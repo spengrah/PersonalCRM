@@ -1880,6 +1880,40 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     expect(res.traces).toBe(8)
   })
 
+  it('counts an ELIGIBLE span whose generation body cannot be BUILT as failed, not as nothing', async () => {
+    // A malformed span timestamp makes buildGenerationBody throw. The span carried
+    // usage, so its cost data IS missing — landing it in no bucket would report a
+    // round with nothing lost while an eligible observation was dropped.
+    const span = usageSpan()
+    span.start_time_unix_nano = Number.NaN
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const logs: string[] = []
+    const res = await exportSpans(cfg, [span], m => logs.push(m))
+    expect(mock.generations).toHaveLength(0) // nothing shipped
+    expect(res.observations).toBe(0)
+    expect(res.observationsFailed).toBe(1)
+    expect(res.observationsSkipped).toBe(0)
+    expect(res.observations + res.observationsFailed + res.observationsSkipped).toBe(1)
+    expect(res.traces).toBe(2) // the traces themselves still shipped
+    expect(logs.some(l => l.includes('generation body unusable'))).toBe(true)
+  })
+
+  it('leaves a usage-LESS span whose body build would throw in NO bucket', async () => {
+    // The same malformed timestamp, but the span was never eligible — the build
+    // returns undefined at the usage gate before reaching the throwing conversion,
+    // so counting it would invent a loss. The two cases must not collapse together.
+    const span = itemSpan('fail', { inputTokens: undefined })
+    span.start_time_unix_nano = Number.NaN
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [span], () => {})
+    expect(res.observations).toBe(0)
+    expect(res.observationsFailed).toBe(0)
+    expect(res.observationsSkipped).toBe(0)
+    expect(res.traces).toBe(1)
+  })
+
   it('does NOT trip the breaker on rejected payloads — those stay attempted and honest', async () => {
     // A 400 is fast and per-span meaningful; only the never-settling class must stop.
     const spans = Array.from({ length: 6 }, (_, i) =>

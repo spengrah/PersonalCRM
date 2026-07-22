@@ -183,7 +183,7 @@ Residual, deliberately not in scope: `codex-sdk.ts` also imports the pure helper
 
 ## Non-goals
 
-- **No `codex-exec` plumbing.** The harness migrated to `codex-sdk`; exec is not in use. (Separately noted: `judge-runner.ts:33` still defaults `QA_JUDGE` to `'codex-exec'` and 34 exec-impl traces predate the migration. Stale default, out of scope, own cleanup.)
+- **No `codex-exec` plumbing.** The harness migrated to `codex-sdk`; exec is not in use. The stale `QA_JUDGE` default that still pointed at exec IS corrected here, because it is a cost-correctness defect and not a cleanup: nothing in the nightly or the Makefile sets `QA_JUDGE`, so an unconfigured round ran the transport whose event stream reports no cached-input count — pricing every cached token at the full input rate and publishing the overstatement as the round's authoritative cost. Every `QA_JUDGE` fallback now reads one `DEFAULT_JUDGE_KIND` (`codex-sdk`), and exec — still selectable — warns once per process when it produces usage without a cached count. Teaching the exec parser to read cached tokens is deliberately NOT done: it is a retired transport, and the warning covers anyone who opts back into it. (The 34 exec-impl traces still predate the migration.)
 - **No trace-granularity change** (per D1) and no change to scores, the `qa-triage` queue, `backfill.ts`, or deep links.
 - **No custom Langfuse model definitions** (fact 1) and no price maintenance in the harness — cost stays inferred from the model string so prices live in one place.
 - **No `total` usage bucket.** Langfuse derives it from mutually-exclusive buckets; ingesting one invites drift.

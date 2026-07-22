@@ -1,13 +1,17 @@
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { describe, it, expect } from 'vitest'
+import { beforeEach, describe, it, expect } from 'vitest'
 import { DEFAULT_JUDGE_EFFORT, DEFAULT_JUDGE_MODEL } from '../models'
 import {
   codexArgs,
+  EXEC_CACHED_USAGE_WARNING,
   makeCodexExecJudge,
   parseCodexEventStream,
+  resetCachedUsageWarning,
+  usageMissesCachedCount,
   verdictsFromCodexOutput,
+  type CodexParseResult,
 } from './codex-exec'
 import { applyGrounding } from '../grader/grade'
 import { parseSpanFile } from '../export/langfuse'
@@ -387,5 +391,79 @@ describe('makeCodexExecJudge — span carries label-trace content + normalized v
     })
     expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
     expect(verdicts.every(v => v.verdict === 'unsure')).toBe(true)
+  })
+})
+
+const emptyParse: CodexParseResult = {
+  message: undefined,
+  usedTool: false,
+  model: undefined,
+  inputTokens: undefined,
+  outputTokens: undefined,
+}
+
+describe('incomplete-usage warning (this transport reports no cached-input count)', () => {
+  beforeEach(() => resetCachedUsageWarning())
+
+  it('the REAL parser drops a cached count the CLI actually reports — so the warning is true', () => {
+    // Grounding the gate in the parser, not in a hand-set flag: the CLI's usage
+    // object carries `cached_input_tokens` INSIDE an inclusive `input_tokens`, and
+    // this parser keeps neither the cached figure nor any way to net it out.
+    const withCache = JSON.stringify({
+      type: 'item.completed',
+      item: { type: 'agent_message', text: JSON.stringify({ verdicts: [] }) },
+      msg: { model: 'gpt-5-codex', usage: { input_tokens: 20_000, cached_input_tokens: 16_000 } },
+    })
+    const parsed = parseCodexEventStream(withCache)
+    expect(parsed.inputTokens).toBe(20_000) // inclusive of the 16k cache read
+    expect(parsed.cachedInputTokens).toBeUndefined() // ...and the split is gone
+    expect(usageMissesCachedCount(parsed)).toBe(true)
+  })
+
+  it('warns when a run produces usage, naming the overstatement and the transport to use', async () => {
+    const warnings: string[] = []
+    const judge = makeCodexExecJudge({
+      warn: m => warnings.push(m),
+      run: async () =>
+        stream({ verdicts: [{ item_index: 0, verdict: 'pass', citation: 'c', critique: 'k' }] }),
+    })
+    await judge(input)
+    expect(warnings).toEqual([EXEC_CACHED_USAGE_WARNING])
+    expect(warnings[0]).toMatch(/OVERSTATEMENT/)
+    expect(warnings[0]).toMatch(/QA_JUDGE=codex-sdk/)
+  })
+
+  it('warns ONCE across many judge calls — a line per behavior would bury it', async () => {
+    const warnings: string[] = []
+    const judge = makeCodexExecJudge({
+      warn: m => warnings.push(m),
+      run: async () => stream({ verdicts: [] }),
+    })
+    await judge(input)
+    await judge(input)
+    await judge(input)
+    expect(warnings).toHaveLength(1)
+  })
+
+  it('stays SILENT on a run that produced no usage at all — nothing was mispriced', async () => {
+    const warnings: string[] = []
+    const judge = makeCodexExecJudge({
+      warn: m => warnings.push(m),
+      run: async () => {
+        throw new Error('boom') // no usage parsed
+      },
+    })
+    await judge(input)
+    expect(warnings).toEqual([])
+  })
+
+  it('goes silent by itself if the transport ever starts reporting the cached count', () => {
+    // The predicate keys off the cached figure being ABSENT, not off the adapter's
+    // name — so a transport that starts reporting it silences this without anyone
+    // remembering to delete the check.
+    expect(usageMissesCachedCount({ ...emptyParse, inputTokens: 20_000 })).toBe(true)
+    expect(
+      usageMissesCachedCount({ ...emptyParse, inputTokens: 20_000, cachedInputTokens: 16_000 })
+    ).toBe(false)
   })
 })

@@ -1,6 +1,6 @@
 // The judge adapter contract: a narrow, swappable `judge(input) → verdict[]`
 // seam. Everything downstream (the grader's residue path) is insulated behind
-// this interface, so the concrete brain (codex-exec default; codex-sdk; HTTP stub)
+// this interface, so the concrete brain (codex-sdk default; codex-exec; HTTP stub)
 // is a config swap with ZERO grader change (design D2).
 
 import type { AriaNode, ApiResponses, DialogRecord, ServerTimeFrame } from '../../support/types'

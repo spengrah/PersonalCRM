@@ -268,6 +268,22 @@ export interface GenerationBody {
   metadata: Record<string, unknown>
 }
 
+// PURE: does this span owe an observation at all? A span with no input-token count
+// is an error run / a metrics-free shape — it would never have produced an
+// observation, so it is not a loss when none ships.
+//
+// This is the SINGLE definition of "eligible" behind the export's accounting
+// identity: `buildGenerationBody` gates on it, and `exportSpans` buckets on it. Two
+// copies of the predicate would let a span be eligible for one and not the other,
+// which is the whole failure mode the identity exists to catch.
+export function spanUsageInputTokens(span: GenAiSpan): number | undefined {
+  return num(span.attributes['gen_ai.usage.input_tokens'])
+}
+
+export function spanCarriesUsage(span: GenAiSpan): boolean {
+  return spanUsageInputTokens(span) !== undefined
+}
+
 // PURE: the generation body for one span, or `undefined` when the span carries no
 // usable usage (an error run — an observation with no usage is noise). Reads
 // everything off the span itself so it is directly testable without an export.
@@ -279,7 +295,7 @@ export function buildGenerationBody(
   scrub: (s: string) => string = s => s
 ): GenerationBody | undefined {
   const a = span.attributes
-  const inputTokens = num(a['gen_ai.usage.input_tokens'])
+  const inputTokens = spanUsageInputTokens(span)
   if (inputTokens === undefined) return undefined
   const cached = num(a['gen_ai.usage.cached_input_tokens'])
   const output = num(a['gen_ai.usage.output_tokens'])
@@ -627,8 +643,11 @@ export interface ExportResult {
   // without surfacing it, a round where every generation was rejected would print
   // a clean summary.
   observations: number
-  // Spans whose observation was ATTEMPTED and did not land (a rejection, a stall, an
-  // unconfirmed envelope) — including the stalls that open the breaker.
+  // Eligible spans whose observation did not land: a rejection, a stall, an
+  // unconfirmed envelope (including the stalls that open the breaker), or a body
+  // that could not be built at all (e.g. an out-of-range span timestamp). A build
+  // failure counts here rather than nowhere — the span carried usage, so the cost
+  // data IS missing, and a silent drop reports a complete round that is not one.
   observationsFailed: number
   // Spans whose observation was NOT attempted because the breaker was already open.
   //
@@ -1055,14 +1074,25 @@ export async function exportSpans(
       // value, so it is contained here — that degrades to no observation, never a
       // dropped trace and never a suppressed enqueue pass.
       let genBody: GenerationBody | undefined
+      let buildFailed = false
       try {
         genBody = buildGenerationBody(span, scrub)
       } catch (err) {
         log(`  generation body unusable for ${traceIdFor(span)}: ${errMsg(err)}`)
         genBody = undefined
+        // A throw can only come from the code AFTER the eligibility gate (the
+        // span-derived timestamp conversion, the scrub), so the span was eligible
+        // and its observation is genuinely lost. `spanCarriesUsage` is consulted
+        // anyway rather than assumed: the bucket must follow the SAME predicate the
+        // build gates on, so a future reordering cannot make the identity drift.
+        buildFailed = spanCarriesUsage(span)
       }
-      if (genBody === undefined) {
-        // Nothing to ship and nothing lost — neither counted nor skipped.
+      if (buildFailed) {
+        // Eligible, attempted, and not shipped — the same bucket as a rejected POST.
+        // Left uncounted, a lost observation would report as no missing cost data.
+        result.observationsFailed++
+      } else if (genBody === undefined) {
+        // Not eligible: no usage to ship, so nothing lost — neither counted nor skipped.
       } else if (observationsBroken) {
         // The breaker is open: attempting would cost another full timeout for a
         // request class that has already proven it is not settling.

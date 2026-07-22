@@ -1,6 +1,7 @@
 // The `codex exec --json --output-schema <schema> --sandbox read-only`
-// implementation of the Judge interface (design D2 — the current default; the
-// codex-sdk adapter is a like-for-like transport swap behind the identical interface).
+// implementation of the Judge interface (design D2). Selectable via
+// QA_JUDGE=codex-exec; the codex-sdk adapter is the default and a like-for-like
+// transport swap behind the identical interface.
 //
 // The PARSE + tool-rejection logic is pure + unit-tested with canned event
 // streams; the spawn is a thin wrapper (a live call, exercised by a manual
@@ -38,6 +39,12 @@ export interface CodexParseResult {
   model: string | undefined
   inputTokens: number | undefined
   outputTokens: number | undefined
+  // The CLI event stream reports `input_tokens` INCLUSIVE of cache reads and this
+  // parser extracts no separate cached figure, so it stays undefined on every real
+  // parse. Declared anyway because it is what `usageMissesCachedCount` keys off:
+  // a transport that ever starts reporting the count silences the warning by
+  // populating this, rather than by someone remembering to delete a check.
+  cachedInputTokens?: number
 }
 
 function typeStringsOf(event: Record<string, unknown>): string[] {
@@ -120,6 +127,38 @@ export function verdictsFromCodexOutput(stdout: string): {
   return { verdicts, rejectedForTool: false, parse }
 }
 
+// This transport's usage is INCOMPLETE, and silently so: the CLI's stream reports
+// one inclusive `input_tokens` and no cached-read figure, so every span it emits
+// prices cache reads at the full input rate. On an observed run that is roughly an
+// 8x overstatement of input cost. The number still LOOKS authoritative downstream,
+// which is exactly why the operator has to be told at the moment it is produced.
+export const EXEC_CACHED_USAGE_WARNING =
+  'codex-exec reports no cached-input token count (its input_tokens is inclusive of ' +
+  'cache reads), so every cached token prices at the full input rate and this run’s ' +
+  'reported cost is an OVERSTATEMENT. Use QA_JUDGE=codex-sdk for accurate usage.'
+
+// A usage-bearing result carrying no cached count — the condition the warning
+// exists for. Pure, so the gate is testable without a run.
+export function usageMissesCachedCount(parse: CodexParseResult | undefined): boolean {
+  return parse?.inputTokens !== undefined && parse.cachedInputTokens === undefined
+}
+
+// Once per process, not per judge call: a round makes one call per behavior, and
+// a line per call would bury the very thing it is warning about.
+let cachedUsageWarned = false
+
+// Test seam — the flag is module state, so a suite that asserts the once-only
+// behaviour needs to clear it between cases.
+export function resetCachedUsageWarning(): void {
+  cachedUsageWarned = false
+}
+
+function warnCachedUsageOnce(warn: (msg: string) => void): void {
+  if (cachedUsageWarned) return
+  cachedUsageWarned = true
+  warn(EXEC_CACHED_USAGE_WARNING)
+}
+
 export interface CodexExecOptions {
   bin?: string
   model?: string
@@ -128,6 +167,8 @@ export interface CodexExecOptions {
   // Injected for tests: run codex and return raw stdout (defaults to a spawn).
   run?: (args: string[], prompt: string) => Promise<string>
   timeoutMs?: number
+  // Where the incomplete-usage warning goes (defaults to stderr).
+  warn?: (msg: string) => void
 }
 
 function defaultRun(
@@ -201,6 +242,7 @@ export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
   const timeoutMs = opts.timeoutMs ?? 120_000
   const run = opts.run ?? defaultRun(bin, timeoutMs)
   const tracePath = opts.tracePath ?? process.env.QA_JUDGE_TRACE
+  const warn = opts.warn ?? ((msg: string) => console.warn(msg))
 
   return async (input: JudgeInput): Promise<PerItemVerdict[]> => {
     const prompt = buildPrompt(input)
@@ -247,6 +289,11 @@ export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
           }
       )
     }
+
+    // The usage this run produced is missing its cached-read share. Say so before
+    // the span is written, so the operator sees it alongside the run that emitted
+    // the understated split rather than discovering it in a cost figure later.
+    if (usageMissesCachedCount(result?.parse)) warnCachedUsageOnce(warn)
 
     if (tracePath) {
       appendSpan(
