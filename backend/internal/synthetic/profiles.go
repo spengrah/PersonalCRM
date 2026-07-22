@@ -68,13 +68,26 @@ type ProfileResult struct {
 	// pages are not near-empty — a judge touring an empty page reads it as a broken
 	// feature. Counts-only / no PII.
 	ContactsWithNotes int
-	// SeededTasks counts the contact_task rows the profile seeded: one `managed`
-	// cadence_due task per cadence-bearing catalog contact (via ReplayTodoist's
-	// reconcile, one of which is then driven to `unmanaged` via the recurring-edit
-	// path — a state change, not a row change) PLUS the one seeded follow-up loop
-	// (SeedPendingFollowUp increments it). It is therefore NOT a pure cadence_due row
-	// count; a future exact-count gate must account for the follow-up too.
+	// SeededTasks counts EVERY contact_task row the profile seeded — the exact total:
+	// one `managed` cadence_due task per cadence-bearing catalog contact (via
+	// ReplayTodoist's reconcile, one of which is then driven to `unmanaged` via the
+	// recurring-edit path — a state change, not a row change), PLUS the visible-task
+	// spread's manual tasks (SeededManualTasks — the product-visible 0/1/multiple
+	// distribution), PLUS the one seeded follow-up loop (SeedPendingFollowUp). A
+	// namespace-scoped `count(contact_task)` equals this exactly.
 	SeededTasks int
+	// SeededManualTasks / SeededContactsWithManualTasks /
+	// SeededContactsWithMultipleManualTasks count the visible-task spread's MANUAL
+	// tasks (SeedVisibleTaskSpread): the total manual rows, the distinct catalog
+	// contacts with ≥1 manual task (the 1-visible + >1-visible cohorts), and the
+	// distinct catalog contacts with >1 manual task (the >1-visible cohort). Scoped
+	// to the catalog manual cohorts ONLY — they deliberately do NOT count the
+	// separately-created follow-up contact, so a namespace-wide product-visible count
+	// equals SeededContactsWithManualTasks + the one follow-up contact. Counts-only /
+	// no PII.
+	SeededManualTasks                     int
+	SeededContactsWithManualTasks         int
+	SeededContactsWithMultipleManualTasks int
 	// SeededPendingFollowUps counts the LIVE followup_loop rows seeded — the "awaiting
 	// reply" state (has_pending_followup). A seeded world cannot reach this state through
 	// the production path (see the seeding site), so it is written directly; without it the
@@ -744,14 +757,26 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.SeededTasks = len(cadenceBearingCatalogIDs)
 
-		// The "awaiting reply" state (has_pending_followup). NOT reachable through the
-		// production path from a seed: the harness runs FollowUpManager in off-mode, and
-		// CAD-012 suppresses follow-ups for backdated automated outbounds anyway — which is
-		// every interaction a historical replay produces. So no seeded world ever contained
-		// a live follow-up; the tours could not capture the state; and the agentic judge,
-		// shown only contact pages with no "Awaiting reply" marker, concluded the FEATURE
-		// DID NOT EXIST and reported a false CAD-036 regression — every run.
-		//
+		// Product-VISIBLE task spread: attach user-style MANUAL tasks to a fixed,
+		// creation-index-selected subset of the cadence-bearing catalog so the
+		// manual/follow-up axis the contact page actually lists (it never lists
+		// cadence_due) forms a realistic 0/1/multiple distribution: a default majority
+		// with zero visible tasks (background cadence_due only), a reserved 1-visible
+		// cohort, and a reserved >1-visible cohort — with varied kind and link age.
+		// SeedVisibleTaskSpread draws NO generator PRNG (repository reads + writes
+		// only), so it is PRNG-neutral in this task block. Record the catalog +
+		// reserved cohort ids on the Harness so the coverage check can assert the
+		// cohorts subject-scoped without putting non-deterministic UUIDs in
+		// ProfileResult.
+		h.SetCatalogContactIDs(catalogContactIDs)
+		spread, err := h.SeedVisibleTaskSpread(ctx, cadenceBearingCatalogIDs)
+		if err != nil {
+			return res, fmt.Errorf("profile %s: seed visible task spread: %w", params.Profile, err)
+		}
+		res.SeededTasks += spread.ManualTasks
+		res.SeededManualTasks = spread.ManualTasks
+		res.SeededContactsWithManualTasks = spread.ContactsWithManualTasks
+		res.SeededContactsWithMultipleManualTasks = spread.ContactsWithMultipleManualTasks
 	}
 
 	// Merge + soft-delete scenarios. Seeded LAST: each draws gen.Contact (name PRNG)
