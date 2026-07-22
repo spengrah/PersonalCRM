@@ -129,14 +129,27 @@ export class IngestionTimeoutError extends Error {
   }
 }
 
+export interface ShipResult {
+  observations: number
+  traces: number
+  failed: number
+  log: string[]
+}
+
+// The smoke ships ONE span with a two-item scenario, so a complete export is exactly
+// two traces, one observation, and zero failures. Anything else is a defect the smoke
+// must report rather than poll past.
+const EXPECT_TRACES_PER_EXPORT = 2
+
 export interface SmokeDeps {
   // Read a trace back. `undefined` = not visible YET (a 404 while the worker is
   // still draining the queue), which is a poll-again signal, not a failure.
   getTrace: (traceId: string) => Promise<Trace | undefined>
-  // Ships the spans and returns BOTH the count and the exporter's own log lines —
-  // on a one-shot live gate the rejection reason is the single most valuable thing
-  // to surface, and it is discarded if the caller only sees a number.
-  shipSpans: (spans: GenAiSpan[]) => Promise<{ observations: number; log: string[] }>
+  // Ships the spans and returns the WHOLE outcome — counts AND the exporter's own
+  // log lines. Every discarded field is a failure the smoke can print PASS through:
+  // a shipped observation says nothing about whether its sibling trace landed, and
+  // on a one-shot live gate the rejection reason is the most valuable line there is.
+  shipSpans: (spans: GenAiSpan[]) => Promise<ShipResult>
   log: (msg: string) => void
   sleep?: (ms: number) => Promise<void>
   now?: () => number
@@ -270,25 +283,38 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   // export-side rejection. The exporter's log lines are printed with it — that
   // rejection reason is the most valuable thing on a one-shot live gate, and there
   // is nothing else the operator could "re-run with" to obtain it.
-  const shippedOrFailed = (
-    result: { observations: number; log: string[] },
-    which: string
-  ): boolean => {
-    if (result.observations === 1) return true
+  // Every field of the export result is checked, not just the observation count: a
+  // failed sibling trace alongside an accepted observation would otherwise satisfy
+  // every later probe and print PASS over a failure the exporter had reported.
+  const exportProblem = (result: ShipResult, which: string): string | undefined => {
+    if (result.failed > 0) return `the ${which} reported ${result.failed} trace ship failure(s)`
+    if (result.traces !== EXPECT_TRACES_PER_EXPORT) {
+      return `the ${which} shipped ${result.traces} trace(s), expected ${EXPECT_TRACES_PER_EXPORT}`
+    }
+    if (result.observations !== 1) {
+      return (
+        `the ${which} shipped ${result.observations} observation(s), expected 1 — the ` +
+        'generation was rejected or skipped BEFORE ingestion; this is not a worker race'
+      )
+    }
+    return undefined
+  }
+
+  const reportExportProblem = (problem: string, result: ShipResult): void => {
     log('')
-    log(
-      `FAIL — the ${which} shipped ${result.observations} observation(s), expected 1. ` +
-        'The generation was rejected or skipped BEFORE ingestion; this is not a worker race.'
-    )
+    log(`FAIL — ${problem}.`)
     if (result.log.length > 0) {
       log('  exporter log:')
       for (const line of result.log) log(`    ${line.trim()}`)
     }
-    return false
   }
 
   const first = await deps.shipSpans([span])
-  if (!shippedOrFailed(first, 'exporter')) return 1
+  const firstProblem = exportProblem(first, 'export')
+  if (firstProblem !== undefined) {
+    reportExportProblem(firstProblem, first)
+    return 1
+  }
 
   // Presence must include the FINAL body's marks, not merely the row: `exportSpans`
   // sends a minimal init trace-create first, so a trace can be readable before its
@@ -372,25 +398,33 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   // second write was actually processed, and only then assert count + id.
   const secondEndIso = new Date(RE_EXPORT_END_MS).toISOString()
   const second = await deps.shipSpans([makeSpan(RE_EXPORT_END_MS)])
-  if (!shippedOrFailed(second, 're-export')) return 1
-  const after = await waitForPresence(
-    `the re-export to be processed on ${carrierId} (endTime ${secondEndIso})`,
-    async () => {
-      const t = await deps.getTrace(carrierId)
-      const rows = observationsOf(t)
-      const marked = rows.some(
-        o => typeof o.endTime === 'string' && o.endTime.startsWith(secondEndIso.slice(0, 19))
-      )
-      return marked ? t : undefined
-    },
-    deps
-  )
-  const afterObs = observationsOf(after)
-  results.push({
-    label: 're-export',
-    ok: afterObs.length === 1 && second.observations === 1 && afterObs[0]?.id === obs.id,
-    detail: `${afterObs.length} observation(s), id ${String(afterObs[0]?.id)} (was ${String(obs.id)})`,
-  })
+  const secondProblem = exportProblem(second, 're-export')
+  if (secondProblem !== undefined) {
+    // Record it as a failed assertion instead of returning: seven assertions —
+    // including the pinned cost oracle — are already computed, and on a run the
+    // operator cannot cheaply repeat, discarding them is pure loss.
+    reportExportProblem(secondProblem, second)
+    results.push({ label: 're-export', ok: false, detail: secondProblem })
+  } else {
+    const after = await waitForPresence(
+      `the re-export to be processed on ${carrierId} (endTime ${secondEndIso})`,
+      async () => {
+        const t = await deps.getTrace(carrierId)
+        const rows = observationsOf(t)
+        const marked = rows.some(
+          o => typeof o.endTime === 'string' && o.endTime.startsWith(secondEndIso.slice(0, 19))
+        )
+        return marked ? t : undefined
+      },
+      deps
+    )
+    const afterObs = observationsOf(after)
+    results.push({
+      label: 're-export',
+      ok: afterObs.length === 1 && afterObs[0]?.id === obs.id,
+      detail: `${afterObs.length} observation(s), id ${String(afterObs[0]?.id)} (was ${String(obs.id)})`,
+    })
+  }
 
   for (const r of results) {
     log(`  ${r.label.padEnd(22)} ${r.ok ? '[OK]' : '[FAIL]'} ${r.detail}`)
@@ -401,10 +435,12 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
     log('PASS')
     return 0
   }
-  // Ingestion LANDED and the values are wrong — a payload/pricing bug, not a race.
+  // Everything that could be computed HAS been printed above; this line names which
+  // assertions failed. "landed but wrong" stays the diagnosis whenever the export
+  // itself was clean — a stalled ingestion raises IngestionTimeoutError instead.
   log(
-    `FAIL — ingestion landed but ${failed.length} assertion(s) mismatched: ` +
-      failed.map(f => f.label).join(', ')
+    `FAIL — ${failed.length} assertion(s) failed: ${failed.map(f => f.label).join(', ')}` +
+      (secondProblem === undefined ? ' (ingestion landed; the values are wrong)' : '')
   )
   return 1
 }
@@ -447,7 +483,12 @@ async function main(): Promise<number> {
             m => captured.push(m),
             SMOKE_EXPORT_OPTIONS
           )
-          return { observations: res.observations, log: captured }
+          return {
+            observations: res.observations,
+            traces: res.traces,
+            failed: res.failed,
+            log: captured,
+          }
         } finally {
           fs.rmSync(file, { force: true })
         }

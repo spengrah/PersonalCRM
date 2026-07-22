@@ -46,6 +46,9 @@ interface FakeOpts {
   siblingInitOnlyReads?: number
   // Lines the exporter reports back with its count.
   shipLog?: string[]
+  // What the exporter reports for traces / ship failures, per export.
+  tracesPerShip?: number[]
+  failedPerShip?: number[]
   // What the exporter itself reports (0 = the generation was rejected at POST time).
   observationsPerShip?: number[]
   timeoutMs?: number
@@ -113,12 +116,17 @@ function makeFake(opts: FakeOpts = {}): {
       counts.ships++
       const n = shipCounts[counts.ships - 1] ?? 1
       if (counts.ships === 2 && opts.reExportIsNoOp === true) {
-        return { observations: n, log: opts.shipLog ?? [] }
+        return { observations: n, traces: 2, failed: 0, log: opts.shipLog ?? [] }
       }
       preUpsertEndIso = obsEndIso
       obsEndIso = new Date(spans[0].end_time_unix_nano / 1e6).toISOString()
       shippedEndTimes.push(obsEndIso)
-      return { observations: n, log: opts.shipLog ?? [] }
+      return {
+        observations: n,
+        traces: opts.tracesPerShip?.[counts.ships - 1] ?? 2,
+        failed: opts.failedPerShip?.[counts.ships - 1] ?? 0,
+        log: opts.shipLog ?? [],
+      }
     },
   }
   let preUpsertEndIso: string | undefined
@@ -211,7 +219,7 @@ describe('runSmoke — asynchronous ingestion', () => {
     // slept out the entire 120s bound before reporting the same mismatch.
     expect(counts.sleeps).toBe(0)
     expect(logs.some(l => l.includes('expected') && l.includes('[FAIL]'))).toBe(true)
-    expect(logs.some(l => l.includes('ingestion landed but'))).toBe(true)
+    expect(logs.some(l => l.includes('ingestion landed; the values are wrong'))).toBe(true)
   })
 
   it('FAILS FAST on a wrong usage bucket too', async () => {
@@ -327,5 +335,31 @@ describe('readErrorDisposition — how a failed trace read is classified', () =>
   it('does NOT swallow a real transport failure', () => {
     expect(readErrorDisposition(new ApiError(500, 'boom', 'GET', '/t'))).toBe('fatal')
     expect(readErrorDisposition(new Error('ECONNREFUSED'))).toBe('fatal')
+  })
+})
+
+describe("runSmoke — the exporter's own failure counts are never discarded", () => {
+  it('FAILS when the FIRST export reported a trace ship failure', async () => {
+    const { deps, logs } = makeFake({ failedPerShip: [1] })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('reported 1 trace ship failure(s)'))).toBe(true)
+  })
+
+  it('FAILS when the RE-EXPORT reported a trace ship failure, even though the observation landed', async () => {
+    // The masking case: the sibling row and the carrier marker from the first export
+    // satisfy every later probe, so only the discarded `failed` count exposes this.
+    const { deps, logs } = makeFake({ failedPerShip: [0, 1] })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export reported 1 trace ship failure(s)'))).toBe(true)
+    // ...and everything already computed is still printed, including the cost oracle.
+    expect(logs.some(l => l.includes('expected') && l.includes('[OK]'))).toBe(true)
+    expect(logs.some(l => l.includes('usageDetails'))).toBe(true)
+    expect(logs.some(l => l.includes('re-export') && l.includes('[FAIL]'))).toBe(true)
+  })
+
+  it('FAILS when an export shipped the wrong number of traces', async () => {
+    const { deps, logs } = makeFake({ tracesPerShip: [1] })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('shipped 1 trace(s), expected 2'))).toBe(true)
   })
 })

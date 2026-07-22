@@ -507,6 +507,30 @@ test_export_summary_with_skipped_observations() {
     cleanup_fixture
 }
 
+test_skipped_observations_are_noted_not_gated() {
+    echo "test: skipped observations emit a NOTE and stay out of the advance predicate"
+    make_fixture
+    run_orch STUB_EXPORT_OUT="qa-export: 5 trace(s), 12 screenshot(s), 3 observation(s), 83 observation(s) skipped; enqueued 3/3"
+    assert_rc0 obs-note
+    # Visible...
+    case "$(ghv notes)" in *"83 observation(s) skipped"*) ok;; *) fail "obs-note: notes should report the skipped observations, got '$(ghv notes)'";; esac
+    # ...but deliberately NOT part of the clean-round predicate (that semantics change
+    # is its own decision, not a side effect of adding visibility).
+    assert_kv round clean obs-note
+    assert_kv advance true obs-note
+    cleanup_fixture
+}
+
+test_no_notes_on_a_clean_round() {
+    echo "test: a round with nothing degraded emits an EMPTY notes field"
+    make_fixture
+    run_orch
+    assert_rc0 no-note
+    assert_kv notes "" no-note
+    assert_kv round clean no-note
+    cleanup_fixture
+}
+
 test_runid_collision_aborts() {
     echo "test: run-id collision (run dir already exists) -> round=aborted, exit!=0, tours never run"
     make_fixture
@@ -863,6 +887,8 @@ main() {
     test_export_summary_with_observations
     test_export_summary_without_observations
     test_export_summary_with_skipped_observations
+    test_skipped_observations_are_noted_not_gated
+    test_no_notes_on_a_clean_round
     test_runid_collision_aborts
     test_rundir_create_error
     test_deploy_gen_unset_records_false

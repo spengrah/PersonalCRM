@@ -1789,6 +1789,28 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     expect(res.enqueue.enqueued).toBeGreaterThan(0)
   })
 
+  it('does NOT count a usage-LESS span as skipped once the breaker is open', async () => {
+    // A judge call that failed before reporting input tokens would never have
+    // produced an observation; counting it as skipped reports a loss that never
+    // existed — the same dishonest-count defect the breaker itself was meant to close.
+    const stalling = Array.from({ length: 3 }, (_, i) =>
+      itemSpan('fail', { ...usageParams, behaviorId: `T-${i}` })
+    )
+    const usageless = Array.from({ length: 4 }, (_, i) =>
+      itemSpan('fail', { behaviorId: `U-${i}`, inputTokens: undefined })
+    )
+    const withUsage = itemSpan('fail', { ...usageParams, behaviorId: 'V-1' })
+    const mock = mockLangfuse({ generationNeverSettles: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [...stalling, ...usageless, withUsage], () => {}, {
+      observationTimeoutMs: 5,
+    })
+    expect(res.observations).toBe(0)
+    // ONLY the one usage-bearing span after the breaker opened is a real skip.
+    expect(res.observationsSkipped).toBe(1)
+    expect(res.traces).toBe(8)
+  })
+
   it('does NOT trip the breaker on rejected payloads — those stay attempted and honest', async () => {
     // A 400 is fast and per-span meaningful; only the never-settling class must stop.
     const spans = Array.from({ length: 6 }, (_, i) =>

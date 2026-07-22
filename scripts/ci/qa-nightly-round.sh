@@ -469,6 +469,21 @@ if grep -qE '^qa-export: WARNING' <<<"$export_out"; then
 fi
 $post_ok || reasons+=("$post_reason")
 
+# NOTES — degradations that are VISIBLE but deliberately NOT part of the clean-round
+# predicate. `reasons` drives advance=false, so anything appended there changes
+# whether the watermark moves; a note records the degradation without making that
+# call. The observation breaker is the first: a round whose cost data is mostly
+# missing is worth seeing in the round's own output, but whether that should also
+# block advancement is a semantics change that belongs in its own change.
+notes=()
+[ "$observations_skipped" -eq 0 ] || notes+=("$observations_skipped observation(s) skipped by the export's timeout breaker — cost data for those spans is MISSING (visibility only; does not gate advancement)")
+if [ "${#notes[@]}" -eq 0 ]; then
+  emit notes ""
+else
+  joined_notes="$(printf '%s; ' "${notes[@]}")"
+  emit notes "${joined_notes%; }"
+fi
+
 if [ "${#reasons[@]}" -eq 0 ]; then
   emit round clean
   emit advance true

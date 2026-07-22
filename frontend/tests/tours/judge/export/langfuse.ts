@@ -972,14 +972,28 @@ export async function exportSpans(
     // sits in its own try/catch: it degrades to a skipped observation, never a
     // dropped trace and never a suppressed enqueue pass.
     if (carrierShipped) {
-      if (observationsBroken) {
+      // Build FIRST, so eligibility is decided before the skip: a span that carries
+      // no usage would never have produced an observation, and counting it as
+      // "skipped" would report a loss that never existed. The build is where the
+      // span-derived timestamp conversion can throw RangeError on a malformed nano
+      // value, so it is contained here — that degrades to no observation, never a
+      // dropped trace and never a suppressed enqueue pass.
+      let genBody: GenerationBody | undefined
+      try {
+        genBody = buildGenerationBody(span, scrub)
+      } catch (err) {
+        log(`  generation body unusable for ${traceIdFor(span)}: ${errMsg(err)}`)
+        genBody = undefined
+      }
+      if (genBody === undefined) {
+        // Nothing to ship and nothing lost — neither counted nor skipped.
+      } else if (observationsBroken) {
         // The breaker is open: attempting would cost another full timeout for a
         // request class that has already proven it is not settling.
         result.observationsSkipped++
       } else {
         try {
-          const genBody = buildGenerationBody(span, scrub)
-          if (genBody) {
+          {
             // A per-event rejection throws, so the count reflects ACCEPTED
             // observations — counting the POST would report a shipped observation
             // that was never stored.
