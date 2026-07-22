@@ -7,7 +7,19 @@
 // fail, and that a stalled read cannot hang the command.
 
 import { describe, expect, it } from 'vitest'
-import { IngestionTimeoutError, runSmoke, waitForPresence, type SmokeDeps } from './obs-smoke'
+import { ApiError } from './langfuse'
+import {
+  FIRST_END_MS,
+  IngestionTimeoutError,
+  MARKER_GAP_MS,
+  MARKER_TRUNCATION_MS,
+  RE_EXPORT_END_MS,
+  SMOKE_EXPORT_OPTIONS,
+  readErrorDisposition,
+  runSmoke,
+  waitForPresence,
+  type SmokeDeps,
+} from './obs-smoke'
 
 const SPAN_ID = 'abcdef0123456789'
 const CARRIER = `judge-SMOKE-OBS-${SPAN_ID}-item0`
@@ -30,6 +42,10 @@ interface FakeOpts {
   usage?: Record<string, number>
   // The re-export silently does nothing — the upsert never lands.
   reExportIsNoOp?: boolean
+  // Reads where the sibling row exists but its final body (metadata) has not landed.
+  siblingInitOnlyReads?: number
+  // Lines the exporter reports back with its count.
+  shipLog?: string[]
   // What the exporter itself reports (0 = the generation was rejected at POST time).
   observationsPerShip?: number[]
   timeoutMs?: number
@@ -52,6 +68,7 @@ function makeFake(opts: FakeOpts = {}): {
   let carrierReads = 0
   let siblingReads = 0
   let readsAfterSecondShip = 0
+  const shippedEndTimes: string[] = []
   const shipCounts = opts.observationsPerShip ?? [1, 1]
 
   const deps: SmokeDeps = {
@@ -73,6 +90,12 @@ function makeFake(opts: FakeOpts = {}): {
       if (id === SIBLING) {
         siblingReads++
         if (siblingReads <= (opts.hideSiblingReads ?? 0)) return undefined
+        // The init trace-create lands FIRST: the row is readable with no metadata at
+        // all, which is where a naive read would assert `usage_attributed === false`
+        // against `undefined` and report a false mismatch.
+        if (siblingReads <= (opts.hideSiblingReads ?? 0) + (opts.siblingInitOnlyReads ?? 0)) {
+          return { id: SIBLING, metadata: {} }
+        }
         return { id: SIBLING, metadata: { usage_attributed: false } }
       }
       carrierReads++
@@ -89,10 +112,13 @@ function makeFake(opts: FakeOpts = {}): {
     shipSpans: async spans => {
       counts.ships++
       const n = shipCounts[counts.ships - 1] ?? 1
-      if (counts.ships === 2 && opts.reExportIsNoOp === true) return { observations: n }
+      if (counts.ships === 2 && opts.reExportIsNoOp === true) {
+        return { observations: n, log: opts.shipLog ?? [] }
+      }
       preUpsertEndIso = obsEndIso
       obsEndIso = new Date(spans[0].end_time_unix_nano / 1e6).toISOString()
-      return { observations: n }
+      shippedEndTimes.push(obsEndIso)
+      return { observations: n, log: opts.shipLog ?? [] }
     },
   }
   let preUpsertEndIso: string | undefined
@@ -174,7 +200,7 @@ describe('runSmoke — asynchronous ingestion', () => {
     expect(code).toBe(0)
     expect(logs).toContain('PASS')
     expect(counts.sleeps).toBeGreaterThan(0) // it really waited
-    expect(logs.some(l => l.includes('waiting for the observation on'))).toBe(true)
+    expect(logs.some(l => l.includes('waiting for the observation + final body'))).toBe(true)
     expect(logs.every(l => !l.includes('[FAIL]'))).toBe(true)
   })
 
@@ -229,11 +255,77 @@ describe('runSmoke — asynchronous ingestion', () => {
     await expect(runSmoke(deps)).rejects.toBeInstanceOf(IngestionTimeoutError)
   })
 
+  it('waits for the SIBLING final body instead of asserting against the init-only row', async () => {
+    // exportSpans sends a minimal init trace-create first, so the sibling is readable
+    // before `usage_attributed` exists. Reading it then yields `undefined !== false`
+    // — a FALSE mismatch on a healthy instance.
+    const { deps, logs } = makeFake({ siblingInitOnlyReads: 2 })
+    expect(await runSmoke(deps)).toBe(0)
+    expect(logs.some(l => l.includes('waiting for the sibling trace'))).toBe(true)
+    expect(logs.some(l => l.includes('usage_attributed') && l.includes('[OK]'))).toBe(true)
+  })
+
+  it('short-circuits on a RE-EXPORT that shipped no observation, without polling', async () => {
+    const { deps, logs, counts } = makeFake({ observationsPerShip: [1, 0] })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('re-export shipped 0 observation(s)'))).toBe(true)
+    expect(counts.sleeps).toBe(0) // never waited on a marker that cannot appear
+  })
+
+  it("prints the exporter's own log when it shipped nothing (the rejection reason)", async () => {
+    const { deps, logs } = makeFake({
+      observationsPerShip: [0],
+      shipLog: ['  generation-create failed for judge-X: ingestion rejected: invalid usageDetails'],
+    })
+    expect(await runSmoke(deps)).toBe(1)
+    expect(logs.some(l => l.includes('exporter log:'))).toBe(true)
+    expect(logs.some(l => l.includes('invalid usageDetails'))).toBe(true)
+  })
+
   it('does not hang when a trace read never settles', async () => {
     const started = Date.now()
     const { deps } = makeFake({ timeoutMs: 150, realTimers: true })
     deps.getTrace = () => new Promise(() => {})
     await expect(runSmoke(deps)).rejects.toBeInstanceOf(IngestionTimeoutError)
     expect(Date.now() - started).toBeLessThan(3_000)
+  })
+})
+
+describe("the smoke's own configuration", () => {
+  it('keeps SMOKE-OBS out of the standing triage queue (zero pass-salt)', () => {
+    // The smoke's verdicts are all `pass` and non-mutation, so the salt sample is the
+    // only path into the queue a human uses for real labeling.
+    expect(SMOKE_EXPORT_OPTIONS.saltPasses).toBe(0)
+  })
+
+  it('keeps the re-export marker above the endTime comparison granularity', () => {
+    // The marker comparison truncates to whole seconds; a gap below that granularity
+    // makes the upsert check unfalsifiable again, silently.
+    expect(MARKER_GAP_MS).toBeGreaterThan(MARKER_TRUNCATION_MS)
+    expect(new Date(RE_EXPORT_END_MS).toISOString().slice(0, 19)).not.toBe(
+      new Date(FIRST_END_MS).toISOString().slice(0, 19)
+    )
+  })
+})
+
+describe('readErrorDisposition — how a failed trace read is classified', () => {
+  it('retries a 404 (the row has not appeared yet)', () => {
+    expect(readErrorDisposition(new ApiError(404, 'not found', 'GET', '/t'))).toBe('retry')
+  })
+
+  it('retries an ABORT — the per-read timeout must not kill the run with a raw stack', () => {
+    // The measured shape: an aborted fetch rejects with an AbortError, NOT an
+    // ApiError, so a 404-only rescue lets it escape every handler.
+    const abort = new Error('The operation was aborted')
+    abort.name = 'AbortError'
+    expect(readErrorDisposition(abort)).toBe('retry')
+    const timeout = new Error('timed out')
+    timeout.name = 'TimeoutError'
+    expect(readErrorDisposition(timeout)).toBe('retry')
+  })
+
+  it('does NOT swallow a real transport failure', () => {
+    expect(readErrorDisposition(new ApiError(500, 'boom', 'GET', '/t'))).toBe('fatal')
+    expect(readErrorDisposition(new Error('ECONNREFUSED'))).toBe('fatal')
   })
 })

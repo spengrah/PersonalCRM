@@ -31,7 +31,15 @@ import * as os from 'os'
 import * as path from 'path'
 import { buildGenAiSpan, type GenAiSpan } from '../adapter/span'
 import type { Scenario } from '../label-trace'
-import { ApiError, api, configFromEnv, exportSpans, parseSpanFile, usageTraceId } from './langfuse'
+import {
+  ApiError,
+  api,
+  configFromEnv,
+  exportSpans,
+  parseSpanFile,
+  usageTraceId,
+  type ExportOptions,
+} from './langfuse'
 
 const BEHAVIOR_ID = 'SMOKE-OBS'
 const MODEL = 'gpt-5.4-mini'
@@ -65,13 +73,27 @@ const INGEST_POLL_MS = 2_000
 // costs one poll interval rather than the whole budget.
 const TRACE_READ_TIMEOUT_MS = 30_000
 
+// The smoke's traces are synthetic and its verdicts are all `pass`, so the ONLY way
+// they could reach the standing triage queue is the pass-salt sample. Zero salt keeps
+// SMOKE-OBS junk out of the queue a human uses for real labeling. Scoped to THIS
+// script — a real round passes its own options, so the enqueue path is untouched
+// (a mutation/fail/unsure trace still enqueues there).
+export const SMOKE_EXPORT_OPTIONS: ExportOptions = { saltPasses: 0 }
+
 // A fixed instant well in the past, so a startTime taken from the export clock is
 // unmistakable rather than plausible.
 const START_MS = Date.UTC(2026, 0, 15, 9, 0, 0)
 const END_MS = START_MS + 3_200
-// The re-export ships the same observation id with this different (still fixed, still
+// The re-export ships the same observation id with a different (still fixed, still
 // past) end instant — the marker that makes "the upsert was processed" observable.
-const RE_EXPORT_END_MS = START_MS + 7_400
+// The comparison truncates to WHOLE SECONDS to tolerate server-side millisecond
+// formatting, so the gap MUST exceed one second or the marker silently stops
+// discriminating and the upsert check becomes unfalsifiable again. Derived from that
+// granularity rather than hand-picked, and asserted by MARKER_GAP_MS's own test.
+export const MARKER_TRUNCATION_MS = 1_000
+export const MARKER_GAP_MS = MARKER_TRUNCATION_MS * 4
+export const RE_EXPORT_END_MS = END_MS + MARKER_GAP_MS
+export const FIRST_END_MS = END_MS
 
 const scenario: Scenario = {
   kind: 'behavior',
@@ -110,7 +132,10 @@ export interface SmokeDeps {
   // Read a trace back. `undefined` = not visible YET (a 404 while the worker is
   // still draining the queue), which is a poll-again signal, not a failure.
   getTrace: (traceId: string) => Promise<Trace | undefined>
-  shipSpans: (spans: GenAiSpan[]) => Promise<{ observations: number }>
+  // Ships the spans and returns BOTH the count and the exporter's own log lines —
+  // on a one-shot live gate the rejection reason is the single most valuable thing
+  // to surface, and it is discarded if the caller only sees a number.
+  shipSpans: (spans: GenAiSpan[]) => Promise<{ observations: number; log: string[] }>
   log: (msg: string) => void
   sleep?: (ms: number) => Promise<void>
   now?: () => number
@@ -121,6 +146,29 @@ export interface SmokeDeps {
 }
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined)
+
+// Is `key` PRESENT on the object (regardless of value)? Presence of a key the final
+// body supplies is the honest "this row has settled" signal; comparing its VALUE here
+// would turn a poll into a value-wait, which is exactly what must not happen.
+// An aborted request (the per-read timeout firing) surfaces as an AbortError /
+// DOMException, NOT as an ApiError — classifying it by name is the only reliable
+// test across runtimes.
+const isAbort = (err: unknown): boolean =>
+  err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')
+
+// How a failed trace READ is treated. `retry` means "indistinguishable from not yet
+// visible", so the poller waits and the OVERALL bound produces the one
+// human-readable diagnosis: a 404 (the row has not appeared) and an abort (this read
+// did not come back in time) are both that. Anything else is a real transport
+// failure and must surface rather than be waited out.
+export function readErrorDisposition(err: unknown): 'retry' | 'fatal' {
+  if (err instanceof ApiError && err.status === 404) return 'retry'
+  if (isAbort(err)) return 'retry'
+  return 'fatal'
+}
+
+const hasKey = (v: unknown, key: string): boolean =>
+  v !== null && typeof v === 'object' && key in (v as Record<string, unknown>)
 
 const observationsOf = (trace: Trace | undefined): Array<Record<string, unknown>> =>
   Array.isArray(trace?.observations) ? (trace.observations as Array<Record<string, unknown>>) : []
@@ -221,26 +269,43 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   log(`  obs    obs-judge-${BEHAVIOR_ID}-${runSpanId}-gen`)
   log('')
 
-  const first = await deps.shipSpans([span])
-
-  // The exporter's own count first: a generation rejected at POST time (or never
-  // built) means no observation is COMING, so polling for one would burn the whole
-  // bound and then blame the ingestion worker for an export-side rejection.
-  if (first.observations !== 1) {
+  // The exporter's own count is checked after EVERY export, not just the first: a
+  // generation rejected at POST time means no observation is COMING, so polling for
+  // one would burn the whole bound and then blame the ingestion worker for an
+  // export-side rejection. The exporter's log lines are printed with it — that
+  // rejection reason is the most valuable thing on a one-shot live gate, and there
+  // is nothing else the operator could "re-run with" to obtain it.
+  const shippedOrFailed = (
+    result: { observations: number; log: string[] },
+    which: string
+  ): boolean => {
+    if (result.observations === 1) return true
     log('')
     log(
-      `FAIL — the exporter shipped ${first.observations} observation(s), expected 1. ` +
-        'The generation was rejected or skipped BEFORE ingestion; this is not a worker ' +
-        'race. Re-run with the export log visible to see the rejection.'
+      `FAIL — the ${which} shipped ${result.observations} observation(s), expected 1. ` +
+        'The generation was rejected or skipped BEFORE ingestion; this is not a worker race.'
     )
-    return 1
+    if (result.log.length > 0) {
+      log('  exporter log:')
+      for (const line of result.log) log(`    ${line.trim()}`)
+    }
+    return false
   }
 
+  const first = await deps.shipSpans([span])
+  if (!shippedOrFailed(first, 'exporter')) return 1
+
+  // Presence must include the FINAL body's marks, not merely the row: `exportSpans`
+  // sends a minimal init trace-create first, so a trace can be readable before its
+  // metadata exists. Asserting `usage_attributed` off that intermediate state is a
+  // FALSE MISMATCH during ordinary worker lag — the mirror of a false pass, and it
+  // burns the operator's one live run just as effectively.
   const carrier = await waitForPresence(
-    `the observation on ${carrierId}`,
+    `the observation + final body on ${carrierId}`,
     async () => {
       const t = await deps.getTrace(carrierId)
-      return observationsOf(t).length > 0 ? t : undefined
+      const settled = observationsOf(t).length > 0 && hasKey(t?.metadata, 'usage_attributed')
+      return settled ? t : undefined
     },
     deps
   )
@@ -291,8 +356,11 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   // The sibling trace must say, in metadata, that it carries none of the usage. Same
   // export, but a SEPARATE row with its own ingestion visibility.
   const sibling = await waitForPresence(
-    `the sibling trace ${siblingId}`,
-    () => deps.getTrace(siblingId),
+    `the sibling trace ${siblingId} (final body)`,
+    async () => {
+      const t = await deps.getTrace(siblingId)
+      return hasKey(t?.metadata, 'usage_attributed') ? t : undefined
+    },
     deps
   )
   const carrierMeta = (carrier.metadata ?? {}) as Record<string, unknown>
@@ -309,6 +377,7 @@ export async function runSmoke(deps: SmokeDeps): Promise<number> {
   // second write was actually processed, and only then assert count + id.
   const secondEndIso = new Date(RE_EXPORT_END_MS).toISOString()
   const second = await deps.shipSpans([makeSpan(RE_EXPORT_END_MS)])
+  if (!shippedOrFailed(second, 're-export')) return 1
   const after = await waitForPresence(
     `the re-export to be processed on ${carrierId} (endTime ${secondEndIso})`,
     async () => {
@@ -357,24 +426,33 @@ async function main(): Promise<number> {
   try {
     return await runSmoke({
       log: msg => console.log(msg),
-      // A 404 means "not visible yet" while the worker drains the queue; every other
-      // transport error is a real failure and propagates.
       getTrace: async id => {
         try {
-          // Bounded: an unbounded read would reintroduce, one layer up, exactly the
-          // hang the poller's deadline exists to prevent.
+          // Bounded per read. An abort is NOT fatal: it means this read did not come
+          // back in time, which is indistinguishable from "not visible yet" — so it
+          // is retried like any other empty read, and the OVERALL bound (which the
+          // poller owns) is what finally fails, with the same human-readable
+          // diagnosis as every other stalled path.
           return await api(cfg, 'GET', `/api/public/traces/${id}`, undefined, TRACE_READ_TIMEOUT_MS)
         } catch (err) {
-          if (err instanceof ApiError && err.status === 404) return undefined
+          if (readErrorDisposition(err) === 'retry') return undefined
           throw err
         }
       },
       shipSpans: async spans => {
-        // Through the REAL path, JSONL parse included.
+        // Through the REAL path, JSONL parse included. The exporter's log is captured
+        // rather than dropped, so a per-event rejection reaches the operator.
         const file = path.join(os.tmpdir(), `qa-obs-smoke-${crypto.randomUUID()}.jsonl`)
         fs.writeFileSync(file, spans.map(s => `${JSON.stringify(s)}\n`).join(''), 'utf8')
+        const captured: string[] = []
         try {
-          return await exportSpans(cfg, parseSpanFile(fs.readFileSync(file, 'utf8')), () => {})
+          const res = await exportSpans(
+            cfg,
+            parseSpanFile(fs.readFileSync(file, 'utf8')),
+            m => captured.push(m),
+            SMOKE_EXPORT_OPTIONS
+          )
+          return { observations: res.observations, log: captured }
         } finally {
           fs.rmSync(file, { force: true })
         }
@@ -390,7 +468,15 @@ async function main(): Promise<number> {
       )
       return 1
     }
-    throw err
+    // Anything else still fails as a DIAGNOSIS, not as a raw stack: the operator gets
+    // one line naming the failure class plus the message.
+    console.error('')
+    console.error(
+      `FAIL — the smoke could not complete: ${err instanceof Error ? `${err.name}: ${err.message}` : String(err)}`
+    )
+    console.error('  Neither the payload nor the ingestion worker is implicated; this is a')
+    console.error('  transport/configuration failure against ' + cfg.host + '.')
+    return 1
   }
 }
 

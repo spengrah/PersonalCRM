@@ -534,10 +534,16 @@ interface MockOpts {
   generationError?: boolean
   // HTTP-success MULTI-STATUS envelope that rejects the event inside `errors`.
   generationMultiStatus?: boolean
+  // Same, for the per-trace INIT event.
+  rejectInit?: boolean
+  // Same, for the score-create event.
+  rejectScore?: boolean
   // Never settle the generation-create POST — proves the request is time-bounded.
   generationNeverSettles?: boolean
   // Fail the final body event for the trace ids this predicate selects (carrier-gate tests).
   failBodyFor?: (traceId: string) => boolean
+  // HTTP-success MULTI-STATUS rejection of the final body event, per trace id.
+  rejectBodyFor?: (traceId: string) => boolean
   // Force multi-page list responses to exercise the paginator.
   configsPerPage?: number
   queuesPerPage?: number
@@ -626,13 +632,32 @@ function mockLangfuse(opts: MockOpts = {}): {
         const score = evt as unknown as ScoreEvent
         scores.push(score)
         order.push({ kind: 'score', traceId: score.body.traceId })
+        if (opts.rejectScore === true) {
+          return okText({
+            successes: [],
+            errors: [{ id: score.id, status: 400, message: 'score refused' }],
+          })
+        }
         return opts.scoreError === true ? err(500, 'score boom') : okText({})
       }
       const body = evt.body as ShippedBody
       const isInit = String(evt.id).includes('-init-')
       calls.push({ kind: isInit ? 'init' : 'body', traceId: body.id, id: String(evt.id) })
+      if (isInit && opts.rejectInit === true) {
+        return okText({
+          successes: [],
+          errors: [{ id: String(evt.id), status: 400, message: 'init refused' }],
+        })
+      }
       if (!isInit) {
         if (opts.failBodyFor?.(body.id) === true) return err(500, 'body boom')
+        if (opts.rejectBodyFor?.(body.id) === true) {
+          // HTTP 200, event rejected inside the envelope.
+          return okText({
+            successes: [],
+            errors: [{ id: String(evt.id), status: 400, message: 'trace body refused' }],
+          })
+        }
         bodies.push(body)
         order.push({ kind: 'body', traceId: body.id })
       }
@@ -1197,6 +1222,22 @@ describe('exportSpans — enqueue predicate (INV-B/F, explicit closed union)', (
     expect(mock.itemPosts[0].objectType).toBe('TRACE')
   })
 
+  it('an all-PASS non-mutation round with saltPasses 0 issues ZERO queue POSTs', async () => {
+    // The shape the live smoke ships: synthetic passes must never land in the queue a
+    // human uses for real labeling, and zero-salt is what keeps them out.
+    const mock = mockLangfuse()
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(
+      cfg,
+      [itemSpan('pass', usageParams), itemSpan('pass', { ...usageParams, behaviorId: 'S-2' })],
+      () => {},
+      { saltPasses: 0 }
+    )
+    expect(mock.itemPosts).toHaveLength(0)
+    expect(res.enqueue.attempted).toBe(0)
+    expect(res.enqueue.enqueued).toBe(0)
+  })
+
   it('a mutation trace with NO verdict (verdict === undefined) STILL enqueues as a trap (INV-B)', async () => {
     // A doctored span with no scenario → no per-item verdict. Enqueue must fire on the
     // mutation flag ALONE — never on a `verdict !== 'pass'` negation, which would also
@@ -1501,20 +1542,28 @@ describe('ingestionRejection (PURE)', () => {
     expect(ingestionRejection({}, 'e1')).toBeUndefined()
   })
 
-  it("reports OUR event when the envelope rejects it, and ignores another event's error", () => {
+  it('reports OUR event when the envelope names it', () => {
     const mine = ingestionRejection(
       { errors: [{ id: 'e1', status: 400, message: 'invalid usageDetails' }] },
       'e1'
     )
     expect(mine).toContain('invalid usageDetails')
     expect(mine).toContain('400')
-    expect(
-      ingestionRejection({ errors: [{ id: 'other', status: 400, message: 'nope' }] }, 'e1')
-    ).toBeUndefined()
   })
 
-  it('treats an unidentified error entry as OUR rejection (the batch carries one event)', () => {
+  it('treats an UNATTRIBUTABLE error entry as OUR rejection — never as acceptance', () => {
+    // Every batch this exporter posts carries exactly ONE event, so any errors entry
+    // is that event's. Skipping an entry whose id we do not recognize would fail OPEN
+    // in precisely the case where we understand the response least.
     expect(ingestionRejection({ errors: [{ message: 'boom' }] }, 'e1')).toContain('boom')
+    const foreign = ingestionRejection(
+      { errors: [{ id: 'other', status: 400, message: 'nope' }] },
+      'e1'
+    )
+    expect(foreign).toContain('nope')
+    expect(foreign).toContain('reported against other')
+    // Even an unreadable entry is a rejection, not a pass.
+    expect(ingestionRejection({ errors: ['garbage'] }, 'e1')).toContain('unreadable')
   })
 })
 
@@ -1606,6 +1655,44 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     expect(res.traces).toBe(1) // the sibling still shipped
   })
 
+  it('SKIPS the observation when the carrier body was REJECTED by the multi-status envelope', async () => {
+    // The HTTP call resolves, so nothing throws — only the envelope says the carrier's
+    // full body never landed. Emitting the generation anyway would produce the dangling
+    // observation the carrier gate exists to prevent.
+    const span = usageSpan()
+    const carrier = `${traceIdFor(span)}-item0`
+    const mock = mockLangfuse({ rejectBodyFor: id => id === carrier })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [span])
+    expect(mock.generations).toHaveLength(0)
+    expect(res.observations).toBe(0)
+    expect(res.failed).toBe(1) // the rejected body counts as a ship failure
+    expect(res.traces).toBe(1) // the sibling still shipped
+  })
+
+  it('logs a score rejected by the envelope, without touching the trace or the enqueue', async () => {
+    const mock = mockLangfuse({ rejectScore: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const logs: string[] = []
+    const res = await exportSpans(cfg, [itemSpan('fail', usageParams)], m => logs.push(m))
+    expect(res.traces).toBe(1)
+    expect(res.failed).toBe(0)
+    expect(res.enqueue.enqueued).toBe(1)
+    expect(logs.some(l => l.includes('score-create failed') && l.includes('score refused'))).toBe(
+      true
+    )
+  })
+
+  it('does NOT count a trace whose INIT event was rejected by the envelope', async () => {
+    const span = itemSpan('fail', usageParams)
+    const mock = mockLangfuse({ rejectInit: true })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const res = await exportSpans(cfg, [span])
+    expect(res.traces).toBe(0)
+    expect(res.failed).toBe(1)
+    expect(res.observations).toBe(0)
+  })
+
   it('STILL ships the observation when only a NON-carrier sibling failed', async () => {
     const span = usageSpan()
     const sibling = `${traceIdFor(span)}-item2`
@@ -1632,7 +1719,7 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     expect(res.failed).toBe(0)
     expect(res.enqueue.enqueued).toBe(1)
     expect(
-      logs.some(l => l.includes('generation-create rejected') && l.includes('invalid usageDetails'))
+      logs.some(l => l.includes('generation-create failed') && l.includes('invalid usageDetails'))
     ).toBe(true)
   })
 

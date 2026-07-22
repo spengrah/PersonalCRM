@@ -632,30 +632,58 @@ type Verdict = 'pass' | 'fail' | 'unsure'
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-// PURE: the rejection reason for `eventId` in an ingestion response, or `undefined`
-// when the event was accepted. `/api/public/ingestion` is MULTI-STATUS — a 2xx body
-// carries `successes` and `errors` arrays, so an HTTP success does NOT mean the
-// event was stored. An unparseable/absent `errors` array is treated as acceptance:
-// this is a best-effort counter, and inventing a failure from an unrecognized
-// envelope would be as dishonest as ignoring a real one.
+// PURE: the rejection reason in an ingestion response, or `undefined` when the event
+// was accepted. `/api/public/ingestion` is MULTI-STATUS — a 2xx body carries
+// `successes` and `errors` arrays, so an HTTP success does NOT mean the event was
+// stored, and a resolved `api()` call is not evidence of anything.
+//
+// EVERY event this exporter posts rides a batch of exactly ONE, so ANY entry in
+// `errors` is our event's rejection — including an entry whose id we do not
+// recognize. Skipping an unattributable entry would fail OPEN: the one shape where
+// we are least sure what happened is the one where we would claim success. An
+// absent/empty `errors` array is acceptance; that is the documented success shape,
+// not an unknown.
 export function ingestionRejection(
   res: Record<string, unknown>,
   eventId: string
 ): string | undefined {
   const errors = res.errors
   if (!Array.isArray(errors) || errors.length === 0) return undefined
-  for (const e of errors) {
-    if (e === null || typeof e !== 'object') continue
-    const row = e as Record<string, unknown>
-    // Match our event when the envelope identifies one; an errors entry with no
-    // recognizable id in a single-event batch is still OUR event.
-    const id = typeof row.id === 'string' ? row.id : undefined
-    if (id !== undefined && id !== eventId) continue
-    const status = row.status !== undefined ? `status ${String(row.status)}` : undefined
-    const message = typeof row.message === 'string' ? row.message : undefined
-    return [status, message].filter(Boolean).join(': ') || JSON.stringify(row).slice(0, 200)
+  // Prefer the entry naming our event; otherwise report the first, flagging that the
+  // envelope attributed it elsewhere (still a rejection — the batch had one event).
+  const rows = errors.filter(
+    (e): e is Record<string, unknown> => e !== null && typeof e === 'object'
+  )
+  if (rows.length === 0) return `ingestion reported ${errors.length} unreadable error entry/entries`
+  const mine = rows.find(r => r.id === eventId)
+  const row = mine ?? rows[0]
+  const status = row.status !== undefined ? `status ${String(row.status)}` : undefined
+  const message = typeof row.message === 'string' ? row.message : undefined
+  const attribution =
+    mine === undefined && typeof row.id === 'string' && row.id !== eventId
+      ? `(reported against ${row.id}, not ${eventId})`
+      : undefined
+  return (
+    [status, message, attribution].filter(Boolean).join(': ') || JSON.stringify(row).slice(0, 200)
+  )
+}
+
+// Post ONE ingestion event and treat a per-event rejection as a failure, not a
+// success. Every ingestion POST in this file goes through here: inferring success
+// from a resolved `api()` call is the defect, and it is identical at all four sites
+// (init trace-create, final trace-create, score-create, generation-create). Callers
+// keep their own failure policy — the fatal ones let it throw, the best-effort ones
+// catch and log.
+async function postIngestionEvent(
+  cfg: LangfuseConfig,
+  event: Record<string, unknown>,
+  timeoutMs?: number
+): Promise<void> {
+  const res = await api(cfg, 'POST', '/api/public/ingestion', { batch: [event] }, timeoutMs)
+  const rejection = ingestionRejection(res, String(event.id))
+  if (rejection !== undefined) {
+    throw new Error(`ingestion rejected ${String(event.id)}: ${rejection}`)
   }
-  return undefined
 }
 
 // The per-item-trace verdict IS that trace's `output` (a PerItemVerdict). The enum
@@ -799,15 +827,11 @@ export async function exportSpans(
     for (const body of buildTraceBody(span, scrub)) {
       try {
         // (1) The trace must exist before media can be registered against it.
-        await api(cfg, 'POST', '/api/public/ingestion', {
-          batch: [
-            {
-              id: `evt-${body.id}-init-${nonce}`,
-              type: 'trace-create',
-              timestamp: new Date().toISOString(),
-              body: { id: body.id, name: body.name },
-            },
-          ],
+        await postIngestionEvent(cfg, {
+          id: `evt-${body.id}-init-${nonce}`,
+          type: 'trace-create',
+          timestamp: new Date().toISOString(),
+          body: { id: body.id, name: body.name },
         })
 
         // (2) Register/upload each expected screenshot against THIS trace's id,
@@ -858,15 +882,14 @@ export async function exportSpans(
         if (spanModel !== undefined) tags.push(`model:${spanModel}`)
         const wireBody: Record<string, unknown> = { ...finalBody, tags }
         if (opts.runId) wireBody.sessionId = opts.runId
-        await api(cfg, 'POST', '/api/public/ingestion', {
-          batch: [
-            {
-              id: `evt-${body.id}-${nonce}`,
-              type: 'trace-create',
-              timestamp: new Date().toISOString(),
-              body: wireBody,
-            },
-          ],
+        // A per-event rejection here throws, so `result.traces` and `carrierShipped`
+        // are never set for a body that did not land — the generation below must
+        // not be emitted against a trace whose full body was refused.
+        await postIngestionEvent(cfg, {
+          id: `evt-${body.id}-${nonce}`,
+          type: 'trace-create',
+          timestamp: new Date().toISOString(),
+          body: wireBody,
         })
         result.traces++
         if (body.id === carrierId) carrierShipped = true
@@ -896,15 +919,11 @@ export async function exportSpans(
               traceId: body.id,
             }
             if (configId) scoreBody.configId = configId
-            await api(cfg, 'POST', '/api/public/ingestion', {
-              batch: [
-                {
-                  id: `evt-${body.id}-score-${nonce}`,
-                  type: 'score-create',
-                  timestamp: spanStartIso,
-                  body: scoreBody,
-                },
-              ],
+            await postIngestionEvent(cfg, {
+              id: `evt-${body.id}-score-${nonce}`,
+              type: 'score-create',
+              timestamp: spanStartIso,
+              body: scoreBody,
             })
           } catch (err) {
             log(`  score-create failed for ${body.id}: ${errMsg(err)}`)
@@ -932,34 +951,20 @@ export async function exportSpans(
       try {
         const genBody = buildGenerationBody(span, scrub)
         if (genBody) {
-          const eventId = `evt-${traceIdFor(span)}-gen-${nonce}`
-          const res = await api(
+          // A per-event rejection throws, so the count reflects ACCEPTED
+          // observations — counting the POST would report a shipped observation
+          // that was never stored.
+          await postIngestionEvent(
             cfg,
-            'POST',
-            '/api/public/ingestion',
             {
-              batch: [
-                {
-                  id: eventId,
-                  type: 'generation-create',
-                  timestamp: genBody.startTime,
-                  body: genBody,
-                },
-              ],
+              id: `evt-${traceIdFor(span)}-gen-${nonce}`,
+              type: 'generation-create',
+              timestamp: genBody.startTime,
+              body: genBody,
             },
             opts.observationTimeoutMs ?? OBSERVATION_TIMEOUT_MS
           )
-          // The ingestion endpoint is MULTI-STATUS: an HTTP success can still carry
-          // per-event rejections in `errors`. Counting the POST rather than the EVENT
-          // would report a shipped observation that was never accepted — a silently
-          // wrong but green count, which is the exact failure this export exists to
-          // eliminate.
-          const rejection = ingestionRejection(res, eventId)
-          if (rejection !== undefined) {
-            log(`  generation-create rejected for ${traceIdFor(span)}: ${rejection}`)
-          } else {
-            result.observations++
-          }
+          result.observations++
         }
       } catch (err) {
         log(`  generation-create failed for ${traceIdFor(span)}: ${errMsg(err)}`)
