@@ -481,7 +481,16 @@ func (h *Harness) SeedVisibleTaskSpread(ctx context.Context, cadenceBearingIDs [
 // base62UUIDWidth and the ordinal to visibleTaskOrdinalWidth makes the split
 // unambiguous, so (contactID, ordinal) → id is one-to-one. The result stays
 // alphanumeric (base62 digits + '0' padding), matching the Todoist-v1 id shape.
+//
+// Precondition: 0 <= ordinal < 62*62 (the values that fit visibleTaskOrdinalWidth
+// base62 digits). Callers use small per-contact ordinals (0, 1). A negative ordinal
+// would emit a non-alphanumeric '-', and an over-wide one would drive strings.Repeat
+// to a negative count — both are seed-time programming errors, so this panics loudly
+// rather than returning a malformed id.
 func paddedBase62UUID(id uuid.UUID, ordinal int) string {
+	if ordinal < 0 || ordinal >= 62*62 {
+		panic(fmt.Sprintf("paddedBase62UUID: ordinal %d out of range [0, %d)", ordinal, 62*62))
+	}
 	raw := base62UUID(id)
 	padded := strings.Repeat("0", base62UUIDWidth-len(raw)) + raw
 	ord := new(big.Int).SetInt64(int64(ordinal)).Text(62)

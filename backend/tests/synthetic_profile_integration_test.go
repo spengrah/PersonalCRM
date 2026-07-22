@@ -125,6 +125,27 @@ func assertVisibleTaskSpread(t *testing.T, ctx context.Context, support *reposit
 	require.Equal(t, 1, multiVisible, "exactly 1 catalog contact has >1 visible task (index 3)")
 	require.Equal(t, len(catalogIDs)-3, zeroVisible, "the remaining catalog contacts are the 0-visible majority (background cadence_due only)")
 
+	// Enforce the EXACT creation-index allocation, not just the aggregate histogram: a
+	// deterministic reallocation to other indices (e.g. 0,1,4) would pass the histogram
+	// + the name-keyed fingerprint but must fail HERE. Every catalog slot is
+	// cadence-bearing (catalogOptionsFor), so CatalogContactIDs is the same
+	// creation-ordered slice SeedVisibleTaskSpread indexed into.
+	countByID := make(map[uuid.UUID]int64, len(counts))
+	for _, c := range counts {
+		countByID[c.ContactID] = c.VisibleCount
+	}
+	for i, id := range catalogIDs {
+		want := int64(0)
+		switch i {
+		case 1, 2:
+			want = 1
+		case 3:
+			want = 2
+		}
+		require.Equal(t, want, countByID[id], "catalog creation index %d visible-task count", i)
+	}
+	require.Equal(t, catalogIDs[1:4], h.ManualCohortIDs(), "manual cohorts are exactly creation indices 1, 2, 3")
+
 	// Row-level coverage over every seeded task (joined to its stable-identity
 	// full_name): the product-visible picture, kinds, lifecycles, link-age spread,
 	// and non-empty manual content.

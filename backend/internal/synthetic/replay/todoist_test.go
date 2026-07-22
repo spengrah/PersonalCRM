@@ -1,10 +1,12 @@
 package replay
 
 import (
+	"context"
 	"regexp"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 )
 
 // TestPaddedBase62UUID pins the injective, fixed-width, alphanumeric external-id
@@ -55,6 +57,15 @@ func TestPaddedBase62UUID(t *testing.T) {
 		t.Fatalf("ordinals 0 and 1 collided: both %q", a)
 	}
 
+	// Documented ordinal domain [0, 62*62): the top of the range still yields a
+	// fixed-width alphanumeric id, and out-of-range ordinals panic rather than emit a
+	// malformed ('-' or over-width) id.
+	if top := paddedBase62UUID(id, 62*62-1); len(top) != wantLen || !alnum.MatchString(top) {
+		t.Fatalf("ordinal 62*62-1: got %q (len %d)", top, len(top))
+	}
+	require.Panics(t, func() { paddedBase62UUID(id, -1) }, "negative ordinal must panic")
+	require.Panics(t, func() { paddedBase62UUID(id, 62*62) }, "over-wide ordinal must panic")
+
 	// Injectivity across (contact, ordinal): every combination in a small grid maps
 	// to a distinct id, including the padding-boundary low-valued UUID beside others.
 	ids := []uuid.UUID{zero, id, maxU, uuid.MustParse("00000000-0000-0000-0000-000000000001")}
@@ -73,5 +84,25 @@ func TestPaddedBase62UUID(t *testing.T) {
 			}
 			seen[enc] = struct{}{}
 		}
+	}
+}
+
+// TestSeedVisibleTaskSpread_NoOpBelowMinCatalog is the regression guard for the
+// visibleSpreadMinCatalog precondition: below the threshold the spread must be a
+// documented no-op (protecting a custom short profile from the fixed-index access).
+// The guard returns before touching the harness's DB/generator, so a bare Harness
+// suffices; removing the guard makes these calls dereference a nil database and
+// panic, failing the test loudly.
+func TestSeedVisibleTaskSpread_NoOpBelowMinCatalog(t *testing.T) {
+	h := &Harness{}
+	for k := 0; k < visibleSpreadMinCatalog; k++ {
+		ids := make([]uuid.UUID, k)
+		for i := range ids {
+			ids[i] = uuid.New()
+		}
+		res, err := h.SeedVisibleTaskSpread(context.Background(), ids)
+		require.NoError(t, err, "no-op for %d ids", k)
+		require.Equal(t, SpreadResult{}, res, "spread is a no-op below %d ids (got %d)", visibleSpreadMinCatalog, k)
+		require.Nil(t, h.ManualCohortIDs(), "no manual cohort recorded for %d ids", k)
 	}
 }
