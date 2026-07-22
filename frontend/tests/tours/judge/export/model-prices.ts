@@ -249,6 +249,13 @@ function parseTier(raw: unknown, where: string): UpstreamTier {
   if (!Array.isArray(raw.conditions)) {
     throw new UpstreamShapeError(`${where}: tier conditions is not an array`)
   }
+  // Elements are forwarded verbatim, so each must at least BE an object — a scalar
+  // condition submits a body the API can reject inside the delete-then-create window.
+  // Their keys stay opaque for the same reason the tokenizer config's do: the
+  // condition schema belongs to Langfuse and will grow.
+  if (raw.conditions.some(c => !isPlainObject(c))) {
+    throw new UpstreamShapeError(`${where}: tier conditions contains a non-object`)
+  }
   // Null-is-absent, consistently with the tokenizer fields: an unnamed tier is keyed
   // by priority instead.
   if (raw.name !== undefined && raw.name !== null && typeof raw.name !== 'string') {
@@ -368,6 +375,19 @@ function parseEntry(rawModel: Record<string, unknown>, where: string): UpstreamM
       typeof rawModel.tokenizerId !== 'string'
     ) {
       throw new UpstreamShapeError(`${where}: tokenizerId is present but not a string`)
+    }
+    // Forwarded verbatim into a create body, so its TYPE matters as much as its
+    // null-ness. A scalar or array here submits a body the API can reject — and that
+    // rejection lands in the delete-then-create window, where the model has already
+    // lost its override and falls back to stale managed pricing or to nothing at all.
+    // The KEYS are deliberately not inspected: that is another application's tokenizer
+    // schema, and encoding it here would reject valid entries the day it grows.
+    if (
+      rawModel.tokenizerConfig !== undefined &&
+      rawModel.tokenizerConfig !== null &&
+      !isPlainObject(rawModel.tokenizerConfig)
+    ) {
+      throw new UpstreamShapeError(`${where}: tokenizerConfig is present but not an object`)
     }
     const tiers = rawModel.pricingTiers.map((t, n) => parseTier(t, `${where} tier ${n}`))
     const defaults = tiers.filter(t => t.isDefault)

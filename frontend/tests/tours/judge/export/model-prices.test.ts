@@ -758,6 +758,21 @@ describe('parseUpstream', () => {
       ),
     ],
     ['tokenizerId non-string', withEntry(e => (e.tokenizerId = 3))],
+    ['tokenizerConfig non-object (scalar)', withEntry(e => (e.tokenizerConfig = 'openai'))],
+    ['tokenizerConfig non-object (array)', withEntry(e => (e.tokenizerConfig = [1, 2]))],
+    [
+      'a condition that is not an object',
+      withEntry(e => {
+        const t = tiers(e)
+        t.push({
+          name: 'Conditional',
+          isDefault: false,
+          priority: 1,
+          conditions: ['big'],
+          prices: { input: 1e-6 },
+        })
+      }),
+    ],
   ]
 
   for (const [label, payload] of rejections) {
@@ -852,6 +867,44 @@ describe('validation blast radius', () => {
     expect(actionFor(r.out, JUDGE)).not.toBe('absent')
     expect(r.mock.creates).toHaveLength(0)
     expect(r.code).not.toBe(0)
+  })
+
+  it('REFUSES a target whose tokenizerConfig is malformed BEFORE any delete-then-create', async () => {
+    // The dangerous window: on a replace the override is deleted first, so a create
+    // the API rejects leaves the model on stale managed pricing — or unpriced. The
+    // refusal has to happen before the first DELETE, not at the create.
+    const set = clone(UNIQUE_SET)
+    const mine = set.find(m => m.modelName === entry.modelName) as Record<string, unknown>
+    mine.tokenizerConfig = 'not-an-object'
+    const r = await run(['--models', JUDGE, '--strict'], {
+      upstreamText: JSON.stringify(set),
+      models: [stale(entry), stale(entry, { id: 'ovr-1', isLangfuseManaged: false })],
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('refused')
+    expect(lineFor(r.out, JUDGE)).toContain('tokenizerConfig')
+    expect(r.mock.deletes).toHaveLength(0)
+    expect(r.mock.creates).toHaveLength(0)
+    expect(r.mock.order).toEqual([])
+    expect(r.code).not.toBe(0)
+  })
+
+  it('skips a malformed tokenizerConfig on a NON-target entry and still syncs', async () => {
+    const set = clone(UNIQUE_SET)
+    const stranger = set.find(m => m.modelName === 'text-bison') as Record<string, unknown>
+    stranger.tokenizerConfig = 7
+    const r = await run(['--models', JUDGE, '--strict'], {
+      upstreamText: JSON.stringify(set),
+      models: [stale(entry)],
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('create')
+    expect(r.mock.creates).toHaveLength(1)
+    expect(r.err.join('\n')).toContain('tokenizerConfig')
+    expect(r.code).toBe(0)
+  })
+
+  it('round-trips a VALID tokenizerConfig object into the create body unchanged', async () => {
+    const r = await run(['--models', JUDGE, '--strict'], { models: [stale(entry)] })
+    expect(r.mock.creates[0].tokenizerConfig).toEqual(entry.tokenizerConfig)
   })
 
   it('a corrupted RESPONSE is still fatal for the whole run', async () => {
