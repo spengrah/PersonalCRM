@@ -731,6 +731,21 @@ test_price_sync_after_preflight() {
     cleanup_fixture
 }
 
+test_price_sync_after_reservation() {
+    echo "test: a run-id collision aborts WITHOUT having synced prices (the loser never mutates)"
+    make_fixture
+    # Two invocations can share a second-granular run id; the atomic run-dir
+    # reservation is what picks a winner. The loser must abort before touching shared
+    # Langfuse pricing state, so the sync sits AFTER the reservation.
+    mkdir -p "$FIXTURE/frontend/tests/tours/.runs/20260101T000000Z"
+    run_orch QA_RUN_ID_OVERRIDE=20260101T000000Z
+    assert_rc_nz price-reservation
+    assert_kv round aborted price-reservation
+    assert_not_ran qa-model-prices price-reservation
+    assert_not_ran tours price-reservation
+    cleanup_fixture
+}
+
 test_price_sync_skipped_round() {
     echo "test: cadence gate says skip -> the price sync never runs"
     make_fixture
@@ -1048,6 +1063,7 @@ main() {
 
     test_price_sync_runs_first
     test_price_sync_after_preflight
+    test_price_sync_after_reservation
     test_price_sync_skipped_round
     test_price_sync_failure_is_not_ok
     test_price_sync_malformed_provenance

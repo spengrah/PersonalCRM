@@ -117,6 +117,8 @@ interface MockOpts {
   /** 1-based index of a models LIST request (page 1) that fails — a re-read error. */
   failListCall?: number
   failDelete?: (id: string, nth: number) => boolean
+  /** A DELETE that removes the row and THEN fails — a lost response, not a no-op. */
+  deleteCommitsThenErrors?: (id: string) => boolean
   failCreate?: boolean
   health?: Record<string, unknown> | 'error'
 }
@@ -229,6 +231,12 @@ function mockTransport(opts: MockOpts = {}) {
       if (opts.failDelete?.(id, deleteCount) === true) {
         order.push(`delete-failed ${id}`)
         return errRes(500, 'delete boom')
+      }
+      if (opts.deleteCommitsThenErrors?.(id) === true) {
+        const gone = liveRows.findIndex(r => String(r.id) === id)
+        if (gone >= 0) liveRows.splice(gone, 1)
+        order.push(`delete-committed-then-errored ${id}`)
+        return errRes(504, 'gateway timeout')
       }
       deletes.push(id)
       const at = liveRows.findIndex(r => String(r.id) === id)
@@ -1136,6 +1144,121 @@ describe('target aliases', () => {
     expect(actionFor(r.out, JUDGE)).toBe('none')
     expect(actionFor(r.out, INTENT)).toBe('none')
     expect(r.code).toBe(0)
+  })
+})
+
+describe('unknown server state', () => {
+  const entry = sampleEntry(JUDGE)
+
+  it('re-reads after a DELETE that committed and then lost its response', async () => {
+    // `deleted` never incremented, so a "did I write?" flag would say no — while the
+    // row is in fact gone and every later target would be judged against a phantom.
+    const r = await run(['--models', `${JUDGE},${INTENT}`, '--strict'], {
+      models: [
+        stale(entry),
+        stale(entry, { id: 'ovr-1', isLangfuseManaged: false }),
+        stale(sampleEntry('gpt-5.5-2026-04-23'), { id: 'ovr-2', isLangfuseManaged: false }),
+      ],
+      deleteCommitsThenErrors: id => id === 'ovr-1',
+      failListCall: 2,
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('failed')
+    // The re-read was attempted (and, here, failed) rather than skipped — proof the
+    // errored attempt marked the snapshot unknown.
+    expect(actionFor(r.out, INTENT)).toBe('failed')
+    expect(lineFor(r.out, INTENT)).toContain('could not re-read the instance')
+    expect(r.code).not.toBe(0)
+  })
+
+  it('re-reads after a failed CREATE with no preceding delete', async () => {
+    const r = await run(['--models', `${JUDGE},${INTENT}`, '--strict'], {
+      models: [stale(entry), stale(sampleEntry('gpt-5.5-2026-04-23'))],
+      failCreate: true,
+      failListCall: 2,
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('failed')
+    expect(lineFor(r.out, INTENT)).toContain('could not re-read the instance')
+  })
+
+  it('a successful DELETE-then-committed-error still converges on the next run', async () => {
+    // The row really is gone, so a later run observes row 3 and re-creates.
+    const r = await run(['--models', JUDGE, '--strict'], { models: [] })
+    expect(actionFor(r.out, JUDGE)).toBe('create')
+    expect(r.mock.creates).toHaveLength(1)
+  })
+})
+
+// ===========================================================================
+// The guard has no unguarded route to a write
+// ===========================================================================
+
+describe('guard totality', () => {
+  const entry = sampleEntry(JUDGE)
+  const zeroed = (value: number, key = 'input') => {
+    const e = clone(entry)
+    const tiers = e.pricingTiers as Array<{ prices: Record<string, number> }>
+    tiers[0].prices[key] = value
+    return JSON.stringify([e])
+  }
+
+  it('refuses a zero price on a model with NO existing definition (first write)', async () => {
+    const r = await run(['--models', JUDGE, '--strict'], {
+      models: [],
+      upstreamText: zeroed(0),
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('refused')
+    expect(lineFor(r.out, JUDGE)).toContain('zero or negative')
+    expect(r.mock.creates).toHaveLength(0)
+    expect(r.code).not.toBe(0)
+  })
+
+  it('refuses a NEGATIVE price on a first write', async () => {
+    const r = await run(['--models', JUDGE, '--strict'], {
+      models: [],
+      upstreamText: zeroed(-1e-6),
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('refused')
+    expect(r.mock.creates).toHaveLength(0)
+  })
+
+  it('refuses a zero price on a usage key upstream just ADDED to an existing model', async () => {
+    // from is undefined for a brand-new key, which is exactly the shortcut a
+    // ratio-only guard takes before ever looking at the value.
+    const r = await run(['--models', JUDGE, '--strict'], {
+      models: [stale(entry)],
+      upstreamText: zeroed(0, 'audio_tokens'),
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('refused')
+    expect(lineFor(r.out, JUDGE)).toContain('audio_tokens')
+    expect(r.mock.creates).toHaveLength(0)
+  })
+
+  it('still writes a first definition whose prices are all positive', async () => {
+    const r = await run(['--models', JUDGE, '--strict'], { models: [] })
+    expect(actionFor(r.out, JUDGE)).toBe('create')
+    expect(r.mock.creates).toHaveLength(1)
+  })
+
+  it('--force is the only way past any of them', async () => {
+    const r = await run(['--models', JUDGE, '--strict', '--force'], {
+      models: [],
+      upstreamText: zeroed(0),
+    })
+    expect(actionFor(r.out, JUDGE)).toBe('create')
+    expect(r.mock.creates).toHaveLength(1)
+  })
+
+  it('guardDeltasFor never returns an empty set for a write with no baseline', () => {
+    const upstream = upstreamOf(JUDGE)
+    const deltas = guardDeltasFor({
+      action: { kind: 'create', reason: '' },
+      upstream,
+      effManaged: undefined,
+      effOverride: undefined,
+    })
+    expect(deltas.length).toBeGreaterThan(0)
+    expect(deltas.every(d => d.from === undefined)).toBe(true)
+    expect(deltas.some(d => d.usageType !== undefined)).toBe(true)
   })
 })
 

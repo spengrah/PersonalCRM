@@ -622,13 +622,19 @@ export function guardDelta(deltas: PriceDelta[]): GuardVerdict {
   for (const d of deltas) {
     if (d.usageType === undefined) continue
     const { from, to } = d
-    // A newly-priced usage type has no prior value to be implausible against.
+    // Checked BEFORE the no-baseline shortcut below: a price of zero or less is
+    // never acceptable, whether it replaces an existing value, arrives on a usage key
+    // upstream just added, or is the first price this model has ever had. Guarding it
+    // only when a baseline exists leaves "the price is now nothing" a valid entry
+    // through two other doors.
+    if (to !== undefined && to <= 0) {
+      return refuse(`${d.usageType} ${fmtPrice(from)} -> ${fmtPrice(to)} (zero or negative)`)
+    }
+    // A newly-priced usage type has no prior value to be implausible AGAINST — only
+    // the ratio check needs one.
     if (from === undefined) continue
     if (to === undefined) {
       return refuse(`${d.usageType} ${fmtPrice(from)} is absent upstream`)
-    }
-    if (to <= 0) {
-      return refuse(`${d.usageType} ${fmtPrice(from)} -> ${fmtPrice(to)} (zero or negative)`)
     }
     if (from <= 0) continue
     const ratio = to > from ? to / from : from / to
@@ -649,7 +655,11 @@ const refuse = (detail: string): GuardVerdict => ({
  * Every mutating action changes which definition prices this model, so every one is
  * guarded. What differs is WHICH pair to compare:
  *
- *   create / replace — the definition in force today becomes upstream's.
+ *   create / replace — the definition in force today becomes upstream's. With NO
+ *     definition in force (a brand-new model, or an override-only target whose
+ *     override is gone), the comparison is against an EMPTY definition, so upstream's
+ *     values still reach the guard as newly-priced keys. Returning nothing here would
+ *     leave every first write of a model completely unguarded.
  *   delete (hand-back) — the override in force today is REMOVED, so pricing falls
  *     back to the managed row. Comparing the managed row against upstream here would
  *     be a guard that can never fire: this action is only reached BECAUSE those two
@@ -674,7 +684,13 @@ export function guardDeltasFor(input: {
       : []
   }
   const inForce = effOverride ?? effManaged
-  return inForce === undefined ? [] : diffPrices(inForce, upstream)
+  // An empty carrier yields a `to`-only delta for every upstream price, which is
+  // exactly what a first write is: every key is new.
+  const baseline: PriceCarrier = inForce ?? {
+    matchPattern: upstream.matchPattern,
+    pricingTiers: [],
+  }
+  return diffPrices(baseline, upstream)
 }
 
 // ---------------------------------------------------------------------------
@@ -924,8 +940,14 @@ async function warnOnVersionSkew(
   }
 }
 
-/** Reconcile ONE target against `rows`. Returns true when it MUTATED the instance,
- * which is the caller's signal that `rows` is now stale.
+/** Reconcile ONE target against `rows`. Returns true when the snapshot may no longer
+ * be current — which is NOT the same as "a write succeeded".
+ *
+ * An ambiguous HTTP failure (a timeout, a dropped connection) means the server's
+ * state is UNKNOWN, and unknown is not unchanged: a DELETE that commits and then
+ * loses its response leaves a row gone that the snapshot still shows. So every path
+ * that has ATTEMPTED a write reports true, success or not — the same reasoning the
+ * caller applies to a thrown error, applied to the error-RETURN path.
  *
  * DIFFERENT target strings can select the SAME upstream definition (a bare alias and
  * a dated one — `gpt-5.5`'s live pattern matches both `gpt-5.5` and
@@ -1050,8 +1072,8 @@ async function reconcileTarget(
         'failed',
         `deleted ${deleted} of ${ordered.length} override(s), delete failed: ${errMsg(err)}`
       )
-      // A partial delete still mutated the instance.
-      return deleted > 0
+      // The failing DELETE may well have committed before its response was lost.
+      return true
     }
   }
 
@@ -1083,7 +1105,8 @@ async function reconcileTarget(
       // price, and exactly where it would have been without this sync.
       line('failed', `deleted ${plural(deleted, 'override')}, create failed: ${errMsg(err)}`)
     }
-    return deleted > 0
+    // Same reasoning as a failed delete: the create may have landed anyway.
+    return true
   }
 
   if (action.kind === 'replace') {

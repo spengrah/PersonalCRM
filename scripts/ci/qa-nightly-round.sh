@@ -208,36 +208,6 @@ if ! bash "$SHA_ASSERT" "$QA_HEAD_SHA"; then
   abort "pre-tours deployed-sha assert failed — checkout not pinned to $QA_HEAD_SHA"
 fi
 
-# 3a-post. Model-price sync (fail-open). Stale prices make cost APPROXIMATE; a
-# skipped round makes the night's QA ABSENT — so a failure here logs loudly, records
-# a manifest field, and CONTINUES. It runs before tours and the export because
-# Langfuse resolves a model's price when the observation is INGESTED, not when it was
-# produced.
-#
-# It runs AFTER the preflight (trace path + the pre-tours deployed-sha pin) and never
-# before: this is the round's first EXTERNAL mutation, and creating or deleting model
-# definitions from a checkout that then turns out not to be the deployed sha — or for
-# a round that aborts a line later on a missing trace path — leaves pricing state
-# changed by a round that never ran.
-# We invoke with STRICT=1 precisely so the exit code is trustworthy: the fail-open
-# lives HERE, in not aborting, not in the child masking its own failures.
-# Same env discipline as every other make child: the injected QA_*_CMD vars can embed
-# secrets and the sync consumes none of them, nor the tours API key. It DOES need
-# LANGFUSE_* — those are its whole purpose — so those stay.
-price_sync_out="$( cd "$REPO_ROOT" && env -u QA_RESEED_CMD -u QA_DEPLOYED_SHA_CMD \
-  -u QA_DEPLOYED_GEN_CMD -u TOURS_API_KEY STRICT=1 "$MAKE" qa-model-prices 2>&1 )" \
-  && price_sync_rc=0 || price_sync_rc=$?
-printf '%s\n' "$price_sync_out"
-price_sync_sha="$(printf '%s\n' "$price_sync_out" | grep -E '^upstream_sha256=[0-9a-f]{64}$' | head -1 | cut -d= -f2-)"
-if [ "$price_sync_rc" -eq 0 ]; then
-  price_sync_status=ok
-else
-  price_sync_status=failed
-  emit price_sync_reason "qa-model-prices exited $price_sync_rc"
-fi
-emit price_sync "$price_sync_status"
-emit price_sync_upstream_sha "${price_sync_sha:-}"
-
 # 3b. Reserve the run dir + validate the run id BEFORE the destructive reseed, so an
 #     invalid id / collision / filesystem error aborts WITHOUT having reseeded staging.
 # The run id doubles as the run-dir name (globalSetup honors a pre-set TOURS_RUN_ID) AND
@@ -272,6 +242,46 @@ if ! mkdir "$RUNDIR_ABS" 2>/dev/null; then
     abort "could not create run dir ($RUNDIR_ABS) — filesystem/permission error"
   fi
 fi
+
+# 3b-post. Model-price sync (fail-open). Stale prices make cost APPROXIMATE; a
+# skipped round makes the night's QA ABSENT — so a failure here logs loudly, records
+# a manifest field, and CONTINUES.
+#
+# WHERE THIS CALL SITS IS LOAD-BEARING — three constraints, none of them obvious.
+# The order is: preflight -> run reservation -> THIS -> reseed -> tours -> export.
+#   1. AFTER the preflight (trace path + the pre-tours deployed-sha pin). This is the
+#      round's first EXTERNAL mutation, and creating or deleting model definitions
+#      from a checkout that then turns out not to be the deployed sha — or for a round
+#      that aborts a line later on a missing trace path — changes pricing state for a
+#      round that never ran.
+#   2. AFTER the atomic run-dir reservation. The run id is only second-granular, so
+#      two invocations can race; the reservation is what picks a winner. Syncing first
+#      lets BOTH interleave delete-then-create against shared Langfuse pricing state,
+#      and lets the loser mutate prices (or make the winner report a failed sync)
+#      before aborting on the collision.
+#   3. BEFORE tours and the export, because Langfuse resolves a model's price when the
+#      observation is INGESTED. That is the only one of the three that is about
+#      correctness of the cost numbers; the other two are about not mutating shared
+#      state on behalf of a round that will not happen.
+# Do not reorder without re-satisfying all three.
+# We invoke with STRICT=1 precisely so the exit code is trustworthy: the fail-open
+# lives HERE, in not aborting, not in the child masking its own failures.
+# Same env discipline as every other make child: the injected QA_*_CMD vars can embed
+# secrets and the sync consumes none of them, nor the tours API key. It DOES need
+# LANGFUSE_* — those are its whole purpose — so those stay.
+price_sync_out="$( cd "$REPO_ROOT" && env -u QA_RESEED_CMD -u QA_DEPLOYED_SHA_CMD \
+  -u QA_DEPLOYED_GEN_CMD -u TOURS_API_KEY STRICT=1 "$MAKE" qa-model-prices 2>&1 )" \
+  && price_sync_rc=0 || price_sync_rc=$?
+printf '%s\n' "$price_sync_out"
+price_sync_sha="$(printf '%s\n' "$price_sync_out" | grep -E '^upstream_sha256=[0-9a-f]{64}$' | head -1 | cut -d= -f2-)"
+if [ "$price_sync_rc" -eq 0 ]; then
+  price_sync_status=ok
+else
+  price_sync_status=failed
+  emit price_sync_reason "qa-model-prices exited $price_sync_rc"
+fi
+emit price_sync "$price_sync_status"
+emit price_sync_upstream_sha "${price_sync_sha:-}"
 
 # has_nul <file>: true (0) if the file contains a NUL byte. bash $()/$(<) SILENTLY STRIP
 # NUL bytes, so an injected reader returning e.g. "A\0B" would compare EQUAL to "AB" and
