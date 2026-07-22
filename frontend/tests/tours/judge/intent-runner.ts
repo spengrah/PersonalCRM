@@ -84,7 +84,11 @@ export async function runIntentPass(
 ): Promise<IntentGrade[]> {
   const grades: IntentGrade[] = []
   for (const intent of intents) {
-    const { captures: bound, dropped } = bindIntentCaptures(intent, captures, cap)
+    const { captures: bound, dropped } = bindIntentCaptures(
+      intent,
+      captures,
+      intent.captureCap ?? cap
+    )
     const input = buildIntentJudgeInput(intent, bound, resolveScreenshot)
     const base = {
       intentId: intent.id,

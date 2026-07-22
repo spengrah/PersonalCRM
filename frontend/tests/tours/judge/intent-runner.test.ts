@@ -136,4 +136,24 @@ describe('runIntentPass', () => {
     const [nonVisual] = await runIntentPass([cap(['CAD-026'])], fakeJudge('pass', ''), [intent])
     expect(nonVisual.ariaOnly).toBeUndefined()
   })
+
+  it('honors a per-intent captureCap over the supplied cap (both directions)', async () => {
+    // Distinct seq so bindIntentCaptures does not dedup them (it keys on tour#seq).
+    const capN = (seq: number): Capture => ({ ...cap(['CAD-026']), seq })
+    const many = [capN(1), capN(2), capN(3), capN(4)]
+
+    // captureCap LOWERS below the supplied cap → 2 kept, 2 dropped.
+    const [lo] = await runIntentPass(many, fakeJudge('pass', ''), [{ ...intent, captureCap: 2 }], 8)
+    expect(lo.boundCount).toBe(2)
+    expect(lo.droppedCount).toBe(2)
+
+    // captureCap RAISES above the supplied cap → all 4 kept (this is CON-051's case).
+    const [hi] = await runIntentPass(many, fakeJudge('pass', ''), [{ ...intent, captureCap: 8 }], 2)
+    expect(hi.boundCount).toBe(4)
+    expect(hi.droppedCount).toBe(0)
+
+    // No captureCap → falls back to the supplied cap.
+    const [dflt] = await runIntentPass(many, fakeJudge('pass', ''), [intent], 2)
+    expect(dflt.boundCount).toBe(2)
+  })
 })
