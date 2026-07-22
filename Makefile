@@ -547,7 +547,7 @@ test-api:
 # inside <string> values, so it parses fine); plutil is macOS-only and not used here.
 test-deploy-scripts:
 	@echo "Running deploy-script shell tests (parallel)..."
-	@tests="scripts/deploy-artifact.test.sh scripts/backup-db.test.sh scripts/restore-db.test.sh scripts/deploy-staging.test.sh scripts/staging-reset.test.sh scripts/ci/staging-reseed-decision.test.sh scripts/ci/qa-round-cadence-gate.test.sh scripts/ci/qa-nightly-round.test.sh scripts/ci/qa-fn-backfill-guard.test.sh scripts/staging-deployed-sha.test.sh scripts/staging-reseed.test.sh scripts/admin/setup-staging-reseed-host.sh.test.sh scripts/run-tours.test.sh scripts/reconcile-mac-daemon.test.sh scripts/setup-mac-deploy.test.sh scripts/trigger-mac-deploy.test.sh scripts/test/test-promote-preflight.sh"; \
+	@tests="scripts/deploy-artifact.test.sh scripts/backup-db.test.sh scripts/restore-db.test.sh scripts/deploy-staging.test.sh scripts/staging-reset.test.sh scripts/ci/staging-reseed-decision.test.sh scripts/ci/ghcr-retention.test.sh scripts/ci/qa-round-cadence-gate.test.sh scripts/ci/qa-nightly-round.test.sh scripts/ci/qa-fn-backfill-guard.test.sh scripts/staging-deployed-sha.test.sh scripts/staging-reseed.test.sh scripts/admin/setup-staging-reseed-host.sh.test.sh scripts/run-tours.test.sh scripts/reconcile-mac-daemon.test.sh scripts/setup-mac-deploy.test.sh scripts/trigger-mac-deploy.test.sh scripts/test/test-promote-preflight.sh"; \
 	tmp="$$(mktemp -d)"; \
 	for t in $$tests; do \
 	  ( bash "$$t" >"$$tmp/$$(echo "$$t" | tr / _).out" 2>&1; echo "$$?" >"$$tmp/$$(echo "$$t" | tr / _).rc" ) & \
