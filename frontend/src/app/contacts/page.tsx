@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState, useEffect, useRef, useCallback } from 'react'
+import { Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -439,13 +439,25 @@ function ContactsPageContent() {
   const [searchTerm, setSearchTerm] = useState(urlContext.search ?? '')
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  const listContext: ContactListContext = {
-    sort: urlContext.sort,
-    order: urlContext.order,
-    ...(searchTerm ? { search: searchTerm } : {}),
-    ...(urlContext.cadence_filter ? { cadence_filter: urlContext.cadence_filter } : {}),
-    ...(urlContext.followup_filter ? { followup_filter: urlContext.followup_filter } : {}),
-  }
+  // Memoized so its identity is stable across renders: it feeds the clamp
+  // effect's dependency array, where an object rebuilt every render would
+  // re-run the effect on every render.
+  const listContext: ContactListContext = useMemo(
+    () => ({
+      sort: urlContext.sort,
+      order: urlContext.order,
+      ...(searchTerm ? { search: searchTerm } : {}),
+      ...(urlContext.cadence_filter ? { cadence_filter: urlContext.cadence_filter } : {}),
+      ...(urlContext.followup_filter ? { followup_filter: urlContext.followup_filter } : {}),
+    }),
+    [
+      urlContext.sort,
+      urlContext.order,
+      searchTerm,
+      urlContext.cadence_filter,
+      urlContext.followup_filter,
+    ]
+  )
 
   const applyContext = (next: ContactListContext) => {
     // No page arg → the page param is dropped → the list resets to page 1.
@@ -470,6 +482,20 @@ function ContactsPageContent() {
     followup_filter: listContext.followup_filter,
     ...(searchTerm && { search: searchTerm }),
   })
+
+  // Clamp an out-of-range ?page once the response reveals the real page count.
+  // A stale bookmark/deep-link (?page=9999) or a page whose filtered set later
+  // shrank asks for a page past the end: the API returns an empty page and both
+  // Pagination blocks hide (they require pages > 1), stranding the user on an
+  // empty table with a nonzero header count and no control to recover. Rewrite
+  // the URL to the last valid page so the list re-fetches and lands on real
+  // rows. buildContactListUrl drops page=1 to the bare URL, so a single-page
+  // result recovers to page 1.
+  useEffect(() => {
+    if (data && data.total > 0 && page > data.pages) {
+      router.replace(buildContactListUrl(listContext, data.pages), { scroll: false })
+    }
+  }, [data, page, listContext, router])
 
   const handleSearchInput = (value: string) => {
     setSearchTerm(value)

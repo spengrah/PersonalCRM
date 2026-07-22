@@ -604,6 +604,62 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
     await expectFullContextRestored(page, (await listReq).url(), '2')
   })
 
+  test('an out-of-range ?page deep-link clamps to the last valid page', async ({ page }) => {
+    // spec: CON-058[3]
+    // A stale bookmark / hand-edited URL asking for a page past the end must
+    // land on the last valid page with real rows, not an empty table with the
+    // pagination controls hidden. The fixture is 21 has_cadence contacts → 2
+    // pages, so ?page=9999 must clamp to page 2 (holding "Back Nav 21").
+    await seedBackNavFixture()
+    const prefix = testApi.prefix
+    const backNav21 = `${prefix}-Back Nav 21`
+
+    // The clamp fires after the first response reveals the real page count, so
+    // a page-2 list request follows the out-of-range page-9999 request.
+    const clampReq = page.waitForResponse(
+      r => isListRequest(r.url()) && new URL(r.url()).searchParams.get('page') === '2'
+    )
+    await page.goto(
+      `/contacts?search=${encodeURIComponent(prefix)}` +
+        `&sort=name&order=asc&cadence_filter=has_cadence&followup_filter=no_followup&page=9999`
+    )
+    await page.waitForLoadState('domcontentloaded')
+    await clampReq
+
+    // URL is rewritten to page 2 and the real page-2 row is on screen — not an
+    // empty table.
+    await expect(page).toHaveURL(/[?&]page=2\b/)
+    await expect(page.getByText(backNav21)).toBeVisible({ timeout: 15000 })
+    await expect(page.locator('tbody tr')).toHaveCount(1)
+    // Pagination controls are back (they hide entirely on an empty page).
+    await expect(page.locator('[data-testid="pagination"]').first()).toBeVisible()
+  })
+
+  test('an out-of-range ?page on a single-page list clamps to the bare page-1 URL', async ({
+    page,
+  }) => {
+    // spec: CON-058[3]
+    // When the whole filtered set fits on one page, the clamp target is page 1,
+    // which buildContactListUrl renders as the bare (page-less) URL — the
+    // distinct recovery branch from the multi-page clamp above.
+    await testApi.seedContacts([{ full_name: 'Solo Page A' }, { full_name: 'Solo Page B' }])
+    const prefix = testApi.prefix
+
+    // The clamp re-fetches page 1 (the request carries page=1 even though the
+    // browser URL becomes page-less).
+    const clampReq = page.waitForResponse(
+      r => isListRequest(r.url()) && new URL(r.url()).searchParams.get('page') === '1'
+    )
+    await page.goto(`/contacts?search=${encodeURIComponent(prefix)}&page=2`)
+    await page.waitForLoadState('domcontentloaded')
+    await clampReq
+
+    // URL is rewritten to the bare page-1 form (no page param at all) and the
+    // rows are on screen — not an empty table.
+    await expect(page).not.toHaveURL(/[?&]page=/)
+    await expect(page.getByText(`${prefix}-Solo Page A`)).toBeVisible({ timeout: 15000 })
+  })
+
   test('changing sort/search/filter from a later page resets to page 1', async ({ page }) => {
     // spec: CON-066[0]
     await seedBackNavFixture()
@@ -653,6 +709,21 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
       return p.get('page') === '1' && p.get('cadence_filter') === 'no_cadence'
     })
     await page.getByLabel('Filter by cadence').selectOption('no_cadence')
+    await reset
+    await expect(page).not.toHaveURL(/[?&]page=/)
+
+    // (d) order-TOGGLE change: re-click the active sort header (name asc → desc).
+    // Same handleSort → applyContext path as (a), but the toggle branch, which
+    // keeps the field and flips only the direction.
+    await page.goto(page2Url)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByText(backNav21)).toBeVisible({ timeout: 15000 })
+    reset = page.waitForResponse(r => {
+      if (!isListRequest(r.url())) return false
+      const p = new URL(r.url()).searchParams
+      return p.get('page') === '1' && p.get('sort') === 'name' && p.get('order') === 'desc'
+    })
+    await page.getByRole('columnheader').filter({ hasText: /^Name/ }).click()
     await reset
     await expect(page).not.toHaveURL(/[?&]page=/)
   })

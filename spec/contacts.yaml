@@ -731,6 +731,7 @@ behaviors:
       - page-number buttons move between pages, with the current page marked
       - the previous/next controls disable at the list boundaries
       - the current page is reflected in the list URL, so a deep-linked or refreshed list restores that same page
+      - a URL asking for a page past the end of a non-empty list (stale deep-link or a shrunk result set) clamps to the last valid page rather than stranding the user on an empty list
     provenance: [pagination.tsx, contacts page]
 
   - id: CON-059
