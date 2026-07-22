@@ -120,6 +120,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd)"
 CADENCE_GATE="$SCRIPT_DIR/qa-round-cadence-gate.sh"
 SHA_ASSERT="$SCRIPT_DIR/qa-round-deployed-sha-assert.sh"
 MAKE="${QA_MAKE:-make}"
+# The price-sync provenance merge, run from frontend/. A seam for the same reason
+# $MAKE is one: the test fixture has no bun and no frontend tree, so it substitutes
+# a recorder here rather than reaching the real interpreter.
+MANIFEST_MERGE="${QA_MANIFEST_MERGE:-bun run tests/tours/judge/export/manifest-merge.ts}"
 RUNS_ROOT="$REPO_ROOT/frontend/tests/tours/.runs"
 
 emit() {
@@ -188,6 +192,7 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Run the round.
 # ---------------------------------------------------------------------------
+
 # The judge trace path is mandatory on a run — the judge writes it and qa-export ships
 # it. A run without it cannot produce a gradeable round, so this is a start-time abort.
 [ -n "${QA_JUDGE_TRACE:-}" ] || abort "QA_JUDGE_TRACE unset — the wrapper must supply a fresh per-round trace path"
@@ -237,6 +242,63 @@ if ! mkdir "$RUNDIR_ABS" 2>/dev/null; then
     abort "could not create run dir ($RUNDIR_ABS) — filesystem/permission error"
   fi
 fi
+
+# 3b-post. Model-price sync (fail-open). Stale prices make cost APPROXIMATE; a
+# skipped round makes the night's QA ABSENT — so a failure here logs loudly, records
+# a manifest field, and CONTINUES.
+#
+# WHERE THIS CALL SITS IS LOAD-BEARING — three constraints, none of them obvious.
+# The order is: preflight -> run reservation -> THIS -> reseed -> tours -> export.
+#   1. AFTER the preflight (trace path + the pre-tours deployed-sha pin). This is the
+#      round's first EXTERNAL mutation, and creating or deleting model definitions
+#      from a checkout that then turns out not to be the deployed sha — or for a round
+#      that aborts a line later on a missing trace path — changes pricing state for a
+#      round that never ran.
+#   2. AFTER the atomic run-dir reservation. The run id is only second-granular, so
+#      two invocations can race; the reservation is what picks a winner. Syncing first
+#      lets BOTH interleave delete-then-create against shared Langfuse pricing state,
+#      and lets the loser mutate prices (or make the winner report a failed sync)
+#      before aborting on the collision.
+#   3. BEFORE tours and the export, because Langfuse resolves a model's price when the
+#      observation is INGESTED. That is the only one of the three that is about
+#      correctness of the cost numbers; the other two are about not mutating shared
+#      state on behalf of a round that will not happen.
+# Do not reorder without re-satisfying all three.
+# We invoke with STRICT=1 precisely so the exit code is trustworthy: the fail-open
+# lives HERE, in not aborting, not in the child masking its own failures.
+# EVERY mode variable the recipe reads is passed EXPLICITLY as a command-line assignment
+# (after the target). make imports the ambient environment as make variables, so an
+# unattended round would otherwise inherit whatever the wrapper's environment carried and
+# silently do something else: DRY_RUN=1 writes nothing yet still reports a synced round,
+# RESET=<model> DELETES an override instead of reconciling, FORCE=1 bypasses the
+# implausible-delta guard, and MODELS=/UPSTREAM= sync the wrong models or payload.
+# Command-line assignments outrank BOTH the environment and the makefile's own defaults —
+# that precedence, not the child's environment, is what makes this invocation
+# self-contained, so `env -u` would not be sufficient here.
+# Same env discipline as every other make child: the injected QA_*_CMD vars can embed
+# secrets and the sync consumes none of them, nor the tours API key. It DOES need
+# LANGFUSE_* — those are its whole purpose — so those stay.
+price_sync_out="$( cd "$REPO_ROOT" && env -u QA_RESEED_CMD -u QA_DEPLOYED_SHA_CMD \
+  -u QA_DEPLOYED_GEN_CMD -u TOURS_API_KEY "$MAKE" qa-model-prices \
+  DRY_RUN= RESET= FORCE= MODELS= UPSTREAM= STRICT=1 2>&1 )" \
+  && price_sync_rc=0 || price_sync_rc=$?
+printf '%s\n' "$price_sync_out"
+price_sync_sha="$(printf '%s\n' "$price_sync_out" | grep -E '^upstream_sha256=[0-9a-f]{64}$' | head -1 | cut -d= -f2-)"
+if [ "$price_sync_rc" -ne 0 ]; then
+  price_sync_status=failed
+  emit price_sync_reason "qa-model-prices exited $price_sync_rc"
+elif [ -z "$price_sync_sha" ]; then
+  # Exit 0 but no parseable upstream_sha256: the payload that was reconciled against is
+  # UNKNOWN, so the round cannot claim a traceable reconciliation. Recording ok with an
+  # empty hash would assert provenance it does not have, so this is a sync failure —
+  # fail-open for the round like any other, but labelled honestly.
+  price_sync_status=failed
+  emit price_sync_reason "qa-model-prices exited 0 without a parseable upstream_sha256"
+else
+  price_sync_status=ok
+fi
+emit price_sync "$price_sync_status"
+emit price_sync_upstream_sha "${price_sync_sha:-}"
 
 # has_nul <file>: true (0) if the file contains a NUL byte. bash $()/$(<) SILENTLY STRIP
 # NUL bytes, so an injected reader returning e.g. "A\0B" would compare EQUAL to "AB" and
@@ -303,6 +365,18 @@ fi
 # orchestrator consumes those commands itself, the children never need them.
 ( cd "$REPO_ROOT" && env -u QA_RESEED_CMD -u QA_DEPLOYED_SHA_CMD -u QA_DEPLOYED_GEN_CMD TOURS_RUN_ID="$RUN_ID" ${skip_reset[@]+"${skip_reset[@]}"} "$MAKE" tours )
 tours_rc=$?
+
+# Deferred price-sync provenance. The sync runs before the run dir exists, so its
+# result is merged into the manifest once tours has written it — before the
+# post-tours provenance assert reads that same file. Additive (one new key), so the
+# assert is unaffected. Non-fatal: the merge writes atomically (temp file + rename in
+# the same directory), so a failure cannot leave a damaged manifest behind, and a
+# merge failure must not fail a round that otherwise ran.
+if [ -f "$RUNDIR_ABS/manifest.json" ]; then
+  ( cd "$REPO_ROOT/frontend" && bash -c "$MANIFEST_MERGE \"\$@\"" _ \
+      "$RUNDIR_ABS/manifest.json" "$price_sync_status" "${price_sync_sha:-}" ) \
+    || printf 'qa-nightly-round: WARNING price-sync provenance merge failed\n' >&2
+fi
 
 # Judge + trap self-test. Its EXIT CODE is the hard trap signal (0 = all traps caught).
 # qa-report runs the LLM JUDGE (a Codex subprocess that reads untrusted tour captures). It
