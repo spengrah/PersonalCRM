@@ -108,6 +108,13 @@ func TestMacHost_Auth_MinProtocolVersion_412(t *testing.T) {
 	errObj, ok := body["error"].(map[string]any)
 	require.True(t, ok, "body: %v", body)
 	require.Equal(t, "UPGRADE_REQUIRED", errObj["code"])
+
+	// spec: MAC-012[1]
+	// The 412 body must carry the minimum acceptable protocol version
+	// literally as min_version so the daemon knows what to upgrade to.
+	minVersion, ok := errObj["min_version"]
+	require.True(t, ok, "error body missing min_version key: %v", errObj)
+	require.EqualValues(t, 1, minVersion, "min_version must equal the server floor (mac.MinProtocolVersion)")
 }
 
 func uuidNew() string {

@@ -2608,6 +2608,72 @@ func TestResolveLink_LinkToEventSuccess(t *testing.T) {
 	require.Empty(t, updated.ConflictCandidates, "snapshot cleared on link")
 }
 
+// TestResolveLink_ResponseIncludesUpdatedMeetingNote — the resolve-link
+// success response carries BOTH halves of the NTS-018 success contract
+// on the wire: data.meeting_note with the row's POST-resolve state, and
+// data.interactions_created with the interactions the resolve wrote.
+// Asserted on literal wire keys via a raw JSON decode, not by
+// round-tripping the production meetingNoteResponse type. The fixture
+// tags a resolved participant (contactA) who is NOT an attendee of the
+// linked candidate, so the link deterministically creates exactly one
+// walk-in interaction whose contact + source_ref are known up front.
+// spec: NTS-018[2]
+func TestResolveLink_ResponseIncludesUpdatedMeetingNote(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	suffix := strings.TrimSuffix(strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-"), "-")
+	emailA := fmt.Sprintf("mn-test-0-%s@example.invalid", suffix)
+	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
+
+	meetingAt := time.Date(2026, 5, 7, 14, 0, 0, 0, time.UTC)
+	// Two candidates with zero overlap with the tagged set {contactA} →
+	// conflict_pending (no strict winner).
+	eventB := env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactB})
+	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactC})
+
+	sessionUUID := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Response Meeting Note Session", []string{anarlogA})
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
+
+	w = postResolveLink(t, env, row.ID.String(), map[string]any{
+		"action": "link",
+		"kind":   "event",
+		"id":     eventB.String(),
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var wire struct {
+		Data struct {
+			MeetingNote         map[string]any `json:"meeting_note"`
+			InteractionsCreated []struct {
+				ContactID string `json:"contact_id"`
+				SourceRef string `json:"source_ref"`
+			} `json:"interactions_created"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &wire))
+	mn := wire.Data.MeetingNote
+	require.NotNil(t, mn, "response must include the updated meeting note, not just interactions_created")
+	require.Equal(t, row.ID.String(), mn["id"], "meeting_note.id on the wire")
+	require.Equal(t, "linked", mn["linkage_state"], "meeting_note.linkage_state reflects the post-resolve state")
+	require.Equal(t, "event", mn["linked_kind"], "meeting_note.linked_kind carries the resolved kind")
+	require.Equal(t, eventB.String(), mn["linked_id"], "meeting_note.linked_id carries the resolved target")
+
+	// The interactions the resolve created, on the literal
+	// interactions_created wire key: exactly the tagged contact's
+	// walk-in (contactA is tagged but not an attendee of eventB).
+	require.Len(t, wire.Data.InteractionsCreated, 1,
+		"response must carry the one walk-in interaction the link created; body: %s", w.Body.String())
+	require.Equal(t, env.contactA.String(), wire.Data.InteractionsCreated[0].ContactID,
+		"interactions_created must name the walk-in contact")
+	require.Equal(t, "anarlog:"+sessionUUID+":walkin:"+env.contactA.String(), wire.Data.InteractionsCreated[0].SourceRef,
+		"interactions_created must carry the walk-in source_ref")
+}
+
 // TestResolveLink_AlreadyLinkedReturns409 — calling resolve-link on a
 // row that's not in conflict_pending returns 409.
 // spec: NTS-018[4]
@@ -2733,45 +2799,231 @@ func TestListNeedsAttention_AcceptsDaemonHostAuth(t *testing.T) {
 }
 
 // TestListNeedsAttention_BasicProjection — seed a conflict_pending row
-// and verify the needs-attention list includes it with a populated
-// candidates array.
+// with one candidate of EACH kind (calendar event + phone call) and
+// verify the needs-attention list projects the full candidates array
+// with per-kind preview CONTENT: the event candidate carries the seeded
+// title + attendee count, the phone_call candidate carries the seeded
+// peer handle.
+// spec: NTS-025[2]
 func TestListNeedsAttention_BasicProjection(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
-	meetingAt := time.Date(2026, 5, 7, 13, 0, 0, 0, time.UTC)
-	env.seedCalendarEventInWindow(t, meetingAt, []uuid.UUID{env.contactA})
-	env.seedCalendarEventInWindow(t, meetingAt.Add(5*time.Minute), []uuid.UUID{env.contactB})
+	meetingAt := env.uniqueWindowBase(7)
+	eventTitle := env.sourceIDPrefix + "Projection Event"
+	// Seed the event inline (not via the zero-attendee helper) with THREE
+	// attendee entries so the preview's attendee_count is nonzero and
+	// distinct from the candidate count (2) — a hardcoded or misprojected
+	// count cannot pass.
+	upserted, err := env.calendarRepo.Upsert(context.Background(), repository.UpsertCalendarEventRequest{
+		GcalEventID:     env.sourceIDPrefix + "cal-proj-" + uuid.NewString()[:8],
+		GcalCalendarID:  "primary",
+		GoogleAccountID: "test-account",
+		Title:           stringPtr(eventTitle),
+		StartTime:       meetingAt,
+		EndTime:         meetingAt.Add(time.Hour),
+		Status:          "confirmed",
+		Attendees: []repository.Attendee{
+			{Email: "a-" + env.sourceIDPrefix + "@example.com"},
+			{Email: "b-" + env.sourceIDPrefix + "@example.com"},
+			{Email: "c-" + env.sourceIDPrefix + "@example.com"},
+		},
+		MatchedContactIDs: []uuid.UUID{env.contactA},
+		SyncedAt:          accelerated.GetCurrentTime(),
+	})
+	require.NoError(t, err)
+	eventID := upserted.ID
+	peer := randomTestPhoneNumber(t)
+	answered := true
+	callID := env.seedPhoneCallInWindowFull(t, meetingAt, peer, repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, &answered, 60, nil)
 
 	sessionUUID := env.newSessionUUID()
-	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Needs Attention Session", nil)
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, env.sourceIDPrefix+"Needs Attention Session", nil)
 	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState, "sanity: cross-kind candidates land conflict_pending")
 
 	// Scope the list to this test's mac_host so other parallel tests'
 	// rows don't pollute the assertion.
 	w = getNeedsAttention(t, env, env.pairedHostID.String())
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
-	var resp struct {
-		Success bool                                 `json:"success"`
-		Data    []service.NeedsAttentionItemResponse `json:"data"`
+	// Decode on LITERAL wire keys (raw maps), never the production response
+	// structs — decoding with the same tags that serialized the payload
+	// would round-trip swapped/renamed keys invisibly.
+	var rawResp struct {
+		Success bool                     `json:"success"`
+		Data    []map[string]interface{} `json:"data"`
 	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	require.True(t, resp.Success)
-	require.NotEmpty(t, resp.Data)
-	var found *service.NeedsAttentionItemResponse
-	for i := range resp.Data {
-		if resp.Data[i].AnarlogSessionID.String() == sessionUUID {
-			found = &resp.Data[i]
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&rawResp))
+	require.True(t, rawResp.Success)
+	require.NotEmpty(t, rawResp.Data)
+	var found map[string]interface{}
+	for _, row := range rawResp.Data {
+		if row["anarlog_session_id"] == sessionUUID {
+			found = row
 			break
 		}
 	}
 	require.NotNil(t, found, "needs-attention list must contain our seeded row")
-	require.Equal(t, repository.LinkageStateConflictPending, found.LinkageState)
-	require.Len(t, found.Candidates, 2, "both event candidates projected")
-	for _, c := range found.Candidates {
-		require.False(t, c.TargetMissing)
-		require.NotNil(t, c.Preview)
+	require.Equal(t, string(repository.LinkageStateConflictPending), found["linkage_state"])
+
+	candidates, ok := found["candidates"].([]interface{})
+	require.True(t, ok, "row must carry a candidates array, got %T", found["candidates"])
+	require.Len(t, candidates, 2, "both candidates projected")
+
+	var eventCand, callCand map[string]interface{}
+	for _, ci := range candidates {
+		c, ok := ci.(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, false, c["target_missing"])
+		switch c["kind"] {
+		case "event":
+			eventCand = c
+		case "phone_call":
+			callCand = c
+		}
 	}
+
+	// Event candidate: per-kind preview is title + attendee_count; the
+	// phone-call key must be ABSENT (omitempty), not merely nil.
+	require.NotNil(t, eventCand, "event candidate must be projected")
+	require.Equal(t, eventID.String(), eventCand["id"])
+	eventPreview, ok := eventCand["preview"].(map[string]interface{})
+	require.True(t, ok, "event candidate must carry a preview object")
+	require.Equal(t, eventTitle, eventPreview["title"], "event preview title must be the seeded event's title")
+	require.Equal(t, float64(3), eventPreview["attendee_count"], "event preview must carry the seeded nonzero attendee count")
+	_, hasPeer := eventPreview["peer_handle"]
+	require.False(t, hasPeer, "event preview must not carry a phone-call key")
+
+	// Phone-call candidate: per-kind preview is the peer handle; the event
+	// keys must be absent.
+	require.NotNil(t, callCand, "phone_call candidate must be projected")
+	require.Equal(t, callID.String(), callCand["id"])
+	callPreview, ok := callCand["preview"].(map[string]interface{})
+	require.True(t, ok, "phone_call candidate must carry a preview object")
+	require.Equal(t, peer, callPreview["peer_handle"], "phone_call preview peer_handle must be the seeded call's peer")
+	_, hasTitle := callPreview["title"]
+	require.False(t, hasTitle, "phone_call preview must not carry an event title key")
+	_, hasCount := callPreview["attendee_count"]
+	require.False(t, hasCount, "phone_call preview must not carry an attendee_count key")
+}
+
+// TestListNeedsAttention_NewestFirstOrdering — seed three attention rows
+// under the same host with distinct meeting_at timestamps, seeded out
+// of chronological order, and assert the response orders them
+// newest-first by meeting_at (not by insertion order).
+// spec: NTS-025[1]
+func TestListNeedsAttention_NewestFirstOrdering(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	base := time.Date(2026, 5, 8, 14, 0, 0, 0, time.UTC)
+
+	// No candidate events, no participants → each session lands
+	// orphan_needs_review directly at ingest, an attention state.
+	// Seeded oldest-first so a stale insertion-order response would be
+	// caught by this test.
+	oldest := env.newSessionUUID()
+	evOldest := buildMNRecordedEvent(t, env.pairedHostID, oldest, base, "Ordering Oldest", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{evOldest}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	newest := env.newSessionUUID()
+	evNewest := buildMNRecordedEvent(t, env.pairedHostID, newest, base.Add(2*time.Hour), "Ordering Newest", nil)
+	w = postMNIngest(t, env, map[string]any{"events": []any{evNewest}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	middle := env.newSessionUUID()
+	evMiddle := buildMNRecordedEvent(t, env.pairedHostID, middle, base.Add(1*time.Hour), "Ordering Middle", nil)
+	w = postMNIngest(t, env, map[string]any{"events": []any{evMiddle}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	for _, sid := range []string{oldest, middle, newest} {
+		row := findMeetingNoteRow(t, env, sid)
+		require.NotNil(t, row)
+		require.Equal(t, repository.LinkageStateOrphanNeedsReview, row.LinkageState, "sanity: lands an attention state")
+	}
+
+	// Scoped to this test's own mac_host so other parallel tests'
+	// rows can't shift relative positions.
+	w = getNeedsAttention(t, env, env.pairedHostID.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var resp struct {
+		Data []struct {
+			AnarlogSessionID string `json:"anarlog_session_id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	pos := map[string]int{}
+	for i, item := range resp.Data {
+		pos[item.AnarlogSessionID] = i
+	}
+	posNewest, ok := pos[newest]
+	require.True(t, ok, "newest row must be present")
+	posMiddle, ok := pos[middle]
+	require.True(t, ok, "middle row must be present")
+	posOldest, ok := pos[oldest]
+	require.True(t, ok, "oldest row must be present")
+
+	require.Less(t, posNewest, posMiddle, "newest meeting_at must sort before middle")
+	require.Less(t, posMiddle, posOldest, "middle meeting_at must sort before oldest")
+}
+
+// TestListNeedsAttention_OrphanCarriesNoCandidates — an
+// orphan_needs_review row's candidates key is absent-or-empty on the
+// wire; only conflict_pending rows project a populated candidates
+// array. Asserted via raw JSON so a "null" vs "[]" difference doesn't
+// mask a candidate entry sneaking in.
+// spec: NTS-025[2]
+func TestListNeedsAttention_OrphanCarriesNoCandidates(t *testing.T) {
+	type item struct {
+		AnarlogSessionID string          `json:"anarlog_session_id"`
+		LinkageState     string          `json:"linkage_state"`
+		Candidates       json.RawMessage `json:"candidates"`
+	}
+
+	env := setupMeetingNoteIngestEnv(t)
+	meetingAt := time.Date(2026, 5, 8, 15, 0, 0, 0, time.UTC)
+	sessionUUID := env.newSessionUUID()
+	// No candidate events, no participants → lands orphan_needs_review
+	// directly at ingest.
+	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Orphan No Candidates", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	row := findMeetingNoteRow(t, env, sessionUUID)
+	require.NotNil(t, row)
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, row.LinkageState, "sanity: lands orphan")
+
+	w = getNeedsAttention(t, env, env.pairedHostID.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var resp struct {
+		Data []item `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+	var found *item
+	for i := range resp.Data {
+		if resp.Data[i].AnarlogSessionID == sessionUUID {
+			found = &resp.Data[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "orphan row must appear in needs-attention")
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, found.LinkageState)
+
+	raw := strings.TrimSpace(string(found.Candidates))
+	require.True(t, raw == "" || raw == "null" || raw == "[]",
+		"orphan_needs_review row's candidates must be absent/null/empty on the wire, got %q", raw)
+
+	var cands []map[string]any
+	if len(found.Candidates) > 0 && raw != "null" {
+		require.NoError(t, json.Unmarshal(found.Candidates, &cands))
+	}
+	require.Empty(t, cands, "orphan_needs_review row must not project any candidate entries")
 }
 
 // TestResolveLink_NoneOfTheseFiresDiscoveryUpsert — none_of_these
@@ -2923,6 +3175,100 @@ func TestListNeedsAttention_HostFilter(t *testing.T) {
 		}
 	}
 	require.True(t, found, "matching host filter must include this test's row")
+}
+
+// TestListNeedsAttention_HostScope_TwoHosts is the adversarial half of
+// the host_id-scoping contract: with attention rows belonging to TWO
+// different mac_hosts, a run scoped to one host must EXCLUDE the other
+// host's row (each direction), and an unscoped run must return rows
+// from both hosts. The second host is seeded REVOKED (the singleton
+// index only constrains live rows) purely as an FK target for a
+// repository-inserted orphan row; fixtures are namespaced via the env's
+// per-run prefix + fresh session UUIDs.
+// spec: NTS-025[1]
+func TestListNeedsAttention_HostScope_TwoHosts(t *testing.T) {
+	env := setupMeetingNoteIngestEnv(t)
+	ctx := context.Background()
+
+	// Own (paired) host's attention row: no candidates, no participants
+	// → orphan_needs_review directly at ingest.
+	meetingAt := env.uniqueWindowBase(8)
+	ownSession := env.newSessionUUID()
+	ev := buildMNRecordedEvent(t, env.pairedHostID, ownSession, meetingAt, env.sourceIDPrefix+"Own Host Orphan", nil)
+	w := postMNIngest(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	ownRow := findMeetingNoteRow(t, env, ownSession)
+	require.NotNil(t, ownRow)
+	require.Equal(t, repository.LinkageStateOrphanNeedsReview, ownRow.LinkageState, "sanity: own row lands an attention state")
+
+	// Other host's attention row, inserted via the repository against a
+	// revoked FK-target host row.
+	hostRepo := repository.NewMacHostRepository(env.database.Queries)
+	otherHost, err := hostRepo.SeedRevokedHostForTest(ctx, "mn-scope-other-"+uuid.NewString()[:8], "0.1.0", 1, "unused-hash")
+	require.NoError(t, err)
+	otherHostID := otherHost.ID
+	t.Cleanup(func() {
+		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		// The env teardown's DeleteAllMacHosts sweeps the seeded host
+		// row itself; its meeting_note rows are ours to remove.
+		_ = env.meetingRepo.TestHardDeleteByHostID(cleanCtx, otherHostID)
+	})
+
+	otherSession := uuid.New()
+	// The hash columns' CHECK constraints require empty-or-64-hex;
+	// derive namespaced hex values from the session UUID.
+	inputHash := sha256.Sum256([]byte("mn-scope-input-" + otherSession.String()))
+	resolvedHash := sha256.Sum256([]byte("mn-scope-resolved-" + otherSession.String()))
+	tx, err := env.database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = env.meetingRepo.InsertMeetingNoteTx(ctx, tx, repository.InsertMeetingNoteParams{
+		AnarlogSessionID: otherSession,
+		MacHostID:        &otherHostID,
+		LinkageState:     repository.LinkageStateOrphanNeedsReview,
+		InputHash:        hex.EncodeToString(inputHash[:]),
+		ResolvedSetHash:  hex.EncodeToString(resolvedHash[:]),
+		MeetingAt:        meetingAt.Add(time.Minute),
+	})
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+
+	sessionsIn := func(w *httptest.ResponseRecorder) map[string]bool {
+		var resp struct {
+			Data []struct {
+				AnarlogSessionID string `json:"anarlog_session_id"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		got := map[string]bool{}
+		for _, item := range resp.Data {
+			got[item.AnarlogSessionID] = true
+		}
+		return got
+	}
+
+	// Scoped to the paired host: own row present, the other host's row
+	// EXCLUDED.
+	w = getNeedsAttention(t, env, env.pairedHostID.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	got := sessionsIn(w)
+	require.True(t, got[ownSession], "own host's row must be present under its own host_id scope")
+	require.False(t, got[otherSession.String()], "the other host's attention row must be EXCLUDED under host_id scoping")
+
+	// Scoped to the other host: the exclusion holds in both directions.
+	w = getNeedsAttention(t, env, otherHostID.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	got = sessionsIn(w)
+	require.True(t, got[otherSession.String()], "other host's row must be present under its own host_id scope")
+	require.False(t, got[ownSession], "own host's row must be EXCLUDED under the other host's scope")
+
+	// Unscoped: rows from BOTH hosts are returned.
+	w = getNeedsAttention(t, env, "")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	got = sessionsIn(w)
+	require.True(t, got[ownSession], "unscoped run must include the paired host's row")
+	require.True(t, got[otherSession.String()], "unscoped run must include the other host's row")
 }
 
 // TestListNeedsAttention_TargetMissingProjection — when a candidate's

@@ -151,6 +151,7 @@ func TestVerifyCallInvariants_HostIDMismatch(t *testing.T) {
 	require.Contains(t, rej.Message, "host_id")
 }
 
+// spec: ING-036
 func TestVerifyCallInvariants_RejectsUnknownSource(t *testing.T) {
 	host := uuid.New()
 	env := validCallEnv(t, events.KindCallReceived, host, "uniq-4")
@@ -158,9 +159,16 @@ func TestVerifyCallInvariants_RejectsUnknownSource(t *testing.T) {
 	rej := verifyCallInvariants(env, host)
 	require.NotNil(t, rej)
 	require.Equal(t, ingestRejectPayloadInvariant, rej.Code)
-	require.Contains(t, rej.Message, "source")
+	// The mutated env.Source also diverges from payload.Source, so pin
+	// the message to the ALLOWLIST branch (which runs first) — a plain
+	// "source" substring would also match the payload-vs-envelope check.
+	require.Contains(t, rej.Message, "not supported on call kinds")
 }
 
+// TestVerifyCallInvariants_RejectsSourceIDMismatch pins the call
+// family's verbatim dedup-key rule: envelope source_id must equal
+// payload.call_unique_id.
+// spec: ING-036
 func TestVerifyCallInvariants_RejectsSourceIDMismatch(t *testing.T) {
 	host := uuid.New()
 	env := validCallEnv(t, events.KindCallReceived, host, "uniq-5")
@@ -171,6 +179,7 @@ func TestVerifyCallInvariants_RejectsSourceIDMismatch(t *testing.T) {
 	require.Contains(t, rej.Message, "source_id")
 }
 
+// spec: ING-036
 func TestVerifyCallInvariants_RejectsPeerNormalizedMismatch(t *testing.T) {
 	// T17: payload peer_normalized doesn't match Pi's re-canonicalization.
 	host := uuid.New()
