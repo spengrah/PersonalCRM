@@ -239,16 +239,26 @@ func checkFile(pf *parsedFile, c *collector) {
 
 // checkSettled enforces the settled surface list: the retired e2e_settled key
 // is rejected outright (the parser silently ignores unknown root keys, so a
-// lingering legacy line would otherwise disable ui blocking unseen), and every
-// element of settled must be a supported surface with no duplicates. `none` is
-// reserved — rejected with a forward-looking message until none-orphan
-// detection ships. Structurally broken settled fields are skipped (already
-// reported by the parser).
+// lingering legacy line would otherwise disable ui blocking unseen), an
+// explicit-but-empty settled (null or []) is rejected rather than read as
+// "nothing blocks", and every element of settled must be a supported surface
+// with no duplicates. `none` is reserved — rejected with a forward-looking
+// message until none-orphan detection ships. Structurally broken settled fields
+// are skipped (already reported by the parser).
 func checkSettled(pf *parsedFile, c *collector) {
 	if pf.fileKeys["e2e_settled"] {
 		c.add(pf, orderLegacyKey, -1, 0, "", "e2e_settled is retired; use a settled: [ui] list")
 	}
 	if pf.fileBroken["settled"] {
+		return
+	}
+	// An explicit settled: key that declares nothing (null or an empty list) is
+	// rejected, not read as "nothing blocks": that reading is indistinguishable
+	// from an absent key yet hides an incomplete edit. Omit the key entirely for
+	// a genuinely unsettled domain; otherwise list its surfaces.
+	if pf.fileKeys["settled"] && len(pf.file.Settled) == 0 {
+		c.add(pf, orderSettledEnum, -1, 0, "",
+			"settled must list at least one surface; omit the key entirely for a genuinely unsettled domain")
 		return
 	}
 	seen := map[string]bool{}

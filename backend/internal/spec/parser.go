@@ -248,13 +248,14 @@ func (pf *parsedFile) fileScalar(fields map[string]*yaml.Node, key string) strin
 }
 
 // fileSurfaceList extracts an optional file-level list-of-surfaces field: a
-// sequence of !!str scalars (the list), or !!null (nil — absent-equivalent).
-// A non-null scalar (e.g. `settled: ui`) is rejected as a structural violation
-// — fail-closed, NOT normalized into a one-element list, so a mis-typed
-// settlement can never silently under-declare its surfaces. A non-!!str
-// sequence item or a mapping is also a file-field-tier structural violation.
-// Element membership (ui|api; none reserved) and duplicates are the semantic
-// pass's job, not the parser's.
+// sequence of !!str scalars (the list), or !!null (nil). A non-null scalar
+// (e.g. `settled: ui`) is rejected as a structural violation — fail-closed, NOT
+// normalized into a one-element list, so a mis-typed settlement can never
+// silently under-declare its surfaces. A non-!!str sequence item or a mapping is
+// also a file-field-tier structural violation. Presence is recorded regardless,
+// so the semantic pass can reject an explicit-but-empty settled (null or []) as
+// distinct from an absent key. Element membership (ui|api; none reserved) and
+// duplicates are also the semantic pass's job, not the parser's.
 func (pf *parsedFile) fileSurfaceList(fields map[string]*yaml.Node, key string) []string {
 	node, ok := fields[key]
 	if !ok {

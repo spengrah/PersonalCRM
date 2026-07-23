@@ -502,9 +502,9 @@ func TestRun_CorruptBaseObjectDB(t *testing.T) {
 	}
 }
 
-// TestRun_BaseAbsence exercises decision 6's confirmed-absence leg: a base with
-// no spec/ dir → empty ls-tree stdout → empty base → HEAD behaviors read as
-// newly-added → exit 0, silent.
+// TestRun_BaseAbsence exercises the confirmed-absence leg: a base with no spec/
+// dir → empty ls-tree stdout → empty base → HEAD behaviors read as newly-added
+// → exit 0, silent.
 func TestRun_BaseAbsence(t *testing.T) {
 	t.Setenv("GITHUB_ACTIONS", "false")
 	root := initRepo(t)

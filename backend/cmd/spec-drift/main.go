@@ -23,8 +23,9 @@
 //	    reworded-but-unchanged-meaning assertion is legitimate, so drift never
 //	    blocks)
 //	2 — operational error: bad usage, unresolvable base (missing ref, unrelated
-//	    history, shallow clone), unreadable/corrupt tree, a git failure, a dirty
-//	    HEAD corpus, or a write failure
+//	    history, shallow clone), unreadable/corrupt tree, a git failure, a HEAD
+//	    corpus that fails spec lint (head-side parse/validation failure), or a
+//	    write failure
 //
 // The warn-only contract must NOT swallow git/operational failures into exit 0:
 // a gate that silently computes nothing and exits green is one that cannot
@@ -66,13 +67,14 @@ func main() {
 // redirect every spec-drift git call away from the <root> argument. execGit
 // clears them so `git -C <dir>` is authoritative.
 var gitLocationVars = map[string]bool{
-	"GIT_DIR":              true,
-	"GIT_WORK_TREE":        true,
-	"GIT_INDEX_FILE":       true,
-	"GIT_OBJECT_DIRECTORY": true,
-	"GIT_COMMON_DIR":       true,
-	"GIT_PREFIX":           true,
-	"GIT_NAMESPACE":        true,
+	"GIT_DIR":                          true,
+	"GIT_WORK_TREE":                    true,
+	"GIT_INDEX_FILE":                   true,
+	"GIT_OBJECT_DIRECTORY":             true,
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES": true,
+	"GIT_COMMON_DIR":                   true,
+	"GIT_PREFIX":                       true,
+	"GIT_NAMESPACE":                    true,
 }
 
 // cleanGitLocationEnv returns os.Environ() with the git-location variables
