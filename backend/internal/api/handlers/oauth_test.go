@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -125,6 +126,23 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
+// assertExactWireKeys asserts a decoded account response object's key set is
+// EXACTLY the expected safe set: an extra key (e.g. leaked encrypted token
+// bytes or nonces) fails, and so does a dropped or renamed safe key (which
+// would otherwise let a token field slip in under an old name unnoticed).
+func assertExactWireKeys(t *testing.T, obj map[string]interface{}, want []string) {
+	t.Helper()
+	got := make([]string, 0, len(obj))
+	for k := range obj {
+		got = append(got, k)
+	}
+	sort.Strings(got)
+	wantSorted := append([]string(nil), want...)
+	sort.Strings(wantSorted)
+	assert.Equal(t, wantSorted, got,
+		"account response key set must exactly equal the non-sensitive safe set — no token/nonce material may be serialized")
+}
+
 func TestGetGoogleAuthURL(t *testing.T) {
 	mock := &MockOAuthService{
 		GetAuthURLFunc: func(state string) string {
@@ -163,29 +181,42 @@ func TestGetGoogleAuthURL_StoresStateServerSide(t *testing.T) {
 	mock := &MockOAuthService{}
 	handler := NewOAuthHandler(mock, "http://localhost:3000")
 
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/auth/google", nil)
+	requestState := func(t *testing.T) string {
+		t.Helper()
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest("GET", "/auth/google", nil)
 
-	handler.GetGoogleAuthURL(c)
+		handler.GetGoogleAuthURL(c)
 
-	require.Equal(t, http.StatusOK, w.Code)
+		require.Equal(t, http.StatusOK, w.Code)
 
-	var response struct {
-		Data struct {
-			URL   string `json:"url"`
-			State string `json:"state"`
-		} `json:"data"`
+		var response struct {
+			Data struct {
+				URL   string `json:"url"`
+				State string `json:"state"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.NotEmpty(t, response.Data.State)
+		return response.Data.State
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
-	require.NotEmpty(t, response.Data.State)
 
-	// The exact state handed back to the caller must have been stored
+	// Two auth-URL requests must mint DISTINCT states — a handler returning
+	// one fixed constant state would otherwise pass every assertion below.
+	firstState := requestState(t)
+	secondState := requestState(t)
+	assert.NotEqual(t, firstState, secondState,
+		"each auth-URL request must generate a fresh random state, not a constant")
+
+	// Each exact state handed back to the caller must have been stored
 	// server-side: validateState accepts it exactly once, proving the copy in
 	// the response and the copy in the store are the same value, not merely
 	// two independently-generated randoms.
-	assert.True(t, handler.validateState(response.Data.State), "the state returned to the caller must have been stored server-side")
-	assert.False(t, handler.validateState(response.Data.State), "a stored state must be single-use")
+	for name, state := range map[string]string{"first": firstState, "second": secondState} {
+		assert.True(t, handler.validateState(state), "the %s state returned to the caller must have been stored server-side", name)
+		assert.False(t, handler.validateState(state), "a stored state must be single-use (%s)", name)
+	}
 }
 
 func TestGoogleCallback(t *testing.T) {
@@ -383,6 +414,81 @@ func TestGoogleCallback_ExpiredStateAbortsBeforeExchange(t *testing.T) {
 	assert.False(t, exchangeCalled, "an expired state must abort the flow before the code exchange")
 }
 
+// spec: SET-003[3]
+// An unknown (never-stored) state must abort the callback with an
+// invalid_state outcome WITHOUT the authorization code ever being exchanged.
+func TestGoogleCallback_UnknownStateAbortsBeforeExchange(t *testing.T) {
+	exchangeCalled := false
+	mock := &MockOAuthService{
+		ExchangeCodeFunc: func(ctx context.Context, code string) (*repository.OAuthCredentialStatus, error) {
+			exchangeCalled = true
+			return &repository.OAuthCredentialStatus{
+				ID:        uuid.New(),
+				Provider:  "google",
+				AccountID: "test@example.com",
+			}, nil
+		},
+	}
+	handler := NewOAuthHandler(mock, "http://localhost:3000")
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/auth/google/callback?code=authcode&state=never-stored-"+uuid.New().String()[:8], nil)
+
+	handler.GoogleCallback(c)
+
+	assert.Equal(t, http.StatusFound, w.Code)
+	location := w.Header().Get("Location")
+	assert.Contains(t, location, "/settings?auth=error")
+	assert.Contains(t, location, "message=invalid_state")
+	assert.False(t, exchangeCalled, "an unknown state must abort the flow before the code exchange")
+}
+
+// spec: SET-003[3]
+// An already-used state must abort a REPLAYED callback with an invalid_state
+// outcome without invoking the code exchange a second time: the state is
+// stored once, consumed by a first (successful) callback, then replayed.
+func TestGoogleCallback_AlreadyUsedStateAbortsBeforeExchange(t *testing.T) {
+	exchangeCalls := 0
+	mock := &MockOAuthService{
+		ExchangeCodeFunc: func(ctx context.Context, code string) (*repository.OAuthCredentialStatus, error) {
+			exchangeCalls++
+			return &repository.OAuthCredentialStatus{
+				ID:        uuid.New(),
+				Provider:  "google",
+				AccountID: "test@example.com",
+			}, nil
+		},
+	}
+	handler := NewOAuthHandler(mock, "http://localhost:3000")
+
+	state := "replayed-state-" + uuid.New().String()[:8]
+	handler.storeState(state)
+
+	// First callback: valid state, exchange runs, success redirect.
+	w1 := httptest.NewRecorder()
+	c1, _ := gin.CreateTestContext(w1)
+	c1.Request = httptest.NewRequest("GET", "/auth/google/callback?code=authcode&state="+state, nil)
+	handler.GoogleCallback(c1)
+
+	require.Equal(t, http.StatusFound, w1.Code)
+	require.Contains(t, w1.Header().Get("Location"), "/settings?auth=success")
+	require.Equal(t, 1, exchangeCalls, "the first callback must exchange the code exactly once")
+
+	// Replay: the same state must now fail validation and the exchange must
+	// NOT be invoked a second time.
+	w2 := httptest.NewRecorder()
+	c2, _ := gin.CreateTestContext(w2)
+	c2.Request = httptest.NewRequest("GET", "/auth/google/callback?code=authcode&state="+state, nil)
+	handler.GoogleCallback(c2)
+
+	assert.Equal(t, http.StatusFound, w2.Code)
+	location := w2.Header().Get("Location")
+	assert.Contains(t, location, "/settings?auth=error")
+	assert.Contains(t, location, "message=invalid_state")
+	assert.Equal(t, 1, exchangeCalls, "a replayed state must abort the flow without a second code exchange")
+}
+
 func TestGoogleCallback_FailureRedirectsIncludeProvider(t *testing.T) {
 	t.Run("provider error carries provider name", func(t *testing.T) {
 		// spec: SET-004[2]
@@ -532,15 +638,25 @@ func TestListGoogleAccounts(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 
 		var response struct {
-			Data []GoogleAccountResponse `json:"data"`
+			Data []map[string]interface{} `json:"data"`
 		}
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 		require.Len(t, response.Data, 1)
-		assert.Equal(t, accountID.String(), response.Data[0].ID)
-		assert.Equal(t, "test@example.com", response.Data[0].AccountID)
-		assert.Equal(t, &accountName, response.Data[0].AccountName)
-		assert.Len(t, response.Data[0].Scopes, 2)
+		account := response.Data[0]
+		assert.Equal(t, accountID.String(), account["id"])
+		assert.Equal(t, "test@example.com", account["account_id"])
+		assert.Equal(t, accountName, account["account_name"])
+		scopes, ok := account["scopes"].([]interface{})
+		require.True(t, ok, "wire key 'scopes' must be an array")
+		assert.Len(t, scopes, 2)
+
+		// spec: SET-009
+		// The raw wire object must carry EXACTLY the non-sensitive metadata
+		// keys — encrypted token bytes and nonces are never serialized.
+		assertExactWireKeys(t, account, []string{
+			"id", "account_id", "account_name", "expires_at", "scopes", "created_at", "updated_at",
+		})
 	})
 
 	t.Run("returns error on service failure", func(t *testing.T) {
@@ -625,12 +741,19 @@ func TestGetGoogleAccountStatus(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 
 		var response struct {
-			Data GoogleAccountResponse `json:"data"`
+			Data map[string]interface{} `json:"data"`
 		}
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
-		assert.Equal(t, accountID.String(), response.Data.ID)
-		assert.Equal(t, "test@example.com", response.Data.AccountID)
+		assert.Equal(t, accountID.String(), response.Data["id"])
+		assert.Equal(t, "test@example.com", response.Data["account_id"])
+
+		// spec: SET-009
+		// Exact safe key set (the fixture carries no expiry, so expires_at is
+		// omitted): encrypted token bytes and nonces are never serialized.
+		assertExactWireKeys(t, response.Data, []string{
+			"id", "account_id", "account_name", "scopes", "created_at", "updated_at",
+		})
 	})
 }
 
@@ -743,25 +866,48 @@ func TestStateValidation(t *testing.T) {
 	})
 }
 
-// spec: SET-002[1]
-func TestOAuthState_ExpiresAfterTenMinutes(t *testing.T) {
-	mock := &MockOAuthService{}
-	handler := NewOAuthHandler(mock, "http://localhost:3000")
+// validateStateAfterShift stores a fresh state under a fixed TIME_BASE, then
+// re-anchors TIME_BASE shiftSeconds into the past and validates the state.
+// With TIME_ACCELERATION=2 the accelerated clock at validation reads
+// (store-time + shiftSeconds + 2*delta) where delta is the real wall-clock
+// time between the two calls: a base shift of D under acceleration A advances
+// accelerated "now" by (A-1)*D, so A=2 makes the advance exactly the shift
+// while keeping wall-clock jitter amplification at 2x (milliseconds in
+// practice, against 30-second margins on both sides of the boundary below).
+// No sleeps, no time.Now() — both sides of the TTL boundary are pinned by
+// deterministic base shifts.
+func validateStateAfterShift(t *testing.T, shiftSeconds int64) bool {
+	t.Helper()
+	handler := NewOAuthHandler(&MockOAuthService{}, "http://localhost:3000")
 
-	t.Setenv("TIME_ACCELERATION", "60")
+	t.Setenv("TIME_ACCELERATION", "2")
 	t.Setenv("TIME_BASE", strconv.FormatInt(fixedOAuthTestBaseUnix, 10))
 
 	state := "ttl-state-" + uuid.New().String()[:8]
 	handler.storeState(state)
 
-	// Shift the accelerated clock's base far enough into the past that the
-	// resulting accelerated "now" lands well beyond the state's 10-minute TTL
-	// (a 1000s base shift * 60x acceleration = 60,000 accelerated seconds,
-	// which dwarfs both the 600s TTL and any real-wall-clock jitter between
-	// the two GetCurrentTime() calls involved).
-	t.Setenv("TIME_BASE", strconv.FormatInt(fixedOAuthTestBaseUnix-1000, 10))
+	t.Setenv("TIME_BASE", strconv.FormatInt(fixedOAuthTestBaseUnix-shiftSeconds, 10))
+	return handler.validateState(state)
+}
 
-	assert.False(t, handler.validateState(state), "a state older than 10 minutes must be rejected")
+// spec: SET-002[1]
+// Pins BOTH sides of the ten-minute TTL boundary: a state validated just
+// under ten minutes after storage is still accepted, and one validated just
+// over ten minutes after storage is rejected. A single gross shift would pass
+// for any TTL below the shift; the two-sided pin fails if the TTL moves in
+// either direction.
+func TestOAuthState_ExpiresAfterTenMinutes(t *testing.T) {
+	t.Run("state is still valid just under ten minutes after storage", func(t *testing.T) {
+		// spec: SET-002[1]
+		assert.True(t, validateStateAfterShift(t, 570),
+			"a state validated 9m30s after storage must still be accepted (TTL is ten minutes)")
+	})
+
+	t.Run("state is invalid just over ten minutes after storage", func(t *testing.T) {
+		// spec: SET-002[1]
+		assert.False(t, validateStateAfterShift(t, 630),
+			"a state validated 10m30s after storage must be rejected (TTL is ten minutes)")
+	})
 }
 
 // spec: SET-002[2]
@@ -1136,6 +1282,13 @@ func TestListTodoistAccounts(t *testing.T) {
 		scopes, ok := account["scopes"].([]interface{})
 		require.True(t, ok, "wire key 'scopes' must be an array")
 		assert.ElementsMatch(t, []interface{}{"data:read_write", "data:delete"}, scopes)
+
+		// spec: SET-009
+		// The raw wire object must carry EXACTLY the non-sensitive metadata
+		// keys — encrypted token bytes and nonces are never serialized.
+		assertExactWireKeys(t, account, []string{
+			"id", "account_id", "account_name", "expires_at", "scopes", "created_at", "updated_at",
+		})
 	})
 
 	t.Run("returns error on service failure", func(t *testing.T) {
@@ -1240,6 +1393,13 @@ func TestGetTodoistAccountStatus(t *testing.T) {
 		assert.Equal(t, accountName, response.Data["account_name"], "wire key 'account_name'")
 		assert.Equal(t, created.Format(time.RFC3339), response.Data["created_at"], "wire key 'created_at'")
 		assert.Equal(t, updated.Format(time.RFC3339), response.Data["updated_at"], "wire key 'updated_at'")
+
+		// spec: SET-009
+		// Exact safe key set (the fixture carries no expiry, so expires_at is
+		// omitted): encrypted token bytes and nonces are never serialized.
+		assertExactWireKeys(t, response.Data, []string{
+			"id", "account_id", "account_name", "scopes", "created_at", "updated_at",
+		})
 	})
 }
 

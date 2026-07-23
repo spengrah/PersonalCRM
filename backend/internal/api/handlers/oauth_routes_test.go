@@ -141,11 +141,15 @@ func requireMissingKey401(t *testing.T, w *httptest.ResponseRecorder, route stri
 	assert.Equal(t, "MISSING_API_KEY", errObj["code"], "route %s", route)
 }
 
+// NOTE: the SET-001 / SET-005 spec citations live in
+// backend/cmd/crm-api/oauth_routes_boundary_test.go, which drives the
+// PRODUCTION wiring (the real wire chain + registerRoutes) rather than this
+// file's test-local reconstruction. The tests below stay as uncited
+// registrar-level groundwork: they pin the registrars' own behavior.
 func TestOAuthRouteRegistration_AuthBoundary(t *testing.T) {
 	router := newOAuthTestRouter(true, true)
 
 	t.Run("callback routes are reachable without the API key", func(t *testing.T) {
-		// spec: SET-001
 		// A keyless request to each provider callback must get PAST the
 		// auth middleware and into the handler. With no query params the
 		// handler deterministically 302-redirects to the settings surface
@@ -166,7 +170,6 @@ func TestOAuthRouteRegistration_AuthBoundary(t *testing.T) {
 	})
 
 	t.Run("auth-URL and account routes without a key are rejected 401", func(t *testing.T) {
-		// spec: SET-001
 		protected := []struct {
 			method string
 			path   string
@@ -187,7 +190,6 @@ func TestOAuthRouteRegistration_AuthBoundary(t *testing.T) {
 	})
 
 	t.Run("auth-URL routes with the key reach their handlers", func(t *testing.T) {
-		// spec: SET-001
 		// Acceptance side of the boundary: the same protected routes
 		// proceed once the key is supplied.
 		wGoogle := serveOAuthTestRequest(router, http.MethodGet, "/api/v1/auth/google", true)
@@ -202,7 +204,6 @@ func TestOAuthRouteRegistration_AuthBoundary(t *testing.T) {
 
 func TestOAuthRouteRegistration_ProviderGating(t *testing.T) {
 	t.Run("both providers enabled registers both full route sets", func(t *testing.T) {
-		// spec: SET-005
 		router := newOAuthTestRouter(true, true)
 		assert.ElementsMatch(t,
 			append(append([]string{}, googleOAuthRouteSet...), todoistOAuthRouteSet...),
@@ -210,7 +211,6 @@ func TestOAuthRouteRegistration_ProviderGating(t *testing.T) {
 	})
 
 	t.Run("google-only registers google routes and no todoist routes", func(t *testing.T) {
-		// spec: SET-005
 		router := newOAuthTestRouter(true, false)
 		assert.ElementsMatch(t, googleOAuthRouteSet, oauthRouteSet(router))
 
@@ -220,7 +220,6 @@ func TestOAuthRouteRegistration_ProviderGating(t *testing.T) {
 	})
 
 	t.Run("todoist-only registers todoist routes and no google routes", func(t *testing.T) {
-		// spec: SET-005
 		router := newOAuthTestRouter(false, true)
 		assert.ElementsMatch(t, todoistOAuthRouteSet, oauthRouteSet(router))
 
@@ -230,7 +229,6 @@ func TestOAuthRouteRegistration_ProviderGating(t *testing.T) {
 	})
 
 	t.Run("both providers disabled registers no oauth routes", func(t *testing.T) {
-		// spec: SET-005
 		router := newOAuthTestRouter(false, false)
 		assert.Empty(t, oauthRouteSet(router))
 

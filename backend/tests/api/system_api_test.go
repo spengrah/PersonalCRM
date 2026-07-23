@@ -24,7 +24,12 @@ import (
 
 // newSystemTestDatabase opens a DB handle exactly like production wiring does
 // (pool config mirrors config.TestConfig() 8/1, same as the sibling
-// setupContactValidationTestRouter). Migrations are applied once by TestMain.
+// setupContactValidationTestRouter). Under the integration_testdb tag the
+// build-tagged TestMain (testmain_integration_test.go) clones a migrated
+// template database and rewrites DATABASE_URL to the clone; under the
+// untagged build there is no TestMain — the tests below self-skip via
+// testing.Short() / unset DATABASE_URL, and an explicitly-set DATABASE_URL
+// must already point at a migrated database.
 func newSystemTestDatabase(t *testing.T) *db.Database {
 	t.Helper()
 
@@ -176,6 +181,27 @@ func TestSystemAPI_ExportData(t *testing.T) {
 		contacts, ok := dataset["contacts"].([]interface{})
 		require.True(t, ok, "dataset must carry a contacts array, got: %T", dataset["contacts"])
 
+		// The fixture contact HAS an interaction and a note in the DB; neither
+		// may surface anywhere in the export envelope — assert over the full
+		// recursive key set of the decoded body. (Kept ahead of the
+		// limit-window guard below so it runs unconditionally.)
+		keys := map[string]bool{}
+		collectKeys(body, keys)
+		assert.False(t, keys["interactions"], "export must not contain an interactions key anywhere")
+		assert.False(t, keys["notes"], "export must not contain a notes key anywhere")
+
+		// ExportData reads at most 1000 contacts (the literal Limit in
+		// SystemHandler.ExportData). The shared test DB accumulates contacts
+		// across runs, so once the live count reaches that window the seeded
+		// contact may legitimately fall outside the export — skip the
+		// membership assertion rather than fail on an artifact of DB growth.
+		const exportLimit = 1000 // mirrors system.go ExportData's Limit
+		liveCount, err := contactRepo.CountContacts(ctx, repository.ListContactsParams{})
+		require.NoError(t, err)
+		if liveCount >= exportLimit {
+			t.Skipf("live contact count %d >= export limit %d: the seeded contact may fall outside ExportData's window; skipping membership assertion", liveCount, exportLimit)
+		}
+
 		var found bool
 		for _, row := range contacts {
 			c, ok := row.(map[string]interface{})
@@ -188,14 +214,6 @@ func TestSystemAPI_ExportData(t *testing.T) {
 			}
 		}
 		assert.True(t, found, fmt.Sprintf("seeded contact %s must appear in the exported contacts", contact.ID))
-
-		// The fixture contact HAS an interaction and a note in the DB; neither
-		// may surface anywhere in the export envelope — assert over the full
-		// recursive key set of the decoded body.
-		keys := map[string]bool{}
-		collectKeys(body, keys)
-		assert.False(t, keys["interactions"], "export must not contain an interactions key anywhere")
-		assert.False(t, keys["notes"], "export must not contain a notes key anywhere")
 	})
 
 	t.Run("Export_ContactsReadFailureReturns500", func(t *testing.T) {
