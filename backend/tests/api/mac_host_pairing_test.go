@@ -258,7 +258,6 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.NotNil(t, baseConflict.CurrentCursor)
 
 	// 6. Commit cursor with good base + backfill_complete=true → 200.
-	// spec: MAC-015[0]
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/cursor", hostHeaders, map[string]any{
 		"cursor":            "cursor-v1",
 		"base_cursor":       "",
@@ -268,6 +267,7 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "expected 200; body: %s", w.Body.String())
 
 	// 7. GET cursor → returns committed value AND backfill_complete.
+	// spec: MAC-015[0]
 	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/cursor", hostHeaders, nil)
 	require.Equal(t, http.StatusOK, w.Code)
 	var cur struct {

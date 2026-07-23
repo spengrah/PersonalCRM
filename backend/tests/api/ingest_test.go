@@ -211,7 +211,7 @@ func uniqueIngestSource(prefix string) string {
 	return prefix + "-" + uuid.NewString()
 }
 
-// spec: ING-001[0]
+// spec: ING-001[0], ING-007[1]
 func TestIngest_ValidBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -244,6 +244,7 @@ func TestIngest_ValidBatch(t *testing.T) {
 	require.Equal(t, int64(3), count)
 }
 
+// spec: ING-001[2]
 func TestIngest_AuthFailure_MissingKey(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -260,6 +261,7 @@ func TestIngest_AuthFailure_MissingKey(t *testing.T) {
 	require.Contains(t, w.Body.String(), "MISSING_API_KEY")
 }
 
+// spec: ING-001[2]
 func TestIngest_AuthFailure_InvalidKey(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

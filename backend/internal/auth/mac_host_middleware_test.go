@@ -166,7 +166,7 @@ func TestMacHostAuth_RevokedOrMissingHost_401(t *testing.T) {
 	require.Equal(t, int64(0), cmp.calls.Load(), "bcrypt must not run when host is unknown")
 }
 
-// spec: MAC-007[4]
+// spec: ING-001[1]
 func TestMacHostAuth_InvalidKey_401(t *testing.T) {
 	id := uuid.New()
 	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{

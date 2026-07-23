@@ -236,6 +236,7 @@ func TestMethodOps_UnnamedMethodsSurvive(t *testing.T) {
 // rule above: at most one primary is a database constraint, so promoting one
 // necessarily demotes another. That is a real side effect on an unnamed row and
 // is stated rather than hidden.
+// spec: CON-062[0]
 func TestMethodOps_PromoteDemotesPreviousPrimary(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -852,6 +853,7 @@ func TestMethodOps_ResultsCoverEveryOperation(t *testing.T) {
 // TestMethodOps_ResultsIndexAgainstSubmittedNotFoldedOperations uses payloads
 // whose folds are NOT one-to-one. Earlier cases all folded one-to-one, so an
 // implementation emitting one result per folded operation passed them.
+// spec: CON-062[12]
 func TestMethodOps_ResultsIndexAgainstSubmittedNotFoldedOperations(t *testing.T) {
 	t.Parallel()
 
@@ -884,8 +886,6 @@ func TestMethodOps_ResultsIndexAgainstSubmittedNotFoldedOperations(t *testing.T)
 
 // TestMethodOps_ResultsCarryResolvedRowSnapshot pins that snapshots reflect
 // POST-apply state rather than echoing the submitted operation's fields.
-//
-// spec: CON-062[13]
 func TestMethodOps_ResultsCarryResolvedRowSnapshot(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)

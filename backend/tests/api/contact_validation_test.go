@@ -108,7 +108,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	defer cleanup()
 
 	t.Run("CreateContact_MissingRequiredField", func(t *testing.T) {
-		// spec: CON-002[0], CON-002[5]
+		// spec: CON-002[5]
 		requestBody := handlers.CreateContactRequest{
 			FullName: "", // Required field empty
 		}
@@ -170,7 +170,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_FullNameTooLong", func(t *testing.T) {
-		// spec: CON-002[0], CON-002[5]
+		// spec: CON-002[5]
 		requestBody := handlers.CreateContactRequest{
 			FullName: strings.Repeat("a", 256), // Exceeds max 255
 		}
@@ -260,7 +260,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_AllFieldsMaxLength", func(t *testing.T) {
-		// spec: CON-002[0], CON-002[6]
+		// spec: CON-002[6]
 		// Use unique email to avoid conflicts in CI
 		uniqueEmail := strings.Repeat("a", 235) + uuid.New().String()[:10] + "@test.com" // Total ~255 chars
 
@@ -538,7 +538,6 @@ func TestContactAPI_QueryValidation(t *testing.T) {
 	})
 
 	t.Run("ListContacts_LimitTooHigh", func(t *testing.T) {
-		// spec: CON-017[1]
 		req, _ := http.NewRequest("GET", "/api/v1/contacts?limit=1001", nil)
 
 		w := httptest.NewRecorder()

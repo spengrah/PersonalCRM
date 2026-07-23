@@ -794,7 +794,7 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 // every method named in the request. The trigger moved from the contact PUT to
 // the operations endpoint when the PUT's method-replacing branch was retired;
 // the diff behavior it asserts is unchanged.
-// spec: IMP-019[0], IMP-019[1]
+// spec: IMP-019[0]
 func TestRematch_ApplyMethodOperations_FiresForNewMethodOnly(t *testing.T) {
 	t.Parallel()
 	env := setupRematchEnv(t)

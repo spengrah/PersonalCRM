@@ -2574,6 +2574,7 @@ func getNeedsAttention(t *testing.T, env *meetingNoteIngestEnv, hostID string) *
 // TestResolveLink_LinkToEventSuccess — seed a conflict_pending row,
 // post action=link with the winning candidate, verify the row transitions
 // to linked and the snapshot is cleared.
+// spec: NTS-018[0], NTS-018[1]
 func TestResolveLink_LinkToEventSuccess(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	meetingAt := time.Date(2026, 5, 7, 9, 0, 0, 0, time.UTC)
@@ -2667,6 +2668,7 @@ func TestResolveLink_UnknownMeetingNoteReturns404(t *testing.T) {
 // TestResolveLink_NoneOfTheseToLinkedImpromptu — conflict_pending row
 // with a tagged participant, "none of these" promotes to
 // linked_impromptu with one interaction per resolved tagged contact.
+// spec: NTS-018[0]
 func TestResolveLink_NoneOfTheseToLinkedImpromptu(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	suffix := strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-")
@@ -2982,6 +2984,7 @@ func TestListNeedsAttention_TargetMissingProjection(t *testing.T) {
 // is cleared. Exercises the LinkedKindPhoneCall branch of
 // resolveToLinked + fetchCandidateAsLinkageTx that previously had ZERO
 // integration coverage.
+// spec: NTS-018[1]
 func TestResolveLink_LinkToPhoneCallSuccess(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	meetingAt := time.Date(2026, 5, 9, 9, 0, 0, 0, time.UTC)

@@ -336,6 +336,7 @@ func (a adminRiverInserter) Insert(ctx context.Context, args river.JobArgs, opts
 // TestIngestRawMessage_HappyPath_StagesRowAndEnqueuesJob asserts a
 // well-formed raw_message.received with a known contact's phone number
 // produces a staging row with matched_contact_id and one River job.
+// spec: ING-007[0]
 func TestIngestRawMessage_HappyPath_StagesRowAndEnqueuesJob(t *testing.T) {
 	env := setupRawIngestEnv(t)
 	t.Parallel()
@@ -366,6 +367,7 @@ func TestIngestRawMessage_HappyPath_StagesRowAndEnqueuesJob(t *testing.T) {
 // happy-path test for the outbound kind: a raw_message.sent for a known
 // contact stages a row with is_outgoing=true and a matched contact, and
 // enqueues one aggregator River job.
+// spec: ING-007[0]
 func TestIngestRawMessage_Sent_StagesOutgoingRowAndEnqueuesJob(t *testing.T) {
 	env := setupRawIngestEnv(t)
 	t.Parallel()
@@ -444,7 +446,7 @@ func TestIngestRawMessage_UnmatchedPeer_StagedWithoutContactNoJob(t *testing.T) 
 // TestIngestRawMessage_GlobalKeyPath_RejectedWithCode asserts that
 // raw_message.* events submitted via the global API key (no
 // X-Mac-Host-ID) are REJECTED per-event with HOST_ONLY_REQUIRES_HOST_AUTH.
-// spec: ING-001[2], ING-007[0]
+// spec: ING-001[2], ING-007[0], ING-007[2]
 func TestIngestRawMessage_GlobalKeyPath_RejectedWithCode(t *testing.T) {
 	env := setupRawIngestEnv(t)
 	t.Parallel()

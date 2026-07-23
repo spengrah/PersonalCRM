@@ -127,7 +127,6 @@ func TestGoogleCallback(t *testing.T) {
 
 		handler.GoogleCallback(c)
 
-		// spec: SET-003[1]
 		assert.Equal(t, http.StatusFound, w.Code)
 		location := w.Header().Get("Location")
 		assert.Contains(t, location, "/settings?auth=error")
