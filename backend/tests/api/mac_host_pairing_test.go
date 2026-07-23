@@ -267,6 +267,7 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "expected 200; body: %s", w.Body.String())
 
 	// 7. GET cursor → returns committed value AND backfill_complete.
+	// spec: MAC-015[0]
 	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/cursor", hostHeaders, nil)
 	require.Equal(t, http.StatusOK, w.Code)
 	var cur struct {
@@ -341,6 +342,7 @@ func TestMacHost_PairingToken_Unknown(t *testing.T) {
 	require.Equal(t, http.StatusGone, w.Code, "unknown token must be 410, body: %s", w.Body.String())
 }
 
+// spec: MAC-003[3]
 func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -359,6 +361,7 @@ func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, "empty hostname must surface 400, body: %s", w.Body.String())
 }
 
+// spec: MAC-003[3]
 func TestMacHost_Pair_MissingToken_400(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -372,6 +375,7 @@ func TestMacHost_Pair_MissingToken_400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, "empty token must surface 400, body: %s", w.Body.String())
 }
 
+// spec: MAC-003[2]
 func TestMacHost_Singleton_SecondPairBlocked(t *testing.T) {
 
 	env := setupMacHostEnv(t)

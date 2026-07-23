@@ -507,6 +507,7 @@ func TestStateValidation(t *testing.T) {
 		state := "one-time-state"
 		handler.storeState(state)
 
+		// spec: SET-003[2]
 		// First validation should succeed
 		assert.True(t, handler.validateState(state))
 

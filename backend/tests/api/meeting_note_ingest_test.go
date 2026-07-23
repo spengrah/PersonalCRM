@@ -623,6 +623,7 @@ func listSessionInteractions(t *testing.T, env *meetingNoteIngestEnv, sessionUUI
 // TC-L1: 0 candidates + 0 resolved tagged humans → orphan_needs_review,
 // no interactions, needs_attention contains the session with reason=orphan.
 // ----------------------------------------------------------------------------
+// spec: ING-035[0]
 func TestMeetingNote_OrphanNoTagged(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	sessionUUID := env.newSessionUUID()
@@ -2573,6 +2574,7 @@ func getNeedsAttention(t *testing.T, env *meetingNoteIngestEnv, hostID string) *
 // TestResolveLink_LinkToEventSuccess — seed a conflict_pending row,
 // post action=link with the winning candidate, verify the row transitions
 // to linked and the snapshot is cleared.
+// spec: NTS-018[0], NTS-018[1]
 func TestResolveLink_LinkToEventSuccess(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	meetingAt := time.Date(2026, 5, 7, 9, 0, 0, 0, time.UTC)
@@ -2608,6 +2610,7 @@ func TestResolveLink_LinkToEventSuccess(t *testing.T) {
 
 // TestResolveLink_AlreadyLinkedReturns409 — calling resolve-link on a
 // row that's not in conflict_pending returns 409.
+// spec: NTS-018[4]
 func TestResolveLink_AlreadyLinkedReturns409(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	meetingAt := time.Date(2026, 5, 7, 10, 0, 0, 0, time.UTC)
@@ -2628,6 +2631,7 @@ func TestResolveLink_AlreadyLinkedReturns409(t *testing.T) {
 
 // TestResolveLink_IDNotInSnapshotReturns400 — picking an event UUID that
 // wasn't in the persisted snapshot returns 400.
+// spec: NTS-018[5]
 func TestResolveLink_IDNotInSnapshotReturns400(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	meetingAt := time.Date(2026, 5, 7, 11, 0, 0, 0, time.UTC)
@@ -2654,6 +2658,7 @@ func TestResolveLink_IDNotInSnapshotReturns400(t *testing.T) {
 
 // TestResolveLink_UnknownMeetingNoteReturns404 — resolve on a random UUID
 // returns 404.
+// spec: NTS-018[3]
 func TestResolveLink_UnknownMeetingNoteReturns404(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	w := postResolveLink(t, env, uuid.NewString(), map[string]any{"action": "none_of_these"})
@@ -2663,6 +2668,7 @@ func TestResolveLink_UnknownMeetingNoteReturns404(t *testing.T) {
 // TestResolveLink_NoneOfTheseToLinkedImpromptu — conflict_pending row
 // with a tagged participant, "none of these" promotes to
 // linked_impromptu with one interaction per resolved tagged contact.
+// spec: NTS-018[0]
 func TestResolveLink_NoneOfTheseToLinkedImpromptu(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	suffix := strings.TrimPrefix(env.sourceIDPrefix, "mn-ingest-")
@@ -2838,6 +2844,7 @@ func TestResolveLink_NoneOfTheseToOrphanNeedsReview(t *testing.T) {
 // snapshot whose row has since been hard-deleted; resolve-link returns
 // 404 (and the tx rolls back so the meeting_note stays
 // conflict_pending).
+// spec: NTS-018[3]
 func TestResolveLink_TargetMissingReturns404(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	meetingAt := time.Date(2026, 5, 8, 11, 0, 0, 0, time.UTC)
@@ -2921,6 +2928,7 @@ func TestListNeedsAttention_HostFilter(t *testing.T) {
 // TestListNeedsAttention_TargetMissingProjection — when a candidate's
 // target has been hard-deleted, the entry stays in the response with
 // target_missing=true and preview=nil.
+// spec: NTS-025[3]
 func TestListNeedsAttention_TargetMissingProjection(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	meetingAt := time.Date(2026, 5, 8, 13, 0, 0, 0, time.UTC)
@@ -2976,6 +2984,7 @@ func TestListNeedsAttention_TargetMissingProjection(t *testing.T) {
 // is cleared. Exercises the LinkedKindPhoneCall branch of
 // resolveToLinked + fetchCandidateAsLinkageTx that previously had ZERO
 // integration coverage.
+// spec: NTS-018[1]
 func TestResolveLink_LinkToPhoneCallSuccess(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	meetingAt := time.Date(2026, 5, 9, 9, 0, 0, 0, time.UTC)
@@ -3018,6 +3027,7 @@ func TestResolveLink_LinkToPhoneCallSuccess(t *testing.T) {
 // phone_call from the snapshot whose row has since been hard-deleted;
 // resolve-link returns 404 and the tx rolls back so the meeting_note
 // stays conflict_pending.
+// spec: NTS-018[3]
 func TestResolveLink_PhoneCallTargetMissingReturns404(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	meetingAt := time.Date(2026, 5, 9, 10, 0, 0, 0, time.UTC)
@@ -3337,6 +3347,7 @@ func TestResolveLink_TerminalStatesReturn409(t *testing.T) {
 			env := setupMeetingNoteIngestEnv(t)
 			row := tc.drive(t, env)
 			w := postResolveLink(t, env, row.ID.String(), map[string]any{"action": "none_of_these"})
+			// spec: NTS-018[4]
 			require.Equal(t, http.StatusConflict, w.Code,
 				"terminal state %s must 409 — body: %s", tc.name, w.Body.String())
 		})
@@ -3476,6 +3487,7 @@ func TestResolveLink_OrphanToImpromptu_WithNewlyResolvableParticipant(t *testing
 // conflict_pending, so this scenario only arises from corrupted state
 // (or a future migration footgun). Seed the row directly via the
 // repository to bypass the normal-flow invariant.
+// spec: NTS-018[6]
 func TestResolveLink_SnapshotMissingReturns422(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	ctx := context.Background()

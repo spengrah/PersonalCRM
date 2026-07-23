@@ -97,6 +97,7 @@ func TestEligibleMethods_FiltersToRegisteredHandlers(t *testing.T) {
 		{Type: "telegram", Value: "alice"},
 		{Type: "discord", Value: "alice#1"},
 	}
+	// spec: IMP-019[0]
 	got := svc.EligibleMethods(input)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 eligible methods, got %d: %+v", len(got), got)

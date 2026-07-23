@@ -108,6 +108,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	defer cleanup()
 
 	t.Run("CreateContact_MissingRequiredField", func(t *testing.T) {
+		// spec: CON-002[5]
 		requestBody := handlers.CreateContactRequest{
 			FullName: "", // Required field empty
 		}
@@ -131,6 +132,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_InvalidEmailFormat", func(t *testing.T) {
+		// spec: CON-002[5]
 		invalidEmails := []string{
 			"not-an-email",
 			"@domain.com",
@@ -168,6 +170,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_FullNameTooLong", func(t *testing.T) {
+		// spec: CON-002[5]
 		requestBody := handlers.CreateContactRequest{
 			FullName: strings.Repeat("a", 256), // Exceeds max 255
 		}
@@ -190,6 +193,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_InvalidCadence", func(t *testing.T) {
+		// spec: CON-002[5]
 		requestBody := handlers.CreateContactRequest{
 			FullName: "Test User",
 			Cadence:  stringPtr("daily"), // Invalid cadence value
@@ -213,6 +217,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_InvalidProfilePhotoURL", func(t *testing.T) {
+		// spec: CON-002[5]
 		requestBody := handlers.CreateContactRequest{
 			FullName:     "Test User",
 			ProfilePhoto: stringPtr("not-a-url"), // Invalid URL
@@ -255,6 +260,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_AllFieldsMaxLength", func(t *testing.T) {
+		// spec: CON-002[6]
 		// Use unique email to avoid conflicts in CI
 		uniqueEmail := strings.Repeat("a", 235) + uuid.New().String()[:10] + "@test.com" // Total ~255 chars
 
@@ -384,6 +390,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	// silent-success failure — the same class the operations endpoint exists to
 	// eliminate, merely inverted from silent destruction.
 	t.Run("UpdateContact_RejectsLegacyMethodsField", func(t *testing.T) {
+		// spec: CON-064[0], CON-064[1], CON-064[2]
 		originalName := "Update Test User " + ns
 
 		cases := []struct {
@@ -609,6 +616,7 @@ func TestContactAPI_GetContactValidation(t *testing.T) {
 	defer cleanup()
 
 	t.Run("GetContact_InvalidUUID", func(t *testing.T) {
+		// spec: CON-005[2]
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/not-a-uuid", nil)
 
 		w := httptest.NewRecorder()

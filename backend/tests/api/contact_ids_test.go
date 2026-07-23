@@ -173,6 +173,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 	})
 
 	t.Run("returns sorted IDs when sort parameter provided", func(t *testing.T) {
+		// spec: CON-018[1]
 		// Create contacts with different names for sorting
 		id1 := createContact("IDs Sort Zebra " + ns)
 		id2 := createContact("IDs Sort Alpha " + ns)

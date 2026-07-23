@@ -22,6 +22,8 @@ import (
 // already protected by the handler's email validator, phone/signal/whatsapp are
 // length-checked only, and telegram/discord/twitter have no format rule at all.
 // The handle and phone rows are the ones that reach this check in production.
+//
+// spec: CON-015[2]
 func TestRequireTypeAndValue_RejectsValuesEmptyAfterNormalization(t *testing.T) {
 	t.Parallel()
 

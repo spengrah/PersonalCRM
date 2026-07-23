@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// spec: CON-015[0]
 func TestNormalizeContactMethodRequests(t *testing.T) {
 	methods, err := normalizeContactMethodRequests([]ContactMethodRequest{
 		{Type: " twitter ", Value: " @handle "},
@@ -31,6 +32,7 @@ func TestValidateContactMethods_DuplicateTypesAllowed(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// spec: CON-015[5]
 func TestValidateContactMethods_DuplicateNormalizedValuePerType(t *testing.T) {
 	validate := validator.New()
 	err := validateContactMethods(validate, []ContactMethodRequest{
@@ -40,6 +42,7 @@ func TestValidateContactMethods_DuplicateNormalizedValuePerType(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// spec: CON-015[6]
 func TestValidateContactMethods_MultiplePrimary(t *testing.T) {
 	validate := validator.New()
 	err := validateContactMethods(validate, []ContactMethodRequest{

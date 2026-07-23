@@ -128,6 +128,7 @@ func TestMacHostRotateKey_HappyPath(t *testing.T) {
 	require.NotNil(t, post.APIKeyRotatedAt, "api_key_rotated_at written")
 }
 
+// spec: MAC-010[1]
 func TestMacHostRotateKey_TokenAlreadyUsed(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -161,6 +162,7 @@ func TestMacHostRotateKey_TokenAlreadyUsed(t *testing.T) {
 	require.Equal(t, "TOKEN_ALREADY_USED", errBody.Error.Code)
 }
 
+// spec: MAC-010[1]
 func TestMacHostRotateKey_InvalidPairingToken(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -179,6 +181,7 @@ func TestMacHostRotateKey_InvalidPairingToken(t *testing.T) {
 	require.Equal(t, "INVALID_PAIRING_TOKEN", errBody.Error.Code)
 }
 
+// spec: MAC-010[1]
 func TestMacHostRotateKey_TokenExpired(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -233,6 +236,7 @@ func TestMacHostRotateKey_HostNotFound_MiddlewareCatches(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "token should still be usable after middleware-rejected attempt: %s", w.Body.String())
 }
 
+// spec: MAC-007[3]
 func TestMacHostRotateKey_RevokedHostRotation(t *testing.T) {
 
 	env := setupMacHostEnv(t)
