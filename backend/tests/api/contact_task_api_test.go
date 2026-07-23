@@ -245,6 +245,86 @@ func TestContactTaskAPI_ListFilters(t *testing.T) {
 		}
 	})
 
+	// Second namespaced contact for the kind/lifecycle closed-set loops so the
+	// per-state seeding above keeps its exact unfiltered count. The closed
+	// sets mirror the handler's list-filter oneof lists (ListContactTasksQuery
+	// in internal/api/handlers/contact_task.go) — a member dropped from the
+	// oneof must fail the acceptance loops below.
+	kindClosedSet := []string{"reach_out", "send", "reminder", "meet", "action"}
+	lifecycleClosedSet := []string{"manual", "cadence_due", "followup_loop"}
+
+	filterContactID := createContactTaskTestContact(t, h, "Task Kind Filter API Test "+suffix)
+	expectedByKind := make(map[string][]string, len(kindClosedSet))
+	expectedByLifecycle := make(map[string][]string, len(lifecycleClosedSet))
+	// One manual task per kind...
+	for _, kind := range kindClosedSet {
+		externalID := "ct-api-kindfilter-" + kind + "-" + suffix
+		_, err := h.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      filterContactID,
+			Provider:       todoist.SourceName,
+			Kind:           kind,
+			Lifecycle:      contacttask.LifecycleManual,
+			ExternalTaskID: externalID,
+			State:          "managed",
+		})
+		require.NoError(t, err)
+		expectedByKind[kind] = append(expectedByKind[kind], externalID)
+		expectedByLifecycle[contacttask.LifecycleManual] = append(expectedByLifecycle[contacttask.LifecycleManual], externalID)
+	}
+	// ...plus one reach_out task per non-manual lifecycle.
+	for _, lifecycle := range []string{contacttask.LifecycleCadenceDue, contacttask.LifecycleFollowUpLoop} {
+		externalID := "ct-api-lcfilter-" + lifecycle + "-" + suffix
+		_, err := h.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+			ContactID:      filterContactID,
+			Provider:       todoist.SourceName,
+			Kind:           contacttask.KindReachOut,
+			Lifecycle:      lifecycle,
+			ExternalTaskID: externalID,
+			State:          "managed",
+		})
+		require.NoError(t, err)
+		expectedByKind[contacttask.KindReachOut] = append(expectedByKind[contacttask.KindReachOut], externalID)
+		expectedByLifecycle[lifecycle] = append(expectedByLifecycle[lifecycle], externalID)
+	}
+
+	listExternalIDs := func(t *testing.T, path string) []string {
+		t.Helper()
+		req, _ := http.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		h.router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, "GET %s should be accepted, body: %s", path, w.Body.String())
+		envelope := decodeContactTaskEnvelope(t, w.Body.Bytes())
+		items, ok := envelope["data"].([]any)
+		require.True(t, ok, "data should be an array for %s", path)
+		ids := make([]string, 0, len(items))
+		for _, item := range items {
+			task, ok := item.(map[string]any)
+			require.True(t, ok)
+			ids = append(ids, task["external_task_id"].(string))
+		}
+		return ids
+	}
+
+	t.Run("KindFilterEachClosedSetMember", func(t *testing.T) {
+		// spec: CAD-032[0]
+		for _, kind := range kindClosedSet {
+			got := listExternalIDs(t, "/api/v1/contacts/"+filterContactID.String()+"/tasks?kind="+kind)
+			require.NotEmpty(t, got, "kind=%s should return the seeded task(s), not an empty list", kind)
+			assert.ElementsMatch(t, expectedByKind[kind], got,
+				"kind=%s should return exactly the seeded tasks of that kind", kind)
+		}
+	})
+
+	t.Run("LifecycleFilterEachClosedSetMember", func(t *testing.T) {
+		// spec: CAD-032[0]
+		for _, lifecycle := range lifecycleClosedSet {
+			got := listExternalIDs(t, "/api/v1/contacts/"+filterContactID.String()+"/tasks?lifecycle="+lifecycle)
+			require.NotEmpty(t, got, "lifecycle=%s should return the seeded task(s), not an empty list", lifecycle)
+			assert.ElementsMatch(t, expectedByLifecycle[lifecycle], got,
+				"lifecycle=%s should return exactly the seeded tasks in that lifecycle", lifecycle)
+		}
+	})
+
 	t.Run("InvalidStateRejected", func(t *testing.T) {
 		// spec: CAD-032[0]
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID.String()+"/tasks?state=archived", nil)
@@ -348,7 +428,14 @@ func TestContactTaskAPI_CreateManualTask(t *testing.T) {
 
 	t.Run("TextLengthBoundary", func(t *testing.T) {
 		// spec: CAD-032[1]
+		// Min boundary accept side: a single-character text is valid.
 		w := postManualTask(t, h, contactID, map[string]any{
+			"kind": "reminder",
+			"text": "a",
+		})
+		assert.Equal(t, http.StatusCreated, w.Code, "text of exactly 1 char should be accepted")
+
+		w = postManualTask(t, h, contactID, map[string]any{
 			"kind": "reminder",
 			"text": strings.Repeat("a", 1000),
 		})

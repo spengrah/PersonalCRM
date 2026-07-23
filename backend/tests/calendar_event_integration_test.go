@@ -222,3 +222,70 @@ func TestUpdateContactLastContactedIfLater_OnlyUpdatesWhenLater(t *testing.T) {
 	require.NotNil(t, contactAfterLater.LastContacted)
 	assert.WithinDuration(t, later, *contactAfterLater.LastContacted, time.Second)
 }
+
+// spec: CAL-020
+//
+// TestCalendarEventCountForContact_ExcludesCancelled binds the count read
+// named by CAL-020: CountEventsForContact applies the same cancelled-event
+// filter as the contact-facing list reads, so a cancelled event matched to
+// the contact must not be counted. The count is scoped to a namespaced
+// contact's matched_contact_ids, so the exact == 1 assertion is independent
+// of sibling tests on the shared DB.
+func TestCalendarEventCountForContact_ExcludesCancelled(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	t.Parallel()
+	ctx := context.Background()
+
+	// Migrations are applied once by TestMain.
+	dbConfig := config.DatabaseConfig{
+		URL:               databaseURL,
+		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
+		MinConns:          1,
+		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
+		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
+		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
+	}
+	database, err := db.NewDatabase(ctx, dbConfig)
+	require.NoError(t, err)
+	defer database.Close()
+
+	gen, _ := migrationGenerator(t)
+	calendarRepo := repository.NewCalendarEventRepository(database.Queries)
+
+	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
+	defer contactCleanup()
+
+	accountID := gen.Prefix() + "calendar-count@example.com"
+	defer func() { _ = calendarRepo.DeleteEventsByAccount(ctx, accountID) }()
+
+	now := accelerated.GetCurrentTime()
+	title := "Count Test Meeting"
+	seed := func(suffix, status string, start time.Time) {
+		_, err := calendarRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
+			GcalEventID:       "count-" + suffix + "-" + uuid.NewString(),
+			GcalCalendarID:    "primary",
+			GoogleAccountID:   accountID,
+			Title:             &title,
+			StartTime:         start,
+			EndTime:           start.Add(time.Hour),
+			Status:            status,
+			MatchedContactIDs: []uuid.UUID{contact.ID},
+			SyncedAt:          now,
+		})
+		require.NoError(t, err)
+	}
+	seed("cancelled", "cancelled", now.Add(-3*time.Hour))
+	seed("confirmed", "confirmed", now.Add(-2*time.Hour))
+
+	count, err := calendarRepo.CountEventsForContact(ctx, contact.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count, "the cancelled event must be excluded from the contact's event count")
+}

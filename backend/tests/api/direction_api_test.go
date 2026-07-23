@@ -402,10 +402,14 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 		var resp api.APIResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		items := resp.Data.([]interface{})
-		for _, item := range items {
-			task := item.(map[string]interface{})
-			assert.Equal(t, "action", task["kind"], "should only return action tasks")
-		}
+		// Exactly the seeded action task — non-empty (a filter that matches
+		// nothing must not pass vacuously) and the reach_out follow-up task
+		// seeded above must be excluded.
+		require.Len(t, items, 1, "exactly the seeded action task should match kind=action")
+		task := items[0].(map[string]interface{})
+		assert.Equal(t, "action", task["kind"], "should only return action tasks")
+		assert.Equal(t, "test-kind-action-"+contactID, task["external_task_id"],
+			"the returned task must be the seeded action task, not the follow-up")
 	})
 
 	t.Run("InvalidKindRejected", func(t *testing.T) {

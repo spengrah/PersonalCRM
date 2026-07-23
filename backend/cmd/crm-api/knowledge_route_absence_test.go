@@ -82,6 +82,19 @@ func requireKnownRoutes(t *testing.T, routes gin.RoutesInfo, wantPresent []strin
 	}
 }
 
+// requireRouteAbsent proves a config shape actually SHRINKS the route tree.
+// The disabled shape asserts a sync-only route is missing: if the feature
+// flag were ignored (both shapes serving the identical, always-enabled
+// router), the absence scan alone would pass on both shapes and prove
+// nothing about the minimal tree — this assertion fails that defect loudly.
+func requireRouteAbsent(t *testing.T, routes gin.RoutesInfo, wantAbsent string) {
+	t.Helper()
+	for _, route := range routes {
+		require.NotEqual(t, wantAbsent, route.Method+" "+route.Path,
+			"sync-only route %s must be absent from this config shape — its presence means the feature flag did not shape the route tree", wantAbsent)
+	}
+}
+
 // TestKnowledgeRouteAbsence_AssertionStoreInvisible enumerates the FULL
 // production router per config shape and asserts no route path touches the
 // assertion store. The enabled shape is the maximal route surface (external
@@ -123,6 +136,9 @@ func TestKnowledgeRouteAbsence_AssertionStoreInvisible(t *testing.T) {
 			"GET /health",
 			"GET /api/v1/contacts",
 		})
+		// Distinguishability guard: the disabled tree must really be the
+		// minimal shape, not the enabled tree served twice.
+		requireRouteAbsent(t, routes, "GET /api/v1/auth/google/callback")
 		requireNoAssertionStoreRoutes(t, routes)
 	})
 }

@@ -1428,6 +1428,75 @@ func TestContactAPI_GetContactValidation(t *testing.T) {
 	})
 }
 
+// TestContactAPI_KnowledgeProjectionWireKeys binds the client-visible
+// projection clause of KNW-033: the contact payload's derived location,
+// birthday, and how_met fields are the ONLY projection of the knowledge
+// graph, so they must actually appear as wire keys on the contact response.
+// The create path persists these values solely as assertions
+// (KnowledgeCacheUpdater is the sole writer of the derived cache columns —
+// CreateContact/UpdateContact SQL never touch them), so a GET response
+// carrying them proves graph knowledge really is projected into the contact
+// payload. The statement's no-endpoint clause is bound by
+// TestKnowledgeRouteAbsence_AssertionStoreInvisible in
+// cmd/crm-api/knowledge_route_absence_test.go; together the citing set
+// covers both clauses.
+func TestContactAPI_KnowledgeProjectionWireKeys(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	t.Parallel()
+	router, cleanup := setupContactValidationTestRouter()
+	defer cleanup()
+
+	// spec: KNW-033
+	ns := uuid.New().String()[:8]
+	location := "Projection City " + ns
+	howMet := "Met at projection test conference " + ns
+	body, err := json.Marshal(map[string]any{
+		"full_name": "Knowledge Projection Test " + ns,
+		"location":  location,
+		"birthday":  "1990-01-15",
+		"how_met":   howMet,
+	})
+	require.NoError(t, err)
+	createReq, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(body))
+	createReq.Header.Set("Content-Type", "application/json")
+	createW := httptest.NewRecorder()
+	router.ServeHTTP(createW, createReq)
+	require.Equal(t, http.StatusCreated, createW.Code, createW.Body.String())
+
+	var createResponse api.APIResponse
+	require.NoError(t, json.Unmarshal(createW.Body.Bytes(), &createResponse))
+	contactID := createResponse.Data.(map[string]interface{})["id"].(string)
+	defer func() {
+		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
+		deleteW := httptest.NewRecorder()
+		router.ServeHTTP(deleteW, deleteReq)
+	}()
+
+	getReq, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
+	getW := httptest.NewRecorder()
+	router.ServeHTTP(getW, getReq)
+	require.Equal(t, http.StatusOK, getW.Code)
+
+	var getResponse api.APIResponse
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResponse))
+	require.True(t, getResponse.Success)
+	data, ok := getResponse.Data.(map[string]interface{})
+	require.True(t, ok, "contact payload should be a JSON object")
+
+	// Literal wire keys — the projection surface named by the spec.
+	assert.Equal(t, location, data["location"], "contact payload must project the graph-derived location")
+	assert.Equal(t, "1990-01-15T00:00:00Z", data["birthday"], "contact payload must project the graph-derived birthday")
+	assert.Equal(t, howMet, data["how_met"], "contact payload must project the graph-derived how_met")
+}
+
 func TestContactAPI_DuplicateMethodValues(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

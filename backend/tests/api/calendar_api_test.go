@@ -28,6 +28,27 @@ type calendarEventsEnvelope struct {
 	Data    []handlers.CalendarEventResponse `json:"data"`
 }
 
+// calendarRawEnvelope decodes the calendar list payload as raw JSON maps so
+// assertions bind to the literal wire keys ("id", ...) instead of the
+// production CalendarEventResponse struct — a renamed JSON tag on the DTO
+// must turn these tests red rather than silently round-tripping.
+type calendarRawEnvelope struct {
+	Success bool             `json:"success"`
+	Data    []map[string]any `json:"data"`
+}
+
+// rawEventIDs projects the raw event maps onto their literal "id" wire key.
+func rawEventIDs(t *testing.T, data []map[string]any) []string {
+	t.Helper()
+	ids := make([]string, 0, len(data))
+	for _, item := range data {
+		id, ok := item["id"].(string)
+		require.True(t, ok, "each event must expose a string id wire key")
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // newCalendarAPITest builds a fresh, empty per-subtest DB clone
 // (newIsolatedRiverTestDB) and a router carrying only the production
 // calendar route surface (handlers.RegisterCalendarRoutes). Because the
@@ -334,11 +355,11 @@ func TestCalendarAPI_CancelledEventsExcluded(t *testing.T) {
 		w := doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events")
 		require.Equal(t, http.StatusOK, w.Code)
 
-		var envelope calendarEventsEnvelope
+		var envelope calendarRawEnvelope
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 		require.True(t, envelope.Success)
 		require.Len(t, envelope.Data, 1, "the cancelled event must be excluded from meeting history")
-		assert.Equal(t, kept.ID.String(), envelope.Data[0].ID)
+		assert.Equal(t, []string{kept.ID.String()}, rawEventIDs(t, envelope.Data))
 	})
 
 	t.Run("UpcomingForContact_ExcludesCancelled", func(t *testing.T) {
@@ -354,11 +375,11 @@ func TestCalendarAPI_CancelledEventsExcluded(t *testing.T) {
 		w := doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events/upcoming")
 		require.Equal(t, http.StatusOK, w.Code)
 
-		var envelope calendarEventsEnvelope
+		var envelope calendarRawEnvelope
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 		require.True(t, envelope.Success)
 		require.Len(t, envelope.Data, 1, "the cancelled event must be excluded from the contact's upcoming events")
-		assert.Equal(t, kept.ID.String(), envelope.Data[0].ID)
+		assert.Equal(t, []string{kept.ID.String()}, rawEventIDs(t, envelope.Data))
 	})
 
 	t.Run("GlobalUpcoming_ExcludesCancelled", func(t *testing.T) {
@@ -374,11 +395,11 @@ func TestCalendarAPI_CancelledEventsExcluded(t *testing.T) {
 		w := doCalendarGet(router, "/api/v1/events/upcoming")
 		require.Equal(t, http.StatusOK, w.Code)
 
-		var envelope calendarEventsEnvelope
+		var envelope calendarRawEnvelope
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 		require.True(t, envelope.Success)
 		require.Len(t, envelope.Data, 1, "the cancelled event must be excluded from the global upcoming feed")
-		assert.Equal(t, kept.ID.String(), envelope.Data[0].ID)
+		assert.Equal(t, []string{kept.ID.String()}, rawEventIDs(t, envelope.Data))
 	})
 }
 
@@ -390,6 +411,11 @@ func TestCalendarAPI_CancelledEventsExcluded(t *testing.T) {
 // Three namespaced events with pairwise-distinct times are seeded per
 // endpoint over HTTP — no existing subtest asserts multi-event ordering
 // because every prior seed left exactly one surviving event.
+//
+// Seeding order is deliberately SCRAMBLED (middle, then the extreme the sort
+// puts first, then the extreme it puts last) so it matches neither the
+// expected output order nor its reverse: a query whose ORDER BY is dropped
+// (heap/insertion order) or inverted cannot coincidentally pass.
 func TestCalendarAPI_EventOrdering(t *testing.T) {
 	t.Parallel()
 
@@ -400,20 +426,20 @@ func TestCalendarAPI_EventOrdering(t *testing.T) {
 		ns := "cal-order-history-" + uuid.NewString()[:8]
 		contactID := seedContact("Calendar Order History Test Contact " + ns)
 		now := accelerated.GetCurrentTime()
-		oldest := seedEvent(t, ctx, calendarRepo, ns, "oldest", now.Add(-72*time.Hour), now.Add(-71*time.Hour), []uuid.UUID{contactID}, nil)
 		middle := seedEvent(t, ctx, calendarRepo, ns, "middle", now.Add(-48*time.Hour), now.Add(-47*time.Hour), []uuid.UUID{contactID}, nil)
 		newest := seedEvent(t, ctx, calendarRepo, ns, "newest", now.Add(-24*time.Hour), now.Add(-23*time.Hour), []uuid.UUID{contactID}, nil)
+		oldest := seedEvent(t, ctx, calendarRepo, ns, "oldest", now.Add(-72*time.Hour), now.Add(-71*time.Hour), []uuid.UUID{contactID}, nil)
 
 		w := doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events")
 		require.Equal(t, http.StatusOK, w.Code)
 
-		var envelope calendarEventsEnvelope
+		var envelope calendarRawEnvelope
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 		require.True(t, envelope.Success)
 		require.Len(t, envelope.Data, 3)
 		assert.Equal(t,
 			[]string{newest.ID.String(), middle.ID.String(), oldest.ID.String()},
-			[]string{envelope.Data[0].ID, envelope.Data[1].ID, envelope.Data[2].ID},
+			rawEventIDs(t, envelope.Data),
 			"meeting history must be ordered most-recent-first")
 	})
 
@@ -424,20 +450,20 @@ func TestCalendarAPI_EventOrdering(t *testing.T) {
 		ns := "cal-order-upcoming-" + uuid.NewString()[:8]
 		contactID := seedContact("Calendar Order Upcoming Test Contact " + ns)
 		now := accelerated.GetCurrentTime()
-		soonest := seedEvent(t, ctx, calendarRepo, ns, "soonest", now.Add(24*time.Hour), now.Add(25*time.Hour), []uuid.UUID{contactID}, nil)
 		middle := seedEvent(t, ctx, calendarRepo, ns, "middle", now.Add(48*time.Hour), now.Add(49*time.Hour), []uuid.UUID{contactID}, nil)
 		latest := seedEvent(t, ctx, calendarRepo, ns, "latest", now.Add(72*time.Hour), now.Add(73*time.Hour), []uuid.UUID{contactID}, nil)
+		soonest := seedEvent(t, ctx, calendarRepo, ns, "soonest", now.Add(24*time.Hour), now.Add(25*time.Hour), []uuid.UUID{contactID}, nil)
 
 		w := doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events/upcoming")
 		require.Equal(t, http.StatusOK, w.Code)
 
-		var envelope calendarEventsEnvelope
+		var envelope calendarRawEnvelope
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 		require.True(t, envelope.Success)
 		require.Len(t, envelope.Data, 3)
 		assert.Equal(t,
 			[]string{soonest.ID.String(), middle.ID.String(), latest.ID.String()},
-			[]string{envelope.Data[0].ID, envelope.Data[1].ID, envelope.Data[2].ID},
+			rawEventIDs(t, envelope.Data),
 			"a contact's upcoming events must be ordered soonest-first")
 	})
 
@@ -448,20 +474,20 @@ func TestCalendarAPI_EventOrdering(t *testing.T) {
 		ns := "cal-order-global-" + uuid.NewString()[:8]
 		contactID := seedContact("Calendar Order Global Test Contact " + ns)
 		now := accelerated.GetCurrentTime()
-		soonest := seedEvent(t, ctx, calendarRepo, ns, "soonest", now.Add(24*time.Hour), now.Add(25*time.Hour), []uuid.UUID{contactID}, nil)
 		middle := seedEvent(t, ctx, calendarRepo, ns, "middle", now.Add(48*time.Hour), now.Add(49*time.Hour), []uuid.UUID{contactID}, nil)
 		latest := seedEvent(t, ctx, calendarRepo, ns, "latest", now.Add(72*time.Hour), now.Add(73*time.Hour), []uuid.UUID{contactID}, nil)
+		soonest := seedEvent(t, ctx, calendarRepo, ns, "soonest", now.Add(24*time.Hour), now.Add(25*time.Hour), []uuid.UUID{contactID}, nil)
 
 		w := doCalendarGet(router, "/api/v1/events/upcoming")
 		require.Equal(t, http.StatusOK, w.Code)
 
-		var envelope calendarEventsEnvelope
+		var envelope calendarRawEnvelope
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 		require.True(t, envelope.Success)
 		require.Len(t, envelope.Data, 3)
 		assert.Equal(t,
 			[]string{soonest.ID.String(), middle.ID.String(), latest.ID.String()},
-			[]string{envelope.Data[0].ID, envelope.Data[1].ID, envelope.Data[2].ID},
+			rawEventIDs(t, envelope.Data),
 			"the global upcoming feed must be ordered soonest-first")
 	})
 }
