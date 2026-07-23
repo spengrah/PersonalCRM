@@ -83,3 +83,27 @@ func TestValidateContactMethods_WhatsAppLength(t *testing.T) {
 	})
 	assert.Error(t, err)
 }
+
+// spec: CON-015[3]
+func TestValidateContactMethods_GChatValidation(t *testing.T) {
+	validate := validator.New()
+	err := validateContactMethods(validate, []ContactMethodRequest{
+		{Type: "gchat", Value: "not-an-email"},
+	})
+	assert.Error(t, err)
+}
+
+// spec: CON-015[4]
+func TestValidateContactMethods_SignalLength(t *testing.T) {
+	validate := validator.New()
+
+	err := validateContactMethods(validate, []ContactMethodRequest{
+		{Type: "signal", Value: strings.Repeat("1", 50)},
+	})
+	assert.NoError(t, err)
+
+	err = validateContactMethods(validate, []ContactMethodRequest{
+		{Type: "signal", Value: strings.Repeat("1", 51)},
+	})
+	assert.Error(t, err)
+}

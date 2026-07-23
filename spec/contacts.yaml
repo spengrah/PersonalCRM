@@ -1,7 +1,7 @@
 domain: contacts
 prefix: CON
 maturity: reviewed
-settled: [ui]
+settled: [ui, api]
 behaviors:
   # --- CRUD ---
 

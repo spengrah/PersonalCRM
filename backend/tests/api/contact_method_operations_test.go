@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -452,6 +453,108 @@ func TestMethodOps_TwoAddsOrderIndependent(t *testing.T) {
 		reverse = collect(t, addOp("email", second), addOp("email", first))
 	})
 	assert.ElementsMatch(t, forward, reverse)
+}
+
+// TestMethodOps_MixedOperationOrderYieldsIdenticalCompleteState is
+// CON-062[2]'s citing test. The permutation test above proves the SHAPE of the
+// outcome is order-independent; this one proves the COMPLETE outcome is —
+// specifically that an updated row's persisted VALUE survives reordering, which
+// no shape comparison can see: a fold that silently dropped the update's value
+// under one ordering would still produce the right cardinality, identity and
+// primary designation.
+//
+// Two contacts are prepared in identical starting states and receive the SAME
+// mixed add+update+remove set, one forward and one reversed. The complete
+// final state — types, values, trigger-owned normalized values, primary
+// designation, cardinality — must be identical across the two, comparing both
+// the method set as read back over HTTP and the persisted rows. Contact-owned
+// ids and timestamps are the only fields excluded: they differ per contact by
+// construction and carry no outcome semantics.
+// spec: CON-062[2]
+func TestMethodOps_MixedOperationOrderYieldsIdenticalCompleteState(t *testing.T) {
+	t.Parallel()
+
+	// One set of values shared by both contacts, so the two outcomes are
+	// comparable value-for-value. Per-contact uniqueness makes the sharing safe.
+	var (
+		startEmail   = uniqueEmail()
+		updatedEmail = uniqueEmail()
+		phone        = "+15550118902"
+		handle       = "h" + uuid.NewString()[:8]
+	)
+
+	type finalRow struct {
+		Type            string
+		Value           string
+		ValueNormalized string
+		IsPrimary       bool
+	}
+	sortRows := func(rows []finalRow) {
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].Type != rows[j].Type {
+				return rows[i].Type < rows[j].Type
+			}
+			return rows[i].Value < rows[j].Value
+		})
+	}
+
+	// applyIn seeds a fresh contact into the shared starting state, applies the
+	// operation set in the given order, and returns the complete outcome two
+	// ways: the method set as read back over HTTP, and the persisted rows
+	// carrying the trigger-owned value_normalized the wire shape omits.
+	applyIn := func(t *testing.T, reversed bool) (httpRows, storedRows []finalRow) {
+		f := newMethodOpsFx(t)
+		toUpdate := f.seed("email", startEmail, true)
+		toRemove := f.seed("phone", phone, false)
+
+		ops := []map[string]any{
+			updateOp(toUpdate.ID, "email", updatedEmail),
+			idOp("remove", toRemove.ID),
+			addOp("discord", handle),
+		}
+		if reversed {
+			for l, r := 0, len(ops)-1; l < r; l, r = l+1, r-1 {
+				ops[l], ops[r] = ops[r], ops[l]
+			}
+		}
+
+		w, body := f.post(ops...)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		for _, m := range body.Methods {
+			httpRows = append(httpRows, finalRow{Type: m.Type, Value: m.Value, IsPrimary: m.IsPrimary})
+		}
+		for _, m := range f.stored() {
+			storedRows = append(storedRows, finalRow{
+				Type: m.Type, Value: m.Value, ValueNormalized: m.ValueNormalized, IsPrimary: m.IsPrimary,
+			})
+		}
+		sortRows(httpRows)
+		sortRows(storedRows)
+		return httpRows, storedRows
+	}
+
+	forwardHTTP, forwardStored := applyIn(t, false)
+	reverseHTTP, reverseStored := applyIn(t, true)
+
+	// The structural claim: the complete outcome is identical across orderings.
+	assert.Equal(t, forwardHTTP, reverseHTTP,
+		"the method set read back over HTTP depends on the order operations appeared in the request")
+	assert.Equal(t, forwardStored, reverseStored,
+		"the persisted final state depends on the order operations appeared in the request")
+
+	// The vacuity guard: equality alone would also pass if BOTH orderings
+	// discarded the update identically, so each ordering is additionally held
+	// to the one deterministic expected outcome — the update's NEW value
+	// persisted on the still-primary email row, the add present, the removed
+	// phone gone, and nothing else. Both value strings are already in
+	// normalized form, so the trigger's output must equal them byte-for-byte.
+	expected := []finalRow{
+		{Type: "discord", Value: handle, ValueNormalized: handle, IsPrimary: false},
+		{Type: "email", Value: updatedEmail, ValueNormalized: updatedEmail, IsPrimary: true},
+	}
+	assert.Equal(t, expected, forwardStored, "forward ordering did not produce the expected complete state")
+	assert.Equal(t, expected, reverseStored, "reversed ordering did not produce the expected complete state")
 }
 
 // --- CON-062[3][4]: idempotency --------------------------------------------
@@ -964,6 +1067,66 @@ func TestMethodOps_ResultsResolveAddToExistingRow(t *testing.T) {
 		"the snapshot echoed the submitted value instead of the resolved row's stored value")
 	assert.True(t, body.Results[0].Method.IsPrimary,
 		"the snapshot did not report the resolved row's primary flag")
+}
+
+// TestMethodOps_MixedOperationsResultsIdentifyAndReflectStoredState is
+// CON-062[13]'s citing test. A mixed add+update+remove request is the case
+// where identification actually matters: with three results in flight, a
+// result that merely counts or orders correctly could still point at the
+// wrong row, or echo the submitted payload instead of what landed. Each
+// result is checked against a follow-up read of the contact's stored
+// methods, not against the request that produced it.
+//
+// spec: CON-062[13]
+func TestMethodOps_MixedOperationsResultsIdentifyAndReflectStoredState(t *testing.T) {
+	t.Parallel()
+	f := newMethodOpsFx(t)
+	toUpdate := f.seed("email", uniqueEmail(), false)
+	toRemove := f.seed("phone", "+15550116789", false)
+	updatedValue := uniqueEmail()
+
+	w, body := f.post(
+		addPrimaryOp("email", uniqueEmail()),
+		updateOp(toUpdate.ID, "email", updatedValue),
+		idOp("remove", toRemove.ID),
+	)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Len(t, body.Results, 3)
+
+	// The add result identifies the newly created method: its id must name a
+	// row that actually exists post-apply, and the reported type/value/primary
+	// must equal that row as read back from storage, not the submitted op.
+	addResult := body.Results[0]
+	assert.Equal(t, "created", addResult.Outcome)
+	addedID, err := uuid.Parse(addResult.MethodID)
+	require.NoError(t, err, "add result did not identify a method id")
+	addedStored := f.storedByID(addedID)
+	require.NotNil(t, addedStored, "the add result's id does not name a persisted method")
+	require.NotNil(t, addResult.Method, "the add result did not report a stored state")
+	assert.Equal(t, addedStored.Type, addResult.Method.Type)
+	assert.Equal(t, addedStored.Value, addResult.Method.Value)
+	assert.Equal(t, addedStored.IsPrimary, addResult.Method.IsPrimary)
+
+	// The update result identifies the method its operation targeted, and its
+	// reported state matches that same row read back after the request.
+	updateResult := body.Results[1]
+	assert.Equal(t, toUpdate.ID.String(), updateResult.MethodID,
+		"the update result did not identify the method its operation addressed")
+	updatedStored := f.storedByID(toUpdate.ID)
+	require.NotNil(t, updatedStored)
+	require.NotNil(t, updateResult.Method, "the update result did not report a stored state")
+	assert.Equal(t, updatedStored.Type, updateResult.Method.Type)
+	assert.Equal(t, updatedStored.Value, updateResult.Method.Value, "the update result did not reflect the persisted value")
+	assert.Equal(t, updatedValue, updateResult.Method.Value)
+	assert.Equal(t, updatedStored.IsPrimary, updateResult.Method.IsPrimary)
+
+	// The remove result identifies the removed method by the id the request
+	// submitted, and reports no stored state: the operation left none.
+	removeResult := body.Results[2]
+	assert.Equal(t, toRemove.ID.String(), removeResult.MethodID,
+		"the remove result did not identify the method its operation addressed")
+	assert.Nil(t, removeResult.Method, "the remove result reported a stored method that no longer exists")
+	assert.Nil(t, f.storedByID(toRemove.ID), "the removed method is still persisted")
 }
 
 // --- Validation -------------------------------------------------------------
