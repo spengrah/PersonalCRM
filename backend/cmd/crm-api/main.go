@@ -220,12 +220,10 @@ func run() int {
 	registerRematchDispatcher(reg, graph, database, eventBus)
 
 	// External sync components (feature-flagged). A zero syncStack
-	// reproduces today's all-nil handler set when disabled; the gate stays
-	// here so buildExternalSync runs only when the feature is on.
-	var syncStk syncStack
-	if cfg.Features.EnableExternalSync {
-		syncStk = buildExternalSync(ctx, cfg, database, core, contactService, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
-	}
+	// reproduces today's all-nil handler set when disabled; the gate lives in
+	// buildExternalSyncIfEnabled, the seam shared with the OAuth route-wiring
+	// boundary test.
+	syncStk := buildExternalSyncIfEnabled(ctx, cfg, database, core, contactService, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
 	syncHandler := syncStk.SyncHandler
 	identityHandler := syncStk.IdentityHandler
 	oauthHandler := syncStk.OAuthHandler

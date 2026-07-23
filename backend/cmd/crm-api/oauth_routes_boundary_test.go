@@ -103,10 +103,10 @@ func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 	domain := buildDomainServices(database, core, graph, ingest, consumers, ingestStk, eventBus)
 	registerRematchDispatcher(reg, graph, database, eventBus)
 
-	var syncStk syncStack
-	if cfg.Features.EnableExternalSync {
-		syncStk = buildExternalSync(ctx, cfg, database, core, contactService, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
-	}
+	// The external-sync feature gate is exercised through the SAME production
+	// seam run() uses — the gate logic itself lives in
+	// buildExternalSyncIfEnabled (wire_sync.go), never re-implemented here.
+	syncStk := buildExternalSyncIfEnabled(ctx, cfg, database, core, contactService, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
 
 	// Telegram is intentionally SKIPPED (Start must not run); a nil
 	// telegramManager is exactly a telegram-disabled boot for aggregation.
@@ -343,4 +343,35 @@ func TestOAuthRouteWiring_ProviderGating(t *testing.T) {
 		assert.Equal(t, http.StatusNotFound, w.Code,
 			"an unconfigured provider's callback URL must return 404")
 	})
+
+	// Partially-configured shapes: the derivation requires BOTH credential
+	// fields, so a provider with only one populated must expose no routes. An
+	// erroneous OR in the credential check passes the all-empty shapes above
+	// but fails these.
+	partialShapes := []struct {
+		name  string
+		setup func(cfg *config.Config)
+		want  []string
+		probe string
+	}{
+		{"google client id only", func(cfg *config.Config) { cfg.Google.ClientSecret = "" }, wiringTodoistOAuthRouteSet, "/api/v1/auth/google/callback"},
+		{"google client secret only", func(cfg *config.Config) { cfg.Google.ClientID = "" }, wiringTodoistOAuthRouteSet, "/api/v1/auth/google/callback"},
+		{"todoist client id only", func(cfg *config.Config) { cfg.Todoist.ClientSecret = "" }, wiringGoogleOAuthRouteSet, "/api/v1/auth/todoist/callback"},
+		{"todoist client secret only", func(cfg *config.Config) { cfg.Todoist.ClientID = "" }, wiringGoogleOAuthRouteSet, "/api/v1/auth/todoist/callback"},
+	}
+	for _, shape := range partialShapes {
+		t.Run("partially configured: "+shape.name+" exposes no routes for that provider", func(t *testing.T) {
+			// spec: SET-005
+			t.Parallel()
+			cfg := oauthWiringConfig(t)
+			cfg.Features.EnableExternalSync = true
+			shape.setup(cfg)
+			router := buildRouterForOAuthWiring(t, cfg)
+
+			assert.ElementsMatch(t, shape.want, oauthWiringRouteSet(router))
+			w := serveOAuthWiringRequest(router, http.MethodGet, shape.probe, false)
+			assert.Equal(t, http.StatusNotFound, w.Code,
+				"a partially-configured provider's callback URL must return 404")
+		})
+	}
 }

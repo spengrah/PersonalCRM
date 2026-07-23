@@ -171,6 +171,12 @@ func TestSystemAPI_ExportData(t *testing.T) {
 
 	t.Run("Export_ContactsOnlyNoInteractionsOrNotes", func(t *testing.T) {
 		// spec: SET-030[2]
+		// Snapshot the live contact count BEFORE the export so the guard
+		// below reasons about the dataset the export saw; the margin absorbs
+		// concurrent writers between this read and the export request.
+		liveCount, err := contactRepo.CountContacts(ctx, repository.ListContactsParams{})
+		require.NoError(t, err)
+
 		_, body := exportBody(t)
 
 		envelope, ok := body["data"].(map[string]interface{})
@@ -192,14 +198,16 @@ func TestSystemAPI_ExportData(t *testing.T) {
 
 		// ExportData reads at most 1000 contacts (the literal Limit in
 		// SystemHandler.ExportData). The shared test DB accumulates contacts
-		// across runs, so once the live count reaches that window the seeded
-		// contact may legitimately fall outside the export — skip the
-		// membership assertion rather than fail on an artifact of DB growth.
+		// across runs, so near that window the seeded contact may
+		// legitimately fall outside the export — skip the membership
+		// assertion rather than fail on an artifact of DB growth. The count
+		// was snapshotted before the export; the margin covers contacts
+		// concurrent tests may have added between the snapshot and the
+		// export request.
 		const exportLimit = 1000 // mirrors system.go ExportData's Limit
-		liveCount, err := contactRepo.CountContacts(ctx, repository.ListContactsParams{})
-		require.NoError(t, err)
-		if liveCount >= exportLimit {
-			t.Skipf("live contact count %d >= export limit %d: the seeded contact may fall outside ExportData's window; skipping membership assertion", liveCount, exportLimit)
+		const guardMargin = 50
+		if liveCount >= exportLimit-guardMargin {
+			t.Skipf("live contact count %d within %d of export limit %d: the seeded contact may fall outside ExportData's window; skipping membership assertion", liveCount, guardMargin, exportLimit)
 		}
 
 		var found bool
