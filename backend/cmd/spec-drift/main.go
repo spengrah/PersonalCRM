@@ -111,8 +111,8 @@ func run(args []string, git gitRunner, stdout, stderr io.Writer) int {
 		return opFail(err)
 	}
 	defer func() { _ = os.RemoveAll(tmpHead) }()
-	if code := materialize(git, root, headSHA, tmpHead, []string{"spec", "backend", "frontend/tests/e2e"}, stderr); code != 0 {
-		return code
+	if err := materialize(git, root, headSHA, tmpHead, []string{"spec", "backend", "frontend/tests/e2e"}); err != nil {
+		return opFail(err)
 	}
 	headFiles, headViol, err := spec.Lint(filepath.Join(tmpHead, "spec"))
 	if err != nil {
@@ -145,8 +145,8 @@ func run(args []string, git gitRunner, stdout, stderr io.Writer) int {
 			return opFail(err)
 		}
 		defer func() { _ = os.RemoveAll(tmpBase) }()
-		if code := materialize(git, root, baseSHA, tmpBase, []string{"spec"}, stderr); code != 0 {
-			return code
+		if err := materialize(git, root, baseSHA, tmpBase, []string{"spec"}); err != nil {
+			return opFail(err)
 		}
 		bf, baseViol, err := spec.Lint(filepath.Join(tmpBase, "spec"))
 		if err != nil {
@@ -218,19 +218,21 @@ func gitOut(git gitRunner, dir string, args ...string) (string, error) {
 }
 
 // materialize runs `git archive <sha> <paths...>` from root and extracts the
-// tar stream into dest. Returns 0 on success, else prints an operational error
-// and returns 2.
-func materialize(git gitRunner, root, sha, dest string, paths []string, stderr io.Writer) int {
+// tar stream into dest. It RETURNS the operational error (rather than printing
+// it and returning a code) so the CALLER owns the exit-2 decision and the
+// message: a caller that dropped this return would emit no "git archive"
+// message at all — the failure would surface only later, differently worded (a
+// missing base tree ⇒ a Lint IO error) — which makes a swallowed archive
+// failure detectable instead of masked by materialize's own print.
+func materialize(git gitRunner, root, sha, dest string, paths []string) error {
 	out, err := git(root, append([]string{"archive", sha}, paths...)...)
 	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "spec-drift: git archive %s: %v\n", sha, err)
-		return 2
+		return fmt.Errorf("git archive %s: %w", sha, err)
 	}
 	if err := extractTar(bytes.NewReader(out), dest); err != nil {
-		_, _ = fmt.Fprintf(stderr, "spec-drift: extract archive %s: %v\n", sha, err)
-		return 2
+		return fmt.Errorf("extract archive %s: %w", sha, err)
 	}
-	return 0
+	return nil
 }
 
 // extractTar extracts a tar stream into dest with a bounded, reject-not-skip

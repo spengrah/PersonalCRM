@@ -563,10 +563,13 @@ func TestRun_BaseArchiveFailure(t *testing.T) {
 	if archiveCalls < 2 {
 		t.Fatalf("base archive was never reached (archiveCalls = %d)", archiveCalls)
 	}
-	// Pin the exit 2 to the archive branch: a regression that swallowed the base
-	// archive error would instead surface a downstream Lint IO error (different
-	// message), so "archive" in stderr proves it was the archive failure itself.
-	if !strings.Contains(errb.String(), "archive") {
+	// Pin the exit 2 to the archive branch. materialize RETURNS its error and the
+	// caller prints it, so a regression that dropped the base-archive return would
+	// emit NO "git archive" message — the base spec dir would simply never
+	// materialize and exit 2 would come from a later, differently worded Lint IO
+	// error ("read spec directory ..."). Requiring "git archive" here therefore
+	// fails on that swallow, distinguishing the archive branch from downstream.
+	if !strings.Contains(errb.String(), "git archive") {
 		t.Fatalf("exit 2 must name the failing base archive, stderr = %q", errb.String())
 	}
 }
