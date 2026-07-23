@@ -210,6 +210,7 @@ func uniqueEmail() string {
 // needlessly reinserted every row would preserve id, type, value and is_primary
 // while silently moving created_at and updated_at — passing a weaker test named
 // for catching exactly that.
+// spec: CON-062[0]
 func TestMethodOps_UnnamedMethodsSurvive(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -264,6 +265,7 @@ func TestMethodOps_ClearNonPrimaryDoesNotDemoteCurrentPrimary(t *testing.T) {
 		"clearing a non-primary row demoted the actual primary")
 }
 
+// spec: CON-062[8]
 func TestMethodOps_ClearNamedPrimaryLeavesNone(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -280,6 +282,7 @@ func TestMethodOps_ClearNamedPrimaryLeavesNone(t *testing.T) {
 
 // --- CON-062[1]: all or nothing --------------------------------------------
 
+// spec: CON-062[1]
 func TestMethodOps_InvalidOperationAppliesNothing(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -339,6 +342,7 @@ func TestMethodOps_AddWithIsPrimaryPromotesAfterInsert(t *testing.T) {
 // one contact, only the first permutation would start from the specified
 // pre-state and the rest would be replays that pass even if the permutation
 // would have failed from the original state.
+// spec: CON-062[2]
 func TestMethodOps_OutcomeIndependentOfPayloadOrder(t *testing.T) {
 	t.Parallel()
 
@@ -452,6 +456,7 @@ func TestMethodOps_TwoAddsOrderIndependent(t *testing.T) {
 
 // --- CON-062[3][4]: idempotency --------------------------------------------
 
+// spec: CON-062[3]
 func TestMethodOps_DuplicateAddIsNoOp(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -479,6 +484,7 @@ func TestMethodOps_IdenticalAddsCoalesce(t *testing.T) {
 	assert.Equal(t, body.Results[0].MethodID, body.Results[1].MethodID)
 }
 
+// spec: CON-062[4]
 func TestMethodOps_RemoveAlreadyAbsentSucceeds(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -530,6 +536,8 @@ func TestMethodOps_NamedRemovalSucceeds(t *testing.T) {
 // statement ran" from "discovered by whichever row PostgreSQL reached first",
 // and pre-SQL determinism is the entire property the fold exists to provide.
 // The fold's message names the colliding pair; the database backstop's does not.
+//
+// spec: CON-062[5]
 func TestMethodOps_DuplicateFinalStateRejected(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -552,6 +560,7 @@ func TestMethodOps_DuplicateFinalStateRejected(t *testing.T) {
 	assert.Equal(t, b.Value, f.storedByID(b.ID).Value, "a rejected payload mutated a row")
 }
 
+// spec: CON-062[6]
 func TestMethodOps_TwoPrimaryDesignationsRejected(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -569,6 +578,8 @@ func TestMethodOps_TwoPrimaryDesignationsRejected(t *testing.T) {
 // written — but the guarantee is per-verb, and a future verb-specific path that
 // bypassed the precheck would otherwise regress silently. It is asserted where
 // it protects a destructive operation, not merely where it is convenient.
+//
+// spec: CON-062[7]
 func TestMethodOps_ForeignMethodIDRejected(t *testing.T) {
 	t.Parallel()
 
@@ -633,6 +644,8 @@ func TestMethodOps_RemoveNonexistentSucceedsButForeignRejected(t *testing.T) {
 // each asserting a 400 AND zero mutation. A payload rejected after partial
 // application would be the same silent-corruption class this endpoint exists to
 // eliminate.
+//
+// spec: CON-062[9]
 func TestMethodOps_ConflictingOperationsRejected(t *testing.T) {
 	t.Parallel()
 
@@ -746,6 +759,8 @@ func TestMethodOps_UpdateWithPrimaryDesignationSucceeds(t *testing.T) {
 // unchanged, so the row is never deleted and never reinserted. Without the
 // in-place update phase the endpoint returns 200 having discarded the edit —
 // the failure must land on the stored-value assertion, not on an error.
+//
+// spec: CON-062[10]
 func TestMethodOps_StableKeyUpdatePersistsThroughAPI(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -771,6 +786,8 @@ func TestMethodOps_StableKeyUpdatePersistsThroughAPI(t *testing.T) {
 // delete-and-reinsert path, which returns the row non-primary. A promotion rule
 // phrased as a designation delta fires neither demote nor promote here and
 // leaves the contact with NO primary.
+//
+// spec: CON-062[11]
 func TestMethodOps_KeyChangingPrimaryUpdateKeepsPrimaryThroughAPI(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -801,6 +818,8 @@ func TestMethodOps_KeyChangingPrimaryUpdateKeepsPrimaryThroughAPI(t *testing.T) 
 // operation, including no-ops. This is the contract a later acknowledged-state
 // advance depends on: a client that cannot learn which row its own addition
 // resolved to will later fail to edit or remove that method.
+//
+// spec: CON-062[12]
 func TestMethodOps_ResultsCoverEveryOperation(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -866,6 +885,8 @@ func TestMethodOps_ResultsIndexAgainstSubmittedNotFoldedOperations(t *testing.T)
 
 // TestMethodOps_ResultsCarryResolvedRowSnapshot pins that snapshots reflect
 // POST-apply state rather than echoing the submitted operation's fields.
+//
+// spec: CON-062[13]
 func TestMethodOps_ResultsCarryResolvedRowSnapshot(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -951,6 +972,8 @@ func TestMethodOps_ResultsResolveAddToExistingRow(t *testing.T) {
 // TestMethodOps_BlankValueRejected pins the deliberate split from the create
 // path. Create DROPS a blank entry; an explicit add or update must REJECT it.
 // Dropping here would turn an unsatisfiable intent into a silent success.
+//
+// spec: CON-015[1]
 func TestMethodOps_BlankValueRejected(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)

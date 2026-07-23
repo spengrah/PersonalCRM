@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// spec: SET-006[0]
 func TestAPIKeyMiddleware(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -29,6 +30,7 @@ func TestAPIKeyMiddleware(t *testing.T) {
 		middleware := APIKeyMiddleware(testConfig)
 		middleware(c)
 
+		// spec: SET-006[3]
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.False(t, c.IsAborted())
 	})
@@ -54,6 +56,7 @@ func TestAPIKeyMiddleware(t *testing.T) {
 		middleware := APIKeyMiddleware(testConfig)
 		middleware(c)
 
+		// spec: SET-006[1]
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 		assert.True(t, c.IsAborted())
 		assert.Contains(t, w.Body.String(), "MISSING_API_KEY")
@@ -68,6 +71,7 @@ func TestAPIKeyMiddleware(t *testing.T) {
 		middleware := APIKeyMiddleware(testConfig)
 		middleware(c)
 
+		// spec: SET-006[2]
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 		assert.True(t, c.IsAborted())
 		assert.Contains(t, w.Body.String(), "INVALID_API_KEY")

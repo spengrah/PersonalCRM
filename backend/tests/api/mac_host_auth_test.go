@@ -86,6 +86,7 @@ func TestMacHost_Auth_IDParamMismatch_403(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, w.Code, "body: %s", w.Body.String())
 }
 
+// spec: MAC-012[0]
 func TestMacHost_Auth_MinProtocolVersion_412(t *testing.T) {
 
 	env := setupMacHostEnv(t)

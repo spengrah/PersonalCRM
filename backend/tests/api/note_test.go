@@ -140,6 +140,7 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
+		// spec: NTS-004[1]
 		assert.Equal(t, http.StatusNoContent, w.Code)
 		assert.Empty(t, w.Body.String())
 	})
@@ -162,6 +163,7 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 		getW := httptest.NewRecorder()
 		router.ServeHTTP(getW, getReq)
 
+		// spec: NTS-004[0]
 		assert.Equal(t, http.StatusOK, getW.Code)
 
 		var response api.APIResponse
@@ -182,6 +184,7 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
+		// spec: NTS-004[2]
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 
 		var response api.APIResponse
@@ -235,6 +238,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
+		// spec: NTS-005[0]
 		assert.Equal(t, http.StatusOK, w.Code)
 
 		var response api.APIResponse
@@ -308,6 +312,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
 
+		// spec: NTS-005[1]
 		assert.Equal(t, http.StatusNoContent, w2.Code)
 		assert.Empty(t, w2.Body.String())
 
@@ -339,6 +344,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
 
+		// spec: NTS-005[1]
 		assert.Equal(t, http.StatusNoContent, w2.Code)
 
 		// Verify note is actually deleted
@@ -379,6 +385,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
+		// spec: NTS-005[3]
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 
 		var response api.APIResponse
@@ -423,6 +430,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
+		// spec: NTS-005[2]
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 
 		var response api.APIResponse
@@ -447,6 +455,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
+		// spec: NTS-005[2]
 		assert.Equal(t, http.StatusOK, w.Code)
 
 		var response api.APIResponse
@@ -469,6 +478,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
+		// spec: NTS-005[3]
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 
 		var response api.APIResponse

@@ -94,6 +94,7 @@ func alwaysMatch(_ []byte, _ []byte) error { return nil }
 // the middleware read and the rotate tx's FOR UPDATE lookup).
 // Deterministically exercises the handler's response shape without
 // needing tx-internal hooks.
+// spec: MAC-010[3]
 func TestRotateKey_HostRevokedBetweenMiddlewareAndTx(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

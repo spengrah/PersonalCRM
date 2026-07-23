@@ -444,6 +444,7 @@ func TestIngestRawMessage_UnmatchedPeer_StagedWithoutContactNoJob(t *testing.T) 
 // TestIngestRawMessage_GlobalKeyPath_RejectedWithCode asserts that
 // raw_message.* events submitted via the global API key (no
 // X-Mac-Host-ID) are REJECTED per-event with HOST_ONLY_REQUIRES_HOST_AUTH.
+// spec: ING-001[2], ING-007[0]
 func TestIngestRawMessage_GlobalKeyPath_RejectedWithCode(t *testing.T) {
 	env := setupRawIngestEnv(t)
 	t.Parallel()
@@ -464,6 +465,7 @@ func TestIngestRawMessage_GlobalKeyPath_RejectedWithCode(t *testing.T) {
 // TestIngestRawMessage_HostAuthForeignKind_Rejected asserts a non-
 // raw_message kind submitted via the host-auth path is REJECTED with
 // UNSUPPORTED_HOST_AUTH_KIND.
+// spec: ING-007[1]
 func TestIngestRawMessage_HostAuthForeignKind_Rejected(t *testing.T) {
 	env := setupRawIngestEnv(t)
 	t.Parallel()
@@ -485,6 +487,7 @@ func TestIngestRawMessage_HostAuthForeignKind_Rejected(t *testing.T) {
 	w := postIngestRaw(t, env, &env.pairedHostID, env.pairedHostKey, map[string]any{
 		"events": []any{ev},
 	})
+	// spec: ING-007[2]
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	resp := parseIngestResp(t, w)
 	require.Equal(t, 0, resp.Accepted)
@@ -496,6 +499,7 @@ func TestIngestRawMessage_HostAuthForeignKind_Rejected(t *testing.T) {
 // TestIngestRawMessage_PayloadHostMismatch_Rejected asserts an
 // envelope whose payload.host_id disagrees with the authenticated host
 // is REJECTED with PAYLOAD_INVARIANT.
+// spec: ING-001[1]
 func TestIngestRawMessage_PayloadHostMismatch_Rejected(t *testing.T) {
 	env := setupRawIngestEnv(t)
 	t.Parallel()

@@ -494,6 +494,7 @@ func TestRematch_NoHandlerForType_ReturnsNilJobID(t *testing.T) {
 // unhandled method type would mint a jobID + enqueue a no-op river
 // job. Only the email handler is registered; adding a phone method
 // must produce uuid.Nil.
+// spec: IMP-019[2]
 func TestRematch_Publisher_NoHandler_ReturnsNilJobID(t *testing.T) {
 	t.Parallel()
 	env := setupRematchEnv(t)
@@ -793,6 +794,7 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 // every method named in the request. The trigger moved from the contact PUT to
 // the operations endpoint when the PUT's method-replacing branch was retired;
 // the diff behavior it asserts is unchanged.
+// spec: IMP-019[0], IMP-019[1]
 func TestRematch_ApplyMethodOperations_FiresForNewMethodOnly(t *testing.T) {
 	t.Parallel()
 	env := setupRematchEnv(t)

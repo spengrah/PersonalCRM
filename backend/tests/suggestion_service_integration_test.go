@@ -251,6 +251,7 @@ func TestSuggestions_Resolve_MalformedMethod400(t *testing.T) {
 	assert.ErrorIs(t, err, service.ErrSuggestionInvalidMethod)
 }
 
+// spec: IMP-018[1]
 func TestSuggestions_Dismiss_RecordsStickyAndDropsPending(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)

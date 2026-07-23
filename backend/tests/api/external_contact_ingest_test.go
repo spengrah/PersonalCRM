@@ -813,6 +813,7 @@ func TestIngestExternalContact_BadSourceIDFormat_Rejected(t *testing.T) {
 	require.Equal(t, "PAYLOAD_INVARIANT", resp.Errors[0].Code)
 }
 
+// spec: ING-005[0]
 func TestIngestExternalContact_VersionZero_Rejected(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
 	entityID := env.sourceIDPrefix + "v0"
@@ -829,6 +830,7 @@ func TestIngestExternalContact_VersionZero_Rejected(t *testing.T) {
 	require.Contains(t, resp.Errors[0].Message, "version")
 }
 
+// spec: ING-005[1]
 func TestIngestExternalContact_VersionTooHigh_Rejected(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
 	entityID := env.sourceIDPrefix + "vhigh"

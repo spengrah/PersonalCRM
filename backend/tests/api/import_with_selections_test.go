@@ -2164,6 +2164,7 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, response.Success)
 		require.NotNil(t, response.Error)
+		// spec: IMP-011[3]
 		assert.Equal(t, "NOT_FOUND", response.Error.Code)
 	})
 
@@ -2201,6 +2202,7 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 		err = json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 		assert.False(t, response.Success)
+		// spec: IMP-011[2]
 		assert.Contains(t, response.Error.Message, "name")
 	})
 

@@ -197,6 +197,7 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.True(t, tokenResp.ExpiresAt.After(accelerated.GetCurrentTime()))
 
 	// 2. Daemon pairs with the token.
+	// spec: MAC-003[0]
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
 		"pairing_token":    tokenResp.Token,
 		"hostname":         "macbook-test-01",
@@ -258,6 +259,7 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.NotNil(t, baseConflict.CurrentCursor)
 
 	// 6. Commit cursor with good base + backfill_complete=true → 200.
+	// spec: MAC-015[0]
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/cursor", hostHeaders, map[string]any{
 		"cursor":            "cursor-v1",
 		"base_cursor":       "",
@@ -328,6 +330,7 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.Equal(t, http.StatusGone, w.Code, "consumed token must surface 410")
 }
 
+// spec: MAC-003[1]
 func TestMacHost_PairingToken_Unknown(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -341,6 +344,7 @@ func TestMacHost_PairingToken_Unknown(t *testing.T) {
 	require.Equal(t, http.StatusGone, w.Code, "unknown token must be 410, body: %s", w.Body.String())
 }
 
+// spec: MAC-003[3]
 func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -372,6 +376,7 @@ func TestMacHost_Pair_MissingToken_400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, "empty token must surface 400, body: %s", w.Body.String())
 }
 
+// spec: MAC-003[2]
 func TestMacHost_Singleton_SecondPairBlocked(t *testing.T) {
 
 	env := setupMacHostEnv(t)

@@ -187,6 +187,7 @@ func TestContactAPI_HasPendingFollowup(t *testing.T) {
 	contactID := createDirectionTestContact(t, router, "Pending Followup API Test "+uuid.NewString()[:8])
 
 	t.Run("NoPendingFollowup", func(t *testing.T) {
+		// spec: CON-005[0]
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -199,6 +200,7 @@ func TestContactAPI_HasPendingFollowup(t *testing.T) {
 	})
 
 	t.Run("WithPendingFollowup", func(t *testing.T) {
+		// spec: CON-005[0]
 		// Create a managed follow-up task
 		id, err := uuid.Parse(contactID)
 		require.NoError(t, err)
@@ -292,6 +294,7 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("has_followup_includes_contact", func(t *testing.T) {
+		// spec: CON-018[3]
 		req, _ := http.NewRequest("GET", "/api/v1/contacts?followup_filter=has_followup&search="+searchQuery, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -312,6 +315,7 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 	})
 
 	t.Run("no_followup_excludes_contact", func(t *testing.T) {
+		// spec: CON-018[3]
 		req, _ := http.NewRequest("GET", "/api/v1/contacts?followup_filter=no_followup&search="+searchQuery, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)

@@ -45,6 +45,7 @@ func (s *stubFailingHostLiveness) GetActiveHostByIDForUpdateTx(
 	return nil, db.ErrNotFound
 }
 
+// spec: ING-006[0]
 func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
