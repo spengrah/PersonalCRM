@@ -630,7 +630,12 @@ func seedStdFixture(t *testing.T, root, specBody string) {
 	writeFile(t, root, "frontend/tests/e2e/.gitkeep", "")
 }
 
-func citingTest() string { return "package x\n// spec: X-001\n" }
+// citingTest is the fixture Go test that cites X-001. The marker token is
+// assembled from split literals so this scanner-facing _test.go file does not
+// itself carry a stray citation marker that make spec-coverage would flag.
+const citeMarker = "// " + "spec: X-001"
+
+func citingTest() string { return "package x\n" + citeMarker + "\n" }
 
 const specTemplate = `domain: x
 prefix: X

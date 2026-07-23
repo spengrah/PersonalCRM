@@ -11,6 +11,7 @@
       { "name": "E2E test-map coverage", "command": "bash scripts/hooks/test-map-coverage-check.sh" },
       { "name": "Spec lint", "command": "make spec-lint" },
       { "name": "Spec coverage", "command": "make spec-coverage" },
+      { "name": "Spec drift", "command": "make spec-drift" },
       { "name": "API types drift", "command": "make api-types-check" },
       { "name": "API docs drift", "command": "make api-docs-check" }
     ]
