@@ -1,7 +1,7 @@
 domain: mac-host
 prefix: MAC
 maturity: reviewed
-settled: [ui]
+settled: [ui, api]
 behaviors:
   # --- Pairing & token lifecycle ---
 
@@ -97,6 +97,9 @@ behaviors:
       - a bearer token that fails the constant-time key comparison is rejected (401)
       - a route id parameter that does not match the header host id is rejected as an authorization failure (403), distinct from an authentication failure
     provenance: [MacHostAuthMiddleware, abortAuth]
+    waivers:
+      - then: 4
+        reason: the constant-time property of the key comparison is unobservable by tests — an injected non-constant-time comparator still yields the same 401-on-mismatch, so a test can only prove the rejection (which MAC-007's other items cover), never the timing property; enforced by code review of the subtle.ConstantTimeCompare call site
 
   - id: MAC-008
     title: Per-host failed-auth limiting precedes the key comparison and refunds on success
@@ -142,6 +145,9 @@ behaviors:
       - a missing or revoked host returns not-found (404)
     provenance: [MacHostHandler.RotateKey, rotateKeyResponse]
     notes: The distinct token-state codes are the opposite choice from pairing (MAC-003) — leaking token state is safe here because the caller already holds the current key.
+    waivers:
+      - then: 3
+        reason: the handler's not-found branch is unreachable through integration — the auth middleware 401s an unknown or revoked host before the handler runs; only the stubbed revoked-between-middleware-and-tx unit test models the race, and it asserts the 401 taxonomy rather than this 404, so the branch is defence-in-depth with no deterministically reachable observable
 
   # --- Heartbeat & protocol ---
 
