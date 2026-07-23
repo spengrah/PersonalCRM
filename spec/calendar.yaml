@@ -1,7 +1,7 @@
 domain: calendar
 prefix: CAL
 maturity: reviewed
-e2e_settled: true
+settled: [ui]
 behaviors:
   # --- Sync provider config & entry ---
 

@@ -14,8 +14,8 @@ import (
 // This file is the traceability scanner: it extracts // spec: citation
 // markers from the deterministic test surfaces (Go tests and Playwright E2E
 // specs), validates them against the parsed corpus, and derives per-then-item
-// coverage for ui-surface behaviors. The CLI wrapper lives in
-// cmd/spec-coverage.
+// coverage keyed on surface — ui behaviors via E2E citations, api behaviors
+// via Go-test citations. The CLI wrapper lives in cmd/spec-coverage.
 
 // refString renders an (ID, then-index) reference as written in a marker:
 // the bare ID for then < 0, else ID[n].
@@ -32,7 +32,7 @@ type Citation struct {
 	Line int
 	ID   string
 	Then int  // 0-based then-item index; -1 = bare (whole-behavior) citation
-	E2E  bool // from a Playwright E2E spec; only these count toward ui coverage
+	E2E  bool // from a Playwright E2E spec; E2E cites credit ui, Go cites credit api
 }
 
 // Ref renders the citation reference as written (ID or ID[n]).
@@ -45,15 +45,16 @@ const (
 	ItemOrphan  = "orphan"
 )
 
-// ItemCoverage is the coverage verdict for one then-item of a ui-surface,
-// status-current behavior. A statement behavior (invariant) has a single
-// implicit item with Then = -1.
+// ItemCoverage is the coverage verdict for one then-item of a ui- or
+// api-surface, status-current behavior. A statement behavior (invariant) has a
+// single implicit item with Then = -1.
 type ItemCoverage struct {
-	ID     string
-	Then   int
-	Text   string // the then-item text (or the statement)
-	State  string // covered | waived | orphan
-	Reason string // waiver reason when waived
+	ID      string
+	Then    int
+	Text    string // the then-item text (or the statement)
+	State   string // covered | waived | orphan
+	Reason  string // waiver reason when waived
+	Surface string // the owning behavior's surface: ui | api
 }
 
 // Ref renders the item as ID[n] (or the bare ID for a statement behavior).
@@ -63,18 +64,39 @@ func (ic ItemCoverage) Ref() string { return refString(ic.ID, ic.Then) }
 type DomainCoverage struct {
 	Domain  string
 	Prefix  string
-	Settled bool // the file's e2e_settled flag: orphans block instead of warn
-	UI      int  // behavior counts by surface classification (non-retired)
+	Settled []string // the file's settled surfaces: their orphans block instead of warn
+	UI      int      // behavior counts by surface classification (non-retired)
 	API     int
 	None    int
 	Intents int
 	Retired int
-	Items   []ItemCoverage // per then-item of ui-surface current behaviors
+	Items   []ItemCoverage // per then-item of ui- or api-surface current behaviors
 }
 
-// Counts returns the number of covered, waived, and orphaned items.
+// Counts returns the number of covered, waived, and orphaned items across all
+// surfaces.
 func (d DomainCoverage) Counts() (covered, waived, orphans int) {
 	for _, it := range d.Items {
+		switch it.State {
+		case ItemCovered:
+			covered++
+		case ItemWaived:
+			waived++
+		case ItemOrphan:
+			orphans++
+		}
+	}
+	return
+}
+
+// SurfaceCounts returns the covered/waived/orphaned item counts for one
+// surface (ui or api), so the two orphan populations are counted and gated
+// independently.
+func (d DomainCoverage) SurfaceCounts(surface string) (covered, waived, orphans int) {
+	for _, it := range d.Items {
+		if it.Surface != surface {
+			continue
+		}
 		switch it.State {
 		case ItemCovered:
 			covered++
@@ -193,11 +215,12 @@ func scanFile(path string, e2e bool) ([]Citation, []Violation, error) {
 }
 
 // ComputeCoverage validates every citation against the parsed corpus and
-// derives per-then-item coverage for ui-surface, status-current behaviors.
-// Invalid citations (unknown ID, out-of-range index, cites of intent /
-// proposed / retired behaviors) land in Problems and never count toward
-// coverage. citeProblems are CollectCitations' marker-level findings — the
-// same failure class, folded into Problems here so no caller can drop them.
+// derives per-then-item coverage for status-current behaviors keyed on
+// surface: ui behaviors are credited by E2E citations, api behaviors by
+// Go-test citations. Invalid citations (unknown ID, out-of-range index, cites
+// of intent / proposed / retired behaviors) land in Problems and never count
+// toward coverage. citeProblems are CollectCitations' marker-level findings —
+// the same failure class, folded into Problems here so no caller can drop them.
 func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) *Coverage {
 	cov := &Coverage{Problems: append([]Violation(nil), citeProblems...)}
 
@@ -212,9 +235,12 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 		}
 	}
 
-	// Validate citations; index the valid E2E ones for the coverage pass.
+	// Validate citations; index the valid ones for the coverage pass, keyed on
+	// harness: E2E cites feed ui coverage, Go cites feed api coverage.
 	e2eBare := map[string]bool{}         // ID cited bare by an E2E spec
 	e2eItem := map[string]map[int]bool{} // ID -> then indexes cited by E2E specs
+	goBare := map[string]bool{}          // ID cited bare by a Go test
+	goItem := map[string]map[int]bool{}  // ID -> then indexes cited by Go tests
 	for _, c := range cites {
 		ref, ok := byID[c.ID]
 		if !ok {
@@ -262,11 +288,25 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 				}
 				e2eItem[c.ID][c.Then] = true
 			}
+		} else {
+			// Go cites credit api coverage. There is deliberately NO
+			// Go-cites-non-api warning (the mirror of the E2E-cites-non-ui
+			// warning): Go tests legitimately cite ui and none behaviors all
+			// over the tree, and the none cites are the future none-coverage
+			// corpus.
+			if c.Then < 0 {
+				goBare[c.ID] = true
+			} else {
+				if goItem[c.ID] == nil {
+					goItem[c.ID] = map[int]bool{}
+				}
+				goItem[c.ID][c.Then] = true
+			}
 		}
 	}
 
-	// Per-domain coverage over ui-surface current behaviors. Path is the
-	// tie-breaker: domain uniqueness is not linted, and an unstable sort on
+	// Per-domain coverage over ui- and api-surface current behaviors. Path is
+	// the tie-breaker: domain uniqueness is not linted, and an unstable sort on
 	// equal keys would make the report order input-dependent.
 	sorted := append([]*File(nil), files...)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -276,7 +316,7 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 		return sorted[i].Path < sorted[j].Path
 	})
 	for _, f := range sorted {
-		dc := DomainCoverage{Domain: f.Domain, Prefix: f.Prefix, Settled: f.E2ESettled}
+		dc := DomainCoverage{Domain: f.Domain, Prefix: f.Prefix, Settled: append([]string(nil), f.Settled...)}
 		for i := range f.Behaviors {
 			b := &f.Behaviors[i]
 			switch {
@@ -295,8 +335,16 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 			case "none":
 				dc.None++
 			}
-			if b.Surface != "ui" || b.Status != "current" {
+			if (b.Surface != "ui" && b.Surface != "api") || b.Status != "current" {
 				continue
+			}
+			// Coverage credit is keyed on surface: ui behaviors read the E2E
+			// citation maps, api behaviors read the Go-test maps. The two paths
+			// are otherwise identical (bare covers all items, indexed covers
+			// item n, a statement is one implicit item coverable bare).
+			bareMap, itemMap, citeKind := e2eBare, e2eItem, "E2E"
+			if b.Surface == "api" {
+				bareMap, itemMap, citeKind = goBare, goItem, "Go"
 			}
 			waived := map[int]string{}
 			for _, w := range b.Waivers {
@@ -305,12 +353,12 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 			if b.Statement != "" {
 				// A statement behavior has one implicit item, coverable only
 				// by a bare citation and waivable as index 0.
-				dc.Items = append(dc.Items, itemState(f.Path, b.ID, -1, b.Statement, e2eBare[b.ID], waived[0], cov))
+				dc.Items = append(dc.Items, itemState(f.Path, b.ID, -1, b.Statement, b.Surface, citeKind, bareMap[b.ID], waived[0], cov))
 				continue
 			}
 			for n, text := range b.Then {
-				covered := e2eBare[b.ID] || e2eItem[b.ID][n]
-				dc.Items = append(dc.Items, itemState(f.Path, b.ID, n, text, covered, waived[n], cov))
+				covered := bareMap[b.ID] || itemMap[b.ID][n]
+				dc.Items = append(dc.Items, itemState(f.Path, b.ID, n, text, b.Surface, citeKind, covered, waived[n], cov))
 			}
 		}
 		cov.Domains = append(cov.Domains, dc)
@@ -320,13 +368,20 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 
 // itemState resolves one item's verdict, recording a stale-waiver warning when
 // an item is both cited and waived (the waiver has been overtaken by a test).
-func itemState(path, id string, then int, text string, covered bool, waiverReason string, cov *Coverage) ItemCoverage {
-	ic := ItemCoverage{ID: id, Then: then, Text: text}
+// The stale-waiver message names the citing harness by citeKind ("E2E" → "an
+// E2E test", "Go" → "a Go test") so the ui path stays byte-identical to the
+// original message while the api path reads correctly.
+func itemState(path, id string, then int, text, surface, citeKind string, covered bool, waiverReason string, cov *Coverage) ItemCoverage {
+	ic := ItemCoverage{ID: id, Then: then, Text: text, Surface: surface}
 	switch {
 	case covered && waiverReason != "":
 		ic.State = ItemCovered
+		phrase := "an E2E test"
+		if citeKind == "Go" {
+			phrase = "a Go test"
+		}
 		cov.Warnings = append(cov.Warnings, Violation{Path: path, Ref: ic.Ref(),
-			Msg: "stale waiver: the item is waived but cited by an E2E test — drop the waiver"})
+			Msg: fmt.Sprintf("stale waiver: the item is waived but cited by %s — drop the waiver", phrase)})
 	case covered:
 		ic.State = ItemCovered
 	case waiverReason != "":

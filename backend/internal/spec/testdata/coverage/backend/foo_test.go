@@ -1,6 +1,11 @@
 package foo
 
-// spec: ALP-005
+// spec: ALP-011
+// spec: ALP-014
+// spec: ALP-015[1]
+// spec: ALP-017
+// spec: ALP-003
+// spec: ALP-018
 func TestEndpoint(t *testing.T) {
 	// spec: DEAD-001
 	// spec: ALP-006

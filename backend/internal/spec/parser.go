@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,7 +16,6 @@ const (
 	tagNull  = "!!null"
 	tagInt   = "!!int"
 	tagFloat = "!!float"
-	tagBool  = "!!bool"
 )
 
 // parsedFile is the walker's rich output for one document: the typed File plus
@@ -205,9 +203,18 @@ func parseFileNode(path string, data []byte) *parsedFile {
 	file.Prefix = pf.fileScalar(fields, "prefix")
 	file.Maturity = pf.fileScalar(fields, "maturity")
 
-	// e2e_settled: optional boolean. Any non-!!bool node is a
-	// file-field-tier structural violation.
-	file.E2ESettled = pf.fileBool(fields, "e2e_settled")
+	// e2e_settled is the retired boolean form of settled. The parser reads no
+	// value from it — it only records presence so the semantic pass can reject
+	// a lingering legacy key (an unread unknown root key would otherwise lint
+	// green and silently disable ui blocking).
+	if _, ok := fields["e2e_settled"]; ok {
+		pf.fileKeys["e2e_settled"] = true
+	}
+
+	// settled: optional list of surfaces whose orphans block. A scalar (or any
+	// non-sequence) node is a file-field-tier structural violation — fail-closed,
+	// not silently normalized.
+	file.Settled = pf.fileSurfaceList(fields, "settled")
 
 	file.Behaviors = make([]Behavior, 0, len(pf.behaviors))
 	for _, pb := range pf.behaviors {
@@ -240,23 +247,45 @@ func (pf *parsedFile) fileScalar(fields map[string]*yaml.Node, key string) strin
 	return node.Value
 }
 
-// fileBool extracts an optional file-level boolean field, recording presence
-// and emitting a file-field-tier structural violation for anything that is not
-// a !!bool scalar. The value is decoded case-insensitively because yaml.v3
-// preserves the source spelling (True/TRUE are legal !!bool spellings whose
-// Node.Value is not normalized).
-func (pf *parsedFile) fileBool(fields map[string]*yaml.Node, key string) bool {
+// fileSurfaceList extracts an optional file-level list-of-surfaces field: a
+// sequence of !!str scalars (the list), or !!null (nil — absent-equivalent).
+// A non-null scalar (e.g. `settled: ui`) is rejected as a structural violation
+// — fail-closed, NOT normalized into a one-element list, so a mis-typed
+// settlement can never silently under-declare its surfaces. A non-!!str
+// sequence item or a mapping is also a file-field-tier structural violation.
+// Element membership (ui|api; none reserved) and duplicates are the semantic
+// pass's job, not the parser's.
+func (pf *parsedFile) fileSurfaceList(fields map[string]*yaml.Node, key string) []string {
 	node, ok := fields[key]
 	if !ok {
-		return false
+		return nil
 	}
 	pf.fileKeys[key] = true
-	if node.Kind != yaml.ScalarNode || node.Tag != tagBool {
+
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag == tagNull {
+			return nil // present but null — absent-equivalent value
+		}
 		pf.fileBroken[key] = true
-		pf.emit(orderStructural, -1, node.Line, "", fmt.Sprintf("%s must be a boolean", key))
-		return false
+		pf.emit(orderStructural, -1, node.Line, "", fmt.Sprintf("%s must be a list of surfaces", key))
+		return nil
+	case yaml.SequenceNode:
+		out := make([]string, 0, len(node.Content))
+		for _, item := range node.Content {
+			if item.Kind != yaml.ScalarNode || item.Tag != tagStr {
+				pf.fileBroken[key] = true
+				pf.emit(orderStructural, -1, item.Line, "", fmt.Sprintf("%s items must be surfaces", key))
+				return nil
+			}
+			out = append(out, item.Value)
+		}
+		return out
+	default:
+		pf.fileBroken[key] = true
+		pf.emit(orderStructural, -1, node.Line, "", fmt.Sprintf("%s must be a list of surfaces", key))
+		return nil
 	}
-	return strings.EqualFold(node.Value, "true")
 }
 
 // walkBehavior walks one behaviors[i] node into a parsedBehavior, degrading
@@ -427,7 +456,7 @@ func (pf *parsedFile) behaviorStrList(pb *parsedBehavior, fields map[string]*yam
 // an integer `then` and a string `reason`. Any shape deviation (non-sequence,
 // non-mapping item, missing/mistyped sub-field, duplicate key in an item) is a
 // behavior-field-tier structural violation that marks the whole field broken —
-// the semantic pass (index range, duplicates, reason non-empty, ui-surface
+// the semantic pass (index range, duplicates, reason non-empty, ui-or-api
 // placement) never sees a partially-parsed waiver list.
 func (pf *parsedFile) behaviorWaivers(pb *parsedBehavior, fields map[string]*yaml.Node) []Waiver {
 	node, ok := fields["waivers"]

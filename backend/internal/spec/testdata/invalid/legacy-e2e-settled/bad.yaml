@@ -1,10 +1,10 @@
-domain: beta
-prefix: BET
+domain: contacts
+prefix: CON
 maturity: reviewed
-settled: [ui]
+e2e_settled: true
 behaviors:
-  - id: BET-001
-    title: an orphan in a settled domain blocks
+  - id: CON-001
+    title: a behavior
     type: ux
     status: current
     surface: ui

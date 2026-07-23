@@ -1,7 +1,7 @@
 domain: contacts
 prefix: CON
 maturity: reviewed
-e2e_settled: true
+settled: [ui]
 behaviors:
   - id: CON-001
     title: a ui-surface behavior with a waived then item
@@ -36,3 +36,14 @@ behaviors:
     type: intent
     status: current
     statement: the surface communicates who needs attention
+  - id: CON-005
+    title: an api-surface behavior with a waived then item
+    type: api
+    status: current
+    surface: api
+    when: the endpoint streams a large export
+    then:
+      - the body is chunked
+    waivers:
+      - then: 0
+        reason: streaming chunk boundaries are not deterministically assertable
