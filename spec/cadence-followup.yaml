@@ -1,7 +1,7 @@
 domain: cadence-followup
 prefix: CAD
 maturity: reviewed
-settled: [ui]
+settled: [ui, api]
 behaviors:
   # --- Cadence computation ---
 

@@ -373,6 +373,7 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("FilterByFollowUpLifecycle", func(t *testing.T) {
+		// spec: CAD-032[0]
 		// Post-046, follow-up tasks are identified by lifecycle=followup_loop
 		// (kind is reach_out for live follow-up rows). The legacy
 		// ?kind=follow_up filter is no longer valid.
@@ -392,6 +393,7 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	})
 
 	t.Run("FilterByAction_ExcludesFollowUp", func(t *testing.T) {
+		// spec: CAD-032[0]
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=action", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -400,13 +402,18 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 		var resp api.APIResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		items := resp.Data.([]interface{})
-		for _, item := range items {
-			task := item.(map[string]interface{})
-			assert.Equal(t, "action", task["kind"], "should only return action tasks")
-		}
+		// Exactly the seeded action task — non-empty (a filter that matches
+		// nothing must not pass vacuously) and the reach_out follow-up task
+		// seeded above must be excluded.
+		require.Len(t, items, 1, "exactly the seeded action task should match kind=action")
+		task := items[0].(map[string]interface{})
+		assert.Equal(t, "action", task["kind"], "should only return action tasks")
+		assert.Equal(t, "test-kind-action-"+contactID, task["external_task_id"],
+			"the returned task must be the seeded action task, not the follow-up")
 	})
 
 	t.Run("InvalidKindRejected", func(t *testing.T) {
+		// spec: CAD-032[0]
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=invalid", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -414,6 +421,7 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	})
 
 	t.Run("LegacyFollowUpKindRejected", func(t *testing.T) {
+		// spec: CAD-032[0]
 		// kind=follow_up is no longer a valid kind enum post-046; the
 		// validator rejects it at the handler boundary.
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=follow_up", nil)
