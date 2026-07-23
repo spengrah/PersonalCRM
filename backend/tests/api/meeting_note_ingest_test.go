@@ -2809,7 +2809,28 @@ func TestListNeedsAttention_BasicProjection(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	meetingAt := env.uniqueWindowBase(7)
 	eventTitle := env.sourceIDPrefix + "Projection Event"
-	eventID := env.seedCalendarEventInWindowWithTitle(t, meetingAt, eventTitle, []uuid.UUID{env.contactA})
+	// Seed the event inline (not via the zero-attendee helper) with THREE
+	// attendee entries so the preview's attendee_count is nonzero and
+	// distinct from the candidate count (2) — a hardcoded or misprojected
+	// count cannot pass.
+	upserted, err := env.calendarRepo.Upsert(context.Background(), repository.UpsertCalendarEventRequest{
+		GcalEventID:     env.sourceIDPrefix + "cal-proj-" + uuid.NewString()[:8],
+		GcalCalendarID:  "primary",
+		GoogleAccountID: "test-account",
+		Title:           stringPtr(eventTitle),
+		StartTime:       meetingAt,
+		EndTime:         meetingAt.Add(time.Hour),
+		Status:          "confirmed",
+		Attendees: []repository.Attendee{
+			{Email: "a-" + env.sourceIDPrefix + "@example.com"},
+			{Email: "b-" + env.sourceIDPrefix + "@example.com"},
+			{Email: "c-" + env.sourceIDPrefix + "@example.com"},
+		},
+		MatchedContactIDs: []uuid.UUID{env.contactA},
+		SyncedAt:          accelerated.GetCurrentTime(),
+	})
+	require.NoError(t, err)
+	eventID := upserted.ID
 	peer := randomTestPhoneNumber(t)
 	answered := true
 	callID := env.seedPhoneCallInWindowFull(t, meetingAt, peer, repository.PhoneCallServiceVoice, repository.PhoneCallDirectionInbound, &answered, 60, nil)
@@ -2828,30 +2849,36 @@ func TestListNeedsAttention_BasicProjection(t *testing.T) {
 	w = getNeedsAttention(t, env, env.pairedHostID.String())
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
-	var resp struct {
-		Success bool                                 `json:"success"`
-		Data    []service.NeedsAttentionItemResponse `json:"data"`
+	// Decode on LITERAL wire keys (raw maps), never the production response
+	// structs — decoding with the same tags that serialized the payload
+	// would round-trip swapped/renamed keys invisibly.
+	var rawResp struct {
+		Success bool                     `json:"success"`
+		Data    []map[string]interface{} `json:"data"`
 	}
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	require.True(t, resp.Success)
-	require.NotEmpty(t, resp.Data)
-	var found *service.NeedsAttentionItemResponse
-	for i := range resp.Data {
-		if resp.Data[i].AnarlogSessionID.String() == sessionUUID {
-			found = &resp.Data[i]
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&rawResp))
+	require.True(t, rawResp.Success)
+	require.NotEmpty(t, rawResp.Data)
+	var found map[string]interface{}
+	for _, row := range rawResp.Data {
+		if row["anarlog_session_id"] == sessionUUID {
+			found = row
 			break
 		}
 	}
 	require.NotNil(t, found, "needs-attention list must contain our seeded row")
-	require.Equal(t, repository.LinkageStateConflictPending, found.LinkageState)
-	require.Len(t, found.Candidates, 2, "both candidates projected")
+	require.Equal(t, string(repository.LinkageStateConflictPending), found["linkage_state"])
 
-	var eventCand, callCand *service.NeedsAttentionCandidate
-	for i := range found.Candidates {
-		c := &found.Candidates[i]
-		require.False(t, c.TargetMissing)
-		require.NotNil(t, c.Preview)
-		switch c.Kind {
+	candidates, ok := found["candidates"].([]interface{})
+	require.True(t, ok, "row must carry a candidates array, got %T", found["candidates"])
+	require.Len(t, candidates, 2, "both candidates projected")
+
+	var eventCand, callCand map[string]interface{}
+	for _, ci := range candidates {
+		c, ok := ci.(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, false, c["target_missing"])
+		switch c["kind"] {
 		case "event":
 			eventCand = c
 		case "phone_call":
@@ -2859,21 +2886,28 @@ func TestListNeedsAttention_BasicProjection(t *testing.T) {
 		}
 	}
 
-	// Event candidate: per-kind preview is title + attendee_count.
+	// Event candidate: per-kind preview is title + attendee_count; the
+	// phone-call key must be ABSENT (omitempty), not merely nil.
 	require.NotNil(t, eventCand, "event candidate must be projected")
-	require.Equal(t, eventID, eventCand.ID)
-	require.NotNil(t, eventCand.Preview.Title, "event preview must carry the title")
-	require.Equal(t, eventTitle, *eventCand.Preview.Title, "event preview title must be the seeded event's title")
-	require.NotNil(t, eventCand.Preview.AttendeeCount, "event preview must carry the attendee count")
-	require.Equal(t, 0, *eventCand.Preview.AttendeeCount, "seeded event has no attendee entries")
-	require.Nil(t, eventCand.Preview.PeerHandle, "event preview must not carry a phone-call field")
+	require.Equal(t, eventID.String(), eventCand["id"])
+	eventPreview, ok := eventCand["preview"].(map[string]interface{})
+	require.True(t, ok, "event candidate must carry a preview object")
+	require.Equal(t, eventTitle, eventPreview["title"], "event preview title must be the seeded event's title")
+	require.Equal(t, float64(3), eventPreview["attendee_count"], "event preview must carry the seeded nonzero attendee count")
+	_, hasPeer := eventPreview["peer_handle"]
+	require.False(t, hasPeer, "event preview must not carry a phone-call key")
 
-	// Phone-call candidate: per-kind preview is the peer handle.
+	// Phone-call candidate: per-kind preview is the peer handle; the event
+	// keys must be absent.
 	require.NotNil(t, callCand, "phone_call candidate must be projected")
-	require.Equal(t, callID, callCand.ID)
-	require.NotNil(t, callCand.Preview.PeerHandle, "phone_call preview must carry the peer handle")
-	require.Equal(t, peer, *callCand.Preview.PeerHandle, "phone_call preview peer_handle must be the seeded call's peer")
-	require.Nil(t, callCand.Preview.Title, "phone_call preview must not carry an event field")
+	require.Equal(t, callID.String(), callCand["id"])
+	callPreview, ok := callCand["preview"].(map[string]interface{})
+	require.True(t, ok, "phone_call candidate must carry a preview object")
+	require.Equal(t, peer, callPreview["peer_handle"], "phone_call preview peer_handle must be the seeded call's peer")
+	_, hasTitle := callPreview["title"]
+	require.False(t, hasTitle, "phone_call preview must not carry an event title key")
+	_, hasCount := callPreview["attendee_count"]
+	require.False(t, hasCount, "phone_call preview must not carry an attendee_count key")
 }
 
 // TestListNeedsAttention_NewestFirstOrdering — seed three attention rows

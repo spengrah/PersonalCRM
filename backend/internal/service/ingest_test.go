@@ -1206,6 +1206,21 @@ func TestVerifyMeetingNoteInvariants_HashMismatch(t *testing.T) {
 	require.Equal(t, ingestRejectMeetingNoteHashMismatch, rej.Code)
 }
 
+// TestVerifyMeetingNoteInvariants_EntityPrefixMismatch pins the composite
+// key's entity-prefix branch: a source_id whose prefix is a VALID but
+// DIFFERENT session UUID (regex shape intact, original hash suffix kept)
+// must be rejected on the prefix check, which runs before the hash check.
+// spec: ING-036
+func TestVerifyMeetingNoteInvariants_EntityPrefixMismatch(t *testing.T) {
+	host := uuid.New()
+	env := validMeetingNoteRecordedEnv(t, host, uuid.NewString())
+	hashSuffix := env.SourceID[len(env.SourceID)-64:]
+	env.SourceID = uuid.NewString() + "@" + hashSuffix
+	rej := verifyMeetingNoteInvariants(env, host)
+	require.NotNil(t, rej)
+	require.Contains(t, rej.Message, "entity prefix does not match payload source_id")
+}
+
 func TestVerifyMeetingNoteInvariants_DeleteAcceptsUnknownSentinel(t *testing.T) {
 	host := uuid.New()
 	sessionUUID := uuid.NewString()
