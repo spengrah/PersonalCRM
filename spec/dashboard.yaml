@@ -1,7 +1,7 @@
 domain: dashboard
 prefix: DSH
 maturity: reviewed
-settled: [ui]
+settled: [ui, api]
 behaviors:
   - id: DSH-001
     title: The dashboard is the application's default landing surface

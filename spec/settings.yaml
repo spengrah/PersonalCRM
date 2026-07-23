@@ -1,7 +1,7 @@
 domain: settings
 prefix: SET
 maturity: reviewed
-settled: [ui]
+settled: [ui, api]
 behaviors:
   # --- OAuth flow & auth boundary ---
 

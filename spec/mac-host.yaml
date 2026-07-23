@@ -1,7 +1,7 @@
 domain: mac-host
 prefix: MAC
 maturity: reviewed
-settled: [ui]
+settled: [ui, api]
 behaviors:
   # --- Pairing & token lifecycle ---
 
@@ -97,6 +97,7 @@ behaviors:
       - a bearer token that fails the constant-time key comparison is rejected (401)
       - a route id parameter that does not match the header host id is rejected as an authorization failure (403), distinct from an authentication failure
     provenance: [MacHostAuthMiddleware, abortAuth]
+    notes: The then[4] constant-time qualifier is a timing property no test can observe — the cited test proves only the rejection (401 on a wrong bearer for a known host). The middleware's comparison is bcrypt.CompareHashAndPassword behind the injectable PasswordComparator seam (DefaultPasswordComparator in mac_host_middleware.go); timing safety is owned by code review of that seam.
 
   - id: MAC-008
     title: Per-host failed-auth limiting precedes the key comparison and refunds on success

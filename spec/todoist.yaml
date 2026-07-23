@@ -1,7 +1,7 @@
 domain: todoist
 prefix: TDS
 maturity: reviewed
-settled: [ui]
+settled: [ui, api]
 behaviors:
   # --- Provider identity and sync orchestration ---
 
