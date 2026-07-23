@@ -147,6 +147,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Full history: spec-drift computes merge-base(HEAD, origin/develop),
+          # which the default depth-1 checkout cannot resolve.
+          fetch-depth: 0
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -161,6 +165,17 @@ jobs:
       # list; invalid citations always block.
       - name: Run spec coverage scanner
         run: make spec-coverage
+      # Ensure origin/develop exists for spec-drift's merge-base. No `|| true`:
+      # hiding a fetch failure would fail-open the drift check (it exits 2 when
+      # it cannot resolve its base, which must surface as a red job).
+      - name: Fetch develop for drift base
+        run: git fetch --no-tags origin +refs/heads/develop:refs/remotes/origin/develop
+      # Behavior-drift advisory: warns (::warning:: annotations) when a
+      # behavior's assertions changed but no citing test was touched. Warn-only
+      # (green on drift); exit 2 on any operational error (unresolvable base,
+      # archive/extraction/lint/scan/diff/output failure).
+      - name: Run spec drift check
+        run: make spec-drift
 
   # Guards drift between Go source and the two committed generated artifacts:
   #   - frontend types  (backend/tygo.yaml → frontend/src/types/generated/)

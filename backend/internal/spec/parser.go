@@ -293,7 +293,7 @@ func (pf *parsedFile) fileSurfaceList(fields map[string]*yaml.Node, key string) 
 // key; behavior-field-tier for a structurally broken field).
 func (pf *parsedFile) walkBehavior(idx int, node *yaml.Node) *parsedBehavior {
 	pb := &parsedBehavior{
-		b:      &Behavior{},
+		b:      &Behavior{Line: node.Line},
 		idx:    idx,
 		ref:    fmt.Sprintf("behaviors[%d]", idx),
 		line:   node.Line,

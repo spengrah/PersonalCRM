@@ -38,6 +38,7 @@ type Behavior struct {
 	Waivers    []Waiver // ui- or api-surface behaviors only: then-items deliberately excluded from deterministic coverage
 	Provenance []string
 	Notes      string
+	Line       int // 1-based source line of the behavior mapping; set by the parser, used in drift annotations
 }
 
 // Waiver records the DROP verdict for one then-item of a ui- or api-surface
