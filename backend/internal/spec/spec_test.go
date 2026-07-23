@@ -170,6 +170,8 @@ func TestLintViolationClasses(t *testing.T) {
 		{"waivers-bad-statement-index", 1, []string{"waiver then index 1 out of range (a statement behavior has one implicit item, index 0)"}},
 		{"settled-not-list", 1, []string{"settled must be a list of surfaces"}},
 		{"settled-mapping", 1, []string{"settled must be a list of surfaces"}},
+		{"settled-null", 1, []string{"settled must list at least one surface; omit the key entirely for a genuinely unsettled domain"}},
+		{"settled-empty-list", 1, []string{"settled must list at least one surface; omit the key entirely for a genuinely unsettled domain"}},
 		{"settled-bad-surface", 1, []string{`invalid settled surface "browser" (want ui|api)`}},
 		{"settled-none", 1, []string{`settled surface "none" is not yet supported`}},
 		{"settled-dup", 1, []string{`duplicate settled surface "ui"`}},
@@ -288,21 +290,23 @@ func TestLintSurfaceAndWaivers(t *testing.T) {
 	}
 }
 
-// TestLintSettledNull pins that a file-level settled: null parses as an absent
-// (nil) surface list with no violation — absent-equivalent, not a broken field.
-func TestLintSettledNull(t *testing.T) {
-	files, viol, err := Lint("testdata/valid-settled-null")
+// TestLintSettledAbsent pins that an omitted settled key is legal — a genuinely
+// unsettled domain — and parses as a nil surface list with no violation. (An
+// explicit-but-empty settled, null or [], is rejected instead; see the
+// settled-null / settled-empty-list cases in TestLintViolationClasses.)
+func TestLintSettledAbsent(t *testing.T) {
+	files, viol, err := Lint("testdata/valid-settled-absent")
 	if err != nil {
 		t.Fatalf("Lint returned error: %v", err)
 	}
 	if len(viol) != 0 {
-		t.Fatalf("valid-settled-null corpus should be clean, got %d violations:\n%s", len(viol), joinViolations(viol))
+		t.Fatalf("valid-settled-absent corpus should be clean, got %d violations:\n%s", len(viol), joinViolations(viol))
 	}
 	if len(files) != 1 {
 		t.Fatalf("want 1 file, got %d", len(files))
 	}
 	if files[0].Settled != nil {
-		t.Errorf("settled: null should parse as nil, got %#v", files[0].Settled)
+		t.Errorf("absent settled should parse as nil, got %#v", files[0].Settled)
 	}
 }
 
