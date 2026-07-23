@@ -229,3 +229,29 @@ func buildExternalSync(
 
 	return stack
 }
+
+// buildExternalSyncIfEnabled applies the external-sync feature gate: the full
+// sync stack when cfg.Features.EnableExternalSync is set, a zero syncStack
+// otherwise. This is the single gate seam shared by run() and the OAuth
+// route-wiring boundary test — a regression that drops or inverts the gate
+// fails the test because the test exercises this exact function.
+func buildExternalSyncIfEnabled(
+	ctx context.Context,
+	cfg *config.Config,
+	database *db.Database,
+	core coreRepos,
+	contactService *service.ContactService,
+	graph graphCore,
+	ingest ingestRepos,
+	messaging messagingFoundation,
+	consumers eventConsumers,
+	domain domainServices,
+	eventBus *events.Bus,
+	riverClient *river.Client[pgx.Tx],
+	pubBus *events.Bus,
+) syncStack {
+	if !cfg.Features.EnableExternalSync {
+		return syncStack{}
+	}
+	return buildExternalSync(ctx, cfg, database, core, contactService, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
+}

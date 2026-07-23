@@ -106,6 +106,7 @@ func sealWithKey(t *testing.T, hexKey, plaintext string, nonce []byte) []byte {
 // TestGoogleOAuth_ExchangeRoundTrip verifies that a token exchanged via the fake
 // endpoint is stored encrypted and decrypts back to the same values, and that the
 // access and refresh tokens are stored under distinct nonces.
+// spec: SET-009
 func TestGoogleOAuth_ExchangeRoundTrip(t *testing.T) {
 	t.Parallel()
 
