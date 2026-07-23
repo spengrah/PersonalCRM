@@ -177,6 +177,65 @@ func TestRun_ArgCount(t *testing.T) {
 // run — real-git end-to-end (exit codes + drift semantics)
 // ---------------------------------------------------------------------------
 
+// TestGitHelpersIgnoreAmbientGitDir is the regression guard for the ambient
+// GIT_DIR/GIT_WORK_TREE hijack: git-location env vars OVERRIDE cmd.Dir, so a
+// leaked ambient value (as a pre-push hook exports for the real repo) would make
+// every fixture git command — and run's own git calls — operate on the wrong
+// repository. It points the environment at a DECOY repo, drives the full fixture
+// flow (commits + a drift run) against a SEPARATE temp repo, and asserts the
+// decoy is left pristine and the temp repo was used. This class is invisible to
+// a plain `go test` (no ambient GIT_DIR); only the hook exposed it. With the
+// unfixed append(os.Environ(),…) gitEnv this test fails (the decoy is polluted).
+func TestGitHelpersIgnoreAmbientGitDir(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "false")
+
+	// Two repos built BEFORE the ambient leak: a decoy standing in for the real
+	// repository the hook's GIT_DIR points at, and the work repo the fixtures
+	// intend to use.
+	decoy := initRepo(t)
+	writeFile(t, decoy, "keep.txt", "decoy")
+	decoyHead := commit(t, decoy, "decoy base")
+	decoyBranch := runGitTrim(t, decoy, "branch", "--show-current")
+
+	work := initRepo(t)
+	writeFile(t, work, "keep.txt", "work")
+	commit(t, work, "work base")
+
+	// Export the ambient git location exactly as the pre-push hook does for the
+	// real repo. These OVERRIDE cmd.Dir unless the helpers strip them.
+	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
+	t.Setenv("GIT_WORK_TREE", decoy)
+
+	// gitEnv guard: an --allow-empty commit against WORK must land in work. A
+	// leaked ambient GIT_DIR would send it to the decoy, moving the decoy HEAD.
+	// --allow-empty makes the commit unconditional, so under the bug the decoy is
+	// deterministically polluted (and thus detected), not merely "nothing to
+	// commit".
+	runGit(t, work, "commit", "--allow-empty", "-m", "work probe")
+	if got := runGitTrim(t, decoy, "rev-parse", "HEAD"); got != decoyHead {
+		t.Fatalf("decoy HEAD moved %s -> %s: ambient GIT_DIR hijacked the fixture commit", decoyHead, got)
+	}
+	if got := runGitTrim(t, decoy, "branch", "--show-current"); got != decoyBranch {
+		t.Fatalf("decoy branch changed %s -> %s", decoyBranch, got)
+	}
+	if log := runGit(t, decoy, "log", "--oneline"); strings.Contains(log, "probe") {
+		t.Fatalf("decoy history polluted by the work commit:\n%s", log)
+	}
+
+	// execGit guard: run() must materialize + diff the WORK repo, not the decoy.
+	seedStdFixture(t, work, validSpec("original outcome"))
+	c1 := commit(t, work, "c1")
+	writeFile(t, work, "spec/x.yaml", validSpec("changed outcome"))
+	commit(t, work, "c2 drift")
+	var out, errb bytes.Buffer
+	if code := run([]string{work, c1}, execGit, &out, &errb); code != 0 {
+		t.Fatalf("run exit = %d, want 0; stderr = %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "X-001") {
+		t.Fatalf("run must operate on the work repo (warn X-001), got %q", out.String())
+	}
+}
+
 func TestRun_CleanNoDrift(t *testing.T) {
 	t.Setenv("GITHUB_ACTIONS", "false")
 	root := initRepo(t)
@@ -655,8 +714,23 @@ func failingGit(fail string) gitRunner {
 	}
 }
 
+// gitEnv builds a CLEAN environment for the fixture git commands. It strips
+// EVERY inherited GIT_* variable first, then adds only the ones we want. This is
+// load-bearing: under the pre-push hook git exports GIT_DIR / GIT_WORK_TREE /
+// GIT_INDEX_FILE pointing at the REAL repo, and those OVERRIDE cmd.Dir — so
+// without stripping them a `runGit(t, tmpDir, "commit", …)` would silently
+// operate on the real repository (hijacking its branches to fixture commits).
+// Making cmd.Dir authoritative keeps every fixture confined to its temp dir.
 func gitEnv() []string {
-	return append(os.Environ(),
+	src := os.Environ()
+	env := make([]string, 0, len(src)+6)
+	for _, kv := range src {
+		if strings.HasPrefix(kv, "GIT_") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return append(env,
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
 		"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
 		"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",

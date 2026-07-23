@@ -60,10 +60,43 @@ func main() {
 	os.Exit(run(os.Args[1:], execGit, os.Stdout, os.Stderr))
 }
 
+// gitLocationVars name the environment variables that tell git WHERE the repo
+// is. Because they override the -C / working-directory selection, an ambient
+// value (e.g. one a pre-push hook exports for the real repo) would silently
+// redirect every spec-drift git call away from the <root> argument. execGit
+// clears them so `git -C <dir>` is authoritative.
+var gitLocationVars = map[string]bool{
+	"GIT_DIR":              true,
+	"GIT_WORK_TREE":        true,
+	"GIT_INDEX_FILE":       true,
+	"GIT_OBJECT_DIRECTORY": true,
+	"GIT_COMMON_DIR":       true,
+	"GIT_PREFIX":           true,
+	"GIT_NAMESPACE":        true,
+}
+
+// cleanGitLocationEnv returns os.Environ() with the git-location variables
+// removed, so `git -C <dir>` (not an ambient GIT_DIR) decides the target repo.
+func cleanGitLocationEnv() []string {
+	src := os.Environ()
+	out := make([]string, 0, len(src))
+	for _, kv := range src {
+		name, _, _ := strings.Cut(kv, "=")
+		if gitLocationVars[name] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // execGit runs `git -C <dir> <args...>`, capturing stdout; on failure it wraps
-// git's stderr as the error so the caller's message reads naturally.
+// git's stderr as the error so the caller's message reads naturally. It clears
+// the git-location env vars (decision above) so <dir> is authoritative even when
+// an ambient GIT_DIR/GIT_WORK_TREE disagrees.
 func execGit(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = cleanGitLocationEnv()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
