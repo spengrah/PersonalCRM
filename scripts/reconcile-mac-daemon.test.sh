@@ -414,7 +414,10 @@ test_fetch_advances_tracking_ref() {
     else fail "fetch must use the explicit origin/main refspec (not FETCH_HEAD-only)"; fi
     if log_has "rev-parse origin/main"; then ok; else fail "target SHA must come from rev-parse origin/main"; fi
     # The new SHA must flow into the build (worktree add at the new SHA).
-    if grep -F 'worktree add' "$CALL_LOG" | grep -qF "$new_sha"; then ok
+    # Capture first, then match a here-string: a piped `grep | grep -q` can
+    # SIGPIPE the first grep under pipefail once the second exits early.
+    worktree_adds="$(grep -F 'worktree add' "$CALL_LOG")"
+    if grep -qF -- "$new_sha" <<<"$worktree_adds"; then ok
     else fail "deploy must target the NEW SHA the fetch advanced to"; fi
     cleanup_sandbox
     unset DEPLOY_ENV_FILE_OVERRIDE

@@ -400,7 +400,7 @@ test_health_gate_commit_mismatch_fails() {
     STUB_MIGRATE_CHECK_RC=0 STUB_HEALTH_OK=1 STUB_HEALTH_GIT_COMMIT="$WRONG_SHA" run_deploy "$VALID_SHA"
     if [ "$RC" -eq 1 ]; then ok; else fail "commit mismatch should fail the gate -> rollback (exit 1), got $RC ($OUT)"; fi
     # The forward gate must have logged the mismatch (not the unknown-skip).
-    if echo "$OUT" | grep -q 'git_commit does not match'; then ok; else fail "expected a commit-mismatch log line"; fi
+    if grep -qF -- 'git_commit does not match' <<<"$OUT"; then ok; else fail "expected a commit-mismatch log line"; fi
     # Rollback re-pins the OLD digest anchor on both units.
     if grep -q 'Image=ghcr.io/spengrah/personalcrm-backend@sha256:c91da029' "$BACKEND_UNIT"; then ok
     else fail "mismatch must re-pin the rollback digest anchor"; fi
@@ -415,7 +415,7 @@ test_health_gate_unknown_warns_and_passes() {
     make_sandbox
     STUB_MIGRATE_CHECK_RC=0 STUB_HEALTH_OK=1 STUB_HEALTH_GIT_COMMIT="unknown" run_deploy "$VALID_SHA"
     if [ "$RC" -eq 0 ]; then ok; else fail "unknown commit should warn + pass (exit 0), got $RC ($OUT)"; fi
-    if echo "$OUT" | grep -q 'build not stamped (git_commit=unknown); skipping commit verification'; then ok
+    if grep -qF -- 'build not stamped (git_commit=unknown); skipping commit verification' <<<"$OUT"; then ok
     else fail "expected the unknown-skip warning in the deploy output"; fi
     cleanup_sandbox
 }
