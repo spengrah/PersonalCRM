@@ -1,7 +1,7 @@
 domain: contacts
 prefix: CON
 maturity: reviewed
-e2e_settled: definitely
+settled: [1]
 behaviors:
   - id: CON-001
     title: a behavior

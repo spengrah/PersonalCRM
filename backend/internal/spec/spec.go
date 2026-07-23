@@ -13,12 +13,14 @@ package spec
 
 // File is one parsed spec/<domain>.yaml document.
 type File struct {
-	Domain     string
-	Prefix     string
-	Maturity   string // draft | reviewed | ratified
-	E2ESettled bool   // e2e_settled: optional; true flips the coverage scanner's orphan handling from warn to block for this domain
-	Behaviors  []Behavior
-	Path       string // set by the parser; used in violation messages
+	Domain   string
+	Prefix   string
+	Maturity string // draft | reviewed | ratified
+	// Settled: surfaces whose orphans block instead of warn; absent = none
+	// block. Elements ∈ {ui, api} (none reserved — not yet supported).
+	Settled   []string
+	Behaviors []Behavior
+	Path      string // set by the parser; used in violation messages
 }
 
 // Behavior is one entry in a File's behaviors list.
@@ -33,15 +35,15 @@ type Behavior struct {
 	Then       []string // same normalization as Given
 	Statement  string   // invariant and intent types only; mutually exclusive with GWT
 	Serves     []string // ux and intent types only; targets must be intent behavior IDs
-	Waivers    []Waiver // ui-surface behaviors only: then-items deliberately excluded from deterministic E2E coverage
+	Waivers    []Waiver // ui- or api-surface behaviors only: then-items deliberately excluded from deterministic coverage
 	Provenance []string
 	Notes      string
 }
 
-// Waiver records the DROP verdict for one then-item of a ui-surface behavior:
-// the item is neither deterministically E2E-provable nor worth a judge intent,
-// so the coverage scanner reports it as waived (with the reason) instead of
-// orphaned.
+// Waiver records the DROP verdict for one then-item of a ui- or api-surface
+// behavior: the item is neither deterministically provable nor worth a judge
+// intent, so the coverage scanner reports it as waived (with the reason)
+// instead of orphaned.
 type Waiver struct {
 	Then   int // 0-based index into the behavior's then list
 	Reason string

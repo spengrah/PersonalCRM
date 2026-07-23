@@ -3,10 +3,10 @@ prefix: CON
 maturity: reviewed
 behaviors:
   - id: CON-001
-    title: a waiver on an api-surface behavior
-    type: api
+    title: a waiver on a none-surface behavior
+    type: business-logic
     status: current
-    surface: api
+    surface: none
     when: x
     then:
       - y

@@ -1,0 +1,13 @@
+domain: apiblocked
+prefix: API
+maturity: reviewed
+settled: [api, ui]
+behaviors:
+  - id: API-001
+    title: an uncited api behavior in an api-settled domain blocks
+    type: api
+    status: current
+    surface: api
+    when: the endpoint is called
+    then:
+      - a 200 carries the resource

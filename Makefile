@@ -146,7 +146,7 @@ help:
 	@echo "  api-docs-check - Fail if the generated Swagger spec drifted (non-mutating)"
 	@echo "  lint        - Run all linters (backend + frontend)"
 	@echo "  spec-lint   - Lint the behavior spec corpus (spec/*.yaml)"
-	@echo "  spec-coverage - Report per-then-item E2E coverage of ui-surface behaviors"
+	@echo "  spec-coverage - Report per-then-item coverage: ui behaviors (E2E), api behaviors (Go)"
 	@echo "  clean       - Clean build artifacts"
 	@echo ""
 	@echo "Testing:"
@@ -609,9 +609,10 @@ spec-lint:
 	@cd backend && go run ./cmd/spec-lint $(REPO_ROOT)/spec
 
 # Behavior-SSOT traceability scanner: cross-references // spec: citations in
-# test files against spec/*.yaml and reports per-then-item E2E coverage for
-# ui-surface behaviors. Warn-only for unsettled domains; invalid citations and
-# orphans in e2e_settled domains exit non-zero.
+# test files against spec/*.yaml and reports per-then-item coverage keyed on
+# surface — ui behaviors via E2E citations, api behaviors via Go-test
+# citations. Warn-only unless a domain lists the surface in its settled list;
+# invalid citations and orphans on a settled surface exit non-zero.
 spec-coverage:
 	@cd backend && go run ./cmd/spec-coverage $(REPO_ROOT)
 

@@ -1,7 +1,7 @@
 domain: mac-host
 prefix: MAC
 maturity: reviewed
-e2e_settled: true
+settled: [ui]
 behaviors:
   # --- Pairing & token lifecycle ---
 

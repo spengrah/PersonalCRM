@@ -1,8 +1,9 @@
 // spec-coverage is the behavior-SSOT traceability scanner: it cross-references
 // // spec: citations in the deterministic test surfaces (backend *_test.go,
 // frontend/tests/e2e *.spec.ts) against the behavior SSOT (spec/*.yaml) and
-// reports per-then-item E2E coverage for ui-surface behaviors. Operator/CI
-// tool; not deployed with the production service.
+// reports per-then-item coverage keyed on surface: ui behaviors via E2E
+// citations, api behaviors via Go-test citations. Operator/CI tool; not
+// deployed with the production service.
 //
 // Usage:
 //
@@ -16,8 +17,7 @@
 //	0 — no invalid citations; orphans (if any) are warnings only
 //	1 — invalid citations found (dead IDs, bad indexes, intent/proposed/
 //	    retired cites, malformed markers) — always fatal — or orphaned
-//	    ui-surface then-items in a domain whose spec file declares
-//	    e2e_settled: true
+//	    then-items on a surface that a domain lists in its settled: [...] list
 //	2 — operational error (bad usage, unreadable tree, corpus lint failure)
 package main
 
@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"personal-crm/backend/internal/spec"
 )
@@ -75,8 +76,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	blocked := false
 	for _, d := range cov.Domains {
-		if _, _, orphans := d.Counts(); d.Settled && orphans > 0 {
-			blocked = true
+		for _, s := range d.Settled {
+			if _, _, orphans := d.SurfaceCounts(s); orphans > 0 {
+				blocked = true
+			}
 		}
 	}
 	if len(cov.Problems) > 0 || blocked {
@@ -93,23 +96,21 @@ func report(w io.Writer, cov *spec.Coverage) error {
 		return err
 	}
 
-	totalOrphans := 0
+	totalUIO, totalAPIO := 0, 0
 	for _, d := range cov.Domains {
-		covered, waived, orphans := d.Counts()
-		totalOrphans += orphans
-		state := "warn"
-		if d.Settled {
-			state = "settled"
-		}
-		if err := p("%-18s [%s]  surface ui/api/none: %d/%d/%d  ui then-items: %d covered, %d waived, %d orphaned\n",
-			d.Domain, state, d.UI, d.API, d.None, covered, waived, orphans); err != nil {
+		uiC, uiW, uiO := d.SurfaceCounts("ui")
+		apiC, apiW, apiO := d.SurfaceCounts("api")
+		totalUIO += uiO
+		totalAPIO += apiO
+		if err := p("%-18s [settled: %s]  surface ui/api/none: %d/%d/%d  ui: %d covered, %d waived, %d orphaned  api: %d covered, %d waived, %d orphaned\n",
+			d.Domain, settledLabel(d.Settled), d.UI, d.API, d.None, uiC, uiW, uiO, apiC, apiW, apiO); err != nil {
 			return err
 		}
 		for _, it := range d.Items {
 			switch it.State {
 			case spec.ItemOrphan:
 				marker := "ORPHAN"
-				if d.Settled {
+				if contains(d.Settled, it.Surface) {
 					marker = "ORPHAN (blocking)"
 				}
 				if err := p("  %s %s: %s\n", marker, it.Ref(), it.Text); err != nil {
@@ -133,8 +134,35 @@ func report(w io.Writer, cov *spec.Coverage) error {
 			return err
 		}
 	}
-	if totalOrphans > 0 || len(cov.Problems) > 0 {
-		return p("spec-coverage: %d orphaned ui then-items, %d invalid citations\n", totalOrphans, len(cov.Problems))
+	if totalUIO+totalAPIO > 0 || len(cov.Problems) > 0 {
+		return p("spec-coverage: %d orphaned then-items (ui %d, api %d), %d invalid citations\n",
+			totalUIO+totalAPIO, totalUIO, totalAPIO, len(cov.Problems))
 	}
-	return p("spec-coverage: all ui-surface then-items covered or waived\n")
+	return p("spec-coverage: all ui- and api-surface then-items covered or waived\n")
+}
+
+// settledLabel renders a domain's settled surface list in canonical enum order
+// (ui before api), comma-joined, so the byte-stable report has one
+// representation per set. An empty list renders "-".
+func settledLabel(settled []string) string {
+	var parts []string
+	for _, s := range []string{"ui", "api"} {
+		if contains(settled, s) {
+			parts = append(parts, s)
+		}
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ",")
+}
+
+// contains reports whether s appears in list.
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

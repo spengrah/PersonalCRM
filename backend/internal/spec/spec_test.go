@@ -152,7 +152,7 @@ func TestLintViolationClasses(t *testing.T) {
 		{"surface-bad-value", 1, []string{`invalid surface "browser" (want ui|api|none)`}},
 		{"surface-missing", 1, []string{`missing required field "surface"`}},
 		{"surface-on-intent", 1, []string{"surface is not for intent behaviors"}},
-		{"waivers-on-non-ui", 1, []string{`waivers are only for ui-surface behaviors (surface "api")`}},
+		{"waivers-on-non-ui", 1, []string{`waivers are only for ui- or api-surface behaviors (surface "none")`}},
 		{"waivers-on-intent", 1, []string{"waivers are not for intent behaviors"}},
 		{"waivers-bad-index", 2, []string{
 			"waiver then index 1 out of range (behavior has 1 then items)",
@@ -168,7 +168,13 @@ func TestLintViolationClasses(t *testing.T) {
 			"waiver reason must be a string",
 		}},
 		{"waivers-bad-statement-index", 1, []string{"waiver then index 1 out of range (a statement behavior has one implicit item, index 0)"}},
-		{"e2e-settled-not-bool", 1, []string{"e2e_settled must be a boolean"}},
+		{"settled-not-list", 1, []string{"settled must be a list of surfaces"}},
+		{"settled-mapping", 1, []string{"settled must be a list of surfaces"}},
+		{"settled-bad-surface", 1, []string{`invalid settled surface "browser" (want ui|api)`}},
+		{"settled-none", 1, []string{`settled surface "none" is not yet supported`}},
+		{"settled-dup", 1, []string{`duplicate settled surface "ui"`}},
+		{"settled-non-string-item", 1, []string{"settled items must be surfaces"}},
+		{"legacy-e2e-settled", 1, []string{"e2e_settled is retired; use a settled: [ui] list"}},
 		{"prefix-bad-format", 1, []string{`prefix "Gc" must be uppercase alphanumeric starting with a letter`}},
 	}
 
@@ -235,10 +241,10 @@ func TestLintServesAndIntent(t *testing.T) {
 	}
 }
 
-// TestLintSurfaceAndWaivers pins the surface/waivers/e2e_settled additions on
-// a valid corpus: a ui-surface behavior carries typed waivers, a retired
-// behavior needs no surface, an intent takes no surface, and the file-level
-// e2e_settled flag parses as a boolean.
+// TestLintSurfaceAndWaivers pins the surface/waivers/settled additions on a
+// valid corpus: a ui-surface behavior carries typed waivers, an api-surface
+// behavior may also carry a waiver, a retired behavior needs no surface, an
+// intent takes no surface, and the file-level settled list parses as [ui].
 func TestLintSurfaceAndWaivers(t *testing.T) {
 	files, viol, err := Lint("testdata/valid-surface")
 	if err != nil {
@@ -247,8 +253,11 @@ func TestLintSurfaceAndWaivers(t *testing.T) {
 	if len(viol) != 0 {
 		t.Fatalf("valid-surface corpus should be clean, got %d violations:\n%s", len(viol), joinViolations(viol))
 	}
-	if len(files) != 1 || !files[0].E2ESettled {
-		t.Fatalf("e2e_settled: true should parse onto the file, got %+v", files)
+	if len(files) != 1 {
+		t.Fatalf("want 1 file, got %d", len(files))
+	}
+	if len(files[0].Settled) != 1 || files[0].Settled[0] != "ui" {
+		t.Fatalf("settled: [ui] should parse onto the file, got %#v", files[0].Settled)
 	}
 
 	if b := findBehavior(files, "CON-001"); b == nil {
@@ -270,6 +279,30 @@ func TestLintSurfaceAndWaivers(t *testing.T) {
 		t.Fatal("CON-004 missing")
 	} else if b.Surface != "" || b.Waivers != nil {
 		t.Errorf("CON-004 intent should carry no surface/waivers: %#v", b)
+	}
+	// An api-surface behavior may carry a waiver (relaxed from ui-only).
+	if b := findBehavior(files, "CON-005"); b == nil {
+		t.Fatal("CON-005 missing")
+	} else if b.Surface != "api" || len(b.Waivers) != 1 || b.Waivers[0].Then != 0 || b.Waivers[0].Reason == "" {
+		t.Errorf("CON-005 api-surface waiver not parsed clean: %#v", b)
+	}
+}
+
+// TestLintSettledNull pins that a file-level settled: null parses as an absent
+// (nil) surface list with no violation — absent-equivalent, not a broken field.
+func TestLintSettledNull(t *testing.T) {
+	files, viol, err := Lint("testdata/valid-settled-null")
+	if err != nil {
+		t.Fatalf("Lint returned error: %v", err)
+	}
+	if len(viol) != 0 {
+		t.Fatalf("valid-settled-null corpus should be clean, got %d violations:\n%s", len(viol), joinViolations(viol))
+	}
+	if len(files) != 1 {
+		t.Fatalf("want 1 file, got %d", len(files))
+	}
+	if files[0].Settled != nil {
+		t.Errorf("settled: null should parse as nil, got %#v", files[0].Settled)
 	}
 }
 

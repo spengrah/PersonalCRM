@@ -40,10 +40,12 @@ type scopedViolation struct {
 // Check-order ranks give violations within one scope a stable order.
 const (
 	orderStructural       = 0  // parse/structural (YAML, node shape, string typing, when-singular)
+	orderLegacyKey        = 9  // retired file keys (e2e_settled); sorts first among file findings
 	orderRequiredFile     = 10 // required file fields present + non-empty
 	orderMaturityEnum     = 11 // maturity enum membership
 	orderPrefixUnique     = 12 // prefixes unique across files
 	orderPrefixFormat     = 13 // prefix charset matches the citation grammar
+	orderSettledEnum      = 14 // settled surface-list membership / duplicates
 	orderRequiredBehavior = 20 // required behavior fields present + non-empty
 	orderTypeEnum         = 21 // type enum membership
 	orderStatusEnum       = 22 // status enum membership
@@ -55,7 +57,7 @@ const (
 	orderServesType       = 28 // serves only on ux/intent behaviors
 	orderServesResolve    = 29 // serves targets resolve to intent behaviors
 	orderSurface          = 30 // surface enum + required for non-intent non-retired + forbidden on intent
-	orderWaivers          = 31 // waivers only on ui-surface; index in range; no dups; reason non-empty
+	orderWaivers          = 31 // waivers only on ui- or api-surface; index in range; no dups; reason non-empty
 )
 
 var (
@@ -232,6 +234,38 @@ func checkFile(pf *parsedFile, c *collector) {
 		c.add(pf, orderPrefixFormat, -1, 0, "",
 			fmt.Sprintf("prefix %q must be uppercase alphanumeric starting with a letter", pf.file.Prefix))
 	}
+	checkSettled(pf, c)
+}
+
+// checkSettled enforces the settled surface list: the retired e2e_settled key
+// is rejected outright (the parser silently ignores unknown root keys, so a
+// lingering legacy line would otherwise disable ui blocking unseen), and every
+// element of settled must be a supported surface with no duplicates. `none` is
+// reserved — rejected with a forward-looking message until none-orphan
+// detection ships. Structurally broken settled fields are skipped (already
+// reported by the parser).
+func checkSettled(pf *parsedFile, c *collector) {
+	if pf.fileKeys["e2e_settled"] {
+		c.add(pf, orderLegacyKey, -1, 0, "", "e2e_settled is retired; use a settled: [ui] list")
+	}
+	if pf.fileBroken["settled"] {
+		return
+	}
+	seen := map[string]bool{}
+	for _, s := range pf.file.Settled {
+		switch {
+		case s == "none":
+			c.add(pf, orderSettledEnum, -1, 0, "",
+				`settled surface "none" is not yet supported (none-orphan detection is future work)`)
+		case !validSurface[s]:
+			c.add(pf, orderSettledEnum, -1, 0, "",
+				fmt.Sprintf("invalid settled surface %q (want ui|api)", s))
+		case seen[s]:
+			c.add(pf, orderSettledEnum, -1, 0, "",
+				fmt.Sprintf("duplicate settled surface %q", s))
+		}
+		seen[s] = true
+	}
 }
 
 func checkRequiredFileField(pf *parsedFile, c *collector, key, val string) {
@@ -321,11 +355,11 @@ func checkSurface(pf *parsedFile, pb *parsedBehavior, c *collector) {
 	}
 }
 
-// checkWaivers enforces waiver semantics: waivers may appear only on
-// ui-surface behaviors (never on intents), every waived then index must be in
-// range, indexes must be unique, and every reason must be non-empty. Placement
-// is decidable only when the fields it depends on (type, surface) parsed
-// clean; index range needs a clean then list.
+// checkWaivers enforces waiver semantics: waivers may appear only on ui- or
+// api-surface behaviors (never on none, never on intents), every waived then
+// index must be in range, indexes must be unique, and every reason must be
+// non-empty. Placement is decidable only when the fields it depends on (type,
+// surface) parsed clean; index range needs a clean then list.
 func checkWaivers(pf *parsedFile, pb *parsedBehavior, c *collector) {
 	if !pb.keys["waivers"] || pb.broken["waivers"] || len(pb.b.Waivers) == 0 {
 		return
@@ -337,18 +371,18 @@ func checkWaivers(pf *parsedFile, pb *parsedBehavior, c *collector) {
 		return pb.line
 	}
 
-	// Placement: intents never carry waivers; other types only with surface: ui.
-	// An illegal placement is the root cause — the per-item checks below would
-	// only add noise about a list that shouldn't exist, so report and stop.
+	// Placement: intents never carry waivers; other types only with surface ui
+	// or api. An illegal placement is the root cause — the per-item checks below
+	// would only add noise about a list that shouldn't exist, so report and stop.
 	typeClean := pb.keys["type"] && !pb.broken["type"] && validType[pb.b.Type]
 	if typeClean && pb.b.Type == "intent" {
 		c.add(pf, orderWaivers, pb.idx, pb.line, pb.ref,
 			"waivers are not for intent behaviors (intents are judge-only)")
 		return
 	}
-	if pb.keys["surface"] && !pb.broken["surface"] && validSurface[pb.b.Surface] && pb.b.Surface != "ui" {
+	if pb.keys["surface"] && !pb.broken["surface"] && validSurface[pb.b.Surface] && pb.b.Surface != "ui" && pb.b.Surface != "api" {
 		c.add(pf, orderWaivers, pb.idx, pb.line, pb.ref,
-			fmt.Sprintf("waivers are only for ui-surface behaviors (surface %q)", pb.b.Surface))
+			fmt.Sprintf("waivers are only for ui- or api-surface behaviors (surface %q)", pb.b.Surface))
 		return
 	}
 

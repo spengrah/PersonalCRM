@@ -1,0 +1,13 @@
+domain: apiwarn
+prefix: API
+maturity: reviewed
+settled: [ui]
+behaviors:
+  - id: API-001
+    title: an uncited api behavior with no api settlement only warns
+    type: api
+    status: current
+    surface: api
+    when: the endpoint is called
+    then:
+      - a 200 carries the resource
