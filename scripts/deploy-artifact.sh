@@ -177,7 +177,7 @@ health_gate() {
     #    DB status is nested under components.database, not a flat key).
     for ((i = 1; i <= HEALTH_RETRIES; i++)); do
         body="$(curl -sf http://127.0.0.1:8080/health 2>/dev/null)" \
-            && printf '%s' "$body" | grep -qE '"status":[[:space:]]*"healthy"' \
+            && grep -qE -- '"status":[[:space:]]*"healthy"' <<<"$body" \
             && { ok=true; break; }
         sleep 1
     done
@@ -189,9 +189,9 @@ health_gate() {
     #     Same $body the loop captured when it reached healthy — no second fetch.
     #     Key-based grep (tolerant of field order and of later-added fields).
     if [ -n "$expected_sha" ]; then
-        if printf '%s' "$body" | grep -qE "\"git_commit\":[[:space:]]*\"${expected_sha}\""; then
+        if grep -qE -- "\"git_commit\":[[:space:]]*\"${expected_sha}\"" <<<"$body"; then
             : # match -> pass
-        elif printf '%s' "$body" | grep -qE '"git_commit":[[:space:]]*"unknown"'; then
+        elif grep -qE -- '"git_commit":[[:space:]]*"unknown"' <<<"$body"; then
             log "health-gate: build not stamped (git_commit=unknown); skipping commit verification"
         else
             log "health-gate: serving build git_commit does not match deployed $expected_sha"

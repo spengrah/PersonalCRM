@@ -318,7 +318,7 @@ test_migrate_command_line() {
         if [[ "$mc" == *"$needle"* ]]; then ok; else fail "migrate-check line missing '$needle': $mc"; fi
     done
     # NEVER `podman exec` for crm-admin.
-    if grep -F 'podman exec' "$CALL_LOG" | grep -q 'crm-admin'; then fail "crm-admin must NOT run via podman exec"; else ok; fi
+    if grep -q 'crm-admin' <<<"$(grep -F 'podman exec' "$CALL_LOG")"; then fail "crm-admin must NOT run via podman exec"; else ok; fi
     # The --migrate (apply) line on the pending path.
     local mg
     mg="$(grep -F 'podman run' "$CALL_LOG" | grep -F -- '--migrate' | grep -vF -- '--migrate-check' | head -1)"
@@ -345,7 +345,7 @@ test_rootless_env_on_every_call() {
     done < "$CALL_LOG"
     if [ "$bad" -eq 0 ]; then ok; else fail "some sudo podman/systemctl calls lacked the rootless env"; fi
     # systemctl must also carry DBUS for the --user bus.
-    if grep -E '^sudo .*systemctl' "$CALL_LOG" | grep -q 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/4242/bus'; then ok
+    if grep -q 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/4242/bus' <<<"$(grep -E '^sudo .*systemctl' "$CALL_LOG")"; then ok
     else fail "systemctl calls missing DBUS_SESSION_BUS_ADDRESS"; fi
 
     # Stronger: NO bare podman/systemctl may run outside a sudo wrapper. The sudo
@@ -400,7 +400,7 @@ test_health_gate_commit_mismatch_fails() {
     STUB_MIGRATE_CHECK_RC=0 STUB_HEALTH_OK=1 STUB_HEALTH_GIT_COMMIT="$WRONG_SHA" run_deploy "$VALID_SHA"
     if [ "$RC" -eq 1 ]; then ok; else fail "commit mismatch should fail the gate -> rollback (exit 1), got $RC ($OUT)"; fi
     # The forward gate must have logged the mismatch (not the unknown-skip).
-    if echo "$OUT" | grep -q 'git_commit does not match'; then ok; else fail "expected a commit-mismatch log line"; fi
+    if grep -qF -- 'git_commit does not match' <<<"$OUT"; then ok; else fail "expected a commit-mismatch log line"; fi
     # Rollback re-pins the OLD digest anchor on both units.
     if grep -q 'Image=ghcr.io/spengrah/personalcrm-backend@sha256:c91da029' "$BACKEND_UNIT"; then ok
     else fail "mismatch must re-pin the rollback digest anchor"; fi
@@ -415,7 +415,7 @@ test_health_gate_unknown_warns_and_passes() {
     make_sandbox
     STUB_MIGRATE_CHECK_RC=0 STUB_HEALTH_OK=1 STUB_HEALTH_GIT_COMMIT="unknown" run_deploy "$VALID_SHA"
     if [ "$RC" -eq 0 ]; then ok; else fail "unknown commit should warn + pass (exit 0), got $RC ($OUT)"; fi
-    if echo "$OUT" | grep -q 'build not stamped (git_commit=unknown); skipping commit verification'; then ok
+    if grep -qF -- 'build not stamped (git_commit=unknown); skipping commit verification' <<<"$OUT"; then ok
     else fail "expected the unknown-skip warning in the deploy output"; fi
     cleanup_sandbox
 }
@@ -436,8 +436,8 @@ test_rollback_gate_does_not_enforce_commit() {
     # Restore ran (forward-migrated DB undone).
     if log_has "restore-db.sh --local --no-app-start"; then ok; else fail "rollback must restore the DB"; fi
     # The rollback completed normally — "Rolled back", NOT "ROLLBACK FAILED".
-    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: Rolled back'; then ok; else fail "expected a normal 'Rolled back' notification"; fi
-    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: ROLLBACK FAILED'; then fail "rollback gate must NOT cause ROLLBACK FAILED"; else ok; fi
+    if grep -q 'Title: Rolled back' <<<"$(grep -F 'curl' "$CALL_LOG")"; then ok; else fail "expected a normal 'Rolled back' notification"; fi
+    if grep -q 'Title: ROLLBACK FAILED' <<<"$(grep -F 'curl' "$CALL_LOG")"; then fail "rollback gate must NOT cause ROLLBACK FAILED"; else ok; fi
     cleanup_sandbox
 }
 
@@ -448,7 +448,7 @@ test_exit0_uptodate_no_db() {
     if [ "$RC" -eq 0 ]; then ok; else fail "up-to-date should exit 0, got $RC ($OUT)"; fi
     if log_lacks "backup-db.sh"; then ok; else fail "up-to-date must NOT snapshot the DB"; fi
     if log_lacks "podman run"; then fail "expected a migrate-check podman run"; else ok; fi
-    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--migrate$'; then fail "up-to-date must NOT --migrate"; else ok; fi
+    if grep -q -- '--migrate$' <<<"$(grep -F 'podman run' "$CALL_LOG")"; then fail "up-to-date must NOT --migrate"; else ok; fi
     if log_lacks "stop personalcrm-database.service"; then ok; else fail "up-to-date must NOT stop the DB"; fi
     if grep -q "Image=ghcr.io/spengrah/personalcrm-backend:$NEW_SHA" "$BACKEND_UNIT"; then ok; else fail "image not swapped to :sha"; fi
     if log_has "restart personalcrm-backend.service"; then ok; else fail "expected app restart"; fi
@@ -461,7 +461,7 @@ test_exit1_abort_no_touch() {
     STUB_MIGRATE_CHECK_RC=1 run_deploy "$VALID_SHA"
     if [ "$RC" -eq 1 ]; then ok; else fail "check-error should exit 1, got $RC"; fi
     if log_lacks "backup-db.sh"; then ok; else fail "error path must NOT snapshot"; fi
-    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--migrate$'; then fail "error path must NOT migrate"; else ok; fi
+    if grep -q -- '--migrate$' <<<"$(grep -F 'podman run' "$CALL_LOG")"; then fail "error path must NOT migrate"; else ok; fi
     if log_lacks "stop personalcrm"; then ok; else fail "error path must NOT stop services"; fi
     # Image= untouched.
     if grep -q 'Image=ghcr.io/spengrah/personalcrm-backend:latest' "$BACKEND_UNIT"; then ok; else fail "error path must NOT rewrite Image="; fi
@@ -502,9 +502,9 @@ test_pg_not_ready_aborts_before_migrate() {
     NTFY_ENV_FILE_OVERRIDE="$SANDBOX/ntfy.env" STUB_MIGRATE_CHECK_RC=2 STUB_PG_NOT_READY=1 run_deploy "$VALID_SHA"
     if [ "$RC" -eq 1 ]; then ok; else fail "pg-not-ready should exit 1, got $RC"; fi
     # Must NOT migrate (postgres never came up) and must NOT take the restore path.
-    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--migrate$'; then fail "must NOT migrate when pg not ready"; else ok; fi
+    if grep -q -- '--migrate$' <<<"$(grep -F 'podman run' "$CALL_LOG")"; then fail "must NOT migrate when pg not ready"; else ok; fi
     if log_lacks "restore-db.sh"; then ok; else fail "pg-not-ready is NOT a restore path"; fi
-    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: Deploy aborted'; then ok; else fail "pg-not-ready must ntfy 'Deploy aborted'"; fi
+    if grep -q 'Title: Deploy aborted' <<<"$(grep -F 'curl' "$CALL_LOG")"; then ok; else fail "pg-not-ready must ntfy 'Deploy aborted'"; fi
     cleanup_sandbox
 }
 
@@ -515,9 +515,9 @@ test_backup_failure_aborts_with_ntfy() {
     NTFY_ENV_FILE_OVERRIDE="$SANDBOX/ntfy.env" STUB_MIGRATE_CHECK_RC=2 STUB_BACKUP_RC=1 run_deploy "$VALID_SHA"
     if [ "$RC" -eq 1 ]; then ok; else fail "backup failure should exit 1, got $RC"; fi
     # Must NOT have migrated (backup failed first).
-    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--migrate$'; then fail "must NOT migrate after backup failure"; else ok; fi
+    if grep -q -- '--migrate$' <<<"$(grep -F 'podman run' "$CALL_LOG")"; then fail "must NOT migrate after backup failure"; else ok; fi
     # Must have sent a 'Deploy aborted' ntfy (not silently restart via the trap).
-    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: Deploy aborted'; then ok; else fail "backup failure must ntfy 'Deploy aborted'"; fi
+    if grep -q 'Title: Deploy aborted' <<<"$(grep -F 'curl' "$CALL_LOG")"; then ok; else fail "backup failure must ntfy 'Deploy aborted'"; fi
     cleanup_sandbox
 }
 
@@ -529,7 +529,7 @@ test_restore_pg_not_ready_is_rollback_failed() {
     NTFY_ENV_FILE_OVERRIDE="$SANDBOX/ntfy.env" \
       STUB_MIGRATE_CHECK_RC=2 STUB_MIGRATE_RC=0 STUB_HEALTH_OK=0 STUB_RESTORE_RC=1 run_deploy "$VALID_SHA"
     if [ "$RC" -eq 1 ]; then ok; else fail "restore failure should exit 1, got $RC"; fi
-    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: ROLLBACK FAILED'; then ok; else fail "restore failure must ntfy ROLLBACK FAILED"; fi
+    if grep -q 'Title: ROLLBACK FAILED' <<<"$(grep -F 'curl' "$CALL_LOG")"; then ok; else fail "restore failure must ntfy ROLLBACK FAILED"; fi
     cleanup_sandbox
 }
 
@@ -607,7 +607,7 @@ test_ntfy_degrade_open() {
     STUB_MIGRATE_CHECK_RC=0 run_deploy "$VALID_SHA"
     if [ "$RC" -eq 0 ]; then ok; else fail "degrade-open deploy should exit 0, got $RC"; fi
     # No ntfy POST should have been attempted (no curl to an ntfy URL).
-    if grep -F 'curl' "$CALL_LOG" | grep -qi 'ntfy'; then fail "ntfy posted despite absent env file"; else ok; fi
+    if grep -qi 'ntfy' <<<"$(grep -F 'curl' "$CALL_LOG")"; then fail "ntfy posted despite absent env file"; else ok; fi
     cleanup_sandbox
 }
 
@@ -617,15 +617,15 @@ test_ntfy_present_outcomes() {
     printf 'NTFY_URL=https://ntfy.example\nNTFY_TOPIC=tok\n' > "$SANDBOX/ntfy.env"
     NTFY_ENV_FILE_OVERRIDE="$SANDBOX/ntfy.env" STUB_MIGRATE_CHECK_RC=0 run_deploy "$VALID_SHA"
     # Deploy OK: Title 'Deploy OK', Tags white_check_mark.
-    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: Deploy OK'; then ok; else fail "missing 'Deploy OK' ntfy title"; fi
-    if grep -F 'curl' "$CALL_LOG" | grep -q 'Tags: white_check_mark'; then ok; else fail "missing white_check_mark tag"; fi
+    if grep -q 'Title: Deploy OK' <<<"$(grep -F 'curl' "$CALL_LOG")"; then ok; else fail "missing 'Deploy OK' ntfy title"; fi
+    if grep -q 'Tags: white_check_mark' <<<"$(grep -F 'curl' "$CALL_LOG")"; then ok; else fail "missing white_check_mark tag"; fi
     cleanup_sandbox
 
     make_sandbox
     printf 'NTFY_URL=https://ntfy.example\nNTFY_TOPIC=tok\n' > "$SANDBOX/ntfy.env"
     NTFY_ENV_FILE_OVERRIDE="$SANDBOX/ntfy.env" STUB_MIGRATE_CHECK_RC=2 STUB_MIGRATE_RC=0 STUB_HEALTH_OK=0 STUB_RESTORE_RC=1 run_deploy "$VALID_SHA"
-    if grep -F 'curl' "$CALL_LOG" | grep -q 'Title: ROLLBACK FAILED'; then ok; else fail "missing ROLLBACK FAILED ntfy title"; fi
-    if grep -F 'curl' "$CALL_LOG" | grep -q 'Priority: urgent'; then ok; else fail "ROLLBACK FAILED must be urgent priority"; fi
+    if grep -q 'Title: ROLLBACK FAILED' <<<"$(grep -F 'curl' "$CALL_LOG")"; then ok; else fail "missing ROLLBACK FAILED ntfy title"; fi
+    if grep -q 'Priority: urgent' <<<"$(grep -F 'curl' "$CALL_LOG")"; then ok; else fail "ROLLBACK FAILED must be urgent priority"; fi
     cleanup_sandbox
 }
 
@@ -657,7 +657,7 @@ test_snapshot_retained_on_failure() {
     make_sandbox
     STUB_MIGRATE_CHECK_RC=2 STUB_MIGRATE_RC=0 STUB_HEALTH_OK=0 run_deploy "$VALID_SHA"
     # The prune helper deletes via `rm -rf ...bak-...`; on a rollback it must NOT run.
-    if grep -F 'sudo rm -rf' "$CALL_LOG" | grep -q '_data.bak-'; then fail "snapshot pruned on a failure path"; else ok; fi
+    if grep -q '_data.bak-' <<<"$(grep -F 'sudo rm -rf' "$CALL_LOG")"; then fail "snapshot pruned on a failure path"; else ok; fi
     cleanup_sandbox
 }
 
