@@ -10,7 +10,7 @@ It is deliberately distinct from `.ai/spec/`, which holds design documents. This
 domain: contacts
 prefix: CON
 maturity: reviewed   # draft | reviewed | ratified
-e2e_settled: false   # optional; true flips the coverage scanner from warn to block for this domain
+settled: [ui]        # optional; surfaces whose orphans block instead of warn (ui | api)
 behaviors: [...]
 ```
 
@@ -139,16 +139,16 @@ test.describe('Rematch on add email', () => {
 
 **The coverage scanner (Piece 3).** `make spec-coverage` (backend/cmd/spec-coverage) cross-references citations in the deterministic test surfaces (backend `*_test.go`, `frontend/tests/e2e/*.spec.ts`) against the corpus and reports, per domain:
 
-- **covered** — a then-item of a `surface: ui`, `status: current` behavior cited by an E2E test (bare cite covers all items; indexed cite covers item `n`; a `ui` invariant's statement is one implicit item, coverable only bare).
+- **covered** — a then-item of a `status: current` behavior cited by the harness its surface owns: a `surface: ui` behavior by an **E2E** test, a `surface: api` behavior by a **Go** test (bare cite covers all items; indexed cite covers item `n`; an invariant's statement is one implicit item, coverable only bare).
 - **waived** — a then-item with a `waivers` entry; reported loudly with the reason. A waived item that gains a citing test is flagged as a stale waiver (warning).
-- **orphan** — a then-item of a `ui`/`current` behavior with neither citation nor waiver. Warn-only while a domain's spec file lacks `e2e_settled: true`; every domain declares it since the E2E surface settlement, so orphans hard-fail — a new `ui` behavior (or then-item) must land with its citing test or an explicit waiver in the same PR.
+- **orphan** — a then-item of a `ui`- or `api`-surface `current` behavior with neither citation nor waiver. The two surfaces' orphan populations are counted independently; a surface's orphans **block** only when the domain lists that surface in its `settled` list, else warn. Every domain lists `ui` (settled since the E2E surface settlement), so a new `ui` behavior (or then-item) must land with its citing test or an explicit waiver in the same PR; no domain lists `api` yet, so `api` orphans warn until a domain is backfilled and flipped.
 - **invalid citations** — always a failure, regardless of settlement: a malformed marker, an unknown ID (dead reference), an out-of-range then-index, an indexed cite of a statement behavior, or a cite of an `intent` (judge-only), `proposed` (a citation asserts truth), or `retired` behavior.
 
-`api`- and `none`-surface behaviors are exempt from E2E coverage by construction; an E2E citation of a non-`ui` behavior draws a warning (it usually means the surface tag is wrong). The Go API tests' citations are validated for deadness but do not count toward ui coverage.
+`none`-surface behaviors are exempt from coverage by construction (no orphan is emitted for them yet). Coverage credit is keyed on the behavior's `surface`: an **E2E** citation credits a `ui` behavior, a **Go** citation credits an `api` behavior. An E2E citation of a non-`ui` behavior draws a warning (it usually means the surface tag is wrong) and grants no api coverage; there is deliberately **no** mirror warning for a Go citation of a `ui` or `none` behavior — Go tests legitimately cite those surfaces all over the tree (and the `none` cites are the future `none`-coverage corpus), so a Go cite of a non-`api` behavior is silent and grants no coverage on that surface.
 
 ## Linting
 
-`make spec-lint` validates the corpus (wired into the pre-push LINT lane and CI's `spec` path group). Checks: YAML parses; required fields present (`domain`, `prefix`, `maturity`, `behaviors`; per-behavior `id`, `title`, `type`, `status`, and `surface` on non-intent non-retired behaviors); enums valid (`type`, `status`, `maturity`, `surface`); `id` matches `<PREFIX>-NNN` against the file's declared `prefix`; prefixes unique across files; IDs unique within a file and globally; `when` is a singular string; GWT xor `statement` per the type rules; `given`/`then`/`serves` list items are non-empty strings; `serves` appears only on `ux`/`intent` behaviors and every target resolves corpus-wide to an existing `intent` behavior (self-references rejected); `surface` forbidden on intents; `e2e_settled` a boolean; `waivers` only on ui-surface behaviors, with in-range unique then-indexes and non-empty reasons.
+`make spec-lint` validates the corpus (wired into the pre-push LINT lane and CI's `spec` path group). Checks: YAML parses; required fields present (`domain`, `prefix`, `maturity`, `behaviors`; per-behavior `id`, `title`, `type`, `status`, and `surface` on non-intent non-retired behaviors); enums valid (`type`, `status`, `maturity`, `surface`); `id` matches `<PREFIX>-NNN` against the file's declared `prefix`; prefixes unique across files; IDs unique within a file and globally; `when` is a singular string; GWT xor `statement` per the type rules; `given`/`then`/`serves` list items are non-empty strings; `serves` appears only on `ux`/`intent` behaviors and every target resolves corpus-wide to an existing `intent` behavior (self-references rejected); `surface` forbidden on intents; `settled` a list of surfaces (each ∈ {ui, api}; `none` reserved for later; no duplicates), and the retired `e2e_settled` key is rejected; `waivers` only on ui- or api-surface behaviors, with in-range unique then-indexes and non-empty reasons.
 
 The linter is minimal by design — parse + validate only. Coverage/orphan/dead-ID checks live in the Piece 3 scanner (`make spec-coverage`, above); behavior-changed-without-test-change detection remains future work.
 
