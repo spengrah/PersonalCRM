@@ -52,7 +52,6 @@ func TestValidateContactMethods_MultiplePrimary(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// spec: CON-015[3]
 func TestValidateContactMethods_EmailValidation(t *testing.T) {
 	validate := validator.New()
 	err := validateContactMethods(validate, []ContactMethodRequest{
@@ -61,7 +60,6 @@ func TestValidateContactMethods_EmailValidation(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// spec: CON-015[4]
 func TestValidateContactMethods_PhoneLength(t *testing.T) {
 	validate := validator.New()
 	err := validateContactMethods(validate, []ContactMethodRequest{

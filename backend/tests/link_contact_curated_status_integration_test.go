@@ -232,7 +232,7 @@ func TestLinkContact_MethodsCuratedDeselectAll_LandsImported(t *testing.T) {
 
 // Link-only import guard: a gmail_correspondence external row cannot be
 // imported as a new contact → 403, and the row stays unmatched.
-// spec: IMP-011[1], IMP-014
+// spec: IMP-011[1]
 func TestImportContact_LinkOnlySource_Forbidden(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)

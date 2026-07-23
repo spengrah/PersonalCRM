@@ -197,7 +197,6 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.True(t, tokenResp.ExpiresAt.After(accelerated.GetCurrentTime()))
 
 	// 2. Daemon pairs with the token.
-	// spec: MAC-003[0]
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
 		"pairing_token":    tokenResp.Token,
 		"hostname":         "macbook-test-01",
@@ -330,7 +329,6 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.Equal(t, http.StatusGone, w.Code, "consumed token must surface 410")
 }
 
-// spec: MAC-003[1]
 func TestMacHost_PairingToken_Unknown(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -363,6 +361,7 @@ func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, "empty hostname must surface 400, body: %s", w.Body.String())
 }
 
+// spec: MAC-003[3]
 func TestMacHost_Pair_MissingToken_400(t *testing.T) {
 
 	env := setupMacHostEnv(t)

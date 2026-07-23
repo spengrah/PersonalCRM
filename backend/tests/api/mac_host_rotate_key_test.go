@@ -77,7 +77,6 @@ func hostAuthHeaders(hostID uuid.UUID, apiKey string) map[string]string {
 	}
 }
 
-// spec: MAC-010[0]
 func TestMacHostRotateKey_HappyPath(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -163,6 +162,7 @@ func TestMacHostRotateKey_TokenAlreadyUsed(t *testing.T) {
 	require.Equal(t, "TOKEN_ALREADY_USED", errBody.Error.Code)
 }
 
+// spec: MAC-010[1]
 func TestMacHostRotateKey_InvalidPairingToken(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -181,6 +181,7 @@ func TestMacHostRotateKey_InvalidPairingToken(t *testing.T) {
 	require.Equal(t, "INVALID_PAIRING_TOKEN", errBody.Error.Code)
 }
 
+// spec: MAC-010[1]
 func TestMacHostRotateKey_TokenExpired(t *testing.T) {
 
 	env := setupMacHostEnv(t)

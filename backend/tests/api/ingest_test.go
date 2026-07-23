@@ -211,6 +211,7 @@ func uniqueIngestSource(prefix string) string {
 	return prefix + "-" + uuid.NewString()
 }
 
+// spec: ING-001[0]
 func TestIngest_ValidBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

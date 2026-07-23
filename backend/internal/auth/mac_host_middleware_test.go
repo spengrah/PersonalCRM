@@ -102,6 +102,7 @@ func TestMacHostAuth_MissingHeader(t *testing.T) {
 	require.Equal(t, int64(0), cmp.calls.Load(), "bcrypt must not be invoked on missing-header path")
 }
 
+// spec: MAC-007[0]
 func TestMacHostAuth_MalformedUUID(t *testing.T) {
 	repo := &fakeHostRepo{}
 	r := newMacAuthTestRouter(t, repo, DefaultPasswordComparator, DefaultMacHostAuthLimiterConfig())
@@ -133,6 +134,7 @@ func TestMacHostAuth_AmbiguousAuth_XAPIKey(t *testing.T) {
 	require.Equal(t, int64(0), cmp.calls.Load(), "bcrypt must not run on ambiguous-auth path")
 }
 
+// spec: MAC-007[1]
 func TestMacHostAuth_AmbiguousAuth_ApiKeyScheme(t *testing.T) {
 	id := uuid.New()
 	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{
@@ -149,6 +151,7 @@ func TestMacHostAuth_AmbiguousAuth_ApiKeyScheme(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// spec: MAC-007[3]
 func TestMacHostAuth_RevokedOrMissingHost_401(t *testing.T) {
 	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{}}
 	cmp := &countingComparator{}

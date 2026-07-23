@@ -94,14 +94,12 @@ func TestGetGoogleAuthURL(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 
-		// spec: SET-002[2]
 		assert.Contains(t, response.Data.URL, "accounts.google.com")
 		assert.Contains(t, response.Data.URL, response.Data.State)
 		assert.NotEmpty(t, response.Data.State)
 	})
 }
 
-// spec: SET-004[0]
 func TestGoogleCallback(t *testing.T) {
 	t.Run("redirects on Google error", func(t *testing.T) {
 		mock := &MockOAuthService{}
@@ -113,7 +111,6 @@ func TestGoogleCallback(t *testing.T) {
 
 		handler.GoogleCallback(c)
 
-		// spec: SET-003[0]
 		assert.Equal(t, http.StatusFound, w.Code)
 		location := w.Header().Get("Location")
 		assert.Contains(t, location, "/settings?auth=error")
@@ -184,7 +181,6 @@ func TestGoogleCallback(t *testing.T) {
 
 		handler.GoogleCallback(c)
 
-		// spec: SET-004[1]
 		assert.Equal(t, http.StatusFound, w.Code)
 		location := w.Header().Get("Location")
 		assert.Contains(t, location, "/settings?auth=success")
@@ -321,7 +317,6 @@ func TestListGoogleAccounts(t *testing.T) {
 		}
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
-		// spec: SET-008[0]
 		require.Len(t, response.Data, 1)
 		assert.Equal(t, accountID.String(), response.Data[0].ID)
 		assert.Equal(t, "test@example.com", response.Data[0].AccountID)
@@ -359,7 +354,6 @@ func TestGetGoogleAccountStatus(t *testing.T) {
 
 		handler.GetGoogleAccountStatus(c)
 
-		// spec: SET-008[1]
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
@@ -379,7 +373,6 @@ func TestGetGoogleAccountStatus(t *testing.T) {
 
 		handler.GetGoogleAccountStatus(c)
 
-		// spec: SET-008[2]
 		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
 

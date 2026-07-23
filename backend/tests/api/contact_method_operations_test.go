@@ -342,7 +342,6 @@ func TestMethodOps_AddWithIsPrimaryPromotesAfterInsert(t *testing.T) {
 // one contact, only the first permutation would start from the specified
 // pre-state and the rest would be replays that pass even if the permutation
 // would have failed from the original state.
-// spec: CON-062[2]
 func TestMethodOps_OutcomeIndependentOfPayloadOrder(t *testing.T) {
 	t.Parallel()
 

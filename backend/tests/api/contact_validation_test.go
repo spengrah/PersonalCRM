@@ -193,7 +193,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_InvalidCadence", func(t *testing.T) {
-		// spec: CON-002[4], CON-002[5]
+		// spec: CON-002[5]
 		requestBody := handlers.CreateContactRequest{
 			FullName: "Test User",
 			Cadence:  stringPtr("daily"), // Invalid cadence value
