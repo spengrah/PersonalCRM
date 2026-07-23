@@ -232,6 +232,34 @@ func TestRun_DriftNullVariant(t *testing.T) {
 	}
 }
 
+// TestRun_ReadsCommittedTreeNotWorktree proves the HEAD corpus AND its citations
+// are read from the committed tree (git archive), never the working tree: after
+// committing the drift, the worktree reverts the spec to the base text and
+// deletes the citation — both uncommitted. If run read disk it would see no
+// drift (spec reverted) or a zero-citation behavior (marker gone) and stay
+// silent; the committed warning must still appear.
+func TestRun_ReadsCommittedTreeNotWorktree(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "false")
+	root := initRepo(t)
+	seedStdFixture(t, root, validSpec("original outcome"))
+	c1 := commit(t, root, "c1")
+	writeFile(t, root, "spec/x.yaml", validSpec("changed outcome"))
+	commit(t, root, "c2 drift")
+
+	// Uncommitted worktree edits that would hide the drift if disk were read.
+	writeFile(t, root, "spec/x.yaml", validSpec("original outcome")) // revert to base text
+	writeFile(t, root, "backend/x_test.go", "package x\n")           // delete the citation
+	// Deliberately NOT committed — HEAD still points at c2's drifted, cited tree.
+
+	var out, errb bytes.Buffer
+	if code := run([]string{root, c1}, execGit, &out, &errb); code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr = %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "X-001") {
+		t.Fatalf("committed drift must warn from the git tree despite a reverted worktree, got %q", out.String())
+	}
+}
+
 // TestRun_DriftAnnotation asserts the GitHub annotation carries the behavior ID
 // and the repo-relative path, with a comma-bearing filename escaped to %2C.
 func TestRun_DriftAnnotation(t *testing.T) {
@@ -258,6 +286,23 @@ func TestRun_DriftAnnotation(t *testing.T) {
 	if !strings.Contains(got, "file=spec/we%2Cird.yaml") {
 		t.Fatalf("expected %%2C-escaped repo-relative path, got %q", got)
 	}
+	// The annotation's line must be the behavior's REAL parsed source line, not a
+	// hand-set constant — so removing the parser's Behavior.Line assignment (which
+	// would drop ,line= from every CI annotation) fails this test.
+	probe := filepath.Join(t.TempDir(), "probe.yaml")
+	if err := os.WriteFile(probe, []byte(validSpec("changed outcome")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pf, _, perr := spec.ParseFile(probe)
+	if perr != nil || pf == nil || len(pf.Behaviors) != 1 {
+		t.Fatalf("probe parse: %v (file = %+v)", perr, pf)
+	}
+	if pf.Behaviors[0].Line == 0 {
+		t.Fatalf("parser did not set Behavior.Line; the annotation would omit ,line=")
+	}
+	if want := fmt.Sprintf(",line=%d::", pf.Behaviors[0].Line); !strings.Contains(got, want) {
+		t.Fatalf("annotation must carry the parsed behavior line %q, got %q", want, got)
+	}
 }
 
 func TestRun_UnresolvableBaseRef(t *testing.T) {
@@ -273,7 +318,11 @@ func TestRun_UnresolvableBaseRef(t *testing.T) {
 	if code := run([]string{root, "bogus-ref-name"}, execGit, &out, &errb); code != 2 {
 		t.Fatalf("bogus-ref exit = %d, want 2; stderr = %s", code, errb.String())
 	}
-	// New-branch case: origin/develop absent → fail-closed exit 2 (not fail-open).
+	// New-branch case: assert origin/develop is genuinely ABSENT before run, so
+	// the exit 2 proves the fail-closed new-branch path (not an incidental miss).
+	if _, rc := runGitRC(root, "rev-parse", "--verify", "origin/develop"); rc == 0 {
+		t.Fatalf("precondition: origin/develop must be absent in a fresh repo")
+	}
 	if code := run([]string{root, "origin/develop"}, execGit, &out, &errb); code != 2 {
 		t.Fatalf("origin/develop-absent exit = %d, want 2; stderr = %s", code, errb.String())
 	}
@@ -291,11 +340,13 @@ func TestRun_UnrelatedHistory(t *testing.T) {
 	otherTip := commit(t, root, "orphan")
 	runGit(t, root, "checkout", "-q", "main") // restore HEAD — load-bearing
 
-	// Precondition: both tips resolve, but they share no merge-base.
+	// Precondition: both tips resolve, and git reports "no merge-base" as exactly
+	// rc 1 (not a generic nonzero error) — so run's exit 2 is the real
+	// unrelated-history path, not an incidental git failure on a bad ref.
 	_ = runGitTrim(t, root, "rev-parse", mainTip)
 	_ = runGitTrim(t, root, "rev-parse", otherTip)
-	if _, rc := runGitRC(root, "merge-base", "HEAD", otherTip); rc == 0 {
-		t.Fatalf("precondition: unrelated histories must not share a merge-base")
+	if _, rc := runGitRC(root, "merge-base", "HEAD", otherTip); rc != 1 {
+		t.Fatalf("precondition: want merge-base rc == 1 (no common ancestor), got %d", rc)
 	}
 
 	var out, errb bytes.Buffer
@@ -325,8 +376,8 @@ func TestRun_ShallowClone(t *testing.T) {
 		t.Fatalf("precondition: clone must be shallow, got %q", s)
 	}
 	_ = runGitTrim(t, clone, "rev-parse", "refs/remotes/origin/feature")
-	if _, rc := runGitRC(clone, "merge-base", "HEAD", "origin/feature"); rc == 0 {
-		t.Fatalf("precondition: shallow clone must not resolve a merge-base")
+	if _, rc := runGitRC(clone, "merge-base", "HEAD", "origin/feature"); rc != 1 {
+		t.Fatalf("precondition: want shallow merge-base rc == 1 (truncated history), got %d", rc)
 	}
 
 	var out, errb bytes.Buffer
@@ -418,31 +469,45 @@ func TestRun_BaseAbsence(t *testing.T) {
 // Each variant changes an assertable field so a taint-policy regression would
 // surface as a false warn.
 func TestRun_UncleanBaseTaint(t *testing.T) {
+	// Every base carries a dirty X-001 PLUS a clean, drifted, separately-cited
+	// X-002. x002Warns is the discriminator: under ID-taint only X-001 is
+	// demoted, so the clean sibling X-002 stays present and warns; under a
+	// file-level taint the whole file (including X-002) is demoted, so X-002 is
+	// silent. This pins ID-scope vs file-scope demotion — a regression that
+	// drops the whole file for an ID-ref violation stops X-002 warning in the
+	// id-taint row, and one that never demotes the whole file makes X-002 warn
+	// in the file-level rows.
 	tests := []struct {
-		name     string
-		baseSpec string
+		name      string
+		baseSpec  string
+		x002Warns bool
 	}{
-		{"semantic id-taint (invalid enum)", taintInvalidSurface},
-		{"file-level taint (invalid maturity)", taintInvalidMaturity},
-		{"pre-id-promotion structural title", taintSeqTitle},
+		{"id-taint keeps clean sibling present", taintInvalidSurface2, true},
+		{"file-level taint demotes whole file", taintInvalidMaturity2, false},
+		{"structural-title taint demotes whole file", taintSeqTitle2, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GITHUB_ACTIONS", "false")
 			root := initRepo(t)
 			writeFile(t, root, "spec/x.yaml", tc.baseSpec)
-			writeFile(t, root, "backend/x_test.go", citingTest())
+			writeFile(t, root, "backend/x_test.go", citingTest())   // cites X-001
+			writeFile(t, root, "backend/x2_test.go", citingTest2()) // cites X-002
 			writeFile(t, root, "frontend/tests/e2e/.gitkeep", "")
 			c1 := commit(t, root, "c1 dirty base")
-			writeFile(t, root, "spec/x.yaml", validSpec("changed outcome"))
-			commit(t, root, "c2 repair + change then")
+			writeFile(t, root, "spec/x.yaml", headSpec2)
+			commit(t, root, "c2 repair + drift both")
 
 			var out, errb bytes.Buffer
 			if code := run([]string{root, c1}, execGit, &out, &errb); code != 0 {
 				t.Fatalf("exit = %d, want 0; stderr = %s", code, errb.String())
 			}
-			if strings.Contains(out.String(), "WARN") {
-				t.Fatalf("expected silence (base behavior tainted → absent), got %q", out.String())
+			// X-001 is always demoted (tainted by ID, or with the whole file) → silent.
+			if strings.Contains(out.String(), "X-001") {
+				t.Fatalf("X-001 must be suppressed (tainted → absent), got %q", out.String())
+			}
+			if got := strings.Contains(out.String(), "X-002"); got != tc.x002Warns {
+				t.Fatalf("X-002 warned = %v, want %v; out = %q", got, tc.x002Warns, out.String())
 			}
 			if !strings.Contains(errb.String(), "base corpus has") {
 				t.Fatalf("expected base-violation notice on stderr, got %q", errb.String())
@@ -468,6 +533,41 @@ func TestRun_FakeGitFailures(t *testing.T) {
 				t.Fatalf("forced %s failure: exit = %d, want 2; stderr = %s", sub, code, errb.String())
 			}
 		})
+	}
+}
+
+// TestRun_BaseArchiveFailure drives the BASE archive call site specifically: a
+// gitRunner that succeeds on the first archive (HEAD) and fails the second
+// (base). failingGit("archive") only ever fails the FIRST archive, so a
+// regression that swallowed only the base-archive failure would slip past it.
+func TestRun_BaseArchiveFailure(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "false")
+	root := initRepo(t)
+	seedStdFixture(t, root, validSpec("o"))
+	c1 := commit(t, root, "c1")
+
+	archiveCalls := 0
+	g := gitRunner(func(dir string, args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "archive" {
+			archiveCalls++
+			if archiveCalls >= 2 {
+				return nil, fmt.Errorf("forced base archive failure")
+			}
+		}
+		return execGit(dir, args...)
+	})
+	var out, errb bytes.Buffer
+	if code := run([]string{root, c1}, g, &out, &errb); code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr = %s", code, errb.String())
+	}
+	if archiveCalls < 2 {
+		t.Fatalf("base archive was never reached (archiveCalls = %d)", archiveCalls)
+	}
+	// Pin the exit 2 to the archive branch: a regression that swallowed the base
+	// archive error would instead surface a downstream Lint IO error (different
+	// message), so "archive" in stderr proves it was the archive failure itself.
+	if !strings.Contains(errb.String(), "archive") {
+		t.Fatalf("exit 2 must name the failing base archive, stderr = %q", errb.String())
 	}
 }
 
@@ -637,6 +737,12 @@ const citeMarker = "// " + "spec: X-001"
 
 func citingTest() string { return "package x\n" + citeMarker + "\n" }
 
+// citingTest2 is the fixture Go test citing X-002 (the clean sibling in the
+// base-taint fixtures). Split-literal marker, same reason as citeMarker.
+const citeMarker2 = "// " + "spec: X-002"
+
+func citingTest2() string { return "package x\n" + citeMarker2 + "\n" }
+
 const specTemplate = `domain: x
 prefix: X
 maturity: draft
@@ -669,9 +775,34 @@ behaviors:
       - o
 `
 
-// taintInvalidSurface — X-001 carries a semantic violation attributable to its
-// ID (invalid surface enum) → tainted by ID.
-const taintInvalidSurface = `domain: x
+// headSpec2 — both behaviors clean, both drifted (then → changed). The repaired
+// HEAD counterpart of every base-taint fixture.
+const headSpec2 = `domain: x
+prefix: X
+maturity: draft
+settled: [ui]
+behaviors:
+  - id: X-001
+    title: t
+    type: business-logic
+    status: current
+    surface: api
+    when: w
+    then:
+      - changed
+  - id: X-002
+    title: t
+    type: business-logic
+    status: current
+    surface: api
+    when: w
+    then:
+      - changed
+`
+
+// taintInvalidSurface2 — X-001 carries a semantic violation attributable to its
+// ID (invalid surface enum) → tainted by ID; X-002 is clean and must survive.
+const taintInvalidSurface2 = `domain: x
 prefix: X
 maturity: draft
 settled: [ui]
@@ -684,10 +815,19 @@ behaviors:
     when: w
     then:
       - original
+  - id: X-002
+    title: t
+    type: business-logic
+    status: current
+    surface: api
+    when: w
+    then:
+      - original
 `
 
-// taintInvalidMaturity — a file-level violation (empty ref) → whole file tainted.
-const taintInvalidMaturity = `domain: x
+// taintInvalidMaturity2 — a file-level violation (empty ref) → whole file
+// tainted; both X-001 and X-002 are demoted.
+const taintInvalidMaturity2 = `domain: x
 prefix: X
 maturity: bogus
 settled: [ui]
@@ -700,12 +840,20 @@ behaviors:
     when: w
     then:
       - original
+  - id: X-002
+    title: t
+    type: business-logic
+    status: current
+    surface: api
+    when: w
+    then:
+      - original
 `
 
-// taintSeqTitle — a pre-ID-promotion structural violation (title is a sequence,
-// emitted with ref "behaviors[0]") while X-001 still exports a valid id → only
-// the non-ID-ref → taint-FILE rule demotes it.
-const taintSeqTitle = `domain: x
+// taintSeqTitle2 — a pre-ID-promotion structural violation on X-001 (title is a
+// sequence, emitted with ref "behaviors[0]") while X-001 still exports a valid
+// id → only the non-ID-ref → taint-FILE rule demotes it, taking X-002 with it.
+const taintSeqTitle2 = `domain: x
 prefix: X
 maturity: draft
 settled: [ui]
@@ -714,6 +862,14 @@ behaviors:
     title:
       - not
       - scalar
+    type: business-logic
+    status: current
+    surface: api
+    when: w
+    then:
+      - original
+  - id: X-002
+    title: t
     type: business-logic
     status: current
     surface: api

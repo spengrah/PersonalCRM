@@ -60,8 +60,9 @@ func TestSpecDrift(t *testing.T) {
 		head          []Behavior
 		cites         []Citation
 		changed       []string
-		wantIDs       []string       // expected warned IDs, in output order
-		wantFileCount map[string]int // optional: distinct citing-file count in the message
+		wantIDs       []string          // expected warned IDs, in output order
+		wantFileCount map[string]int    // optional: distinct citing-file count in the message
+		wantCiteList  map[string]string // optional: exact sorted/deduped path:line list inside "(...)"
 	}{
 		// --- assertable-field changes → warn when the citing file is untouched ---
 		{
@@ -170,16 +171,31 @@ func TestSpecDrift(t *testing.T) {
 				cite(citeFile, 42, "X-001"),
 			},
 			wantIDs: []string{"X-001"}, wantFileCount: map[string]int{"X-001": 1},
+			// Two distinct (path,line) pairs in one file: both listed, sorted.
+			wantCiteList: map[string]string{"X-001": "backend/x_test.go:10, backend/x_test.go:42"},
+		},
+		{
+			name: "exact-duplicate (path,line) citation deduped",
+			base: []Behavior{baseGWT()},
+			head: []Behavior{with(baseGWT(), func(b *Behavior) { b.When = "w2" })},
+			cites: []Citation{
+				cite(citeFile, 10, "X-001"),
+				cite(citeFile, 10, "X-001"),
+			},
+			wantIDs: []string{"X-001"}, wantFileCount: map[string]int{"X-001": 1},
+			wantCiteList: map[string]string{"X-001": "backend/x_test.go:10"},
 		},
 		{
 			name: "multiple citing files all untouched → warn",
 			base: []Behavior{baseGWT()},
 			head: []Behavior{with(baseGWT(), func(b *Behavior) { b.When = "w2" })},
 			cites: []Citation{
-				cite("backend/a_test.go", 10, "X-001"),
 				cite("backend/b_test.go", 20, "X-001"),
+				cite("backend/a_test.go", 10, "X-001"),
 			},
 			wantIDs: []string{"X-001"}, wantFileCount: map[string]int{"X-001": 2},
+			// Assert the exact sorted list — proves ordering, not just the count.
+			wantCiteList: map[string]string{"X-001": "backend/a_test.go:10, backend/b_test.go:20"},
 		},
 		{
 			name: "multiple citing files one touched → silent",
@@ -254,8 +270,71 @@ func TestSpecDrift(t *testing.T) {
 					t.Fatalf("no warning for %s carrying %q; got %+v", id, want, got)
 				}
 			}
+			for id, list := range tc.wantCiteList {
+				want := "(" + list + ")"
+				found := false
+				for _, v := range got {
+					if v.Ref == id && strings.Contains(v.Msg, want) {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("warning for %s missing exact citing list %q; got %+v", id, want, got)
+				}
+			}
 		})
 	}
+}
+
+// TestSpecDriftOrdering_PathAndRef exercises the Path and Ref tie-breakers of
+// the output sort (the line-only ordering test reaches neither). Two behaviors
+// share a Path AND Line (Ref decides), plus one in a later-sorting Path at the
+// same Line (Path decides).
+func TestSpecDriftOrdering_PathAndRef(t *testing.T) {
+	mk := func(id string, line int) Behavior {
+		b := baseGWT()
+		b.ID = id
+		b.Line = line
+		return b
+	}
+	drift := func(b Behavior) Behavior { return with(b, func(x *Behavior) { x.When = "w2" }) }
+
+	base := []*File{
+		{Path: "spec/a.yaml", Behaviors: []Behavior{mk("X-002", 5), mk("X-001", 5)}},
+		{Path: "spec/b.yaml", Behaviors: []Behavior{mk("X-003", 5)}},
+	}
+	head := []*File{
+		{Path: "spec/a.yaml", Behaviors: []Behavior{drift(mk("X-002", 5)), drift(mk("X-001", 5))}},
+		{Path: "spec/b.yaml", Behaviors: []Behavior{drift(mk("X-003", 5))}},
+	}
+	cites := []Citation{
+		cite("backend/a_test.go", 1, "X-001"),
+		cite("backend/b_test.go", 1, "X-002"),
+		cite("backend/c_test.go", 1, "X-003"),
+	}
+
+	got := SpecDrift(base, head, cites, map[string]bool{})
+	want := []string{"X-001", "X-002", "X-003"} // a.yaml (Ref 001<002), then b.yaml
+	if len(got) != 3 {
+		t.Fatalf("want 3 warnings, got %d: %v", len(got), refs(got))
+	}
+	for i, w := range want {
+		if got[i].Ref != w {
+			t.Fatalf("order = %v, want %v", refs(got), want)
+		}
+	}
+	// Path tie-break landed a.yaml before b.yaml.
+	if got[0].Path != "spec/a.yaml" || got[2].Path != "spec/b.yaml" {
+		t.Fatalf("path ordering = [%s ... %s], want spec/a.yaml ... spec/b.yaml", got[0].Path, got[2].Path)
+	}
+}
+
+func refs(vs []Violation) []string {
+	out := make([]string, len(vs))
+	for i, v := range vs {
+		out[i] = v.Ref
+	}
+	return out
 }
 
 // TestSpecDriftOrdering pins the (Path, Line, Ref) output ordering so multiple

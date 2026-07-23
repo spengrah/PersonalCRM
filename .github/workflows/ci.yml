@@ -172,7 +172,8 @@ jobs:
         run: git fetch --no-tags origin +refs/heads/develop:refs/remotes/origin/develop
       # Behavior-drift advisory: warns (::warning:: annotations) when a
       # behavior's assertions changed but no citing test was touched. Warn-only
-      # (green on drift); exit 2 only if the base cannot be resolved.
+      # (green on drift); exit 2 on any operational error (unresolvable base,
+      # archive/extraction/lint/scan/diff/output failure).
       - name: Run spec drift check
         run: make spec-drift
 
