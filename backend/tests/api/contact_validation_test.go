@@ -348,9 +348,32 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 
 	t.Run("CreateContact_ProfilePhotoTooLong", func(t *testing.T) {
 		// spec: CON-002[2]
-		// Syntactically valid URL, but its total length exceeds the 500 cap.
-		longURL := "https://example.com/" + strings.Repeat("a", 490) + ".jpg"
-		require.Greater(t, len(longURL), 500)
+		// Pin the 500-character cap exactly: a syntactically valid URL of
+		// exactly 500 characters is accepted, and one of exactly 501 is
+		// rejected, so a validator capped anywhere else fails one side.
+		okURL := "https://example.com/" + strings.Repeat("a", 476) + ".jpg"
+		require.Len(t, okURL, 500)
+
+		okBody, _ := json.Marshal(handlers.CreateContactRequest{
+			FullName:     "Test User PhotoCap",
+			ProfilePhoto: stringPtr(okURL),
+		})
+		okReq, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(okBody))
+		okReq.Header.Set("Content-Type", "application/json")
+		okW := httptest.NewRecorder()
+		router.ServeHTTP(okW, okReq)
+		require.Equal(t, http.StatusCreated, okW.Code, "a 500-char profile_photo URL must be accepted: %s", okW.Body.String())
+
+		var okResp api.APIResponse
+		require.NoError(t, json.Unmarshal(okW.Body.Bytes(), &okResp))
+		createdID := okResp.Data.(map[string]interface{})["id"].(string)
+		defer func() {
+			delReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+createdID, nil)
+			router.ServeHTTP(httptest.NewRecorder(), delReq)
+		}()
+
+		longURL := "https://example.com/" + strings.Repeat("a", 477) + ".jpg"
+		require.Len(t, longURL, 501)
 
 		requestBody := handlers.CreateContactRequest{
 			FullName:     "Test User",
@@ -671,6 +694,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	})
 
 	t.Run("UpdateContact_InvalidCadenceRejected", func(t *testing.T) {
+		// spec: CON-047[0]
 		// spec: CON-047[1]
 		updateReq := handlers.UpdateContactRequest{
 			FullName: "Update Test User " + ns,
@@ -916,9 +940,12 @@ func TestContactAPI_DeleteValidation(t *testing.T) {
 
 	t.Run("DeleteContact_NoHardDeleteRouteExposed", func(t *testing.T) {
 		// spec: CON-048[3]
-		// Registers the whole contact route surface through the production
-		// registrar (not a hand-picked subset) so this is an assertion about the
-		// routes the binary actually serves.
+		// Registers the contact-resource registrar (RegisterContactRoutes) and
+		// enumerates every DELETE route it serves under /contacts. Other
+		// registrars mount subresources under /contacts/:id/..., but the
+		// contact row's own lifecycle routes are registered here, so a
+		// hard-delete variant on the contact resource would surface in this
+		// enumeration.
 		routesRouter := gin.New()
 		routesV1 := routesRouter.Group("/api/v1")
 		handlers.RegisterContactRoutes(routesV1, handlers.ContactRouteDeps{

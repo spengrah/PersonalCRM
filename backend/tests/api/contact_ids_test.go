@@ -173,6 +173,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 	})
 
 	t.Run("returns sorted IDs when sort parameter provided", func(t *testing.T) {
+		// spec: CON-018[0]
 		// spec: CON-018[1]
 		// Create contacts with different names for sorting
 		id1 := createContact("IDs Sort Zebra " + ns)
@@ -273,6 +274,7 @@ func TestContactAPI_ListContactIDs(t *testing.T) {
 	})
 
 	t.Run("sorts by cadence frequency descending (most frequent first)", func(t *testing.T) {
+		// spec: CON-018[0]
 		// Create contacts with different cadences
 		// We need to use the full API to set cadence, so use raw request
 		createContactWithCadence := func(name, cadence string) string {

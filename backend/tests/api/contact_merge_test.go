@@ -911,3 +911,128 @@ func TestContactMergePreviewAPI_Errors(t *testing.T) {
 		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	})
 }
+
+// TestContactMergePreviewAPI_SuccessCounts proves the success path of the
+// merge-preview route over HTTP: the JSON response must carry all five
+// counters the spec names, with values matching seeded data — a service-level
+// preview test cannot catch an omitted or misnamed response field.
+func TestContactMergePreviewAPI_SuccessCounts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	t.Parallel()
+	router, rcleanup := setupContactMergePreviewTestRouter()
+	defer rcleanup()
+
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	ns := uuid.New().String()[:8]
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
+	noteRepo := repository.NewNoteRepository(database.Queries)
+	calendarEventRepo := repository.NewCalendarEventRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	cadenceUpdater := buildCadenceUpdaterForAPITest(t, database)
+	assertSvc, cache := buildKnowledgeDepsForAPITest(t, database, nil)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil, cadenceUpdater, assertSvc, cache, nil)
+
+	t.Run("GetMergePreview_AllFiveCountersInResponse", func(t *testing.T) {
+		// spec: CON-037[0]
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "Preview Counts Target " + ns,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
+
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "Preview Counts Source " + ns,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, source.ID) }()
+
+		// Target owns the shared method so exactly one of the source's four
+		// methods is a duplicate: methods_to_transfer=3, duplicate_methods=1.
+		// The counts are chosen pairwise-distinct where the fixture model
+		// allows (a contact has at most one notepad note, so notes_to_transfer
+		// and duplicate_methods are both 1).
+		dupValue := "dup-" + ns + "@example.com"
+		_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+			ContactID: target.ID, Type: "email", Value: dupValue,
+		})
+		require.NoError(t, err)
+		_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+			ContactID: source.ID, Type: "email", Value: dupValue,
+		})
+		require.NoError(t, err)
+		for _, v := range []string{"a-" + ns + "@example.com", "b-" + ns + "@example.com", "c-" + ns + "@example.com"} {
+			_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+				ContactID: source.ID, Type: "email", Value: v,
+			})
+			require.NoError(t, err)
+		}
+
+		_, err = noteRepo.CreateNotepad(ctx, source.ID, "Preview counts notepad "+ns)
+		require.NoError(t, err)
+
+		now := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+		for i := 0; i < 4; i++ {
+			_, err = interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+				ContactID:  source.ID,
+				Source:     repository.InteractionSourceManual,
+				OccurredAt: now.Add(-time.Duration(i) * time.Hour),
+				Direction:  repository.InteractionDirectionOutbound,
+			})
+			require.NoError(t, err)
+		}
+
+		title := "Preview Counts Event"
+		for _, suffix := range []string{"1", "2"} {
+			event, err := calendarEventRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
+				GcalEventID:       "preview-counts-" + ns + "-" + suffix,
+				GcalCalendarID:    "preview-counts-" + ns + "-cal",
+				GoogleAccountID:   "preview-counts-" + ns + "-acct",
+				Title:             &title,
+				StartTime:         now,
+				EndTime:           now.Add(time.Hour),
+				Status:            "confirmed",
+				Attendees:         []repository.Attendee{},
+				MatchedContactIDs: []uuid.UUID{source.ID},
+				SyncedAt:          now,
+			})
+			require.NoError(t, err)
+			eventID := event.ID
+			defer func() { _ = calendarEventRepo.TestHardDeleteByID(ctx, eventID) }()
+		}
+
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+target.ID.String()+"/merge/preview?source_id="+source.ID.String(), nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		var response api.APIResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.True(t, response.Success)
+
+		data, err := json.Marshal(response.Data)
+		require.NoError(t, err)
+		var preview handlers.MergePreviewResponse
+		require.NoError(t, json.Unmarshal(data, &preview))
+
+		assert.Equal(t, source.ID.String(), preview.SourceContact.ID)
+		assert.Equal(t, target.ID.String(), preview.TargetContact.ID)
+		assert.Equal(t, int64(3), preview.MethodsToTransfer)
+		assert.Equal(t, int64(1), preview.DuplicateMethods)
+		assert.Equal(t, int64(1), preview.NotesToTransfer)
+		assert.Equal(t, int64(4), preview.InteractionsToTransfer)
+		assert.Equal(t, int64(2), preview.CalendarEventsToUpdate)
+	})
+}

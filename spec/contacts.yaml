@@ -622,11 +622,15 @@ behaviors:
     given: a PUT for an existing contact
     when: the request is handled
     then:
-      - field validation follows the same rules as create (name required and bounded, cadence from the closed set, methods validated)
+      - field validation follows the same rules as create (name required and bounded, cadence from the closed set)
       - an invalid request is rejected with a validation error (400)
       - an unknown or soft-deleted contact returns not-found (404)
       - a valid request returns the updated contact (200)
     provenance: [ContactHandler.UpdateContact, UpdateContactRequest]
+    notes: >
+      Methods are not validated on this path: a methods key on the update body
+      is rejected outright rather than validated per create rules — that
+      rejection is CON-064's behavior.
 
   - id: CON-048
     title: Contact delete returns no content and admits no hard delete

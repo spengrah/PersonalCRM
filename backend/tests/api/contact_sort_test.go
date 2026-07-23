@@ -18,6 +18,7 @@ import (
 	_ "personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -380,6 +381,7 @@ func TestContactSort_ContactBy(t *testing.T) {
 	})
 
 	t.Run("contact_by sort is accepted by API validation", func(t *testing.T) {
+		// spec: CON-018[0]
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?sort=contact_by&order=asc", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -532,6 +534,7 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 	})
 
 	t.Run("last_response_at sort is accepted by API validation", func(t *testing.T) {
+		// spec: CON-018[0]
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?sort=last_response_at&order=desc", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -539,6 +542,7 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 	})
 
 	t.Run("legacy last_contacted sort still accepted", func(t *testing.T) {
+		// spec: CON-018[0]
 		// last_contacted remains a valid sort value on the API even though no UI
 		// surface emits it; regression-guard for any external caller still using
 		// the legacy field.
@@ -610,7 +614,7 @@ func TestContactSort_Location(t *testing.T) {
 
 	t.Run("location sort is accepted by API validation and returned in the response body", func(t *testing.T) {
 		// spec: CON-018[0]
-		prefix := "SortLocShape"
+		prefix := "SortLocShape" + uuid.New().String()[:8]
 		id := h.createContactWithLocation(prefix+" Shape Test", "Shapeburg")
 		defer h.deleteContact(id)
 
@@ -688,7 +692,7 @@ func TestContactSort_Birthday(t *testing.T) {
 
 	t.Run("birthday sort is accepted by API validation and returned in the response body", func(t *testing.T) {
 		// spec: CON-018[0]
-		prefix := "SortBdayShape"
+		prefix := "SortBdayShape" + uuid.New().String()[:8]
 		id := h.createContactWithBirthday(prefix+" Shape Test", "1990-01-15")
 		defer h.deleteContact(id)
 
