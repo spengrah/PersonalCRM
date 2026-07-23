@@ -151,6 +151,47 @@ func TestMacHostAuth_AmbiguousAuth_ApiKeyScheme(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// spec: MAC-007[2]
+func TestMacHostAuth_MissingOrEmptyBearer_401(t *testing.T) {
+	id := uuid.New()
+	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{
+		id: {ID: id, APIKeyHash: "shared-secret"},
+	}}
+
+	cases := []struct {
+		name       string
+		authHeader string
+		setHeader  bool
+	}{
+		{name: "absent Authorization header", setHeader: false},
+		{name: "empty Authorization header", authHeader: "", setHeader: true},
+		{name: "Bearer prefix with empty token", authHeader: "Bearer ", setHeader: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmp := &countingComparator{}
+			r := newMacAuthTestRouter(t, repo, cmp.Compare, DefaultMacHostAuthLimiterConfig())
+
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.Header.Set("X-Mac-Host-ID", id.String())
+			if tc.setHeader {
+				req.Header.Set("Authorization", tc.authHeader)
+			}
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+			require.Equal(t, http.StatusUnauthorized, w.Code)
+			require.Equal(t, int64(0), cmp.calls.Load(), "bcrypt must not run on missing-bearer path")
+
+			var body map[string]any
+			require.NoError(t, json.NewDecoder(strings.NewReader(w.Body.String())).Decode(&body))
+			errObj, ok := body["error"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "MISSING_BEARER", errObj["code"], "must hit the dedicated MISSING_BEARER branch")
+		})
+	}
+}
+
 // spec: MAC-007[3]
 func TestMacHostAuth_RevokedOrMissingHost_401(t *testing.T) {
 	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{}}

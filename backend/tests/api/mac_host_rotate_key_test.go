@@ -1,11 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -440,4 +442,129 @@ func TestMacHostRotateKey_OldKeyImmediatelyInvalid(t *testing.T) {
 		})
 	require.Equal(t, http.StatusUnauthorized, w.Code,
 		"old key must be invalid AT COMMIT, not 'eventually'; body=%s", w.Body.String())
+}
+
+// TestMacHostRotateKey_PlaintextNeverLeaksInSubsequentReads rotates a
+// host's key and sweeps every subsequent read surface (heartbeat
+// response, admin ListHosts, admin GetHostAdmin) for the rotated
+// plaintext key, asserting on the raw response body string.
+// spec: MAC-010[0]
+func TestMacHostRotateKey_PlaintextNeverLeaksInSubsequentReads(t *testing.T) {
+
+	env := setupMacHostEnv(t)
+	hostID, oldKey := pairFreshHost(t, env, "rotate-plaintext-sweep-"+uuid.NewString()[:8])
+	token := mintRotateToken(t, env)
+
+	w := macHTTP(t, env, http.MethodPost, "/api/v1/host/"+hostID.String()+"/rotate-key",
+		hostAuthHeaders(hostID, oldKey),
+		map[string]any{"pairing_token": token})
+	require.Equal(t, http.StatusOK, w.Code, "rotate: %s", w.Body.String())
+	require.Contains(t, w.Body.String(), `"api_key"`, "sanity: rotate response must actually carry the key field")
+
+	var res struct {
+		APIKey string `json:"api_key"`
+	}
+	readData(t, w, &res)
+	require.NotEmpty(t, res.APIKey)
+	require.NotEqual(t, oldKey, res.APIKey)
+
+	// Heartbeat with the NEW key must never echo the plaintext key back.
+	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+hostID.String()+"/heartbeat",
+		hostAuthHeaders(hostID, res.APIKey),
+		map[string]any{"daemon_version": "0.1.0", "protocol_version": 1})
+	require.Equal(t, http.StatusOK, w.Code, "heartbeat: %s", w.Body.String())
+	require.NotContains(t, w.Body.String(), res.APIKey, "heartbeat response must never contain the rotated plaintext api key")
+	require.NotContains(t, w.Body.String(), `"api_key"`, "heartbeat response must never carry an api_key wire key at all")
+
+	// Admin ListHosts.
+	w = macHTTP(t, env, http.MethodGet, "/api/v1/host", map[string]string{"X-API-Key": env.apiKey}, nil)
+	require.Equal(t, http.StatusOK, w.Code, "list hosts: %s", w.Body.String())
+	require.NotContains(t, w.Body.String(), res.APIKey, "ListHosts response must never contain the rotated plaintext api key")
+	require.NotContains(t, w.Body.String(), `"api_key"`, "ListHosts response must never carry an api_key wire key at all (not even hashed)")
+
+	// Admin GetHostAdmin.
+	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+hostID.String(), map[string]string{"X-API-Key": env.apiKey}, nil)
+	require.Equal(t, http.StatusOK, w.Code, "get admin: %s", w.Body.String())
+	require.NotContains(t, w.Body.String(), res.APIKey, "GetHostAdmin response must never contain the rotated plaintext api key")
+	require.NotContains(t, w.Body.String(), `"api_key"`, "GetHostAdmin response must never carry an api_key wire key at all (not even hashed)")
+}
+
+// rotateKeyHTTPRequest builds a rotate-key request against env.router
+// WITHOUT calling testify's require — safe to invoke concurrently from
+// multiple goroutines (unlike macHTTP, which calls t.Helper()/require
+// internally and is documented as main-goroutine-only elsewhere in this
+// package).
+func rotateKeyHTTPRequest(env *macHostTestEnv, hostID uuid.UUID, apiKey, pairingToken string) *httptest.ResponseRecorder {
+	body, _ := json.Marshal(map[string]any{"pairing_token": pairingToken})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/host/"+hostID.String()+"/rotate-key", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range hostAuthHeaders(hostID, apiKey) {
+		req.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	env.router.ServeHTTP(w, req)
+	return w
+}
+
+// TestMacHostRotateKey_HTTP_StaleAuthOnConcurrentLoss drives the
+// service-level CAS race (already proven directly against
+// MacHostService.RotateAPIKey in TestMacHostRotateKey_ConcurrentRotation_
+// DifferentTokens) over REAL concurrent HTTP requests: two goroutines
+// both authenticate with the SAME still-current key via
+// MacHostAuthMiddleware (both requests race to the finish line before
+// either commits), then race in the handler's compare-and-swap. The
+// loser's stale-auth rejection must surface as 401 STALE_AUTH on the
+// wire — the literal error code the handler maps
+// service.ErrAPIKeyStaleAuth to. Distinct pairing tokens per goroutine
+// so token single-use never intrudes on which side loses the CAS.
+// spec: MAC-010[2]
+func TestMacHostRotateKey_HTTP_StaleAuthOnConcurrentLoss(t *testing.T) {
+
+	env := setupMacHostEnv(t)
+	hostID, oldKey := pairFreshHost(t, env, "rotate-http-race-"+uuid.NewString()[:8])
+	tokenA := mintRotateToken(t, env)
+	tokenB := mintRotateToken(t, env)
+
+	type outcome struct {
+		status  int
+		errCode string
+		body    string
+	}
+	results := make(chan outcome, 2)
+	var wg sync.WaitGroup
+	var start sync.WaitGroup
+	start.Add(1)
+	for _, tok := range []string{tokenA, tokenB} {
+		wg.Add(1)
+		go func(token string) {
+			defer wg.Done()
+			start.Wait()
+			w := rotateKeyHTTPRequest(env, hostID, oldKey, token)
+			var errBody struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			_ = json.Unmarshal(w.Body.Bytes(), &errBody)
+			results <- outcome{status: w.Code, errCode: errBody.Error.Code, body: w.Body.String()}
+		}(tok)
+	}
+	start.Done()
+	wg.Wait()
+	close(results)
+
+	successes, staleAuth := 0, 0
+	for r := range results {
+		switch r.status {
+		case http.StatusOK:
+			successes++
+		case http.StatusUnauthorized:
+			require.Equal(t, "STALE_AUTH", r.errCode, "loser body: %s", r.body)
+			staleAuth++
+		default:
+			t.Fatalf("unexpected rotate-key status %d, body: %s", r.status, r.body)
+		}
+	}
+	require.Equal(t, 1, successes, "exactly one concurrent rotation must succeed")
+	require.Equal(t, 1, staleAuth, "exactly one concurrent rotation must fail 401 STALE_AUTH")
 }

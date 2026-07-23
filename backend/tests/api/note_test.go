@@ -196,8 +196,33 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 	})
 
 	t.Run("GetNote_ContactNotFound_Returns404", func(t *testing.T) {
+		// spec: NTS-004[3]
 		nonExistentID := uuid.New().String()
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+nonExistentID+"/notes", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response api.APIResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.False(t, response.Success)
+		assert.Equal(t, "NOT_FOUND", response.Error.Code)
+	})
+
+	t.Run("GetNote_SoftDeletedContact_Returns404", func(t *testing.T) {
+		// spec: NTS-004[3]
+		contactID := createTestContact(t, router, "Soft Deleted Notepad Get Test User "+uuid.New().String()[:8])
+
+		// Soft-delete the contact via the same DELETE endpoint used by siblings
+		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
+		deleteW := httptest.NewRecorder()
+		router.ServeHTTP(deleteW, deleteReq)
+		require.Equal(t, http.StatusNoContent, deleteW.Code, "Failed to soft-delete test contact: %s", deleteW.Body.String())
+
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/notes", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
@@ -397,10 +422,39 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 	})
 
 	t.Run("SaveNote_ContactNotFound_Returns404", func(t *testing.T) {
+		// spec: NTS-005[4]
 		nonExistentID := uuid.New().String()
 		saveReq := handlers.SaveNoteRequest{Body: "Some content"}
 		jsonBody, _ := json.Marshal(saveReq)
 		req, _ := http.NewRequest("PUT", "/api/v1/contacts/"+nonExistentID+"/notes", bytes.NewBuffer(jsonBody))
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response api.APIResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.False(t, response.Success)
+		assert.Equal(t, "NOT_FOUND", response.Error.Code)
+	})
+
+	t.Run("SaveNote_SoftDeletedContact_Returns404", func(t *testing.T) {
+		// spec: NTS-005[4]
+		contactID := createTestContact(t, router, "Soft Deleted Notepad Save Test User "+uuid.New().String()[:8])
+
+		// Soft-delete the contact via the same DELETE endpoint used by siblings
+		deleteReq, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+contactID, nil)
+		deleteW := httptest.NewRecorder()
+		router.ServeHTTP(deleteW, deleteReq)
+		require.Equal(t, http.StatusNoContent, deleteW.Code, "Failed to soft-delete test contact: %s", deleteW.Body.String())
+
+		saveReq := handlers.SaveNoteRequest{Body: "Some content"}
+		jsonBody, _ := json.Marshal(saveReq)
+		req, _ := http.NewRequest("PUT", "/api/v1/contacts/"+contactID+"/notes", bytes.NewBuffer(jsonBody))
 		req.Header.Set("Content-Type", "application/json")
 
 		w := httptest.NewRecorder()

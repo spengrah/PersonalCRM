@@ -62,6 +62,7 @@ func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository
 
 	// Create handler
 	importHandler := handlers.NewImportHandler(externalRepo, nil, contactService, matchService, enrichmentService, suggestionService)
+	suggestionHandler := handlers.NewSuggestionHandler(suggestionService)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
@@ -76,6 +77,10 @@ func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository
 		imports.POST("/candidates/:id/import", importHandler.ImportContact)
 		imports.POST("/candidates/:id/link", importHandler.LinkContact)
 		imports.POST("/candidates/:id/ignore", importHandler.IgnoreContact)
+		// suggestions is a sibling static route (mirrors the production
+		// ordering in RegisterImportRoutes) — the server-declared
+		// allowed_actions per candidate live here.
+		imports.GET("/suggestions", suggestionHandler.ListSuggestions)
 	}
 
 	cleanup := func() {
@@ -2128,7 +2133,7 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 	}
 
 	t.Parallel()
-	router, externalRepo, _, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
 	defer cleanup()
 
 	ctx := context.Background()
@@ -2169,9 +2174,56 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 	})
 
 	t.Run("ImportContact_AlreadyImported", func(t *testing.T) {
-		// Skip: This test's expected behavior depends on specific API response format
-		// that may vary. Core import functionality is validated by E2E tests.
-		t.Skip("Skipping: already-imported behavior validated by E2E tests")
+		// Create an external contact with a name so the first import succeeds.
+		displayName := "Already Imported Candidate " + uuid.New().String()[:8]
+		external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+			Source:      "test",
+			SourceID:    uuid.New().String(),
+			DisplayName: &displayName,
+			Emails: []repository.EmailEntry{
+				{Value: "already-imported-" + uuid.New().String()[:8] + "@example.com", Type: "home"},
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, external)
+
+		defer func() {
+			_ = externalRepo.Delete(ctx, external.ID)
+		}()
+
+		// First import succeeds and flips match_status away from unmatched.
+		firstReq, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", nil)
+		firstReq.Header.Set("Content-Type", "application/json")
+		firstW := httptest.NewRecorder()
+		router.ServeHTTP(firstW, firstReq)
+		require.Equal(t, http.StatusCreated, firstW.Code)
+
+		var firstResponse api.APIResponse
+		require.NoError(t, json.Unmarshal(firstW.Body.Bytes(), &firstResponse))
+		contactData := firstResponse.Data.(map[string]interface{})["contact"].(map[string]interface{})
+		contactID, err := uuid.Parse(contactData["id"].(string))
+		require.NoError(t, err)
+		defer func() {
+			_ = contactRepo.HardDeleteContact(ctx, contactID)
+		}()
+
+		// Re-importing the now-processed candidate is rejected (400).
+		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", nil)
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		// spec: IMP-011[0]
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		var response api.APIResponse
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.False(t, response.Success)
+		require.NotNil(t, response.Error)
+		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
+		assert.Equal(t, string(repository.MatchStatusImported), response.Error.Details)
 	})
 
 	t.Run("ImportContact_NoName", func(t *testing.T) {
@@ -2247,6 +2299,99 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 		require.NotNil(t, response.Error)
 		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	})
+}
+
+// TestImportAPI_LinkOnlySourcePolicy proves the whole IMP-014 invariant on
+// the wire: a link-only source (gmail_correspondence) never has "import"
+// among its server-declared allowed_actions (the suggestions surface), AND
+// a crafted import request against that same candidate is rejected
+// server-side (403) rather than merely hidden by the UI.
+// spec: IMP-014
+func TestImportAPI_LinkOnlySourcePolicy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	t.Parallel()
+	router, externalRepo, _, _, cleanup := setupImportTestRouter()
+	defer cleanup()
+
+	ctx := context.Background()
+
+	suffix := uuid.New().String()[:8]
+	displayName := "Link Only Policy " + suffix
+	external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:      "gmail_correspondence",
+		SourceID:    "gmail-correspondence-" + suffix,
+		DisplayName: &displayName,
+		Emails: []repository.EmailEntry{
+			{Value: "link-only-" + suffix + "@example.com", Type: "home"},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, external)
+
+	defer func() {
+		_ = externalRepo.Delete(ctx, external.ID)
+	}()
+
+	// Half 1: the server declares the allowed actions per candidate — a
+	// link-only candidate's entry never offers "import". Asserted on the
+	// literal wire keys (generic map decode), not a round trip through the
+	// CandidateSuggestionResponse DTO.
+	sugReq, _ := http.NewRequest("GET", "/api/v1/imports/suggestions?source=gmail_correspondence&limit=1000", nil)
+	sugW := httptest.NewRecorder()
+	router.ServeHTTP(sugW, sugReq)
+	require.Equal(t, http.StatusOK, sugW.Code)
+
+	var sugResponse api.APIResponse
+	require.NoError(t, json.Unmarshal(sugW.Body.Bytes(), &sugResponse))
+	items, ok := sugResponse.Data.([]interface{})
+	require.True(t, ok, "suggestions response data was not a list")
+
+	var found bool
+	for _, raw := range items {
+		item, ok := raw.(map[string]interface{})
+		if !ok || item["kind"] != "contact" {
+			continue
+		}
+		candidate, ok := item["candidate"].(map[string]interface{})
+		if !ok || candidate["id"] != external.ID.String() {
+			continue
+		}
+		found = true
+		allowed, ok := candidate["allowed_actions"].([]interface{})
+		require.True(t, ok, "allowed_actions missing from candidate wire response")
+		assert.NotContains(t, allowed, "import", "link-only source must never declare import as allowed")
+		assert.Contains(t, allowed, "link")
+		assert.Contains(t, allowed, "ignore")
+	}
+	require.True(t, found, "seeded link-only candidate not present in suggestions response")
+
+	// Half 2: the policy is enforced server-side, not merely hidden
+	// client-side — a crafted import request is rejected with 403 and the
+	// row stays unmatched.
+	importReq, _ := http.NewRequest("POST", "/api/v1/imports/candidates/"+external.ID.String()+"/import", nil)
+	importReq.Header.Set("Content-Type", "application/json")
+	importW := httptest.NewRecorder()
+	router.ServeHTTP(importW, importReq)
+
+	assert.Equal(t, http.StatusForbidden, importW.Code)
+
+	var importResponse api.APIResponse
+	require.NoError(t, json.Unmarshal(importW.Body.Bytes(), &importResponse))
+	assert.False(t, importResponse.Success)
+	require.NotNil(t, importResponse.Error)
+	assert.Equal(t, "VALIDATION_ERROR", importResponse.Error.Code)
+
+	after, err := externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.MatchStatusUnmatched, after.MatchStatus, "row must stay unmatched after a rejected import")
 }
 
 func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {

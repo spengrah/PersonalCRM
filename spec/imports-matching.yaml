@@ -1,7 +1,7 @@
 domain: imports-matching
 prefix: IMP
 maturity: reviewed
-settled: [ui]
+settled: [ui, api]
 behaviors:
   # --- Matching engine ---
 

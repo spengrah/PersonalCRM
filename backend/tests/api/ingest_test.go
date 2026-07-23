@@ -211,7 +211,7 @@ func uniqueIngestSource(prefix string) string {
 	return prefix + "-" + uuid.NewString()
 }
 
-// spec: ING-001[0], ING-007[1]
+// spec: ING-001[0], ING-007[1], ING-004[1]
 func TestIngest_ValidBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -350,8 +350,10 @@ func TestIngest_MissingFields(t *testing.T) {
 	require.Contains(t, indexes[1], "observed_at")
 	require.Contains(t, indexes, 2)
 	require.Contains(t, indexes[2], "source")
+	// spec: ING-004[1]
 	require.Contains(t, indexes, 3)
 	require.Contains(t, indexes[3], "kind")
+	// spec: ING-004[3]
 	require.Contains(t, indexes, 4)
 	require.Contains(t, indexes[4], "payload")
 	require.Contains(t, indexes, 5)
@@ -368,7 +370,7 @@ func TestIngest_MissingFields(t *testing.T) {
 // would silently decode null into a zero-value struct, so the ingest
 // boundary must reject it as PAYLOAD_INVALID rather than persist a row
 // with all-zero payload fields.
-// spec: ING-003[0]
+// spec: ING-003[0], ING-004[3]
 func TestIngest_NullPayload(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -399,6 +401,7 @@ func TestIngest_NullPayload(t *testing.T) {
 	require.Equal(t, int64(0), count)
 }
 
+// spec: ING-004[1]
 func TestIngest_UnknownKind(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -426,6 +429,7 @@ func TestIngest_UnknownKind(t *testing.T) {
 	require.Equal(t, "UNKNOWN_KIND", resp.Errors[0].Code)
 }
 
+// spec: ING-004[3]
 func TestIngest_PayloadStructurallyInvalid(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -456,6 +460,214 @@ func TestIngest_PayloadStructurallyInvalid(t *testing.T) {
 	require.Equal(t, 1, resp.Rejected)
 	require.Len(t, resp.Errors, 1)
 	require.Equal(t, "PAYLOAD_INVALID", resp.Errors[0].Code)
+}
+
+// ingestMaxSourceLen / ingestMaxSourceIDLen mirror the unexported
+// maxSourceLen / maxSourceIDLen constants in
+// internal/api/handlers/ingest.go (64 / 255 chars). Hardcoded here the
+// same way TestIngest_BatchTooLarge hardcodes 501 — this package can't
+// reference the handlers package's unexported constants directly.
+const (
+	ingestMaxSourceLen   = 64
+	ingestMaxSourceIDLen = 255
+)
+
+// padUniqueTo returns a string of exactly n bytes: a unique uuid prefix
+// (so the shared DB doesn't see cross-test collisions) padded with 'a'
+// to the exact target length.
+func padUniqueTo(n int) string {
+	id := uuid.NewString()
+	if len(id) >= n {
+		return id[:n]
+	}
+	return id + strings.Repeat("a", n-len(id))
+}
+
+// spec: ING-004[0]
+func TestIngest_SourceLengthBound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+	setup := setupIngestTestRouter(t, true)
+
+	t.Run("OverMax_Rejected", func(t *testing.T) {
+		t.Parallel()
+		source := padUniqueTo(ingestMaxSourceLen + 1)
+		ev := buildManualEventReq(t, source, uuid.NewString())
+		batch := handlers.IngestBatchRequest{Events: []handlers.IngestEventRequest{ev}}
+		w := postIngest(t, setup.router, setup.apiKey, jsonBody(t, batch))
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+		var resp handlers.IngestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		require.Equal(t, 0, resp.Accepted)
+		require.Equal(t, 1, resp.Rejected)
+		require.Len(t, resp.Errors, 1)
+		require.Equal(t, "FIELD_TOO_LONG", resp.Errors[0].Code)
+	})
+
+	t.Run("AtMax_Accepted", func(t *testing.T) {
+		t.Parallel()
+		source := padUniqueTo(ingestMaxSourceLen)
+		require.Len(t, source, ingestMaxSourceLen)
+		ev := buildManualEventReq(t, source, uuid.NewString())
+		batch := handlers.IngestBatchRequest{Events: []handlers.IngestEventRequest{ev}}
+		w := postIngest(t, setup.router, setup.apiKey, jsonBody(t, batch))
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+		var resp handlers.IngestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		require.Equal(t, 1, resp.Accepted)
+		require.Equal(t, 0, resp.Rejected)
+
+		count, err := setup.eventRepo.CountBySource(setup.ctx, source)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count)
+	})
+}
+
+// spec: ING-004[0]
+func TestIngest_SourceIDLengthBound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+	setup := setupIngestTestRouter(t, true)
+
+	t.Run("OverMax_Rejected", func(t *testing.T) {
+		t.Parallel()
+		source := uniqueIngestSource("sid-over-max")
+		sourceID := padUniqueTo(ingestMaxSourceIDLen + 1)
+		ev := buildManualEventReq(t, source, sourceID)
+		batch := handlers.IngestBatchRequest{Events: []handlers.IngestEventRequest{ev}}
+		w := postIngest(t, setup.router, setup.apiKey, jsonBody(t, batch))
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+		var resp handlers.IngestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		require.Equal(t, 0, resp.Accepted)
+		require.Equal(t, 1, resp.Rejected)
+		require.Len(t, resp.Errors, 1)
+		require.Equal(t, "FIELD_TOO_LONG", resp.Errors[0].Code)
+	})
+
+	t.Run("AtMax_Accepted", func(t *testing.T) {
+		t.Parallel()
+		source := uniqueIngestSource("sid-at-max")
+		sourceID := padUniqueTo(ingestMaxSourceIDLen)
+		require.Len(t, sourceID, ingestMaxSourceIDLen)
+		ev := buildManualEventReq(t, source, sourceID)
+		batch := handlers.IngestBatchRequest{Events: []handlers.IngestEventRequest{ev}}
+		w := postIngest(t, setup.router, setup.apiKey, jsonBody(t, batch))
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+		var resp handlers.IngestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		require.Equal(t, 1, resp.Accepted)
+		require.Equal(t, 0, resp.Rejected)
+
+		count, err := setup.eventRepo.CountBySource(setup.ctx, source)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count)
+	})
+}
+
+// TestIngest_PayloadSizeBound exercises the size-bound half of
+// ING-004[3]: payloads over the 64 KiB cap (maxPayloadBytes in
+// internal/api/handlers/ingest.go) are rejected PAYLOAD_TOO_LARGE, and a
+// payload at exactly the cap is accepted. The size check runs before
+// the kind-known / structural checks, so an oversized payload doesn't
+// need to be a valid interaction.manual payload — but the at-bound case
+// does (so it also proves an otherwise-valid event isn't penalized for
+// being large). Description is padded byte-for-byte (plain ASCII, no
+// JSON escaping) so the computed overhead is exact.
+//
+// spec: ING-004[3]
+func TestIngest_PayloadSizeBound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+	setup := setupIngestTestRouter(t, true)
+
+	const maxPayloadBytes = 64 << 10 // mirrors handlers.maxPayloadBytes (unexported)
+
+	// Probe: build a valid manual-event payload with a short padding
+	// string to measure the fixed JSON overhead around the Description
+	// field, then compute the exact padding length needed to land the
+	// marshaled payload at exactly maxPayloadBytes.
+	buildPayload := func(t *testing.T, padLen int) json.RawMessage {
+		t.Helper()
+		observed := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+		payload, err := events.Marshal(events.KindInteractionManual, events.InteractionManualPayload{
+			Version:     1,
+			ContactID:   uuid.New(),
+			Direction:   "mutual",
+			OccurredAt:  observed,
+			Description: strings.Repeat("x", padLen),
+		})
+		require.NoError(t, err)
+		return payload
+	}
+
+	probePadLen := 10
+	probe := buildPayload(t, probePadLen)
+	overhead := len(probe) - probePadLen
+	atBoundPadLen := maxPayloadBytes - overhead
+	require.Greater(t, atBoundPadLen, 0)
+
+	t.Run("OverSize_Rejected", func(t *testing.T) {
+		t.Parallel()
+		source := uniqueIngestSource("payload-oversize")
+		observed := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+		payload := buildPayload(t, atBoundPadLen+1)
+		require.Greater(t, len(payload), maxPayloadBytes)
+		ev := handlers.IngestEventRequest{
+			Source:     source,
+			SourceID:   uuid.NewString(),
+			Kind:       string(events.KindInteractionManual),
+			Payload:    payload,
+			ObservedAt: &observed,
+		}
+		batch := handlers.IngestBatchRequest{Events: []handlers.IngestEventRequest{ev}}
+		w := postIngest(t, setup.router, setup.apiKey, jsonBody(t, batch))
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+		var resp handlers.IngestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		require.Equal(t, 0, resp.Accepted)
+		require.Equal(t, 1, resp.Rejected)
+		require.Len(t, resp.Errors, 1)
+		require.Equal(t, "PAYLOAD_TOO_LARGE", resp.Errors[0].Code)
+	})
+
+	t.Run("AtBound_Accepted", func(t *testing.T) {
+		t.Parallel()
+		source := uniqueIngestSource("payload-at-bound")
+		observed := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
+		payload := buildPayload(t, atBoundPadLen)
+		require.Equal(t, maxPayloadBytes, len(payload))
+		ev := handlers.IngestEventRequest{
+			Source:     source,
+			SourceID:   uuid.NewString(),
+			Kind:       string(events.KindInteractionManual),
+			Payload:    payload,
+			ObservedAt: &observed,
+		}
+		batch := handlers.IngestBatchRequest{Events: []handlers.IngestEventRequest{ev}}
+		w := postIngest(t, setup.router, setup.apiKey, jsonBody(t, batch))
+		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+		var resp handlers.IngestResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		require.Equal(t, 1, resp.Accepted)
+		require.Equal(t, 0, resp.Rejected)
+
+		count, err := setup.eventRepo.CountBySource(setup.ctx, source)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), count)
+	})
 }
 
 // spec: ING-002[3]
@@ -691,6 +903,42 @@ func TestIngest_BodyTooLarge_Returns413(t *testing.T) {
 	raw := fmt.Sprintf(`{"events":[{"source":"x","kind":"interaction.manual","payload":{"v":%q},"observed_at":"2026-04-10T12:00:00Z"}]}`, big)
 	w := postIngest(t, setup.router, setup.apiKey, []byte(raw))
 	require.Equal(t, http.StatusRequestEntityTooLarge, w.Code, "body: %s", w.Body.String())
+}
+
+// TestIngest_NeedsAttentionKeyAbsentWhenNoAttention pins the
+// backward-compat half of the needs-attention contract on the LITERAL
+// wire body: a batch that produces no attention items must omit the
+// needs_attention key ENTIRELY (json omitempty), so daemons that
+// predate the field see a byte-compatible response. Decoding into the
+// production IngestResponse struct cannot distinguish an absent key
+// from `"needs_attention": null` or `[]` — hence the raw map decode
+// with a key-presence check.
+// spec: ING-035[1]
+func TestIngest_NeedsAttentionKeyAbsentWhenNoAttention(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+	setup := setupIngestTestRouter(t, true)
+
+	source := uniqueIngestSource("na-key-absent")
+	batch := handlers.IngestBatchRequest{
+		Events: []handlers.IngestEventRequest{
+			buildManualEventReq(t, source, uuid.NewString()),
+		},
+	}
+	w := postIngest(t, setup.router, setup.apiKey, jsonBody(t, batch))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	// Sanity: sibling keys ARE present, so the absence check below is
+	// not vacuously passing on a mis-decoded/empty object.
+	require.Contains(t, raw, "accepted")
+	require.Contains(t, raw, "errors")
+	_, present := raw["needs_attention"]
+	require.False(t, present,
+		"needs_attention must be ABSENT from the wire body (not null or []) when no session needs attention; got: %s", w.Body.String())
 }
 
 // failingRepo is a test double that wraps a real EventRepository and fails

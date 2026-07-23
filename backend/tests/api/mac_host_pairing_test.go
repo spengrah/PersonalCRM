@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +24,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -403,6 +406,121 @@ func TestMacHost_Singleton_SecondPairBlocked(t *testing.T) {
 	require.Equal(t, http.StatusConflict, w.Code, "second pair must be 409 from singleton; body: %s", w.Body.String())
 }
 
+// TestMacHost_Heartbeat_PersistsFieldsAndEchoesProtocolState pairs a
+// host, sends a heartbeat carrying distinct values for every
+// daemon-supplied field, then reads the host back through the admin
+// GET route to confirm each field was actually persisted — and
+// separately decodes the heartbeat response body for the literal
+// cursor_epoch/protocol_version/min_protocol_version keys.
+func TestMacHost_Heartbeat_PersistsFieldsAndEchoesProtocolState(t *testing.T) {
+
+	env := setupMacHostEnv(t)
+
+	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	require.NoError(t, err)
+	res, err := env.macService.PairWithToken(context.Background(), plain, "heartbeat-fields-host", "0.1.0", 1)
+	require.NoError(t, err)
+
+	hostHeaders := map[string]string{
+		"X-Mac-Host-ID": res.HostID.String(),
+		"Authorization": "Bearer " + res.APIKey,
+	}
+
+	before := accelerated.GetCurrentTime()
+
+	// Distinct values on every daemon-supplied field. protocol_version
+	// (2) and cursor_epoch (1, from pairing) are pairwise-distinct
+	// numerics; the JSON blobs are distinct from each other and from
+	// the empty defaults the handler substitutes when absent.
+	const heartbeatDaemonVersion = "9.9.9-heartbeat-test"
+	const heartbeatProtocolVersion = 2
+	permissions := json.RawMessage(`{"fda":true,"screen_recording":false}`)
+	sourceHealth := json.RawMessage(`{"messages":{"ok":true},"phone_calls":{"ok":false}}`)
+
+	w := macHTTP(t, env, http.MethodPost, "/api/v1/host/"+res.HostID.String()+"/heartbeat", hostHeaders, map[string]any{
+		"daemon_version":   heartbeatDaemonVersion,
+		"protocol_version": heartbeatProtocolVersion,
+		"permissions":      permissions,
+		"source_health":    sourceHealth,
+	})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	// spec: MAC-011[1]
+	// spec: MAC-011[2]
+	// Literal wire keys on the heartbeat response body — decoded via a
+	// local struct with matching json tags, not the handler's private
+	// response type.
+	var hbResp struct {
+		OK                 bool  `json:"ok"`
+		CursorEpoch        int64 `json:"cursor_epoch"`
+		ProtocolVersion    int32 `json:"protocol_version"`
+		MinProtocolVersion int32 `json:"min_protocol_version"`
+	}
+	readData(t, w, &hbResp)
+	require.True(t, hbResp.OK)
+	require.Equal(t, res.CursorEpoch, hbResp.CursorEpoch, "cursor_epoch must echo the host's current epoch")
+	require.EqualValues(t, 2, hbResp.ProtocolVersion, "protocol_version must be the server's current version (mac.ProtocolVersion)")
+	require.EqualValues(t, 1, hbResp.MinProtocolVersion, "min_protocol_version must be the server's floor (mac.MinProtocolVersion)")
+
+	// spec: MAC-011[0]
+	// Read the host back via the admin GET route and assert every
+	// heartbeat-supplied field was actually persisted.
+	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String(), map[string]string{
+		"X-API-Key": env.apiKey,
+	}, nil)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var hostView struct {
+		DaemonVersion   string          `json:"daemon_version"`
+		ProtocolVersion int32           `json:"protocol_version"`
+		LastHeartbeatAt *time.Time      `json:"last_heartbeat_at"`
+		Permissions     json.RawMessage `json:"permissions"`
+		SourceHealth    json.RawMessage `json:"source_health"`
+	}
+	readData(t, w, &hostView)
+
+	require.Equal(t, heartbeatDaemonVersion, hostView.DaemonVersion, "daemon_version must be persisted")
+	require.EqualValues(t, heartbeatProtocolVersion, hostView.ProtocolVersion, "protocol_version must be persisted")
+	require.NotNil(t, hostView.LastHeartbeatAt, "last_heartbeat_at must be recorded")
+	require.False(t, hostView.LastHeartbeatAt.Before(before.Add(-time.Second)), "last_heartbeat_at must reflect the heartbeat, not a stale value")
+	require.JSONEq(t, string(permissions), string(hostView.Permissions), "permissions must be persisted verbatim")
+	require.JSONEq(t, string(sourceHealth), string(hostView.SourceHealth), "source_health must be persisted verbatim")
+}
+
+// TestMacHost_GetCursor_PreCommit_EmptyBaseline covers reading a
+// freshly-paired host's cursor before any commit has happened: the
+// cursor must be empty and the epoch must be the host's current
+// (post-pairing) epoch, never a fabricated non-empty value.
+func TestMacHost_GetCursor_PreCommit_EmptyBaseline(t *testing.T) {
+
+	env := setupMacHostEnv(t)
+
+	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	require.NoError(t, err)
+	res, err := env.macService.PairWithToken(context.Background(), plain, "precommit-cursor-host", "0.1.0", 1)
+	require.NoError(t, err)
+
+	hostHeaders := map[string]string{
+		"X-Mac-Host-ID": res.HostID.String(),
+		"Authorization": "Bearer " + res.APIKey,
+	}
+
+	// spec: MAC-015[1]
+	// No commit has happened yet for this host+source.
+	w := macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String()+"/sync/messages/cursor", hostHeaders, nil)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var cur struct {
+		Cursor           string `json:"cursor"`
+		CursorEpoch      int64  `json:"cursor_epoch"`
+		BackfillComplete bool   `json:"backfill_complete"`
+	}
+	readData(t, w, &cur)
+	require.Equal(t, "", cur.Cursor, "cursor must be empty before any commit")
+	require.Equal(t, res.CursorEpoch, cur.CursorEpoch, "cursor_epoch must be the host's current epoch")
+	require.False(t, cur.BackfillComplete, "backfill_complete must default to false before any commit")
+}
+
 func TestMacHost_CursorFirstWriteRace(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -448,4 +566,249 @@ func TestMacHost_CursorFirstWriteRace(t *testing.T) {
 	}
 	require.Equal(t, 1, success, "exactly one commit must win")
 	require.Equal(t, N-1, conflict, "all other commits surface ErrCursorBaseMismatch")
+}
+
+// TestMacHost_Pair_PlaintextKeyNeverLeaksInSubsequentReads pairs a host
+// and sweeps every subsequent read surface (heartbeat response, admin
+// ListHosts, admin GetHostAdmin) for the plaintext api key, asserting
+// on the raw response body string rather than any decoded struct —
+// a struct round-trip could not catch a field the production DTO
+// doesn't declare but the handler still serializes ad hoc.
+func TestMacHost_Pair_PlaintextKeyNeverLeaksInSubsequentReads(t *testing.T) {
+
+	env := setupMacHostEnv(t)
+
+	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	require.NoError(t, err)
+
+	// spec: MAC-003[0]
+	w := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
+		"pairing_token":    plain,
+		"hostname":         "plaintext-sweep-" + uuid.NewString()[:8],
+		"daemon_version":   "0.1.0",
+		"protocol_version": 1,
+	})
+	require.Equal(t, http.StatusOK, w.Code, "pair: %s", w.Body.String())
+	require.Contains(t, w.Body.String(), `"api_key"`, "sanity: pair response must actually carry the key field")
+
+	var pair struct {
+		HostID uuid.UUID `json:"host_id"`
+		APIKey string    `json:"api_key"`
+	}
+	readData(t, w, &pair)
+	require.NotEmpty(t, pair.APIKey)
+
+	hostHeaders := map[string]string{
+		"X-Mac-Host-ID": pair.HostID.String(),
+		"Authorization": "Bearer " + pair.APIKey,
+	}
+
+	// Heartbeat response must never echo the plaintext key back.
+	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+pair.HostID.String()+"/heartbeat", hostHeaders, map[string]any{
+		"daemon_version":   "0.1.0",
+		"protocol_version": 1,
+	})
+	require.Equal(t, http.StatusOK, w.Code, "heartbeat: %s", w.Body.String())
+	require.NotContains(t, w.Body.String(), pair.APIKey, "heartbeat response must never contain the plaintext api key")
+	require.NotContains(t, w.Body.String(), `"api_key"`, "heartbeat response must never carry an api_key wire key at all")
+
+	// Admin ListHosts.
+	w = macHTTP(t, env, http.MethodGet, "/api/v1/host", map[string]string{"X-API-Key": env.apiKey}, nil)
+	require.Equal(t, http.StatusOK, w.Code, "list hosts: %s", w.Body.String())
+	require.NotContains(t, w.Body.String(), pair.APIKey, "ListHosts response must never contain the plaintext api key")
+	require.NotContains(t, w.Body.String(), `"api_key"`, "ListHosts response must never carry an api_key wire key at all (not even hashed)")
+
+	// Admin GetHostAdmin.
+	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+pair.HostID.String(), map[string]string{"X-API-Key": env.apiKey}, nil)
+	require.Equal(t, http.StatusOK, w.Code, "get admin: %s", w.Body.String())
+	require.NotContains(t, w.Body.String(), pair.APIKey, "GetHostAdmin response must never contain the plaintext api key")
+	require.NotContains(t, w.Body.String(), `"api_key"`, "GetHostAdmin response must never carry an api_key wire key at all (not even hashed)")
+}
+
+// spec: MAC-003[1]
+// TestMacHost_Pair_ExpiredUnconsumedToken_410 seeds an expired-but-never-
+// consumed pairing token directly (SeedPairingToken accepts an explicit
+// expires_at, the same helper the rotate-key sibling test uses for its
+// TOKEN_EXPIRED case) and drives it through the actual pairing endpoint,
+// asserting the opaque 410 the pairing contract collapses all token-state
+// failures to.
+func TestMacHost_Pair_ExpiredUnconsumedToken_410(t *testing.T) {
+
+	env := setupMacHostEnv(t)
+
+	plaintext := "expired-pair-token-" + uuid.NewString()[:8]
+	hash := sha256.Sum256([]byte(plaintext))
+	_, err := env.database.Queries.SeedPairingToken(context.Background(), db.SeedPairingTokenParams{
+		TokenHash: hex.EncodeToString(hash[:]),
+		ExpiresAt: pgtype.Timestamptz{Time: accelerated.GetCurrentTime().Add(-1 * time.Hour), Valid: true},
+	})
+	require.NoError(t, err)
+
+	w := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
+		"pairing_token":    plaintext,
+		"hostname":         "expired-token-host-" + uuid.NewString()[:8],
+		"daemon_version":   "0.1.0",
+		"protocol_version": 1,
+	})
+	require.Equal(t, http.StatusGone, w.Code, "expired unconsumed token must surface 410, body: %s", w.Body.String())
+}
+
+// TestMacHost_Heartbeat_TooOldProtocol_NoWriteBefore412 pairs a host,
+// seeds distinguishable state via one accepted heartbeat, then sends a
+// below-floor-protocol heartbeat carrying DIFFERENT values on every
+// mutable field and asserts the 412 rejection AND that none of those
+// fields moved — proving the protocol gate runs before any database
+// write, not merely before the response is sent.
+// spec: MAC-012[0]
+func TestMacHost_Heartbeat_TooOldProtocol_NoWriteBefore412(t *testing.T) {
+
+	env := setupMacHostEnv(t)
+
+	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	require.NoError(t, err)
+	res, err := env.macService.PairWithToken(context.Background(), plain, "protocol-gate-host-"+uuid.NewString()[:8], "0.1.0", 1)
+	require.NoError(t, err)
+
+	hostHeaders := map[string]string{
+		"X-Mac-Host-ID": res.HostID.String(),
+		"Authorization": "Bearer " + res.APIKey,
+	}
+
+	// Seed real, accepted state first so there is something concrete
+	// to prove is untouched by the rejected heartbeat below.
+	seedPermissions := json.RawMessage(`{"fda":true,"screen_recording":false}`)
+	seedSourceHealth := json.RawMessage(`{"messages":{"ok":true}}`)
+	w := macHTTP(t, env, http.MethodPost, "/api/v1/host/"+res.HostID.String()+"/heartbeat", hostHeaders, map[string]any{
+		"daemon_version":   "1.2.3-seed",
+		"protocol_version": 1,
+		"permissions":      seedPermissions,
+		"source_health":    seedSourceHealth,
+	})
+	require.Equal(t, http.StatusOK, w.Code, "seed heartbeat: %s", w.Body.String())
+
+	pre, err := env.hostRepo.GetHost(context.Background(), res.HostID)
+	require.NoError(t, err)
+	require.NotNil(t, pre.LastHeartbeatAt, "seed heartbeat must have recorded last_heartbeat_at")
+
+	// Below-floor protocol_version (server minimum is 1) carrying
+	// DISTINCT values on every mutable field vs. the seed above.
+	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+res.HostID.String()+"/heartbeat", hostHeaders, map[string]any{
+		"daemon_version":   "9.9.9-rejected",
+		"protocol_version": 0,
+		"permissions":      json.RawMessage(`{"fda":false,"screen_recording":true}`),
+		"source_health":    json.RawMessage(`{"messages":{"ok":false},"phone_calls":{"ok":true}}`),
+	})
+	require.Equal(t, http.StatusPreconditionFailed, w.Code, "body: %s", w.Body.String())
+
+	post, err := env.hostRepo.GetHost(context.Background(), res.HostID)
+	require.NoError(t, err)
+
+	require.Equal(t, pre.LastHeartbeatAt, post.LastHeartbeatAt, "last_heartbeat_at must be untouched by a 412-rejected heartbeat")
+	require.Equal(t, pre.DaemonVersion, post.DaemonVersion, "daemon_version must be untouched by a 412-rejected heartbeat")
+	require.Equal(t, pre.ProtocolVersion, post.ProtocolVersion, "protocol_version must be untouched by a 412-rejected heartbeat")
+	require.JSONEq(t, string(pre.Permissions), string(post.Permissions), "permissions must be untouched by a 412-rejected heartbeat")
+	require.JSONEq(t, string(pre.SourceHealth), string(post.SourceHealth), "source_health must be untouched by a 412-rejected heartbeat")
+}
+
+// TestMacHost_Cursor_BackfillComplete_DefaultsFalseWhenAbsent commits a
+// cursor whose request body omits the backfill_complete key entirely
+// (not merely sets it false) and asserts the read-back flag is false.
+// spec: MAC-015[2]
+func TestMacHost_Cursor_BackfillComplete_DefaultsFalseWhenAbsent(t *testing.T) {
+
+	env := setupMacHostEnv(t)
+
+	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	require.NoError(t, err)
+	res, err := env.macService.PairWithToken(context.Background(), plain, "backfill-default-host-"+uuid.NewString()[:8], "0.1.0", 1)
+	require.NoError(t, err)
+
+	hostHeaders := map[string]string{
+		"X-Mac-Host-ID": res.HostID.String(),
+		"Authorization": "Bearer " + res.APIKey,
+	}
+
+	// Deliberately no "backfill_complete" key in this map at all.
+	w := macHTTP(t, env, http.MethodPost, "/api/v1/host/"+res.HostID.String()+"/sync/messages/cursor", hostHeaders, map[string]any{
+		"cursor":       "cursor-no-backfill-key",
+		"base_cursor":  "",
+		"cursor_epoch": res.CursorEpoch,
+	})
+	require.Equal(t, http.StatusOK, w.Code, "commit: %s", w.Body.String())
+
+	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String()+"/sync/messages/cursor", hostHeaders, nil)
+	require.Equal(t, http.StatusOK, w.Code, "get cursor: %s", w.Body.String())
+	var cur struct {
+		Cursor           string `json:"cursor"`
+		BackfillComplete bool   `json:"backfill_complete"`
+	}
+	readData(t, w, &cur)
+	require.Equal(t, "cursor-no-backfill-key", cur.Cursor)
+	require.False(t, cur.BackfillComplete, "backfill_complete must default to false when the commit body omits the key")
+}
+
+// TestMacHost_PushSourceAllowlist_HTTP drives the cursor get/commit and
+// known-ids endpoints with an unknown push source and asserts the
+// validation error, then drives one allowed source as acceptance —
+// exercising the handler-level allowlist gate (mac.IsAllowedPushSource)
+// over HTTP rather than only at the unit level.
+// spec: MAC-013
+func TestMacHost_PushSourceAllowlist_HTTP(t *testing.T) {
+
+	env := setupMacHostEnv(t)
+
+	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	require.NoError(t, err)
+	res, err := env.macService.PairWithToken(context.Background(), plain, "allowlist-host-"+uuid.NewString()[:8], "0.1.0", 1)
+	require.NoError(t, err)
+
+	hostHeaders := map[string]string{
+		"X-Mac-Host-ID": res.HostID.String(),
+		"Authorization": "Bearer " + res.APIKey,
+	}
+
+	const unknownSource = "not_a_real_source"
+
+	assertValidationError := func(w *httptest.ResponseRecorder, label string) {
+		require.Equal(t, http.StatusBadRequest, w.Code, "%s: %s", label, w.Body.String())
+		var errBody struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		require.NoError(t, json.NewDecoder(w.Body).Decode(&errBody))
+		require.Equal(t, "VALIDATION_ERROR", errBody.Error.Code, "%s error code", label)
+	}
+
+	// GET cursor rejects unknown source.
+	w := macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String()+"/sync/"+unknownSource+"/cursor", hostHeaders, nil)
+	assertValidationError(w, "GetCursor unknown source")
+
+	// POST cursor (commit) rejects unknown source.
+	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+res.HostID.String()+"/sync/"+unknownSource+"/cursor", hostHeaders, map[string]any{
+		"cursor":       "x",
+		"base_cursor":  "",
+		"cursor_epoch": res.CursorEpoch,
+	})
+	assertValidationError(w, "CommitCursor unknown source")
+
+	// GET known-ids rejects unknown source.
+	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String()+"/sync/"+unknownSource+"/known-ids", hostHeaders, nil)
+	assertValidationError(w, "KnownIDs unknown source")
+
+	// Acceptance: a genuinely allowed source succeeds on all three.
+	const allowedSource = "phone_calls"
+
+	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String()+"/sync/"+allowedSource+"/cursor", hostHeaders, nil)
+	require.Equal(t, http.StatusOK, w.Code, "GetCursor allowed source: %s", w.Body.String())
+
+	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+res.HostID.String()+"/sync/"+allowedSource+"/cursor", hostHeaders, map[string]any{
+		"cursor":       "phone-cursor-1",
+		"base_cursor":  "",
+		"cursor_epoch": res.CursorEpoch,
+	})
+	require.Equal(t, http.StatusOK, w.Code, "CommitCursor allowed source: %s", w.Body.String())
+
+	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String()+"/sync/"+allowedSource+"/known-ids", hostHeaders, nil)
+	require.Equal(t, http.StatusOK, w.Code, "KnownIDs allowed source: %s", w.Body.String())
 }

@@ -1337,6 +1337,89 @@ func TestMethodOps_ConflictErrorTranslatesTo400(t *testing.T) {
 	}
 }
 
+// --- Rematch job id propagation ----------------------------------------------
+
+// stubApplierResult returns a fixed successful result, so the handler's
+// response assembly (contactMethodOperationsToResponse) can be exercised
+// directly without standing up a live rematch registry + event bus. The
+// registry/dispatcher mechanics (whether a job gets minted for a given
+// method type) are pinned at the service level in
+// backend/tests/rematch_integration_test.go
+// (TestRematch_ApplyMethodOperations_FiresForNewMethodOnly); this is the
+// HTTP-mapping half only.
+type stubApplierResult struct {
+	result *service.ApplyContactMethodsResult
+}
+
+func (s stubApplierResult) ApplyOperations(context.Context, uuid.UUID, []service.ContactMethodOperation) (*service.ApplyContactMethodsResult, error) {
+	return s.result, nil
+}
+
+// TestMethodOps_RematchJobIDPropagatesToResponse proves the operations
+// response carries rematch_job_id on the literal wire, both when a job was
+// minted and when it wasn't (the field is omitempty, so no job means the
+// key is absent rather than an empty string).
+// spec: IMP-019[1]
+func TestMethodOps_RematchJobIDPropagatesToResponse(t *testing.T) {
+	t.Parallel()
+
+	t.Run("job minted surfaces literal rematch_job_id", func(t *testing.T) {
+		t.Parallel()
+		jobID := uuid.New()
+		router := newMethodOpsRouter(stubApplierResult{result: &service.ApplyContactMethodsResult{
+			Methods:      []repository.ContactMethod{},
+			RematchJobID: jobID,
+			Results:      []service.ContactMethodOperationResult{},
+		}})
+
+		body, err := json.Marshal(map[string]any{
+			"operations": []map[string]any{addOp("email", uniqueEmail())},
+		})
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost,
+			"/api/v1/contacts/"+uuid.NewString()+"/methods", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var envelope struct {
+			Data map[string]interface{} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+		got, ok := envelope.Data["rematch_job_id"]
+		require.True(t, ok, "rematch_job_id key missing from operations response")
+		assert.Equal(t, jobID.String(), got)
+	})
+
+	t.Run("no job minted omits the key", func(t *testing.T) {
+		t.Parallel()
+		router := newMethodOpsRouter(stubApplierResult{result: &service.ApplyContactMethodsResult{
+			Methods:      []repository.ContactMethod{},
+			RematchJobID: uuid.Nil,
+			Results:      []service.ContactMethodOperationResult{},
+		}})
+
+		body, err := json.Marshal(map[string]any{
+			"operations": []map[string]any{addOp("email", uniqueEmail())},
+		})
+		require.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost,
+			"/api/v1/contacts/"+uuid.NewString()+"/methods", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var envelope struct {
+			Data map[string]interface{} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+		_, ok := envelope.Data["rematch_job_id"]
+		assert.False(t, ok, "rematch_job_id key must be omitted when no job was minted")
+	})
+}
+
 // --- The route surface ------------------------------------------------------
 
 // TestMethodRoutes_NoDesiredSetPut asserts PUT /contacts/:id/methods is NOT

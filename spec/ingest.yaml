@@ -1,7 +1,7 @@
 domain: ingest
 prefix: ING
 maturity: reviewed
-settled: [ui]
+settled: [ui, api]
 behaviors:
   # --- HTTP ingest surface ---
 

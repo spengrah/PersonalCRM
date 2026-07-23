@@ -2,12 +2,16 @@ package tests
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,6 +29,20 @@ func newSuggestionService(env *abReconcileEnv) *service.SuggestionService {
 		env.matchSvc,
 		env.database,
 	)
+}
+
+// newSuggestionRouter builds a Gin router carrying only the production
+// suggestions route surface (the /imports/candidates and /imports/:id
+// routes are also registered per RegisterImportRoutes' fixed ordering, but
+// with nil handlers — safe because these tests never route to them).
+// gin.SetMode is hoisted to TestMain so parallel tests don't race on it.
+func newSuggestionRouter(svc *service.SuggestionService) *gin.Engine {
+	router := gin.New()
+	v1 := router.Group("/api/v1")
+	handlers.RegisterImportRoutes(v1, handlers.ImportRouteDeps{
+		Suggestions: handlers.NewSuggestionHandler(svc),
+	})
+	return router
 }
 
 // seedImportedWithPending seeds a linked imported address-book row carrying
@@ -132,6 +150,7 @@ func TestSuggestions_List_SourceScopeExcludesNonAddressBook(t *testing.T) {
 	}
 }
 
+// spec: IMP-018[0]
 func TestSuggestions_Resolve_AddsMethodAndClearsPending(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -163,6 +182,7 @@ func TestSuggestions_Resolve_AddsMethodAndClearsPending(t *testing.T) {
 	assert.GreaterOrEqual(t, jobs, int64(1))
 }
 
+// spec: IMP-018[3]
 func TestSuggestions_Resolve_Idempotent(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -184,6 +204,65 @@ func TestSuggestions_Resolve_Idempotent(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 0, second.Applied)
+}
+
+// TestSuggestions_Resolve_RequestedSubset_OnlyRequestedConfirmed proves the
+// requested-subset half of IMP-018[0]: with two live pending methods,
+// requesting only one confirms exactly that one (enrichment + pending
+// clear) and leaves the other untouched in pending.
+//
+// spec: IMP-018[0]
+func TestSuggestions_Resolve_RequestedSubset_OnlyRequestedConfirmed(t *testing.T) {
+	t.Parallel()
+	env := setupABReconcileEnv(t)
+	ctx := context.Background()
+	svc := newSuggestionService(env)
+
+	emailX := "resolve-subset-x-" + abSuffix(t) + "@example.com"
+	emailY := "resolve-subset-y-" + abSuffix(t) + "@example.com"
+	contact, external := seedImportedWithPending(t, ctx, env, []string{emailX, emailY})
+
+	res, err := svc.ResolveMethodSuggestions(ctx, external.ID, []repository.PendingMethodSuggestion{
+		{Type: "email", Value: strings.ToLower(emailX)},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Applied, "only the requested method is confirmed")
+
+	require.True(t, contactHasMethod(t, ctx, env, contact.ID, emailX), "requested method is added")
+	require.False(t, contactHasMethod(t, ctx, env, contact.ID, emailY), "unrequested method must NOT be added")
+
+	after, err := env.externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+	require.Len(t, after.PendingMethodSuggestions, 1, "unrequested method stays pending")
+	assert.Equal(t, strings.ToLower(emailY), after.PendingMethodSuggestions[0].Value)
+}
+
+// TestSuggestions_Resolve_Unspecified_ConfirmsAllPending proves the
+// unspecified-means-all half of IMP-018[0]: an empty/nil methods list
+// confirms EVERY live pending method (not just one), enriching all of
+// them and fully clearing pending.
+//
+// spec: IMP-018[0]
+func TestSuggestions_Resolve_Unspecified_ConfirmsAllPending(t *testing.T) {
+	t.Parallel()
+	env := setupABReconcileEnv(t)
+	ctx := context.Background()
+	svc := newSuggestionService(env)
+
+	emailX := "resolve-all-x-" + abSuffix(t) + "@example.com"
+	emailY := "resolve-all-y-" + abSuffix(t) + "@example.com"
+	contact, external := seedImportedWithPending(t, ctx, env, []string{emailX, emailY})
+
+	res, err := svc.ResolveMethodSuggestions(ctx, external.ID, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, res.Applied, "unspecified methods must confirm ALL live pending")
+
+	require.True(t, contactHasMethod(t, ctx, env, contact.ID, emailX), "first pending method added")
+	require.True(t, contactHasMethod(t, ctx, env, contact.ID, emailY), "second pending method added")
+
+	after, err := env.externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+	assert.Nil(t, after.PendingMethodSuggestions, "pending fully clears")
 }
 
 func TestSuggestions_Resolve_AlreadyOnContact_NotReAdded(t *testing.T) {
@@ -251,6 +330,12 @@ func TestSuggestions_Resolve_MalformedMethod400(t *testing.T) {
 	assert.ErrorIs(t, err, service.ErrSuggestionInvalidMethod)
 }
 
+// TestSuggestions_Dismiss_RecordsStickyAndDropsPending proves the
+// value dimension of IMP-018[1]'s sticky-per-(type,value) stickiness: a
+// dismissed email is sticky and a second PENDING entry of the SAME type
+// but a DIFFERENT value survives.
+//
+// spec: IMP-018[1]
 func TestSuggestions_Dismiss_RecordsStickyAndDropsPending(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -288,6 +373,7 @@ func TestSuggestions_Dismiss_RecordsStickyAndDropsPending(t *testing.T) {
 	}
 }
 
+// spec: IMP-018[3]
 func TestSuggestions_Dismiss_Idempotent(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -310,6 +396,72 @@ func TestSuggestions_Dismiss_Idempotent(t *testing.T) {
 	assert.Equal(t, 0, second.Dismissed, "duplicate dismiss is a no-op")
 }
 
+// TestSuggestions_Dismiss_StickyPerType_SameValueSurvivesDifferentType proves
+// the TYPE dimension of IMP-018[1]'s sticky-per-(type,value) rule: an
+// email pending entry and a telegram pending entry that happen to share
+// the SAME normalized value are independent stickiness keys — dismissing
+// the email entry must not sweep up the telegram entry with the same
+// value. "sticky" + a per-test namespace token normalizes identically for
+// both email (lowercase+trim) and telegram (strip '@'+lowercase) so the
+// VALUE half of the key is deliberately held constant while TYPE differs.
+//
+// spec: IMP-018[1]
+func TestSuggestions_Dismiss_StickyPerType_SameValueSurvivesDifferentType(t *testing.T) {
+	t.Parallel()
+	env := setupABReconcileEnv(t)
+	ctx := context.Background()
+	svc := newSuggestionService(env)
+
+	sfx := abSuffix(t)
+	sharedValue := "sticky" + sfx
+
+	contact, err := env.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Sticky Type " + sfx})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.contactRepo.HardDeleteContact(ctx, contact.ID) })
+
+	display := "Sticky Type Ext " + sfx
+	external, err := env.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:      "telegram",
+		SourceID:    "telegram-sticky-" + sfx,
+		DisplayName: &display,
+		Emails:      []repository.EmailEntry{{Value: sharedValue}},
+		Metadata:    map[string]any{"username": sharedValue},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = env.externalRepo.Delete(ctx, external.ID) })
+	_, err = env.externalRepo.UpdateMatch(ctx, external.ID, &contact.ID, repository.MatchStatusImported)
+	require.NoError(t, err)
+	external, err = env.externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+
+	res, err := env.reconcile.ReconcileLinkedExternalContactMethods(ctx, repository.ReconcileTarget{
+		ExternalContact:    *external,
+		EffectiveContactID: contact.ID,
+		EffectiveStatus:    repository.MatchStatusImported,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, res.SuggestionsRecorded)
+	external, err = env.externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+	require.Len(t, external.PendingMethodSuggestions, 2, "precondition: email + telegram pending sharing one value")
+
+	// Dismiss ONLY the email entry.
+	dres, err := svc.DismissMethodSuggestions(ctx, external.ID, []repository.PendingMethodSuggestion{
+		{Type: "email", Value: sharedValue},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, dres.Dismissed)
+
+	after, err := env.externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+	require.Len(t, after.PendingMethodSuggestions, 1, "the telegram entry with the SAME value must survive an email-only dismiss")
+	assert.Equal(t, "telegram", after.PendingMethodSuggestions[0].Type)
+	assert.Equal(t, sharedValue, after.PendingMethodSuggestions[0].Value)
+	require.Len(t, after.DismissedMethodSuggestions, 1)
+	assert.Equal(t, "email", after.DismissedMethodSuggestions[0].Type)
+}
+
+// spec: IMP-018[2]
 func TestSuggestions_Dismiss_AlreadyOnContact_NotStickyDismissed(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -339,6 +491,49 @@ func TestSuggestions_Dismiss_AlreadyOnContact_NotStickyDismissed(t *testing.T) {
 	assert.Nil(t, after.DismissedMethodSuggestions, "already-applied entry must not be sticky-dismissed")
 }
 
+// TestSuggestions_Dismiss_NoLongerOffered_PrunedNotDismissed proves the
+// second prune reason of IMP-018[2]: a pending method the source no
+// longer offers (the external row's current method set drifted since the
+// suggestion was recorded) is pruned from pending WITHOUT being recorded
+// as a dismissal.
+//
+// spec: IMP-018[2]
+func TestSuggestions_Dismiss_NoLongerOffered_PrunedNotDismissed(t *testing.T) {
+	t.Parallel()
+	env := setupABReconcileEnv(t)
+	ctx := context.Background()
+	svc := newSuggestionService(env)
+
+	email := "dismiss-gone-source-" + abSuffix(t) + "@example.com"
+	_, external := seedImportedWithPending(t, ctx, env, []string{email})
+
+	// Producer resync: the source no longer carries the email at all.
+	// Pending/dismissed columns survive a wholesale upsert untouched
+	// (TestABReconcile_ProducerUpsertPreservesSuggestionColumns), so the
+	// stale pending entry is still there, but the external row's CURRENT
+	// method set (BuildMethodsFromExternal) no longer offers it.
+	_, err := env.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:      external.Source,
+		SourceID:    external.SourceID,
+		DisplayName: external.DisplayName,
+	})
+	require.NoError(t, err)
+	external, err = env.externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+	require.Len(t, external.PendingMethodSuggestions, 1, "precondition: stale pending survives the resync")
+	require.Empty(t, external.Emails, "precondition: the source no longer offers the email")
+
+	res, err := svc.DismissMethodSuggestions(ctx, external.ID, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, res.Dismissed, "no-longer-offered entry is pruned, not dismissed")
+
+	after, err := env.externalRepo.GetByID(ctx, external.ID)
+	require.NoError(t, err)
+	assert.Nil(t, after.PendingMethodSuggestions, "no-longer-offered entry is pruned from pending")
+	assert.Nil(t, after.DismissedMethodSuggestions, "no-longer-offered entry must not be sticky-dismissed")
+}
+
+// spec: IMP-018[3]
 func TestSuggestions_Resolve_ContactGone(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -410,4 +605,51 @@ func TestSuggestions_DuplicateOfCanonical_ResolvesToCanonicalContact(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, canonContact.ID, res.ContactID)
 	require.True(t, contactHasMethod(t, ctx, env, canonContact.ID, dupEmail), "dup's method enriches the canonical contact")
+}
+
+// TestSuggestionsAPI_Resolve_SoftDeletedContact_Returns410 proves the
+// literal HTTP status half of IMP-018[3]: through the real
+// production route (not the service call directly), a soft-deleted
+// effective contact reports 410 Gone on the wire.
+//
+// spec: IMP-018[3]
+func TestSuggestionsAPI_Resolve_SoftDeletedContact_Returns410(t *testing.T) {
+	t.Parallel()
+	env := setupABReconcileEnv(t)
+	ctx := context.Background()
+	svc := newSuggestionService(env)
+	router := newSuggestionRouter(svc)
+
+	email := "gone-api-resolve-" + abSuffix(t) + "@example.com"
+	contact, external := seedImportedWithPending(t, ctx, env, []string{email})
+	require.NoError(t, env.contactRepo.SoftDeleteContact(ctx, contact.ID))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/imports/suggestions/"+external.ID.String()+"/methods/resolve", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusGone, w.Code, "soft-deleted effective contact must report 410 Gone on the wire")
+}
+
+// TestSuggestionsAPI_Dismiss_SoftDeletedContact_Returns410 is the dismiss
+// counterpart: the same soft-deleted-contact-gone check applies to the
+// dismiss action route too.
+//
+// spec: IMP-018[3]
+func TestSuggestionsAPI_Dismiss_SoftDeletedContact_Returns410(t *testing.T) {
+	t.Parallel()
+	env := setupABReconcileEnv(t)
+	ctx := context.Background()
+	svc := newSuggestionService(env)
+	router := newSuggestionRouter(svc)
+
+	email := "gone-api-dismiss-" + abSuffix(t) + "@example.com"
+	contact, external := seedImportedWithPending(t, ctx, env, []string{email})
+	require.NoError(t, env.contactRepo.SoftDeleteContact(ctx, contact.ID))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/imports/suggestions/"+external.ID.String()+"/methods/dismiss", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusGone, w.Code, "soft-deleted effective contact must report 410 Gone on the wire")
 }
