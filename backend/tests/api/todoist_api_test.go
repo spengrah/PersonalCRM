@@ -4,12 +4,16 @@
 // TodoistHandler: GetSettings and UpdateSettings, which read/write only
 // through oauthService.ListAccounts + syncRepo — no external HTTP.
 //
-// ListProjects/ListLabels (SET-018) are deliberately NOT covered here: they
-// construct todoist.NewSyncClient(accessToken) inline with no injection
-// seam, so their live-provider contract can't be exercised without a real
-// Todoist account or a handler client seam. Closing that gap needs a small
-// production change (inject the existing todoist.ClientFactory into
-// TodoistHandler) before a picker suite can be added.
+// ListProjects/ListLabels (SET-018) are only partially covered here. The
+// no-account-connected 404 branch (SET-018[0]) runs entirely before either
+// handler touches the live provider client (it returns as soon as
+// len(accounts)==0), so it is hermetic and covered below. The remaining
+// SET-018 clauses (deleted-entry filtering, provider-failure 500) construct
+// todoist.NewSyncClient(accessToken) inline with no injection seam, so their
+// live-provider contract can't be exercised without a real Todoist account
+// or a handler client seam. Closing that gap needs a small production
+// change (inject the existing todoist.ClientFactory into TodoistHandler)
+// before the rest of the picker suite can be added.
 package api
 
 import (
@@ -309,5 +313,51 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 		assert.Equal(t, newLabelID, state.Metadata[todoist.MetadataKeyLabelID])
 		_, hasLabelName := state.Metadata[todoist.MetadataKeyLabelName]
 		assert.False(t, hasLabelName, "label_name must be cleared from stored metadata when the label changes")
+	})
+}
+
+// TestTodoistAPI_Pickers_NoAccount proves the ListProjects/ListLabels
+// no-account guard: both routes check len(accounts)==0 and return 404
+// BEFORE constructing a live provider client, so this is testable with no
+// external Todoist access. Each subtest asserts the literal wire shape of
+// the error envelope (raw map, not the DTO struct) so a renamed/mis-typed
+// field is caught.
+func TestTodoistAPI_Pickers_NoAccount(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ListProjects_NoAccount_Returns404", func(t *testing.T) {
+		// spec: SET-018[0]
+		router, _, _ := newTodoistAPITest(t)
+
+		w := doTodoistRequest(router, http.MethodGet, "/api/v1/todoist/projects", nil)
+		require.Equal(t, http.StatusNotFound, w.Code)
+
+		var envelope map[string]interface{}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+		assert.Equal(t, false, envelope["success"])
+		errObj, ok := envelope["error"].(map[string]interface{})
+		require.True(t, ok, "error envelope must carry an 'error' object")
+		assert.Equal(t, "NOT_FOUND", errObj["code"])
+		assert.NotEmpty(t, errObj["message"])
+		_, hasData := envelope["data"]
+		assert.False(t, hasData, "a 404 error response must not carry a 'data' key")
+	})
+
+	t.Run("ListLabels_NoAccount_Returns404", func(t *testing.T) {
+		// spec: SET-018[0]
+		router, _, _ := newTodoistAPITest(t)
+
+		w := doTodoistRequest(router, http.MethodGet, "/api/v1/todoist/labels", nil)
+		require.Equal(t, http.StatusNotFound, w.Code)
+
+		var envelope map[string]interface{}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+		assert.Equal(t, false, envelope["success"])
+		errObj, ok := envelope["error"].(map[string]interface{})
+		require.True(t, ok, "error envelope must carry an 'error' object")
+		assert.Equal(t, "NOT_FOUND", errObj["code"])
+		assert.NotEmpty(t, errObj["message"])
+		_, hasData := envelope["data"]
+		assert.False(t, hasData, "a 404 error response must not carry a 'data' key")
 	})
 }

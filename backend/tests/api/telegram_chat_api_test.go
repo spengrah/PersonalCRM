@@ -205,13 +205,14 @@ func TestChatAPI_ListChats(t *testing.T) {
 	assert.True(t, large, "large group should be in response")
 }
 
+// spec: TGM-014[0]
 func TestChatAPI_ListChats_ExcludesPrivate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
 	t.Parallel()
 
-	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
+	router, chatConfigRepo, chatID1, chatID2, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -223,25 +224,53 @@ func TestChatAPI_ListChats_ExcludesPrivate(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// A group chat is seeded alongside the excluded private chat so this one
+	// test proves both halves of TGM-014[0]: private (non-group) chats are
+	// filtered out, and each surviving chat carries the literal
+	// effective_tracked wire key.
+	mc3 := int32(3)
+	_, err = chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+		TelegramChatID: chatID2,
+		ChatType:       "group",
+		MemberCount:    &mc3,
+		Status:         "tracked",
+	})
+	require.NoError(t, err)
+
 	req, _ := http.NewRequest("GET", "/api/v1/telegram/chats", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var resp struct {
-		Data []struct {
-			TelegramChatID int64 `json:"telegram_chat_id"`
-		} `json:"data"`
+	// Decode into a raw map so a renamed/dropped literal wire key is caught,
+	// rather than round-tripping invisibly through a typed DTO struct.
+	var raw struct {
+		Data []map[string]interface{} `json:"data"`
 	}
-	err = json.Unmarshal(w.Body.Bytes(), &resp)
+	err = json.Unmarshal(w.Body.Bytes(), &raw)
 	require.NoError(t, err)
 
-	for _, chat := range resp.Data {
-		assert.NotEqual(t, chatID1, chat.TelegramChatID, "private chat should not appear")
+	var foundPrivate, foundGroup bool
+	for _, chat := range raw.Data {
+		idFloat, ok := chat["telegram_chat_id"].(float64)
+		require.True(t, ok, "telegram_chat_id must be present and numeric")
+		id := int64(idFloat)
+		if id == chatID1 {
+			foundPrivate = true
+		}
+		if id == chatID2 {
+			foundGroup = true
+			trackedVal, hasKey := chat["effective_tracked"]
+			assert.True(t, hasKey, "group chat should carry the effective_tracked key")
+			assert.Equal(t, true, trackedVal, "tracked small group should be effective_tracked=true")
+		}
 	}
+	assert.False(t, foundPrivate, "private chat should not appear")
+	assert.True(t, foundGroup, "group chat should appear carrying effective_tracked")
 }
 
+// spec: TGM-014[1]
 func TestChatAPI_UpdateStatus_Ignored(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -282,6 +311,7 @@ func TestChatAPI_UpdateStatus_Ignored(t *testing.T) {
 	assert.False(t, resp.Data.EffectiveTracked)
 }
 
+// spec: TGM-014[1]
 func TestChatAPI_UpdateStatus_TrackedOverridesLarge(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -322,6 +352,47 @@ func TestChatAPI_UpdateStatus_TrackedOverridesLarge(t *testing.T) {
 	assert.True(t, resp.Data.EffectiveTracked)
 }
 
+// spec: TGM-014[1]
+func TestChatAPI_UpdateStatus_Auto(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Seed as "ignored" so the PATCH to "auto" exercises a real transition,
+	// not a no-op re-write of the default.
+	mc5 := int32(5)
+	_, err := chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+		TelegramChatID: chatID1,
+		ChatType:       "group",
+		MemberCount:    &mc5,
+		Status:         "ignored",
+	})
+	require.NoError(t, err)
+
+	body, _ := json.Marshal(map[string]string{"status": "auto"})
+	req, _ := http.NewRequest("PATCH", fmt.Sprintf("/api/v1/telegram/chats/%d", chatID1), bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var raw struct {
+		Data map[string]interface{} `json:"data"`
+	}
+	err = json.Unmarshal(w.Body.Bytes(), &raw)
+	require.NoError(t, err)
+	assert.Equal(t, "auto", raw.Data["status"])
+	assert.Equal(t, true, raw.Data["effective_tracked"], "small group under auto should be effective_tracked")
+}
+
+// spec: TGM-014[1]
 func TestChatAPI_UpdateStatus_InvalidStatus(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -340,6 +411,7 @@ func TestChatAPI_UpdateStatus_InvalidStatus(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// spec: TGM-014[2]
 func TestChatAPI_UpdateStatus_NotFound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -358,4 +430,23 @@ func TestChatAPI_UpdateStatus_NotFound(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// spec: TGM-014[2]
+func TestChatAPI_UpdateStatus_NonNumericChatID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	router, _, _, _, cleanup := setupTelegramChatRouter(t)
+	defer cleanup()
+
+	body, _ := json.Marshal(map[string]string{"status": "ignored"})
+	req, _ := http.NewRequest("PATCH", "/api/v1/telegram/chats/not-a-number", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
