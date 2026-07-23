@@ -1,0 +1,13 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+settled: {ui: true}
+behaviors:
+  - id: CON-001
+    title: a behavior
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - y

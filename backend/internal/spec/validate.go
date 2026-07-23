@@ -57,7 +57,7 @@ const (
 	orderServesType       = 28 // serves only on ux/intent behaviors
 	orderServesResolve    = 29 // serves targets resolve to intent behaviors
 	orderSurface          = 30 // surface enum + required for non-intent non-retired + forbidden on intent
-	orderWaivers          = 31 // waivers only on ui-surface; index in range; no dups; reason non-empty
+	orderWaivers          = 31 // waivers only on ui- or api-surface; index in range; no dups; reason non-empty
 )
 
 var (

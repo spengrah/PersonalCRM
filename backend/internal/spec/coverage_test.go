@@ -112,6 +112,11 @@ func TestComputeCoverageVerdicts(t *testing.T) {
 	if apiC != 5 || apiW != 2 || apiO != 3 {
 		t.Fatalf("api counts covered/waived/orphans = %d/%d/%d, want 5/2/3\nitems: %#v", apiC, apiW, apiO, d.Items)
 	}
+	// Counts() aggregates across surfaces: ui(4/2/1) + api(5/2/3) = 9/4/4.
+	aggC, aggW, aggO := d.Counts()
+	if aggC != 9 || aggW != 4 || aggO != 4 {
+		t.Fatalf("aggregate counts covered/waived/orphans = %d/%d/%d, want 9/4/4\nitems: %#v", aggC, aggW, aggO, d.Items)
+	}
 
 	cases := []struct {
 		ref, state, surface string

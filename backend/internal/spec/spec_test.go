@@ -169,6 +169,7 @@ func TestLintViolationClasses(t *testing.T) {
 		}},
 		{"waivers-bad-statement-index", 1, []string{"waiver then index 1 out of range (a statement behavior has one implicit item, index 0)"}},
 		{"settled-not-list", 1, []string{"settled must be a list of surfaces"}},
+		{"settled-mapping", 1, []string{"settled must be a list of surfaces"}},
 		{"settled-bad-surface", 1, []string{`invalid settled surface "browser" (want ui|api)`}},
 		{"settled-none", 1, []string{`settled surface "none" is not yet supported`}},
 		{"settled-dup", 1, []string{`duplicate settled surface "ui"`}},
