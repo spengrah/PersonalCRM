@@ -18,6 +18,7 @@ import (
 	_ "personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,6 +81,36 @@ type sortTestHelper struct {
 
 func (h *sortTestHelper) createContact(name string) string {
 	body := fmt.Sprintf(`{"full_name": "%s"}`, name)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/contacts", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.router.ServeHTTP(w, req)
+	require.Equal(h.t, http.StatusCreated, w.Code)
+
+	var resp api.APIResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(h.t, err)
+	contactData := resp.Data.(map[string]interface{})
+	return contactData["id"].(string)
+}
+
+func (h *sortTestHelper) createContactWithLocation(name, location string) string {
+	body := fmt.Sprintf(`{"full_name": "%s", "location": "%s"}`, name, location)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/contacts", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.router.ServeHTTP(w, req)
+	require.Equal(h.t, http.StatusCreated, w.Code)
+
+	var resp api.APIResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(h.t, err)
+	contactData := resp.Data.(map[string]interface{})
+	return contactData["id"].(string)
+}
+
+func (h *sortTestHelper) createContactWithBirthday(name, birthday string) string {
+	body := fmt.Sprintf(`{"full_name": "%s", "birthday": "%s"}`, name, birthday)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/contacts", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -350,6 +381,7 @@ func TestContactSort_ContactBy(t *testing.T) {
 	})
 
 	t.Run("contact_by sort is accepted by API validation", func(t *testing.T) {
+		// spec: CON-018[0]
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?sort=contact_by&order=asc", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -502,6 +534,7 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 	})
 
 	t.Run("last_response_at sort is accepted by API validation", func(t *testing.T) {
+		// spec: CON-018[0]
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?sort=last_response_at&order=desc", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -509,6 +542,7 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 	})
 
 	t.Run("legacy last_contacted sort still accepted", func(t *testing.T) {
+		// spec: CON-018[0]
 		// last_contacted remains a valid sort value on the API even though no UI
 		// surface emits it; regression-guard for any external caller still using
 		// the legacy field.
@@ -523,5 +557,161 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+}
+
+func TestContactSort_Location(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	t.Parallel()
+	router, cleanup := setupContactSortTestRouter(t)
+	defer cleanup()
+
+	h := &sortTestHelper{router: router, t: t}
+
+	t.Run("location ascending sorts alphabetically", func(t *testing.T) {
+		// spec: CON-018[0]
+		prefix := "SortLocAsc"
+		idA := h.createContactWithLocation(prefix+" Alpha Test", "Alphaville")
+		idZ := h.createContactWithLocation(prefix+" Zulu Test", "Zurich Town")
+		defer h.deleteContact(idA)
+		defer h.deleteContact(idZ)
+
+		resp := h.getIDsResponse("/api/v1/contacts?ids_only=true&search=" + prefix + "&sort=location&order=asc")
+
+		posA := h.findPosition(resp.IDs, idA)
+		posZ := h.findPosition(resp.IDs, idZ)
+
+		assert.NotEqual(t, -1, posA, "Alphaville contact should be in results")
+		assert.NotEqual(t, -1, posZ, "Zurich contact should be in results")
+		assert.Less(t, posA, posZ, "Alphaville should come before Zurich Town in asc order")
+	})
+
+	t.Run("location descending sorts reverse alphabetically", func(t *testing.T) {
+		// spec: CON-018[0]
+		prefix := "SortLocDesc"
+		idA := h.createContactWithLocation(prefix+" Alpha Test", "Alphaville")
+		idZ := h.createContactWithLocation(prefix+" Zulu Test", "Zurich Town")
+		defer h.deleteContact(idA)
+		defer h.deleteContact(idZ)
+
+		resp := h.getIDsResponse("/api/v1/contacts?ids_only=true&search=" + prefix + "&sort=location&order=desc")
+
+		posA := h.findPosition(resp.IDs, idA)
+		posZ := h.findPosition(resp.IDs, idZ)
+
+		assert.NotEqual(t, -1, posA, "Alphaville contact should be in results")
+		assert.NotEqual(t, -1, posZ, "Zurich contact should be in results")
+		assert.Less(t, posZ, posA, "Zurich Town should come before Alphaville in desc order")
+	})
+
+	t.Run("location sort is accepted by API validation and returned in the response body", func(t *testing.T) {
+		// spec: CON-018[0]
+		prefix := "SortLocShape" + uuid.New().String()[:8]
+		id := h.createContactWithLocation(prefix+" Shape Test", "Shapeburg")
+		defer h.deleteContact(id)
+
+		ids := h.getListResponseIDs("/api/v1/contacts?search=" + prefix + "&sort=location&order=asc")
+		require.NotEqual(t, -1, h.findPosition(ids, id), "seeded contact should be in the full list response")
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?search="+prefix+"&sort=location&order=asc", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var apiResp api.APIResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &apiResp))
+		require.True(t, apiResp.Success)
+
+		dataIface, ok := apiResp.Data.([]interface{})
+		require.True(t, ok, "expected list response data to be an array")
+		require.Len(t, dataIface, 1)
+		row := dataIface[0].(map[string]interface{})
+		assert.Equal(t, "Shapeburg", row["location"], "response body should carry the seeded location value")
+	})
+}
+
+func TestContactSort_Birthday(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	t.Parallel()
+	router, cleanup := setupContactSortTestRouter(t)
+	defer cleanup()
+
+	h := &sortTestHelper{router: router, t: t}
+
+	t.Run("birthday ascending sorts earliest first", func(t *testing.T) {
+		// spec: CON-018[0]
+		prefix := "SortBdayAsc"
+		idOld := h.createContactWithBirthday(prefix+" Old Test", "1980-01-01")
+		idYoung := h.createContactWithBirthday(prefix+" Young Test", "2000-06-01")
+		defer h.deleteContact(idOld)
+		defer h.deleteContact(idYoung)
+
+		resp := h.getIDsResponse("/api/v1/contacts?ids_only=true&search=" + prefix + "&sort=birthday&order=asc")
+
+		posOld := h.findPosition(resp.IDs, idOld)
+		posYoung := h.findPosition(resp.IDs, idYoung)
+
+		assert.NotEqual(t, -1, posOld, "Old birthday contact should be in results")
+		assert.NotEqual(t, -1, posYoung, "Young birthday contact should be in results")
+		assert.Less(t, posOld, posYoung, "Earlier birthday should come before later birthday in asc order")
+	})
+
+	t.Run("birthday descending sorts latest first", func(t *testing.T) {
+		// spec: CON-018[0]
+		prefix := "SortBdayDesc"
+		idOld := h.createContactWithBirthday(prefix+" Old Test", "1980-01-01")
+		idYoung := h.createContactWithBirthday(prefix+" Young Test", "2000-06-01")
+		defer h.deleteContact(idOld)
+		defer h.deleteContact(idYoung)
+
+		resp := h.getIDsResponse("/api/v1/contacts?ids_only=true&search=" + prefix + "&sort=birthday&order=desc")
+
+		posOld := h.findPosition(resp.IDs, idOld)
+		posYoung := h.findPosition(resp.IDs, idYoung)
+
+		assert.NotEqual(t, -1, posOld, "Old birthday contact should be in results")
+		assert.NotEqual(t, -1, posYoung, "Young birthday contact should be in results")
+		assert.Less(t, posYoung, posOld, "Later birthday should come before earlier birthday in desc order")
+	})
+
+	t.Run("birthday sort is accepted by API validation and returned in the response body", func(t *testing.T) {
+		// spec: CON-018[0]
+		prefix := "SortBdayShape" + uuid.New().String()[:8]
+		id := h.createContactWithBirthday(prefix+" Shape Test", "1990-01-15")
+		defer h.deleteContact(id)
+
+		ids := h.getListResponseIDs("/api/v1/contacts?search=" + prefix + "&sort=birthday&order=asc")
+		require.NotEqual(t, -1, h.findPosition(ids, id), "seeded contact should be in the full list response")
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contacts?search="+prefix+"&sort=birthday&order=asc", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var apiResp api.APIResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &apiResp))
+		require.True(t, apiResp.Success)
+
+		dataIface, ok := apiResp.Data.([]interface{})
+		require.True(t, ok, "expected list response data to be an array")
+		require.Len(t, dataIface, 1)
+		row := dataIface[0].(map[string]interface{})
+		assert.Equal(t, "1990-01-15T00:00:00Z", row["birthday"], "response body should carry the seeded birthday value")
 	})
 }

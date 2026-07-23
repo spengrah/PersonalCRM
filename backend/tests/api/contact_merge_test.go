@@ -1,16 +1,24 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/api"
+	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,6 +70,7 @@ func TestContactMerge_Integration(t *testing.T) {
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	noteRepo := repository.NewNoteRepository(database.Queries)
+	calendarEventRepo := repository.NewCalendarEventRepository(database.Queries)
 
 	// Create service
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
@@ -155,6 +164,91 @@ func TestContactMerge_Integration(t *testing.T) {
 
 		assert.Equal(t, int64(1), preview.MethodsToTransfer) // unique@example.com
 		assert.Equal(t, int64(1), preview.DuplicateMethods)  // shared@example.com
+	})
+
+	t.Run("GetMergePreview_InteractionsAndCalendarEvents", func(t *testing.T) {
+		// spec: CON-037[0]
+		// Create target contact
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "Merge Target Events " + ns,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
+
+		// Create source contact
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "Merge Source Events " + ns,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, source.ID) }()
+
+		// Seed three interactions on the source contact. A count that differs
+		// from the calendar-event count below (2) also catches a field-swap
+		// defect, not just a dropped-to-zero one.
+		now := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+		_, err = interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+			ContactID:  source.ID,
+			Source:     repository.InteractionSourceManual,
+			OccurredAt: now,
+			Direction:  repository.InteractionDirectionOutbound,
+		})
+		require.NoError(t, err)
+		_, err = interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+			ContactID:  source.ID,
+			Source:     repository.InteractionSourceManual,
+			OccurredAt: now.Add(-time.Hour),
+			Direction:  repository.InteractionDirectionInbound,
+		})
+		require.NoError(t, err)
+		_, err = interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+			ContactID:  source.ID,
+			Source:     repository.InteractionSourceManual,
+			OccurredAt: now.Add(-2 * time.Hour),
+			Direction:  repository.InteractionDirectionOutbound,
+		})
+		require.NoError(t, err)
+
+		// Seed two calendar events that match the source contact. Calendar
+		// events are not FK-linked to contact (matched_contact_ids is a plain
+		// uuid[] column, no ON DELETE CASCADE), so they must be hard-deleted
+		// explicitly rather than relying on the source contact's cleanup.
+		title := "Merge Preview Event"
+		event1, err := calendarEventRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
+			GcalEventID:       "merge-preview-" + ns + "-1",
+			GcalCalendarID:    "merge-preview-" + ns + "-cal",
+			GoogleAccountID:   "merge-preview-" + ns + "-acct",
+			Title:             &title,
+			StartTime:         now,
+			EndTime:           now.Add(time.Hour),
+			Status:            "confirmed",
+			Attendees:         []repository.Attendee{},
+			MatchedContactIDs: []uuid.UUID{source.ID},
+			SyncedAt:          now,
+		})
+		require.NoError(t, err)
+		defer func() { _ = calendarEventRepo.TestHardDeleteByID(ctx, event1.ID) }()
+
+		event2, err := calendarEventRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
+			GcalEventID:       "merge-preview-" + ns + "-2",
+			GcalCalendarID:    "merge-preview-" + ns + "-cal",
+			GoogleAccountID:   "merge-preview-" + ns + "-acct",
+			Title:             &title,
+			StartTime:         now.Add(24 * time.Hour),
+			EndTime:           now.Add(25 * time.Hour),
+			Status:            "confirmed",
+			Attendees:         []repository.Attendee{},
+			MatchedContactIDs: []uuid.UUID{source.ID},
+			SyncedAt:          now,
+		})
+		require.NoError(t, err)
+		defer func() { _ = calendarEventRepo.TestHardDeleteByID(ctx, event2.ID) }()
+
+		// Get merge preview
+		preview, err := contactService.GetMergePreview(ctx, source.ID, target.ID)
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(3), preview.InteractionsToTransfer)
+		assert.Equal(t, int64(2), preview.CalendarEventsToUpdate)
 	})
 
 	t.Run("MergeContacts_TransfersAllData", func(t *testing.T) {
@@ -658,5 +752,303 @@ func TestContactMerge_Integration(t *testing.T) {
 		// value, confirming BulkApply ran and the refetch picked it up.
 		assert.Equal(t, sourceLastContacted.UTC(), merged.LastContacted.UTC(),
 			"BulkApply should forward-max last_contacted to the source value")
+	})
+}
+
+// setupContactMergePreviewTestRouter mirrors setupContactValidationTestRouter's
+// wiring, but only registers the merge-preview route (GET /:id/merge/preview,
+// where :id is the TARGET and source_id is a query param) plus a bare CreateContact
+// route needed to seed fixtures through the HTTP layer's own DB handle.
+func setupContactMergePreviewTestRouter() (*gin.Engine, func()) {
+	ctx := context.Background()
+	databaseURL := os.Getenv("DATABASE_URL")
+
+	dbConfig := config.DatabaseConfig{
+		URL:               databaseURL,
+		MaxConns:          8,
+		MinConns:          1,
+		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
+		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
+		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
+	}
+	database, err := db.NewDatabase(ctx, dbConfig)
+	if err != nil {
+		panic("Failed to connect to test database: " + err.Error())
+	}
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	cadenceUpdater := buildCadenceUpdaterForAPITest(nil, database)
+	assertSvc, cache := buildKnowledgeDepsForAPITest(nil, database, nil)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil, cadenceUpdater, assertSvc, cache, nil)
+	contactHandler := handlers.NewContactHandler(contactService)
+
+	router := gin.New()
+	router.Use(api.RequestIDMiddleware())
+	corsConfig := config.CORSConfig{AllowAll: true}
+	router.Use(api.CORSMiddleware(corsConfig))
+
+	v1 := router.Group("/api/v1")
+	contacts := v1.Group("/contacts")
+	{
+		contacts.POST("", contactHandler.CreateContact)
+		contacts.GET("/:id/merge/preview", contactHandler.GetMergePreview)
+	}
+
+	cleanup := func() {
+		database.Close()
+	}
+
+	return router, cleanup
+}
+
+func TestContactMergePreviewAPI_Errors(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	t.Parallel()
+	router, cleanup := setupContactMergePreviewTestRouter()
+	defer cleanup()
+
+	ns := uuid.New().String()[:8]
+
+	// createContactViaAPI seeds a fixture contact through the router's own
+	// CreateContact route, matching the DB handle the merge-preview route
+	// reads from.
+	createContactViaAPI := func(t *testing.T, name string) uuid.UUID {
+		t.Helper()
+		body, err := json.Marshal(handlers.CreateContactRequest{FullName: name})
+		require.NoError(t, err)
+		req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+		var response api.APIResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		data, err := json.Marshal(response.Data)
+		require.NoError(t, err)
+		var created handlers.ContactResponse
+		require.NoError(t, json.Unmarshal(data, &created))
+		id, err := uuid.Parse(created.ID)
+		require.NoError(t, err)
+		return id
+	}
+
+	t.Run("GetMergePreview_UnknownSourceID_NotFound", func(t *testing.T) {
+		// spec: CON-037[1]
+		target := createContactViaAPI(t, "Preview Errors Target A "+ns)
+
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+target.String()+"/merge/preview?source_id="+uuid.New().String(), nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response api.APIResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.False(t, response.Success)
+		require.NotNil(t, response.Error)
+		assert.Equal(t, "NOT_FOUND", response.Error.Code)
+	})
+
+	t.Run("GetMergePreview_UnknownTargetID_NotFound", func(t *testing.T) {
+		// spec: CON-037[1]
+		source := createContactViaAPI(t, "Preview Errors Source B "+ns)
+
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+uuid.New().String()+"/merge/preview?source_id="+source.String(), nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+
+		var response api.APIResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.False(t, response.Success)
+		require.NotNil(t, response.Error)
+		assert.Equal(t, "NOT_FOUND", response.Error.Code)
+	})
+
+	t.Run("GetMergePreview_MissingSourceID_ValidationError", func(t *testing.T) {
+		// spec: CON-037[2]
+		target := createContactViaAPI(t, "Preview Errors Target C "+ns)
+
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+target.String()+"/merge/preview", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		var response api.APIResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.False(t, response.Success)
+		require.NotNil(t, response.Error)
+		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
+	})
+
+	t.Run("GetMergePreview_MalformedSourceID_ValidationError", func(t *testing.T) {
+		// spec: CON-037[2]
+		target := createContactViaAPI(t, "Preview Errors Target D "+ns)
+
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+target.String()+"/merge/preview?source_id=not-a-uuid", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		var response api.APIResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		assert.False(t, response.Success)
+		require.NotNil(t, response.Error)
+		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
+	})
+}
+
+// TestContactMergePreviewAPI_SuccessCounts proves the success path of the
+// merge-preview route over HTTP: the JSON response must carry all five
+// counters the spec names, with values matching seeded data — a service-level
+// preview test cannot catch an omitted or misnamed response field.
+func TestContactMergePreviewAPI_SuccessCounts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	t.Parallel()
+	router, rcleanup := setupContactMergePreviewTestRouter()
+	defer rcleanup()
+
+	database, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	ns := uuid.New().String()[:8]
+
+	contactRepo := repository.NewContactRepository(database.Queries)
+	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
+	noteRepo := repository.NewNoteRepository(database.Queries)
+	calendarEventRepo := repository.NewCalendarEventRepository(database.Queries)
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	cadenceUpdater := buildCadenceUpdaterForAPITest(t, database)
+	assertSvc, cache := buildKnowledgeDepsForAPITest(t, database, nil)
+	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil, cadenceUpdater, assertSvc, cache, nil)
+
+	t.Run("GetMergePreview_AllFiveCountersInResponse", func(t *testing.T) {
+		// spec: CON-037[0]
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "Preview Counts Target " + ns,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
+
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "Preview Counts Source " + ns,
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, source.ID) }()
+
+		// All five counters are pairwise-distinct (3/2/1/4/5) so swapping any
+		// two DTO JSON tags produces a detectably different payload. A contact
+		// has at most one notepad note, so notes_to_transfer anchors the value
+		// 1 and every other counter avoids it. Target owns two shared methods,
+		// making two of the source's five methods duplicates:
+		// methods_to_transfer=3, duplicate_methods=2.
+		for _, dupValue := range []string{"dup1-" + ns + "@example.com", "dup2-" + ns + "@example.com"} {
+			_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+				ContactID: target.ID, Type: "email", Value: dupValue,
+			})
+			require.NoError(t, err)
+			_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+				ContactID: source.ID, Type: "email", Value: dupValue,
+			})
+			require.NoError(t, err)
+		}
+		for _, v := range []string{"a-" + ns + "@example.com", "b-" + ns + "@example.com", "c-" + ns + "@example.com"} {
+			_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+				ContactID: source.ID, Type: "email", Value: v,
+			})
+			require.NoError(t, err)
+		}
+
+		_, err = noteRepo.CreateNotepad(ctx, source.ID, "Preview counts notepad "+ns)
+		require.NoError(t, err)
+
+		now := accelerated.GetCurrentTime().Truncate(time.Microsecond)
+		for i := 0; i < 4; i++ {
+			_, err = interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+				ContactID:  source.ID,
+				Source:     repository.InteractionSourceManual,
+				OccurredAt: now.Add(-time.Duration(i) * time.Hour),
+				Direction:  repository.InteractionDirectionOutbound,
+			})
+			require.NoError(t, err)
+		}
+
+		title := "Preview Counts Event"
+		for _, suffix := range []string{"1", "2", "3", "4", "5"} {
+			event, err := calendarEventRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
+				GcalEventID:       "preview-counts-" + ns + "-" + suffix,
+				GcalCalendarID:    "preview-counts-" + ns + "-cal",
+				GoogleAccountID:   "preview-counts-" + ns + "-acct",
+				Title:             &title,
+				StartTime:         now,
+				EndTime:           now.Add(time.Hour),
+				Status:            "confirmed",
+				Attendees:         []repository.Attendee{},
+				MatchedContactIDs: []uuid.UUID{source.ID},
+				SyncedAt:          now,
+			})
+			require.NoError(t, err)
+			eventID := event.ID
+			defer func() { _ = calendarEventRepo.TestHardDeleteByID(ctx, eventID) }()
+		}
+
+		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+target.ID.String()+"/merge/preview?source_id="+source.ID.String(), nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+		var response api.APIResponse
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+		require.True(t, response.Success)
+
+		// Assert the literal wire keys rather than decoding into the
+		// production MergePreviewResponse struct: decoding with the same tags
+		// that serialized the payload would round-trip a renamed or swapped
+		// key and leave every assertion green.
+		preview, ok := response.Data.(map[string]interface{})
+		require.True(t, ok, "preview payload must be a JSON object")
+
+		sourceObj, ok := preview["source_contact"].(map[string]interface{})
+		require.True(t, ok, "response must carry a source_contact object")
+		assert.Equal(t, source.ID.String(), sourceObj["id"])
+		targetObj, ok := preview["target_contact"].(map[string]interface{})
+		require.True(t, ok, "response must carry a target_contact object")
+		assert.Equal(t, target.ID.String(), targetObj["id"])
+
+		counters := map[string]float64{
+			"methods_to_transfer":       3,
+			"duplicate_methods":         2,
+			"notes_to_transfer":         1,
+			"interactions_to_transfer":  4,
+			"calendar_events_to_update": 5,
+		}
+		for key, want := range counters {
+			got, present := preview[key]
+			require.True(t, present, "response must carry the %q key", key)
+			assert.Equal(t, want, got, "counter %q", key)
+		}
 	})
 }
