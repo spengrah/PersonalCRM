@@ -37,6 +37,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -244,7 +245,7 @@ func extractTar(r io.Reader, dest string) error {
 	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
