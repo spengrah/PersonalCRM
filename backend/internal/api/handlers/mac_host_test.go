@@ -146,6 +146,59 @@ func TestRotateKey_HostRevokedBetweenMiddlewareAndTx(t *testing.T) {
 	require.Equal(t, api.ErrCodeNotFound, resp.Error.Code)
 }
 
+// TestRotateKey_ConcurrentRotationLoser_MapsStaleAuthTo401 covers the
+// handler's service.ErrAPIKeyStaleAuth → 401 STALE_AUTH mapping: the
+// key was rotated out from under the caller between the middleware
+// read and the rotate tx's CAS check. The service stub returns the
+// sentinel deterministically (the CAS-detection semantics themselves
+// are proven at the service layer by
+// TestMacHostRotateKey_ConcurrentRotation_DifferentTokens/_SameToken),
+// so this pins the wire contract without a real race.
+// spec: MAC-010[2]
+func TestRotateKey_ConcurrentRotationLoser_MapsStaleAuthTo401(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	hostID := uuid.New()
+	stubHost := &repository.MacHost{
+		ID:         hostID,
+		Hostname:   "test-host",
+		APIKeyHash: "test-hash",
+	}
+	stub := &stubMacHostService{rotateErr: service.ErrAPIKeyStaleAuth}
+	handler := NewMacHostHandler(stub, nil)
+
+	r := gin.New()
+	r.Use(auth.MacHostAuthMiddleware(
+		&fakeHostRepo{host: stubHost},
+		alwaysMatch,
+		auth.DefaultMacHostAuthLimiterConfig()))
+	r.POST("/api/v1/host/:id/rotate-key", handler.RotateKey)
+
+	body, err := json.Marshal(map[string]any{"pairing_token": "fresh-token"})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/host/"+hostID.String()+"/rotate-key",
+		bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Mac-Host-ID", hostID.String())
+	req.Header.Set("Authorization", "Bearer test-hash")
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, 1, stub.rotateCalls, "service must be invoked exactly once")
+
+	var resp struct {
+		Success bool          `json:"success"`
+		Error   *api.APIError `json:"error"`
+	}
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
+	require.False(t, resp.Success)
+	require.NotNil(t, resp.Error)
+	require.Equal(t, "STALE_AUTH", resp.Error.Code, "loser must surface the literal STALE_AUTH code")
+}
+
 // TestHeartbeat_HostRevokedBetweenMiddlewareAndTx covers the
 // handler's db.ErrNotFound -> 401 UNKNOWN_HOST branch: the host was
 // revoked between the middleware's read and the heartbeat write.

@@ -11,13 +11,13 @@ import (
 
 // These are unit tests against the per-family payload-version validators
 // directly (no HTTP/DB harness needed — they're pure functions operating
-// on an IngestEventRequest's raw JSON payload). validateCallPayloadVersion
-// and validateExternalContactPayloadVersion already have below/above
-// version coverage at the API-integration level (phone_call_ingest and
-// external_contact_ingest test files); raw_message and meeting_note don't,
-// so both halves are covered here for those two families, plus the
-// below-minimum half for call (rounding out ING-005[0] across all three
-// families named in the spec).
+// on an IngestEventRequest's raw JSON payload). Both halves of the
+// version envelope (below-minimum rejection and above-maximum rejection
+// with the "upgrade Pi" signal) are pinned here for ALL FOUR daemon
+// families the spec names: message, external-contact, meeting-note, and
+// call. The API-integration level additionally exercises the
+// external_contact and call version gates end-to-end
+// (external_contact_ingest and phone_call_ingest test files).
 
 // spec: ING-005[0]
 func TestValidateRawMessagePayload_VersionBelowMin_Rejected(t *testing.T) {
@@ -76,6 +76,34 @@ func TestValidateMeetingNotePayloadVersion_VersionTooHigh_Rejected(t *testing.T)
 }
 
 // spec: ING-005[0]
+func TestValidateExternalContactPayloadVersion_VersionBelowMin_Rejected(t *testing.T) {
+	ev := IngestEventRequest{
+		Source:   "icloud_contacts",
+		SourceID: "ext-below-min",
+		Kind:     string(events.KindExternalContactUpserted),
+		Payload:  json.RawMessage(`{"version":0}`),
+	}
+	ierr := validateExternalContactPayloadVersion(0, events.KindExternalContactUpserted, ev)
+	require.NotNil(t, ierr)
+	require.Equal(t, ingestCodePayloadInvalid, ierr.Code)
+	require.Contains(t, ierr.Message, "version")
+}
+
+// spec: ING-005[1]
+func TestValidateExternalContactPayloadVersion_VersionTooHigh_Rejected(t *testing.T) {
+	ev := IngestEventRequest{
+		Source:   "icloud_contacts",
+		SourceID: "ext-too-high",
+		Kind:     string(events.KindExternalContactUpserted),
+		Payload:  json.RawMessage(`{"version":999}`),
+	}
+	ierr := validateExternalContactPayloadVersion(0, events.KindExternalContactUpserted, ev)
+	require.NotNil(t, ierr)
+	require.Equal(t, ingestCodePayloadInvalid, ierr.Code)
+	require.Contains(t, ierr.Message, "upgrade Pi")
+}
+
+// spec: ING-005[0]
 func TestValidateCallPayloadVersion_VersionBelowMin_Rejected(t *testing.T) {
 	ev := IngestEventRequest{
 		Source:   "phone_calls",
@@ -87,4 +115,18 @@ func TestValidateCallPayloadVersion_VersionBelowMin_Rejected(t *testing.T) {
 	require.NotNil(t, ierr)
 	require.Equal(t, ingestCodePayloadInvalid, ierr.Code)
 	require.Contains(t, ierr.Message, "version")
+}
+
+// spec: ING-005[1]
+func TestValidateCallPayloadVersion_VersionTooHigh_Rejected(t *testing.T) {
+	ev := IngestEventRequest{
+		Source:   "phone_calls",
+		SourceID: "call-too-high",
+		Kind:     string(events.KindCallReceived),
+		Payload:  json.RawMessage(`{"version":999}`),
+	}
+	ierr := validateCallPayloadVersion(0, events.KindCallReceived, ev)
+	require.NotNil(t, ierr)
+	require.Equal(t, ingestCodePayloadInvalid, ierr.Code)
+	require.Contains(t, ierr.Message, "upgrade Pi")
 }

@@ -297,6 +297,7 @@ func callRotateAPIKeyDirect(
 	return env.macService.RotateAPIKey(context.Background(), hostID, startingHash, token)
 }
 
+// spec: MAC-010[2]
 func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -364,6 +365,7 @@ func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
 	require.Equal(t, 1, consumedCount, "exactly one token must be consumed")
 }
 
+// spec: MAC-010[2]
 func TestMacHostRotateKey_ConcurrentRotation_SameToken(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -460,13 +462,16 @@ func TestMacHostRotateKey_PlaintextNeverLeaksInSubsequentReads(t *testing.T) {
 		map[string]any{"pairing_token": token})
 	require.Equal(t, http.StatusOK, w.Code, "rotate: %s", w.Body.String())
 	require.Contains(t, w.Body.String(), `"api_key"`, "sanity: rotate response must actually carry the key field")
+	require.Contains(t, w.Body.String(), `"api_key_rotated_at"`, "rotate response must carry the rotation timestamp on the wire")
 
 	var res struct {
-		APIKey string `json:"api_key"`
+		APIKey          string    `json:"api_key"`
+		APIKeyRotatedAt time.Time `json:"api_key_rotated_at"`
 	}
 	readData(t, w, &res)
 	require.NotEmpty(t, res.APIKey)
 	require.NotEqual(t, oldKey, res.APIKey)
+	require.False(t, res.APIKeyRotatedAt.IsZero(), "api_key_rotated_at must be a real timestamp, not the zero value")
 
 	// Heartbeat with the NEW key must never echo the plaintext key back.
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+hostID.String()+"/heartbeat",
@@ -506,18 +511,24 @@ func rotateKeyHTTPRequest(env *macHostTestEnv, hostID uuid.UUID, apiKey, pairing
 	return w
 }
 
-// TestMacHostRotateKey_HTTP_StaleAuthOnConcurrentLoss drives the
-// service-level CAS race (already proven directly against
-// MacHostService.RotateAPIKey in TestMacHostRotateKey_ConcurrentRotation_
-// DifferentTokens) over REAL concurrent HTTP requests: two goroutines
-// both authenticate with the SAME still-current key via
-// MacHostAuthMiddleware (both requests race to the finish line before
-// either commits), then race in the handler's compare-and-swap. The
-// loser's stale-auth rejection must surface as 401 STALE_AUTH on the
-// wire — the literal error code the handler maps
-// service.ErrAPIKeyStaleAuth to. Distinct pairing tokens per goroutine
-// so token single-use never intrudes on which side loses the CAS.
-// spec: MAC-010[2]
+// TestMacHostRotateKey_HTTP_StaleAuthOnConcurrentLoss is an UNCITED
+// stress test: two goroutines race real HTTP rotate-key requests with
+// the same still-current key and distinct pairing tokens. Exactly one
+// must succeed; the loser must be rejected 401 — but the loser's error
+// code depends on WHERE its request was when the winner committed, and
+// both interleavings are legal:
+//
+//   - the loser's middleware read the PRE-commit hash (both requests
+//     authenticated before either committed) → the handler's CAS check
+//     fires → 401 STALE_AUTH; or
+//   - the loser's middleware ran AFTER the winner's commit, so its
+//     bearer (the old key) no longer matches the live hash → the
+//     middleware rejects it → 401 INVALID_KEY.
+//
+// The deterministic decompositions live elsewhere: the 401 STALE_AUTH
+// wire mapping is pinned by the handler-level stub test
+// TestRotateKey_ConcurrentRotationLoser_MapsStaleAuthTo401, and the CAS
+// detection semantics by TestMacHostRotateKey_ConcurrentRotation_*.
 func TestMacHostRotateKey_HTTP_StaleAuthOnConcurrentLoss(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -553,18 +564,19 @@ func TestMacHostRotateKey_HTTP_StaleAuthOnConcurrentLoss(t *testing.T) {
 	wg.Wait()
 	close(results)
 
-	successes, staleAuth := 0, 0
+	successes, losers := 0, 0
 	for r := range results {
 		switch r.status {
 		case http.StatusOK:
 			successes++
 		case http.StatusUnauthorized:
-			require.Equal(t, "STALE_AUTH", r.errCode, "loser body: %s", r.body)
-			staleAuth++
+			// Either code is a legal loser outcome; see the test comment.
+			require.Contains(t, []string{"STALE_AUTH", "INVALID_KEY"}, r.errCode, "loser body: %s", r.body)
+			losers++
 		default:
 			t.Fatalf("unexpected rotate-key status %d, body: %s", r.status, r.body)
 		}
 	}
 	require.Equal(t, 1, successes, "exactly one concurrent rotation must succeed")
-	require.Equal(t, 1, staleAuth, "exactly one concurrent rotation must fail 401 STALE_AUTH")
+	require.Equal(t, 1, losers, "exactly one concurrent rotation must fail 401")
 }

@@ -19,6 +19,7 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/mac"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -426,12 +427,39 @@ func TestMacHost_Heartbeat_PersistsFieldsAndEchoesProtocolState(t *testing.T) {
 		"Authorization": "Bearer " + res.APIKey,
 	}
 
-	before := accelerated.GetCurrentTime()
+	ctx := context.Background()
 
-	// Distinct values on every daemon-supplied field. protocol_version
-	// (2) and cursor_epoch (1, from pairing) are pairwise-distinct
-	// numerics; the JSON blobs are distinct from each other and from
-	// the empty defaults the handler substitutes when absent.
+	// Bump the host's cursor_epoch twice (1 → 3) so cursor_epoch,
+	// protocol_version (mac.ProtocolVersion = 2), and
+	// min_protocol_version (mac.MinProtocolVersion = 1) are all
+	// pairwise-distinct — a tag swap between any two of the numeric
+	// response fields would otherwise be green when two of them share a
+	// value. BumpMacHostCursorEpoch is the same admin/backup-restore
+	// epoch mechanism the daemon-cache-invalidation flow uses; its
+	// RETURNING value is the independent read the epoch assertion
+	// compares against.
+	_, err = env.database.Queries.BumpMacHostCursorEpoch(ctx, pgtype.UUID{Bytes: res.HostID, Valid: true})
+	require.NoError(t, err)
+	bumpedEpoch, err := env.database.Queries.BumpMacHostCursorEpoch(ctx, pgtype.UUID{Bytes: res.HostID, Valid: true})
+	require.NoError(t, err)
+	require.NotEqual(t, int64(mac.ProtocolVersion), bumpedEpoch, "fixture sanity: epoch must differ from protocol_version")
+	require.NotEqual(t, int64(mac.MinProtocolVersion), bumpedEpoch, "fixture sanity: epoch must differ from min_protocol_version")
+
+	// Stamp last_heartbeat_at to a fixed past value so the post-heartbeat
+	// assertion can require strict advancement from a KNOWN persisted
+	// baseline — without ever comparing the DB's NOW()-written value
+	// against accelerated.GetCurrentTime() (the accelerated clock can sit
+	// far ahead of the wall clock the DB writes with).
+	seededHeartbeatAt := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, env.hostRepo.SetHeartbeatAtForTest(ctx, res.HostID, seededHeartbeatAt))
+	pre, err := env.hostRepo.GetHost(ctx, res.HostID)
+	require.NoError(t, err)
+	require.NotNil(t, pre.LastHeartbeatAt)
+	require.True(t, pre.LastHeartbeatAt.Equal(seededHeartbeatAt), "fixture sanity: baseline heartbeat stamp persisted")
+
+	// Distinct values on every daemon-supplied field. The JSON blobs are
+	// distinct from each other and from the empty defaults the handler
+	// substitutes when absent.
 	const heartbeatDaemonVersion = "9.9.9-heartbeat-test"
 	const heartbeatProtocolVersion = 2
 	permissions := json.RawMessage(`{"fda":true,"screen_recording":false}`)
@@ -449,7 +477,11 @@ func TestMacHost_Heartbeat_PersistsFieldsAndEchoesProtocolState(t *testing.T) {
 	// spec: MAC-011[2]
 	// Literal wire keys on the heartbeat response body — decoded via a
 	// local struct with matching json tags, not the handler's private
-	// response type.
+	// response type. Each numeric field is compared against an
+	// INDEPENDENT read of the value it must carry (the epoch bump's
+	// RETURNING value; the mac package constants), and the three values
+	// are pairwise-distinct (3 / 2 / 1), so a swapped wire tag cannot
+	// pass.
 	var hbResp struct {
 		OK                 bool  `json:"ok"`
 		CursorEpoch        int64 `json:"cursor_epoch"`
@@ -458,9 +490,9 @@ func TestMacHost_Heartbeat_PersistsFieldsAndEchoesProtocolState(t *testing.T) {
 	}
 	readData(t, w, &hbResp)
 	require.True(t, hbResp.OK)
-	require.Equal(t, res.CursorEpoch, hbResp.CursorEpoch, "cursor_epoch must echo the host's current epoch")
-	require.EqualValues(t, 2, hbResp.ProtocolVersion, "protocol_version must be the server's current version (mac.ProtocolVersion)")
-	require.EqualValues(t, 1, hbResp.MinProtocolVersion, "min_protocol_version must be the server's floor (mac.MinProtocolVersion)")
+	require.Equal(t, bumpedEpoch, hbResp.CursorEpoch, "cursor_epoch must echo the host's current (post-bump) epoch")
+	require.Equal(t, mac.ProtocolVersion, hbResp.ProtocolVersion, "protocol_version must be the server's current version (mac.ProtocolVersion)")
+	require.Equal(t, mac.MinProtocolVersion, hbResp.MinProtocolVersion, "min_protocol_version must be the server's floor (mac.MinProtocolVersion)")
 
 	// spec: MAC-011[0]
 	// Read the host back via the admin GET route and assert every
@@ -482,7 +514,15 @@ func TestMacHost_Heartbeat_PersistsFieldsAndEchoesProtocolState(t *testing.T) {
 	require.Equal(t, heartbeatDaemonVersion, hostView.DaemonVersion, "daemon_version must be persisted")
 	require.EqualValues(t, heartbeatProtocolVersion, hostView.ProtocolVersion, "protocol_version must be persisted")
 	require.NotNil(t, hostView.LastHeartbeatAt, "last_heartbeat_at must be recorded")
-	require.False(t, hostView.LastHeartbeatAt.Before(before.Add(-time.Second)), "last_heartbeat_at must reflect the heartbeat, not a stale value")
+	// last_heartbeat_at is written with the DB's NOW() (wall clock), so
+	// it must never be compared against accelerated.GetCurrentTime() —
+	// under time acceleration the accelerated clock races ahead of the
+	// wall clock and the comparison inverts. Instead: non-zero, and
+	// strictly advanced past the pre-heartbeat persisted baseline.
+	require.False(t, hostView.LastHeartbeatAt.IsZero(), "last_heartbeat_at must be non-zero")
+	require.True(t, hostView.LastHeartbeatAt.After(*pre.LastHeartbeatAt),
+		"last_heartbeat_at must strictly advance past the pre-heartbeat persisted value (pre=%s post=%s)",
+		pre.LastHeartbeatAt, hostView.LastHeartbeatAt)
 	require.JSONEq(t, string(permissions), string(hostView.Permissions), "permissions must be persisted verbatim")
 	require.JSONEq(t, string(sourceHealth), string(hostView.SourceHealth), "source_health must be persisted verbatim")
 }
@@ -590,13 +630,22 @@ func TestMacHost_Pair_PlaintextKeyNeverLeaksInSubsequentReads(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, w.Code, "pair: %s", w.Body.String())
 	require.Contains(t, w.Body.String(), `"api_key"`, "sanity: pair response must actually carry the key field")
+	require.Contains(t, w.Body.String(), `"cursor_epoch"`, "pair response must carry the current cursor epoch on the wire")
 
 	var pair struct {
-		HostID uuid.UUID `json:"host_id"`
-		APIKey string    `json:"api_key"`
+		HostID      uuid.UUID `json:"host_id"`
+		APIKey      string    `json:"api_key"`
+		CursorEpoch int64     `json:"cursor_epoch"`
 	}
 	readData(t, w, &pair)
+	require.NotEqual(t, uuid.Nil, pair.HostID, "pair response must carry the host id")
 	require.NotEmpty(t, pair.APIKey)
+
+	// cursor_epoch must be the host's CURRENT epoch — compare against an
+	// independent repository read of the freshly-created host row.
+	hostRow, err := env.hostRepo.GetHost(context.Background(), pair.HostID)
+	require.NoError(t, err)
+	require.Equal(t, hostRow.CursorEpoch, pair.CursorEpoch, "pair response cursor_epoch must equal the host row's current epoch")
 
 	hostHeaders := map[string]string{
 		"X-Mac-Host-ID": pair.HostID.String(),
@@ -626,31 +675,61 @@ func TestMacHost_Pair_PlaintextKeyNeverLeaksInSubsequentReads(t *testing.T) {
 }
 
 // spec: MAC-003[1]
-// TestMacHost_Pair_ExpiredUnconsumedToken_410 seeds an expired-but-never-
-// consumed pairing token directly (SeedPairingToken accepts an explicit
-// expires_at, the same helper the rotate-key sibling test uses for its
-// TOKEN_EXPIRED case) and drives it through the actual pairing endpoint,
-// asserting the opaque 410 the pairing contract collapses all token-state
-// failures to.
-func TestMacHost_Pair_ExpiredUnconsumedToken_410(t *testing.T) {
+// TestMacHost_Pair_TokenStateFailures_Opaque410 drives all three
+// token-state failures through the actual pairing endpoint — an invalid
+// (never-minted) token, an already-consumed token (successful pair, then
+// reuse), and an expired unconsumed token (seeded past-expiry via
+// SeedPairingToken, the same helper the rotate-key sibling uses for its
+// TOKEN_EXPIRED case) — asserting each collapses to 410 AND that the
+// three response bodies are byte-identical, so the wire response cannot
+// be used to probe WHICH condition failed. The body carries no
+// request-id or timestamp fields (the standard error envelope is
+// {success, error{code, message, details}}), so raw-byte comparison is
+// the strongest possible indistinguishability assertion.
+func TestMacHost_Pair_TokenStateFailures_Opaque410(t *testing.T) {
 
 	env := setupMacHostEnv(t)
+	ctx := context.Background()
 
-	plaintext := "expired-pair-token-" + uuid.NewString()[:8]
-	hash := sha256.Sum256([]byte(plaintext))
-	_, err := env.database.Queries.SeedPairingToken(context.Background(), db.SeedPairingTokenParams{
+	pairBody := func(token string) map[string]any {
+		return map[string]any{
+			"pairing_token":    token,
+			"hostname":         "opaque-410-host-" + uuid.NewString()[:8],
+			"daemon_version":   "0.1.0",
+			"protocol_version": 1,
+		}
+	}
+
+	// State 1: invalid — a token that was never minted.
+	wInvalid := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, pairBody("bogus-pair-token-"+uuid.NewString()[:8]))
+	require.Equal(t, http.StatusGone, wInvalid.Code, "invalid token must surface 410, body: %s", wInvalid.Body.String())
+
+	// State 2: expired — seeded unconsumed with a past expires_at.
+	expiredPlain := "expired-pair-token-" + uuid.NewString()[:8]
+	hash := sha256.Sum256([]byte(expiredPlain))
+	_, err := env.database.Queries.SeedPairingToken(ctx, db.SeedPairingTokenParams{
 		TokenHash: hex.EncodeToString(hash[:]),
 		ExpiresAt: pgtype.Timestamptz{Time: accelerated.GetCurrentTime().Add(-1 * time.Hour), Valid: true},
 	})
 	require.NoError(t, err)
+	wExpired := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, pairBody(expiredPlain))
+	require.Equal(t, http.StatusGone, wExpired.Code, "expired unconsumed token must surface 410, body: %s", wExpired.Body.String())
 
-	w := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
-		"pairing_token":    plaintext,
-		"hostname":         "expired-token-host-" + uuid.NewString()[:8],
-		"daemon_version":   "0.1.0",
-		"protocol_version": 1,
-	})
-	require.Equal(t, http.StatusGone, w.Code, "expired unconsumed token must surface 410, body: %s", w.Body.String())
+	// State 3: already consumed — a real pair succeeds, then the same
+	// token is replayed. The consume check fires before the singleton
+	// check, so the live host does not turn this into a 409.
+	consumedPlain, _, err := env.macService.CreatePairingToken(ctx)
+	require.NoError(t, err)
+	wPair := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, pairBody(consumedPlain))
+	require.Equal(t, http.StatusOK, wPair.Code, "seed pair must succeed: %s", wPair.Body.String())
+	wConsumed := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, pairBody(consumedPlain))
+	require.Equal(t, http.StatusGone, wConsumed.Code, "consumed token must surface 410, body: %s", wConsumed.Body.String())
+
+	// Opaqueness: the three failure bodies must be indistinguishable.
+	require.Equal(t, wInvalid.Body.String(), wExpired.Body.String(),
+		"invalid vs expired 410 bodies must be byte-identical")
+	require.Equal(t, wInvalid.Body.String(), wConsumed.Body.String(),
+		"invalid vs consumed 410 bodies must be byte-identical")
 }
 
 // TestMacHost_Heartbeat_TooOldProtocol_NoWriteBefore412 pairs a host,
@@ -796,11 +875,21 @@ func TestMacHost_PushSourceAllowlist_HTTP(t *testing.T) {
 	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String()+"/sync/"+unknownSource+"/known-ids", hostHeaders, nil)
 	assertValidationError(w, "KnownIDs unknown source")
 
-	// Acceptance: a genuinely allowed source succeeds on all three.
-	const allowedSource = "phone_calls"
+	// Acceptance: EVERY source in the fixed allowlist the spec names
+	// must pass the handler gate — asserted on cursor GET for all five
+	// (the cheapest of the three endpoints).
+	allowedSources := []string{"messages", "icloud_contacts", "anarlog_humans", "anarlog_sessions", "phone_calls"}
+	require.Len(t, allowedSources, len(mac.AllowedPushSources),
+		"test table must enumerate the full production allowlist — update both together")
+	for _, src := range allowedSources {
+		require.True(t, mac.IsAllowedPushSource(src), "test table entry %q must be in the production allowlist", src)
+		w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String()+"/sync/"+src+"/cursor", hostHeaders, nil)
+		require.Equal(t, http.StatusOK, w.Code, "GetCursor allowed source %q: %s", src, w.Body.String())
+	}
 
-	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String()+"/sync/"+allowedSource+"/cursor", hostHeaders, nil)
-	require.Equal(t, http.StatusOK, w.Code, "GetCursor allowed source: %s", w.Body.String())
+	// One allowed source additionally exercises commit + known-ids
+	// acceptance end-to-end.
+	const allowedSource = "phone_calls"
 
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host/"+res.HostID.String()+"/sync/"+allowedSource+"/cursor", hostHeaders, map[string]any{
 		"cursor":       "phone-cursor-1",
@@ -811,4 +900,34 @@ func TestMacHost_PushSourceAllowlist_HTTP(t *testing.T) {
 
 	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String()+"/sync/"+allowedSource+"/known-ids", hostHeaders, nil)
 	require.Equal(t, http.StatusOK, w.Code, "KnownIDs allowed source: %s", w.Body.String())
+}
+
+// TestMacHost_PushSourceAllowlist_ServiceReCheck exercises the
+// service-layer defence-in-depth half of the allowlist invariant: a
+// non-HTTP caller that reaches MacHostService.GetCursor / CommitCursor
+// with a source outside the allowlist must be rejected with
+// ErrUnknownPushSource even though the handler gate never ran. The
+// re-check short-circuits before any repository call, so no host needs
+// to be paired.
+// spec: MAC-013
+func TestMacHost_PushSourceAllowlist_ServiceReCheck(t *testing.T) {
+
+	env := setupMacHostEnv(t)
+	ctx := context.Background()
+	hostID := uuid.New()
+	const unknownSource = "not_a_real_source"
+
+	_, err := env.macService.GetCursor(ctx, unknownSource, hostID)
+	require.Error(t, err, "GetCursor must re-check the allowlist at the service layer")
+	require.ErrorIs(t, err, service.ErrUnknownPushSource, "GetCursor rejection must be ErrUnknownPushSource, got %v", err)
+
+	err = env.macService.CommitCursor(ctx, repository.CommitMacHostCursorParams{
+		HostID:       hostID,
+		Source:       unknownSource,
+		BaseCursor:   "",
+		NewCursor:    "x",
+		ClaimedEpoch: 1,
+	})
+	require.Error(t, err, "CommitCursor must re-check the allowlist at the service layer")
+	require.ErrorIs(t, err, service.ErrUnknownPushSource, "CommitCursor rejection must be ErrUnknownPushSource, got %v", err)
 }

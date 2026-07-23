@@ -157,6 +157,7 @@ func TestVerifyRawMessageInvariants_HostMismatch(t *testing.T) {
 
 // TestVerifyRawMessageInvariants_SourceMismatch rejects an envelope
 // whose source is not "messages" (currently the only supported one).
+// spec: ING-036
 func TestVerifyRawMessageInvariants_SourceMismatch(t *testing.T) {
 	host := uuid.New()
 	pBytes := mustMarshalRawMsg(events.RawMessageReceivedPayload{
@@ -187,7 +188,9 @@ func TestVerifyRawMessageInvariants_PayloadSourceVsEnvelopeSource(t *testing.T) 
 
 // TestVerifyRawMessageInvariants_GuidMismatch rejects when payload.Guid
 // disagrees with env.SourceID — the staging-table dedup key and the
-// event-log dedup key MUST be the same string.
+// event-log dedup key MUST be the same string (the message family's
+// verbatim source_id-matches-dedup-key rule).
+// spec: ING-036
 func TestVerifyRawMessageInvariants_GuidMismatch(t *testing.T) {
 	host := uuid.New()
 	pBytes := mustMarshalRawMsg(events.RawMessageReceivedPayload{
@@ -331,6 +334,7 @@ func TestVerifyExternalContactInvariants_HostMismatch(t *testing.T) {
 	require.Contains(t, rej.Message, "host_id")
 }
 
+// spec: ING-036
 func TestVerifyExternalContactInvariants_SourceMismatch(t *testing.T) {
 	host := uuid.New()
 	env := validUpsertedEnv(host, "CN-1")
@@ -401,6 +405,10 @@ func TestVerifyExternalContactInvariants_BadSourceIDShape_Delete(t *testing.T) {
 	require.Contains(t, rej.Message, "source_id")
 }
 
+// TestVerifyExternalContactInvariants_SourceIDEntityPrefixMismatch pins
+// the composite-key half of the dedup recipe: the <entity>@<hash>
+// source_id's entity prefix must match the payload's own entity_id.
+// spec: ING-036
 func TestVerifyExternalContactInvariants_SourceIDEntityPrefixMismatch(t *testing.T) {
 	host := uuid.New()
 	env := validUpsertedEnv(host, "CN-1")
@@ -883,6 +891,7 @@ func TestHandleExternalContactUpserted_AnarlogBlockUsesFailEmpty(t *testing.T) {
 // TestVerifyExternalContactInvariants_HashMismatchRejected proves the
 // Pi-side JCS recomputation catches a daemon-supplied source_id whose
 // hash does NOT match the canonical SHA-256(JCS(payload \ {host_id})).
+// spec: ING-036
 func TestVerifyExternalContactInvariants_HashMismatchRejected(t *testing.T) {
 	host := uuid.New()
 	env := validUpsertedEnv(host, "CN-1")
@@ -1154,6 +1163,7 @@ func TestVerifyMeetingNoteInvariants_HostMismatch(t *testing.T) {
 	require.Contains(t, rej.Message, "host_id")
 }
 
+// spec: ING-036
 func TestVerifyMeetingNoteInvariants_SourceMismatch(t *testing.T) {
 	host := uuid.New()
 	env := validMeetingNoteRecordedEnv(t, host, uuid.NewString())
@@ -1181,6 +1191,10 @@ func TestVerifyMeetingNoteInvariants_NonUUIDSourceID(t *testing.T) {
 	require.Contains(t, rej.Message, "not a UUID")
 }
 
+// TestVerifyMeetingNoteInvariants_HashMismatch pins the meeting_note
+// half of the server-recomputed content-hash rule: a source_id whose
+// hash suffix does not match the recomputation is rejected.
+// spec: ING-036
 func TestVerifyMeetingNoteInvariants_HashMismatch(t *testing.T) {
 	host := uuid.New()
 	env := validMeetingNoteRecordedEnv(t, host, uuid.NewString())

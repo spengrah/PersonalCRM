@@ -348,6 +348,7 @@ func TestIngest_MissingFields(t *testing.T) {
 	// spec: ING-004[2]
 	require.Contains(t, indexes, 1)
 	require.Contains(t, indexes[1], "observed_at")
+	// spec: ING-004[0]
 	require.Contains(t, indexes, 2)
 	require.Contains(t, indexes[2], "source")
 	// spec: ING-004[1]
