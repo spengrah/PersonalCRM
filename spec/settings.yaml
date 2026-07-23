@@ -234,11 +234,6 @@ behaviors:
       - the live provider is queried and deleted entries are filtered out of the result
       - a token or provider-API failure surfaces as a server error (500)
     provenance: [TodoistHandler.ListProjects, TodoistHandler.ListLabels]
-    waivers:
-      - then: 1
-        reason: ListProjects/ListLabels construct todoist.NewSyncClient(accessToken) inline with no injection seam, so exercising the live-provider query and its deleted-entry filtering requires either a real Todoist account or a production ClientFactory seam; a seam PR would convert this waiver into a test (stale-waiver detection will flag it then)
-      - then: 2
-        reason: same inline-client construction — forcing a token or provider-API failure requires the live client call to run and fail; untestable without a production injection seam (see then 1)
 
   # --- Settings surfaces (Track B) ---
 

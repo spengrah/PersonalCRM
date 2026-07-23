@@ -125,7 +125,7 @@ behaviors:
     provenance: [TelegramHandler.StartAuth, TelegramHandler.VerifyCode, TelegramHandler.VerifyPassword, TelegramHandler.CancelAuth, TelegramHandler.Disconnect, TelegramHandler.GetStatus]
     waivers:
       - then: 1
-        reason: the 409 conflicts require AuthSessionManager's unexported session state to be live, which only a real StartAuth sets — and StartAuth blocks inside a gotd MTProto client.Run dialing Telegram's production DCs; no stub seam exists and adding one is a production change out of a coverage arc's scope
+        reason: the already-connected 409 half is proven by an uncited groundwork test (TestTelegramAuthAPI_StartConflictWhenAlreadyConnected — the conflict is decided from the stored session row before any client is built); the auth-already-in-progress 409 half is the genuine impossibility — it requires AuthSessionManager's unexported live session state, which only a real StartAuth sets, and StartAuth blocks inside a gotd MTProto client.Run dialing Telegram's production DCs; no stub seam exists and adding one is a production change out of a coverage arc's scope
       - then: 2
         reason: the invalid-token 400 half is proven by an uncited groundwork test (TestTelegramAuthAPI_ValidationErrors area); the expired-token 410 half is deterministically unreachable — cleanup closes the session and nils it atomically under one mutex, so any post-TTL request takes the invalid-token 400 path; ErrAuthTokenExpired fires only in a race window on a live MTProto-backed session (candidate for a spec correction rather than a test)
       - then: 3
