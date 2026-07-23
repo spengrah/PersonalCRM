@@ -959,20 +959,22 @@ func TestContactMergePreviewAPI_SuccessCounts(t *testing.T) {
 		require.NoError(t, err)
 		defer func() { _ = contactRepo.HardDeleteContact(ctx, source.ID) }()
 
-		// Target owns the shared method so exactly one of the source's four
-		// methods is a duplicate: methods_to_transfer=3, duplicate_methods=1.
-		// The counts are chosen pairwise-distinct where the fixture model
-		// allows (a contact has at most one notepad note, so notes_to_transfer
-		// and duplicate_methods are both 1).
-		dupValue := "dup-" + ns + "@example.com"
-		_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
-			ContactID: target.ID, Type: "email", Value: dupValue,
-		})
-		require.NoError(t, err)
-		_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
-			ContactID: source.ID, Type: "email", Value: dupValue,
-		})
-		require.NoError(t, err)
+		// All five counters are pairwise-distinct (3/2/1/4/5) so swapping any
+		// two DTO JSON tags produces a detectably different payload. A contact
+		// has at most one notepad note, so notes_to_transfer anchors the value
+		// 1 and every other counter avoids it. Target owns two shared methods,
+		// making two of the source's five methods duplicates:
+		// methods_to_transfer=3, duplicate_methods=2.
+		for _, dupValue := range []string{"dup1-" + ns + "@example.com", "dup2-" + ns + "@example.com"} {
+			_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+				ContactID: target.ID, Type: "email", Value: dupValue,
+			})
+			require.NoError(t, err)
+			_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+				ContactID: source.ID, Type: "email", Value: dupValue,
+			})
+			require.NoError(t, err)
+		}
 		for _, v := range []string{"a-" + ns + "@example.com", "b-" + ns + "@example.com", "c-" + ns + "@example.com"} {
 			_, err = contactMethodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 				ContactID: source.ID, Type: "email", Value: v,
@@ -995,7 +997,7 @@ func TestContactMergePreviewAPI_SuccessCounts(t *testing.T) {
 		}
 
 		title := "Preview Counts Event"
-		for _, suffix := range []string{"1", "2"} {
+		for _, suffix := range []string{"1", "2", "3", "4", "5"} {
 			event, err := calendarEventRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
 				GcalEventID:       "preview-counts-" + ns + "-" + suffix,
 				GcalCalendarID:    "preview-counts-" + ns + "-cal",
@@ -1038,10 +1040,10 @@ func TestContactMergePreviewAPI_SuccessCounts(t *testing.T) {
 
 		counters := map[string]float64{
 			"methods_to_transfer":       3,
-			"duplicate_methods":         1,
+			"duplicate_methods":         2,
 			"notes_to_transfer":         1,
 			"interactions_to_transfer":  4,
-			"calendar_events_to_update": 2,
+			"calendar_events_to_update": 5,
 		}
 		for key, want := range counters {
 			got, present := preview[key]
