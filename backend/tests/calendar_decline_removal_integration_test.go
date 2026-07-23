@@ -536,6 +536,58 @@ func TestIntegration_AttendedAfterDelete_LockSerialization(t *testing.T) {
 	assert.False(t, existsAfterDelete, "after the decline DELETE, the attended branch sees no row → skips the insert")
 }
 
+// spec: CAL-020
+//
+// TestIntegration_CalendarEvent_HardDeleteReadBack proves clause (a) of
+// CAL-020 — "removal is a hard delete" — beyond what
+// TestIntegration_AttendedAfterDelete_LockSerialization already shows (that
+// the FOR SHARE existence probe returns false post-delete). A hard delete
+// and a soft-delete "flag" are indistinguishable to a caller that merely
+// checks existence through the SAME query that would also filter the flag;
+// this test instead does two things a soft-delete could not survive: (1) a
+// direct GetByID read-back returns db.ErrNotFound — unambiguous absence, not
+// a status a read might filter past — and (2) a subsequent Upsert on the
+// EXACT SAME Google identity triple inserts a BRAND NEW row (a distinct
+// UUID) rather than updating the old one, proving ON CONFLICT had nothing
+// left in the table to match against. Clause (b) of CAL-020 — every
+// contact-facing read filters cancelled events — is proven jointly by
+// TestCalendarAPI_CancelledEventsExcluded in
+// backend/tests/api/calendar_api_test.go.
+func TestIntegration_CalendarEvent_HardDeleteReadBack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+	ctx := context.Background()
+	e := newDeclineTestEnv(t, ctx)
+	contact := e.newContact(t, nil, nil)
+
+	accountID := e.gen.Prefix() + "harddelete-readback"
+	stored := e.seedCalendarEvent(t, accountID, contact.ID)
+
+	require.NoError(t, e.calendarRepo.DeleteByGcalID(ctx, stored.GcalEventID, "primary", accountID))
+
+	_, err := e.calendarRepo.GetByID(ctx, stored.ID)
+	require.ErrorIs(t, err, db.ErrNotFound, "hard delete leaves no row for GetByID to find — not a status a read could filter past")
+
+	title := "decline-lock-event"
+	reinserted, err := e.calendarRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
+		GcalEventID:       stored.GcalEventID,
+		GcalCalendarID:    "primary",
+		GoogleAccountID:   accountID,
+		Title:             &title,
+		StartTime:         time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
+		EndTime:           time.Date(2026, 3, 1, 11, 0, 0, 0, time.UTC),
+		Status:            "confirmed",
+		Attendees:         []repository.Attendee{},
+		MatchedContactIDs: []uuid.UUID{contact.ID},
+		SyncedAt:          time.Date(2026, 3, 1, 11, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, stored.ID, reinserted.ID,
+		"re-upserting the same Google identity triple after a hard delete inserts a fresh row (a new UUID) because ON CONFLICT had no existing row to match — proving the prior row was truly removed, not merely flagged")
+}
+
 // TestIntegration_CalendarDecline_RecomputeSeesConcurrentInteraction is the
 // regression for the lock-then-aggregate ordering: the recompute acquires the
 // contact FOR UPDATE lock as a SEPARATE statement BEFORE reading the

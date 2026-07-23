@@ -1,7 +1,7 @@
 domain: knowledge
 prefix: KNW
 maturity: reviewed
-settled: [ui]
+settled: [ui, api]
 behaviors:
   # --- Assertion write path ---
 
