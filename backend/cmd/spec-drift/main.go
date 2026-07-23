@@ -61,20 +61,32 @@ func main() {
 	os.Exit(run(os.Args[1:], execGit, os.Stdout, os.Stderr))
 }
 
-// gitLocationVars name the environment variables that tell git WHERE the repo
-// is. Because they override the -C / working-directory selection, an ambient
-// value (e.g. one a pre-push hook exports for the real repo) would silently
-// redirect every spec-drift git call away from the <root> argument. execGit
-// clears them so `git -C <dir>` is authoritative.
+// gitLocationVars name the environment variables that redirect git away from
+// the -C / working-directory selection or alter which objects, config, and
+// commit graph it reads — an ambient value (e.g. one a pre-push hook exports for
+// the real repo) would silently point a spec-drift git call at the wrong repo,
+// or (via the graft/replace/shallow vars) skew merge-base and object reads.
+// execGit clears them all so `git -C <dir>` alone is authoritative. This is the
+// union of `git rev-parse --local-env-vars` (the authoritative per-repo set) and
+// GIT_NAMESPACE; keep it a superset of that command's output for the local git.
 var gitLocationVars = map[string]bool{
-	"GIT_DIR":                          true,
-	"GIT_WORK_TREE":                    true,
-	"GIT_INDEX_FILE":                   true,
-	"GIT_OBJECT_DIRECTORY":             true,
 	"GIT_ALTERNATE_OBJECT_DIRECTORIES": true,
 	"GIT_COMMON_DIR":                   true,
-	"GIT_PREFIX":                       true,
+	"GIT_CONFIG":                       true,
+	"GIT_CONFIG_COUNT":                 true,
+	"GIT_CONFIG_PARAMETERS":            true,
+	"GIT_DIR":                          true,
+	"GIT_GRAFT_FILE":                   true,
+	"GIT_IMPLICIT_WORK_TREE":           true,
+	"GIT_INDEX_FILE":                   true,
+	"GIT_INTERNAL_SUPER_PREFIX":        true,
 	"GIT_NAMESPACE":                    true,
+	"GIT_NO_REPLACE_OBJECTS":           true,
+	"GIT_OBJECT_DIRECTORY":             true,
+	"GIT_PREFIX":                       true,
+	"GIT_REPLACE_REF_BASE":             true,
+	"GIT_SHALLOW_FILE":                 true,
+	"GIT_WORK_TREE":                    true,
 }
 
 // cleanGitLocationEnv returns os.Environ() with the git-location variables

@@ -177,6 +177,37 @@ func TestRun_ArgCount(t *testing.T) {
 // run — real-git end-to-end (exit codes + drift semantics)
 // ---------------------------------------------------------------------------
 
+// TestCleanGitLocationEnv pins the scrub map directly: every var in
+// gitLocationVars must be dropped from the returned environment, and an
+// unrelated GIT_* var (author identity, not a location var) must survive. This
+// guards the map against typos and makes a future addition fail loudly until it
+// is scrubbed too. Iterating gitLocationVars (rather than a hardcoded list)
+// means new entries are covered automatically.
+func TestCleanGitLocationEnv(t *testing.T) {
+	for name := range gitLocationVars {
+		t.Setenv(name, "hijack-"+name)
+	}
+	// An unrelated var that MUST survive the scrub.
+	const survivor = "GIT_AUTHOR_NAME"
+	t.Setenv(survivor, "keep-me")
+
+	got := map[string]string{}
+	for _, kv := range cleanGitLocationEnv() {
+		name, val, _ := strings.Cut(kv, "=")
+		got[name] = val
+	}
+
+	for name := range gitLocationVars {
+		if _, present := got[name]; present {
+			t.Errorf("cleanGitLocationEnv kept location var %q; want it dropped", name)
+		}
+	}
+	if v, present := got[survivor]; !present || v != "keep-me" {
+		t.Errorf("cleanGitLocationEnv dropped unrelated var %q (present=%v value=%q); want it kept with %q",
+			survivor, present, v, "keep-me")
+	}
+}
+
 // TestGitHelpersIgnoreAmbientGitDir is the regression guard for the ambient
 // GIT_DIR/GIT_WORK_TREE hijack: git-location env vars OVERRIDE cmd.Dir, so a
 // leaked ambient value (as a pre-push hook exports for the real repo) would make
