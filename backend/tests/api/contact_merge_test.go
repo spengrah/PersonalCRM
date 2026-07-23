@@ -1022,17 +1022,31 @@ func TestContactMergePreviewAPI_SuccessCounts(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
 		require.True(t, response.Success)
 
-		data, err := json.Marshal(response.Data)
-		require.NoError(t, err)
-		var preview handlers.MergePreviewResponse
-		require.NoError(t, json.Unmarshal(data, &preview))
+		// Assert the literal wire keys rather than decoding into the
+		// production MergePreviewResponse struct: decoding with the same tags
+		// that serialized the payload would round-trip a renamed or swapped
+		// key and leave every assertion green.
+		preview, ok := response.Data.(map[string]interface{})
+		require.True(t, ok, "preview payload must be a JSON object")
 
-		assert.Equal(t, source.ID.String(), preview.SourceContact.ID)
-		assert.Equal(t, target.ID.String(), preview.TargetContact.ID)
-		assert.Equal(t, int64(3), preview.MethodsToTransfer)
-		assert.Equal(t, int64(1), preview.DuplicateMethods)
-		assert.Equal(t, int64(1), preview.NotesToTransfer)
-		assert.Equal(t, int64(4), preview.InteractionsToTransfer)
-		assert.Equal(t, int64(2), preview.CalendarEventsToUpdate)
+		sourceObj, ok := preview["source_contact"].(map[string]interface{})
+		require.True(t, ok, "response must carry a source_contact object")
+		assert.Equal(t, source.ID.String(), sourceObj["id"])
+		targetObj, ok := preview["target_contact"].(map[string]interface{})
+		require.True(t, ok, "response must carry a target_contact object")
+		assert.Equal(t, target.ID.String(), targetObj["id"])
+
+		counters := map[string]float64{
+			"methods_to_transfer":       3,
+			"duplicate_methods":         1,
+			"notes_to_transfer":         1,
+			"interactions_to_transfer":  4,
+			"calendar_events_to_update": 2,
+		}
+		for key, want := range counters {
+			got, present := preview[key]
+			require.True(t, present, "response must carry the %q key", key)
+			assert.Equal(t, want, got, "counter %q", key)
+		}
 	})
 }
