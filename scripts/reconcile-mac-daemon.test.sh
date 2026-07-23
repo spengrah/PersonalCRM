@@ -258,7 +258,11 @@ write_deploy_env() {
 # assert helpers operating on $CALL_LOG / $OUT.
 log_has()   { grep -qF -- "$1" "$CALL_LOG"; }
 log_lacks() { ! grep -qF -- "$1" "$CALL_LOG"; }
-out_has()   { printf '%s' "$OUT" | grep -qF -- "$1"; }
+# Match against a here-string, NOT `printf ... | grep`: under `set -o pipefail` a
+# `grep -q` that matches an early line exits and closes the pipe before printf
+# drains, so printf takes SIGPIPE (141) and pipefail reports the pipeline as
+# failed even though the match succeeded — a load-dependent false negative.
+out_has()   { grep -qF -- "$1" <<<"$OUT"; }
 # count ntfy POSTs (curl invocations). grep -c prints 0 and exits 1 on no match,
 # so swallow the exit without a second echo (which would print "0\n0").
 ntfy_count() { grep -cE '^curl ' "$CALL_LOG" || true; }
