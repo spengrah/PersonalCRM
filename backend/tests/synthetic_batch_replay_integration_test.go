@@ -1097,6 +1097,16 @@ func TestSyntheticBatchReplay_CleanupParity(t *testing.T) {
 
 	require.NoError(t, teardown(ctx))
 	requireNamespaceReclaimed(t, ctx, h)
+
+	// Telegram rows are reclaimed by the EXACT peer ids the batch tracked, not by
+	// a namespace prefix — telegram_message has no prefix-bearing column — so they
+	// are asserted separately.
+	support := repository.NewSyntheticSupportRepository(h.Database().Queries)
+	for _, it := range tgItems {
+		n, err := support.CountTelegramMessagesByChatAndMessageID(ctx, it.Spec.TelegramChatID, it.Spec.TelegramMessageID)
+		require.NoError(t, err)
+		assert.Zero(t, n, "teardown must reclaim the batch's telegram rows by tracked peer id")
+	}
 }
 
 // TestSyntheticBatchReplay_MidBatchFailureIsReclaimable exercises drainPartial
