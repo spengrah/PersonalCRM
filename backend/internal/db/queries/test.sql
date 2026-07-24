@@ -786,6 +786,80 @@ SELECT COUNT(*) FROM node WHERE id = ANY(@node_ids::uuid[]) AND deleted_at IS NU
 -- the soft-delete set.
 SELECT COUNT(*) FROM node WHERE id = ANY(@node_ids::uuid[]) AND merged_into IS NOT NULL;
 
+-- Batch replay Settle Gate A — set-widened forms of the per-message predicates
+-- above. A batch adapter drives N payloads through one provider pass and then
+-- settles ONCE, so its gate is a single COUNT over the batch's identifiers
+-- compared against len(batch) rather than N separate reads. Each query keeps the
+-- terminal condition of the single-message predicate it widens (the derived
+-- interaction actually landed) and stays scoped to the passed identifiers, never
+-- DB-wide. COUNT(DISTINCT <key>) so a duplicate row can never push the count past
+-- the batch size and satisfy the gate on a partial batch.
+
+-- name: SyntheticCountSettledCommsMessagesByExternalIds :one
+-- gmail/gchat batch: how many of these external ids have a comms_message row for
+-- the source with an interaction_id. Shared by BOTH sources (the single-message
+-- predicate SyntheticCountLinkedCommsMessageByExternalId is likewise shared) —
+-- gmail and gchat differ only in the source literal the caller passes.
+SELECT COUNT(DISTINCT external_id) FROM comms_message
+WHERE source = @source
+  AND external_id = ANY(@external_ids::text[])
+  AND interaction_id IS NOT NULL
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountCommsMessagesByExternalIds :one
+-- gchat batch PROGRESS probe (not a gate): how many of these external ids have a
+-- comms_message row at all, linked or not. The GChat provider writes these rows
+-- SYNCHRONOUSLY inside Sync, whereas the interaction linkage arrives later from a
+-- River consumer — so this is the only signal that can tell "the sweep has not
+-- presented this space yet" apart from "the aggregate has not run yet". The
+-- bucket loop polls it between Syncs; the terminal gate stays the linked count.
+SELECT COUNT(DISTINCT external_id) FROM comms_message
+WHERE source = @source
+  AND external_id = ANY(@external_ids::text[])
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountSettledMessagesMessagesByGuids :one
+-- iMessage batch: how many of these guids have a staging row with an
+-- interaction_id.
+SELECT COUNT(DISTINCT guid) FROM messages_message
+WHERE guid = ANY(@guids::text[])
+  AND interaction_id IS NOT NULL
+  AND deleted_at IS NULL;
+
+-- name: SyntheticCountSettledTelegramMessagesByPeerAndMessageIds :one
+-- telegram batch: how many of these (peer_user_id, telegram_message_id) PAIRS
+-- have a message row with an interaction_id. The key is composite for the same
+-- reason the single-message predicate's is (see
+-- SyntheticCountLinkedTelegramMessageByMessageId): the peer band is
+-- collision-checked at namespace setup, the message-id bucket is not — so a
+-- message-id-only batch gate could be satisfied early, or pushed permanently
+-- past the batch size, by another namespace's rows. The arrays are parallel:
+-- element i of each names one payload.
+SELECT COUNT(DISTINCT (tm.peer_user_id, tm.telegram_message_id))
+FROM unnest(@peer_user_ids::bigint[]) WITH ORDINALITY AS p(peer_user_id, ord)
+JOIN unnest(@telegram_message_ids::int[]) WITH ORDINALITY AS m(telegram_message_id, ord)
+  ON p.ord = m.ord
+JOIN telegram_message tm
+  ON tm.peer_user_id = p.peer_user_id
+ AND tm.telegram_message_id = m.telegram_message_id
+WHERE tm.interaction_id IS NOT NULL
+  AND tm.deleted_at IS NULL;
+
+-- name: SyntheticCountMatchedCalendarEventsByGcalIds :one
+-- gcal batch: how many of these (gcal_event_id, contact_id) PAIRS have a
+-- calendar_event row carrying the contact in matched_contact_ids AND
+-- last_contacted_updated = true (the attended interaction published). The pair is
+-- the unit because one batch may target several contacts, and a merely-matched
+-- event does not prove the past-event publish ran. The arrays are parallel:
+-- element i of each names one payload.
+SELECT COUNT(DISTINCT (ce.gcal_event_id, c.contact_id))
+FROM unnest(@gcal_event_ids::text[]) WITH ORDINALITY AS g(gcal_event_id, ord)
+JOIN unnest(@contact_ids::uuid[]) WITH ORDINALITY AS c(contact_id, ord)
+  ON g.ord = c.ord
+JOIN calendar_event ce ON ce.gcal_event_id = g.gcal_event_id
+WHERE c.contact_id = ANY(ce.matched_contact_ids)
+  AND ce.last_contacted_updated = true;
+
 -- name: TestInsertContactAtID :exec
 -- Latent-person promotion test support: insert a contact row AT a caller-supplied
 -- id (node.id == contact.id), so a test can promote a latent person node (created

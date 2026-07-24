@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/telegram"
@@ -80,6 +81,131 @@ func (h *Harness) ReplayTelegram(ctx context.Context, contactID uuid.UUID, spec 
 		return TelegramResult{}, err
 	}
 	return TelegramResult{ContactID: contactID, PeerUserID: spec.PeerUserID, Matched: true}, nil
+}
+
+// TelegramBatchItem is one private Telegram payload in a batch: the seeded
+// contact it targets and the message. PairKey marks the two items of a promotion
+// pair (0 = not part of one) — the inbound member is driven in a later
+// dependency generation so its outbound's interaction already exists when the
+// reply bridge looks for it.
+type TelegramBatchItem struct {
+	ContactID uuid.UUID
+	Spec      factory.TelegramMessageSpec
+	PairKey   int
+}
+
+// ReplayTelegramBatch drives N private Telegram payloads through ONE
+// MessageHandler pass per dependency generation and settles once per generation.
+//
+// Items must be in chronological replay order (oldest first), and the adapter
+// preserves that order WITHIN each generation. It is not a whole-batch ordering:
+// the inbound half of a PairKey group is deferred to generation 1, so a
+// pair-bearing batch drives its outbound first regardless of input position, and
+// reports SyncCalls == 2.
+//
+// Telegram aggregates INLINE inside HandleNewMessage, but aggregation only
+// claims rows and publishes an envelope — the interaction is written later by a
+// River consumer, and the claimed rows are excluded from subsequent aggregation
+// reads for a 5-minute TTL. That is why a promotion pair needs a settle barrier
+// between its halves and not merely chronological order.
+func (h *Harness) ReplayTelegramBatch(ctx context.Context, items []TelegramBatchItem) (BatchResult, error) {
+	const source = "telegram"
+
+	entries := telegramBatchEntries(items)
+	if err := validateBatchStructure(source, entries); err != nil {
+		return BatchResult{}, err
+	}
+	if err := h.validateBatchOwnership(ctx, source, entries); err != nil {
+		return BatchResult{}, err
+	}
+
+	contactIDs := distinctContactIDs(entries)
+	res := BatchResult{Payloads: len(items), Contacts: len(contactIDs)}
+	before, err := h.snapshotInteractionIDs(ctx, contactIDs)
+	if err != nil {
+		return res, err
+	}
+
+	handler := telegram.NewMessageHandler(
+		h.telegramRepo,
+		repository.NewTelegramChatConfigRepository(h.database.Queries),
+		repository.NewSyncRepositoryWithPool(h.database.Queries, h.database.Pool),
+		nil, // syncStateID: optional, only used to stamp last-sync timestamps
+		telegramSelfUserID,
+		h.groupMaxMembers, // irrelevant on the private path
+		h.peerMatcher.matcher,
+		h.peerMatcher.engine,
+	)
+	// api stays nil: the private path never touches it.
+
+	// Track every peer up front so a mid-batch failure still leaves the by-peer
+	// telegram_message delete able to reclaim what was written.
+	h.track(func(c *created) {
+		for _, it := range items {
+			c.addTelegramPeer(it.Spec.PeerUserID)
+		}
+	})
+
+	for _, generation := range partitionGenerations(entries) {
+		peerIDs := make([]int64, 0, len(generation))
+		messageIDs := make([]int32, 0, len(generation))
+		for _, i := range generation {
+			spec := items[i].Spec
+			entities, update := BuildPrivateUpdate(spec)
+			if err := handler.HandleNewMessage(ctx, entities, update); err != nil {
+				return res, h.drainPartial(ctx, source, "", contactIDs, fmt.Errorf("telegram handle message: %w", err))
+			}
+			peerIDs = append(peerIDs, spec.PeerUserID)
+			messageIDs = append(messageIDs, spec.TelegramMessageID)
+		}
+		res.SyncCalls++
+
+		// Gate A is scoped to THIS generation's (peer, message id) pairs.
+		if err := h.Settle(ctx, h.telegramBatchSettled(peerIDs, messageIDs), ""); err != nil {
+			return res, h.drainPartial(ctx, source, "", contactIDs, err)
+		}
+		res.SettleCalls++
+	}
+
+	res.Interactions = h.trackBatchInteractions(ctx, contactIDs, before)
+	for _, contactID := range contactIDs {
+		if err := h.assertContactVenue(ctx, contactID, repository.InteractionSourceTelegram); err != nil {
+			return res, err
+		}
+	}
+	return res, nil
+}
+
+// telegramBatchSettled is the batch Gate A: every one of these (peer, message
+// id) pairs has an interaction-linked telegram_message row. The key stays
+// composite for the same reason the single-message gate's is — only the peer
+// band is collision-checked at namespace setup.
+func (h *Harness) telegramBatchSettled(peerUserIDs []int64, telegramMessageIDs []int32) gateA {
+	want := int64(len(peerUserIDs))
+	return func(ctx context.Context) (bool, error) {
+		n, err := h.support.CountSettledTelegramMessagesByPeerAndMessageIDs(ctx, peerUserIDs, telegramMessageIDs)
+		return n >= want, err
+	}
+}
+
+// telegramBatchEntries projects the typed items into the source-neutral view.
+// The identifier is the composite (peer, message id) because message ids alone
+// are not namespace-disjoint; the addressed identifier is the handle the peer
+// matcher resolves the contact by.
+func telegramBatchEntries(items []TelegramBatchItem) []batchEntry {
+	out := make([]batchEntry, 0, len(items))
+	for _, it := range items {
+		out = append(out, batchEntry{
+			contactID:     it.ContactID,
+			identifier:    fmt.Sprintf("%d:%d", it.Spec.PeerUserID, it.Spec.TelegramMessageID),
+			seeded:        it.Spec.Intent == factory.MatchSeeded,
+			outbound:      it.Spec.Out,
+			pairKey:       it.PairKey,
+			addressed:     it.Spec.MatchHandle,
+			addressedType: identity.IdentifierTypeTelegram,
+		})
+	}
+	return out
 }
 
 // BuildPrivateUpdate constructs the *tg.UpdateNewMessage + tg.Entities the private

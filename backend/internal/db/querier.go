@@ -1860,6 +1860,13 @@ type Querier interface {
 	// row, so the decline test settles on this reaching 0. calendar_event has no
 	// deleted_at column (hard-delete table).
 	SyntheticCountCalendarEventByGcalId(ctx context.Context, gcalEventID string) (int64, error)
+	// gchat batch PROGRESS probe (not a gate): how many of these external ids have a
+	// comms_message row at all, linked or not. The GChat provider writes these rows
+	// SYNCHRONOUSLY inside Sync, whereas the interaction linkage arrives later from a
+	// River consumer — so this is the only signal that can tell "the sweep has not
+	// presented this space yet" apart from "the aggregate has not run yet". The
+	// bucket loop polls it between Syncs; the terminal gate stays the linked count.
+	SyntheticCountCommsMessagesByExternalIds(ctx context.Context, arg SyntheticCountCommsMessagesByExternalIdsParams) (int64, error)
 	// Harness setup collision detection (D5) — PRIMARY phone-band check. A seeded
 	// synthetic contact's phone lives ONLY as a contact_method (no external_identity
 	// until a later replay), and identity matching cross-matches via
@@ -1933,6 +1940,13 @@ type Querier interface {
 	// winner node stays live (== id count) while soft-deleted + merge-loser nodes are
 	// tombstoned (== 0).
 	SyntheticCountLiveNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	// gcal batch: how many of these (gcal_event_id, contact_id) PAIRS have a
+	// calendar_event row carrying the contact in matched_contact_ids AND
+	// last_contacted_updated = true (the attended interaction published). The pair is
+	// the unit because one batch may target several contacts, and a merely-matched
+	// event does not prove the past-event publish ran. The arrays are parallel:
+	// element i of each names one payload.
+	SyntheticCountMatchedCalendarEventsByGcalIds(ctx context.Context, arg SyntheticCountMatchedCalendarEventsByGcalIdsParams) (int64, error)
 	// Settle Gate A (Mac-contact seeded): the external_contact row for the entity
 	// id exists linked to a CRM contact (match_status='matched').
 	SyntheticCountMatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
@@ -1955,6 +1969,31 @@ type Querier interface {
 	// seeding their own signals on the shared DB). Used to assert ≥1 signal exists for
 	// the seeded nodes (coverage) and that 0 remain after teardown.
 	SyntheticCountRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	// Batch replay Settle Gate A — set-widened forms of the per-message predicates
+	// above. A batch adapter drives N payloads through one provider pass and then
+	// settles ONCE, so its gate is a single COUNT over the batch's identifiers
+	// compared against len(batch) rather than N separate reads. Each query keeps the
+	// terminal condition of the single-message predicate it widens (the derived
+	// interaction actually landed) and stays scoped to the passed identifiers, never
+	// DB-wide. COUNT(DISTINCT <key>) so a duplicate row can never push the count past
+	// the batch size and satisfy the gate on a partial batch.
+	// gmail/gchat batch: how many of these external ids have a comms_message row for
+	// the source with an interaction_id. Shared by BOTH sources (the single-message
+	// predicate SyntheticCountLinkedCommsMessageByExternalId is likewise shared) —
+	// gmail and gchat differ only in the source literal the caller passes.
+	SyntheticCountSettledCommsMessagesByExternalIds(ctx context.Context, arg SyntheticCountSettledCommsMessagesByExternalIdsParams) (int64, error)
+	// iMessage batch: how many of these guids have a staging row with an
+	// interaction_id.
+	SyntheticCountSettledMessagesMessagesByGuids(ctx context.Context, guids []string) (int64, error)
+	// telegram batch: how many of these (peer_user_id, telegram_message_id) PAIRS
+	// have a message row with an interaction_id. The key is composite for the same
+	// reason the single-message predicate's is (see
+	// SyntheticCountLinkedTelegramMessageByMessageId): the peer band is
+	// collision-checked at namespace setup, the message-id bucket is not — so a
+	// message-id-only batch gate could be satisfied early, or pushed permanently
+	// past the batch size, by another namespace's rows. The arrays are parallel:
+	// element i of each names one payload.
+	SyntheticCountSettledTelegramMessagesByPeerAndMessageIds(ctx context.Context, arg SyntheticCountSettledTelegramMessagesByPeerAndMessageIdsParams) (int64, error)
 	// Settle Gate A (iMessage unknown-sender): the staging row for the guid landed
 	// (processed) with matched_contact_id IS NULL.
 	SyntheticCountStrandedMessagesMessageByGuid(ctx context.Context, guid string) (int64, error)

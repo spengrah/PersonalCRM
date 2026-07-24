@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic/factory"
@@ -114,4 +115,138 @@ func (h *Harness) ReplayIMessage(ctx context.Context, contactID uuid.UUID, spec 
 		return IMessageResult{}, err
 	}
 	return IMessageResult{ContactID: contactID, Guid: spec.Guid, Matched: true}, nil
+}
+
+// IMessageBatchItem is one iMessage payload in a batch: the seeded contact it
+// targets and the raw_message envelope. PairKey marks the two items of a
+// promotion pair (0 = not part of one).
+type IMessageBatchItem struct {
+	ContactID uuid.UUID
+	Spec      factory.IMessageSpec
+	PairKey   int
+}
+
+// ReplayIMessageBatch drives N iMessage payloads through ONE IngestBatch call
+// per dependency generation and settles once per generation. IngestBatch already
+// enqueues the messaging aggregate ONCE per (contact, source) at the end of the
+// batch, so a whole generation costs one aggregate pass per contact rather than
+// one per payload. Items must be in chronological replay order.
+func (h *Harness) ReplayIMessageBatch(ctx context.Context, items []IMessageBatchItem) (BatchResult, error) {
+	const source = "imessage"
+
+	entries, err := h.imessageBatchEntries(items)
+	if err != nil {
+		return BatchResult{}, err
+	}
+	if err := validateBatchStructure(source, entries); err != nil {
+		return BatchResult{}, err
+	}
+	if err := h.validateBatchOwnership(ctx, source, entries); err != nil {
+		return BatchResult{}, err
+	}
+
+	contactIDs := distinctContactIDs(entries)
+	res := BatchResult{Payloads: len(items), Contacts: len(contactIDs)}
+	before, err := h.snapshotInteractionIDs(ctx, contactIDs)
+	if err != nil {
+		return res, err
+	}
+
+	// raw_message.* root events carry no CRM contact id; track the source so
+	// cleanup captures them.
+	h.track(func(c *created) { c.addDirectSource(items[0].Spec.Envelope.Source) })
+
+	for _, generation := range partitionGenerations(entries) {
+		envelopes := make([]*events.Envelope, 0, len(generation))
+		guids := make([]string, 0, len(generation))
+		indices := make([]int, 0, len(generation))
+		for n, i := range generation {
+			envelopes = append(envelopes, items[i].Spec.Envelope)
+			guids = append(guids, items[i].Spec.Guid)
+			indices = append(indices, n)
+		}
+
+		accepted, _, rejections, _, err := h.ingestService.IngestBatch(ctx, envelopes, indices, &h.macHostID)
+		if err != nil {
+			return res, h.drainPartial(ctx, source, repository.InteractionSourceMessages, contactIDs, fmt.Errorf("ingest imessage batch: %w", err))
+		}
+		if accepted != len(envelopes) {
+			return res, h.drainPartial(ctx, source, repository.InteractionSourceMessages, contactIDs,
+				fmt.Errorf("ingest imessage batch: %d of %d accepted (rejections=%v) — host wiring regression", accepted, len(envelopes), rejections))
+		}
+		res.SyncCalls++
+
+		// Gate A is scoped to THIS generation's guids, never the whole batch.
+		if err := h.Settle(ctx, h.imessageBatchSettled(guids), repository.InteractionSourceMessages); err != nil {
+			return res, h.drainPartial(ctx, source, repository.InteractionSourceMessages, contactIDs, err)
+		}
+		res.SettleCalls++
+	}
+
+	res.Interactions = h.trackBatchInteractions(ctx, contactIDs, before)
+	for _, contactID := range contactIDs {
+		if err := h.assertContactVenue(ctx, contactID, repository.InteractionSourceMessages); err != nil {
+			return res, err
+		}
+	}
+	return res, nil
+}
+
+// imessageBatchSettled is the batch Gate A: every one of these guids has an
+// interaction-linked staging row.
+func (h *Harness) imessageBatchSettled(guids []string) gateA {
+	want := int64(len(guids))
+	return func(ctx context.Context) (bool, error) {
+		n, err := h.support.CountSettledMessagesMessagesByGUIDs(ctx, guids)
+		return n >= want, err
+	}
+}
+
+// imessageBatchEntries projects the typed items into the source-neutral view.
+// Direction and the addressed handle both come from the envelope: the kind
+// carries the direction the inline ingest handler reads, and the payload carries
+// the peer handle that decides whether the contact matches at all.
+func (h *Harness) imessageBatchEntries(items []IMessageBatchItem) ([]batchEntry, error) {
+	out := make([]batchEntry, 0, len(items))
+	for i, it := range items {
+		if it.Spec.Envelope == nil {
+			return nil, fmt.Errorf("imessage: item %d has a nil envelope", i)
+		}
+		handle, err := imessagePeerHandle(it.Spec.Envelope)
+		if err != nil {
+			return nil, fmt.Errorf("imessage: item %d (%s): %w", i, it.Spec.Guid, err)
+		}
+		out = append(out, batchEntry{
+			contactID:     it.ContactID,
+			identifier:    it.Spec.Guid,
+			seeded:        it.Spec.Intent == factory.MatchSeeded,
+			outbound:      it.Spec.Envelope.Kind == events.KindRawMessageSent,
+			pairKey:       it.PairKey,
+			addressed:     handle,
+			addressedType: identity.DetectIdentifierType(handle),
+		})
+	}
+	return out, nil
+}
+
+// imessagePeerHandle decodes the peer handle out of a raw_message envelope. The
+// sent and received kinds share a field shape but decode to distinct types, so
+// events.Unmarshal's kind-vs-type check requires dispatching on the kind.
+func imessagePeerHandle(env *events.Envelope) (string, error) {
+	switch env.Kind {
+	case events.KindRawMessageSent:
+		var payload events.RawMessageSentPayload
+		if err := events.Unmarshal(env, &payload); err != nil {
+			return "", err
+		}
+		return payload.PeerHandle, nil
+	case events.KindRawMessageReceived:
+		var payload events.RawMessageReceivedPayload
+		if err := events.Unmarshal(env, &payload); err != nil {
+			return "", err
+		}
+		return payload.PeerHandle, nil
+	default:
+		return "", fmt.Errorf("unexpected envelope kind %q for an iMessage payload", env.Kind)
+	}
 }

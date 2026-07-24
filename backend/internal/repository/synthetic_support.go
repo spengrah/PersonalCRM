@@ -583,6 +583,96 @@ func (r *SyntheticSupportRepository) CountProcessedCalendarEventByGcalID(ctx con
 	})
 }
 
+// --- Settle Gate A, batch (set-widened) forms --------------------------------
+//
+// A batch replay adapter drives N payloads through one provider pass and settles
+// ONCE, so its gate is a single COUNT over the batch's identifiers compared
+// against len(batch). Each wrapper widens the terminal predicate of the
+// single-message gate above to a set without weakening it, and stays scoped to
+// the passed identifiers.
+
+// CountSettledGmailMessagesByExternalIDs counts how many of the given external
+// ids have an interaction-linked comms_message row on the email source — the
+// batch Gmail Gate A. Satisfied when it equals the batch size.
+func (r *SyntheticSupportRepository) CountSettledGmailMessagesByExternalIDs(ctx context.Context, externalIDs []string) (int64, error) {
+	return r.countSettledCommsMessages(ctx, "email", externalIDs)
+}
+
+// CountSettledGChatMessagesByExternalIDs counts how many of the given external
+// ids have an interaction-linked comms_message row on the gchat source — the
+// batch GChat Gate A. Satisfied when it equals the batch size.
+func (r *SyntheticSupportRepository) CountSettledGChatMessagesByExternalIDs(ctx context.Context, externalIDs []string) (int64, error) {
+	return r.countSettledCommsMessages(ctx, "gchat", externalIDs)
+}
+
+// countSettledCommsMessages backs both comms-source batch gates. gmail and gchat
+// share one comms_message predicate differing only in the source literal — the
+// same sharing the single-message gate already uses
+// (CountLinkedCommsMessageByExternalID).
+func (r *SyntheticSupportRepository) countSettledCommsMessages(ctx context.Context, source string, externalIDs []string) (int64, error) {
+	return r.queries.SyntheticCountSettledCommsMessagesByExternalIds(ctx, db.SyntheticCountSettledCommsMessagesByExternalIdsParams{
+		Source:      source,
+		ExternalIds: externalIDs,
+	})
+}
+
+// CountGChatMessagesByExternalIDs counts how many of the given external ids have
+// a gchat comms_message row at all (linked or not). It is the GChat batch
+// bucket loop's PROGRESS probe, not its gate: the provider writes these rows
+// synchronously inside Sync while the interaction linkage arrives later from a
+// River consumer, so only this read distinguishes an unpresented space from an
+// unfinished aggregate.
+func (r *SyntheticSupportRepository) CountGChatMessagesByExternalIDs(ctx context.Context, externalIDs []string) (int64, error) {
+	return r.queries.SyntheticCountCommsMessagesByExternalIds(ctx, db.SyntheticCountCommsMessagesByExternalIdsParams{
+		Source:      "gchat",
+		ExternalIds: externalIDs,
+	})
+}
+
+// CountSettledMessagesMessagesByGUIDs counts how many of the given guids have an
+// interaction-linked messages_message staging row — the batch iMessage Gate A.
+func (r *SyntheticSupportRepository) CountSettledMessagesMessagesByGUIDs(ctx context.Context, guids []string) (int64, error) {
+	return r.queries.SyntheticCountSettledMessagesMessagesByGuids(ctx, guids)
+}
+
+// CountSettledTelegramMessagesByPeerAndMessageIDs counts how many of the given
+// (peer, message id) PAIRS have an interaction-linked telegram_message row — the
+// batch Telegram Gate A. The arrays are parallel and must be the same length;
+// the composite key is required because only the peer band is collision-checked
+// at namespace setup (see the query comment).
+func (r *SyntheticSupportRepository) CountSettledTelegramMessagesByPeerAndMessageIDs(ctx context.Context, peerUserIDs []int64, telegramMessageIDs []int32) (int64, error) {
+	if len(peerUserIDs) != len(telegramMessageIDs) {
+		// The ordinality join would silently yield min(len) pairs, so the gate could
+		// never be satisfied — a 30-second timeout naming the wrong cause, the
+		// failure class the batch preflight exists to eliminate.
+		return 0, fmt.Errorf("count settled telegram messages: %d peer ids but %d message ids", len(peerUserIDs), len(telegramMessageIDs))
+	}
+	return r.queries.SyntheticCountSettledTelegramMessagesByPeerAndMessageIds(ctx, db.SyntheticCountSettledTelegramMessagesByPeerAndMessageIdsParams{
+		PeerUserIds:        peerUserIDs,
+		TelegramMessageIds: telegramMessageIDs,
+	})
+}
+
+// CountMatchedCalendarEventsByGcalIDs counts how many of the given (gcal event
+// id, contact id) PAIRS have a calendar_event carrying the contact in
+// matched_contact_ids with last_contacted_updated = true — the batch GCal Gate A.
+// The arrays are parallel and must be the same length.
+func (r *SyntheticSupportRepository) CountMatchedCalendarEventsByGcalIDs(ctx context.Context, gcalEventIDs []string, contactIDs []uuid.UUID) (int64, error) {
+	if len(gcalEventIDs) != len(contactIDs) {
+		// See CountSettledTelegramMessagesByPeerAndMessageIDs: a mismatch makes the
+		// gate unsatisfiable rather than wrong-by-a-row.
+		return 0, fmt.Errorf("count matched calendar events: %d event ids but %d contact ids", len(gcalEventIDs), len(contactIDs))
+	}
+	pg := make([]pgtype.UUID, 0, len(contactIDs))
+	for _, id := range contactIDs {
+		pg = append(pg, uuidToPgUUID(id))
+	}
+	return r.queries.SyntheticCountMatchedCalendarEventsByGcalIds(ctx, db.SyntheticCountMatchedCalendarEventsByGcalIdsParams{
+		GcalEventIds: gcalEventIDs,
+		ContactIds:   pg,
+	})
+}
+
 // CountStrandedTelegramMessagesByPeer counts telegram_message rows for the peer
 // with matched_contact_id IS NULL (the stranded / discovery-candidate state).
 func (r *SyntheticSupportRepository) CountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID int64) (int64, error) {
