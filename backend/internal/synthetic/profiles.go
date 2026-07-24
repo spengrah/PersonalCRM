@@ -9,6 +9,7 @@ import (
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/synthetic/replay"
 
 	"github.com/google/uuid"
 )
@@ -153,6 +154,49 @@ type ProfileResult struct {
 	// it into a call-vs-row count would muddy that invariant. Counts-only / no PII.
 	OutboundOnlyContacts  int
 	MutualMessageContacts int
+	// Timings is the run's wall-clock measurement. It is EXCLUDED from every
+	// equality assertion (durations are wall-clock and never equal across runs) —
+	// the determinism test zeroes it on both sides before comparing, deliberately
+	// keeping the rest of the struct under strict equality.
+	Timings SeedTimings
+}
+
+// SeedTimings carries wall-clock measurement of a profile run: how long the run
+// took in total, how long each phase took and how many source payloads it drove,
+// and what the settle gates cost. Durations are REAL time, not accelerated —
+// reseed cost is infrastructure timing, and an accelerated measurement under
+// TIME_ACCELERATION would report a fictional number (the same reasoning the
+// settle budgets use; see replay.Stopwatch).
+//
+// No PII: durations and counts only.
+type SeedTimings struct {
+	// Total is the whole-run duration, stamped by RunProfile on BOTH the success
+	// and the failure path — a reseed that failed after six minutes is exactly
+	// the case the number is for.
+	Total time.Duration
+	// Phases are the completed phases in execution order. A run that failed
+	// carries the phases that finished before the failure.
+	Phases []PhaseTiming
+	// Current names the phase that was RUNNING when the run returned: empty on a
+	// clean run, populated on a failure. Without it the partial summary cannot
+	// name the failing phase (the phase-stop closure only records when reached).
+	Current string
+	// Settle is the harness's cumulative settle accounting, refreshed on every
+	// return path so an early settle failure still reports what it cost.
+	Settle replay.SettleTimings
+}
+
+// PhaseTiming is one comment-delimited seeding block's cost. Name is a stable
+// identifier (it is what a before/after comparison across a population change is
+// keyed on), so renaming one is a deliberate act, not a refactor.
+type PhaseTiming struct {
+	Name     string
+	Duration time.Duration
+	// Payloads is the number of source payloads this phase drove through a replay
+	// seam. Phases that seed no source payloads (contact creation, notes, graph
+	// assertions, entity/signal writes) report 0 — "none by design", which the
+	// summary renders as `-` so it reads differently from "expected some, got none".
+	Payloads int
 }
 
 // ProfileParams returns the default SeedParams for a named profile (error on an
@@ -280,20 +324,57 @@ func ProfileParams(name Profile) (SeedParams, error) {
 // RunProfile only SEEDS; the caller decides the lifecycle — Quiesce on success
 // (seed-and-leave), the teardown closure on error (stop client + clean the
 // partial world).
+// The whole-run duration is stamped on BOTH paths — a run that failed carries a
+// partial ProfileResult (elapsed time, the phases that completed, the phase that
+// was running) and the callers print it as a degraded summary before surfacing
+// the error. Without that, a failed reseed is a bare error with nothing to
+// diagnose from.
 func RunProfile(ctx context.Context, h *Harness, params SeedParams) (ProfileResult, error) {
+	sw := replay.NewStopwatch()
 	res := ProfileResult{Profile: params.Profile, Namespace: h.Namespace(), Seed: params.Seed}
+	var err error
 	switch params.Profile {
 	case ProfileMinimalScoped:
-		return runMinimalScoped(ctx, h, params, res)
+		res, err = runMinimalScoped(ctx, h, params, res)
 	case ProfileDev, ProfileProdShaped:
-		return runCatalogProfile(ctx, h, params, res)
+		res, err = runCatalogProfile(ctx, h, params, res)
 	default:
-		return res, fmt.Errorf("synthetic: RunProfile: unknown profile %q", params.Profile)
+		err = fmt.Errorf("synthetic: RunProfile: unknown profile %q", params.Profile)
+	}
+	res.Timings.Total = sw.Elapsed()
+	return res, err
+}
+
+// newPhaseTimer returns the `phase` starter for one profile run, writing into
+// the supplied SeedTimings. phase(name) marks the named phase as running (so an
+// error return from inside it can be attributed) and returns the stop func;
+// stop(payloads) appends the completed PhaseTiming and clears Current. The stop
+// func is called EXPLICITLY at the block's end rather than deferred, so the span
+// boundary is visible at both ends and a misplacement is obvious rather than silent.
+//
+// The closures draw no generator PRNG and allocate no source ids, so they are
+// position-free: inserting them between existing blocks cannot shift the
+// deterministic id/handle sequence the source replays depend on.
+func newPhaseTimer(t *SeedTimings) func(name string) func(payloads int) {
+	return func(name string) func(payloads int) {
+		sw := replay.NewStopwatch()
+		t.Current = name
+		return func(payloads int) {
+			t.Phases = append(t.Phases, PhaseTiming{Name: name, Duration: sw.Elapsed(), Payloads: payloads})
+			t.Current = ""
+		}
 	}
 }
 
 // runMinimalScoped is exactly today's SeedAll (the byte-stable golden shape).
-func runMinimalScoped(ctx context.Context, h *Harness, params SeedParams, res ProfileResult) (ProfileResult, error) {
+// It reports a single phase so all three profiles surface timings uniformly.
+func runMinimalScoped(ctx context.Context, h *Harness, params SeedParams, res ProfileResult) (out ProfileResult, err error) {
+	// Refresh the settle accounting on EVERY return path (including an early
+	// settle failure, which is precisely the case the instrumentation exists for).
+	defer func() { out.Timings.Settle = h.SettleStats() }()
+	phase := newPhaseTimer(&res.Timings)
+
+	stop := phase("seed-all")
 	seedRes, err := SeedAll(ctx, h, params)
 	if err != nil {
 		return res, err
@@ -301,6 +382,7 @@ func runMinimalScoped(ctx context.Context, h *Harness, params SeedParams, res Pr
 	res.Contacts = len(seedRes.GmailContactIDs) + len(seedRes.TelegramContactIDs)
 	res.GmailSettled = len(seedRes.GmailContactIDs)
 	res.TelegramSettled = len(seedRes.TelegramContactIDs)
+	stop(res.Contacts)
 	return res, nil
 }
 
@@ -321,7 +403,19 @@ func runMinimalScoped(ctx context.Context, h *Harness, params SeedParams, res Pr
 // review rows (anarlog_title discovery), and comms_message without interaction_id
 // (GChat MatchUnknown is match-only, writes no comms_message). Building these is a
 // factory/replay addition deferred to a follow-on.
-func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res ProfileResult) (ProfileResult, error) {
+func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res ProfileResult) (out ProfileResult, err error) {
+	// Refresh the settle accounting on EVERY return path. Reading it only after
+	// the last block would return an EMPTY accumulator on an early settle
+	// failure — precisely the case the instrumentation exists for. The named
+	// result makes the deferred write land on the value actually returned; every
+	// `return res, …` below is unchanged.
+	defer func() { out.Timings.Settle = h.SettleStats() }()
+	// phase(name) … stop(payloads) brackets each seeding block below. `payloads`
+	// counts SOURCE payloads driven through a replay seam: where a ProfileResult
+	// counter already increments once per replay call, the phase reports that
+	// counter's delta (self-maintaining); otherwise it keeps a local tally.
+	phase := newPhaseTimer(&res.Timings)
+
 	gen := h.Generator()
 	n := params.Counts.SeededContacts
 	if n <= 0 {
@@ -347,6 +441,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// birthday, so the toolkit-authored date fact (a `birthday`, single-cardinality)
 	// can occupy a fresh slot rather than superseding a contact-create birthday.
 	catalogContactsWithoutBirthday := make([]uuid.UUID, 0, n)
+	stop := phase("catalog-contacts")
 	for i := 0; i < n; i++ {
 		opts := catalogOptionsFor(i, n, gen.Anchor(), gen.Prefix())
 		spec := gen.Contact(opts...)
@@ -374,6 +469,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			cadenceBearingCatalogIDs = append(cadenceBearingCatalogIDs, contact.ID)
 		}
 	}
+	stop(0)
 
 	// Give a realistic fraction of catalog contacts a notepad note — every third
 	// contact by index (⌈n/3⌉ total), a personal-CRM-like density — so contact-detail
@@ -382,6 +478,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// literal body), so this pass is ordering-safe: it cannot shift the deterministic
 	// id/handle sequence the source replays below depend on. Bodies are unprefixed
 	// literals (SeedNote adds the namespace prefix) so no gen.Note() draw is needed.
+	stop = phase("catalog-notes")
 	for i, contactID := range catalogContactIDs {
 		if i%3 != 0 {
 			continue
@@ -391,6 +488,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.ContactsWithNotes++
 	}
+	stop(0)
 
 	// A few settled interactions on DEDICATED contacts per source so every source
 	// surface has matched content WITHOUT clobbering the catalog's cadence states.
@@ -411,6 +509,10 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		messagesPer = 1
 	}
 
+	// res.SettledInteractions increments once per replay call in this block, so
+	// its delta IS the phase's payload count.
+	stop = phase("per-source-settled")
+	settledBefore := res.SettledInteractions
 	for i := 0; i < perSource; i++ {
 		// Gmail-settled (email match).
 		gmSpec := gen.Contact(factory.WithEmail())
@@ -491,9 +593,11 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.IMessageSettled++
 	}
+	stop(res.SettledInteractions - settledBefore)
 
 	// --- PRODUCIBLE pending states -----------------------------------------
 	// Unmatched external_contact (Imports queue) via ReplayMacContacts MatchUnknown.
+	stop = phase("pending-unmatched-external")
 	for i := 0; i < params.Counts.UnmatchedExternal; i++ {
 		spec, err := gen.MacContact(gen.Contact(factory.WithEmail()), factory.MatchUnknown, h.MacHostID())
 		if err != nil {
@@ -504,7 +608,9 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.UnmatchedExternal++
 	}
+	stop(params.Counts.UnmatchedExternal)
 	// Stranded telegram_message via ReplayTelegram MatchUnknown.
+	stop = phase("pending-stranded-telegram")
 	for i := 0; i < params.Counts.StrandedTelegram; i++ {
 		spec := gen.TelegramMessage(gen.Contact(factory.WithTelegram()), factory.MatchUnknown)
 		if _, err := h.ReplayTelegram(ctx, uuid.Nil, spec); err != nil {
@@ -512,7 +618,9 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.StrandedTelegram++
 	}
+	stop(params.Counts.StrandedTelegram)
 	// Stranded messages_message via ReplayIMessage MatchUnknown.
+	stop = phase("pending-stranded-messages")
 	for i := 0; i < params.Counts.StrandedMessages; i++ {
 		spec, err := gen.IMessage(gen.Contact(factory.WithPhone()), factory.MatchUnknown, h.MacHostID())
 		if err != nil {
@@ -523,7 +631,9 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.StrandedMessages++
 	}
+	stop(params.Counts.StrandedMessages)
 	// Unmatched calendar attendee via ReplayGCal MatchUnknown.
+	stop = phase("pending-unmatched-calendar")
 	for i := 0; i < params.Counts.UnmatchedCalendar; i++ {
 		spec := gen.GCalEvent(gen.Contact(factory.WithEmail()), factory.MatchUnknown)
 		if _, err := h.ReplayGCal(ctx, uuid.Nil, spec); err != nil {
@@ -531,7 +641,9 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.UnmatchedCalendar++
 	}
+	stop(params.Counts.UnmatchedCalendar)
 	// Orphan meeting_note via the existing meeting-note repo.
+	stop = phase("pending-orphan-notes")
 	for i := 0; i < params.Counts.OrphanMeetingNote; i++ {
 		if _, err := h.SeedOrphanMeetingNote(ctx,
 			fmt.Sprintf("synthetic orphan note %d", i),
@@ -540,6 +652,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.OrphanMeetingNote++
 	}
+	stop(0)
 
 	// Graph (SP1) text-fact assertions spread across the catalog person nodes
 	// (node.id == contact.id). Seeded LAST so the generator-PRNG advancement these
@@ -555,6 +668,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// proposition_key, and successive assertions land on distinct contacts
 	// (i % len), so the single-cardinality predicates (home_address/job_title)
 	// never supersede a same-subject prior.
+	stop = phase("graph-text-facts")
 	if len(catalogContactIDs) > 0 {
 		for i := 0; i < params.Counts.SeededAssertions; i++ {
 			subject := catalogContactIDs[i%len(catalogContactIDs)]
@@ -565,6 +679,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			res.SeededAssertions++
 		}
 	}
+	stop(0)
 
 	// Graph (SP1) value-type + edge assertions. These ride the SAME "seeded LAST"
 	// rule as the text-fact spread above: the gen.BoolFact / gen.DateFact /
@@ -577,6 +692,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// nodes — all auto-if-confident → accepted. Bounded by the catalog size so a
 	// distinct subject per fact keeps the single-cardinality bool predicates from
 	// superseding one another.
+	stop = phase("graph-bool-facts")
 	boolFacts := params.Counts.SeededBoolFacts
 	if boolFacts > len(catalogContactIDs) {
 		boolFacts = len(catalogContactIDs)
@@ -589,6 +705,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.SeededBoolFacts++
 	}
+	stop(0)
 
 	// The FIRST clock-anchored birthday date-fact (the "today" fixture) asserted
 	// DIRECTLY through the assert path (distinct from the contact-create
@@ -598,6 +715,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// Seeded on a catalog contact that carries no contact-path birthday so it
 	// occupies a fresh single-cardinality slot. Anchor-relative (UTC) so no
 	// time.Now() and the fixture tracks the reseed clock.
+	stop = phase("graph-birthday-today")
 	if len(catalogContactsWithoutBirthday) > 0 {
 		plan := BirthdayFixturePlan(gen.Anchor())
 		bday := BirthdayFixtureDate(gen.Anchor(), plan[0].OffsetDays)
@@ -609,6 +727,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		h.SetDateFactContactID(catalogContactsWithoutBirthday[0])
 		res.SeededDateFacts++
 	}
+	stop(0)
 
 	// Person→person EDGE assertions among already-seeded catalog person nodes (no
 	// new entity nodes — those are a later PR). knows/introduced_by are
@@ -618,6 +737,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// catalog size so each subject is distinct (the single-cardinality introduced_by
 	// never supersedes). Both endpoints are person nodes, so the existing per-node
 	// assertion teardown sweep (subject OR object) already removes them.
+	stop = phase("graph-person-edges")
 	relationships := params.Counts.SeededRelationships
 	if len(catalogContactIDs) < 2 {
 		relationships = 0 // an edge needs two distinct nodes
@@ -634,6 +754,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.SeededRelationships++
 	}
+	stop(0)
 
 	// Entity nodes (org/topic/tag pool) + person→entity EDGE assertions. Seeded
 	// LAST because gen.Entity DRAWS the name PRNG (givenName) — appending it after
@@ -645,6 +766,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// objects from it repeatedly — prod-like (many people share a few orgs/topics/
 	// tags). place entity nodes + lives_in edges are NOT seeded here; they ride the
 	// contact-create authority flip via WithLocation (Phase 1 above).
+	stop = phase("graph-entities")
 	var orgNodeIDs, topicNodeIDs, tagNodeIDs []uuid.UUID
 	for j := 0; j < params.Counts.SeededEntities; j++ {
 		subtype := catalogEntitySubtypes[j%len(catalogEntitySubtypes)]
@@ -662,6 +784,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.SeededEntities++
 	}
+	stop(0)
 
 	// Person→entity edges cycle works_at→org / interested_in→topic / tagged_as→tag,
 	// all auto-if-confident → accepted. The subject is a distinct catalog contact
@@ -671,6 +794,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// predicates are accepted; the proposed surface is covered by the person→person
 	// sibling_of edge above. A subtype with an empty pool is skipped (only possible
 	// when SeededEntities < 3, which the profiles avoid).
+	stop = phase("graph-entity-edges")
 	entityEdges := params.Counts.SeededEntityEdges
 	if entityEdges > len(catalogContactIDs) {
 		entityEdges = len(catalogContactIDs)
@@ -709,6 +833,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.SeededEntityEdges++
 	}
+	stop(0)
 
 	// relationship_signal rows (SP1 derived storage) on a subset of the catalog
 	// person nodes. In prod these are computed from comms analysis; SP1 has no
@@ -720,6 +845,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// rotated key from a small fixed pool (a few signal kinds repeat across people,
 	// prod-like) and a deterministic value; as_of is the generator anchor (no
 	// time.Now()).
+	stop = phase("graph-signals")
 	signals := params.Counts.SeededSignals
 	if signals > len(catalogContactIDs) {
 		signals = len(catalogContactIDs)
@@ -735,6 +861,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.SeededSignals++
 	}
+	stop(0)
 
 	// Cadence tasks (Todoist) on the cadence-bearing catalog contacts. ReplayTodoist
 	// drives the REAL CadenceSyncProvider reconcile, which reads
@@ -752,6 +879,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// finalized its external id. `completed`/`dismissed` are prod-impossible for this
 	// lifecycle (a completed cadence row is deleted by the next reconcile; a skip routes
 	// to a managed replacement, never to dismissed), so they are not seeded here.
+	stop = phase("tasks")
 	if params.Counts.SeededTasks > 0 && len(cadenceBearingCatalogIDs) > 0 {
 		if _, err := h.ReplayTodoist(ctx, cadenceBearingCatalogIDs); err != nil {
 			return res, fmt.Errorf("profile %s: replay todoist: %w", params.Profile, err)
@@ -785,6 +913,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		res.SeededContactsWithManualTasks = spread.ContactsWithManualTasks
 		res.SeededContactsWithMultipleManualTasks = spread.ContactsWithMultipleManualTasks
 	}
+	stop(0)
 
 	// Merge + soft-delete scenarios. Seeded LAST: each draws gen.Contact (name PRNG)
 	// + gen.BoolFact, so appending them after every other generator-driven block keeps
@@ -796,6 +925,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// statement). The assertions are BOOL facts (value_bool, not value_text) so they
 	// add no live value_text on the surviving merge winner — keeping the determinism
 	// ordering guard's "entity pool seq > text-fact seq" invariant intact.
+	stop = phase("soft-deleted")
 	for i := 0; i < params.Counts.SeededSoftDeleted; i++ {
 		if _, err := h.SeedSoftDeletedContact(ctx, gen.Contact(),
 			gen.BoolFact(softDeleteFactPredicate, true)); err != nil {
@@ -803,6 +933,8 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.SeededSoftDeleted++
 	}
+	stop(0)
+	stop = phase("merged")
 	for i := 0; i < params.Counts.SeededMerged; i++ {
 		// Distinct winner/loser predicates so the re-pointed loser fact lands beside the
 		// winner's own without single-cardinality supersession.
@@ -814,6 +946,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.SeededMerged++
 	}
+	stop(0)
 
 	// Import-source candidates so EVERY Imports subtab has unmatched content (item
 	// 13). Seeded LAST — the very end of the generator-driven sequence — because
@@ -835,6 +968,11 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// Teardown reclaims them via the existing external_contact source_id-prefix sweep
 	// (gcontacts/gmail_correspondence/anarlog carry an ns-prefixed source_id) and the
 	// telegram-peer sweep (the discovery candidate is keyed by the bare peer id).
+	//
+	// Only the anarlog + telegram-discovery halves drive replay payloads; the two
+	// Google candidates are direct repo upserts, so they are not counted here.
+	stop = phase("import-candidates")
+	importPayloads := 0
 	for i := 0; i < params.Counts.ImportCandidatesPerSource; i++ {
 		// gcontacts (direct repo upsert).
 		if _, err := h.SeedExternalContactCandidate(ctx, gen.ExternalContactCandidate(importSourceGContacts)); err != nil {
@@ -857,6 +995,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: replay anarlog candidate %d: %w", params.Profile, i, err)
 		}
 		res.UnmatchedAnarlogHumans++
+		importPayloads++
 
 		// telegram discovery: a group conversation of telegramDiscoveryMessages messages
 		// sharing ONE chat + unknown sender (distinct message ids), built by copying the
@@ -873,7 +1012,9 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: replay telegram discovery %d: %w", params.Profile, i, err)
 		}
 		res.TelegramDiscovery++
+		importPayloads += len(discoverySpecs)
 	}
+	stop(importPayloads)
 
 	// --- The "awaiting reply" scenario (has_pending_followup) -----------------------
 	//
@@ -896,6 +1037,8 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// the seed cannot ASSERT on last_outreach_at here (the job has not run yet); the
 	// coverage check asserts it post-Quiesce, which is the honest place to prove the chain
 	// actually landed.
+	stop = phase("follow-up-loop")
+	followUpPayloads := 0
 	if params.Counts.SeededTasks > 0 {
 		fuSpec := gen.Contact(factory.WithEmail(), factory.WithCadence(followUpScenarioCadence))
 		fuContact, err := h.SeedContact(ctx, fuSpec)
@@ -907,12 +1050,14 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			return res, fmt.Errorf("profile %s: replay gcal for awaiting-reply contact: %w", params.Profile, err)
 		}
 		res.SettledInteractions++
+		followUpPayloads++
 		if _, err := h.SeedPendingFollowUp(ctx, fuContact.ID, fuContact.FullName); err != nil {
 			return res, fmt.Errorf("profile %s: seed pending follow-up: %w", params.Profile, err)
 		}
 		res.SeededTasks++
 		res.SeededPendingFollowUps = 1
 	}
+	stop(followUpPayloads)
 
 	// --- Two-sided message-direction cohort (F4) --------------------------------
 	//
@@ -933,6 +1078,8 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// carries a single outbound interaction: last_outreach_at set (CAD-006),
 	// last_contacted / last_interaction_at NULL (an outbound touches neither), so
 	// these pass the PR1 lockstep gate unchanged (NULL last_contacted → exempt).
+	stop = phase("direction-cohort")
+	directionPayloads := 0
 	obGmailSpec := gen.Contact(factory.WithEmail())
 	obGmailContact, err := h.SeedContact(ctx, obGmailSpec)
 	if err != nil {
@@ -943,6 +1090,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		return res, fmt.Errorf("profile %s: replay outbound gmail: %w", params.Profile, err)
 	}
 	res.OutboundOnlyContacts++
+	directionPayloads++
 
 	obGChatSpec := gen.Contact(factory.WithEmail())
 	obGChatContact, err := h.SeedContact(ctx, obGChatSpec)
@@ -954,6 +1102,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		return res, fmt.Errorf("profile %s: replay outbound gchat: %w", params.Profile, err)
 	}
 	res.OutboundOnlyContacts++
+	directionPayloads++
 
 	obIMsgSpec := gen.Contact(factory.WithPhone())
 	obIMsgContact, err := h.SeedContact(ctx, obIMsgSpec)
@@ -969,6 +1118,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		return res, fmt.Errorf("profile %s: replay outbound imessage: %w", params.Profile, err)
 	}
 	res.OutboundOnlyContacts++
+	directionPayloads++
 
 	// One MUTUAL (reply-bridged) telegram contact. Telegram runs its aggregation
 	// engine INLINE in ReplayTelegram (worker-free), so the promote is reliable.
@@ -990,6 +1140,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	if _, err := h.ReplayTelegram(ctx, mutualContact.ID, tgOutbound); err != nil {
 		return res, fmt.Errorf("profile %s: replay mutual telegram outbound: %w", params.Profile, err)
 	}
+	directionPayloads++
 	tgReply := tgOutbound // clone: same peer + chat, so the bridge can fire
 	tgReply.TelegramMessageID = tgOutbound.TelegramMessageID + 1
 	tgReply.Out = false
@@ -998,8 +1149,10 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	if _, err := h.ReplayTelegram(ctx, mutualContact.ID, tgReply); err != nil {
 		return res, fmt.Errorf("profile %s: replay mutual telegram reply: %w", params.Profile, err)
 	}
+	directionPayloads++
 	h.SetMutualMessageContactID(mutualContact.ID)
 	res.MutualMessageContacts++
+	stop(directionPayloads)
 
 	// --- Additional clock-anchored birthday fixtures (seeded LAST) --------------
 	//
@@ -1014,6 +1167,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// assertion, so even the no-method slot qualifies): plan[i] lands on
 	// catalogContactsWithoutBirthday[i], reserving the full ordered set (today first)
 	// so the coverage/determinism tests can classify each subject-scoped.
+	stop = phase("birthday-fixtures")
 	plan := BirthdayFixturePlan(gen.Anchor())
 	seededCount := min(len(catalogContactsWithoutBirthday), len(plan))
 	for i := 1; i < seededCount; i++ {
@@ -1024,6 +1178,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		res.SeededDateFacts++
 	}
 	h.SetBirthdayFixtureIDs(catalogContactsWithoutBirthday[:seededCount])
+	stop(0)
 
 	return res, nil
 }
