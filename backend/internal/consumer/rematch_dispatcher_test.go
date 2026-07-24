@@ -51,10 +51,11 @@ func newWorkerForRunner(t *testing.T, runnerErr error) (*RematchDispatcherWorker
 // rematch runner reports budget exhaustion (the continue-later sentinel), Work
 // reschedules the job via JobSnooze instead of returning a terminal error that
 // would burn the job's MaxAttempts and discard the backfill. The sentinel is
-// wrapped exactly as production wraps it (per-account context + %w), so this
-// also proves the sentinel survives the wrapping back up to Work.
+// wrapped exactly as production wraps it — per-account context (%w) inside the
+// errors.Join that gchatRematchBase.rematch builds — so this also proves the
+// sentinel survives the full wrapping (Join + %w) back up to Work.
 func TestRematchDispatcherWorker_Work_BudgetExhausted_Snoozes(t *testing.T) {
-	runnerErr := fmt.Errorf("account acct-1: %w", google.ErrRematchBudgetExhausted)
+	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", google.ErrRematchBudgetExhausted))
 	worker, job := newWorkerForRunner(t, runnerErr)
 
 	err := worker.Work(context.Background(), job)
@@ -69,16 +70,40 @@ func TestRematchDispatcherWorker_Work_BudgetExhausted_Snoozes(t *testing.T) {
 // TestRematchDispatcherWorker_Work_GenuineError_Propagates proves a non-budget
 // failure still propagates as a terminal error so river retries and eventually
 // discards it per MaxAttempts — budget-exhaustion handling must not swallow
-// real failures.
+// real failures. The error is wrapped as production wraps it (per-account %w
+// inside errors.Join).
 func TestRematchDispatcherWorker_Work_GenuineError_Propagates(t *testing.T) {
 	sentinel := errors.New("gchat api exploded")
-	worker, job := newWorkerForRunner(t, sentinel)
+	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", sentinel))
+	worker, job := newWorkerForRunner(t, runnerErr)
 
 	err := worker.Work(context.Background(), job)
 
 	require.ErrorIs(t, err, sentinel, "genuine errors must propagate so river retries/discards normally")
 	var snooze *river.JobSnoozeError
 	require.NotErrorAs(t, err, &snooze, "genuine errors must not be rescheduled as a snooze")
+}
+
+// TestRematchDispatcherWorker_Work_MixedError_Snoozes locks the documented
+// self-resolving tradeoff for the multi-account fan-out: when one account
+// budget-exhausts and another returns a genuine error, rematch returns an
+// errors.Join of both, and Work snoozes (budget-exhaustion is present). Once the
+// budget stops exhausting on a later run, only the genuine error remains and it
+// discards normally. Guarding this here means a refactor that reordered the
+// checks (e.g. inspecting for a genuine error first) fails loudly instead of
+// silently discarding backfills mid-budget.
+func TestRematchDispatcherWorker_Work_MixedError_Snoozes(t *testing.T) {
+	runnerErr := errors.Join(
+		fmt.Errorf("account acct-1: %w", google.ErrRematchBudgetExhausted),
+		fmt.Errorf("account acct-2: %w", errors.New("oauth token revoked")),
+	)
+	worker, job := newWorkerForRunner(t, runnerErr)
+
+	err := worker.Work(context.Background(), job)
+
+	var snooze *river.JobSnoozeError
+	require.ErrorAs(t, err, &snooze,
+		"budget exhaustion co-occurring with a genuine error still snoozes (self-resolving tradeoff)")
 }
 
 // stubRunner records Run invocations and returns a configurable error.
