@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1150,6 +1151,23 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 // proposition_key and the edge object node id are NOT fingerprinted (they embed
 // the per-run subject/object UUID, so they are not run-stable); a person→person
 // edge therefore contributes only its (predicate_key, status) to the fingerprint.
+// catalogProfilePhaseCount is how many comment-delimited seeding blocks
+// runCatalogProfile brackets with a phase timer. It is pinned so a block added
+// (or a stop() call lost) without a phase is caught here rather than silently
+// dropping a row from the reseed summary.
+const catalogProfilePhaseCount = 22
+
+// phaseShape projects phase timings onto their DETERMINISTIC components — name
+// and payload volume — dropping the wall-clock duration, so a run-to-run
+// comparison asserts the seeding shape without asserting the impossible.
+func phaseShape(phases []synthetic.PhaseTiming) []string {
+	out := make([]string, 0, len(phases))
+	for _, p := range phases {
+		out = append(out, fmt.Sprintf("%s=%d", p.Name, p.Payloads))
+	}
+	return out
+}
+
 func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
@@ -1282,6 +1300,22 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 
 	res1, fp1, ent1, ext1, task1, bday1 := run()
 	res2, fp2, ent2, ext2, task2, bday2 := run()
+
+	// Timings are wall-clock and will never be equal across runs, so they are the
+	// one field excluded from the whole-struct equality below. Zeroing the nested
+	// struct — rather than comparing field-by-field around it — keeps every other
+	// counter, including counters added later, under strict equality.
+	require.NotZero(t, res1.Timings.Total, "the run must report a wall-clock duration")
+	require.Positive(t, res1.Timings.Settle.Calls, "the run must report settle accounting")
+	require.Empty(t, res1.Timings.Current, "a clean run leaves no phase marked as running")
+	require.Len(t, res1.Timings.Phases, catalogProfilePhaseCount,
+		"every catalog-profile seeding block reports a phase")
+	// Phase NAMES and payload volumes ARE deterministic (durations are not), so
+	// they are compared through a duration-free projection.
+	require.Equal(t, phaseShape(res1.Timings.Phases), phaseShape(res2.Timings.Phases),
+		"phase names + payload volumes must be deterministic across runs")
+	res1.Timings = synthetic.SeedTimings{}
+	res2.Timings = synthetic.SeedTimings{}
 
 	require.Equal(t, res1, res2, "prod-shaped ProfileResult must be deterministic across runs")
 	require.NotEmpty(t, fp1, "the seed must produce assertions to fingerprint")

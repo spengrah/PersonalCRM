@@ -59,6 +59,113 @@ func realTimeBudget(d time.Duration) (open func() bool, cancel func()) {
 	return func() bool { return tctx.Err() == nil }, c
 }
 
+// Stopwatch measures REAL elapsed wall-clock time. It is the single audited
+// real-clock site in the synthetic toolkit: seed/reseed duration is
+// INFRASTRUCTURE timing (how long an operation took), not domain time, so
+// accelerated.GetCurrentTime() would report a duration scaled by
+// TIME_ACCELERATION — a fictional number, useless for the one purpose the
+// measurement has. This is the same judgment the settle budgets already make
+// (see defaultSettleTimeout / realTimeBudget), and the same class as the request
+// latency measurement in internal/api/middleware.go, which .golangci.yml names
+// among the sanctioned //nolint:forbidigo exceptions.
+//
+// Exported because both package synthetic (whole-run + per-phase timing) and
+// this package (settle accounting) need it, and synthetic imports replay — the
+// reverse import would cycle.
+type Stopwatch struct {
+	start time.Time
+}
+
+// NewStopwatch starts a stopwatch at the current real wall-clock instant.
+func NewStopwatch() *Stopwatch {
+	//nolint:forbidigo // Wall-clock time for reseed/settle duration measurement, not domain time (see Stopwatch).
+	return &Stopwatch{start: time.Now()}
+}
+
+// Elapsed reports the real time since the stopwatch was started. time.Since uses
+// the monotonic reading captured at start, so it is immune to wall-clock jumps.
+func (s *Stopwatch) Elapsed() time.Duration { return time.Since(s.start) }
+
+// SettleTimings is the harness's cumulative settle accounting: how many Settle
+// calls a run made, how long each gate waited, and — the falsifiability
+// discriminator — how much of that wait was POLLING versus genuine worker/DB
+// throughput. A gate satisfied on its first check cost ~one query; one that
+// polled many times cost real latency that batching can remove.
+//
+// Counts and durations only — no PII. Excluded from determinism equality
+// (durations are wall-clock and never equal across runs).
+type SettleTimings struct {
+	// Calls is the number of Settle invocations.
+	Calls int
+	// GateAWait / GateBWait / CaptureWait are the cumulative time spent in the
+	// domain terminal predicate, the River-job finalization gate, and the
+	// full-union event-id rebuild. GateA/GateB nest inside the caller's phase
+	// timer, and Capture follows them within the same Settle.
+	GateAWait   time.Duration
+	GateBWait   time.Duration
+	CaptureWait time.Duration
+	// GateACalls is the number of waitGateA invocations that actually evaluated a
+	// predicate (an adapter may pass nil). It is the denominator of the
+	// inline-hit rate — Calls would overcount, since a nil-predicate Settle
+	// evaluates nothing.
+	GateACalls int
+	// GateAPolls is the total number of predicate evaluations across all gate-A
+	// waits; GateAInlineHits is how many of those waits were satisfied by the
+	// FIRST evaluation, before any sleep. A high inline-hit rate means gate A
+	// cost ~one query per Settle; a low one means real polling latency.
+	GateAPolls      int
+	GateAInlineHits int
+	// GateBPolls is the total number of gate-B count-query iterations. Divided by
+	// Calls it gives the average polls per Settle: ~1 means no polling overhead,
+	// a large value means the reseed is waiting on River workers.
+	GateBPolls int
+}
+
+// recordSettleCall / recordGateA / recordGateB / recordCapture accumulate the
+// settle accounting. They take a DEDICATED mutex rather than the ledger's
+// createdMu: captureEventIDs already takes createdMu inside its own body, so
+// reusing it here would risk a re-entrant lock the moment recording moves inside
+// a locked region. Same discipline (mutex-guarded accumulator), separate lock.
+func (h *Harness) recordSettleCall() {
+	h.settleMu.Lock()
+	defer h.settleMu.Unlock()
+	h.settle.Calls++
+}
+
+func (h *Harness) recordGateA(wait time.Duration, polls int, inlineHit bool) {
+	h.settleMu.Lock()
+	defer h.settleMu.Unlock()
+	h.settle.GateACalls++
+	h.settle.GateAWait += wait
+	h.settle.GateAPolls += polls
+	if inlineHit {
+		h.settle.GateAInlineHits++
+	}
+}
+
+func (h *Harness) recordGateB(wait time.Duration, polls int) {
+	h.settleMu.Lock()
+	defer h.settleMu.Unlock()
+	h.settle.GateBWait += wait
+	h.settle.GateBPolls += polls
+}
+
+func (h *Harness) recordCapture(wait time.Duration) {
+	h.settleMu.Lock()
+	defer h.settleMu.Unlock()
+	h.settle.CaptureWait += wait
+}
+
+// SettleStats returns a snapshot of the run's cumulative settle accounting.
+// Exported so package synthetic can fold it into the profile result; safe to
+// call at any point, including from an error path, so a failed reseed still
+// reports whatever settling had completed.
+func (h *Harness) SettleStats() SettleTimings {
+	h.settleMu.Lock()
+	defer h.settleMu.Unlock()
+	return h.settle
+}
+
 // created is the ID ledger the harness/adapters accumulate during a run so
 // Cleanup can delete by exact id (never by a DB-wide source/kind value) and
 // Gate B can scope to this replay's contacts. eventIDs is the UNION of
@@ -212,6 +319,12 @@ type Harness struct {
 
 	created   *created
 	createdMu sync.Mutex
+
+	// settle is the cumulative settle accounting (call count, per-gate wait, poll
+	// counts) a profile run reads via SettleStats. Guarded by its OWN mutex — see
+	// recordSettleCall.
+	settle   SettleTimings
+	settleMu sync.Mutex
 
 	stopped bool
 }
@@ -525,6 +638,7 @@ type gateA func(ctx context.Context) (bool, error)
 // source is the aggregation source for Gate B's messaging-aggregate companion
 // (e.g. "messages"/"gchat"); pass "" for sources with no aggregate jobs.
 func (h *Harness) Settle(ctx context.Context, predicate gateA, source string) error {
+	h.recordSettleCall()
 	// Gate A — domain terminal predicate.
 	if err := h.waitGateA(ctx, predicate); err != nil {
 		return err
@@ -541,12 +655,23 @@ func (h *Harness) waitGateA(ctx context.Context, predicate gateA) error {
 	if predicate == nil {
 		return nil
 	}
+	// Accounting is recorded on EVERY exit path (satisfied, or timed out) so a
+	// failed reseed still reports what its gates cost.
+	sw := NewStopwatch()
+	polls := 0
+	inlineHit := false
+	defer func() { h.recordGateA(sw.Elapsed(), polls, inlineHit) }()
 	open, cancel := realTimeBudget(defaultSettleTimeout)
 	defer cancel()
 	var lastErr error
 	for open() {
+		polls++
 		ok, err := predicate(ctx)
 		if err == nil && ok {
+			// An inline hit is a gate satisfied BEFORE the first sleep: it cost one
+			// query, not polling latency. A gate that timed out is never one, however
+			// few evaluations it managed.
+			inlineHit = polls == 1
 			return nil
 		}
 		lastErr = err
@@ -556,12 +681,16 @@ func (h *Harness) waitGateA(ctx context.Context, predicate gateA) error {
 }
 
 func (h *Harness) waitGateB(ctx context.Context, source string) error {
+	sw := NewStopwatch()
+	polls := 0
+	defer func() { h.recordGateB(sw.Elapsed(), polls) }()
 	contactIDs := h.snapshotContactIDs()
 	open, cancel := realTimeBudget(defaultSettleTimeout)
 	defer cancel()
 	var lastEventJobs, lastAggJobs int64
 	var lastErr error
 	for open() {
+		polls++
 		eventJobs, err := h.support.CountUnfinalizedRiverJobsForEventsByContacts(ctx, contactIDs)
 		if err != nil {
 			lastErr = err
@@ -590,6 +719,8 @@ func (h *Harness) waitGateB(ctx context.Context, source string) error {
 // captureEventIDs grows created.eventIDs to the UNION of contact-scoped cascade
 // events and adapter-direct root events (by synthetic source/source_id prefix).
 func (h *Harness) captureEventIDs(ctx context.Context) error {
+	sw := NewStopwatch()
+	defer func() { h.recordCapture(sw.Elapsed()) }()
 	contactIDs := h.snapshotContactIDs()
 	seen := map[uuid.UUID]struct{}{}
 	var union []uuid.UUID

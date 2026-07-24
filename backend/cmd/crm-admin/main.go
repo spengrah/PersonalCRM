@@ -833,9 +833,10 @@ func runSeed(ctx context.Context, opts runOptions, deps adminDeps) error {
 	}
 	res, err := deps.seed.Seed(ctx, params)
 	if err != nil {
+		writePartialSeedSummary(deps.stdout, res)
 		return fmt.Errorf("seed: %w", err)
 	}
-	return writeSeedSummary(deps.stdout, res)
+	return writeSeedSummary(deps.stdout, res, false)
 }
 
 // runResetAndSeed hard-wipes the live data tables then reseeds. The CRM_ENV gate
@@ -851,15 +852,40 @@ func runResetAndSeed(ctx context.Context, opts runOptions, deps adminDeps) error
 	}
 	res, err := deps.seed.ResetAndSeed(ctx, params)
 	if err != nil {
+		writePartialSeedSummary(deps.stdout, res)
 		return fmt.Errorf("reset-and-seed: %w", err)
 	}
-	return writeSeedSummary(deps.stdout, res)
+	return writeSeedSummary(deps.stdout, res, false)
+}
+
+// writePartialSeedSummary prints the DEGRADED summary for a failed seed — the
+// timing block plus whatever counts accumulated — so a reseed that died six
+// minutes in says which phase it was running and what it had cost. It prints
+// nothing when the run never reached the profile (a harness-build or preflight
+// failure leaves a zero result, and a summary of nothing is noise), and it
+// deliberately swallows its own write error: the caller is already returning the
+// seed failure, which is the error that matters.
+func writePartialSeedSummary(w io.Writer, res synthetic.ProfileResult) {
+	if res.Timings.Total == 0 {
+		return
+	}
+	_ = writeSeedSummary(w, res, true)
 }
 
 // writeSeedSummary prints the counts-only seed summary (no PII). The bare
 // namespace is printed (NOT the synth-<ns>- prefix — an internal detail).
-func writeSeedSummary(w io.Writer, res synthetic.ProfileResult) error {
-	if _, err := fmt.Fprintf(w, "seed summary (profile=%s namespace=%s prng_seed=%d):\n"+
+// partial marks a run that FAILED: the counts and timings are whatever had
+// accumulated, and the header says so, so a partial summary is never mistaken
+// for a successful run.
+func writeSeedSummary(w io.Writer, res synthetic.ProfileResult, partial bool) error {
+	marker := ""
+	if partial {
+		marker = " (PARTIAL — run failed)"
+		if res.Timings.Current != "" {
+			marker = fmt.Sprintf(" (PARTIAL — run failed during phase %q)", res.Timings.Current)
+		}
+	}
+	if _, err := fmt.Fprintf(w, "seed summary (profile=%s namespace=%s prng_seed=%d)%s:\n"+
 		"  contacts:             %d\n"+
 		"  gmail_settled:        %d\n"+
 		"  telegram_settled:     %d\n"+
@@ -871,13 +897,73 @@ func writeSeedSummary(w io.Writer, res synthetic.ProfileResult) error {
 		"  stranded_messages:    %d\n"+
 		"  unmatched_calendar:   %d\n"+
 		"  orphan_meeting_notes: %d\n",
-		res.Profile, res.Namespace, res.Seed,
+		res.Profile, res.Namespace, res.Seed, marker,
 		res.Contacts, res.GmailSettled, res.TelegramSettled, res.GCalSettled, res.GChatSettled,
 		res.IMessageSettled, res.UnmatchedExternal, res.StrandedTelegram, res.StrandedMessages,
 		res.UnmatchedCalendar, res.OrphanMeetingNote); err != nil {
 		return fmt.Errorf("write seed summary: %w", err)
 	}
+	return writeSeedTimings(w, res.Timings)
+}
+
+// writeSeedTimings prints the wall-clock block: total duration, the settle
+// accounting, and every phase with its payload volume.
+//
+// The attribution model is NESTED, and the summary says so rather than inviting
+// a wrong reading: a phase timer ENCOMPASSES the Settle calls made inside it,
+// and the gate timers nest inside those. So `outside_gates` (duration minus
+// total gate wait) is close to an accounting identity — PostgreSQL and River
+// work performed WHILE a gate waits is already counted as gate wait — and it is
+// labelled as bookkeeping, not evidence. What is actually falsifiable is
+// gate_polls: waitGateA evaluates its predicate BEFORE the first sleep, so a
+// high inline-hit rate with low poll counts means gate wait is genuine worker/DB
+// throughput, while a low rate with many polls is latency that batching removes.
+func writeSeedTimings(w io.Writer, t synthetic.SeedTimings) error {
+	s := t.Settle
+	gateTotal := s.GateAWait + s.GateBWait + s.CaptureWait
+	inlineDen := s.GateACalls
+	if inlineDen == 0 {
+		inlineDen = 1 // avoid a bare 0/0; the numerator is 0 too, so the line still reads honestly
+	}
+	avgGateBPolls := 0.0
+	if s.Calls > 0 {
+		avgGateBPolls = float64(s.GateBPolls) / float64(s.Calls)
+	}
+	if _, err := fmt.Fprintf(w,
+		"  duration:             %s\n"+
+			"  settle_calls:         %d\n"+
+			"  gate_wait:            gate_a=%s gate_b=%s capture=%s   (nested inside phases)\n"+
+			"  gate_polls:           gate_a=inline-hits %d/%d  gate_b=polls %d (avg %.1f/call)\n"+
+			"  outside_gates:        %s   (bookkeeping: duration − gate wait; NOT a hypothesis test)\n"+
+			"  phases (%d):\n",
+		formatSeedDuration(t.Total),
+		s.Calls,
+		formatSeedDuration(s.GateAWait), formatSeedDuration(s.GateBWait), formatSeedDuration(s.CaptureWait),
+		s.GateAInlineHits, inlineDen, s.GateBPolls, avgGateBPolls,
+		formatSeedDuration(t.Total-gateTotal),
+		len(t.Phases)); err != nil {
+		return fmt.Errorf("write seed timings: %w", err)
+	}
+	for _, p := range t.Phases {
+		// A phase that seeds no source payloads prints `-`, so "none by design"
+		// reads differently from "expected payloads, got none".
+		payloads := "-"
+		if p.Payloads > 0 {
+			payloads = fmt.Sprintf("%d payloads", p.Payloads)
+		}
+		if _, err := fmt.Fprintf(w, "    %-26s %9s   %s\n",
+			p.Name, formatSeedDuration(p.Duration), payloads); err != nil {
+			return fmt.Errorf("write seed phase timing: %w", err)
+		}
+	}
 	return nil
+}
+
+// formatSeedDuration renders a duration as plain seconds. Duration.String would
+// switch units across the ranges these numbers span ("1m12.97s" vs "412ms"),
+// which makes a phase table impossible to scan or diff.
+func formatSeedDuration(d time.Duration) string {
+	return fmt.Sprintf("%.2fs", d.Seconds())
 }
 
 func runMintPairingToken(ctx context.Context, opts runOptions, deps adminDeps) error {
@@ -1484,6 +1570,12 @@ func (a seedAdapter) ResetAndSeed(ctx context.Context, params synthetic.SeedPara
 
 // runProfile builds the namespaced harness, runs the profile, and enforces the
 // seed-and-leave (success) / full-teardown (error) lifecycle.
+//
+// On failure it returns the PARTIAL ProfileResult alongside the error rather
+// than discarding it: which phase was running, how long the run had taken, and
+// how many payloads had landed IS the diagnostic, and the entrypoints print it
+// as a degraded summary. The error return is unchanged, so the exit code still
+// reflects failure — this adds diagnostics, it swallows nothing.
 func (a seedAdapter) runProfile(ctx context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error) {
 	h, teardown, err := synthetic.NewHarnessWithDBForNamespace(ctx, a.database, params.Namespace, params.Seed)
 	if err != nil {
@@ -1497,9 +1589,9 @@ func (a seedAdapter) runProfile(ctx context.Context, params synthetic.SeedParams
 		// the partial world is still standing) ALONGSIDE the seed error — silently
 		// dropping it would hide that the "no leave-behind" guarantee was not met.
 		if tdErr := teardown(context.Background()); tdErr != nil {
-			return synthetic.ProfileResult{}, fmt.Errorf("seed failed: %w; AND partial-world teardown also failed (data may remain): %v", err, tdErr)
+			return res, fmt.Errorf("seed failed: %w; AND partial-world teardown also failed (data may remain): %v", err, tdErr)
 		}
-		return synthetic.ProfileResult{}, err
+		return res, err
 	}
 	// Success: Quiesce (stop client, LEAVE the rows).
 	if qErr := h.Quiesce(ctx); qErr != nil {
