@@ -655,8 +655,10 @@ func (h *Harness) waitGateA(ctx context.Context, predicate gateA) error {
 	if predicate == nil {
 		return nil
 	}
-	// Accounting is recorded on EVERY exit path (satisfied, or timed out) so a
-	// failed reseed still reports what its gates cost.
+	// The deferred record runs on every exit path, so a gate that TIMED OUT still
+	// reports what it cost — that is true by construction, not by test: the unit
+	// tests pin the satisfied paths only (a timeout case would cost
+	// defaultSettleTimeout of wall clock to reach the same line).
 	sw := NewStopwatch()
 	polls := 0
 	inlineHit := false

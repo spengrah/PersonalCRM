@@ -329,6 +329,12 @@ func TestSyntheticProfile_MinimalScopedMatchesSeedAll(t *testing.T) {
 	require.Equal(t, 1, res.GmailSettled)
 	require.Equal(t, 1, res.TelegramSettled)
 	require.Equal(t, 2, res.Contacts)
+	// minimal-scoped reports its one `seed-all` phase, so all three profiles
+	// surface timings uniformly — otherwise this path's phase bracket could be
+	// dropped without any test noticing.
+	require.Len(t, res.Timings.Phases, 1, "minimal-scoped reports its single phase")
+	require.Equal(t, "seed-all", res.Timings.Phases[0].Name)
+	require.Positive(t, res.Timings.Settle.Calls, "minimal-scoped reports settle accounting")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
@@ -1118,6 +1124,23 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	require.Greater(t, remaining, int64(0), "prod-shaped profile seeds contacts")
 }
 
+// catalogProfilePhaseCount is how many comment-delimited seeding blocks
+// runCatalogProfile brackets with a phase timer. It is pinned so a block added
+// (or a stop() call lost) without a phase is caught here rather than silently
+// dropping a row from the reseed summary.
+const catalogProfilePhaseCount = 22
+
+// phaseShape projects phase timings onto their DETERMINISTIC components — name
+// and payload volume — dropping the wall-clock duration, so a run-to-run
+// comparison asserts the seeding shape without asserting the impossible.
+func phaseShape(phases []synthetic.PhaseTiming) []string {
+	out := make([]string, 0, len(phases))
+	for _, p := range phases {
+		out = append(out, fmt.Sprintf("%s=%d", p.Name, p.Payloads))
+	}
+	return out
+}
+
 // TestSyntheticProfile_ProdShapedDeterministic proves the prod-shaped seed is
 // deterministic: two runs at the same (namespace, seed, anchor) produce
 // byte-identical ProfileResult counts AND an identical fingerprint of the
@@ -1151,23 +1174,6 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 // proposition_key and the edge object node id are NOT fingerprinted (they embed
 // the per-run subject/object UUID, so they are not run-stable); a person→person
 // edge therefore contributes only its (predicate_key, status) to the fingerprint.
-// catalogProfilePhaseCount is how many comment-delimited seeding blocks
-// runCatalogProfile brackets with a phase timer. It is pinned so a block added
-// (or a stop() call lost) without a phase is caught here rather than silently
-// dropping a row from the reseed summary.
-const catalogProfilePhaseCount = 22
-
-// phaseShape projects phase timings onto their DETERMINISTIC components — name
-// and payload volume — dropping the wall-clock duration, so a run-to-run
-// comparison asserts the seeding shape without asserting the impossible.
-func phaseShape(phases []synthetic.PhaseTiming) []string {
-	out := make([]string, 0, len(phases))
-	for _, p := range phases {
-		out = append(out, fmt.Sprintf("%s=%d", p.Name, p.Payloads))
-	}
-	return out
-}
-
 func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
@@ -1307,6 +1313,15 @@ func TestSyntheticProfile_ProdShapedDeterministic(t *testing.T) {
 	// counter, including counters added later, under strict equality.
 	require.NotZero(t, res1.Timings.Total, "the run must report a wall-clock duration")
 	require.Positive(t, res1.Timings.Settle.Calls, "the run must report settle accounting")
+	// Each of the four instrumented settle hunks gets its own witness. Calls alone
+	// would stay green if the Gate-B or capture recording were deleted — and those
+	// are two of the five numbers the reseed summary prints, so a silent zero would
+	// read as "gate B is free" and invert this PR's measured conclusion. waitGateB
+	// always polls at least once and captureEventIDs always runs, so both are
+	// non-zero on any real run.
+	require.Positive(t, res1.Timings.Settle.GateAPolls, "gate A accounting is recorded")
+	require.Positive(t, res1.Timings.Settle.GateBPolls, "gate B accounting is recorded")
+	require.Positive(t, res1.Timings.Settle.CaptureWait, "capture accounting is recorded")
 	require.Empty(t, res1.Timings.Current, "a clean run leaves no phase marked as running")
 	require.Len(t, res1.Timings.Phases, catalogProfilePhaseCount,
 		"every catalog-profile seeding block reports a phase")

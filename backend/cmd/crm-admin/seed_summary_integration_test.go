@@ -50,6 +50,10 @@ func TestSeedAdapterRunProfileCarriesPartialResultOnFailure(t *testing.T) {
 	res, err := adapter.runProfile(ctx, params)
 
 	require.Error(t, err, "the profile failure is still surfaced")
+	// A genuine profile failure must stay in the PARTIAL branch: the world was
+	// torn down, so labelling it world-intact would tell an operator to trust
+	// counts for rows that no longer exist.
+	require.NotErrorIs(t, err, errSeedWorldIntact)
 	// A discarded result would be the zero ProfileResult; these fields are the
 	// discriminator that the partial one came back.
 	require.Equal(t, params.Profile, res.Profile)

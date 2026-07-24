@@ -833,7 +833,7 @@ func runSeed(ctx context.Context, opts runOptions, deps adminDeps) error {
 	}
 	res, err := deps.seed.Seed(ctx, params)
 	if err != nil {
-		writePartialSeedSummary(deps.stdout, res)
+		writeSeedSummaryOnError(deps.stdout, res, err)
 		return fmt.Errorf("seed: %w", err)
 	}
 	return writeSeedSummary(deps.stdout, res, false)
@@ -852,24 +852,33 @@ func runResetAndSeed(ctx context.Context, opts runOptions, deps adminDeps) error
 	}
 	res, err := deps.seed.ResetAndSeed(ctx, params)
 	if err != nil {
-		writePartialSeedSummary(deps.stdout, res)
+		writeSeedSummaryOnError(deps.stdout, res, err)
 		return fmt.Errorf("reset-and-seed: %w", err)
 	}
 	return writeSeedSummary(deps.stdout, res, false)
 }
 
-// writePartialSeedSummary prints the DEGRADED summary for a failed seed — the
-// timing block plus whatever counts accumulated — so a reseed that died six
-// minutes in says which phase it was running and what it had cost. It prints
-// nothing when the run never reached the profile (a harness-build or preflight
-// failure leaves a zero result, and a summary of nothing is noise), and it
-// deliberately swallows its own write error: the caller is already returning the
-// seed failure, which is the error that matters.
-func writePartialSeedSummary(w io.Writer, res synthetic.ProfileResult) {
+// errSeedWorldIntact marks a failure that happened AFTER the profile finished
+// seeding — the world is complete and was NOT torn down. Such a run must not be
+// labelled PARTIAL: an operator who reads "run failed" against a good staging
+// world re-runs --reset-and-seed, which wipes it. That is the inverse of the
+// mistake the marker exists to prevent, and the more expensive one.
+var errSeedWorldIntact = errors.New("seed completed; a post-seed step failed")
+
+// writeSeedSummaryOnError prints the summary for a seed run that returned an
+// error. It marks the summary PARTIAL only when the PROFILE failed — a
+// post-seed failure (errSeedWorldIntact) leaves a complete world, so it prints
+// as an ordinary summary and the returned error carries the bad news.
+//
+// It prints nothing when the run never reached the profile (a harness-build or
+// preflight failure leaves a zero result, and a summary of nothing is noise),
+// and it deliberately swallows its own write error: the caller is already
+// returning the seed failure, which is the error that matters.
+func writeSeedSummaryOnError(w io.Writer, res synthetic.ProfileResult, err error) {
 	if res.Timings.Total == 0 {
 		return
 	}
-	_ = writeSeedSummary(w, res, true)
+	_ = writeSeedSummary(w, res, !errors.Is(err, errSeedWorldIntact))
 }
 
 // writeSeedSummary prints the counts-only seed summary (no PII). The bare
@@ -903,7 +912,21 @@ func writeSeedSummary(w io.Writer, res synthetic.ProfileResult, partial bool) er
 		res.UnmatchedCalendar, res.OrphanMeetingNote); err != nil {
 		return fmt.Errorf("write seed summary: %w", err)
 	}
-	return writeSeedTimings(w, res.Timings)
+	if err := writeSeedTimings(w, res.Timings); err != nil {
+		return err
+	}
+	if !partial {
+		return nil
+	}
+	// A failed profile run is torn down before this prints, so the counts above
+	// describe what HAD been seeded, not rows an operator can go look at. Without
+	// this they read as current DB state.
+	if _, err := fmt.Fprintf(w,
+		"  note: the partial world these counts describe has been torn down "+
+			"(unless the error reports that teardown also failed).\n"); err != nil {
+		return fmt.Errorf("write seed summary note: %w", err)
+	}
+	return nil
 }
 
 // writeSeedTimings prints the wall-clock block: total duration, the settle
@@ -1592,9 +1615,17 @@ func (a seedAdapter) runProfile(ctx context.Context, params synthetic.SeedParams
 		}
 		return res, err
 	}
-	// Success: Quiesce (stop client, LEAVE the rows).
+	// Success: Quiesce (stop client, LEAVE the rows). A Quiesce failure is NOT a
+	// seed failure — the profile completed and teardown did not run, so the world
+	// is intact. Tagging it errSeedWorldIntact keeps the summary out of the
+	// PARTIAL branch; the error itself still fails the command.
+	//
+	// Quiesce returns nil unconditionally today, so this branch is unreachable
+	// and has no test — the tag is here so the classification is already correct
+	// if Quiesce ever grows a failure, rather than mislabelling a good world as a
+	// failed run the day it does.
 	if qErr := h.Quiesce(ctx); qErr != nil {
-		return res, fmt.Errorf("quiesce after seed: %w", qErr)
+		return res, fmt.Errorf("%w: quiesce after seed: %w", errSeedWorldIntact, qErr)
 	}
 	return res, nil
 }

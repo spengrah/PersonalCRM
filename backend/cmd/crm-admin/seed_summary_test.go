@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -183,6 +184,44 @@ func TestRunSeedEntrypointsPrintPartialSummaryOnFailure(t *testing.T) {
 			require.Contains(t, out, "  settle_calls:         12")
 		})
 	}
+}
+
+// A POST-SEED failure — Quiesce, which runs after the profile completed and
+// after teardown was skipped — must NOT print as PARTIAL. The world is fully
+// seeded and intact; an operator who reads "run failed" against a good staging
+// world re-runs --reset-and-seed and wipes it, which is the inverse of the
+// mistake the marker exists to prevent and the more expensive one.
+func TestRunSeedPrintsCompleteSummaryWhenOnlyPostSeedStepFailed(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	deps.seed = &fakeSeedRunner{
+		result: synthetic.ProfileResult{Contacts: 170, Timings: synthetic.SeedTimings{Total: 71 * time.Second}},
+		// The shape seedAdapter.runProfile produces on a Quiesce failure.
+		err: fmt.Errorf("%w: quiesce after seed: %w", errSeedWorldIntact, errors.New("stop river client")),
+	}
+
+	err := run(context.Background(), runOptions{doSeed: true, seedYes: true}, deps)
+
+	require.Error(t, err, "the command still fails")
+	require.Contains(t, err.Error(), "quiesce after seed")
+	out := stdout.String()
+	require.NotContains(t, out, "PARTIAL", "a completed seed is never labelled a failed run")
+	require.NotContains(t, out, "torn down", "an intact world is not described as torn down")
+	require.Contains(t, out, "  contacts:             170")
+}
+
+// The counterpart: a genuine PROFILE failure still gets the marker, and says the
+// rows it counts no longer exist.
+func TestWriteSeedSummaryOnErrorMarksProfileFailurePartial(t *testing.T) {
+	res := timingFixture()
+	res.Timings.Current = "per-source-settled"
+
+	var partialBuf, intactBuf bytes.Buffer
+	writeSeedSummaryOnError(&partialBuf, res, errors.New("replay gmail 3 msg 1: boom"))
+	writeSeedSummaryOnError(&intactBuf, res, fmt.Errorf("%w: quiesce", errSeedWorldIntact))
+
+	require.Contains(t, partialBuf.String(), "PARTIAL")
+	require.Contains(t, partialBuf.String(), "has been torn down")
+	require.NotContains(t, intactBuf.String(), "PARTIAL")
 }
 
 // A failure BEFORE the profile ran (the additive drain preflight, a harness
