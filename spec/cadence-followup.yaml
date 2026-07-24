@@ -328,7 +328,7 @@ behaviors:
     when: the dashboard renders
     then:
       - overdue contacts appear as cards with the count in the header
-      - each card shows urgency (tiers at up to 2, up to 7, and more days overdue), cadence, how long since last contact, reachable contact methods, and the suggested action
+      - each card shows urgency (tiers at up to 2, up to 7, and more days overdue), cadence, how long since the last connection — or how long since the contact was added, when there has never been one — reachable contact methods, and the suggested action
       - with nothing overdue, an all-caught-up state is shown instead
     serves: [DSH-010, DSH-011]
     provenance: [dashboard/page.tsx, OverdueContactCard, dashboard.spec.ts]
@@ -343,7 +343,7 @@ behaviors:
     then:
       - urgency (default) orders most-overdue first
       - name orders alphabetically
-      - last-contacted orders oldest contact first, with never-contacted at the end
+      - recency orders longest-waiting first, ranking never-connected contacts by when they were added
     serves: [DSH-010]
     provenance: [dashboard/page.tsx sort controls]
 

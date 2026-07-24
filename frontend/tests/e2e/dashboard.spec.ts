@@ -213,10 +213,10 @@ test.describe('Dashboard - Card Anatomy (mocked) @area:dashboard', () => {
       const card = page.getByRole('listitem').filter({ hasText: c.name })
       await expect(card.getByLabel(c.tier, { exact: true })).toBeVisible()
       await expect(card.getByText('(weekly cadence)')).toBeVisible()
-      // Recency requires a VALUE after "Last contacted", not just the label
-      // (formatLastContacted regressing to '' would fail the \S+ match).
+      // Recency requires a VALUE after the label, not just the label
+      // (formatOverdueRecency regressing to '' would fail the \S+ match).
       await expect(
-        card.getByText(new RegExp(`${c.days} days overdue - Last contacted \\S+`))
+        card.getByText(new RegExp(`${c.days} days overdue - Last connected \\S+`))
       ).toBeVisible()
       await expect(
         card.getByText(`${c.name.toLowerCase().replace(/ /g, '-')}@example.com`)
@@ -234,12 +234,12 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
   // the rendered card DOM order. One full-envelope route mock feeds all three
   // orderings; the fixture is built so urgency, name, and last-contacted
   // orders are pairwise DISTINCT (a no-op or wrong sort fails), and one
-  // never-contacted record (last_contacted OMITTED, like the real omitempty
-  // response) proves the null-sink branch.
+  // never-connected record (last_contacted OMITTED, like the real omitempty
+  // response) proves it is ranked by its created_at rather than dropped.
   const fixtureSuffix = 'Sortfix'
   // urgency (days desc):      Zulu(30), Mike(12), Alpha(3), Bravo(1)
   // name (alphabetical):      Alpha, Bravo, Mike, Zulu
-  // last-contacted (oldest→): Alpha(01-10), Bravo(03-01), Zulu(05-01), Mike(never) last
+  // recency (longest wait→):  Mike(created 01-01), Alpha(01-10), Bravo(03-01), Zulu(05-01)
   const fixture = [
     overdueEntry({
       name: `Alpha ${fixtureSuffix}`,
@@ -299,22 +299,40 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
       ])
   })
 
-  test('last-contacted orders oldest first with never-contacted last', async ({ page }) => {
+  test('recency orders longest-waiting first, ranking never-connected by added date', async ({
+    page,
+  }) => {
     // spec: CAD-027[2]
     await gotoMockedDashboard(page)
     await page.getByRole('button', { name: 'Last Contacted', exact: true }).click()
-    // Mike (last_contacted: null) renders "Never contacted" and must sink to
-    // the END regardless of its days_overdue — the null-sink branch.
+    // Mike (last_contacted omitted) has waited since its created_at (01-01) —
+    // longer than anyone here has gone without connecting — so it leads rather
+    // than sinking below contacts with a more recent connection.
     await expect
       .poll(() => cardOrder(page))
       .toEqual([
+        `Mike ${fixtureSuffix}`,
         `Alpha ${fixtureSuffix}`,
         `Bravo ${fixtureSuffix}`,
         `Zulu ${fixtureSuffix}`,
-        `Mike ${fixtureSuffix}`,
       ])
+  })
+
+  // spec: CAD-026[1]
+  // The regression guard for the bug this copy exists to prevent: a contact with
+  // no recorded connection must be described by when it was ADDED, never as a
+  // contact that happened. Before the fix the card asserted "Last contacted
+  // <creation date>" — inventing a conversation and contradicting the same
+  // contact's detail page, which correctly showed no recent activity.
+  test('a never-connected contact is described by when it was added, not as contact', async ({
+    page,
+  }) => {
+    await gotoMockedDashboard(page)
     const mikeCard = page.getByRole('listitem').filter({ hasText: `Mike ${fixtureSuffix}` })
-    await expect(mikeCard.getByText('Never contacted')).toBeVisible()
+    await expect(mikeCard.getByText(/12 days overdue - Added \S+/)).toBeVisible()
+    // Scoped to the recency phrasing — the card's "Mark as Contacted" action
+    // legitimately contains the word.
+    await expect(mikeCard.getByText(/Last (contacted|connected)/i)).toHaveCount(0)
   })
 })
 

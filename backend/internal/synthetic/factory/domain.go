@@ -78,8 +78,8 @@ func WithCadence(cadence string) ContactOption {
 }
 
 // WithCreatedAge backdates the contact to `age` before the anchor, mirroring the
-// create handler: created_at and last_contacted are both stamped to that one past
-// instant. Combined with a cadence, a far-enough age reads as overdue — with an
+// create handler: created_at is stamped to that one past instant and last_contacted
+// is left unset. Combined with a cadence, a far-enough age reads as overdue — with an
 // empty timeline that is honest (added long ago, no interactions logged). Draws no
 // PRNG (fixed age).
 func WithCreatedAge(age time.Duration) ContactOption {
@@ -90,7 +90,7 @@ func WithCreatedAge(age time.Duration) ContactOption {
 }
 
 // WithRecentCreation backdates the contact to a deterministic instant within the
-// last `window`, again stamping created_at and last_contacted from that one value.
+// last `window`, again stamping created_at and leaving last_contacted unset.
 // Draws one recentOffset from the PRNG (the recent-window jitter).
 func WithRecentCreation(window time.Duration) ContactOption {
 	return func(c *contactConfig) {
@@ -203,17 +203,18 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 		spec.Methods = append(spec.Methods, MethodSpec{Type: "telegram", Value: handle, IsPrimary: len(spec.Methods) == 0})
 	}
 
-	// Backdated cohorts stamp created_at and last_contacted from ONE past instant,
-	// mirroring the create handler (at creation, last_contacted == created_at).
+	// Backdated cohorts stamp created_at from ONE past instant, mirroring the create
+	// handler — which leaves last_contacted unset (CON-001). Only a replayed
+	// inbound/mutual interaction moves last_contacted, so a generated contact with an
+	// empty timeline correctly reads as never-connected rather than manufacturing a
+	// connection that never happened.
 	switch {
 	case cfg.createdAge != nil:
 		t := g.at(-*cfg.createdAge)
 		spec.CreatedAt = &t
-		spec.LastContacted = &t
 	case cfg.recentCreationWindow != nil:
 		t := g.at(g.recentOffset(*cfg.recentCreationWindow))
 		spec.CreatedAt = &t
-		spec.LastContacted = &t
 	}
 
 	return spec

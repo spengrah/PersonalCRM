@@ -15,7 +15,7 @@ import {
   getContactMethodLabel,
   getPrimaryAndSecondaryMethods,
 } from '@/lib/contact-methods'
-import { getLocalCalendarDayDifference } from '@/lib/utils'
+import { cadenceBaseDate, formatOverdueRecency } from '@/lib/contact-recency'
 import type { ContactMethod, OverdueContact } from '@/types/contact'
 import { clsx } from 'clsx'
 
@@ -56,26 +56,6 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
   }
   const urgency = getUrgencyIndicator(contact.days_overdue)
 
-  const formatLastContacted = (lastContacted?: string) => {
-    if (!lastContacted) return 'Never contacted'
-    const date = new Date(lastContacted)
-    if (Number.isNaN(date.getTime())) return ''
-
-    const diffDays = getLocalCalendarDayDifference(date, currentTime)
-
-    if (diffDays < 0) {
-      const futureDays = Math.abs(diffDays)
-      if (futureDays === 1) return 'in 1 day'
-      return `in ${futureDays} days`
-    }
-
-    if (diffDays === 0) return 'Today'
-    if (diffDays === 1) return 'Yesterday'
-    if (diffDays <= 7) return `${diffDays} days ago`
-    if (diffDays <= 30) return `${Math.floor(diffDays / 7)} weeks ago`
-    return `${Math.floor(diffDays / 30)} months ago`
-  }
-
   return (
     <div
       role="listitem"
@@ -101,8 +81,8 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
             <div className="flex items-center space-x-2 text-sm text-gray-600">
               <Clock className="w-4 h-4" />
               <span>
-                <strong>{contact.days_overdue} days overdue</strong> - Last contacted{' '}
-                {formatLastContacted(contact.last_contacted)}
+                <strong>{contact.days_overdue} days overdue</strong> -{' '}
+                {formatOverdueRecency(contact, currentTime)}
               </span>
             </div>
 
@@ -197,10 +177,7 @@ export default function DashboardPage() {
         case 'name':
           return a.full_name.localeCompare(b.full_name)
         case 'lastContacted':
-          if (!a.last_contacted && !b.last_contacted) return 0
-          if (!a.last_contacted) return 1
-          if (!b.last_contacted) return -1
-          return new Date(a.last_contacted).getTime() - new Date(b.last_contacted).getTime()
+          return cadenceBaseDate(a) - cadenceBaseDate(b)
         default:
           return 0
       }

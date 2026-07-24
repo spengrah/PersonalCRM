@@ -406,16 +406,18 @@ func assertSeedCoherence(t *testing.T, ctx context.Context, support *repository.
 			overdueByHelper++
 		}
 		// D1: a backdated (created-long-ago) contact is overdue with an honest empty
-		// timeline — created_at far in the past, last_contacted == created_at (the
-		// creation stamp), and a computed contact_by already elapsed.
-		if b.LastContacted != nil && b.LastContacted.Equal(*b.CreatedAt) &&
+		// timeline — created_at far in the past, last_contacted NULL (no connection
+		// ever happened, CON-001), and a computed contact_by already elapsed. The
+		// helper count above proves the same rows are overdue through the created_at
+		// fallback (CAD-002[0]) with no last_contacted to lean on.
+		if b.LastContacted == nil &&
 			b.CreatedAt.Before(overdueFloor) &&
 			b.ContactBy != nil && b.ContactBy.Before(now) {
 			backdatedOverdue++
 		}
 	}
 	require.GreaterOrEqual(t, overdueByHelper, 1, "≥1 overdue contact via the production cadence helper")
-	require.GreaterOrEqual(t, backdatedOverdue, 1, "≥1 backdated overdue contact (far-past created_at == last_contacted, contact_by elapsed)")
+	require.GreaterOrEqual(t, backdatedOverdue, 1, "≥1 backdated overdue contact (far-past created_at, NULL last_contacted, contact_by elapsed)")
 
 	// Tour capacity (CAD-029): the world must contain FOUR DISTINCT contacts
 	// assignable to the outreach / response / pending / none states — the precondition
@@ -779,36 +781,35 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	buckets, err := support.ListContactBucketsByNamePrefix(ctx, h.Generator().Prefix())
 	require.NoError(t, err)
 
-	// "Overdue" must mean a last_contacted WELL in the past (the backdated cohort
-	// is created ~90 days ago, stamping last_contacted == created_at), NOT merely
-	// before now — a recently-created contact (<48h ago) is also before now. Using a
-	// 14-day-ago floor distinguishes the overdue bucket from the recent bucket, so a
-	// clobber-to-recent regression (the bug this guards) would FAIL here.
-	var overdue, neverContacted, noMethod int
+	// The backdated cohort is created ~90 days ago and carries NO last_contacted — it
+	// has never been connected with (CON-001). A settling replay must not clobber that
+	// into a connection (a MatchSeeded inbound letting the cadence updater write
+	// last_contacted), so identify the cohort by its far-past created_at and require it
+	// intact. The 14-day-ago floor distinguishes it from the recent-creation bucket
+	// (<48h ago), so a clobber regression (the bug this guards) would FAIL here.
+	var backdatedIntact, neverContacted, noMethod int
 	now := accelerated.GetCurrentTime()
 	overdueFloor := now.Add(-14 * 24 * time.Hour)
 	for _, b := range buckets {
 		if b.MethodCount == 0 {
 			noMethod++
 		}
-		if b.Cadence != nil && *b.Cadence != "" {
-			switch {
-			case b.LastContacted == nil:
-				neverContacted++
-			case b.LastContacted.Before(overdueFloor):
-				overdue++
+		if b.Cadence != nil && *b.Cadence != "" && b.LastContacted == nil {
+			neverContacted++
+			if b.CreatedAt != nil && b.CreatedAt.Before(overdueFloor) {
+				backdatedIntact++
 			}
 		}
 	}
-	require.GreaterOrEqual(t, overdue, 1, "≥1 cadence-bearing contact with a far-past last_contacted (overdue bucket survived a settling replay)")
+	require.GreaterOrEqual(t, backdatedIntact, 1, "≥1 cadence-bearing backdated contact un-clobbered (far-past created_at, NULL last_contacted)")
 	require.GreaterOrEqual(t, neverContacted, 1, "≥1 cadence-bearing never-contacted contact (NULL last_contacted survived)")
 	require.GreaterOrEqual(t, noMethod, 1, "≥1 no-method contact (the no-method bucket exists)")
 
 	// Overdue-cohort DIVERSITY (DSH-010): the overdue surface must show a RANGE of
 	// days-overdue and cadences, not a single monthly / ~60-day monoculture the
 	// dashboard urgency tiers cannot separate. Select the backdated cohort
-	// STRUCTURALLY — cadence set, last_contacted == created_at (the backdated creation
-	// stamp), created_at older than a fixed floor (now − 7d, which deterministically
+	// STRUCTURALLY — cadence set, last_contacted NULL (never connected, CON-001),
+	// created_at older than a fixed floor (now − 7d, which deterministically
 	// excludes the <48h recent cohort in EVERY env) — so this does NOT depend on the
 	// env-reading cadence helper, which collapses days-overdue under compressed test
 	// durations. Assert ≥3 distinct created-ages AND ≥2 distinct cadences; this is the
@@ -818,10 +819,10 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	distinctCreatedAges := map[int64]bool{}
 	distinctOverdueCadences := map[string]bool{}
 	for _, b := range buckets {
-		if b.Cadence == nil || *b.Cadence == "" || b.CreatedAt == nil || b.LastContacted == nil {
+		if b.Cadence == nil || *b.Cadence == "" || b.CreatedAt == nil || b.LastContacted != nil {
 			continue
 		}
-		if !b.LastContacted.Equal(*b.CreatedAt) || !b.CreatedAt.Before(diversityFloor) {
+		if !b.CreatedAt.Before(diversityFloor) {
 			continue
 		}
 		distinctCreatedAges[b.CreatedAt.UnixNano()] = true
