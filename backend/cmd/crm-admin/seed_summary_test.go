@@ -1,0 +1,193 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"personal-crm/backend/internal/synthetic"
+	"personal-crm/backend/internal/synthetic/replay"
+
+	"github.com/stretchr/testify/require"
+)
+
+// timingFixture is a ProfileResult carrying a representative timing block: two
+// completed phases (one with payloads, one without) and settle accounting whose
+// numbers are chosen so every derived figure in the summary is distinguishable
+// from every other — an arithmetic slip in the rendering cannot coincidentally
+// print the right string.
+func timingFixture() synthetic.ProfileResult {
+	return synthetic.ProfileResult{
+		Profile:   synthetic.ProfileProdShaped,
+		Namespace: "prodshaped",
+		Seed:      42,
+		Contacts:  179,
+		Timings: synthetic.SeedTimings{
+			Total: 100 * time.Second,
+			Phases: []synthetic.PhaseTiming{
+				{Name: "catalog-contacts", Duration: 9500 * time.Millisecond, Payloads: 0},
+				{Name: "per-source-settled", Duration: 48 * time.Second, Payloads: 60},
+			},
+			Settle: replay.SettleTimings{
+				Calls:           104,
+				GateAWait:       40 * time.Second,
+				GateBWait:       18 * time.Second,
+				CaptureWait:     9 * time.Second,
+				GateACalls:      100,
+				GateAPolls:      210,
+				GateAInlineHits: 88,
+				GateBPolls:      520,
+			},
+		},
+	}
+}
+
+func TestWriteSeedSummaryRendersTimingBlock(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, writeSeedSummary(&buf, timingFixture(), false))
+	out := buf.String()
+
+	require.Contains(t, out, "seed summary (profile=prod-shaped namespace=prodshaped prng_seed=42):")
+	require.NotContains(t, out, "PARTIAL", "a successful run is never marked partial")
+	require.Contains(t, out, "  duration:             100.00s")
+	require.Contains(t, out, "  settle_calls:         104")
+	require.Contains(t, out, "gate_a=40.00s gate_b=18.00s capture=9.00s")
+	// The falsifiability discriminator: the inline-hit rate is over gate-A
+	// invocations (100), NOT over Settle calls (104) — a nil-predicate Settle
+	// evaluates nothing and must not dilute the rate.
+	require.Contains(t, out, "gate_a=inline-hits 88/100")
+	require.Contains(t, out, "gate_b=polls 520 (avg 5.0/call)")
+	// 100s total − (40+18+9)s of gate wait.
+	require.Contains(t, out, "  outside_gates:        33.00s")
+	require.Contains(t, out, "NOT a hypothesis test", "the residual is labelled as bookkeeping")
+}
+
+func TestWriteSeedSummaryRendersEveryPhaseWithPayloadVolume(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, writeSeedSummary(&buf, timingFixture(), false))
+	out := buf.String()
+
+	require.Contains(t, out, "  phases (2):")
+	// A phase with no source payloads prints `-`, so "none by design" reads
+	// differently from "expected payloads, got none".
+	require.Regexp(t, `\n    catalog-contacts\s+9\.50s\s+-\n`, out)
+	require.Regexp(t, `\n    per-source-settled\s+48\.00s\s+60 payloads\n`, out)
+}
+
+func TestWriteSeedSummaryRendersPartialFailure(t *testing.T) {
+	res := timingFixture()
+	// A run that died mid-block: the phases before it completed, the failing one
+	// is named, and the counts are whatever had accumulated.
+	res.Timings.Current = "per-source-settled"
+	res.Timings.Phases = res.Timings.Phases[:1]
+
+	var buf bytes.Buffer
+	require.NoError(t, writeSeedSummary(&buf, res, true))
+	out := buf.String()
+
+	require.Contains(t, out, `(PARTIAL — run failed during phase "per-source-settled")`)
+	require.Contains(t, out, "  phases (1):")
+	// The failing phase is NAMED in the header but must not appear as a completed
+	// row: the phase table is exactly the blocks that finished.
+	require.Equal(t, []string{"catalog-contacts"}, phaseTableNames(out))
+}
+
+// phaseTableNames extracts the phase rows (four-space-indented) from a rendered
+// summary, so a test can assert the table's contents rather than substring
+// presence — the failing phase's NAME appears in the header either way.
+func phaseTableNames(summary string) []string {
+	var names []string
+	for _, line := range strings.Split(summary, "\n") {
+		if !strings.HasPrefix(line, "    ") {
+			continue
+		}
+		names = append(names, strings.Fields(line)[0])
+	}
+	return names
+}
+
+// A failure BEFORE any phase started (an unknown profile, a preflight error
+// inside RunProfile) still gets a partial marker — just without a phase name.
+func TestWriteSeedSummaryPartialWithoutRunningPhase(t *testing.T) {
+	res := timingFixture()
+	res.Timings.Current = ""
+	res.Timings.Phases = nil
+
+	var buf bytes.Buffer
+	require.NoError(t, writeSeedSummary(&buf, res, true))
+	out := buf.String()
+
+	require.Contains(t, out, "(PARTIAL — run failed):")
+	require.Contains(t, out, "  phases (0):")
+}
+
+// The minimal-scoped / empty case: a result with no timings at all renders
+// without panicking and without a division by zero on the poll averages.
+func TestWriteSeedSummaryZeroTimings(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, writeSeedSummary(&buf, synthetic.ProfileResult{
+		Profile: synthetic.ProfileMinimalScoped, Namespace: "ns",
+	}, false))
+	out := buf.String()
+
+	require.Contains(t, out, "  duration:             0.00s")
+	require.Contains(t, out, "gate_a=inline-hits 0/1")
+	require.Contains(t, out, "gate_b=polls 0 (avg 0.0/call)")
+	require.Contains(t, out, "  phases (0):")
+}
+
+// --- entrypoint failure lifecycle -------------------------------------------
+
+// Both seed entrypoints print the degraded summary BEFORE returning the error.
+// Without this the timing block is stamped but never seen, and a reseed that
+// died six minutes in is a bare error with nothing to diagnose from.
+func TestRunSeedEntrypointsPrintPartialSummaryOnFailure(t *testing.T) {
+	partial := synthetic.SeedTimings{
+		Total:   90 * time.Second,
+		Current: "per-source-settled",
+		Phases:  []synthetic.PhaseTiming{{Name: "catalog-contacts", Duration: time.Second}},
+		Settle:  replay.SettleTimings{Calls: 12},
+	}
+
+	for _, tc := range []struct {
+		name string
+		opts runOptions
+	}{
+		{"seed", runOptions{doSeed: true, seedYes: true}},
+		{"reset-and-seed", runOptions{resetAndSeed: true, seedYes: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, stdout, _, _, _, _ := newTestDeps()
+			deps.seed = &fakeSeedRunner{
+				result: synthetic.ProfileResult{Contacts: 37, Timings: partial},
+				err:    errors.New("replay gmail 3 msg 1: boom"),
+			}
+
+			err := run(context.Background(), tc.opts, deps)
+			require.Error(t, err, "the seed failure is still surfaced")
+			require.Contains(t, err.Error(), "boom")
+
+			out := stdout.String()
+			require.Contains(t, out, `(PARTIAL — run failed during phase "per-source-settled")`)
+			require.Contains(t, out, "  contacts:             37", "the counts that accumulated are reported")
+			require.Contains(t, out, "  duration:             90.00s")
+			require.Contains(t, out, "  settle_calls:         12")
+		})
+	}
+}
+
+// A failure BEFORE the profile ran (the additive drain preflight, a harness
+// build) leaves a zero result. Printing a summary of nothing would be noise, so
+// the degraded summary is suppressed and only the error surfaces.
+func TestRunSeedPrintsNoSummaryWhenProfileNeverRan(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	deps.seed = &fakeSeedRunner{err: errors.New("refusing additive --seed: 4 queued river_job row(s)")}
+
+	err := run(context.Background(), runOptions{doSeed: true, seedYes: true}, deps)
+	require.Error(t, err)
+	require.False(t, strings.Contains(stdout.String(), "seed summary"),
+		"a run that never reached the profile prints no summary, got %q", stdout.String())
+}

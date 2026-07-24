@@ -99,6 +99,9 @@ func (f *fakeGmailBackfillResetter) ResetGmailBackfillCursors(_ context.Context)
 
 // fakeSeedRunner records which seed path ran (additive vs reset) and the params
 // it received, so dispatch + flag-mapping can be asserted without a DB/harness.
+// It returns `result` on BOTH paths, mirroring the real seedAdapter: a failed
+// run carries its PARTIAL ProfileResult out alongside the error, and the
+// entrypoints print that as a degraded summary.
 type fakeSeedRunner struct {
 	result     synthetic.ProfileResult
 	err        error
@@ -107,30 +110,24 @@ type fakeSeedRunner struct {
 	lastParams synthetic.SeedParams
 }
 
-func (f *fakeSeedRunner) Seed(_ context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error) {
-	f.seedCalls++
-	f.lastParams = params
-	if f.err != nil {
-		return synthetic.ProfileResult{}, f.err
-	}
+func (f *fakeSeedRunner) stamp(params synthetic.SeedParams) synthetic.ProfileResult {
 	res := f.result
 	res.Profile = params.Profile
 	res.Namespace = params.Namespace
 	res.Seed = params.Seed
-	return res, nil
+	return res
+}
+
+func (f *fakeSeedRunner) Seed(_ context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error) {
+	f.seedCalls++
+	f.lastParams = params
+	return f.stamp(params), f.err
 }
 
 func (f *fakeSeedRunner) ResetAndSeed(_ context.Context, params synthetic.SeedParams) (synthetic.ProfileResult, error) {
 	f.resetCalls++
 	f.lastParams = params
-	if f.err != nil {
-		return synthetic.ProfileResult{}, f.err
-	}
-	res := f.result
-	res.Profile = params.Profile
-	res.Namespace = params.Namespace
-	res.Seed = params.Seed
-	return res, nil
+	return f.stamp(params), f.err
 }
 
 func newTestDeps() (adminDeps, *bytes.Buffer, *fakeTokenMinter, *fakeHostLister, *fakeHostRevoker, *fakeRematchRunner) {
