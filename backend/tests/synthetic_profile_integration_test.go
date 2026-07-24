@@ -408,11 +408,13 @@ func assertSeedCoherence(t *testing.T, ctx context.Context, support *repository.
 		// D1: a backdated (created-long-ago) contact is overdue with an honest empty
 		// timeline — created_at far in the past, last_contacted NULL (no connection
 		// ever happened, CON-001), and a computed contact_by already elapsed. The
-		// helper count above proves the same rows are overdue through the created_at
-		// fallback (CAD-002[0]) with no last_contacted to lean on.
+		// production cadence helper is invoked ON THIS ROW with a nil last_contacted
+		// and must agree it is overdue, proving the created_at fallback (CAD-002[0])
+		// drives overdue-ness directly rather than any residual last_contacted value.
 		if b.LastContacted == nil &&
 			b.CreatedAt.Before(overdueFloor) &&
-			b.ContactBy != nil && b.ContactBy.Before(now) {
+			b.ContactBy != nil && b.ContactBy.Before(now) &&
+			cadence.IsOverdueWithConfig(cadenceType, nil, *b.CreatedAt, now) {
 			backdatedOverdue++
 		}
 	}
@@ -787,22 +789,29 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// last_contacted), so identify the cohort by its far-past created_at and require it
 	// intact. The 14-day-ago floor distinguishes it from the recent-creation bucket
 	// (<48h ago), so a clobber regression (the bug this guards) would FAIL here.
-	var backdatedIntact, neverContacted, noMethod int
+	// Post-change, every never-connected contact carries NULL last_contacted regardless
+	// of age, so "backdated" and "never-contacted" are no longer disjoint by
+	// last_contacted (they were, pre-change) — split them by created_at instead so each
+	// assertion proves a DISTINCT cohort and neither is satisfied vacuously by the other:
+	// backdated = far-past created_at (the overdue cohort), recent = created after the
+	// 14d floor (the recent cohort, which gets no settling replay so its NULL survives).
+	var backdatedIntact, recentNeverConnected, noMethod int
 	now := accelerated.GetCurrentTime()
 	overdueFloor := now.Add(-14 * 24 * time.Hour)
 	for _, b := range buckets {
 		if b.MethodCount == 0 {
 			noMethod++
 		}
-		if b.Cadence != nil && *b.Cadence != "" && b.LastContacted == nil {
-			neverContacted++
-			if b.CreatedAt != nil && b.CreatedAt.Before(overdueFloor) {
+		if b.Cadence != nil && *b.Cadence != "" && b.LastContacted == nil && b.CreatedAt != nil {
+			if b.CreatedAt.Before(overdueFloor) {
 				backdatedIntact++
+			} else {
+				recentNeverConnected++
 			}
 		}
 	}
-	require.GreaterOrEqual(t, backdatedIntact, 1, "≥1 cadence-bearing backdated contact un-clobbered (far-past created_at, NULL last_contacted)")
-	require.GreaterOrEqual(t, neverContacted, 1, "≥1 cadence-bearing never-contacted contact (NULL last_contacted survived)")
+	require.GreaterOrEqual(t, backdatedIntact, 1, "≥1 cadence-bearing backdated never-connected contact un-clobbered (far-past created_at, NULL last_contacted)")
+	require.GreaterOrEqual(t, recentNeverConnected, 1, "≥1 cadence-bearing recent never-connected contact (created after the 14d floor, NULL last_contacted) — a cohort distinct from the backdated one")
 	require.GreaterOrEqual(t, noMethod, 1, "≥1 no-method contact (the no-method bucket exists)")
 
 	// Overdue-cohort DIVERSITY (DSH-010): the overdue surface must show a RANGE of

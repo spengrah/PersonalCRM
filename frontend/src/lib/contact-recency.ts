@@ -1,4 +1,4 @@
-import { getLocalCalendarDayDifference } from './utils'
+import { formatRelativeTime } from './utils'
 
 /**
  * The fields the overdue card's recency line reads. `last_contacted` is unset until
@@ -8,20 +8,6 @@ import { getLocalCalendarDayDifference } from './utils'
 export interface RecencySource {
   created_at: string
   last_contacted?: string
-}
-
-function relativeDay(date: Date, referenceDate: Date): string {
-  const diffDays = getLocalCalendarDayDifference(date, referenceDate)
-
-  if (diffDays < 0) {
-    const futureDays = Math.abs(diffDays)
-    return futureDays === 1 ? 'in 1 day' : `in ${futureDays} days`
-  }
-  if (diffDays === 0) return 'today'
-  if (diffDays === 1) return 'yesterday'
-  if (diffDays <= 7) return `${diffDays} days ago`
-  if (diffDays <= 30) return `${Math.floor(diffDays / 7)} weeks ago`
-  return `${Math.floor(diffDays / 30)} months ago`
 }
 
 /**
@@ -38,13 +24,14 @@ export function cadenceBaseDate(contact: RecencySource): number {
  * Builds the overdue card's recency line as a COMPLETE phrase, label included. The
  * label and the value have to be decided together: a contact with no connection has
  * no "last contacted" date to report, only a date it was added, and a template that
- * hardcodes one label around a formatted value cannot say both.
+ * hardcodes one label around a formatted value cannot say both. The relative phrase
+ * itself comes from formatRelativeTime, the shared singular-aware formatter, so the
+ * card never renders "1 weeks ago".
  */
 export function formatOverdueRecency(contact: RecencySource, currentTime: Date): string {
-  const date = new Date(contact.last_contacted ?? contact.created_at)
-  if (Number.isNaN(date.getTime())) return ''
+  const source = contact.last_contacted ?? contact.created_at
+  const relative = formatRelativeTime(source, currentTime)
+  if (!relative) return ''
 
-  return contact.last_contacted
-    ? `Last connected ${relativeDay(date, currentTime)}`
-    : `Added ${relativeDay(date, currentTime)}`
+  return contact.last_contacted ? `Last connected ${relative}` : `Added ${relative}`
 }

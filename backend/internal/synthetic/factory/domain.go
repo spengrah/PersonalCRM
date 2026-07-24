@@ -22,14 +22,16 @@ type MethodSpec struct {
 // exposed so source-payload factories targeting THIS contact reuse the exact
 // same identifiers (so matching links the replay to the seeded contact).
 type ContactSpec struct {
-	FullName      string
-	Methods       []MethodSpec
-	Cadence       *string
-	CreatedAt     *time.Time
-	LastContacted *time.Time
-	Birthday      *time.Time
-	Location      *string
-	HowMet        *string
+	FullName  string
+	Methods   []MethodSpec
+	Cadence   *string
+	CreatedAt *time.Time
+	// No LastContacted field: creation never seeds last_contacted (CON-001); only a
+	// replayed inbound/mutual interaction moves it, so the seed cannot manufacture a
+	// connection that never happened (the #641 regression class).
+	Birthday *time.Time
+	Location *string
+	HowMet   *string
 
 	// Convenience accessors to the primary identifiers (also present in
 	// Methods) so adapters can address this contact without re-deriving them.

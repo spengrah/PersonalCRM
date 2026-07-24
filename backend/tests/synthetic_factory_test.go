@@ -153,19 +153,18 @@ func TestSyntheticFactory_EdgeCaseOptions(t *testing.T) {
 	assert.True(t, strings.ContainsAny(uni.FullName, "Ünïcödé"), "unicode name should carry non-ASCII")
 
 	// Backdated (created-long-ago) contact: created_at is stamped to that past
-	// instant and last_contacted is left unset, mirroring the create handler
-	// (CON-001) — nothing has been contacted, so nothing claims to have been.
+	// instant, mirroring the create handler (CON-001). last_contacted is left unset
+	// structurally — ContactSpec carries no such field, so nothing can claim a
+	// connection that never happened.
 	const age = 90 * 24 * time.Hour
 	od := g.Contact(factory.WithEmail(), factory.WithCadence("weekly"), factory.WithCreatedAge(age))
 	require.NotNil(t, od.CreatedAt)
-	assert.Nil(t, od.LastContacted, "a generated contact has no connection behind it")
 	assert.Equal(t, fixedAnchor.Add(-age), *od.CreatedAt, "backdated instant must be anchor − age")
 
-	// Recently-created contact: created_at set within the window, last_contacted unset.
+	// Recently-created contact: created_at set within the window.
 	const window = 48 * time.Hour
 	rc := g.Contact(factory.WithEmail(), factory.WithCadence("weekly"), factory.WithRecentCreation(window))
 	require.NotNil(t, rc.CreatedAt)
-	assert.Nil(t, rc.LastContacted, "a generated contact has no connection behind it")
 	assert.False(t, rc.CreatedAt.After(fixedAnchor), "recent creation must not be after the anchor")
 	assert.False(t, rc.CreatedAt.Before(fixedAnchor.Add(-window)), "recent creation must be within the window")
 }

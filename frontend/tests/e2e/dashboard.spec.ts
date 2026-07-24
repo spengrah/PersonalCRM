@@ -11,6 +11,7 @@ function overdueEntry(over: {
   name: string
   days: number
   lastContacted?: string
+  createdAt?: string
   email?: string
 }): OverdueContactResponse {
   const slug = over.name.toLowerCase().replace(/ /g, '-')
@@ -24,7 +25,7 @@ function overdueEntry(over: {
     ...(over.lastContacted ? { last_contacted: over.lastContacted } : {}),
     contact_by: '2026-07-01T00:00:00Z',
     has_pending_followup: false,
-    created_at: '2026-01-01T00:00:00Z',
+    created_at: over.createdAt ?? '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     days_overdue: over.days,
     next_due_date: '2026-07-01T00:00:00Z',
@@ -239,7 +240,11 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
   const fixtureSuffix = 'Sortfix'
   // urgency (days desc):      Zulu(30), Mike(12), Alpha(3), Bravo(1)
   // name (alphabetical):      Alpha, Bravo, Mike, Zulu
-  // recency (longest wait→):  Mike(created 01-01), Alpha(01-10), Bravo(03-01), Zulu(05-01)
+  // recency (longest wait→):  Alpha(lc 01-10), Mike(added 02-01), Bravo(lc 03-01), Zulu(lc 05-01)
+  //   Mike (never-connected) is deliberately placed BETWEEN two connected
+  //   contacts by its created_at — a regression that pinned null-last_contacted
+  //   rows to an edge would reorder Mike and fail, distinguishing "ranked by
+  //   added date" (CAD-027[2]) from "never-connected grouped first/last".
   const fixture = [
     overdueEntry({
       name: `Alpha ${fixtureSuffix}`,
@@ -251,7 +256,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
       days: 30,
       lastContacted: '2026-05-01T12:00:00Z',
     }),
-    overdueEntry({ name: `Mike ${fixtureSuffix}`, days: 12 }),
+    overdueEntry({ name: `Mike ${fixtureSuffix}`, days: 12, createdAt: '2026-02-01T00:00:00Z' }),
     overdueEntry({
       name: `Bravo ${fixtureSuffix}`,
       days: 1,
@@ -305,14 +310,14 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
     // spec: CAD-027[2]
     await gotoMockedDashboard(page)
     await page.getByRole('button', { name: 'Last Contacted', exact: true }).click()
-    // Mike (last_contacted omitted) has waited since its created_at (01-01) —
-    // longer than anyone here has gone without connecting — so it leads rather
-    // than sinking below contacts with a more recent connection.
+    // Mike (last_contacted omitted) is ranked by its created_at (02-01), landing
+    // BETWEEN Alpha (connected 01-10) and Bravo (connected 03-01) — not pinned to
+    // an edge. This ordering fails if never-connected rows are grouped first/last.
     await expect
       .poll(() => cardOrder(page))
       .toEqual([
-        `Mike ${fixtureSuffix}`,
         `Alpha ${fixtureSuffix}`,
+        `Mike ${fixtureSuffix}`,
         `Bravo ${fixtureSuffix}`,
         `Zulu ${fixtureSuffix}`,
       ])

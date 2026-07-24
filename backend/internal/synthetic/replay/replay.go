@@ -281,13 +281,12 @@ func (h *Harness) SeedContact(ctx context.Context, spec factory.ContactSpec) (*r
 		methods = append(methods, service.ContactMethodInput{Type: m.Type, Value: m.Value, IsPrimary: m.IsPrimary})
 	}
 	contact, _, err := h.contactService.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      spec.FullName,
-		Cadence:       spec.Cadence,
-		CreatedAt:     spec.CreatedAt,
-		LastContacted: spec.LastContacted,
-		Birthday:      spec.Birthday,
-		Location:      spec.Location,
-		HowMet:        spec.HowMet,
+		FullName:  spec.FullName,
+		Cadence:   spec.Cadence,
+		CreatedAt: spec.CreatedAt,
+		Birthday:  spec.Birthday,
+		Location:  spec.Location,
+		HowMet:    spec.HowMet,
 	}, methods)
 	if err != nil {
 		return nil, fmt.Errorf("seed contact: %w", err)
