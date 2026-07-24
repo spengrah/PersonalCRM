@@ -96,8 +96,12 @@ type TelegramBatchItem struct {
 
 // ReplayTelegramBatch drives N private Telegram payloads through ONE
 // MessageHandler pass per dependency generation and settles once per generation.
-// Items must be in chronological replay order (oldest first); the adapter drives
-// them in exactly that order.
+//
+// Items must be in chronological replay order (oldest first), and the adapter
+// preserves that order WITHIN each generation. It is not a whole-batch ordering:
+// the inbound half of a PairKey group is deferred to generation 1, so a
+// pair-bearing batch drives its outbound first regardless of input position, and
+// reports SyncCalls == 2.
 //
 // Telegram aggregates INLINE inside HandleNewMessage, but aggregation only
 // claims rows and publishes an envelope — the interaction is written later by a
@@ -117,7 +121,10 @@ func (h *Harness) ReplayTelegramBatch(ctx context.Context, items []TelegramBatch
 
 	contactIDs := distinctContactIDs(entries)
 	res := BatchResult{Payloads: len(items), Contacts: len(contactIDs)}
-	before := h.snapshotInteractionIDs(ctx, contactIDs)
+	before, err := h.snapshotInteractionIDs(ctx, contactIDs)
+	if err != nil {
+		return res, err
+	}
 
 	handler := telegram.NewMessageHandler(
 		h.telegramRepo,

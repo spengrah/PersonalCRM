@@ -99,8 +99,21 @@ type GmailBatchItem struct {
 
 // ReplayGmailBatch drives N Gmail payloads through ONE GmailSyncProvider Sync
 // per dependency generation and settles once per generation, instead of N single
-// replays each performing a full Settle. Items must be in chronological replay
-// order (oldest first); the adapter never reorders them.
+// replays each performing a full Settle.
+//
+// Items must be in chronological replay order (oldest first), and the adapter
+// preserves that order WITHIN each generation. It is not a whole-batch ordering:
+// the inbound half of a PairKey group is deliberately deferred to generation 1,
+// so a batch carrying a pair drives its outbound before its inbound regardless
+// of where the two sit in the input. SyncCalls is therefore per generation — a
+// pair-bearing batch reports 2.
+//
+// Gmail does NOT depend on that barrier: its promotion keys on a source_ref the
+// consumer derives from the message itself (contact, thread, local day), so one
+// generation already yields one mutual — TestSyntheticBatchReplay_
+// GmailSameLocalDayPromotion drives both shapes and pins it. The split is kept
+// anyway because it costs one O(1) Settle and a per-source exception would rest
+// on that single observation while uniformity does not.
 //
 // The fake fetcher returns the whole generation on every scan window and the
 // provider filters by exact internalDate, so one Sync covers every item inside
@@ -108,7 +121,10 @@ type GmailBatchItem struct {
 func (h *Harness) ReplayGmailBatch(ctx context.Context, items []GmailBatchItem) (BatchResult, error) {
 	const source = "gmail"
 
-	entries := gmailBatchEntries(items)
+	entries, err := gmailBatchEntries(items)
+	if err != nil {
+		return BatchResult{}, err
+	}
 	if err := validateBatchStructure(source, entries); err != nil {
 		return BatchResult{}, err
 	}
@@ -116,6 +132,7 @@ func (h *Harness) ReplayGmailBatch(ctx context.Context, items []GmailBatchItem) 
 	if err != nil {
 		return BatchResult{}, err
 	}
+
 	if err := gmailBatchSpanWithinReach(items); err != nil {
 		return BatchResult{}, err
 	}
@@ -125,7 +142,10 @@ func (h *Harness) ReplayGmailBatch(ctx context.Context, items []GmailBatchItem) 
 
 	contactIDs := distinctContactIDs(entries)
 	res := BatchResult{Payloads: len(items), Contacts: len(contactIDs)}
-	before := h.snapshotInteractionIDs(ctx, contactIDs)
+	before, err := h.snapshotInteractionIDs(ctx, contactIDs)
+	if err != nil {
+		return res, err
+	}
 
 	// The provider publishes email.* root events whose source_id is
 	// synth-<ns>-prefixed; track the source so cleanup captures them.
@@ -213,9 +233,12 @@ func gmailBatchFetcherFuncs(items []GmailBatchItem) google.FakeGmailFetcherFuncs
 // SENT label (what the provider itself reads), and the addressed identifier is
 // the peer side of the message — the value that decides whether the contact
 // matches at all.
-func gmailBatchEntries(items []GmailBatchItem) []batchEntry {
+func gmailBatchEntries(items []GmailBatchItem) ([]batchEntry, error) {
 	out := make([]batchEntry, 0, len(items))
-	for _, it := range items {
+	for i, it := range items {
+		if it.Spec.Message == nil {
+			return nil, fmt.Errorf("gmail: item %d has a nil message", i)
+		}
 		outbound := gmailSpecOutbound(it.Spec)
 		peerHeader := "From"
 		if outbound {
@@ -231,7 +254,7 @@ func gmailBatchEntries(items []GmailBatchItem) []batchEntry {
 			addressedType: identity.IdentifierTypeEmail,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // gmailSpecOutbound reports whether the provider will derive OUTBOUND from this

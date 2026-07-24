@@ -7,10 +7,17 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/google"
+	"personal-crm/backend/internal/identity"
+	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
+
+	"personal-crm/backend/internal/events"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	calendarapi "google.golang.org/api/calendar/v3"
+	chat "google.golang.org/api/chat/v1"
 	gmailapi "google.golang.org/api/gmail/v1"
 )
 
@@ -217,14 +224,6 @@ func TestGmailBatchSpanWithinReachRejectsOverBound(t *testing.T) {
 	require.Contains(t, err.Error(), (200 * 24 * time.Hour).String(), "the error names the actual span")
 }
 
-func TestGmailBatchSpanBoundSitsUnderTheProviderHardLimit(t *testing.T) {
-	// The bound is only meaningful if it is strictly under what one Sync reaches:
-	// 7-day windows × 24 windows = 168 days, minus the 2-day floor the scan window
-	// is dropped to.
-	const providerReach = 168 * 24 * time.Hour
-	require.Less(t, gmailBatchMaxSpan, providerReach-2*24*time.Hour)
-}
-
 func TestGmailBatchAccountRejectsMixedAccounts(t *testing.T) {
 	items := gmailItemsSpanning(24 * time.Hour)
 	items[1].Spec.AccountID = "other@synthetic.example"
@@ -243,11 +242,21 @@ func TestGmailBatchEntriesAddressesThePeerSide(t *testing.T) {
 	// The addressed identifier is the value that decides whether the contact
 	// matches, so it must follow the direction: the sender for an inbound, the
 	// recipient for an outbound.
-	inbound := gmailBatchEntries([]GmailBatchItem{{ContactID: uuid.New(), Spec: gmailSpecAt("a", time.Unix(0, 0), false)}})
-	outbound := gmailBatchEntries([]GmailBatchItem{{ContactID: uuid.New(), Spec: gmailSpecAt("b", time.Unix(0, 0), true)}})
+	inbound, err := gmailBatchEntries([]GmailBatchItem{{ContactID: uuid.New(), Spec: gmailSpecAt("a", time.Unix(0, 0), false)}})
+	require.NoError(t, err)
+	outbound, err := gmailBatchEntries([]GmailBatchItem{{ContactID: uuid.New(), Spec: gmailSpecAt("b", time.Unix(0, 0), true)}})
+	require.NoError(t, err)
 
 	require.Equal(t, "peer@synthetic.example", inbound[0].addressed)
 	require.Equal(t, "peer@synthetic.example", outbound[0].addressed)
+}
+
+func TestGmailBatchEntriesRejectsNilMessage(t *testing.T) {
+	// A nil message would otherwise panic inside the span check, before any
+	// validation error could name the offending item.
+	_, err := gmailBatchEntries([]GmailBatchItem{{ContactID: uuid.New(), Spec: factory.GmailMessageSpec{Intent: factory.MatchSeeded}}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "item 0")
 }
 
 // --- drive loops -------------------------------------------------------------
@@ -319,18 +328,38 @@ func TestChunkStringsPartitionsAndDisablesCleanly(t *testing.T) {
 }
 
 func TestGChatBucketSizeFitsTheSharedPageBudget(t *testing.T) {
-	// The size is arithmetic, not a round number: a first-sight space costs 3
+	// The size is arithmetic, not a round number: a first-sight space costs three
 	// pages (membership + content + edit), and the SAME budget also funds the
-	// reverse email→id warm-up, which the provider bounds at 50 fresh resolves per
-	// sweep. Both come out of the one 100-page budget.
-	const (
-		pageBudgetPerSweep      = 100
-		pagesPerFirstSightSpace = 3
-		maxResolvePagesPerSweep = 50
-	)
-	worstCase := gchatBatchDefaultSpacesPerSync*pagesPerFirstSightSpace + maxResolvePagesPerSweep
-	require.LessOrEqual(t, worstCase, pageBudgetPerSweep,
+	// reverse email→id warm-up, which the provider bounds by its member-resolve
+	// cap. Both come out of the one shared page budget.
+	//
+	// The budgets are read from the PROVIDER, not mirrored as local literals — a
+	// mirrored copy cannot fail when the provider's budget moves, which is the
+	// only drift this test exists to catch.
+	budget := google.GChatPageBudgetPerSyncForTest()
+	resolveCap := google.GChatMemberResolveCapForTest()
+
+	worstCase := gchatBatchDefaultSpacesPerSync*gchatBatchPagesPerFirstSightSpace + resolveCap
+	require.LessOrEqual(t, worstCase, budget,
 		"a bucket must complete inside one sweep's budget or its trailing spaces are silently never presented")
+
+	// And it must be the LARGEST such size: a bucket one space bigger has to
+	// overflow, or the constant is leaving reachable spaces on the table.
+	oneMore := (gchatBatchDefaultSpacesPerSync+1)*gchatBatchPagesPerFirstSightSpace + resolveCap
+	require.Greater(t, oneMore, budget, "the bucket size should be the maximum the budget admits")
+}
+
+func TestGmailSpanBoundSitsUnderTheProviderReach(t *testing.T) {
+	// Read from the provider for the same reason as the GChat budget: a local
+	// copy of 168 days could not fail if the window span or the window cap moved.
+	require.Less(t, gmailBatchMaxSpan, google.GmailScanReachForTest(),
+		"a batch inside the bound must be inside what one Sync can actually list")
+}
+
+func TestGCalPageSizeMatchesTheProviderPageLimit(t *testing.T) {
+	// The drain-loop iteration cap derives from this; if it drifted above the
+	// provider's real page the cap would be too low and a valid batch would fail.
+	require.Equal(t, google.CalendarPastEventPageLimitForTest(), gcalPastEventPageSize)
 }
 
 func TestChatFilterCreateTimeFloorExtractsTheCursor(t *testing.T) {
@@ -343,4 +372,201 @@ func TestLaterRFC3339ComparesByInstantNotString(t *testing.T) {
 	require.True(t, laterRFC3339("2026-07-01T10:00:00.5Z", "2026-07-01T10:00:00.10Z"))
 	require.False(t, laterRFC3339("2026-07-01T10:00:00Z", "2026-07-01T10:00:00Z"))
 	require.True(t, laterRFC3339("2026-07-01T10:00:00Z", ""), "no floor lets anything through")
+}
+
+// --- direction and peer projections -----------------------------------------
+//
+// These decide BOTH the generation partition and the ownership preflight, so a
+// wrong direction silently changes the drive order and a wrong peer silently
+// changes which contact the batch claims to be addressing. Each source projects
+// from a different field of a different wire shape, so each needs its own case.
+
+func TestIdentifierTypeForMethodNormalizesGChatLikeEmail(t *testing.T) {
+	// A GChat sender address IS an email, and the batch compares on the
+	// normalized STRING rather than the type — which is what lets a payload
+	// addressed as gchat match a contact carrying only an email method.
+	const addr = "  Peer@Synthetic.Example  "
+	viaEmail := identity.Normalize(addr, identifierTypeForMethod(string(repository.ContactMethodEmail)))
+	viaGChat := identity.Normalize(addr, identifierTypeForMethod(string(repository.ContactMethodGChat)))
+
+	require.Equal(t, "peer@synthetic.example", viaEmail)
+	require.Equal(t, viaEmail, viaGChat, "gchat and email must normalize identically or the ownership check splits them")
+}
+
+func TestIdentifierTypeForMethodCoversEveryMatchableType(t *testing.T) {
+	for methodType, want := range map[repository.ContactMethodType]identity.IdentifierType{
+		repository.ContactMethodEmail:    identity.IdentifierTypeEmail,
+		repository.ContactMethodGChat:    identity.IdentifierTypeGChat,
+		repository.ContactMethodPhone:    identity.IdentifierTypePhone,
+		repository.ContactMethodTelegram: identity.IdentifierTypeTelegram,
+		repository.ContactMethodWhatsApp: identity.IdentifierTypeWhatsApp,
+	} {
+		require.Equal(t, want, identifierTypeForMethod(string(methodType)), "method type %q", methodType)
+	}
+}
+
+func TestGChatSpecPeerReadsTheSenderForDirection(t *testing.T) {
+	const account = "me@synthetic.example"
+	const peerEmail = "peer@synthetic.example"
+	base := factory.GChatMessageSpec{
+		AccountID: account,
+		SpaceName: "spaces/SP-1",
+		Members: []*chat.Membership{
+			{State: "JOINED", Member: &chat.User{Name: "users/sender", Type: "HUMAN"}},
+			{State: "JOINED", Member: &chat.User{Name: "users/me", Type: "HUMAN"}},
+		},
+		EmailByUser: map[string]string{"users/sender": peerEmail, "users/me": account},
+		Intent:      factory.MatchSeeded,
+	}
+
+	base.Message = &chat.Message{Name: "m-in", Sender: &chat.User{Name: "users/sender"}}
+	peer, outbound := gchatSpecPeer(base)
+	require.Equal(t, peerEmail, peer)
+	require.False(t, outbound, "a message sent by the co-member is inbound")
+
+	// Outbound: the account is the sender, so the peer is the OTHER co-member —
+	// not the sender, which is the account itself.
+	base.Message = &chat.Message{Name: "m-out", Sender: &chat.User{Name: "users/me"}}
+	peer, outbound = gchatSpecPeer(base)
+	require.Equal(t, peerEmail, peer)
+	require.True(t, outbound)
+}
+
+func TestGCalSpecPeerAttendeeSkipsSelf(t *testing.T) {
+	spec := factory.GCalEventSpec{Event: &calendarapi.Event{Attendees: []*calendarapi.EventAttendee{
+		{Email: "me@synthetic.example", Self: true},
+		{Email: "peer@synthetic.example"},
+	}}}
+	require.Equal(t, "peer@synthetic.example", gcalSpecPeerAttendee(spec))
+
+	require.Empty(t, gcalSpecPeerAttendee(factory.GCalEventSpec{}), "a nil event addresses nothing")
+	require.Empty(t, gcalSpecPeerAttendee(factory.GCalEventSpec{Event: &calendarapi.Event{
+		Attendees: []*calendarapi.EventAttendee{{Email: "me@synthetic.example", Self: true}},
+	}}), "a self-only event has no peer to own the identifier")
+}
+
+func imessageSpecFor(t *testing.T, guid, handle string, outbound bool) factory.IMessageSpec {
+	t.Helper()
+	payload := events.RawMessageReceivedPayload{
+		Version: 1, HostID: uuid.New(), Source: "messages",
+		Guid: guid, ChatID: "chat-" + guid, PeerHandle: handle,
+		MessageType: "text", SentAt: time.Unix(1_700_000_000, 0).UTC(),
+	}
+	kind := events.KindRawMessageReceived
+	var raw []byte
+	var err error
+	if outbound {
+		kind = events.KindRawMessageSent
+		raw, err = events.Marshal(kind, events.RawMessageSentPayload(payload))
+	} else {
+		raw, err = events.Marshal(kind, payload)
+	}
+	require.NoError(t, err)
+	return factory.IMessageSpec{
+		Envelope: &events.Envelope{Source: "messages", SourceID: guid, Kind: kind, Payload: raw},
+		Guid:     guid,
+		Intent:   factory.MatchSeeded,
+	}
+}
+
+func TestIMessageBatchEntriesReadsDirectionFromTheKind(t *testing.T) {
+	// The sent and received kinds share a field shape but decode to distinct
+	// types, so the peer handle can only be read by dispatching on the kind — and
+	// the kind is also what the inline ingest handler reads for direction.
+	h := &Harness{}
+	entries, err := h.imessageBatchEntries([]IMessageBatchItem{
+		{ContactID: uuid.New(), Spec: imessageSpecFor(t, "g-in", "+15550001111", false)},
+		{ContactID: uuid.New(), Spec: imessageSpecFor(t, "g-out", "+15550001111", true)},
+	})
+	require.NoError(t, err)
+
+	require.False(t, entries[0].outbound)
+	require.True(t, entries[1].outbound)
+	require.Equal(t, "+15550001111", entries[0].addressed)
+	require.Equal(t, identity.IdentifierTypePhone, entries[0].addressedType)
+}
+
+func TestIMessageBatchEntriesRejectsNilEnvelope(t *testing.T) {
+	h := &Harness{}
+	_, err := h.imessageBatchEntries([]IMessageBatchItem{{ContactID: uuid.New(), Spec: factory.IMessageSpec{Guid: "g"}}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "nil envelope")
+}
+
+// --- mixed-account rejection -------------------------------------------------
+
+func TestGChatBatchAccountRejectsMixedAccounts(t *testing.T) {
+	items := []GChatBatchItem{
+		{Spec: factory.GChatMessageSpec{AccountID: "a@synthetic.example"}},
+		{Spec: factory.GChatMessageSpec{AccountID: "b@synthetic.example"}},
+	}
+	_, err := gchatBatchAccount(items)
+	require.ErrorIs(t, err, ErrBatchMixedAccounts)
+	require.Contains(t, err.Error(), "item 1")
+}
+
+func TestGCalBatchAccountRejectsMixedAccounts(t *testing.T) {
+	items := []GCalBatchItem{
+		{Spec: factory.GCalEventSpec{AccountID: "a@synthetic.example"}},
+		{Spec: factory.GCalEventSpec{AccountID: "b@synthetic.example"}},
+	}
+	_, err := gcalBatchAccount(items)
+	require.ErrorIs(t, err, ErrBatchMixedAccounts)
+	require.Contains(t, err.Error(), "item 1")
+}
+
+// --- INV-13a: why a Gmail promotion pair must share an Age -------------------
+
+// TestGmailPairSameAgeSharesLocalDayAcrossAnchors is the clock-anchored-fixture
+// discipline applied to the Gmail promotion rule. The consumer's aggregation key
+// includes a LOCAL day, so the two halves of a pair must land on the same one.
+//
+// The test proves BOTH directions across a sweep of anchors that steps through a
+// whole local day (so local midnight falls inside the sweep):
+//
+//   - equal Age always lands both halves on the same local day, for every
+//     anchor — because equal Age means the identical instant, unconditionally;
+//   - a nonzero gap does NOT, for at least one anchor in the sweep — which is
+//     what makes "same Age" a requirement rather than a stylistic choice.
+//
+// A rule of "a gap under 24 hours" would pass on most anchors and fail on the
+// ones near midnight: the failure class this repo has been bitten by twice.
+func TestGmailPairSameAgeSharesLocalDayAcrossAnchors(t *testing.T) {
+	localDay := func(spec factory.GmailMessageSpec) (int, time.Month, int) {
+		return time.UnixMilli(spec.Message.InternalDate).Local().Date()
+	}
+
+	// Step through 24 hours in 30-minute increments, starting from a local
+	// midnight, so every part of the day — including the boundary — is covered.
+	midnight := time.Date(2026, time.July, 24, 0, 0, 0, 0, time.Local)
+	gapStraddledSomewhere := false
+
+	for step := 0; step < 48; step++ {
+		anchor := midnight.Add(time.Duration(step) * 30 * time.Minute)
+		gen := factory.NewGeneratorAt(factory.DefaultSeed, "anchorsweep", anchor)
+		target := gen.Contact(factory.WithEmail())
+
+		const age = 4 * 24 * time.Hour
+		outbound := gen.GmailMessage(target, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(age))
+		inbound := gen.GmailMessage(target, factory.MatchSeeded, factory.WithMessageAge(age))
+
+		require.Equal(t, outbound.Message.InternalDate, inbound.Message.InternalDate,
+			"anchor %s: equal Age must mean the identical instant", anchor)
+		oy, om, od := localDay(outbound)
+		iy, im, id := localDay(inbound)
+		require.Equal(t, [3]int{oy, int(om), od}, [3]int{iy, int(im), id},
+			"anchor %s: the pair must share a local day", anchor)
+
+		// The counterfactual: the same pair with a 12h gap, which is well under a
+		// day and would look safe to anyone reasoning in durations.
+		gapped := gen.GmailMessage(target, factory.MatchSeeded, factory.WithMessageAge(age+12*time.Hour))
+		gy, gm, gd := localDay(gapped)
+		if [3]int{gy, int(gm), gd} != [3]int{oy, int(om), od} {
+			gapStraddledSomewhere = true
+		}
+	}
+
+	require.True(t, gapStraddledSomewhere,
+		"a sub-day gap must straddle local midnight for SOME anchor — otherwise this test is not "+
+			"demonstrating why equal Age is required, and the pair rule could be silently loosened")
 }

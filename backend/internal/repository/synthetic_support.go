@@ -641,6 +641,12 @@ func (r *SyntheticSupportRepository) CountSettledMessagesMessagesByGUIDs(ctx con
 // the composite key is required because only the peer band is collision-checked
 // at namespace setup (see the query comment).
 func (r *SyntheticSupportRepository) CountSettledTelegramMessagesByPeerAndMessageIDs(ctx context.Context, peerUserIDs []int64, telegramMessageIDs []int32) (int64, error) {
+	if len(peerUserIDs) != len(telegramMessageIDs) {
+		// The ordinality join would silently yield min(len) pairs, so the gate could
+		// never be satisfied — a 30-second timeout naming the wrong cause, the
+		// failure class the batch preflight exists to eliminate.
+		return 0, fmt.Errorf("count settled telegram messages: %d peer ids but %d message ids", len(peerUserIDs), len(telegramMessageIDs))
+	}
 	return r.queries.SyntheticCountSettledTelegramMessagesByPeerAndMessageIds(ctx, db.SyntheticCountSettledTelegramMessagesByPeerAndMessageIdsParams{
 		PeerUserIds:        peerUserIDs,
 		TelegramMessageIds: telegramMessageIDs,
@@ -652,6 +658,11 @@ func (r *SyntheticSupportRepository) CountSettledTelegramMessagesByPeerAndMessag
 // matched_contact_ids with last_contacted_updated = true — the batch GCal Gate A.
 // The arrays are parallel and must be the same length.
 func (r *SyntheticSupportRepository) CountMatchedCalendarEventsByGcalIDs(ctx context.Context, gcalEventIDs []string, contactIDs []uuid.UUID) (int64, error) {
+	if len(gcalEventIDs) != len(contactIDs) {
+		// See CountSettledTelegramMessagesByPeerAndMessageIDs: a mismatch makes the
+		// gate unsatisfiable rather than wrong-by-a-row.
+		return 0, fmt.Errorf("count matched calendar events: %d event ids but %d contact ids", len(gcalEventIDs), len(contactIDs))
+	}
 	pg := make([]pgtype.UUID, 0, len(contactIDs))
 	for _, id := range contactIDs {
 		pg = append(pg, uuidToPgUUID(id))

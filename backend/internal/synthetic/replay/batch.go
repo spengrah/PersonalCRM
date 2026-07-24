@@ -34,10 +34,13 @@ type BatchResult struct {
 	// burst conversation turns many payloads into one row. Any reconciliation
 	// claim has to name which unit it means.
 	Interactions int
-	// SyncCalls is the number of provider drive iterations. It is >1 for GCal
-	// (which DRAINS: the same input each Sync, the provider advancing
-	// irreversibly) and for GChat (which BUCKETS: the adapter partitions the
-	// input because the provider cannot advance). One for the other sources.
+	// SyncCalls is the total number of provider drive iterations across ALL
+	// generations. Per generation it is one for Gmail, Telegram and iMessage, and
+	// more than one for GCal (which DRAINS: the same input each Sync, the
+	// provider advancing irreversibly) and GChat (which BUCKETS: the adapter
+	// partitions the input because the provider cannot advance). So a
+	// pair-bearing Gmail/Telegram/iMessage batch reports 2, not 1 — the count
+	// tracks generations as well as the per-source drive shape.
 	SyncCalls int
 	// SettleCalls is one per dependency GENERATION: 1 normally, 2 when the batch
 	// carries promotion pairs whose inbound half needs its outbound's interaction
@@ -84,8 +87,8 @@ var (
 
 const (
 	// gmailBatchMaxSpan bounds the age span (oldest payload to newest) of one
-	// Gmail batch. The Gmail provider reaches gmailWindowSpan (7d) ×
-	// gmailMaxWindowsPerSync (24) = 168 days forward from one Sync's
+	// Gmail batch. The Gmail provider reaches google.GmailScanReachForTest()
+	// (7-day windows × a 24-window cap = 168 days) forward from one Sync's
 	// backfill_since, and floors that at the OLDEST payload's send time. Anything
 	// newer than oldest + 168d falls beyond the last window and is silently never
 	// processed — no error, just a missing row and a Gate A timeout naming the
@@ -97,11 +100,10 @@ const (
 	// timeline designs built on top of this.
 	gmailBatchMaxSpan = 150 * 24 * time.Hour
 
-	// gcalPastEventPageSize mirrors the LIMIT the calendar provider's past-event
-	// publish loop reads with (updateLastContactedForPastEvents →
-	// ListPastEventsNeedingUpdate(ctx, now, 100)). More than this many past
-	// events need several Syncs; MarkLastContactedUpdated makes each one advance
-	// irreversibly.
+	// gcalPastEventPageSize mirrors the page the calendar provider's past-event
+	// publish loop reads (google.CalendarPastEventPageLimitForTest). More than
+	// this many past events need several Syncs; MarkLastContactedUpdated makes
+	// each one advance irreversibly.
 	gcalPastEventPageSize = 100
 
 	// gchatBatchDefaultSpacesPerSync is how many spaces the GChat batch adapter
@@ -114,11 +116,23 @@ const (
 	// within its own budget.
 	//
 	// The size is the budget arithmetic, not a round number. A first-sight space
-	// costs 3 pages (membership + content + edit). The same budget ALSO funds the
-	// reverse email→id warm-up, which is bounded per sweep by the provider's
-	// resolve cap of 50 (every budget-consuming resolution decrements both). So
-	// the worst case for B spaces is 3B + 50 pages, and 3(16) + 50 = 98 ≤ 100.
+	// costs gchatBatchPagesPerFirstSightSpace pages (membership + content + edit).
+	// The same budget ALSO funds the reverse email→id warm-up, which is bounded
+	// per sweep by the provider's member-resolve cap — every budget-consuming
+	// resolution decrements both. So the worst case for B spaces is
+	// 3B + resolveCap pages, and 3(16) + 50 = 98 ≤ 100. The unit test asserts
+	// that against the provider's OWN exported values rather than local copies,
+	// so a change to either budget fails here instead of silently truncating the
+	// tail of every bucket.
 	gchatBatchDefaultSpacesPerSync = 16
+
+	// gchatBatchPagesPerFirstSightSpace is what one previously-unseen space costs
+	// the shared page budget: one membership page, one content page, one
+	// edit/delete page. Both content passes issue their list call BEFORE they can
+	// observe the window is empty, which is why an already-drained space keeps
+	// costing pages on every later sweep and why bucketing — not draining — is
+	// the mitigation.
+	gchatBatchPagesPerFirstSightSpace = 3
 
 	// gchatBatchDrainSlackSyncs is how many extra Syncs the GChat adapter's
 	// fallback drain allows past the bucket count. It is generous on purpose: a
@@ -128,6 +142,76 @@ const (
 	// between "needed one more pass" and "will never finish".
 	gchatBatchDrainSlackSyncs = 8
 )
+
+// --- per-call tuning --------------------------------------------------------
+
+// BatchOption tunes ONE batch call. Only the two sources with a drive loop take
+// options; the rest need none. They exist so a test can drive the failure shapes
+// the defaults exist to prevent — a GChat sweep with bucketing disabled, a GCal
+// drain that hits its cap — without a package-level global. A global would be
+// safe while these adapters have no caller and become real coupling the moment a
+// seed profile calls them.
+type BatchOption func(*batchOptions)
+
+type batchOptions struct {
+	// gchatSpacesPerSync overrides how many spaces a Sync is shown. Nil uses the
+	// budget-derived default; a non-positive value disables bucketing entirely.
+	gchatSpacesPerSync *int
+	// gchatDrainSlackSyncs overrides the fallback drain's iteration slack.
+	gchatDrainSlackSyncs *int
+	// gcalMaxSyncs overrides the drain-loop iteration cap, which otherwise
+	// derives from the batch size.
+	gcalMaxSyncs *int
+}
+
+func applyBatchOptions(opts []BatchOption) batchOptions {
+	var o batchOptions
+	for _, apply := range opts {
+		apply(&o)
+	}
+	return o
+}
+
+// WithGChatSpacesPerSync overrides the GChat bucket size for one call. A
+// non-positive value presents EVERY space on every Sync — the unbucketed shape,
+// which the provider's shared page budget cannot survive for a large batch.
+func WithGChatSpacesPerSync(n int) BatchOption {
+	return func(o *batchOptions) { o.gchatSpacesPerSync = &n }
+}
+
+// WithGChatDrainSlackSyncs overrides how many extra Syncs the GChat fallback
+// drain allows past the bucket count. Raise it when a caller needs the loop to
+// reach a plateau (and report a stall) rather than exit on its cap.
+func WithGChatDrainSlackSyncs(n int) BatchOption {
+	return func(o *batchOptions) { o.gchatDrainSlackSyncs = &n }
+}
+
+// WithGCalMaxSyncs overrides the GCal drain-loop iteration cap, which otherwise
+// derives from the batch size and the provider's past-event page limit.
+func WithGCalMaxSyncs(n int) BatchOption {
+	return func(o *batchOptions) { o.gcalMaxSyncs = &n }
+}
+
+func (o batchOptions) spacesPerSync() int {
+	if o.gchatSpacesPerSync != nil {
+		return *o.gchatSpacesPerSync
+	}
+	return gchatBatchDefaultSpacesPerSync
+}
+
+func (o batchOptions) drainSlackSyncs() int {
+	if o.gchatDrainSlackSyncs != nil {
+		return *o.gchatDrainSlackSyncs
+	}
+	return gchatBatchDrainSlackSyncs
+}
+
+func (o batchOptions) maxSyncs(derived int) int {
+	if o.gcalMaxSyncs != nil {
+		return *o.gcalMaxSyncs
+	}
+	return derived
+}
 
 // --- shared batch machinery -------------------------------------------------
 
@@ -347,11 +431,13 @@ func oldestInstant(instants []time.Time) time.Time {
 // --- interaction accounting + ledger ----------------------------------------
 
 // batchInteractionPageSize pages the per-contact interaction reads the batch
-// accounting does. The single-replay ledger helper reads a single page of 100,
-// which is fine for one payload; a batch can put more than that on one contact,
-// and an under-read would both undercount Interactions and leave interaction /
-// venue rows untracked for cleanup.
-const batchInteractionPageSize = 200
+// accounting does. It matches the single-replay ledger helper's page, which
+// reads exactly one such page — fine for one payload, but a batch can put more
+// than a page on one contact, and an under-read would both undercount
+// Interactions and leave interaction / venue rows untracked for cleanup. Keeping
+// the sizes equal also means any fixture that outgrows the single adapter's read
+// exercises this loop's second page rather than fitting inside the first.
+const batchInteractionPageSize = 100
 
 // listAllContactInteractions pages a contact's interactions to exhaustion.
 func (h *Harness) listAllContactInteractions(ctx context.Context, contactID uuid.UUID) ([]repository.Interaction, error) {
@@ -370,21 +456,27 @@ func (h *Harness) listAllContactInteractions(ctx context.Context, contactID uuid
 
 // snapshotInteractionIDs reads the current interaction id set for each contact,
 // so the batch can report how many rows IT landed rather than how many the
-// contact happens to have. Best-effort per contact: a read error yields an empty
-// set for that contact, which can only understate the delta.
-func (h *Harness) snapshotInteractionIDs(ctx context.Context, contactIDs []uuid.UUID) map[uuid.UUID]map[uuid.UUID]struct{} {
+// contact happens to have.
+//
+// A read error is RETURNED, not swallowed. An empty snapshot would make every
+// pre-existing row look newly landed and OVERSTATE BatchResult.Interactions —
+// the field downstream reconciliation is written against — and it would do so
+// silently. The snapshot runs before anything is driven, so failing here costs
+// nothing and names its own cause.
+func (h *Harness) snapshotInteractionIDs(ctx context.Context, contactIDs []uuid.UUID) (map[uuid.UUID]map[uuid.UUID]struct{}, error) {
 	out := make(map[uuid.UUID]map[uuid.UUID]struct{}, len(contactIDs))
 	for _, id := range contactIDs {
-		set := map[uuid.UUID]struct{}{}
 		rows, err := h.listAllContactInteractions(ctx, id)
-		if err == nil {
-			for _, r := range rows {
-				set[r.ID] = struct{}{}
-			}
+		if err != nil {
+			return nil, fmt.Errorf("snapshot interactions before batch: %w", err)
+		}
+		set := make(map[uuid.UUID]struct{}, len(rows))
+		for _, r := range rows {
+			set[r.ID] = struct{}{}
 		}
 		out[id] = set
 	}
-	return out
+	return out, nil
 }
 
 // trackBatchInteractions records every interaction id (and its venue node id)

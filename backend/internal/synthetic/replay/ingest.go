@@ -147,7 +147,10 @@ func (h *Harness) ReplayIMessageBatch(ctx context.Context, items []IMessageBatch
 
 	contactIDs := distinctContactIDs(entries)
 	res := BatchResult{Payloads: len(items), Contacts: len(contactIDs)}
-	before := h.snapshotInteractionIDs(ctx, contactIDs)
+	before, err := h.snapshotInteractionIDs(ctx, contactIDs)
+	if err != nil {
+		return res, err
+	}
 
 	// raw_message.* root events carry no CRM contact id; track the source so
 	// cleanup captures them.

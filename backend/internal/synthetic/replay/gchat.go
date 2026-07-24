@@ -130,8 +130,10 @@ type GChatBatchItem struct {
 //
 // So GChat joins GCal as a SyncCalls > 1 source by a different mechanism: GCal
 // drains (the provider advances), GChat buckets (the adapter partitions).
-func (h *Harness) ReplayGChatBatch(ctx context.Context, items []GChatBatchItem) (BatchResult, error) {
+func (h *Harness) ReplayGChatBatch(ctx context.Context, items []GChatBatchItem, opts ...BatchOption) (BatchResult, error) {
 	const source = "gchat"
+
+	options := applyBatchOptions(opts)
 
 	entries := gchatBatchEntries(items)
 	if err := validateBatchStructure(source, entries); err != nil {
@@ -147,7 +149,10 @@ func (h *Harness) ReplayGChatBatch(ctx context.Context, items []GChatBatchItem) 
 
 	contactIDs := distinctContactIDs(entries)
 	res := BatchResult{Payloads: len(items), Contacts: len(contactIDs)}
-	before := h.snapshotInteractionIDs(ctx, contactIDs)
+	before, err := h.snapshotInteractionIDs(ctx, contactIDs)
+	if err != nil {
+		return res, err
+	}
 
 	syncRepo := repository.NewSyncRepositoryWithPool(h.database.Queries, h.database.Pool)
 	st, err := syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
@@ -177,7 +182,7 @@ func (h *Harness) ReplayGChatBatch(ctx context.Context, items []GChatBatchItem) 
 			externalIDs = append(externalIDs, it.Spec.ExternalID)
 		}
 
-		syncCalls, err := h.driveGChatBuckets(ctx, provider, syncRepo, world, accountID, externalIDs)
+		syncCalls, err := h.driveGChatBuckets(ctx, provider, syncRepo, world, accountID, externalIDs, options)
 		res.SyncCalls += syncCalls
 		if err != nil {
 			return res, h.drainPartial(ctx, source, repository.InteractionSourceGChat, contactIDs, err)
@@ -232,6 +237,7 @@ func (h *Harness) driveGChatBuckets(
 	world *gchatBatchWorld,
 	accountID string,
 	externalIDs []string,
+	options batchOptions,
 ) (syncCalls int, err error) {
 	want := int64(len(externalIDs))
 	rowsPresent := func(ctx context.Context) (int64, error) {
@@ -250,7 +256,7 @@ func (h *Harness) driveGChatBuckets(
 		return nil
 	}
 
-	buckets := chunkStrings(world.spaceNames(), gchatSpacesPerSync())
+	buckets := chunkStrings(world.spaceNames(), options.spacesPerSync())
 	for _, bucket := range buckets {
 		world.presentSpaces(bucket)
 		if err := driveSync(ctx); err != nil {
@@ -273,7 +279,7 @@ func (h *Harness) driveGChatBuckets(
 	// the real cause — rather than as a cap hit, which is ambiguous between
 	// "needed one more pass" and "will never finish".
 	world.presentSpaces(world.spaceNames())
-	drainCalls, err := driveUntilCount(ctx, want, len(buckets)+gchatBatchDrainSlackSyncs, driveSync, rowsPresent)
+	drainCalls, err := driveUntilCount(ctx, want, len(buckets)+options.drainSlackSyncs(), driveSync, rowsPresent)
 	syncCalls += drainCalls
 	return syncCalls, err
 }
@@ -356,8 +362,10 @@ type gchatBatchWorld struct {
 	// order is the distinct space names in first-seen item order, so bucketing is
 	// deterministic and mirrors the caller's chronological ordering.
 	order []string
-	// members / emailByUser are per space and per user, unioned across every item
-	// that shares a space (a cloned conversation varies only the message).
+	// members is the FIRST item's membership for each space — a cloned
+	// conversation varies only the message, so later items carry the same set.
+	// emailByUser is unioned across every item, since a clone may introduce a
+	// user name the first item did not name.
 	members     map[string][]*chat.Membership
 	emailByUser map[string]string
 	// messages is the CURRENT generation's messages per space.

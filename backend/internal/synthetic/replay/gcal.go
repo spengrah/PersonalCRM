@@ -152,7 +152,9 @@ func (h *Harness) ReplayGCal(ctx context.Context, contactID uuid.UUID, spec fact
 // GCalBatchItem is one calendar payload in a batch: the seeded contact it
 // targets and the event. There is no PairKey: a matched calendar event is always
 // MUTUAL, so calendar carries no promotion mechanic and therefore no dependency
-// generations.
+// generations. A caller mapping a plan that CAN carry a pair key should assert
+// it is unset for calendar rather than drop it — there is no field here to
+// carry it, so a silent drop would lose a stated intent.
 type GCalBatchItem struct {
 	ContactID uuid.UUID
 	Spec      factory.GCalEventSpec
@@ -169,8 +171,10 @@ type GCalBatchItem struct {
 // Settle whose predicate demands all N must time out on the first iteration when
 // only a page can have landed. Settle runs exactly once, after the drive loop —
 // so SyncCalls > 1 while SettleCalls stays 1.
-func (h *Harness) ReplayGCalBatch(ctx context.Context, items []GCalBatchItem) (BatchResult, error) {
+func (h *Harness) ReplayGCalBatch(ctx context.Context, items []GCalBatchItem, opts ...BatchOption) (BatchResult, error) {
 	const source = "gcal"
+
+	options := applyBatchOptions(opts)
 
 	entries := gcalBatchEntries(items)
 	if err := validateBatchStructure(source, entries); err != nil {
@@ -186,7 +190,10 @@ func (h *Harness) ReplayGCalBatch(ctx context.Context, items []GCalBatchItem) (B
 
 	contactIDs := distinctContactIDs(entries)
 	res := BatchResult{Payloads: len(items), Contacts: len(contactIDs)}
-	before := h.snapshotInteractionIDs(ctx, contactIDs)
+	before, err := h.snapshotInteractionIDs(ctx, contactIDs)
+	if err != nil {
+		return res, err
+	}
 
 	// The provider publishes calendar.attended per (event, contact); those events
 	// carry contact_id and are captured by the contact-scoped read, but track the
@@ -237,7 +244,7 @@ func (h *Harness) ReplayGCalBatch(ctx context.Context, items []GCalBatchItem) (B
 	// page and one of slack, so an off-by-one in the provider's page accounting
 	// surfaces as a completed batch rather than a spurious failure.
 	derivedCap := (len(items)+gcalPastEventPageSize-1)/gcalPastEventPageSize + 2
-	syncCalls, driveErr := driveUntilCount(ctx, int64(len(items)), gcalMaxSyncs(derivedCap), drive, count)
+	syncCalls, driveErr := driveUntilCount(ctx, int64(len(items)), options.maxSyncs(derivedCap), drive, count)
 	res.SyncCalls = syncCalls
 	if driveErr != nil {
 		return res, h.drainPartial(ctx, source, "", contactIDs, driveErr)

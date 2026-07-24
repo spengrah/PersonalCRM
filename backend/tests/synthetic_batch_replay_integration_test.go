@@ -616,6 +616,7 @@ func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 2, res.SettleCalls, "a promotion pair is two dependency generations")
+		assert.Equal(t, 2, res.SyncCalls, "one handler pass per generation, not one per batch")
 		assert.Equal(t, 1, res.Interactions, "the pair collapses to ONE promoted row")
 
 		rows, err := h.InteractionRepo().ListContactInteractions(ctx, contact.ID, 100, 0)
@@ -669,10 +670,12 @@ func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 	}
 }
 
-// TestSyntheticBatchReplay_TelegramOrderPromotesMutual proves the ORDERING
-// contract is real and not incidental: the same pair driven newest-first does
-// not promote, because session promotion requires the outbound to precede the
-// inbound.
+// TestSyntheticBatchReplay_TelegramOrderPromotesMutual proves the TIMING
+// contract is real and not incidental. Session promotion requires the outbound
+// to precede the inbound in time, so a pair whose inbound carries the older
+// timestamp does not promote — even though the adapter drives it in the same
+// outbound-first order, since partitionGenerations always defers the inbound
+// half.
 func TestSyntheticBatchReplay_TelegramOrderPromotesMutual(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	ctx := context.Background()
@@ -700,15 +703,21 @@ func TestSyntheticBatchReplay_TelegramOrderPromotesMutual(t *testing.T) {
 		assert.Equal(t, "mutual", rows[0].Direction)
 	})
 
-	t.Run("reversed_does_not_promote", func(t *testing.T) {
+	t.Run("inbound_timestamped_first_does_not_promote", func(t *testing.T) {
+		// The drive ORDER is identical here — partitionGenerations always defers a
+		// pair's inbound half, so both subtests drive outbound-then-inbound. What
+		// differs is the TIMESTAMPS: this pair's inbound is the older half, and the
+		// reply bridge requires the outbound to precede the inbound in time. So
+		// what this proves is that the timing contract is load-bearing on its own,
+		// independent of drive order.
 		h := batchTestHarness(t, ctx, database)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithTelegram())
 		contact, err := h.SeedContact(ctx, spec)
 		require.NoError(t, err)
 
-		// The INBOUND is now the older half, so there is no prior outbound
-		// interaction for it to promote — the pair stays two one-sided rows.
+		// The INBOUND is the older half, so there is no prior outbound interaction
+		// for it to promote against — the pair stays two one-sided rows.
 		inbound := gen.TelegramMessage(spec, factory.MatchSeeded, factory.WithMessageAge(5*24*time.Hour))
 		outbound := inbound
 		outbound.TelegramMessageID = inbound.TelegramMessageID + 1
@@ -753,14 +762,23 @@ func TestSyntheticBatchReplay_GmailSameLocalDayPromotion(t *testing.T) {
 		const age = 4 * 24 * time.Hour
 		outbound := gen.GmailMessage(spec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(age))
 		inbound := gen.GmailMessage(spec, factory.MatchSeeded, factory.WithMessageAge(age))
-		// A fresh ThreadId is minted per call, so the caller must thread them.
+		// A fresh ThreadId is minted per call, so the caller must thread them. The
+		// timestamps are deliberately NOT copied: equal Age already yields the
+		// identical instant off the shared anchor, and asserting that rather than
+		// forcing it is what makes assertSameLocalDay able to fail.
 		inbound.Message.ThreadId = outbound.Message.ThreadId
-		inbound.Message.InternalDate = outbound.Message.InternalDate
 		return outbound, inbound
 	}
 
+	// The aggregation key includes a LOCAL day, so both halves must land on one.
+	// Equal Age is what guarantees that unconditionally; the anchor sweep in the
+	// replay package's unit tests proves the counterfactual (a sub-day gap DOES
+	// straddle local midnight for some anchors), which is why the rule is equality
+	// rather than "a small gap".
 	assertSameLocalDay := func(t *testing.T, a, b factory.GmailMessageSpec) {
 		t.Helper()
+		require.Equal(t, a.Message.InternalDate, b.Message.InternalDate,
+			"equal Age must yield the identical instant off the shared anchor")
 		at := time.UnixMilli(a.Message.InternalDate).Local()
 		bt := time.UnixMilli(b.Message.InternalDate).Local()
 		ay, am, ad := at.Date()
@@ -783,6 +801,8 @@ func TestSyntheticBatchReplay_GmailSameLocalDayPromotion(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 2, res.SettleCalls)
+		assert.Equal(t, 2, res.SyncCalls,
+			"SyncCalls is per GENERATION: a pair-bearing gmail batch drives twice, not once")
 		assert.Equal(t, 1, res.Interactions, "two payloads on one thread and one local day collapse to one row")
 
 		rows, err := h.InteractionRepo().ListContactInteractions(ctx, contact.ID, 100, 0)
@@ -804,6 +824,7 @@ func TestSyntheticBatchReplay_GmailSameLocalDayPromotion(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 1, res.SettleCalls, "no PairKey means one generation")
+		assert.Equal(t, 1, res.SyncCalls, "one generation is one Sync")
 
 		rows, err := h.InteractionRepo().ListContactInteractions(ctx, contact.ID, 100, 0)
 		require.NoError(t, err)
@@ -917,13 +938,24 @@ func TestSyntheticBatchReplay_GCalDrainsOverLimit(t *testing.T) {
 // from independent factory calls is not a conversation: each call mints a fresh
 // space, which can never bridge and costs the page budget a fresh three pages.
 func cloneGChatMessage(base factory.GChatMessageSpec, suffix string, outbound bool, createTime time.Time) factory.GChatMessageSpec {
+	// Pick by MEMBERSHIP order rather than by ranging the map: Go randomizes map
+	// iteration, so a space with more than two members would otherwise clone a
+	// nondeterministic sender.
 	sender, me := "", ""
-	for user, email := range base.EmailByUser {
-		if email == base.AccountID {
-			me = user
+	for _, member := range base.Members {
+		if member == nil || member.Member == nil {
 			continue
 		}
-		sender = user
+		user := member.Member.Name
+		if base.EmailByUser[user] == base.AccountID {
+			if me == "" {
+				me = user
+			}
+			continue
+		}
+		if sender == "" {
+			sender = user
+		}
 	}
 	from := sender
 	if outbound {
@@ -993,13 +1025,17 @@ func TestSyntheticBatchReplay_GChatBucketsAcrossBudget(t *testing.T) {
 		// a pure drain over the whole space list, which is exactly the shape the
 		// shared page budget defeats: each sweep re-pays for the spaces it already
 		// processed and reaches a little further, until it reaches no further.
-		restore := replay.SetGChatBatchSpacesPerSyncForTest(0)
-		defer restore()
-
 		h := batchTestHarness(t, ctx, database)
 		items := buildBatch(h)
 
-		res, err := h.ReplayGChatBatch(ctx, items)
+		// Bucketing off, and generous drain slack: the point is to reach the
+		// PLATEAU and have it reported as one. With only a couple of iterations the
+		// loop can still be inching forward when it hits its cap, and a cap error
+		// is ambiguous between "needed one more pass" and "will never finish" —
+		// which is exactly the diagnosis this control exists to make unambiguous.
+		res, err := h.ReplayGChatBatch(ctx, items,
+			replay.WithGChatSpacesPerSync(0),
+			replay.WithGChatDrainSlackSyncs(20))
 		require.ErrorIs(t, err, replay.ErrBatchDrainIncomplete,
 			"without bucketing the sweep cannot present every space, and that must fail loudly")
 		assert.Contains(t, err.Error(), "stalled at",
@@ -1045,6 +1081,53 @@ func TestSyntheticBatchReplay_GChatBucketsAcrossBudget(t *testing.T) {
 		assert.Less(t, res.Interactions, res.Payloads,
 			"a burst inside one space's aggregation window collapses into fewer rows than payloads")
 	})
+}
+
+// TestSyntheticBatchReplay_GChatPromotionBarrier exercises the GChat
+// MULTI-GENERATION path, which no other test reaches: the Telegram barrier tests
+// drive telegram and the local-day test drives gmail. It matters because the
+// frozen catalog's messaging coverage rides entirely on gchat, so a burst
+// archetype carrying a promotion pair will be this path's first real caller.
+//
+// A second generation re-enters the bucket loop, re-points the fake world at a
+// different message set, re-reads the sync state, and re-presents an
+// ALREADY-SWEPT space to a provider holding a persistent per-space cursor, a
+// membership cache and a shared page budget. Each of those could plausibly
+// swallow the reply; asserting the settled outcome is what proves none of them
+// does.
+func TestSyntheticBatchReplay_GChatPromotionBarrier(t *testing.T) {
+	testsupport.RequireLongTests(t)
+	ctx := context.Background()
+	database, _ := newIsolatedRiverTestDB(t, ctx)
+
+	h := batchTestHarness(t, ctx, database)
+	gen := h.Generator()
+	spec := gen.Contact(factory.WithEmail())
+	contact, err := h.SeedContact(ctx, spec)
+	require.NoError(t, err)
+
+	// One space, two messages: an outbound and its reply 6h later. The clone is
+	// what makes them one conversation — independently generated specs would mint
+	// separate spaces and could never bridge.
+	outbound := gen.GChatMessage(spec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(5*24*time.Hour))
+	outboundAt, err := time.Parse(time.RFC3339Nano, outbound.Message.CreateTime)
+	require.NoError(t, err)
+	reply := cloneGChatMessage(outbound, "reply", false, outboundAt.Add(6*time.Hour))
+
+	res, err := h.ReplayGChatBatch(ctx, []replay.GChatBatchItem{
+		{ContactID: contact.ID, Spec: outbound, PairKey: 1},
+		{ContactID: contact.ID, Spec: reply, PairKey: 1},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, res.SettleCalls, "a promotion pair is two dependency generations")
+	assert.Equal(t, 2, res.SyncCalls, "one bucket per generation, so one Sync each")
+	assert.Equal(t, 1, res.Interactions, "the pair collapses to ONE promoted row")
+
+	rows, err := h.InteractionRepo().ListContactInteractions(ctx, contact.ID, 100, 0)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "re-presenting the space in generation 1 must deliver the reply, not swallow it")
+	assert.Equal(t, "mutual", rows[0].Direction)
+	assert.Equal(t, "gchat", rows[0].Source)
 }
 
 // --- cleanup -----------------------------------------------------------------
@@ -1124,9 +1207,6 @@ func TestSyntheticBatchReplay_MidBatchFailureIsReclaimable(t *testing.T) {
 	ctx := context.Background()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
-	restore := replay.SetGCalBatchMaxSyncsForTest(1)
-	defer restore()
-
 	const events = 120
 
 	h, teardown, err := synthetic.NewHarnessWithDBForNamespace(ctx, database, syntheticNS(t), factory.DefaultSeed)
@@ -1144,7 +1224,10 @@ func TestSyntheticBatchReplay_MidBatchFailureIsReclaimable(t *testing.T) {
 		})
 	}
 
-	_, err = h.ReplayGCalBatch(ctx, items)
+	// One drive iteration for a batch that needs two: the first Sync writes every
+	// calendar_event and publishes a full page of attended interactions, then the
+	// loop runs out of iterations. A real failure shape, not an injected one.
+	_, err = h.ReplayGCalBatch(ctx, items, replay.WithGCalMaxSyncs(1))
 	require.Error(t, err)
 	require.ErrorIs(t, err, replay.ErrBatchDrainIncomplete, "the ORIGINAL error survives the partial-drain wrapping")
 	assert.Contains(t, err.Error(), "partial drain after failure")

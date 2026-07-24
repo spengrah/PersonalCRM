@@ -970,6 +970,12 @@ func (p *CalendarSyncProvider) storeUnmatchedAttendee(
 	return nil
 }
 
+// calendarPastEventPageLimit bounds how many unprocessed past events one Sync
+// publishes for. It is a per-Sync page, not a total: MarkLastContactedUpdated
+// removes a published event from the read, so successive Syncs advance through a
+// larger backlog irreversibly.
+const calendarPastEventPageLimit = 100
+
 // updateLastContactedForPastEvents publishes calendar.attended events for
 // past calendar events. In cutover mode the async InteractionRecorder
 // consumer writes the interaction rows from those events.
@@ -982,7 +988,7 @@ func (p *CalendarSyncProvider) storeUnmatchedAttendee(
 func (p *CalendarSyncProvider) updateLastContactedForPastEvents(ctx context.Context) error {
 	now := accelerated.GetCurrentTime()
 
-	events, err := p.calendarRepo.ListPastEventsNeedingUpdate(ctx, now, 100)
+	events, err := p.calendarRepo.ListPastEventsNeedingUpdate(ctx, now, calendarPastEventPageLimit)
 	if err != nil {
 		return fmt.Errorf("list past events: %w", err)
 	}
