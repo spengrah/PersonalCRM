@@ -52,9 +52,13 @@ describe('cadenceBaseDate', () => {
 // anyway, contradicting the same contact's detail page.
 describe('formatOverdueRecency', () => {
   const now = new Date('2026-07-24T12:00:00Z')
-  // Noon-anchored fixtures: both endpoints sit near local midday in every timezone,
-  // far from any midnight boundary, so the local-calendar-day gap equals the UTC gap
-  // regardless of the runner's offset (and DST) — offset-proof without a global TZ pin.
+  // Noon-anchored fixtures: both endpoints sit near local midday, so the
+  // local-calendar-day gap tracks the UTC gap within ±1 across all offsets. (It can
+  // skew by 1 in offset ≥ +12h DST zones like Australia/Norfolk, where a 12:00Z
+  // instant lands at 00:00 the next local day.) The N values are chosen bucket-distant
+  // — far from the 7/30/365-day phrase boundaries — so a ±1 skew never flips the
+  // rendered phrase, keeping these assertions offset-proof without a global TZ pin.
+  // Keep that property when adding fixtures: do not pick N near a multiple of 7/30/365.
   const isoDaysAgo = (n: number) => new Date(now.getTime() - n * 86_400_000).toISOString()
 
   it('labels a never-connected contact by when it was ADDED, not as contact', () => {
