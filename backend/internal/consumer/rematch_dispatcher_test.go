@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +42,8 @@ func newWorkerForRunner(t *testing.T, runnerErr error) (*RematchDispatcherWorker
 		NewRematchDispatcher(&stubRunner{err: runnerErr}),
 	)
 	job := &river.Job[consumerjobs.RematchDispatcherJobArgs]{
-		Args: consumerjobs.RematchDispatcherJobArgs{EventID: env.ID},
+		JobRow: &rivertype.JobRow{Metadata: []byte(`{}`)},
+		Args:   consumerjobs.RematchDispatcherJobArgs{EventID: env.ID, RematchJobID: uuid.New()},
 	}
 	return worker, job
 }
@@ -108,11 +110,56 @@ func TestRematchDispatcherWorker_Work_MixedError_Snoozes(t *testing.T) {
 		"budget exhaustion co-occurring with a genuine error still snoozes (self-resolving tradeoff)")
 }
 
+// TestRematchDispatcherWorker_Work_BudgetExhausted_CeilingCancels proves the
+// snooze is bounded: the rematch scan restarts from the fixed onboarding floor
+// on every attempt (nothing persists progress), so an account whose history
+// exceeds the per-run page budget exhausts DETERMINISTICALLY — unlimited
+// snoozing would rescan the same pages every 5 minutes forever. At the ceiling
+// (river's metadata "snoozes" counter) Work must (a) mark the in-memory job
+// failed via the runner so the frontend watcher sees a terminal state instead
+// of polling forever, and (b) cancel the River job (JobCancel — immediately
+// terminal, no further budget-burning retry attempts).
+func TestRematchDispatcherWorker_Work_BudgetExhausted_CeilingCancels(t *testing.T) {
+	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", service.ErrRematchBudgetExhausted))
+	worker, job := newWorkerForRunner(t, runnerErr)
+	job.Metadata = fmt.Appendf(nil, `{"snoozes": %d}`, rematchBudgetSnoozeCeiling)
+
+	err := worker.Work(context.Background(), job)
+
+	var snooze *river.JobSnoozeError
+	require.False(t, errors.As(err, &snooze), "at the ceiling Work must stop snoozing")
+	var cancel *river.JobCancelError
+	require.ErrorAs(t, err, &cancel, "at the ceiling Work must cancel the job (terminal, no retries)")
+
+	runner := worker.dispatcher.runner.(*stubRunner)
+	require.Equal(t, []uuid.UUID{job.Args.RematchJobID}, runner.failedJobIDs(),
+		"giving up must mark the in-memory rematch job failed so the frontend watcher terminates")
+}
+
+// TestRematchDispatcherWorker_Work_BudgetExhausted_BelowCeiling_Snoozes pins the
+// boundary: one snooze below the ceiling still reschedules (the give-up branch
+// must not fire early).
+func TestRematchDispatcherWorker_Work_BudgetExhausted_BelowCeiling_Snoozes(t *testing.T) {
+	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", service.ErrRematchBudgetExhausted))
+	worker, job := newWorkerForRunner(t, runnerErr)
+	job.Metadata = fmt.Appendf(nil, `{"snoozes": %d}`, rematchBudgetSnoozeCeiling-1)
+
+	err := worker.Work(context.Background(), job)
+
+	var snooze *river.JobSnoozeError
+	require.ErrorAs(t, err, &snooze, "below the ceiling Work must keep snoozing")
+
+	runner := worker.dispatcher.runner.(*stubRunner)
+	require.Empty(t, runner.failedJobIDs(), "below the ceiling the in-memory job must stay untouched")
+}
+
 // stubRunner records Run invocations and returns a configurable error.
 type stubRunner struct {
-	mu    sync.Mutex
-	calls []stubRunCall
-	err   error
+	mu          sync.Mutex
+	calls       []stubRunCall
+	err         error
+	failedJobs  []uuid.UUID
+	failReasons []error
 }
 
 type stubRunCall struct {
@@ -132,6 +179,19 @@ func (s *stubRunner) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.calls)
+}
+
+func (s *stubRunner) FailJob(jobID uuid.UUID, reason error) {
+	s.mu.Lock()
+	s.failedJobs = append(s.failedJobs, jobID)
+	s.failReasons = append(s.failReasons, reason)
+	s.mu.Unlock()
+}
+
+func (s *stubRunner) failedJobIDs() []uuid.UUID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]uuid.UUID(nil), s.failedJobs...)
 }
 
 // validEnvelope builds a routable contact_methods.added envelope for tests.

@@ -233,6 +233,46 @@ func TestRun_BudgetExhausted_KeepsRunning(t *testing.T) {
 	}
 }
 
+// TestFailJob_MarksJobFailed covers the worker's give-up path: when the
+// budget-snooze ceiling is reached the dispatcher worker cancels the River job
+// and must be able to push the in-memory job to a terminal state — otherwise
+// the frontend watcher (which only stops on a non-running status) polls a
+// cancelled job forever.
+func TestFailJob_MarksJobFailed(t *testing.T) {
+	svc := NewRematchService()
+	jobID := uuid.New()
+	svc.RegisterPending(jobID, uuid.New(), []Method{{Type: "email", Value: "a@b.c"}})
+
+	svc.FailJob(jobID, errors.New("budget exhausted after ceiling"))
+
+	job, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.Status != JobStatusFailed {
+		t.Fatalf("FailJob must mark the job failed, got %s", job.Status)
+	}
+	if job.Error == "" {
+		t.Fatal("FailJob must record the failure reason")
+	}
+	if job.CompletedAt == nil {
+		t.Fatal("FailJob must stamp completedAt (terminal state)")
+	}
+}
+
+// TestFailJob_UnknownJobIsNoOp pins that failing an unregistered/pruned job id
+// neither panics nor creates a phantom entry.
+func TestFailJob_UnknownJobIsNoOp(t *testing.T) {
+	svc := NewRematchService()
+	unknown := uuid.New()
+
+	svc.FailJob(unknown, errors.New("whatever"))
+
+	if _, err := svc.GetJob(unknown); !errors.Is(err, ErrJobNotFound) {
+		t.Fatalf("unknown job must stay unknown, got err=%v", err)
+	}
+}
+
 func TestRun_PanicPropagatesAsError(t *testing.T) {
 	svc := NewRematchService()
 	svc.Register(panickyHandler{})

@@ -49,8 +49,13 @@ var ErrJobNotFound = errors.New("rematch job not found")
 // the eventual completion) while still returning the error, so
 // RematchDispatcherWorker.Work reschedules the River job (JobSnooze) without
 // counting the attempt toward MaxAttempts. The gchat rematch (internal/google)
-// wraps this at its budget-abort sites; re-running the idempotent scan resumes
-// the backfill once the steady-state sweep has advanced the backfill floor.
+// wraps this at its budget-abort sites.
+//
+// A re-run is idempotent but NOT guaranteed to get further: the gchat scan
+// restarts from the account's static onboarding floor and persists no
+// continuation cursor, so rescheduling only resolves a TRANSIENTLY over-budget
+// account. Work therefore bounds the retries (rematchBudgetSnoozeCeiling) and
+// gives up terminally rather than rescanning forever.
 var ErrRematchBudgetExhausted = errors.New("rematch scan budget exhausted; retry to finish backfill")
 
 // JobProgress is the externally-visible snapshot of a rematch job.
@@ -409,6 +414,21 @@ func (s *RematchService) rehydrateOrLookup(jobID, contactID uuid.UUID, methods [
 	}
 	j.resetForRun()
 	return j
+}
+
+// FailJob forces the in-memory job into the terminal Failed state with the
+// given reason. Used by the rematch dispatcher worker when it gives up on a
+// repeatedly budget-exhausted backfill: Run deliberately leaves such a job
+// Running so the frontend watcher keeps polling across snoozes, so something
+// has to push it terminal once the worker stops rescheduling — otherwise the
+// watcher polls a job that will never advance. Unknown job ids are a no-op
+// (the entry may already have been pruned).
+func (s *RematchService) FailJob(jobID uuid.UUID, reason error) {
+	v, ok := s.jobs.Load(jobID)
+	if !ok {
+		return
+	}
+	v.(*job).setFailed(reason)
 }
 
 // GetJob returns a snapshot of the job, or ErrJobNotFound if unknown.
