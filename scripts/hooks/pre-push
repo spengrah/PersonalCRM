@@ -4,7 +4,7 @@
 # Reads configuration from .ai/pre-push.json. Runs enabled checks; blocks push
 # if any required check fails.
 #
-# Execution model (L3): review-log (advisory warn only — the Claude review
+# Execution model (L3): review-log (advisory warn only — the code-review
 # verdict is enforced at merge time, not push time) and the Swift gate run first
 # (cheap / path-gated fast-fail). Then four independent phases run CONCURRENTLY — LINT,
 # GO (test-unit && test-integration, the DB-owning long pole), FRONTEND, and
@@ -46,13 +46,22 @@ CONFIG_FILE=".ai/pre-push.json"
 # path-filters.yml is the single source of truth (shared with CI's dorny filter).
 FILTERS_FILE="path-filters.yml"
 
-# Check Claude review log for HEAD — ADVISORY ONLY (merge-gated review model).
-# /review-head writes the verdict to .ai/log/review/<HEAD-sha>.md. The verdict is
-# enforced at MERGE time by the workflow's merge gate (monitor-pr with
-# verdict-required=true / plan-and-ship Phase 2.5 barrier: verdict PASS + review
-# bot clean + CI green), NOT at push time. Pushing first lets review-head, CI,
-# and the PR review bot run in parallel instead of in series; the deterministic
-# gates below (lint + tests + E2E) still block the push.
+# Check the code-review verdict for HEAD — ADVISORY ONLY (merge-gated model).
+#
+# The merge gate has ONE review signal: the local native Codex review, whose
+# verdict is .ai/log/review/<HEAD-sha>.codex.md. It is enforced at MERGE time
+# (monitor-pr / plan-and-ship Phase 2.5 barrier: that verdict PASS + CI green),
+# NOT at push time — pushing first lets the review and CI run concurrently. The
+# deterministic gates below (lint + tests + E2E) still block the push.
+#
+# review-head's .ai/log/review/<sha>.md is NOT read here any more: it was retired
+# as a gate signal (dev-workflow v0.12.0) and is now a standalone on-demand
+# review. Historical .md files predate that and are left alone.
+#
+# The gate review is launched the moment HEAD is frozen, which is typically
+# seconds before this hook runs, so the common state at push time is a pending
+# marker (SOURCE: pending, deliberately carrying no RESULT= line). That is
+# healthy, not a failure — report it as in-flight rather than as a non-PASS.
 check_review_log() {
   local enabled
   enabled=$(jq -r '.review.enabled // false' "$CONFIG_FILE")
@@ -62,19 +71,24 @@ check_review_log() {
 
   local head_sha
   head_sha=$(git rev-parse HEAD)
-  local review_file=".ai/log/review/${head_sha}.md"
+  local review_file=".ai/log/review/${head_sha}.codex.md"
 
   if [[ ! -f "$review_file" ]]; then
-    echo "  [review] WARN no Claude review for HEAD (${head_sha:0:12}) — required at MERGE time; run /review-head in parallel with CI + the PR bot after pushing" >&2
+    echo "  [review] WARN no codex review for HEAD (${head_sha:0:12}) — required at MERGE time; launch it now so it runs alongside CI" >&2
+    return 0
+  fi
+
+  if grep -q '^SOURCE: pending$' "$review_file"; then
+    echo "  [review] OK codex review in flight for ${head_sha:0:12} (pending marker)" >&2
     return 0
   fi
 
   if ! grep -q '^RESULT=PASS$' "$review_file"; then
-    echo "  [review] WARN Claude review for HEAD (${head_sha:0:12}) is not PASS — the merge gate will block until a passing (delta) review exists" >&2
+    echo "  [review] WARN codex review for HEAD (${head_sha:0:12}) is not PASS — the merge gate will block until a passing review exists for this SHA" >&2
     return 0
   fi
 
-  echo "  [review] OK Claude review of ${head_sha:0:12}" >&2
+  echo "  [review] OK codex review of ${head_sha:0:12}" >&2
 }
 
 # Run the lint commands and RETURN a real exit code (non-zero on a required
