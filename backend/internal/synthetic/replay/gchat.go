@@ -237,7 +237,7 @@ func (h *Harness) driveGChatBuckets(
 	rowsPresent := func(ctx context.Context) (int64, error) {
 		return h.support.CountGChatMessagesByExternalIDs(ctx, externalIDs)
 	}
-	sync := func(ctx context.Context) error {
+	driveSync := func(ctx context.Context) error {
 		// Re-read the state each Sync: the provider persists its per-space cursors
 		// and caches into the row, and the next bucket must start from them.
 		state, err := syncRepo.GetSyncStateBySource(ctx, repository.InteractionSourceGChat, &accountID)
@@ -253,7 +253,7 @@ func (h *Harness) driveGChatBuckets(
 	buckets := chunkStrings(world.spaceNames(), gchatSpacesPerSync())
 	for _, bucket := range buckets {
 		world.presentSpaces(bucket)
-		if err := sync(ctx); err != nil {
+		if err := driveSync(ctx); err != nil {
 			return syncCalls, err
 		}
 		syncCalls++
@@ -273,7 +273,7 @@ func (h *Harness) driveGChatBuckets(
 	// the real cause — rather than as a cap hit, which is ambiguous between
 	// "needed one more pass" and "will never finish".
 	world.presentSpaces(world.spaceNames())
-	drainCalls, err := driveUntilCount(ctx, want, len(buckets)+gchatBatchDrainSlackSyncs, sync, rowsPresent)
+	drainCalls, err := driveUntilCount(ctx, want, len(buckets)+gchatBatchDrainSlackSyncs, driveSync, rowsPresent)
 	syncCalls += drainCalls
 	return syncCalls, err
 }
