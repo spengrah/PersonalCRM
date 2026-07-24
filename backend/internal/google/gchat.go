@@ -598,6 +598,17 @@ func buildKnownMapFromIdentities(ctx context.Context, commsRepo *repository.Comm
 	return knownMap, nil
 }
 
+// ErrRematchBudgetExhausted is the sentinel ScanIdentifier returns when a
+// rematch scan stops because its per-run page budget ran out before the
+// backfill finished. It is a CONTINUE-LATER signal, not a terminal failure: the
+// scan writes are idempotent and the scan cursor is left unadvanced, so a later
+// re-run resumes the backfill (the steady-state sweep advances the backfill
+// floor between runs, shrinking the remaining work until a run fits in budget).
+// The rematch dispatcher worker detects this sentinel and reschedules the River
+// job via JobSnooze instead of returning a terminal error, so budget exhaustion
+// never counts against the job's MaxAttempts.
+var ErrRematchBudgetExhausted = errors.New("rematch scan budget exhausted; retry to finish backfill")
+
 // ScanIdentifier runs a one-shot, address-scoped historical scan for one
 // connected account: it iterates the account's spaces and upserts only the rows
 // that involve addrNormalized (inbound FROM the address, or outbound TO a space
@@ -650,7 +661,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 	budget := gchatMaxWindowsPerSync
 	for _, space := range spaces {
 		if budget <= 0 {
-			return counters.matched, fmt.Errorf("rematch scan budget exhausted before completing: retry to finish backfill")
+			return counters.matched, fmt.Errorf("before completing: %w", ErrRematchBudgetExhausted)
 		}
 		members, _, memberIncomplete, mErr := paginateMembers(ctx, fetcher, space.Name, &budget)
 		if mErr != nil {
@@ -659,7 +670,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 		if memberIncomplete {
 			// Budget ran out mid-membership → the scan is incomplete; fail so
 			// River retries the whole (idempotent) backfill.
-			return counters.matched, fmt.Errorf("rematch scan budget exhausted paging membership: retry to finish backfill")
+			return counters.matched, fmt.Errorf("paging membership: %w", ErrRematchBudgetExhausted)
 		}
 		// Co-member resolution uses the FULL knownMap (so a space qualifies when
 		// the target address is one of its members); row-writing uses scanMap.
@@ -684,7 +695,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 			return counters.matched, fmt.Errorf("resolve scanned member id: %w", sErr)
 		}
 		if status == deferredBudgetHit {
-			return counters.matched, fmt.Errorf("rematch scan budget exhausted resolving member id: retry to finish backfill")
+			return counters.matched, fmt.Errorf("resolving member id: %w", ErrRematchBudgetExhausted)
 		}
 		idIsMember := false
 		if _, isMe := meIDs[userName]; status == resolvedKnownID && !isMe {
@@ -715,7 +726,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 		if !proven {
 			// Budget ran out mid-window → the scan is incomplete; fail so River
 			// retries the whole (idempotent) backfill rather than dropping history.
-			return counters.matched, fmt.Errorf("rematch scan budget exhausted mid-window: retry to finish backfill")
+			return counters.matched, fmt.Errorf("mid-window: %w", ErrRematchBudgetExhausted)
 		}
 	}
 	return counters.matched, nil

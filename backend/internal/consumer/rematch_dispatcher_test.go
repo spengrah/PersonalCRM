@@ -4,16 +4,82 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/riverqueue/river"
 	"github.com/stretchr/testify/require"
 )
+
+// envelopeBus is an eventBusTx stub whose GetEvent returns a preconfigured
+// envelope, used to drive RematchDispatcherWorker.Work in unit tests.
+type envelopeBus struct {
+	env *events.Envelope
+	err error
+}
+
+func (b *envelopeBus) PublishTx(context.Context, pgx.Tx, *events.Envelope) error { return nil }
+
+func (b *envelopeBus) GetEvent(context.Context, uuid.UUID) (*events.Envelope, error) {
+	return b.env, b.err
+}
+
+func newWorkerForRunner(t *testing.T, runnerErr error) (*RematchDispatcherWorker, *river.Job[consumerjobs.RematchDispatcherJobArgs]) {
+	t.Helper()
+	env := validEnvelope(t, uuid.New(), uuid.New(), []events.ContactMethodRef{{Type: "email", Value: "a@b.c"}})
+	worker := NewRematchDispatcherWorker(
+		&envelopeBus{env: env},
+		nil, // pool is unused by Work
+		NewRematchDispatcher(&stubRunner{err: runnerErr}),
+	)
+	job := &river.Job[consumerjobs.RematchDispatcherJobArgs]{
+		Args: consumerjobs.RematchDispatcherJobArgs{EventID: env.ID},
+	}
+	return worker, job
+}
+
+// TestRematchDispatcherWorker_Work_BudgetExhausted_Snoozes proves that when the
+// rematch runner reports budget exhaustion (the continue-later sentinel), Work
+// reschedules the job via JobSnooze instead of returning a terminal error that
+// would burn the job's MaxAttempts and discard the backfill. The sentinel is
+// wrapped exactly as production wraps it (per-account context + %w), so this
+// also proves the sentinel survives the wrapping back up to Work.
+func TestRematchDispatcherWorker_Work_BudgetExhausted_Snoozes(t *testing.T) {
+	runnerErr := fmt.Errorf("account acct-1: %w", google.ErrRematchBudgetExhausted)
+	worker, job := newWorkerForRunner(t, runnerErr)
+
+	err := worker.Work(context.Background(), job)
+
+	var snooze *river.JobSnoozeError
+	require.ErrorAs(t, err, &snooze, "budget exhaustion must reschedule via JobSnooze, not discard")
+	require.Positive(t, snooze.Duration, "snooze must use a non-zero backoff")
+	require.NotErrorIs(t, err, google.ErrRematchBudgetExhausted,
+		"the returned reschedule must not carry the sentinel as a terminal error")
+}
+
+// TestRematchDispatcherWorker_Work_GenuineError_Propagates proves a non-budget
+// failure still propagates as a terminal error so river retries and eventually
+// discards it per MaxAttempts — budget-exhaustion handling must not swallow
+// real failures.
+func TestRematchDispatcherWorker_Work_GenuineError_Propagates(t *testing.T) {
+	sentinel := errors.New("gchat api exploded")
+	worker, job := newWorkerForRunner(t, sentinel)
+
+	err := worker.Work(context.Background(), job)
+
+	require.ErrorIs(t, err, sentinel, "genuine errors must propagate so river retries/discards normally")
+	var snooze *river.JobSnoozeError
+	require.NotErrorAs(t, err, &snooze, "genuine errors must not be rescheduled as a snooze")
+}
 
 // stubRunner records Run invocations and returns a configurable error.
 type stubRunner struct {

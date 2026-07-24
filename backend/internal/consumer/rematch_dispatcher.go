@@ -8,6 +8,7 @@ import (
 
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/service"
 
@@ -106,15 +107,39 @@ func NewRematchDispatcherWorker(bus eventBusTx, pool *pgxpool.Pool, dispatcher *
 	return &RematchDispatcherWorker{bus: bus, pool: pool, dispatcher: dispatcher}
 }
 
+// rematchBudgetSnoozeDelay is how long a rematch job waits before resuming when
+// a gchat rematch aborts on budget exhaustion. It is comfortably above the
+// "within minutes" rapid-fire cadence that was discarding these jobs, and
+// spaced so repeated snoozes span the steady-state sweep interval
+// (GChatDefaultInterval) — giving the sweep time to advance the backfill floor
+// so a later run fits within budget.
+const rematchBudgetSnoozeDelay = 5 * time.Minute
+
 // Work implements river.Worker. Fetches the event envelope by id and
-// invokes HandleEvent. On error river retries per MaxAttempts (3 from
-// the InsertOpts set in events.consumerJobsForKind).
+// invokes HandleEvent. Budget-exhaustion (google.ErrRematchBudgetExhausted) is
+// a continue-later signal, not a terminal failure, so it is rescheduled via
+// JobSnooze (which bumps MaxAttempts) rather than discarded. Genuine errors
+// propagate so river retries per MaxAttempts (3 from the InsertOpts set in
+// events.consumerJobsForKind) and eventually discards.
 func (w *RematchDispatcherWorker) Work(ctx context.Context, j *river.Job[consumerjobs.RematchDispatcherJobArgs]) error {
 	env, err := w.bus.GetEvent(ctx, j.Args.EventID)
 	if err != nil {
 		return fmt.Errorf("fetch event %s: %w", j.Args.EventID, err)
 	}
-	return w.dispatcher.HandleEvent(ctx, env)
+	if err := w.dispatcher.HandleEvent(ctx, env); err != nil {
+		if errors.Is(err, google.ErrRematchBudgetExhausted) {
+			// Snooze instead of returning a terminal error: three rapid retries
+			// against the same still-exhausted budget would discard the job and
+			// strand the contact's backfill. Snoozing never counts against
+			// MaxAttempts, so the backfill resumes until it completes. A genuine
+			// failure co-occurring with budget exhaustion keeps snoozing until
+			// the budget stops exhausting, then discards normally once it is the
+			// sole remaining error.
+			return river.JobSnooze(rematchBudgetSnoozeDelay)
+		}
+		return err
+	}
+	return nil
 }
 
 // Timeout bounds a single rematch run. Multi-method rematch over large
