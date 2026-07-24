@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
@@ -145,17 +144,16 @@ func createRequestToRepo(req CreateContactRequest) repository.CreateContactReque
 		birthday = req.Birthday.Time
 	}
 
-	// Set last_contacted to current date when creating a contact
-	now := accelerated.GetCurrentTime()
-
+	// last_contacted is deliberately left unset: it records a two-way connection
+	// (CAD-006), and a new contact has had none. contact_by falls back to
+	// created_at (CAD-002[0]), so the cadence clock still starts at creation.
 	return repository.CreateContactRequest{
-		FullName:      req.FullName,
-		Location:      req.Location,
-		Birthday:      birthday,
-		HowMet:        req.HowMet,
-		Cadence:       req.Cadence,
-		LastContacted: &now,
-		ProfilePhoto:  req.ProfilePhoto,
+		FullName:     req.FullName,
+		Location:     req.Location,
+		Birthday:     birthday,
+		HowMet:       req.HowMet,
+		Cadence:      req.Cadence,
+		ProfilePhoto: req.ProfilePhoto,
 	}
 }
 

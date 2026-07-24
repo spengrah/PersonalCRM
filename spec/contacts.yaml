@@ -13,11 +13,11 @@ behaviors:
     given: a create request with a full name and optionally a cadence
     when: the contact is created
     then:
-      - last_contacted is initialized to the creation time
-      - contact_by is computed from the cadence and last_contacted
+      - last_contacted is left unset — no contact has happened yet
+      - contact_by is computed from the cadence and the creation time
       - without a cadence, contact_by is unset
     provenance: [ContactService.CreateContact, createRequestToRepo, ContactRepository.CreateContact]
-    notes: last_contacted at creation is deliberate — a new contact starts its cadence clock immediately rather than appearing overdue.
+    notes: The cadence clock still starts at creation, but from created_at via the documented base-date fallback (CAD-002[0]) rather than a seeded last_contacted. Seeding it made the creation instant indistinguishable from a real two-way connection (CAD-006), so every consumer that read the column asserted contact that never happened — the dashboard's overdue card reported "Last contacted N ago" for people nobody had ever spoken to, contradicting the same contact's detail page. One consequence of the NULL start — a subsequently-applied backdated inbound/mutual interaction (historical import, past calendar event) now sets last_contacted — and re-derives contact_by — to that real past instant, where a creation stamp previously blocked it (the forward-only guard saw last_contacted=now and rejected the older value). A newly-added contact with prior interaction history can therefore land overdue immediately; that is the truthful cadence position, not a regression.
 
   - id: CON-002
     title: Contact create validates fields and returns the created contact

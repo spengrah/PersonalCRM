@@ -11,6 +11,7 @@ function overdueEntry(over: {
   name: string
   days: number
   lastContacted?: string
+  createdAt?: string
   email?: string
 }): OverdueContactResponse {
   const slug = over.name.toLowerCase().replace(/ /g, '-')
@@ -24,7 +25,7 @@ function overdueEntry(over: {
     ...(over.lastContacted ? { last_contacted: over.lastContacted } : {}),
     contact_by: '2026-07-01T00:00:00Z',
     has_pending_followup: false,
-    created_at: '2026-01-01T00:00:00Z',
+    created_at: over.createdAt ?? '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     days_overdue: over.days,
     next_due_date: '2026-07-01T00:00:00Z',
@@ -213,10 +214,10 @@ test.describe('Dashboard - Card Anatomy (mocked) @area:dashboard', () => {
       const card = page.getByRole('listitem').filter({ hasText: c.name })
       await expect(card.getByLabel(c.tier, { exact: true })).toBeVisible()
       await expect(card.getByText('(weekly cadence)')).toBeVisible()
-      // Recency requires a VALUE after "Last contacted", not just the label
-      // (formatLastContacted regressing to '' would fail the \S+ match).
+      // Recency requires a VALUE after the label, not just the label
+      // (formatOverdueRecency regressing to '' would fail the \S+ match).
       await expect(
-        card.getByText(new RegExp(`${c.days} days overdue - Last contacted \\S+`))
+        card.getByText(new RegExp(`${c.days} days overdue - Last connected \\S+`))
       ).toBeVisible()
       await expect(
         card.getByText(`${c.name.toLowerCase().replace(/ /g, '-')}@example.com`)
@@ -234,12 +235,16 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
   // the rendered card DOM order. One full-envelope route mock feeds all three
   // orderings; the fixture is built so urgency, name, and last-contacted
   // orders are pairwise DISTINCT (a no-op or wrong sort fails), and one
-  // never-contacted record (last_contacted OMITTED, like the real omitempty
-  // response) proves the null-sink branch.
+  // never-connected record (last_contacted OMITTED, like the real omitempty
+  // response) proves it is ranked by its created_at rather than dropped.
   const fixtureSuffix = 'Sortfix'
   // urgency (days desc):      Zulu(30), Mike(12), Alpha(3), Bravo(1)
   // name (alphabetical):      Alpha, Bravo, Mike, Zulu
-  // last-contacted (oldest→): Alpha(01-10), Bravo(03-01), Zulu(05-01), Mike(never) last
+  // recency (longest wait→):  Alpha(lc 01-10), Mike(added 02-01), Bravo(lc 03-01), Zulu(lc 05-01)
+  //   Mike (never-connected) is deliberately placed BETWEEN two connected
+  //   contacts by its created_at — a regression that pinned null-last_contacted
+  //   rows to an edge would reorder Mike and fail, distinguishing "ranked by
+  //   added date" (CAD-027[2]) from "never-connected grouped first/last".
   const fixture = [
     overdueEntry({
       name: `Alpha ${fixtureSuffix}`,
@@ -251,7 +256,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
       days: 30,
       lastContacted: '2026-05-01T12:00:00Z',
     }),
-    overdueEntry({ name: `Mike ${fixtureSuffix}`, days: 12 }),
+    overdueEntry({ name: `Mike ${fixtureSuffix}`, days: 12, createdAt: '2026-02-01T00:00:00Z' }),
     overdueEntry({
       name: `Bravo ${fixtureSuffix}`,
       days: 1,
@@ -299,22 +304,40 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
       ])
   })
 
-  test('last-contacted orders oldest first with never-contacted last', async ({ page }) => {
+  test('recency orders longest-waiting first, ranking never-connected by added date', async ({
+    page,
+  }) => {
     // spec: CAD-027[2]
     await gotoMockedDashboard(page)
     await page.getByRole('button', { name: 'Last Contacted', exact: true }).click()
-    // Mike (last_contacted: null) renders "Never contacted" and must sink to
-    // the END regardless of its days_overdue — the null-sink branch.
+    // Mike (last_contacted omitted) is ranked by its created_at (02-01), landing
+    // BETWEEN Alpha (connected 01-10) and Bravo (connected 03-01) — not pinned to
+    // an edge. This ordering fails if never-connected rows are grouped first/last.
     await expect
       .poll(() => cardOrder(page))
       .toEqual([
         `Alpha ${fixtureSuffix}`,
+        `Mike ${fixtureSuffix}`,
         `Bravo ${fixtureSuffix}`,
         `Zulu ${fixtureSuffix}`,
-        `Mike ${fixtureSuffix}`,
       ])
+  })
+
+  // spec: CAD-026[1]
+  // The regression guard for the bug this copy exists to prevent: a contact with
+  // no recorded connection must be described by when it was ADDED, never as a
+  // contact that happened. Before the fix the card asserted "Last contacted
+  // <creation date>" — inventing a conversation and contradicting the same
+  // contact's detail page, which correctly showed no recent activity.
+  test('a never-connected contact is described by when it was added, not as contact', async ({
+    page,
+  }) => {
+    await gotoMockedDashboard(page)
     const mikeCard = page.getByRole('listitem').filter({ hasText: `Mike ${fixtureSuffix}` })
-    await expect(mikeCard.getByText('Never contacted')).toBeVisible()
+    await expect(mikeCard.getByText(/12 days overdue - Added \S+/)).toBeVisible()
+    // Scoped to the recency phrasing — the card's "Mark as Contacted" action
+    // legitimately contains the word.
+    await expect(mikeCard.getByText(/Last (contacted|connected)/i)).toHaveCount(0)
   })
 })
 

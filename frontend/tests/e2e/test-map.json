@@ -261,6 +261,10 @@
     "tags": ["@area:contacts", "@area:contact-merge"]
   },
   {
+    "pattern": "^frontend/src/lib/contact-recency\\.ts$",
+    "tags": ["@area:dashboard", "@area:overdue"]
+  },
+  {
     "pattern": "^frontend/src/lib/method-conflict-detection\\.ts$",
     "tags": ["@area:contact-merge"]
   },

@@ -155,7 +155,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   await page.getByRole('button', { name: 'Last Contacted' }).click()
   await tour.capture(page, {
     behaviors: ['CAD-027'],
-    note: 'overdue list, last-contacted sort (oldest first)',
+    note: 'overdue list, recency sort (longest wait first; never-connected ranked by added date)',
     pair: { id: 'sort', role: 'sort-last-contacted' },
     fields: { overdueCards: await readOverdueCards(page, lastContactedById) },
   })

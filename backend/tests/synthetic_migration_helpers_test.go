@@ -84,12 +84,11 @@ func seedMigrationContact(
 	}
 
 	contact, _, err := contactSvc.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      spec.FullName,
-		Cadence:       spec.Cadence,
-		LastContacted: spec.LastContacted,
-		Birthday:      spec.Birthday,
-		Location:      spec.Location,
-		HowMet:        spec.HowMet,
+		FullName: spec.FullName,
+		Cadence:  spec.Cadence,
+		Birthday: spec.Birthday,
+		Location: spec.Location,
+		HowMet:   spec.HowMet,
 	}, methods)
 	require.NoError(t, err)
 

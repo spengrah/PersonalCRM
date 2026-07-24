@@ -1160,21 +1160,21 @@ INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempt
 VALUES (@kind, 'default', @state::river_job_state, '{}'::jsonb, '{}'::jsonb, 1, 1, @scheduled_at, @attempted_at, @finalized_at);
 
 -- name: TestCountIncoherentLastContactedByNamePrefix :one
--- Coherence gate: count the namespace's contacts whose non-creation last_contacted
--- is NOT backed by a live inbound/mutual interaction at the same occurred_at, or
--- whose last_interaction_at is not in lockstep with last_contacted. Asserted == 0.
--- last_contacted <> created_at exempts the creation stamp (the backdated cohort
--- sets both columns from ONE *time.Time, so they are byte-equal; there is no seed
--- path left that writes last_contacted disconnected from created_at). A moved
--- last_contacted must (i) equal last_interaction_at (the cadence updater writes
--- both to occurred_at under one guard) and (ii) be backed by a live inbound/mutual
--- interaction at the same occurred_at (CAD-010). Caller passes a BARE prefix.
+-- Coherence gate: count the namespace's contacts whose last_contacted is NOT backed
+-- by a live inbound/mutual interaction at the same occurred_at, or whose
+-- last_interaction_at is not in lockstep with last_contacted. Asserted == 0.
+-- Every non-NULL last_contacted is now interaction-driven: creation leaves the column
+-- NULL (CON-001), so there is no creation stamp to exempt, and a last_contacted equal
+-- to created_at with no backing interaction is exactly the fabricated-connection state
+-- this gate exists to catch — it must NOT be exempted. A moved last_contacted must
+-- (i) equal last_interaction_at (the cadence updater writes both to occurred_at under
+-- one guard) and (ii) be backed by a live inbound/mutual interaction at the same
+-- occurred_at (CAD-010). Caller passes a BARE prefix.
 SELECT COUNT(*)
 FROM contact c
 WHERE c.full_name LIKE @name_prefix || '%'
   AND c.deleted_at IS NULL
   AND c.last_contacted IS NOT NULL
-  AND c.last_contacted <> c.created_at
   AND (
         c.last_interaction_at IS DISTINCT FROM c.last_contacted
      OR NOT EXISTS (
