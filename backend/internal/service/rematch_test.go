@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -198,6 +199,37 @@ func TestRun_HandlerErrorFailsJob(t *testing.T) {
 	}
 	if job.Error == "" {
 		t.Fatal("expected non-empty error message")
+	}
+}
+
+func TestRun_BudgetExhausted_KeepsRunning(t *testing.T) {
+	svc := NewRematchService()
+	// Production-shaped wrap: a RematchHandler wraps the sentinel with
+	// per-account context (%w) inside the errors.Join that
+	// gchatRematchBase.rematch builds across connected accounts.
+	wrapped := errors.Join(fmt.Errorf("account acct-1: %w", ErrRematchBudgetExhausted))
+	svc.Register(&stubHandler{typ: "email", err: wrapped})
+
+	jobID := uuid.New()
+	runErr := svc.Run(context.Background(), jobID, uuid.New(), []Method{{Type: "email", Value: "a@b.c"}})
+
+	// Run must still return the sentinel so RematchDispatcherWorker.Work snoozes.
+	if !errors.Is(runErr, ErrRematchBudgetExhausted) {
+		t.Fatalf("Run should return the budget sentinel so the worker snoozes; got %v", runErr)
+	}
+	// ...but must NOT mark the in-memory job failed: the frontend rematch-job
+	// watcher stops polling on any non-running status, so a snoozed backfill
+	// marked failed would show as terminal and its eventual completion's cache
+	// invalidations would never fire.
+	job, err := svc.GetJob(jobID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if job.Status != JobStatusRunning {
+		t.Fatalf("budget exhaustion must leave the job running, got %s", job.Status)
+	}
+	if job.Error != "" {
+		t.Fatalf("budget exhaustion must not record an error string, got %q", job.Error)
 	}
 }
 

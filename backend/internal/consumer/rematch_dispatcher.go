@@ -8,7 +8,6 @@ import (
 
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/events"
-	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/service"
 
@@ -116,7 +115,7 @@ func NewRematchDispatcherWorker(bus eventBusTx, pool *pgxpool.Pool, dispatcher *
 const rematchBudgetSnoozeDelay = 5 * time.Minute
 
 // Work implements river.Worker. Fetches the event envelope by id and
-// invokes HandleEvent. Budget-exhaustion (google.ErrRematchBudgetExhausted) is
+// invokes HandleEvent. Budget-exhaustion (service.ErrRematchBudgetExhausted) is
 // a continue-later signal, not a terminal failure, so it is rescheduled via
 // JobSnooze (which bumps MaxAttempts) rather than discarded. Genuine errors
 // propagate so river retries per MaxAttempts (3 from the InsertOpts set in
@@ -127,14 +126,21 @@ func (w *RematchDispatcherWorker) Work(ctx context.Context, j *river.Job[consume
 		return fmt.Errorf("fetch event %s: %w", j.Args.EventID, err)
 	}
 	if err := w.dispatcher.HandleEvent(ctx, env); err != nil {
-		if errors.Is(err, google.ErrRematchBudgetExhausted) {
+		if errors.Is(err, service.ErrRematchBudgetExhausted) {
 			// Snooze instead of returning a terminal error: three rapid retries
 			// against the same still-exhausted budget would discard the job and
 			// strand the contact's backfill. Snoozing never counts against
 			// MaxAttempts, so the backfill resumes until it completes. A genuine
 			// failure co-occurring with budget exhaustion keeps snoozing until
 			// the budget stops exhausting, then discards normally once it is the
-			// sole remaining error.
+			// sole remaining error. Log at Warn (river logs snoozes only at
+			// Debug) so a backfill stuck snoozing stays visible; rematch_job_id
+			// + event_id attribute it without logging contact PII.
+			logger.Warn().
+				Str("event_id", env.ID.String()).
+				Str("rematch_job_id", j.Args.RematchJobID.String()).
+				Dur("snooze", rematchBudgetSnoozeDelay).
+				Msg("rematch_dispatcher: gchat rematch budget exhausted; snoozing to continue backfill")
 			return river.JobSnooze(rematchBudgetSnoozeDelay)
 		}
 		return err

@@ -11,7 +11,6 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/events"
-	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
@@ -50,12 +49,15 @@ func newWorkerForRunner(t *testing.T, runnerErr error) (*RematchDispatcherWorker
 // TestRematchDispatcherWorker_Work_BudgetExhausted_Snoozes proves that when the
 // rematch runner reports budget exhaustion (the continue-later sentinel), Work
 // reschedules the job via JobSnooze instead of returning a terminal error that
-// would burn the job's MaxAttempts and discard the backfill. The sentinel is
-// wrapped exactly as production wraps it — per-account context (%w) inside the
-// errors.Join that gchatRematchBase.rematch builds — so this also proves the
-// sentinel survives the full wrapping (Join + %w) back up to Work.
+// would burn the job's MaxAttempts and discard the backfill. The error is
+// wrapped as gchatRematchBase.rematch wraps it (per-account %w inside
+// errors.Join) and driven through the real HandleEvent wrap ("rematch run:
+// %w"), so this exercises Work's errors.Is detection across the Join +
+// HandleEvent layers. The RematchService.Run layer is stubbed here (stubRunner
+// replaces it); its behavior on the sentinel is covered by
+// service.TestRun_BudgetExhausted_KeepsRunning.
 func TestRematchDispatcherWorker_Work_BudgetExhausted_Snoozes(t *testing.T) {
-	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", google.ErrRematchBudgetExhausted))
+	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", service.ErrRematchBudgetExhausted))
 	worker, job := newWorkerForRunner(t, runnerErr)
 
 	err := worker.Work(context.Background(), job)
@@ -63,7 +65,7 @@ func TestRematchDispatcherWorker_Work_BudgetExhausted_Snoozes(t *testing.T) {
 	var snooze *river.JobSnoozeError
 	require.ErrorAs(t, err, &snooze, "budget exhaustion must reschedule via JobSnooze, not discard")
 	require.Positive(t, snooze.Duration, "snooze must use a non-zero backoff")
-	require.NotErrorIs(t, err, google.ErrRematchBudgetExhausted,
+	require.NotErrorIs(t, err, service.ErrRematchBudgetExhausted,
 		"the returned reschedule must not carry the sentinel as a terminal error")
 }
 
@@ -94,7 +96,7 @@ func TestRematchDispatcherWorker_Work_GenuineError_Propagates(t *testing.T) {
 // silently discarding backfills mid-budget.
 func TestRematchDispatcherWorker_Work_MixedError_Snoozes(t *testing.T) {
 	runnerErr := errors.Join(
-		fmt.Errorf("account acct-1: %w", google.ErrRematchBudgetExhausted),
+		fmt.Errorf("account acct-1: %w", service.ErrRematchBudgetExhausted),
 		fmt.Errorf("account acct-2: %w", errors.New("oauth token revoked")),
 	)
 	worker, job := newWorkerForRunner(t, runnerErr)

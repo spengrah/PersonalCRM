@@ -42,6 +42,17 @@ const (
 // ErrJobNotFound is returned by GetJob when the job ID is unknown.
 var ErrJobNotFound = errors.New("rematch job not found")
 
+// ErrRematchBudgetExhausted is a continue-later signal a RematchHandler may wrap
+// (via %w) to report that it stopped because a per-run scan/page budget ran out
+// before its backfill finished — NOT a terminal failure. On this sentinel Run
+// leaves the in-memory job Running (so the frontend watcher keeps polling for
+// the eventual completion) while still returning the error, so
+// RematchDispatcherWorker.Work reschedules the River job (JobSnooze) without
+// counting the attempt toward MaxAttempts. The gchat rematch (internal/google)
+// wraps this at its budget-abort sites; re-running the idempotent scan resumes
+// the backfill once the steady-state sweep has advanced the backfill floor.
+var ErrRematchBudgetExhausted = errors.New("rematch scan budget exhausted; retry to finish backfill")
+
 // JobProgress is the externally-visible snapshot of a rematch job.
 type JobProgress struct {
 	ID          uuid.UUID
@@ -348,6 +359,20 @@ func (s *RematchService) Run(ctx context.Context, jobID, contactID uuid.UUID, me
 		for _, handler := range hs {
 			n, handlerErr := handler.Rematch(ctx, contactID, m.Value)
 			if handlerErr != nil {
+				if errors.Is(handlerErr, ErrRematchBudgetExhausted) {
+					// Continue-later signal, not a terminal failure: leave the
+					// in-memory job Running so the frontend watcher keeps polling
+					// for the eventual completion, but still return the error so
+					// RematchDispatcherWorker.Work reschedules (JobSnooze) instead
+					// of the job being marked failed. A later run resumes the
+					// idempotent scan. contactId is third-party PII; jobId + type
+					// attribute the deferral without logging it.
+					logger.Info().
+						Str("jobId", jobID.String()).
+						Str("type", m.Type).
+						Msg("rematch: handler budget-exhausted; job stays running for snooze/retry")
+					return handlerErr
+				}
 				// contactId is a third-party contact UUID; jobId + type attribute
 				// the failure without logging it.
 				logger.Warn().Err(handlerErr).
