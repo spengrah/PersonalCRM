@@ -616,6 +616,19 @@ func (r *SyntheticSupportRepository) countSettledCommsMessages(ctx context.Conte
 	})
 }
 
+// CountGChatMessagesByExternalIDs counts how many of the given external ids have
+// a gchat comms_message row at all (linked or not). It is the GChat batch
+// bucket loop's PROGRESS probe, not its gate: the provider writes these rows
+// synchronously inside Sync while the interaction linkage arrives later from a
+// River consumer, so only this read distinguishes an unpresented space from an
+// unfinished aggregate.
+func (r *SyntheticSupportRepository) CountGChatMessagesByExternalIDs(ctx context.Context, externalIDs []string) (int64, error) {
+	return r.queries.SyntheticCountCommsMessagesByExternalIds(ctx, db.SyntheticCountCommsMessagesByExternalIdsParams{
+		Source:      "gchat",
+		ExternalIds: externalIDs,
+	})
+}
+
 // CountSettledMessagesMessagesByGUIDs counts how many of the given guids have an
 // interaction-linked messages_message staging row — the batch iMessage Gate A.
 func (r *SyntheticSupportRepository) CountSettledMessagesMessagesByGUIDs(ctx context.Context, guids []string) (int64, error) {

@@ -1860,6 +1860,13 @@ type Querier interface {
 	// row, so the decline test settles on this reaching 0. calendar_event has no
 	// deleted_at column (hard-delete table).
 	SyntheticCountCalendarEventByGcalId(ctx context.Context, gcalEventID string) (int64, error)
+	// gchat batch PROGRESS probe (not a gate): how many of these external ids have a
+	// comms_message row at all, linked or not. The GChat provider writes these rows
+	// SYNCHRONOUSLY inside Sync, whereas the interaction linkage arrives later from a
+	// River consumer — so this is the only signal that can tell "the sweep has not
+	// presented this space yet" apart from "the aggregate has not run yet". The
+	// bucket loop polls it between Syncs; the terminal gate stays the linked count.
+	SyntheticCountCommsMessagesByExternalIds(ctx context.Context, arg SyntheticCountCommsMessagesByExternalIdsParams) (int64, error)
 	// Harness setup collision detection (D5) — PRIMARY phone-band check. A seeded
 	// synthetic contact's phone lives ONLY as a contact_method (no external_identity
 	// until a later replay), and identity matching cross-matches via

@@ -806,6 +806,18 @@ WHERE source = @source
   AND interaction_id IS NOT NULL
   AND deleted_at IS NULL;
 
+-- name: SyntheticCountCommsMessagesByExternalIds :one
+-- gchat batch PROGRESS probe (not a gate): how many of these external ids have a
+-- comms_message row at all, linked or not. The GChat provider writes these rows
+-- SYNCHRONOUSLY inside Sync, whereas the interaction linkage arrives later from a
+-- River consumer — so this is the only signal that can tell "the sweep has not
+-- presented this space yet" apart from "the aggregate has not run yet". The
+-- bucket loop polls it between Syncs; the terminal gate stays the linked count.
+SELECT COUNT(DISTINCT external_id) FROM comms_message
+WHERE source = @source
+  AND external_id = ANY(@external_ids::text[])
+  AND deleted_at IS NULL;
+
 -- name: SyntheticCountSettledMessagesMessagesByGuids :one
 -- iMessage batch: how many of these guids have a staging row with an
 -- interaction_id.

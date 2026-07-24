@@ -877,6 +877,31 @@ func (q *Queries) SyntheticCountCalendarEventByGcalId(ctx context.Context, gcalE
 	return count, err
 }
 
+const SyntheticCountCommsMessagesByExternalIds = `-- name: SyntheticCountCommsMessagesByExternalIds :one
+SELECT COUNT(DISTINCT external_id) FROM comms_message
+WHERE source = $1
+  AND external_id = ANY($2::text[])
+  AND deleted_at IS NULL
+`
+
+type SyntheticCountCommsMessagesByExternalIdsParams struct {
+	Source      string   `json:"source"`
+	ExternalIds []string `json:"external_ids"`
+}
+
+// gchat batch PROGRESS probe (not a gate): how many of these external ids have a
+// comms_message row at all, linked or not. The GChat provider writes these rows
+// SYNCHRONOUSLY inside Sync, whereas the interaction linkage arrives later from a
+// River consumer — so this is the only signal that can tell "the sweep has not
+// presented this space yet" apart from "the aggregate has not run yet". The
+// bucket loop polls it between Syncs; the terminal gate stays the linked count.
+func (q *Queries) SyntheticCountCommsMessagesByExternalIds(ctx context.Context, arg SyntheticCountCommsMessagesByExternalIdsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountCommsMessagesByExternalIds, arg.Source, arg.ExternalIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountContactMethodsByValueNormalizedPrefix = `-- name: SyntheticCountContactMethodsByValueNormalizedPrefix :one
 SELECT COUNT(*) FROM contact_method cm
 JOIN contact c ON c.id = cm.contact_id

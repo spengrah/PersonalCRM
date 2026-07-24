@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/google"
+	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
 
@@ -146,4 +147,181 @@ func (h *Harness) ReplayGCal(ctx context.Context, contactID uuid.UUID, spec fact
 		return GCalResult{}, err
 	}
 	return GCalResult{ContactID: contactID, GcalEventID: spec.GcalEventID, Matched: true}, nil
+}
+
+// GCalBatchItem is one calendar payload in a batch: the seeded contact it
+// targets and the event. There is no PairKey: a matched calendar event is always
+// MUTUAL, so calendar carries no promotion mechanic and therefore no dependency
+// generations.
+type GCalBatchItem struct {
+	ContactID uuid.UUID
+	Spec      factory.GCalEventSpec
+}
+
+// ReplayGCalBatch drives N calendar payloads through the CalendarSyncProvider and
+// settles ONCE. One Sync genuinely carries the whole batch — the fake ListEvents
+// returns every event on the first page — but the provider's past-event publish
+// loop reads only gcalPastEventPageSize rows per Sync, so a batch above that
+// needs several. Re-Syncing makes progress because MarkLastContactedUpdated
+// permanently removes a processed event from that read.
+//
+// The loop polls the plain Gate A count between iterations, never Settle: a
+// Settle whose predicate demands all N must time out on the first iteration when
+// only a page can have landed. Settle runs exactly once, after the drive loop —
+// so SyncCalls > 1 while SettleCalls stays 1.
+func (h *Harness) ReplayGCalBatch(ctx context.Context, items []GCalBatchItem) (BatchResult, error) {
+	const source = "gcal"
+
+	entries := gcalBatchEntries(items)
+	if err := validateBatchStructure(source, entries); err != nil {
+		return BatchResult{}, err
+	}
+	accountID, err := gcalBatchAccount(items)
+	if err != nil {
+		return BatchResult{}, err
+	}
+	if err := h.validateBatchOwnership(ctx, source, entries); err != nil {
+		return BatchResult{}, err
+	}
+
+	contactIDs := distinctContactIDs(entries)
+	res := BatchResult{Payloads: len(items), Contacts: len(contactIDs)}
+	before := h.snapshotInteractionIDs(ctx, contactIDs)
+
+	// The provider publishes calendar.attended per (event, contact); those events
+	// carry contact_id and are captured by the contact-scoped read, but track the
+	// source as a backstop for any non-contact-bearing gcal root event.
+	h.track(func(c *created) { c.addDirectSource(google.CalendarSourceName) })
+
+	provider := google.NewCalendarSyncProvider(
+		nil, // oauthService unused with the injected fetcher
+		repository.NewCalendarEventRepository(h.database.Queries),
+		h.contactRepo,
+		h.identityService,
+		h.externalRepo,
+		h.bus,
+		h.database.Pool,
+	)
+	allEvents := make([]*calendarapi.Event, 0, len(items))
+	for _, it := range items {
+		allEvents = append(allEvents, it.Spec.Event)
+	}
+	provider.SetFetcherFactoryForTest(google.NewFakeCalendarFetcherFactoryForTest(google.FakeCalendarFetcherFuncs{
+		ListEvents: func(_ context.Context, _ string, opts google.CalendarListOpts) ([]*calendarapi.Event, string, string, error) {
+			if opts.PageToken != "" {
+				return nil, "", "synth-sync-token", nil
+			}
+			return allEvents, "", "synth-sync-token", nil
+		},
+	}))
+	// Confine the provider's DB-wide past-event enumeration to THIS harness's
+	// events, exactly as the single adapter does.
+	provider.SetCalendarRepoForTest(&namespaceScopedCalendarRepo{
+		real:   repository.NewCalendarEventRepository(h.database.Queries),
+		prefix: h.gen.Prefix(),
+	})
+
+	gcalIDs, pairContactIDs := gcalBatchGateKeys(items)
+	count := func(ctx context.Context) (int64, error) {
+		return h.support.CountMatchedCalendarEventsByGcalIDs(ctx, gcalIDs, pairContactIDs)
+	}
+	drive := func(ctx context.Context) error {
+		state := &repository.SyncState{Source: repository.InteractionSourceGCal, AccountID: &accountID}
+		if _, err := provider.Sync(ctx, state, nil); err != nil {
+			return fmt.Errorf("gcal sync: %w", err)
+		}
+		return nil
+	}
+
+	// Cap: one Sync per past-event page, plus two — one for the trailing partial
+	// page and one of slack, so an off-by-one in the provider's page accounting
+	// surfaces as a completed batch rather than a spurious failure.
+	derivedCap := (len(items)+gcalPastEventPageSize-1)/gcalPastEventPageSize + 2
+	syncCalls, driveErr := driveUntilCount(ctx, int64(len(items)), gcalMaxSyncs(derivedCap), drive, count)
+	res.SyncCalls = syncCalls
+	if driveErr != nil {
+		return res, h.drainPartial(ctx, source, "", contactIDs, driveErr)
+	}
+
+	if err := h.Settle(ctx, h.gcalBatchSettled(gcalIDs, pairContactIDs), ""); err != nil {
+		return res, h.drainPartial(ctx, source, "", contactIDs, err)
+	}
+	res.SettleCalls++
+
+	res.Interactions = h.trackBatchInteractions(ctx, contactIDs, before)
+	for _, contactID := range contactIDs {
+		if err := h.assertContactVenue(ctx, contactID, repository.InteractionSourceGCal); err != nil {
+			return res, err
+		}
+	}
+	return res, nil
+}
+
+// gcalBatchSettled is the batch Gate A: every one of these (event, contact)
+// pairs has a calendar_event carrying the contact in matched_contact_ids with
+// last_contacted_updated set.
+func (h *Harness) gcalBatchSettled(gcalEventIDs []string, contactIDs []uuid.UUID) gateA {
+	want := int64(len(gcalEventIDs))
+	return func(ctx context.Context) (bool, error) {
+		n, err := h.support.CountMatchedCalendarEventsByGcalIDs(ctx, gcalEventIDs, contactIDs)
+		return n >= want, err
+	}
+}
+
+// gcalBatchGateKeys returns the batch's parallel (gcal event id, contact id)
+// gate arrays, in item order.
+func gcalBatchGateKeys(items []GCalBatchItem) ([]string, []uuid.UUID) {
+	gcalIDs := make([]string, 0, len(items))
+	contactIDs := make([]uuid.UUID, 0, len(items))
+	for _, it := range items {
+		gcalIDs = append(gcalIDs, it.Spec.GcalEventID)
+		contactIDs = append(contactIDs, it.ContactID)
+	}
+	return gcalIDs, contactIDs
+}
+
+// gcalBatchEntries projects the typed items into the source-neutral view. There
+// is no direction (a matched event is always mutual) and no PairKey; the
+// addressed identifier is the non-self attendee, the address that decides
+// whether the contact matches.
+func gcalBatchEntries(items []GCalBatchItem) []batchEntry {
+	out := make([]batchEntry, 0, len(items))
+	for _, it := range items {
+		out = append(out, batchEntry{
+			contactID:     it.ContactID,
+			identifier:    it.Spec.GcalEventID,
+			seeded:        it.Spec.Intent == factory.MatchSeeded,
+			addressed:     gcalSpecPeerAttendee(it.Spec),
+			addressedType: identity.IdentifierTypeEmail,
+		})
+	}
+	return out
+}
+
+// gcalSpecPeerAttendee returns the first non-self attendee address on an event
+// ("" if there is none).
+func gcalSpecPeerAttendee(spec factory.GCalEventSpec) string {
+	if spec.Event == nil {
+		return ""
+	}
+	for _, attendee := range spec.Event.Attendees {
+		if attendee == nil || attendee.Self {
+			continue
+		}
+		return attendee.Email
+	}
+	return ""
+}
+
+// gcalBatchAccount returns the single connected account the batch is driven
+// under; a mixed-account batch would sync the wrong account's calendar.
+func gcalBatchAccount(items []GCalBatchItem) (string, error) {
+	account := items[0].Spec.AccountID
+	for i, it := range items {
+		if it.Spec.AccountID != account {
+			return "", fmt.Errorf("gcal: item %d is on account %q but the batch is on %q: %w",
+				i, it.Spec.AccountID, account, ErrBatchMixedAccounts)
+		}
+	}
+	return account, nil
 }
