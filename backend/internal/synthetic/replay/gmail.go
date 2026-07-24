@@ -171,9 +171,9 @@ func (h *Harness) ReplayGmailBatch(ctx context.Context, items []GmailBatchItem) 
 }
 
 // gmailBatchSettled is the batch Gate A: every one of these external ids has an
-// interaction-linked comms_message row. COUNT(DISTINCT external_id) over the
-// passed ids cannot exceed the batch size, so >= is the equality the plan calls
-// for, stated in a form that cannot be tripped by a duplicate row.
+// interaction-linked comms_message row. The gate is an equality against the
+// batch size; COUNT(DISTINCT external_id) over the passed ids cannot exceed it,
+// so >= expresses the same condition in a form a duplicate row cannot trip.
 func (h *Harness) gmailBatchSettled(externalIDs []string) gateA {
 	want := int64(len(externalIDs))
 	return func(ctx context.Context) (bool, error) {
