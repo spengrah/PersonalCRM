@@ -273,8 +273,10 @@ behaviors:
     then:
       - every handler registered for each method's type runs (email fans out to calendar, gmail, and gchat backfills; telegram and phone link stranded telegram messages)
       - matched historical items are linked to the contact
-      - a handler failure fails the job and it is retried as a whole
-    provenance: [RematchService.Run, CalendarRematchHandler, GmailRematchHandler, UsernameRematchHandler]
+      - a genuine handler failure fails the job and it is retried as a whole
+      - a handler reporting that its own per-run scan budget ran out before finishing is a continue-later signal, not a failure - the job stays running and is rescheduled rather than consuming a retry attempt
+      - rescheduling is bounded - once a budget-exhausted job has been rescheduled up to its ceiling without finishing, it is failed and cancelled rather than retried forever
+    provenance: [RematchService.Run, CalendarRematchHandler, GmailRematchHandler, UsernameRematchHandler, service.ErrRematchBudgetExhausted, RematchDispatcherWorker.Work]
 
   - id: IMP-021
     title: Rematch jobs are pollable from the moment they are announced

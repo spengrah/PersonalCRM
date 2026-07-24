@@ -85,8 +85,11 @@ func (d *RematchDispatcher) HandleEvent(ctx context.Context, env *events.Envelop
 	}
 
 	if err := d.runner.Run(ctx, p.RematchJobID, p.ContactID, methods); err != nil {
-		// Run has already marked the in-memory job Failed. Propagate so
-		// River retries per MaxAttempts (3) from InsertOpts.
+		// Run has marked the in-memory job Failed for a genuine error, but
+		// deliberately leaves it Running for the continue-later sentinel
+		// (service.ErrRematchBudgetExhausted). Propagate either way: Work
+		// inspects the error and converts the sentinel into a snooze, while a
+		// genuine error is retried per MaxAttempts (3) from InsertOpts.
 		return fmt.Errorf("rematch run: %w", err)
 	}
 	return nil
