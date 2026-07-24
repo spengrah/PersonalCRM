@@ -921,10 +921,6 @@ func writeSeedSummary(w io.Writer, res synthetic.ProfileResult, partial bool) er
 func writeSeedTimings(w io.Writer, t synthetic.SeedTimings) error {
 	s := t.Settle
 	gateTotal := s.GateAWait + s.GateBWait + s.CaptureWait
-	inlineDen := s.GateACalls
-	if inlineDen == 0 {
-		inlineDen = 1 // avoid a bare 0/0; the numerator is 0 too, so the line still reads honestly
-	}
 	avgGateBPolls := 0.0
 	if s.Calls > 0 {
 		avgGateBPolls = float64(s.GateBPolls) / float64(s.Calls)
@@ -939,7 +935,7 @@ func writeSeedTimings(w io.Writer, t synthetic.SeedTimings) error {
 		formatSeedDuration(t.Total),
 		s.Calls,
 		formatSeedDuration(s.GateAWait), formatSeedDuration(s.GateBWait), formatSeedDuration(s.CaptureWait),
-		s.GateAInlineHits, inlineDen, s.GateBPolls, avgGateBPolls,
+		s.GateAInlineHits, s.GateACalls, s.GateBPolls, avgGateBPolls,
 		formatSeedDuration(t.Total-gateTotal),
 		len(t.Phases)); err != nil {
 		return fmt.Errorf("write seed timings: %w", err)

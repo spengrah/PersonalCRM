@@ -138,7 +138,9 @@ func TestWriteSeedSummaryZeroTimings(t *testing.T) {
 	out := buf.String()
 
 	require.Contains(t, out, "  duration:             0.00s")
-	require.Contains(t, out, "gate_a=inline-hits 0/1")
+	// 0/0, not a fudged 0/1: a run with no gate-A invocations had no denominator,
+	// and inventing one would misreport the rate the whole block exists to show.
+	require.Contains(t, out, "gate_a=inline-hits 0/0")
 	require.Contains(t, out, "gate_b=polls 0 (avg 0.0/call)")
 	require.Contains(t, out, "  phases (0):")
 }
