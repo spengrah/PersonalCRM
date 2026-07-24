@@ -267,11 +267,13 @@ func (h *Harness) driveGChatBuckets(
 		return syncCalls, nil
 	}
 
-	// Fallback drain over the full list, bounded. Two iterations of slack past the
-	// bucket count is enough for any residual the bucket pass left behind; more
-	// would just be a slower way to reach the same stall.
+	// Fallback drain over the full list, bounded. The slack is deliberately more
+	// than a residual needs: a shortfall that is genuinely converging should
+	// finish, and one that is not should be diagnosed as a STALL — which names
+	// the real cause — rather than as a cap hit, which is ambiguous between
+	// "needed one more pass" and "will never finish".
 	world.presentSpaces(world.spaceNames())
-	drainCalls, err := driveUntilCount(ctx, want, len(buckets)+2, sync, rowsPresent)
+	drainCalls, err := driveUntilCount(ctx, want, len(buckets)+gchatBatchDrainSlackSyncs, sync, rowsPresent)
 	syncCalls += drainCalls
 	return syncCalls, err
 }
@@ -386,8 +388,19 @@ func newGChatBatchWorld(items []GChatBatchItem) *gchatBatchWorld {
 	return w
 }
 
-// spaceNames returns the distinct space names in first-seen order.
-func (w *gchatBatchWorld) spaceNames() []string { return w.order }
+// spaceNames returns the CURRENT generation's distinct space names, in the
+// batch's first-seen order. Only these are worth presenting: a space with no
+// message in this generation would consume budget and yield nothing, and its
+// lastActiveTime would be undefined.
+func (w *gchatBatchWorld) spaceNames() []string {
+	out := make([]string, 0, len(w.order))
+	for _, name := range w.order {
+		if len(w.messages[name]) > 0 {
+			out = append(out, name)
+		}
+	}
+	return out
+}
 
 // setGeneration points the world at one generation's messages.
 func (w *gchatBatchWorld) setGeneration(items []GChatBatchItem) {

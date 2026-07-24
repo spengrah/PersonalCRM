@@ -119,6 +119,14 @@ const (
 	// resolve cap of 50 (every budget-consuming resolution decrements both). So
 	// the worst case for B spaces is 3B + 50 pages, and 3(16) + 50 = 98 ≤ 100.
 	gchatBatchDefaultSpacesPerSync = 16
+
+	// gchatBatchDrainSlackSyncs is how many extra Syncs the GChat adapter's
+	// fallback drain allows past the bucket count. It is generous on purpose: a
+	// residual that is genuinely converging should finish inside it, and one that
+	// is not should be reported as a STALL — no progress across an iteration,
+	// which names the real cause — rather than as a cap hit, which is ambiguous
+	// between "needed one more pass" and "will never finish".
+	gchatBatchDrainSlackSyncs = 8
 )
 
 // --- shared batch machinery -------------------------------------------------
