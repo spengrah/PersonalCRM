@@ -525,6 +525,10 @@
     "tags": ["@area:contacts", "@area:meetings"]
   },
   {
+    "pattern": "^backend/internal/consumer/rematch_dispatcher\\.go$",
+    "tags": ["@area:contacts", "@area:meetings"]
+  },
+  {
     "pattern": "^backend/internal/api/handlers/rematch\\.go$",
     "tags": ["@area:contacts", "@area:meetings"]
   },

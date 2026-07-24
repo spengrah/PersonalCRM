@@ -12,6 +12,7 @@ import (
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	syncpkg "personal-crm/backend/internal/sync"
 
 	"github.com/google/uuid"
@@ -650,7 +651,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 	budget := gchatMaxWindowsPerSync
 	for _, space := range spaces {
 		if budget <= 0 {
-			return counters.matched, fmt.Errorf("rematch scan budget exhausted before completing: retry to finish backfill")
+			return counters.matched, fmt.Errorf("before completing: %w", service.ErrRematchBudgetExhausted)
 		}
 		members, _, memberIncomplete, mErr := paginateMembers(ctx, fetcher, space.Name, &budget)
 		if mErr != nil {
@@ -659,7 +660,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 		if memberIncomplete {
 			// Budget ran out mid-membership → the scan is incomplete; fail so
 			// River retries the whole (idempotent) backfill.
-			return counters.matched, fmt.Errorf("rematch scan budget exhausted paging membership: retry to finish backfill")
+			return counters.matched, fmt.Errorf("paging membership: %w", service.ErrRematchBudgetExhausted)
 		}
 		// Co-member resolution uses the FULL knownMap (so a space qualifies when
 		// the target address is one of its members); row-writing uses scanMap.
@@ -684,7 +685,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 			return counters.matched, fmt.Errorf("resolve scanned member id: %w", sErr)
 		}
 		if status == deferredBudgetHit {
-			return counters.matched, fmt.Errorf("rematch scan budget exhausted resolving member id: retry to finish backfill")
+			return counters.matched, fmt.Errorf("resolving member id: %w", service.ErrRematchBudgetExhausted)
 		}
 		idIsMember := false
 		if _, isMe := meIDs[userName]; status == resolvedKnownID && !isMe {
@@ -715,7 +716,7 @@ func (p *GChatSyncProvider) ScanIdentifier(
 		if !proven {
 			// Budget ran out mid-window → the scan is incomplete; fail so River
 			// retries the whole (idempotent) backfill rather than dropping history.
-			return counters.matched, fmt.Errorf("rematch scan budget exhausted mid-window: retry to finish backfill")
+			return counters.matched, fmt.Errorf("mid-window: %w", service.ErrRematchBudgetExhausted)
 		}
 	}
 	return counters.matched, nil

@@ -4,22 +4,162 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
 )
 
+// envelopeBus is an eventBusTx stub whose GetEvent returns a preconfigured
+// envelope, used to drive RematchDispatcherWorker.Work in unit tests.
+type envelopeBus struct {
+	env *events.Envelope
+	err error
+}
+
+func (b *envelopeBus) PublishTx(context.Context, pgx.Tx, *events.Envelope) error { return nil }
+
+func (b *envelopeBus) GetEvent(context.Context, uuid.UUID) (*events.Envelope, error) {
+	return b.env, b.err
+}
+
+func newWorkerForRunner(t *testing.T, runnerErr error) (*RematchDispatcherWorker, *river.Job[consumerjobs.RematchDispatcherJobArgs]) {
+	t.Helper()
+	env := validEnvelope(t, uuid.New(), uuid.New(), []events.ContactMethodRef{{Type: "email", Value: "a@b.c"}})
+	worker := NewRematchDispatcherWorker(
+		&envelopeBus{env: env},
+		nil, // pool is unused by Work
+		NewRematchDispatcher(&stubRunner{err: runnerErr}),
+	)
+	job := &river.Job[consumerjobs.RematchDispatcherJobArgs]{
+		JobRow: &rivertype.JobRow{Metadata: []byte(`{}`)},
+		Args:   consumerjobs.RematchDispatcherJobArgs{EventID: env.ID, RematchJobID: uuid.New()},
+	}
+	return worker, job
+}
+
+// TestRematchDispatcherWorker_Work_BudgetExhausted_Snoozes proves that when the
+// rematch runner reports budget exhaustion (the continue-later sentinel), Work
+// reschedules the job via JobSnooze instead of returning a terminal error that
+// would burn the job's MaxAttempts and discard the backfill. The error is
+// wrapped as gchatRematchBase.rematch wraps it (per-account %w inside
+// errors.Join) and driven through the real HandleEvent wrap ("rematch run:
+// %w"), so this exercises Work's errors.Is detection across the Join +
+// HandleEvent layers. The RematchService.Run layer is stubbed here (stubRunner
+// replaces it); its behavior on the sentinel is covered by
+// service.TestRun_BudgetExhausted_KeepsRunning.
+func TestRematchDispatcherWorker_Work_BudgetExhausted_Snoozes(t *testing.T) {
+	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", service.ErrRematchBudgetExhausted))
+	worker, job := newWorkerForRunner(t, runnerErr)
+
+	err := worker.Work(context.Background(), job)
+
+	var snooze *river.JobSnoozeError
+	require.ErrorAs(t, err, &snooze, "budget exhaustion must reschedule via JobSnooze, not discard")
+	require.Positive(t, snooze.Duration, "snooze must use a non-zero backoff")
+	require.NotErrorIs(t, err, service.ErrRematchBudgetExhausted,
+		"the returned reschedule must not carry the sentinel as a terminal error")
+}
+
+// TestRematchDispatcherWorker_Work_GenuineError_Propagates proves a non-budget
+// failure still propagates as a terminal error so river retries and eventually
+// discards it per MaxAttempts — budget-exhaustion handling must not swallow
+// real failures. The error is wrapped as production wraps it (per-account %w
+// inside errors.Join).
+func TestRematchDispatcherWorker_Work_GenuineError_Propagates(t *testing.T) {
+	sentinel := errors.New("gchat api exploded")
+	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", sentinel))
+	worker, job := newWorkerForRunner(t, runnerErr)
+
+	err := worker.Work(context.Background(), job)
+
+	require.ErrorIs(t, err, sentinel, "genuine errors must propagate so river retries/discards normally")
+	var snooze *river.JobSnoozeError
+	require.NotErrorAs(t, err, &snooze, "genuine errors must not be rescheduled as a snooze")
+}
+
+// TestRematchDispatcherWorker_Work_MixedError_Snoozes locks the documented
+// self-resolving tradeoff for the multi-account fan-out: when one account
+// budget-exhausts and another returns a genuine error, rematch returns an
+// errors.Join of both, and Work snoozes (budget-exhaustion is present). Once the
+// budget stops exhausting on a later run, only the genuine error remains and it
+// discards normally. Guarding this here means a refactor that reordered the
+// checks (e.g. inspecting for a genuine error first) fails loudly instead of
+// silently discarding backfills mid-budget.
+func TestRematchDispatcherWorker_Work_MixedError_Snoozes(t *testing.T) {
+	runnerErr := errors.Join(
+		fmt.Errorf("account acct-1: %w", service.ErrRematchBudgetExhausted),
+		fmt.Errorf("account acct-2: %w", errors.New("oauth token revoked")),
+	)
+	worker, job := newWorkerForRunner(t, runnerErr)
+
+	err := worker.Work(context.Background(), job)
+
+	var snooze *river.JobSnoozeError
+	require.ErrorAs(t, err, &snooze,
+		"budget exhaustion co-occurring with a genuine error still snoozes (self-resolving tradeoff)")
+}
+
+// TestRematchDispatcherWorker_Work_BudgetExhausted_CeilingCancels proves the
+// snooze is bounded: the rematch scan restarts from the fixed onboarding floor
+// on every attempt (nothing persists progress), so an account whose history
+// exceeds the per-run page budget exhausts DETERMINISTICALLY — unlimited
+// snoozing would rescan the same pages every 5 minutes forever. At the ceiling
+// (river's metadata "snoozes" counter) Work must (a) mark the in-memory job
+// failed via the runner so the frontend watcher sees a terminal state instead
+// of polling forever, and (b) cancel the River job (JobCancel — immediately
+// terminal, no further budget-burning retry attempts).
+func TestRematchDispatcherWorker_Work_BudgetExhausted_CeilingCancels(t *testing.T) {
+	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", service.ErrRematchBudgetExhausted))
+	worker, job := newWorkerForRunner(t, runnerErr)
+	job.Metadata = fmt.Appendf(nil, `{"snoozes": %d}`, rematchBudgetSnoozeCeiling)
+
+	err := worker.Work(context.Background(), job)
+
+	var snooze *river.JobSnoozeError
+	require.False(t, errors.As(err, &snooze), "at the ceiling Work must stop snoozing")
+	var cancel *river.JobCancelError
+	require.ErrorAs(t, err, &cancel, "at the ceiling Work must cancel the job (terminal, no retries)")
+
+	runner := worker.dispatcher.runner.(*stubRunner)
+	require.Equal(t, []uuid.UUID{job.Args.RematchJobID}, runner.failedJobIDs(),
+		"giving up must mark the in-memory rematch job failed so the frontend watcher terminates")
+}
+
+// TestRematchDispatcherWorker_Work_BudgetExhausted_BelowCeiling_Snoozes pins the
+// boundary: one snooze below the ceiling still reschedules (the give-up branch
+// must not fire early).
+func TestRematchDispatcherWorker_Work_BudgetExhausted_BelowCeiling_Snoozes(t *testing.T) {
+	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", service.ErrRematchBudgetExhausted))
+	worker, job := newWorkerForRunner(t, runnerErr)
+	job.Metadata = fmt.Appendf(nil, `{"snoozes": %d}`, rematchBudgetSnoozeCeiling-1)
+
+	err := worker.Work(context.Background(), job)
+
+	var snooze *river.JobSnoozeError
+	require.ErrorAs(t, err, &snooze, "below the ceiling Work must keep snoozing")
+
+	runner := worker.dispatcher.runner.(*stubRunner)
+	require.Empty(t, runner.failedJobIDs(), "below the ceiling the in-memory job must stay untouched")
+}
+
 // stubRunner records Run invocations and returns a configurable error.
 type stubRunner struct {
-	mu    sync.Mutex
-	calls []stubRunCall
-	err   error
+	mu          sync.Mutex
+	calls       []stubRunCall
+	err         error
+	failedJobs  []uuid.UUID
+	failReasons []error
 }
 
 type stubRunCall struct {
@@ -39,6 +179,19 @@ func (s *stubRunner) callCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.calls)
+}
+
+func (s *stubRunner) FailJob(jobID uuid.UUID, reason error) {
+	s.mu.Lock()
+	s.failedJobs = append(s.failedJobs, jobID)
+	s.failReasons = append(s.failReasons, reason)
+	s.mu.Unlock()
+}
+
+func (s *stubRunner) failedJobIDs() []uuid.UUID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]uuid.UUID(nil), s.failedJobs...)
 }
 
 // validEnvelope builds a routable contact_methods.added envelope for tests.
