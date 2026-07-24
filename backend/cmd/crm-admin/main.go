@@ -948,7 +948,10 @@ func writeSeedTimings(w io.Writer, t synthetic.SeedTimings) error {
 		// A phase that seeds no source payloads prints `-`, so "none by design"
 		// reads differently from "expected payloads, got none".
 		payloads := "-"
-		if p.Payloads > 0 {
+		switch {
+		case p.Payloads == 1:
+			payloads = "1 payload"
+		case p.Payloads > 1:
 			payloads = fmt.Sprintf("%d payloads", p.Payloads)
 		}
 		if _, err := fmt.Fprintf(w, "    %-26s %9s   %s\n",

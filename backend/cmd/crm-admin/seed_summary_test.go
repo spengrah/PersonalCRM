@@ -14,11 +14,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// timingFixture is a ProfileResult carrying a representative timing block: two
-// completed phases (one with payloads, one without) and settle accounting whose
-// numbers are chosen so every derived figure in the summary is distinguishable
-// from every other — an arithmetic slip in the rendering cannot coincidentally
-// print the right string.
+// timingFixture is a ProfileResult carrying a representative timing block:
+// completed phases covering all three payload renderings (none, one, many) and
+// settle accounting whose numbers are chosen so every derived figure in the
+// summary is distinguishable from every other — an arithmetic slip in the
+// rendering cannot coincidentally print the right string.
 func timingFixture() synthetic.ProfileResult {
 	return synthetic.ProfileResult{
 		Profile:   synthetic.ProfileProdShaped,
@@ -29,6 +29,7 @@ func timingFixture() synthetic.ProfileResult {
 			Total: 100 * time.Second,
 			Phases: []synthetic.PhaseTiming{
 				{Name: "catalog-contacts", Duration: 9500 * time.Millisecond, Payloads: 0},
+				{Name: "follow-up-loop", Duration: 1500 * time.Millisecond, Payloads: 1},
 				{Name: "per-source-settled", Duration: 48 * time.Second, Payloads: 60},
 			},
 			Settle: replay.SettleTimings{
@@ -70,11 +71,14 @@ func TestWriteSeedSummaryRendersEveryPhaseWithPayloadVolume(t *testing.T) {
 	require.NoError(t, writeSeedSummary(&buf, timingFixture(), false))
 	out := buf.String()
 
-	require.Contains(t, out, "  phases (2):")
+	require.Contains(t, out, "  phases (3):")
 	// A phase with no source payloads prints `-`, so "none by design" reads
 	// differently from "expected payloads, got none".
 	require.Regexp(t, `\n    catalog-contacts\s+9\.50s\s+-\n`, out)
 	require.Regexp(t, `\n    per-source-settled\s+48\.00s\s+60 payloads\n`, out)
+	// Singular for one — a "1 payloads" row in a summary a human reads once per
+	// reseed is the kind of thing that erodes trust in the numbers beside it.
+	require.Regexp(t, `\n    follow-up-loop\s+1\.50s\s+1 payload\n`, out)
 }
 
 func TestWriteSeedSummaryRendersPartialFailure(t *testing.T) {
@@ -82,17 +86,17 @@ func TestWriteSeedSummaryRendersPartialFailure(t *testing.T) {
 	// A run that died mid-block: the phases before it completed, the failing one
 	// is named, and the counts are whatever had accumulated.
 	res.Timings.Current = "per-source-settled"
-	res.Timings.Phases = res.Timings.Phases[:1]
+	res.Timings.Phases = res.Timings.Phases[:2]
 
 	var buf bytes.Buffer
 	require.NoError(t, writeSeedSummary(&buf, res, true))
 	out := buf.String()
 
 	require.Contains(t, out, `(PARTIAL — run failed during phase "per-source-settled")`)
-	require.Contains(t, out, "  phases (1):")
+	require.Contains(t, out, "  phases (2):")
 	// The failing phase is NAMED in the header but must not appear as a completed
 	// row: the phase table is exactly the blocks that finished.
-	require.Equal(t, []string{"catalog-contacts"}, phaseTableNames(out))
+	require.Equal(t, []string{"catalog-contacts", "follow-up-loop"}, phaseTableNames(out))
 }
 
 // phaseTableNames extracts the phase rows (four-space-indented) from a rendered
