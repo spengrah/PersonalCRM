@@ -17,6 +17,7 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/synthetic/replay"
 	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
@@ -826,6 +827,137 @@ func assertMessageDirectionCoverage(t *testing.T, ctx context.Context, support *
 	require.True(t, ts.LastContacted.Equal(*ts.LastResponseAt), "mutual last_contacted == last_response_at")
 }
 
+// assertArchetypeCohorts is the archetype coverage gate both catalog profiles
+// run: the assignment the seed applied must be the one the pure function
+// derives, the cohorts the ladder promises must exist, their samples must
+// actually DIFFER, and the two archetype counters must show the collapse rather
+// than agree.
+//
+// The cohort and multi-sample floors are gated by catalog size, and the two
+// thresholds are deliberately different. Per-archetype PRESENCE is asserted from
+// n >= 12, where the ladder switches to the full assignment. The >=2-samples
+// floor is asserted from n >= 13, and the derivation is arithmetic: the no-method
+// slot is structurally history-free whatever archetype it is given, leaving n - 1
+// usable slots, and six history archetypes at two samples each need twelve of
+// them. At n = 12 exactly the floor is unsatisfiable over the frozen catalog, and
+// archetypes add history rather than contacts, so it cannot be fixed by seeding
+// another slot.
+func assertArchetypeCohorts(t *testing.T, ctx context.Context, h *synthetic.Harness, res synthetic.ProfileResult, n int) {
+	t.Helper()
+
+	samples := h.ArchetypeSamples()
+	require.Len(t, samples, n, "the archetype block records one sample per catalog slot, including the history-free ones")
+
+	cohorts := map[factory.Archetype][]replay.ArchetypeSample{}
+	totalExpected := 0
+	for i, sample := range samples {
+		require.Equal(t, i, sample.SlotIndex, "samples are recorded in frozen catalog order")
+		require.Equal(t, synthetic.ArchetypeForIndex(i, n), sample.Archetype,
+			"slot %d must carry the archetype the assignment independently derives", i)
+		cohorts[sample.Archetype] = append(cohorts[sample.Archetype], sample)
+		totalExpected += sample.ExpectedInteractions
+	}
+
+	// The collapse relation between the two counters, never an equality: a mail
+	// promotion pair lands one mutual row and a chat burst lands one session, so
+	// rows are strictly fewer than payloads wherever any history exists.
+	require.Equal(t, totalExpected, res.ArchetypeInteractions,
+		"the landed-row counter must equal the sum of the per-contact expectations")
+	if res.ArchetypePayloads > 0 {
+		require.Greater(t, res.ArchetypePayloads, res.ArchetypeInteractions,
+			"payloads must exceed landed rows — that difference IS the aggregation collapse")
+	}
+
+	if n < 12 {
+		return
+	}
+	for _, archetype := range []factory.Archetype{
+		factory.ArchetypeMutualRegular,
+		factory.ArchetypeMutualDrifting,
+		factory.ArchetypeDormant,
+		factory.ArchetypeOutboundHeavy,
+		factory.ArchetypeInboundOnly,
+		factory.ArchetypeBurstThenQuiet,
+		factory.ArchetypeNeverContacted,
+	} {
+		require.NotEmpty(t, cohorts[archetype], "n=%d: every archetype must have a cohort on the full assignment rung (%s)", n, archetype)
+	}
+
+	if n < 13 {
+		return
+	}
+	for archetype, cohort := range cohorts {
+		if archetype == factory.ArchetypeNeverContacted {
+			continue
+		}
+		require.GreaterOrEqual(t, len(cohort), 2, "n=%d: %s must carry >=2 samples", n, archetype)
+		// The distinguisher is the full per-contact occurred_at MULTISET, not a
+		// (row count, newest age) projection: two legitimately jittered samples
+		// collide on that projection often enough to be a designed-in flake.
+		distinct := map[string]bool{}
+		for _, sample := range cohort {
+			rows, err := h.InteractionRepo().ListContactInteractions(ctx, sample.ContactID, 500, 0)
+			require.NoError(t, err)
+			instants := make([]string, 0, len(rows))
+			for _, row := range rows {
+				instants = append(instants, row.OccurredAt.UTC().Format(time.RFC3339Nano))
+			}
+			sort.Strings(instants)
+			distinct[strings.Join(instants, "|")] = true
+		}
+		require.GreaterOrEqual(t, len(distinct), 2,
+			"n=%d: %s must carry >=2 samples with DIFFERENT interaction timelines — jitter has to be observable, not merely drawn", n, archetype)
+	}
+}
+
+// assertOverdueBand measures the overdue population from the DATABASE and holds
+// it against the assignment's prediction, the absolute ceiling, and the target
+// share of the live world.
+//
+// The measurement constructs PRODUCTION cadence durations explicitly and
+// evaluates them at the seeded world's own anchor. The suite runs under
+// CRM_ENV=test, where annual is two hours and every contact is trivially overdue,
+// so a count taken through the ambient config would be meaningless — and mutating
+// the variable would change cadence semantics for every concurrently-running
+// test.
+//
+// The prediction-versus-measurement equality is what keeps the assignment's
+// denominator MODEL honest: the model is never the assertion, the database is.
+func assertOverdueBand(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, h *synthetic.Harness, n int) {
+	t.Helper()
+
+	buckets, err := support.ListContactBucketsByNamePrefix(ctx, h.Generator().Prefix())
+	require.NoError(t, err)
+	anchor := h.Generator().Anchor()
+
+	overdue := 0
+	for _, b := range buckets {
+		if b.Cadence == nil || *b.Cadence == "" || b.CreatedAt == nil {
+			continue
+		}
+		if synthetic.OverdueAtProduction(*b.Cadence, b.LastContacted, *b.CreatedAt, anchor) {
+			overdue++
+		}
+	}
+
+	// The two pinned overdue fixtures sit outside the catalog and are always
+	// overdue, so the assignment's catalog prediction accounts for them separately.
+	const pinnedOverdue = 2
+	require.Equal(t, synthetic.PredictedCatalogOverdue(n)+pinnedOverdue, overdue,
+		"the measured overdue population must equal what the assignment predicts — a drifting model has to fail here rather than be trusted")
+	require.LessOrEqual(t, overdue, synthetic.OverdueCeiling,
+		"the overdue population must stay under the ceiling; the overdue tours refuse to run above their own, higher, capture cap")
+
+	if n < 12 {
+		return
+	}
+	live := len(buckets)
+	require.Positive(t, live)
+	share := 100.0 * float64(overdue) / float64(live)
+	require.GreaterOrEqual(t, share, 20.0, "overdue share %.1f%% of %d live contacts is below the target band", share, live)
+	require.LessOrEqual(t, share, 27.0, "overdue share %.1f%% of %d live contacts is above the target band", share, live)
+}
+
 func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)
@@ -934,6 +1066,10 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	// Pinned tour fixtures: every state the QA tours depend on resolves to exactly
 	// one named contact carrying that state.
 	assertPinnedTourFixtures(t, ctx, support, repository.NewContactRepository(database.Queries), h, h.Generator().Prefix(), h.Generator().Anchor())
+	// Archetype cohorts: the catalog's interaction state now EMERGES from replayed
+	// source payloads, so assert the cohorts exist, vary, and collapse as intended.
+	assertArchetypeCohorts(t, ctx, h, res, params.Counts.SeededContacts)
+	assertOverdueBand(t, ctx, support, h, params.Counts.SeededContacts)
 }
 
 // assertNotesCoverage runs the F6 notes gate: the profile seeds a note on a
@@ -1376,6 +1512,37 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	tgDiscovery, err := support.CountUnmatchedTelegramDiscoveryInBand(ctx, h.Generator().PeerBandStart(), h.Generator().PeerBandEnd())
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, tgDiscovery, int64(1), "≥1 unmatched telegram discovery candidate present")
+
+	// Archetype cohorts. At this catalog size (9) the ladder is on its RESERVED
+	// rung, so per-archetype presence is not asserted; what is asserted is that the
+	// assignment the seed applied is the one the pure function derives and that the
+	// two counters show the collapse.
+	assertArchetypeCohorts(t, ctx, h, res, params.Counts.SeededContacts)
+	assertOverdueBand(t, ctx, support, h, params.Counts.SeededContacts)
+
+	// The reserved rung's whole point: exactly one CONTACTED-AND-OVERDUE contact —
+	// a state the seed produces nowhere else — and it is the slot the assignment
+	// gave the drifting archetype to. Every other overdue contact in the world is
+	// never-connected, which is a different state and a different card.
+	anchor := h.Generator().Anchor()
+	var contactedOverdue []uuid.UUID
+	for _, b := range buckets {
+		if b.Cadence == nil || *b.Cadence == "" || b.CreatedAt == nil || b.LastContacted == nil {
+			continue
+		}
+		if synthetic.OverdueAtProduction(*b.Cadence, b.LastContacted, *b.CreatedAt, anchor) {
+			contactedOverdue = append(contactedOverdue, b.ID)
+		}
+	}
+	require.Len(t, contactedOverdue, 1, "the reserved rung supplies exactly one contacted-and-overdue contact")
+	var driftingID uuid.UUID
+	for _, sample := range h.ArchetypeSamples() {
+		if sample.Archetype == factory.ArchetypeMutualDrifting {
+			driftingID = sample.ContactID
+		}
+	}
+	require.Equal(t, driftingID, contactedOverdue[0],
+		"the contacted-and-overdue contact must be the slot the assignment gave mutual-drifting to")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)
