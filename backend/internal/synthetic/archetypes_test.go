@@ -393,17 +393,37 @@ func TestArchetypeAssignmentOverdueBand(t *testing.T) {
 		prodShapedLiveContacts = prodShapedCatalog + ProdShapedNonCatalogLiveContacts
 	)
 
+	// catalogNonCatalogLiveContacts is their midpoint under INTEGER division, which
+	// is the true midpoint only while the sum is even. An odd sum would round down
+	// by half a contact silently rather than fail, so the parity is asserted rather
+	// than assumed.
+	require.Zero(t, (DevNonCatalogLiveContacts+ProdShapedNonCatalogLiveContacts)%2,
+		"the two non-catalog cohorts must sum to an EVEN number, or catalogNonCatalogLiveContacts (integer division) is not their midpoint")
+	require.Equal(t, (DevNonCatalogLiveContacts+ProdShapedNonCatalogLiveContacts)/2, catalogNonCatalogLiveContacts,
+		"the budget's non-catalog model must stay the midpoint of the two profiles' cohorts")
+
 	// Note on what is deliberately NOT asserted here: "the endpoint-visible set is a
-	// subset of the recomputed set". At the MODEL level that is a tautology —
+	// subset of the recomputed set". A count-comparing version of it used to live
+	// here and was removed rather than moved, for three reasons that are worth
+	// stating so this does not read as coverage quietly dropped.
+	//
+	// First, it compared SIZES, not membership, so it could not catch the failure
+	// the property is about: a set with the wrong members but the right cardinality
+	// passed it. The real form needs the two id SETS, which only exist against a
+	// seeded database — that version now lives in assertOverdueBand as
+	// require.Subset, in the LONG_TESTS lane.
+	//
+	// Second, the models it compared are not left unguarded in PR CI: the exact
+	// totals and the three exact gap pins below run here, and between them they pin
+	// both models at every size that matters, which subsumes any inequality between
+	// them.
+	//
+	// Third, at the MODEL level the inequality is not falsifiable at all —
 	// archetypeLeavesSlotPersistedOverdue is DEFINED as a conjunction with
 	// archetypeLeavesSlotOverdue, so no (i, n, archetype) exists at which it could
-	// fail, and asserting it would be an inert guard dressed as a real one. The
-	// property is only falsifiable against DATA, where contact_by is a column
-	// written by the cadence engine rather than a term in an expression, and that is
-	// where it lives: assertOverdueBand's require.Subset over the two id sets. That
-	// puts it in the LONG_TESTS lane (pre-push and the nightly slow workflow), not
-	// PR CI — which is a real coverage difference, but the alternative is not a
-	// cheaper guard, it is a fake one.
+	// fail. That is a narrow claim about this specific expression, not a general
+	// licence: an assertion that merely happens to pass today is worth keeping, and
+	// this one is different only because its failure set is provably empty.
 	for n := 1; n <= 150; n++ {
 		total := PredictedCatalogOverdue(n) + PinnedOverdueFixtureCount
 		endpointTotal := PredictedCatalogOverduePersisted(n) + PinnedOverdueFixtureCount

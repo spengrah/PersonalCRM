@@ -1183,6 +1183,10 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 
 	params, err := synthetic.ProfileParams(synthetic.ProfileProdShaped)
 	require.NoError(t, err)
+	// Captured BEFORE the CI bounding below, so the live-population expectation can
+	// be derived from how far this test bounds the profile rather than restating a
+	// measured total. See the assertOverdueBand call at the end.
+	shippedSeededMerged := params.Counts.SeededMerged
 	params.Namespace = syntheticNS(t)
 	// Bound the prod-shaped volume for CI: the orchestration is the same at a
 	// smaller scale, and the coverage buckets each still get ≥1 representative.
@@ -1602,14 +1606,21 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// assignment the seed applied is the one the pure function derives and that the
 	// two counters show the collapse.
 	assertArchetypeCohorts(t, ctx, h, res, params.Counts.SeededContacts)
-	// This test bounds its volume knobs for CI (UnmatchedExternal, StrandedTelegram,
-	// StrandedMessages, UnmatchedCalendar above), which shrinks the non-catalog
-	// cohort below the shipped prod-shaped figure. So the number pinned here is the
-	// BOUNDED cohort, not synthetic.ProdShapedNonCatalogLiveContacts — pinning it
-	// anyway is what keeps the bounding itself from drifting unnoticed, since no
-	// lane measures the shipped prod-shaped world at all.
-	const prodShapedBoundedNonCatalogLive = 29
-	assertOverdueBand(t, ctx, support, h, params.Counts.SeededContacts, prodShapedBoundedNonCatalogLive)
+	// This test bounds its volume knobs for CI, so its non-catalog cohort is smaller
+	// than the shipped prod-shaped figure. Exactly ONE of those knobs moves a
+	// live-contact count: SeededMerged. Each merge pair creates two contacts and
+	// leaves one LIVE — the loser is tombstoned and the buckets query filters it —
+	// so bounding the pair count costs one live contact per pair dropped. (The other
+	// bounded knobs — UnmatchedExternal, StrandedTelegram, StrandedMessages,
+	// UnmatchedCalendar — replay MatchUnknown payloads and create no contact rows at
+	// all, so they cannot move this number in either direction.)
+	//
+	// DERIVED from the shipped constant and the override, not restated as a literal:
+	// a future change to either SeededMerged value moves this automatically, so the
+	// number and its explanation cannot come apart. That divergence is exactly how
+	// the previous version of this comment came to blame the wrong four knobs.
+	wantNonCatalogLive := synthetic.ProdShapedNonCatalogLiveContacts - (shippedSeededMerged - params.Counts.SeededMerged)
+	assertOverdueBand(t, ctx, support, h, params.Counts.SeededContacts, wantNonCatalogLive)
 
 	// The reserved rung's whole point: exactly one CONTACTED-AND-OVERDUE contact —
 	// a state the seed produces nowhere else — and it is the slot the assignment

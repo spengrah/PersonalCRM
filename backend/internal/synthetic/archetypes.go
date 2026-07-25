@@ -296,24 +296,36 @@ func archetypeScarcityOrder() []factory.Archetype {
 const OverdueCeiling = 45
 
 // DevNonCatalogLiveContacts / ProdShapedNonCatalogLiveContacts are how many LIVE
-// contacts each profile seeds OUTSIDE the catalog: the per-source showcase
-// contacts, the direction cohort, the follow-up contact and the pinned tour
-// fixtures. Together with the catalog size they give a profile's live population,
-// which is the denominator every overdue share is taken over.
+// contacts each profile seeds OUTSIDE the catalog. Together with the catalog size
+// they give a profile's live population, which is the denominator every overdue
+// share is taken over.
+//
+// The composition, which ADDS UP to both constants rather than gesturing at them:
+//
+//	5 × perSourceSettledCount   per-source settled showcase contacts (1 dev / 3 prod-shaped)
+//	  + 4                       message-direction cohort (3 outbound-only + 1 telegram mutual)
+//	  + 1                       follow-up-loop contact
+//	  + 8                       pinned tour-fixture contacts
+//	  + SeededMerged            merge WINNERS — one live contact per pair, since the
+//	                            loser is tombstoned and the buckets query filters it
+//
+// dev: 5+4+1+8+1 = 19. prod-shaped: 15+4+1+8+3 = 31. The merge term is the one
+// that moved when the prod-shaped coverage test bounded its knobs, and leaving it
+// out of this list is how the number and its explanation came apart before.
 //
 // Exported so the coverage tests derive that denominator from one authority
-// instead of freezing a measured total. How firmly each is held differs, and the
-// difference is worth knowing:
+// instead of freezing a measured total. How firmly each is held differs:
 //
 //   - Dev is PINNED against the database. TestSyntheticProfile_DevCoversCatalog
 //     seeds the profile at its natural knobs, so assertOverdueBand asserts the
 //     measured non-catalog count equals this constant on every run.
-//   - Prod-shaped is a MODEL. It is corroborated by the deployed-staging
-//     measurement in gh #751 (181 live against a 150-slot catalog), but no
-//     executing lane pins it: the only prod-shaped coverage test bounds its
-//     volume knobs for CI, which shrinks the cohort to
-//     prodShapedBoundedNonCatalogLive. That bounded number IS pinned, so the
-//     bounding cannot drift unnoticed either.
+//   - Prod-shaped is a MODEL, corroborated by the deployed-staging measurement in
+//     gh #751 (181 live against a 150-slot catalog) but pinned by no executing
+//     lane: the only prod-shaped coverage test bounds its volume knobs for CI and
+//     never seeds n=150. What that lane DOES pin is its own bounded cohort, which
+//     it derives from this constant and its own SeededMerged override — so the
+//     merge knob cannot drift unnoticed. The other knobs it bounds seed no contact
+//     rows at all, so no live-contact assertion moves with them either way.
 const (
 	DevNonCatalogLiveContacts        = 19
 	ProdShapedNonCatalogLiveContacts = 31
@@ -324,6 +336,11 @@ const (
 // profiles. DERIVED rather than restated, so the two cohorts above stay the
 // single authority. It is a TARGET-PICKING device inside the budget, never an
 // assertion: the coverage test measures the live population from the database.
+//
+// This is INTEGER division, so it is the true midpoint only while the two cohorts
+// sum to an even number — 19+31 = 50 today. A future cohort change making the sum
+// odd would silently round down by half a contact rather than fail, so the parity
+// is asserted in TestArchetypeAssignmentOverdueBand instead of left to chance.
 const catalogNonCatalogLiveContacts = (DevNonCatalogLiveContacts + ProdShapedNonCatalogLiveContacts) / 2
 
 // overdueSharePercent is the percentage of the live population the budget lets
@@ -354,34 +371,38 @@ const overdueSharePercent = 23
 // non-catalog cohort can move by a couple of contacts without flaking a gate —
 // at prod-shaped one contact is 0.55% of the share.
 //
-// This is a COARSE SANITY BAND and nothing more. In particular it is NOT what
-// stops a gate from quietly reverting to recomputing overdue-ness: the recomputed
-// share at prod-shaped is 40/181 = 22.10% against a 22.0% ceiling — a tenth of a
-// point, under a fifth of one contact.
+// How much protection it gives against a gate quietly reverting to RECOMPUTING
+// overdue-ness is LANE-DEPENDENT, and the honest answer is per-lane rather than
+// one sentence:
 //
-// The ceiling COULD be lowered: the corridor between the persisted maximum
-// (21.11%, at n=71) and the recomputed minimum (22.10%) admits any value in
-// [21.12, 22.0), and 21.2 would buy 0.90 points against a revert. That is not
-// free, though — it is the same knife-edge pointed the other way, leaving only
-// 0.09 points of headroom above a legitimate persisted population. The corridor
-// is about one point wide in total, so every position in it trades anti-revert
-// margin against legitimate-variation margin, and there is no setting that has
-// both. 22.0 spends the corridor on variation headroom deliberately, because
-// legitimate variation is the thing this band exists to tolerate and the
-// anti-revert job belongs to an assertion that can do it properly.
+//   - dev (n=18), where the band branch executes: a revert measures 9/37 = 24.3%
+//     against this 22.0% ceiling and FAILS the band — 2.3 points of margin, with
+//     5.8 points still left above the legitimate 16.2% persisted share. It also
+//     fails the exact equality by three contacts. Two independent catches.
+//   - prod-shaped (n=9): the band branch is skipped (n < archetypeLadderFullAssignment)
+//     and the two models coincide, so NOTHING on that lane catches a revert. Pinned
+//     as an explicit zero in TestArchetypeAssignmentOverdueBand so it stays visible.
+//   - n=150, the shipped prod-shaped size: a revert would measure 40/181 = 22.10%
+//     against 22.0%, a margin of a tenth of a point — but no gate runs there.
 //
-// That assertion is the coverage gate's EXACT equality against
-// PredictedCatalogOverduePersisted. Its margin is the gap between the two models,
-// and the gap is SIZE-DEPENDENT: nine contacts at n=150, three at n=18, and ZERO
-// at n=9, where the two models coincide. Only the sizes a gate actually runs at
-// count, and that is n=18 (dev) and n=9 (prod-shaped, CI-bounded) — so the
-// enforced anti-revert margin is three contacts on the dev lane and nothing at
-// all on the prod-shaped one. n=9 is pinned as an explicit zero in
-// TestArchetypeAssignmentOverdueBand so the blind spot stays visible.
+// So the band is not decorative; it is one of two catches at the only scope that
+// runs it. The reason not to LEAN on it is the n=150 row: at that size the margin
+// is a fifth of a contact, and any claim resting on it would be an overclaim.
 //
-// Read the band as "the population still looks roughly like the one we
-// designed", and read the dev lane's equality as the assertion that holds the
-// line.
+// The corridor is worth recording because it is where a "just tighten the
+// ceiling" instinct goes wrong. Across the modelled sweep the persisted share
+// tops out at 21.11% (n=71) and the recomputed share bottoms at 22.10%, so the
+// ceiling can be anything in [21.12, 22.0) — 0.99 points wide. Moving to 21.2
+// would buy 0.90 points against a revert at n=150 while leaving 0.09 points above
+// a legitimate persisted population, which is the same knife-edge pointed the
+// other way. That tension is a property of the SWEEP, not of any executing lane:
+// at dev both margins are comfortable at 22.0 (2.3 and 5.8). The ceiling stays at
+// 22.0 because it buys variation headroom where the gate actually runs, and the
+// n=150 margin it gives up is one no gate was collecting.
+//
+// The guard that does not depend on any of this is the coverage gate's EXACT
+// equality against PredictedCatalogOverduePersisted, whose margin is the gap
+// between the two models: three contacts at n=18, ZERO at n=9, nine at n=150.
 const (
 	OverdueBandFloorPercent   = 12.0
 	OverdueBandCeilingPercent = 22.0
