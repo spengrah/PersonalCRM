@@ -960,7 +960,13 @@ func assertArchetypeSettleBudget(t *testing.T, res synthetic.ProfileResult) {
 //
 // The prediction-versus-measurement equalities are what keep the assignment's
 // MODELS honest: a model is never the assertion, the database is.
-func assertOverdueBand(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, h *synthetic.Harness, n int) {
+//
+// wantNonCatalogLive is how many LIVE contacts the profile seeds outside the
+// catalog, so the live denominator is pinned rather than merely read. Without it
+// the share assertions accept any denominator that keeps the ratio in band — at
+// dev that is a 23-contact window — and a profile knob change would move the world
+// without moving a single assertion.
+func assertOverdueBand(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, h *synthetic.Harness, n, wantNonCatalogLive int) {
 	t.Helper()
 
 	// Precondition, not an assumption. The persisted contact_by column holds
@@ -975,6 +981,10 @@ func assertOverdueBand(t *testing.T, ctx context.Context, support *repository.Sy
 	buckets, err := support.ListContactBucketsByNamePrefix(ctx, h.Generator().Prefix())
 	require.NoError(t, err)
 	anchor := h.Generator().Anchor()
+
+	require.Equal(t, n+wantNonCatalogLive, len(buckets),
+		"the live population must be the catalog (%d) plus this profile's non-catalog cohort (%d) — the overdue share's denominator is pinned, not merely read, so a knob change that moves the world cannot leave every assertion still passing",
+		n, wantNonCatalogLive)
 
 	recomputedIDs := make([]uuid.UUID, 0, len(buckets))
 	for _, b := range buckets {
@@ -1014,7 +1024,7 @@ func assertOverdueBand(t *testing.T, ctx context.Context, support *repository.Sy
 	require.Equal(t, synthetic.PredictedCatalogOverdue(n)+synthetic.PinnedOverdueFixtureCount, overdue,
 		"the recomputed overdue population must equal what the assignment predicts — a drifting model has to fail here rather than be trusted")
 	require.Equal(t, synthetic.PredictedCatalogOverduePersisted(n)+synthetic.PinnedOverdueFixtureCount, endpointOverdue,
-		"the ENDPOINT-visible overdue population must equal what the assignment predicts for the persisted contact_by column — this is the assertion gh #751 was missing, and the one a silent revert to recompute-based measurement fails by nine contacts at prod-shaped")
+		"the ENDPOINT-visible overdue population must equal what the assignment predicts for the persisted contact_by column — this is the assertion gh #751 was missing. Its anti-revert margin is the gap between the two models AT THIS n: three contacts at n=18, and ZERO at n=9, where they coincide and this assertion cannot detect a revert at all (pinned in TestArchetypeAssignmentOverdueBand)")
 	require.LessOrEqual(t, overdue, synthetic.OverdueCeiling,
 		"the overdue population must stay under the ceiling; the overdue tours refuse to run above their own, higher, capture cap")
 
@@ -1141,7 +1151,9 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	// Archetype cohorts: the catalog's interaction state now EMERGES from replayed
 	// source payloads, so assert the cohorts exist, vary, and collapse as intended.
 	assertArchetypeCohorts(t, ctx, h, res, params.Counts.SeededContacts)
-	assertOverdueBand(t, ctx, support, h, params.Counts.SeededContacts)
+	// Dev seeds at its natural knobs, so its non-catalog cohort is the shipped one
+	// and this call PINS synthetic.DevNonCatalogLiveContacts against the database.
+	assertOverdueBand(t, ctx, support, h, params.Counts.SeededContacts, synthetic.DevNonCatalogLiveContacts)
 }
 
 // assertNotesCoverage runs the F6 notes gate: the profile seeds a note on a
@@ -1590,7 +1602,14 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	// assignment the seed applied is the one the pure function derives and that the
 	// two counters show the collapse.
 	assertArchetypeCohorts(t, ctx, h, res, params.Counts.SeededContacts)
-	assertOverdueBand(t, ctx, support, h, params.Counts.SeededContacts)
+	// This test bounds its volume knobs for CI (UnmatchedExternal, StrandedTelegram,
+	// StrandedMessages, UnmatchedCalendar above), which shrinks the non-catalog
+	// cohort below the shipped prod-shaped figure. So the number pinned here is the
+	// BOUNDED cohort, not synthetic.ProdShapedNonCatalogLiveContacts — pinning it
+	// anyway is what keeps the bounding itself from drifting unnoticed, since no
+	// lane measures the shipped prod-shaped world at all.
+	const prodShapedBoundedNonCatalogLive = 29
+	assertOverdueBand(t, ctx, support, h, params.Counts.SeededContacts, prodShapedBoundedNonCatalogLive)
 
 	// The reserved rung's whole point: exactly one CONTACTED-AND-OVERDUE contact —
 	// a state the seed produces nowhere else — and it is the slot the assignment

@@ -377,16 +377,33 @@ func TestArchetypeAssignmentIsDeterministic(t *testing.T) {
 // a margin gets overstated. Neither model is ever an assertion about the world:
 // the coverage test counts live and overdue contacts from the database.
 func TestArchetypeAssignmentOverdueBand(t *testing.T) {
-	const devKnobNonCatalogLive = 19
+	const devKnobNonCatalogLive = DevNonCatalogLiveContacts
 
-	// The live contact counts the two shipped worlds actually carry, MEASURED in
-	// the coverage tests (dev) and on deployed staging (prod-shaped) — not
-	// n + a modelled non-catalog cohort.
+	// The live populations the two shipped worlds carry, DERIVED from the
+	// per-profile non-catalog cohorts rather than frozen as measured totals — a
+	// literal 37 or 181 here would go stale silently the moment a profile knob
+	// changed. Dev's cohort is pinned against the database by assertOverdueBand;
+	// prod-shaped's is a model corroborated by the staging measurement in gh #751.
+	// See the constants' own doc for which is which and why.
 	const (
-		devLiveContacts        = 37
-		prodShapedLiveContacts = 181
+		devCatalog        = 18
+		prodShapedCatalog = 150
+
+		devLiveContacts        = devCatalog + DevNonCatalogLiveContacts
+		prodShapedLiveContacts = prodShapedCatalog + ProdShapedNonCatalogLiveContacts
 	)
 
+	// Note on what is deliberately NOT asserted here: "the endpoint-visible set is a
+	// subset of the recomputed set". At the MODEL level that is a tautology —
+	// archetypeLeavesSlotPersistedOverdue is DEFINED as a conjunction with
+	// archetypeLeavesSlotOverdue, so no (i, n, archetype) exists at which it could
+	// fail, and asserting it would be an inert guard dressed as a real one. The
+	// property is only falsifiable against DATA, where contact_by is a column
+	// written by the cadence engine rather than a term in an expression, and that is
+	// where it lives: assertOverdueBand's require.Subset over the two id sets. That
+	// puts it in the LONG_TESTS lane (pre-push and the nightly slow workflow), not
+	// PR CI — which is a real coverage difference, but the alternative is not a
+	// cheaper guard, it is a fake one.
 	for n := 1; n <= 150; n++ {
 		total := PredictedCatalogOverdue(n) + PinnedOverdueFixtureCount
 		endpointTotal := PredictedCatalogOverduePersisted(n) + PinnedOverdueFixtureCount
@@ -407,16 +424,35 @@ func TestArchetypeAssignmentOverdueBand(t *testing.T) {
 			"n=%d: endpoint-visible overdue share %.1f%% is above the product band", n, endpointShare)
 	}
 
-	// What actually stops a silent revert to recompute-based measurement is the
-	// coverage gate's EXACT equality against PredictedCatalogOverduePersisted, and
-	// what makes that guard real is the size of the gap it would be off by. Pin the
-	// gap, not the band: the band's ceiling clears the prod-shaped recomputed share
-	// by 0.10 percentage points (40/181 = 22.10% against a 22.0% ceiling — under a
-	// fifth of one contact), which is far too little to carry an anti-revert claim.
-	for _, n := range []int{18, 150} {
-		gap := PredictedCatalogOverdue(n) - PredictedCatalogOverduePersisted(n)
-		require.GreaterOrEqual(t, gap, 3,
-			"n=%d: the recomputed and endpoint-visible models must differ by enough contacts (%d) that measuring the wrong one fails the coverage gate's exact equality by an unmistakable margin", n, gap)
+	// What stops a silent revert to recompute-based measurement is the coverage
+	// gate's EXACT equality against PredictedCatalogOverduePersisted, and what makes
+	// that guard real is the GAP it would be off by. The band cannot do that job:
+	// its ceiling clears the prod-shaped recomputed share by 0.10 percentage points
+	// (40/181 = 22.10% against 22.0%), under a fifth of one contact.
+	//
+	// The gap is SIZE-DEPENDENT, and pinning it exactly — at the sizes that ship AND
+	// at the sizes gates actually run at — is the point of this block. Those are not
+	// the same set. assertOverdueBand has exactly two call sites, n=18 (dev) and n=9
+	// (prod-shaped, whose coverage test bounds its catalog for CI); n=150 ships but
+	// is executed by no gate. So the enforced anti-revert margin is three contacts on
+	// the dev lane, and n=9's ZERO is pinned deliberately: at that size the two
+	// models coincide, so on the prod-shaped lane a revert to recompute-based
+	// measurement passes the equality, passes the subset check on identical sets, and
+	// skips the band branch (n < archetypeLadderFullAssignment) entirely. That lane
+	// has no anti-revert power at all. Pinning the zero keeps the blind spot an
+	// asserted fact rather than something a later reader has to rediscover.
+	for _, c := range []struct {
+		n       int
+		wantGap int
+		note    string
+	}{
+		{n: 9, wantGap: 0, note: "prod-shaped coverage lane (CI-bounded catalog) — the models COINCIDE here, so this lane cannot detect a revert"},
+		{n: 18, wantGap: 3, note: "dev coverage lane — the only executing gate with anti-revert power"},
+		{n: 150, wantGap: 9, note: "shipped prod-shaped size — no gate executes it; this is the number staging would have caught"},
+	} {
+		gap := PredictedCatalogOverdue(c.n) - PredictedCatalogOverduePersisted(c.n)
+		require.Equal(t, c.wantGap, gap,
+			"n=%d: the gap between the recomputed and endpoint-visible models is the margin a revert to the wrong measurement is caught by — %s", c.n, c.note)
 	}
 
 	// The shipping shares, against the REAL live denominators. These are the numbers

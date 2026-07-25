@@ -295,12 +295,36 @@ func archetypeScarcityOrder() []factory.Archetype {
 // the two, and therefore the conservative side to assert from.
 const OverdueCeiling = 45
 
-// catalogNonCatalogLiveContacts models the profile's non-catalog live contacts —
-// 19 at the dev knobs and 31 at prod-shaped's, so the midpoint is what one
-// formula has to pick when it must set a sensible target for both. It is a
-// TARGET-PICKING device inside the budget, never an assertion: the coverage test
-// measures the live population from the database.
-const catalogNonCatalogLiveContacts = 25
+// DevNonCatalogLiveContacts / ProdShapedNonCatalogLiveContacts are how many LIVE
+// contacts each profile seeds OUTSIDE the catalog: the per-source showcase
+// contacts, the direction cohort, the follow-up contact and the pinned tour
+// fixtures. Together with the catalog size they give a profile's live population,
+// which is the denominator every overdue share is taken over.
+//
+// Exported so the coverage tests derive that denominator from one authority
+// instead of freezing a measured total. How firmly each is held differs, and the
+// difference is worth knowing:
+//
+//   - Dev is PINNED against the database. TestSyntheticProfile_DevCoversCatalog
+//     seeds the profile at its natural knobs, so assertOverdueBand asserts the
+//     measured non-catalog count equals this constant on every run.
+//   - Prod-shaped is a MODEL. It is corroborated by the deployed-staging
+//     measurement in gh #751 (181 live against a 150-slot catalog), but no
+//     executing lane pins it: the only prod-shaped coverage test bounds its
+//     volume knobs for CI, which shrinks the cohort to
+//     prodShapedBoundedNonCatalogLive. That bounded number IS pinned, so the
+//     bounding cannot drift unnoticed either.
+const (
+	DevNonCatalogLiveContacts        = 19
+	ProdShapedNonCatalogLiveContacts = 31
+)
+
+// catalogNonCatalogLiveContacts is the midpoint of the two, which is what one
+// budget formula has to pick when it must set a sensible target for both
+// profiles. DERIVED rather than restated, so the two cohorts above stay the
+// single authority. It is a TARGET-PICKING device inside the budget, never an
+// assertion: the coverage test measures the live population from the database.
+const catalogNonCatalogLiveContacts = (DevNonCatalogLiveContacts + ProdShapedNonCatalogLiveContacts) / 2
 
 // overdueSharePercent is the percentage of the live population the budget lets
 // the assignment leave overdue. It bounds the RECOMPUTED quantity — the one
@@ -332,16 +356,32 @@ const overdueSharePercent = 23
 //
 // This is a COARSE SANITY BAND and nothing more. In particular it is NOT what
 // stops a gate from quietly reverting to recomputing overdue-ness: the recomputed
-// share at prod-shaped is 40/181 = 22.10% against a 22.0% ceiling, a margin of a
-// tenth of a point — under a fifth of one contact — and the band cannot be
-// tightened to buy more, because the persisted range tops out at 21.11% while the
-// recomputed range bottoms out at 22.10%. The ceiling is boxed in.
+// share at prod-shaped is 40/181 = 22.10% against a 22.0% ceiling — a tenth of a
+// point, under a fifth of one contact.
 //
-// The real anti-revert guard is the coverage gate's EXACT equality against
-// PredictedCatalogOverduePersisted, which a revert misses by nine contacts at
-// prod-shaped and three at dev — margins that are not close to anything. Read the
-// band as "the population still looks roughly like the one we designed", and read
-// the equality as the assertion that actually holds the line.
+// The ceiling COULD be lowered: the corridor between the persisted maximum
+// (21.11%, at n=71) and the recomputed minimum (22.10%) admits any value in
+// [21.12, 22.0), and 21.2 would buy 0.90 points against a revert. That is not
+// free, though — it is the same knife-edge pointed the other way, leaving only
+// 0.09 points of headroom above a legitimate persisted population. The corridor
+// is about one point wide in total, so every position in it trades anti-revert
+// margin against legitimate-variation margin, and there is no setting that has
+// both. 22.0 spends the corridor on variation headroom deliberately, because
+// legitimate variation is the thing this band exists to tolerate and the
+// anti-revert job belongs to an assertion that can do it properly.
+//
+// That assertion is the coverage gate's EXACT equality against
+// PredictedCatalogOverduePersisted. Its margin is the gap between the two models,
+// and the gap is SIZE-DEPENDENT: nine contacts at n=150, three at n=18, and ZERO
+// at n=9, where the two models coincide. Only the sizes a gate actually runs at
+// count, and that is n=18 (dev) and n=9 (prod-shaped, CI-bounded) — so the
+// enforced anti-revert margin is three contacts on the dev lane and nothing at
+// all on the prod-shaped one. n=9 is pinned as an explicit zero in
+// TestArchetypeAssignmentOverdueBand so the blind spot stays visible.
+//
+// Read the band as "the population still looks roughly like the one we
+// designed", and read the dev lane's equality as the assertion that holds the
+// line.
 const (
 	OverdueBandFloorPercent   = 12.0
 	OverdueBandCeilingPercent = 22.0
