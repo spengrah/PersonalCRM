@@ -191,11 +191,14 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   // Genuinely armed, unlike the CON-065 walk below: the capture above DRAINED
   // the response buffer, so the only list-path response left to satisfy this is
   // the detail page's own ids_only fetch (its sole /api/v1/contacts call).
-  // It is also load-bearing for the trap suite. This capture's only other gate
-  // is a static button, so this wait is what guarantees the ids_only response is
-  // RECORDED here — and the reorder_ids doctoring op (aimed at CON-038[1]) reads
-  // that array and silently no-ops when it is absent, so dropping this wait would
-  // leave a trap built on it unable to fail.
+  // Keep it even though NO shipped trap depends on it today: a FUTURE trap over
+  // CON-038[1] would, because the reorder_ids doctoring op reads this response's
+  // ids array and silently no-ops when it is absent — it would be a trap that
+  // cannot fail. The Edit button below is no substitute: it gates on the CONTACT
+  // fetch (the page renders a skeleton until that lands, and the line above
+  // already awaited it), so it says nothing about whether the ids_only response
+  // has arrived. This wait is the only thing that guarantees the array is
+  // RECORDED in this capture.
   await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH) // ids_only nav order
   await page.getByRole('button', { name: 'Edit' }).waitFor({ state: 'visible' })
   await tour.capture(page, {
@@ -246,10 +249,12 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   // the pager mid-load as "No contacts" — contradictory evidence (see the
   // post-nav capture-race gotcha in core.md).
   // The regex is ANCHORED precisely because this is the sole gate: unanchored,
-  // seeded note/task prose ("Discussed 2 of 3 action items") matches it too, and
-  // a detail page renders plenty of it. Measured against staging with such a
-  // decoy in the DOM: unanchored matches 2 elements, anchored matches 1 — the
-  // pager span, whose whole text is "N of M".
+  // prose of the form "Discussed 2 of 3 action items" matches it too, and a
+  // detail page renders plenty of note/task text. Nothing in the seed renders
+  // such a string today — the unanchored form does match exactly 1 element on a
+  // real detail page — so this was measured against staging by INJECTING a decoy
+  // into the DOM: with it present, unanchored matches 2 and anchored matches 1,
+  // the pager span, whose whole text is "N of M".
   await page
     .getByText(/^\d+ of \d+$/)
     .first()
