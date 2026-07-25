@@ -9,6 +9,7 @@
 // loading / error / caught-up overdue states deterministic (no seed luck).
 
 import { test } from './support/tour-fixtures'
+import { assertOverdueFitsCapture, OVERDUE_CAPTURE_CAP } from './support/pinned-fixtures'
 import type { Page } from '@playwright/test'
 
 interface OverdueRow {
@@ -119,11 +120,18 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   })
 
   // --- Reserve the overdue set (by API) for CAD-026/027 tier + order evidence ---
+  //
+  // Every capture from here on carries OVERDUE_CAPTURE_CAP: the overdue array
+  // reaches a capture either as a `fields` value or as the drained body of an
+  // overdue GET, and which capture drains a given response depends on where the
+  // fetch lands in the buffer — so the cap is set for the whole region rather than
+  // reasoned about per call site.
   const overdueResp = await tour.apiCtx.get('/api/v1/contacts/overdue')
   const overdueRows = ((await overdueResp.json())?.data ?? []) as OverdueRow[]
   if (overdueRows.length === 0) {
     throw new Error('dashboard tour: no overdue contacts in the seed — cannot tour CAD-026/027/028')
   }
+  assertOverdueFitsCapture(overdueRows.length, 'dashboard')
   const lastContactedById = new Map<string, string | null>(
     overdueRows.map(r => [r.id, r.last_contacted ?? null])
   )
@@ -136,6 +144,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
     .first()
     .waitFor({ state: 'visible' })
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['CAD-026', 'CAD-027'],
     note: 'overdue list, urgency (default) sort: cards + count + tiers',
     pair: { id: 'sort', role: 'sort-urgency' },
@@ -145,6 +154,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   // --- CAD-027[1]: name order ---
   await page.getByRole('button', { name: 'Name' }).click()
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['CAD-027'],
     note: 'overdue list, name sort (alphabetical)',
     pair: { id: 'sort', role: 'sort-name' },
@@ -154,6 +164,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   // --- CAD-027[2]: last-contacted order ---
   await page.getByRole('button', { name: 'Last Contacted' }).click()
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['CAD-027'],
     note: 'overdue list, recency sort (longest wait first; never-connected ranked by added date)',
     pair: { id: 'sort', role: 'sort-last-contacted' },
@@ -163,6 +174,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   // --- CAD-028 / DSH-005: mark-as-contacted on the dashboard (mutating) ---
   await page.getByRole('button', { name: 'Most Urgent' }).click() // back to default
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['CAD-028', 'DSH-005'],
     note: 'before mark-as-contacted (dashboard overdue list)',
     pair: { id: 'mark', role: 'mark-before' },
@@ -171,6 +183,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   await tour.waitForApi(page, 'POST', /\/contacts\/[0-9a-f-]{36}\/interactions$/)
   await tour.waitForApi(page, 'GET', OVERDUE_PATH) // the invalidation refetch
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['CAD-028', 'DSH-005'],
     note: 'after mark-as-contacted: mutual interaction + overdue refetch (no reload)',
     pair: { id: 'mark', role: 'mark-after' },
@@ -186,6 +199,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   await page.locator('.max-w-7xl [class*="animate-pulse"]').first().waitFor({ state: 'visible' })
   const overdueLoadingSkeletons = await page.locator('.max-w-7xl [class*="animate-pulse"]').count()
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['DSH-004'],
     note: 'overdue loading state (route held): placeholder shown, not empty/caught-up',
     pair: { id: 'dsh004', role: 'loading' },
@@ -204,6 +218,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   await page.goto('/dashboard')
   await page.getByText('Error loading overdue contacts').waitFor({ state: 'visible' })
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['DSH-004'],
     note: 'overdue error state (500): error carries the reason, not caught-up',
     pair: { id: 'dsh004', role: 'error' },
@@ -220,6 +235,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   await page.goto('/dashboard')
   await page.getByRole('heading', { name: /All caught up/ }).waitFor({ state: 'visible' })
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['DSH-003', 'CAD-026'],
     note: 'caught-up empty state: add + view-list affordances',
     pair: { id: 'caughtup', role: 'caught-up' },

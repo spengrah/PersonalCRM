@@ -9,7 +9,9 @@
 //
 // Fixtures that a tour never resolves (the designated overdue contacts) are
 // deliberately absent: those are population guarantees, and the tours that consume
-// them select positionally because the selection is the behavior under test.
+// them select positionally because the selection is the behavior under test. What
+// those tours DO need from here is the capture cap below, which is what carries a
+// population guarantee through to the judge intact.
 
 import type { APIRequestContext } from '@playwright/test'
 
@@ -22,6 +24,29 @@ export const FIXTURE_MERGE_SOURCE = 'fxmergesource'
 export const FIXTURE_SEARCH = 'fxsearchsubject'
 export const FIXTURE_DELETE = 'fxdeletevictim'
 export const FIXTURE_BIRTHDAY = 'fxbirthday'
+
+// The overdue set is EVIDENCE, not a sample: the judge grades urgency ordering and
+// tier separation across the WHOLE list, and the seed guarantees two designated
+// overdue contacts are in it. A capture array longer than its cap is sliced
+// head-first, so the tail is dropped — and under the name and last-contacted sorts
+// that tail has nothing to do with urgency, which is how a designated fixture can
+// end up in it. The prod-shaped overdue population measures 52, above the 50-row
+// default, so the overdue-bearing captures carry this EXPLICIT cap instead.
+export const OVERDUE_CAPTURE_CAP = 64
+
+// Refuse to tour a world whose overdue population has outgrown the capture cap.
+// Truncation is recorded in the capture but the dropped rows are not, so a judge
+// grading a partial list cannot tell which contacts it never saw — the loud
+// failure is the only outcome that stays honest.
+export function assertOverdueFitsCapture(count: number, tourName: string): void {
+  if (count > OVERDUE_CAPTURE_CAP) {
+    throw new Error(
+      `${tourName} tour: ${count} overdue contacts exceed the capture cap of ${OVERDUE_CAPTURE_CAP} — ` +
+        'the captured overdue list would be truncated and the judge would grade a partial set. ' +
+        'Bring the seeded overdue population back under the cap, or raise the cap deliberately.'
+    )
+  }
+}
 
 interface MarkedContact {
   id: string

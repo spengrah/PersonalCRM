@@ -81,8 +81,11 @@ const (
 	FixtureMarkerBirthday = "fxbirthday"
 )
 
-// PinnedFixtureMarkers is every pinned tour-fixture marker, in seeding order for
-// the ones this block seeds followed by the ones that ride existing contacts. The
+// PinnedFixtureMarkers is every pinned tour-fixture marker: first the ones this
+// block seeds, then the ones that ride contacts other blocks seed. Within each
+// group the order is declaration order and is NOT load-bearing — nothing reads
+// this slice positionally, and the fixtures are not built in this sequence (the
+// overdue pair is appended from its own table, after the birthday fixture). The
 // coverage checks iterate it, so a fixture added without a marker entry is not
 // silently unasserted.
 var PinnedFixtureMarkers = []string{
@@ -113,6 +116,17 @@ var PinnedFixtureMarkers = []string{
 // order is cadence-frequency ascending, and the contacts tour mutates its first
 // row. A pinned fixture at rank 1 could displace the catalog contact that row is
 // meant to be and collide with the tour's own fixture reservations.
+//
+// These two are the ONLY contacts this block adds to the overdue population, and
+// the population is capture-bounded, not just seed-bounded: the tours' overdue
+// evidence is a JSON array that the capture normalizer slices at a cap, dropping
+// the tail. The prod-shaped catalog already supplies 50 overdue contacts, so this
+// pair takes the set to 52 — measured, not assumed. The overdue tours therefore
+// carry an explicit capture cap (OVERDUE_CAPTURE_CAP in
+// frontend/tests/tours/support/pinned-fixtures.ts) and refuse to run above it, so
+// a set that outgrows the cap fails loudly instead of reaching the judge with an
+// unnamed subset missing. Adding a third overdue fixture means re-checking that
+// cap, not just this table.
 //
 // Anchor-relative via WithCreatedAge (no time.Now()); a pure table, so it draws no
 // PRNG.
