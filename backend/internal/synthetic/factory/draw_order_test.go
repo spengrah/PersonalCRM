@@ -106,3 +106,31 @@ func TestTimelineFor_DrawsAFixedCount(t *testing.T) {
 		}
 	}
 }
+
+// TestWithNameMarker_DrawsZero proves WithNameMarker adds NO generator draw over
+// the identical base build. The pinned fixtures carry markers and are seeded from
+// the profile's append-last block; a marker that drew would make the stream
+// position depend on how many fixtures are pinned, which is exactly the coupling
+// the append-last rule exists to prevent.
+//
+// Compares STREAM POSITIONS, not values — the same technique as the tests above.
+func TestWithNameMarker_DrawsZero(t *testing.T) {
+	t.Parallel()
+
+	gA := NewGeneratorAt(DefaultSeed, "draworder", drawOrderAnchor)
+	specA := gA.Contact(append(baseDrawOrderOpts(), WithNameMarker("fxmarker"))...)
+	withOption := gA.rng.Uint64()
+
+	gB := NewGeneratorAt(DefaultSeed, "draworder", drawOrderAnchor)
+	specB := gB.Contact(baseDrawOrderOpts()...)
+	withoutOption := gB.rng.Uint64()
+
+	if withOption != withoutOption {
+		t.Fatalf("WithNameMarker changed the PRNG stream position: got next-raw %d with the option vs %d without it (expected equal — zero extra draws)", withOption, withoutOption)
+	}
+	// The option must still have DONE something — a no-op would pass the draw check
+	// vacuously while leaving every fixture unresolvable.
+	if specA.FullName != specB.FullName+" fxmarker" {
+		t.Fatalf("WithNameMarker did not append the marker to the display name: got %q, want %q", specA.FullName, specB.FullName+" fxmarker")
+	}
+}
