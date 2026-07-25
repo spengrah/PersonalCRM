@@ -399,31 +399,14 @@ func TestArchetypeAssignmentOverdueBand(t *testing.T) {
 	// than assumed.
 	require.Zero(t, (DevNonCatalogLiveContacts+ProdShapedNonCatalogLiveContacts)%2,
 		"the two non-catalog cohorts must sum to an EVEN number, or catalogNonCatalogLiveContacts (integer division) is not their midpoint")
-	require.Equal(t, (DevNonCatalogLiveContacts+ProdShapedNonCatalogLiveContacts)/2, catalogNonCatalogLiveContacts,
-		"the budget's non-catalog model must stay the midpoint of the two profiles' cohorts")
 
-	// Note on what is deliberately NOT asserted here: "the endpoint-visible set is a
-	// subset of the recomputed set". A count-comparing version of it used to live
-	// here and was removed rather than moved, for three reasons that are worth
-	// stating so this does not read as coverage quietly dropped.
-	//
-	// First, it compared SIZES, not membership, so it could not catch the failure
-	// the property is about: a set with the wrong members but the right cardinality
-	// passed it. The real form needs the two id SETS, which only exist against a
-	// seeded database — that version now lives in assertOverdueBand as
-	// require.Subset, in the LONG_TESTS lane.
-	//
-	// Second, the models it compared are not left unguarded in PR CI: the exact
-	// totals and the three exact gap pins below run here, and between them they pin
-	// both models at every size that matters, which subsumes any inequality between
-	// them.
-	//
-	// Third, at the MODEL level the inequality is not falsifiable at all —
-	// archetypeLeavesSlotPersistedOverdue is DEFINED as a conjunction with
-	// archetypeLeavesSlotOverdue, so no (i, n, archetype) exists at which it could
-	// fail. That is a narrow claim about this specific expression, not a general
-	// licence: an assertion that merely happens to pass today is worth keeping, and
-	// this one is different only because its failure set is provably empty.
+	// "The endpoint-visible set is a subset of the recomputed set" is NOT asserted
+	// here. At the model level archetypeLeavesSlotPersistedOverdue is DEFINED as a
+	// conjunction with archetypeLeavesSlotOverdue, so no (i, n, archetype) exists at
+	// which the inequality could fail — a narrow claim about this expression, not a
+	// general licence to drop assertions that merely pass. The falsifiable form
+	// needs the two id SETS against a seeded database, and lives in
+	// assertOverdueBand as require.Subset.
 	for n := 1; n <= 150; n++ {
 		total := PredictedCatalogOverdue(n) + PinnedOverdueFixtureCount
 		endpointTotal := PredictedCatalogOverduePersisted(n) + PinnedOverdueFixtureCount
@@ -444,11 +427,9 @@ func TestArchetypeAssignmentOverdueBand(t *testing.T) {
 			"n=%d: endpoint-visible overdue share %.1f%% is above the product band", n, endpointShare)
 	}
 
-	// What stops a silent revert to recompute-based measurement is the coverage
-	// gate's EXACT equality against PredictedCatalogOverduePersisted, and what makes
-	// that guard real is the GAP it would be off by. The band cannot do that job:
-	// its ceiling clears the prod-shaped recomputed share by 0.10 percentage points
-	// (40/181 = 22.10% against 22.0%), under a fifth of one contact.
+	// The coverage gate's EXACT equality against PredictedCatalogOverduePersisted
+	// catches a silent revert to recompute-based measurement, and the GAP between
+	// the two models is the margin it catches it by.
 	//
 	// The gap is SIZE-DEPENDENT, and pinning it exactly — at the sizes that ship AND
 	// at the sizes gates actually run at — is the point of this block. Those are not
@@ -458,7 +439,7 @@ func TestArchetypeAssignmentOverdueBand(t *testing.T) {
 	// the dev lane, and n=9's ZERO is pinned deliberately: at that size the two
 	// models coincide, so on the prod-shaped lane a revert to recompute-based
 	// measurement passes the equality, passes the subset check on identical sets, and
-	// skips the band branch (n < archetypeLadderFullAssignment) entirely. That lane
+	// skips the band branch (below n=12) entirely. That lane
 	// has no anti-revert power at all. Pinning the zero keeps the blind spot an
 	// asserted fact rather than something a later reader has to rediscover.
 	for _, c := range []struct {

@@ -309,9 +309,7 @@ const OverdueCeiling = 45
 //	  + SeededMerged            merge WINNERS — one live contact per pair, since the
 //	                            loser is tombstoned and the buckets query filters it
 //
-// dev: 5+4+1+8+1 = 19. prod-shaped: 15+4+1+8+3 = 31. The merge term is the one
-// that moved when the prod-shaped coverage test bounded its knobs, and leaving it
-// out of this list is how the number and its explanation came apart before.
+// dev: 5+4+1+8+1 = 19. prod-shaped: 15+4+1+8+3 = 31.
 //
 // Exported so the coverage tests derive that denominator from one authority
 // instead of freezing a measured total. How firmly each is held differs:
@@ -323,9 +321,7 @@ const OverdueCeiling = 45
 //     gh #751 (181 live against a 150-slot catalog) but pinned by no executing
 //     lane: the only prod-shaped coverage test bounds its volume knobs for CI and
 //     never seeds n=150. What that lane DOES pin is its own bounded cohort, which
-//     it derives from this constant and its own SeededMerged override — so the
-//     merge knob cannot drift unnoticed. The other knobs it bounds seed no contact
-//     rows at all, so no live-contact assertion moves with them either way.
+//     it derives from this constant and its own SeededMerged override.
 const (
 	DevNonCatalogLiveContacts        = 19
 	ProdShapedNonCatalogLiveContacts = 31
@@ -379,8 +375,8 @@ const overdueSharePercent = 23
 //     against this 22.0% ceiling and FAILS the band — 2.3 points of margin, with
 //     5.8 points still left above the legitimate 16.2% persisted share. It also
 //     fails the exact equality by three contacts. Two independent catches.
-//   - prod-shaped (n=9): the band branch is skipped (n < archetypeLadderFullAssignment)
-//     and the two models coincide, so NOTHING on that lane catches a revert. Pinned
+//   - prod-shaped (n=9): the band branch is skipped below n=12 and the two models
+//     coincide, so NOTHING on that lane catches a revert. Pinned
 //     as an explicit zero in TestArchetypeAssignmentOverdueBand so it stays visible.
 //   - n=150, the shipped prod-shaped size: a revert would measure 40/181 = 22.10%
 //     against 22.0%, a margin of a tenth of a point — but no gate runs there.
@@ -388,17 +384,6 @@ const overdueSharePercent = 23
 // So the band is not decorative; it is one of two catches at the only scope that
 // runs it. The reason not to LEAN on it is the n=150 row: at that size the margin
 // is a fifth of a contact, and any claim resting on it would be an overclaim.
-//
-// The corridor is worth recording because it is where a "just tighten the
-// ceiling" instinct goes wrong. Across the modelled sweep the persisted share
-// tops out at 21.11% (n=71) and the recomputed share bottoms at 22.10%, so the
-// ceiling can be anything in [21.12, 22.0) — 0.99 points wide. Moving to 21.2
-// would buy 0.90 points against a revert at n=150 while leaving 0.09 points above
-// a legitimate persisted population, which is the same knife-edge pointed the
-// other way. That tension is a property of the SWEEP, not of any executing lane:
-// at dev both margins are comfortable at 22.0 (2.3 and 5.8). The ceiling stays at
-// 22.0 because it buys variation headroom where the gate actually runs, and the
-// n=150 margin it gives up is one no gate was collecting.
 //
 // The guard that does not depend on any of this is the coverage gate's EXACT
 // equality against PredictedCatalogOverduePersisted, whose margin is the gap
