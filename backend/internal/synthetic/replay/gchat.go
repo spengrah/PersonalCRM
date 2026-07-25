@@ -135,7 +135,10 @@ func (h *Harness) ReplayGChatBatch(ctx context.Context, items []GChatBatchItem, 
 
 	options := applyBatchOptions(opts)
 
-	entries := gchatBatchEntries(items)
+	entries, err := gchatBatchEntries(items)
+	if err != nil {
+		return BatchResult{}, err
+	}
 	if err := validateBatchStructure(source, entries); err != nil {
 		return BatchResult{}, err
 	}
@@ -298,9 +301,12 @@ func (h *Harness) gchatBatchSettled(externalIDs []string) gateA {
 // Direction is whether the sender resolves to the connected account, which is
 // exactly what the provider reads; the addressed identifier is the peer's chat
 // address (an email, normalized the same way).
-func gchatBatchEntries(items []GChatBatchItem) []batchEntry {
+func gchatBatchEntries(items []GChatBatchItem) ([]batchEntry, error) {
 	out := make([]batchEntry, 0, len(items))
-	for _, it := range items {
+	for i, it := range items {
+		if it.Spec.Message == nil {
+			return nil, fmt.Errorf("gchat: item %d has a nil message", i)
+		}
 		peer, outbound := gchatSpecPeer(it.Spec)
 		out = append(out, batchEntry{
 			contactID:     it.ContactID,
@@ -312,7 +318,7 @@ func gchatBatchEntries(items []GChatBatchItem) []batchEntry {
 			addressedType: identity.IdentifierTypeGChat,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // gchatSpecPeer returns the peer's chat address and whether the message is

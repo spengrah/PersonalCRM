@@ -259,6 +259,23 @@ func TestGmailBatchEntriesRejectsNilMessage(t *testing.T) {
 	require.Contains(t, err.Error(), "item 0")
 }
 
+// TestGCalBatchEntriesRejectsNilEvent / TestGChatBatchEntriesRejectsNilMessage
+// are the symmetric guards. They matter now that a caller builds these items
+// programmatically from a generated plan rather than by hand: without them a
+// mapper bug becomes a nil dereference deep inside a provider instead of a named
+// preflight error at the batch boundary.
+func TestGCalBatchEntriesRejectsNilEvent(t *testing.T) {
+	_, err := gcalBatchEntries([]GCalBatchItem{{ContactID: uuid.New(), Spec: factory.GCalEventSpec{Intent: factory.MatchSeeded}}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "item 0")
+}
+
+func TestGChatBatchEntriesRejectsNilMessage(t *testing.T) {
+	_, err := gchatBatchEntries([]GChatBatchItem{{ContactID: uuid.New(), Spec: factory.GChatMessageSpec{Intent: factory.MatchSeeded}}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "item 0")
+}
+
 // --- drive loops -------------------------------------------------------------
 
 func TestDriveUntilCountStopsOnCompletion(t *testing.T) {
@@ -515,7 +532,7 @@ func TestGCalBatchAccountRejectsMixedAccounts(t *testing.T) {
 	require.Contains(t, err.Error(), "item 1")
 }
 
-// --- INV-13a: why a Gmail promotion pair must share an Age -------------------
+// --- why a Gmail promotion pair must share an Age ----------------------------
 
 // TestGmailPairSameAgeSharesLocalDayAcrossAnchors is the clock-anchored-fixture
 // discipline applied to the Gmail promotion rule. The consumer's aggregation key

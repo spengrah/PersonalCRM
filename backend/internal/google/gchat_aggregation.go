@@ -30,6 +30,22 @@ const GChatSourceName = repository.InteractionSourceGChat
 // here means a later explicit-reply provider need not touch the adapter.
 const replyTargetMetadataKey = "reply_target_external_id"
 
+// GChatBurstWindowHours / GChatReplyBridgeHours are the aggregation windows the
+// GChat engine runs on: consecutive same-direction messages inside the burst
+// window form one session, and an inbound session that follows an outbound one
+// inside the reply-bridge window merges into it and turns it mutual.
+//
+// They are declared HERE, beside the constructor, because they are not free
+// parameters in practice: every caller passes the same pair, and a caller that
+// SIZES ITS INPUT to them — the synthetic seed spaces a burst's opening messages
+// to fall inside the burst window, and predicts how many rows a conversation
+// collapses into — is silently wrong the moment a wiring literal moves. Read
+// them; do not re-declare them.
+const (
+	GChatBurstWindowHours = 2
+	GChatReplyBridgeHours = 48
+)
+
 // NewGChatAggregationEngine constructs a shared aggregator engine configured
 // for the Google Chat source over the comms_message table. Mirror of
 // messages.NewAggregationEngine — same nil-safety conventions. Returns the

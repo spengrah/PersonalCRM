@@ -16,6 +16,24 @@ type CadenceConfig struct {
 	Annual    time.Duration
 }
 
+// ProductionCadenceConfig is the real-world cadence table — the durations
+// production and staging run on. It is exported so a caller can state a
+// production-duration expectation WITHOUT reading (or mutating) CRM_ENV: under
+// CRM_ENV=test annual is two hours and every contact is trivially overdue, so a
+// test that reads the ambient environment proves nothing about these semantics,
+// and setting the variable would change cadence behaviour for every
+// concurrently-running test in the process.
+func ProductionCadenceConfig() CadenceConfig {
+	return CadenceConfig{
+		Weekly:    7 * 24 * time.Hour,   // 1 week
+		Biweekly:  14 * 24 * time.Hour,  // 2 weeks
+		Monthly:   30 * 24 * time.Hour,  // ~1 month
+		Quarterly: 90 * 24 * time.Hour,  // ~3 months
+		Biannual:  180 * 24 * time.Hour, // ~6 months
+		Annual:    365 * 24 * time.Hour, // 1 year
+	}
+}
+
 // GetCadenceConfig returns appropriate cadence configuration based on environment
 func GetCadenceConfig() CadenceConfig {
 	env := os.Getenv("CRM_ENV")
@@ -48,31 +66,32 @@ func GetCadenceConfig() CadenceConfig {
 	case "staging", "production", "prod", "":
 		// Production semantics: real-world cadences. Staging shares them —
 		// its QA world is prod-shaped by construction, not by compressed time.
-		return CadenceConfig{
-			Weekly:    7 * 24 * time.Hour,   // 1 week
-			Biweekly:  14 * 24 * time.Hour,  // 2 weeks
-			Monthly:   30 * 24 * time.Hour,  // ~1 month
-			Quarterly: 90 * 24 * time.Hour,  // ~3 months
-			Biannual:  180 * 24 * time.Hour, // ~6 months
-			Annual:    365 * 24 * time.Hour, // 1 year
-		}
+		return ProductionCadenceConfig()
 	default:
 		// Default to production for safety
-		return CadenceConfig{
-			Weekly:    7 * 24 * time.Hour,   // 1 week
-			Biweekly:  14 * 24 * time.Hour,  // 2 weeks
-			Monthly:   30 * 24 * time.Hour,  // ~1 month
-			Quarterly: 90 * 24 * time.Hour,  // ~3 months
-			Biannual:  180 * 24 * time.Hour, // ~6 months
-			Annual:    365 * 24 * time.Hour, // 1 year
-		}
+		return ProductionCadenceConfig()
 	}
 }
 
 // GetCadenceDuration returns the duration for a given cadence type
 func GetCadenceDuration(cadenceType CadenceType) time.Duration {
-	config := GetCadenceConfig()
+	return durationFor(GetCadenceConfig(), cadenceType)
+}
 
+// GetProductionCadenceDuration is GetCadenceDuration against the PRODUCTION
+// table rather than the ambient environment's. It exists so a caller that must
+// reason in real-world durations — a seed asserting an overdue expectation under
+// CRM_ENV=test, where annual is two hours — resolves the duration through the
+// SAME lookup, including its unrecognized-cadence fallback, instead of
+// hand-copying it.
+func GetProductionCadenceDuration(cadenceType CadenceType) time.Duration {
+	return durationFor(ProductionCadenceConfig(), cadenceType)
+}
+
+// durationFor is the single cadence-type → duration lookup. Both accessors above
+// route through it, so an unrecognized cadence cannot resolve one way in one
+// caller and another way in the next.
+func durationFor(config CadenceConfig, cadenceType CadenceType) time.Duration {
 	switch cadenceType {
 	case CadenceWeekly:
 		return config.Weekly
@@ -107,17 +126,31 @@ func CalculateNextDueDateWithConfig(cadenceType CadenceType, lastContacted *time
 
 // IsOverdueWithConfig checks if contact is overdue using environment-specific cadences
 func IsOverdueWithConfig(cadenceType CadenceType, lastContacted *time.Time, createdAt time.Time, checkTime time.Time) bool {
-	duration := GetCadenceDuration(cadenceType)
+	return isOverdue(GetCadenceDuration(cadenceType), lastContacted, createdAt, checkTime)
+}
 
-	var lastContactTime time.Time
+// IsOverdueWithProductionConfig is IsOverdueWithConfig evaluated against the
+// PRODUCTION cadence table, whatever the ambient environment is. It shares the
+// formula rather than restating it, so the two answers cannot diverge — which
+// they would, silently, if a caller needing production semantics kept its own
+// copy: under CRM_ENV=test annual is two hours and every contact is overdue, so
+// such a caller cannot simply use the env-derived helper either.
+//
+// checkTime is the caller's reference instant, so a prediction and a measurement
+// can be made to answer the same question about the same moment.
+func IsOverdueWithProductionConfig(cadenceType CadenceType, lastContacted *time.Time, createdAt time.Time, checkTime time.Time) bool {
+	return isOverdue(GetProductionCadenceDuration(cadenceType), lastContacted, createdAt, checkTime)
+}
+
+// isOverdue is the overdue formula itself: a contact is overdue once checkTime
+// has passed its base instant plus the cadence period, where the base is
+// last_contacted when set and created_at otherwise.
+func isOverdue(duration time.Duration, lastContacted *time.Time, createdAt time.Time, checkTime time.Time) bool {
+	lastContactTime := createdAt
 	if lastContacted != nil {
 		lastContactTime = *lastContacted
-	} else {
-		lastContactTime = createdAt
 	}
-
-	nextContactDue := lastContactTime.Add(duration)
-	return checkTime.After(nextContactDue)
+	return checkTime.After(lastContactTime.Add(duration))
 }
 
 // GetOverdueDaysWithConfig returns how many "days" overdue

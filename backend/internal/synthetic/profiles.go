@@ -154,6 +154,24 @@ type ProfileResult struct {
 	// it into a call-vs-row count would muddy that invariant. Counts-only / no PII.
 	OutboundOnlyContacts  int
 	MutualMessageContacts int
+	// ArchetypePayloads is the number of SOURCE PAYLOADS the archetype block drove
+	// onto the catalog — the calendar events, mail messages and chat messages the
+	// assigned relationship shapes describe. Counts-only / no PII.
+	ArchetypePayloads int
+	// ArchetypeInteractions is the number of interaction ROWS those payloads
+	// LANDED. It is deliberately smaller than ArchetypePayloads: aggregation
+	// collapses, so a mail promotion pair becomes one mutual row and a chat burst
+	// becomes one session. Kept OUT of SettledInteractions, whose equality is exact
+	// and is extended explicitly rather than relaxed — folding a collapsing count
+	// into a call-vs-row invariant would muddy both. Counts-only / no PII.
+	ArchetypeInteractions int
+	// ArchetypeSettleCalls is how many settle gates the archetype block waited on:
+	// one per dependency GENERATION of each batch, not one per payload. It is the
+	// phase's real cost model — a settle is O(all harness contacts) and rebuilds
+	// the full event-id union every call — so it is reported separately from the
+	// payload volume, and the block refuses to finish if it exceeds one settle per
+	// generation. Counts-only / no PII.
+	ArchetypeSettleCalls int
 	// Timings is the run's wall-clock measurement. It is EXCLUDED from every
 	// equality assertion (durations are wall-clock and never equal across runs) —
 	// the determinism test zeroes it on both sides before comparing, deliberately
@@ -424,13 +442,23 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 
 	// --- Contact edge-case catalog (deterministic spread across n) ---------
 	// These contacts carry the cadence / recency / birthday / name / no-method
-	// edge-case shapes the UI + QA tour exercise. They are seeded WITHOUT a
-	// settling MatchSeeded replay ON PURPOSE: a settled inbound interaction would
-	// make the cadence updater overwrite last_contacted (destroying the overdue /
-	// never-contacted intent), and every contact would carry a method (no
-	// no-method bucket). The settled per-source interactions live on the
-	// dedicated contacts below instead.
+	// edge-case shapes the UI + QA tour exercise. No interaction history is seeded
+	// HERE: it arrives at the very END of this profile, from the archetype block,
+	// which replays a per-slot relationship shape through the batch adapters.
+	//
+	// That placement is not tidiness. A replayed inbound or mutual moves
+	// last_contacted and contact_by, so which history a slot may receive has to be
+	// decided against its cadence — otherwise a shape lands that silently
+	// un-overdues the slot — and the no-method slot can match no payload at all.
+	// The archetype assignment makes both decisions; an ad-hoc settling replay in
+	// this loop would make neither, and would run BEFORE the blocks that read the
+	// catalog's cadence state.
 	catalogContactIDs := make([]uuid.UUID, 0, n)
+	// archetypeSlots retains each slot's index + spec alongside its id so the
+	// archetype block can address the contact with source payloads it can actually
+	// match. Memory only: no PRNG draw, no id allocation, so it cannot shift the
+	// deterministic sequence the source replays depend on.
+	archetypeSlots := make([]archetypeSlot, 0, n)
 	// cadenceBearingCatalogIDs is the subset whose spec carries a cadence —
 	// CreateContact auto-computes contact_by from cadence, making them eligible for
 	// ReplayTodoist's reconcile (which seeds one `managed` cadence task per such
@@ -465,6 +493,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 			res.ContactsWithLocation++
 		}
 		catalogContactIDs = append(catalogContactIDs, contact.ID)
+		archetypeSlots = append(archetypeSlots, archetypeSlot{Index: i, ContactID: contact.ID, Spec: spec})
 		if spec.Cadence != nil && *spec.Cadence != "" {
 			cadenceBearingCatalogIDs = append(cadenceBearingCatalogIDs, contact.ID)
 		}
@@ -1202,6 +1231,25 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	}
 	stop(0)
 
+	// --- Archetype interaction histories (replayed LAST of all) -----------------
+	//
+	// Every catalog slot carries a relationship SHAPE — a recurring meeting series,
+	// one-sided outreach, a burst that went quiet — and this block is where that
+	// shape becomes interaction state, by replaying its source payloads through the
+	// batch adapters. Nothing here writes a contact column directly: the state
+	// EMERGES from the payloads exactly as it does in production, which is what
+	// makes it impossible for the seed to express a state the app cannot produce.
+	//
+	// It runs after every other generator-drawing block because TimelineFor draws
+	// the shared PRNG, and it adds HISTORY rather than contacts — the tour evidence
+	// caps bound the population's shape, so a richer world has to come from deeper
+	// histories, not more rows.
+	stop = phase("archetype-replay")
+	if err := seedArchetypeHistories(ctx, h, gen, params.Profile, archetypeSlots, n, &res); err != nil {
+		return res, err
+	}
+	stop(res.ArchetypePayloads)
+
 	return res, nil
 }
 
@@ -1361,9 +1409,12 @@ var catalogLocationStems = []string{
 // n, deterministically spreading the edge-case shapes across the population:
 // cadence states (overdue / recent / never-contacted), the 1900 birthday
 // sentinel, a unicode name, a descender name, a no-method contact, plus a
-// fraction carrying real-year birthdays and how_met bio facts. Catalog contacts
-// get NO settling replay, so these last_contacted states survive (a MatchSeeded
-// inbound would otherwise let the cadence updater overwrite them).
+// fraction carrying real-year birthdays and how_met bio facts.
+//
+// These options are the slot's IDENTITY. Its interaction state comes from the
+// archetype block at the end of the profile, and which archetypes a slot may
+// receive is decided from this spec — see catalogSlot, which reads the same three
+// tables this function does and is pinned against it.
 //
 // anchor is the generator's clock (real-year birthdays are anchor-relative, so
 // no time.Now()); prefix is the namespace prefix the how_met value carries so it

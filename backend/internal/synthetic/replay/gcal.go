@@ -176,7 +176,10 @@ func (h *Harness) ReplayGCalBatch(ctx context.Context, items []GCalBatchItem, op
 
 	options := applyBatchOptions(opts)
 
-	entries := gcalBatchEntries(items)
+	entries, err := gcalBatchEntries(items)
+	if err != nil {
+		return BatchResult{}, err
+	}
 	if err := validateBatchStructure(source, entries); err != nil {
 		return BatchResult{}, err
 	}
@@ -291,9 +294,12 @@ func gcalBatchGateKeys(items []GCalBatchItem) ([]string, []uuid.UUID) {
 // is no direction (a matched event is always mutual) and no PairKey; the
 // addressed identifier is the non-self attendee, the address that decides
 // whether the contact matches.
-func gcalBatchEntries(items []GCalBatchItem) []batchEntry {
+func gcalBatchEntries(items []GCalBatchItem) ([]batchEntry, error) {
 	out := make([]batchEntry, 0, len(items))
-	for _, it := range items {
+	for i, it := range items {
+		if it.Spec.Event == nil {
+			return nil, fmt.Errorf("gcal: item %d has a nil event", i)
+		}
 		out = append(out, batchEntry{
 			contactID:     it.ContactID,
 			identifier:    it.Spec.GcalEventID,
@@ -302,7 +308,7 @@ func gcalBatchEntries(items []GCalBatchItem) []batchEntry {
 			addressedType: identity.IdentifierTypeEmail,
 		})
 	}
-	return out
+	return out, nil
 }
 
 // gcalSpecPeerAttendee returns the first non-self attendee address on an event

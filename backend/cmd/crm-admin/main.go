@@ -905,11 +905,20 @@ func writeSeedSummary(w io.Writer, res synthetic.ProfileResult, partial bool) er
 		"  stranded_telegram:    %d\n"+
 		"  stranded_messages:    %d\n"+
 		"  unmatched_calendar:   %d\n"+
-		"  orphan_meeting_notes: %d\n",
+		"  orphan_meeting_notes: %d\n"+
+		// Three archetype figures in three different UNITS, which is why they are
+		// reported separately rather than reconciled: payloads driven, interaction
+		// rows landed (smaller by design — aggregation collapses a promotion pair
+		// into one mutual and a burst into one session), and settle gates waited on
+		// (one per dependency generation, not per payload — the phase's real cost).
+		"  archetype_payloads:   %d\n"+
+		"  archetype_rows:       %d\n"+
+		"  archetype_settles:    %d\n",
 		res.Profile, res.Namespace, res.Seed, marker,
 		res.Contacts, res.GmailSettled, res.TelegramSettled, res.GCalSettled, res.GChatSettled,
 		res.IMessageSettled, res.UnmatchedExternal, res.StrandedTelegram, res.StrandedMessages,
-		res.UnmatchedCalendar, res.OrphanMeetingNote); err != nil {
+		res.UnmatchedCalendar, res.OrphanMeetingNote,
+		res.ArchetypePayloads, res.ArchetypeInteractions, res.ArchetypeSettleCalls); err != nil {
 		return fmt.Errorf("write seed summary: %w", err)
 	}
 	if err := writeSeedTimings(w, res.Timings); err != nil {

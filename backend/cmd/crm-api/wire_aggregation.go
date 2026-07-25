@@ -84,15 +84,14 @@ func buildAggregationEngines(
 	// GChat aggregation engine over comms_message. LIVE but INERT: the
 	// engine/worker/sweeper/reenqueuer for gchat run on every tick, but every
 	// query is source='gchat'-scoped and returns zero rows until a provider +
-	// enablement write comms_message(source='gchat') rows. Burst/reply windows
-	// are hard-coded here (matching how messages hard-codes its constants);
-	// env-var overrides are out of scope for now.
+	// enablement write comms_message(source='gchat') rows. The burst/reply windows
+	// are constants on the engine's own package, so a caller that sizes its input
+	// to them reads the same values this wiring passes; env-var overrides are out
+	// of scope for now.
 	gchatEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(riverClient)
-	const gchatBurstWindowHours = 2
-	const gchatReplyBridgeHours = 48
 	gchatEngine := google.NewGChatAggregationEngine(
-		gchatBurstWindowHours,
-		gchatReplyBridgeHours,
+		google.GChatBurstWindowHours,
+		google.GChatReplyBridgeHours,
 		commsMessageRepo,
 		interactionRepo,
 		contactService,
