@@ -660,6 +660,11 @@ func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 			return true
 		}
 		require.Len(t, rows, 2, "the un-promoted outcome is exactly the two one-sided rows")
+		require.ElementsMatch(t, []string{"outbound", "inbound"},
+			[]string{rows[0].Direction, rows[1].Direction},
+			"the two rows must be one outbound and one inbound — direction admits only these three "+
+				"values, so any other pair (a promoted row left beside a duplicate inbound above all) "+
+				"is a regression, not the race")
 		return false
 	}
 
@@ -680,8 +685,8 @@ func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 	// and a re-measurement should say which it took. A tight loop of 50
 	// consecutive executions inside one warm process collapsed 60 times in 400
 	// (15.0%) over eight batches spanning idle to heavily loaded, worst batch 13
-	// of 50 (26%). The 3-execution shape this test actually runs, across twenty
-	// fresh processes, collapsed 4 times in 60 (6.7%) — enough to fail a strict
+	// of 50 (26%). A colder shape — twenty fresh processes, three executions each
+	// — collapsed 4 times in 60 (6.7%), which was already enough to fail a strict
 	// "never collapses" on 4 of those 20 runs. The loop below is the warm shape
 	// and is sized against the higher 15%.
 	//
