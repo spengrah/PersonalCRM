@@ -435,12 +435,17 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 
 	// --- Contact edge-case catalog (deterministic spread across n) ---------
 	// These contacts carry the cadence / recency / birthday / name / no-method
-	// edge-case shapes the UI + QA tour exercise. They are seeded here with NO
-	// interaction history: their history arrives at the very END of this profile,
-	// from the archetype block, which replays a per-slot relationship shape through
-	// the batch adapters. Seeding it here instead would clobber the cadence states
-	// the later blocks are built on — the settle order is what makes the states
-	// survive, not an absence of history.
+	// edge-case shapes the UI + QA tour exercise. No interaction history is seeded
+	// HERE: it arrives at the very END of this profile, from the archetype block,
+	// which replays a per-slot relationship shape through the batch adapters.
+	//
+	// That placement is not tidiness. A replayed inbound or mutual moves
+	// last_contacted and contact_by, so which history a slot may receive has to be
+	// decided against its cadence — otherwise a shape lands that silently
+	// un-overdues the slot — and the no-method slot can match no payload at all.
+	// The archetype assignment makes both decisions; an ad-hoc settling replay in
+	// this loop would make neither, and would run BEFORE the blocks that read the
+	// catalog's cadence state.
 	catalogContactIDs := make([]uuid.UUID, 0, n)
 	// archetypeSlots retains each slot's index + spec alongside its id so the
 	// archetype block can address the contact with source payloads it can actually

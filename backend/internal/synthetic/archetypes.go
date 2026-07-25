@@ -145,23 +145,24 @@ const (
 // calmMargin of each end, so a generator bound that moved by more than the margin
 // fails there rather than silently widening what this rule admits.
 type archetypeShape struct {
-	Intent     archetypeIntent
-	NewestMin  time.Duration
-	NewestMax  time.Duration
-	HasHistory bool
+	Intent    archetypeIntent
+	NewestMin time.Duration
+	NewestMax time.Duration
 }
 
 const archetypeDay = 24 * time.Hour
 
-// archetypeShapes is the closed catalog's compatibility table.
+// archetypeShapes is the closed catalog's compatibility table. never-contacted
+// carries no bounds because it emits no entry to date; a neutral intent is
+// admissible on every cadence without reading them.
 var archetypeShapes = map[factory.Archetype]archetypeShape{
-	factory.ArchetypeMutualRegular:  {Intent: intentCalm, NewestMin: 3 * archetypeDay, NewestMax: 14 * archetypeDay, HasHistory: true},
-	factory.ArchetypeMutualDrifting: {Intent: intentOverdue, NewestMin: 70 * archetypeDay, NewestMax: 112 * archetypeDay, HasHistory: true},
-	factory.ArchetypeDormant:        {Intent: intentOverdue, NewestMin: 120 * archetypeDay, NewestMax: 150 * archetypeDay, HasHistory: true},
-	factory.ArchetypeInboundOnly:    {Intent: intentCalm, NewestMin: 1 * archetypeDay, NewestMax: 15 * archetypeDay, HasHistory: true},
-	factory.ArchetypeBurstThenQuiet: {Intent: intentCalm, NewestMin: 30 * archetypeDay, NewestMax: 90 * archetypeDay, HasHistory: true},
-	factory.ArchetypeOutboundHeavy:  {Intent: intentNeutral, NewestMin: 2 * archetypeDay, NewestMax: 20 * archetypeDay, HasHistory: true},
-	factory.ArchetypeNeverContacted: {Intent: intentNeutral, HasHistory: false},
+	factory.ArchetypeMutualRegular:  {Intent: intentCalm, NewestMin: 3 * archetypeDay, NewestMax: 14 * archetypeDay},
+	factory.ArchetypeMutualDrifting: {Intent: intentOverdue, NewestMin: 70 * archetypeDay, NewestMax: 112 * archetypeDay},
+	factory.ArchetypeDormant:        {Intent: intentOverdue, NewestMin: 120 * archetypeDay, NewestMax: 150 * archetypeDay},
+	factory.ArchetypeInboundOnly:    {Intent: intentCalm, NewestMin: 1 * archetypeDay, NewestMax: 15 * archetypeDay},
+	factory.ArchetypeBurstThenQuiet: {Intent: intentCalm, NewestMin: 30 * archetypeDay, NewestMax: 90 * archetypeDay},
+	factory.ArchetypeOutboundHeavy:  {Intent: intentNeutral, NewestMin: 2 * archetypeDay, NewestMax: 20 * archetypeDay},
+	factory.ArchetypeNeverContacted: {Intent: intentNeutral},
 }
 
 // historyArchetypes are the six that emit a timeline, in the FIXED order every
