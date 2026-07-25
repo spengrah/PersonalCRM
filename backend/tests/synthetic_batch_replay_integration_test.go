@@ -656,18 +656,38 @@ func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 		assert.Equal(t, 1, withBarrier(t), "run %d: the barrier must be reliable, not lucky", i)
 	}
 
-	// The no-barrier variant turns out to fail DETERMINISTICALLY rather than
-	// intermittently, which is a stronger result than the design assumed: the
-	// inbound does not merely sometimes lose the race, it cannot win it. Its
-	// outbound's claimed rows are excluded from the aggregation read for a
-	// five-minute TTL, and the outbound's interaction does not exist yet, so the
-	// inbound has nothing to promote against and lands its own row. Asserting it
-	// keeps the barrier from being quietly deleted as ceremony.
-	for i := 0; i < repetitions; i++ {
-		assert.NotEqual(t, 1, withoutBarrier(t),
-			"run %d: forcing both halves into one generation must NOT collapse to a single mutual — "+
-				"if it does, the barrier's justification has changed and needs re-deriving, not deleting", i)
+	// The no-barrier variant is UNRELIABLE, not impossible. The outbound's
+	// claimed rows are excluded from the inbound's aggregation read for a
+	// five-minute TTL, and the outbound's INTERACTION is written later by a River
+	// consumer, so the inbound usually has nothing to promote against and lands
+	// its own row — but when the consumer wins the race the pair does collapse to
+	// one mutual. Measured: 60 collapses in 400 executions (15.0%) over eight
+	// 50-execution batches spanning idle to heavily loaded, worst single batch 13
+	// of 50 (26%); and 4 collapses in the 60 executions of twenty full runs of
+	// this test, which failed 4 times out of 20 on a strict "never collapses".
+	//
+	// What is true, and what the barrier's justification actually rests on, is
+	// that the un-barriered path cannot be RELIED on to promote: over
+	// noBarrierRepetitions runs at least one must decline to. That is wrong only
+	// if EVERY run collapses — p^10, i.e. 5.8e-9 at the measured 15%, 1.4e-6 at
+	// the worst observed 26%, and still 1.0e-4 at a 40% rate no batch approached.
+	// Collapses are near-independent (12 adjacent pairs observed against 8.8
+	// expected under independence; longest streak 3 in 400). Keeping the
+	// assertion is what stops the barrier being deleted as ceremony: if the
+	// engine ever made the un-barriered path reliable, every run here would
+	// promote and the barrier's justification would need re-deriving.
+	const noBarrierRepetitions = 10
+	collapsed := 0
+	for i := 0; i < noBarrierRepetitions; i++ {
+		if withoutBarrier(t) == 1 {
+			collapsed++
+		}
 	}
+	t.Logf("no-barrier: %d of %d runs collapsed to a single mutual", collapsed, noBarrierRepetitions)
+	assert.Less(t, collapsed, noBarrierRepetitions,
+		"every one of %d runs forcing both halves into one generation collapsed to a single mutual — "+
+			"the un-barriered path has become reliable, so the barrier's justification has changed "+
+			"and needs re-deriving, not deleting", noBarrierRepetitions)
 }
 
 // TestSyntheticBatchReplay_TelegramOrderPromotesMutual proves the TIMING
