@@ -188,6 +188,17 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   await page.locator('tbody tr').first().getByRole('link').first().click()
   await page.waitForURL(u => DETAIL_PAGE_PATH.test(new URL(u).pathname))
   await tour.waitForApi(page, 'GET', CONTACT_ID_PATH) // detail contact
+  // Genuinely armed, unlike the CON-065 walk below: the capture above DRAINED
+  // the response buffer, so the only list-path response left to satisfy this is
+  // the detail page's own ids_only fetch (its sole /api/v1/contacts call).
+  // Keep it even though NO shipped trap depends on it today: a FUTURE trap over
+  // CON-038[1] would, because the reorder_ids doctoring op reads this response's
+  // ids array and silently no-ops when it is absent — it would be a trap that
+  // cannot fail. The Edit button below is no substitute: it gates on the CONTACT
+  // fetch (the page renders a skeleton until that lands, and the line above
+  // already awaited it), so it says nothing about whether the ids_only response
+  // has arrived. This wait is the only thing that guarantees the array is
+  // RECORDED in this capture.
   await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH) // ids_only nav order
   await page.getByRole('button', { name: 'Edit' }).waitFor({ state: 'visible' })
   await tour.capture(page, {
@@ -226,14 +237,26 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   await navRow.first().getByRole('link').first().click()
   await page.waitForURL(u => DETAIL_PAGE_PATH.test(new URL(u).pathname))
   await tour.waitForApi(page, 'GET', CONTACT_ID_PATH)
-  await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH) // ids_only nav order
   await page.getByRole('button', { name: 'Back to list' }).waitFor({ state: 'visible' })
-  // Gate the capture on the pager RESOLVING to "N of M", not just the button.
-  // waitForApi resolves on response headers, and the button + heading are static,
-  // so without this the ARIA snapshot can catch the pager mid-load as "No contacts"
-  // — contradictory evidence (see the post-nav capture-race gotcha in core.md).
+  // Gate the capture on the pager RESOLVING to "N of M", not just the button —
+  // and NOT on a list-path waitForApi, which would gate on nothing here: no
+  // capture drains the response buffer between the goto above and the row
+  // click, so it would peek the searched list's OWN response and return
+  // instantly. The pager is the RENDERED consequence of the ids_only nav load
+  // (the bar reads "No contacts" until it lands), and it is strictly stronger
+  // than the network event: waitForApi resolves on response headers, and the
+  // button + heading are static, so without this the ARIA snapshot can catch
+  // the pager mid-load as "No contacts" — contradictory evidence (see the
+  // post-nav capture-race gotcha in core.md).
+  // The regex is ANCHORED precisely because this is the sole gate: unanchored,
+  // prose of the form "Discussed 2 of 3 action items" matches it too, and a
+  // detail page renders plenty of note/task text. Nothing in the seed renders
+  // such a string today — the unanchored form does match exactly 1 element on a
+  // real detail page — so this was measured against staging by INJECTING a decoy
+  // into the DOM: with it present, unanchored matches 2 and anchored matches 1,
+  // the pager span, whose whole text is "N of M".
   await page
-    .getByText(/\d+ of \d+/)
+    .getByText(/^\d+ of \d+$/)
     .first()
     .waitFor({ state: 'visible' })
   await tour.capture(page, {
@@ -247,11 +270,14 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
     const url = new URL(u)
     return url.pathname === '/contacts' && url.searchParams.get('search') === navSearch
   })
-  await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH)
   await page.getByRole('heading', { name: 'Contacts', level: 2 }).waitFor({ state: 'visible' })
-  // Gate on the restored row rendering, not the static heading — this is the
-  // observable consequence that the filtered list re-committed after Back, so
-  // the capture never snapshots the list skeleton mid-load.
+  // Gate on the restored row rendering, not the static heading — and NEVER on a
+  // list GET: the return leg lands on the IDENTICAL query key seconds after the
+  // outbound one, so React Query serves it from cache and issues no request at
+  // all (useContacts pins its own staleTime, which overrides the Playwright
+  // zero-stale default — see the staleTime gotcha in core.md). The rendered row
+  // is the observable consequence either way: immediate from cache, after the
+  // fetch when cold — so the capture never snapshots the list skeleton mid-load.
   await navRow.first().waitFor({ state: 'visible' })
   await tour.capture(page, {
     behaviors: ['CON-065'],
