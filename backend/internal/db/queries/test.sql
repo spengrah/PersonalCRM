@@ -1577,3 +1577,30 @@ FROM contact_task ct
 JOIN contact c ON ct.contact_id = c.id
 WHERE c.full_name LIKE @name_prefix || '%'
   AND c.deleted_at IS NULL;
+
+-- name: ListPinnedFixtureContactsByNamePrefix :many
+-- Pinned tour-fixture proof: the namespace's live contacts with the columns the
+-- fixture assertions read, returned in the SAME order the tours' default contact
+-- list uses (cadence rank ascending == 'most frequent first', then the full_name /
+-- id tiebreakers) — a copy of ListContacts' cadence-desc ORDER BY, so the
+-- positional (B-group) selections the tours make can be checked for degeneracy
+-- against the order they will actually see. Marker resolution is done Go-side over
+-- full_name so the exactly-one-match rule is asserted rather than assumed. Caller
+-- passes a BARE prefix; '%' appended. Test only.
+SELECT
+    c.id,
+    c.full_name,
+    c.cadence,
+    c.created_at,
+    c.last_contacted,
+    c.last_outreach_at,
+    c.last_response_at,
+    c.contact_by,
+    c.birthday
+FROM contact c
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL
+ORDER BY
+  CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END ASC,
+  c.full_name ASC,
+  c.id ASC;

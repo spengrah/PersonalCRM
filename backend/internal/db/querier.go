@@ -1351,6 +1351,15 @@ type Querier interface {
 	ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error)
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
+	// Pinned tour-fixture proof: the namespace's live contacts with the columns the
+	// fixture assertions read, returned in the SAME order the tours' default contact
+	// list uses (cadence rank ascending == 'most frequent first', then the full_name /
+	// id tiebreakers) — a copy of ListContacts' cadence-desc ORDER BY, so the
+	// positional (B-group) selections the tours make can be checked for degeneracy
+	// against the order they will actually see. Marker resolution is done Go-side over
+	// full_name so the exactly-one-match rule is asserted rather than assumed. Caller
+	// passes a BARE prefix; '%' appended. Test only.
+	ListPinnedFixtureContactsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*ListPinnedFixtureContactsByNamePrefixRow, error)
 	ListPredicatesByStatus(ctx context.Context, status string) ([]*ListPredicatesByStatusRow, error)
 	// All locators for an assertion, oldest first.
 	ListProvenance(ctx context.Context, assertionID pgtype.UUID) ([]*AssertionProvenance, error)
