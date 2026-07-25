@@ -466,19 +466,21 @@ func assertPinnedTourFixtures(
 	}
 
 	// The tours read the overdue set through GET /contacts/overdue, whose predicate
-	// is the persisted contact_by against today's DATE — not the column checks above.
-	// Assert both fixtures come back from that path, so the chain from "seeded
-	// overdue" to "in the list the tours capture" is proven rather than inferred from
-	// the margins.
-	endpointOverdue, err := contactRepo.ListOverdueContacts(ctx, cadence.Today(now), 1000)
+	// is the persisted contact_by against today's DATE — a strictly different
+	// comparison from the `now` the column checks above use, so a fixture overdue by
+	// less than a day passes every check above and is still absent from the list the
+	// tours capture. Assert both fixtures come back from that predicate. Read
+	// namespace-scoped and unbounded rather than through the production query's
+	// global LIMIT, which an accumulated shared test DB could overflow.
+	endpointOverdue, err := support.ListOverdueContactIdsByNamePrefix(ctx, prefix, cadence.Today(now))
 	require.NoError(t, err)
 	returnedByEndpoint := make(map[uuid.UUID]bool, len(endpointOverdue))
-	for _, c := range endpointOverdue {
-		returnedByEndpoint[c.ID] = true
+	for _, id := range endpointOverdue {
+		returnedByEndpoint[id] = true
 	}
 	for _, f := range overdueFixtures {
 		require.True(t, returnedByEndpoint[f.ID],
-			"overdue fixture %s must be returned by the overdue endpoint the tours read, not merely carry overdue columns", subjectOf[f.ID])
+			"overdue fixture %s must be returned by the overdue endpoint's predicate, not merely carry overdue columns", subjectOf[f.ID])
 	}
 
 	// A7 — the merge pair. The preview flags a field conflicting only when the

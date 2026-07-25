@@ -1612,3 +1612,22 @@ func (r *SyntheticSupportRepository) ListPinnedFixtureContactsByNamePrefix(ctx c
 	}
 	return out, nil
 }
+
+// ListOverdueContactIdsByNamePrefix returns the namespace's contacts that the
+// overdue endpoint would return for the given day — same predicate as the
+// production ListOverdueContacts, scoped to one namespace and unbounded so an
+// accumulated shared test DB cannot push a subject outside a global limit window.
+func (r *SyntheticSupportRepository) ListOverdueContactIdsByNamePrefix(ctx context.Context, namePrefix string, today time.Time) ([]uuid.UUID, error) {
+	rows, err := r.queries.ListOverdueContactIdsByNamePrefix(ctx, db.ListOverdueContactIdsByNamePrefixParams{
+		NamePrefix: pgtype.Text{String: namePrefix, Valid: true},
+		Today:      pgtype.Date{Time: today, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, uuid.UUID(row.Bytes))
+	}
+	return out, nil
+}

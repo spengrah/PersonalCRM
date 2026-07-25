@@ -112,7 +112,8 @@ func TestPinnedOverdueFixturesCloseTheDiversityGap(t *testing.T) {
 	// only: the ladder rotates, so a larger world reaches later backdated slots whose
 	// cadences do overlap the fixtures'. Nothing depends on cadence-newness at scale
 	// (see the table's own comment); the AGE half is checked against the whole ladder
-	// here and against the whole world in the integration gate at n = 18 and n = 150.
+	// here and against the whole world in the integration gate, which runs at the two
+	// n values its call sites use — 18 (dev) and 9 (the prod-shaped coverage check).
 	catalogBackdatedCadences := map[string]bool{}
 	catalogCreatedAges := map[time.Duration]bool{}
 	for _, pair := range catalogOverdueLadder {

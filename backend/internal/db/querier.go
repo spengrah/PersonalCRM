@@ -1346,6 +1346,15 @@ type Querier interface {
 	// output and the reconcile diff. Used both by the watchdog (to compute the
 	// resolve set) and by the read endpoint (active breaches only).
 	ListOpenStalenessBreaches(ctx context.Context) ([]*SyncStalenessBreach, error)
+	// Pinned tour-fixture proof: the namespace's live contacts that the overdue
+	// endpoint would return. The predicate is a deliberate copy of ListOverdueContacts
+	// in contact.sql — contact_by set and strictly before TODAY'S DATE, which is a
+	// different comparison from the `now` the fixture's column checks use, and the
+	// reason this read proves something they do not. Scoped to one namespace and
+	// unbounded, because the production query's global LIMIT would let an accumulated
+	// shared test DB push a fixture out of the window and turn a coverage claim into a
+	// flake. Caller passes a BARE prefix; '%' appended. Test only.
+	ListOverdueContactIdsByNamePrefix(ctx context.Context, arg ListOverdueContactIdsByNamePrefixParams) ([]pgtype.UUID, error)
 	// Lists contacts whose contact_by date is before today (overdue).
 	// Returns contacts ordered by how overdue they are (most overdue first).
 	ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error)

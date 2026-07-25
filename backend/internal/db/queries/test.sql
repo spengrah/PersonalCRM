@@ -1605,3 +1605,20 @@ ORDER BY
   CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END ASC,
   c.full_name ASC,
   c.id ASC;
+
+-- name: ListOverdueContactIdsByNamePrefix :many
+-- Pinned tour-fixture proof: the namespace's live contacts that the overdue
+-- endpoint would return. The predicate is a deliberate copy of ListOverdueContacts
+-- in contact.sql — contact_by set and strictly before TODAY'S DATE, which is a
+-- different comparison from the `now` the fixture's column checks use, and the
+-- reason this read proves something they do not. Scoped to one namespace and
+-- unbounded, because the production query's global LIMIT would let an accumulated
+-- shared test DB push a fixture out of the window and turn a coverage claim into a
+-- flake. Caller passes a BARE prefix; '%' appended. Test only.
+SELECT c.id
+FROM contact c
+WHERE c.full_name LIKE @name_prefix || '%'
+  AND c.deleted_at IS NULL
+  AND c.contact_by IS NOT NULL
+  AND c.contact_by < sqlc.arg(today)::date
+ORDER BY c.contact_by ASC;

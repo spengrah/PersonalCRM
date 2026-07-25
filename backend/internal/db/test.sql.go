@@ -574,6 +574,49 @@ func (q *Queries) InsertRiverJobForTest(ctx context.Context, args []byte) error 
 	return err
 }
 
+const ListOverdueContactIdsByNamePrefix = `-- name: ListOverdueContactIdsByNamePrefix :many
+SELECT c.id
+FROM contact c
+WHERE c.full_name LIKE $1 || '%'
+  AND c.deleted_at IS NULL
+  AND c.contact_by IS NOT NULL
+  AND c.contact_by < $2::date
+ORDER BY c.contact_by ASC
+`
+
+type ListOverdueContactIdsByNamePrefixParams struct {
+	NamePrefix pgtype.Text `json:"name_prefix"`
+	Today      pgtype.Date `json:"today"`
+}
+
+// Pinned tour-fixture proof: the namespace's live contacts that the overdue
+// endpoint would return. The predicate is a deliberate copy of ListOverdueContacts
+// in contact.sql — contact_by set and strictly before TODAY'S DATE, which is a
+// different comparison from the `now` the fixture's column checks use, and the
+// reason this read proves something they do not. Scoped to one namespace and
+// unbounded, because the production query's global LIMIT would let an accumulated
+// shared test DB push a fixture out of the window and turn a coverage claim into a
+// flake. Caller passes a BARE prefix; '%' appended. Test only.
+func (q *Queries) ListOverdueContactIdsByNamePrefix(ctx context.Context, arg ListOverdueContactIdsByNamePrefixParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, ListOverdueContactIdsByNamePrefix, arg.NamePrefix, arg.Today)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListPinnedFixtureContactsByNamePrefix = `-- name: ListPinnedFixtureContactsByNamePrefix :many
 SELECT
     c.id,
