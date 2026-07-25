@@ -330,7 +330,9 @@ func assertPinnedTourFixtures(
 
 	rows, err := support.ListPinnedFixtureContactsByNamePrefix(ctx, prefix)
 	require.NoError(t, err)
-	// A6: the contacts tour hard-throws below five contacts.
+	// A6: the contacts tour hard-throws below five contacts. A floor the pinned
+	// block alone already clears, so it records the tour's requirement rather than
+	// gating anything the seed could plausibly lose.
 	require.GreaterOrEqual(t, len(rows), 5, "the contacts tour needs ≥5 contacts in the world")
 
 	recorded := h.PinnedFixtureIDs()
@@ -373,6 +375,12 @@ func assertPinnedTourFixtures(
 		flagsByID[f.ContactID] = f
 	}
 
+	// A9 — the delete victim carries no state of its own (it exists to be consumed),
+	// so it is discharged ENTIRELY by the resolution rules above: it must be
+	// recorded, resolve to exactly one contact, survive the search path, and be a
+	// subject no other fixture shares. There is deliberately nothing further to
+	// assert about it here.
+
 	// A1 — the no-recent-activity subject. It also carries the tasks-section empty
 	// state on the SAME page visit, so zero PRODUCT-VISIBLE tasks is part of the
 	// fixture, asserted directly rather than inferred from its seeding position.
@@ -381,14 +389,14 @@ func assertPinnedTourFixtures(
 	require.Nil(t, noActivity.LastResponseAt, "no-activity fixture must carry no response")
 	require.Nil(t, noActivity.LastContacted, "no-activity fixture must never have been connected with")
 	require.True(t, flagsByID[noActivity.ID].HasNone, "no-activity fixture must carry no pending follow-up either")
-	require.NotNil(t, noActivity.Cadence)
+	require.NotNil(t, noActivity.Cadence, "no-activity fixture must be cadence-bearing (the recent-never-connected floor requires one)")
 	require.NotEmpty(t, *noActivity.Cadence, "no-activity fixture must be cadence-bearing (the recent-never-connected floor requires one)")
-	require.NotNil(t, noActivity.CreatedAt)
+	require.NotNil(t, noActivity.CreatedAt, "no-activity fixture must carry a creation timestamp")
 	require.True(t, noActivity.CreatedAt.After(now.Add(-14*24*time.Hour)),
 		"no-activity fixture must be recently created (it supplies the recent-never-connected floor)")
 	visible, err := support.ListVisibleTaskCountsByContactIds(ctx, []uuid.UUID{noActivity.ID})
 	require.NoError(t, err)
-	require.Len(t, visible, 1)
+	require.Len(t, visible, 1, "the visible-task count query must answer for the no-activity fixture")
 	require.Zero(t, visible[0].VisibleCount, "no-activity fixture must have zero product-visible tasks (the tasks empty state rides on it)")
 
 	// A2 / A3 — outreach and response, on DISTINCT contacts (the distinctness is
@@ -413,12 +421,12 @@ func assertPinnedTourFixtures(
 	}
 	diversityFloor := now.Add(-7 * 24 * time.Hour)
 	for _, f := range overdueFixtures {
-		require.NotNil(t, f.Cadence)
+		require.NotNil(t, f.Cadence, "overdue fixture must be cadence-bearing")
 		require.NotEmpty(t, *f.Cadence, "overdue fixture must be cadence-bearing")
 		require.Nil(t, f.LastContacted, "overdue fixture must be never-connected (an honest empty timeline)")
-		require.NotNil(t, f.CreatedAt)
+		require.NotNil(t, f.CreatedAt, "overdue fixture must carry a creation timestamp")
 		require.True(t, f.CreatedAt.Before(now.Add(-14*24*time.Hour)), "overdue fixture must be backdated past the 14d floor")
-		require.NotNil(t, f.ContactBy)
+		require.NotNil(t, f.ContactBy, "overdue fixture must carry a computed contact_by")
 		require.True(t, f.ContactBy.Before(now), "overdue fixture's computed contact_by must have elapsed")
 		cadenceType, err := cadence.ParseCadence(*f.Cadence)
 		require.NoError(t, err)
@@ -449,21 +457,25 @@ func assertPinnedTourFixtures(
 	// checked from that side.
 	mergeTarget := byMarker[synthetic.FixtureMarkerMergeTarget]
 	mergeSource := byMarker[synthetic.FixtureMarkerMergeSource]
-	require.NotNil(t, mergeTarget.Cadence)
-	require.NotNil(t, mergeSource.Cadence)
+	require.NotNil(t, mergeTarget.Cadence, "the merge target must carry a cadence — the pair conflicts on it")
+	require.NotNil(t, mergeSource.Cadence, "the merge source must carry a cadence — a conflict needs the source value set")
 	require.NotEqual(t, *mergeTarget.Cadence, *mergeSource.Cadence, "the merge pair must differ in cadence")
-	require.NotNil(t, mergeTarget.Location)
+	require.NotNil(t, mergeTarget.Location, "the merge target must carry a location — the pair conflicts on it")
 	require.NotNil(t, mergeSource.Location, "the merge source must carry a location — a conflict needs the source value set")
 	require.NotEqual(t, *mergeTarget.Location, *mergeSource.Location,
 		"the merge pair must differ in location too — one conflicting field is not enough to prove the preview surfaces the ACTUALLY-conflicting ones")
 
 	// A8 — the searched navigation subject must survive the has_cadence filter.
 	searchSubject := byMarker[synthetic.FixtureMarkerSearch]
-	require.NotNil(t, searchSubject.Cadence)
+	require.NotNil(t, searchSubject.Cadence, "the search subject must be cadence-bearing (it is reached through cadence_filter=has_cadence)")
 	require.NotEmpty(t, *searchSubject.Cadence, "the search subject must be cadence-bearing (it is reached through cadence_filter=has_cadence)")
 
 	// A6 — the merge and navigation subjects are what the "≥3 unique-named contacts"
 	// requirement is actually about, so it is discharged over exactly those three.
+	// This check is DOMINATED by the exactly-one-match rule above (any row sharing a
+	// fixture's full_name necessarily contains that fixture's marker, so it would
+	// fail there first) and is kept as a statement of what the tour's exact-name
+	// selector needs, not as an independent gate.
 	nameCount := map[string]int{}
 	for _, row := range rows {
 		nameCount[row.FullName]++
