@@ -626,7 +626,14 @@ func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 		return len(rows)
 	}
 
-	withoutBarrier := func(t *testing.T) int {
+	// withoutBarrier reports whether the pair COLLAPSED to a single promoted
+	// mutual. Row count alone would not distinguish that from a regression that
+	// drops the inbound outright, which also leaves one row; counting the two as
+	// one would corrupt the very rate the repetition count below is sized
+	// against. Only two outcomes are legitimate — the collapse, or the two
+	// one-sided rows the race normally leaves — so any other shape fails here
+	// rather than being silently bucketed into either.
+	withoutBarrier := func(t *testing.T) bool {
 		h := batchTestHarness(t, ctx, database)
 		gen := h.Generator()
 		spec := gen.Contact(factory.WithTelegram())
@@ -647,7 +654,13 @@ func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 
 		rows, err := h.InteractionRepo().ListContactInteractions(ctx, contact.ID, 100, 0)
 		require.NoError(t, err)
-		return len(rows)
+		if len(rows) == 1 {
+			require.Equal(t, "mutual", rows[0].Direction,
+				"a lone row must be the promoted mutual — a one-sided one means a half was dropped, not promoted")
+			return true
+		}
+		require.Len(t, rows, 2, "the un-promoted outcome is exactly the two one-sided rows")
+		return false
 	}
 
 	// Both variants are repeated: the failure mode is a timing window, so one
@@ -661,25 +674,45 @@ func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 	// five-minute TTL, and the outbound's INTERACTION is written later by a River
 	// consumer, so the inbound usually has nothing to promote against and lands
 	// its own row — but when the consumer wins the race the pair does collapse to
-	// one mutual. Measured: 60 collapses in 400 executions (15.0%) over eight
-	// 50-execution batches spanning idle to heavily loaded, worst single batch 13
-	// of 50 (26%); and 4 collapses in the 60 executions of twenty full runs of
-	// this test, which failed 4 times out of 20 on a strict "never collapses".
+	// one mutual.
 	//
-	// What is true, and what the barrier's justification actually rests on, is
-	// that the un-barriered path cannot be RELIED on to promote: over
-	// noBarrierRepetitions runs at least one must decline to. That is wrong only
-	// if EVERY run collapses — p^10, i.e. 5.8e-9 at the measured 15%, 1.4e-6 at
-	// the worst observed 26%, and still 1.0e-4 at a 40% rate no batch approached.
-	// Collapses are near-independent (12 adjacent pairs observed against 8.8
-	// expected under independence; longest streak 3 in 400). Keeping the
-	// assertion is what stops the barrier being deleted as ceremony: if the
-	// engine ever made the un-barriered path reliable, every run here would
-	// promote and the barrier's justification would need re-deriving.
+	// Two measurements exist, of DIFFERENT shapes; they are not interchangeable
+	// and a re-measurement should say which it took. A tight loop of 50
+	// consecutive executions inside one warm process collapsed 60 times in 400
+	// (15.0%) over eight batches spanning idle to heavily loaded, worst batch 13
+	// of 50 (26%). The 3-execution shape this test actually runs, across twenty
+	// fresh processes, collapsed 4 times in 60 (6.7%) — enough to fail a strict
+	// "never collapses" on 4 of those 20 runs. The loop below is the warm shape
+	// and is sized against the higher 15%.
+	//
+	// What is true, and what the barrier's justification rests on, is that the
+	// un-barriered path cannot be RELIED on to promote: over noBarrierRepetitions
+	// runs at least one must decline to. That is wrong only if EVERY run
+	// collapses. Under independence that is p^10 — 5.8e-9 at 15%, 1.4e-6 at the
+	// worst batch's 26%. Independence is ASSUMED, not established: 12 adjacent
+	// collapse pairs against 8.8 expected is 1.1 sigma, which fails to refute
+	// independence rather than evidencing it, and only the longest streak (3
+	// observed, ~3 expected) genuinely matches it. Taken as real clustering the
+	// conditional rate is 12/58 = 0.21, a 1.38x lift; carrying that lift onto the
+	// worst batch's marginal gives the pessimistic figure, 0.26 * 0.359^9 =
+	// 2.6e-5. A second assumption rides underneath: the ten runs share one
+	// process, one database and one load state, so the honest quantity is E[p^10]
+	// across environments, dominated by the worst one. The batches above bound
+	// that on a developer machine; they cannot bound an arbitrary CI runner.
+	// Even the pessimistic 2.6e-5 is four orders of magnitude below the ~19% at
+	// which the strict form false-positived, which is what makes 10 the count.
+	//
+	// The guard is deliberately weak against PARTIAL reliability shifts: it fires
+	// only 10.7% of the time if the collapse rate reached 80%, 34.9% at 90%. That
+	// band was never usefully covered — the strict form false-positived on a
+	// healthy engine roughly one run in five — and the shift worth catching is
+	// the total one: an engine change that makes the un-barriered path reliable
+	// promotes every run here, and the barrier's justification then needs
+	// re-deriving, not deleting.
 	const noBarrierRepetitions = 10
 	collapsed := 0
 	for i := 0; i < noBarrierRepetitions; i++ {
-		if withoutBarrier(t) == 1 {
+		if withoutBarrier(t) {
 			collapsed++
 		}
 	}
