@@ -24,6 +24,7 @@
 // 'tasks-empty', 'mark-after'), never these.
 
 import { test } from './support/tour-fixtures'
+import { assertOverdueFitsCapture, OVERDUE_CAPTURE_CAP } from './support/pinned-fixtures'
 import type { Page } from '@playwright/test'
 
 interface OverdueRow {
@@ -69,6 +70,22 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
 }) => {
   test.setTimeout(480_000)
 
+  // A world with nobody overdue is a seeding problem, not a state to tour —
+  // the journey has no signal to follow. Fail loudly. Read BEFORE the first
+  // capture, because the landing capture already drains the dashboard's overdue
+  // GET into its evidence: a cap check that ran afterwards would be checking a
+  // capture that had already been truncated. Every capture in this tour carries
+  // OVERDUE_CAPTURE_CAP for the same reason — the overdue array reaches them
+  // both as a `fields` value and as a drained response body.
+  const overdueResp = await tour.apiCtx.get('/api/v1/contacts/overdue')
+  const overdueRows = ((await overdueResp.json())?.data ?? []) as OverdueRow[]
+  if (overdueRows.length === 0) {
+    throw new Error(
+      'relationship-loop tour: no overdue contacts in the seed — the loop has no signal to follow'
+    )
+  }
+  assertOverdueFitsCapture(overdueRows.length, 'relationship-loop')
+
   // --- 1. Land: the app opens on the dashboard (DSH-001) ---
   // Arm the overdue-fetch listener BEFORE navigating: the dashboard issues its
   // overdue GET once, during landing, and the step-1 landing capture() below
@@ -80,20 +97,11 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
   await page.waitForURL(u => new URL(u).pathname === '/dashboard')
   await page.getByRole('heading', { name: 'Action Required' }).waitFor({ state: 'visible' })
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['DSH-001', 'CAD-038'],
     note: 'journey start: app root landed on the dashboard',
     pair: { id: 'relationship-loop', role: 'loop-landing' },
   })
-
-  // A world with nobody overdue is a seeding problem, not a state to tour —
-  // the journey has no signal to follow. Fail loudly.
-  const overdueResp = await tour.apiCtx.get('/api/v1/contacts/overdue')
-  const overdueRows = ((await overdueResp.json())?.data ?? []) as OverdueRow[]
-  if (overdueRows.length === 0) {
-    throw new Error(
-      'relationship-loop tour: no overdue contacts in the seed — the loop has no signal to follow'
-    )
-  }
 
   // --- 2. Read the needs-attention signal (CAD-026) ---
   await overdueLoaded // the landing overdue GET (armed pre-nav; race-safe, gh #707)
@@ -113,6 +121,7 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
     throw new Error('relationship-loop tour: the most-urgent overdue card has no View-details link')
   }
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['CAD-026', 'CAD-038'],
     note: 'needs-attention signal read: overdue cards + count (default most-urgent sort)',
     pair: { id: 'relationship-loop', role: 'signal' },
@@ -131,6 +140,7 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
   await page.getByRole('button', { name: 'Log Interaction' }).waitFor({ state: 'visible' })
   await page.getByRole('heading', { name: 'Tasks', level: 3 }).waitFor({ state: 'visible' })
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['CAD-029', 'CAD-030', 'CAD-038'],
     note: 'contact detail reached from the signal: recent activity, cadence, queued tasks',
     pair: { id: 'relationship-loop', role: 'detail-before' },
@@ -143,6 +153,7 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
   await page.getByRole('button', { name: 'Log Interaction' }).click()
   await page.getByRole('heading', { name: /Log Interaction with/ }).waitFor({ state: 'visible' })
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['CAD-038'],
     note: 'log-interaction modal open: direction defaults to mutual, date to today',
     pair: { id: 'relationship-loop', role: 'act' },
@@ -158,6 +169,7 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
   // page reflecting the action without a reload.
   await tour.waitForApi(page, 'GET', new RegExp(`/api/v1/contacts/${targetId}$`))
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['CAD-029', 'CAD-038'],
     note: 'detail after the action: mutual interaction POSTed, relationship state refetched in place',
     pair: { id: 'relationship-loop', role: 'detail-after' },
@@ -199,6 +211,7 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
 
   const cardsAfter = await readOverdueCards(page)
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['DSH-005', 'CAD-038'],
     note: 'back on the dashboard: did the widget drop the contact we just acted on?',
     pair: { id: 'relationship-loop', role: 'loop-return' },

@@ -12,6 +12,14 @@
 // never expect().
 
 import { test } from './support/tour-fixtures'
+import {
+  FIXTURE_BIRTHDAY,
+  FIXTURE_DELETE,
+  FIXTURE_MERGE_SOURCE,
+  FIXTURE_MERGE_TARGET,
+  FIXTURE_SEARCH,
+  resolveFixture,
+} from './support/pinned-fixtures'
 
 interface TourContact {
   id: string
@@ -52,46 +60,99 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   for (const c of contacts) nameCount.set(c.full_name, (nameCount.get(c.full_name) ?? 0) + 1)
   const uniqueName = (c: TourContact): boolean => nameCount.get(c.full_name) === 1
 
-  // markContact = the first cadence-desc row (guaranteed on list page 1).
-  const markContact = contacts[0]
-  const reserved = new Set<string>([markContact.id])
+  // The MUTATED and SEARCHED subjects are pinned fixtures, resolved by marker and
+  // then verified — the state each step needs is seeded deliberately rather than
+  // scanned for. inWindow re-reads each resolved subject from THIS list, because
+  // the merge selector's candidate universe is exactly this window: a subject
+  // outside it would be invisible to the selector and would make `uniqueName`
+  // (computed over this list) a claim about a different set.
+  const byId = new Map(contacts.map(c => [c.id, c]))
+  const inWindow = (c: TourContact, label: string): TourContact => {
+    const row = byId.get(c.id)
+    if (!row) {
+      throw new Error(`tour: pinned fixture for ${label} is outside the limit=500 selector window`)
+    }
+    if (!uniqueName(row)) {
+      throw new Error(`tour: pinned fixture for ${label} does not carry a unique name`)
+    }
+    return row
+  }
 
   // CON-043 REQUIRES a cadence-differing pair with unique names (so the
-  // client-side selector filter is unambiguous). Throw if none — a tour error
-  // is signal, not a silent evidence-less capture.
-  let target: TourContact | undefined
-  let source: TourContact | undefined
-  for (let i = 0; i < contacts.length && !target; i++) {
-    const a = contacts[i]
-    if (reserved.has(a.id) || !a.cadence || !uniqueName(a)) continue
-    for (let j = i + 1; j < contacts.length; j++) {
-      const b = contacts[j]
-      if (reserved.has(b.id) || !b.cadence || !uniqueName(b)) continue
-      if (a.cadence !== b.cadence) {
-        target = a
-        source = b
-        break
-      }
-    }
+  // client-side selector filter is unambiguous), and the preview only surfaces a
+  // conflict toggle for a field the SOURCE actually differs on.
+  const target = inWindow(
+    await resolveFixture<TourContact>(tour.apiCtx, FIXTURE_MERGE_TARGET, 'CON-043 merge target'),
+    'CON-043 merge target'
+  )
+  const source = inWindow(
+    await resolveFixture<TourContact>(tour.apiCtx, FIXTURE_MERGE_SOURCE, 'CON-043 merge source'),
+    'CON-043 merge source'
+  )
+  if (!target.cadence || !source.cadence || target.cadence === source.cadence) {
+    throw new Error('tour: the CON-043 merge fixtures must both carry a cadence, and differ')
   }
-  if (!target || !source) {
-    throw new Error('tour: CON-043 requires a cadence-differing, unique-named pair; seed lacks one')
-  }
-  reserved.add(target.id)
-  reserved.add(source.id)
 
   // CON-065 walks a searched + cadence-filtered list, so it needs a distinct
   // contact with a cadence (survives cadence_filter=has_cadence) and a unique
   // name (the search resolves to its row unambiguously). Never mutated below.
-  const navContact = contacts.find(c => !reserved.has(c.id) && c.cadence && uniqueName(c))
-  if (!navContact) {
-    throw new Error('tour: CON-065 needs a distinct cadence-bearing, unique-named contact')
+  const navContact = inWindow(
+    await resolveFixture<TourContact>(tour.apiCtx, FIXTURE_SEARCH, 'CON-065 navigation subject'),
+    'CON-065 navigation subject'
+  )
+  if (!navContact.cadence) {
+    throw new Error('tour: the CON-065 fixture must carry a cadence (the list is cadence-filtered)')
   }
-  reserved.add(navContact.id)
 
-  const deleteContact = contacts.find(c => !reserved.has(c.id))
-  if (!deleteContact) throw new Error('tour: no distinct contact left for the delete step')
-  reserved.add(deleteContact.id)
+  const deleteContact = inWindow(
+    await resolveFixture<TourContact>(tour.apiCtx, FIXTURE_DELETE, 'CON-042 delete victim'),
+    'CON-042 delete victim'
+  )
+
+  // CON-045's birthday card. Resolved so the capture waits for a card that is
+  // genuinely in the seed's imminent group, not merely the first card rendered.
+  const birthdayContact = await resolveFixture<TourContact>(
+    tour.apiCtx,
+    FIXTURE_BIRTHDAY,
+    'CON-045 highlight-window birthday'
+  )
+  if (!birthdayContact.birthday) {
+    throw new Error('tour: the CON-045 birthday fixture carries no birthday')
+  }
+
+  // Every resolved subject must be its OWN contact: two of these steps MUTATE
+  // (merge archives the source, delete removes its victim), so a collision would
+  // consume a subject a later step still needs and the tour would fail somewhere
+  // unrelated to the cause. The seed's markers make this true and the Go gate
+  // proves it per-PR; this is the tour-side check for staging drift.
+  const reserved = new Set<string>()
+  for (const [label, c] of [
+    ['CON-043 merge target', target],
+    ['CON-043 merge source', source],
+    ['CON-065 navigation subject', navContact],
+    ['CON-042 delete victim', deleteContact],
+    ['CON-045 highlight-window birthday', birthdayContact],
+  ] as Array<[string, TourContact]>) {
+    if (reserved.has(c.id)) {
+      throw new Error(`tour: the fixture for ${label} resolved to a contact another step reserved`)
+    }
+    reserved.add(c.id)
+  }
+
+  // markContact = the first cadence-desc row (guaranteed on list page 1). Left
+  // POSITIONAL on purpose — it is the ordering that is under test here — so the
+  // only thing asserted is that a pinned fixture has not drifted into that row and
+  // collided with a reservation above.
+  const markContact = contacts[0]
+  if (reserved.has(markContact.id)) {
+    throw new Error(
+      'tour: the first cadence-ordered row is a pinned fixture — the seed must keep that row a generated contact'
+    )
+  }
+  reserved.add(markContact.id)
+  // Reads from the full reservation set, so the ?action= subject can never be a
+  // pinned fixture: both of its flows discard rather than commit today, but the
+  // reservation is the fence, not the flows' current behavior.
   const actionParamContact = contacts.find(c => !reserved.has(c.id)) ?? markContact
 
   // Mid-list + first contact for keyboard-nav (read-only; order = default nav).
@@ -203,7 +264,15 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   // system/time GET (which would deadlock on the warm 5m-stale cache).
   await page.goto('/birthdays')
   await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH) // the limit=1000 load
-  await page.getByTestId('birthday-card').first().waitFor({ state: 'visible', timeout: 20_000 })
+  // Wait for the PINNED fixture's own card, not merely the first one rendered: the
+  // judged quality is that imminent birthdays stand apart from distant ones, and a
+  // page whose only card is a distant one would satisfy `.first()`. No `.first()`
+  // on the filtered locator either — two cards matching a fixture name would be a
+  // strict-mode failure, which is the loud outcome that case deserves.
+  await page
+    .getByTestId('birthday-card')
+    .filter({ hasText: birthdayContact.full_name })
+    .waitFor({ state: 'visible', timeout: 20_000 })
   // DECISION 1 (capture weight): the con045 verifier's birthday ground-truth
   // ([0] grouping / [1] gift candidates / [3] placeholder names) needs only
   // { full_name, birthday } per birthday-bearing contact — NOT the full
@@ -457,7 +526,14 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
 
   // Manual name edit in edit mode; the live input value is captured via fields
   // (ariaSnapshot does not reliably emit a textbox's value).
-  const editedMergedName = `${source.full_name} (merged)`
+  //
+  // Deliberately MARKER-FREE, and not derived from either fixture's name. The
+  // merge commits this string onto the surviving contact, so deriving it from the
+  // source would leave a second contact carrying the source's marker — making the
+  // seed no longer the only writer of marker-bearing names, and leaving the source
+  // marker resolving exactly-once to the wrong object on a re-run without a
+  // reseed, which no resolution rule can detect.
+  const editedMergedName = 'Merged Contact (tour edit)'
   await mergeModal.getByRole('heading', { level: 3 }).click() // handleStartEditingName
   const nameInput = mergeModal.getByRole('textbox').first()
   await nameInput.waitFor({ state: 'visible' })

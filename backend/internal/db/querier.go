@@ -1346,11 +1346,29 @@ type Querier interface {
 	// output and the reconcile diff. Used both by the watchdog (to compute the
 	// resolve set) and by the read endpoint (active breaches only).
 	ListOpenStalenessBreaches(ctx context.Context) ([]*SyncStalenessBreach, error)
+	// Pinned tour-fixture proof: the namespace's live contacts that the overdue
+	// endpoint would return. The predicate is a deliberate copy of ListOverdueContacts
+	// in contact.sql — contact_by set and strictly before TODAY'S DATE, which is a
+	// different comparison from the `now` the fixture's column checks use, and the
+	// reason this read proves something they do not. Scoped to one namespace and
+	// unbounded, because the production query's global LIMIT would let an accumulated
+	// shared test DB push a fixture out of the window and turn a coverage claim into a
+	// flake. Caller passes a BARE prefix; '%' appended. Test only.
+	ListOverdueContactIdsByNamePrefix(ctx context.Context, arg ListOverdueContactIdsByNamePrefixParams) ([]pgtype.UUID, error)
 	// Lists contacts whose contact_by date is before today (overdue).
 	// Returns contacts ordered by how overdue they are (most overdue first).
 	ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error)
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
+	// Pinned tour-fixture proof: the namespace's live contacts with the columns the
+	// fixture assertions read, returned in the SAME order the tours' default contact
+	// list uses (cadence rank ascending == 'most frequent first', then the full_name /
+	// id tiebreakers) — a copy of ListContacts' cadence-desc ORDER BY, so the
+	// positional (B-group) selections the tours make can be checked for degeneracy
+	// against the order they will actually see. Marker resolution is done Go-side over
+	// full_name so the exactly-one-match rule is asserted rather than assumed. Caller
+	// passes a BARE prefix; '%' appended. Test only.
+	ListPinnedFixtureContactsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*ListPinnedFixtureContactsByNamePrefixRow, error)
 	ListPredicatesByStatus(ctx context.Context, status string) ([]*ListPredicatesByStatusRow, error)
 	// All locators for an assertion, oldest first.
 	ListProvenance(ctx context.Context, assertionID pgtype.UUID) ([]*AssertionProvenance, error)

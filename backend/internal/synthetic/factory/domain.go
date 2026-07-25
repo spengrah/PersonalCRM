@@ -56,6 +56,7 @@ type contactConfig struct {
 	location             *string
 	unicodeName          bool
 	descender            bool
+	nameMarker           string
 }
 
 // WithEmail adds an email contact_method (default ON if no method option is
@@ -153,6 +154,17 @@ func WithUnicodeName() ContactOption { return func(c *contactConfig) { c.unicode
 // rendering edge case.
 func WithDescenderName() ContactOption { return func(c *contactConfig) { c.descender = true } }
 
+// WithNameMarker appends a resolution marker token to the contact's display name,
+// so a hand-authored fixture can be resolved over the API by search instead of by
+// an ad-hoc predicate over whatever the population happens to contain. The marker
+// is a caller concern (its convention and its constraints are documented where the
+// fixtures are seeded); the factory only places it. Composes with the name edge
+// cases (unicode / descender) rather than replacing them, and draws no PRNG — a
+// marker must never shift the shared generator stream.
+func WithNameMarker(marker string) ContactOption {
+	return func(c *contactConfig) { c.nameMarker = marker }
+}
+
 // Contact builds a deterministic ContactSpec. With no options it defaults to a
 // single email method (the common case). All identifiers are namespace-prefixed.
 func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
@@ -177,6 +189,9 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 		display = given + " Ünïcödé-" + sur
 	case cfg.descender:
 		display = given + " Gregory-" + sur // descenders: g, y, p, q
+	}
+	if cfg.nameMarker != "" {
+		display += " " + cfg.nameMarker
 	}
 	// Namespace-prefixed full_name so the prefix cleanup backstop finds it.
 	fullName := g.Prefix() + display

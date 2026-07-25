@@ -1542,3 +1542,92 @@ func (r *SyntheticSupportRepository) CountMergedIntoNodesByIds(ctx context.Conte
 	}
 	return r.queries.SyntheticCountMergedIntoNodesByIds(ctx, pgUUIDs(nodeIDs))
 }
+
+// PinnedFixtureContact is one live namespace contact with the columns the pinned
+// tour-fixture assertions read. Rows arrive in the tours' default contact-list
+// order (cadence rank ascending, then full_name / id), so the positional
+// selections the tours make are checkable against the order they will see.
+type PinnedFixtureContact struct {
+	ID             uuid.UUID
+	FullName       string
+	Cadence        *string
+	CreatedAt      *time.Time
+	LastContacted  *time.Time
+	LastOutreachAt *time.Time
+	LastResponseAt *time.Time
+	ContactBy      *time.Time
+	Birthday       *time.Time
+	Location       *string
+}
+
+// ListPinnedFixtureContactsByNamePrefix returns the namespace's live contacts in
+// the tours' default cadence-desc list order. Used by the coverage checks to
+// resolve each pinned fixture by its name marker (requiring exactly one match) and
+// to assert the ordering the tours' positional selections depend on is
+// non-degenerate.
+func (r *SyntheticSupportRepository) ListPinnedFixtureContactsByNamePrefix(ctx context.Context, namePrefix string) ([]PinnedFixtureContact, error) {
+	rows, err := r.queries.ListPinnedFixtureContactsByNamePrefix(ctx, pgtype.Text{String: namePrefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PinnedFixtureContact, 0, len(rows))
+	for _, row := range rows {
+		c := PinnedFixtureContact{
+			ID:       uuid.UUID(row.ID.Bytes),
+			FullName: row.FullName,
+		}
+		if row.Cadence.Valid {
+			v := row.Cadence.String
+			c.Cadence = &v
+		}
+		if row.CreatedAt.Valid {
+			t := row.CreatedAt.Time
+			c.CreatedAt = &t
+		}
+		if row.LastContacted.Valid {
+			t := row.LastContacted.Time
+			c.LastContacted = &t
+		}
+		if row.LastOutreachAt.Valid {
+			t := row.LastOutreachAt.Time
+			c.LastOutreachAt = &t
+		}
+		if row.LastResponseAt.Valid {
+			t := row.LastResponseAt.Time
+			c.LastResponseAt = &t
+		}
+		if row.ContactBy.Valid {
+			t := row.ContactBy.Time
+			c.ContactBy = &t
+		}
+		if row.Birthday.Valid {
+			t := row.Birthday.Time
+			c.Birthday = &t
+		}
+		if row.Location.Valid {
+			v := row.Location.String
+			c.Location = &v
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// ListOverdueContactIdsByNamePrefix returns the namespace's contacts that the
+// overdue endpoint would return for the given day — same predicate as the
+// production ListOverdueContacts, scoped to one namespace and unbounded so an
+// accumulated shared test DB cannot push a subject outside a global limit window.
+func (r *SyntheticSupportRepository) ListOverdueContactIdsByNamePrefix(ctx context.Context, namePrefix string, today time.Time) ([]uuid.UUID, error) {
+	rows, err := r.queries.ListOverdueContactIdsByNamePrefix(ctx, db.ListOverdueContactIdsByNamePrefixParams{
+		NamePrefix: pgtype.Text{String: namePrefix, Valid: true},
+		Today:      pgtype.Date{Time: today, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, uuid.UUID(row.Bytes))
+	}
+	return out, nil
+}

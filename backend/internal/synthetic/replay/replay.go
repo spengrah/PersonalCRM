@@ -317,6 +317,18 @@ type Harness struct {
 	// result struct.
 	birthdayFixtureIDs []uuid.UUID
 
+	// pinnedFixtureIDs maps a pinned tour-fixture MARKER to the contact the profile
+	// seeded (or re-used) for it. The marker is the fixture's stable identity — it is
+	// what a tour searches for over the API and what the coverage checks resolve — so
+	// one marker-keyed map replaces what would otherwise be a Set/Get pair per
+	// fixture. A profile records entries via SetPinnedFixtureID; the coverage checks
+	// read the whole map via PinnedFixtureIDs to scope the per-fixture assertions to
+	// their exact subjects. Like the ids above it is NOT a
+	// ProfileResult field: contact ids come from uuid_generate_v4()
+	// (non-deterministic), so it stays off the counts-only, determinism-compared
+	// result struct.
+	pinnedFixtureIDs map[string]uuid.UUID
+
 	created   *created
 	createdMu sync.Mutex
 
@@ -908,6 +920,31 @@ func (h *Harness) BirthdayFixtureIDs() []uuid.UUID {
 	h.createdMu.Lock()
 	defer h.createdMu.Unlock()
 	return append([]uuid.UUID(nil), h.birthdayFixtureIDs...)
+}
+
+// SetPinnedFixtureID records the contact seeded (or re-used) for one pinned
+// tour-fixture marker. Called by the seeding blocks — hence exported. Guarded by
+// the ledger mutex for parity with the other tracked ids.
+func (h *Harness) SetPinnedFixtureID(marker string, id uuid.UUID) {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	if h.pinnedFixtureIDs == nil {
+		h.pinnedFixtureIDs = make(map[string]uuid.UUID)
+	}
+	h.pinnedFixtureIDs[marker] = id
+}
+
+// PinnedFixtureIDs returns a copy of the marker→contact map for every pinned
+// tour fixture the profile recorded (nil-safe: an empty map when none ran). Read
+// by the coverage checks to scope each fixture's assertions to its exact subject.
+func (h *Harness) PinnedFixtureIDs() map[string]uuid.UUID {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	out := make(map[string]uuid.UUID, len(h.pinnedFixtureIDs))
+	for marker, id := range h.pinnedFixtureIDs {
+		out[marker] = id
+	}
+	return out
 }
 
 // gateBClear reports whether Gate B has reached zero for this replay's contacts.

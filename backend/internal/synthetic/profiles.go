@@ -1040,7 +1040,10 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	stop = phase("follow-up-loop")
 	followUpPayloads := 0
 	if params.Counts.SeededTasks > 0 {
-		fuSpec := gen.Contact(factory.WithEmail(), factory.WithCadence(followUpScenarioCadence))
+		// Marker-bearing: this contact IS the pinned "awaiting reply" fixture, so the
+		// tour resolves it by name rather than probing every contact's detail endpoint
+		// looking for has_pending_followup (the list payload never carries it).
+		fuSpec := gen.Contact(factory.WithEmail(), factory.WithCadence(followUpScenarioCadence), factory.WithNameMarker(FixtureMarkerPending))
 		fuContact, err := h.SeedContact(ctx, fuSpec)
 		if err != nil {
 			return res, fmt.Errorf("profile %s: seed awaiting-reply contact: %w", params.Profile, err)
@@ -1056,16 +1059,18 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		}
 		res.SeededTasks++
 		res.SeededPendingFollowUps = 1
+		h.SetPinnedFixtureID(FixtureMarkerPending, fuContact.ID)
 	}
 	stop(followUpPayloads)
 
 	// --- Two-sided message-direction cohort (F4) --------------------------------
 	//
-	// Seeded LAST, after every other generator-driven block: it draws gen.Contact
-	// (name PRNG) + source replays, and appending keeps the deterministic id/handle
+	// Seeded after every other SOURCE-REPLAYING block: it draws gen.Contact (name
+	// PRNG) + source replays, and appending keeps the deterministic id/handle
 	// sequence the earlier source replays depend on unshifted (the message factories
 	// draw ZERO PRNG — only deterministic counters — but gen.Contact does, so this
-	// must still land at the very end).
+	// must still land near the very end). Only the replay-free birthday-fixture and
+	// pinned-fixture blocks follow it.
 	//
 	// Every message-sourced interaction the loops above produce is INBOUND, so the
 	// judge never sees the user reply and reads every conversation as one-sided (a
@@ -1080,7 +1085,8 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// these pass the PR1 lockstep gate unchanged (NULL last_contacted → exempt).
 	stop = phase("direction-cohort")
 	directionPayloads := 0
-	obGmailSpec := gen.Contact(factory.WithEmail())
+	// The gmail one is marker-bearing: it IS the pinned "last outreach" fixture.
+	obGmailSpec := gen.Contact(factory.WithEmail(), factory.WithNameMarker(FixtureMarkerOutreach))
 	obGmailContact, err := h.SeedContact(ctx, obGmailSpec)
 	if err != nil {
 		return res, fmt.Errorf("profile %s: seed outbound gmail contact: %w", params.Profile, err)
@@ -1091,6 +1097,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	}
 	res.OutboundOnlyContacts++
 	directionPayloads++
+	h.SetPinnedFixtureID(FixtureMarkerOutreach, obGmailContact.ID)
 
 	obGChatSpec := gen.Contact(factory.WithEmail())
 	obGChatContact, err := h.SeedContact(ctx, obGChatSpec)
@@ -1130,7 +1137,9 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// aggregation finds the outbound interaction and PromoteInteractionToMutualTx
 	// flips it in place: one mutual row, last_contacted == last_interaction_at ==
 	// last_outreach_at == last_response_at.
-	mutualSpec := gen.Contact(factory.WithTelegram())
+	// Marker-bearing: this contact IS the pinned "last response" fixture (a mutual
+	// sets last_response_at), distinct from the outreach fixture above.
+	mutualSpec := gen.Contact(factory.WithTelegram(), factory.WithNameMarker(FixtureMarkerResponse))
 	mutualContact, err := h.SeedContact(ctx, mutualSpec)
 	if err != nil {
 		return res, fmt.Errorf("profile %s: seed mutual telegram contact: %w", params.Profile, err)
@@ -1151,6 +1160,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	}
 	directionPayloads++
 	h.SetMutualMessageContactID(mutualContact.ID)
+	h.SetPinnedFixtureID(FixtureMarkerResponse, mutualContact.ID)
 	res.MutualMessageContacts++
 	stop(directionPayloads)
 
@@ -1158,9 +1168,10 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	//
 	// The "today" fixture was seeded above at its historical position. The rest of
 	// the ordered plan (+1 imminent, distant, and the best-effort extras) is
-	// appended HERE, after every other generator/sourceID consumer: gen.DateFact
-	// draws the shared sourceIDSeq, so placing these draws last shifts no downstream
-	// source id. Together with the today fixture they give CON-052 a small set where
+	// appended HERE, after every other sourceIDSeq consumer: gen.DateFact draws the
+	// shared sourceIDSeq, so placing these draws last shifts no downstream source id
+	// (the pinned-fixture block that follows draws only gen.Contact, which does not
+	// touch sourceIDSeq). Together with the today fixture they give CON-052 a small set where
 	// imminent birthdays visibly stand apart from those that recede.
 	//
 	// Allocation degrades with the birthdayless catalog slots (a birthday is an
@@ -1178,6 +1189,17 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		res.SeededDateFacts++
 	}
 	h.SetBirthdayFixtureIDs(catalogContactsWithoutBirthday[:seededCount])
+	stop(0)
+
+	// --- Pinned tour fixtures (seeded LAST of all) ------------------------------
+	//
+	// The hand-authored contacts the QA tours resolve by name marker. Appended after
+	// every other generator-drawing block, per the marker convention documented in
+	// fixtures.go.
+	stop = phase("pinned-fixtures")
+	if err := seedPinnedTourFixtures(ctx, h, gen, params.Profile, &res); err != nil {
+		return res, err
+	}
 	stop(0)
 
 	return res, nil

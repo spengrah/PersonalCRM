@@ -681,6 +681,14 @@
     "tags": []
   },
   {
+    "pattern": "^backend/internal/synthetic/",
+    "tags": []
+  },
+  {
+    "pattern": "^backend/internal/repository/synthetic_support\\.go$",
+    "tags": []
+  },
+  {
     "pattern": "^frontend/src/.*/__tests__/",
     "tags": []
   }
