@@ -191,6 +191,11 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   // Genuinely armed, unlike the CON-065 walk below: the capture above DRAINED
   // the response buffer, so the only list-path response left to satisfy this is
   // the detail page's own ids_only fetch (its sole /api/v1/contacts call).
+  // It is also load-bearing for the trap suite. This capture's only other gate
+  // is a static button, so this wait is what guarantees the ids_only response is
+  // RECORDED here — and the reorder_ids doctoring op (aimed at CON-038[1]) reads
+  // that array and silently no-ops when it is absent, so dropping this wait would
+  // leave a trap built on it unable to fail.
   await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH) // ids_only nav order
   await page.getByRole('button', { name: 'Edit' }).waitFor({ state: 'visible' })
   await tour.capture(page, {
@@ -240,8 +245,13 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   // button + heading are static, so without this the ARIA snapshot can catch
   // the pager mid-load as "No contacts" — contradictory evidence (see the
   // post-nav capture-race gotcha in core.md).
+  // The regex is ANCHORED precisely because this is the sole gate: unanchored,
+  // seeded note/task prose ("Discussed 2 of 3 action items") matches it too, and
+  // a detail page renders plenty of it. Measured against staging with such a
+  // decoy in the DOM: unanchored matches 2 elements, anchored matches 1 — the
+  // pager span, whose whole text is "N of M".
   await page
-    .getByText(/\d+ of \d+/)
+    .getByText(/^\d+ of \d+$/)
     .first()
     .waitFor({ state: 'visible' })
   await tour.capture(page, {
