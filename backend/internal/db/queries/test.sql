@@ -1596,7 +1596,8 @@ SELECT
     c.last_outreach_at,
     c.last_response_at,
     c.contact_by,
-    c.birthday
+    c.birthday,
+    c.location
 FROM contact c
 WHERE c.full_name LIKE @name_prefix || '%'
   AND c.deleted_at IS NULL

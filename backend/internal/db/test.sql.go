@@ -584,7 +584,8 @@ SELECT
     c.last_outreach_at,
     c.last_response_at,
     c.contact_by,
-    c.birthday
+    c.birthday,
+    c.location
 FROM contact c
 WHERE c.full_name LIKE $1 || '%'
   AND c.deleted_at IS NULL
@@ -604,6 +605,7 @@ type ListPinnedFixtureContactsByNamePrefixRow struct {
 	LastResponseAt pgtype.Timestamptz `json:"last_response_at"`
 	ContactBy      pgtype.Date        `json:"contact_by"`
 	Birthday       pgtype.Date        `json:"birthday"`
+	Location       pgtype.Text        `json:"location"`
 }
 
 // Pinned tour-fixture proof: the namespace's live contacts with the columns the
@@ -633,6 +635,7 @@ func (q *Queries) ListPinnedFixtureContactsByNamePrefix(ctx context.Context, nam
 			&i.LastResponseAt,
 			&i.ContactBy,
 			&i.Birthday,
+			&i.Location,
 		); err != nil {
 			return nil, err
 		}

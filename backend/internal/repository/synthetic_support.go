@@ -1557,6 +1557,7 @@ type PinnedFixtureContact struct {
 	LastResponseAt *time.Time
 	ContactBy      *time.Time
 	Birthday       *time.Time
+	Location       *string
 }
 
 // ListPinnedFixtureContactsByNamePrefix returns the namespace's live contacts in
@@ -1602,6 +1603,10 @@ func (r *SyntheticSupportRepository) ListPinnedFixtureContactsByNamePrefix(ctx c
 		if row.Birthday.Valid {
 			t := row.Birthday.Time
 			c.Birthday = &t
+		}
+		if row.Location.Valid {
+			v := row.Location.String
+			c.Location = &v
 		}
 		out = append(out, c)
 	}

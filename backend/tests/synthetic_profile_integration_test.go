@@ -299,6 +299,207 @@ func assertBirthdayFixtures(t *testing.T, ctx context.Context, support *reposito
 	}
 }
 
+// assertPinnedTourFixtures runs the pinned tour-fixture gate. For every marker in
+// synthetic.PinnedFixtureMarkers it requires that:
+//
+//   - exactly ONE contact in the namespace carries the marker (not "at least one":
+//     a second match would make the tour's choice a silent coin flip, so it has to
+//     be a loud failure here);
+//   - that row is the one the harness recorded, so the id-scoped assertions below
+//     are about the same contact the tour will resolve;
+//   - the API SEARCH the tours actually use returns exactly that row. A marker that
+//     exists in the DB but does not survive full-text tokenization is unresolvable,
+//     and only running the real search path proves that it does.
+//
+// It then asserts each fixture carries the state its consuming tour depends on,
+// and that the ordering the tours' deliberately POSITIONAL selections read is
+// non-degenerate. The tours read a world-wide list where this reads a
+// namespace-scoped one; on staging the seeded namespace IS the world, which is the
+// case these assertions are about.
+func assertPinnedTourFixtures(
+	t *testing.T,
+	ctx context.Context,
+	support *repository.SyntheticSupportRepository,
+	contactRepo *repository.ContactRepository,
+	h *synthetic.Harness,
+	prefix string,
+	anchor time.Time,
+) {
+	t.Helper()
+	now := accelerated.GetCurrentTime()
+
+	rows, err := support.ListPinnedFixtureContactsByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	// A6: the contacts tour hard-throws below five contacts.
+	require.GreaterOrEqual(t, len(rows), 5, "the contacts tour needs ≥5 contacts in the world")
+
+	recorded := h.PinnedFixtureIDs()
+	require.Len(t, recorded, len(synthetic.PinnedFixtureMarkers),
+		"every declared fixture marker must be recorded on the harness — an unrecorded fixture is one nothing can scope an assertion to")
+
+	byMarker := make(map[string]repository.PinnedFixtureContact, len(synthetic.PinnedFixtureMarkers))
+	subjectOf := make(map[uuid.UUID]string, len(synthetic.PinnedFixtureMarkers))
+	for _, marker := range synthetic.PinnedFixtureMarkers {
+		var matches []repository.PinnedFixtureContact
+		for _, row := range rows {
+			if strings.Contains(row.FullName, marker) {
+				matches = append(matches, row)
+			}
+		}
+		require.Len(t, matches, 1, "fixture %q must resolve to exactly one contact in the namespace", marker)
+		require.Equal(t, recorded[marker], matches[0].ID, "fixture %q: the harness-recorded subject must be the marker-resolvable row", marker)
+
+		found, err := contactRepo.ListContacts(ctx, repository.ListContactsParams{Query: marker, Limit: 200})
+		require.NoError(t, err)
+		scoped := make([]uuid.UUID, 0, 1)
+		for _, c := range found {
+			if strings.HasPrefix(c.FullName, prefix) {
+				scoped = append(scoped, c.ID)
+			}
+		}
+		require.Equal(t, []uuid.UUID{matches[0].ID}, scoped,
+			"fixture %q must be returned by the contact SEARCH the tours resolve with, exactly once", marker)
+
+		prior, dup := subjectOf[matches[0].ID]
+		require.False(t, dup, "fixtures %q and %q resolved to the SAME contact — each fixture needs its own subject", prior, marker)
+		subjectOf[matches[0].ID] = marker
+		byMarker[marker] = matches[0]
+	}
+
+	flags, err := support.ListCadenceActivityFlagsByNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	flagsByID := make(map[uuid.UUID]repository.CadenceActivityFlags, len(flags))
+	for _, f := range flags {
+		flagsByID[f.ContactID] = f
+	}
+
+	// A1 — the no-recent-activity subject. It also carries the tasks-section empty
+	// state on the SAME page visit, so zero PRODUCT-VISIBLE tasks is part of the
+	// fixture, asserted directly rather than inferred from its seeding position.
+	noActivity := byMarker[synthetic.FixtureMarkerNoActivity]
+	require.Nil(t, noActivity.LastOutreachAt, "no-activity fixture must carry no outreach")
+	require.Nil(t, noActivity.LastResponseAt, "no-activity fixture must carry no response")
+	require.Nil(t, noActivity.LastContacted, "no-activity fixture must never have been connected with")
+	require.True(t, flagsByID[noActivity.ID].HasNone, "no-activity fixture must carry no pending follow-up either")
+	require.NotNil(t, noActivity.Cadence)
+	require.NotEmpty(t, *noActivity.Cadence, "no-activity fixture must be cadence-bearing (the recent-never-connected floor requires one)")
+	require.NotNil(t, noActivity.CreatedAt)
+	require.True(t, noActivity.CreatedAt.After(now.Add(-14*24*time.Hour)),
+		"no-activity fixture must be recently created (it supplies the recent-never-connected floor)")
+	visible, err := support.ListVisibleTaskCountsByContactIds(ctx, []uuid.UUID{noActivity.ID})
+	require.NoError(t, err)
+	require.Len(t, visible, 1)
+	require.Zero(t, visible[0].VisibleCount, "no-activity fixture must have zero product-visible tasks (the tasks empty state rides on it)")
+
+	// A2 / A3 — outreach and response, on DISTINCT contacts (the distinctness is
+	// already guaranteed above; what matters here is that each carries its column).
+	outreach := byMarker[synthetic.FixtureMarkerOutreach]
+	require.NotNil(t, outreach.LastOutreachAt, "outreach fixture must carry last_outreach_at")
+	response := byMarker[synthetic.FixtureMarkerResponse]
+	require.NotNil(t, response.LastResponseAt, "response fixture must carry last_response_at")
+
+	// A4 — the awaiting-reply subject.
+	pending := byMarker[synthetic.FixtureMarkerPending]
+	require.True(t, flagsByID[pending.ID].HasPending, "pending fixture must carry a live follow-up loop")
+
+	// A5 — the two designated overdue contacts. STATE guarantees, not subjects: no
+	// tour resolves them, the dashboard and relationship-loop tours keep their
+	// positional most-urgent selection. What is asserted is that the world contains
+	// them and that each contributes a creation age no other qualifying contact has —
+	// the diversity gap the frozen catalog cannot close on its own.
+	overdueFixtures := []repository.PinnedFixtureContact{
+		byMarker[synthetic.FixtureMarkerOverdueA],
+		byMarker[synthetic.FixtureMarkerOverdueB],
+	}
+	diversityFloor := now.Add(-7 * 24 * time.Hour)
+	for _, f := range overdueFixtures {
+		require.NotNil(t, f.Cadence)
+		require.NotEmpty(t, *f.Cadence, "overdue fixture must be cadence-bearing")
+		require.Nil(t, f.LastContacted, "overdue fixture must be never-connected (an honest empty timeline)")
+		require.NotNil(t, f.CreatedAt)
+		require.True(t, f.CreatedAt.Before(now.Add(-14*24*time.Hour)), "overdue fixture must be backdated past the 14d floor")
+		require.NotNil(t, f.ContactBy)
+		require.True(t, f.ContactBy.Before(now), "overdue fixture's computed contact_by must have elapsed")
+		cadenceType, err := cadence.ParseCadence(*f.Cadence)
+		require.NoError(t, err)
+		require.True(t, cadence.IsOverdueWithConfig(cadenceType, nil, *f.CreatedAt, now),
+			"overdue fixture must be overdue via the production cadence helper")
+	}
+	require.NotEqual(t, *overdueFixtures[0].Cadence, *overdueFixtures[1].Cadence, "the two overdue fixtures must carry distinct cadences")
+	require.False(t, overdueFixtures[0].CreatedAt.Equal(*overdueFixtures[1].CreatedAt), "the two overdue fixtures must carry distinct creation ages")
+	for i, f := range overdueFixtures {
+		other := overdueFixtures[1-i]
+		for _, row := range rows {
+			if row.ID == f.ID || row.ID == other.ID {
+				continue
+			}
+			if row.Cadence == nil || *row.Cadence == "" || row.LastContacted != nil || row.CreatedAt == nil {
+				continue
+			}
+			if !row.CreatedAt.Before(diversityFloor) {
+				continue
+			}
+			require.False(t, row.CreatedAt.Equal(*f.CreatedAt),
+				"overdue fixture %s duplicates another contact's creation age — it adds no NEW distinct age to the diversity set", subjectOf[f.ID])
+		}
+	}
+
+	// A7 — the merge pair. The preview flags a field conflicting only when the
+	// SOURCE's value is non-empty and differs from the target's, so both fields are
+	// checked from that side.
+	mergeTarget := byMarker[synthetic.FixtureMarkerMergeTarget]
+	mergeSource := byMarker[synthetic.FixtureMarkerMergeSource]
+	require.NotNil(t, mergeTarget.Cadence)
+	require.NotNil(t, mergeSource.Cadence)
+	require.NotEqual(t, *mergeTarget.Cadence, *mergeSource.Cadence, "the merge pair must differ in cadence")
+	require.NotNil(t, mergeTarget.Location)
+	require.NotNil(t, mergeSource.Location, "the merge source must carry a location — a conflict needs the source value set")
+	require.NotEqual(t, *mergeTarget.Location, *mergeSource.Location,
+		"the merge pair must differ in location too — one conflicting field is not enough to prove the preview surfaces the ACTUALLY-conflicting ones")
+
+	// A8 — the searched navigation subject must survive the has_cadence filter.
+	searchSubject := byMarker[synthetic.FixtureMarkerSearch]
+	require.NotNil(t, searchSubject.Cadence)
+	require.NotEmpty(t, *searchSubject.Cadence, "the search subject must be cadence-bearing (it is reached through cadence_filter=has_cadence)")
+
+	// A6 — the merge and navigation subjects are what the "≥3 unique-named contacts"
+	// requirement is actually about, so it is discharged over exactly those three.
+	nameCount := map[string]int{}
+	for _, row := range rows {
+		nameCount[row.FullName]++
+	}
+	for _, marker := range []string{synthetic.FixtureMarkerMergeTarget, synthetic.FixtureMarkerMergeSource, synthetic.FixtureMarkerSearch} {
+		require.Equal(t, 1, nameCount[byMarker[marker].FullName],
+			"fixture %q must carry a name unique in the world — the merge selector filters by exact name text", marker)
+	}
+
+	// A10 — the dedicated highlight-window birthday. Pinned by DAY COUNT, which is
+	// date-independent; the page's section for it is not (see the fixture's own
+	// comment), so the section is deliberately not asserted.
+	birthday := byMarker[synthetic.FixtureMarkerBirthday]
+	require.NotNil(t, birthday.Birthday, "the birthday fixture must have a populated birthday cache")
+	require.Equal(t, synthetic.FixtureBirthdayOffsetDays, synthetic.BirthdayDaysUntil(*birthday.Birthday, anchor),
+		"the birthday fixture must be exactly %d days out", synthetic.FixtureBirthdayOffsetDays)
+
+	// B-group non-degeneracy. These selections are deliberately NOT pinned — they
+	// test the ordering itself — so what is asserted is that the ordering is
+	// well-defined for them. rows arrive in the tours' default cadence order.
+	require.GreaterOrEqual(t, len(rows), 2, "the navigation boundary captures need ≥2 contacts in the order")
+	sortKey := func(c repository.PinnedFixtureContact) string {
+		cadenceValue := ""
+		if c.Cadence != nil {
+			cadenceValue = *c.Cadence
+		}
+		return cadenceValue + "\x00" + c.FullName
+	}
+	require.NotEqual(t, sortKey(rows[0]), sortKey(rows[1]),
+		"the first two rows of the default order must have distinct sort keys — a tie there is broken by a per-run random id, so the tour's first-row subject would rebind between sweeps")
+	for _, marker := range synthetic.PinnedFixtureMarkers {
+		require.NotEqual(t, rows[0].ID, byMarker[marker].ID,
+			"pinned fixture %q must not occupy the first row of the default order — the contacts tour mutates that row and reserves the fixtures separately", marker)
+	}
+}
+
 // These profile-orchestration integration tests are SLOW-gated
 // (testsupport.RequireLongTests) and routed to the nightly slow suite via the
 // TestSynthetic name prefix. Each sub-test uses a UNIQUE namespace so
@@ -679,6 +880,9 @@ func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
 	assertMessageDirectionCoverage(t, ctx, support, h, res)
 	// Notes coverage (F6).
 	assertNotesCoverage(t, ctx, support, h, res, params.Counts.SeededContacts)
+	// Pinned tour fixtures: every state the QA tours depend on resolves to exactly
+	// one named contact carrying that state.
+	assertPinnedTourFixtures(t, ctx, support, repository.NewContactRepository(database.Queries), h, h.Generator().Prefix(), h.Generator().Anchor())
 }
 
 // assertNotesCoverage runs the F6 notes gate: the profile seeds a note on a
@@ -855,6 +1059,9 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	assertMessageDirectionCoverage(t, ctx, support, h, res)
 	// Notes coverage (F6).
 	assertNotesCoverage(t, ctx, support, h, res, params.Counts.SeededContacts)
+	// Pinned tour fixtures: every state the QA tours depend on resolves to exactly
+	// one named contact carrying that state.
+	assertPinnedTourFixtures(t, ctx, support, repository.NewContactRepository(database.Queries), h, h.Generator().Prefix(), h.Generator().Anchor())
 
 	// Bio facts (how_met, location, real-year birthdays) ride on the contact-create
 	// authority flip; the catalog carries ≥1 of each. A location additionally mints
@@ -1128,7 +1335,7 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 // runCatalogProfile brackets with a phase timer. It is pinned so a block added
 // (or a stop() call lost) without a phase is caught here rather than silently
 // dropping a row from the reseed summary.
-const catalogProfilePhaseCount = 22
+const catalogProfilePhaseCount = 23
 
 // phaseShape projects phase timings onto their DETERMINISTIC components — name
 // and payload volume — dropping the wall-clock duration, so a run-to-run

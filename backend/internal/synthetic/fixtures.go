@@ -136,7 +136,7 @@ const (
 	fixtureSearchCadence      = "biannual"
 )
 
-// fixtureBirthdayOffsetDays places the dedicated birthday fixture inside the
+// FixtureBirthdayOffsetDays places the dedicated birthday fixture inside the
 // birthdays page's ≤7-day highlight window, and away from the offsets the
 // catalog-riding clock-anchored fixtures already occupy so the imminent group
 // gains a distinct additional member.
@@ -147,7 +147,7 @@ const (
 // already past in the current calendar year files under "Already Celebrated This
 // Year" even when the next one is two days away), which is why the tour resolves
 // the fixture's card by identity rather than by section.
-const fixtureBirthdayOffsetDays = 2
+const FixtureBirthdayOffsetDays = 2
 
 // fixtureMergeLocationStems are the two DISTINCT location stems the merge pair
 // carries, drawn from the catalog's pool so places keep repeating across the world
@@ -211,7 +211,7 @@ func buildPinnedTourFixtures(gen *factory.Generator) []pinnedFixturePlan {
 		// Birthday inside the highlight window.
 		{FixtureMarkerBirthday, []factory.ContactOption{
 			factory.WithEmail(),
-			factory.WithBirthday(BirthdayFixtureDate(anchor, fixtureBirthdayOffsetDays)),
+			factory.WithBirthday(BirthdayFixtureDate(anchor, FixtureBirthdayOffsetDays)),
 		}},
 	}
 	for _, pair := range pinnedOverdueFixtures {

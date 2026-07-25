@@ -245,10 +245,10 @@ func TestPinnedMergeFixturesConflict(t *testing.T) {
 func TestPinnedBirthdayFixtureLandsInTheHighlightWindow(t *testing.T) {
 	t.Parallel()
 
-	require.Greater(t, fixtureBirthdayOffsetDays, 0, "the fixture must be upcoming, not today or past")
-	require.LessOrEqual(t, fixtureBirthdayOffsetDays, 7, "the fixture must land in the ≤7-day highlight window")
+	require.Greater(t, FixtureBirthdayOffsetDays, 0, "the fixture must be upcoming, not today or past")
+	require.LessOrEqual(t, FixtureBirthdayOffsetDays, 7, "the fixture must land in the ≤7-day highlight window")
 	for _, planned := range BirthdayFixturePlan(fixtureTestAnchor) {
-		require.NotEqual(t, planned.OffsetDays, fixtureBirthdayOffsetDays,
+		require.NotEqual(t, planned.OffsetDays, FixtureBirthdayOffsetDays,
 			"the dedicated fixture must not duplicate the catalog-riding %s fixture's offset", planned.Role)
 	}
 
@@ -271,8 +271,8 @@ func TestPinnedBirthdayFixtureLandsInTheHighlightWindow(t *testing.T) {
 		time.Date(2028, time.February, 27, 6, 0, 0, 0, time.UTC),
 		time.Date(2027, time.February, 27, 6, 0, 0, 0, time.UTC),
 	} {
-		bday := BirthdayFixtureDate(anchor, fixtureBirthdayOffsetDays)
-		require.Equal(t, fixtureBirthdayOffsetDays, BirthdayDaysUntil(bday, anchor),
-			"birthday fixture must be exactly %d days out at anchor %s", fixtureBirthdayOffsetDays, anchor)
+		bday := BirthdayFixtureDate(anchor, FixtureBirthdayOffsetDays)
+		require.Equal(t, FixtureBirthdayOffsetDays, BirthdayDaysUntil(bday, anchor),
+			"birthday fixture must be exactly %d days out at anchor %s", FixtureBirthdayOffsetDays, anchor)
 	}
 }
