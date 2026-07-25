@@ -111,6 +111,18 @@ result, _ := synthetic.RunProfile(ctx, h, params)           // counts-only Profi
 
 Some pending states have **no toolkit producer yet** (documented, asserted-absent by the coverage check, tracked for a follow-on): `conflict_pending` meeting_note, title-candidate review rows, `comms_message` without `interaction_id`. See the comment block on `runCatalogProfile` in `profiles.go`.
 
+## Asserting the seeded population's shape — read what the product reads
+
+A population-shape gate ("the seed leaves 12–22% of live contacts overdue") is a claim about what the application SHOWS. Assert it through the same read the application performs, not through a recomputation of the same concept from the underlying columns. The two are different quantities whenever a derived/cached column can lag its inputs, and a gate on the recomputation passes while the deployed world disagrees — silently, because both numbers look correct.
+
+The concrete case (gh #751): the overdue band was asserted by recomputing overdue-ness from `(cadence, last_contacted, created_at)` via `synthetic.OverdueAtProduction`, while `GET /contacts/overdue` filters on the persisted `contact_by` column. `contact_by` is written FORWARD-ONLY, so an archetype whose newest two-way interaction predates its contact's `created_at` moves `last_contacted` backwards past `created_at` and leaves `contact_by` at the creation-time value — the recompute says overdue, the endpoint does not return it. Deployed staging was nine contacts short of what the gate measured and the gate could not see it. The fix was to measure both, model both (`PredictedCatalogOverdue` vs `PredictedCatalogOverduePersisted`), and put the product-facing band on the endpoint's own predicate (`SyntheticSupportRepository.ListOverdueContactIdsByNamePrefix`, a deliberate namespace-scoped copy of the production query).
+
+Rules of thumb when adding one of these gates:
+
+- Prefer a test-only sqlc query that COPIES the production predicate (namespace-scoped and unbounded — the production `LIMIT` would let an accumulated shared test DB truncate the window) over re-deriving the concept in Go.
+- If a derived column is involved, assert its precondition rather than assuming it. `contact_by` holds `base + AMBIENT cadence period`, so `assertOverdueBand` requires `cadence.GetCadenceConfig() == cadence.ProductionCadenceConfig()` outright; under a compressed `CRM_ENV` that column is minutes wide and the band would be grading nonsense. (The Go integration suite runs with `CRM_ENV` unset — i.e. production durations — because no `make test-integration*` target sets it; only the frontend E2E lane sets `CRM_ENV=testing`.)
+- Keep the recomputation too, as a separate assertion. It is what the seed's assignment can actually steer, and the two measurements bracketing each other (endpoint set ⊆ recomputed set) is itself a regression detector.
+
 ## Entrypoints
 
 | Entrypoint | What it does |

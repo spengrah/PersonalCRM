@@ -938,21 +938,39 @@ func assertArchetypeSettleBudget(t *testing.T, res synthetic.ProfileResult) {
 		"settles must stay strictly below payloads — a per-payload replay loop settles once PER payload, so equality is the regression")
 }
 
-// assertOverdueBand measures the overdue population from the DATABASE and holds
-// it against the assignment's prediction, the absolute ceiling, and the target
-// share of the live world.
+// assertOverdueBand measures the overdue population from the DATABASE, TWICE —
+// once by recomputing overdue-ness from (cadence, last_contacted, created_at),
+// and once through the predicate GET /contacts/overdue actually runs — and holds
+// each against its own model, the absolute ceiling, and the target share.
 //
-// The measurement constructs PRODUCTION cadence durations explicitly and
-// evaluates them at the seeded world's own anchor. The suite runs under
-// CRM_ENV=test, where annual is two hours and every contact is trivially overdue,
-// so a count taken through the ambient config would be meaningless — and mutating
-// the variable would change cadence semantics for every concurrently-running
-// test.
+// Measuring twice is the point. The two quantities are not the same, and the
+// difference is not a rounding error: contact_by is written FORWARD-ONLY, so an
+// archetype whose newest two-way entry predates its contact's created_at moves
+// last_contacted backwards past created_at while leaving contact_by at the
+// creation-time value. The recompute calls that contact overdue; the endpoint
+// does not return it. Asserting the band on the recompute alone let a
+// nine-contact divergence ship silently to staging (gh #751), because the band
+// is a statement about what the PRODUCT shows and the recompute is not that.
 //
-// The prediction-versus-measurement equality is what keeps the assignment's
-// denominator MODEL honest: the model is never the assertion, the database is.
+// The recompute constructs PRODUCTION cadence durations explicitly rather than
+// reading the ambient config, so it states a production-duration expectation
+// whatever CRM_ENV happens to be. The persisted column cannot do that — it was
+// written by the seed through the ambient config — so the production-duration
+// precondition is asserted outright below instead of assumed.
+//
+// The prediction-versus-measurement equalities are what keep the assignment's
+// MODELS honest: a model is never the assertion, the database is.
 func assertOverdueBand(t *testing.T, ctx context.Context, support *repository.SyntheticSupportRepository, h *synthetic.Harness, n int) {
 	t.Helper()
+
+	// Precondition, not an assumption. The persisted contact_by column holds
+	// base + AMBIENT cadence period, so the endpoint-visible count below is the
+	// production quantity only while the ambient table IS the production one.
+	// Under CRM_ENV=test annual is two hours and every column would be minutes
+	// wide, which would make the band meaningless rather than merely wrong — so
+	// fail loudly and say why, rather than grading nonsense.
+	require.Equal(t, cadence.ProductionCadenceConfig(), cadence.GetCadenceConfig(),
+		"the overdue band is a production-duration statement and the persisted contact_by column is written through the AMBIENT cadence table; run this suite without a compressed CRM_ENV")
 
 	buckets, err := support.ListContactBucketsByNamePrefix(ctx, h.Generator().Prefix())
 	require.NoError(t, err)
@@ -968,12 +986,25 @@ func assertOverdueBand(t *testing.T, ctx context.Context, support *repository.Sy
 		}
 	}
 
+	// The endpoint's own read: contact_by set and strictly before today's DATE,
+	// namespace-scoped and unbounded (the production query's global LIMIT would
+	// let an accumulated shared test DB truncate the window). Evaluated at the
+	// same anchor the recompute uses, so the two counts answer one question about
+	// one instant instead of straddling the seed's own duration.
+	endpointOverdueIDs, err := support.ListOverdueContactIdsByNamePrefix(ctx, h.Generator().Prefix(), cadence.Today(anchor))
+	require.NoError(t, err)
+	endpointOverdue := len(endpointOverdueIDs)
+
 	// The pinned overdue fixtures sit outside the catalog and are always overdue,
-	// so the assignment's catalog prediction accounts for them separately. The
+	// so the assignment's catalog predictions account for them separately. The
 	// count is READ from the seed rather than restated here, so a change to the
-	// fixture table cannot drift the budget and this assertion apart.
+	// fixture table cannot drift the budget and these assertions apart.
 	require.Equal(t, synthetic.PredictedCatalogOverdue(n)+synthetic.PinnedOverdueFixtureCount, overdue,
-		"the measured overdue population must equal what the assignment predicts — a drifting model has to fail here rather than be trusted")
+		"the recomputed overdue population must equal what the assignment predicts — a drifting model has to fail here rather than be trusted")
+	require.Equal(t, synthetic.PredictedCatalogOverduePersisted(n)+synthetic.PinnedOverdueFixtureCount, endpointOverdue,
+		"the ENDPOINT-visible overdue population must equal what the assignment predicts for the persisted contact_by column — this is the assertion gh #751 was missing")
+	require.LessOrEqual(t, endpointOverdue, overdue,
+		"the endpoint's overdue set is contact_by in the past, which the forward-only write makes a SUBSET of the recomputed set — the reverse is a cadence-write regression, not a modelling gap")
 	require.LessOrEqual(t, overdue, synthetic.OverdueCeiling,
 		"the overdue population must stay under the ceiling; the overdue tours refuse to run above their own, higher, capture cap")
 
@@ -982,9 +1013,11 @@ func assertOverdueBand(t *testing.T, ctx context.Context, support *repository.Sy
 	}
 	live := len(buckets)
 	require.Positive(t, live)
-	share := 100.0 * float64(overdue) / float64(live)
-	require.GreaterOrEqual(t, share, 20.0, "overdue share %.1f%% of %d live contacts is below the target band", share, live)
-	require.LessOrEqual(t, share, 27.0, "overdue share %.1f%% of %d live contacts is above the target band", share, live)
+	share := 100.0 * float64(endpointOverdue) / float64(live)
+	require.GreaterOrEqual(t, share, synthetic.OverdueBandFloorPercent,
+		"endpoint-visible overdue share %.1f%% of %d live contacts is below the target band", share, live)
+	require.LessOrEqual(t, share, synthetic.OverdueBandCeilingPercent,
+		"endpoint-visible overdue share %.1f%% of %d live contacts is above the target band", share, live)
 }
 
 func TestSyntheticProfile_DevCoversCatalog(t *testing.T) {
@@ -1572,6 +1605,16 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 	}
 	require.Equal(t, driftingID, contactedOverdue[0],
 		"the contacted-and-overdue contact must be the slot the assignment gave mutual-drifting to")
+
+	// …and the product has to AGREE that it is overdue. The state exists to put a
+	// contacted-and-overdue card on the dashboard, so recomputing overdue-ness is
+	// not enough: the same contact must come back from the predicate the overdue
+	// endpoint runs against the persisted contact_by column. Recompute-only was
+	// exactly how a nine-contact shortfall reached staging unnoticed (gh #751).
+	endpointOverdueIDs, err := support.ListOverdueContactIdsByNamePrefix(ctx, prefix, cadence.Today(anchor))
+	require.NoError(t, err)
+	require.Contains(t, endpointOverdueIDs, driftingID,
+		"the reserved rung's contacted-and-overdue contact must also be returned by the overdue ENDPOINT — a contact the product does not list as overdue does not supply the state")
 
 	remaining, err := h.ContactsRemaining(ctx)
 	require.NoError(t, err)

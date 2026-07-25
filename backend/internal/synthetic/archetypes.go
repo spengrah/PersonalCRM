@@ -288,6 +288,11 @@ func archetypeScarcityOrder() []factory.Archetype {
 // array cap (50), and the overdue tours' own explicit cap, which they enforce by
 // REFUSING to run above it. Exported so the coverage tests assert the shipped
 // population against the same number the assignment is built to.
+//
+// The bound the tours actually feel is on the ENDPOINT-visible set, which is a
+// subset of the recomputed one (see archetypeLeavesSlotPersistedOverdue), so the
+// coverage gate holds this ceiling against the recomputed count — the larger of
+// the two, and therefore the conservative side to assert from.
 const OverdueCeiling = 45
 
 // catalogNonCatalogLiveContacts models the profile's non-catalog live contacts —
@@ -297,10 +302,45 @@ const OverdueCeiling = 45
 // measures the live population from the database.
 const catalogNonCatalogLiveContacts = 25
 
-// overdueSharePercent is the percentage of the live population the overdue set
-// aims at. The band the coverage gates assert is 20–27%; the budget aims at the
-// middle of it.
+// overdueSharePercent is the percentage of the live population the budget lets
+// the assignment leave overdue. It bounds the RECOMPUTED quantity — the one
+// archetypeLeavesSlotOverdue counts — because that is what the placement loop
+// can actually steer: whether a slot's contact_by ends up in the past is decided
+// afterwards, by the forward-only cadence write, not by the assignment.
+// 23% keeps the recomputed population in the 20–27% range across the assignable
+// sizes; the ENDPOINT-visible share that falls out of it is the lower band below.
 const overdueSharePercent = 23
+
+// OverdueBandFloorPercent / OverdueBandCeilingPercent bound the share of live
+// contacts the seeded world leaves overdue AS THE PRODUCT SHOWS IT — the count
+// GET /contacts/overdue returns, which is the persisted contact_by column.
+//
+// Derivation, not a golden number. The endpoint-visible set is the
+// natively-overdue (backdated) catalog slots that no calm archetype rescued,
+// plus the two pinned fixtures — see archetypeLeavesSlotPersistedOverdue for why
+// the endpoint's set is exactly that conjunction. Backdated slots are one
+// catalog index in three, so the numerator grows like n/3 less the calm quota
+// while the denominator grows like n plus a fixed non-catalog cohort, which puts
+// the share in the mid-to-high teens across the whole assignable range: sweeping
+// n over [12, 150] against the dev-knob denominator spans 12.9% to 21.1%, and the
+// two shipped worlds measure 16.2% (dev, n=18: 6 of 37) and 17.1% (prod-shaped,
+// n=150: 31 of 181). The band is that sweep rounded outward to whole points.
+//
+// It is deliberately wide enough that the calm quota, the ladder, or the
+// non-catalog cohort can move by a couple of contacts without flaking a gate —
+// at prod-shaped one contact is 0.55% of the share — and deliberately narrow
+// enough to exclude the RECOMPUTED share, which runs 22–26% over the same range.
+// A gate that quietly went back to recomputing overdue-ness instead of reading
+// the column therefore fails here rather than passing while staging disagrees,
+// which is the regression gh #751 recorded.
+//
+// The band is the population-SHAPE statement and carries that slack on purpose.
+// The tight guard is the exact equality against PredictedCatalogOverduePersisted
+// in the coverage gate; this is not the place to catch a one-contact drift.
+const (
+	OverdueBandFloorPercent   = 12.0
+	OverdueBandCeilingPercent = 22.0
+)
 
 // PinnedOverdueFixtureCount is how many overdue contacts the pinned-fixture block
 // adds. They sit OUTSIDE the catalog and are always overdue, so the catalog
@@ -632,10 +672,60 @@ func archetypeLeavesSlotOverdue(i, n int, a factory.Archetype) bool {
 // PredictedCatalogOverdue is how many CATALOG slots the assignment leaves
 // overdue at this catalog size. Exported so the coverage test can compare a
 // DB-measured count against the prediction rather than trusting either alone.
+//
+// This is the RECOMPUTED quantity — overdue derived from (cadence,
+// last_contacted, created_at). It is NOT what GET /contacts/overdue returns; see
+// PredictedCatalogOverduePersisted for that, and the comment there for why the
+// two legitimately differ.
 func PredictedCatalogOverdue(n int) int {
 	count := 0
 	for i, a := range archetypeAssignment(n) {
 		if archetypeLeavesSlotOverdue(i, n, a) {
+			count++
+		}
+	}
+	return count
+}
+
+// archetypeLeavesSlotPersistedOverdue predicts whether the slot ends up overdue
+// AS THE OVERDUE ENDPOINT SEES IT — with the persisted contact_by column in the
+// past — which is a strictly smaller set than archetypeLeavesSlotOverdue.
+//
+// The two differ because contact_by is written FORWARD-ONLY. Creation seeds it
+// at DateOnly(created_at + period) (repository.CreateContact); an interaction
+// then offers DateOnly(occurred_at + period) through the forward branch of
+// UpdateContactCadenceForward, which writes only when the incoming date is
+// strictly GREATER than the stored one. An archetype whose newest two-way entry
+// predates the contact's own created_at — which the catalog produces
+// deliberately, since a backfill routinely discovers correspondence older than
+// the row that records it — therefore moves last_contacted backwards past
+// created_at while leaving contact_by at the creation-time value. The recompute
+// bases on last_contacted and says overdue; the endpoint reads contact_by and
+// does not. Whether the APPLICATION should behave that way is tracked separately
+// as gh #753; the seed models what it does rather than assuming the reads agree.
+//
+// So the endpoint's answer is the CONJUNCTION: contact_by ends up at
+// max(created_at + period, last_contacted + period), and a maximum is in the
+// past only when both terms are. Hence natively-overdue AND recompute-overdue.
+//
+// The conjunction is exact rather than approximate because the two creation
+// shapes that are not natively overdue are not near the boundary: a slotRecent
+// is created within 48h against a 7d-or-longer period, and a slotFresh is
+// created at the anchor itself. No PRNG draw inside either window can push
+// created_at + period into the past, so this stays a pure function of (i, n, a).
+func archetypeLeavesSlotPersistedOverdue(i, n int, a factory.Archetype) bool {
+	return catalogSlotNativelyOverdue(i, n) && archetypeLeavesSlotOverdue(i, n, a)
+}
+
+// PredictedCatalogOverduePersisted is how many CATALOG slots the assignment
+// leaves overdue in the persisted contact_by column — i.e. how many the overdue
+// ENDPOINT returns, which is the number the arc's overdue band is about.
+// Exported for the same reason as PredictedCatalogOverdue: so the coverage gate
+// compares a DB measurement against a model instead of trusting either alone.
+func PredictedCatalogOverduePersisted(n int) int {
+	count := 0
+	for i, a := range archetypeAssignment(n) {
+		if archetypeLeavesSlotPersistedOverdue(i, n, a) {
 			count++
 		}
 	}
@@ -655,10 +745,17 @@ func PredictedCatalogOverdue(n int) int {
 // that the caller holds a nullable cadence STRING, and that an absent cadence
 // means no due date at all rather than a defaulted one.
 //
-// Exported for the coverage tests, which run under CRM_ENV=test where annual is
-// two hours and every contact is overdue — so a measurement taken through the
-// ambient config would prove nothing, and mutating the variable would change
+// Exported so the coverage tests can state a production-duration expectation
+// without DEPENDING on the ambient environment: under CRM_ENV=test annual is two
+// hours and every contact is trivially overdue, so a recomputation taken through
+// the ambient config would prove nothing, and mutating the variable would change
 // cadence semantics for every concurrently-running test.
+//
+// This is the RECOMPUTE, and it is not what the overdue endpoint answers. The
+// endpoint reads the persisted contact_by column, which the forward-only cadence
+// write can leave in the future on a contact this function calls overdue — see
+// archetypeLeavesSlotPersistedOverdue. Anything asserting what the PRODUCT shows
+// must read the column; this function is for reasoning about the seed's intent.
 func OverdueAtProduction(cadenceName string, lastContacted *time.Time, createdAt, ref time.Time) bool {
 	if cadenceName == "" {
 		// No cadence means the app computes no due date, so nothing can be overdue.
