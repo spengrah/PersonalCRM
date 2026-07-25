@@ -444,14 +444,26 @@ func (b *timelineBuilder) sorted() []TimelineEntry {
 //
 // With a calendar it is a single meeting, which the pipeline always classifies
 // as mutual. Without one — a Telegram- or phone-only contact — the same
-// two-wayness has to be EARNED, so the exchange becomes a promotion pair on the
-// chat source: outbound first, inbound messagingPairGap later, both inside the
-// one conversation the timeline holds with that contact.
+// two-wayness has to be EARNED, so the exchange becomes a chat promotion pair.
 func (b *timelineBuilder) addMutualExchange(p sourcePlan, age time.Duration) {
 	if p.meeting != "" {
 		b.add(TimelineEntry{Source: p.meeting, Age: age})
 		return
 	}
+	b.addChatExchange(p, age)
+}
+
+// addChatExchange records a two-way exchange on the chat source: outbound
+// first, inbound messagingPairGap later.
+//
+// Every chat exchange a timeline emits goes into ONE conversation, allocated on
+// first use and held for the rest of the timeline. A contact has a single
+// private chat with you — one Telegram peer, one iMessage thread — so splitting
+// a relationship across two of them would ask the replay layer to mint two
+// separate private conversations with the same person, which is not a state the
+// world produces. Distinct conversations are for distinct THREADS (mail), and
+// for one-sided history that must never bridge.
+func (b *timelineBuilder) addChatExchange(p sourcePlan, age time.Duration) {
 	if b.fallback == 0 {
 		b.fallback = b.conversation()
 	}
@@ -589,8 +601,29 @@ func seriesAges(count int, newest, gapLo, gapHi time.Duration, j timelineJitter)
 
 // addPairsBetweenMeetings places correspondence pairs INSIDE the newest gaps of
 // a meeting series — pair k between meeting k and meeting k+1. Keeping them at
-// the recent end is what holds the mail entries inside mailMaxSpan while the
-// calendar carries the deep history.
+// the recent end is what holds one timeline's mail entries inside a single Gmail
+// sync's reach (replay.gmailBatchMaxSpan, 150 days) while the calendar carries
+// the deep history.
+//
+// That bound is PER BATCH — it spans every instant in the batch, across all the
+// contacts in it — while what a timeline can promise is per contact. The two are
+// not the same number, and the batch one is the larger:
+//
+//	newest mail any archetype emits:  1d  (inbound-only, at its newest bound)
+//	oldest mail any archetype emits: 180d (mutual-drifting, second correspondence
+//	                                       pair at the far end of the second
+//	                                       meeting gap: 112 + 35 + 35 - 2)
+//
+// So mail pooled across archetypes spans up to 179 DAYS against a 150-day limit.
+// That is the arithmetic bound, not a sample; sampling 4,000 namespaces per
+// archetype observes about 173 days, which is the same conclusion with less
+// authority.
+//
+// Pooling every contact's mail into ONE Gmail batch therefore exceeds the limit
+// and is rejected — by design, not by accident: the replay layer raises a named
+// error rather than auto-splitting, because only the caller knows whether
+// splitting a contact's history across two syncs is semantically fine. A caller
+// batching mail across contacts has to bucket by age.
 func addPairsBetweenMeetings(b *timelineBuilder, p sourcePlan, ages []time.Duration, pairs int, j timelineJitter) {
 	for k := 0; k < pairs && k+1 < len(ages); k++ {
 		gap := ages[k+1] - ages[k]
@@ -645,22 +678,28 @@ func buildDormant(b *timelineBuilder, p sourcePlan, j timelineJitter) {
 	newest := pickDuration(j[jitterNewestAge], dormantNewestMin, dormantNewestMax)
 	oldest := pickDuration(j[jitterSpan], newest+dormantSpanMin, dormantOldestMax)
 
-	// The relationship closes with a two-way exchange on the chat source, which
-	// is what makes the history genuinely two-way on more than the calendar.
-	conv := b.conversation()
-	key := b.pair()
-	b.add(TimelineEntry{Source: p.chat, Age: newest + messagingPairGap, Outbound: true, ConversationKey: conv, PairKey: key})
-	b.add(TimelineEntry{Source: p.chat, Age: newest, ConversationKey: conv, PairKey: key})
+	// The relationship closes with a two-way exchange on the chat source, which is
+	// what makes the history genuinely two-way on more than the calendar. It goes
+	// through the same held conversation as any other chat exchange, so a
+	// calendar-less target ends up with one conversation rather than two.
+	b.addChatExchange(p, newest)
 
-	// Meetings fill the rest of the window, evenly, back to the oldest bound. The
-	// step is floored to whole hours so the oldest entry can never overshoot it.
-	first := newest + messagingPairGap + dormantPairInset
+	// Meetings fill the rest of the window, stepping back from the drawn oldest
+	// bound so that bound is hit exactly and the history's depth is the floor it
+	// was drawn against. The step is floored to whole hours, which can only move
+	// the NEWEST meeting further from the closing exchange, never past it.
+	//
+	// Spacing here is deliberately not the 21-35d of the calendar-led archetypes:
+	// dormant's shape is "it ended", not "it had a rhythm", and at two meetings
+	// the gap can reach roughly four months. That is intended texture, and it is
+	// bounded by the dormant window rather than by a spacing rule.
+	newestMeeting := newest + messagingPairGap + dormantPairInset
 	var step time.Duration
 	if meetings > 1 {
-		step = floorHours((oldest - first) / time.Duration(meetings-1))
+		step = floorHours((oldest - newestMeeting) / time.Duration(meetings-1))
 	}
 	for i := 0; i < meetings; i++ {
-		b.addMutualExchange(p, first+time.Duration(i)*step)
+		b.addMutualExchange(p, oldest-time.Duration(i)*step)
 	}
 }
 
@@ -695,11 +734,16 @@ func buildBurstThenQuiet(b *timelineBuilder, p sourcePlan, j timelineJitter) {
 	if filler <= 0 {
 		return
 	}
+	// Under the declared bounds this step is at least five hours (the narrowest
+	// cluster over the largest filler count), so it is always positive and every
+	// filler stays strictly older than the closing pair. It is deliberately NOT
+	// clamped: a clamp would silently reshape the archetype if a future bound
+	// change made the step degenerate — pushing fillers past the pair, or
+	// colliding two ages — where an unclamped step instead trips the tests that
+	// pin the closing pair as the newest group and every age in a conversation as
+	// distinct.
 	openingEnd := oldest - time.Duration(burstOpeningMessages-1)*burstOpeningStride
 	step := floorHours((openingEnd - pairOutbound) / time.Duration(filler+1))
-	if step < time.Hour {
-		step = time.Hour
-	}
 	for i := 1; i <= filler; i++ {
 		b.add(TimelineEntry{
 			Source:          p.chat,

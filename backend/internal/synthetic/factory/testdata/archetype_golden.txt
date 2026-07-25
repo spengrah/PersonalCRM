@@ -22,12 +22,12 @@ email/inbound-only entries=2
 email/inbound-only [00] source=email age=846h0m0s outbound=false conv=0 pair=0
 email/inbound-only [01] source=email age=241h0m0s outbound=false conv=0 pair=0
 email/dormant entries=8
-email/dormant [00] source=gcal age=4662h0m0s outbound=false conv=0 pair=0
-email/dormant [01] source=gcal age=4468h0m0s outbound=false conv=0 pair=0
-email/dormant [02] source=gcal age=4274h0m0s outbound=false conv=0 pair=0
-email/dormant [03] source=gcal age=4080h0m0s outbound=false conv=0 pair=0
-email/dormant [04] source=gcal age=3886h0m0s outbound=false conv=0 pair=0
-email/dormant [05] source=gcal age=3692h0m0s outbound=false conv=0 pair=0
+email/dormant [00] source=gcal age=4663h0m0s outbound=false conv=0 pair=0
+email/dormant [01] source=gcal age=4469h0m0s outbound=false conv=0 pair=0
+email/dormant [02] source=gcal age=4275h0m0s outbound=false conv=0 pair=0
+email/dormant [03] source=gcal age=4081h0m0s outbound=false conv=0 pair=0
+email/dormant [04] source=gcal age=3887h0m0s outbound=false conv=0 pair=0
+email/dormant [05] source=gcal age=3693h0m0s outbound=false conv=0 pair=0
 email/dormant [06] source=gchat age=3572h0m0s outbound=true conv=1 pair=1
 email/dormant [07] source=gchat age=3566h0m0s outbound=false conv=1 pair=1
 email/burst-then-quiet entries=5
@@ -67,18 +67,18 @@ telegram/inbound-only entries=2
 telegram/inbound-only [00] source=telegram age=846h0m0s outbound=false conv=0 pair=0
 telegram/inbound-only [01] source=telegram age=241h0m0s outbound=false conv=0 pair=0
 telegram/dormant entries=14
-telegram/dormant [00] source=telegram age=4668h0m0s outbound=true conv=2 pair=7
-telegram/dormant [01] source=telegram age=4662h0m0s outbound=false conv=2 pair=7
-telegram/dormant [02] source=telegram age=4474h0m0s outbound=true conv=2 pair=6
-telegram/dormant [03] source=telegram age=4468h0m0s outbound=false conv=2 pair=6
-telegram/dormant [04] source=telegram age=4280h0m0s outbound=true conv=2 pair=5
-telegram/dormant [05] source=telegram age=4274h0m0s outbound=false conv=2 pair=5
-telegram/dormant [06] source=telegram age=4086h0m0s outbound=true conv=2 pair=4
-telegram/dormant [07] source=telegram age=4080h0m0s outbound=false conv=2 pair=4
-telegram/dormant [08] source=telegram age=3892h0m0s outbound=true conv=2 pair=3
-telegram/dormant [09] source=telegram age=3886h0m0s outbound=false conv=2 pair=3
-telegram/dormant [10] source=telegram age=3698h0m0s outbound=true conv=2 pair=2
-telegram/dormant [11] source=telegram age=3692h0m0s outbound=false conv=2 pair=2
+telegram/dormant [00] source=telegram age=4669h0m0s outbound=true conv=1 pair=2
+telegram/dormant [01] source=telegram age=4663h0m0s outbound=false conv=1 pair=2
+telegram/dormant [02] source=telegram age=4475h0m0s outbound=true conv=1 pair=3
+telegram/dormant [03] source=telegram age=4469h0m0s outbound=false conv=1 pair=3
+telegram/dormant [04] source=telegram age=4281h0m0s outbound=true conv=1 pair=4
+telegram/dormant [05] source=telegram age=4275h0m0s outbound=false conv=1 pair=4
+telegram/dormant [06] source=telegram age=4087h0m0s outbound=true conv=1 pair=5
+telegram/dormant [07] source=telegram age=4081h0m0s outbound=false conv=1 pair=5
+telegram/dormant [08] source=telegram age=3893h0m0s outbound=true conv=1 pair=6
+telegram/dormant [09] source=telegram age=3887h0m0s outbound=false conv=1 pair=6
+telegram/dormant [10] source=telegram age=3699h0m0s outbound=true conv=1 pair=7
+telegram/dormant [11] source=telegram age=3693h0m0s outbound=false conv=1 pair=7
 telegram/dormant [12] source=telegram age=3572h0m0s outbound=true conv=1 pair=1
 telegram/dormant [13] source=telegram age=3566h0m0s outbound=false conv=1 pair=1
 telegram/burst-then-quiet entries=5

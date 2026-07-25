@@ -86,6 +86,13 @@ const (
 	wantDormantEntriesMax = 9
 	wantDormantNewestMin  = 120 * dayT
 	wantDormantOldestMax  = 240 * dayT
+	// wantDormantSpanMin is the minimum depth of a dormant history: a two-way
+	// relationship that ended has to have lasted long enough to be one.
+	wantDormantSpanMin = 45 * dayT
+	// wantDormantMeetingGapMax bounds dormant's meeting spacing, which is
+	// deliberately looser than the 21-35d of the calendar-led archetypes — the
+	// archetype's shape is "it ended", not "it had a rhythm".
+	wantDormantMeetingGapMax = 120 * dayT
 
 	wantBurstEntriesMin = 5
 	wantBurstEntriesMax = 12
@@ -522,9 +529,24 @@ func TestTimelineFor_DormantShape(t *testing.T) {
 		require.LessOrEqualf(t, tl.Entries[0].Age, time.Duration(wantDormantOldestMax),
 			"oldest entry %s predates the dormant window — dormant, not prehistoric", tl.Entries[0].Age)
 
+		span := tl.Entries[0].Age - newest
+		require.GreaterOrEqualf(t, span, time.Duration(wantDormantSpanMin),
+			"dormant history is only %s deep — too shallow to be a relationship that ended", span)
+
 		counts := sourcesOf(tl)
 		require.Positivef(t, counts[SourceGCal], "dormant needs at least one meeting")
 		require.Positivef(t, counts[SourceGChat], "dormant needs at least one chat message")
+
+		// Dormant's meetings are stepped across the window rather than held to the
+		// 21-35d rhythm of the live archetypes, so the gap is bounded by the window
+		// itself. Unbounded is the thing to avoid, not wide.
+		meetings := entriesFrom(tl, SourceGCal)
+		for i := 1; i < len(meetings); i++ {
+			gap := meetings[i-1].Age - meetings[i].Age
+			require.Positivef(t, gap, "dormant meeting %d does not advance", i)
+			require.LessOrEqualf(t, gap, time.Duration(wantDormantMeetingGapMax),
+				"dormant meeting gap %s exceeds the dormant window", gap)
+		}
 	}
 }
 
@@ -564,6 +586,16 @@ func TestTimelineFor_BurstThenQuietShape(t *testing.T) {
 			require.False(t, members[1].Outbound)
 		}
 
+		// The conversation CLOSES with that pair: its two entries are the newest
+		// two in the timeline. Without this, a filler entry drifting newer than the
+		// pair would leave the archetype still reporting one well-formed pair and a
+		// legal cluster width, having quietly stopped being "burst then quiet".
+		last := tl.Entries[len(tl.Entries)-1]
+		secondLast := tl.Entries[len(tl.Entries)-2]
+		require.NotZero(t, last.PairKey, "the newest entry is not part of the closing pair")
+		require.Equalf(t, last.PairKey, secondLast.PairKey,
+			"the two newest entries are not the closing pair (%d, %d)", secondLast.PairKey, last.PairKey)
+
 		directions := map[bool]int{}
 		for _, e := range tl.Entries {
 			directions[e.Outbound]++
@@ -593,10 +625,17 @@ func maxWithinWindow(entries []TimelineEntry, window time.Duration) int {
 	return best
 }
 
-// TestTimelineFor_MailEntriesStayInsideProviderReach pins the span bound. The
-// Gmail provider reaches a bounded window forward from one sync's backfill point
-// and SILENTLY drops anything past it — a missing row and a gate timeout naming
-// the wrong cause — which is why deep history is carried by the calendar.
+// TestTimelineFor_MailEntriesStayInsideProviderReach pins the span bound FOR ONE
+// TIMELINE. The Gmail provider reaches a bounded window forward from one sync's
+// backfill point and SILENTLY drops anything past it — a missing row and a gate
+// timeout naming the wrong cause — which is why deep history is carried by the
+// calendar.
+//
+// The scope matters and is easy to misread: the replay layer's limit applies to
+// a whole BATCH, over every instant in it across all contacts, whereas what a
+// timeline can promise is per contact. Pooled across archetypes, mail spans up
+// to 179d against a 150d limit, so a caller batching mail across contacts must
+// bucket by age — see addPairsBetweenMeetings for that arithmetic.
 func TestTimelineFor_MailEntriesStayInsideProviderReach(t *testing.T) {
 	t.Parallel()
 
@@ -613,6 +652,131 @@ func TestTimelineFor_MailEntriesStayInsideProviderReach(t *testing.T) {
 		}
 	}
 	require.Positive(t, checked, "no mail entries were exercised")
+}
+
+// TestTimelineFor_MessagingConversationAgesAreDistinct pins, for EVERY entry of a
+// shared messaging conversation, the property the pair rule only pins for the
+// two members of a pair: no two ages may coincide. Messaging sources order
+// eligible rows by sent_at alone and the aggregation engine's sort is stable
+// relative to an unspecified DB order, so two messages at the same instant in
+// one conversation leave their order to a tie-break the database is free to
+// resolve either way — which is the nondeterminism this whole timing design
+// exists to remove. burst-then-quiet puts five to twelve entries in one
+// conversation, so the guarantee has to hold beyond the pair.
+//
+// Today it holds by arithmetic (opening stride, filler step, pair placement).
+// This makes it hold by assertion, so a future bound change that collided two
+// ages fails here instead of shipping.
+func TestTimelineFor_MessagingConversationAgesAreDistinct(t *testing.T) {
+	t.Parallel()
+
+	messaging := map[Source]bool{SourceGChat: true, SourceTelegram: true, SourceMessages: true}
+	checked := 0
+	for _, caps := range []MethodSet{emailCaps, telegramCaps, phoneCaps, fullCaps} {
+		for _, a := range allArchetypes {
+			for _, tl := range timelineSamples(t, a, caps, 16) {
+				seen := map[int]map[time.Duration]bool{}
+				for i, e := range tl.Entries {
+					if e.ConversationKey == 0 || !messaging[e.Source] {
+						continue
+					}
+					ages, ok := seen[e.ConversationKey]
+					if !ok {
+						ages = map[time.Duration]bool{}
+						seen[e.ConversationKey] = ages
+					}
+					require.Falsef(t, ages[e.Age],
+						"%s entry %d repeats age %s inside conversation %d — the order of the two would fall to a DB tie-break",
+						a, i, e.Age, e.ConversationKey)
+					ages[e.Age] = true
+					checked++
+				}
+			}
+		}
+	}
+	require.Positive(t, checked, "no shared messaging conversations were exercised")
+}
+
+// TestTimelineFor_ChatOnlyTargetsHoldOneConversation pins the other half of that
+// rule. A contact has ONE private chat with you, so every chat exchange a
+// timeline emits for a calendar-less target belongs to the same conversation;
+// two would ask the replay layer to mint two separate private chats with the
+// same person.
+func TestTimelineFor_ChatOnlyTargetsHoldOneConversation(t *testing.T) {
+	t.Parallel()
+
+	// Archetypes whose history is two-way, and therefore chat-carried when the
+	// target has no calendar. The one-sided archetypes deliberately use distinct
+	// conversations so nothing can bridge.
+	twoWay := []Archetype{ArchetypeMutualRegular, ArchetypeMutualDrifting, ArchetypeDormant, ArchetypeBurstThenQuiet}
+	for _, caps := range []MethodSet{telegramCaps, phoneCaps} {
+		for _, a := range twoWay {
+			for _, tl := range timelineSamples(t, a, caps, 16) {
+				keys := map[int]bool{}
+				for _, e := range tl.Entries {
+					keys[e.ConversationKey] = true
+				}
+				require.Lenf(t, keys, 1, "%s gave a chat-only target %d conversations", a, len(keys))
+				require.NotContains(t, keys, 0, "%s left a chat exchange outside a conversation", a)
+			}
+		}
+	}
+}
+
+// TestTimelineFor_CalendarEntriesAreNeverGrouped pins the seam property that
+// makes the batch layer's calendar item type safe without a pair field: a
+// matched calendar event is always mutual, so it is never half of a promotion
+// pair and never part of a conversation. The grouping guards elsewhere catch a
+// violation only incidentally — a construction that produced a calendar pair
+// with genuinely differing directions would slip past all of them.
+func TestTimelineFor_CalendarEntriesAreNeverGrouped(t *testing.T) {
+	t.Parallel()
+
+	checked := 0
+	for _, a := range allArchetypes {
+		for _, tl := range timelineSamples(t, a, emailCaps, sampleCount) {
+			for i, e := range tl.Entries {
+				if e.Source != SourceGCal {
+					continue
+				}
+				require.Zerof(t, e.PairKey, "%s calendar entry %d carries a PairKey", a, i)
+				require.Zerof(t, e.ConversationKey, "%s calendar entry %d carries a ConversationKey", a, i)
+				checked++
+			}
+		}
+	}
+	require.Positive(t, checked, "no calendar entries were exercised")
+}
+
+// TestTimelineFor_OneSidedHistoryPrefersMail pins the other half of the source
+// resolution. One-sided history rides the threaded mail source whenever the
+// target has one — even for a contact whose two-way conversation rides telegram
+// — because a thread is the better carrier for correspondence that never got a
+// reply. Only the chat half of the resolution was pinned before.
+func TestTimelineFor_OneSidedHistoryPrefersMail(t *testing.T) {
+	t.Parallel()
+
+	oneSided := []Archetype{ArchetypeOutboundHeavy, ArchetypeInboundOnly}
+	cases := []struct {
+		caps MethodSet
+		want Source
+	}{
+		{fullCaps, SourceEmail},
+		{MethodSet{Email: true, Telegram: true}, SourceEmail},
+		{MethodSet{Email: true, Phone: true}, SourceEmail},
+		{telegramCaps, SourceTelegram},
+		{phoneCaps, SourceMessages},
+	}
+	for _, tc := range cases {
+		for _, a := range oneSided {
+			for _, tl := range timelineSamples(t, a, tc.caps, 8) {
+				require.NotEmpty(t, tl.Entries)
+				for _, e := range tl.Entries {
+					require.Equalf(t, tc.want, e.Source, "%s at caps %+v rode %q", a, tc.caps, e.Source)
+				}
+			}
+		}
+	}
 }
 
 // --- determinism and variation ----------------------------------------------
