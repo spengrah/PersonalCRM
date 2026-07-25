@@ -1,11 +1,17 @@
 package synthetic
 
 import (
+	"errors"
+	"fmt"
 	"sort"
 	"time"
 
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/synthetic/replay"
+
+	"github.com/google/uuid"
+	chat "google.golang.org/api/chat/v1"
 )
 
 // --- the frozen catalog slot model ------------------------------------------
@@ -627,4 +633,445 @@ func OverdueAtProduction(cadenceName string, lastContacted *time.Time, createdAt
 		base = *lastContacted
 	}
 	return ref.After(base.Add(period))
+}
+
+// --- timeline → batch payloads ----------------------------------------------
+
+// Batch-composition failures. Each is named so a mapper bug is an immediate,
+// self-describing error instead of a stranded row and a settle timeout blaming
+// the wrong thing.
+var (
+	// errArchetypeUnsupportedSource — a timeline emitted a source the catalog
+	// cannot carry. Catalog contacts are email-only, so the generator resolves them
+	// to exactly {gcal, email, gchat}; telegram and iMessage would need dedicated
+	// contacts, and archetypes add history rather than contacts. Failing loudly is
+	// the point: a future method-set change must be a deliberate edit here, not a
+	// silent strand.
+	errArchetypeUnsupportedSource = errors.New("synthetic archetypes: timeline emitted a source the catalog cannot match")
+	// errArchetypeCalendarPairKey — a calendar entry carried a pair key. A matched
+	// calendar event is always mutual, so the batch item type has no field to carry
+	// one; dropping it silently would lose a stated intent.
+	errArchetypeCalendarPairKey = errors.New("synthetic archetypes: calendar entry carries a promotion pair key")
+	// errArchetypePairMalformed — a promotion pair that is not exactly two entries
+	// with differing directions, or whose timing breaks the source-specific rule.
+	errArchetypePairMalformed = errors.New("synthetic archetypes: promotion pair is malformed")
+)
+
+const (
+	// gmailAgeBucketWidth buckets the block's mail by age before it is replayed.
+	// Mail pooled across archetypes spans up to 179 days — mutual-drifting's second
+	// correspondence pair at the far end of the second meeting gap against
+	// inbound-only at its newest bound — while one Gmail batch may span at most 150
+	// days, and the adapter REJECTS a wider batch rather than auto-splitting it
+	// (only the caller knows whether splitting a contact's history across two syncs
+	// is semantically fine). A fixed 120-day window makes the bound hold by
+	// construction whatever the draws are: every bucket spans strictly less than
+	// 120 days. Both halves of a Gmail promotion pair carry the SAME age, so a pair
+	// can never straddle two buckets.
+	gmailAgeBucketWidth = 120 * 24 * time.Hour
+
+	// chatBurstWindow / chatReplyBridgeWindow mirror the harness's GChat
+	// aggregation engine wiring. They are used only to PREDICT how many interaction
+	// rows a chat conversation collapses into; the prediction is compared against
+	// the database row for row, so a drift here fails the collapse assertion rather
+	// than passing quietly.
+	chatBurstWindow       = 2 * time.Hour
+	chatReplyBridgeWindow = 48 * time.Hour
+)
+
+// archetypeSlot is one catalog slot the archetype block gives history to: which
+// frozen index it is, which contact it became, and the spec the source payloads
+// must address so the replay actually matches it.
+type archetypeSlot struct {
+	Index     int
+	ContactID uuid.UUID
+	Spec      factory.ContactSpec
+}
+
+// archetypeBatches is the block's whole payload plan, ready to drive. Gmail is
+// pre-bucketed (oldest bucket first, each bucket oldest-entry first); the other
+// two are single batches in oldest-first order.
+type archetypeBatches struct {
+	GCal         []replay.GCalBatchItem
+	GmailBuckets [][]replay.GmailBatchItem
+	GChat        []replay.GChatBatchItem
+	Samples      []replay.ArchetypeSample
+	Payloads     int
+}
+
+// archetypeMethodSet reports what identifiers a seeded catalog contact actually
+// owns, so the generator can only ever emit sources it can match. Read off the
+// spec rather than assumed, so a catalog slot that gained a method would produce
+// an honest timeline — and one that produced an unmatchable source would fail at
+// the mapper rather than strand a row.
+func archetypeMethodSet(spec factory.ContactSpec) factory.MethodSet {
+	return factory.MethodSet{
+		Email:    spec.Email != "",
+		Telegram: spec.TelegramHandle != "",
+		Phone:    spec.Phone != "",
+	}
+}
+
+// buildArchetypeBatches turns each slot's archetype into source payloads.
+//
+// TimelineFor is called for EVERY slot, including the ones that end up with no
+// history at all: its draw cost is fixed, so calling it unconditionally makes the
+// block's PRNG consumption a function of the catalog size alone and never of
+// which archetype landed where.
+func buildArchetypeBatches(gen *factory.Generator, slots []archetypeSlot, n int) (archetypeBatches, error) {
+	var out archetypeBatches
+
+	// Every batch is collected with its entries' ages, so the whole block can be
+	// put into one chronological order at the end rather than per contact — and so
+	// the mail can be bucketed by age band across every contact at once.
+	type agedGCalItem struct {
+		item replay.GCalBatchItem
+		age  time.Duration
+	}
+	type agedGmailItem struct {
+		item replay.GmailBatchItem
+		age  time.Duration
+	}
+	type agedGChatItem struct {
+		item replay.GChatBatchItem
+		age  time.Duration
+	}
+	var calendar []agedGCalItem
+	var mail []agedGmailItem
+	var messages []agedGChatItem
+
+	// PairKey groups are validated across the WHOLE batch by the adapter, so two
+	// contacts each carrying the timeline-local key 1 would form a four-member
+	// group and be rejected. Re-key every pair against one block-global counter.
+	nextPairKey := 0
+
+	for _, slot := range slots {
+		archetype := ArchetypeForIndex(slot.Index, n)
+		timeline := gen.TimelineFor(archetype, archetypeMethodSet(slot.Spec))
+
+		// A conversation is a PLAN-level statement; at replay time the payloads must
+		// also share the source's conversation identifier, and the factories mint a
+		// fresh one per call. So the first entry of a conversation mints it and every
+		// later entry is cloned onto it.
+		threads := map[int]string{}
+		spaces := map[int]factory.GChatMessageSpec{}
+		spaceClones := map[int]int{}
+		batchPairKeys := map[int]int{}
+		pairMembers := map[int][]factory.TimelineEntry{}
+
+		for _, entry := range timeline.Entries {
+			pairKey := 0
+			if entry.PairKey != 0 {
+				key, ok := batchPairKeys[entry.PairKey]
+				if !ok {
+					nextPairKey++
+					key = nextPairKey
+					batchPairKeys[entry.PairKey] = key
+				}
+				pairKey = key
+				pairMembers[entry.PairKey] = append(pairMembers[entry.PairKey], entry)
+			}
+
+			switch entry.Source {
+			case factory.SourceGCal:
+				if entry.PairKey != 0 {
+					return out, fmt.Errorf("slot %d (%s): %w", slot.Index, archetype, errArchetypeCalendarPairKey)
+				}
+				calendar = append(calendar, agedGCalItem{
+					item: replay.GCalBatchItem{
+						ContactID: slot.ContactID,
+						Spec:      gen.GCalEvent(slot.Spec, factory.MatchSeeded, factory.WithMessageAge(entry.Age)),
+					},
+					age: entry.Age,
+				})
+
+			case factory.SourceEmail:
+				spec := gen.GmailMessage(slot.Spec, factory.MatchSeeded, archetypeMessageOptions(entry)...)
+				if entry.ConversationKey != 0 {
+					if threadID, ok := threads[entry.ConversationKey]; ok {
+						spec.Message.ThreadId = threadID
+					} else {
+						threads[entry.ConversationKey] = spec.Message.ThreadId
+					}
+				}
+				mail = append(mail, agedGmailItem{
+					item: replay.GmailBatchItem{ContactID: slot.ContactID, Spec: spec, PairKey: pairKey},
+					age:  entry.Age,
+				})
+
+			case factory.SourceGChat:
+				var spec factory.GChatMessageSpec
+				if base, ok := spaces[entry.ConversationKey]; entry.ConversationKey != 0 && ok {
+					spaceClones[entry.ConversationKey]++
+					spec = cloneArchetypeGChatMessage(
+						base,
+						fmt.Sprintf("arch-%d", spaceClones[entry.ConversationKey]),
+						entry.Outbound,
+						gen.Anchor().Add(-gchatMessageDefaultOffset-entry.Age),
+					)
+				} else {
+					spec = gen.GChatMessage(slot.Spec, factory.MatchSeeded, archetypeMessageOptions(entry)...)
+					if entry.ConversationKey != 0 {
+						spaces[entry.ConversationKey] = spec
+					}
+				}
+				messages = append(messages, agedGChatItem{
+					item: replay.GChatBatchItem{ContactID: slot.ContactID, Spec: spec, PairKey: pairKey},
+					age:  entry.Age,
+				})
+
+			default:
+				return out, fmt.Errorf("slot %d (%s): source %q: %w", slot.Index, archetype, entry.Source, errArchetypeUnsupportedSource)
+			}
+		}
+
+		if err := validateArchetypePairs(slot.Index, archetype, pairMembers); err != nil {
+			return out, err
+		}
+
+		out.Samples = append(out.Samples, replay.ArchetypeSample{
+			ContactID:            slot.ContactID,
+			SlotIndex:            slot.Index,
+			Archetype:            archetype,
+			Payloads:             len(timeline.Entries),
+			ExpectedInteractions: expectedArchetypeInteractions(timeline),
+		})
+		out.Payloads += len(timeline.Entries)
+	}
+
+	sort.SliceStable(calendar, func(i, j int) bool { return calendar[i].age > calendar[j].age })
+	for _, c := range calendar {
+		out.GCal = append(out.GCal, c.item)
+	}
+	sort.SliceStable(messages, func(i, j int) bool { return messages[i].age > messages[j].age })
+	for _, m := range messages {
+		out.GChat = append(out.GChat, m.item)
+	}
+
+	// Bucket the mail by age band and emit the OLDEST bucket first, each bucket
+	// oldest-entry first — the chronological replay order the adapters require.
+	byBucket := map[int][]replay.GmailBatchItem{}
+	buckets := []int{}
+	sort.SliceStable(mail, func(i, j int) bool { return mail[i].age > mail[j].age })
+	for _, m := range mail {
+		bucket := int(m.age / gmailAgeBucketWidth)
+		if _, ok := byBucket[bucket]; !ok {
+			buckets = append(buckets, bucket)
+		}
+		byBucket[bucket] = append(byBucket[bucket], m.item)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(buckets)))
+	for _, bucket := range buckets {
+		out.GmailBuckets = append(out.GmailBuckets, byBucket[bucket])
+	}
+
+	return out, nil
+}
+
+// gchatMessageDefaultOffset is the small backward offset the GChat factory adds
+// on top of a message's age. A cloned message has to reproduce it exactly, or the
+// clone's instant would not be the instant its timeline entry asked for.
+const gchatMessageDefaultOffset = time.Hour
+
+// archetypeMessageOptions maps a timeline entry onto the factory's message
+// options. Age is passed THROUGH: promotion-pair timing is decided by the
+// generator (a mail pair at the same instant, a chat pair six hours apart with
+// the outbound older), and a caller that recomputed or "improved" a gap would
+// reintroduce exactly the tie-break the construction exists to remove.
+func archetypeMessageOptions(entry factory.TimelineEntry) []factory.MessageOption {
+	opts := []factory.MessageOption{factory.WithMessageAge(entry.Age)}
+	if entry.Outbound {
+		opts = append(opts, factory.WithOutbound())
+	}
+	return opts
+}
+
+// validateArchetypePairs checks the promotion-pair contract structurally, per
+// source, so a future generator change trips a named error here rather than a
+// local-midnight flake or a nondeterministic session split in the pipeline.
+func validateArchetypePairs(slotIndex int, archetype factory.Archetype, pairs map[int][]factory.TimelineEntry) error {
+	keys := make([]int, 0, len(pairs))
+	for k := range pairs {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	for _, k := range keys {
+		members := pairs[k]
+		if len(members) != 2 {
+			return fmt.Errorf("slot %d (%s): pair %d has %d members (want 2): %w",
+				slotIndex, archetype, k, len(members), errArchetypePairMalformed)
+		}
+		older, newer := members[0], members[1]
+		if older.Outbound == newer.Outbound {
+			return fmt.Errorf("slot %d (%s): pair %d members share a direction: %w",
+				slotIndex, archetype, k, errArchetypePairMalformed)
+		}
+		if older.Source != newer.Source {
+			return fmt.Errorf("slot %d (%s): pair %d spans two sources (%q and %q): %w",
+				slotIndex, archetype, k, older.Source, newer.Source, errArchetypePairMalformed)
+		}
+		if older.Source == factory.SourceEmail {
+			// The mail aggregation key includes a LOCAL day, so any nonzero gap can
+			// straddle local midnight depending on where the moving anchor lands. The
+			// same instant is the same local day, unconditionally.
+			if older.Age != newer.Age {
+				return fmt.Errorf("slot %d (%s): mail pair %d halves are %s apart but must share an instant: %w",
+					slotIndex, archetype, k, older.Age-newer.Age, errArchetypePairMalformed)
+			}
+			continue
+		}
+		// The chat path orders eligible rows only by sent time and promotion requires
+		// the outbound to precede the inbound, so equal timestamps could
+		// nondeterministically become one mutual or two one-sided sessions.
+		if !older.Outbound || older.Age <= newer.Age {
+			return fmt.Errorf("slot %d (%s): chat pair %d must place its OUTBOUND half strictly older: %w",
+				slotIndex, archetype, k, errArchetypePairMalformed)
+		}
+	}
+	return nil
+}
+
+// cloneArchetypeGChatMessage builds another message in the SAME space as base —
+// the clone discipline that makes a group of items one conversation. Independent
+// factory calls mint a fresh space each, which can never bridge and costs the
+// provider's shared page budget three fresh pages.
+//
+// Deliberately not shared with the batch tests' equivalent: that one is a fixture
+// for hand-authored batches, and coupling seed orchestration to a test helper
+// would make either one hard to change. Both are covered by their own assertions.
+func cloneArchetypeGChatMessage(base factory.GChatMessageSpec, suffix string, outbound bool, createTime time.Time) factory.GChatMessageSpec {
+	// Pick the sender by MEMBERSHIP order rather than by ranging EmailByUser: Go
+	// randomizes map iteration, so a space with more than two members would
+	// otherwise clone a nondeterministic sender.
+	sender, me := "", ""
+	for _, member := range base.Members {
+		if member == nil || member.Member == nil {
+			continue
+		}
+		user := member.Member.Name
+		if base.EmailByUser[user] == base.AccountID {
+			if me == "" {
+				me = user
+			}
+			continue
+		}
+		if sender == "" {
+			sender = user
+		}
+	}
+	from := sender
+	if outbound {
+		from = me
+	}
+	name := base.SpaceName + "/messages/" + suffix
+	clone := base
+	clone.Message = &chat.Message{
+		Name:       name,
+		Sender:     &chat.User{Name: from, Type: "HUMAN"},
+		Text:       "synthetic chat message",
+		CreateTime: createTime.UTC().Format(time.RFC3339Nano),
+	}
+	clone.ExternalID = name
+	return clone
+}
+
+// --- the expected payload → interaction collapse -----------------------------
+
+// expectedArchetypeInteractions is how many interaction ROWS a timeline's
+// payloads are expected to land once the pipeline has aggregated them. It is
+// deliberately smaller than the payload count: a mail promotion pair collapses
+// into one mutual row, and a chat burst collapses into one session per idle gap.
+//
+// It is derived from the timeline's STRUCTURE and from the pipeline's stated
+// aggregation semantics — not measured — so comparing it against the database is
+// a real test rather than a tautology. When the two disagree the derivation is
+// wrong and must be re-derived; it is never relaxed to an inequality.
+func expectedArchetypeInteractions(tl factory.Timeline) int {
+	rows := 0
+	mailThreads := map[int]bool{}
+	chatConversations := map[int][]factory.TimelineEntry{}
+	soloChat := 0
+
+	for _, entry := range tl.Entries {
+		switch entry.Source {
+		case factory.SourceGCal:
+			// A matched calendar event is one mutual interaction, and the archetypes
+			// space meetings weeks apart, so no two collapse.
+			rows++
+		case factory.SourceEmail:
+			// Mail promotion keys on (contact, thread, local day). Every conversation
+			// this catalog emits is one thread at one instant, so a thread is one row;
+			// an unthreaded message is its own.
+			if entry.ConversationKey == 0 {
+				rows++
+				continue
+			}
+			mailThreads[entry.ConversationKey] = true
+		default:
+			if entry.ConversationKey == 0 {
+				soloChat++
+				continue
+			}
+			chatConversations[entry.ConversationKey] = append(chatConversations[entry.ConversationKey], entry)
+		}
+	}
+	rows += len(mailThreads) + soloChat
+
+	keys := make([]int, 0, len(chatConversations))
+	for k := range chatConversations {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	for _, k := range keys {
+		rows += chatSessionCount(chatConversations[k])
+	}
+	return rows
+}
+
+// chatSessionCount is how many interaction rows one chat conversation's messages
+// aggregate into, following the engine's own two steps: consecutive same-
+// direction messages inside the burst window form a burst, and an inbound burst
+// that follows an outbound SESSION within the reply-bridge window merges into it
+// and turns it mutual (so a second inbound cannot bridge into the same session).
+//
+// entries arrive oldest-first, which is the order the engine reads them in.
+func chatSessionCount(entries []factory.TimelineEntry) int {
+	if len(entries) == 0 {
+		return 0
+	}
+	type session struct {
+		outbound bool
+		mutual   bool
+		lastAge  time.Duration
+	}
+	var sessions []session
+	burstOutbound := entries[0].Outbound
+	burstFirstAge, burstLastAge := entries[0].Age, entries[0].Age
+
+	flush := func() {
+		if len(sessions) > 0 && !burstOutbound {
+			prev := &sessions[len(sessions)-1]
+			// The engine bridges by INSTANT gap, and ages run backwards, so the gap
+			// from the previous session's newest message to this burst's oldest is
+			// prev.lastAge − burstFirstAge.
+			if prev.outbound && !prev.mutual && prev.lastAge-burstFirstAge <= chatReplyBridgeWindow {
+				prev.mutual = true
+				prev.lastAge = burstLastAge
+				return
+			}
+		}
+		sessions = append(sessions, session{outbound: burstOutbound, lastAge: burstLastAge})
+	}
+
+	for _, entry := range entries[1:] {
+		gap := burstLastAge - entry.Age
+		if entry.Outbound != burstOutbound || gap > chatBurstWindow {
+			flush()
+			burstOutbound, burstFirstAge, burstLastAge = entry.Outbound, entry.Age, entry.Age
+			continue
+		}
+		burstLastAge = entry.Age
+	}
+	flush()
+	return len(sessions)
 }

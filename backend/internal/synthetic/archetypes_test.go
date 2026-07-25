@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/synthetic/replay"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -420,6 +422,337 @@ func TestArchetypeAssignmentPreservesC3Floors(t *testing.T) {
 		if n == 12 || n == 13 {
 			require.Zero(t, catalogSupplied,
 				"n=%d: at this size the catalog cannot supply the floor and fxnoactivity is the sole supplier — if this changes, the note above is stale", n)
+		}
+	}
+}
+
+// --- payload construction ----------------------------------------------------
+
+// archetypeUnitSlots builds the catalog slots for an n-contact catalog without a
+// database: the same frozen options the profile uses, with a synthetic contact id
+// standing in for the seeded row.
+func archetypeUnitSlots(gen *factory.Generator, n int) []archetypeSlot {
+	slots := make([]archetypeSlot, 0, n)
+	for i := 0; i < n; i++ {
+		spec := gen.Contact(catalogOptionsFor(i, n, gen.Anchor(), gen.Prefix())...)
+		slots = append(slots, archetypeSlot{Index: i, ContactID: uuid.New(), Spec: spec})
+	}
+	return slots
+}
+
+func gmailItemOutbound(it replay.GmailBatchItem) bool {
+	for _, label := range it.Spec.Message.LabelIds {
+		if label == "SENT" {
+			return true
+		}
+	}
+	return false
+}
+
+func gchatItemOutbound(it replay.GChatBatchItem) bool {
+	return it.Spec.EmailByUser[it.Spec.Message.Sender.Name] == it.Spec.AccountID
+}
+
+func gchatItemCreatedAt(t *testing.T, it replay.GChatBatchItem) time.Time {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339Nano, it.Spec.Message.CreateTime)
+	require.NoError(t, err)
+	return at
+}
+
+// TestArchetypePayloadsAreAdapterLegal builds the whole block's payloads across
+// many namespaces and asserts the shape the batch adapters' preflight demands.
+// Every rejection those adapters raise is a named error raised BEFORE anything is
+// driven, so a mapper that produced an illegal batch would fail the seed rather
+// than corrupt it — but it would fail it in the slow lane, at reseed time, on a
+// draw that happened to hit the bad case. This is the fast-lane equivalent.
+func TestArchetypePayloadsAreAdapterLegal(t *testing.T) {
+	const namespaces = 60
+	// The determinism run, the prod coverage run, the ladder rung, the multi-sample
+	// threshold and the dev profile. 150 is covered by the coverage sweep rather
+	// than here: it multiplies the cost without reaching a new shape.
+	sizes := []int{5, 9, 12, 13, 18}
+
+	for _, n := range sizes {
+		for s := 0; s < namespaces; s++ {
+			gen := factory.NewGenerator(factory.DefaultSeed, "payloadunit"+strconv.Itoa(n)+"x"+strconv.Itoa(s))
+			batches, err := buildArchetypeBatches(gen, archetypeUnitSlots(gen, n), n)
+			require.NoError(t, err, "n=%d ns=%d", n, s)
+
+			total := len(batches.GCal) + len(batches.GChat)
+			for _, bucket := range batches.GmailBuckets {
+				total += len(bucket)
+			}
+			require.Equal(t, batches.Payloads, total, "n=%d ns=%d: the payload count must be the batches' size", n, s)
+
+			identifiers := map[string]bool{}
+			requireUnique := func(id string) {
+				require.False(t, identifiers[id], "n=%d ns=%d: duplicate source identifier %q — the adapters reject a batch carrying one", n, s, id)
+				identifiers[id] = true
+			}
+
+			// --- calendar -----------------------------------------------------------
+			var prevStart time.Time
+			for i, it := range batches.GCal {
+				require.Equal(t, factory.MatchSeeded, it.Spec.Intent, "calendar items must be MatchSeeded")
+				requireUnique(it.Spec.GcalEventID)
+				start, err := time.Parse(time.RFC3339, it.Spec.Event.Start.DateTime)
+				require.NoError(t, err)
+				if i > 0 {
+					require.False(t, start.Before(prevStart), "n=%d ns=%d: calendar items must be oldest-first", n, s)
+				}
+				prevStart = start
+			}
+
+			// --- mail ---------------------------------------------------------------
+			mailPairs := map[int][]replay.GmailBatchItem{}
+			for _, bucket := range batches.GmailBuckets {
+				require.NotEmpty(t, bucket, "an empty bucket must never be driven — the adapters reject a zero-item batch")
+				var oldest, newest time.Time
+				var prev time.Time
+				for i, it := range bucket {
+					require.Equal(t, factory.MatchSeeded, it.Spec.Intent, "mail items must be MatchSeeded")
+					requireUnique(it.Spec.ExternalID)
+					sentAt := time.UnixMilli(it.Spec.Message.InternalDate).UTC()
+					if i == 0 || sentAt.Before(oldest) {
+						oldest = sentAt
+					}
+					if i == 0 || sentAt.After(newest) {
+						newest = sentAt
+					}
+					if i > 0 {
+						require.False(t, sentAt.Before(prev), "n=%d ns=%d: mail must be oldest-first inside a bucket", n, s)
+					}
+					prev = sentAt
+					if it.PairKey != 0 {
+						mailPairs[it.PairKey] = append(mailPairs[it.PairKey], it)
+					}
+				}
+				require.Less(t, newest.Sub(oldest), 150*24*time.Hour,
+					"n=%d ns=%d: a mail bucket must stay inside one sync's reach — the adapter rejects a wider batch by design", n, s)
+			}
+			for key, members := range mailPairs {
+				require.Len(t, members, 2, "mail pair %d must have exactly two members", key)
+				require.NotEqual(t, gmailItemOutbound(members[0]), gmailItemOutbound(members[1]),
+					"mail pair %d members must differ in direction", key)
+				require.Equal(t, members[0].Spec.Message.InternalDate, members[1].Spec.Message.InternalDate,
+					"mail pair %d must share an INSTANT: the aggregation key includes a local day, so any nonzero gap can straddle local midnight", key)
+				require.Equal(t, members[0].Spec.Message.ThreadId, members[1].Spec.Message.ThreadId,
+					"mail pair %d must share a thread — the factory mints a fresh one per call, so the caller clones", key)
+			}
+
+			// --- chat ---------------------------------------------------------------
+			chatPairs := map[int][]replay.GChatBatchItem{}
+			spaceOf := map[uuid.UUID]map[string]bool{}
+			var prevCreated time.Time
+			for i, it := range batches.GChat {
+				require.Equal(t, factory.MatchSeeded, it.Spec.Intent, "chat items must be MatchSeeded")
+				requireUnique(it.Spec.ExternalID)
+				createdAt := gchatItemCreatedAt(t, it)
+				if i > 0 {
+					require.False(t, createdAt.Before(prevCreated), "n=%d ns=%d: chat items must be oldest-first", n, s)
+				}
+				prevCreated = createdAt
+				if spaceOf[it.ContactID] == nil {
+					spaceOf[it.ContactID] = map[string]bool{}
+				}
+				spaceOf[it.ContactID][it.Spec.SpaceName] = true
+				if it.PairKey != 0 {
+					chatPairs[it.PairKey] = append(chatPairs[it.PairKey], it)
+				}
+			}
+			for key, members := range chatPairs {
+				require.Len(t, members, 2, "chat pair %d must have exactly two members", key)
+				outboundFirst := gchatItemOutbound(members[0])
+				require.True(t, outboundFirst && !gchatItemOutbound(members[1]),
+					"chat pair %d must be an OUTBOUND then an inbound: this path orders eligible rows only by sent time, so the ordering has to be decided by construction", key)
+				require.True(t, gchatItemCreatedAt(t, members[0]).Before(gchatItemCreatedAt(t, members[1])),
+					"chat pair %d outbound half must be strictly older", key)
+				require.Equal(t, members[0].Spec.SpaceName, members[1].Spec.SpaceName,
+					"chat pair %d must share a space — a pair across two spaces can never bridge", key)
+			}
+			// A contact's chat history is ONE conversation: the archetypes that use chat
+			// hold a single space for the whole timeline, which is also what keeps a
+			// burst inside the provider's page budget.
+			for contactID, spaces := range spaceOf {
+				require.Len(t, spaces, 1, "n=%d ns=%d: contact %s must carry exactly one chat space", n, s, contactID)
+			}
+
+			// Pair keys are BLOCK-global: the adapters group by pair key across the
+			// whole batch, so two contacts each carrying the timeline-local key 1 would
+			// form a four-member group and be rejected.
+			for key := range mailPairs {
+				require.NotContains(t, chatPairs, key, "pair key %d is reused across two sources", key)
+			}
+		}
+	}
+}
+
+// TestArchetypePayloadsSkipEmptySources pins the skip-empty rule at the size it
+// actually bites. On the reserved rung the assignment is mutual-drifting plus
+// outbound-heavy plus never-contacted, none of which emits a chat entry for an
+// email-only contact, so the chat batch is EMPTY at every 5 <= n < 12 — which is
+// exactly the configuration the determinism run (5) and the prod coverage run (9)
+// use. The adapters reject a zero-item batch by preflight, so driving one would
+// fail the seed.
+func TestArchetypePayloadsSkipEmptySources(t *testing.T) {
+	for n := archetypeLadderReservedOnly; n < archetypeLadderFullAssignment; n++ {
+		gen := factory.NewGenerator(factory.DefaultSeed, "emptyunit"+strconv.Itoa(n))
+		batches, err := buildArchetypeBatches(gen, archetypeUnitSlots(gen, n), n)
+		require.NoError(t, err)
+		require.Empty(t, batches.GChat, "n=%d: the reserved rung emits no chat payload at all", n)
+		require.NotEmpty(t, batches.GCal, "n=%d: the reserved rung's contacted-and-overdue supplier emits meetings", n)
+		require.NotEmpty(t, batches.GmailBuckets, "n=%d: the reserved rung's outbound-heavy slot emits mail", n)
+	}
+
+	// Below the reserved rung the whole overlay is a no-op.
+	for n := 1; n < archetypeLadderReservedOnly; n++ {
+		gen := factory.NewGenerator(factory.DefaultSeed, "emptyunitlow"+strconv.Itoa(n))
+		batches, err := buildArchetypeBatches(gen, archetypeUnitSlots(gen, n), n)
+		require.NoError(t, err)
+		require.Zero(t, batches.Payloads, "n=%d: below the floor the overlay drives nothing", n)
+		require.Empty(t, batches.GCal)
+		require.Empty(t, batches.GmailBuckets)
+		require.Empty(t, batches.GChat)
+	}
+}
+
+// TestArchetypePayloadsRejectUnmatchableSource proves the method-awareness guard
+// fires rather than stranding a row. A contact the frozen catalog cannot produce
+// today — one owning a telegram handle — resolves the chat role to telegram,
+// which no catalog replay path carries. The mapper must refuse it by NAME rather
+// than build a payload nothing in the block will drive, because an unmatchable
+// source surfaces thirty seconds later as a settle timeout blaming the wrong
+// thing.
+func TestArchetypePayloadsRejectUnmatchableSource(t *testing.T) {
+	const n = 18
+	gen := factory.NewGenerator(factory.DefaultSeed, "unmatchableunit")
+	spec := gen.Contact(factory.WithEmail(), factory.WithTelegram(), factory.WithCadence("weekly"))
+
+	chatBearing := -1
+	for i := 0; i < n; i++ {
+		switch ArchetypeForIndex(i, n) {
+		case factory.ArchetypeDormant, factory.ArchetypeBurstThenQuiet:
+			chatBearing = i
+		}
+		if chatBearing >= 0 {
+			break
+		}
+	}
+	require.GreaterOrEqual(t, chatBearing, 0, "n=%d must place a chat-bearing archetype somewhere", n)
+
+	_, err := buildArchetypeBatches(gen, []archetypeSlot{{Index: chatBearing, ContactID: uuid.New(), Spec: spec}}, n)
+	require.ErrorIs(t, err, errArchetypeUnsupportedSource,
+		"a telegram-bearing contact resolves the chat role to telegram, which the catalog replay block does not drive")
+}
+
+// TestArchetypePairValidationRejectsMalformedPairs watches the pair contract
+// fail. Each case is a shape a future generator change could produce, and each
+// one silently breaks a different thing downstream: a mis-sized group has no
+// defined generation split, a same-direction group promotes nothing, a mail pair
+// with a gap can straddle local midnight, and a chat pair in the wrong order
+// becomes two one-sided sessions instead of one mutual.
+func TestArchetypePairValidationRejectsMalformedPairs(t *testing.T) {
+	mail := func(age time.Duration, outbound bool) factory.TimelineEntry {
+		return factory.TimelineEntry{Source: factory.SourceEmail, Age: age, Outbound: outbound, PairKey: 1}
+	}
+	chatEntry := func(age time.Duration, outbound bool) factory.TimelineEntry {
+		return factory.TimelineEntry{Source: factory.SourceGChat, Age: age, Outbound: outbound, PairKey: 1}
+	}
+
+	cases := map[string][]factory.TimelineEntry{
+		"one_member":         {mail(10*24*time.Hour, true)},
+		"three_members":      {mail(10*24*time.Hour, true), mail(10*24*time.Hour, false), mail(10*24*time.Hour, false)},
+		"same_direction":     {mail(10*24*time.Hour, true), mail(10*24*time.Hour, true)},
+		"mail_gap":           {mail(10*24*time.Hour+time.Hour, true), mail(10*24*time.Hour, false)},
+		"chat_equal_age":     {chatEntry(10*24*time.Hour, true), chatEntry(10*24*time.Hour, false)},
+		"chat_inbound_older": {chatEntry(10*24*time.Hour, false), chatEntry(10*24*time.Hour+6*time.Hour, true)},
+	}
+	for name, members := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := validateArchetypePairs(0, factory.ArchetypeDormant, map[int][]factory.TimelineEntry{1: members})
+			require.ErrorIs(t, err, errArchetypePairMalformed)
+		})
+	}
+
+	// The two legal shapes must pass, or the rejections above are vacuous.
+	require.NoError(t, validateArchetypePairs(0, factory.ArchetypeMutualRegular,
+		map[int][]factory.TimelineEntry{1: {mail(10*24*time.Hour, true), mail(10*24*time.Hour, false)}}))
+	require.NoError(t, validateArchetypePairs(0, factory.ArchetypeDormant,
+		map[int][]factory.TimelineEntry{1: {chatEntry(10*24*time.Hour+6*time.Hour, true), chatEntry(10*24*time.Hour, false)}}))
+}
+
+// TestExpectedInteractionsMatchesArchetypeShape pins the payload → interaction
+// collapse formula against each archetype's actual timeline structure, across
+// many namespaces. The formula is what the seed records as its expectation and
+// what the end-to-end test compares the database against, so a generator change
+// that altered the collapse must fail in this fast lane rather than only in the
+// slow one.
+func TestExpectedInteractionsMatchesArchetypeShape(t *testing.T) {
+	const namespaces = 400
+	caps := factory.MethodSet{Email: true}
+
+	for s := 0; s < namespaces; s++ {
+		gen := factory.NewGenerator(factory.DefaultSeed, "collapseunit"+strconv.Itoa(s))
+		for _, a := range archetypeTieBreak {
+			tl := gen.TimelineFor(a, caps)
+			var gcal, mail, chatMsgs int
+			pairs := map[int]bool{}
+			for _, e := range tl.Entries {
+				switch e.Source {
+				case factory.SourceGCal:
+					gcal++
+				case factory.SourceEmail:
+					mail++
+				default:
+					chatMsgs++
+				}
+				if e.PairKey != 0 {
+					pairs[e.PairKey] = true
+				}
+			}
+			got := expectedArchetypeInteractions(tl)
+
+			switch a {
+			case factory.ArchetypeMutualRegular:
+				// M meetings 21–35 days apart, each its own row, plus ONE correspondence
+				// pair collapsing to a single mutual.
+				require.Equal(t, 2, mail)
+				require.Len(t, pairs, 1)
+				require.Equal(t, gcal+1, got)
+			case factory.ArchetypeMutualDrifting:
+				// The same series, stopped, with one or two correspondence pairs.
+				require.Equal(t, 2*len(pairs), mail)
+				require.Equal(t, gcal+len(pairs), got)
+			case factory.ArchetypeDormant:
+				// M meetings plus a closing chat exchange six hours apart in one space,
+				// which the reply bridge promotes into a single mutual.
+				require.Equal(t, 2, chatMsgs)
+				require.Len(t, pairs, 1)
+				require.Equal(t, gcal+1, got)
+			case factory.ArchetypeOutboundHeavy, factory.ArchetypeInboundOnly:
+				// Distinct threads five or more days apart: nothing collapses.
+				require.Empty(t, pairs)
+				require.Zero(t, gcal)
+				require.Equal(t, mail, got)
+			case factory.ArchetypeBurstThenQuiet:
+				// K messages in ONE space: the opening three inside one burst window
+				// become one session (−2), and the closing pair promotes into one (−1).
+				require.Zero(t, gcal)
+				require.Zero(t, mail)
+				require.Len(t, pairs, 1)
+				require.Equal(t, chatMsgs-3, got,
+					"a burst of %d messages must collapse to %d rows — the assertion that proves the burst window is exercised rather than K unrelated messages seeded",
+					chatMsgs, chatMsgs-3)
+			case factory.ArchetypeNeverContacted:
+				require.Empty(t, tl.Entries)
+				require.Zero(t, got)
+			}
+
+			if a != factory.ArchetypeNeverContacted {
+				require.LessOrEqual(t, got, len(tl.Entries), "%s: the collapse can never produce MORE rows than payloads", a)
+				require.Positive(t, got, "%s must land at least one row", a)
+			}
 		}
 	}
 }

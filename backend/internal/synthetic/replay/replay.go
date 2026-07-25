@@ -329,6 +329,16 @@ type Harness struct {
 	// result struct.
 	pinnedFixtureIDs map[string]uuid.UUID
 
+	// archetypeSamples is the per-catalog-slot record of which archetype the
+	// profile gave it, how many payloads its timeline drove, and how many
+	// interaction rows that timeline is EXPECTED to land after aggregation
+	// collapse. Recorded for EVERY slot including the history-free ones, so an
+	// assertion can prove absence as well as presence. Like the ids above it is NOT
+	// a ProfileResult field: it carries contact ids, which come from
+	// uuid_generate_v4() (non-deterministic), so it stays off the counts-only,
+	// determinism-compared result struct.
+	archetypeSamples []ArchetypeSample
+
 	created   *created
 	createdMu sync.Mutex
 
@@ -945,6 +955,41 @@ func (h *Harness) PinnedFixtureIDs() map[string]uuid.UUID {
 		out[marker] = id
 	}
 	return out
+}
+
+// ArchetypeSample is one archetype-assigned catalog contact: which frozen slot
+// it occupies, which relationship shape it was given, how many source payloads
+// that shape drove, and how many interaction ROWS those payloads are expected to
+// land once the pipeline has aggregated them.
+//
+// The expectation is derived from the timeline's structure and the pipeline's
+// aggregation semantics, never measured, so comparing it against the database is
+// a real test rather than a tautology.
+type ArchetypeSample struct {
+	ContactID            uuid.UUID
+	SlotIndex            int
+	Archetype            factory.Archetype
+	Payloads             int
+	ExpectedInteractions int
+}
+
+// SetArchetypeSamples records the archetype assignment the profile actually
+// seeded, one entry per catalog slot. Called by the seeding block (package
+// synthetic) — hence exported. Guarded by the ledger mutex for parity with the
+// other tracked ids.
+func (h *Harness) SetArchetypeSamples(samples []ArchetypeSample) {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	h.archetypeSamples = append([]ArchetypeSample(nil), samples...)
+}
+
+// ArchetypeSamples returns the per-slot archetype record (nil if the block did
+// not run). Read by the coverage checks to scope each archetype assertion to its
+// exact subject without putting contact ids in ProfileResult.
+func (h *Harness) ArchetypeSamples() []ArchetypeSample {
+	h.createdMu.Lock()
+	defer h.createdMu.Unlock()
+	return append([]ArchetypeSample(nil), h.archetypeSamples...)
 }
 
 // gateBClear reports whether Gate B has reached zero for this replay's contacts.
