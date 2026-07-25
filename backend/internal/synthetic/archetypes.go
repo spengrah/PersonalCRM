@@ -1,6 +1,7 @@
 package synthetic
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -1074,4 +1075,77 @@ func chatSessionCount(entries []factory.TimelineEntry) int {
 	}
 	flush()
 	return len(sessions)
+}
+
+// --- the seeding block -------------------------------------------------------
+
+// seedArchetypeHistories gives every catalog slot the interaction history its
+// archetype describes, by replaying the timeline's payloads through the batch
+// adapters.
+//
+// It runs at the VERY END of the catalog profile, after every other
+// generator-drawing block: TimelineFor draws the shared PRNG, and inserting it
+// anywhere earlier would shift every later allocation — a shifted numeric
+// identifier can land on an id another contact already owns, which surfaces as a
+// cross-match and a settle timeout far from the edit that caused it.
+//
+// The three sources are driven in a fixed order — calendar, then mail bucket by
+// bucket, then chat — so the phase's settle count is reproducible. Cross-source
+// ordering is otherwise free: the consumers' occurred_at guard is forward-only,
+// so an older calendar batch replayed after a newer mail batch cannot move
+// last_contacted backwards, and promotion is per-thread or per-space, never
+// across sources.
+//
+// A source with no payloads is SKIPPED rather than driven: the adapters reject a
+// zero-item batch by preflight, and on the reserved rung the chat batch is
+// guaranteed empty.
+func seedArchetypeHistories(
+	ctx context.Context,
+	h *Harness,
+	gen *factory.Generator,
+	profile Profile,
+	slots []archetypeSlot,
+	n int,
+	res *ProfileResult,
+) error {
+	batches, err := buildArchetypeBatches(gen, slots, n)
+	if err != nil {
+		return fmt.Errorf("profile %s: build archetype payloads: %w", profile, err)
+	}
+	// Recorded for EVERY slot, including the history-free ones, so a coverage
+	// assertion can prove absence as well as presence.
+	h.SetArchetypeSamples(batches.Samples)
+
+	record := func(result replay.BatchResult) {
+		res.ArchetypePayloads += result.Payloads
+		// Each batch snapshots the touched contacts' interaction ids before it
+		// drives, so summing across batches cannot double-count.
+		res.ArchetypeInteractions += result.Interactions
+	}
+
+	if len(batches.GCal) > 0 {
+		result, err := h.ReplayGCalBatch(ctx, batches.GCal)
+		if err != nil {
+			return fmt.Errorf("profile %s: replay archetype calendar batch: %w", profile, err)
+		}
+		record(result)
+	}
+	for i, bucket := range batches.GmailBuckets {
+		if len(bucket) == 0 {
+			continue
+		}
+		result, err := h.ReplayGmailBatch(ctx, bucket)
+		if err != nil {
+			return fmt.Errorf("profile %s: replay archetype mail bucket %d: %w", profile, i, err)
+		}
+		record(result)
+	}
+	if len(batches.GChat) > 0 {
+		result, err := h.ReplayGChatBatch(ctx, batches.GChat)
+		if err != nil {
+			return fmt.Errorf("profile %s: replay archetype chat batch: %w", profile, err)
+		}
+		record(result)
+	}
+	return nil
 }

@@ -905,11 +905,19 @@ func writeSeedSummary(w io.Writer, res synthetic.ProfileResult, partial bool) er
 		"  stranded_telegram:    %d\n"+
 		"  stranded_messages:    %d\n"+
 		"  unmatched_calendar:   %d\n"+
-		"  orphan_meeting_notes: %d\n",
+		"  orphan_meeting_notes: %d\n"+
+		// The two archetype counters are reported SEPARATELY because they measure
+		// different units: payloads driven versus interaction rows landed. The
+		// second is deliberately smaller — aggregation collapses a promotion pair
+		// into one mutual row and a burst into one session — so a reader comparing
+		// them is seeing the collapse, not a shortfall.
+		"  archetype_payloads:   %d\n"+
+		"  archetype_interactions: %d\n",
 		res.Profile, res.Namespace, res.Seed, marker,
 		res.Contacts, res.GmailSettled, res.TelegramSettled, res.GCalSettled, res.GChatSettled,
 		res.IMessageSettled, res.UnmatchedExternal, res.StrandedTelegram, res.StrandedMessages,
-		res.UnmatchedCalendar, res.OrphanMeetingNote); err != nil {
+		res.UnmatchedCalendar, res.OrphanMeetingNote,
+		res.ArchetypePayloads, res.ArchetypeInteractions); err != nil {
 		return fmt.Errorf("write seed summary: %w", err)
 	}
 	if err := writeSeedTimings(w, res.Timings); err != nil {

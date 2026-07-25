@@ -1386,7 +1386,7 @@ func TestSyntheticProfile_ProdShapedCoverageCheck(t *testing.T) {
 // runCatalogProfile brackets with a phase timer. It is pinned so a block added
 // (or a stop() call lost) without a phase is caught here rather than silently
 // dropping a row from the reseed summary.
-const catalogProfilePhaseCount = 23
+const catalogProfilePhaseCount = 24
 
 // phaseShape projects phase timings onto their DETERMINISTIC components — name
 // and payload volume — dropping the wall-clock duration, so a run-to-run

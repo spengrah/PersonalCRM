@@ -26,6 +26,10 @@ func timingFixture() synthetic.ProfileResult {
 		Namespace: "prodshaped",
 		Seed:      42,
 		Contacts:  179,
+		// Distinct from each other and from every other count in the fixture, so a
+		// rendering that printed the wrong field cannot coincidentally match.
+		ArchetypePayloads:     943,
+		ArchetypeInteractions: 771,
 		Timings: synthetic.SeedTimings{
 			Total: 100 * time.Second,
 			Phases: []synthetic.PhaseTiming{
@@ -65,6 +69,11 @@ func TestWriteSeedSummaryRendersTimingBlock(t *testing.T) {
 	// 100s total − (40+18+9)s of gate wait.
 	require.Contains(t, out, "  outside_gates:        33.00s")
 	require.Contains(t, out, "NOT a hypothesis test", "the residual is labelled as bookkeeping")
+	// The archetype block reports payloads driven and interaction ROWS landed as
+	// two separate figures: they measure different units, and the second is
+	// smaller by design because aggregation collapses.
+	require.Contains(t, out, "  archetype_payloads:   943")
+	require.Contains(t, out, "  archetype_interactions: 771")
 }
 
 func TestWriteSeedSummaryRendersEveryPhaseWithPayloadVolume(t *testing.T) {
