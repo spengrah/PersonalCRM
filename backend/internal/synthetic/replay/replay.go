@@ -322,8 +322,8 @@ type Harness struct {
 	// what a tour searches for over the API and what the coverage checks resolve — so
 	// one marker-keyed map replaces what would otherwise be a Set/Get pair per
 	// fixture. A profile records entries via SetPinnedFixtureID; the coverage checks
-	// read them via PinnedFixtureID / PinnedFixtureIDs to scope the per-fixture
-	// assertions to their exact subjects. Like the ids above it is NOT a
+	// read the whole map via PinnedFixtureIDs to scope the per-fixture assertions to
+	// their exact subjects. Like the ids above it is NOT a
 	// ProfileResult field: contact ids come from uuid_generate_v4()
 	// (non-deterministic), so it stays off the counts-only, determinism-compared
 	// result struct.
@@ -934,17 +934,9 @@ func (h *Harness) SetPinnedFixtureID(marker string, id uuid.UUID) {
 	h.pinnedFixtureIDs[marker] = id
 }
 
-// PinnedFixtureID returns the contact recorded for a pinned tour-fixture marker
-// (uuid.Nil when the fixture was not seeded). Read by the coverage checks to scope
-// each fixture's assertions to its exact subject.
-func (h *Harness) PinnedFixtureID(marker string) uuid.UUID {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	return h.pinnedFixtureIDs[marker]
-}
-
 // PinnedFixtureIDs returns a copy of the marker→contact map for every pinned
-// tour fixture the profile recorded (nil-safe: an empty map when none ran).
+// tour fixture the profile recorded (nil-safe: an empty map when none ran). Read
+// by the coverage checks to scope each fixture's assertions to its exact subject.
 func (h *Harness) PinnedFixtureIDs() map[string]uuid.UUID {
 	h.createdMu.Lock()
 	defer h.createdMu.Unlock()

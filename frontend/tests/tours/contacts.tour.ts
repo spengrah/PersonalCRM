@@ -120,18 +120,39 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
     throw new Error('tour: the CON-045 birthday fixture carries no birthday')
   }
 
+  // Every resolved subject must be its OWN contact: two of these steps MUTATE
+  // (merge archives the source, delete removes its victim), so a collision would
+  // consume a subject a later step still needs and the tour would fail somewhere
+  // unrelated to the cause. The seed's markers make this true and the Go gate
+  // proves it per-PR; this is the tour-side check for staging drift.
+  const reserved = new Set<string>()
+  for (const [label, c] of [
+    ['CON-043 merge target', target],
+    ['CON-043 merge source', source],
+    ['CON-065 navigation subject', navContact],
+    ['CON-042 delete victim', deleteContact],
+    ['CON-045 highlight-window birthday', birthdayContact],
+  ] as Array<[string, TourContact]>) {
+    if (reserved.has(c.id)) {
+      throw new Error(`tour: the fixture for ${label} resolved to a contact another step reserved`)
+    }
+    reserved.add(c.id)
+  }
+
   // markContact = the first cadence-desc row (guaranteed on list page 1). Left
   // POSITIONAL on purpose — it is the ordering that is under test here — so the
   // only thing asserted is that a pinned fixture has not drifted into that row and
   // collided with a reservation above.
   const markContact = contacts[0]
-  const reserved = new Set<string>([target.id, source.id, navContact.id, deleteContact.id])
   if (reserved.has(markContact.id)) {
     throw new Error(
       'tour: the first cadence-ordered row is a pinned fixture — the seed must keep that row a generated contact'
     )
   }
   reserved.add(markContact.id)
+  // Reads from the full reservation set, so the ?action= subject can never be a
+  // pinned fixture: both of its flows discard rather than commit today, but the
+  // reservation is the fence, not the flows' current behavior.
   const actionParamContact = contacts.find(c => !reserved.has(c.id)) ?? markContact
 
   // Mid-list + first contact for keyboard-nav (read-only; order = default nav).
@@ -505,7 +526,14 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
 
   // Manual name edit in edit mode; the live input value is captured via fields
   // (ariaSnapshot does not reliably emit a textbox's value).
-  const editedMergedName = `${source.full_name} (merged)`
+  //
+  // Deliberately MARKER-FREE, and not derived from either fixture's name. The
+  // merge commits this string onto the surviving contact, so deriving it from the
+  // source would leave a second contact carrying the source's marker — making the
+  // seed no longer the only writer of marker-bearing names, and leaving the source
+  // marker resolving exactly-once to the wrong object on a re-run without a
+  // reseed, which no resolution rule can detect.
+  const editedMergedName = 'Merged Contact (tour edit)'
   await mergeModal.getByRole('heading', { level: 3 }).click() // handleStartEditingName
   const nameInput = mergeModal.getByRole('textbox').first()
   await nameInput.waitFor({ state: 'visible' })

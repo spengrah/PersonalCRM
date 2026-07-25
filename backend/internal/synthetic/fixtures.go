@@ -105,12 +105,17 @@ var PinnedFixtureMarkers = []string{
 // pinnedOverdueFixtures is the (cadence, created-age) table for the two
 // designated overdue fixtures. Both pairs are genuinely overdue under PRODUCTION
 // cadence durations, and both are chosen to close a gap the FROZEN catalog cannot:
-// the catalog supplies backdated cadence-bearing slots only at creation indices 0
-// and 3, so a small world has two distinct old creation ages where the dashboard's
-// urgency-diversity gate needs three. Each pair therefore carries a created age
-// distinct from every catalog ladder entry AND from the other pair's, and a
-// cadence distinct from the two the catalog's backdated slots use — and their
-// days-overdue magnitudes deliberately land in different urgency tiers.
+// at SMALL n the catalog supplies backdated cadence-bearing slots only at creation
+// indices 0 and 3, so such a world has two distinct old creation ages where the
+// dashboard's urgency-diversity gate needs three. Each pair therefore carries a
+// created age distinct from every catalog ladder entry AND from the other pair's,
+// and — again at small n, where the scarcity bites — a cadence distinct from the
+// two the catalog's backdated slots use. That cadence-newness claim is about small
+// worlds only: the overdue ladder rotates, so at n >= 18 a later catalog slot
+// carries quarterly too. Nothing depends on cadence-newness at scale; the
+// load-bearing distinctness is the AGES, which are checked ladder-wide in the unit
+// test and world-wide in the integration gate. Their days-overdue magnitudes
+// deliberately land in different urgency tiers.
 //
 // Neither cadence may be the FIRST-RANKED one (weekly): the contact list's default
 // order is cadence-frequency ascending, and the contacts tour mutates its first
@@ -121,11 +126,16 @@ var PinnedFixtureMarkers = []string{
 // the population is capture-bounded, not just seed-bounded: the tours' overdue
 // evidence is a JSON array that the capture normalizer slices at a cap, dropping
 // the tail. The prod-shaped catalog already supplies 50 overdue contacts, so this
-// pair takes the set to 52 — measured, not assumed. The overdue tours therefore
-// carry an explicit capture cap (OVERDUE_CAPTURE_CAP in
-// frontend/tests/tours/support/pinned-fixtures.ts) and refuse to run above it, so
-// a set that outgrows the cap fails loudly instead of reaching the judge with an
-// unnamed subset missing. Adding a third overdue fixture means re-checking that
+// pair takes the set to 52 — measured, not assumed.
+//
+// What the tours do about that, stated exactly: in BOTH tours that expose the
+// overdue set (dashboard, relationship-loop) every capture carries the explicit
+// OVERDUE_CAPTURE_CAP from frontend/tests/tours/support/pinned-fixtures.ts, and
+// each tour checks the live population against that cap BEFORE its first capture —
+// which it must, because the dashboard's own overdue GET is drained into whichever
+// capture happens to run next, not only into the ones that name the set. A
+// population above the cap therefore stops the tour instead of quietly reaching the
+// judge as an unnamed subset. Adding a third overdue fixture means re-checking that
 // cap, not just this table.
 //
 // Anchor-relative via WithCreatedAge (no time.Now()); a pure table, so it draws no

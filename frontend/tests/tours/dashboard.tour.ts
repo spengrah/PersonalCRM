@@ -66,6 +66,25 @@ async function readOverdueCards(
 test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, tour }) => {
   test.setTimeout(480_000)
 
+  // --- Reserve the overdue set (by API) for CAD-026/027 tier + order evidence ---
+  //
+  // Read BEFORE the first capture, and EVERY capture in this tour carries
+  // OVERDUE_CAPTURE_CAP. The landing `page.goto('/')` below redirects to the
+  // dashboard, whose widget fires its own parameterless overdue GET; that
+  // page-context response is buffered and drained by whichever capture runs next,
+  // so the overdue array reaches captures as a drained response body long before
+  // the first one that names it in `fields`. A cap check placed after those
+  // captures would be checking evidence that had already been sliced.
+  const overdueResp = await tour.apiCtx.get('/api/v1/contacts/overdue')
+  const overdueRows = ((await overdueResp.json())?.data ?? []) as OverdueRow[]
+  if (overdueRows.length === 0) {
+    throw new Error('dashboard tour: no overdue contacts in the seed — cannot tour CAD-026/027/028')
+  }
+  assertOverdueFitsCapture(overdueRows.length, 'dashboard')
+  const lastContactedById = new Map<string, string | null>(
+    overdueRows.map(r => [r.id, r.last_contacted ?? null])
+  )
+
   // --- DSH-001: the dashboard is the default landing surface ---
   await page.goto('/')
   // Best-effort mid-redirect capture: the in-flight state (and its screenshot)
@@ -81,6 +100,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   // defect).
   try {
     await tour.capture(page, {
+      arrayCap: OVERDUE_CAPTURE_CAP,
       behaviors: ['DSH-001'],
       note: 'mid-redirect state at the app root (best-effort; may already show the destination)',
       pair: { id: 'redirect', role: 'inflight' },
@@ -91,6 +111,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   await page.waitForURL(u => new URL(u).pathname === '/dashboard')
   await page.getByRole('heading', { name: 'Action Required' }).waitFor({ state: 'visible' })
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['DSH-001'],
     note: 'app root redirected to the dashboard (default landing)',
     pair: { id: 'landing', role: 'landing' },
@@ -104,6 +125,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
     .first()
     .evaluate(el => getComputedStyle(el).position)
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['DSH-002', 'DSH-003', 'DSH-007'],
     note: 'dashboard shell: global nav, header Add Contact, no dashboard search',
     pair: { id: 'dashboard', role: 'dashboard' },
@@ -114,27 +136,11 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   await page.goto('/contacts')
   await page.getByPlaceholder('Search contacts...').waitFor({ state: 'visible' })
   await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['DSH-007'],
     note: 'contact list search input (contact text search)',
     pair: { id: 'contacts-search', role: 'contacts-search' },
   })
-
-  // --- Reserve the overdue set (by API) for CAD-026/027 tier + order evidence ---
-  //
-  // Every capture from here on carries OVERDUE_CAPTURE_CAP: the overdue array
-  // reaches a capture either as a `fields` value or as the drained body of an
-  // overdue GET, and which capture drains a given response depends on where the
-  // fetch lands in the buffer — so the cap is set for the whole region rather than
-  // reasoned about per call site.
-  const overdueResp = await tour.apiCtx.get('/api/v1/contacts/overdue')
-  const overdueRows = ((await overdueResp.json())?.data ?? []) as OverdueRow[]
-  if (overdueRows.length === 0) {
-    throw new Error('dashboard tour: no overdue contacts in the seed — cannot tour CAD-026/027/028')
-  }
-  assertOverdueFitsCapture(overdueRows.length, 'dashboard')
-  const lastContactedById = new Map<string, string | null>(
-    overdueRows.map(r => [r.id, r.last_contacted ?? null])
-  )
 
   // --- CAD-026 / CAD-027[0]: overdue cards + urgency (default) order ---
   await page.goto('/dashboard')

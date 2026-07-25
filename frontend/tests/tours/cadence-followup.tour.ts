@@ -36,9 +36,36 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
   // --- Resolve the pinned contact for each CAD-029 activity state ---
   // Resolution is by marker; the STATE is then verified on the resolved row, since
   // a search that returned something is not proof it returned the right thing.
+  //
+  // detailOf throws on a non-OK response rather than degrading to {}. An empty
+  // object reads as "no activity signals", so a failed fetch would let the
+  // no-activity check below pass for a reason that has nothing to do with the
+  // contact — the same vacuity the state verification exists to remove.
   const detailOf = async (id: string): Promise<Record<string, unknown>> => {
     const r = await tour.apiCtx.get(`/api/v1/contacts/${id}`)
+    if (!r.ok()) {
+      throw new Error(
+        `cadence-followup tour: contact detail fetch failed (${r.status()}) for ${id}`
+      )
+    }
     return ((await r.json())?.data ?? {}) as Record<string, unknown>
+  }
+
+  // Every CAD-029 state must sit on its OWN contact: the four captures are read as
+  // four distinct relationships, and two states landing on one contact would let a
+  // single page stand in for two behaviors. The seed's markers make that true and
+  // the Go gate proves it per-PR, but staging drift is exactly what a tour-side
+  // check is for, so each resolved subject is claimed here as it is resolved.
+  const reserved = new Map<string, string>()
+  const claim = (id: string, label: string): void => {
+    const prior = reserved.get(id)
+    if (prior) {
+      throw new Error(
+        `cadence-followup tour: ${label} resolved to the same contact as ${prior} — ` +
+          'each CAD-029 activity state needs its own subject'
+      )
+    }
+    reserved.set(id, label)
   }
 
   const outreachContact = await resolveFixture<ActivityContact>(
@@ -49,6 +76,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
   if (!outreachContact.last_outreach_at) {
     throw new Error('cadence-followup tour: the outreach fixture carries no last_outreach_at')
   }
+  claim(outreachContact.id, 'the outreach fixture')
 
   const responseContact = await resolveFixture<ActivityContact>(
     tour.apiCtx,
@@ -58,11 +86,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
   if (!responseContact.last_response_at) {
     throw new Error('cadence-followup tour: the response fixture carries no last_response_at')
   }
-  if (responseContact.id === outreachContact.id) {
-    throw new Error(
-      'cadence-followup tour: the outreach and response fixtures must be distinct contacts'
-    )
-  }
+  claim(responseContact.id, 'the response fixture')
 
   // has_pending_followup is ONLY computed by the DETAIL handler. The list (and overdue)
   // payloads carry the field as a non-pointer bool with no omitempty, so they ship
@@ -75,6 +99,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
     FIXTURE_PENDING,
     'CAD-029[2] has_pending_followup'
   )
+  claim(pendingContact.id, 'the pending fixture')
   // Loud, never skipped: a world with no live follow-up is a SEED bug (the prod-shaped
   // profile seeds one), and touring without this state is exactly what produced the
   // false CAD-036 regression — the judge read the missing state as a missing feature.
@@ -89,6 +114,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
     FIXTURE_NO_ACTIVITY,
     'CAD-029[3] no recent-activity signals'
   )
+  claim(noneContact.id, 'the no-activity fixture')
   const noneDetail = await detailOf(noneContact.id)
   if (
     noneDetail.last_outreach_at ||

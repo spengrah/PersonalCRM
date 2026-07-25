@@ -7,11 +7,16 @@
 // backend/internal/synthetic/fixtures.go. Do not restate it here; the literals
 // below are the interface between the two, nothing more.
 //
-// Fixtures that a tour never resolves (the designated overdue contacts) are
-// deliberately absent: those are population guarantees, and the tours that consume
-// them select positionally because the selection is the behavior under test. What
-// those tours DO need from here is the capture cap below, which is what carries a
-// population guarantee through to the judge intact.
+// No tour resolves the designated overdue contacts: those are population
+// guarantees, and the tours that consume them select positionally because the
+// selection is the behavior under test. What those tours DO need from here is the
+// capture cap below, which is what carries a population guarantee through to the
+// judge intact.
+//
+// These literals are hand-copied from Go constants, so pinned-fixtures.test.ts
+// reads fixtures.go and fails on drift — a renamed marker would otherwise pass
+// every per-PR gate and surface only as a resolveFixture throw on the nightly
+// staging sweep, out-of-band and post-merge.
 
 import type { APIRequestContext } from '@playwright/test'
 
@@ -24,6 +29,28 @@ export const FIXTURE_MERGE_SOURCE = 'fxmergesource'
 export const FIXTURE_SEARCH = 'fxsearchsubject'
 export const FIXTURE_DELETE = 'fxdeletevictim'
 export const FIXTURE_BIRTHDAY = 'fxbirthday'
+
+// The two designated overdue markers. Exported ONLY so the drift check covers the
+// seed's full marker set — no tour resolves them, and none should: see above.
+export const FIXTURE_OVERDUE_A = 'fxoverduea'
+export const FIXTURE_OVERDUE_B = 'fxoverdueb'
+
+// Every marker the seed declares, in no meaningful order. The drift check compares
+// this against the Go constants as a SET, so a marker added on one side only is a
+// failure rather than a silent divergence.
+export const ALL_FIXTURE_MARKERS = [
+  FIXTURE_NO_ACTIVITY,
+  FIXTURE_OUTREACH,
+  FIXTURE_RESPONSE,
+  FIXTURE_PENDING,
+  FIXTURE_MERGE_TARGET,
+  FIXTURE_MERGE_SOURCE,
+  FIXTURE_SEARCH,
+  FIXTURE_DELETE,
+  FIXTURE_BIRTHDAY,
+  FIXTURE_OVERDUE_A,
+  FIXTURE_OVERDUE_B,
+]
 
 // The overdue set is EVIDENCE, not a sample: the judge grades urgency ordering and
 // tier separation across the WHOLE list, and the seed guarantees two designated

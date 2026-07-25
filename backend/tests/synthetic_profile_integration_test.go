@@ -330,9 +330,10 @@ func assertPinnedTourFixtures(
 
 	rows, err := support.ListPinnedFixtureContactsByNamePrefix(ctx, prefix)
 	require.NoError(t, err)
-	// A6: the contacts tour hard-throws below five contacts. A floor the pinned
-	// block alone already clears, so it records the tour's requirement rather than
-	// gating anything the seed could plausibly lose.
+	// DOCUMENTATION, NOT A GATE — A6: the contacts tour hard-throws below five
+	// contacts, but the pinned block alone seeds eight into this namespace, so this
+	// records the tour's requirement rather than gating anything the seed could
+	// plausibly lose.
 	require.GreaterOrEqual(t, len(rows), 5, "the contacts tour needs ≥5 contacts in the world")
 
 	recorded := h.PinnedFixtureIDs()
@@ -435,10 +436,19 @@ func assertPinnedTourFixtures(
 	}
 	require.NotEqual(t, *overdueFixtures[0].Cadence, *overdueFixtures[1].Cadence, "the two overdue fixtures must carry distinct cadences")
 	require.False(t, overdueFixtures[0].CreatedAt.Equal(*overdueFixtures[1].CreatedAt), "the two overdue fixtures must carry distinct creation ages")
-	for i, f := range overdueFixtures {
-		other := overdueFixtures[1-i]
+	overdueFixtureIDs := make(map[uuid.UUID]bool, len(overdueFixtures))
+	for _, f := range overdueFixtures {
+		overdueFixtureIDs[f.ID] = true
+	}
+	for _, f := range overdueFixtures {
+		// Comparisons are counted: with nothing to compare against, "adds a new age"
+		// is trivially true, and a silently empty loop would look identical to a
+		// satisfied one. The wider system property this contributes to — ≥3 distinct
+		// old creation ages among the cadence-bearing never-connected rows — is gated
+		// by the coherence floor, not here.
+		compared := 0
 		for _, row := range rows {
-			if row.ID == f.ID || row.ID == other.ID {
+			if overdueFixtureIDs[row.ID] {
 				continue
 			}
 			if row.Cadence == nil || *row.Cadence == "" || row.LastContacted != nil || row.CreatedAt == nil {
@@ -447,9 +457,28 @@ func assertPinnedTourFixtures(
 			if !row.CreatedAt.Before(diversityFloor) {
 				continue
 			}
+			compared++
 			require.False(t, row.CreatedAt.Equal(*f.CreatedAt),
 				"overdue fixture %s duplicates another contact's creation age — it adds no NEW distinct age to the diversity set", subjectOf[f.ID])
 		}
+		require.NotZero(t, compared,
+			"overdue fixture %s was compared against no other qualifying contact — the distinct-age claim would pass vacuously", subjectOf[f.ID])
+	}
+
+	// The tours read the overdue set through GET /contacts/overdue, whose predicate
+	// is the persisted contact_by against today's DATE — not the column checks above.
+	// Assert both fixtures come back from that path, so the chain from "seeded
+	// overdue" to "in the list the tours capture" is proven rather than inferred from
+	// the margins.
+	endpointOverdue, err := contactRepo.ListOverdueContacts(ctx, cadence.Today(now), 1000)
+	require.NoError(t, err)
+	returnedByEndpoint := make(map[uuid.UUID]bool, len(endpointOverdue))
+	for _, c := range endpointOverdue {
+		returnedByEndpoint[c.ID] = true
+	}
+	for _, f := range overdueFixtures {
+		require.True(t, returnedByEndpoint[f.ID],
+			"overdue fixture %s must be returned by the overdue endpoint the tours read, not merely carry overdue columns", subjectOf[f.ID])
 	}
 
 	// A7 — the merge pair. The preview flags a field conflicting only when the
@@ -470,17 +499,25 @@ func assertPinnedTourFixtures(
 	require.NotNil(t, searchSubject.Cadence, "the search subject must be cadence-bearing (it is reached through cadence_filter=has_cadence)")
 	require.NotEmpty(t, *searchSubject.Cadence, "the search subject must be cadence-bearing (it is reached through cadence_filter=has_cadence)")
 
-	// A6 — the merge and navigation subjects are what the "≥3 unique-named contacts"
-	// requirement is actually about, so it is discharged over exactly those three.
-	// This check is DOMINATED by the exactly-one-match rule above (any row sharing a
-	// fixture's full_name necessarily contains that fixture's marker, so it would
-	// fail there first) and is kept as a statement of what the tour's exact-name
-	// selector needs, not as an independent gate.
+	// DOCUMENTATION, NOT A GATE — A6: the "≥3 unique-named contacts" requirement is
+	// about the subjects the contacts tour resolves by exact name text. That is five,
+	// not three: the merge pair and the navigation subject go through the tour's
+	// uniqueName check, the delete victim does too, and the birthday card is matched
+	// by hasText on its full name. This check is DOMINATED by the exactly-one-match
+	// rule above (any row sharing a fixture's full_name necessarily contains that
+	// fixture's marker, so it would fail there first) and is kept as a statement of
+	// what the tour's selectors need.
 	nameCount := map[string]int{}
 	for _, row := range rows {
 		nameCount[row.FullName]++
 	}
-	for _, marker := range []string{synthetic.FixtureMarkerMergeTarget, synthetic.FixtureMarkerMergeSource, synthetic.FixtureMarkerSearch} {
+	for _, marker := range []string{
+		synthetic.FixtureMarkerMergeTarget,
+		synthetic.FixtureMarkerMergeSource,
+		synthetic.FixtureMarkerSearch,
+		synthetic.FixtureMarkerDelete,
+		synthetic.FixtureMarkerBirthday,
+	} {
 		require.Equal(t, 1, nameCount[byMarker[marker].FullName],
 			"fixture %q must carry a name unique in the world — the merge selector filters by exact name text", marker)
 	}
