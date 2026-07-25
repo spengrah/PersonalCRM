@@ -290,7 +290,8 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	)
 	gchatEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(client)
 	gchatEngine := google.NewGChatAggregationEngine(
-		2, 48, commsRepo, interactionRepo, contactService, contactService, bus, database.Pool, gchatEnqueuer,
+		google.GChatBurstWindowHours, google.GChatReplyBridgeHours,
+		commsRepo, interactionRepo, contactService, contactService, bus, database.Pool, gchatEnqueuer,
 	)
 	chatListerRegistry := scheduler.NewPerSourceChatListerRegistry(
 		map[string]func(ctx context.Context, contactID uuid.UUID) ([]string, error){

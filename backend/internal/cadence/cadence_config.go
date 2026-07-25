@@ -75,8 +75,23 @@ func GetCadenceConfig() CadenceConfig {
 
 // GetCadenceDuration returns the duration for a given cadence type
 func GetCadenceDuration(cadenceType CadenceType) time.Duration {
-	config := GetCadenceConfig()
+	return durationFor(GetCadenceConfig(), cadenceType)
+}
 
+// GetProductionCadenceDuration is GetCadenceDuration against the PRODUCTION
+// table rather than the ambient environment's. It exists so a caller that must
+// reason in real-world durations — a seed asserting an overdue expectation under
+// CRM_ENV=test, where annual is two hours — resolves the duration through the
+// SAME lookup, including its unrecognized-cadence fallback, instead of
+// hand-copying it.
+func GetProductionCadenceDuration(cadenceType CadenceType) time.Duration {
+	return durationFor(ProductionCadenceConfig(), cadenceType)
+}
+
+// durationFor is the single cadence-type → duration lookup. Both accessors above
+// route through it, so an unrecognized cadence cannot resolve one way in one
+// caller and another way in the next.
+func durationFor(config CadenceConfig, cadenceType CadenceType) time.Duration {
 	switch cadenceType {
 	case CadenceWeekly:
 		return config.Weekly
@@ -111,17 +126,31 @@ func CalculateNextDueDateWithConfig(cadenceType CadenceType, lastContacted *time
 
 // IsOverdueWithConfig checks if contact is overdue using environment-specific cadences
 func IsOverdueWithConfig(cadenceType CadenceType, lastContacted *time.Time, createdAt time.Time, checkTime time.Time) bool {
-	duration := GetCadenceDuration(cadenceType)
+	return isOverdue(GetCadenceDuration(cadenceType), lastContacted, createdAt, checkTime)
+}
 
-	var lastContactTime time.Time
+// IsOverdueWithProductionConfig is IsOverdueWithConfig evaluated against the
+// PRODUCTION cadence table, whatever the ambient environment is. It shares the
+// formula rather than restating it, so the two answers cannot diverge — which
+// they would, silently, if a caller needing production semantics kept its own
+// copy: under CRM_ENV=test annual is two hours and every contact is overdue, so
+// such a caller cannot simply use the env-derived helper either.
+//
+// checkTime is the caller's reference instant, so a prediction and a measurement
+// can be made to answer the same question about the same moment.
+func IsOverdueWithProductionConfig(cadenceType CadenceType, lastContacted *time.Time, createdAt time.Time, checkTime time.Time) bool {
+	return isOverdue(GetProductionCadenceDuration(cadenceType), lastContacted, createdAt, checkTime)
+}
+
+// isOverdue is the overdue formula itself: a contact is overdue once checkTime
+// has passed its base instant plus the cadence period, where the base is
+// last_contacted when set and created_at otherwise.
+func isOverdue(duration time.Duration, lastContacted *time.Time, createdAt time.Time, checkTime time.Time) bool {
+	lastContactTime := createdAt
 	if lastContacted != nil {
 		lastContactTime = *lastContacted
-	} else {
-		lastContactTime = createdAt
 	}
-
-	nextContactDue := lastContactTime.Add(duration)
-	return checkTime.After(nextContactDue)
+	return checkTime.After(lastContactTime.Add(duration))
 }
 
 // GetOverdueDaysWithConfig returns how many "days" overdue

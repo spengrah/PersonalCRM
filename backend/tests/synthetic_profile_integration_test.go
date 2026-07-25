@@ -867,6 +867,7 @@ func assertArchetypeCohorts(t *testing.T, ctx context.Context, h *synthetic.Harn
 		require.Greater(t, res.ArchetypePayloads, res.ArchetypeInteractions,
 			"payloads must exceed landed rows — that difference IS the aggregation collapse")
 	}
+	assertArchetypeSettleBudget(t, res)
 
 	if n < 12 {
 		return
@@ -910,6 +911,33 @@ func assertArchetypeCohorts(t *testing.T, ctx context.Context, h *synthetic.Harn
 	}
 }
 
+// assertArchetypeSettleBudget pins the reason this phase batches at all.
+//
+// Settle is O(all harness contacts) and rebuilds the whole event-id union on
+// every call, so the phase's cost is its SETTLE count, not its payload count.
+// Batching collapses that to one Settle per dependency GENERATION — a handful for
+// the whole catalog — where the same history through per-payload single replays
+// would cost one per payload: roughly a hundred at dev and a thousand at
+// prod-shaped. A regression from batch replay back to single replay would leave
+// every other assertion in this suite passing while the reseed's gate wait
+// regressed by about two orders of magnitude, which is precisely what this bound
+// exists to catch.
+func assertArchetypeSettleBudget(t *testing.T, res synthetic.ProfileResult) {
+	t.Helper()
+	if res.ArchetypePayloads == 0 {
+		require.Zero(t, res.ArchetypeSettleCalls, "no payloads means no settles")
+		return
+	}
+	require.Positive(t, res.ArchetypeSettleCalls, "driving payloads must settle at least once")
+	// Calendar, up to two mail buckets and chat, each at most two generations.
+	const maxArchetypeSettles = 8
+	require.LessOrEqual(t, res.ArchetypeSettleCalls, maxArchetypeSettles,
+		"the archetype phase settled %d times for %d payloads — a per-payload replay loop looks exactly like this",
+		res.ArchetypeSettleCalls, res.ArchetypePayloads)
+	require.Less(t, res.ArchetypeSettleCalls, res.ArchetypePayloads,
+		"settles must stay strictly below payloads — a per-payload replay loop settles once PER payload, so equality is the regression")
+}
+
 // assertOverdueBand measures the overdue population from the DATABASE and holds
 // it against the assignment's prediction, the absolute ceiling, and the target
 // share of the live world.
@@ -940,10 +968,11 @@ func assertOverdueBand(t *testing.T, ctx context.Context, support *repository.Sy
 		}
 	}
 
-	// The two pinned overdue fixtures sit outside the catalog and are always
-	// overdue, so the assignment's catalog prediction accounts for them separately.
-	const pinnedOverdue = 2
-	require.Equal(t, synthetic.PredictedCatalogOverdue(n)+pinnedOverdue, overdue,
+	// The pinned overdue fixtures sit outside the catalog and are always overdue,
+	// so the assignment's catalog prediction accounts for them separately. The
+	// count is READ from the seed rather than restated here, so a change to the
+	// fixture table cannot drift the budget and this assertion apart.
+	require.Equal(t, synthetic.PredictedCatalogOverdue(n)+synthetic.PinnedOverdueFixtureCount, overdue,
 		"the measured overdue population must equal what the assignment predicts — a drifting model has to fail here rather than be trusted")
 	require.LessOrEqual(t, overdue, synthetic.OverdueCeiling,
 		"the overdue population must stay under the ceiling; the overdue tours refuse to run above their own, higher, capture cap")

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	chat "google.golang.org/api/chat/v1"
 )
 
 // catalogSlotSizes are the catalog sizes the slot/assignment tests sweep: the
@@ -40,18 +41,18 @@ func TestCatalogSlotMatchesFrozenOptions(t *testing.T) {
 			switch slot.Kind {
 			case slotBackdated:
 				require.NotNil(t, spec.CreatedAt, "n=%d i=%d: a backdated slot stamps created_at", n, i)
-				require.True(t, spec.CreatedAt.Equal(anchor.Add(-slot.CreatedAge)),
-					"n=%d i=%d: backdated created_at must be exactly anchor − CreatedAge (got %s, want %s)",
-					n, i, spec.CreatedAt, anchor.Add(-slot.CreatedAge))
+				require.True(t, spec.CreatedAt.Equal(anchor.Add(-slot.CreatedAgeBound)),
+					"n=%d i=%d: backdated created_at must be exactly anchor − CreatedAgeBound (got %s, want %s)",
+					n, i, spec.CreatedAt, anchor.Add(-slot.CreatedAgeBound))
 			case slotRecent:
 				require.NotNil(t, spec.CreatedAt, "n=%d i=%d: a recent slot stamps created_at", n, i)
 				age := anchor.Sub(*spec.CreatedAt)
 				require.GreaterOrEqual(t, age, time.Duration(0), "n=%d i=%d: a recent slot is not created in the future", n, i)
-				require.Less(t, age, slot.CreatedAge,
+				require.Less(t, age, slot.CreatedAgeBound,
 					"n=%d i=%d: a recent slot lands inside the window catalogSlot reports as its bound", n, i)
 			case slotFresh:
 				require.Nil(t, spec.CreatedAt, "n=%d i=%d: a fresh slot carries no created-age option", n, i)
-				require.Zero(t, slot.CreatedAge, "n=%d i=%d: a fresh slot reports no created age", n, i)
+				require.Zero(t, slot.CreatedAgeBound, "n=%d i=%d: a fresh slot reports no created age", n, i)
 			}
 		}
 	}
@@ -71,39 +72,75 @@ func TestCatalogSlotIsPure(t *testing.T) {
 
 // --- compatibility -----------------------------------------------------------
 
-// TestArchetypeNewestAgeRangesMatchTheGenerator is the anti-drift guard for the
-// one table this package RESTATES rather than reads: the generator's
-// per-archetype newest-entry bounds live in an unexported table a package below,
-// so the compatibility rule declares its own copy.
+// TestArchetypeShapesMatchTheGenerator is the anti-drift guard for the table
+// this package RESTATES rather than reads: the generator's per-archetype
+// parameters are unexported and live a package below, so the compatibility rule
+// declares its own copy of the two facts it consumes.
 //
-// The guard samples real timelines across many namespaces and requires the
-// observed newest ages to (a) stay inside the declared bounds and (b) reach
-// within one calmMargin of each end. (a) catches a generator that widened its
-// range past what the rule was reasoned about; (b) catches one that narrowed or
-// shifted it. A drift smaller than the margin survives, which is the honest limit
-// of a sampling guard — but a drift smaller than the margin also cannot flip an
-// admissibility verdict on its own, which is what the margin is for.
+// It guards BOTH of them, over real sampled timelines:
+//
+//   - Intent — the field that selects WHICH inequality applies, and therefore
+//     the more load-bearing half. An archetype is neutral exactly when its
+//     timelines can never move last_contacted; a generator change that gave a
+//     neutral archetype an inbound or a calendar entry would silently make the
+//     "admissible on every cadence" shortcut false, and fails here instead.
+//     (Overdue-versus-calm is a DESIGN statement about which side of the period
+//     the archetype should sit on, not a generator fact, so it is pinned by the
+//     margin test below rather than derived here.)
+//   - NewestMin/NewestMax — measured over the newest entry that WRITES
+//     last_contacted, which is the quantity the rule reasons about. Measuring the
+//     newest entry of any kind would coincide today only because no archetype
+//     emits a one-sided entry newer than its newest two-way one.
+//
+// The bounds must sit inside the declared range AND reach within one calmMargin
+// of each end: (a) catches a generator that widened past what the rule was
+// reasoned about, (b) catches one that narrowed or shifted. A drift smaller than
+// the margin survives, which is the honest limit of a sampling guard — and a
+// drift smaller than the margin cannot flip an admissibility verdict on its own,
+// which is what the margin is for.
 //
 // The sample size makes (b) non-flaky rather than merely likely: the narrowest
 // declared range is 265 whole-hour draws and the margin is 25 of them, so the
 // probability of no sample landing in an end band is about e^-283.
-func TestArchetypeNewestAgeRangesMatchTheGenerator(t *testing.T) {
+func TestArchetypeShapesMatchTheGenerator(t *testing.T) {
 	const namespaces = 3000
 	caps := factory.MethodSet{Email: true}
 
 	observedMin := map[factory.Archetype]time.Duration{}
 	observedMax := map[factory.Archetype]time.Duration{}
+	writesLastContacted := map[factory.Archetype]bool{}
+
 	for s := 0; s < namespaces; s++ {
-		g := factory.NewGenerator(factory.DefaultSeed, "rangeunit"+strconv.Itoa(s))
-		for _, a := range historyArchetypes {
+		g := factory.NewGenerator(factory.DefaultSeed, "shapeunit"+strconv.Itoa(s))
+		for _, a := range archetypeTieBreak {
 			tl := g.TimelineFor(a, caps)
+			if a == factory.ArchetypeNeverContacted {
+				require.Empty(t, tl.Entries, "never-contacted must stay history-free")
+				continue
+			}
 			require.NotEmpty(t, tl.Entries, "%s must emit a timeline for an email-bearing contact", a)
-			newest := tl.Entries[0].Age
+
+			var newest time.Duration
+			found := false
 			for _, e := range tl.Entries {
-				if e.Age < newest {
-					newest = e.Age
+				// Calendar carries no promotion mechanic — a matched event is always
+				// mutual — so the generator must never ask for a pair key on one. The
+				// calendar batch item has no field to carry it, and the mapper refuses
+				// rather than dropping it (TestArchetypeCalendarPairKeyIsRejected).
+				if e.Source == factory.SourceGCal {
+					require.Zero(t, e.PairKey, "%s: a calendar entry must carry no promotion pair key", a)
+				}
+				if !archetypeWritesLastContacted(e) {
+					continue
+				}
+				if !found || e.Age < newest {
+					newest, found = e.Age, true
 				}
 			}
+			if !found {
+				continue
+			}
+			writesLastContacted[a] = true
 			if prev, ok := observedMin[a]; !ok || newest < prev {
 				observedMin[a] = newest
 			}
@@ -113,13 +150,27 @@ func TestArchetypeNewestAgeRangesMatchTheGenerator(t *testing.T) {
 		}
 	}
 
-	for _, a := range historyArchetypes {
+	for _, a := range archetypeTieBreak {
 		shape := archetypeShapes[a]
+
+		// The intent half: neutral EXACTLY when nothing the archetype emits can move
+		// last_contacted.
+		if shape.Intent == intentNeutral {
+			require.False(t, writesLastContacted[a],
+				"%s is declared NEUTRAL — admissible on every cadence without reading its bounds — but its timelines carry an entry that writes last_contacted", a)
+			require.Zero(t, shape.NewestMin, "%s is neutral, so it must declare no bounds to keep unread values out of the table", a)
+			require.Zero(t, shape.NewestMax, "%s is neutral, so it must declare no bounds to keep unread values out of the table", a)
+			continue
+		}
+		require.True(t, writesLastContacted[a],
+			"%s is declared with an overdue/calm intent, so its timelines must contain an entry that writes last_contacted", a)
+
+		// The bounds half, measured over that entry.
 		require.GreaterOrEqual(t, observedMin[a], shape.NewestMin,
-			"%s drew a newest age of %s, below the declared floor %s — the compatibility rule was reasoned about the declared range",
+			"%s dated its newest two-way entry %s back, below the declared floor %s — the compatibility rule was reasoned about the declared range",
 			a, observedMin[a], shape.NewestMin)
 		require.LessOrEqual(t, observedMax[a], shape.NewestMax,
-			"%s drew a newest age of %s, above the declared ceiling %s — the compatibility rule was reasoned about the declared range",
+			"%s dated its newest two-way entry %s back, above the declared ceiling %s — the compatibility rule was reasoned about the declared range",
 			a, observedMax[a], shape.NewestMax)
 		require.LessOrEqual(t, observedMin[a]-shape.NewestMin, calmMargin,
 			"%s never drew within one margin of its declared floor %s (closest %s) — the generator's floor has moved",
@@ -128,6 +179,15 @@ func TestArchetypeNewestAgeRangesMatchTheGenerator(t *testing.T) {
 			"%s never drew within one margin of its declared ceiling %s (closest %s) — the generator's ceiling has moved",
 			a, shape.NewestMax, observedMax[a])
 	}
+}
+
+// TestPinnedOverdueFixtureCountMatchesTheTable keeps the exported constant — a
+// const because the coverage tests add it back to a catalog prediction — in step
+// with the fixture table it counts. A slice literal cannot be a const, so this is
+// what makes the number a derivation rather than a restatement.
+func TestPinnedOverdueFixtureCountMatchesTheTable(t *testing.T) {
+	require.Equal(t, len(pinnedOverdueFixtures), PinnedOverdueFixtureCount,
+		"the exported pinned-overdue count must equal the number of pinned overdue fixtures")
 }
 
 // TestArchetypeCompatibilityHasAMargin proves the rule is STRICT WITH A MARGIN,
@@ -310,7 +370,7 @@ func TestArchetypeAssignmentOverdueBand(t *testing.T) {
 	const devKnobNonCatalogLive = 19
 
 	for n := 1; n <= 150; n++ {
-		total := PredictedCatalogOverdue(n) + pinnedOverdueFixtureCount
+		total := PredictedCatalogOverdue(n) + PinnedOverdueFixtureCount
 		require.LessOrEqual(t, total, OverdueCeiling,
 			"n=%d: the overdue population must stay under the ceiling (the overdue tours refuse to run above their own, higher, capture cap)", n)
 
@@ -324,15 +384,15 @@ func TestArchetypeAssignmentOverdueBand(t *testing.T) {
 
 	// The two shipping sizes are pinned exactly, so a tuning change to the budget
 	// or the placement ordering is a deliberate edit rather than a drift.
-	require.Equal(t, 9, PredictedCatalogOverdue(18)+pinnedOverdueFixtureCount, "dev (n=18) overdue total")
-	require.Equal(t, 40, PredictedCatalogOverdue(150)+pinnedOverdueFixtureCount, "prod-shaped (n=150) overdue total")
+	require.Equal(t, 9, PredictedCatalogOverdue(18)+PinnedOverdueFixtureCount, "dev (n=18) overdue total")
+	require.Equal(t, 40, PredictedCatalogOverdue(150)+PinnedOverdueFixtureCount, "prod-shaped (n=150) overdue total")
 
 	// The structural FLOOR: backdated slots with no admissible calm archetype are
 	// overdue whatever they receive, the no-method slot is reserved and backdated,
 	// and the two pinned fixtures are always overdue. The budget cannot push below
 	// this, so it must itself fit under the ceiling.
 	for n := 1; n <= 150; n++ {
-		floor := pinnedOverdueFixtureCount
+		floor := PinnedOverdueFixtureCount
 		for i := 0; i < n; i++ {
 			slot := catalogSlot(i, n)
 			if i == noMethodCatalogIndex && n > noMethodCatalogIndex {
@@ -347,7 +407,7 @@ func TestArchetypeAssignmentOverdueBand(t *testing.T) {
 		}
 		require.LessOrEqual(t, floor, OverdueCeiling,
 			"n=%d: the structural overdue floor (%d) must fit under the ceiling — no budget can lower it", n, floor)
-		require.LessOrEqual(t, floor, PredictedCatalogOverdue(n)+pinnedOverdueFixtureCount,
+		require.LessOrEqual(t, floor, PredictedCatalogOverdue(n)+PinnedOverdueFixtureCount,
 			"n=%d: the predicted total can never be below the structural floor", n)
 	}
 }
@@ -377,10 +437,10 @@ func TestArchetypeAssignmentPreservesC3Floors(t *testing.T) {
 		}
 		for i, a := range assignment {
 			slot := catalogSlot(i, n)
-			if archetypeShapes[a].Intent != intentNeutral || slot.Kind != slotBackdated || slot.CreatedAge <= diversityFloorAge {
+			if archetypeShapes[a].Intent != intentNeutral || slot.Kind != slotBackdated || slot.CreatedAgeBound <= diversityFloorAge {
 				continue
 			}
-			ages[slot.CreatedAge] = true
+			ages[slot.CreatedAgeBound] = true
 			cadences[slot.Cadence] = true
 		}
 		require.GreaterOrEqual(t, len(ages), 3, "n=%d: the never-connected backdated set spans >=3 distinct created-ages", n)
@@ -483,7 +543,12 @@ func TestArchetypePayloadsAreAdapterLegal(t *testing.T) {
 			for _, bucket := range batches.GmailBuckets {
 				total += len(bucket)
 			}
-			require.Equal(t, batches.Payloads, total, "n=%d ns=%d: the payload count must be the batches' size", n, s)
+			perSlot := 0
+			for _, sample := range batches.Samples {
+				perSlot += sample.Payloads
+			}
+			require.Equal(t, perSlot, total,
+				"n=%d ns=%d: every timeline entry must reach exactly one batch item", n, s)
 
 			identifiers := map[string]bool{}
 			requireUnique := func(id string) {
@@ -610,7 +675,7 @@ func TestArchetypePayloadsSkipEmptySources(t *testing.T) {
 		gen := factory.NewGenerator(factory.DefaultSeed, "emptyunitlow"+strconv.Itoa(n))
 		batches, err := buildArchetypeBatches(gen, archetypeUnitSlots(gen, n), n)
 		require.NoError(t, err)
-		require.Zero(t, batches.Payloads, "n=%d: below the floor the overlay drives nothing", n)
+		require.True(t, batches.empty(), "n=%d: below the floor the overlay drives nothing", n)
 		require.Empty(t, batches.GCal)
 		require.Empty(t, batches.GmailBuckets)
 		require.Empty(t, batches.GChat)
@@ -667,6 +732,10 @@ func TestArchetypePairValidationRejectsMalformedPairs(t *testing.T) {
 		"mail_gap":           {mail(10*24*time.Hour+time.Hour, true), mail(10*24*time.Hour, false)},
 		"chat_equal_age":     {chatEntry(10*24*time.Hour, true), chatEntry(10*24*time.Hour, false)},
 		"chat_inbound_older": {chatEntry(10*24*time.Hour, false), chatEntry(10*24*time.Hour+6*time.Hour, true)},
+		// A pair whose halves live on different sources has no coherent timing rule
+		// at all — mail promotes on a shared thread and one local day, chat on the
+		// reply bridge in one space — so neither half can promote the other.
+		"two_sources": {mail(10*24*time.Hour, true), chatEntry(10*24*time.Hour, false)},
 	}
 	for name, members := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -755,4 +824,94 @@ func TestExpectedInteractionsMatchesArchetypeShape(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestArchetypeCalendarPairKeyIsRejected watches the guard the calendar batch
+// item type explicitly asks callers to write. GCalBatchItem has NO PairKey field
+// — a matched calendar event is always mutual, so calendar carries no promotion
+// mechanic — and its own comment says a caller mapping a plan that CAN carry a
+// pair key must ASSERT it is unset rather than drop it silently.
+//
+// The generator emits no such timeline today, which is exactly why the branch
+// needs a hand-authored one: a guard nothing can exercise is indistinguishable
+// from one that always passes.
+func TestArchetypeCalendarPairKeyIsRejected(t *testing.T) {
+	gen := factory.NewGenerator(factory.DefaultSeed, "gcalpairunit")
+	spec := gen.Contact(factory.WithEmail(), factory.WithCadence("weekly"))
+	slots := []archetypeSlot{{Index: 0, ContactID: uuid.New(), Spec: spec}}
+
+	timeline := factory.Timeline{
+		Archetype: factory.ArchetypeMutualRegular,
+		Entries: []factory.TimelineEntry{
+			{Source: factory.SourceGCal, Age: 30 * 24 * time.Hour, PairKey: 1},
+			{Source: factory.SourceGCal, Age: 10 * 24 * time.Hour, PairKey: 1},
+		},
+	}
+	_, err := buildArchetypeBatchesFrom(gen, slots, func(archetypeSlot) (factory.Archetype, factory.Timeline, error) {
+		return factory.ArchetypeMutualRegular, timeline, nil
+	})
+	require.ErrorIs(t, err, errArchetypeCalendarPairKey,
+		"a stated promotion intent must be refused by name, not dropped because the item type has nowhere to put it")
+}
+
+// TestArchetypeChatCloneRejectsUnresolvedMembership watches the mapper's one
+// otherwise-SILENT failure. A cloned chat message whose space membership does not
+// yield both the connected account and a peer would be built with an empty
+// sender; the provider reads that as an INBOUND from an empty address, and the
+// batch ownership preflight skips empty-addressed items by design — so an
+// intended outbound would strand and time out a gate blaming the wrong thing.
+//
+// burst-then-quiet's opening and filler clones carry no PairKey, so the
+// malformed-pair check would not catch them either.
+func TestArchetypeChatCloneRejectsUnresolvedMembership(t *testing.T) {
+	gen := factory.NewGenerator(factory.DefaultSeed, "cloneunit")
+	spec := gen.Contact(factory.WithEmail(), factory.WithCadence("annual"))
+	base := gen.GChatMessage(spec, factory.MatchSeeded, factory.WithMessageAge(20*24*time.Hour))
+
+	t.Run("resolved_membership_clones", func(t *testing.T) {
+		clone, err := cloneArchetypeGChatMessage(base, "arch-1", true, gen.Anchor().Add(-30*24*time.Hour))
+		require.NoError(t, err)
+		require.Equal(t, base.SpaceName, clone.SpaceName)
+		require.Equal(t, base.AccountID, clone.EmailByUser[clone.Message.Sender.Name],
+			"an outbound clone must be sent BY the connected account")
+	})
+
+	t.Run("missing_peer", func(t *testing.T) {
+		broken := base
+		broken.EmailByUser = map[string]string{}
+		for user := range base.EmailByUser {
+			broken.EmailByUser[user] = base.AccountID // every member resolves to "me"
+		}
+		_, err := cloneArchetypeGChatMessage(broken, "arch-1", true, gen.Anchor())
+		require.ErrorIs(t, err, errArchetypeChatCloneUnresolved)
+	})
+
+	t.Run("missing_me", func(t *testing.T) {
+		broken := base
+		broken.AccountID = "someone-else@synthetic.example"
+		_, err := cloneArchetypeGChatMessage(broken, "arch-1", false, gen.Anchor())
+		require.ErrorIs(t, err, errArchetypeChatCloneUnresolved)
+	})
+
+	t.Run("nil_member_entries", func(t *testing.T) {
+		broken := base
+		broken.Members = []*chat.Membership{nil, {State: "JOINED"}}
+		_, err := cloneArchetypeGChatMessage(broken, "arch-1", false, gen.Anchor())
+		require.ErrorIs(t, err, errArchetypeChatCloneUnresolved)
+	})
+}
+
+// TestArchetypeSlotOutOfRangeIsRejected pins the other half of the oracle
+// contract: the assignment is a WHOLE-CATALOG computation, so applying it to a
+// slot that is not in that catalog is a caller error, not something to paper over
+// with a default archetype.
+func TestArchetypeSlotOutOfRangeIsRejected(t *testing.T) {
+	gen := factory.NewGenerator(factory.DefaultSeed, "rangeslotunit")
+	spec := gen.Contact(factory.WithEmail(), factory.WithCadence("weekly"))
+	_, err := buildArchetypeBatches(gen, []archetypeSlot{{Index: 18, ContactID: uuid.New(), Spec: spec}}, 18)
+	require.ErrorIs(t, err, errArchetypeSlotOutOfRange)
+
+	require.Empty(t, ArchetypeForIndex(18, 18),
+		"the oracle must not answer with a valid archetype outside the catalog — a mis-derived index has to disagree loudly")
+	require.Empty(t, ArchetypeForIndex(-1, 18))
 }

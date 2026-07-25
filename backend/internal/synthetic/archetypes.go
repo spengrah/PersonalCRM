@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/cadence"
+	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/synthetic/replay"
 
@@ -50,11 +51,16 @@ const (
 type catalogSlotSpec struct {
 	Kind    catalogSlotKind
 	Cadence string
-	// CreatedAge is how far before the anchor the contact is created. Exact for
-	// slotBackdated; for slotRecent it is the WINDOW (the true age is a PRNG draw
-	// inside it), which is the conservative bound for an overdue prediction since a
-	// larger age can only make a contact more overdue. Zero for slotFresh.
-	CreatedAge time.Duration
+	// CreatedAgeBound is an UPPER BOUND on how far before the anchor the contact is
+	// created: exact for slotBackdated (the frozen ladder pins it), the WINDOW for
+	// slotRecent (the true age is a PRNG draw inside it), zero for slotFresh.
+	//
+	// A bound rather than a value is enough because the only consumer is the
+	// overdue prediction, and a larger created age can only make a contact MORE
+	// overdue — so a slot whose bound is not overdue cannot be overdue. The one
+	// place the prediction concludes overdue (slotBackdated) is the one place the
+	// bound is exact.
+	CreatedAgeBound time.Duration
 	// NoMethods marks the no-method slot, which owns no identifier and can
 	// therefore match no source payload at all.
 	NoMethods bool
@@ -67,18 +73,18 @@ func catalogSlot(i, n int) catalogSlotSpec {
 	// differ.
 	if i == 3 && n > 3 {
 		pair := catalogOverdueLadder[(i/3)%len(catalogOverdueLadder)]
-		return catalogSlotSpec{Kind: slotBackdated, Cadence: pair.cadence, CreatedAge: pair.createdAge, NoMethods: true}
+		return catalogSlotSpec{Kind: slotBackdated, Cadence: pair.cadence, CreatedAgeBound: pair.createdAge, NoMethods: true}
 	}
 
 	switch i % 3 {
 	case 0:
 		pair := catalogOverdueLadder[(i/3)%len(catalogOverdueLadder)]
-		return catalogSlotSpec{Kind: slotBackdated, Cadence: pair.cadence, CreatedAge: pair.createdAge}
+		return catalogSlotSpec{Kind: slotBackdated, Cadence: pair.cadence, CreatedAgeBound: pair.createdAge}
 	case 1:
 		return catalogSlotSpec{
-			Kind:       slotRecent,
-			Cadence:    catalogRecentCadences[(i/3)%len(catalogRecentCadences)],
-			CreatedAge: catalogRecentWindow,
+			Kind:            slotRecent,
+			Cadence:         catalogRecentCadences[(i/3)%len(catalogRecentCadences)],
+			CreatedAgeBound: catalogRecentWindow,
 		}
 	default:
 		return catalogSlotSpec{
@@ -123,27 +129,38 @@ const calmMargin = 24 * time.Hour
 type archetypeIntent int
 
 const (
+	// intentNeutral never writes last_contacted at all (an outbound touches only
+	// last_outreach_at; an empty timeline touches nothing), so the slot keeps
+	// whatever overdue-ness its created_at gives it — on every cadence. It is
+	// FIRST so that it is the zero value: an archetype missing from the table
+	// then degrades to "changes nothing", which is the only safe default for a
+	// predicate that decides overdue-ness.
+	intentNeutral archetypeIntent = iota
 	// intentOverdue writes last_contacted from a deliberately OLD newest entry, so
 	// the contact stays overdue and carries real history behind it.
-	intentOverdue archetypeIntent = iota
+	intentOverdue
 	// intentCalm writes last_contacted from a RECENT newest entry, taking the
 	// contact out of the overdue set.
 	intentCalm
-	// intentNeutral never writes last_contacted at all (an outbound touches only
-	// last_outreach_at; an empty timeline touches nothing), so the slot keeps
-	// whatever overdue-ness its created_at gives it — on every cadence.
-	intentNeutral
 )
 
 // archetypeShape is one archetype's compatibility input: what it does to
-// overdue-ness, and the inclusive bounds of the age it dates its NEWEST entry at.
+// overdue-ness, and — for the archetypes whose intent makes that question
+// answerable — the inclusive bounds of the age it dates its newest
+// LAST-CONTACTED-WRITING entry at.
 //
-// The bounds RESTATE the generator's per-archetype table, because that table is
-// unexported and lives a package below this one. They are not trusted: a unit
-// test samples TimelineFor across thousands of namespaces and requires the
-// observed newest ages to sit inside these bounds AND to reach within one
-// calmMargin of each end, so a generator bound that moved by more than the margin
-// fails there rather than silently widening what this rule admits.
+// Both fields RESTATE facts that live a package below, in an unexported
+// generator table, and neither is trusted. A unit test samples TimelineFor
+// across thousands of namespaces and requires (a) that an archetype is neutral
+// exactly when its timelines never contain an entry that writes last_contacted,
+// and (b) that the observed newest such age sits inside these bounds AND reaches
+// within one calmMargin of each end. So a generator change that moved a bound by
+// more than the margin, or that gave a neutral archetype a two-way entry, fails
+// there rather than silently widening what this rule admits.
+//
+// A NEUTRAL archetype declares no bounds. It cannot move last_contacted at all,
+// so archetypeAdmissible never reads them, and carrying decorative values would
+// put an unguarded restatement back into the table.
 type archetypeShape struct {
 	Intent    archetypeIntent
 	NewestMin time.Duration
@@ -152,17 +169,24 @@ type archetypeShape struct {
 
 const archetypeDay = 24 * time.Hour
 
-// archetypeShapes is the closed catalog's compatibility table. never-contacted
-// carries no bounds because it emits no entry to date; a neutral intent is
-// admissible on every cadence without reading them.
+// archetypeShapes is the closed catalog's compatibility table.
 var archetypeShapes = map[factory.Archetype]archetypeShape{
 	factory.ArchetypeMutualRegular:  {Intent: intentCalm, NewestMin: 3 * archetypeDay, NewestMax: 14 * archetypeDay},
 	factory.ArchetypeMutualDrifting: {Intent: intentOverdue, NewestMin: 70 * archetypeDay, NewestMax: 112 * archetypeDay},
 	factory.ArchetypeDormant:        {Intent: intentOverdue, NewestMin: 120 * archetypeDay, NewestMax: 150 * archetypeDay},
 	factory.ArchetypeInboundOnly:    {Intent: intentCalm, NewestMin: 1 * archetypeDay, NewestMax: 15 * archetypeDay},
 	factory.ArchetypeBurstThenQuiet: {Intent: intentCalm, NewestMin: 30 * archetypeDay, NewestMax: 90 * archetypeDay},
-	factory.ArchetypeOutboundHeavy:  {Intent: intentNeutral, NewestMin: 2 * archetypeDay, NewestMax: 20 * archetypeDay},
+	factory.ArchetypeOutboundHeavy:  {Intent: intentNeutral},
 	factory.ArchetypeNeverContacted: {Intent: intentNeutral},
+}
+
+// archetypeWritesLastContacted reports whether a timeline entry is one the
+// pipeline classifies as inbound or mutual — the only kind that moves
+// last_contacted, and therefore the only kind the compatibility rule reasons
+// about. A matched calendar event is always mutual; a message writes it when it
+// arrives rather than when it is sent.
+func archetypeWritesLastContacted(e factory.TimelineEntry) bool {
+	return e.Source == factory.SourceGCal || !e.Outbound
 }
 
 // historyArchetypes are the six that emit a timeline, in the FIXED order every
@@ -186,29 +210,21 @@ var archetypeTieBreak = append(append([]factory.Archetype{}, historyArchetypes..
 // Compatibility breadth is counted over it.
 var archetypeCadences = []string{"weekly", "biweekly", "monthly", "quarterly", "biannual", "annual"}
 
-// productionCadencePeriod is a cadence name's PRODUCTION period.
+// productionCadencePeriod is a cadence name's PRODUCTION period, and whether the
+// name is one this table recognizes at all.
+//
+// The duration comes from the cadence package's own lookup, so the two cannot
+// disagree. What is deliberately NOT shared is the fallback: that lookup resolves
+// an unrecognized cadence to Monthly, which is the right answer when computing a
+// due date for a row that already exists, and the wrong one here — the
+// compatibility rule decides what MAY be placed, and defaulting would silently
+// admit archetypes onto a cadence nobody reasoned about.
 func productionCadencePeriod(name string) (time.Duration, bool) {
 	cadenceType, err := cadence.ParseCadence(name)
 	if err != nil {
 		return 0, false
 	}
-	cfg := cadence.ProductionCadenceConfig()
-	switch cadenceType {
-	case cadence.CadenceWeekly:
-		return cfg.Weekly, true
-	case cadence.CadenceBiweekly:
-		return cfg.Biweekly, true
-	case cadence.CadenceMonthly:
-		return cfg.Monthly, true
-	case cadence.CadenceQuarterly:
-		return cfg.Quarterly, true
-	case cadence.CadenceBiannual:
-		return cfg.Biannual, true
-	case cadence.CadenceAnnual:
-		return cfg.Annual, true
-	default:
-		return 0, false
-	}
+	return cadence.GetProductionCadenceDuration(cadenceType), true
 }
 
 // archetypeAdmissible reports whether the archetype may be placed on a slot
@@ -286,10 +302,12 @@ const catalogNonCatalogLiveContacts = 25
 // middle of it.
 const overdueSharePercent = 23
 
-// pinnedOverdueFixtureCount is how many overdue contacts the pinned-fixture block
+// PinnedOverdueFixtureCount is how many overdue contacts the pinned-fixture block
 // adds. They sit OUTSIDE the catalog and are always overdue, so the catalog
-// budget subtracts them rather than counting them twice.
-const pinnedOverdueFixtureCount = 2
+// budget subtracts them rather than counting them twice. Exported so the coverage
+// tests add the same number back rather than restating it, and pinned against
+// pinnedOverdueFixtures by a unit test (a slice literal cannot be a const).
+const PinnedOverdueFixtureCount = 2
 
 // catalogOverdueBudget is how many CATALOG slots the assignment may leave
 // overdue at this catalog size.
@@ -298,7 +316,7 @@ func catalogOverdueBudget(n int) int {
 	if target > OverdueCeiling {
 		target = OverdueCeiling
 	}
-	return target - pinnedOverdueFixtureCount
+	return target - PinnedOverdueFixtureCount
 }
 
 // archetypeQuota is how many samples of each history archetype the quota phase
@@ -337,7 +355,11 @@ const noMethodCatalogIndex = 3
 func ArchetypeForIndex(i, n int) factory.Archetype {
 	assignment := archetypeAssignment(n)
 	if i < 0 || i >= len(assignment) {
-		return factory.ArchetypeNeverContacted
+		// The EMPTY archetype, deliberately not a real one. This function's whole
+		// justification is that it is an INDEPENDENT oracle: an out-of-range answer
+		// that happened to be a valid archetype would let a comparison against a
+		// mis-derived index agree by coincidence instead of failing loudly.
+		return factory.Archetype("")
 	}
 	return assignment[i]
 }
@@ -466,7 +488,11 @@ func archetypeAssignment(n int) []factory.Archetype {
 			discretionary = append(discretionary, i)
 		}
 	}
-	for _, i := range append(forced, discretionary...) {
+	// Copied rather than appended in place: `forced` was grown by append above and
+	// can carry spare capacity, so appending onto it would write into its own
+	// backing array.
+	order := append(append([]int{}, forced...), discretionary...)
+	for _, i := range order {
 		slot := catalogSlot(i, n)
 		if overdue+1 <= budget {
 			// Under budget: keep the slot never-connected AND overdue, which is the
@@ -581,7 +607,7 @@ func catalogSlotNativelyOverdue(i, n int) bool {
 	if !ok {
 		return false
 	}
-	return slot.CreatedAge >= period+calmMargin
+	return slot.CreatedAgeBound >= period+calmMargin
 }
 
 // archetypeLeavesSlotOverdue predicts whether a slot ends up overdue once its
@@ -616,25 +642,29 @@ func PredictedCatalogOverdue(n int) int {
 	return count
 }
 
-// OverdueAtProduction reports whether a contact is overdue under PRODUCTION
-// cadence durations, evaluated at ref — normally the seeded world's own generator
-// anchor, so a prediction and a measurement answer the same question about the
-// same instant instead of racing the wall clock between them.
+// OverdueAtProduction reports whether a contact carrying this cadence NAME is
+// overdue under production durations, evaluated at ref — normally the seeded
+// world's own generator anchor, so a prediction and a measurement answer the same
+// question about the same instant instead of racing the wall clock between them.
 //
-// Same formula as cadence.IsOverdueWithConfig, with the env-derived duration
-// replaced by the production one. Exported for the coverage tests: the suite runs
-// under CRM_ENV=test, where annual is two hours and every contact is overdue, so
-// a measurement taken through the ambient config would prove nothing.
+// It DELEGATES the formula rather than restating it: the cadence package owns
+// both the table and the overdue arithmetic, and a second copy here would be free
+// to drift on exactly the edge a copy always drifts on (this one previously did —
+// an unrecognized cadence resolved to Monthly there and to "never overdue"
+// here). What is local is only the two things the cadence package cannot know:
+// that the caller holds a nullable cadence STRING, and that an absent cadence
+// means no due date at all rather than a defaulted one.
+//
+// Exported for the coverage tests, which run under CRM_ENV=test where annual is
+// two hours and every contact is overdue — so a measurement taken through the
+// ambient config would prove nothing, and mutating the variable would change
+// cadence semantics for every concurrently-running test.
 func OverdueAtProduction(cadenceName string, lastContacted *time.Time, createdAt, ref time.Time) bool {
-	period, ok := productionCadencePeriod(cadenceName)
-	if !ok {
+	if cadenceName == "" {
+		// No cadence means the app computes no due date, so nothing can be overdue.
 		return false
 	}
-	base := createdAt
-	if lastContacted != nil {
-		base = *lastContacted
-	}
-	return ref.After(base.Add(period))
+	return cadence.IsOverdueWithProductionConfig(cadence.CadenceType(cadenceName), lastContacted, createdAt, ref)
 }
 
 // --- timeline → batch payloads ----------------------------------------------
@@ -657,6 +687,22 @@ var (
 	// errArchetypePairMalformed — a promotion pair that is not exactly two entries
 	// with differing directions, or whose timing breaks the source-specific rule.
 	errArchetypePairMalformed = errors.New("synthetic archetypes: promotion pair is malformed")
+	// errArchetypeChatCloneUnresolved — a chat conversation whose membership does
+	// not yield BOTH the connected account and a peer, so a clone cannot be given a
+	// sender. Left unchecked this is the mapper's one silent failure: the clone
+	// would carry an empty sender, the provider would read it as INBOUND with an
+	// empty peer address, and the batch ownership preflight skips empty-addressed
+	// items by design — so an intended outbound would strand and time out a gate
+	// blaming the wrong thing. Every other failure here is named and immediate.
+	errArchetypeChatCloneUnresolved = errors.New("synthetic archetypes: chat conversation membership does not resolve both sender roles")
+	// errArchetypeSlotOutOfRange — a slot whose frozen index is not in the catalog
+	// the assignment was derived for. The two must be the same catalog or the
+	// overlay is being applied to a world it was not computed against.
+	errArchetypeSlotOutOfRange = errors.New("synthetic archetypes: slot index is outside the assigned catalog")
+	// errArchetypeSettleBudget — the block settled more times than one Settle per
+	// dependency generation allows, which is what a regression from batch replay
+	// back to per-payload replay looks like from the outside.
+	errArchetypeSettleBudget = errors.New("synthetic archetypes: replay exceeded its settle budget")
 )
 
 const (
@@ -672,13 +718,16 @@ const (
 	// can never straddle two buckets.
 	gmailAgeBucketWidth = 120 * 24 * time.Hour
 
-	// chatBurstWindow / chatReplyBridgeWindow mirror the harness's GChat
-	// aggregation engine wiring. They are used only to PREDICT how many interaction
-	// rows a chat conversation collapses into; the prediction is compared against
-	// the database row for row, so a drift here fails the collapse assertion rather
-	// than passing quietly.
-	chatBurstWindow       = 2 * time.Hour
-	chatReplyBridgeWindow = 48 * time.Hour
+	// chatBurstWindow / chatReplyBridgeWindow are the GChat aggregation engine's
+	// OWN windows, read from the package that declares them rather than mirrored as
+	// local literals — a mirrored literal cannot fail when the real window moves,
+	// which is precisely the drift this arc's other budget accessors exist to stop.
+	//
+	// They are load-bearing twice over: the collapse prediction below counts
+	// sessions by the burst window, and the opening burst's forty-minute stride is
+	// only INSIDE one session while that window stays above it.
+	chatBurstWindow       = time.Duration(google.GChatBurstWindowHours) * time.Hour
+	chatReplyBridgeWindow = time.Duration(google.GChatReplyBridgeHours) * time.Hour
 )
 
 // archetypeSlot is one catalog slot the archetype block gives history to: which
@@ -693,12 +742,50 @@ type archetypeSlot struct {
 // archetypeBatches is the block's whole payload plan, ready to drive. Gmail is
 // pre-bucketed (oldest bucket first, each bucket oldest-entry first); the other
 // two are single batches in oldest-first order.
+//
+// It carries no payload total on purpose: the seeding block counts what the
+// adapters actually DROVE, and a second counter for the same quantity would be
+// two numbers kept in step by nothing but a cross-check.
 type archetypeBatches struct {
 	GCal         []replay.GCalBatchItem
 	GmailBuckets [][]replay.GmailBatchItem
 	GChat        []replay.GChatBatchItem
 	Samples      []replay.ArchetypeSample
-	Payloads     int
+}
+
+// empty reports whether the plan would drive nothing at all — the case the
+// adapters reject by preflight and the caller must therefore skip.
+func (b archetypeBatches) empty() bool {
+	return len(b.GCal) == 0 && len(b.GmailBuckets) == 0 && len(b.GChat) == 0
+}
+
+// archetypeTimelineSource resolves one slot's archetype and the timeline that
+// archetype produces for it. It is a seam, not indirection for its own sake: the
+// mapper's guard branches are reachable only from timeline SHAPES the generator
+// does not currently emit (a calendar entry carrying a pair key, a pair spanning
+// two sources), and a guard nothing can exercise is indistinguishable from one
+// that always passes.
+type archetypeTimelineSource func(slot archetypeSlot) (factory.Archetype, factory.Timeline, error)
+
+// buildArchetypeBatches turns each slot's assigned archetype into source
+// payloads.
+//
+// TimelineFor is called for EVERY slot, including the ones that end up with no
+// history at all: its draw cost is fixed, so calling it unconditionally makes the
+// block's PRNG consumption a function of the catalog size alone and never of
+// which archetype landed where.
+func buildArchetypeBatches(gen *factory.Generator, slots []archetypeSlot, n int) (archetypeBatches, error) {
+	// Derived ONCE for the whole catalog: the assignment is a whole-catalog
+	// computation, so resolving it per slot would run it n times per seed.
+	assignment := archetypeAssignment(n)
+	return buildArchetypeBatchesFrom(gen, slots, func(slot archetypeSlot) (factory.Archetype, factory.Timeline, error) {
+		if slot.Index < 0 || slot.Index >= len(assignment) {
+			return "", factory.Timeline{}, fmt.Errorf("slot %d against a %d-slot catalog: %w",
+				slot.Index, len(assignment), errArchetypeSlotOutOfRange)
+		}
+		archetype := assignment[slot.Index]
+		return archetype, gen.TimelineFor(archetype, archetypeMethodSet(slot.Spec)), nil
+	})
 }
 
 // archetypeMethodSet reports what identifiers a seeded catalog contact actually
@@ -714,13 +801,9 @@ func archetypeMethodSet(spec factory.ContactSpec) factory.MethodSet {
 	}
 }
 
-// buildArchetypeBatches turns each slot's archetype into source payloads.
-//
-// TimelineFor is called for EVERY slot, including the ones that end up with no
-// history at all: its draw cost is fixed, so calling it unconditionally makes the
-// block's PRNG consumption a function of the catalog size alone and never of
-// which archetype landed where.
-func buildArchetypeBatches(gen *factory.Generator, slots []archetypeSlot, n int) (archetypeBatches, error) {
+// buildArchetypeBatchesFrom is buildArchetypeBatches over a caller-supplied
+// timeline source.
+func buildArchetypeBatchesFrom(gen *factory.Generator, slots []archetypeSlot, timelineFor archetypeTimelineSource) (archetypeBatches, error) {
 	var out archetypeBatches
 
 	// Every batch is collected with its entries' ages, so the whole block can be
@@ -748,8 +831,10 @@ func buildArchetypeBatches(gen *factory.Generator, slots []archetypeSlot, n int)
 	nextPairKey := 0
 
 	for _, slot := range slots {
-		archetype := ArchetypeForIndex(slot.Index, n)
-		timeline := gen.TimelineFor(archetype, archetypeMethodSet(slot.Spec))
+		archetype, timeline, err := timelineFor(slot)
+		if err != nil {
+			return out, err
+		}
 
 		// A conversation is a PLAN-level statement; at replay time the payloads must
 		// also share the source's conversation identifier, and the factories mint a
@@ -805,12 +890,16 @@ func buildArchetypeBatches(gen *factory.Generator, slots []archetypeSlot, n int)
 				var spec factory.GChatMessageSpec
 				if base, ok := spaces[entry.ConversationKey]; entry.ConversationKey != 0 && ok {
 					spaceClones[entry.ConversationKey]++
-					spec = cloneArchetypeGChatMessage(
+					clone, cloneErr := cloneArchetypeGChatMessage(
 						base,
 						fmt.Sprintf("arch-%d", spaceClones[entry.ConversationKey]),
 						entry.Outbound,
 						gen.Anchor().Add(-gchatMessageDefaultOffset-entry.Age),
 					)
+					if cloneErr != nil {
+						return out, fmt.Errorf("slot %d (%s): %w", slot.Index, archetype, cloneErr)
+					}
+					spec = clone
 				} else {
 					spec = gen.GChatMessage(slot.Spec, factory.MatchSeeded, archetypeMessageOptions(entry)...)
 					if entry.ConversationKey != 0 {
@@ -838,7 +927,6 @@ func buildArchetypeBatches(gen *factory.Generator, slots []archetypeSlot, n int)
 			Payloads:             len(timeline.Entries),
 			ExpectedInteractions: expectedArchetypeInteractions(timeline),
 		})
-		out.Payloads += len(timeline.Entries)
 	}
 
 	sort.SliceStable(calendar, func(i, j int) bool { return calendar[i].age > calendar[j].age })
@@ -941,7 +1029,7 @@ func validateArchetypePairs(slotIndex int, archetype factory.Archetype, pairs ma
 // Deliberately not shared with the batch tests' equivalent: that one is a fixture
 // for hand-authored batches, and coupling seed orchestration to a test helper
 // would make either one hard to change. Both are covered by their own assertions.
-func cloneArchetypeGChatMessage(base factory.GChatMessageSpec, suffix string, outbound bool, createTime time.Time) factory.GChatMessageSpec {
+func cloneArchetypeGChatMessage(base factory.GChatMessageSpec, suffix string, outbound bool, createTime time.Time) (factory.GChatMessageSpec, error) {
 	// Pick the sender by MEMBERSHIP order rather than by ranging EmailByUser: Go
 	// randomizes map iteration, so a space with more than two members would
 	// otherwise clone a nondeterministic sender.
@@ -961,6 +1049,13 @@ func cloneArchetypeGChatMessage(base factory.GChatMessageSpec, suffix string, ou
 			sender = user
 		}
 	}
+	// Both roles must resolve. A missing one would produce an empty sender, which
+	// the provider reads as an inbound from an empty address — a direction flip and
+	// an unmatchable payload, neither of which any downstream check would name.
+	if me == "" || sender == "" {
+		return factory.GChatMessageSpec{}, fmt.Errorf("space %q resolves me=%q peer=%q: %w",
+			base.SpaceName, me, sender, errArchetypeChatCloneUnresolved)
+	}
 	from := sender
 	if outbound {
 		from = me
@@ -974,7 +1069,7 @@ func cloneArchetypeGChatMessage(base factory.GChatMessageSpec, suffix string, ou
 		CreateTime: createTime.UTC().Format(time.RFC3339Nano),
 	}
 	clone.ExternalID = name
-	return clone
+	return clone, nil
 }
 
 // --- the expected payload → interaction collapse -----------------------------
@@ -1116,12 +1211,21 @@ func seedArchetypeHistories(
 	// Recorded for EVERY slot, including the history-free ones, so a coverage
 	// assertion can prove absence as well as presence.
 	h.SetArchetypeSamples(batches.Samples)
+	if batches.empty() {
+		return nil
+	}
 
+	batchCalls := 0
 	record := func(result replay.BatchResult) {
+		batchCalls++
 		res.ArchetypePayloads += result.Payloads
 		// Each batch snapshots the touched contacts' interaction ids before it
 		// drives, so summing across batches cannot double-count.
 		res.ArchetypeInteractions += result.Interactions
+		// Settle is O(all harness contacts) and rebuilds the whole event-id union
+		// on every call, so the phase's cost is its SETTLE count, not its payload
+		// count. One per dependency generation, at most two per batch.
+		res.ArchetypeSettleCalls += result.SettleCalls
 	}
 
 	if len(batches.GCal) > 0 {
@@ -1148,5 +1252,22 @@ func seedArchetypeHistories(
 		}
 		record(result)
 	}
+
+	// The settle budget is the whole reason this block batches at all: the same
+	// history through per-payload single replays would cost one Settle per payload
+	// — roughly a hundred at dev and a thousand at prod-shaped — each of them
+	// O(all harness contacts). A batch settles once per dependency GENERATION, and
+	// a generation split exists only where a promotion pair does, so two per call
+	// is the ceiling. Exceeding it means the batching has been undone somewhere,
+	// which every other assertion in this arc would happily pass.
+	if max := batchCalls * archetypeMaxSettlesPerBatch; res.ArchetypeSettleCalls > max {
+		return fmt.Errorf("profile %s: archetype replay settled %d times across %d batches (max %d): %w",
+			profile, res.ArchetypeSettleCalls, batchCalls, max, errArchetypeSettleBudget)
+	}
 	return nil
 }
+
+// archetypeMaxSettlesPerBatch is how many Settles one batch call may cost: one
+// per dependency generation, and a batch has at most two (the inbound half of
+// each promotion pair is deferred to the second).
+const archetypeMaxSettlesPerBatch = 2

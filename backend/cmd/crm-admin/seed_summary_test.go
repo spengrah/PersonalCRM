@@ -30,6 +30,7 @@ func timingFixture() synthetic.ProfileResult {
 		// rendering that printed the wrong field cannot coincidentally match.
 		ArchetypePayloads:     943,
 		ArchetypeInteractions: 771,
+		ArchetypeSettleCalls:  7,
 		Timings: synthetic.SeedTimings{
 			Total: 100 * time.Second,
 			Phases: []synthetic.PhaseTiming{
@@ -73,7 +74,8 @@ func TestWriteSeedSummaryRendersTimingBlock(t *testing.T) {
 	// two separate figures: they measure different units, and the second is
 	// smaller by design because aggregation collapses.
 	require.Contains(t, out, "  archetype_payloads:   943")
-	require.Contains(t, out, "  archetype_interactions: 771")
+	require.Contains(t, out, "  archetype_rows:       771")
+	require.Contains(t, out, "  archetype_settles:    7")
 }
 
 func TestWriteSeedSummaryRendersEveryPhaseWithPayloadVolume(t *testing.T) {

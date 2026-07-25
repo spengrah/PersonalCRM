@@ -165,6 +165,13 @@ type ProfileResult struct {
 	// and is extended explicitly rather than relaxed — folding a collapsing count
 	// into a call-vs-row invariant would muddy both. Counts-only / no PII.
 	ArchetypeInteractions int
+	// ArchetypeSettleCalls is how many settle gates the archetype block waited on:
+	// one per dependency GENERATION of each batch, not one per payload. It is the
+	// phase's real cost model — a settle is O(all harness contacts) and rebuilds
+	// the full event-id union every call — so it is reported separately from the
+	// payload volume, and the block refuses to finish if it exceeds one settle per
+	// generation. Counts-only / no PII.
+	ArchetypeSettleCalls int
 	// Timings is the run's wall-clock measurement. It is EXCLUDED from every
 	// equality assertion (durations are wall-clock and never equal across runs) —
 	// the determinism test zeroes it on both sides before comparing, deliberately

@@ -299,6 +299,7 @@ func assertArchetypeReplayOutcomes(t *testing.T, ctx context.Context, database *
 		"the block's landed-row counter must equal the sum of the per-contact expectations")
 	require.Greater(t, res.ArchetypePayloads, res.ArchetypeInteractions,
 		"payloads must exceed rows: a mail promotion pair collapses to one mutual and a chat burst to one session")
+	assertArchetypeSettleBudget(t, res)
 	burstCohort := cohorts[factory.ArchetypeBurstThenQuiet]
 	require.NotEmpty(t, burstCohort, "the burst archetype must have a cohort")
 	for _, sample := range samples {
