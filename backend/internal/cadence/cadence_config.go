@@ -16,6 +16,24 @@ type CadenceConfig struct {
 	Annual    time.Duration
 }
 
+// ProductionCadenceConfig is the real-world cadence table — the durations
+// production and staging run on. It is exported so a caller can state a
+// production-duration expectation WITHOUT reading (or mutating) CRM_ENV: under
+// CRM_ENV=test annual is two hours and every contact is trivially overdue, so a
+// test that reads the ambient environment proves nothing about these semantics,
+// and setting the variable would change cadence behaviour for every
+// concurrently-running test in the process.
+func ProductionCadenceConfig() CadenceConfig {
+	return CadenceConfig{
+		Weekly:    7 * 24 * time.Hour,   // 1 week
+		Biweekly:  14 * 24 * time.Hour,  // 2 weeks
+		Monthly:   30 * 24 * time.Hour,  // ~1 month
+		Quarterly: 90 * 24 * time.Hour,  // ~3 months
+		Biannual:  180 * 24 * time.Hour, // ~6 months
+		Annual:    365 * 24 * time.Hour, // 1 year
+	}
+}
+
 // GetCadenceConfig returns appropriate cadence configuration based on environment
 func GetCadenceConfig() CadenceConfig {
 	env := os.Getenv("CRM_ENV")
@@ -48,24 +66,10 @@ func GetCadenceConfig() CadenceConfig {
 	case "staging", "production", "prod", "":
 		// Production semantics: real-world cadences. Staging shares them —
 		// its QA world is prod-shaped by construction, not by compressed time.
-		return CadenceConfig{
-			Weekly:    7 * 24 * time.Hour,   // 1 week
-			Biweekly:  14 * 24 * time.Hour,  // 2 weeks
-			Monthly:   30 * 24 * time.Hour,  // ~1 month
-			Quarterly: 90 * 24 * time.Hour,  // ~3 months
-			Biannual:  180 * 24 * time.Hour, // ~6 months
-			Annual:    365 * 24 * time.Hour, // 1 year
-		}
+		return ProductionCadenceConfig()
 	default:
 		// Default to production for safety
-		return CadenceConfig{
-			Weekly:    7 * 24 * time.Hour,   // 1 week
-			Biweekly:  14 * 24 * time.Hour,  // 2 weeks
-			Monthly:   30 * 24 * time.Hour,  // ~1 month
-			Quarterly: 90 * 24 * time.Hour,  // ~3 months
-			Biannual:  180 * 24 * time.Hour, // ~6 months
-			Annual:    365 * 24 * time.Hour, // 1 year
-		}
+		return ProductionCadenceConfig()
 	}
 }
 
