@@ -164,8 +164,21 @@ func TestCatalogOverdueLadderWellFormed(t *testing.T) {
 
 		// Genuinely overdue under prod durations: created-age exceeds the cadence
 		// period, so the computed contact_by has elapsed.
-		require.Greater(t, pair.createdAge, period,
-			"ladder[%d] (%s, age %s) must be overdue under prod durations (age > period %s)", i, pair.cadence, pair.createdAge, period)
+		//
+		// The bound is period + calmMargin, not a bare `>`, because
+		// catalogSlotNativelyOverdue — which the endpoint-visible overdue prediction
+		// is built on — admits a slot only at that margin. A ladder entry landing in
+		// [period, period+calmMargin) would satisfy a bare `>` and still be predicted
+		// NOT natively overdue, which would silently drop it from
+		// PredictedCatalogOverduePersisted while the world still contains it. Worse,
+		// a created_age within a day of its period is overdue by less than a day, so
+		// whether DateOnly(created_at + period) has crossed today's date depends on
+		// where the anchor sits in the day — the exact-equality assertion in the
+		// coverage gate would become wall-clock dependent. Today's entries clear by
+		// four days or more; this keeps that a property rather than a coincidence.
+		require.GreaterOrEqual(t, pair.createdAge, period+calmMargin,
+			"ladder[%d] (%s, age %s) must be overdue under prod durations by at least the calm margin (age >= period %s + %s) — catalogSlotNativelyOverdue admits it only at that bound, and a sub-day margin makes the coverage gate's exact equality wall-clock dependent",
+			i, pair.cadence, pair.createdAge, period, calmMargin)
 
 		overdue := pair.createdAge - period
 		overdueMagnitudes[overdue] = true

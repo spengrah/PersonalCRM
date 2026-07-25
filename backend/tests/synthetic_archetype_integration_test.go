@@ -251,10 +251,18 @@ func assertArchetypeReplayOutcomes(t *testing.T, ctx context.Context, database *
 		assertCadenceShape(t, label, want.CadenceShape, ts, newest)
 
 		// --- 4. overdue preservation under PRODUCTION durations -----------------
-		// The suite runs under CRM_ENV=test, where annual is two hours and every
-		// contact is trivially overdue, so reading the ambient config would prove
-		// nothing. The durations are constructed explicitly and evaluated at the
-		// seeded world's own anchor.
+		// The durations are constructed explicitly rather than read from the ambient
+		// config, and evaluated at the seeded world's own anchor, so this states a
+		// production-duration expectation whatever CRM_ENV happens to be — under
+		// CRM_ENV=test annual is two hours and every contact would be trivially
+		// overdue.
+		//
+		// This is the RECOMPUTE, and it is the right read HERE: the claim is about
+		// what each archetype's history does to last_contacted, which is the
+		// archetype's own contract. It is NOT a claim about what
+		// GET /contacts/overdue returns — the persisted contact_by column can
+		// disagree with it (see archetypeLeavesSlotPersistedOverdue) — and the
+		// population gate that must answer for the endpoint is assertOverdueBand.
 		bucket, ok := bucketByID[sample.ContactID]
 		require.True(t, ok, "%s: the catalog contact must be live in the namespace", label)
 		require.NotNil(t, bucket.Cadence, "%s: every catalog slot is cadence-bearing", label)

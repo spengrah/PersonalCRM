@@ -328,15 +328,20 @@ const overdueSharePercent = 23
 //
 // It is deliberately wide enough that the calm quota, the ladder, or the
 // non-catalog cohort can move by a couple of contacts without flaking a gate —
-// at prod-shaped one contact is 0.55% of the share — and deliberately narrow
-// enough to exclude the RECOMPUTED share, which runs 22–26% over the same range.
-// A gate that quietly went back to recomputing overdue-ness instead of reading
-// the column therefore fails here rather than passing while staging disagrees,
-// which is the regression gh #751 recorded.
+// at prod-shaped one contact is 0.55% of the share.
 //
-// The band is the population-SHAPE statement and carries that slack on purpose.
-// The tight guard is the exact equality against PredictedCatalogOverduePersisted
-// in the coverage gate; this is not the place to catch a one-contact drift.
+// This is a COARSE SANITY BAND and nothing more. In particular it is NOT what
+// stops a gate from quietly reverting to recomputing overdue-ness: the recomputed
+// share at prod-shaped is 40/181 = 22.10% against a 22.0% ceiling, a margin of a
+// tenth of a point — under a fifth of one contact — and the band cannot be
+// tightened to buy more, because the persisted range tops out at 21.11% while the
+// recomputed range bottoms out at 22.10%. The ceiling is boxed in.
+//
+// The real anti-revert guard is the coverage gate's EXACT equality against
+// PredictedCatalogOverduePersisted, which a revert misses by nine contacts at
+// prod-shaped and three at dev — margins that are not close to anything. Read the
+// band as "the population still looks roughly like the one we designed", and read
+// the equality as the assertion that actually holds the line.
 const (
 	OverdueBandFloorPercent   = 12.0
 	OverdueBandCeilingPercent = 22.0

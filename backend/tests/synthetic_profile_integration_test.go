@@ -976,24 +976,36 @@ func assertOverdueBand(t *testing.T, ctx context.Context, support *repository.Sy
 	require.NoError(t, err)
 	anchor := h.Generator().Anchor()
 
-	overdue := 0
+	recomputedIDs := make([]uuid.UUID, 0, len(buckets))
 	for _, b := range buckets {
 		if b.Cadence == nil || *b.Cadence == "" || b.CreatedAt == nil {
 			continue
 		}
 		if synthetic.OverdueAtProduction(*b.Cadence, b.LastContacted, *b.CreatedAt, anchor) {
-			overdue++
+			recomputedIDs = append(recomputedIDs, b.ID)
 		}
 	}
+	overdue := len(recomputedIDs)
 
 	// The endpoint's own read: contact_by set and strictly before today's DATE,
 	// namespace-scoped and unbounded (the production query's global LIMIT would
 	// let an accumulated shared test DB truncate the window). Evaluated at the
-	// same anchor the recompute uses, so the two counts answer one question about
+	// same anchor the recompute uses, so the two reads answer one question about
 	// one instant instead of straddling the seed's own duration.
 	endpointOverdueIDs, err := support.ListOverdueContactIdsByNamePrefix(ctx, h.Generator().Prefix(), cadence.Today(anchor))
 	require.NoError(t, err)
 	endpointOverdue := len(endpointOverdueIDs)
+
+	// MEMBERSHIP first, and over the id SETS rather than their sizes. The endpoint
+	// returns contact_by in the past, which the forward-only write can only ever
+	// make a subset of the recomputed set — a contact the endpoint lists as overdue
+	// while the recompute does not means the persisted column and the cadence
+	// formula have drifted apart, which is a different and worse failure than a
+	// count being off. Comparing counts would miss it entirely whenever the
+	// cardinalities happen to match, and the two exact equalities below would
+	// happily pass on a set with the wrong members in it.
+	require.Subset(t, recomputedIDs, endpointOverdueIDs,
+		"every contact the overdue ENDPOINT returns must also be overdue by the cadence formula — an endpoint-only overdue contact means contact_by no longer agrees with (cadence, last_contacted, created_at)")
 
 	// The pinned overdue fixtures sit outside the catalog and are always overdue,
 	// so the assignment's catalog predictions account for them separately. The
@@ -1002,9 +1014,7 @@ func assertOverdueBand(t *testing.T, ctx context.Context, support *repository.Sy
 	require.Equal(t, synthetic.PredictedCatalogOverdue(n)+synthetic.PinnedOverdueFixtureCount, overdue,
 		"the recomputed overdue population must equal what the assignment predicts — a drifting model has to fail here rather than be trusted")
 	require.Equal(t, synthetic.PredictedCatalogOverduePersisted(n)+synthetic.PinnedOverdueFixtureCount, endpointOverdue,
-		"the ENDPOINT-visible overdue population must equal what the assignment predicts for the persisted contact_by column — this is the assertion gh #751 was missing")
-	require.LessOrEqual(t, endpointOverdue, overdue,
-		"the endpoint's overdue set is contact_by in the past, which the forward-only write makes a SUBSET of the recomputed set — the reverse is a cadence-write regression, not a modelling gap")
+		"the ENDPOINT-visible overdue population must equal what the assignment predicts for the persisted contact_by column — this is the assertion gh #751 was missing, and the one a silent revert to recompute-based measurement fails by nine contacts at prod-shaped")
 	require.LessOrEqual(t, overdue, synthetic.OverdueCeiling,
 		"the overdue population must stay under the ceiling; the overdue tours refuse to run above their own, higher, capture cap")
 
