@@ -136,8 +136,16 @@ func TestPinnedOverdueFixturesCloseTheDiversityGap(t *testing.T) {
 		ct, err := cadence.ParseCadence(pair.cadence)
 		require.NoError(t, err)
 		period := cadence.GetCadenceDuration(ct)
-		require.Greater(t, pair.createdAge, period,
-			"fixture %s (%s, age %s) must be overdue under prod durations (age > period %s)", pair.marker, pair.cadence, pair.createdAge, period)
+		// Same bound the catalog ladder is held to (TestCatalogOverdueLadderWellFormed),
+		// and for the same two reasons: these fixtures are counted into the coverage
+		// gate's exact equalities through PinnedOverdueFixtureCount, which assumes
+		// every one of them is overdue in the PERSISTED contact_by column; and an
+		// entry overdue by less than a day makes whether DateOnly(created_at + period)
+		// has crossed today's date depend on where the anchor sits in the day. The
+		// margin removes both.
+		require.GreaterOrEqual(t, pair.createdAge, period+calmMargin,
+			"fixture %s (%s, age %s) must be overdue under prod durations by at least the calm margin (age >= period %s + %s) — PinnedOverdueFixtureCount counts it as endpoint-overdue, and a sub-day margin makes that wall-clock dependent",
+			pair.marker, pair.cadence, pair.createdAge, period, calmMargin)
 
 		// Backdated past the coherence gate's 14-day floor, so each fixture is a
 		// genuine backdated-overdue contact rather than a recent one that merely

@@ -355,22 +355,61 @@ func TestArchetypeAssignmentIsDeterministic(t *testing.T) {
 }
 
 // TestArchetypeAssignmentOverdueBand pins the overdue population: the absolute
-// ceiling at every size, the target band on the full rung, both shipping
-// profiles' exact totals, and the structural floor.
+// ceiling at every size, both bands on the full rung, both shipping profiles'
+// exact totals, and the structural floor.
 //
-// The band's denominator is live(n) = n + 19, the DEV-knob non-catalog live
+// TWO quantities are pinned, because they are genuinely different numbers. The
+// RECOMPUTED population (PredictedCatalogOverdue) is what the assignment's budget
+// steers, and the budget's 23% midpoint holds it in 20–27%. The ENDPOINT-visible
+// population (PredictedCatalogOverduePersisted) is what GET /contacts/overdue
+// returns once the forward-only contact_by write has had its say, and it is
+// strictly smaller — that gap is what shipped unnoticed to staging as gh #751.
+// The product-facing band is the endpoint one.
+//
+// The SWEEP's denominator is live(n) = n + 19, the DEV-knob non-catalog live
 // count. It is exact at the small sizes the sweep spends most of its range on,
 // and it is strictly CONSERVATIVE at large ones: a smaller denominator inflates
-// the share, so the sweep tests against the 27% ceiling rather than away from it.
+// the share, so the sweep tests against each ceiling rather than away from it.
 // The budget formula's own midpoint constant is a target-picking device for two
 // profiles at once and is deliberately NOT reused here — it puts n = 12 below the
-// band. Neither model is ever an assertion about the world: the coverage test
-// counts live and overdue contacts from the database.
+// band. The two SHIPPING sizes are held against their real measured live counts
+// instead, because a modelled denominator that flatters the number is exactly how
+// a margin gets overstated. Neither model is ever an assertion about the world:
+// the coverage test counts live and overdue contacts from the database.
 func TestArchetypeAssignmentOverdueBand(t *testing.T) {
-	const devKnobNonCatalogLive = 19
+	const devKnobNonCatalogLive = DevNonCatalogLiveContacts
 
+	// The live populations the two shipped worlds carry, DERIVED from the
+	// per-profile non-catalog cohorts rather than frozen as measured totals — a
+	// literal 37 or 181 here would go stale silently the moment a profile knob
+	// changed. Dev's cohort is pinned against the database by assertOverdueBand;
+	// prod-shaped's is a model corroborated by the staging measurement in gh #751.
+	// See the constants' own doc for which is which and why.
+	const (
+		devCatalog        = 18
+		prodShapedCatalog = 150
+
+		devLiveContacts        = devCatalog + DevNonCatalogLiveContacts
+		prodShapedLiveContacts = prodShapedCatalog + ProdShapedNonCatalogLiveContacts
+	)
+
+	// catalogNonCatalogLiveContacts is their midpoint under INTEGER division, which
+	// is the true midpoint only while the sum is even. An odd sum would round down
+	// by half a contact silently rather than fail, so the parity is asserted rather
+	// than assumed.
+	require.Zero(t, (DevNonCatalogLiveContacts+ProdShapedNonCatalogLiveContacts)%2,
+		"the two non-catalog cohorts must sum to an EVEN number, or catalogNonCatalogLiveContacts (integer division) is not their midpoint")
+
+	// "The endpoint-visible set is a subset of the recomputed set" is NOT asserted
+	// here. At the model level archetypeLeavesSlotPersistedOverdue is DEFINED as a
+	// conjunction with archetypeLeavesSlotOverdue, so no (i, n, archetype) exists at
+	// which the inequality could fail — a narrow claim about this expression, not a
+	// general licence to drop assertions that merely pass. The falsifiable form
+	// needs the two id SETS against a seeded database, and lives in
+	// assertOverdueBand as require.Subset.
 	for n := 1; n <= 150; n++ {
 		total := PredictedCatalogOverdue(n) + PinnedOverdueFixtureCount
+		endpointTotal := PredictedCatalogOverduePersisted(n) + PinnedOverdueFixtureCount
 		require.LessOrEqual(t, total, OverdueCeiling,
 			"n=%d: the overdue population must stay under the ceiling (the overdue tours refuse to run above their own, higher, capture cap)", n)
 
@@ -378,14 +417,68 @@ func TestArchetypeAssignmentOverdueBand(t *testing.T) {
 			continue
 		}
 		share := 100.0 * float64(total) / float64(n+devKnobNonCatalogLive)
-		require.GreaterOrEqual(t, share, 20.0, "n=%d: overdue share %.1f%% is below the band", n, share)
-		require.LessOrEqual(t, share, 27.0, "n=%d: overdue share %.1f%% is above the band", n, share)
+		require.GreaterOrEqual(t, share, 20.0, "n=%d: recomputed overdue share %.1f%% is below the budget's band", n, share)
+		require.LessOrEqual(t, share, 27.0, "n=%d: recomputed overdue share %.1f%% is above the budget's band", n, share)
+
+		endpointShare := 100.0 * float64(endpointTotal) / float64(n+devKnobNonCatalogLive)
+		require.GreaterOrEqual(t, endpointShare, OverdueBandFloorPercent,
+			"n=%d: endpoint-visible overdue share %.1f%% is below the product band", n, endpointShare)
+		require.LessOrEqual(t, endpointShare, OverdueBandCeilingPercent,
+			"n=%d: endpoint-visible overdue share %.1f%% is above the product band", n, endpointShare)
+	}
+
+	// The coverage gate's EXACT equality against PredictedCatalogOverduePersisted
+	// catches a silent revert to recompute-based measurement, and the GAP between
+	// the two models is the margin it catches it by.
+	//
+	// The gap is SIZE-DEPENDENT, and pinning it exactly — at the sizes that ship AND
+	// at the sizes gates actually run at — is the point of this block. Those are not
+	// the same set. assertOverdueBand has exactly two call sites, n=18 (dev) and n=9
+	// (prod-shaped, whose coverage test bounds its catalog for CI); n=150 ships but
+	// is executed by no gate. So the enforced anti-revert margin is three contacts on
+	// the dev lane, and n=9's ZERO is pinned deliberately: at that size the two
+	// models coincide, so on the prod-shaped lane a revert to recompute-based
+	// measurement passes the equality, passes the subset check on identical sets, and
+	// skips the band branch (below n=12) entirely. That lane
+	// has no anti-revert power at all. Pinning the zero keeps the blind spot an
+	// asserted fact rather than something a later reader has to rediscover.
+	for _, c := range []struct {
+		n       int
+		wantGap int
+		note    string
+	}{
+		{n: 9, wantGap: 0, note: "prod-shaped coverage lane (CI-bounded catalog) — the models COINCIDE here, so this lane cannot detect a revert"},
+		{n: 18, wantGap: 3, note: "dev coverage lane — the only executing gate with anti-revert power"},
+		{n: 150, wantGap: 9, note: "shipped prod-shaped size — no gate executes it; this is the number staging would have caught"},
+	} {
+		gap := PredictedCatalogOverdue(c.n) - PredictedCatalogOverduePersisted(c.n)
+		require.Equal(t, c.wantGap, gap,
+			"n=%d: the gap between the recomputed and endpoint-visible models is the margin a revert to the wrong measurement is caught by — %s", c.n, c.note)
+	}
+
+	// The shipping shares, against the REAL live denominators. These are the numbers
+	// the deployed worlds produce, so this is where the band is held honest.
+	devShare := 100.0 * float64(PredictedCatalogOverduePersisted(18)+PinnedOverdueFixtureCount) / float64(devLiveContacts)
+	prodShare := 100.0 * float64(PredictedCatalogOverduePersisted(150)+PinnedOverdueFixtureCount) / float64(prodShapedLiveContacts)
+	for _, c := range []struct {
+		label string
+		share float64
+	}{{"dev (n=18)", devShare}, {"prod-shaped (n=150)", prodShare}} {
+		require.GreaterOrEqual(t, c.share, OverdueBandFloorPercent,
+			"%s: shipped endpoint-visible share %.2f%% is below the product band", c.label, c.share)
+		require.LessOrEqual(t, c.share, OverdueBandCeilingPercent,
+			"%s: shipped endpoint-visible share %.2f%% is above the product band", c.label, c.share)
 	}
 
 	// The two shipping sizes are pinned exactly, so a tuning change to the budget
-	// or the placement ordering is a deliberate edit rather than a drift.
-	require.Equal(t, 9, PredictedCatalogOverdue(18)+PinnedOverdueFixtureCount, "dev (n=18) overdue total")
-	require.Equal(t, 40, PredictedCatalogOverdue(150)+PinnedOverdueFixtureCount, "prod-shaped (n=150) overdue total")
+	// or the placement ordering is a deliberate edit rather than a drift. The
+	// endpoint totals are the numbers measured on the seeded worlds: 6 of 37 live
+	// at dev and 31 of 181 at prod-shaped (the latter reproduces, to the contact,
+	// what deployed staging returned in gh #751).
+	require.Equal(t, 9, PredictedCatalogOverdue(18)+PinnedOverdueFixtureCount, "dev (n=18) recomputed overdue total")
+	require.Equal(t, 40, PredictedCatalogOverdue(150)+PinnedOverdueFixtureCount, "prod-shaped (n=150) recomputed overdue total")
+	require.Equal(t, 6, PredictedCatalogOverduePersisted(18)+PinnedOverdueFixtureCount, "dev (n=18) endpoint-visible overdue total")
+	require.Equal(t, 31, PredictedCatalogOverduePersisted(150)+PinnedOverdueFixtureCount, "prod-shaped (n=150) endpoint-visible overdue total")
 
 	// The structural FLOOR: backdated slots with no admissible calm archetype are
 	// overdue whatever they receive, the no-method slot is reserved and backdated,
@@ -410,6 +503,45 @@ func TestArchetypeAssignmentOverdueBand(t *testing.T) {
 		require.LessOrEqual(t, floor, PredictedCatalogOverdue(n)+PinnedOverdueFixtureCount,
 			"n=%d: the predicted total can never be below the structural floor", n)
 	}
+}
+
+// TestPersistedOverduePredictionIsNotBoundarySensitive proves the one claim
+// PredictedCatalogOverduePersisted rests on that is not visible in its own body:
+// that a slot which is not NATIVELY overdue cannot become endpoint-overdue for
+// any PRNG draw inside its creation window.
+//
+// The prediction is a pure function of (i, n, archetype), but created_at is a
+// DRAW — slotRecent picks a real age anywhere inside catalogRecentWindow. That is
+// only sound while every possible draw leaves created_at + period in the future,
+// because contact_by is seeded at creation and the forward-only write never
+// lowers it. So assert the separation directly, with a margin, rather than
+// trusting that 48 hours is obviously less than a week: a future edit that
+// widened the recent window past a cadence period, or put a sub-window cadence in
+// the recent pool, would make the prediction quietly PRNG-dependent, and this is
+// where that fails.
+func TestPersistedOverduePredictionIsNotBoundarySensitive(t *testing.T) {
+	kindName := map[catalogSlotKind]string{
+		slotBackdated: "backdated",
+		slotRecent:    "recent",
+		slotFresh:     "fresh",
+	}
+
+	checked := 0
+	for n := 1; n <= 150; n++ {
+		for i := 0; i < n; i++ {
+			slot := catalogSlot(i, n)
+			if slot.Kind == slotBackdated {
+				continue
+			}
+			period, ok := productionCadencePeriod(slot.Cadence)
+			require.True(t, ok, "n=%d i=%d: slot cadence %q must be a recognized cadence", n, i, slot.Cadence)
+			require.Less(t, slot.CreatedAgeBound+calmMargin, period,
+				"n=%d i=%d: a %s slot may be created up to %s before the anchor on a %s cadence (period %s) — a draw at that bound puts created_at + period in the PAST, so the endpoint-overdue prediction stops being a pure function of the assignment",
+				n, i, kindName[slot.Kind], slot.CreatedAgeBound, slot.Cadence, period)
+			checked++
+		}
+	}
+	require.NotZero(t, checked, "the sweep must actually reach non-backdated slots, or it proves nothing")
 }
 
 // TestArchetypeAssignmentPreservesC3Floors re-asserts the coherence floors the
