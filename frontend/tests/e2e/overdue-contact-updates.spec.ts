@@ -7,7 +7,7 @@ import { waitForOverdueListSettled } from './helpers/dashboard'
  * E2E coverage for overdue-contact state changes.
  *
  * The dashboard-card "Mark as Contacted" halves (server-timestamped mutual
- * interaction + immediate removal, CAD-028.mutual-interaction-logged-timestamped/[1]) are cited and proven in
+ * interaction + immediate removal, CAD-028.mutual-interaction-logged-timestamped + .contact-leaves-overdue-list) are cited and proven in
  * dashboard.spec.ts; this file owns the detail-page Log Interaction modal
  * variant (CON-053), the cross-view consistency leg (CAD-028.change-consistent-across-dashboard), and the
  * overdue endpoint's reporting contract (CAD-023).

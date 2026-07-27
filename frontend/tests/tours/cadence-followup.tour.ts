@@ -184,7 +184,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
     ariaRoot: tasksSection,
   })
 
-  // --- CAD-031.kind-chosen-reach-out[1]: the add-task modal (kind picker + text-required) ---
+  // --- CAD-031.kind-chosen-reach-out + .task-text-required-notes: the add-task modal (kind picker + text-required) ---
   const addTaskModal = page
     .locator('div.fixed.inset-0')
     .filter({ has: page.getByRole('heading', { name: /Add Task for/ }) })

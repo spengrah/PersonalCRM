@@ -557,7 +557,7 @@ func TestMethodOps_MixedOperationOrderYieldsIdenticalCompleteState(t *testing.T)
 	assert.Equal(t, expected, reverseStored, "reversed ordering did not produce the expected complete state")
 }
 
-// --- CON-062.adding-existing-method-succeeds[4]: idempotency ---------------
+// --- CON-062.adding-existing-method-succeeds + .removing-method-already-absent: idempotency ---
 
 // spec: CON-062.adding-existing-method-succeeds
 func TestMethodOps_DuplicateAddIsNoOp(t *testing.T) {
@@ -627,7 +627,7 @@ func TestMethodOps_NamedRemovalSucceeds(t *testing.T) {
 	assert.NotNil(t, f.storedByID(survivor.ID), "an unnamed row was removed")
 }
 
-// --- CON-062.duplicate-resulting-set-rejected[6]: final-state validation ---
+// --- CON-062.duplicate-resulting-set-rejected + .multiple-primaries-rejected: final-state validation ---
 
 // TestMethodOps_DuplicateFinalStateRejected asserts the rejection comes from
 // the FOLD, by requiring the response to name the colliding value.
@@ -855,7 +855,7 @@ func TestMethodOps_UpdateWithPrimaryDesignationSucceeds(t *testing.T) {
 	assert.True(t, after.IsPrimary, "the primary designation did not land")
 }
 
-// --- CON-062.updating-method-value-takes-effect[11]: stable-key updates over HTTP ---
+// --- CON-062.updating-method-value-takes-effect + .updating-primary-keeps-primary: stable-key updates over HTTP ---
 
 // TestMethodOps_StableKeyUpdatePersistsThroughAPI is CON-062.updating-method-value-takes-effect's citing test.
 // A case-only edit changes the stored value while (type, value_normalized) is
@@ -915,7 +915,7 @@ func TestMethodOps_KeyChangingPrimaryUpdateKeepsPrimaryThroughAPI(t *testing.T) 
 	assert.Equal(t, 1, primaries, "expected exactly one primary in the response")
 }
 
-// --- CON-062.response-reports-one-result[13]: the results contract ---------
+// --- CON-062.response-reports-one-result + .each-result-identifies-method: the results contract ---
 
 // TestMethodOps_ResultsCoverEveryOperation pins one result per SUBMITTED
 // operation, including no-ops. This is the contract a later acknowledged-state
