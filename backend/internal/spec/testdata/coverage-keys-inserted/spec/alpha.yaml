@@ -1,0 +1,50 @@
+domain: alpha
+prefix: ALP
+maturity: reviewed
+behaviors:
+  - id: ALP-001
+    title: a keyed ui behavior
+    type: ux
+    status: current
+    surface: ui
+    when: the trigger fires
+    then:
+      - key: first-outcome
+        text: the first outcome holds
+      - key: inserted-outcome
+        text: an outcome inserted at position 1
+      - key: second-outcome
+        text: the second outcome holds
+      - key: waived-outcome
+        text: the waived outcome is not browser-observable
+    waivers:
+      - then: waived-outcome
+        reason: not deterministically provable in the browser
+  - id: ALP-002
+    title: a ui behavior still cited positionally
+    type: ux
+    status: current
+    surface: ui
+    when: the trigger fires
+    then:
+      - the indexed first outcome holds
+      - an indexed outcome inserted at position 1
+      - the indexed second outcome holds
+  - id: ALP-003
+    title: a statement behavior waived by the reserved token
+    type: invariant
+    status: current
+    surface: ui
+    statement: every read filters soft-deleted rows
+    waivers:
+      - then: statement
+        reason: structural, enforced by the query layer rather than observable
+  - id: ALP-004
+    title: a keyed api behavior credited by a Go citation
+    type: api
+    status: current
+    surface: api
+    when: the request is validated
+    then:
+      - key: rejects-bad-input
+        text: an invalid request is rejected with a validation error (400)

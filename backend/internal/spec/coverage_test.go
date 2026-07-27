@@ -1,6 +1,8 @@
 package spec
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -231,6 +233,302 @@ func TestComputeCoverageClean(t *testing.T) {
 	covered, waived, orphans := cov.Domains[0].Counts()
 	if covered != 1 || waived != 0 || orphans != 0 {
 		t.Errorf("counts = %d/%d/%d, want 1/0/0", covered, waived, orphans)
+	}
+}
+
+// markerPrefix is the citation-marker prefix, assembled from two literals so
+// that this file never contains one. coverage_test.go is a *_test.go OUTSIDE
+// testdata/, so the repo's own `make spec-coverage` run walks it — a literal
+// marker here (even inside a Go string) would surface as a spurious INVALID in
+// the real report.
+const markerPrefix = "// spec" + ": "
+
+// marker renders one whole-line citation marker for the temp-tree fixtures.
+func marker(refs string) string { return markerPrefix + refs + "\n" }
+
+// scanMarkers writes one Go test file carrying the given marker lines into a
+// throwaway repo-shaped tree and returns what CollectCitations extracts. The
+// grammar cases need no corpus, so a temp tree keeps them out of the shared
+// coverage fixtures (whose per-item verdicts other tests pin exactly).
+func scanMarkers(t *testing.T, body string) ([]Citation, []Violation) {
+	t.Helper()
+	root := t.TempDir()
+	backend := filepath.Join(root, "backend")
+	e2e := filepath.Join(root, "frontend", "tests", "e2e")
+	for _, d := range []string{backend, e2e} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(backend, "x_test.go"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	cites, probs, err := CollectCitations(backend, e2e)
+	if err != nil {
+		t.Fatalf("CollectCitations returned error: %v", err)
+	}
+	return cites, probs
+}
+
+// TestCollectCitationsKeyedForm pins the keyed reference: it parses into Key
+// (leaving Then at -1, the bare sentinel), and Ref() round-trips all three
+// written forms.
+func TestCollectCitationsKeyedForm(t *testing.T) {
+	cites, probs := scanMarkers(t, "package x\n"+
+		marker("ALP-001.live-contact-flag")+
+		marker("ALP-002[3]")+
+		marker("ALP-003")+
+		marker("ALP-004.a1-b2, ALP-005.k"))
+	if len(probs) != 0 {
+		t.Fatalf("no problems expected, got:\n%s", joinViolations(probs))
+	}
+	want := []struct {
+		id, key string
+		then    int
+		ref     string
+	}{
+		{"ALP-001", "live-contact-flag", -1, "ALP-001.live-contact-flag"},
+		{"ALP-002", "", 3, "ALP-002[3]"},
+		{"ALP-003", "", -1, "ALP-003"},
+		{"ALP-004", "a1-b2", -1, "ALP-004.a1-b2"},
+		{"ALP-005", "k", -1, "ALP-005.k"},
+	}
+	if len(cites) != len(want) {
+		t.Fatalf("want %d citations, got %d: %#v", len(want), len(cites), cites)
+	}
+	for i, w := range want {
+		c := cites[i]
+		if c.ID != w.id || c.Key != w.key || c.Then != w.then {
+			t.Errorf("citation %d = {ID:%q Key:%q Then:%d}, want {ID:%q Key:%q Then:%d}", i, c.ID, c.Key, c.Then, w.id, w.key, w.then)
+		}
+		if got := c.Ref(); got != w.ref {
+			t.Errorf("citation %d Ref() = %q, want %q", i, got, w.ref)
+		}
+	}
+}
+
+// TestCollectCitations_HashSuffixReserved pins the @ reservation: a reference
+// carrying one gets its OWN forward-looking message, not the generic malformed
+// one, so the character cannot be squatted before the suffix is designed.
+func TestCollectCitations_HashSuffixReserved(t *testing.T) {
+	cites, probs := scanMarkers(t, "package x\n"+marker("ALP-001.live-contact-flag@a3f2"))
+	if len(cites) != 0 {
+		t.Errorf("a reserved-suffix reference must not be collected: %#v", cites)
+	}
+	if len(probs) != 1 {
+		t.Fatalf("want 1 problem, got %d:\n%s", len(probs), joinViolations(probs))
+	}
+	want := `spec citation "ALP-001.live-contact-flag@a3f2" uses the reserved @hash suffix, which is not yet supported`
+	if probs[0].Msg != want {
+		t.Errorf("problem = %q, want %q", probs[0].Msg, want)
+	}
+	if strings.Contains(probs[0].Msg, "malformed") {
+		t.Error("the reserved-suffix message must be distinct from the generic malformed one")
+	}
+}
+
+// TestCollectCitations_MalformedKey pins that the key charset is enforced at
+// the citation site too — a key outside it could never match a linted then-item
+// key, so accepting it would only defer the failure.
+func TestCollectCitations_MalformedKey(t *testing.T) {
+	for _, ref := range []string{"ALP-001.Bad_Key", "ALP-001.", "ALP-001.-lead", "ALP-001.trail-", "ALP-001.a--b"} {
+		cites, probs := scanMarkers(t, "package x\n"+marker(ref))
+		if len(cites) != 0 {
+			t.Errorf("%s: must not be collected, got %#v", ref, cites)
+		}
+		if len(probs) != 1 || !strings.Contains(probs[0].Msg, "malformed spec citation") {
+			t.Errorf("%s: want a malformed-citation problem, got %#v", ref, probs)
+		}
+	}
+}
+
+// TestComputeCoverageKeyedVerdicts pins keyed resolution end to end: a keyed
+// citation covers exactly its item, a keyed waiver waives exactly its item, the
+// reserved "statement" waiver waives a statement behavior's implicit item, and
+// legacy indexed citations still cover item n alongside them.
+func TestComputeCoverageKeyedVerdicts(t *testing.T) {
+	cov := loadCoverage(t, "testdata/coverage-keys")
+	if len(cov.Problems) != 0 {
+		t.Fatalf("no problems expected, got:\n%s", joinViolations(cov.Problems))
+	}
+	if len(cov.Domains) != 1 {
+		t.Fatalf("want 1 domain, got %d", len(cov.Domains))
+	}
+	d := cov.Domains[0]
+
+	cases := []struct{ ref, state string }{
+		{"ALP-001.first-outcome", ItemCovered},  // keyed E2E citation
+		{"ALP-001.second-outcome", ItemCovered}, // keyed E2E citation
+		{"ALP-001.waived-outcome", ItemWaived},  // keyed waiver
+		{"ALP-002[0]", ItemCovered},             // legacy indexed citation
+		{"ALP-002[1]", ItemCovered},             // legacy indexed citation
+		{"ALP-003", ItemWaived},                 // statement waived by the reserved token
+		{"ALP-004.rejects-bad-input", ItemCovered},
+	}
+	for _, tc := range cases {
+		it := findItem(d.Items, tc.ref)
+		if it == nil {
+			t.Errorf("item %s missing from report: %#v", tc.ref, d.Items)
+			continue
+		}
+		if it.State != tc.state {
+			t.Errorf("%s state = %s, want %s", tc.ref, it.State, tc.state)
+		}
+	}
+	// A keyed citation covers ONLY its own item: nothing else went covered by
+	// accident, and no item stayed orphaned.
+	if _, _, orphans := d.Counts(); orphans != 0 {
+		t.Errorf("want 0 orphans, got %d: %#v", orphans, d.Items)
+	}
+}
+
+// TestComputeCoverage_KeyedCitationSurvivesThenInsertion is acceptance
+// criterion 2, both directions in one test: two corpora differing only by an
+// item inserted at position 1. Every KEYED citation keeps the identical verdict
+// for the identical assertion text, while the INDEXED citations in the same
+// fixture demonstrably re-point — which is the failure this arc exists to end.
+func TestComputeCoverage_KeyedCitationSurvivesThenInsertion(t *testing.T) {
+	before := loadCoverage(t, "testdata/coverage-keys")
+	after := loadCoverage(t, "testdata/coverage-keys-inserted")
+
+	stateByText := func(cov *Coverage) map[string]string {
+		out := map[string]string{}
+		for _, d := range cov.Domains {
+			for _, it := range d.Items {
+				out[it.Text] = it.State
+			}
+		}
+		return out
+	}
+	b, a := stateByText(before), stateByText(after)
+
+	// Keyed: the assertion's verdict is unchanged by the insertion above it.
+	for _, text := range []string{
+		"the first outcome holds",
+		"the second outcome holds",
+		"the waived outcome is not browser-observable",
+	} {
+		if b[text] == "" {
+			t.Fatalf("precondition: %q missing from the base corpus", text)
+		}
+		if a[text] != b[text] {
+			t.Errorf("keyed item %q: state %s → %s across the insertion (must be stable)", text, b[text], a[text])
+		}
+	}
+
+	// Indexed, same fixture, same insertion: the citation now names a different
+	// assertion, and the one it used to name is orphaned. If this ever stops
+	// failing, the test has stopped discriminating.
+	const shifted = "the indexed second outcome holds"
+	if b[shifted] != ItemCovered {
+		t.Fatalf("precondition: %q must be covered before the insertion, got %q", shifted, b[shifted])
+	}
+	if a[shifted] != ItemOrphan {
+		t.Errorf("indexed citation should have re-pointed: %q is %q after the insertion, want %s", shifted, a[shifted], ItemOrphan)
+	}
+	if a["an indexed outcome inserted at position 1"] != ItemCovered {
+		t.Errorf("the inserted item should have absorbed the indexed citation, got %q", a["an indexed outcome inserted at position 1"])
+	}
+	// The keyed inserted item is a fresh orphan — correct: nothing cites it yet.
+	if a["an outcome inserted at position 1"] != ItemOrphan {
+		t.Errorf("a newly inserted keyed item should be orphaned, got %q", a["an outcome inserted at position 1"])
+	}
+}
+
+// TestComputeCoverage_DanglingKeyCitation is acceptance criterion 3: renaming
+// (or deleting) a cited item's key fails loudly, naming the citing path:line,
+// the reference, and the behavior's available keys.
+func TestComputeCoverage_DanglingKeyCitation(t *testing.T) {
+	cov := loadCoverage(t, "testdata/coverage-dangling-key")
+	if len(cov.Problems) != 1 {
+		t.Fatalf("want 1 problem, got %d:\n%s", len(cov.Problems), joinViolations(cov.Problems))
+	}
+	p := cov.Problems[0]
+	const want = "citation ALP-001.renamed-key names an unknown then-item key (behavior has: alpha, beta)"
+	if p.Msg != want {
+		t.Errorf("problem = %q, want %q", p.Msg, want)
+	}
+	if !strings.HasSuffix(p.Path, "alpha_test.go") || p.Line == 0 {
+		t.Errorf("problem must name the citing site, got %s:%d", p.Path, p.Line)
+	}
+}
+
+// TestComputeCoverage_DanglingKeyOnUnkeyedBehavior pins the empty-enumeration
+// branch of the same message: a behavior with no keyed items says so rather
+// than rendering "behavior has: ".
+func TestComputeCoverage_DanglingKeyOnUnkeyedBehavior(t *testing.T) {
+	files := []*File{{Domain: "alpha", Prefix: "ALP", Path: "spec/alpha.yaml", Behaviors: []Behavior{{
+		ID: "ALP-001", Type: "api", Status: "current", Surface: "api", When: "w",
+		Then: []ThenItem{{Text: "an unkeyed outcome"}},
+	}}}}
+	cites := []Citation{{Path: "backend/x_test.go", Line: 3, ID: "ALP-001", Key: "nope"}}
+	cov := ComputeCoverage(files, cites, nil)
+	if len(cov.Problems) != 1 {
+		t.Fatalf("want 1 problem, got %#v", cov.Problems)
+	}
+	const want = "citation ALP-001.nope names an unknown then-item key (behavior has no keyed then items)"
+	if cov.Problems[0].Msg != want {
+		t.Errorf("problem = %q, want %q", cov.Problems[0].Msg, want)
+	}
+}
+
+// TestComputeCoverage_KeyedCitationOfStatementBehavior pins that a keyed
+// citation of a statement behavior is invalid, with a message distinct from the
+// indexed case (a statement behavior has no then list at all, so neither an
+// index nor a key can address it).
+func TestComputeCoverage_KeyedCitationOfStatementBehavior(t *testing.T) {
+	files := []*File{{Domain: "alpha", Prefix: "ALP", Path: "spec/alpha.yaml", Behaviors: []Behavior{{
+		ID: "ALP-001", Type: "invariant", Status: "current", Surface: "api",
+		Statement: "every read filters soft-deleted rows",
+	}}}}
+	keyed := ComputeCoverage(files, []Citation{{Path: "backend/x_test.go", Line: 3, ID: "ALP-001", Key: "some-key", Then: -1}}, nil)
+	indexed := ComputeCoverage(files, []Citation{{Path: "backend/x_test.go", Line: 3, ID: "ALP-001", Then: 0}}, nil)
+	if len(keyed.Problems) != 1 || len(indexed.Problems) != 1 {
+		t.Fatalf("want 1 problem each, got keyed=%#v indexed=%#v", keyed.Problems, indexed.Problems)
+	}
+	const want = "citation ALP-001.some-key names a then-item key on a statement behavior (no then items)"
+	if keyed.Problems[0].Msg != want {
+		t.Errorf("keyed problem = %q, want %q", keyed.Problems[0].Msg, want)
+	}
+	if keyed.Problems[0].Msg == indexed.Problems[0].Msg {
+		t.Error("the keyed and indexed statement-citation messages must be distinct")
+	}
+}
+
+// TestComputeCoverage_LegacyIndexWaiverStillWaives exercises the index-form
+// waiver through the waiver→index resolution that now sits in front of the
+// waived map — the one site whose type changed.
+func TestComputeCoverage_LegacyIndexWaiverStillWaives(t *testing.T) {
+	files := []*File{{Domain: "alpha", Prefix: "ALP", Path: "spec/alpha.yaml", Behaviors: []Behavior{{
+		ID: "ALP-001", Type: "api", Status: "current", Surface: "api", When: "w",
+		Then:    []ThenItem{{Text: "covered by nothing"}, {Text: "waived positionally"}},
+		Waivers: []Waiver{{Index: 1, Reason: "not deterministically provable"}},
+	}}}}
+	cov := ComputeCoverage(files, nil, nil)
+	items := cov.Domains[0].Items
+	if it := findItem(items, "ALP-001[1]"); it == nil || it.State != ItemWaived || it.Reason == "" {
+		t.Errorf("index-form waiver should still waive item 1: %#v", items)
+	}
+	if it := findItem(items, "ALP-001[0]"); it == nil || it.State != ItemOrphan {
+		t.Errorf("item 0 should stay orphaned: %#v", items)
+	}
+}
+
+// TestItemCoverageRef pins the three rendering forms. It is load-bearing rather
+// than cosmetic: coverage_test's findItem helper looks items up BY Ref().
+func TestItemCoverageRef(t *testing.T) {
+	cases := []struct {
+		ic   ItemCoverage
+		want string
+	}{
+		{ItemCoverage{ID: "ALP-001", Key: "live-contact-flag", Then: 0}, "ALP-001.live-contact-flag"},
+		{ItemCoverage{ID: "ALP-001", Then: 2}, "ALP-001[2]"},
+		{ItemCoverage{ID: "ALP-001", Then: -1}, "ALP-001"},
+	}
+	for _, tc := range cases {
+		if got := tc.ic.Ref(); got != tc.want {
+			t.Errorf("Ref(%#v) = %q, want %q", tc.ic, got, tc.want)
+		}
 	}
 }
 

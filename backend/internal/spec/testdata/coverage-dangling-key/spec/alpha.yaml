@@ -1,0 +1,15 @@
+domain: alpha
+prefix: ALP
+maturity: reviewed
+behaviors:
+  - id: ALP-001
+    title: a keyed api behavior whose key was renamed
+    type: api
+    status: current
+    surface: api
+    when: the request is validated
+    then:
+      - key: alpha
+        text: the alpha outcome holds
+      - key: beta
+        text: the beta outcome holds
