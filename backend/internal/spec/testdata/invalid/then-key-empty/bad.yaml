@@ -1,0 +1,33 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  # One deviation per BEHAVIOR: the walker returns nil on the first one, so a
+  # second case inside the same then list would be unreachable.
+  - id: CON-001
+    title: a then item key written as an empty string
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: ""
+        text: y
+  - id: CON-002
+    title: a then item key written as null
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: null
+        text: y
+  - id: CON-003
+    title: a then item key that is not a string
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: 7
+        text: y

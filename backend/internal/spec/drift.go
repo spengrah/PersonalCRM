@@ -20,11 +20,18 @@ import (
 // (a then-item reorder counts as a change). Title, notes, provenance, type,
 // status, surface, serves, and waivers are deliberately excluded — only the
 // given/when/then/statement assertions are drift-relevant.
+//
+// The then lists are compared as TEXTS (ThenTexts), never as ThenItem structs.
+// Line would make any insertion anywhere in a file drift every behavior below
+// it, and Key is a citation handle rather than an assertion: minting one
+// changes what a test may write, not what the behavior claims. A key rename
+// cannot happen silently either — spec-coverage hard-fails naming every
+// dangling citation — so drift has nothing to add there.
 func assertablesEqual(a, b *Behavior) bool {
 	return a.When == b.When &&
 		a.Statement == b.Statement &&
 		slices.Equal(a.Given, b.Given) &&
-		slices.Equal(a.Then, b.Then)
+		slices.Equal(a.ThenTexts(), b.ThenTexts())
 }
 
 // SpecDrift compares the assertable content of each HEAD behavior against its

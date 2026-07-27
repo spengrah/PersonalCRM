@@ -6,6 +6,16 @@ import (
 	"testing"
 )
 
+// thenItems builds an unkeyed then list from plain texts — the shape the
+// parser produces for plain-string YAML items.
+func thenItems(texts ...string) []ThenItem {
+	out := make([]ThenItem, len(texts))
+	for i, t := range texts {
+		out[i] = ThenItem{Text: t}
+	}
+	return out
+}
+
 // baseGWT is a fully-populated GWT behavior; per-case mutations clone it and
 // change exactly one field so each row isolates one axis of the comparison.
 func baseGWT() Behavior {
@@ -17,7 +27,7 @@ func baseGWT() Behavior {
 		Surface:    "api",
 		Given:      []string{"g1"},
 		When:       "w1",
-		Then:       []string{"t1", "t2"},
+		Then:       thenItems("t1", "t2"),
 		Provenance: []string{"p1"},
 		Notes:      "notes",
 		Line:       7,
@@ -68,14 +78,14 @@ func TestSpecDrift(t *testing.T) {
 		{
 			name:    "then changed",
 			base:    []Behavior{baseGWT()},
-			head:    []Behavior{with(baseGWT(), func(b *Behavior) { b.Then = []string{"t1", "t2-changed"} })},
+			head:    []Behavior{with(baseGWT(), func(b *Behavior) { b.Then = thenItems("t1", "t2-changed") })},
 			cites:   defaultCites,
 			wantIDs: []string{"X-001"}, wantFileCount: map[string]int{"X-001": 1},
 		},
 		{
 			name:    "then reorder",
 			base:    []Behavior{baseGWT()},
-			head:    []Behavior{with(baseGWT(), func(b *Behavior) { b.Then = []string{"t2", "t1"} })},
+			head:    []Behavior{with(baseGWT(), func(b *Behavior) { b.Then = thenItems("t2", "t1") })},
 			cites:   defaultCites,
 			wantIDs: []string{"X-001"},
 		},
@@ -139,7 +149,7 @@ func TestSpecDrift(t *testing.T) {
 		},
 		{
 			name: "waivers changed", base: []Behavior{baseGWT()},
-			head:  []Behavior{with(baseGWT(), func(b *Behavior) { b.Waivers = []Waiver{{Then: 0, Reason: "r"}} })},
+			head:  []Behavior{with(baseGWT(), func(b *Behavior) { b.Waivers = []Waiver{{Index: 0, Reason: "r"}} })},
 			cites: defaultCites, wantIDs: nil,
 		},
 
@@ -147,7 +157,7 @@ func TestSpecDrift(t *testing.T) {
 		{
 			name:    "then changed + citing file touched → silent",
 			base:    []Behavior{baseGWT()},
-			head:    []Behavior{with(baseGWT(), func(b *Behavior) { b.Then = []string{"t1", "t2x"} })},
+			head:    []Behavior{with(baseGWT(), func(b *Behavior) { b.Then = thenItems("t1", "t2x") })},
 			cites:   defaultCites,
 			changed: []string{citeFile},
 			wantIDs: nil,
@@ -155,7 +165,7 @@ func TestSpecDrift(t *testing.T) {
 		{
 			name:    "then changed + no citing file touched → warn",
 			base:    []Behavior{baseGWT()},
-			head:    []Behavior{with(baseGWT(), func(b *Behavior) { b.Then = []string{"t1", "t2x"} })},
+			head:    []Behavior{with(baseGWT(), func(b *Behavior) { b.Then = thenItems("t1", "t2x") })},
 			cites:   defaultCites,
 			changed: []string{"backend/unrelated_test.go"},
 			wantIDs: []string{"X-001"},
@@ -283,6 +293,51 @@ func TestSpecDrift(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSpecDrift_KeyingOnlyEditIsSilent pins that minting then-item keys is not
+// an assertion change. The keying pass gives every item a Key and shifts every
+// Line (a keyed item occupies two YAML lines where a plain one occupied
+// one) while changing no text — and drift must stay silent, or the migration
+// would fire a warning storm across every cited behavior. Comparing ThenItem
+// structs instead of ThenTexts() is exactly the mistake this catches.
+func TestSpecDrift_KeyingOnlyEditIsSilent(t *testing.T) {
+	base := []*File{{Path: "spec/x.yaml", Behaviors: []Behavior{baseGWT()}}}
+	keyed := with(baseGWT(), func(b *Behavior) {
+		b.Then = []ThenItem{
+			{Key: "first-outcome", Text: "t1", Line: 40},
+			{Key: "second-outcome", Text: "t2", Line: 42},
+		}
+	})
+	head := []*File{{Path: "spec/x.yaml", Behaviors: []Behavior{keyed}}}
+
+	if got := SpecDrift(base, head, []Citation{cite(citeFile, 10, "X-001")}, map[string]bool{}); len(got) != 0 {
+		t.Fatalf("keying-only edit must not drift, got %+v", got)
+	}
+
+	// The same fixture with ONE text changed still warns, so the silence above
+	// is the exclusion working rather than the comparison being dead.
+	textChanged := with(keyed, func(b *Behavior) { b.Then[1].Text = "t2-changed" })
+	head = []*File{{Path: "spec/x.yaml", Behaviors: []Behavior{textChanged}}}
+	if got := SpecDrift(base, head, []Citation{cite(citeFile, 10, "X-001")}, map[string]bool{}); len(got) != 1 {
+		t.Fatalf("a text change alongside keys must still warn, got %+v", got)
+	}
+}
+
+// TestSpecDriftThenTexts pins the projection drift compares on.
+func TestSpecDriftThenTexts(t *testing.T) {
+	b := baseGWT()
+	if got := b.ThenTexts(); !equalStrs(got, []string{"t1", "t2"}) {
+		t.Errorf("ThenTexts() = %#v, want [t1 t2]", got)
+	}
+	b.Then = nil
+	if got := b.ThenTexts(); got != nil {
+		t.Errorf("an absent then must project to nil, got %#v", got)
+	}
+	b.Then = []ThenItem{}
+	if got := b.ThenTexts(); got == nil || len(got) != 0 {
+		t.Errorf("a present-but-empty then must project to an empty non-nil slice, got %#v", got)
 	}
 }
 

@@ -1,0 +1,49 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  # One deviation per BEHAVIOR: the walker fails closed on the first one.
+  - id: CON-001
+    title: a then item that is neither a string nor a mapping
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - - nested
+  - id: CON-002
+    title: a then item mapping with an unknown sub-key
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: some-key
+        txt: y
+  - id: CON-003
+    title: a then item mapping missing its text
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: some-key
+  - id: CON-004
+    title: a then item mapping with a duplicate sub-key
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: some-key
+        text: y
+        text: z
+  - id: CON-005
+    title: a then item mapping whose text is not a string
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: some-key
+        text: 7

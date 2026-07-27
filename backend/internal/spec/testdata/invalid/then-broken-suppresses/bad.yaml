@@ -1,0 +1,22 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  # A structurally broken then list must report ONCE and suppress every
+  # then-dependent semantic check: the duplicate key and the empty text below
+  # it, the empty-list-item check, and the waiver's key resolution.
+  - id: CON-001
+    title: a broken then list suppresses its own semantic checks
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: dup-key
+        txt: y
+      - key: dup-key
+        text: ""
+      - ""
+    waivers:
+      - then: no-such-key
+        reason: r

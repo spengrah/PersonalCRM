@@ -1,0 +1,26 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: a statement waiver keyed with anything but the reserved token
+    type: invariant
+    status: current
+    surface: ui
+    statement: every read filters soft-deleted rows
+    waivers:
+      - then: some-key
+        reason: not provable
+  # The mirror case: the reserved token on a behavior that has a then list.
+  - id: CON-002
+    title: a given/when/then waiver keyed with the reserved statement token
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: real-key
+        text: y
+    waivers:
+      - then: statement
+        reason: not provable

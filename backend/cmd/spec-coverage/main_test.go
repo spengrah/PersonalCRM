@@ -142,6 +142,97 @@ func TestSettledLabel(t *testing.T) {
 	}
 }
 
+// TestRunKeyedCitationsClean pins the keyed form at the CLI boundary: a corpus
+// whose items are cited by key (with a keyed waiver and a reserved-token
+// statement waiver alongside) is fully covered and exits 0.
+func TestRunKeyedCitationsClean(t *testing.T) {
+	code, stdout, stderr := runCLI(t, fixtures+"/coverage-keys")
+	if code != 0 {
+		t.Fatalf("want exit 0, got %d (stderr: %s)\n%s", code, stderr, stdout)
+	}
+	if !hasLine(stdout, "spec-coverage: all ui- and api-surface then-items covered or waived") {
+		t.Errorf("clean summary line missing from stdout:\n%s", stdout)
+	}
+	// Waived lines render by key, and a statement behavior's implicit item
+	// still renders as the bare ID.
+	for _, line := range []string{
+		"  waived ALP-001.waived-outcome: not deterministically provable in the browser",
+		"  waived ALP-003: structural, enforced by the query layer rather than observable",
+	} {
+		if !hasLine(stdout, line) {
+			t.Errorf("stdout missing golden line %q; got:\n%s", line, stdout)
+		}
+	}
+}
+
+// TestSpecCoverage_KeyedCorpusInsertionStable is acceptance criterion 2 at the
+// CLI boundary: the same corpus with one item inserted at position 1 keeps
+// every keyed citation's verdict, while the indexed citations in the same
+// fixture re-point and orphan the assertion they used to name.
+func TestSpecCoverage_KeyedCorpusInsertionStable(t *testing.T) {
+	_, before, _ := runCLI(t, fixtures+"/coverage-keys")
+	code, after, _ := runCLI(t, fixtures+"/coverage-keys-inserted")
+	if code != 0 {
+		t.Fatalf("want exit 0 (alpha is unsettled, so orphans warn), got %d:\n%s", code, after)
+	}
+
+	// Keyed: the waived item is still addressed by the same reference and still
+	// waived, though an item was inserted above it.
+	const waived = "  waived ALP-001.waived-outcome: not deterministically provable in the browser"
+	if !hasLine(before, waived) || !hasLine(after, waived) {
+		t.Errorf("keyed waiver line did not survive the insertion:\nBEFORE:\n%s\nAFTER:\n%s", before, after)
+	}
+	// No keyed item that was covered before became an orphan.
+	for _, line := range []string{
+		"  ORPHAN ALP-001.first-outcome: the first outcome holds",
+		"  ORPHAN ALP-001.second-outcome: the second outcome holds",
+	} {
+		if hasLine(after, line) {
+			t.Errorf("a keyed citation lost its item across the insertion: %q\n%s", line, after)
+		}
+	}
+	// Indexed, same insertion: the assertion the citation used to name is now
+	// an orphan. The precondition is asserted POSITIVELY — report() prints
+	// nothing for a covered item, so "no ORPHAN ALP-002[2] before" would be
+	// unfalsifiable (the fixture gives ALP-002 two items, so index 2 cannot
+	// exist before the insertion) and would prove nothing about coverage.
+	// Instead: the base corpus reports everything covered-or-waived, and
+	// ALP-002 carries no waiver, so both of its indexed items are covered —
+	// and if either were not, the clean summary would be replaced by the
+	// corresponding ORPHAN line. Both halves are checked.
+	if !hasLine(before, "spec-coverage: all ui- and api-surface then-items covered or waived") {
+		t.Fatalf("precondition: the base corpus must be fully covered-or-waived:\n%s", before)
+	}
+	for _, line := range []string{
+		"  ORPHAN ALP-002[0]: the indexed first outcome holds",
+		"  ORPHAN ALP-002[1]: the indexed second outcome holds",
+	} {
+		if hasLine(before, line) {
+			t.Fatalf("precondition: ALP-002's items must both be covered before the insertion, saw %q:\n%s", line, before)
+		}
+	}
+	const shifted = "  ORPHAN ALP-002[2]: the indexed second outcome holds"
+	if !hasLine(after, shifted) {
+		t.Errorf("indexed citation should have re-pointed, orphaning %q:\n%s", shifted, after)
+	}
+}
+
+// TestSpecCoverage_DanglingKeyExitsOne is acceptance criterion 3 at the CLI
+// boundary: a citation naming a key the corpus no longer carries is a hard
+// failure that names the citing site.
+func TestSpecCoverage_DanglingKeyExitsOne(t *testing.T) {
+	code, stdout, _ := runCLI(t, fixtures+"/coverage-dangling-key")
+	if code != 1 {
+		t.Fatalf("want exit 1 on a dangling keyed citation, got %d:\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "citation ALP-001.renamed-key names an unknown then-item key (behavior has: alpha, beta)") {
+		t.Errorf("stdout missing the dangling-key problem:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "alpha_test.go:3") {
+		t.Errorf("stdout must name the citing site:\n%s", stdout)
+	}
+}
+
 func TestRunLintDirtyCorpus(t *testing.T) {
 	// A repo root whose spec/ does not lint clean is an operational error —
 	// point spec/ at a fixture with violations by faking the layout.
