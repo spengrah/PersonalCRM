@@ -534,13 +534,20 @@ func (pf *parsedFile) thenItemMapping(pb *parsedBehavior, item *yaml.Node) (Then
 		return ThenItem{}, false
 	}
 
+	// Reported line, by case: a violation with an offending NODE reports at
+	// that node's line; one that is a property of the mapping as a whole
+	// reports at the mapping's own line. So the unknown sub-key below points at
+	// the offending sub-key rather than at `- key:` two lines up, while a
+	// duplicate sub-key (mappingFields keeps only the name, not the second
+	// node — same as walkBehavior's duplicate handling) and a missing sub-field
+	// (no node to point at) stay on the mapping.
 	f, dup := mappingFields(item)
 	if len(dup) > 0 {
 		return brk(item.Line, fmt.Sprintf("duplicate key %q in then item mapping", dup[0]))
 	}
 	for _, k := range sortedKeys(f) {
 		if k != "key" && k != "text" {
-			return brk(item.Line, fmt.Sprintf("unknown key %q in then item mapping (want key, text)", k))
+			return brk(f[k].Line, fmt.Sprintf("unknown key %q in then item mapping (want key, text)", k))
 		}
 	}
 	keyNode, keyOK := f["key"]

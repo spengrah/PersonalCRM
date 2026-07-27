@@ -198,8 +198,11 @@ func TestLintViolationClasses(t *testing.T) {
 			"then item text must be a string",
 		}},
 		{"waiver-key-unknown", 1, []string{`waiver then "no-such-key" names no then-item key of this behavior`}},
-		{"waiver-statement-bad-key", 1, []string{
+		// Both directions of misusing the reserved token, each with its own
+		// message — the generic unknown-key wording would misdirect either way.
+		{"waiver-statement-bad-key", 2, []string{
 			`waiver then "some-key" is not valid for a statement behavior (use the reserved key "statement")`,
+			`waiver then "statement" is reserved for statement behaviors; waive a then item of this behavior by its key`,
 		}},
 	}
 
@@ -426,15 +429,24 @@ func TestParserThenMessagesAreDistinct(t *testing.T) {
 		t.Fatalf("no CON-003 violation in:\n%s", joinViolations(viol))
 	}
 
-	// The non-scalar, non-mapping item gets the OTHER message.
+	// The non-scalar, non-mapping item gets the OTHER message. The found guard
+	// matters as much as the comparison: without it a change that dropped the
+	// violation entirely would satisfy an empty loop.
 	_, viol, err = Lint("testdata/invalid/then-item-bad-shape")
 	if err != nil {
 		t.Fatalf("Lint returned error: %v", err)
 	}
+	found = false
 	for _, v := range viol {
-		if v.Ref == "CON-001" && v.Msg != shapeMsg {
-			t.Errorf("CON-001 msg = %q, want %q", v.Msg, shapeMsg)
+		if v.Ref == "CON-001" {
+			found = true
+			if v.Msg != shapeMsg {
+				t.Errorf("CON-001 msg = %q, want %q", v.Msg, shapeMsg)
+			}
 		}
+	}
+	if !found {
+		t.Fatalf("no CON-001 violation in:\n%s", joinViolations(viol))
 	}
 }
 

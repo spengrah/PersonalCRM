@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -336,8 +337,15 @@ func TestCollectCitations_MalformedKey(t *testing.T) {
 		if len(cites) != 0 {
 			t.Errorf("%s: must not be collected, got %#v", ref, cites)
 		}
-		if len(probs) != 1 || !strings.Contains(probs[0].Msg, "malformed spec citation") {
-			t.Errorf("%s: want a malformed-citation problem, got %#v", ref, probs)
+		if len(probs) != 1 {
+			t.Fatalf("%s: want 1 malformed-citation problem, got %#v", ref, probs)
+		}
+		// The HINT is pinned by equality, not by a "malformed" prefix match:
+		// it enumerates the accepted forms, so it is the one line an author
+		// reads to learn the grammar, and a prefix assertion would let it rot.
+		want := fmt.Sprintf("malformed spec citation %q (want <ID>, <ID>.<then-item-key>, or <ID>[<then-index>])", ref)
+		if probs[0].Msg != want {
+			t.Errorf("%s: msg = %q, want %q", ref, probs[0].Msg, want)
 		}
 	}
 }
@@ -461,7 +469,9 @@ func TestComputeCoverage_DanglingKeyOnUnkeyedBehavior(t *testing.T) {
 		ID: "ALP-001", Type: "api", Status: "current", Surface: "api", When: "w",
 		Then: []ThenItem{{Text: "an unkeyed outcome"}},
 	}}}}
-	cites := []Citation{{Path: "backend/x_test.go", Line: 3, ID: "ALP-001", Key: "nope"}}
+	// Then: -1 mirrors what scanFile produces: the grammar's alternation is
+	// exclusive, so a keyed citation never carries an index.
+	cites := []Citation{{Path: "backend/x_test.go", Line: 3, ID: "ALP-001", Key: "nope", Then: -1}}
 	cov := ComputeCoverage(files, cites, nil)
 	if len(cov.Problems) != 1 {
 		t.Fatalf("want 1 problem, got %#v", cov.Problems)

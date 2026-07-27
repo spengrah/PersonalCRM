@@ -192,12 +192,26 @@ func TestSpecCoverage_KeyedCorpusInsertionStable(t *testing.T) {
 		}
 	}
 	// Indexed, same insertion: the assertion the citation used to name is now
-	// an orphan. If this stops holding, the fixture pair has stopped
-	// discriminating and the keyed-stability claim above proves nothing.
-	const shifted = "  ORPHAN ALP-002[2]: the indexed second outcome holds"
-	if hasLine(before, shifted) {
-		t.Fatalf("precondition: the indexed item must be covered before the insertion:\n%s", before)
+	// an orphan. The precondition is asserted POSITIVELY — report() prints
+	// nothing for a covered item, so "no ORPHAN ALP-002[2] before" would be
+	// unfalsifiable (the fixture gives ALP-002 two items, so index 2 cannot
+	// exist before the insertion) and would prove nothing about coverage.
+	// Instead: the base corpus reports everything covered-or-waived, and
+	// ALP-002 carries no waiver, so both of its indexed items are covered —
+	// and if either were not, the clean summary would be replaced by the
+	// corresponding ORPHAN line. Both halves are checked.
+	if !hasLine(before, "spec-coverage: all ui- and api-surface then-items covered or waived") {
+		t.Fatalf("precondition: the base corpus must be fully covered-or-waived:\n%s", before)
 	}
+	for _, line := range []string{
+		"  ORPHAN ALP-002[0]: the indexed first outcome holds",
+		"  ORPHAN ALP-002[1]: the indexed second outcome holds",
+	} {
+		if hasLine(before, line) {
+			t.Fatalf("precondition: ALP-002's items must both be covered before the insertion, saw %q:\n%s", line, before)
+		}
+	}
+	const shifted = "  ORPHAN ALP-002[2]: the indexed second outcome holds"
 	if !hasLine(after, shifted) {
 		t.Errorf("indexed citation should have re-pointed, orphaning %q:\n%s", shifted, after)
 	}

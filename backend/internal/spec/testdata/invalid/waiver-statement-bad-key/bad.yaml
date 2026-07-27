@@ -11,3 +11,16 @@ behaviors:
     waivers:
       - then: some-key
         reason: not provable
+  # The mirror case: the reserved token on a behavior that has a then list.
+  - id: CON-002
+    title: a given/when/then waiver keyed with the reserved statement token
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: real-key
+        text: y
+    waivers:
+      - then: statement
+        reason: not provable

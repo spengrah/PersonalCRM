@@ -382,11 +382,11 @@ func checkSurface(pf *parsedFile, pb *parsedBehavior, c *collector) {
 
 // checkThenKeys enforces then-item key semantics: the charset, the reserved
 // "statement" token, and uniqueness within the behavior. A structurally broken
-// then list is skipped, the same tiered guard checkListItems carries. Both are
-// belt-and-braces rather than live filters — behaviorThen returns nil whenever
-// it marks the field broken, so there is nothing to iterate either way — and
-// both stay because the guard, not the walker's current return value, is what
-// states the tier contract.
+// then list is skipped, the same tiered guard checkListItems carries. Both
+// guards are currently UNREACHABLE, not live filters — behaviorThen returns nil
+// whenever it marks the field broken, so the loop below has nothing to iterate
+// either way — and both stay because the guard, not the walker's present return
+// value, is what states the tier contract.
 //
 // Uniqueness is checked among NON-EMPTY keys only. An unkeyed item is a plain
 // string with an empty key, and a behavior routinely has several of those —
@@ -471,6 +471,14 @@ func checkWaivers(pf *parsedFile, pb *parsedBehavior, c *collector) {
 				}
 			case pb.broken["then"]:
 				continue // the then list never parsed; a key cannot be resolved
+			case w.Key == waiverStatementKey:
+				// The mirror of the case above, and it needs its own message:
+				// "statement" is reserved rather than merely absent, so the
+				// generic unknown-key wording would send the author looking for
+				// a then item they never meant to name.
+				c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
+					fmt.Sprintf("waiver then %q is reserved for statement behaviors; waive a then item of this behavior by its key", waiverStatementKey))
+				continue
 			default:
 				if _, ok := resolveWaiverIndex(pb.b, w); !ok {
 					c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
