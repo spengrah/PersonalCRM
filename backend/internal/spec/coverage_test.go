@@ -362,8 +362,10 @@ func TestThenKeyCharsetIsShared(t *testing.T) {
 }
 
 // TestCollectCitations_HashSuffixReserved pins the @ reservation: a reference
-// carrying one gets its OWN forward-looking message, not the generic malformed
-// one, so the character cannot be squatted before the suffix is designed.
+// carrying one gets its OWN actionable message, not the generic malformed one,
+// so the character cannot be squatted and the author is told what to write
+// instead. The content-hash suffix it was once held for was declined, so the
+// message promises nothing.
 func TestCollectCitations_HashSuffixReserved(t *testing.T) {
 	cites, probs := scanMarkers(t, "package x\n"+marker("ALP-001.live-contact-flag@a3f2"))
 	if len(cites) != 0 {
@@ -372,7 +374,7 @@ func TestCollectCitations_HashSuffixReserved(t *testing.T) {
 	if len(probs) != 1 {
 		t.Fatalf("want 1 problem, got %d:\n%s", len(probs), joinViolations(probs))
 	}
-	want := `spec citation "ALP-001.live-contact-flag@a3f2" uses the reserved @hash suffix, which is not yet supported`
+	want := `spec citation "ALP-001.live-contact-flag@a3f2" uses the reserved @ suffix, which is not part of the citation grammar; cite the then-item by key (<ID>.<then-item-key>)`
 	if probs[0].Msg != want {
 		t.Errorf("problem = %q, want %q", probs[0].Msg, want)
 	}
