@@ -366,20 +366,31 @@ func TestThenKeyCharsetIsShared(t *testing.T) {
 // so the character cannot be squatted and the author is told what to write
 // instead. The content-hash suffix it was once held for was declined, so the
 // message promises nothing.
+// Both forms are exercised because the @ check runs BEFORE the grammar, so it
+// cannot know which form it rejected: the remedy it names must be true of a
+// bare reference too. A statement behavior is bare-only (no then list to key),
+// so a message prescribing a key would be actively wrong for ALP-002@a3f2.
 func TestCollectCitations_HashSuffixReserved(t *testing.T) {
-	cites, probs := scanMarkers(t, "package x\n"+marker("ALP-001.live-contact-flag@a3f2"))
-	if len(cites) != 0 {
-		t.Errorf("a reserved-suffix reference must not be collected: %#v", cites)
-	}
-	if len(probs) != 1 {
-		t.Fatalf("want 1 problem, got %d:\n%s", len(probs), joinViolations(probs))
-	}
-	want := `spec citation "ALP-001.live-contact-flag@a3f2" uses the reserved @ suffix, which is not part of the citation grammar; cite the then-item by key (<ID>.<then-item-key>)`
-	if probs[0].Msg != want {
-		t.Errorf("problem = %q, want %q", probs[0].Msg, want)
-	}
-	if strings.Contains(probs[0].Msg, "malformed") {
-		t.Error("the reserved-suffix message must be distinct from the generic malformed one")
+	for _, ref := range []string{"ALP-001.live-contact-flag@a3f2", "ALP-002@a3f2"} {
+		cites, probs := scanMarkers(t, "package x\n"+marker(ref))
+		if len(cites) != 0 {
+			t.Errorf("%s: a reserved-suffix reference must not be collected: %#v", ref, cites)
+		}
+		if len(probs) != 1 {
+			t.Fatalf("%s: want 1 problem, got %d:\n%s", ref, len(probs), joinViolations(probs))
+		}
+		want := fmt.Sprintf("spec citation %q uses the reserved @ suffix, which is not part of the citation grammar; drop the suffix (cite <ID> or <ID>.<then-item-key>)", ref)
+		if probs[0].Msg != want {
+			t.Errorf("problem = %q, want %q", probs[0].Msg, want)
+		}
+		if strings.Contains(probs[0].Msg, "malformed") {
+			t.Errorf("%s: the reserved-suffix message must be distinct from the generic malformed one", ref)
+		}
+		// The remedy must not prescribe a key: it is unreachable advice for a
+		// statement behavior, and this branch cannot tell the two apart.
+		if strings.Contains(probs[0].Msg, "cite the then-item by key") {
+			t.Errorf("%s: the remedy must not prescribe a key — the form is unknown at this point", ref)
+		}
 	}
 }
 
