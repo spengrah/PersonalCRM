@@ -18,10 +18,16 @@ import (
 
 // refString renders a coverage item's reference: ID.key when the item carries a
 // key, the bare ID for then < 0 (a statement behavior's implicit item), else
-// ID[n]. The ID[n] rendering is a LOCATION, not a citable handle — an uncited
-// item legitimately has no key, and the positional form is no longer accepted
-// in a // spec: marker. An author reading ORPHAN CON-002[3] mints the key
-// first (see the authoring recipe in spec/README.md), then cites ID.key.
+// ID[n].
+//
+// Having a key and being cited are INDEPENDENT: a key is minted once and never
+// withdrawn, so an item whose citation was deleted or left dangling is orphaned
+// while still rendering as ID.key — and that reference is a citable handle an
+// author can paste straight back into a marker. Only an item that has never
+// been cited or waived falls through to ID[n], which is a LOCATION rather than
+// a handle: the positional form is no longer accepted in a // spec: marker, so
+// that author mints the key first (see the authoring recipe in
+// spec/README.md).
 func refString(id string, then int, key string) string {
 	switch {
 	case key != "":
@@ -72,9 +78,10 @@ type ItemCoverage struct {
 }
 
 // Ref renders the item as ID.key when it has a key, ID[n] when it does not, and
-// the bare ID for a statement behavior's implicit item. An uncited item
-// legitimately has no key, so orphan lines keep reading ID[n] — the author mints
-// the key when they write the citing test.
+// the bare ID for a statement behavior's implicit item. Orphan lines therefore
+// read either way: ID.key for an item that carries a key but nothing currently
+// cites, ID[n] for one that has never been referenced at all. See refString for
+// why the difference matters to the author reading the report.
 func (ic ItemCoverage) Ref() string { return refString(ic.ID, ic.Then, ic.Key) }
 
 // DomainCoverage is one domain's slice of the coverage report.

@@ -64,10 +64,11 @@ func TestRunInvalidCitations(t *testing.T) {
 	// waived line, and the new per-surface totals line.
 	for _, line := range []string{
 		"alpha              [settled: -]  surface ui/api/none: 7/8/1  ui: 4 covered, 2 waived, 1 orphaned  api: 5 covered, 2 waived, 3 orphaned",
-		// ALP-003's item is UNCITED, so it carries no key and still renders
-		// positionally — the live proof that arc I6 holds after the
-		// retirement: the reference on an orphan line is a location, not a
-		// citable handle.
+		// ALP-003's item has never been cited or waived, so it carries no key
+		// and still renders positionally. That is the load-bearing half of the
+		// orphan rendering: a reference in this form is a location, not a
+		// citable handle. (An orphan whose item DOES carry a key renders as
+		// ID.key instead — see coverage-indexed-rejected's golden.)
 		"  ORPHAN ALP-003[0]: the request carries the filter param",
 		"  waived ALP-001.refocus-rechecks-freshness: focus-driven freshness is not deterministically provable",
 		"spec-coverage: 4 orphaned then-items (ui 1, api 3), 8 invalid citations",

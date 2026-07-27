@@ -283,11 +283,13 @@ t.Run("rescan with an eligible method returns a pollable job", func(t *testing.T
 test('adding a matching email links a past event', async ({ page, request }) => { ... })
 ```
 
-**Minting a key.** A then-item carries a key only once something references it, so citing or waiving an uncited item takes one extra step:
+**Minting a key.** A then-item carries a key only once something first cites or waives it, so referencing a never-referenced item takes one extra step:
 
 - **To cite one** — convert the plain string in `spec/<domain>.yaml` to a `{key, text}` mapping, minting a permanent lowercase-kebab key that describes the claim (negations included), then cite `<ID>.<key>`.
 - **To waive one** — the same conversion first. A waiver addresses its item by key (`- then: <key>`), so a plain-string item cannot be waived at all.
 - **To cite a statement behavior** (`invariant`/`intent`-shaped) — **bare only**. `<ID>.<key>` is rejected, and the reserved `then: statement` token is for waivers, never citations.
+
+Check the coverage report before minting anything: a key is never withdrawn, so an item whose citation was deleted or left dangling is orphaned **while keeping its key**, and its line reads `ORPHAN <ID>.some-key: …`. Cite that reference as printed — do not convert the item again or rename its key.
 
 Full grammar, the worked authoring recipe, placement rules, and cite-on-write policy: `spec/README.md` → [Test → behavior citations](../../spec/README.md#test--behavior-citations) and [Citing an item that has no key yet](../../spec/README.md#citing-an-item-that-has-no-key-yet).
 

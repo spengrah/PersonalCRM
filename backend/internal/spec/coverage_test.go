@@ -124,8 +124,9 @@ func TestComputeCoverageVerdicts(t *testing.T) {
 	cases := []struct {
 		ref, state, surface string
 	}{
-		// Keyed items render by key; uncited items carry no key and keep the
-		// positional rendering (a LOCATION, not a citable handle — arc I6).
+		// Keyed items render by key; items that have never been cited or
+		// waived carry no key and keep the positional rendering, which is a
+		// location rather than a citable handle.
 		{"ALP-001.list-refreshes", ItemCovered, "ui"},            // keyed E2E citation
 		{"ALP-001.refocus-rechecks-freshness", ItemWaived, "ui"}, // keyed waiver
 		{"ALP-002[0]", ItemCovered, "ui"},                        // bare E2E citation covers all items

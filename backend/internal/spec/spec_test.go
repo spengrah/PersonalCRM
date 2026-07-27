@@ -867,20 +867,25 @@ func TestParser_UnknownThenSubKeyReportsTheSubKeyLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	// The offending sub-key ("txt:") and the mapping line that opens its item
-	// ("- key:" immediately above), both located in the fixture text.
-	var subKeyLine, mappingLine int
-	for i, line := range strings.Split(string(data), "\n") {
+	// Locate the offending sub-key ("txt:") and the line that OPENS its mapping
+	// (the "- key:" directly above it) in the fixture text.
+	lines := strings.Split(string(data), "\n")
+	subKeyLine, mappingLine := 0, 0
+	for i, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "txt:") {
-			subKeyLine = i + 1
-			mappingLine = i // the `- key: some-key` line directly above
+			subKeyLine = i + 1 // 1-based, as the parser reports
+			mappingLine = i    // 1-based line of the item above
 		}
 	}
 	if subKeyLine == 0 {
 		t.Fatalf("precondition: the fixture must carry a `txt:` sub-key")
 	}
-	if subKeyLine == mappingLine {
-		t.Fatal("precondition: the sub-key and the mapping line must differ, or the assertion proves nothing")
+	// The two lines differ by construction, so asserting THAT would prove
+	// nothing. The falsifiable precondition is the fixture's SHAPE: the line
+	// above the sub-key must really be the mapping opener, or "reported at the
+	// sub-key, not at the mapping" is not the distinction being measured.
+	if got := strings.TrimSpace(lines[mappingLine-1]); !strings.HasPrefix(got, "- key:") {
+		t.Fatalf("precondition: line %d above the `txt:` sub-key must open the item mapping, got %q", mappingLine, got)
 	}
 
 	_, viol, err := Lint("testdata/invalid/then-item-bad-shape")
