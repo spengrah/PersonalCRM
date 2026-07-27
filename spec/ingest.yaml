@@ -13,9 +13,12 @@ behaviors:
     given: the daemon ingest events endpoint
     when: a batch is posted to the ingest endpoint
     then:
-      - the endpoint is registered only when event-bus ingest is enabled
-      - a request carrying the Mac-host header is authenticated as a daemon host and that host identity is threaded into batch processing
-      - a request without the host header is authenticated by the global API key and carries no host identity
+      - key: endpoint-registered-when-enabled
+        text: the endpoint is registered only when event-bus ingest is enabled
+      - key: request-carrying-mac-host
+        text: a request carrying the Mac-host header is authenticated as a daemon host and that host identity is threaded into batch processing
+      - key: request-without-host-header
+        text: a request without the host header is authenticated by the global API key and carries no host identity
     provenance: [IngestHandler.IngestEvents, IngestAuthMiddleware, auth.MacHostIDFromContext, EnableEventBusIngest]
 
   - id: ING-002
@@ -26,10 +29,14 @@ behaviors:
     given: a POST to the ingest endpoint
     when: the request envelope is checked before per-event processing
     then:
-      - a body over the size cap is rejected as payload-too-large (413)
-      - a malformed JSON body is rejected with a validation error (400)
-      - an empty events array is rejected with a validation error (400)
-      - a batch exceeding the maximum event count is rejected with a validation error (400)
+      - key: body-over-size-cap
+        text: a body over the size cap is rejected as payload-too-large (413)
+      - key: malformed-json-body-rejected
+        text: a malformed JSON body is rejected with a validation error (400)
+      - key: empty-events-array-rejected
+        text: an empty events array is rejected with a validation error (400)
+      - key: batch-over-max-count-rejected
+        text: a batch exceeding the maximum event count is rejected with a validation error (400)
     provenance: [IngestHandler.IngestEvents, maxIngestBodyBytes, maxBatchSize]
 
   - id: ING-003
@@ -40,9 +47,12 @@ behaviors:
     given: a batch of events that pass request-level checks
     when: the batch is processed
     then:
-      - the HTTP response is success (200) even when every event in the batch is rejected
-      - each rejected event appears in an errors list with its original request-array index and a stable error code
-      - the response reports separate accepted, duplicate, and rejected counts and is deliberately not wrapped in the standard API envelope
+      - key: http-response-success-200
+        text: the HTTP response is success (200) even when every event in the batch is rejected
+      - key: each-rejected-event-appears
+        text: each rejected event appears in an errors list with its original request-array index and a stable error code
+      - key: response-reports-separate-accepted
+        text: the response reports separate accepted, duplicate, and rejected counts and is deliberately not wrapped in the standard API envelope
     provenance: [IngestHandler.IngestEvents, IngestResponse, IngestError]
     notes: Attention items for sessions needing review are surfaced separately (ING-035).
 
@@ -54,10 +64,14 @@ behaviors:
     given: a single event in the batch
     when: the event is validated
     then:
-      - source is required and length-bounded, and source_id is length-bounded
-      - kind is required and must be a known event kind
-      - observed_at is required and must be a non-zero timestamp
-      - payload is required, size-bounded, and must pass structural validation for its kind (a literal JSON null is rejected)
+      - key: source-required-length-bounded
+        text: source is required and length-bounded, and source_id is length-bounded
+      - key: kind-required-must-known
+        text: kind is required and must be a known event kind
+      - key: observed-at-required-non-zero
+        text: observed_at is required and must be a non-zero timestamp
+      - key: payload-required-size-bounded
+        text: payload is required, size-bounded, and must pass structural validation for its kind (a literal JSON null is rejected)
     provenance: [validateIngestEvent, events.IsKnownKind, events.ValidatePayload]
 
   - id: ING-005
@@ -68,8 +82,10 @@ behaviors:
     given: a daemon-emitted event (message, external-contact, meeting-note, or call)
     when: the payload version is checked
     then:
-      - a version below the supported minimum is rejected as an invalid payload
-      - a version above the highest known version is rejected as an invalid payload with an upgrade signal
+      - key: version-below-supported-minimum
+        text: a version below the supported minimum is rejected as an invalid payload
+      - key: version-above-highest-known
+        text: a version above the highest known version is rejected as an invalid payload with an upgrade signal
     provenance: [validateRawMessagePayload, validateCallPayloadVersion, validateExternalContactPayloadVersion, validateMeetingNotePayloadVersion]
     notes: The "upgrade Pi" rejection makes an out-of-range daemon build fail loudly instead of silently dropping unknown fields on a lenient decode.
 
@@ -81,8 +97,10 @@ behaviors:
     given: a daemon batch whose host is revoked between authentication and commit
     when: the batch reaches its in-transaction host-liveness check
     then:
-      - the whole batch is rolled back with nothing persisted
-      - the response is unauthorized (401) so the daemon stops retrying
+      - key: whole-batch-rolled-back
+        text: the whole batch is rolled back with nothing persisted
+      - key: unauthorized-401-stops-retries
+        text: the response is unauthorized (401) so the daemon stops retrying
     provenance: [IngestHandler.IngestEvents, service.ErrHostRevokedDuringBatch]
 
   # --- Auth-path allowlist ---
@@ -95,9 +113,12 @@ behaviors:
     given: an authenticated ingest request
     when: each event's kind is checked against the auth path it arrived on
     then:
-      - daemon-push kinds are accepted only on the host-auth path
-      - internally-published kinds are accepted only on the global-key path
-      - a kind on the wrong path is rejected for that event without failing the batch
+      - key: daemon-push-kinds-accepted
+        text: daemon-push kinds are accepted only on the host-auth path
+      - key: internally-published-kinds-accepted
+        text: internally-published kinds are accepted only on the global-key path
+      - key: kind-wrong-path-rejected
+        text: a kind on the wrong path is rejected for that event without failing the batch
     provenance: [isHostOnlyKind, IngestService.IngestBatch]
     notes: A daemon-push kind is one that belongs to a registered ingest family (ING-024); these kinds have exactly one legitimate producer.
 
@@ -433,8 +454,10 @@ behaviors:
     given: a batch containing meeting-note recordings
     when: a recording lands in a conflict or orphan state
     then:
-      - the response carries a needs-attention entry naming the session and the reason
-      - the field is omitted for daemons that predate it
+      - key: response-carries-needs-attention
+        text: the response carries a needs-attention entry naming the session and the reason
+      - key: field-omitted-daemons-predate
+        text: the field is omitted for daemons that predate it
     provenance: [IngestResponse.NeedsAttention, NeedsAttentionItem]
     notes: What makes a session a conflict or an orphan is imports-matching scope (IMP-025).
 

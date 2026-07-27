@@ -110,7 +110,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	defer cleanup()
 
 	t.Run("CreateContact_MissingRequiredField", func(t *testing.T) {
-		// spec: CON-002[5]
+		// spec: CON-002.invalid-request-rejected-validation
 		requestBody := handlers.CreateContactRequest{
 			FullName: "", // Required field empty
 		}
@@ -134,7 +134,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_InvalidEmailFormat", func(t *testing.T) {
-		// spec: CON-002[5]
+		// spec: CON-002.invalid-request-rejected-validation
 		invalidEmails := []string{
 			"not-an-email",
 			"@domain.com",
@@ -172,7 +172,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_FullNameTooLong", func(t *testing.T) {
-		// spec: CON-002[5]
+		// spec: CON-002.invalid-request-rejected-validation
 		requestBody := handlers.CreateContactRequest{
 			FullName: strings.Repeat("a", 256), // Exceeds max 255
 		}
@@ -195,7 +195,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_InvalidCadence", func(t *testing.T) {
-		// spec: CON-002[5]
+		// spec: CON-002.invalid-request-rejected-validation
 		requestBody := handlers.CreateContactRequest{
 			FullName: "Test User",
 			Cadence:  stringPtr("daily"), // Invalid cadence value
@@ -219,7 +219,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_InvalidProfilePhotoURL", func(t *testing.T) {
-		// spec: CON-002[5]
+		// spec: CON-002.invalid-request-rejected-validation
 		requestBody := handlers.CreateContactRequest{
 			FullName:     "Test User",
 			ProfilePhoto: stringPtr("not-a-url"), // Invalid URL
@@ -262,7 +262,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_FullNameSingleCharAccepted", func(t *testing.T) {
-		// spec: CON-002[0]
+		// spec: CON-002.full-name-required-bounded
 		ns := uuid.New().String()[:8]
 		requestBody := handlers.CreateContactRequest{
 			FullName: "A", // Lower bound of the 1-255 range
@@ -297,7 +297,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_LocationTooLong", func(t *testing.T) {
-		// spec: CON-002[1]
+		// spec: CON-002.location-limited-255-characters
 		requestBody := handlers.CreateContactRequest{
 			FullName: "Test User",
 			Location: stringPtr(strings.Repeat("a", 256)), // Exceeds max 255
@@ -322,7 +322,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_HowMetTooLong", func(t *testing.T) {
-		// spec: CON-002[1]
+		// spec: CON-002.location-limited-255-characters
 		requestBody := handlers.CreateContactRequest{
 			FullName: "Test User",
 			HowMet:   stringPtr(strings.Repeat("a", 501)), // Exceeds max 500
@@ -347,7 +347,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_ProfilePhotoTooLong", func(t *testing.T) {
-		// spec: CON-002[2]
+		// spec: CON-002.profile-photo-must-url
 		// Pin the 500-character cap exactly: a syntactically valid URL of
 		// exactly 500 characters is accepted, and one of exactly 501 is
 		// rejected, so a validator capped anywhere else fails one side.
@@ -399,7 +399,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_MalformedBirthday", func(t *testing.T) {
-		// spec: CON-002[3]
+		// spec: CON-002.birthday-must-parse-valid
 		requestBody := map[string]interface{}{
 			"full_name": "Test User",
 			"birthday":  "not-a-date",
@@ -424,7 +424,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_AllCadenceValuesAccepted", func(t *testing.T) {
-		// spec: CON-002[4]
+		// spec: CON-002.cadence-must-one-weekly
 		validCadences := []string{"weekly", "biweekly", "monthly", "quarterly", "biannual", "annual"}
 
 		for _, cadence := range validCadences {
@@ -461,7 +461,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("CreateContact_AllFieldsMaxLength", func(t *testing.T) {
-		// spec: CON-002[6]
+		// spec: CON-002.valid-request-creates-contact
 		// Use unique email to avoid conflicts in CI
 		uniqueEmail := strings.Repeat("a", 235) + uuid.New().String()[:10] + "@test.com" // Total ~255 chars
 
@@ -591,7 +591,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	// silent-success failure — the same class the operations endpoint exists to
 	// eliminate, merely inverted from silent destruction.
 	t.Run("UpdateContact_RejectsLegacyMethodsField", func(t *testing.T) {
-		// spec: CON-064[0], CON-064[1], CON-064[2]
+		// spec: CON-064.request-rejected-naming-operations, CON-064.explicit-null-empty-list, CON-064.no-other-fields-applied
 		originalName := "Update Test User " + ns
 
 		cases := []struct {
@@ -648,7 +648,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	})
 
 	t.Run("UpdateContact_BlankFullNameRejected", func(t *testing.T) {
-		// spec: CON-047[0]
+		// spec: CON-047.field-validation-matches-create
 		updateReq := handlers.UpdateContactRequest{
 			FullName: "",
 		}
@@ -671,7 +671,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	})
 
 	t.Run("UpdateContact_FullNameTooLongRejected", func(t *testing.T) {
-		// spec: CON-047[0]
+		// spec: CON-047.field-validation-matches-create
 		updateReq := handlers.UpdateContactRequest{
 			FullName: strings.Repeat("a", 256), // Exceeds max 255
 		}
@@ -694,8 +694,8 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	})
 
 	t.Run("UpdateContact_InvalidCadenceRejected", func(t *testing.T) {
-		// spec: CON-047[0]
-		// spec: CON-047[1]
+		// spec: CON-047.field-validation-matches-create
+		// spec: CON-047.invalid-request-rejected-validation
 		updateReq := handlers.UpdateContactRequest{
 			FullName: "Update Test User " + ns,
 			Cadence:  stringPtr("daily"), // Not in the closed set
@@ -720,7 +720,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	})
 
 	t.Run("UpdateContact_UnknownContactNotFound", func(t *testing.T) {
-		// spec: CON-047[2]
+		// spec: CON-047.unknown-soft-deleted-contact
 		unknownID := uuid.New().String()
 		updateReq := handlers.UpdateContactRequest{
 			FullName: "Updated Name",
@@ -744,7 +744,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	})
 
 	t.Run("UpdateContact_SoftDeletedContactNotFound", func(t *testing.T) {
-		// spec: CON-047[2]
+		// spec: CON-047.unknown-soft-deleted-contact
 		createReq := handlers.CreateContactRequest{
 			FullName: "Update SoftDeleted " + ns,
 		}
@@ -785,7 +785,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	})
 
 	t.Run("UpdateContact_ValidRequestReturnsUpdatedContact", func(t *testing.T) {
-		// spec: CON-047[3]
+		// spec: CON-047.valid-request-returns-updated
 		updatedName := "Updated Name " + ns
 		updateReq := handlers.UpdateContactRequest{
 			FullName: updatedName,
@@ -845,7 +845,7 @@ func TestContactAPI_DeleteValidation(t *testing.T) {
 	ns := uuid.New().String()[:8]
 
 	t.Run("DeleteContact_MalformedIDRejected", func(t *testing.T) {
-		// spec: CON-048[0]
+		// spec: CON-048.malformed-id-returns-validation
 		req, _ := http.NewRequest("DELETE", "/api/v1/contacts/not-a-uuid", nil)
 
 		w := httptest.NewRecorder()
@@ -862,7 +862,7 @@ func TestContactAPI_DeleteValidation(t *testing.T) {
 	})
 
 	t.Run("DeleteContact_UnknownContactNotFound", func(t *testing.T) {
-		// spec: CON-048[1]
+		// spec: CON-048.unknown-already-deleted-contact
 		unknownID := uuid.New().String()
 		req, _ := http.NewRequest("DELETE", "/api/v1/contacts/"+unknownID, nil)
 
@@ -880,7 +880,7 @@ func TestContactAPI_DeleteValidation(t *testing.T) {
 	})
 
 	t.Run("DeleteContact_AlreadyDeletedContactNotFound", func(t *testing.T) {
-		// spec: CON-048[1]
+		// spec: CON-048.unknown-already-deleted-contact
 		createReq := handlers.CreateContactRequest{
 			FullName: "Delete Twice " + ns,
 		}
@@ -915,7 +915,7 @@ func TestContactAPI_DeleteValidation(t *testing.T) {
 	})
 
 	t.Run("DeleteContact_SuccessfulDeleteReturnsEmptyNoContent", func(t *testing.T) {
-		// spec: CON-048[2]
+		// spec: CON-048.successful-delete-returns-204
 		createReq := handlers.CreateContactRequest{
 			FullName: "Delete Success " + ns,
 		}
@@ -939,7 +939,7 @@ func TestContactAPI_DeleteValidation(t *testing.T) {
 	})
 
 	t.Run("DeleteContact_NoHardDeleteRouteExposed", func(t *testing.T) {
-		// spec: CON-048[3]
+		// spec: CON-048.no-hard-delete-operation
 		// Registers the contact-resource registrar (RegisterContactRoutes) and
 		// enumerates every DELETE route it serves under /contacts. Other
 		// registrars mount subresources under /contacts/:id/..., but the
@@ -1125,7 +1125,7 @@ func TestContactAPI_QueryValidation(t *testing.T) {
 	})
 
 	t.Run("ListContacts_DefaultPagination", func(t *testing.T) {
-		// spec: CON-017[0]
+		// spec: CON-017.default-page-1-20-rows
 		// Seed more than the default page size so the un-paginated request is
 		// guaranteed to have a 20-row page to return regardless of what other
 		// tests have left in the shared DB.
@@ -1172,7 +1172,7 @@ func TestContactAPI_QueryValidation(t *testing.T) {
 	})
 
 	t.Run("ListContacts_LimitCapAccepted", func(t *testing.T) {
-		// spec: CON-017[1]
+		// spec: CON-017.page-size-capped-1000
 		req, _ := http.NewRequest("GET", "/api/v1/contacts?limit=1000", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -1187,7 +1187,7 @@ func TestContactAPI_QueryValidation(t *testing.T) {
 	})
 
 	t.Run("ListContacts_PaginationMetaAccurate", func(t *testing.T) {
-		// spec: CON-017[2]
+		// spec: CON-017.response-meta-reports-total
 		ns := uuid.New().String()[:8]
 		const seeded = 7
 		var ids []string
@@ -1234,7 +1234,7 @@ func TestContactAPI_QueryValidation(t *testing.T) {
 	})
 
 	t.Run("ListContacts_CadenceFilter", func(t *testing.T) {
-		// spec: CON-018[2]
+		// spec: CON-018.cadence-filter-closed-set
 		ns := uuid.New().String()[:8]
 		var withCadenceIDs, withoutCadenceIDs []string
 
@@ -1309,7 +1309,7 @@ func TestContactAPI_QueryValidation(t *testing.T) {
 	})
 
 	t.Run("ListContacts_InvalidCadenceFilter", func(t *testing.T) {
-		// spec: CON-018[4]
+		// spec: CON-018.anything-else-rejected-validation
 		req, _ := http.NewRequest("GET", "/api/v1/contacts?cadence_filter=bogus", nil)
 
 		w := httptest.NewRecorder()
@@ -1326,7 +1326,7 @@ func TestContactAPI_QueryValidation(t *testing.T) {
 	})
 
 	t.Run("ListContacts_InvalidFollowupFilter", func(t *testing.T) {
-		// spec: CON-018[4]
+		// spec: CON-018.anything-else-rejected-validation
 		req, _ := http.NewRequest("GET", "/api/v1/contacts?followup_filter=bogus", nil)
 
 		w := httptest.NewRecorder()
@@ -1358,7 +1358,7 @@ func TestContactAPI_GetContactValidation(t *testing.T) {
 	defer cleanup()
 
 	t.Run("GetContact_InvalidUUID", func(t *testing.T) {
-		// spec: CON-005[2]
+		// spec: CON-005.malformed-id-returns-validation
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/not-a-uuid", nil)
 
 		w := httptest.NewRecorder()
@@ -1392,7 +1392,7 @@ func TestContactAPI_GetContactValidation(t *testing.T) {
 	})
 
 	t.Run("GetContact_SoftDeleted_NotFound", func(t *testing.T) {
-		// spec: CON-005[1]
+		// spec: CON-005.unknown-soft-deleted-contact
 		ns := uuid.New().String()[:8]
 		createReq := handlers.CreateContactRequest{
 			FullName: "SoftDeleted Test " + ns,

@@ -102,7 +102,7 @@ func alwaysMatch(_ []byte, _ []byte) error { return nil }
 // the middleware read and the rotate tx's FOR UPDATE lookup).
 // Deterministically exercises the handler's response shape without
 // needing tx-internal hooks.
-// spec: MAC-010[3]
+// spec: MAC-010.missing-revoked-host
 func TestRotateKey_HostRevokedBetweenMiddlewareAndTx(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -155,7 +155,7 @@ func TestRotateKey_HostRevokedBetweenMiddlewareAndTx(t *testing.T) {
 // are proven at the service layer by
 // TestMacHostRotateKey_ConcurrentRotation_DifferentTokens/_SameToken),
 // so this pins the wire contract without a real race.
-// spec: MAC-010[2]
+// spec: MAC-010.rotated-out-key-stale-auth
 func TestRotateKey_ConcurrentRotationLoser_MapsStaleAuthTo401(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -203,7 +203,7 @@ func TestRotateKey_ConcurrentRotationLoser_MapsStaleAuthTo401(t *testing.T) {
 // TestHeartbeat_HostRevokedBetweenMiddlewareAndTx covers the
 // handler's db.ErrNotFound -> 401 UNKNOWN_HOST branch: the host was
 // revoked between the middleware's read and the heartbeat write.
-// spec: MAC-011[3]
+// spec: MAC-011.host-revoked-between-authentication
 func TestHeartbeat_HostRevokedBetweenMiddlewareAndTx(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

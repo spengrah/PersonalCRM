@@ -93,7 +93,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await expect(page.getByTestId('mac-host-row')).toHaveCount(0)
   })
 
-  // spec: MAC-018[3]
+  // spec: MAC-018.admin-can-mint-fresh
   test('opens pairing modal with a token when Pair new Mac is clicked', async ({ page }) => {
     // No host seeding or reset needed: the pairing modal works regardless
     // of how many hosts are listed (parallel workers may own one).
@@ -133,7 +133,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await expect(dialog).not.toBeVisible()
   })
 
-  // spec: MAC-018[0]
+  // spec: MAC-018.list-returns-live-hosts
   test('renders paired host with permissions and source-health badges', async ({
     page,
     request,
@@ -190,7 +190,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await deleteAllMacHosts(request)
   })
 
-  // spec: MAC-046[0]
+  // spec: MAC-046.backfill-complete-shows-count
   test('renders icloud_contacts contact count when backfill_complete (#327)', async ({
     page,
     request,
@@ -257,7 +257,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await deleteAllMacHosts(request)
   })
 
-  // spec: MAC-046[1]
+  // spec: MAC-046.backfill-in-progress-placeholder
   test('renders dash for icloud_contacts when backfill_complete is false (#327)', async ({
     page,
     request,
@@ -301,7 +301,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await deleteAllMacHosts(request)
   })
 
-  // spec: MAC-018[3]
+  // spec: MAC-018.admin-can-mint-fresh
   test('opens rotate-key modal with templated CLI command when Rotate Key is clicked', async ({
     page,
     request,
@@ -361,7 +361,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await deleteAllMacHosts(request)
   })
 
-  // spec: MAC-018[3], MAC-018[0]
+  // spec: MAC-018.admin-can-mint-fresh, MAC-018.list-returns-live-hosts
   test('uninstall flow removes a paired host', async ({ page, request }) => {
     await deleteAllMacHosts(request)
     await seedMacHost(request, { hostname: 'e2e-uninstall-me', protocol_version: 1 })

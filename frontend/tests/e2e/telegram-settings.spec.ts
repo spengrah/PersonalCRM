@@ -18,7 +18,7 @@ async function mockStatus(page: Page, data: Record<string, unknown>) {
 const telegramRegion = (page: Page) => page.getByRole('region', { name: 'Telegram' })
 
 test.describe('Telegram Settings @area:settings', () => {
-  // spec: SET-027[0]
+  // spec: SET-027.section-present-settings-surface
   test('shows Telegram section on settings page', async ({ page }) => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
@@ -29,7 +29,7 @@ test.describe('Telegram Settings @area:settings', () => {
     })
   })
 
-  // spec: SET-027[1]
+  // spec: SET-027.not-configured-state-when-disabled
   test('not-configured backend collapses to configuration guidance', async ({ page }) => {
     // Force the not-configured branch deterministically: the section keys it
     // off a 404 from the status endpoint (telegram routes are not registered
@@ -57,7 +57,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(section.getByText('TELEGRAM_API_HASH')).toBeVisible()
   })
 
-  // spec: TGM-038[0]
+  // spec: TGM-038.starting-connect-reveals-phone
   test('auth flow: phone input shows on Connect click', async ({ page }) => {
     await mockStatus(page, { status: 'disconnected', connected: false })
 
@@ -77,7 +77,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible()
   })
 
-  // spec: TGM-038[1]
+  // spec: TGM-038.started-flow-advances-code
   test('auth flow: phone input → code input transition', async ({ page }) => {
     await mockStatus(page, { status: 'disconnected', connected: false })
 
@@ -123,7 +123,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByLabel('Verification Code')).toBeVisible()
   })
 
-  // spec: TGM-038[2]
+  // spec: TGM-038.valid-code-either-connects
   test('auth flow: code → connected transition', async ({ page }) => {
     await mockStatus(page, { status: 'disconnected', connected: false })
 
@@ -180,7 +180,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
 
-  // spec: TGM-038[2], TGM-038[3]
+  // spec: TGM-038.valid-code-either-connects, TGM-038.valid-password-connects-account
   test('auth flow: code → 2FA → connected transition', async ({ page }) => {
     await mockStatus(page, { status: 'disconnected', connected: false })
 
@@ -252,7 +252,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
 
-  // spec: TGM-038[4], TGM-039[0], TGM-039[2]
+  // spec: TGM-038.connected-state-shows-account, TGM-039.account-username-phone-number, TGM-039.disconnect-offered-and-confirmed
   test('shows connected state with username', async ({ page }) => {
     // Mock status as connected
     await mockStatus(page, {
@@ -275,7 +275,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
 
-  // spec: TGM-039[2]
+  // spec: TGM-039.disconnect-offered-and-confirmed
   test('disconnect returns the section to the disconnected state', async ({ page }) => {
     // One handler covers DELETE /auth and GET /auth/status: the glob matches
     // both, so branch on method + path and route.fallback() anything else.
@@ -337,7 +337,7 @@ test.describe('Telegram Settings @area:settings', () => {
     })
   })
 
-  // spec: TGM-040[0], TGM-040[1]
+  // spec: TGM-040.failure-reason-shown-user, TGM-040.flow-stays-code-entry
   test('shows error on invalid code', async ({ page }) => {
     await mockStatus(page, { status: 'disconnected', connected: false })
 
@@ -390,7 +390,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByLabel('Verification Code')).toBeVisible()
   })
 
-  // spec: TGM-041[0]
+  // spec: TGM-041.discovered-group-chats-listed
   test('group chat management: shows chat list', async ({ page }) => {
     await mockStatus(page, { status: 'connected', connected: true, username: 'testuser' })
 
@@ -432,7 +432,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(section.getByText('25 members').first()).toBeVisible()
   })
 
-  // spec: TGM-041[1]
+  // spec: TGM-041.before-any-chats-discovered
   test('group chat management: empty state', async ({ page }) => {
     await mockStatus(page, { status: 'connected', connected: true, username: 'testuser' })
 
@@ -452,7 +452,7 @@ test.describe('Telegram Settings @area:settings', () => {
     })
   })
 
-  // spec: TGM-039[1]
+  // spec: TGM-039.backfill-progress-counts-shown
   test('group chat management: backfill progress', async ({ page }) => {
     await mockStatus(page, {
       status: 'connected',
@@ -478,7 +478,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(page.getByText(/Syncing messages.*15\/42/)).toBeVisible({ timeout: 10000 })
   })
 
-  // spec: TGM-041[2]
+  // spec: TGM-041.changing-tracking-choice-persists
   test('group chat management: toggle auto to ignored', async ({ page }) => {
     let currentStatus = 'auto'
     let currentTracked = true
@@ -545,7 +545,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await expect(select).toHaveValue('ignored', { timeout: 5000 })
   })
 
-  // spec: TGM-041[2]
+  // spec: TGM-041.changing-tracking-choice-persists
   test('group chat management: toggle auto to tracked', async ({ page }) => {
     let currentStatus = 'auto'
 

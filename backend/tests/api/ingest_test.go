@@ -211,7 +211,7 @@ func uniqueIngestSource(prefix string) string {
 	return prefix + "-" + uuid.NewString()
 }
 
-// spec: ING-001[0], ING-007[1], ING-004[1]
+// spec: ING-001.endpoint-registered-when-enabled, ING-007.internally-published-kinds-accepted, ING-004.kind-required-must-known
 func TestIngest_ValidBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -244,7 +244,7 @@ func TestIngest_ValidBatch(t *testing.T) {
 	require.Equal(t, int64(3), count)
 }
 
-// spec: ING-001[2]
+// spec: ING-001.request-without-host-header
 func TestIngest_AuthFailure_MissingKey(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -261,7 +261,7 @@ func TestIngest_AuthFailure_MissingKey(t *testing.T) {
 	require.Contains(t, w.Body.String(), "MISSING_API_KEY")
 }
 
-// spec: ING-001[2]
+// spec: ING-001.request-without-host-header
 func TestIngest_AuthFailure_InvalidKey(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -278,7 +278,7 @@ func TestIngest_AuthFailure_InvalidKey(t *testing.T) {
 	require.Contains(t, w.Body.String(), "INVALID_API_KEY")
 }
 
-// spec: ING-002[1]
+// spec: ING-002.malformed-json-body-rejected
 func TestIngest_MalformedJSON(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -293,7 +293,7 @@ func TestIngest_MalformedJSON(t *testing.T) {
 // a mixed batch where events are missing source / kind / payload /
 // observed_at must return HTTP 200 with those events surfaced in
 // errors[] — NOT 400'd wholesale at gin's bind step.
-// spec: ING-003[1]
+// spec: ING-003.each-rejected-event-appears
 func TestIngest_MissingFields(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -345,20 +345,20 @@ func TestIngest_MissingFields(t *testing.T) {
 		require.Equal(t, "MISSING_FIELD", e.Code)
 		indexes[e.Index] = e.Message
 	}
-	// spec: ING-004[2]
+	// spec: ING-004.observed-at-required-non-zero
 	require.Contains(t, indexes, 1)
 	require.Contains(t, indexes[1], "observed_at")
-	// spec: ING-004[0]
+	// spec: ING-004.source-required-length-bounded
 	require.Contains(t, indexes, 2)
 	require.Contains(t, indexes[2], "source")
-	// spec: ING-004[1]
+	// spec: ING-004.kind-required-must-known
 	require.Contains(t, indexes, 3)
 	require.Contains(t, indexes[3], "kind")
-	// spec: ING-004[3]
+	// spec: ING-004.payload-required-size-bounded
 	require.Contains(t, indexes, 4)
 	require.Contains(t, indexes[4], "payload")
 	require.Contains(t, indexes, 5)
-	// spec: ING-004[2]
+	// spec: ING-004.observed-at-required-non-zero
 	require.Contains(t, indexes[5], "observed_at")
 
 	// The valid event at index 0 persisted.
@@ -371,7 +371,7 @@ func TestIngest_MissingFields(t *testing.T) {
 // would silently decode null into a zero-value struct, so the ingest
 // boundary must reject it as PAYLOAD_INVALID rather than persist a row
 // with all-zero payload fields.
-// spec: ING-003[0], ING-004[3]
+// spec: ING-003.http-response-success-200, ING-004.payload-required-size-bounded
 func TestIngest_NullPayload(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -402,7 +402,7 @@ func TestIngest_NullPayload(t *testing.T) {
 	require.Equal(t, int64(0), count)
 }
 
-// spec: ING-004[1]
+// spec: ING-004.kind-required-must-known
 func TestIngest_UnknownKind(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -430,7 +430,7 @@ func TestIngest_UnknownKind(t *testing.T) {
 	require.Equal(t, "UNKNOWN_KIND", resp.Errors[0].Code)
 }
 
-// spec: ING-004[3]
+// spec: ING-004.payload-required-size-bounded
 func TestIngest_PayloadStructurallyInvalid(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -484,7 +484,7 @@ func padUniqueTo(n int) string {
 	return id + strings.Repeat("a", n-len(id))
 }
 
-// spec: ING-004[0]
+// spec: ING-004.source-required-length-bounded
 func TestIngest_SourceLengthBound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -528,7 +528,7 @@ func TestIngest_SourceLengthBound(t *testing.T) {
 	})
 }
 
-// spec: ING-004[0]
+// spec: ING-004.source-required-length-bounded
 func TestIngest_SourceIDLengthBound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -584,7 +584,7 @@ func TestIngest_SourceIDLengthBound(t *testing.T) {
 // being large). Description is padded byte-for-byte (plain ASCII, no
 // JSON escaping) so the computed overhead is exact.
 //
-// spec: ING-004[3]
+// spec: ING-004.payload-required-size-bounded
 func TestIngest_PayloadSizeBound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -671,7 +671,7 @@ func TestIngest_PayloadSizeBound(t *testing.T) {
 	})
 }
 
-// spec: ING-002[3]
+// spec: ING-002.batch-over-max-count-rejected
 func TestIngest_BatchTooLarge(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -692,7 +692,7 @@ func TestIngest_BatchTooLarge(t *testing.T) {
 	require.Contains(t, w.Body.String(), "VALIDATION_ERROR")
 }
 
-// spec: ING-002[2]
+// spec: ING-002.empty-events-array-rejected
 func TestIngest_EmptyBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -809,7 +809,7 @@ func TestIngest_NullSourceID_NotDeduped(t *testing.T) {
 // criterion: EVENT_BUS_INGEST_ENABLED=false → 404. The route is not
 // registered; gin's default NoRoute handler emits 404 without running the
 // v1 group's API-key middleware.
-// spec: ING-001[0]
+// spec: ING-001.endpoint-registered-when-enabled
 func TestIngest_GateDisabled_Returns404(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -842,7 +842,7 @@ func TestIngest_GateDisabled_NoKey_StillReturns404(t *testing.T) {
 	require.NotContains(t, w.Body.String(), "MISSING_API_KEY")
 }
 
-// spec: ING-003[2]
+// spec: ING-003.response-reports-separate-accepted
 func TestIngest_MixedBatch(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -889,7 +889,7 @@ func TestIngest_MixedBatch(t *testing.T) {
 // per-payload size check would also reject this but the MaxBytesReader
 // wrap at the handler boundary fires first because it's enforced during
 // JSON decode, before any per-field validation runs.
-// spec: ING-002[0]
+// spec: ING-002.body-over-size-cap
 func TestIngest_BodyTooLarge_Returns413(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -914,7 +914,7 @@ func TestIngest_BodyTooLarge_Returns413(t *testing.T) {
 // production IngestResponse struct cannot distinguish an absent key
 // from `"needs_attention": null` or `[]` — hence the raw map decode
 // with a key-presence check.
-// spec: ING-035[1]
+// spec: ING-035.field-omitted-daemons-predate
 func TestIngest_NeedsAttentionKeyAbsentWhenNoAttention(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

@@ -23,7 +23,7 @@ import (
 // length-checked only, and telegram/discord/twitter have no format rule at all.
 // The handle and phone rows are the ones that reach this check in production.
 //
-// spec: CON-015[2]
+// spec: CON-015.empty-normalized-value-rejected
 func TestRequireTypeAndValue_RejectsValuesEmptyAfterNormalization(t *testing.T) {
 	t.Parallel()
 

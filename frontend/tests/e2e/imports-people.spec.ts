@@ -14,7 +14,7 @@ test.describe('Imports People tab — Anarlog source @area:imports', () => {
     await testApi.cleanup()
   })
 
-  // spec: IMP-026[0]
+  // spec: IMP-026.people-tab-default-holds
   test('filters to anarlog_humans candidates via the Anarlog pill', async ({ page }) => {
     await testApi.seedExternalContacts([
       {

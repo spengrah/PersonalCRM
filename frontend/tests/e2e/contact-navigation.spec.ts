@@ -20,7 +20,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should disable keyboard navigation in edit mode', async ({ page }) => {
-    // spec: CON-040[1]
+    // spec: CON-040.arrows-inert-while-editing
     // Create 2 contacts
     const { ids } = await testApi.seedContacts([
       { full_name: 'Edit Mode Test A' },
@@ -80,7 +80,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should not navigate when typing in input fields', async ({ page }) => {
-    // spec: CON-040[1]
+    // spec: CON-040.arrows-inert-while-editing
     // Create 2 contacts
     const { ids } = await testApi.seedContacts([
       { full_name: 'Input Field Test A' },
@@ -127,7 +127,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should preserve URL context (sort, search) during navigation', async ({ page }) => {
-    // spec: CON-060[0]
+    // spec: CON-060.sort-order-search-context
     // Create contacts
     const { ids } = await testApi.seedContacts([
       { full_name: 'Context Test Alpha', location: 'New York' },
@@ -158,7 +158,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should navigate via navigation bar buttons', async ({ page }) => {
-    // spec: CON-059[0], CON-059[1]
+    // spec: CON-059.buttons-move-adjacent-contact, CON-059.position-indicator-reports-contact
     // Create 3 contacts with a known name-asc order so a pass proves real
     // movement to the ADJACENT contact, not just "some navigation happened".
     const { ids } = await testApi.seedContacts([
@@ -192,7 +192,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('should restore search and sort state after Escape back to list', async ({ page }) => {
-    // spec: CON-040[3]
+    // spec: CON-040.escape-discards-edit-mode
     // Two contacts so search + sort visibly shape the list
     await testApi.seedContacts([
       { full_name: 'Restore State Alpha' },
@@ -232,7 +232,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   test('detail prev/next follows the same default (cadence) ordering as the list', async ({
     page,
   }) => {
-    // spec: CON-038[1]
+    // spec: CON-038.detail-prev-next-same-default
     // Navigate by CLICKING the seeded row in the default (cadence) list — the
     // detail must CARRY that ordering context, so prev/next walks the same
     // cadence order rather than an ordering hand-fed through the URL. Names are
@@ -298,7 +298,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   test('arrow keys move to the previous/next contact and disable at both boundaries @smoke', async ({
     page,
   }) => {
-    // spec: CON-040[0]
+    // spec: CON-040.left-right-arrows-move
     // Seed a known name-asc order and isolate the set via search, so a pass
     // proves real movement to the adjacent contact.
     const { ids } = await testApi.seedContacts([
@@ -349,7 +349,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('Enter opens edit mode when focus is outside an input', async ({ page }) => {
-    // spec: CON-040[2]
+    // spec: CON-040.enter-opens-edit-mode
     const { ids } = await testApi.seedContacts([{ full_name: 'Enter Edit Test' }])
     const fullName = `${testApi.prefix}-Enter Edit Test`
 
@@ -371,7 +371,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     page,
     request,
   }) => {
-    // spec: CON-040[3]
+    // spec: CON-040.escape-discards-edit-mode
     const { ids } = await testApi.seedContacts([{ full_name: 'Discard Edit Test' }])
     const contactId = ids[0]
     const fullName = `${testApi.prefix}-Discard Edit Test`
@@ -419,7 +419,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   })
 
   test('arrows are inert while focus is in an input outside edit mode', async ({ page }) => {
-    // spec: CON-040[1]
+    // spec: CON-040.arrows-inert-while-editing
     // The Log Interaction modal keeps keyboard nav ENABLED (it is not edit
     // mode), so focusing its input exercises the hook's input-target guard
     // specifically — unlike edit mode, which disables the whole hook and would
@@ -581,7 +581,7 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
   test('the Back to list control restores full context AND page via the real journey', async ({
     page,
   }) => {
-    // spec: CON-065[0], CON-065[1]
+    // spec: CON-065.visible-return-list-control, CON-065.returning-lands-list-page
     const ids = await seedBackNavFixture()
     await journeyToBackNav21Detail(page, ids)
 
@@ -593,7 +593,7 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
   })
 
   test('Escape restores full context AND page identically to the button', async ({ page }) => {
-    // spec: CON-040[3], CON-065[1]
+    // spec: CON-040.escape-discards-edit-mode, CON-065.returning-lands-list-page
     const ids = await seedBackNavFixture()
     await journeyToBackNav21Detail(page, ids)
 
@@ -605,7 +605,7 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
   })
 
   test('an out-of-range ?page deep-link clamps to the last valid page', async ({ page }) => {
-    // spec: CON-058[3]
+    // spec: CON-058.page-past-end-clamps
     // A stale bookmark / hand-edited URL asking for a page past the end must
     // land on the last valid page with real rows, not an empty table with the
     // pagination controls hidden. The fixture is 21 has_cadence contacts → 2
@@ -638,7 +638,7 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
   test('an out-of-range ?page on a single-page list clamps to the bare page-1 URL', async ({
     page,
   }) => {
-    // spec: CON-058[3]
+    // spec: CON-058.page-past-end-clamps
     // When the whole filtered set fits on one page, the clamp target is page 1,
     // which buildContactListUrl renders as the bare (page-less) URL — the
     // distinct recovery branch from the multi-page clamp above.
@@ -661,7 +661,7 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
   })
 
   test('changing sort/search/filter from a later page resets to page 1', async ({ page }) => {
-    // spec: CON-066[0]
+    // spec: CON-066.list-returns-first-page
     await seedBackNavFixture()
     const prefix = testApi.prefix
     const backNav21 = `${prefix}-Back Nav 21`
@@ -731,7 +731,7 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
   test('using pagination reflects the page into the URL and survives a reload', async ({
     page,
   }) => {
-    // spec: CON-058[2]
+    // spec: CON-058.current-page-reflected-in-url
     await seedBackNavFixture()
     const prefix = testApi.prefix
     await page.goto(

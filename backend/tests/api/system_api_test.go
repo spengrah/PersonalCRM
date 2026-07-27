@@ -140,7 +140,7 @@ func TestSystemAPI_ExportData(t *testing.T) {
 	}
 
 	t.Run("Export_IsJSONAttachmentWrappingEnvelope", func(t *testing.T) {
-		// spec: SET-030[0]
+		// spec: SET-030.response-json-attachment-content
 		w, body := exportBody(t)
 
 		assert.Equal(t, "attachment; filename=crm_export.json", w.Header().Get("Content-Disposition"))
@@ -156,7 +156,7 @@ func TestSystemAPI_ExportData(t *testing.T) {
 	})
 
 	t.Run("Export_EnvelopeCarriesVersionAndTimestamp", func(t *testing.T) {
-		// spec: SET-030[1]
+		// spec: SET-030.envelope-carries-version-tag
 		_, body := exportBody(t)
 
 		envelope, ok := body["data"].(map[string]interface{})
@@ -170,7 +170,7 @@ func TestSystemAPI_ExportData(t *testing.T) {
 	})
 
 	t.Run("Export_ContactsOnlyNoInteractionsOrNotes", func(t *testing.T) {
-		// spec: SET-030[2]
+		// spec: SET-030.exported-dataset-contacts-only
 		// Snapshot the live contact count BEFORE the export so the guard
 		// below reasons about the dataset the export saw; the margin absorbs
 		// concurrent writers between this read and the export request.
@@ -225,7 +225,7 @@ func TestSystemAPI_ExportData(t *testing.T) {
 	})
 
 	t.Run("Export_ContactsReadFailureReturns500", func(t *testing.T) {
-		// spec: SET-030[3]
+		// spec: SET-030.contacts-read-failure-500
 		// The repository has no injection seam, so force a genuine read
 		// failure: a handler whose repository sits on an already-closed pool.
 		failingDB := newSystemTestDatabase(t)

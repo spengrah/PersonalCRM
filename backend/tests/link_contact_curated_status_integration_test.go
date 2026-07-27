@@ -191,7 +191,7 @@ func TestLinkContact_CuratedWithCadence_LandsImported(t *testing.T) {
 // Bare link (no curation signal) → match_status='matched'. This is the
 // sole owner of the bare-link branch: the modal always curates, so the
 // state is unreachable from the browser (waived in spec/imports-matching).
-// spec: IMP-007[2], IMP-013[1]
+// spec: IMP-007.matched-marks-rows-linked, IMP-013.bare-link-no-curation
 func TestLinkContact_Bare_LandsMatched(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
@@ -232,7 +232,7 @@ func TestLinkContact_MethodsCuratedDeselectAll_LandsImported(t *testing.T) {
 
 // Link-only import guard: a gmail_correspondence external row cannot be
 // imported as a new contact → 403, and the row stays unmatched.
-// spec: IMP-011[1]
+// spec: IMP-011.link-only-source-forbidden
 func TestImportContact_LinkOnlySource_Forbidden(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)

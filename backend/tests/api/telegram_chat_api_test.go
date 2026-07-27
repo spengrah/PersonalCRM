@@ -205,7 +205,7 @@ func TestChatAPI_ListChats(t *testing.T) {
 	assert.True(t, large, "large group should be in response")
 }
 
-// spec: TGM-014[0]
+// spec: TGM-014.list-returns-only-group
 func TestChatAPI_ListChats_ExcludesPrivate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -270,7 +270,7 @@ func TestChatAPI_ListChats_ExcludesPrivate(t *testing.T) {
 	assert.True(t, foundGroup, "group chat should appear carrying effective_tracked")
 }
 
-// spec: TGM-014[1]
+// spec: TGM-014.status-update-closed-set
 func TestChatAPI_UpdateStatus_Ignored(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -311,7 +311,7 @@ func TestChatAPI_UpdateStatus_Ignored(t *testing.T) {
 	assert.False(t, resp.Data.EffectiveTracked)
 }
 
-// spec: TGM-014[1]
+// spec: TGM-014.status-update-closed-set
 func TestChatAPI_UpdateStatus_TrackedOverridesLarge(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -352,7 +352,7 @@ func TestChatAPI_UpdateStatus_TrackedOverridesLarge(t *testing.T) {
 	assert.True(t, resp.Data.EffectiveTracked)
 }
 
-// spec: TGM-014[1]
+// spec: TGM-014.status-update-closed-set
 func TestChatAPI_UpdateStatus_Auto(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -392,7 +392,7 @@ func TestChatAPI_UpdateStatus_Auto(t *testing.T) {
 	assert.Equal(t, true, raw.Data["effective_tracked"], "small group under auto should be effective_tracked")
 }
 
-// spec: TGM-014[1]
+// spec: TGM-014.status-update-closed-set
 func TestChatAPI_UpdateStatus_InvalidStatus(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -411,7 +411,7 @@ func TestChatAPI_UpdateStatus_InvalidStatus(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// spec: TGM-014[2]
+// spec: TGM-014.non-numeric-chat-id
 func TestChatAPI_UpdateStatus_NotFound(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -432,7 +432,7 @@ func TestChatAPI_UpdateStatus_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-// spec: TGM-014[2]
+// spec: TGM-014.non-numeric-chat-id
 func TestChatAPI_UpdateStatus_NonNumericChatID(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

@@ -2169,7 +2169,7 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, response.Success)
 		require.NotNil(t, response.Error)
-		// spec: IMP-011[3]
+		// spec: IMP-011.unknown-candidate-not-found
 		assert.Equal(t, "NOT_FOUND", response.Error.Code)
 	})
 
@@ -2214,7 +2214,7 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		// spec: IMP-011[0]
+		// spec: IMP-011.already-processed-candidate-rejected
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 
 		var response api.APIResponse
@@ -2254,7 +2254,7 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 		err = json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 		assert.False(t, response.Success)
-		// spec: IMP-011[2]
+		// spec: IMP-011.import-without-name-rejected
 		assert.Contains(t, response.Error.Message, "name")
 	})
 

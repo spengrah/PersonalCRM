@@ -67,7 +67,7 @@ func TestResolveLink_PathParamInvalidUUID(t *testing.T) {
 
 // TestResolveLink_EmptyBody — handler returns 400 when the body is
 // empty (action is required).
-// spec: NTS-018[0]
+// spec: NTS-018.action-required-must-link
 func TestResolveLink_EmptyBody(t *testing.T) {
 	router := newTestHandler(t, nil)
 	id := uuid.New().String()
@@ -76,7 +76,7 @@ func TestResolveLink_EmptyBody(t *testing.T) {
 }
 
 // TestResolveLink_NullBody — handler returns 400 on literal null JSON.
-// spec: NTS-018[0]
+// spec: NTS-018.action-required-must-link
 func TestResolveLink_NullBody(t *testing.T) {
 	router := newTestHandler(t, nil)
 	id := uuid.New().String()
@@ -86,7 +86,7 @@ func TestResolveLink_NullBody(t *testing.T) {
 
 // TestResolveLink_UnknownAction — handler returns 400 for an action
 // outside {link, none_of_these}.
-// spec: NTS-018[0]
+// spec: NTS-018.action-required-must-link
 func TestResolveLink_UnknownAction(t *testing.T) {
 	router := newTestHandler(t, nil)
 	id := uuid.New().String()
@@ -97,7 +97,7 @@ func TestResolveLink_UnknownAction(t *testing.T) {
 
 // TestResolveLink_LinkMissingKindAndID — action=link without kind+id
 // returns 400.
-// spec: NTS-018[1]
+// spec: NTS-018.action-link-requires-kind
 func TestResolveLink_LinkMissingKindAndID(t *testing.T) {
 	router := newTestHandler(t, nil)
 	id := uuid.New().String()
@@ -108,7 +108,7 @@ func TestResolveLink_LinkMissingKindAndID(t *testing.T) {
 }
 
 // TestResolveLink_LinkMissingID — action=link with only kind returns 400.
-// spec: NTS-018[1]
+// spec: NTS-018.action-link-requires-kind
 func TestResolveLink_LinkMissingID(t *testing.T) {
 	router := newTestHandler(t, nil)
 	id := uuid.New().String()
@@ -118,7 +118,7 @@ func TestResolveLink_LinkMissingID(t *testing.T) {
 }
 
 // TestResolveLink_LinkMissingKind — action=link with only id returns 400.
-// spec: NTS-018[1]
+// spec: NTS-018.action-link-requires-kind
 func TestResolveLink_LinkMissingKind(t *testing.T) {
 	router := newTestHandler(t, nil)
 	id := uuid.New().String()
@@ -129,7 +129,7 @@ func TestResolveLink_LinkMissingKind(t *testing.T) {
 
 // TestResolveLink_LinkInvalidKind — action=link with an unrecognized
 // kind returns 400.
-// spec: NTS-018[1]
+// spec: NTS-018.action-link-requires-kind
 func TestResolveLink_LinkInvalidKind(t *testing.T) {
 	router := newTestHandler(t, nil)
 	id := uuid.New().String()
@@ -141,7 +141,7 @@ func TestResolveLink_LinkInvalidKind(t *testing.T) {
 
 // TestResolveLink_LinkInvalidIDFormat — action=link with a malformed
 // uuid returns 400.
-// spec: NTS-018[1]
+// spec: NTS-018.action-link-requires-kind
 func TestResolveLink_LinkInvalidIDFormat(t *testing.T) {
 	router := newTestHandler(t, nil)
 	id := uuid.New().String()
@@ -178,7 +178,7 @@ func TestResolveLink_NoneOfTheseValidBody(t *testing.T) {
 
 // TestListNeedsAttention_InvalidHostID — bad host_id query param
 // returns 400.
-// spec: NTS-025[0]
+// spec: NTS-025.malformed-host-id-query
 func TestListNeedsAttention_InvalidHostID(t *testing.T) {
 	router := newTestHandler(t, nil)
 	w := httptest.NewRecorder()

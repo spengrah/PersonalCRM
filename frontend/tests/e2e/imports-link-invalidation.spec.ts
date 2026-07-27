@@ -52,7 +52,7 @@ test.describe('Import link invalidates contact detail @area:imports', () => {
     await testApi.cleanup()
   })
 
-  // spec: IMP-040[0]
+  // spec: IMP-040.returning-detail-shows-method
   test("linked candidate's new method appears on the contact detail without a refresh", async ({
     page,
     request,

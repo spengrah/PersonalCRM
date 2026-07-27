@@ -8,7 +8,7 @@ test.describe('Navigation @area:navigation', () => {
   test('persistent nav links all five sections and marks the current one active', async ({
     page,
   }) => {
-    // spec: DSH-002[0], DSH-002[1]
+    // spec: DSH-002.wide-sm-viewports-links, DSH-002.link-matching-current-section
     // On EVERY primary surface, all five section links must be present with
     // their correct hrefs (DSH-002[0]), and the link matching the current
     // section must carry aria-current="page" while a non-current link does
@@ -42,7 +42,7 @@ test.describe('Navigation @area:navigation', () => {
   })
 
   test('clicking a nav link navigates to that section', async ({ page }) => {
-    // spec: DSH-002[0]
+    // spec: DSH-002.wide-sm-viewports-links
     // The href loop above proves the links point at the right routes; this
     // proves the click-through actually lands on the destination surface.
     await page.goto('/dashboard')
@@ -57,7 +57,7 @@ test.describe('Navigation @area:navigation', () => {
   })
 
   test('navigation remains visible when scrolling', async ({ page }) => {
-    // spec: DSH-002[2]
+    // spec: DSH-002.navigation-bar-stays-visible
     // Navigate to contacts page (has enough content to scroll)
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')

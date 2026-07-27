@@ -89,14 +89,18 @@ behaviors:
     given: an external contact row
     when: its match status changes
     then:
-      - unmatched rows await review in the queue
-      - imported marks rows resolved with human curation (import-as-new, or a curated link)
-      - matched marks rows linked without curation (bare link, or source auto-match)
-      - ignored is terminal and sticky; the row never resurfaces in the queue
+      - key: unmatched-rows-await-review
+        text: unmatched rows await review in the queue
+      - key: imported-marks-rows-resolved
+        text: imported marks rows resolved with human curation (import-as-new, or a curated link)
+      - key: matched-marks-rows-linked
+        text: matched marks rows linked without curation (bare link, or source auto-match)
+      - key: ignored-terminal-sticky-row
+        text: ignored is terminal and sticky; the row never resurfaces in the queue
     provenance: [external_contact match_status CHECK, LinkContact curated signal, Ignore]
     notes: imported-vs-matched is the discriminator that drives auto-propagate vs suggest in reconciliation (IMP-017) — imported means a human curated the method set.
     waivers:
-      - then: 2
+      - then: matched-marks-rows-linked
         reason: the matched (uncurated bare-link) state needs a link with NO curation signal — a zero-method candidate against a cadence-less contact with the name untouched — a degenerate path the modal offers no stable affordance for; the discriminator is owned by the Go integration test TestLinkContact_Bare_LandsMatched
 
   - id: IMP-008
@@ -148,10 +152,14 @@ behaviors:
     given: an import request for a candidate
     when: the request is validated
     then:
-      - an already-processed candidate is rejected (400)
-      - a link-only source is forbidden from importing (403), enforced server-side
-      - an import without a name is rejected (400)
-      - an unknown candidate is not-found (404)
+      - key: already-processed-candidate-rejected
+        text: an already-processed candidate is rejected (400)
+      - key: link-only-source-forbidden
+        text: a link-only source is forbidden from importing (403), enforced server-side
+      - key: import-without-name-rejected
+        text: an import without a name is rejected (400)
+      - key: unknown-candidate-not-found
+        text: an unknown candidate is not-found (404)
     provenance: [ImportContact guards, IsLinkOnlySource]
 
   - id: IMP-012
@@ -162,10 +170,14 @@ behaviors:
     given: a valid import of an unmatched candidate
     when: the import runs
     then:
-      - a CRM contact is created through the normal creation path (person node, knowledge routing, methods)
-      - methods come from the user's selection when provided, else from the external record
-      - the candidate row is marked imported and linked to the new contact
-      - the response reports the new contact and a rematch job id
+      - key: crm-contact-created-normal-path
+        text: a CRM contact is created through the normal creation path (person node, knowledge routing, methods)
+      - key: methods-come-from-selection
+        text: methods come from the user's selection when provided, else from the external record
+      - key: candidate-row-marked-imported
+        text: the candidate row is marked imported and linked to the new contact
+      - key: response-reports-new-contact
+        text: the response reports the new contact and a rematch job id
     provenance: [ImportContact, buildMethodsFromSelection, BuildMethodsFromExternal]
 
   - id: IMP-013
@@ -176,12 +188,14 @@ behaviors:
     given: a link of a candidate to an existing contact
     when: the link is recorded
     then:
-      - any curation signal (method selection, conflict resolution, cadence, name, or an explicit curated flag) marks the row imported
-      - a bare link with no curation marks the row matched
+      - key: any-curation-signal-imports
+        text: any curation signal (method selection, conflict resolution, cadence, name, or an explicit curated flag) marks the row imported
+      - key: bare-link-no-curation
+        text: a bare link with no curation marks the row matched
     provenance: [LinkContact curated signal, EnrichContactFromExternalWithSelections]
     notes: Method-value conflicts neither block nor prompt today — a same-type different-value method is simply offered as an addition (IMP-027) — and the server does not reject links over conflicts; conflict resolutions still count as a curation signal at the API level.
     waivers:
-      - then: 1
+      - then: bare-link-no-curation
         reason: a bare link (no method curation, no cadence, no name change) is a degenerate UI path — the modal curates whenever the candidate offers methods or the contact carries a cadence to pre-fill; owned by the Go integration test TestLinkContact_Bare_LandsMatched
 
   - id: IMP-014
@@ -242,10 +256,14 @@ behaviors:
     given: pending method suggestions on a linked external contact
     when: the user resolves or dismisses them
     then:
-      - resolve confirms the requested methods (or all when unspecified), adds them via enrichment, and clears them from pending
-      - dismiss is sticky per method (type and value) and appends to the dismissed set
-      - entries already on the contact or no longer offered by the source are pruned without being dismissed
-      - actions re-check live state under lock and tolerate repeats; a soft-deleted contact reports gone (410)
+      - key: resolve-confirms-requested-methods
+        text: resolve confirms the requested methods (or all when unspecified), adds them via enrichment, and clears them from pending
+      - key: dismiss-sticky-per-method
+        text: dismiss is sticky per method (type and value) and appends to the dismissed set
+      - key: stale-entries-pruned-not-dismissed
+        text: entries already on the contact or no longer offered by the source are pruned without being dismissed
+      - key: actions-re-check-live
+        text: actions re-check live state under lock and tolerate repeats; a soft-deleted contact reports gone (410)
     provenance: [ResolveMethodSuggestions, DismissMethodSuggestions, ErrSuggestionContactGone]
 
   # --- Rematch ---
@@ -258,9 +276,12 @@ behaviors:
     given: new methods appearing on a CRM contact (create, a method operations request, enrichment, or suggestion resolve)
     when: the write commits
     then:
-      - a rematch event is published for the methods that have a registered handler
-      - the caller receives the rematch job id
-      - no job is minted when no handler covers any of the methods
+      - key: rematch-event-published-methods
+        text: a rematch event is published for the methods that have a registered handler
+      - key: caller-receives-rematch-job
+        text: the caller receives the rematch job id
+      - key: no-job-minted-without-handler
+        text: no job is minted when no handler covers any of the methods
     provenance: [rematchRegistry.EligibleMethods, contact_methods.added publishers, RematchDispatcher]
 
   - id: IMP-020
@@ -301,9 +322,12 @@ behaviors:
     given: pending method suggestions and unmatched candidates
     when: the suggestions feed is requested
     then:
-      - method suggestions ride on top as a group (first page only)
-      - contact candidates follow, confidence-ranked and paginated
-      - each candidate declares its server-decided allowed actions
+      - key: method-suggestions-ride-top
+        text: method suggestions ride on top as a group (first page only)
+      - key: contact-candidates-follow-confidence
+        text: contact candidates follow, confidence-ranked and paginated
+      - key: each-candidate-declares-server
+        text: each candidate declares its server-decided allowed actions
     provenance: [GET /imports/suggestions, SuggestionItem, buildMethodSuggestionItems]
 
   - id: IMP-023
@@ -358,10 +382,14 @@ behaviors:
     given: pending imports and interaction reviews
     when: the imports page renders
     then:
-      - a People tab (default) holds method suggestions on top, then confidence-ranked candidates with source filters and pagination
-      - an Interactions tab holds conflicts and orphans, with an attention badge counting only those (discovery items excluded)
-      - manual sync triggers are offered for contact and calendar sources
-      - a low-confidence names section appears at the bottom only when title-derived tokens exist
+      - key: people-tab-default-holds
+        text: a People tab (default) holds method suggestions on top, then confidence-ranked candidates with source filters and pagination
+      - key: interactions-tab-holds-conflicts
+        text: an Interactions tab holds conflicts and orphans, with an attention badge counting only those (discovery items excluded)
+      - key: manual-sync-triggers-offered
+        text: manual sync triggers are offered for contact and calendar sources
+      - key: low-confidence-names-section
+        text: a low-confidence names section appears at the bottom only when title-derived tokens exist
     provenance: [imports/page.tsx, SubTabs, NameCandidateSection]
 
   - id: IMP-027
@@ -372,15 +400,20 @@ behaviors:
     given: a candidate opened for resolution
     when: the modal renders
     then:
-      - everything is one scrollable view — no multi-step wizard
-      - the user chooses import-as-new or link-to-existing; link-only sources are locked to link
-      - the name is editable inline, and an empty name blocks resolution; an unresolved telegram peer requires a name edit before import
-      - methods are individually selectable with at most one marked primary; link mode distinguishes to-add from already-present methods (already-present ones cannot be re-selected), and a same-type different-value method is offered as an addition alongside the CRM value
-      - a cadence can be chosen; link mode pre-fills it from the existing contact
+      - key: everything-one-scrollable-view
+        text: everything is one scrollable view — no multi-step wizard
+      - key: user-chooses-import-new
+        text: the user chooses import-as-new or link-to-existing; link-only sources are locked to link
+      - key: name-editable-empty-blocks
+        text: the name is editable inline, and an empty name blocks resolution; an unresolved telegram peer requires a name edit before import
+      - key: methods-selectable-one-primary
+        text: methods are individually selectable with at most one marked primary; link mode distinguishes to-add from already-present methods (already-present ones cannot be re-selected), and a same-type different-value method is offered as an addition alongside the CRM value
+      - key: cadence-chosen-or-prefilled
+        text: a cadence can be chosen; link mode pre-fills it from the existing contact
     provenance: [suggestion-modal.tsx, method-selector.tsx, detectMethodConflicts]
     notes: A conflict-resolution affordance (keep-CRM vs use-external toggle) exists in the code but is currently unreachable — the detector never emits a conflict state.
     waivers:
-      - then: 0
+      - then: everything-one-scrollable-view
         reason: single-view/no-wizard is a structural-absence property with no deterministic observable; the citing tests for the other then-items all drive one dialog with no step transitions, and visual composition is judge-owned
 
   - id: IMP-028
@@ -391,10 +424,14 @@ behaviors:
     given: several candidates in the queue
     when: the modal is open
     then:
-      - a position pager and arrow keys (inert while typing) move between candidates independent of list pagination (bounded at 1000 candidates)
-      - after resolving a candidate the modal advances to the next one, closing only when the queue is exhausted
-      - the suggested match, when present, is pre-selected in link mode
-      - opening a candidate from its card opens that candidate — the modal tracks it by id, not list position, so while it remains in the queue a background list refetch or reorder cannot swap in a different candidate (once it is resolved and gone, the modal advances in place as above)
+      - key: position-pager-arrow-keys
+        text: a position pager and arrow keys (inert while typing) move between candidates independent of list pagination (bounded at 1000 candidates)
+      - key: modal-advances-to-next
+        text: after resolving a candidate the modal advances to the next one, closing only when the queue is exhausted
+      - key: suggested-match-when-present
+        text: the suggested match, when present, is pre-selected in link mode
+      - key: card-opens-that-candidate
+        text: opening a candidate from its card opens that candidate — the modal tracks it by id, not list position, so while it remains in the queue a background list refetch or reorder cannot swap in a different candidate (once it is resolved and gone, the modal advances in place as above)
     provenance: [ContactCandidateResolver pager, currentId tracking]
 
   - id: IMP-029
@@ -405,9 +442,12 @@ behaviors:
     given: a candidate with a suggested match
     when: its card renders
     then:
-      - the link action names the suggested contact with its confidence percentage
-      - without a suggestion, the link action asks the user to select a contact
-      - import is not offered on link-only sources
+      - key: link-action-names-suggested
+        text: the link action names the suggested contact with its confidence percentage
+      - key: without-suggestion-link-action
+        text: without a suggestion, the link action asks the user to select a contact
+      - key: import-not-offered-link
+        text: import is not offered on link-only sources
     provenance: [CandidateCard, sourceAllowsImport]
 
   - id: IMP-030
@@ -418,12 +458,15 @@ behaviors:
     given: a pending method suggestion opened for review
     when: the resolver renders
     then:
-      - the target contact is fixed — no contact selection, no import mode
-      - methods already on the contact are shown disabled
-      - confirming requires at least one selected method; dismissing dismisses all pending ones stickily
+      - key: target-fixed-no-selection
+        text: the target contact is fixed — no contact selection, no import mode
+      - key: methods-already-contact-shown
+        text: methods already on the contact are shown disabled
+      - key: confirm-requires-one-method
+        text: confirming requires at least one selected method; dismissing dismisses all pending ones stickily
     provenance: [method-suggestion-resolver.tsx]
     waivers:
-      - then: 1
+      - then: methods-already-contact-shown
         reason: the suggestions feed prunes already-on-contact entries server-side (buildMethodSuggestionItems drift defense), so the disabled already-present row is unreachable and unseedable in E2E; the render-time state is covered by the method-suggestion-resolver component test
 
   - id: IMP-031
@@ -434,9 +477,12 @@ behaviors:
     given: a resolution action on any review surface (import, link, ignore, suggestion, conflict, orphan, name token)
     when: the action succeeds
     then:
-      - the item leaves its queue and dependent counts update immediately
-      - dependent surfaces refresh through query invalidation scoped to the action (queue surfaces always; contact surfaces as affected by the action)
-      - a returned rematch job is registered for polling
+      - key: item-leaves-queue-counts-update
+        text: the item leaves its queue and dependent counts update immediately
+      - key: dependent-surfaces-invalidated
+        text: dependent surfaces refresh through query invalidation scoped to the action (queue surfaces always; contact surfaces as affected by the action)
+      - key: returned-rematch-job-registered
+        text: a returned rematch job is registered for polling
     provenance: [query-invalidation.ts import events, use-imports.ts]
 
   - id: IMP-036
@@ -447,8 +493,10 @@ behaviors:
     given: a telegram candidate carrying a username
     when: its card renders
     then:
-      - the @username appears as a chip deep-linking to the t.me profile
-      - when the candidate has no name fields the @username becomes the display name and the chip is suppressed
+      - key: username-appears-chip-deep
+        text: the @username appears as a chip deep-linking to the t.me profile
+      - key: no-name-fields-username-used
+        text: when the candidate has no name fields the @username becomes the display name and the chip is suppressed
     provenance: [imports/page.tsx CandidateCard telegram chip, getCandidateDisplayName]
 
   - id: IMP-037
@@ -459,7 +507,8 @@ behaviors:
     given: a gmail-correspondence candidate with correspondence metadata
     when: its card renders
     then:
-      - an evidence badge names the co-occurring contact and shows the message count
+      - key: evidence-badge-names-cooccurring
+        text: an evidence badge names the co-occurring contact and shows the message count
     provenance: [imports/page.tsx CandidateCard correspondenceLabel, gmail_correspondence metadata]
 
   - id: IMP-038
@@ -470,8 +519,10 @@ behaviors:
     given: a deep link into the imports page carrying a session id
     when: the Interactions tab loads with the session param
     then:
-      - the session's card is present on the Interactions tab
-      - the one-time session param is stripped from the URL so a refresh does not re-trigger the highlight
+      - key: session-card-present
+        text: the session's card is present on the Interactions tab
+      - key: one-time-session-param
+        text: the one-time session param is stripped from the URL so a refresh does not re-trigger the highlight
     provenance: [imports/page.tsx sessionParam effect, InteractionsTab highlightedSession]
     notes: The scroll-into-view and highlight styling are judge-owned presentation; the deterministic contract is card-present plus param-strip.
 
@@ -483,10 +534,14 @@ behaviors:
     given: a candidate open in the resolution modal
     when: the user dismisses it without resolving
     then:
-      - pressing Escape closes the modal
-      - clicking the backdrop closes the modal
-      - the Cancel action closes the modal
-      - dismissal resolves nothing — the candidate stays unmatched in its queue, and an uncommitted name edit is discarded
+      - key: pressing-escape-closes-modal
+        text: pressing Escape closes the modal
+      - key: clicking-backdrop-closes-modal
+        text: clicking the backdrop closes the modal
+      - key: cancel-action-closes-modal
+        text: the Cancel action closes the modal
+      - key: dismissal-resolves-nothing
+        text: dismissal resolves nothing — the candidate stays unmatched in its queue, and an uncommitted name edit is discarded
     provenance: [suggestion-modal.tsx onClose paths, Escape keydown handler, handleCancelNameEdit]
 
   - id: IMP-040
@@ -497,7 +552,8 @@ behaviors:
     given: a contact whose detail view has already been viewed in this session
     when: an import candidate is linked to that contact, adding a method
     then:
-      - returning to the contact's detail view shows the newly added method, with no manual refresh or hard reload
+      - key: returning-detail-shows-method
+        text: returning to the contact's detail view shows the newly added method, with no manual refresh or hard reload
     provenance: ['invalidationRules import:linked', 'useLinkCandidate onSuccess']
     notes: >
       The detail view is cached for five minutes in production, so the linked

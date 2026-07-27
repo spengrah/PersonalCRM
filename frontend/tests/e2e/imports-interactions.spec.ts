@@ -67,7 +67,7 @@ test.describe('Imports Interactions tab @area:imports', () => {
     await testApi.resetMacHosts()
   })
 
-  // spec: IMP-026[1]
+  // spec: IMP-026.interactions-tab-holds-conflicts
   test('shows the attention badge and renders orphan cards on the Interactions tab', async ({
     page,
   }) => {
@@ -114,7 +114,7 @@ test.describe('Imports Interactions tab @area:imports', () => {
     expect(badgeCountAfter).toBe(badgeCount)
   })
 
-  // spec: IMP-026[1]
+  // spec: IMP-026.interactions-tab-holds-conflicts
   test('accepts ?tab=needs-attention as a transitional alias for Interactions', async ({
     page,
   }) => {
@@ -131,7 +131,7 @@ test.describe('Imports Interactions tab @area:imports', () => {
     await expect(page).toHaveURL(/tab=interactions/, { timeout: 15000 })
   })
 
-  // spec: IMP-031[0], IMP-026[1]
+  // spec: IMP-031.item-leaves-queue-counts-update, IMP-026.interactions-tab-holds-conflicts
   test('resolves the orphan via "Log as impromptu" (orphan_needs_review → linked_impromptu)', async ({
     page,
   }) => {
@@ -169,7 +169,7 @@ test.describe('Imports Interactions tab @area:imports', () => {
     await expect(headingB).toBeVisible()
   })
 
-  // spec: IMP-038[0], IMP-038[1]
+  // spec: IMP-038.session-card-present, IMP-038.one-time-session-param
   test('lands on the ?session deep-linked card and strips the one-time param', async ({ page }) => {
     await page.goto(`/imports?tab=interactions&session=${sessionB}`)
     await page.waitForLoadState('domcontentloaded')

@@ -86,7 +86,7 @@ func TestMacHostAuth_HappyPath(t *testing.T) {
 	require.Equal(t, int64(1), cmp.calls.Load())
 }
 
-// spec: MAC-007[0]
+// spec: MAC-007.missing-malformed-host-id
 func TestMacHostAuth_MissingHeader(t *testing.T) {
 	id := uuid.New()
 	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{
@@ -102,7 +102,7 @@ func TestMacHostAuth_MissingHeader(t *testing.T) {
 	require.Equal(t, int64(0), cmp.calls.Load(), "bcrypt must not be invoked on missing-header path")
 }
 
-// spec: MAC-007[0]
+// spec: MAC-007.missing-malformed-host-id
 func TestMacHostAuth_MalformedUUID(t *testing.T) {
 	repo := &fakeHostRepo{}
 	r := newMacAuthTestRouter(t, repo, DefaultPasswordComparator, DefaultMacHostAuthLimiterConfig())
@@ -115,7 +115,7 @@ func TestMacHostAuth_MalformedUUID(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
-// spec: MAC-007[1]
+// spec: MAC-007.presenting-global-api-key
 func TestMacHostAuth_AmbiguousAuth_XAPIKey(t *testing.T) {
 	id := uuid.New()
 	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{
@@ -134,7 +134,7 @@ func TestMacHostAuth_AmbiguousAuth_XAPIKey(t *testing.T) {
 	require.Equal(t, int64(0), cmp.calls.Load(), "bcrypt must not run on ambiguous-auth path")
 }
 
-// spec: MAC-007[1]
+// spec: MAC-007.presenting-global-api-key
 func TestMacHostAuth_AmbiguousAuth_ApiKeyScheme(t *testing.T) {
 	id := uuid.New()
 	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{
@@ -151,7 +151,7 @@ func TestMacHostAuth_AmbiguousAuth_ApiKeyScheme(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// spec: MAC-007[2]
+// spec: MAC-007.missing-empty-bearer-token
 func TestMacHostAuth_MissingOrEmptyBearer_401(t *testing.T) {
 	id := uuid.New()
 	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{
@@ -192,7 +192,7 @@ func TestMacHostAuth_MissingOrEmptyBearer_401(t *testing.T) {
 	}
 }
 
-// spec: MAC-007[3]
+// spec: MAC-007.unknown-revoked-host-rejected
 func TestMacHostAuth_RevokedOrMissingHost_401(t *testing.T) {
 	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{}}
 	cmp := &countingComparator{}
@@ -207,7 +207,7 @@ func TestMacHostAuth_RevokedOrMissingHost_401(t *testing.T) {
 	require.Equal(t, int64(0), cmp.calls.Load(), "bcrypt must not run when host is unknown")
 }
 
-// spec: MAC-007[4]
+// spec: MAC-007.bearer-token-fails-constant
 func TestMacHostAuth_InvalidKey_401(t *testing.T) {
 	id := uuid.New()
 	repo := &fakeHostRepo{hosts: map[uuid.UUID]*repository.MacHost{
@@ -225,7 +225,7 @@ func TestMacHostAuth_InvalidKey_401(t *testing.T) {
 	require.Equal(t, int64(1), cmp.calls.Load(), "bcrypt runs once for the failing attempt")
 }
 
-// spec: MAC-007[5]
+// spec: MAC-007.route-id-mismatch-forbidden
 func TestMacHostAuth_IDParamMismatch_403(t *testing.T) {
 	id := uuid.New()
 	other := uuid.New()

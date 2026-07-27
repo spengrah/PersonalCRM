@@ -13,7 +13,7 @@ test.describe('Error Boundary @area:error-boundary', () => {
   test('overdue loading shows placeholder skeletons, not an empty or caught-up state', async ({
     page,
   }) => {
-    // spec: DSH-004[0], DSH-003[0]
+    // spec: DSH-004.while-loading-placeholder-content, DSH-003.add-contact-action-always
     // Hold the overdue request open so the dashboard is pinned in its loading
     // state while we assert. The route is installed BEFORE goto (parallel-safe:
     // per-page interception, no DB mutation) and released afterwards so the
@@ -56,7 +56,7 @@ test.describe('Error Boundary @area:error-boundary', () => {
   test('overdue failure shows an error state with a reason, not empty or caught-up', async ({
     page,
   }) => {
-    // spec: DSH-004[1], DSH-004[2], DSH-003[0]
+    // spec: DSH-004.request-failure-error-state, DSH-004.shown-failure-reason-faithfully, DSH-003.add-contact-action-always
     // 500 the overdue endpoint (full apiClient failure envelope) BEFORE goto:
     // apiClient throws ApiError on !response.ok, React Query exhausts its
     // retries, and the dashboard renders its error branch.

@@ -31,7 +31,7 @@ test.describe('Imports gmail_correspondence evidence @area:imports', () => {
     await testApi.cleanup()
   })
 
-  // spec: IMP-037[0], IMP-029[2], IMP-031[0]
+  // spec: IMP-037.evidence-badge-names-cooccurring, IMP-029.import-not-offered-link, IMP-031.item-leaves-queue-counts-update
   test('evidence badge renders, Import is hidden, and link adds the method', async ({
     page,
     request,

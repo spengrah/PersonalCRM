@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { cadenceBaseDate, formatOverdueRecency } from '../contact-recency'
 
-// spec: CAD-027[2]
+// spec: CAD-027.recency-orders-longest-waiting
 // The overdue list's recency ordering answers "who have I gone longest without
 // connecting with". A never-connected contact has waited since it was added, so it
 // belongs in that ordering by its creation date — the same base the cadence engine
@@ -45,7 +45,7 @@ describe('cadenceBaseDate', () => {
   })
 })
 
-// spec: CAD-026[1]
+// spec: CAD-026.each-card-shows-urgency
 // last_contacted records a two-way connection (CAD-006) and is unset until one
 // happens (CON-001). The overdue card must not present a contact's creation instant
 // as a connection — the app knew nothing had happened and said "Last contacted N ago"

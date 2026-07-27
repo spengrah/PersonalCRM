@@ -255,13 +255,16 @@ behaviors:
     given: a contact who gains an email address that appears on stored events not yet linked to them
     when: a calendar rematch runs for that email
     then:
-      - the contact is appended to each matching event's matched set
-      - past confirmed events additionally project the contact's attendance, while future events are only linked
-      - the append does not reset the event's processed flag, so already-projected attendees are not re-emitted
+      - key: contact-appended-each-matching
+        text: the contact is appended to each matching event's matched set
+      - key: past-confirmed-events-additionally
+        text: past confirmed events additionally project the contact's attendance, while future events are only linked
+      - key: append-does-not-reset
+        text: the append does not reset the event's processed flag, so already-projected attendees are not re-emitted
     waivers:
-      - then: 1
+      - then: past-confirmed-events-additionally
         reason: the past-projects/future-links split is backend projection plumbing with no browser-added coverage; proven deterministically by TestRematch_CalendarPastEvent_RecordsInteraction and TestRematch_CalendarFutureEvent_NoInteraction in rematch_integration_test.go
-      - then: 2
+      - then: append-does-not-reset
         reason: not re-emitting already-projected attendees is a negative with no browser surface; the append path's flag preservation is proven by TestRematch_AppendPreservesProcessedFlag and the upsert path's flag semantics by TestCalendarEventUpsertResetsLastContactedUpdated (Go integration tests)
     provenance: [CalendarRematchHandler.Rematch, AppendMatchedContact, FindEventsByAttendeeEmailUnmatchedForContact]
     notes: The rematch trigger and job dispatch are imports-matching scope — cross-reference IMP-019 and IMP-020.
@@ -323,8 +326,10 @@ behaviors:
     given: a contact detail page
     when: the page renders
     then:
-      - a Meetings section is shown when the contact has at least one calendar event
-      - nothing is shown when the contact has no events or the events fail to load
+      - key: meetings-section-shown-with-events
+        text: a Meetings section is shown when the contact has at least one calendar event
+      - key: nothing-shown-without-events
+        text: nothing is shown when the contact has no events or the events fail to load
     provenance: [contacts detail page, components/contacts/meetings.tsx]
 
   - id: CAL-025
@@ -335,10 +340,14 @@ behaviors:
     given: a contact with a mix of upcoming and past meetings
     when: the Meetings section is used
     then:
-      - three filters — all, upcoming, and past — each show a live count
-      - upcoming is the default view
-      - a meeting is classified as past once its end time is before the app's accelerated current time
-      - past meetings are ordered most-recent-first
+      - key: three-filters-all-upcoming
+        text: three filters — all, upcoming, and past — each show a live count
+      - key: upcoming-default-view
+        text: upcoming is the default view
+      - key: meeting-classified-past-once
+        text: a meeting is classified as past once its end time is before the app's accelerated current time
+      - key: past-meetings-ordered-most
+        text: past meetings are ordered most-recent-first
     provenance: [components/contacts/meetings.tsx, useAcceleratedTime]
 
   - id: CAL-026
@@ -349,10 +358,14 @@ behaviors:
     given: a meeting in the Meetings section
     when: its card renders
     then:
-      - it shows the title (a fallback label when untitled), the date, and the start-to-end time range
-      - it shows a location when the meeting has one
-      - it shows an attendee count only when the meeting has more than one attendee
-      - a past meeting carries a past marker
+      - key: shows-title-fallback-label
+        text: it shows the title (a fallback label when untitled), the date, and the start-to-end time range
+      - key: shows-location-when-meeting
+        text: it shows a location when the meeting has one
+      - key: shows-attendee-count-only
+        text: it shows an attendee count only when the meeting has more than one attendee
+      - key: past-meeting-carries-past
+        text: a past meeting carries a past marker
     provenance: [components/contacts/meetings.tsx MeetingCard]
     notes: The visual de-emphasis of past cards (reduced opacity) is presentation quality owned by the agentic judge, deliberately not pinned as a then-item.
 
@@ -364,8 +377,10 @@ behaviors:
     given: a meeting card
     when: the meeting carries a source link
     then:
-      - the title becomes a link that opens the meeting in a new tab with an external-link affordance
-      - a meeting without a link renders as plain text
+      - key: title-becomes-link-opens
+        text: the title becomes a link that opens the meeting in a new tab with an external-link affordance
+      - key: meeting-without-link-renders
+        text: a meeting without a link renders as plain text
     provenance: [components/contacts/meetings.tsx html_link branch]
 
   - id: CAL-028
@@ -376,9 +391,12 @@ behaviors:
     given: a filtered meeting list longer than the initial page
     when: the user asks for more
     then:
-      - a fixed number of meetings show initially, with a control reporting how many remain
-      - each activation reveals more until the list is exhausted, when the control disappears
-      - switching filters resets the reveal back to the initial page
+      - key: fixed-number-meetings-show
+        text: a fixed number of meetings show initially, with a control reporting how many remain
+      - key: each-activation-reveals-more
+        text: each activation reveals more until the list is exhausted, when the control disappears
+      - key: switching-filters-resets-reveal
+        text: switching filters resets the reveal back to the initial page
     provenance: [components/contacts/meetings.tsx displayLimit]
 
   - id: CAL-029
@@ -389,8 +407,10 @@ behaviors:
     given: a connected Google account granted calendar access
     when: the settings account section renders
     then:
-      - a calendar sync control shows the account's current calendar sync state and lets the user trigger a sync on demand
-      - a triggered sync reports that it started and reflects progress or errors as the state polls
+      - key: sync-control-shows-state
+        text: a calendar sync control shows the account's current calendar sync state and lets the user trigger a sync on demand
+      - key: triggered-sync-reports-started
+        text: a triggered sync reports that it started and reflects progress or errors as the state polls
     provenance: [components/settings/google-accounts-section.tsx, hooks/use-sync-states.ts]
     notes: The OAuth connect and reconnect flows themselves are settings scope (SET); the reconnect-on-auth-failure prompt is SET-025 and the scope-gated visibility of this sync affordance is SET-024. This behavior covers only the calendar sync trigger and its state surface.
 
@@ -402,7 +422,9 @@ behaviors:
     given: the calendar sync has stalled past its watchdog threshold
     when: the settings page renders
     then:
-      - a staleness banner names Google Calendar among the stalled sources
-      - the banner stays quiet while loading or when nothing is stalled
+      - key: staleness-banner-names-google
+        text: a staleness banner names Google Calendar among the stalled sources
+      - key: banner-quiet-when-nothing-stalled
+        text: the banner stays quiet while loading or when nothing is stalled
     provenance: [components/sync-staleness-banner.tsx]
     notes: The watchdog that detects staleness is settings/ingest scope; this behavior covers only the calendar labeling on the banner.

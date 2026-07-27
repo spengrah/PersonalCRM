@@ -188,7 +188,7 @@ func TestTelegramAuthAPI_ValidationErrors(t *testing.T) {
 	router, _ := setupTelegramAuthRouter(t, ctx)
 
 	t.Run("StartAuth_MissingOrEmptyPhone", func(t *testing.T) {
-		// spec: TGM-007[0]
+		// spec: TGM-007.empty-malformed-phone-number
 		for _, payload := range []interface{}{
 			map[string]string{},                      // field absent
 			map[string]string{"phone_number": ""},    // empty
@@ -201,7 +201,7 @@ func TestTelegramAuthAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("StartAuth_MalformedPhone", func(t *testing.T) {
-		// spec: TGM-007[0]
+		// spec: TGM-007.empty-malformed-phone-number
 		for _, phone := range []string{
 			"1234567",           // no leading +
 			"+123456",           // 6 digits — below the 7-digit minimum
@@ -216,7 +216,7 @@ func TestTelegramAuthAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("StartAuth_BoundaryValidPhonesPassValidation", func(t *testing.T) {
-		// spec: TGM-007[0]
+		// spec: TGM-007.empty-malformed-phone-number
 		// A dedicated harness whose session row is seeded connected: a phone
 		// that PASSES validation reaches the manager and is answered with the
 		// already-connected 409 (decided from the DB row, before any MTProto
@@ -237,49 +237,49 @@ func TestTelegramAuthAPI_ValidationErrors(t *testing.T) {
 	})
 
 	t.Run("StartAuth_MalformedBody", func(t *testing.T) {
-		// spec: TGM-007[0]
+		// spec: TGM-007.empty-malformed-phone-number
 		w := doTelegramJSON(t, router, http.MethodPost, "/api/v1/telegram/auth/start", "{not-json")
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Equal(t, api.ErrCodeValidation, telegramWireErrorCode(t, decodeTelegramWire(t, w)))
 	})
 
 	t.Run("VerifyCode_MissingToken", func(t *testing.T) {
-		// spec: TGM-007[0]
+		// spec: TGM-007.empty-malformed-phone-number
 		w := doTelegramJSON(t, router, http.MethodPost, "/api/v1/telegram/auth/verify-code", map[string]string{"code": "12345"})
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Equal(t, api.ErrCodeValidation, telegramWireErrorCode(t, decodeTelegramWire(t, w)))
 	})
 
 	t.Run("VerifyCode_MissingCode", func(t *testing.T) {
-		// spec: TGM-007[0]
+		// spec: TGM-007.empty-malformed-phone-number
 		w := doTelegramJSON(t, router, http.MethodPost, "/api/v1/telegram/auth/verify-code", map[string]string{"auth_token": "deadbeef"})
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Equal(t, api.ErrCodeValidation, telegramWireErrorCode(t, decodeTelegramWire(t, w)))
 	})
 
 	t.Run("VerifyCode_MalformedBody", func(t *testing.T) {
-		// spec: TGM-007[0]
+		// spec: TGM-007.empty-malformed-phone-number
 		w := doTelegramJSON(t, router, http.MethodPost, "/api/v1/telegram/auth/verify-code", "{not-json")
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Equal(t, api.ErrCodeValidation, telegramWireErrorCode(t, decodeTelegramWire(t, w)))
 	})
 
 	t.Run("VerifyPassword_MissingToken", func(t *testing.T) {
-		// spec: TGM-007[0]
+		// spec: TGM-007.empty-malformed-phone-number
 		w := doTelegramJSON(t, router, http.MethodPost, "/api/v1/telegram/auth/verify-password", map[string]string{"password": "hunter2"})
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Equal(t, api.ErrCodeValidation, telegramWireErrorCode(t, decodeTelegramWire(t, w)))
 	})
 
 	t.Run("VerifyPassword_MissingPassword", func(t *testing.T) {
-		// spec: TGM-007[0]
+		// spec: TGM-007.empty-malformed-phone-number
 		w := doTelegramJSON(t, router, http.MethodPost, "/api/v1/telegram/auth/verify-password", map[string]string{"auth_token": "deadbeef"})
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Equal(t, api.ErrCodeValidation, telegramWireErrorCode(t, decodeTelegramWire(t, w)))
 	})
 
 	t.Run("VerifyPassword_MalformedBody", func(t *testing.T) {
-		// spec: TGM-007[0]
+		// spec: TGM-007.empty-malformed-phone-number
 		w := doTelegramJSON(t, router, http.MethodPost, "/api/v1/telegram/auth/verify-password", "{not-json")
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Equal(t, api.ErrCodeValidation, telegramWireErrorCode(t, decodeTelegramWire(t, w)))
@@ -386,7 +386,7 @@ func TestTelegramAuthAPI_Disconnect(t *testing.T) {
 	t.Parallel()
 
 	t.Run("SucceedsAndClearsSession", func(t *testing.T) {
-		// spec: TGM-007[5]
+		// spec: TGM-007.disconnect-200-unless-delete-fails
 		ctx := context.Background()
 		router, sessionRepo := setupTelegramAuthRouter(t, ctx)
 		ns := uuid.NewString()[:8]
@@ -404,7 +404,7 @@ func TestTelegramAuthAPI_Disconnect(t *testing.T) {
 	})
 
 	t.Run("SessionDeleteFailureIsServerError", func(t *testing.T) {
-		// spec: TGM-007[5]
+		// spec: TGM-007.disconnect-200-unless-delete-fails
 		ctx := context.Background()
 		router, sessionRepo := setupTelegramAuthRouter(t, ctx)
 		ns := uuid.NewString()[:8]
@@ -447,7 +447,7 @@ func TestTelegramAuthAPI_Status(t *testing.T) {
 	t.Parallel()
 
 	t.Run("DisconnectedWithoutSession", func(t *testing.T) {
-		// spec: TGM-007[6]
+		// spec: TGM-007.status-always-returns-200
 		ctx := context.Background()
 		router, _ := setupTelegramAuthRouter(t, ctx)
 
@@ -465,7 +465,7 @@ func TestTelegramAuthAPI_Status(t *testing.T) {
 	})
 
 	t.Run("ConnectedFromStoredSession", func(t *testing.T) {
-		// spec: TGM-007[6]
+		// spec: TGM-007.status-always-returns-200
 		ctx := context.Background()
 		router, sessionRepo := setupTelegramAuthRouter(t, ctx)
 		ns := uuid.NewString()[:8]

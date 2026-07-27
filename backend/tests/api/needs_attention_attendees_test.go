@@ -157,7 +157,7 @@ func TestNeedsAttention_EnrichedAttendees(t *testing.T) {
 // implied set) and whose count of attendee matched=true flags (1,
 // because one attendee's display label doesn't resolve to either
 // contact's name) diverge — proving the two are carried independently.
-// spec: NTS-025[4]
+// spec: NTS-025.candidate-overlap-count-independent
 func TestNeedsAttention_OverlapCountIndependentOfMatchedFlags(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	ctx := context.Background()

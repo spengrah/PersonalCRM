@@ -85,8 +85,8 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     page,
     request,
   }) => {
-    // spec: CON-045[3]
-    // spec: KNW-035[0], KNW-035[1]
+    // spec: CON-045.placeholder-year-birthdays-no-age
+    // spec: KNW-035.date-renders-month-day, KNW-035.no-age-computed-displayed
     // The list-row and detail-page assertions below prove the year-less
     // rendering (month/day only, placeholder year never shown) and the
     // birthdays-card assertions prove the age suppression.
@@ -142,7 +142,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     page,
     request,
   }) => {
-    // spec: CON-045[0]
+    // spec: CON-045.contacts-grouped-into-today
     // Freeze the frame mid-year so the three groups are deterministic and
     // parallel-safe (the same per-page frame-mock idiom used for CON-045[1]).
     await mockFrozenSystemTime(page, '2026-06-15T12:00:00Z')
@@ -189,7 +189,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     page,
     request,
   }) => {
-    // spec: CON-045[2]
+    // spec: CON-045.upcoming-birthdays-sort-soonest
     await mockFrozenSystemTime(page, '2026-06-15T12:00:00Z')
     const soonName = `${testApi.prefix}-Sort Soon` // 3 days out
     const laterName = `${testApi.prefix}-Sort Later` // 10 days out
@@ -240,7 +240,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
   })
 
   test('the birthdays page date header follows the server accelerated frame', async ({ page }) => {
-    // spec: CON-045[4]
+    // spec: CON-045.page-follows-accelerated-time
     // Freeze the frame to a fixed, non-wall-clock date and assert the page
     // header renders THAT date — proving it follows the server frame rather than
     // the wall clock (a real-frame assertion would pass trivially when the
@@ -255,7 +255,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
   })
 
   test('shows the gift-planning section near year end', async ({ page, request }) => {
-    // spec: CON-045[1]
+    // spec: CON-045.gift-planning-near-year-end
     // December frame → the page surfaces early-next-year (Jan-Mar) birthdays.
     await mockFrozenSystemTime(page, '2026-12-15T12:00:00Z')
     const febName = `${testApi.prefix}-Gift Feb`
@@ -276,7 +276,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
   })
 
   test('hides the gift-planning section away from year end', async ({ page, request }) => {
-    // spec: CON-045[1]
+    // spec: CON-045.gift-planning-near-year-end
     // June frame → no gift-planning section, even with a Jan-Mar birthday.
     await mockFrozenSystemTime(page, '2026-06-15T12:00:00Z')
     const febName = `${testApi.prefix}-Gift Feb`

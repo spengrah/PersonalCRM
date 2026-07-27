@@ -31,7 +31,7 @@ test.describe('Rematch on add email @area:contacts', () => {
     // CAL-019[1] (past-projects/future-links split) and CAL-019[2] (processed
     // flag not reset) are waived in spec/calendar.yaml: both are backend
     // projection plumbing owned by rematch_integration_test.go.
-    // spec: CAL-019[0]
+    // spec: CAL-019.contact-appended-each-matching
     const attendeeEmail = `rematch-${Date.now()}@example.com`
 
     // Seed a contact with no email so the rematch handler has something to link to.

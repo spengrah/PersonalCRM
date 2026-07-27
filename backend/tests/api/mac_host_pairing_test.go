@@ -271,7 +271,7 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "expected 200; body: %s", w.Body.String())
 
 	// 7. GET cursor → returns committed value AND backfill_complete.
-	// spec: MAC-015[0]
+	// spec: MAC-015.committed-cursor-returned-along
 	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+pair.HostID.String()+"/sync/messages/cursor", hostHeaders, nil)
 	require.Equal(t, http.StatusOK, w.Code)
 	var cur struct {
@@ -346,7 +346,7 @@ func TestMacHost_PairingToken_Unknown(t *testing.T) {
 	require.Equal(t, http.StatusGone, w.Code, "unknown token must be 410, body: %s", w.Body.String())
 }
 
-// spec: MAC-003[3]
+// spec: MAC-003.missing-pairing-token-hostname
 func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -365,7 +365,7 @@ func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, "empty hostname must surface 400, body: %s", w.Body.String())
 }
 
-// spec: MAC-003[3]
+// spec: MAC-003.missing-pairing-token-hostname
 func TestMacHost_Pair_MissingToken_400(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -379,7 +379,7 @@ func TestMacHost_Pair_MissingToken_400(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, w.Code, "empty token must surface 400, body: %s", w.Body.String())
 }
 
-// spec: MAC-003[2]
+// spec: MAC-003.second-pairing-attempt-conflict
 func TestMacHost_Singleton_SecondPairBlocked(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -473,8 +473,8 @@ func TestMacHost_Heartbeat_PersistsFieldsAndEchoesProtocolState(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
-	// spec: MAC-011[1]
-	// spec: MAC-011[2]
+	// spec: MAC-011.response-echoes-current-cursor
+	// spec: MAC-011.response-reports-protocol-versions
 	// Literal wire keys on the heartbeat response body — decoded via a
 	// local struct with matching json tags, not the handler's private
 	// response type. Each numeric field is compared against an
@@ -494,7 +494,7 @@ func TestMacHost_Heartbeat_PersistsFieldsAndEchoesProtocolState(t *testing.T) {
 	require.Equal(t, mac.ProtocolVersion, hbResp.ProtocolVersion, "protocol_version must be the server's current version (mac.ProtocolVersion)")
 	require.Equal(t, mac.MinProtocolVersion, hbResp.MinProtocolVersion, "min_protocol_version must be the server's floor (mac.MinProtocolVersion)")
 
-	// spec: MAC-011[0]
+	// spec: MAC-011.heartbeat-fields-recorded
 	// Read the host back via the admin GET route and assert every
 	// heartbeat-supplied field was actually persisted.
 	w = macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String(), map[string]string{
@@ -545,7 +545,7 @@ func TestMacHost_GetCursor_PreCommit_EmptyBaseline(t *testing.T) {
 		"Authorization": "Bearer " + res.APIKey,
 	}
 
-	// spec: MAC-015[1]
+	// spec: MAC-015.before-commit-empty-cursor
 	// No commit has happened yet for this host+source.
 	w := macHTTP(t, env, http.MethodGet, "/api/v1/host/"+res.HostID.String()+"/sync/messages/cursor", hostHeaders, nil)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -621,7 +621,7 @@ func TestMacHost_Pair_PlaintextKeyNeverLeaksInSubsequentReads(t *testing.T) {
 	plain, _, err := env.macService.CreatePairingToken(context.Background())
 	require.NoError(t, err)
 
-	// spec: MAC-003[0]
+	// spec: MAC-003.valid-token-pairs-host
 	w := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
 		"pairing_token":    plain,
 		"hostname":         "plaintext-sweep-" + uuid.NewString()[:8],
@@ -674,7 +674,7 @@ func TestMacHost_Pair_PlaintextKeyNeverLeaksInSubsequentReads(t *testing.T) {
 	require.NotContains(t, w.Body.String(), `"api_key"`, "GetHostAdmin response must never carry an api_key wire key at all (not even hashed)")
 }
 
-// spec: MAC-003[1]
+// spec: MAC-003.invalid-already-consumed-expired
 // TestMacHost_Pair_TokenStateFailures_Opaque410 drives all three
 // token-state failures through the actual pairing endpoint — an invalid
 // (never-minted) token, an already-consumed token (successful pair, then
@@ -738,7 +738,7 @@ func TestMacHost_Pair_TokenStateFailures_Opaque410(t *testing.T) {
 // mutable field and asserts the 412 rejection AND that none of those
 // fields moved — proving the protocol gate runs before any database
 // write, not merely before the response is sent.
-// spec: MAC-012[0]
+// spec: MAC-012.request-rejected-upgrade-required
 func TestMacHost_Heartbeat_TooOldProtocol_NoWriteBefore412(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -792,7 +792,7 @@ func TestMacHost_Heartbeat_TooOldProtocol_NoWriteBefore412(t *testing.T) {
 // TestMacHost_Cursor_BackfillComplete_DefaultsFalseWhenAbsent commits a
 // cursor whose request body omits the backfill_complete key entirely
 // (not merely sets it false) and asserts the read-back flag is false.
-// spec: MAC-015[2]
+// spec: MAC-015.backfill-complete-flag-opaque
 func TestMacHost_Cursor_BackfillComplete_DefaultsFalseWhenAbsent(t *testing.T) {
 
 	env := setupMacHostEnv(t)

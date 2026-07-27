@@ -211,7 +211,7 @@ func uniqueEmail() string {
 // needlessly reinserted every row would preserve id, type, value and is_primary
 // while silently moving created_at and updated_at — passing a weaker test named
 // for catching exactly that.
-// spec: CON-062[0]
+// spec: CON-062.unnamed-method-untouched
 func TestMethodOps_UnnamedMethodsSurvive(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -237,7 +237,7 @@ func TestMethodOps_UnnamedMethodsSurvive(t *testing.T) {
 // rule above: at most one primary is a database constraint, so promoting one
 // necessarily demotes another. That is a real side effect on an unnamed row and
 // is stated rather than hidden.
-// spec: CON-062[0]
+// spec: CON-062.unnamed-method-untouched
 func TestMethodOps_PromoteDemotesPreviousPrimary(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -267,7 +267,7 @@ func TestMethodOps_ClearNonPrimaryDoesNotDemoteCurrentPrimary(t *testing.T) {
 		"clearing a non-primary row demoted the actual primary")
 }
 
-// spec: CON-062[8]
+// spec: CON-062.named-primary-can-be-cleared
 func TestMethodOps_ClearNamedPrimaryLeavesNone(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -284,7 +284,7 @@ func TestMethodOps_ClearNamedPrimaryLeavesNone(t *testing.T) {
 
 // --- CON-062[1]: all or nothing --------------------------------------------
 
-// spec: CON-062[1]
+// spec: CON-062.whole-request-applies-atomically
 func TestMethodOps_InvalidOperationAppliesNothing(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -470,7 +470,7 @@ func TestMethodOps_TwoAddsOrderIndependent(t *testing.T) {
 // the method set as read back over HTTP and the persisted rows. Contact-owned
 // ids and timestamps are the only fields excluded: they differ per contact by
 // construction and carry no outcome semantics.
-// spec: CON-062[2]
+// spec: CON-062.outcome-not-order-dependent
 func TestMethodOps_MixedOperationOrderYieldsIdenticalCompleteState(t *testing.T) {
 	t.Parallel()
 
@@ -559,7 +559,7 @@ func TestMethodOps_MixedOperationOrderYieldsIdenticalCompleteState(t *testing.T)
 
 // --- CON-062[3][4]: idempotency --------------------------------------------
 
-// spec: CON-062[3]
+// spec: CON-062.adding-method-already-exists
 func TestMethodOps_DuplicateAddIsNoOp(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -587,7 +587,7 @@ func TestMethodOps_IdenticalAddsCoalesce(t *testing.T) {
 	assert.Equal(t, body.Results[0].MethodID, body.Results[1].MethodID)
 }
 
-// spec: CON-062[4]
+// spec: CON-062.removing-method-already-absent
 func TestMethodOps_RemoveAlreadyAbsentSucceeds(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -640,7 +640,7 @@ func TestMethodOps_NamedRemovalSucceeds(t *testing.T) {
 // and pre-SQL determinism is the entire property the fold exists to provide.
 // The fold's message names the colliding pair; the database backstop's does not.
 //
-// spec: CON-062[5]
+// spec: CON-062.duplicate-resulting-set-rejected
 func TestMethodOps_DuplicateFinalStateRejected(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -663,7 +663,7 @@ func TestMethodOps_DuplicateFinalStateRejected(t *testing.T) {
 	assert.Equal(t, b.Value, f.storedByID(b.ID).Value, "a rejected payload mutated a row")
 }
 
-// spec: CON-062[6]
+// spec: CON-062.multiple-primaries-rejected
 func TestMethodOps_TwoPrimaryDesignationsRejected(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -682,7 +682,7 @@ func TestMethodOps_TwoPrimaryDesignationsRejected(t *testing.T) {
 // bypassed the precheck would otherwise regress silently. It is asserted where
 // it protects a destructive operation, not merely where it is convenient.
 //
-// spec: CON-062[7]
+// spec: CON-062.operation-naming-method-id
 func TestMethodOps_ForeignMethodIDRejected(t *testing.T) {
 	t.Parallel()
 
@@ -748,7 +748,7 @@ func TestMethodOps_RemoveNonexistentSucceedsButForeignRejected(t *testing.T) {
 // application would be the same silent-corruption class this endpoint exists to
 // eliminate.
 //
-// spec: CON-062[9]
+// spec: CON-062.request-whose-operations-conflict
 func TestMethodOps_ConflictingOperationsRejected(t *testing.T) {
 	t.Parallel()
 
@@ -863,7 +863,7 @@ func TestMethodOps_UpdateWithPrimaryDesignationSucceeds(t *testing.T) {
 // in-place update phase the endpoint returns 200 having discarded the edit —
 // the failure must land on the stored-value assertion, not on an error.
 //
-// spec: CON-062[10]
+// spec: CON-062.updating-method-value-takes-effect
 func TestMethodOps_StableKeyUpdatePersistsThroughAPI(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -890,7 +890,7 @@ func TestMethodOps_StableKeyUpdatePersistsThroughAPI(t *testing.T) {
 // phrased as a designation delta fires neither demote nor promote here and
 // leaves the contact with NO primary.
 //
-// spec: CON-062[11]
+// spec: CON-062.updating-primary-keeps-primary
 func TestMethodOps_KeyChangingPrimaryUpdateKeepsPrimaryThroughAPI(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -922,7 +922,7 @@ func TestMethodOps_KeyChangingPrimaryUpdateKeepsPrimaryThroughAPI(t *testing.T) 
 // advance depends on: a client that cannot learn which row its own addition
 // resolved to will later fail to edit or remove that method.
 //
-// spec: CON-062[12]
+// spec: CON-062.response-reports-one-result
 func TestMethodOps_ResultsCoverEveryOperation(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -956,7 +956,7 @@ func TestMethodOps_ResultsCoverEveryOperation(t *testing.T) {
 // TestMethodOps_ResultsIndexAgainstSubmittedNotFoldedOperations uses payloads
 // whose folds are NOT one-to-one. Earlier cases all folded one-to-one, so an
 // implementation emitting one result per folded operation passed them.
-// spec: CON-062[12]
+// spec: CON-062.response-reports-one-result
 func TestMethodOps_ResultsIndexAgainstSubmittedNotFoldedOperations(t *testing.T) {
 	t.Parallel()
 
@@ -1077,7 +1077,7 @@ func TestMethodOps_ResultsResolveAddToExistingRow(t *testing.T) {
 // result is checked against a follow-up read of the contact's stored
 // methods, not against the request that produced it.
 //
-// spec: CON-062[13]
+// spec: CON-062.each-result-identifies-method
 func TestMethodOps_MixedOperationsResultsIdentifyAndReflectStoredState(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -1135,7 +1135,7 @@ func TestMethodOps_MixedOperationsResultsIdentifyAndReflectStoredState(t *testin
 // path. Create DROPS a blank entry; an explicit add or update must REJECT it.
 // Dropping here would turn an unsatisfiable intent into a silent success.
 //
-// spec: CON-015[1]
+// spec: CON-015.blank-value-operation-rejected
 func TestMethodOps_BlankValueRejected(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)
@@ -1359,7 +1359,7 @@ func (s stubApplierResult) ApplyOperations(context.Context, uuid.UUID, []service
 // response carries rematch_job_id on the literal wire, both when a job was
 // minted and when it wasn't (the field is omitempty, so no job means the
 // key is absent rather than an empty string).
-// spec: IMP-019[1]
+// spec: IMP-019.caller-receives-rematch-job
 func TestMethodOps_RematchJobIDPropagatesToResponse(t *testing.T) {
 	t.Parallel()
 

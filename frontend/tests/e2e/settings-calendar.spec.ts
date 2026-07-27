@@ -85,7 +85,7 @@ test.describe('Settings calendar sync @area:settings', () => {
   // below matches the browser's rendering on any host.
   test.use({ locale: 'en-US', timezoneId: 'UTC' })
 
-  // spec: CAL-029[0]
+  // spec: CAL-029.sync-control-shows-state
   test('the calendar badge shows the sync state and triggers a sync for the account', async ({
     page,
   }) => {
@@ -123,7 +123,7 @@ test.describe('Settings calendar sync @area:settings', () => {
     expect(triggerRequest.postDataJSON()).toMatchObject({ account_id: ACCOUNT_ID })
   })
 
-  // spec: CAL-029[1]
+  // spec: CAL-029.triggered-sync-reports-started
   test('a triggered sync reports it started and the badge reflects the polled progress', async ({
     page,
   }) => {
@@ -160,7 +160,7 @@ test.describe('Settings calendar sync @area:settings', () => {
     await expect(syncButton).toBeDisabled()
   })
 
-  // spec: CAL-030[0]
+  // spec: CAL-030.staleness-banner-names-google
   test('a stalled calendar sync is named on the staleness banner', async ({ page }) => {
     await mockCalendarAccount(page)
     await mockSyncStates(page, [gcalSyncState()])
@@ -178,7 +178,7 @@ test.describe('Settings calendar sync @area:settings', () => {
     await expect(banner).toContainText('no successful sync in 2h')
   })
 
-  // spec: CAL-030[1]
+  // spec: CAL-030.banner-quiet-when-nothing-stalled
   test('the staleness banner stays quiet when nothing is stalled', async ({ page }) => {
     await mockCalendarAccount(page)
     await mockSyncStates(page, [gcalSyncState()])

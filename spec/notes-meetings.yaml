@@ -50,10 +50,14 @@ behaviors:
     given: a GET for a contact's notepad
     when: the request is handled
     then:
-      - a live contact with a notepad returns it (200)
-      - a live contact without a notepad returns no content (204)
-      - a malformed contact id returns a validation error (400)
-      - an unknown or soft-deleted contact returns not-found (404)
+      - key: live-contact-notepad
+        text: a live contact with a notepad returns it (200)
+      - key: live-contact-without-notepad
+        text: a live contact without a notepad returns no content (204)
+      - key: malformed-contact-id
+        text: a malformed contact id returns a validation error (400)
+      - key: unknown-soft-deleted-contact
+        text: an unknown or soft-deleted contact returns not-found (404)
     provenance: [NoteHandler.GetContactNotepad, NoteResponse]
 
   - id: NTS-005
@@ -64,11 +68,16 @@ behaviors:
     given: a PUT of a contact's notepad body
     when: the request is handled
     then:
-      - a non-empty body returns the saved note (200)
-      - an empty or whitespace-only body deletes the note and returns no content (204)
-      - the body is limited to 50000 characters, else a validation error (400)
-      - a malformed contact id or unparseable body returns a validation error (400)
-      - an unknown or soft-deleted contact returns not-found (404)
+      - key: non-empty-body
+        text: a non-empty body returns the saved note (200)
+      - key: empty-whitespace-only-body
+        text: an empty or whitespace-only body deletes the note and returns no content (204)
+      - key: body-limited-50000-characters
+        text: the body is limited to 50000 characters, else a validation error (400)
+      - key: malformed-contact-id-unparseable
+        text: a malformed contact id or unparseable body returns a validation error (400)
+      - key: unknown-soft-deleted-contact
+        text: an unknown or soft-deleted contact returns not-found (404)
     provenance: [NoteHandler.SaveContactNotepad, SaveNoteRequest]
     notes: The length cap is validated on the raw body before trimming, so an over-length whitespace-only body is rejected rather than treated as an empty delete.
 
@@ -93,9 +102,12 @@ behaviors:
     given: a contact detail page
     when: the notepad renders
     then:
-      - the notepad appears only when it has content; an empty or absent notepad shows nothing
-      - the body preserves the user's line breaks
-      - long content is clamped with an expand and collapse control that appears only when the content overflows
+      - key: notepad-appears-only-with-content
+        text: the notepad appears only when it has content; an empty or absent notepad shows nothing
+      - key: body-preserves-line-breaks
+        text: the body preserves the user's line breaks
+      - key: long-content-clamped-expand
+        text: long content is clamped with an expand and collapse control that appears only when the content overflows
     provenance: [contact detail notes block, contacts.spec.ts]
 
   - id: NTS-008
@@ -106,9 +118,12 @@ behaviors:
     given: the contact edit or create form
     when: the notepad field is edited and the form is submitted
     then:
-      - the notepad is saved as its own operation alongside the contact update, both completing before edit mode closes
-      - clearing the notepad field removes the note
-      - the displayed notepad reflects the new content after a successful save
+      - key: notepad-saved-own-operation
+        text: the notepad is saved as its own operation alongside the contact update, both completing before edit mode closes
+      - key: clearing-notepad-field-removes
+        text: clearing the notepad field removes the note
+      - key: displayed-notepad-reflects-new
+        text: the displayed notepad reflects the new content after a successful save
     provenance: [contact-form.tsx notes field, contact detail submit, new contact page]
 
   # --- Meeting-note linkage states and user-driven resolution ---
@@ -233,13 +248,20 @@ behaviors:
     given: a POST to resolve-link for a meeting_note
     when: the request is handled
     then:
-      - action is required and must be link or none_of_these
-      - action=link requires kind in event or phone_call and an id parseable as a UUID, else a validation error (400)
-      - a successful resolve returns the updated meeting note and the interactions created (200)
-      - a missing row, or a snapshot target that no longer exists, returns not-found (404)
-      - a row not in an attention state returns conflict (409)
-      - a chosen id absent from the snapshot returns a validation error (400)
-      - a conflict_pending row missing its snapshot returns unprocessable content (422)
+      - key: action-required-must-link
+        text: action is required and must be link or none_of_these
+      - key: action-link-requires-kind
+        text: action=link requires kind in event or phone_call and an id parseable as a UUID, else a validation error (400)
+      - key: successful-resolve-returns-updated
+        text: a successful resolve returns the updated meeting note and the interactions created (200)
+      - key: missing-row-snapshot-target
+        text: a missing row, or a snapshot target that no longer exists, returns not-found (404)
+      - key: row-not-attention-state
+        text: a row not in an attention state returns conflict (409)
+      - key: chosen-id-absent-snapshot
+        text: a chosen id absent from the snapshot returns a validation error (400)
+      - key: conflict-pending-row-missing
+        text: a conflict_pending row missing its snapshot returns unprocessable content (422)
     provenance: [MeetingNoteHandler.ResolveLink, mapResolveError]
 
   - id: NTS-019
@@ -327,10 +349,15 @@ behaviors:
     given: a GET to needs-attention for meeting notes
     when: the request is handled
     then:
-      - a malformed host_id query parameter returns a validation error (400)
-      - the response returns every live meeting note in an attention state, newest first, optionally scoped to a host_id (200)
-      - each conflict_pending row carries a candidates array projecting each snapshot candidate with a per-kind preview; an orphan_needs_review row carries no candidates
-      - a snapshot candidate whose target row has been deleted is marked target-missing with a null preview rather than dropped from the response
-      - each candidate's overlap count is carried independently of the per-attendee matched flags, which drive only visual emphasis
+      - key: malformed-host-id-query
+        text: a malformed host_id query parameter returns a validation error (400)
+      - key: returns-attention-notes-newest-first
+        text: the response returns every live meeting note in an attention state, newest first, optionally scoped to a host_id (200)
+      - key: each-conflict-pending-row
+        text: each conflict_pending row carries a candidates array projecting each snapshot candidate with a per-kind preview; an orphan_needs_review row carries no candidates
+      - key: deleted-target-marked-missing
+        text: a snapshot candidate whose target row has been deleted is marked target-missing with a null preview rather than dropped from the response
+      - key: candidate-overlap-count-independent
+        text: each candidate's overlap count is carried independently of the per-attendee matched flags, which drive only visual emphasis
     provenance: [MeetingNoteHandler.ListNeedsAttention, MeetingNoteService.ListNeedsAttention, projectCandidates, candidatePreview, ListMeetingNotesNeedingAttention]
     notes: The business-logic of what makes a session a conflict versus an orphan is cross-ref IMP-025; this pins the read endpoint's API and projection contract, mirroring NTS-018 for the resolve-link write endpoint.

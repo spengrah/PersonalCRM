@@ -27,14 +27,14 @@ test.describe('Contact notepad @area:contacts', () => {
     page,
   }) => {
     // With no note seeded, the detail page renders no Notes row at all
-    // spec: NTS-007[0]
+    // spec: NTS-007.notepad-appears-only-with-content
     await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
     await expect(notesRow(page)).toHaveCount(0)
 
     // A short note renders the row with its body, and no expand control
     // (the control appears only when the content overflows the clamp)
-    // spec: NTS-007[0], NTS-007[2]
+    // spec: NTS-007.notepad-appears-only-with-content, NTS-007.long-content-clamped-expand
     const shortNote = `${testApi.prefix} short note body`
     await testApi.seedContactNote(contactId, shortNote)
     await page.reload()
@@ -58,14 +58,14 @@ test.describe('Contact notepad @area:contacts', () => {
     await page.reload()
     await expect(notesRow(page)).toBeVisible({ timeout: 15000 })
 
-    // spec: NTS-007[2]
+    // spec: NTS-007.long-content-clamped-expand
     const expand = notesRow(page).getByRole('button', { name: /Show more/i })
     await expect(expand).toBeVisible()
     await expand.click()
     const collapse = notesRow(page).getByRole('button', { name: /Show less/i })
     await expect(collapse).toBeVisible()
 
-    // spec: NTS-007[1]
+    // spec: NTS-007.body-preserves-line-breaks
     const body = await notesRow(page).locator('dd > div').first().innerText()
     expect(body).toContain(firstParagraph)
     expect(body).toContain(lastParagraph)
@@ -113,7 +113,7 @@ test.describe('Contact notepad @area:contacts', () => {
 
     // The contact update has landed while the notepad save is still held
     // open — the edit form must still be on screen
-    // spec: NTS-008[0]
+    // spec: NTS-008.notepad-saved-own-operation
     const contactResponse = await contactPut
     expect(contactResponse.ok()).toBe(true)
     await expect(page.getByRole('button', { name: 'Update Contact' })).toBeVisible()
@@ -122,13 +122,13 @@ test.describe('Contact notepad @area:contacts', () => {
     releaseNotesPut()
     const notesResponse = await notesPut
     expect(notesResponse.ok()).toBe(true)
-    // spec: NTS-008[0]
+    // spec: NTS-008.notepad-saved-own-operation
     await expect(page.getByRole('button', { name: 'Edit' }).first()).toBeVisible({
       timeout: 15000,
     })
 
     // Both new values render after the save
-    // spec: NTS-008[2]
+    // spec: NTS-008.displayed-notepad-reflects-new
     await expect(page.getByRole('heading', { name: renamed })).toBeVisible()
     await expect(notesRow(page)).toContainText(noteBody)
   })
@@ -146,7 +146,7 @@ test.describe('Contact notepad @area:contacts', () => {
     await page.getByLabel('Notes').fill('')
 
     // An empty notepad submission deletes the note: the API answers 204
-    // spec: NTS-008[1]
+    // spec: NTS-008.clearing-notepad-field-removes
     const [notesResponse] = await Promise.all([
       page.waitForResponse(
         r =>
@@ -157,7 +157,7 @@ test.describe('Contact notepad @area:contacts', () => {
     expect(notesResponse.status()).toBe(204)
 
     // Back on the detail view, the Notes row is gone
-    // spec: NTS-008[1]
+    // spec: NTS-008.clearing-notepad-field-removes
     await expect(page.getByRole('button', { name: 'Edit' }).first()).toBeVisible({
       timeout: 15000,
     })

@@ -465,8 +465,10 @@ behaviors:
     given: a contact detail page
     when: the profile section renders
     then:
-      - a known location appears as a labeled row; an unknown location renders no row at all
-      - a known birthday appears as a labeled, human-readable date row; an unknown birthday renders no row
+      - key: known-location-appears-labeled
+        text: a known location appears as a labeled row; an unknown location renders no row at all
+      - key: known-birthday-appears-labeled
+        text: a known birthday appears as a labeled, human-readable date row; an unknown birthday renders no row
     provenance: ["contacts/[id]/page.tsx knowledge rows"]
 
   - id: KNW-035
@@ -477,7 +479,9 @@ behaviors:
     given: a contact whose birthday was stored with the placeholder year that marks a year-less (imported) birthday
     when: the birthday is displayed on any surface
     then:
-      - the date renders as month and day only, with the placeholder year never shown
-      - no age is computed or displayed for it
+      - key: date-renders-month-day
+        text: the date renders as month and day only, with the placeholder year never shown
+      - key: no-age-computed-displayed
+        text: no age is computed or displayed for it
     provenance: [formatBirthday, isPlaceholderBirthday, birthdays.spec.ts placeholder assertions]
     notes: The placeholder-year sentinel convention and the year-less rendering (formatBirthday drops the year on every surface — contact detail per KNW-034, the birthdays page, etc.) are the knowledge-domain derived-data concern owned here. Because no real year is stored there is no year to derive an age from; the landed CON-045 owns the birthdays-page display of that age-suppression outcome. The two are consistent, not competing — this row does not claim authority over CON-045.

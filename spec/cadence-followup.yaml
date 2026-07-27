@@ -295,11 +295,14 @@ behaviors:
     given: contacts past their next-contact date
     when: the overdue list is requested
     then:
-      - each entry carries the contact plus days overdue, the next due date, and a suggested action
-      - entries are ordered most-overdue first
-      - the list is bounded (1000), and truncation retains the most overdue contacts
+      - key: each-entry-carries-contact
+        text: each entry carries the contact plus days overdue, the next due date, and a suggested action
+      - key: entries-ordered-most-overdue
+        text: entries are ordered most-overdue first
+      - key: list-bounded-1000-truncation
+        text: the list is bounded (1000), and truncation retains the most overdue contacts
     waivers:
-      - then: 2
+      - then: list-bounded-1000-truncation
         reason: the 1000-entry bound and most-overdue-retained truncation cannot be deterministically seeded in an E2E run; the bound is applied in ContactService.ListOverdueContacts and ordering-under-limit is proven by TestContactBy_ListOverdueContacts
     provenance: [ContactHandler.ListOverdueContacts, ContactService.ListOverdueContacts]
 
@@ -327,9 +330,12 @@ behaviors:
     given: contacts past their next-contact date
     when: the dashboard renders
     then:
-      - overdue contacts appear as cards with the count in the header
-      - each card shows urgency (tiers at up to 2, up to 7, and more days overdue), cadence, how long since the last connection — or how long since the contact was added, when there has never been one — reachable contact methods, and the suggested action
-      - with nothing overdue, an all-caught-up state is shown instead
+      - key: overdue-contacts-appear-cards
+        text: overdue contacts appear as cards with the count in the header
+      - key: each-card-shows-urgency
+        text: each card shows urgency (tiers at up to 2, up to 7, and more days overdue), cadence, how long since the last connection — or how long since the contact was added, when there has never been one — reachable contact methods, and the suggested action
+      - key: nothing-overdue-all-caught
+        text: with nothing overdue, an all-caught-up state is shown instead
     serves: [DSH-010, DSH-011]
     provenance: [dashboard/page.tsx, OverdueContactCard, dashboard.spec.ts]
 
@@ -341,9 +347,12 @@ behaviors:
     given: an overdue list with several contacts
     when: the user switches the sort
     then:
-      - urgency (default) orders most-overdue first
-      - name orders alphabetically
-      - recency orders longest-waiting first, ranking never-connected contacts by when they were added
+      - key: urgency-default-orders-most
+        text: urgency (default) orders most-overdue first
+      - key: name-orders-alphabetically
+        text: name orders alphabetically
+      - key: recency-orders-longest-waiting
+        text: recency orders longest-waiting first, ranking never-connected contacts by when they were added
     serves: [DSH-010]
     provenance: [dashboard/page.tsx sort controls]
 
@@ -355,9 +364,12 @@ behaviors:
     given: an overdue contact card
     when: the user marks the contact as contacted
     then:
-      - a mutual interaction is logged, timestamped by the server's accelerated clock
-      - the contact leaves the overdue list without a page reload, and the count updates
-      - the change is consistent across dashboard, contact list, and contact detail
+      - key: mutual-interaction-logged-timestamped
+        text: a mutual interaction is logged, timestamped by the server's accelerated clock
+      - key: contact-leaves-overdue-list
+        text: the contact leaves the overdue list without a page reload, and the count updates
+      - key: change-consistent-across-dashboard
+        text: the change is consistent across dashboard, contact list, and contact detail
     serves: [DSH-010, DSH-012]
     provenance: [OverdueContactCard, overdue-contact-updates.spec.ts, dashboard.spec.ts]
     notes: The list-row variant of this action is CON-044.
@@ -370,10 +382,14 @@ behaviors:
     given: a contact detail page
     when: the recent-activity summary renders
     then:
-      - the last outreach time is shown when one exists
-      - the last response time is shown when one exists
-      - an awaiting-reply indicator is shown while a follow-up is pending
-      - with none of these, an explicit no-recent-activity state is shown
+      - key: last-outreach-time-shown
+        text: the last outreach time is shown when one exists
+      - key: last-response-time-shown
+        text: the last response time is shown when one exists
+      - key: awaiting-reply-indicator-shown
+        text: an awaiting-reply indicator is shown while a follow-up is pending
+      - key: explicit-no-recent-activity
+        text: with none of these, an explicit no-recent-activity state is shown
     serves: [CAD-036]
     provenance: ['contacts/[id]/page.tsx recent activity block', contact-direction.spec.ts]
 
@@ -385,10 +401,14 @@ behaviors:
     given: a contact with follow-up, manual, and completed tasks
     when: the tasks section renders
     then:
-      - managed follow-up tasks appear first with a distinct pending indicator, then live manual tasks
-      - each task carries a badge derived from its kind and lifecycle
-      - completed tasks are collapsed behind a toggle with a count
-      - with no tasks, an empty state invites adding one
+      - key: managed-tasks-appear-first
+        text: managed follow-up tasks appear first with a distinct pending indicator, then live manual tasks
+      - key: each-task-carries-badge
+        text: each task carries a badge derived from its kind and lifecycle
+      - key: completed-tasks-collapsed-behind
+        text: completed tasks are collapsed behind a toggle with a count
+      - key: no-tasks-empty-state
+        text: with no tasks, an empty state invites adding one
     serves: [CAD-036]
     provenance: [tasks-section.tsx, contact detail task queries]
     notes: A follow-up still in pending_remote_create is not listed in the section; during that window it surfaces only via the awaiting-reply indicator (CAD-029).
@@ -401,9 +421,12 @@ behaviors:
     given: the add-task flow on a contact
     when: the user creates a task
     then:
-      - the kind is chosen from reach-out, send, and reminder
-      - task text is required; notes are optional
-      - the created task appears in the contact's live tasks
+      - key: kind-chosen-reach-out
+        text: the kind is chosen from reach-out, send, and reminder
+      - key: task-text-required-notes
+        text: task text is required; notes are optional
+      - key: created-task-appears-contact
+        text: the created task appears in the contact's live tasks
     serves: [CAD-036]
     provenance: [add-task-modal.tsx, ContactTaskService.CreateManualTask]
 
@@ -415,9 +438,12 @@ behaviors:
     given: the contact task endpoints
     when: requests are handled
     then:
-      - task listing filters by state, kind, and lifecycle from their closed sets; invalid values are rejected (400) and an unknown contact is not-found (404)
-      - task creation requires a user-pickable kind and text (1-1000 chars, notes up to 5000), returning the created task (201)
-      - unlinking removes only the CRM link, returning no content (204), and is not-found (404) when the task does not belong to the contact
+      - key: task-listing-filters-state
+        text: task listing filters by state, kind, and lifecycle from their closed sets; invalid values are rejected (400) and an unknown contact is not-found (404)
+      - key: task-creation-requires-kind-text
+        text: task creation requires a user-pickable kind and text (1-1000 chars, notes up to 5000), returning the created task (201)
+      - key: unlinking-removes-only-crm
+        text: unlinking removes only the CRM link, returning no content (204), and is not-found (404) when the task does not belong to the contact
     provenance: [contact_task_routes.go, ContactTaskHandler]
 
   - id: CAD-033
@@ -428,8 +454,10 @@ behaviors:
     given: a task linked to a contact
     when: the user manages it from the CRM
     then:
-      - the CRM offers unlink behind a confirmation prompt; confirming removes the task from the CRM
-      - the linked task row offers no in-CRM complete or dismiss control — those happen in the remote task app
+      - key: unlink-behind-confirmation
+        text: the CRM offers unlink behind a confirmation prompt; confirming removes the task from the CRM
+      - key: no-in-crm-complete-or-dismiss
+        text: the linked task row offers no in-CRM complete or dismiss control — those happen in the remote task app
     provenance: [tasks-section.tsx TaskRow, useDeleteTaskLink]
 
   - id: CAD-034
@@ -466,8 +494,10 @@ behaviors:
     given: a task linked to a contact
     when: the user unlinks it from the CRM
     then:
-      - the CRM deletes only its own tracking row for the task
-      - no outbound call is made to the remote task provider — the remote task is untouched
+      - key: crm-deletes-only-own
+        text: the CRM deletes only its own tracking row for the task
+      - key: no-outbound-call-made
+        text: no outbound call is made to the remote task provider — the remote task is untouched
     provenance: [service/contact_task.go DeleteTaskLink]
     notes: The safe-remote-state guarantee formerly expressed as the judged intent CAD-037; moved to deterministic coverage (a backend integration test asserts zero outbound calls) per the QA-program rule that deterministic guarantees belong in tests, not the judge.
 
