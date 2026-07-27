@@ -74,7 +74,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     // the shared mac_host singleton table is seeded/reset by parallel
     // workers (imports-interactions.spec.ts), so asserting real-API global
     // emptiness is racy and would mean deleting hosts other tests own. The
-    // real-API list facet (MAC-018[0]) is covered by the seeded-host and
+    // real-API list facet (MAC-018.list-returns-live-hosts) is covered by the seeded-host and
     // uninstall tests below; this test is uncited (the mock replaces the
     // endpoint the behavior describes).
     await page.route('**/api/v1/host', route =>

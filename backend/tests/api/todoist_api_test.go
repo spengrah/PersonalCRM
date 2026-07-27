@@ -5,10 +5,10 @@
 // through oauthService.ListAccounts + syncRepo), plus the full
 // ListProjects/ListLabels picker contract (SET-018).
 //
-// The pickers' no-account-connected 404 branch (SET-018[0]) runs entirely
+// The pickers' no-account-connected 404 branch (SET-018.no-account-connected-404) runs entirely
 // before either handler touches the live provider client (it returns as soon
 // as len(accounts)==0), so it is hermetic. The live-provider clauses
-// (SET-018[1] deleted-entry filtering, SET-018[2] token/provider-failure 500)
+// (SET-018.deleted-entries-filtered-out deleted-entry filtering, SET-018.token-provider-api-failure token/provider-failure 500)
 // need no production seam: the handlers construct
 // todoist.NewSyncClient(accessToken) inline, but the client reads the
 // package-level todoist.SyncEndpoint var at request-build time, so pointing
@@ -71,7 +71,7 @@ func newTodoistAPITest(t *testing.T) (router *gin.Engine, syncRepo *repository.S
 		// but GetSettings/UpdateSettings never decrypt them — dummy non-nil
 		// bytes satisfy the constraint without a real token. (The 4-byte
 		// nonce also deterministically fails Decrypt's nonce-size check,
-		// which the SET-018[2] token-failure test relies on.)
+		// which the SET-018.token-provider-api-failure token-failure test relies on.)
 		_, err := oauthRepo.Upsert(ctx, repository.UpsertOAuthCredentialRequest{
 			Provider:             todoist.ProviderName,
 			AccountID:            accountID,

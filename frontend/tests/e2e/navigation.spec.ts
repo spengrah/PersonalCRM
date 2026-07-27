@@ -10,9 +10,9 @@ test.describe('Navigation @area:navigation', () => {
   }) => {
     // spec: DSH-002.wide-sm-viewports-links, DSH-002.link-matching-current-section
     // On EVERY primary surface, all five section links must be present with
-    // their correct hrefs (DSH-002[0]), and the link matching the current
+    // their correct hrefs (DSH-002.wide-sm-viewports-links), and the link matching the current
     // section must carry aria-current="page" while a non-current link does
-    // not (DSH-002[1]). Asserting the active mark per route proves it follows
+    // not (DSH-002.link-matching-current-section). Asserting the active mark per route proves it follows
     // the pathname rather than a hard-coded default.
     const SECTIONS = [
       { name: 'Dashboard', href: '/dashboard' },

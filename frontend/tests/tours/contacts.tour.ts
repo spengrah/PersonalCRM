@@ -175,7 +175,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   // READ-ONLY BEHAVIORS FIRST
   // =====================================================================
 
-  // --- CON-038: list + detail share the default cadence order ---
+  // --- CON-038: list + detail share the default cadence order --------------
   await page.goto(LIST_URL)
   await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH)
   await page.getByRole('heading', { name: 'Contacts', level: 2 }).waitFor({ state: 'visible' })
@@ -192,7 +192,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   // the response buffer, so the only list-path response left to satisfy this is
   // the detail page's own ids_only fetch (its sole /api/v1/contacts call).
   // Keep it even though NO shipped trap depends on it today: a FUTURE trap over
-  // CON-038[1] would, because the reorder_ids doctoring op reads this response's
+  // CON-038.detail-prev-next-same-default would, because the reorder_ids doctoring op reads this response's
   // ids array and silently no-ops when it is absent — it would be a trap that
   // cannot fail. The Edit button below is no substitute: it gates on the CONTACT
   // fetch (the page renders a skeleton until that lands, and the line above
@@ -218,7 +218,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
     pair: { id: 'default-order-CON-038', role: 'list-bare' },
   })
 
-  // --- CON-065: a visible "Back to list" control restores list context ---
+  // --- CON-065: a visible "Back to list" control restores list context -----
   // A NON-default search + cadence filter make the preserved context observable.
   // The round trip is list → detail (open a row) → "Back to list" (by mouse):
   // the return lands on the SAME searched + filtered list, at parity with the
@@ -285,7 +285,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
     pair: { id: 'back-to-list-CON-065', role: 'back-to-list' },
   })
 
-  // --- CON-045: birthdays grouped by proximity under accelerated time ---
+  // --- CON-045: birthdays grouped by proximity under accelerated time ------
   // Readiness = rendered cards (the cache-warm accelerated frame), NOT a fresh
   // system/time GET (which would deadlock on the warm 5m-stale cache).
   await page.goto('/birthdays')
@@ -318,7 +318,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
     fields: { birthdayContacts },
   })
 
-  // --- CON-041: one-shot ?action= param strip ---
+  // --- CON-041: one-shot ?action= param strip ------------------------------
   await page.goto(detailUrl(actionParamContact.id, 'edit'))
   await page.waitForURL(u => !new URL(u).search.includes('action='))
   await tour.waitForApi(page, 'GET', CONTACT_ID_PATH)
@@ -342,7 +342,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   await page.keyboard.press('Escape') // close merge modal without merging
   await page.getByRole('heading', { name: 'Merge Contacts' }).waitFor({ state: 'hidden' })
 
-  // --- CON-040: keyboard navigation drives the detail page ---
+  // --- CON-040: keyboard navigation drives the detail page -----------------
   // The whole keyboard sequence is one bracket the grader diffs by seq: the
   // nav/inert then-items are proven by comparing consecutive captures' urls.
   const navPair = 'keyboard-nav-CON-040'
@@ -399,7 +399,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   await page.keyboard.press('Escape')
   await page.getByRole('heading', { name: /Add Task for/ }).waitFor({ state: 'hidden' })
 
-  // Boundary: last contact → Next nav disabled (the other half of CON-040[0]).
+  // Boundary: last contact → Next nav disabled (the other half of CON-040.left-right-arrows-move).
   // Placed after the input-focus capture so it does not move the page off the
   // first contact that input-focus-inert's url is diffed against.
   await gotoDetailReady(lastId)
@@ -607,7 +607,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
     pair: { id: 'merge-CON-043', role: 'dismissed' },
   })
 
-  // --- CON-042: deleting a contact requires explicit confirmation ---
+  // --- CON-042: deleting a contact requires explicit confirmation ----------
   // Dismiss bracket then accept bracket on the SAME contact.
   await page.goto(detailUrl(deleteContact.id))
   await tour.waitForApi(page, 'GET', CONTACT_ID_PATH)

@@ -33,7 +33,7 @@ const CONTACT_ID_PATH = /\/api\/v1\/contacts\/[0-9a-f-]{36}$/
 test('cadence-followup tour — contact-detail cadence surfaces', async ({ page, tour }) => {
   test.setTimeout(480_000)
 
-  // --- Resolve the pinned contact for each CAD-029 activity state ---
+  // --- Resolve the pinned contact for each CAD-029 activity state ----------
   // Resolution is by marker; the STATE is then verified on the resolved row, since
   // a search that returned something is not proof it returned the right thing.
   //
@@ -130,7 +130,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
     await page.getByRole('button', { name: 'Edit' }).waitFor({ state: 'visible' })
   }
 
-  // --- CAD-029[0]: last outreach shown when it exists ---
+  // --- CAD-029.last-outreach-time-shown: last outreach shown when it exists ---
   await gotoDetail(outreachContact.id)
   await page.getByText('Last outreach:').waitFor({ state: 'visible' })
   await tour.capture(page, {
@@ -139,7 +139,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
     pair: { id: 'activity', role: 'activity-outreach' },
   })
 
-  // --- CAD-029[1]: last response shown when it exists ---
+  // --- CAD-029.last-response-time-shown: last response shown when it exists ---
   await gotoDetail(responseContact.id)
   await page.getByText('Last response:').waitFor({ state: 'visible' })
   await tour.capture(page, {
@@ -148,7 +148,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
     pair: { id: 'activity', role: 'activity-response' },
   })
 
-  // --- CAD-029[2]: pending-reply ("Awaiting reply") state ---
+  // --- CAD-029.awaiting-reply-indicator-shown: pending-reply ("Awaiting reply") state ---
   // The state the judge could never see. It is unreachable from a historical replay
   // (FollowUpManager is off-mode in the seed harness, and CAD-012 suppresses follow-ups
   // for backdated automated outbounds), so the prod-shaped profile now seeds one live
@@ -164,7 +164,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
     pair: { id: 'activity', role: 'activity-pending' },
   })
 
-  // --- CAD-029[3]: no-recent-activity state ---
+  // --- CAD-029.explicit-no-recent-activity: no-recent-activity state -------
   await gotoDetail(noneContact.id)
   await page.getByText('No recent activity').waitFor({ state: 'visible' })
   await tour.capture(page, {
@@ -173,7 +173,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
     pair: { id: 'activity', role: 'activity-none' },
   })
 
-  // --- CAD-030[3] + CAD-033 (skip-listed): the tasks section empty state ---
+  // --- CAD-030.no-tasks-empty-state + CAD-033 (skip-listed): the tasks section empty state ---
   // The TasksSection card is a labeled region (<section aria-label="Tasks">).
   const tasksSection = page.getByRole('region', { name: 'Tasks', exact: true })
   await page.getByText('No tasks yet').waitFor({ state: 'visible' })
@@ -184,7 +184,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
     ariaRoot: tasksSection,
   })
 
-  // --- CAD-031[0][1]: the add-task modal (kind picker + text-required) ---
+  // --- CAD-031.kind-chosen-reach-out[1]: the add-task modal (kind picker + text-required) ---
   const addTaskModal = page
     .locator('div.fixed.inset-0')
     .filter({ has: page.getByRole('heading', { name: /Add Task for/ }) })

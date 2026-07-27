@@ -117,7 +117,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await expect(sourceOption).toBeVisible({ timeout: 5000 })
 
     // The selector excludes the merge target — it appears only as the kept
-    // heading, never as a selectable option (CON-043[0]).
+    // heading, never as a selectable option (CON-043.current-contact-marked-kept).
     await expect(page.getByRole('option', { name: targetName })).toHaveCount(0)
 
     // Select the source contact

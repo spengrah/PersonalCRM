@@ -176,12 +176,12 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
 
     // Wait for navigation bar to be fully ready with IDs loaded; the position
     // indicator reports the contact's EXACT place in the search-isolated
-    // 3-contact fixture (CON-059[1]) — first under name-asc, so "1 of 3".
+    // 3-contact fixture (CON-059.position-indicator-reports-contact) — first under name-asc, so "1 of 3".
     await expect(page.getByRole('button', { name: 'Next contact' })).toBeVisible({ timeout: 10000 })
     await expect(page.getByText('1 of 3')).toBeVisible({ timeout: 10000 })
 
     // Click next: it moves to the ADJACENT contact under the carried
-    // name-asc order — ids[1], "Button Nav 2" (CON-059[0]) — and the
+    // name-asc order — ids[1], "Button Nav 2" (CON-059.buttons-move-adjacent-contact) — and the
     // position indicator advances with it.
     const nextButton = page.getByRole('button', { name: 'Next contact' })
     await expect(nextButton).toBeEnabled({ timeout: 5000 })

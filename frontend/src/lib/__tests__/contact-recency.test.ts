@@ -5,7 +5,7 @@ import { cadenceBaseDate, formatOverdueRecency } from '../contact-recency'
 // The overdue list's recency ordering answers "who have I gone longest without
 // connecting with". A never-connected contact has waited since it was added, so it
 // belongs in that ordering by its creation date — the same base the cadence engine
-// uses (CAD-002[0]) — rather than sinking below everyone as an absent value.
+// uses (CAD-002) — rather than sinking below everyone as an absent value.
 describe('cadenceBaseDate', () => {
   it('ranks a never-connected contact by its added date, interleaved among connected ones', () => {
     // The distinguishing claim: never-connected contacts are ordered BY when they

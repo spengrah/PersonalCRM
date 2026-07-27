@@ -7,9 +7,9 @@ import { waitForOverdueListSettled } from './helpers/dashboard'
  * E2E coverage for overdue-contact state changes.
  *
  * The dashboard-card "Mark as Contacted" halves (server-timestamped mutual
- * interaction + immediate removal, CAD-028[0]/[1]) are cited and proven in
+ * interaction + immediate removal, CAD-028.mutual-interaction-logged-timestamped/[1]) are cited and proven in
  * dashboard.spec.ts; this file owns the detail-page Log Interaction modal
- * variant (CON-053), the cross-view consistency leg (CAD-028[2]), and the
+ * variant (CON-053), the cross-view consistency leg (CAD-028.change-consistent-across-dashboard), and the
  * overdue endpoint's reporting contract (CAD-023).
  *
  * Note: In testing mode (CRM_ENV=testing), weekly cadence = 2 minutes.
@@ -175,7 +175,7 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
 
     // 3. Contact Detail: the recent-activity block reflects the new mutual
     // interaction — the "Last response" row is rendered only when a
-    // response timestamp exists (CAD-029[1]), and it must carry a VALUE,
+    // response timestamp exists (CAD-029.last-response-time-shown), and it must carry a VALUE,
     // not just the label.
     await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
@@ -229,7 +229,7 @@ test.describe('Overdue Contact Updates - Multiple Contacts @area:overdue', () =>
       page.getByRole('heading', { name: `${testApi.prefix}-Second Overdue` })
     ).toBeVisible()
 
-    // CAD-023[2] (the 1000-entry bound + most-overdue-retained truncation)
+    // CAD-023.list-bounded-1000-truncation (the 1000-entry bound + most-overdue-retained truncation)
     // is waived in spec/cadence-followup.yaml: not E2E-seedable.
     // spec: CAD-023.each-entry-carries-contact, CAD-023.entries-ordered-most-overdue
     const overdueRes = await request.get(`${API_BASE_URL}/api/v1/contacts/overdue`, {

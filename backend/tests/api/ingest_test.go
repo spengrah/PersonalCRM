@@ -575,7 +575,7 @@ func TestIngest_SourceIDLengthBound(t *testing.T) {
 }
 
 // TestIngest_PayloadSizeBound exercises the size-bound half of
-// ING-004[3]: payloads over the 64 KiB cap (maxPayloadBytes in
+// ING-004.payload-required-size-bounded: payloads over the 64 KiB cap (maxPayloadBytes in
 // internal/api/handlers/ingest.go) are rejected PAYLOAD_TOO_LARGE, and a
 // payload at exactly the cap is accepted. The size check runs before
 // the kind-known / structural checks, so an oversized payload doesn't

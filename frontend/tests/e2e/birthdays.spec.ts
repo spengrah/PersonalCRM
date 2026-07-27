@@ -144,7 +144,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
   }) => {
     // spec: CON-045.contacts-grouped-into-today
     // Freeze the frame mid-year so the three groups are deterministic and
-    // parallel-safe (the same per-page frame-mock idiom used for CON-045[1]).
+    // parallel-safe (the same per-page frame-mock idiom used for CON-045.gift-planning-near-year-end).
     await mockFrozenSystemTime(page, '2026-06-15T12:00:00Z')
     const todayName = `${testApi.prefix}-Group Today`
     const upcomingName = `${testApi.prefix}-Group Upcoming`

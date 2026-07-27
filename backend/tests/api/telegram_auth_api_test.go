@@ -287,7 +287,7 @@ func TestTelegramAuthAPI_ValidationErrors(t *testing.T) {
 }
 
 // TestTelegramAuthAPI_StartConflictWhenAlreadyConnected is GROUNDWORK for
-// TGM-007[1] (deliberately uncited): it proves the already-connected half of
+// TGM-007.in-progress-or-connected-409 (deliberately uncited): it proves the already-connected half of
 // the then-item (409 CONFLICT decided from the stored session). The
 // auth-in-progress half is unreachable without a live MTProto client — the
 // AuthSessionManager's session field is unexported and set only inside a real
@@ -312,7 +312,7 @@ func TestTelegramAuthAPI_StartConflictWhenAlreadyConnected(t *testing.T) {
 	assert.Contains(t, errObj["message"], "Already connected")
 }
 
-// TestTelegramAuthAPI_InvalidTokenBadRequest is GROUNDWORK for TGM-007[2]
+// TestTelegramAuthAPI_InvalidTokenBadRequest is GROUNDWORK for TGM-007.invalid-token-client-error
 // (deliberately uncited): it proves the invalid-token half (400 BAD_REQUEST,
 // distinct from the 400 VALIDATION_ERROR of missing fields) for both
 // verify-code and verify-password. The expired half (410) is unreachable
@@ -349,7 +349,7 @@ func TestTelegramAuthAPI_InvalidTokenBadRequest(t *testing.T) {
 	}
 }
 
-// TestTelegramAuthAPI_CancelAlwaysSucceeds is GROUNDWORK for TGM-007[4]
+// TestTelegramAuthAPI_CancelAlwaysSucceeds is GROUNDWORK for TGM-007.cancel-always-succeeds-200
 // (deliberately uncited): it proves the cancel-always-succeeds half — 200 with
 // {"status":"cancelled"} even with no flow in progress, and idempotently on
 // repeat. The successful-step half (a StartAuth/VerifyCode/VerifyPassword
@@ -374,7 +374,7 @@ func TestTelegramAuthAPI_CancelAlwaysSucceeds(t *testing.T) {
 	}
 }
 
-// TestTelegramAuthAPI_Disconnect proves both halves of TGM-007[5]: the happy
+// TestTelegramAuthAPI_Disconnect proves both halves of TGM-007.disconnect-200-unless-delete-fails: the happy
 // path returns 200 with {"status":"disconnected"} and clears the session row;
 // a failing session-row delete (forced by serving the request with an
 // already-cancelled context, so the repository DELETE fails without any
@@ -437,7 +437,7 @@ func TestTelegramAuthAPI_Disconnect(t *testing.T) {
 	})
 }
 
-// TestTelegramAuthAPI_Status proves TGM-007[6]: status always answers 200 and
+// TestTelegramAuthAPI_Status proves TGM-007.status-always-returns-200: status always answers 200 and
 // reflects the current connection state, asserting the LITERAL wire keys of
 // the payload in both the no-session and stored-connected-session states.
 func TestTelegramAuthAPI_Status(t *testing.T) {

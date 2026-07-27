@@ -28,7 +28,7 @@ test.describe('Rematch on add email @area:contacts', () => {
     page,
     request,
   }) => {
-    // CAL-019[1] (past-projects/future-links split) and CAL-019[2] (processed
+    // CAL-019.past-confirmed-events-additionally (past-projects/future-links split) and CAL-019.append-does-not-reset (processed
     // flag not reset) are waived in spec/calendar.yaml: both are backend
     // projection plumbing owned by rematch_integration_test.go.
     // spec: CAL-019.contact-appended-each-matching

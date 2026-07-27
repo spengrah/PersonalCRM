@@ -175,7 +175,7 @@ test.describe('Telegram Settings @area:settings', () => {
     // A valid code connects: the success indication carries the verify
     // response's username, and the view switches to the connected state
     // (its disconnect affordance appears). The connected VIEW's username
-    // display is TGM-038[4], proven by the pre-connected-status test.
+    // display is TGM-038.connected-state-shows-account, proven by the pre-connected-status test.
     await expect(page.getByText(/Connected.*@testuser/)).toBeVisible({ timeout: 5000 })
     await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })

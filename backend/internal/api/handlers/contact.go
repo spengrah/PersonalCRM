@@ -146,7 +146,7 @@ func createRequestToRepo(req CreateContactRequest) repository.CreateContactReque
 
 	// last_contacted is deliberately left unset: it records a two-way connection
 	// (CAD-006), and a new contact has had none. contact_by falls back to
-	// created_at (CAD-002[0]), so the cadence clock still starts at creation.
+	// created_at (CAD-002), so the cadence clock still starts at creation.
 	return repository.CreateContactRequest{
 		FullName:     req.FullName,
 		Location:     req.Location,

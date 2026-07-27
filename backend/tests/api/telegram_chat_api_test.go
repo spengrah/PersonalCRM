@@ -225,7 +225,7 @@ func TestChatAPI_ListChats_ExcludesPrivate(t *testing.T) {
 	require.NoError(t, err)
 
 	// A group chat is seeded alongside the excluded private chat so this one
-	// test proves both halves of TGM-014[0]: private (non-group) chats are
+	// test proves both halves of TGM-014.list-returns-only-group: private (non-group) chats are
 	// filtered out, and each surviving chat carries the literal
 	// effective_tracked wire key.
 	mc3 := int32(3)

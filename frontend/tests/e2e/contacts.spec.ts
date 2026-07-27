@@ -433,7 +433,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     page.on('request', watchDelete)
     // The confirmation copy is captured INSIDE the handler (it cannot be read
     // after the dialog resolves) and asserted below: the prompt must warn the
-    // action cannot be undone (CON-042[0]).
+    // action cannot be undone (CON-042.confirmation-prompt-warns-action).
     let confirmMessage = ''
     page.once('dialog', dialog => {
       confirmMessage = dialog.message()
@@ -461,10 +461,10 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const delResp = await deleteResponse
     expect(delResp.status()).toBe(204)
 
-    // Redirected to the contact list on success (CON-042[2]).
+    // Redirected to the contact list on success (CON-042.success-user-returned-contact).
     await expect(page).toHaveURL(/\/contacts(\?|$)/)
 
-    // The contact is now gone (CON-042[1]).
+    // The contact is now gone (CON-042.only-confirmation-contact-deleted).
     const afterResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
       headers: API_HEADERS,
     })
