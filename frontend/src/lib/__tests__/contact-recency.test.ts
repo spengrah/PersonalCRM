@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { cadenceBaseDate, formatOverdueRecency } from '../contact-recency'
 
-// spec: CAD-027.recency-orders-longest-waiting
-// The overdue list's recency ordering answers "who have I gone longest without
-// connecting with". A never-connected contact has waited since it was added, so it
-// belongs in that ordering by its creation date — the same base the cadence engine
-// uses (CAD-002) — rather than sinking below everyone as an absent value.
+// The overdue list's recency ordering (CAD-027) answers "who have I gone longest
+// without connecting with". A never-connected contact has waited since it was
+// added, so it belongs in that ordering by its creation date — the same base the
+// cadence engine uses (CAD-002) — rather than sinking below everyone as an absent
+// value.
 describe('cadenceBaseDate', () => {
   it('ranks a never-connected contact by its added date, interleaved among connected ones', () => {
     // The distinguishing claim: never-connected contacts are ordered BY when they
@@ -45,11 +45,10 @@ describe('cadenceBaseDate', () => {
   })
 })
 
-// spec: CAD-026.each-card-shows-urgency
 // last_contacted records a two-way connection (CAD-006) and is unset until one
-// happens (CON-001). The overdue card must not present a contact's creation instant
-// as a connection — the app knew nothing had happened and said "Last contacted N ago"
-// anyway, contradicting the same contact's detail page.
+// happens (CON-001). The overdue card (CAD-026) must not present a contact's
+// creation instant as a connection — the app knew nothing had happened and said
+// "Last contacted N ago" anyway, contradicting the same contact's detail page.
 describe('formatOverdueRecency', () => {
   const now = new Date('2026-07-24T12:00:00Z')
   // Noon-anchored fixtures: both endpoints sit near local midday, so the
