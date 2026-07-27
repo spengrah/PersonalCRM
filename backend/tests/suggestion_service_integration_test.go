@@ -207,7 +207,7 @@ func TestSuggestions_Resolve_Idempotent(t *testing.T) {
 }
 
 // TestSuggestions_Resolve_RequestedSubset_OnlyRequestedConfirmed proves the
-// requested-subset half of IMP-018[0]: with two live pending methods,
+// requested-subset half of IMP-018.resolve-confirms-requested-methods: with two live pending methods,
 // requesting only one confirms exactly that one (enrichment + pending
 // clear) and leaves the other untouched in pending.
 //
@@ -238,7 +238,7 @@ func TestSuggestions_Resolve_RequestedSubset_OnlyRequestedConfirmed(t *testing.T
 }
 
 // TestSuggestions_Resolve_Unspecified_ConfirmsAllPending proves the
-// unspecified-means-all half of IMP-018[0]: an empty/nil methods list
+// unspecified-means-all half of IMP-018.resolve-confirms-requested-methods: an empty/nil methods list
 // confirms EVERY live pending method (not just one), enriching all of
 // them and fully clearing pending.
 //
@@ -331,7 +331,7 @@ func TestSuggestions_Resolve_MalformedMethod400(t *testing.T) {
 }
 
 // TestSuggestions_Dismiss_RecordsStickyAndDropsPending proves the
-// value dimension of IMP-018[1]'s sticky-per-(type,value) stickiness: a
+// value dimension of IMP-018.dismiss-sticky-per-method's sticky-per-(type,value) stickiness: a
 // dismissed email is sticky and a second PENDING entry of the SAME type
 // but a DIFFERENT value survives.
 //
@@ -397,7 +397,7 @@ func TestSuggestions_Dismiss_Idempotent(t *testing.T) {
 }
 
 // TestSuggestions_Dismiss_StickyPerType_SameValueSurvivesDifferentType proves
-// the TYPE dimension of IMP-018[1]'s sticky-per-(type,value) rule: an
+// the TYPE dimension of IMP-018.dismiss-sticky-per-method's sticky-per-(type,value) rule: an
 // email pending entry and a telegram pending entry that happen to share
 // the SAME normalized value are independent stickiness keys — dismissing
 // the email entry must not sweep up the telegram entry with the same
@@ -492,7 +492,7 @@ func TestSuggestions_Dismiss_AlreadyOnContact_NotStickyDismissed(t *testing.T) {
 }
 
 // TestSuggestions_Dismiss_NoLongerOffered_PrunedNotDismissed proves the
-// second prune reason of IMP-018[2]: a pending method the source no
+// second prune reason of IMP-018.stale-entries-pruned-not-dismissed: a pending method the source no
 // longer offers (the external row's current method set drifted since the
 // suggestion was recorded) is pruned from pending WITHOUT being recorded
 // as a dismissal.
@@ -608,7 +608,7 @@ func TestSuggestions_DuplicateOfCanonical_ResolvesToCanonicalContact(t *testing.
 }
 
 // TestSuggestionsAPI_Resolve_SoftDeletedContact_Returns410 proves the
-// literal HTTP status half of IMP-018[3]: through the real
+// literal HTTP status half of IMP-018.actions-re-check-live: through the real
 // production route (not the service call directly), a soft-deleted
 // effective contact reports 410 Gone on the wire.
 //

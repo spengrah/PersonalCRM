@@ -85,7 +85,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
     overdueRows.map(r => [r.id, r.last_contacted ?? null])
   )
 
-  // --- DSH-001: the dashboard is the default landing surface ---
+  // --- DSH-001: the dashboard is the default landing surface ---------------
   await page.goto('/')
   // Best-effort mid-redirect capture: the in-flight state (and its screenshot)
   // is evidence for the DSH-011 intent ("the dashboard never dead-ends"), bound
@@ -132,7 +132,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
     fields: { activeNavClass, navPosition },
   })
 
-  // --- DSH-007[0]: search lives on the contact list ---
+  // --- DSH-007.contact-text-search-provided: search lives on the contact list ---
   await page.goto('/contacts')
   await page.getByPlaceholder('Search contacts...').waitFor({ state: 'visible' })
   await tour.capture(page, {
@@ -142,7 +142,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
     pair: { id: 'contacts-search', role: 'contacts-search' },
   })
 
-  // --- CAD-026 / CAD-027[0]: overdue cards + urgency (default) order ---
+  // --- CAD-026 / CAD-027.urgency-default-orders-most: overdue cards + urgency (default) order ---
   await page.goto('/dashboard')
   await tour.waitForApi(page, 'GET', OVERDUE_PATH)
   await page
@@ -157,7 +157,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
     fields: { overdueCards: await readOverdueCards(page, lastContactedById) },
   })
 
-  // --- CAD-027[1]: name order ---
+  // --- CAD-027.name-orders-alphabetically: name order ----------------------
   await page.getByRole('button', { name: 'Name' }).click()
   await tour.capture(page, {
     arrayCap: OVERDUE_CAPTURE_CAP,
@@ -167,7 +167,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
     fields: { overdueCards: await readOverdueCards(page, lastContactedById) },
   })
 
-  // --- CAD-027[2]: last-contacted order ---
+  // --- CAD-027.recency-orders-longest-waiting: last-contacted order --------
   await page.getByRole('button', { name: 'Last Contacted' }).click()
   await tour.capture(page, {
     arrayCap: OVERDUE_CAPTURE_CAP,
@@ -177,7 +177,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
     fields: { overdueCards: await readOverdueCards(page, lastContactedById) },
   })
 
-  // --- CAD-028 / DSH-005: mark-as-contacted on the dashboard (mutating) ---
+  // --- CAD-028 / DSH-005: mark-as-contacted on the dashboard (mutating) ----
   await page.getByRole('button', { name: 'Most Urgent' }).click() // back to default
   await tour.capture(page, {
     arrayCap: OVERDUE_CAPTURE_CAP,
@@ -199,7 +199,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   // ROUTE-INTERCEPTION CAPTURES LAST (deterministic loading / error / caught-up)
   // =====================================================================
 
-  // --- DSH-004[0]: loading placeholder (route held) ---
+  // --- DSH-004.while-loading-placeholder-content: loading placeholder (route held) ---
   const hold = await tour.holdRoute(page, OVERDUE_MATCH)
   await page.goto('/dashboard')
   await page.locator('.max-w-7xl [class*="animate-pulse"]').first().waitFor({ state: 'visible' })
@@ -213,7 +213,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   })
   await hold.release()
 
-  // --- DSH-004[1]: error state (route → 500) ---
+  // --- DSH-004.request-failure-error-state: error state (route → 500) ------
   await page.route('**/contacts/overdue', route =>
     route.fulfill({
       status: 500,
@@ -230,7 +230,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
     pair: { id: 'dsh004', role: 'error' },
   })
 
-  // --- DSH-003[1] + CAD-026[2]: caught-up state (route → empty) ---
+  // --- DSH-003.caught-up-offers-add-and-list + CAD-026.nothing-overdue-all-caught: caught-up state (route → empty) ---
   await page.route('**/contacts/overdue', route =>
     route.fulfill({
       status: 200,

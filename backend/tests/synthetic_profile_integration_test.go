@@ -669,7 +669,7 @@ func assertSeedCoherence(t *testing.T, ctx context.Context, support *repository.
 		// timeline — created_at far in the past, last_contacted NULL (no connection
 		// ever happened, CON-001), and a computed contact_by already elapsed. The
 		// production cadence helper is invoked ON THIS ROW with a nil last_contacted
-		// and must agree it is overdue, proving the created_at fallback (CAD-002[0])
+		// and must agree it is overdue, proving the created_at fallback (CAD-002)
 		// drives overdue-ness directly rather than any residual last_contacted value.
 		if b.LastContacted == nil &&
 			b.CreatedAt.Before(overdueFloor) &&

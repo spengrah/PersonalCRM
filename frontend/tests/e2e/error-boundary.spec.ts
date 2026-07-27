@@ -81,7 +81,7 @@ test.describe('Error Boundary @area:error-boundary', () => {
       alert.getByRole('heading', { name: 'Error loading overdue contacts' })
     ).toBeVisible({ timeout: 20000 })
 
-    // The shown reason FAITHFULLY reflects the actual failure (DSH-004[2]):
+    // The shown reason FAITHFULLY reflects the actual failure (DSH-004.shown-failure-reason-faithfully):
     // apiClient plumbs the envelope's error.message into ApiError.message and
     // the dashboard renders error.message, so the mocked failure message is
     // deterministically the rendered reason.

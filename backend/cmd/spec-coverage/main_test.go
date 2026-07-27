@@ -69,7 +69,7 @@ func TestRunInvalidCitations(t *testing.T) {
 		// orphan rendering: a reference in this form is a location, not a
 		// citable handle. (An orphan whose item DOES carry a key renders as
 		// ID.key instead — see coverage-indexed-rejected's golden.)
-		"  ORPHAN ALP-003[0]: the request carries the filter param",
+		"  ORPHAN ALP-003[0] (no key yet): the request carries the filter param",
 		"  waived ALP-001.refocus-rechecks-freshness: focus-driven freshness is not deterministically provable",
 		"spec-coverage: 4 orphaned then-items (ui 1, api 3), 8 invalid citations",
 	} {
@@ -88,7 +88,7 @@ func TestRunSettledOrphanBlocks(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("want exit 1 on settled-domain orphan, got %d", code)
 	}
-	if !hasLine(stdout, "  ORPHAN (blocking) BET-001[0]: y") {
+	if !hasLine(stdout, "  ORPHAN (blocking) BET-001[0] (no key yet): y") {
 		t.Errorf("blocking orphan golden missing from stdout:\n%s", stdout)
 	}
 	if !hasLine(stdout, "beta               [settled: ui]  surface ui/api/none: 1/0/0  ui: 0 covered, 0 waived, 1 orphaned  api: 0 covered, 0 waived, 0 orphaned") {
@@ -108,7 +108,7 @@ func TestRunApiSettledBlocks(t *testing.T) {
 	if !hasLine(stdout, "apiblocked         [settled: ui,api]  surface ui/api/none: 0/1/0  ui: 0 covered, 0 waived, 0 orphaned  api: 0 covered, 0 waived, 1 orphaned") {
 		t.Errorf("api-settled header golden missing (canonicalization?):\n%s", stdout)
 	}
-	if !hasLine(stdout, "  ORPHAN (blocking) API-001[0]: a 200 carries the resource") {
+	if !hasLine(stdout, "  ORPHAN (blocking) API-001[0] (no key yet): a 200 carries the resource") {
 		t.Errorf("blocking api orphan golden missing from stdout:\n%s", stdout)
 	}
 }
@@ -120,7 +120,7 @@ func TestRunApiWarnNotBlocked(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("want exit 0 when api is unsettled, got %d", code)
 	}
-	if !hasLine(stdout, "  ORPHAN API-001[0]: a 200 carries the resource") {
+	if !hasLine(stdout, "  ORPHAN API-001[0] (no key yet): a 200 carries the resource") {
 		t.Errorf("non-blocking api orphan golden missing from stdout:\n%s", stdout)
 	}
 	if strings.Contains(stdout, "ORPHAN (blocking)") {

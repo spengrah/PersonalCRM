@@ -45,7 +45,7 @@ test.describe('Dashboard @area:dashboard', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // The redirect target has render-settled: the main h2 heading is up.
-    // (The nav links themselves are covered per-surface by the DSH-002[0]
+    // (The nav links themselves are covered per-surface by the DSH-002.wide-sm-viewports-links
     // loop in navigation.spec.ts.)
     await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
   })
@@ -84,7 +84,7 @@ test.describe('Dashboard @area:dashboard', () => {
     // NEGATIVE existence proof at a settled state: establish the dashboard
     // has fully rendered first, THEN assert that no plausible search-surface
     // shape is present (a not-yet-rendered page would pass these vacuously).
-    // Search lives on the contact list (DSH-007[0], contacts.spec.ts).
+    // Search lives on the contact list (DSH-007.contact-text-search-provided, contacts.spec.ts).
     await page.goto('/dashboard')
     await expect(page.getByRole('heading', { name: 'Action Required', level: 2 })).toBeVisible()
 
@@ -244,7 +244,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
   //   Mike (never-connected) is deliberately placed BETWEEN two connected
   //   contacts by its created_at — a regression that pinned null-last_contacted
   //   rows to an edge would reorder Mike and fail, distinguishing "ranked by
-  //   added date" (CAD-027[2]) from "never-connected grouped first/last".
+  //   added date" (CAD-027.recency-orders-longest-waiting) from "never-connected grouped first/last".
   const fixture = [
     overdueEntry({
       name: `Alpha ${fixtureSuffix}`,
@@ -391,15 +391,15 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     page,
   }) => {
     // spec: DSH-005.overdue-list-refreshes-reflect, CAD-028.mutual-interaction-logged-timestamped, CAD-028.contact-leaves-overdue-list
-    // DSH-005[0]: the on-dashboard interaction:created trigger refreshing the
+    // DSH-005.overdue-list-refreshes-reflect: the on-dashboard interaction:created trigger refreshing the
     // overdue list without a manual reload. DSH-005's broader trigger coverage
     // (merge / meeting-note-resolve), the cosmetic-edit no-op, and the
     // refocus/staleTime timing were verifier-abstained and are not asserted
     // here.
-    // CAD-028[0]: the mutual interaction is logged with a server-assigned,
-    // full-precision accelerated-clock timestamp. CAD-028[1]: the contact
+    // CAD-028.mutual-interaction-logged-timestamped: the mutual interaction is logged with a server-assigned,
+    // full-precision accelerated-clock timestamp. CAD-028.contact-leaves-overdue-list: the contact
     // leaves the overdue list without a reload and the header count updates.
-    // CAD-028[2] (dashboard/list/detail consistency) is proved in
+    // CAD-028.change-consistent-across-dashboard (dashboard/list/detail consistency) is proved in
     // overdue-contact-updates.spec.ts.
     const contactName = `${testApi.prefix}-Dashboard Test Contact`
     const sentinelName = `${testApi.prefix}-Dashboard Sentinel Contact`

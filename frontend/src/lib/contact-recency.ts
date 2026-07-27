@@ -12,7 +12,7 @@ export interface RecencySource {
 
 /**
  * The cadence base date as epoch ms: last_contacted when set, else created_at — the
- * same base contact_by is computed from (CAD-002[0]). Sorting on it keeps
+ * same base contact_by is computed from (CAD-002). Sorting on it keeps
  * never-connected contacts in the recency ordering, ranked by how long they have
  * waited, instead of sinking them below every contact that has a connection.
  */

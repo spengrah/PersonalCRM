@@ -201,7 +201,7 @@ func uniqueEmail() string {
 	return "m" + uuid.NewString()[:8] + "@example.test"
 }
 
-// --- CON-062[0]: absence expresses nothing ---------------------------------
+// --- CON-062.unnamed-method-untouched: absence expresses nothing -----------
 
 // TestMethodOps_UnnamedMethodsSurvive is the regression. A method the payload
 // does not name must come through byte-identical in EVERY persisted column.
@@ -282,7 +282,7 @@ func TestMethodOps_ClearNamedPrimaryLeavesNone(t *testing.T) {
 	}
 }
 
-// --- CON-062[1]: all or nothing --------------------------------------------
+// --- CON-062.whole-request-applies-atomically: all or nothing --------------
 
 // spec: CON-062.whole-request-applies-atomically
 func TestMethodOps_InvalidOperationAppliesNothing(t *testing.T) {
@@ -333,7 +333,7 @@ func TestMethodOps_AddWithIsPrimaryPromotesAfterInsert(t *testing.T) {
 	assert.False(t, f.storedByID(seeded.ID).IsPrimary, "the seeded primary was not demoted")
 }
 
-// --- CON-062[2]: order independence ----------------------------------------
+// --- CON-062.outcome-not-order-dependent: order independence ---------------
 
 // TestMethodOps_OutcomeIndependentOfPayloadOrder uses a payload whose classes
 // genuinely interact: the add reuses the key the update frees, so a fold that
@@ -456,7 +456,7 @@ func TestMethodOps_TwoAddsOrderIndependent(t *testing.T) {
 }
 
 // TestMethodOps_MixedOperationOrderYieldsIdenticalCompleteState is
-// CON-062[2]'s citing test. The permutation test above proves the SHAPE of the
+// CON-062.outcome-not-order-dependent's citing test. The permutation test above proves the SHAPE of the
 // outcome is order-independent; this one proves the COMPLETE outcome is —
 // specifically that an updated row's persisted VALUE survives reordering, which
 // no shape comparison can see: a fold that silently dropped the update's value
@@ -557,7 +557,7 @@ func TestMethodOps_MixedOperationOrderYieldsIdenticalCompleteState(t *testing.T)
 	assert.Equal(t, expected, reverseStored, "reversed ordering did not produce the expected complete state")
 }
 
-// --- CON-062[3][4]: idempotency --------------------------------------------
+// --- CON-062.adding-existing-method-succeeds + .removing-method-already-absent: idempotency ---
 
 // spec: CON-062.adding-existing-method-succeeds
 func TestMethodOps_DuplicateAddIsNoOp(t *testing.T) {
@@ -627,7 +627,7 @@ func TestMethodOps_NamedRemovalSucceeds(t *testing.T) {
 	assert.NotNil(t, f.storedByID(survivor.ID), "an unnamed row was removed")
 }
 
-// --- CON-062[5][6]: final-state validation ---------------------------------
+// --- CON-062.duplicate-resulting-set-rejected + .multiple-primaries-rejected: final-state validation ---
 
 // TestMethodOps_DuplicateFinalStateRejected asserts the rejection comes from
 // the FOLD, by requiring the response to name the colliding value.
@@ -674,7 +674,7 @@ func TestMethodOps_TwoPrimaryDesignationsRejected(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-// --- CON-062[7]: a method id is not a capability ---------------------------
+// --- CON-062.operation-naming-method-id: a method id is not a capability ---
 
 // TestMethodOps_ForeignMethodIDRejected table-drives EVERY id-bearing verb.
 // The ownership check is currently shared, so one verb would cover the code as
@@ -741,7 +741,7 @@ func TestMethodOps_RemoveNonexistentSucceedsButForeignRejected(t *testing.T) {
 	})
 }
 
-// --- CON-062[9]: conflicts rejected, not resolved by order ------------------
+// --- CON-062.request-whose-operations-conflict: conflicts rejected, not resolved by order ---
 
 // TestMethodOps_ConflictingOperationsRejected covers every documented conflict,
 // each asserting a 400 AND zero mutation. A payload rejected after partial
@@ -855,9 +855,9 @@ func TestMethodOps_UpdateWithPrimaryDesignationSucceeds(t *testing.T) {
 	assert.True(t, after.IsPrimary, "the primary designation did not land")
 }
 
-// --- CON-062[10][11]: stable-key updates over HTTP --------------------------
+// --- CON-062.updating-method-value-takes-effect + .updating-primary-keeps-primary: stable-key updates over HTTP ---
 
-// TestMethodOps_StableKeyUpdatePersistsThroughAPI is CON-062[10]'s citing test.
+// TestMethodOps_StableKeyUpdatePersistsThroughAPI is CON-062.updating-method-value-takes-effect's citing test.
 // A case-only edit changes the stored value while (type, value_normalized) is
 // unchanged, so the row is never deleted and never reinserted. Without the
 // in-place update phase the endpoint returns 200 having discarded the edit —
@@ -884,7 +884,7 @@ func TestMethodOps_StableKeyUpdatePersistsThroughAPI(t *testing.T) {
 	assert.Equal(t, upper, body.Methods[0].Value, "the response did not reflect the new value")
 }
 
-// TestMethodOps_KeyChangingPrimaryUpdateKeepsPrimaryThroughAPI is CON-062[11]'s
+// TestMethodOps_KeyChangingPrimaryUpdateKeepsPrimaryThroughAPI is CON-062.updating-primary-keeps-primary's
 // citing test. Updating the primary's value changes its key, forcing the
 // delete-and-reinsert path, which returns the row non-primary. A promotion rule
 // phrased as a designation delta fires neither demote nor promote here and
@@ -915,7 +915,7 @@ func TestMethodOps_KeyChangingPrimaryUpdateKeepsPrimaryThroughAPI(t *testing.T) 
 	assert.Equal(t, 1, primaries, "expected exactly one primary in the response")
 }
 
-// --- CON-062[12][13]: the results contract ----------------------------------
+// --- CON-062.response-reports-one-result + .each-result-identifies-method: the results contract ---
 
 // TestMethodOps_ResultsCoverEveryOperation pins one result per SUBMITTED
 // operation, including no-ops. This is the contract a later acknowledged-state
@@ -1070,7 +1070,7 @@ func TestMethodOps_ResultsResolveAddToExistingRow(t *testing.T) {
 }
 
 // TestMethodOps_MixedOperationsResultsIdentifyAndReflectStoredState is
-// CON-062[13]'s citing test. A mixed add+update+remove request is the case
+// CON-062.each-result-identifies-method's citing test. A mixed add+update+remove request is the case
 // where identification actually matters: with three results in flight, a
 // result that merely counts or orders correctly could still point at the
 // wrong row, or echo the submitted payload instead of what landed. Each
@@ -1129,7 +1129,7 @@ func TestMethodOps_MixedOperationsResultsIdentifyAndReflectStoredState(t *testin
 	assert.Nil(t, f.storedByID(toRemove.ID), "the removed method is still persisted")
 }
 
-// --- Validation -------------------------------------------------------------
+// --- Validation ------------------------------------------------------------
 
 // TestMethodOps_BlankValueRejected pins the deliberate split from the create
 // path. Create DROPS a blank entry; an explicit add or update must REJECT it.
@@ -1216,7 +1216,7 @@ func TestMethodOps_OperationValueFormatValidated(t *testing.T) {
 	}
 }
 
-// --- Boundaries -------------------------------------------------------------
+// --- Boundaries ------------------------------------------------------------
 
 func TestMethodOps_UnknownContactReturns404(t *testing.T) {
 	t.Parallel()
@@ -1240,7 +1240,7 @@ func TestMethodOps_EmptyOperationsIsNoOp(t *testing.T) {
 	assert.Equal(t, existing.ID.String(), body.Methods[0].ID)
 }
 
-// --- C6: the trigger mirror -------------------------------------------------
+// --- C6: the trigger mirror ------------------------------------------------
 
 // TestMethodOps_HandleResolvesThroughTriggerMirror pins THE MIRROR, not the
 // database backstop.
@@ -1253,7 +1253,7 @@ func TestMethodOps_EmptyOperationsIsNoOp(t *testing.T) {
 //
 // A correct mirror folds "@@foo" to "foo", matches the stored row, and resolves
 // the add to it. So the correct answer here is a 200 that does NOT duplicate
-// the row, per CON-062[3] — not a rejection. There is no input for which a
+// the row, per CON-062.adding-existing-method-succeeds — not a rejection. There is no input for which a
 // correct mirror produces a conflict against a single pre-existing row: a
 // rejection needs two DIFFERENT stored values sharing one normalized key in one
 // payload, which is the casing case in _ConflictingOperationsRejected.
@@ -1277,7 +1277,7 @@ func TestMethodOps_HandleResolvesThroughTriggerMirror(t *testing.T) {
 		"the add did not resolve to the row the trigger considers identical")
 }
 
-// --- The handler's domain-error translation ---------------------------------
+// --- The handler's domain-error translation --------------------------------
 
 // stubApplier returns a fixed error, so the handler's error mapping can be
 // exercised for a domain error a correct fold makes unreachable from a real
@@ -1337,7 +1337,7 @@ func TestMethodOps_ConflictErrorTranslatesTo400(t *testing.T) {
 	}
 }
 
-// --- Rematch job id propagation ----------------------------------------------
+// --- Rematch job id propagation --------------------------------------------
 
 // stubApplierResult returns a fixed successful result, so the handler's
 // response assembly (contactMethodOperationsToResponse) can be exercised
@@ -1420,14 +1420,14 @@ func TestMethodOps_RematchJobIDPropagatesToResponse(t *testing.T) {
 	})
 }
 
-// --- The route surface ------------------------------------------------------
+// --- The route surface -----------------------------------------------------
 
 // TestMethodRoutes_NoDesiredSetPut asserts PUT /contacts/:id/methods is NOT
 // registered. A PUT taking the full desired list is wholesale replace wearing a
 // sub-resource costume: absence would again imply deletion, reintroducing the
 // exact defect this endpoint exists to eliminate.
 //
-// CON-062[0] tests POST semantics and would stay green alongside a new PUT, so
+// CON-062.unnamed-method-untouched tests POST semantics and would stay green alongside a new PUT, so
 // a guarantee that depends on a route never being added is asserted
 // mechanically rather than left in prose.
 func TestMethodRoutes_NoDesiredSetPut(t *testing.T) {
