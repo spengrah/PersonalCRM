@@ -224,13 +224,21 @@ func scanFile(path string, e2e bool) ([]Citation, []Violation, error) {
 			if ref == "" {
 				continue
 			}
-			// @ is RESERVED for a future content-hash suffix and is checked
-			// before the grammar, so a citation that carries one gets a
-			// forward-looking message instead of degrading into the generic
-			// malformed one. Nothing may squat the character meanwhile.
+			// @ is RESERVED and carries no meaning: a content-hash suffix
+			// (pinning which WORDING a citation proves) was considered and
+			// declined — spec-drift is the standing answer for a reworded
+			// assertion whose tests went untouched, and a blocking hash would
+			// have re-confirmed every citation on every reword. The character
+			// stays rejected so nothing squats it, and is checked before the
+			// grammar so it gets its own actionable message instead of
+			// degrading into the generic malformed one. Because that check
+			// precedes parsing, the reference's form is still unknown here —
+			// so the message says to DROP the suffix and names both valid
+			// forms, rather than prescribing a key that a statement behavior
+			// (bare-only, no then list) could not carry.
 			if strings.Contains(ref, "@") {
 				probs = append(probs, Violation{Path: path, Line: i + 1,
-					Msg: fmt.Sprintf("spec citation %q uses the reserved @hash suffix, which is not yet supported", ref)})
+					Msg: fmt.Sprintf("spec citation %q uses the reserved @ suffix, which is not part of the citation grammar; drop the suffix (cite <ID> or <ID>.<then-item-key>)", ref)})
 				continue
 			}
 			// The retired positional form is recognized before the grammar so

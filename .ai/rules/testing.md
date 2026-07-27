@@ -262,7 +262,7 @@ await candidateCard.getByRole('button', { name: /Import/i }).click()
 
 ## Citing behaviors in tests
 
-New and deliberately-relaxed tests cite the `spec/*.yaml` behaviors they prove with a line comment. Two reference forms:
+New and deliberately-relaxed tests **on a scanned harness** cite the `spec/*.yaml` behaviors they prove with a line comment. The scanned harnesses are exactly two — Go (`backend/**/*_test.go`) and Playwright E2E (`frontend/tests/e2e/**/*.spec.ts`). A marker in any other test (Vitest unit/component tests especially) is read by no gate and validated by nothing, so reference the behavior in **prose** there instead. Two reference forms:
 
 - `// spec: <ID>.<then-item-key>` — claims **one then-item**, by its permanent key. **This is the norm on both harnesses**: E2E citations are 291 keyed / 0 bare, and Go citations of `surface: api` behaviors are 298 keyed / 46 bare (6% bare inside `backend/tests/api/`).
 - `// spec: <ID>` — claims the **whole behavior**, every then-item at once. Legal and sometimes right: use it when the test genuinely proves every item, and for a statement behavior, which has no then list to key. Otherwise prefer keyed — a bare cite marks items covered that your test may not prove, and silences the orphan signal that would have asked for them.
