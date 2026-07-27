@@ -346,9 +346,14 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 			if b.Surface == "api" {
 				bareMap, itemMap, citeKind = goBare, goItem, "Go"
 			}
+			// Both waiver forms are resolved to an item index here, so the rest
+			// of the pass stays index-keyed and form-agnostic. An unresolvable
+			// keyed waiver waives nothing (spec-lint reports it).
 			waived := map[int]string{}
 			for _, w := range b.Waivers {
-				waived[w.Then] = w.Reason
+				if n, ok := resolveWaiverIndex(b, w); ok {
+					waived[n] = w.Reason
+				}
 			}
 			if b.Statement != "" {
 				// A statement behavior has one implicit item, coverable only
@@ -356,9 +361,9 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 				dc.Items = append(dc.Items, itemState(f.Path, b.ID, -1, b.Statement, b.Surface, citeKind, bareMap[b.ID], waived[0], cov))
 				continue
 			}
-			for n, text := range b.Then {
+			for n, item := range b.Then {
 				covered := bareMap[b.ID] || itemMap[b.ID][n]
-				dc.Items = append(dc.Items, itemState(f.Path, b.ID, n, text, b.Surface, citeKind, covered, waived[n], cov))
+				dc.Items = append(dc.Items, itemState(f.Path, b.ID, n, item.Text, b.Surface, citeKind, covered, waived[n], cov))
 			}
 		}
 		cov.Domains = append(cov.Domains, dc)

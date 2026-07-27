@@ -1,0 +1,13 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: a statement waiver keyed with anything but the reserved token
+    type: invariant
+    status: current
+    surface: ui
+    statement: every read filters soft-deleted rows
+    waivers:
+      - then: some-key
+        reason: not provable

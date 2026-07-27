@@ -334,13 +334,14 @@ func (pf *parsedFile) walkBehavior(idx int, node *yaml.Node) *parsedBehavior {
 	pb.b.When = pf.behaviorWhen(pb, fields)
 	pb.b.Statement = pf.behaviorString(pb, fields, "statement")
 
-	// given / then / serves: !!str scalar (→ one-element list) or a sequence
-	// of !!str.
+	// given / serves: !!str scalar (→ one-element list) or a sequence of !!str.
+	// then has its own walker — it is the only one of the three that also
+	// accepts the keyed {key, text} mapping form.
 	pb.b.Given = pf.behaviorStrList(pb, fields, "given")
-	pb.b.Then = pf.behaviorStrList(pb, fields, "then")
+	pb.b.Then = pf.behaviorThen(pb, fields)
 	pb.b.Serves = pf.behaviorStrList(pb, fields, "serves")
 
-	// waivers: a sequence of {then: <int>, reason: <string>} mappings.
+	// waivers: a sequence of {then: <key|int>, reason: <string>} mappings.
 	pb.b.Waivers = pf.behaviorWaivers(pb, fields)
 
 	// provenance: best-effort scalar list, no checks (non-load-bearing).
@@ -453,12 +454,129 @@ func (pf *parsedFile) behaviorStrList(pb *parsedBehavior, fields map[string]*yam
 	}
 }
 
+// behaviorThen extracts the then field. It accepts everything behaviorStrList
+// accepts — a !!str scalar (normalized to a one-element list), a !!null scalar
+// (nil, absent-equivalent), or a sequence of !!str scalars — plus the keyed
+// item form: a sequence item may be a {key, text} mapping, both sub-fields
+// required, both !!str, key non-empty, no unknown sub-keys.
+//
+// Fail-closed like behaviorWaivers: the FIRST structural deviation marks the
+// whole field broken, emits exactly one violation, and returns nil, so the
+// semantic pass never sees a half-parsed then list (a silently-dropped item
+// would delete a coverage obligation).
+//
+// The item tier is deliberately stricter than the behavior tier, where
+// walkBehavior silently ignores unknown behavior-level keys: a then item is the
+// unit citations bind to, so a typo'd sub-key (`txt:`) would otherwise mint an
+// empty-text item that lints clean and can never be cited.
+func (pf *parsedFile) behaviorThen(pb *parsedBehavior, fields map[string]*yaml.Node) []ThenItem {
+	node, ok := fields["then"]
+	if !ok {
+		return nil
+	}
+	pb.keys["then"] = true
+
+	brk := func(line int, msg string) []ThenItem {
+		pb.broken["then"] = true
+		pf.emit(orderStructural, pb.idx, line, pb.ref, msg)
+		return nil
+	}
+
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag == tagNull {
+			return nil // present but null — absent-equivalent value
+		}
+		if node.Tag != tagStr {
+			return brk(node.Line, "then items must be strings")
+		}
+		return []ThenItem{{Text: node.Value, Line: node.Line}}
+	case yaml.SequenceNode:
+		out := make([]ThenItem, 0, len(node.Content))
+		for _, item := range node.Content {
+			switch {
+			case item.Kind == yaml.ScalarNode && item.Tag == tagStr:
+				out = append(out, ThenItem{Text: item.Value, Line: item.Line})
+			case item.Kind == yaml.ScalarNode:
+				// A non-!!str scalar item keeps the ORIGINAL message: it is
+				// still simply not a string, and widening it here would silently
+				// reclassify the pre-existing non-string-scalars fixture.
+				return brk(item.Line, "then items must be strings")
+			case item.Kind == yaml.MappingNode:
+				it, ok := pf.thenItemMapping(pb, item)
+				if !ok {
+					return nil // thenItemMapping already emitted + marked broken
+				}
+				out = append(out, it)
+			default:
+				return brk(item.Line, "then items must be strings or {key, text} mappings")
+			}
+		}
+		return out
+	default:
+		return brk(node.Line, "then must be a string or a list of strings")
+	}
+}
+
+// thenItemMapping parses one keyed then item: exactly {key, text}, both !!str,
+// key non-empty. Any deviation marks the then field broken and emits one
+// violation (ok=false).
+//
+// The empty-key rejection is load-bearing and belongs at the PARSER tier:
+// strScalar reports both `key: ""` and `key: null` as ("", true), so an
+// empty-keyed mapping would otherwise parse to a ThenItem indistinguishable
+// from a plain-string item — uncitable, yet lint-green. Only the parser can
+// still see that the author wrote a mapping.
+func (pf *parsedFile) thenItemMapping(pb *parsedBehavior, item *yaml.Node) (ThenItem, bool) {
+	brk := func(line int, msg string) (ThenItem, bool) {
+		pb.broken["then"] = true
+		pf.emit(orderStructural, pb.idx, line, pb.ref, msg)
+		return ThenItem{}, false
+	}
+
+	f, dup := mappingFields(item)
+	if len(dup) > 0 {
+		return brk(item.Line, fmt.Sprintf("duplicate key %q in then item mapping", dup[0]))
+	}
+	for _, k := range sortedKeys(f) {
+		if k != "key" && k != "text" {
+			return brk(item.Line, fmt.Sprintf("unknown key %q in then item mapping (want key, text)", k))
+		}
+	}
+	keyNode, keyOK := f["key"]
+	textNode, textOK := f["text"]
+	if !keyOK || !textOK {
+		return brk(item.Line, "then item mapping must have a key and a text")
+	}
+	key, strOK := strScalar(keyNode)
+	if !strOK || key == "" {
+		return brk(keyNode.Line, "then item key must be a non-empty string")
+	}
+	text, strOK := strScalar(textNode)
+	if !strOK {
+		return brk(textNode.Line, "then item text must be a string")
+	}
+	return ThenItem{Key: key, Text: text, Line: item.Line}, true
+}
+
+// sortedKeys returns a mapping's keys in sorted order, so an unknown-sub-key
+// report names the same key on every run (Go map iteration is randomized).
+func sortedKeys(f map[string]*yaml.Node) []string {
+	out := make([]string, 0, len(f))
+	for k := range f {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // behaviorWaivers extracts the waivers field: a sequence of mappings, each with
-// an integer `then` and a string `reason`. Any shape deviation (non-sequence,
-// non-mapping item, missing/mistyped sub-field, duplicate key in an item) is a
-// behavior-field-tier structural violation that marks the whole field broken —
-// the semantic pass (index range, duplicates, reason non-empty, ui-or-api
-// placement) never sees a partially-parsed waiver list.
+// a `then` naming the waived item — a !!str then-item key (the current form) or
+// an !!int index (the legacy form) — and a string `reason`. Any shape deviation
+// (non-sequence, non-mapping item, missing/mistyped sub-field, duplicate key in
+// an item) is a behavior-field-tier structural violation that marks the whole
+// field broken — the semantic pass (key/index resolution, duplicates, reason
+// non-empty, ui-or-api placement) never sees a partially-parsed waiver list.
 func (pf *parsedFile) behaviorWaivers(pb *parsedBehavior, fields map[string]*yaml.Node) []Waiver {
 	node, ok := fields["waivers"]
 	if !ok {
@@ -493,18 +611,24 @@ func (pf *parsedFile) behaviorWaivers(pb *parsedBehavior, fields map[string]*yam
 			return nil
 		}
 		thenNode, thenOK := wf["then"]
-		if !thenOK || thenNode.Kind != yaml.ScalarNode || thenNode.Tag != tagInt {
+		if !thenOK || thenNode.Kind != yaml.ScalarNode || (thenNode.Tag != tagInt && thenNode.Tag != tagStr) {
 			pb.broken["waivers"] = true
 			pf.emit(orderStructural, pb.idx, item.Line, pb.ref,
-				"waiver then must be an integer then-item index")
+				"waiver then must be a then-item key or an integer index")
 			return nil
 		}
-		idx, err := strconv.Atoi(thenNode.Value)
-		if err != nil {
-			pb.broken["waivers"] = true
-			pf.emit(orderStructural, pb.idx, thenNode.Line, pb.ref,
-				"waiver then must be an integer then-item index")
-			return nil
+		w := Waiver{}
+		if thenNode.Tag == tagStr {
+			w.Key, w.Keyed = thenNode.Value, true
+		} else {
+			idx, err := strconv.Atoi(thenNode.Value)
+			if err != nil {
+				pb.broken["waivers"] = true
+				pf.emit(orderStructural, pb.idx, thenNode.Line, pb.ref,
+					"waiver then must be a then-item key or an integer index")
+				return nil
+			}
+			w.Index = idx
 		}
 		reasonNode, reasonOK := wf["reason"]
 		if !reasonOK {
@@ -518,7 +642,8 @@ func (pf *parsedFile) behaviorWaivers(pb *parsedBehavior, fields map[string]*yam
 			pf.emit(orderStructural, pb.idx, reasonNode.Line, pb.ref, "waiver reason must be a string")
 			return nil
 		}
-		out = append(out, Waiver{Then: idx, Reason: reason})
+		w.Reason = reason
+		out = append(out, w)
 		lines = append(lines, item.Line)
 	}
 	pb.waiverLines = lines

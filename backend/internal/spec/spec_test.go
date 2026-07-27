@@ -1,6 +1,8 @@
 package spec
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -75,7 +77,7 @@ func TestLintValidCorpus(t *testing.T) {
 		if len(b.Given) != 2 {
 			t.Errorf("CON-003 want 2 given items, got %#v", b.Given)
 		}
-		if len(b.Then) != 1 || b.Then[0] != "the row is persisted" {
+		if len(b.Then) != 1 || b.Then[0].Text != "the row is persisted" {
 			t.Errorf("CON-003 scalar then not normalized: %#v", b.Then)
 		}
 	}
@@ -163,7 +165,7 @@ func TestLintViolationClasses(t *testing.T) {
 		{"waivers-bad-shape", 5, []string{
 			"waivers must be a list of {then, reason} mappings",
 			"waivers items must be {then, reason} mappings",
-			"waiver then must be an integer then-item index",
+			"waiver then must be a then-item key or an integer index",
 			"waiver must have a reason",
 			"waiver reason must be a string",
 		}},
@@ -178,6 +180,27 @@ func TestLintViolationClasses(t *testing.T) {
 		{"settled-non-string-item", 1, []string{"settled items must be surfaces"}},
 		{"legacy-e2e-settled", 1, []string{"e2e_settled is retired; use a settled: [ui] list"}},
 		{"prefix-bad-format", 1, []string{`prefix "Gc" must be uppercase alphanumeric starting with a letter`}},
+		// --- then-item keys ---
+		{"then-key-bad-charset", 3, []string{
+			`then item key "bad_key" must be lowercase alphanumeric words separated by hyphens`,
+			`then item key "BadKey" must be lowercase alphanumeric words separated by hyphens`,
+			`then item key "trailing-" must be lowercase alphanumeric words separated by hyphens`,
+		}},
+		{"then-key-empty", 3, []string{"then item key must be a non-empty string"}},
+		{"then-key-reserved", 1, []string{`then item key "statement" is reserved for statement-behavior waivers`}},
+		{"then-key-dup", 1, []string{`duplicate then item key "same-key"`}},
+		{"then-text-empty", 1, []string{"then list items must be non-empty strings"}},
+		{"then-item-bad-shape", 5, []string{
+			"then items must be strings or {key, text} mappings",
+			`unknown key "txt" in then item mapping (want key, text)`,
+			"then item mapping must have a key and a text",
+			`duplicate key "text" in then item mapping`,
+			"then item text must be a string",
+		}},
+		{"waiver-key-unknown", 1, []string{`waiver then "no-such-key" names no then-item key of this behavior`}},
+		{"waiver-statement-bad-key", 1, []string{
+			`waiver then "some-key" is not valid for a statement behavior (use the reserved key "statement")`,
+		}},
 	}
 
 	for _, tc := range cases {
@@ -268,7 +291,7 @@ func TestLintSurfaceAndWaivers(t *testing.T) {
 		if b.Surface != "ui" {
 			t.Errorf("CON-001 surface = %q, want ui", b.Surface)
 		}
-		if len(b.Waivers) != 1 || b.Waivers[0].Then != 1 || b.Waivers[0].Reason == "" {
+		if len(b.Waivers) != 1 || b.Waivers[0].Keyed || b.Waivers[0].Index != 1 || b.Waivers[0].Reason == "" {
 			t.Errorf("CON-001 waivers not parsed: %#v", b.Waivers)
 		}
 	}
@@ -285,7 +308,7 @@ func TestLintSurfaceAndWaivers(t *testing.T) {
 	// An api-surface behavior may carry a waiver (relaxed from ui-only).
 	if b := findBehavior(files, "CON-005"); b == nil {
 		t.Fatal("CON-005 missing")
-	} else if b.Surface != "api" || len(b.Waivers) != 1 || b.Waivers[0].Then != 0 || b.Waivers[0].Reason == "" {
+	} else if b.Surface != "api" || len(b.Waivers) != 1 || b.Waivers[0].Keyed || b.Waivers[0].Index != 0 || b.Waivers[0].Reason == "" {
 		t.Errorf("CON-005 api-surface waiver not parsed clean: %#v", b)
 	}
 }
@@ -307,6 +330,295 @@ func TestLintSettledAbsent(t *testing.T) {
 	}
 	if files[0].Settled != nil {
 		t.Errorf("absent settled should parse as nil, got %#v", files[0].Settled)
+	}
+}
+
+// TestLintThenKeysAndKeyedWaivers pins the keyed then-item form on a valid
+// corpus: keyed and plain items coexist in one then list, a keyed item carries
+// its Key/Text/Line, a plain one carries an empty Key, a waiver addresses an
+// item by key, the reserved "statement" token addresses a statement behavior's
+// implicit item, and the legacy index form still parses alongside them.
+func TestLintThenKeysAndKeyedWaivers(t *testing.T) {
+	files, viol, err := Lint("testdata/valid-then-keys")
+	if err != nil {
+		t.Fatalf("Lint returned error: %v", err)
+	}
+	if len(viol) != 0 {
+		t.Fatalf("valid-then-keys corpus should be clean, got %d violations:\n%s", len(viol), joinViolations(viol))
+	}
+
+	b := findBehavior(files, "KEY-001")
+	if b == nil {
+		t.Fatal("KEY-001 missing")
+	}
+	if len(b.Then) != 3 {
+		t.Fatalf("KEY-001 want 3 then items, got %#v", b.Then)
+	}
+	want := []ThenItem{
+		{Key: "live-contact-flag", Text: "a live contact is returned with a has_pending_followup flag", Line: 13},
+		{Key: "", Text: "an unkeyed outcome stays a plain string", Line: 15},
+		{Key: "pending-followup-count", Text: "the pending followup count is returned", Line: 16},
+	}
+	for i, w := range want {
+		if b.Then[i] != w {
+			t.Errorf("KEY-001 then[%d] = %#v, want %#v", i, b.Then[i], w)
+		}
+	}
+	if got := b.ThenTexts(); len(got) != 3 || got[0] != want[0].Text || got[1] != want[1].Text {
+		t.Errorf("KEY-001 ThenTexts() = %#v", got)
+	}
+	if len(b.Waivers) != 1 || !b.Waivers[0].Keyed || b.Waivers[0].Key != "pending-followup-count" {
+		t.Errorf("KEY-001 keyed waiver not parsed: %#v", b.Waivers)
+	}
+
+	if b := findBehavior(files, "KEY-002"); b == nil {
+		t.Fatal("KEY-002 missing")
+	} else if len(b.Waivers) != 1 || !b.Waivers[0].Keyed || b.Waivers[0].Key != "statement" {
+		t.Errorf("KEY-002 statement waiver not parsed: %#v", b.Waivers)
+	}
+
+	// The legacy index form survives alongside the keyed one, and Keyed is what
+	// tells them apart — not a sentinel value of Index.
+	if b := findBehavior(files, "KEY-003"); b == nil {
+		t.Fatal("KEY-003 missing")
+	} else if len(b.Waivers) != 1 || b.Waivers[0].Keyed || b.Waivers[0].Index != 1 || b.Waivers[0].Key != "" {
+		t.Errorf("KEY-003 legacy index waiver not parsed: %#v", b.Waivers)
+	}
+}
+
+// TestParserThenMessagesAreDistinct guards the message split that keeps this
+// change inert. A single widened message ("then items must be strings or
+// {key, text} mappings") would still satisfy the pre-existing
+// strings.Contains assertion on non-string-scalars/ as a PREFIX, so the suite
+// would stay green while the stated byte-identity invariant was broken. This
+// asserts the pre-existing case's message by EQUALITY, and that the two
+// messages are different strings.
+func TestParserThenMessagesAreDistinct(t *testing.T) {
+	const scalarMsg = "then items must be strings"
+	const shapeMsg = "then items must be strings or {key, text} mappings"
+	if scalarMsg == shapeMsg {
+		t.Fatal("the two then-item messages must be distinct")
+	}
+	if !strings.HasPrefix(shapeMsg, scalarMsg) {
+		t.Fatal("precondition: the widened message shares the old one's prefix — that is exactly why equality is required below")
+	}
+
+	_, viol, err := Lint("testdata/invalid/non-string-scalars")
+	if err != nil {
+		t.Fatalf("Lint returned error: %v", err)
+	}
+	want := Violation{
+		Path: "testdata/invalid/non-string-scalars/bad.yaml",
+		Ref:  "CON-003",
+		Line: 26,
+		Msg:  scalarMsg,
+	}
+	found := false
+	for _, v := range viol {
+		if v.Ref == "CON-003" {
+			found = true
+			if v != want {
+				t.Errorf("CON-003 violation = %#v, want %#v", v, want)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no CON-003 violation in:\n%s", joinViolations(viol))
+	}
+
+	// The non-scalar, non-mapping item gets the OTHER message.
+	_, viol, err = Lint("testdata/invalid/then-item-bad-shape")
+	if err != nil {
+		t.Fatalf("Lint returned error: %v", err)
+	}
+	for _, v := range viol {
+		if v.Ref == "CON-001" && v.Msg != shapeMsg {
+			t.Errorf("CON-001 msg = %q, want %q", v.Msg, shapeMsg)
+		}
+	}
+}
+
+// TestLint_ThenKeyDuplicateIgnoresEmptyKeys pins the non-empty qualifier on
+// key uniqueness. Without it every behavior with two or more plain-string then
+// items would report `duplicate then item key ""` and the whole corpus would
+// fail lint — testdata/valid's CON-001 has exactly that shape.
+func TestLint_ThenKeyDuplicateIgnoresEmptyKeys(t *testing.T) {
+	files, viol, err := Lint("testdata/valid")
+	if err != nil {
+		t.Fatalf("Lint returned error: %v", err)
+	}
+	b := findBehavior(files, "CON-001")
+	if b == nil {
+		t.Fatal("CON-001 missing")
+	}
+	if len(b.Then) < 2 {
+		t.Fatalf("precondition: CON-001 must have >=2 unkeyed then items, got %#v", b.Then)
+	}
+	for _, it := range b.Then {
+		if it.Key != "" {
+			t.Fatalf("precondition: CON-001's then items must all be unkeyed, got %#v", b.Then)
+		}
+	}
+	if strings.Contains(joinViolations(viol), "duplicate then item key") {
+		t.Errorf("unkeyed items must not collide:\n%s", joinViolations(viol))
+	}
+}
+
+// TestLint_WaiverNegativeIndexStillOutOfRange is the union-soundness guard. A
+// negative index is a REPRESENTABLE legacy value, so it must never be read as a
+// "the keyed form is in use" sentinel — the discriminator is Waiver.Keyed. If
+// the sentinel encoding were ever reintroduced, this range check would become
+// unreachable and the assertion below would fail.
+func TestLint_WaiverNegativeIndexStillOutOfRange(t *testing.T) {
+	files, viol, err := Lint("testdata/invalid/waivers-bad-index")
+	if err != nil {
+		t.Fatalf("Lint returned error: %v", err)
+	}
+	b := findBehavior(files, "CON-001")
+	if b == nil {
+		t.Fatal("CON-001 missing")
+	}
+	var negative *Waiver
+	for i := range b.Waivers {
+		if b.Waivers[i].Index == -1 {
+			negative = &b.Waivers[i]
+		}
+	}
+	if negative == nil {
+		t.Fatalf("precondition: the fixture must carry a `then: -1` waiver, got %#v", b.Waivers)
+	}
+	if negative.Keyed {
+		t.Errorf("a negative index must parse as the INDEX form, not the keyed one: %#v", *negative)
+	}
+	if !strings.Contains(joinViolations(viol), "waiver then index -1 out of range") {
+		t.Errorf("negative index must still report out of range:\n%s", joinViolations(viol))
+	}
+}
+
+// TestLint_WaiverDuplicateAcrossForms pins that duplicate detection keys on the
+// RESOLVED item index: a key-form waiver and an index-form waiver naming the
+// same item are one duplicate, not two independent waivers.
+func TestLint_WaiverDuplicateAcrossForms(t *testing.T) {
+	_, viol, err := Lint("testdata/invalid/waiver-dup-across-forms")
+	if err != nil {
+		t.Fatalf("Lint returned error: %v", err)
+	}
+	if len(viol) != 1 {
+		t.Fatalf("want exactly 1 violation, got %d:\n%s", len(viol), joinViolations(viol))
+	}
+	if !strings.Contains(viol[0].Msg, "duplicate waiver for then item 1") {
+		t.Errorf("want the resolved-index duplicate message, got %q", viol[0].Msg)
+	}
+}
+
+// TestLintThenItemBrokenSuppressesSemantics pins the tiered-degradation
+// contract for the new walker: the FIRST structural deviation in a then list
+// reports once and suppresses every then-dependent semantic check below it —
+// key charset/uniqueness, the empty-text check, and waiver key resolution.
+func TestLintThenItemBrokenSuppressesSemantics(t *testing.T) {
+	_, viol, err := Lint("testdata/invalid/then-broken-suppresses")
+	if err != nil {
+		t.Fatalf("Lint returned error: %v", err)
+	}
+	if len(viol) != 1 {
+		t.Fatalf("a broken then must report exactly once, got %d:\n%s", len(viol), joinViolations(viol))
+	}
+	if !strings.Contains(viol[0].Msg, `unknown key "txt" in then item mapping`) {
+		t.Errorf("want the first structural deviation, got %q", viol[0].Msg)
+	}
+	out := joinViolations(viol)
+	for _, suppressed := range []string{
+		"duplicate then item key",
+		"then list items must be non-empty strings",
+		"names no then-item key of this behavior",
+		"must have a then with at least one outcome",
+	} {
+		if strings.Contains(out, suppressed) {
+			t.Errorf("a broken then must suppress %q; got:\n%s", suppressed, out)
+		}
+	}
+
+	// Fail-closed is the other half of the contract and the half that survives
+	// into the EXPORTED output: a broken then must parse to nil, never to a
+	// partial list with the offending item silently dropped. A dropped item
+	// would delete a coverage obligation while lint stayed at one violation, so
+	// the violation count above cannot detect it on its own.
+	files, _, err := ParseDir("testdata/invalid/then-broken-suppresses")
+	if err != nil {
+		t.Fatalf("ParseDir returned error: %v", err)
+	}
+	b := findBehavior(files, "CON-001")
+	if b == nil {
+		t.Fatal("CON-001 missing from the parsed output")
+	}
+	if b.Then != nil {
+		t.Errorf("a structurally broken then must parse to nil, got %#v", b.Then)
+	}
+}
+
+// TestParserThenScalarForms pins the scalar branches of the then walker, which
+// the fixture corpus only exercises in its sequence form. Each broken form must
+// yield nil — never a partially-populated list and never an empty non-nil slice
+// — because absent-vs-present-but-empty is decidable off exactly that
+// distinction downstream.
+func TestParserThenScalarForms(t *testing.T) {
+	const header = "domain: contacts\nprefix: CON\nmaturity: reviewed\nbehaviors:\n  - id: CON-001\n    title: t\n    type: business-logic\n    status: current\n    surface: none\n    when: w\n    "
+	cases := []struct {
+		name    string
+		then    string
+		wantLen int // -1 = nil
+		wantNil bool
+		wantMsg string // "" = no violation
+	}{
+		{"string scalar normalizes to one item", "then: a single outcome", 1, false, ""},
+		{"null is absent-equivalent", "then: null", 0, true, ""},
+		{"int scalar keeps the original message", "then: 42", 0, true, "then items must be strings"},
+		{"bool scalar keeps the original message", "then: true", 0, true, "then items must be strings"},
+		{"mapping keeps the original message", "then:\n      a: b", 0, true, "then must be a string or a list of strings"},
+		{"empty sequence is present-but-empty", "then: []", 0, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "spec.yaml")
+			if err := os.WriteFile(path, []byte(header+tc.then+"\n"), 0o644); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			// ParseDir is parse-only, so no semantic noise (a missing then would
+			// otherwise also report "must have a then with at least one outcome").
+			files, viol, err := ParseDir(dir)
+			if err != nil {
+				t.Fatalf("ParseDir returned error: %v", err)
+			}
+			if tc.wantMsg == "" {
+				if len(viol) != 0 {
+					t.Fatalf("want no violations, got:\n%s", joinViolations(viol))
+				}
+			} else {
+				if len(viol) != 1 {
+					t.Fatalf("want 1 violation, got %d:\n%s", len(viol), joinViolations(viol))
+				}
+				if viol[0].Msg != tc.wantMsg {
+					t.Errorf("msg = %q, want %q", viol[0].Msg, tc.wantMsg)
+				}
+			}
+			b := findBehavior(files, "CON-001")
+			if b == nil {
+				t.Fatal("CON-001 missing")
+			}
+			if tc.wantNil && b.Then != nil {
+				t.Fatalf("want a nil then, got %#v", b.Then)
+			}
+			if !tc.wantNil && b.Then == nil {
+				t.Fatal("want a non-nil then, got nil")
+			}
+			if len(b.Then) != tc.wantLen {
+				t.Fatalf("want %d then items, got %#v", tc.wantLen, b.Then)
+			}
+			if tc.wantLen == 1 && b.Then[0].Text != "a single outcome" {
+				t.Errorf("scalar then not normalized: %#v", b.Then)
+			}
+		})
 	}
 }
 
@@ -461,6 +773,55 @@ func TestParseFile(t *testing.T) {
 	if _, _, err := ParseFile("testdata/valid/does-not-exist.yaml"); err == nil {
 		t.Error("ParseFile on a missing file should error")
 	}
+}
+
+// TestParseFileThenItemLines pins that keyed items survive the parse-only path
+// (ParseFile, which the traceability scanner and the drift CLI both use) and
+// that ThenItem.Line carries the item's own source line — the anchor a
+// line-oriented rewriter needs, since a waiver's `- then: 1` entry shares the
+// six-space indent of a then item and cannot be told apart by indentation.
+func TestParseFileThenItemLines(t *testing.T) {
+	file, viol, err := ParseFile("testdata/valid-then-keys/spec.yaml")
+	if err != nil {
+		t.Fatalf("ParseFile returned error: %v", err)
+	}
+	if len(viol) != 0 {
+		t.Fatalf("valid file should have no parse violations:\n%s", joinViolations(viol))
+	}
+	b := findBehavior([]*File{file}, "KEY-001")
+	if b == nil {
+		t.Fatal("KEY-001 missing")
+	}
+	// Every item's Line must name a line that actually holds it, and the lines
+	// must strictly increase down the list.
+	src := strings.Split(readFixture(t, "testdata/valid-then-keys/spec.yaml"), "\n")
+	prev := 0
+	for i, it := range b.Then {
+		if it.Line <= prev {
+			t.Errorf("then[%d].Line = %d is not after the previous item's %d", i, it.Line, prev)
+		}
+		prev = it.Line
+		if it.Line < 1 || it.Line > len(src) {
+			t.Fatalf("then[%d].Line = %d is outside the file", i, it.Line)
+		}
+		line := src[it.Line-1]
+		if it.Key != "" {
+			if !strings.Contains(line, "key: "+it.Key) {
+				t.Errorf("then[%d].Line %d = %q, expected the `key: %s` line", i, it.Line, line, it.Key)
+			}
+		} else if !strings.Contains(line, it.Text) {
+			t.Errorf("then[%d].Line %d = %q, expected the item's own text", i, it.Line, line)
+		}
+	}
+}
+
+func readFixture(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", path, err)
+	}
+	return string(data)
 }
 
 func TestViolationString(t *testing.T) {

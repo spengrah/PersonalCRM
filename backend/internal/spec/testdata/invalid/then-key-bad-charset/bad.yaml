@@ -1,0 +1,31 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  - id: CON-001
+    title: a then item key with an underscore
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: bad_key
+        text: y
+  - id: CON-002
+    title: a then item key with uppercase
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: BadKey
+        text: y
+  - id: CON-003
+    title: a then item key with a trailing hyphen
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: trailing-
+        text: y

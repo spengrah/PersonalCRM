@@ -1,0 +1,42 @@
+domain: keys
+prefix: KEY
+maturity: reviewed
+behaviors:
+  - id: KEY-001
+    title: a behavior mixing keyed and plain then items
+    type: ux
+    status: current
+    surface: ui
+    given: a starting state
+    when: the trigger fires
+    then:
+      - key: live-contact-flag
+        text: a live contact is returned with a has_pending_followup flag
+      - an unkeyed outcome stays a plain string
+      - key: pending-followup-count
+        text: the pending followup count is returned
+    waivers:
+      - then: pending-followup-count
+        reason: the count is not deterministically provable in the browser
+  - id: KEY-002
+    title: a statement behavior waived by the reserved token
+    type: invariant
+    status: current
+    surface: ui
+    statement: every read filters soft-deleted rows
+    waivers:
+      - then: statement
+        reason: structural, enforced by the query layer rather than observable
+  - id: KEY-003
+    title: a behavior whose waiver still uses the legacy index form
+    type: api
+    status: current
+    surface: api
+    when: the request is validated
+    then:
+      - key: rejects-bad-input
+        text: an invalid request is rejected with a validation error (400)
+      - the legacy-waived outcome
+    waivers:
+      - then: 1
+        reason: the legacy index form is still accepted

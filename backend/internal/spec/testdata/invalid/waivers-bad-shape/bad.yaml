@@ -21,8 +21,10 @@ behaviors:
       - y
     waivers:
       - just a string
+  # `then` accepts both a key (a string) and an index (an integer), so this
+  # case must be a node that is NEITHER — a sequence, not a mistyped scalar.
   - id: CON-003
-    title: waiver then not an integer
+    title: waiver then is neither a key nor an integer
     type: ux
     status: current
     surface: ui
@@ -30,7 +32,7 @@ behaviors:
     then:
       - y
     waivers:
-      - then: first
+      - then: [1]
         reason: r
   - id: CON-004
     title: waiver without a reason
