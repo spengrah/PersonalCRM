@@ -10,7 +10,8 @@ It is deliberately distinct from `.ai/spec/`, which holds design documents. This
 domain: contacts
 prefix: CON
 maturity: reviewed   # draft | reviewed | ratified
-settled: [ui]        # optional; surfaces whose orphans block instead of warn (ui | api)
+settled: [ui, api]   # optional; surfaces whose orphans block instead of warn (ui | api).
+                     # All twelve domains currently list BOTH.
 behaviors: [...]
 ```
 
@@ -23,7 +24,9 @@ Maturity semantics (per-file, so the paradigm switches on domain-by-domain):
 ## Per-behavior schema
 
 ```yaml
-- id: CON-001            # <PREFIX>-NNN, stable forever
+- id: XXX-001            # <PREFIX>-NNN, taken from the file's own prefix, stable forever.
+                         # XXX stands in for that prefix: this block is a format template,
+                         # not a corpus entry, so its id resolves to no real behavior.
   title: Soft-deleting a contact cascades to its dependents
   type: business-logic    # business-logic | api | ux | invariant | data
   status: current         # current | proposed | retired
@@ -111,7 +114,7 @@ Deterministic tests cite the behavior IDs they cover with a source-comment marke
 - **Function level** — the marker sits on the line(s) immediately preceding the test declaration (`func TestXxx`, `test(...)`, `test.describe(...)`), separated from it only by blank or other comment lines. It binds to the whole test.
 - **Subtest level** — the marker is the first statement line(s) inside a `t.Run("name", func(t *testing.T) { ... })` body (or inside a `test(...)` body). It binds to that subtest. Prefer this when only some subtests prove the cited behavior — a function-level marker binds to every subtest, including generic ones that prove no behavior.
 
-**Granularity and cardinality.** E2E tests cite per then-item (`CON-045.placeholder-year-birthdays-no-age`) — the granularity the verifier→E2E migration established — so the coverage scanner can tell which facets of a behavior a test actually proves. A bare behavior-granular citation (`IMP-021`) is also legal and claims the whole behavior (every then-item); it is the norm for the Go API tests and for statement behaviors, which have no then list at all. A keyed citation binds to the item's **identity**, so reordering, inserting, and deleting sibling items cannot re-point it; a citation naming a key the behavior does not carry is a hard failure that **enumerates the behavior's available keys** in the message. Cardinality is free N:M: one test may cite several references, and one then-item may be cited by many tests. No uniqueness constraint. (An earlier rule said citations are behavior-granular only; the per-then-item convention supersedes it. An earlier revision addressed items positionally and warned that the scanner could not detect a reorder — that defect is what stable keys closed.)
+**Granularity and cardinality.** E2E tests cite per then-item (`CON-045.placeholder-year-birthdays-no-age`) — the granularity the verifier→E2E migration established — so the coverage scanner can tell which facets of a behavior a test actually proves. A bare behavior-granular citation (`IMP-021`) is also legal and claims the whole behavior (every then-item); it is the norm for the Go API tests and for statement behaviors, which have no then list at all. A keyed citation binds to the item's **identity**, so reordering, inserting, and deleting sibling items cannot re-point it; a citation naming a key the behavior does not carry is a hard failure whose message **enumerates the behavior's available keys** (or says it has none, when the behavior carries no keyed items at all). Cardinality is free N:M: one test may cite several references, and one then-item may be cited by many tests. No uniqueness constraint. (An earlier rule said citations are behavior-granular only; the per-then-item convention supersedes it. An earlier revision addressed items positionally and warned that the scanner could not detect a reorder — that defect is what stable keys closed.)
 
 ### Citing an item that has no key yet
 
@@ -130,7 +133,7 @@ Choose the key to describe the *claim*, since it is permanent: lowercase-kebab, 
 
 **2. Waive an uncited then-item.** Same conversion first. A waiver addresses its item by key (`- then: row-leaves-overdue-list`), so a plain-string item cannot be waived at all — and the failure you get instead, `waiver then "…" names no then-item key of this behavior` from **spec-lint**, reads like a typo rather than "convert the item first".
 
-**3. Cite a statement behavior** (`invariant` / `intent`-shaped, no `then` list) — **bare only**, `// spec: CON-013`. `ID.key` is rejected (`names a then-item key on a statement behavior (no then items)`), and the reserved `then: statement` token is for *waivers*, never for citations.
+**3. Cite a statement behavior** (`invariant` / `intent`-shaped, no `then` list) — **bare only**, e.g. `// spec: IMP-014` from a Go test (IMP-014 is `surface: api`, so a Go cite credits it). `ID.key` is rejected (`names a then-item key on a statement behavior (no then items)`), and the reserved `then: statement` token is for *waivers*, never for citations.
 
 Starting from a coverage report rather than from the YAML? **Read which form the orphan line prints — the two mean different things.**
 
@@ -176,8 +179,8 @@ Every reference in both examples is **real and surface-matched**: `IMP-040` and 
 
 - **covered** — a then-item of a `status: current` behavior cited by the harness its surface owns: a `surface: ui` behavior by an **E2E** test, a `surface: api` behavior by a **Go** test (a bare cite covers all items; a keyed cite covers the item carrying that key; an invariant's statement is one implicit item, coverable only bare).
 - **waived** — a then-item with a `waivers` entry; reported loudly with the reason. A waived item that gains a citing test is flagged as a stale waiver (warning).
-- **orphan** — a then-item of a `ui`- or `api`-surface `current` behavior with neither citation nor waiver. The two surfaces' orphan populations are counted independently; a surface's orphans **block** only when the domain lists that surface in its `settled` list, else warn. Every domain lists `ui` (settled since the E2E surface settlement), so a new `ui` behavior (or then-item) must land with its citing test or an explicit waiver in the same PR; no domain lists `api` yet, so `api` orphans warn until a domain is backfilled and flipped. An orphan line renders the item by **key** (`ORPHAN <ID>.some-key: …`) when it already carries one — orphaned and keyed are independent, so an item whose citation was deleted or left dangling keeps its key, and that reference can be cited as printed. An item that has no key yet falls back to its **position** (`ORPHAN <ID>[3]: …`), and *that* reference is a location rather than a citable handle. See [Citing an item that has no key yet](#citing-an-item-that-has-no-key-yet) for which of the two you are looking at and what to do about it.
-- **invalid citations** — always a failure, regardless of settlement: a malformed marker, an unknown ID (dead reference), a **retired positional `ID[n]` reference**, a key the behavior does not carry (the message enumerates the ones it does), a keyed cite of a statement behavior (which has no then list), a reference carrying the reserved `@` suffix (held for a future content hash, not yet supported), or a cite of an `intent` (judge-only), `proposed` (a citation asserts truth), or `retired` behavior.
+- **orphan** — a then-item of a `ui`- or `api`-surface `current` behavior with neither citation nor waiver. The two surfaces' orphan populations are counted independently; a surface's orphans **block** only when the domain lists that surface in its `settled` list, else warn. **Every domain lists BOTH `ui` and `api`** (ui since the E2E surface settlement, api since the api-citation backfill), so a new or changed then-item on **either** surface must land with its citing test — an E2E test for `ui`, a Go test for `api` — or an explicit waiver, in the same PR. There is no warn-only surface left: an orphan on either one blocks. An orphan line renders the item by **key** (`ORPHAN <ID>.some-key: …`) when it already carries one — orphaned and keyed are independent, so an item whose citation was deleted or left dangling keeps its key, and that reference can be cited as printed. An item that has no key yet falls back to its **position** (`ORPHAN <ID>[3]: …`), and *that* reference is a location rather than a citable handle. See [Citing an item that has no key yet](#citing-an-item-that-has-no-key-yet) for which of the two you are looking at and what to do about it.
+- **invalid citations** — always a failure, regardless of settlement: a malformed marker, an unknown ID (dead reference), a **retired positional `ID[n]` reference**, a key the behavior does not carry (the message enumerates the ones it does, or says there are none), a keyed cite of a statement behavior (which has no then list), a reference carrying the reserved `@` suffix (held for a future content hash, not yet supported), or a cite of an `intent` (judge-only), `proposed` (a citation asserts truth), or `retired` behavior.
 
 `none`-surface behaviors are exempt from coverage by construction (no orphan is emitted for them yet). Coverage credit is keyed on the behavior's `surface`: an **E2E** citation credits a `ui` behavior, a **Go** citation credits an `api` behavior. An E2E citation of a non-`ui` behavior draws a warning (it usually means the surface tag is wrong) and grants no api coverage; there is deliberately **no** mirror warning for a Go citation of a `ui` or `none` behavior — Go tests legitimately cite those surfaces all over the tree (and the `none` cites are the future `none`-coverage corpus), so a Go cite of a non-`api` behavior is silent and grants no coverage on that surface.
 
