@@ -262,7 +262,14 @@ await candidateCard.getByRole('button', { name: /Import/i }).click()
 
 ## Citing behaviors in tests
 
-New and deliberately-relaxed tests cite the `spec/*.yaml` behavior IDs they prove with a line comment: `// spec: <ID>[, <ID> ...]`. Put the marker next to the assertions that prove the behavior — function-level (immediately preceding the `func TestXxx` / `test(...)` / `test.describe(...)`) or subtest-level (first line inside the `t.Run` / `test(...)` body). Cite only `status: current` behaviors the test actually asserts green; generic contracts that no behavior owns carry no marker.
+New and deliberately-relaxed tests cite the `spec/*.yaml` behaviors they prove with a line comment. Two reference forms:
+
+- `// spec: <ID>` — claims the **whole behavior** (every then-item). The norm for Go API tests and for statement behaviors, which have no then list.
+- `// spec: <ID>.<then-item-key>` — claims **one then-item**, by its permanent key. The norm for E2E tests.
+
+The positional `<ID>[n]` form is **retired** and blocks: `spec-coverage` rejects it with a targeted *cite the then-item by key* message. A key binds to the item's identity, so reordering, inserting, or deleting sibling items cannot silently re-point a citation.
+
+Put the marker next to the assertions that prove the behavior — function-level (immediately preceding the `func TestXxx` / `test(...)` / `test.describe(...)`) or subtest-level (first line inside the `t.Run` / `test(...)` body). Cite only `status: current` behaviors the test actually asserts green; generic contracts that no behavior owns carry no marker.
 
 ```go
 t.Run("rescan with an eligible method returns a pollable job", func(t *testing.T) {
@@ -272,11 +279,17 @@ t.Run("rescan with an eligible method returns a pollable job", func(t *testing.T
 ```
 
 ```ts
-// spec: CAL-019
+// spec: CAL-019.contact-appended-each-matching
 test('adding a matching email links a past event', async ({ page, request }) => { ... })
 ```
 
-Full grammar, placement rules, cite-on-write policy, and scanner-readiness: `spec/README.md` → [Test → behavior citations](../../spec/README.md#test--behavior-citations).
+**Minting a key.** A then-item carries a key only once something references it, so citing or waiving an uncited item takes one extra step:
+
+- **To cite one** — convert the plain string in `spec/<domain>.yaml` to a `{key, text}` mapping, minting a permanent lowercase-kebab key that describes the claim (negations included), then cite `<ID>.<key>`.
+- **To waive one** — the same conversion first. A waiver addresses its item by key (`- then: <key>`), so a plain-string item cannot be waived at all.
+- **To cite a statement behavior** (`invariant`/`intent`-shaped) — **bare only**. `<ID>.<key>` is rejected, and the reserved `then: statement` token is for waivers, never citations.
+
+Full grammar, the worked authoring recipe, placement rules, and cite-on-write policy: `spec/README.md` → [Test → behavior citations](../../spec/README.md#test--behavior-citations) and [Citing an item that has no key yet](../../spec/README.md#citing-an-item-that-has-no-key-yet).
 
 ## Writing Good Tests
 
