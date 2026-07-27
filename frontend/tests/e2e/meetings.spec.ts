@@ -92,18 +92,18 @@ test.describe('Meetings Component @area:meetings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // Verify Meetings section exists
-    // spec: CAL-024[0]
+    // spec: CAL-024.meetings-section-shown-with-events
     await expect(page.getByRole('heading', { name: /Meetings/i })).toBeVisible()
     const region = meetingsRegion(page)
 
     // Verify filter tabs exist with live counts derived from the seeded data
-    // spec: CAL-025[0]
+    // spec: CAL-025.three-filters-all-upcoming
     await expect(region.getByRole('button', { name: /All \(4\)/i })).toBeVisible()
     await expect(region.getByRole('button', { name: /Upcoming \(2\)/i })).toBeVisible()
     await expect(region.getByRole('button', { name: /Past \(2\)/i })).toBeVisible()
 
     // By default (Upcoming tab pressed), only upcoming events should be visible
-    // spec: CAL-025[1]
+    // spec: CAL-025.upcoming-default-view
     await expect(region.getByRole('button', { name: /Upcoming \(2\)/i })).toHaveAttribute(
       'aria-pressed',
       'true'
@@ -142,7 +142,7 @@ test.describe('Meetings Component @area:meetings', () => {
     const region = meetingsRegion(page)
 
     // Click Upcoming filter: shows only the upcoming event
-    // spec: CAL-025[0]
+    // spec: CAL-025.three-filters-all-upcoming
     await region.getByRole('button', { name: /Upcoming \(1\)/i }).click()
     await expect(region.getByRole('button', { name: /Upcoming \(1\)/i })).toHaveAttribute(
       'aria-pressed',
@@ -153,7 +153,7 @@ test.describe('Meetings Component @area:meetings', () => {
 
     // Click Past filter: only the past-seeded event shows (the end-time
     // classification boundary itself is proven by the in-progress test below)
-    // spec: CAL-025[0]
+    // spec: CAL-025.three-filters-all-upcoming
     await region.getByRole('button', { name: /Past \(1\)/i }).click()
     await expect(region.getByRole('button', { name: /Past \(1\)/i })).toHaveAttribute(
       'aria-pressed',
@@ -163,7 +163,7 @@ test.describe('Meetings Component @area:meetings', () => {
     await expect(region.getByText(`${testApi.prefix}-Upcoming Event`)).not.toBeVisible()
 
     // The past meeting's card carries the past marker (scoped to that card)
-    // spec: CAL-026[3]
+    // spec: CAL-026.past-meeting-carries-past
     await expect(
       meetingCard(page, `${testApi.prefix}-Past Event`).getByText('Past', { exact: true })
     ).toBeVisible()
@@ -185,7 +185,7 @@ test.describe('Meetings Component @area:meetings', () => {
     // Cards render most-recent-first (days_ago 1, then 5, then 10) — a
     // different order than they were seeded in (10, 1, 5), so this proves
     // the sort rather than echoing insertion order
-    // spec: CAL-025[3]
+    // spec: CAL-025.past-meetings-ordered-most
     const cards = meetingCards(page)
     await expect(cards).toHaveCount(3)
     await expect(cards.nth(0)).toContainText(`${testApi.prefix}-Past Recent`)
@@ -229,7 +229,7 @@ test.describe('Meetings Component @area:meetings', () => {
 
     // The live counts split 1/1: the in-progress meeting stays upcoming, the
     // ended one is past — end time vs the frozen accelerated now decides
-    // spec: CAL-025[2]
+    // spec: CAL-025.meeting-classified-past-once
     await expect(region.getByRole('button', { name: /Upcoming \(1\)/i })).toBeVisible()
     await expect(region.getByRole('button', { name: /Past \(1\)/i })).toBeVisible()
 
@@ -282,19 +282,19 @@ test.describe('Meetings Component @area:meetings', () => {
     await expect(bareCard).toBeVisible()
 
     // Title, date, and start-to-end time range, computed from the API data
-    // spec: CAL-026[0]
+    // spec: CAL-026.shows-title-fallback-label
     await expect(detailedCard).toContainText(expectedDateTime(detailed!.start_time))
     await expect(detailedCard).toContainText(
       expectedTimeRange(detailed!.start_time, detailed!.end_time)
     )
 
     // Location shows only on the meeting that has one
-    // spec: CAL-026[1]
+    // spec: CAL-026.shows-location-when-meeting
     await expect(detailedCard.getByText(`${testApi.prefix}-Conference Room B`)).toBeVisible()
     await expect(bareCard.getByText(`${testApi.prefix}-Conference Room B`)).not.toBeVisible()
 
     // Attendee count shows only when the meeting has more than one attendee
-    // spec: CAL-026[2]
+    // spec: CAL-026.shows-attendee-count-only
     await expect(detailedCard.getByText('2 attendees')).toBeVisible()
     await expect(bareCard.getByText(/attendees/)).not.toBeVisible()
   })
@@ -329,7 +329,7 @@ test.describe('Meetings Component @area:meetings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // The untitled event's card renders the fallback label
-    // spec: CAL-026[0]
+    // spec: CAL-026.shows-title-fallback-label
     await expect(
       meetingCards(page).getByRole('heading', { level: 4, name: 'Untitled Meeting' })
     ).toBeVisible()
@@ -352,7 +352,7 @@ test.describe('Meetings Component @area:meetings', () => {
     const region = meetingsRegion(page)
 
     // The linked meeting's title is a link opening in a new tab
-    // spec: CAL-027[0]
+    // spec: CAL-027.title-becomes-link-opens
     const meetingLink = region.getByRole('link', {
       name: new RegExp(`${testApi.prefix}-Meeting With Link`),
     })
@@ -364,7 +364,7 @@ test.describe('Meetings Component @area:meetings', () => {
     )
 
     // The meeting without a link renders its title as plain text, not a link
-    // spec: CAL-027[1]
+    // spec: CAL-027.meeting-without-link-renders
     await expect(region.getByText(`${testApi.prefix}-Meeting Without Link`)).toBeVisible()
     await expect(
       region.getByRole('link', { name: new RegExp(`${testApi.prefix}-Meeting Without Link`) })
@@ -379,14 +379,14 @@ test.describe('Meetings Component @area:meetings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // Meetings section should not be visible with no events
-    // spec: CAL-024[1]
+    // spec: CAL-024.nothing-shown-without-events
     await expect(
       page.getByRole('heading', { name: `${testApi.prefix}-Meeting Test Contact` })
     ).toBeVisible()
     await expect(page.getByRole('heading', { name: /Meetings/i })).not.toBeVisible()
 
     // Even with events seeded, a failing events fetch renders nothing
-    // spec: CAL-024[1]
+    // spec: CAL-024.nothing-shown-without-events
     await testApi.seedCalendarEvents(contactId, [
       { title: 'Hidden Meeting', is_past: false, days_ahead: 3 },
     ])
@@ -421,18 +421,18 @@ test.describe('Meetings Component @area:meetings', () => {
 
     // Initially 10 of the 15 seeded events show, and the control's accessible
     // name reports the remainder derived from the data
-    // spec: CAL-028[0]
+    // spec: CAL-028.fixed-number-meetings-show
     await expect(region.getByRole('button', { name: /Load more \(5 remaining\)/i })).toBeVisible()
     await expect(meetingCards(page)).toHaveCount(10)
 
     // One activation exhausts the list: all 15 show and the control disappears
-    // spec: CAL-028[1]
+    // spec: CAL-028.each-activation-reveals-more
     await region.getByRole('button', { name: /Load more \(5 remaining\)/i }).click()
     await expect(meetingCards(page)).toHaveCount(15)
     await expect(region.getByRole('button', { name: /Load more/i })).not.toBeVisible()
 
     // Switching filters resets the reveal back to the initial page
-    // spec: CAL-028[2]
+    // spec: CAL-028.switching-filters-resets-reveal
     await region.getByRole('button', { name: /All \(15\)/i }).click()
     await expect(region.getByRole('button', { name: /Load more \(5 remaining\)/i })).toBeVisible()
     await expect(meetingCards(page)).toHaveCount(10)

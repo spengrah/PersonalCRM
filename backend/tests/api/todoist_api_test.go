@@ -371,7 +371,7 @@ func TestTodoistAPI_Pickers_NoAccount(t *testing.T) {
 	t.Parallel()
 
 	t.Run("ListProjects_NoAccount_Returns404", func(t *testing.T) {
-		// spec: SET-018[0]
+		// spec: SET-018.no-account-connected-404
 		router, _, _, _ := newTodoistAPITest(t)
 
 		w := doTodoistRequest(router, http.MethodGet, "/api/v1/todoist/projects", nil)
@@ -389,7 +389,7 @@ func TestTodoistAPI_Pickers_NoAccount(t *testing.T) {
 	})
 
 	t.Run("ListLabels_NoAccount_Returns404", func(t *testing.T) {
-		// spec: SET-018[0]
+		// spec: SET-018.no-account-connected-404
 		router, _, _, _ := newTodoistAPITest(t)
 
 		w := doTodoistRequest(router, http.MethodGet, "/api/v1/todoist/labels", nil)
@@ -475,7 +475,7 @@ func TestTodoistAPI_Pickers_FilterDeletedEntries(t *testing.T) {
 	t.Cleanup(server.Close)
 	withTodoistSyncEndpoint(t, server.URL)
 
-	// spec: SET-018[1]
+	// spec: SET-018.deleted-entries-filtered-out
 	w := doTodoistRequest(router, http.MethodGet, "/api/v1/todoist/projects", nil)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	assert.Equal(t, []map[string]interface{}{
@@ -515,7 +515,7 @@ func TestTodoistAPI_Pickers_TokenOrProviderFailure500(t *testing.T) {
 		seedAccount()
 
 		for _, path := range pickerPaths {
-			// spec: SET-018[2]
+			// spec: SET-018.token-provider-api-failure
 			w := doTodoistRequest(router, http.MethodGet, path, nil)
 			assertTodoistInternalErrorWire(t, w)
 		}
@@ -534,7 +534,7 @@ func TestTodoistAPI_Pickers_TokenOrProviderFailure500(t *testing.T) {
 		withTodoistSyncEndpoint(t, server.URL)
 
 		for _, path := range pickerPaths {
-			// spec: SET-018[2]
+			// spec: SET-018.token-provider-api-failure
 			w := doTodoistRequest(router, http.MethodGet, path, nil)
 			assertTodoistInternalErrorWire(t, w)
 		}

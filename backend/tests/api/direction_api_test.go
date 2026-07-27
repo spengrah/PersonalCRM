@@ -187,7 +187,7 @@ func TestContactAPI_HasPendingFollowup(t *testing.T) {
 	contactID := createDirectionTestContact(t, router, "Pending Followup API Test "+uuid.NewString()[:8])
 
 	t.Run("NoPendingFollowup", func(t *testing.T) {
-		// spec: CON-005[0]
+		// spec: CON-005.live-contact-flag
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -200,7 +200,7 @@ func TestContactAPI_HasPendingFollowup(t *testing.T) {
 	})
 
 	t.Run("WithPendingFollowup", func(t *testing.T) {
-		// spec: CON-005[0]
+		// spec: CON-005.live-contact-flag
 		// Create a managed follow-up task
 		id, err := uuid.Parse(contactID)
 		require.NoError(t, err)
@@ -294,7 +294,7 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("has_followup_includes_contact", func(t *testing.T) {
-		// spec: CON-018[3]
+		// spec: CON-018.followup-filter-closed-set
 		req, _ := http.NewRequest("GET", "/api/v1/contacts?followup_filter=has_followup&search="+searchQuery, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -315,7 +315,7 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 	})
 
 	t.Run("no_followup_excludes_contact", func(t *testing.T) {
-		// spec: CON-018[3]
+		// spec: CON-018.followup-filter-closed-set
 		req, _ := http.NewRequest("GET", "/api/v1/contacts?followup_filter=no_followup&search="+searchQuery, nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -373,7 +373,7 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("FilterByFollowUpLifecycle", func(t *testing.T) {
-		// spec: CAD-032[0]
+		// spec: CAD-032.task-listing-filters-state
 		// Post-046, follow-up tasks are identified by lifecycle=followup_loop
 		// (kind is reach_out for live follow-up rows). The legacy
 		// ?kind=follow_up filter is no longer valid.
@@ -393,7 +393,7 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	})
 
 	t.Run("FilterByAction_ExcludesFollowUp", func(t *testing.T) {
-		// spec: CAD-032[0]
+		// spec: CAD-032.task-listing-filters-state
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=action", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -413,7 +413,7 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	})
 
 	t.Run("InvalidKindRejected", func(t *testing.T) {
-		// spec: CAD-032[0]
+		// spec: CAD-032.task-listing-filters-state
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=invalid", nil)
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -421,7 +421,7 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 	})
 
 	t.Run("LegacyFollowUpKindRejected", func(t *testing.T) {
-		// spec: CAD-032[0]
+		// spec: CAD-032.task-listing-filters-state
 		// kind=follow_up is no longer a valid kind enum post-046; the
 		// validator rejects it at the handler boundary.
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID+"/tasks?kind=follow_up", nil)

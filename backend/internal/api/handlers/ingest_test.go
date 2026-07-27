@@ -19,7 +19,7 @@ import (
 // external_contact and call version gates end-to-end
 // (external_contact_ingest and phone_call_ingest test files).
 
-// spec: ING-005[0]
+// spec: ING-005.version-below-supported-minimum
 func TestValidateRawMessagePayload_VersionBelowMin_Rejected(t *testing.T) {
 	ev := IngestEventRequest{
 		Source:   "messages",
@@ -33,7 +33,7 @@ func TestValidateRawMessagePayload_VersionBelowMin_Rejected(t *testing.T) {
 	require.Contains(t, ierr.Message, "version")
 }
 
-// spec: ING-005[1]
+// spec: ING-005.version-above-highest-known
 func TestValidateRawMessagePayload_VersionTooHigh_Rejected(t *testing.T) {
 	ev := IngestEventRequest{
 		Source:   "messages",
@@ -47,7 +47,7 @@ func TestValidateRawMessagePayload_VersionTooHigh_Rejected(t *testing.T) {
 	require.Contains(t, ierr.Message, "upgrade Pi")
 }
 
-// spec: ING-005[0]
+// spec: ING-005.version-below-supported-minimum
 func TestValidateMeetingNotePayloadVersion_VersionBelowMin_Rejected(t *testing.T) {
 	ev := IngestEventRequest{
 		Source:   "anarlog_sessions",
@@ -61,7 +61,7 @@ func TestValidateMeetingNotePayloadVersion_VersionBelowMin_Rejected(t *testing.T
 	require.Contains(t, ierr.Message, "version")
 }
 
-// spec: ING-005[1]
+// spec: ING-005.version-above-highest-known
 func TestValidateMeetingNotePayloadVersion_VersionTooHigh_Rejected(t *testing.T) {
 	ev := IngestEventRequest{
 		Source:   "anarlog_sessions",
@@ -75,7 +75,7 @@ func TestValidateMeetingNotePayloadVersion_VersionTooHigh_Rejected(t *testing.T)
 	require.Contains(t, ierr.Message, "upgrade Pi")
 }
 
-// spec: ING-005[0]
+// spec: ING-005.version-below-supported-minimum
 func TestValidateExternalContactPayloadVersion_VersionBelowMin_Rejected(t *testing.T) {
 	ev := IngestEventRequest{
 		Source:   "icloud_contacts",
@@ -89,7 +89,7 @@ func TestValidateExternalContactPayloadVersion_VersionBelowMin_Rejected(t *testi
 	require.Contains(t, ierr.Message, "version")
 }
 
-// spec: ING-005[1]
+// spec: ING-005.version-above-highest-known
 func TestValidateExternalContactPayloadVersion_VersionTooHigh_Rejected(t *testing.T) {
 	ev := IngestEventRequest{
 		Source:   "icloud_contacts",
@@ -103,7 +103,7 @@ func TestValidateExternalContactPayloadVersion_VersionTooHigh_Rejected(t *testin
 	require.Contains(t, ierr.Message, "upgrade Pi")
 }
 
-// spec: ING-005[0]
+// spec: ING-005.version-below-supported-minimum
 func TestValidateCallPayloadVersion_VersionBelowMin_Rejected(t *testing.T) {
 	ev := IngestEventRequest{
 		Source:   "phone_calls",
@@ -117,7 +117,7 @@ func TestValidateCallPayloadVersion_VersionBelowMin_Rejected(t *testing.T) {
 	require.Contains(t, ierr.Message, "version")
 }
 
-// spec: ING-005[1]
+// spec: ING-005.version-above-highest-known
 func TestValidateCallPayloadVersion_VersionTooHigh_Rejected(t *testing.T) {
 	ev := IngestEventRequest{
 		Source:   "phone_calls",

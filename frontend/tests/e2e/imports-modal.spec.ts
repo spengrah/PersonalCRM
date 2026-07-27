@@ -82,7 +82,7 @@ test.describe('Imports Modal @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-028[0]
+    // spec: IMP-028.position-pager-arrow-keys
     test('should navigate with arrow keys and the position pager', async ({ page }) => {
       const displayName = `${testApi.prefix}-Modal Test Contact A`
 
@@ -169,7 +169,7 @@ test.describe('Imports Modal @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-027[4]
+    // spec: IMP-027.cadence-chosen-or-prefilled
     test('link mode pre-fills the cadence from the existing contact', async ({ page }) => {
       // Seed a candidate and a target contact with an existing cadence
       await testApi.seedExternalContacts([
@@ -216,7 +216,7 @@ test.describe('Imports Modal @area:imports', () => {
       await expect(cadenceSelect).toHaveValue('quarterly', { timeout: 5000 })
     })
 
-    // spec: IMP-027[4]
+    // spec: IMP-027.cadence-chosen-or-prefilled
     test('should update cadence when linking contact', async ({ page, request }) => {
       await testApi.seedExternalContacts([
         {
@@ -307,7 +307,7 @@ test.describe('Imports Modal @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-027[2]
+    // spec: IMP-027.name-editable-empty-blocks
     test('should enter edit mode when clicking name', async ({ page }) => {
       // Seed a candidate
       await testApi.seedExternalContacts([
@@ -345,7 +345,7 @@ test.describe('Imports Modal @area:imports', () => {
       await expect(nameInput).toHaveValue(new RegExp(displayName))
     })
 
-    // spec: IMP-027[2], IMP-012[0], IMP-031[0]
+    // spec: IMP-027.name-editable-empty-blocks, IMP-012.crm-contact-created-normal-path, IMP-031.item-leaves-queue-counts-update
     test('should edit name and persist on import', async ({ page, request }) => {
       // Seed a candidate
       await testApi.seedExternalContacts([
@@ -427,7 +427,7 @@ test.describe('Imports Modal @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-027[3]
+    // spec: IMP-027.methods-selectable-one-primary
     test('should only allow one primary method at a time', async ({ page }) => {
       // Seed a candidate with multiple contact methods
       await testApi.seedExternalContacts([
@@ -483,7 +483,7 @@ test.describe('Imports Modal @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-027[4], IMP-031[0]
+    // spec: IMP-027.cadence-chosen-or-prefilled, IMP-031.item-leaves-queue-counts-update
     test('should import contact with selected cadence', async ({ page, request }) => {
       // Seed a candidate for this isolated test
       await testApi.seedExternalContacts([
@@ -556,7 +556,7 @@ test.describe('Imports Modal @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-027[2]
+    // spec: IMP-027.name-editable-empty-blocks
     test('an empty name blocks resolution', async ({ page }) => {
       const { ids } = await testApi.seedExternalContacts([
         {
@@ -611,7 +611,7 @@ test.describe('Imports Modal @area:imports', () => {
       expect(importPosts).toBe(1)
     })
 
-    // spec: IMP-027[2]
+    // spec: IMP-027.name-editable-empty-blocks
     test('an unresolved telegram peer requires a name edit before import', async ({ page }) => {
       // An unresolved peer: telegram source with no name fields, no
       // username, and no methods. Hidden by default behind the opt-in
@@ -640,7 +640,7 @@ test.describe('Imports Modal @area:imports', () => {
       // The modal opens on the clicked card's peer (keyed by id); every
       // unresolved peer displays as "Unknown", so the import POST below is
       // additionally pinned to OUR external id and fails loudly on a mixup.
-      // spec: IMP-028[3]
+      // spec: IMP-028.card-opens-that-candidate
       await expectModalCandidate(page, 'Unknown')
 
       const modal = resolverDialog(page)
@@ -677,7 +677,7 @@ test.describe('Imports Modal @area:imports', () => {
       expect(importPosts).toBe(1)
     })
 
-    // spec: IMP-027[3]
+    // spec: IMP-027.methods-selectable-one-primary
     test('link mode disables already-present methods and offers additions', async ({ page }) => {
       // The CRM contact already carries email X; the candidate carries the
       // identical X, a same-type different-value email Z, and a phone Y.
@@ -743,7 +743,7 @@ test.describe('Imports Modal @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-028[1]
+    // spec: IMP-028.modal-advances-to-next
     test('advances to the next candidate after resolving, closing only when the queue is exhausted', async ({
       page,
     }) => {
@@ -844,7 +844,7 @@ test.describe('Imports Modal @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-039[0], IMP-039[1], IMP-039[2], IMP-039[3]
+    // spec: IMP-039.pressing-escape-closes-modal, IMP-039.clicking-backdrop-closes-modal, IMP-039.cancel-action-closes-modal, IMP-039.dismissal-resolves-nothing
     test('Escape, backdrop, and Cancel dismiss without resolving', async ({ page, request }) => {
       const { ids } = await testApi.seedExternalContacts([
         {

@@ -100,7 +100,7 @@ behaviors:
     provenance: [external_contact match_status CHECK, LinkContact curated signal, Ignore]
     notes: imported-vs-matched is the discriminator that drives auto-propagate vs suggest in reconciliation (IMP-017) — imported means a human curated the method set.
     waivers:
-      - then: 2
+      - then: matched-marks-rows-linked
         reason: the matched (uncurated bare-link) state needs a link with NO curation signal — a zero-method candidate against a cadence-less contact with the name untouched — a degenerate path the modal offers no stable affordance for; the discriminator is owned by the Go integration test TestLinkContact_Bare_LandsMatched
 
   - id: IMP-008
@@ -195,7 +195,7 @@ behaviors:
     provenance: [LinkContact curated signal, EnrichContactFromExternalWithSelections]
     notes: Method-value conflicts neither block nor prompt today — a same-type different-value method is simply offered as an addition (IMP-027) — and the server does not reject links over conflicts; conflict resolutions still count as a curation signal at the API level.
     waivers:
-      - then: 1
+      - then: bare-link-no-curation
         reason: a bare link (no method curation, no cadence, no name change) is a degenerate UI path — the modal curates whenever the candidate offers methods or the contact carries a cadence to pre-fill; owned by the Go integration test TestLinkContact_Bare_LandsMatched
 
   - id: IMP-014
@@ -413,7 +413,7 @@ behaviors:
     provenance: [suggestion-modal.tsx, method-selector.tsx, detectMethodConflicts]
     notes: A conflict-resolution affordance (keep-CRM vs use-external toggle) exists in the code but is currently unreachable — the detector never emits a conflict state.
     waivers:
-      - then: 0
+      - then: everything-one-scrollable-view
         reason: single-view/no-wizard is a structural-absence property with no deterministic observable; the citing tests for the other then-items all drive one dialog with no step transitions, and visual composition is judge-owned
 
   - id: IMP-028
@@ -466,7 +466,7 @@ behaviors:
         text: confirming requires at least one selected method; dismissing dismisses all pending ones stickily
     provenance: [method-suggestion-resolver.tsx]
     waivers:
-      - then: 1
+      - then: methods-already-contact-shown
         reason: the suggestions feed prunes already-on-contact entries server-side (buildMethodSuggestionItems drift defense), so the disabled already-present row is unreachable and unseedable in E2E; the render-time state is covered by the method-suggestion-resolver component test
 
   - id: IMP-031

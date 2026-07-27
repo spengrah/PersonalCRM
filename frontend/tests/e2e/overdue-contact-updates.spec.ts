@@ -66,7 +66,7 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     // mutual submission from a SEEDED-OVERDUE fixture, plus the outcome
     // unique to this entry point: the logged interaction clears the
     // contact's overdue state.
-    // spec: CON-053[0], CON-053[2]
+    // spec: CON-053.direction-chosen-outbound-inbound, CON-053.interaction-posted-chosen-direction
     const contactName = `${testApi.prefix}-Overdue Test Contact`
 
     // Seeded-data precondition: the contact renders as overdue on the
@@ -108,7 +108,7 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     page,
     request,
   }) => {
-    // spec: CAD-028[2], CAD-029[1]
+    // spec: CAD-028.change-consistent-across-dashboard, CAD-029.last-response-time-shown
     const contactName = `${testApi.prefix}-Overdue Test Contact`
 
     // A SENTINEL that stays overdue: its rendered card is the data-derived
@@ -231,7 +231,7 @@ test.describe('Overdue Contact Updates - Multiple Contacts @area:overdue', () =>
 
     // CAD-023[2] (the 1000-entry bound + most-overdue-retained truncation)
     // is waived in spec/cadence-followup.yaml: not E2E-seedable.
-    // spec: CAD-023[0], CAD-023[1]
+    // spec: CAD-023.each-entry-carries-contact, CAD-023.entries-ordered-most-overdue
     const overdueRes = await request.get(`${API_BASE_URL}/api/v1/contacts/overdue`, {
       headers: API_HEADERS,
     })

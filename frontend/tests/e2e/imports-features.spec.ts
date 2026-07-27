@@ -32,7 +32,7 @@ test.describe('Imports Features @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-026[0]
+    // spec: IMP-026.people-tab-default-holds
     test('paginates the candidate list', async ({ page }) => {
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
@@ -75,7 +75,7 @@ test.describe('Imports Features @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-029[1]
+    // spec: IMP-029.without-suggestion-link-action
     test('should show "Link (select)" when no suggested match', async ({ page }) => {
       // Seed an external contact with a unique name that won't match any CRM contact
       await testApi.seedExternalContacts([
@@ -97,7 +97,7 @@ test.describe('Imports Features @area:imports', () => {
       await expect(candidateCard.getByRole('button', { name: 'Link (select)' })).toBeVisible()
     })
 
-    // spec: IMP-029[0]
+    // spec: IMP-029.link-action-names-suggested
     test('should show suggested match with confidence percentage when present', async ({
       page,
     }) => {
@@ -136,7 +136,7 @@ test.describe('Imports Features @area:imports', () => {
       await expect(linkButton).toContainText('%')
     })
 
-    // spec: IMP-028[2]
+    // spec: IMP-028.suggested-match-when-present
     test('should pre-select suggested contact in link modal', async ({ page }) => {
       // Seed matching CRM contact and external contact
       await testApi.seedOverdueContacts([
@@ -192,7 +192,7 @@ test.describe('Imports Features @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-036[0]
+    // spec: IMP-036.username-appears-chip-deep
     test('shows @username chip on Telegram candidate card', async ({ page }) => {
       // Use a prefix-scoped handle so parallel test runs don't collide on the
       // link selector and so we can scope assertions to our card.
@@ -223,7 +223,7 @@ test.describe('Imports Features @area:imports', () => {
       await expect(handleLink).toHaveAttribute('href', `https://t.me/${telegramPath}`)
     })
 
-    // spec: IMP-036[1]
+    // spec: IMP-036.no-name-fields-username-used
     test('falls back to @username when no name is set on Telegram candidate', async ({ page }) => {
       const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
 
@@ -252,7 +252,7 @@ test.describe('Imports Features @area:imports', () => {
     // A candidate with no source name fields must still be importable without
     // editing the name — the frontend sends the @handle as `name` explicitly,
     // because the backend can't derive it from display_name/first_name/last_name.
-    // spec: IMP-012[0], IMP-012[1]
+    // spec: IMP-012.crm-contact-created-normal-path, IMP-012.methods-come-from-selection
     test('imports a handle-only Telegram candidate without requiring a name edit', async ({
       page,
       request,
@@ -317,7 +317,7 @@ test.describe('Imports Features @area:imports', () => {
       expect(methods.some(m => m.type === 'telegram')).toBe(true)
     })
 
-    // spec: IMP-027[3]
+    // spec: IMP-027.methods-selectable-one-primary
     test('shows @username method in Link to Existing modal', async ({ page }) => {
       const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
 

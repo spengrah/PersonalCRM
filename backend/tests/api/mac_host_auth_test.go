@@ -109,7 +109,7 @@ func TestMacHost_Auth_MinProtocolVersion_412(t *testing.T) {
 	require.True(t, ok, "body: %v", body)
 	require.Equal(t, "UPGRADE_REQUIRED", errObj["code"])
 
-	// spec: MAC-012[1]
+	// spec: MAC-012.response-carries-minimum-acceptable
 	// The 412 body must carry the minimum acceptable protocol version
 	// literally as min_version so the daemon knows what to upgrade to.
 	minVersion, ok := errObj["min_version"]

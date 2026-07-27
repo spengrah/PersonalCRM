@@ -9,7 +9,7 @@ import (
 // Pure unit coverage of extractBackfillComplete: the flag is opaque to
 // the backend, so absent keys and malformed values must default to
 // false rather than erroring or defaulting to true.
-// spec: MAC-015[2]
+// spec: MAC-015.backfill-complete-flag-opaque
 func TestExtractBackfillComplete(t *testing.T) {
 	cases := []struct {
 		name     string

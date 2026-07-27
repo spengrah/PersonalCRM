@@ -59,7 +59,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('should display target contact as "Keeping"', async ({ page }) => {
-    // spec: CON-043[0]
+    // spec: CON-043.current-contact-marked-kept
     // Create a contact to be the merge target
     const { ids } = await testApi.seedContacts([
       {
@@ -85,7 +85,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('should search and select source contact', async ({ page }) => {
-    // spec: CON-043[0], CON-043[1]
+    // spec: CON-043.current-contact-marked-kept, CON-043.selecting-source-loads-preview
     // Create target and source contacts
     const { ids } = await testApi.seedContacts([
       {
@@ -128,7 +128,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('should toggle field selection between source and target', async ({ page, request }) => {
-    // spec: CON-043[2]
+    // spec: CON-043.conflicting-fields-cadence-location
     // Conflicts span all three fields the spec names (cadence, location,
     // birthday), so the default-keeps-target proof covers the full clause, not
     // just location. Seeded via direct POST because the seed endpoint has no
@@ -214,7 +214,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('should edit merged contact name', async ({ page }) => {
-    // spec: CON-043[3]
+    // spec: CON-043.merged-name-editable
     // Create contacts
     const { ids } = await testApi.seedContacts([
       {
@@ -255,7 +255,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('should cancel name edit with Escape', async ({ page }) => {
-    // spec: CON-043[3]
+    // spec: CON-043.merged-name-editable
     // The editable-name contract's discard path: Escape must not adopt the
     // typed name (no accidental rename baked into the merge).
     const { ids } = await testApi.seedContacts([
@@ -296,7 +296,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('should dismiss the modal without merging via backdrop click', async ({ page }) => {
-    // spec: CON-043[6]
+    // spec: CON-043.modal-dismissed-without-merging
     // Backdrop click dismisses the modal IN PLACE: no merge fires, the modal
     // closes, and the user stays on the detail page. The Escape path is NOT
     // asserted here: the detail page's window-level Escape handler is not
@@ -342,7 +342,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('should successfully merge contacts', async ({ page }) => {
-    // spec: CON-043[5]
+    // spec: CON-043.outcome-reported-auto-dismissed
     // Create contacts with some methods
     const { ids } = await testApi.seedContacts([
       {
@@ -413,7 +413,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('should show quick-fill name option when source has different name', async ({ page }) => {
-    // spec: CON-043[3]
+    // spec: CON-043.merged-name-editable
     // Create contacts with different names
     const { ids } = await testApi.seedContacts([
       {
@@ -455,7 +455,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('should disable merge button when no source selected', async ({ page }) => {
-    // spec: CON-043[4]
+    // spec: CON-043.merge-cannot-submit-until-ready
     // Create a contact
     const { ids } = await testApi.seedContacts([
       {
@@ -480,7 +480,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('keeps the merge submit disabled while the preview is loading', async ({ page }) => {
-    // spec: CON-043[4]
+    // spec: CON-043.merge-cannot-submit-until-ready
     const { ids } = await testApi.seedContacts([
       { full_name: 'Preview Loading Target' },
       { full_name: 'Preview Loading Source' },
@@ -515,7 +515,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
   })
 
   test('keeps the merge submit disabled while the merge is in flight', async ({ page }) => {
-    // spec: CON-043[4]
+    // spec: CON-043.merge-cannot-submit-until-ready
     const { ids } = await testApi.seedContacts([
       { full_name: 'In Flight Target' },
       { full_name: 'In Flight Source' },

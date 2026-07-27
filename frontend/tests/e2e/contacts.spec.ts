@@ -47,7 +47,7 @@ test.describe('Contacts - TestAPI Seeded @area:contacts', () => {
     await expect(heading).not.toHaveClass(/leading-7/)
   })
 
-  // spec: NTS-007[2]
+  // spec: NTS-007.long-content-clamped-expand
   test('should show expandable notes for long content', async ({ page }) => {
     // Create notes longer than 300 characters to trigger truncation
     const longNotes = `Met at the AI conference in San Francisco, March 2024. Works as a senior ML engineer at a startup focused on personal productivity tools.
@@ -94,7 +94,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(showMoreButton).toBeVisible()
   })
 
-  // spec: NTS-007[2]
+  // spec: NTS-007.long-content-clamped-expand
   test('should not show expand button for short notes', async ({ page }) => {
     const shortNotes = 'Brief note about this contact.'
 
@@ -121,7 +121,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page.getByRole('button', { name: 'Show more' })).not.toBeVisible()
   })
 
-  // spec: CON-053[1], CON-053[2]
+  // spec: CON-053.optional-backdated-date, CON-053.interaction-posted-chosen-direction
   test('should log a backdated interaction via the Log Interaction modal', async ({ page }) => {
     // The Log Interaction modal (direction picker + date picker)
     // replaces the previous inline pencil-edit on `last_contacted`.
@@ -211,7 +211,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   })
 
   test('should navigate to edit mode via context menu Edit action', async ({ page }) => {
-    // spec: CON-041[0], CON-041[1]
+    // spec: CON-041.action-runs-once-edit, CON-041.parameter-stripped-from-url
     const { ids } = await testApi.seedContacts([{ full_name: 'Context Edit Test' }])
 
     const contactId = ids[0]
@@ -241,7 +241,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   })
 
   test('should navigate to merge modal via context menu Merge action', async ({ page }) => {
-    // spec: CON-041[0], CON-041[1]
+    // spec: CON-041.action-runs-once-edit, CON-041.parameter-stripped-from-url
     const { ids } = await testApi.seedContacts([{ full_name: 'Context Merge Test' }])
 
     const contactId = ids[0]
@@ -270,7 +270,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page).not.toHaveURL(/action=/)
   })
 
-  // spec: CON-053[0], CON-053[2]
+  // spec: CON-053.direction-chosen-outbound-inbound, CON-053.interaction-posted-chosen-direction
   test('should log a mutual interaction via the Log Interaction modal default', async ({
     page,
   }) => {
@@ -305,7 +305,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 })
   })
 
-  // spec: CON-053[0]
+  // spec: CON-053.direction-chosen-outbound-inbound
   test('should log an outbound interaction via the Log Interaction modal', async ({ page }) => {
     // The modal's direction picker reaches the API: choosing Outbound posts
     // direction=outbound. The cadence timestamp effects of each direction are
@@ -333,7 +333,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     expect(body.data.direction).toBe('outbound')
   })
 
-  // spec: CON-053[0]
+  // spec: CON-053.direction-chosen-outbound-inbound
   test('should log an inbound interaction via the Log Interaction modal', async ({ page }) => {
     // The modal's direction picker reaches the API: choosing Inbound posts
     // direction=inbound. The cadence timestamp effects of each direction are
@@ -362,7 +362,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   })
 
   test('defaults the contact list to cadence order, most-frequent-first', async ({ page }) => {
-    // spec: CON-038[0]
+    // spec: CON-038.list-defaults-cadence-order
     // Names are chosen so ALPHABETICAL order (either direction) differs from the
     // cadence-desc order — otherwise a backend that ignored sort=cadence and fell
     // back to name order would pass this test. Cadence-desc = Yankee(weekly) →
@@ -413,7 +413,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     page,
     request,
   }) => {
-    // spec: CON-042[0], CON-042[1], CON-042[2]
+    // spec: CON-042.confirmation-prompt-warns-action, CON-042.only-confirmation-contact-deleted, CON-042.success-user-returned-contact
     const { ids } = await testApi.seedContacts([{ full_name: 'Delete Confirm Test' }])
     const contactId = ids[0]
     const fullName = `${testApi.prefix}-Delete Confirm Test`
@@ -474,7 +474,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   test('logs a mutual interaction from the list-row Mark as Contacted quick action', async ({
     page,
   }) => {
-    // spec: CON-044[0]
+    // spec: CON-044.mutual-direction-interaction-logged
     // The LIST-row context-menu quick action (distinct from the detail-page Log
     // Interaction modal): it posts a mutual, server-timestamped interaction.
     const { ids } = await testApi.seedContacts([
@@ -523,7 +523,7 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
   })
 
   test('should filter contacts by cadence status', async ({ page }) => {
-    // spec: DSH-007[0], CON-054[0], CON-054[1]
+    // spec: DSH-007.contact-text-search-provided, CON-054.has-cadence-no-cadence, CON-054.clearing-filter-restores-unfiltered
     // Contact text search is provided through the contact list's search
     // input: the tightened search step below proves typing a term drives a
     // `search=` list request that FILTERS the results (the matching fixtures
@@ -634,7 +634,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await testApi.cleanup()
   })
 
-  // spec: CON-055[0]
+  // spec: CON-055.contact-created-user-lands
   test('should create a contact from the form @smoke', async ({ page }) => {
     const fullName = `${testApi.prefix}-Create Contact`
 
@@ -649,7 +649,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
   })
 
-  // spec: CON-055[0]
+  // spec: CON-055.contact-created-user-lands
   //
   // ContactForm and transformContactFormData are SHARED with the edit path, and
   // the edit path stopped sending `methods` on the contact PUT. Creation still
@@ -675,7 +675,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByText(email)).toBeVisible({ timeout: 15000 })
   })
 
-  // spec: NTS-008[2]
+  // spec: NTS-008.displayed-notepad-reflects-new
   test('should edit contact notes', async ({ page }) => {
     const notes =
       'Met at a conference in 2024. Works in AI/ML. Very interested in personal CRM tools.'
@@ -713,7 +713,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByText(notes)).not.toBeVisible()
   })
 
-  // spec: CON-056[0], CON-056[1], CON-056[2]
+  // spec: CON-056.methods-displayed-normalized, CON-056.primary-method-marked-only, CON-056.no-link-surface-plain-text
   test('should display contact with methods and the primary marked', async ({ page }) => {
     // A slim display proof: seeded methods render with normalized values and
     // exactly one Primary mark. The normalization RULES themselves (per-type
@@ -758,7 +758,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByRole('link', { name: gchatEmail })).toHaveCount(0)
   })
 
-  // spec: CON-061[0], CON-061[1]
+  // spec: CON-061.cadence-renders-formatted-label, CON-061.next-contact-date-or-placeholder
   test('should render formatted cadence and next-contact values in list rows', async ({ page }) => {
     // Derived-value display: a contact with a cadence + last-contacted has a
     // computed contact_by, rendered as a date in the Next Contact column; a
@@ -799,7 +799,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(noneRow.getByRole('cell').nth(nextIdx)).toHaveText('-')
   })
 
-  // spec: CON-057[0]
+  // spec: CON-057.list-refetches-column-sort-field
   test('should sort by Next Contact column when header clicked', async ({ page }) => {
     // Two sequential click -> response round trips under real parallel
     // worker load can exceed the default 30s budget; give this test room.
@@ -845,7 +845,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByText(`${testApi.prefix}-SortNext Contact`)).toBeVisible()
   })
 
-  // spec: CON-057[0]
+  // spec: CON-057.list-refetches-column-sort-field
   test('should sort by Last response column when header clicked', async ({ page }) => {
     // Two sequential click -> response round trips under real parallel
     // worker load can exceed the default 30s budget; give this test room.
@@ -886,7 +886,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(page.getByText(`${testApi.prefix}-SortResp Contact`)).toBeVisible()
   })
 
-  // spec: CON-058[0], CON-058[1]
+  // spec: CON-058.page-number-buttons-move, CON-058.previous-next-controls-disable
   test('should show page number buttons and top/bottom pagination when multiple pages exist', async ({
     page,
   }) => {

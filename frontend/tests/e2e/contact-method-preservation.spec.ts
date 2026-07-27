@@ -105,7 +105,7 @@ test.describe('Contact method preservation @area:contacts', () => {
     page,
     request,
   }) => {
-    // spec: CON-063[0]
+    // spec: CON-063.method-added-another-writer
     const emailA = `pres-a-${Date.now()}@example.com`
     const emailB = `pres-b-${Date.now()}@example.com`
     const { ids } = await testApi.seedContacts([
@@ -131,7 +131,7 @@ test.describe('Contact method preservation @area:contacts', () => {
   })
 
   test('removes a method the user deleted in the form', async ({ page, request }) => {
-    // spec: CON-063[1]
+    // spec: CON-063.method-user-explicitly-deleted
     const emailA = `del-a-${Date.now()}@example.com`
     const { ids } = await testApi.seedContacts([
       {
@@ -165,7 +165,7 @@ test.describe('Contact method preservation @area:contacts', () => {
   })
 
   test('reports which parts of the save succeeded when one step fails', async ({ page }) => {
-    // spec: CON-063[2]
+    // spec: CON-063.partial-failure-names-saved-parts
     const emailA = `part-a-${Date.now()}@example.com`
     const { ids } = await testApi.seedContacts([
       { full_name: 'Partial Target', methods: [{ type: 'email', value: emailA }] },
@@ -191,7 +191,7 @@ test.describe('Contact method preservation @area:contacts', () => {
     page,
     request,
   }) => {
-    // spec: CON-063[3]
+    // spec: CON-063.retrying-after-partial-failure
     const emailA = `retry-a-${Date.now()}@example.com`
     const emailB = `retry-b-${Date.now()}@example.com`
     const { ids } = await testApi.seedContacts([
@@ -219,7 +219,7 @@ test.describe('Contact method preservation @area:contacts', () => {
     page,
     request,
   }) => {
-    // spec: CON-063[4]
+    // spec: CON-063.partial-save-add-can-be-removed
     //
     // The ordering here is load-bearing. B is added AFTER edit mode opens, so it
     // is genuinely unseen; adding it before would make it legitimately part of
@@ -270,7 +270,7 @@ test.describe('Contact method preservation @area:contacts', () => {
     page,
     request,
   }) => {
-    // spec: CON-063[5]
+    // spec: CON-063.partial-save-add-can-be-edited
     const emailA = `addedit-a-${Date.now()}@example.com`
     const phoneC = '5555550146'
     const phoneCEdited = '5555550147'
@@ -315,7 +315,7 @@ test.describe('Contact method preservation @area:contacts', () => {
     page,
     request,
   }) => {
-    // spec: CON-063[6]
+    // spec: CON-063.reverting-method-value-restores
     const emailA = `revert-a-${Date.now()}@example.com`
     const emailIntermediate = `revert-b-${Date.now()}@example.com`
     const { ids } = await testApi.seedContacts([

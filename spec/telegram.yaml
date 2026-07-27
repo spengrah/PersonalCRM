@@ -131,13 +131,13 @@ behaviors:
         text: status always returns 200 with the current connection state
     provenance: [TelegramHandler.StartAuth, TelegramHandler.VerifyCode, TelegramHandler.VerifyPassword, TelegramHandler.CancelAuth, TelegramHandler.Disconnect, TelegramHandler.GetStatus]
     waivers:
-      - then: 1
+      - then: in-progress-or-connected-409
         reason: the already-connected 409 half is proven by an uncited groundwork test (TestTelegramAuthAPI_StartConflictWhenAlreadyConnected — the conflict is decided from the stored session row before any client is built); the auth-already-in-progress 409 half is the genuine impossibility — it requires AuthSessionManager's unexported live session state, which only a real StartAuth sets, and StartAuth blocks inside a gotd MTProto client.Run dialing Telegram's production DCs; no stub seam exists and adding one is a production change out of a coverage arc's scope
-      - then: 2
+      - then: invalid-token-client-error
         reason: the invalid-token 400 half is proven by an uncited groundwork test (TestTelegramAuthAPI_ValidationErrors area); the expired-token 410 half is deterministically unreachable — cleanup closes the session and nils it atomically under one mutex, so any post-TTL request takes the invalid-token 400 path; ErrAuthTokenExpired fires only in a race window on a live MTProto-backed session (candidate for a spec correction rather than a test)
-      - then: 3
+      - then: wrong-code-password-unauthorized
         reason: the 401 wrong-code/password and 500 internal-error branches require an AuthResult delivered on the session's result channel, written exclusively by the live client.Run goroutine after real Telegram RPC attempts; no seam exists to stub the MTProto client or feed the channel
-      - then: 4
+      - then: cancel-always-succeeds-200
         reason: the cancel-always-succeeds half is proven by an uncited groundwork test (TestTelegramAuthAPI_CancelAlwaysSucceeds); the successful-step-returns-200 half requires a live or stubbed MTProto auth flow reaching awaiting_code/awaiting_password — no seam exists (see then 3)
 
   - id: TGM-008

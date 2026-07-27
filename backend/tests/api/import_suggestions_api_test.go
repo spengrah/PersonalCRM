@@ -116,7 +116,7 @@ func findSuggestionItemIndex(items []suggestionItem, kind, id string) int {
 // The method-suggestion group rides on top of the confidence-ranked
 // candidates, but ONLY on page 1 — the group is small and always returned
 // in full above the fold; paginating to page 2 must never repeat it.
-// spec: IMP-022[0]
+// spec: IMP-022.method-suggestions-ride-top
 func TestImportSuggestionsAPI_MethodGroupOnlyOnFirstPage(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -171,7 +171,7 @@ func TestImportSuggestionsAPI_MethodGroupOnlyOnFirstPage(t *testing.T) {
 // /imports/candidates) and paginate over the candidate group only, with no
 // overlap between pages. Asserted through the /imports/suggestions endpoint
 // itself, not the shared sort helper.
-// spec: IMP-022[1]
+// spec: IMP-022.contact-candidates-follow-confidence
 func TestImportSuggestionsAPI_CandidatesRankedAndPaginated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -266,7 +266,7 @@ func TestImportSuggestionsAPI_CandidatesRankedAndPaginated(t *testing.T) {
 // Each candidate's allowed_actions is the server-side derivation for its
 // source: a link-only source (gmail_correspondence) never offers "import";
 // an ordinary source offers all three. Asserted on the literal wire key.
-// spec: IMP-022[2]
+// spec: IMP-022.each-candidate-declares-server
 func TestImportSuggestionsAPI_CandidateAllowedActionsPerSource(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

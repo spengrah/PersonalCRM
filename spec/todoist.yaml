@@ -418,7 +418,7 @@ behaviors:
       - key: cadence-due-not-surfaced
         text: the cadence-due projection is not surfaced on the contact page (cadence is surfaced through the overdue and recent-activity surfaces instead)
     waivers:
-      - then: 2
+      - then: cadence-due-not-surfaced
         reason: a structural-absence property with no deterministic browser observable — the provider-less E2E env cannot seed a real cadence_due row (the contact-page task routes are OAuth-gated and route-mocked in E2E, so an absence assertion would only prove the mock), and the exclusion is enforced by the contact page's lifecycle-scoped task queries (manual + followup_loop only), which structurally omit cadence_due projections
     provenance: [tasks-section.tsx, contact detail task queries]
     notes: The tasks-section layout, badges, and completed-toggle are CAD-030; unlinking (which keeps the task alive in Todoist) is CAD-033. This pins the Todoist-projection-specific display concerns.

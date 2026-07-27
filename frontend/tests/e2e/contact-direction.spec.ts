@@ -20,7 +20,7 @@ test.describe('Contact Direction Signals @area:contacts', () => {
   })
 
   test('shows direction signal timestamps after mutual interaction', async ({ page, request }) => {
-    // spec: CAD-029[0], CAD-029[1]
+    // spec: CAD-029.last-outreach-time-shown, CAD-029.last-response-time-shown
     const { ids } = await testApi.seedContacts([
       { full_name: 'Direction Signal Test', cadence: 'monthly' },
     ])
@@ -53,7 +53,7 @@ test.describe('Contact Direction Signals @area:contacts', () => {
     page,
     request,
   }) => {
-    // spec: CAD-029[0], CAD-029[1]
+    // spec: CAD-029.last-outreach-time-shown, CAD-029.last-response-time-shown
     // Create a fresh contact with no prior interactions
     const { ids } = await testApi.seedContacts([
       { full_name: 'Outbound Only Test', cadence: 'monthly' },
@@ -83,7 +83,7 @@ test.describe('Contact Direction Signals @area:contacts', () => {
   })
 
   test('shows awaiting-reply indicator while a follow-up pends', async ({ page, request }) => {
-    // spec: CAD-029[2]
+    // spec: CAD-029.awaiting-reply-indicator-shown
     const { ids } = await testApi.seedContacts([
       { full_name: 'Awaiting Reply Test', cadence: 'monthly' },
     ])
@@ -124,7 +124,7 @@ test.describe('Contact Direction Signals @area:contacts', () => {
   })
 
   test('shows explicit no-recent-activity state with no direction signals', async ({ page }) => {
-    // spec: CAD-029[3]
+    // spec: CAD-029.explicit-no-recent-activity
     // A freshly seeded contact has no interactions and no pending follow-up,
     // which guarantees the no-recent-activity branch (no vacuous fallback).
     const { ids } = await testApi.seedContacts([

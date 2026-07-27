@@ -302,7 +302,7 @@ behaviors:
       - key: list-bounded-1000-truncation
         text: the list is bounded (1000), and truncation retains the most overdue contacts
     waivers:
-      - then: 2
+      - then: list-bounded-1000-truncation
         reason: the 1000-entry bound and most-overdue-retained truncation cannot be deterministically seeded in an E2E run; the bound is applied in ContactService.ListOverdueContacts and ordering-under-limit is proven by TestContactBy_ListOverdueContacts
     provenance: [ContactHandler.ListOverdueContacts, ContactService.ListOverdueContacts]
 

@@ -20,7 +20,7 @@ type hostDetailView struct {
 // TestMacHost_GetAdmin_DetailView covers the admin host-detail read:
 // a live host is returned, a revoked host is still returned (the admin
 // view does not filter revocation), and an unknown id is 404.
-// spec: MAC-018[1]
+// spec: MAC-018.detail-view-returns-single
 func TestMacHost_GetAdmin_DetailView(t *testing.T) {
 
 	env := setupMacHostEnv(t)

@@ -35,7 +35,7 @@ function overdueEntry(over: {
 
 test.describe('Dashboard @area:dashboard', () => {
   test('should display dashboard with navigation @smoke', async ({ page }) => {
-    // spec: DSH-001[0]
+    // spec: DSH-001.user-taken-dashboard-default
     await page.goto('/')
 
     // Should redirect to dashboard (client-side redirect via useEffect)
@@ -51,7 +51,7 @@ test.describe('Dashboard @area:dashboard', () => {
   })
 
   test('caught-up state offers add-contact and view-list paths', async ({ page }) => {
-    // spec: DSH-003[0], DSH-003[1]
+    // spec: DSH-003.add-contact-action-always, DSH-003.caught-up-offers-add-and-list
     // Route-mock an EMPTY overdue list (full apiClient envelope) before first
     // load so the caught-up state renders deterministically regardless of what
     // parallel workers have seeded (per-page interception, no DB mutation).
@@ -80,7 +80,7 @@ test.describe('Dashboard @area:dashboard', () => {
   })
 
   test('dashboard exposes no dashboard-level or global search surface', async ({ page }) => {
-    // spec: DSH-007[1]
+    // spec: DSH-007.no-global-search-surface
     // NEGATIVE existence proof at a settled state: establish the dashboard
     // has fully rendered first, THEN assert that no plausible search-surface
     // shape is present (a not-yet-rendered page would pass these vacuously).
@@ -117,7 +117,7 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
   })
 
   test('shows overdue contacts as cards with the count in the header', async ({ page }) => {
-    // spec: CAD-026[0]
+    // spec: CAD-026.overdue-contacts-appear-cards
     await page.goto('/dashboard')
     await page.waitForLoadState('domcontentloaded')
 
@@ -155,7 +155,7 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
 
 test.describe('Dashboard - All Caught Up (mocked) @area:dashboard', () => {
   test('shows the all-caught-up state when nothing is overdue', async ({ page }) => {
-    // spec: CAD-026[2]
+    // spec: CAD-026.nothing-overdue-all-caught
     // The empty-overdue state is GLOBAL — parallel workers seed overdue
     // contacts, so it is not deterministically reachable by seeding. Mock the
     // overdue response with the full apiClient envelope (a bare array would
@@ -187,7 +187,7 @@ test.describe('Dashboard - Card Anatomy (mocked) @area:dashboard', () => {
   test('each card shows urgency tier, cadence, recency, a reachable method, and the suggested action', async ({
     page,
   }) => {
-    // spec: CAD-026[1]
+    // spec: CAD-026.each-card-shows-urgency
     await page.route('**/api/v1/contacts/overdue', route =>
       route.fulfill({
         json: {
@@ -280,7 +280,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
   }
 
   test('urgency (default) orders most-overdue first', async ({ page }) => {
-    // spec: CAD-027[0]
+    // spec: CAD-027.urgency-default-orders-most
     await gotoMockedDashboard(page)
     expect(await cardOrder(page)).toEqual([
       `Zulu ${fixtureSuffix}`,
@@ -291,7 +291,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
   })
 
   test('name orders alphabetically', async ({ page }) => {
-    // spec: CAD-027[1]
+    // spec: CAD-027.name-orders-alphabetically
     await gotoMockedDashboard(page)
     await page.getByRole('button', { name: 'Name', exact: true }).click()
     await expect
@@ -307,7 +307,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
   test('recency orders longest-waiting first, ranking never-connected by added date', async ({
     page,
   }) => {
-    // spec: CAD-027[2]
+    // spec: CAD-027.recency-orders-longest-waiting
     await gotoMockedDashboard(page)
     await page.getByRole('button', { name: 'Last Contacted', exact: true }).click()
     // Mike (last_contacted omitted) is ranked by its created_at (02-01), landing
@@ -323,7 +323,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
       ])
   })
 
-  // spec: CAD-026[1]
+  // spec: CAD-026.each-card-shows-urgency
   // The regression guard for the bug this copy exists to prevent: a contact with
   // no recorded connection must be described by when it was ADDED, never as a
   // contact that happened. Before the fix the card asserted "Last contacted
@@ -375,7 +375,7 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
   })
 
   test('header add-contact action is available on a populated dashboard', async ({ page }) => {
-    // spec: DSH-003[0]
+    // spec: DSH-003.add-contact-action-always
     // Establish the POPULATED state first — the seeded overdue card must have
     // rendered (a loading or error mask would otherwise vacuously pass a
     // state-independent affordance check) — then assert the header CTA.
@@ -390,7 +390,7 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
   test('marking contact as contacted updates dashboard immediately without navigation', async ({
     page,
   }) => {
-    // spec: DSH-005[0], CAD-028[0], CAD-028[1]
+    // spec: DSH-005.overdue-list-refreshes-reflect, CAD-028.mutual-interaction-logged-timestamped, CAD-028.contact-leaves-overdue-list
     // DSH-005[0]: the on-dashboard interaction:created trigger refreshing the
     // overdue list without a manual reload. DSH-005's broader trigger coverage
     // (merge / meeting-note-resolve), the cosmetic-edit no-op, and the

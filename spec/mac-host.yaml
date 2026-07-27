@@ -275,9 +275,9 @@ behaviors:
         text: an admin can mint a fresh pairing token and revoke a host
     provenance: [MacHostHandler.ListHosts/GetHostAdmin/GetSourceCounts/CreatePairingToken/DeleteHost, RegisterMacHostAdminRoutes]
     waivers:
-      - then: 1
+      - then: detail-view-returns-single
         reason: the host detail read (including revoked hosts and the unknown-id 404) is HTTP contract with no browser surface — the settings/mac page consumes only the list endpoint; owned by the Go API test mac_host_get_admin_test.go
-      - then: 2
+      - then: per-source-live-counts
         reason: the 404-vs-empty-count-map distinction is response-shape contract invisible in the browser (the UI renders only the happy-path counts); owned by the Go API tests in mac_host_source_counts_test.go (UnknownHost_404, NoRowsReturnsEmpty)
 
   # --- Daemon read endpoints ---

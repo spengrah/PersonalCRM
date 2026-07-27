@@ -176,7 +176,7 @@ func TestGetGoogleAuthURL(t *testing.T) {
 	})
 }
 
-// spec: SET-002[0]
+// spec: SET-002.random-csrf-state-generated
 func TestGetGoogleAuthURL_StoresStateServerSide(t *testing.T) {
 	mock := &MockOAuthService{}
 	handler := NewOAuthHandler(mock, "http://localhost:3000")
@@ -373,7 +373,7 @@ func TestGoogleCallback(t *testing.T) {
 	})
 }
 
-// spec: SET-003[3]
+// spec: SET-003.expired-unknown-already-used
 func TestGoogleCallback_ExpiredStateAbortsBeforeExchange(t *testing.T) {
 	exchangeCalled := false
 	mock := &MockOAuthService{
@@ -414,7 +414,7 @@ func TestGoogleCallback_ExpiredStateAbortsBeforeExchange(t *testing.T) {
 	assert.False(t, exchangeCalled, "an expired state must abort the flow before the code exchange")
 }
 
-// spec: SET-003[3]
+// spec: SET-003.expired-unknown-already-used
 // An unknown (never-stored) state must abort the callback with an
 // invalid_state outcome WITHOUT the authorization code ever being exchanged.
 func TestGoogleCallback_UnknownStateAbortsBeforeExchange(t *testing.T) {
@@ -444,7 +444,7 @@ func TestGoogleCallback_UnknownStateAbortsBeforeExchange(t *testing.T) {
 	assert.False(t, exchangeCalled, "an unknown state must abort the flow before the code exchange")
 }
 
-// spec: SET-003[3]
+// spec: SET-003.expired-unknown-already-used
 // An already-used state must abort a REPLAYED callback with an invalid_state
 // outcome without invoking the code exchange a second time: the state is
 // stored once, consumed by a first (successful) callback, then replayed.
@@ -491,7 +491,7 @@ func TestGoogleCallback_AlreadyUsedStateAbortsBeforeExchange(t *testing.T) {
 
 func TestGoogleCallback_FailureRedirectsIncludeProvider(t *testing.T) {
 	t.Run("provider error carries provider name", func(t *testing.T) {
-		// spec: SET-004[2]
+		// spec: SET-004.failure-carries-outcome-error
 		mock := &MockOAuthService{}
 		handler := NewOAuthHandler(mock, "http://localhost:3000")
 
@@ -509,7 +509,7 @@ func TestGoogleCallback_FailureRedirectsIncludeProvider(t *testing.T) {
 	})
 
 	t.Run("invalid state carries provider name", func(t *testing.T) {
-		// spec: SET-004[2]
+		// spec: SET-004.failure-carries-outcome-error
 		mock := &MockOAuthService{}
 		handler := NewOAuthHandler(mock, "http://localhost:3000")
 
@@ -527,7 +527,7 @@ func TestGoogleCallback_FailureRedirectsIncludeProvider(t *testing.T) {
 	})
 
 	t.Run("exchange failure carries provider name", func(t *testing.T) {
-		// spec: SET-004[2]
+		// spec: SET-004.failure-carries-outcome-error
 		mock := &MockOAuthService{
 			ExchangeCodeFunc: func(ctx context.Context, code string) (*repository.OAuthCredentialStatus, error) {
 				return nil, errors.New("exchange failed")
@@ -552,7 +552,7 @@ func TestGoogleCallback_FailureRedirectsIncludeProvider(t *testing.T) {
 	})
 }
 
-// spec: SET-004[3]
+// spec: SET-004.redirect-params-url-encoded
 func TestGoogleCallback_ErrorRedirectIsProperlyURLEncoded(t *testing.T) {
 	mock := &MockOAuthService{}
 	handler := NewOAuthHandler(mock, "http://localhost:3000")
@@ -850,7 +850,7 @@ func TestStateValidation(t *testing.T) {
 		state := "one-time-state"
 		handler.storeState(state)
 
-		// spec: SET-003[2]
+		// spec: SET-003.state-accepted-at-most-once
 		// First validation should succeed
 		assert.True(t, handler.validateState(state))
 
@@ -890,7 +890,7 @@ func validateStateAfterShift(t *testing.T, shiftSeconds int64) bool {
 	return handler.validateState(state)
 }
 
-// spec: SET-002[1]
+// spec: SET-002.stored-state-expires-ten-minutes
 // Pins BOTH sides of the ten-minute TTL boundary: a state validated just
 // under ten minutes after storage is still accepted, and one validated just
 // over ten minutes after storage is rejected. A single gross shift would pass
@@ -898,19 +898,19 @@ func validateStateAfterShift(t *testing.T, shiftSeconds int64) bool {
 // either direction.
 func TestOAuthState_ExpiresAfterTenMinutes(t *testing.T) {
 	t.Run("state is still valid just under ten minutes after storage", func(t *testing.T) {
-		// spec: SET-002[1]
+		// spec: SET-002.stored-state-expires-ten-minutes
 		assert.True(t, validateStateAfterShift(t, 570),
 			"a state validated 9m30s after storage must still be accepted (TTL is ten minutes)")
 	})
 
 	t.Run("state is invalid just over ten minutes after storage", func(t *testing.T) {
-		// spec: SET-002[1]
+		// spec: SET-002.stored-state-expires-ten-minutes
 		assert.False(t, validateStateAfterShift(t, 630),
 			"a state validated 10m30s after storage must be rejected (TTL is ten minutes)")
 	})
 }
 
-// spec: SET-002[2]
+// spec: SET-002.returns-authorization-url-and-state
 // Twin of TestGetGoogleAuthURL: proves the Todoist auth-URL response also
 // carries both the provider authorization URL and the state.
 func TestGetTodoistAuthURL(t *testing.T) {
@@ -947,7 +947,7 @@ func TestGetTodoistAuthURL(t *testing.T) {
 	})
 }
 
-// spec: SET-003[0]
+// spec: SET-003.provider-supplied-error-parameter
 // Twin of the Google error-short-circuit ordering: a provider error param
 // must abort the flow before any state validation or code exchange. A
 // valid state is stored ahead of the request so that, if the short-circuit
@@ -987,7 +987,7 @@ func TestTodoistCallback_ErrorShortCircuitsBeforeStateOrExchange(t *testing.T) {
 	assert.True(t, handler.validateState(state), "a provider error must short-circuit before state validation, leaving the state unconsumed")
 }
 
-// spec: SET-003[1]
+// spec: SET-003.csrf-state-validated-consumed
 // Twin of the Google validate-then-exchange ordering: an invalid state
 // aborts before the exchange runs, and a valid state is validated and
 // consumed (single-use) before the exchange is attempted -- regardless of
@@ -1065,7 +1065,7 @@ func assertTrivialRedirectBody(t *testing.T, w *httptest.ResponseRecorder) {
 	assert.Less(t, len(body), 300, "a callback redirect's body must be trivially small (net/http's boilerplate anchor link, at most) -- never a rendered page")
 }
 
-// spec: SET-004[0]
+// spec: SET-004.response-redirect-back-settings
 // Neither provider's callback redirect may carry a rendered page or JSON
 // body -- the response must be a bare redirect (allowing only net/http's
 // own trivial boilerplate anchor body, never one this handler wrote).
@@ -1098,7 +1098,7 @@ func TestOAuthCallbackRedirect_BodyIsEmpty(t *testing.T) {
 	})
 }
 
-// spec: SET-004[0]
+// spec: SET-004.response-redirect-back-settings
 // Twin of the Google redirect-shape assertions: every TodoistCallback
 // outcome must redirect to the settings surface carrying the matching
 // outcome and provider name.
@@ -1163,7 +1163,7 @@ func TestTodoistCallback_RedirectShape(t *testing.T) {
 	})
 }
 
-// spec: SET-004[1]
+// spec: SET-004.success-carries-outcome-success
 // Twin of TestGoogleCallback's "redirects to success on valid exchange":
 // a successful Todoist exchange redirects with auth=success and
 // provider=todoist.
@@ -1196,7 +1196,7 @@ func TestTodoistCallback_SuccessRedirectIncludesProvider(t *testing.T) {
 	assert.Contains(t, location, "provider=todoist")
 }
 
-// spec: SET-008[0]
+// spec: SET-008.listing-returns-array-connected
 // Twin of TestListGoogleAccounts: proves ListTodoistAccounts' 200 response
 // carries an array of connected-account objects. The shape assertion below
 // decodes into map[string]interface{} (the raw wire shape) rather than the
@@ -1315,7 +1315,7 @@ func TestListTodoistAccounts(t *testing.T) {
 // counterpart.
 func TestGetTodoistAccountStatus(t *testing.T) {
 	t.Run("returns error on invalid UUID", func(t *testing.T) {
-		// spec: SET-008[1]
+		// spec: SET-008.malformed-account-id
 		handler := NewOAuthHandler(&MockOAuthService{}, "http://localhost:3000")
 		handler.SetTodoistOAuth(&MockTodoistOAuthService{})
 
@@ -1330,7 +1330,7 @@ func TestGetTodoistAccountStatus(t *testing.T) {
 	})
 
 	t.Run("returns 404 for non-existent account", func(t *testing.T) {
-		// spec: SET-008[2]
+		// spec: SET-008.unknown-account-id
 		mock := &MockTodoistOAuthService{
 			GetAccountStatusFunc: func(ctx context.Context, id uuid.UUID) (*repository.OAuthCredentialStatus, error) {
 				return nil, db.ErrNotFound
@@ -1351,7 +1351,7 @@ func TestGetTodoistAccountStatus(t *testing.T) {
 	})
 
 	t.Run("returns account status", func(t *testing.T) {
-		// spec: SET-008[3]
+		// spec: SET-008.status-and-revoke-return-200
 		accountID := uuid.New()
 		externalAccountID := "todoist-user-" + uuid.New().String()[:8]
 		accountName := "Todoist Status User " + uuid.New().String()[:8]
@@ -1408,7 +1408,7 @@ func TestGetTodoistAccountStatus(t *testing.T) {
 // Google counterpart.
 func TestRevokeTodoistAccount(t *testing.T) {
 	t.Run("returns error on invalid UUID", func(t *testing.T) {
-		// spec: SET-008[1]
+		// spec: SET-008.malformed-account-id
 		handler := NewOAuthHandler(&MockOAuthService{}, "http://localhost:3000")
 		handler.SetTodoistOAuth(&MockTodoistOAuthService{})
 
@@ -1423,7 +1423,7 @@ func TestRevokeTodoistAccount(t *testing.T) {
 	})
 
 	t.Run("returns 404 for non-existent account", func(t *testing.T) {
-		// spec: SET-008[2]
+		// spec: SET-008.unknown-account-id
 		mock := &MockTodoistOAuthService{
 			RevokeAccountFunc: func(ctx context.Context, id uuid.UUID) error {
 				return db.ErrNotFound
@@ -1444,7 +1444,7 @@ func TestRevokeTodoistAccount(t *testing.T) {
 	})
 
 	t.Run("successfully revokes account", func(t *testing.T) {
-		// spec: SET-008[3]
+		// spec: SET-008.status-and-revoke-return-200
 		revokedID := uuid.Nil
 		mock := &MockTodoistOAuthService{
 			RevokeAccountFunc: func(ctx context.Context, id uuid.UUID) error {

@@ -42,7 +42,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     await testApi.cleanup()
   })
 
-  // spec: IMP-026[3]
+  // spec: IMP-026.low-confidence-names-section
   test('renders the name-candidate section with the grouped token and evidence count', async ({
     page,
   }) => {
@@ -86,7 +86,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
       }
     })
 
-  // spec: IMP-031[0]
+  // spec: IMP-031.item-leaves-queue-counts-update
   test('imports the whole token group as a new contact', async ({ page }) => {
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
@@ -112,7 +112,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     await expect(page.getByText(display, { exact: true })).toHaveCount(0, { timeout: 10000 })
   })
 
-  // spec: IMP-031[0]
+  // spec: IMP-031.item-leaves-queue-counts-update
   test('links the token group to an existing contact', async ({ page }) => {
     const seeded = await testApi.seedContacts([{ full_name: 'Link Target Person' }])
     const targetName = `${testApi.prefix}-Link Target Person`
@@ -142,7 +142,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     await expect(page.getByText(display, { exact: true })).toHaveCount(0, { timeout: 10000 })
   })
 
-  // spec: IMP-031[0]
+  // spec: IMP-031.item-leaves-queue-counts-update
   test('ignores the token group via "Not a person"', async ({ page }) => {
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')

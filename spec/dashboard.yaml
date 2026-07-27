@@ -85,11 +85,11 @@ behaviors:
       - key: refocus-refetches-only-when-stale
         text: returning focus to the window re-checks freshness, but refetches only once the list has gone stale (a 5-minute staleTime); refocusing sooner does not refetch
     waivers:
-      - then: 1
+      - then: covers-logging-interaction-merging
         reason: the per-flow freshness matrix is not deterministically provable in one browser test (documented at the DSH verifier→E2E migration); holistic freshness is judged under DSH-012
-      - then: 2
+      - then: purely-cosmetic-contact-edits
         reason: proving a negative (no refetch on a cosmetic edit) means asserting the absence of a background request — inherently racy in a browser test; judge-owned under DSH-012
-      - then: 3
+      - then: refocus-refetches-only-when-stale
         reason: the 5-minute staleTime gate depends on wall-clock query staleness the E2E harness cannot control deterministically; judge-owned under DSH-012
     serves: [DSH-012]
     provenance: [query-invalidation.ts overdue invalidation rules, use-contacts.ts useOverdueContacts]

@@ -167,7 +167,7 @@ func TestContactMerge_Integration(t *testing.T) {
 	})
 
 	t.Run("GetMergePreview_InteractionsAndCalendarEvents", func(t *testing.T) {
-		// spec: CON-037[0]
+		// spec: CON-037.preview-reports-affected-counts
 		// Create target contact
 		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Merge Target Events " + ns,
@@ -844,7 +844,7 @@ func TestContactMergePreviewAPI_Errors(t *testing.T) {
 	}
 
 	t.Run("GetMergePreview_UnknownSourceID_NotFound", func(t *testing.T) {
-		// spec: CON-037[1]
+		// spec: CON-037.missing-source-target
 		target := createContactViaAPI(t, "Preview Errors Target A "+ns)
 
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+target.String()+"/merge/preview?source_id="+uuid.New().String(), nil)
@@ -861,7 +861,7 @@ func TestContactMergePreviewAPI_Errors(t *testing.T) {
 	})
 
 	t.Run("GetMergePreview_UnknownTargetID_NotFound", func(t *testing.T) {
-		// spec: CON-037[1]
+		// spec: CON-037.missing-source-target
 		source := createContactViaAPI(t, "Preview Errors Source B "+ns)
 
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+uuid.New().String()+"/merge/preview?source_id="+source.String(), nil)
@@ -878,7 +878,7 @@ func TestContactMergePreviewAPI_Errors(t *testing.T) {
 	})
 
 	t.Run("GetMergePreview_MissingSourceID_ValidationError", func(t *testing.T) {
-		// spec: CON-037[2]
+		// spec: CON-037.missing-malformed-source-id
 		target := createContactViaAPI(t, "Preview Errors Target C "+ns)
 
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+target.String()+"/merge/preview", nil)
@@ -895,7 +895,7 @@ func TestContactMergePreviewAPI_Errors(t *testing.T) {
 	})
 
 	t.Run("GetMergePreview_MalformedSourceID_ValidationError", func(t *testing.T) {
-		// spec: CON-037[2]
+		// spec: CON-037.missing-malformed-source-id
 		target := createContactViaAPI(t, "Preview Errors Target D "+ns)
 
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+target.String()+"/merge/preview?source_id=not-a-uuid", nil)
@@ -946,7 +946,7 @@ func TestContactMergePreviewAPI_SuccessCounts(t *testing.T) {
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, repository.NewContactTaskRepository(database.Queries), nil, nil, cadenceUpdater, assertSvc, cache, nil)
 
 	t.Run("GetMergePreview_AllFiveCountersInResponse", func(t *testing.T) {
-		// spec: CON-037[0]
+		// spec: CON-037.preview-reports-affected-counts
 		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
 			FullName: "Preview Counts Target " + ns,
 		})

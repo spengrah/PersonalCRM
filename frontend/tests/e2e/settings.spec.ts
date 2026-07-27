@@ -104,7 +104,7 @@ test.describe('Settings Page @area:settings', () => {
     ).toBeVisible({ timeout: 15_000 })
   })
 
-  // spec: SET-019[0], SET-023[0], SET-023[1]
+  // spec: SET-019.each-provider-section-shows-state, SET-023.section-shows-not-connected, SET-023.lists-required-configuration
   test('unconfigured providers collapse to a not-connected state with setup guidance', async ({
     page,
   }) => {
@@ -137,7 +137,7 @@ test.describe('Settings Page @area:settings', () => {
     await expect(todoist.getByText('TODOIST_CLIENT_SECRET')).toBeVisible()
   })
 
-  // spec: SET-019[1], SET-019[2]
+  // spec: SET-019.connected-account-shows-identity, SET-019.section-offers-connect-disconnect
   test('a connected account shows its identity, connect date, and manage affordances', async ({
     page,
   }) => {
@@ -159,7 +159,7 @@ test.describe('Settings Page @area:settings', () => {
     await expect(google.getByRole('button', { name: 'Disconnect e2e-google-user' })).toBeVisible()
   })
 
-  // spec: SET-020[0]
+  // spec: SET-020.app-fetches-provider-authorization
   test('connecting a provider fetches the auth URL and navigates to it', async ({ page }) => {
     await mockGoogleAccounts(page, null)
     // Stub the provider consent screen with a same-origin URL so the
@@ -187,7 +187,7 @@ test.describe('Settings Page @area:settings', () => {
     await page.waitForURL('**/settings?consent-stub=1', { timeout: 10_000 })
   })
 
-  // spec: SET-021[0], SET-021[2]
+  // spec: SET-021.success-outcome-shows-success, SET-021.one-time-outcome-parameters
   test('a success outcome shows a notification, refreshes accounts, and strips params', async ({
     page,
   }) => {
@@ -216,7 +216,7 @@ test.describe('Settings Page @area:settings', () => {
     await expect(page).toHaveURL('/settings', { timeout: 10_000 })
   })
 
-  // spec: SET-021[1], SET-021[2]
+  // spec: SET-021.error-outcome-shows-failure, SET-021.one-time-outcome-parameters
   test('an error outcome surfaces the failure reason and strips params', async ({ page }) => {
     await mockGoogleAccounts(page, [])
     await mockSyncStates(page, [])
@@ -231,7 +231,7 @@ test.describe('Settings Page @area:settings', () => {
     await expect(page).toHaveURL('/settings', { timeout: 10_000 })
   })
 
-  // spec: SET-022[0], SET-022[1]
+  // spec: SET-022.confirmation-identifies-account, SET-022.only-confirmation-account-revoked
   test('disconnect asks for confirmation and dismissing revokes nothing', async ({ page }) => {
     await mockGoogleAccounts(page, [googleAccount('e2e-google-user')])
     await mockSyncStates(page, [])
@@ -265,7 +265,7 @@ test.describe('Settings Page @area:settings', () => {
     expect(revokeCalled).toBe(false)
   })
 
-  // spec: SET-022[2]
+  // spec: SET-022.outcome-reported-account-list
   test('confirming a disconnect revokes the account and the list reflects removal', async ({
     page,
   }) => {
@@ -307,7 +307,7 @@ test.describe('Settings Page @area:settings', () => {
     })
   })
 
-  // spec: SET-024[0]
+  // spec: SET-024.per-source-sync-affordance
   test('per-source sync affordances follow the account scopes', async ({ page }) => {
     // Gmail + Calendar granted, Contacts omitted.
     await mockGoogleAccounts(page, [
@@ -327,7 +327,7 @@ test.describe('Settings Page @area:settings', () => {
     await expect(google.getByRole('button', { name: 'Sync Contacts' })).toHaveCount(0)
   })
 
-  // spec: SET-024[1]
+  // spec: SET-024.google-chat-affordance-appears
   test('the Chat affordance appears when all chat scopes are held', async ({ page }) => {
     await mockGoogleAccounts(page, [
       googleAccount('e2e-chat-user', { scopes: [GMAIL_SCOPE, ...CHAT_SCOPES] }),
@@ -343,7 +343,7 @@ test.describe('Settings Page @area:settings', () => {
     await expect(google.getByRole('button', { name: /Chat — reconnect required/ })).toHaveCount(0)
   })
 
-  // spec: SET-024[1]
+  // spec: SET-024.google-chat-affordance-appears
   test('a partial chat grant shows a reconnect prompt instead of the Chat affordance', async ({
     page,
   }) => {
@@ -361,7 +361,7 @@ test.describe('Settings Page @area:settings', () => {
     await expect(google.getByRole('button', { name: 'Sync Chat' })).toHaveCount(0)
   })
 
-  // spec: SET-025[0], SET-025[1]
+  // spec: SET-025.reconnect-affordance-appears-account, SET-025.prompt-suppressed-once-account
   test('an auth-errored sync surfaces a reconnect prompt only while the credential is stale', async ({
     page,
   }) => {
@@ -401,7 +401,7 @@ test.describe('Settings Page @area:settings', () => {
     await expect(google.getByRole('button', { name: 'Reconnect', exact: true })).toHaveCount(1)
   })
 
-  // spec: SET-026[0], SET-026[1], SET-026[2]
+  // spec: SET-026.project-label-pickers-offered, SET-026.selecting-project-label-persists, SET-026.both-project-and-label-required
   test('the Todoist configuration guides selecting a project and label', async ({ page }) => {
     await mockTodoistAccounts(page, [googleAccount('e2e-todoist-account')])
     await mockSyncStates(page, [])
@@ -464,7 +464,7 @@ test.describe('Settings Page @area:settings', () => {
     await expect(bothRequired).toHaveCount(0, { timeout: 10_000 })
   })
 
-  // spec: TDS-034[0], TDS-034[1]
+  // spec: TDS-034.sync-requested-account-success, TDS-034.read-write-permission-visible
   test('a manual Todoist task sync can be triggered with its outcome indicated', async ({
     page,
   }) => {
@@ -522,7 +522,7 @@ test.describe('Settings Page @area:settings', () => {
     await expect(todoist.getByText(/Failed to start sync/i)).toBeVisible({ timeout: 10_000 })
   })
 
-  // spec: SET-028[0], SET-028[1], SET-028[2]
+  // spec: SET-028.export-affordance-downloads-user, SET-028.import-affordance-accepts-backup, SET-028.import-not-yet-functional
   test('the backup surface exports a JSON download and validates an uploaded backup', async ({
     page,
   }) => {
@@ -562,7 +562,7 @@ test.describe('Settings Page @area:settings', () => {
     await expect(page.getByText(/without making changes/i)).toBeVisible()
   })
 
-  // spec: SET-035[0], SET-035[1]
+  // spec: SET-035.system-information-section-present, SET-035.non-empty-application-version
   test('the system information section reports a version', async ({ page }) => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')

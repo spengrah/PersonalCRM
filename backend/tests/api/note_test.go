@@ -140,7 +140,7 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		// spec: NTS-004[1]
+		// spec: NTS-004.live-contact-without-notepad
 		assert.Equal(t, http.StatusNoContent, w.Code)
 		assert.Empty(t, w.Body.String())
 	})
@@ -163,7 +163,7 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 		getW := httptest.NewRecorder()
 		router.ServeHTTP(getW, getReq)
 
-		// spec: NTS-004[0]
+		// spec: NTS-004.live-contact-notepad
 		assert.Equal(t, http.StatusOK, getW.Code)
 
 		var response api.APIResponse
@@ -184,7 +184,7 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		// spec: NTS-004[2]
+		// spec: NTS-004.malformed-contact-id
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 
 		var response api.APIResponse
@@ -196,7 +196,7 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 	})
 
 	t.Run("GetNote_ContactNotFound_Returns404", func(t *testing.T) {
-		// spec: NTS-004[3]
+		// spec: NTS-004.unknown-soft-deleted-contact
 		nonExistentID := uuid.New().String()
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+nonExistentID+"/notes", nil)
 		w := httptest.NewRecorder()
@@ -213,7 +213,7 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 	})
 
 	t.Run("GetNote_SoftDeletedContact_Returns404", func(t *testing.T) {
-		// spec: NTS-004[3]
+		// spec: NTS-004.unknown-soft-deleted-contact
 		contactID := createTestContact(t, router, "Soft Deleted Notepad Get Test User "+uuid.New().String()[:8])
 
 		// Soft-delete the contact via the same DELETE endpoint used by siblings
@@ -263,7 +263,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		// spec: NTS-005[0]
+		// spec: NTS-005.non-empty-body
 		assert.Equal(t, http.StatusOK, w.Code)
 
 		var response api.APIResponse
@@ -337,7 +337,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
 
-		// spec: NTS-005[1]
+		// spec: NTS-005.empty-whitespace-only-body
 		assert.Equal(t, http.StatusNoContent, w2.Code)
 		assert.Empty(t, w2.Body.String())
 
@@ -369,7 +369,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w2 := httptest.NewRecorder()
 		router.ServeHTTP(w2, req2)
 
-		// spec: NTS-005[1]
+		// spec: NTS-005.empty-whitespace-only-body
 		assert.Equal(t, http.StatusNoContent, w2.Code)
 
 		// Verify note is actually deleted
@@ -410,7 +410,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		// spec: NTS-005[3]
+		// spec: NTS-005.malformed-contact-id-unparseable
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 
 		var response api.APIResponse
@@ -422,7 +422,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 	})
 
 	t.Run("SaveNote_ContactNotFound_Returns404", func(t *testing.T) {
-		// spec: NTS-005[4]
+		// spec: NTS-005.unknown-soft-deleted-contact
 		nonExistentID := uuid.New().String()
 		saveReq := handlers.SaveNoteRequest{Body: "Some content"}
 		jsonBody, _ := json.Marshal(saveReq)
@@ -443,7 +443,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 	})
 
 	t.Run("SaveNote_SoftDeletedContact_Returns404", func(t *testing.T) {
-		// spec: NTS-005[4]
+		// spec: NTS-005.unknown-soft-deleted-contact
 		contactID := createTestContact(t, router, "Soft Deleted Notepad Save Test User "+uuid.New().String()[:8])
 
 		// Soft-delete the contact via the same DELETE endpoint used by siblings
@@ -484,7 +484,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		// spec: NTS-005[2]
+		// spec: NTS-005.body-limited-50000-characters
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 
 		var response api.APIResponse
@@ -509,7 +509,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		// spec: NTS-005[2]
+		// spec: NTS-005.body-limited-50000-characters
 		assert.Equal(t, http.StatusOK, w.Code)
 
 		var response api.APIResponse
@@ -532,7 +532,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 
-		// spec: NTS-005[3]
+		// spec: NTS-005.malformed-contact-id-unparseable
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 
 		var response api.APIResponse

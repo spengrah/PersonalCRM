@@ -99,7 +99,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
   test.describe('Tasks Section', () => {
     test('shows tasks section on contact detail page', async ({ page }) => {
-      // spec: CAD-030[3]
+      // spec: CAD-030.no-tasks-empty-state
       const { ids } = await testApi.seedContacts([{ full_name: 'Task Test Contact' }])
 
       // Mock SUCCESSFUL empty lists for all three task queries: without the
@@ -127,7 +127,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
     test('lists follow-up tasks first with a distinct pending indicator, then manual tasks', async ({
       page,
     }) => {
-      // spec: CAD-030[0]
+      // spec: CAD-030.managed-tasks-appear-first
       const { ids } = await testApi.seedContacts([{ full_name: 'Task Order Contact' }])
       const contactId = ids[0]
       const followUp = makeTask(contactId, {
@@ -161,7 +161,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
     })
 
     test('derives each task badge from its kind and lifecycle', async ({ page }) => {
-      // spec: CAD-030[1]
+      // spec: CAD-030.each-task-carries-badge
       const { ids } = await testApi.seedContacts([{ full_name: 'Task Badge Contact' }])
       const contactId = ids[0]
       // Distinct kind/lifecycle pairs across the followup_loop + manual
@@ -217,7 +217,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
     test('strips CRM link markers and falls back to a placeholder for empty content', async ({
       page,
     }) => {
-      // spec: TDS-035[0]
+      // spec: TDS-035.crm-link-markers-stripped
       const { ids } = await testApi.seedContacts([{ full_name: 'Task Content Contact' }])
       const contactId = ids[0]
       // The three cleanTaskContent shapes a projected task can carry: a
@@ -256,7 +256,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
     })
 
     test('collapses completed tasks behind a toggle with a count', async ({ page }) => {
-      // spec: CAD-030[2]
+      // spec: CAD-030.completed-tasks-collapsed-behind
       const { ids } = await testApi.seedContacts([{ full_name: 'Task History Contact' }])
       const contactId = ids[0]
       await mockTaskLists(page, contactId, () => ({
@@ -287,7 +287,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
   test.describe('Add Task Modal', () => {
     test('opens add task modal and closes it with Escape', async ({ page }) => {
-      // spec: CAD-031[0]
+      // spec: CAD-031.kind-chosen-reach-out
       const { ids } = await testApi.seedContacts([{ full_name: 'Modal Test Contact' }])
 
       await page.goto(`/contacts/${ids[0]}`)
@@ -341,7 +341,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
     })
 
     test('disables submit while task text is empty', async ({ page }) => {
-      // spec: CAD-031[1]
+      // spec: CAD-031.task-text-required-notes
       const { ids } = await testApi.seedContacts([{ full_name: 'Validation Test Contact' }])
 
       await page.goto(`/contacts/${ids[0]}`)
@@ -368,7 +368,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
     })
 
     test('created task appears in the live tasks list', async ({ page }) => {
-      // spec: CAD-031[2]
+      // spec: CAD-031.created-task-appears-contact
       // Real creation needs a Todoist provider AND the POST route is
       // OAuth-gated (the real endpoint 404s in this env, so an unmocked
       // waitForResponse would observe that 404). Mock the write loop:
@@ -437,7 +437,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
     const UNLINK_TITLE = 'Remove from CRM (keeps in Todoist)'
 
     test('offers unlink with confirmation and fires only the CRM-link DELETE', async ({ page }) => {
-      // spec: CAD-033[0]
+      // spec: CAD-033.unlink-behind-confirmation
       const { ids } = await testApi.seedContacts([{ full_name: 'Unlink Accept Contact' }])
       const contactId = ids[0]
       const linked = makeTask(contactId, { id: 'task-linked-1', content: 'Mock linked task' })
@@ -494,7 +494,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
     })
 
     test('dismissing the unlink confirmation leaves the task linked', async ({ page }) => {
-      // spec: CAD-033[0]
+      // spec: CAD-033.unlink-behind-confirmation
       const { ids } = await testApi.seedContacts([{ full_name: 'Unlink Dismiss Contact' }])
       const contactId = ids[0]
       const linked = makeTask(contactId, { id: 'task-linked-2', content: 'Mock linked task' })
@@ -531,7 +531,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
     })
 
     test('exposes no in-CRM complete or dismiss control on a linked task', async ({ page }) => {
-      // spec: CAD-033[1], TDS-035[1]
+      // spec: CAD-033.no-in-crm-complete-or-dismiss, TDS-035.linked-task-deep-link
       // The CRM-side affordance: a linked task row offers ONLY unlink (plus
       // "Open in Todoist") — completing and dismissing happen in the remote
       // task app. The remote-survival guarantee (unlinking does not touch the

@@ -150,7 +150,7 @@ func TestSuggestions_List_SourceScopeExcludesNonAddressBook(t *testing.T) {
 	}
 }
 
-// spec: IMP-018[0]
+// spec: IMP-018.resolve-confirms-requested-methods
 func TestSuggestions_Resolve_AddsMethodAndClearsPending(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -182,7 +182,7 @@ func TestSuggestions_Resolve_AddsMethodAndClearsPending(t *testing.T) {
 	assert.GreaterOrEqual(t, jobs, int64(1))
 }
 
-// spec: IMP-018[3]
+// spec: IMP-018.actions-re-check-live
 func TestSuggestions_Resolve_Idempotent(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -211,7 +211,7 @@ func TestSuggestions_Resolve_Idempotent(t *testing.T) {
 // requesting only one confirms exactly that one (enrichment + pending
 // clear) and leaves the other untouched in pending.
 //
-// spec: IMP-018[0]
+// spec: IMP-018.resolve-confirms-requested-methods
 func TestSuggestions_Resolve_RequestedSubset_OnlyRequestedConfirmed(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -242,7 +242,7 @@ func TestSuggestions_Resolve_RequestedSubset_OnlyRequestedConfirmed(t *testing.T
 // confirms EVERY live pending method (not just one), enriching all of
 // them and fully clearing pending.
 //
-// spec: IMP-018[0]
+// spec: IMP-018.resolve-confirms-requested-methods
 func TestSuggestions_Resolve_Unspecified_ConfirmsAllPending(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -335,7 +335,7 @@ func TestSuggestions_Resolve_MalformedMethod400(t *testing.T) {
 // dismissed email is sticky and a second PENDING entry of the SAME type
 // but a DIFFERENT value survives.
 //
-// spec: IMP-018[1]
+// spec: IMP-018.dismiss-sticky-per-method
 func TestSuggestions_Dismiss_RecordsStickyAndDropsPending(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -373,7 +373,7 @@ func TestSuggestions_Dismiss_RecordsStickyAndDropsPending(t *testing.T) {
 	}
 }
 
-// spec: IMP-018[3]
+// spec: IMP-018.actions-re-check-live
 func TestSuggestions_Dismiss_Idempotent(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -405,7 +405,7 @@ func TestSuggestions_Dismiss_Idempotent(t *testing.T) {
 // both email (lowercase+trim) and telegram (strip '@'+lowercase) so the
 // VALUE half of the key is deliberately held constant while TYPE differs.
 //
-// spec: IMP-018[1]
+// spec: IMP-018.dismiss-sticky-per-method
 func TestSuggestions_Dismiss_StickyPerType_SameValueSurvivesDifferentType(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -461,7 +461,7 @@ func TestSuggestions_Dismiss_StickyPerType_SameValueSurvivesDifferentType(t *tes
 	assert.Equal(t, "email", after.DismissedMethodSuggestions[0].Type)
 }
 
-// spec: IMP-018[2]
+// spec: IMP-018.stale-entries-pruned-not-dismissed
 func TestSuggestions_Dismiss_AlreadyOnContact_NotStickyDismissed(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -497,7 +497,7 @@ func TestSuggestions_Dismiss_AlreadyOnContact_NotStickyDismissed(t *testing.T) {
 // suggestion was recorded) is pruned from pending WITHOUT being recorded
 // as a dismissal.
 //
-// spec: IMP-018[2]
+// spec: IMP-018.stale-entries-pruned-not-dismissed
 func TestSuggestions_Dismiss_NoLongerOffered_PrunedNotDismissed(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -533,7 +533,7 @@ func TestSuggestions_Dismiss_NoLongerOffered_PrunedNotDismissed(t *testing.T) {
 	assert.Nil(t, after.DismissedMethodSuggestions, "no-longer-offered entry must not be sticky-dismissed")
 }
 
-// spec: IMP-018[3]
+// spec: IMP-018.actions-re-check-live
 func TestSuggestions_Resolve_ContactGone(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -612,7 +612,7 @@ func TestSuggestions_DuplicateOfCanonical_ResolvesToCanonicalContact(t *testing.
 // production route (not the service call directly), a soft-deleted
 // effective contact reports 410 Gone on the wire.
 //
-// spec: IMP-018[3]
+// spec: IMP-018.actions-re-check-live
 func TestSuggestionsAPI_Resolve_SoftDeletedContact_Returns410(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
@@ -635,7 +635,7 @@ func TestSuggestionsAPI_Resolve_SoftDeletedContact_Returns410(t *testing.T) {
 // counterpart: the same soft-deleted-contact-gone check applies to the
 // dismiss action route too.
 //
-// spec: IMP-018[3]
+// spec: IMP-018.actions-re-check-live
 func TestSuggestionsAPI_Dismiss_SoftDeletedContact_Returns410(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)

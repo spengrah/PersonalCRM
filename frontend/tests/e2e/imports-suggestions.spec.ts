@@ -21,7 +21,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await testApi.cleanup()
   })
 
-  // spec: IMP-026[0], IMP-030[0], IMP-030[2], IMP-031[0], IMP-031[1]
+  // spec: IMP-026.people-tab-default-holds, IMP-030.target-fixed-no-selection, IMP-030.confirm-requires-one-method, IMP-031.item-leaves-queue-counts-update, IMP-031.dependent-surfaces-invalidated
   test('method-suggestion card appears at the top; Review confirms and clears it', async ({
     page,
   }) => {
@@ -73,7 +73,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     })
   })
 
-  // spec: IMP-030[2], IMP-031[0]
+  // spec: IMP-030.confirm-requires-one-method, IMP-031.item-leaves-queue-counts-update
   test('Dismiss removes the card and it does not return after reload', async ({ page }) => {
     const email = `dismiss-${testApi.prefix}@example.invalid`
     await testApi.seedMethodSuggestions({
@@ -97,7 +97,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await expect(page.getByText(cardText)).toHaveCount(0, { timeout: 10000 })
   })
 
-  // spec: IMP-029[2], IMP-027[1]
+  // spec: IMP-029.import-not-offered-link, IMP-027.user-chooses-import-new
   test('link-only source hides Import on the card and in the modal', async ({ page }) => {
     // Seed a gmail_correspondence unmatched candidate (link-only source).
     await testApi.seedExternalContacts([
@@ -130,7 +130,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await expect(page.getByRole('button', { name: /Link to Existing/i })).toHaveCount(0)
   })
 
-  // spec: IMP-013[0], IMP-027[3], IMP-031[0]
+  // spec: IMP-013.any-curation-signal-imports, IMP-027.methods-selectable-one-primary, IMP-031.item-leaves-queue-counts-update
   test('deselect-all link removes the candidate', async ({ page }) => {
     // Seed a CRM contact + a same-named candidate so the modal opens with the
     // contact auto-selected (suggested match). Use icloud_contacts (not

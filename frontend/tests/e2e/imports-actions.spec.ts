@@ -41,7 +41,7 @@ test.describe('Imports Actions @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-007[0], IMP-027[1]
+    // spec: IMP-007.unmatched-rows-await-review, IMP-027.user-chooses-import-new
     test('should display candidate cards with correct information', async ({ page }) => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
@@ -57,7 +57,7 @@ test.describe('Imports Actions @area:imports', () => {
       await expect(card.getByRole('button', { name: /Link/i })).toBeVisible()
     })
 
-    // spec: IMP-027[1]
+    // spec: IMP-027.user-chooses-import-new
     test('should open link modal when clicking Link button', async ({ page }) => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
@@ -103,8 +103,8 @@ test.describe('Imports Actions @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-012[0], IMP-012[1], IMP-012[2], IMP-012[3]
-    // spec: IMP-007[1], IMP-031[0], IMP-031[2]
+    // spec: IMP-012.crm-contact-created-normal-path, IMP-012.methods-come-from-selection, IMP-012.candidate-row-marked-imported, IMP-012.response-reports-new-contact
+    // spec: IMP-007.imported-marks-rows-resolved, IMP-031.item-leaves-queue-counts-update, IMP-031.returned-rematch-job-registered
     test('should import candidate and persist the created contact', async ({ page, request }) => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
@@ -124,7 +124,7 @@ test.describe('Imports Actions @area:imports', () => {
       // The modal opens on the clicked card's candidate (keyed by id); the
       // import POST below is pinned to OUR external id, proving the clicked
       // candidate is the one that gets resolved.
-      // spec: IMP-028[3]
+      // spec: IMP-028.card-opens-that-candidate
       await expectModalCandidate(page, displayName)
 
       // Capture the import POST and the frontend's first rematch-job poll
@@ -203,7 +203,7 @@ test.describe('Imports Actions @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-007[3], IMP-031[0]
+    // spec: IMP-007.ignored-terminal-sticky-row, IMP-031.item-leaves-queue-counts-update
     test('should ignore candidate stickily', async ({ page, request }) => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
@@ -289,7 +289,7 @@ test.describe('Imports Actions @area:imports', () => {
       await testApi.cleanup()
     })
 
-    // spec: IMP-013[0], IMP-007[1], IMP-031[0]
+    // spec: IMP-013.any-curation-signal-imports, IMP-007.imported-marks-rows-resolved, IMP-031.item-leaves-queue-counts-update
     test('should link candidate to existing contact', async ({ page, request }) => {
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')

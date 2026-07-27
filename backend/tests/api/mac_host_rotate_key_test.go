@@ -130,7 +130,7 @@ func TestMacHostRotateKey_HappyPath(t *testing.T) {
 	require.NotNil(t, post.APIKeyRotatedAt, "api_key_rotated_at written")
 }
 
-// spec: MAC-010[1]
+// spec: MAC-010.token-state-failures-distinct
 func TestMacHostRotateKey_TokenAlreadyUsed(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -164,7 +164,7 @@ func TestMacHostRotateKey_TokenAlreadyUsed(t *testing.T) {
 	require.Equal(t, "TOKEN_ALREADY_USED", errBody.Error.Code)
 }
 
-// spec: MAC-010[1]
+// spec: MAC-010.token-state-failures-distinct
 func TestMacHostRotateKey_InvalidPairingToken(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -183,7 +183,7 @@ func TestMacHostRotateKey_InvalidPairingToken(t *testing.T) {
 	require.Equal(t, "INVALID_PAIRING_TOKEN", errBody.Error.Code)
 }
 
-// spec: MAC-010[1]
+// spec: MAC-010.token-state-failures-distinct
 func TestMacHostRotateKey_TokenExpired(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -238,7 +238,7 @@ func TestMacHostRotateKey_HostNotFound_MiddlewareCatches(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "token should still be usable after middleware-rejected attempt: %s", w.Body.String())
 }
 
-// spec: MAC-007[3]
+// spec: MAC-007.unknown-revoked-host-rejected
 func TestMacHostRotateKey_RevokedHostRotation(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -297,7 +297,7 @@ func callRotateAPIKeyDirect(
 	return env.macService.RotateAPIKey(context.Background(), hostID, startingHash, token)
 }
 
-// spec: MAC-010[2]
+// spec: MAC-010.rotated-out-key-stale-auth
 func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -365,7 +365,7 @@ func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
 	require.Equal(t, 1, consumedCount, "exactly one token must be consumed")
 }
 
-// spec: MAC-010[2]
+// spec: MAC-010.rotated-out-key-stale-auth
 func TestMacHostRotateKey_ConcurrentRotation_SameToken(t *testing.T) {
 
 	env := setupMacHostEnv(t)
@@ -450,7 +450,7 @@ func TestMacHostRotateKey_OldKeyImmediatelyInvalid(t *testing.T) {
 // host's key and sweeps every subsequent read surface (heartbeat
 // response, admin ListHosts, admin GetHostAdmin) for the rotated
 // plaintext key, asserting on the raw response body string.
-// spec: MAC-010[0]
+// spec: MAC-010.success-returns-new-plaintext
 func TestMacHostRotateKey_PlaintextNeverLeaksInSubsequentReads(t *testing.T) {
 
 	env := setupMacHostEnv(t)

@@ -13,7 +13,7 @@ test.describe('Imports Page @area:imports', () => {
     await testApi.cleanup()
   })
 
-  // spec: IMP-026[0]
+  // spec: IMP-026.people-tab-default-holds
   test('renders candidates confidence-ranked on the People tab', async ({ page }) => {
     // Two CRM contacts; the high external matches one on name AND email
     // (high confidence), the med external matches the other on name only
@@ -58,7 +58,7 @@ test.describe('Imports Page @area:imports', () => {
     expect(highIdx).toBeLessThan(medIdx)
   })
 
-  // spec: IMP-026[0]
+  // spec: IMP-026.people-tab-default-holds
   test('source filters expose selection state and scope the candidate request', async ({
     page,
   }) => {
@@ -101,7 +101,7 @@ test.describe('Imports Page @area:imports', () => {
     await expect(googleContacts).toHaveAttribute('aria-pressed', 'false')
   })
 
-  // spec: IMP-026[2]
+  // spec: IMP-026.manual-sync-triggers-offered
   test('manual sync triggers fire per-source sync requests', async ({ page }) => {
     // The sync buttons act on connected Google accounts — an external-provider
     // dependency — so mock the account list (sanctioned route-mock technique)

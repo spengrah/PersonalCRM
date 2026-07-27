@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// spec: CON-015[0]
+// spec: CON-015.blank-valued-entries-dropped
 func TestNormalizeContactMethodRequests(t *testing.T) {
 	methods, err := normalizeContactMethodRequests([]ContactMethodRequest{
 		{Type: " twitter ", Value: " @handle "},
@@ -32,7 +32,7 @@ func TestValidateContactMethods_DuplicateTypesAllowed(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// spec: CON-015[5]
+// spec: CON-015.two-entries-same-type
 func TestValidateContactMethods_DuplicateNormalizedValuePerType(t *testing.T) {
 	validate := validator.New()
 	err := validateContactMethods(validate, []ContactMethodRequest{
@@ -42,7 +42,7 @@ func TestValidateContactMethods_DuplicateNormalizedValuePerType(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// spec: CON-015[6]
+// spec: CON-015.more-than-one-entry
 func TestValidateContactMethods_MultiplePrimary(t *testing.T) {
 	validate := validator.New()
 	err := validateContactMethods(validate, []ContactMethodRequest{
@@ -84,7 +84,7 @@ func TestValidateContactMethods_WhatsAppLength(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// spec: CON-015[3]
+// spec: CON-015.email-family-values-valid
 func TestValidateContactMethods_GChatValidation(t *testing.T) {
 	validate := validator.New()
 	err := validateContactMethods(validate, []ContactMethodRequest{
@@ -93,7 +93,7 @@ func TestValidateContactMethods_GChatValidation(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// spec: CON-015[4]
+// spec: CON-015.phone-family-values-limited
 func TestValidateContactMethods_SignalLength(t *testing.T) {
 	validate := validator.New()
 

@@ -54,7 +54,7 @@ func (s *stubFailingHostLiveness) GetActiveHostByIDForUpdateTx(
 	return nil, db.ErrNotFound
 }
 
-// spec: ING-006[0]
+// spec: ING-006.whole-batch-rolled-back
 func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
@@ -385,7 +385,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 // the shared DB and hard-deletes all hosts in cleanup, same as the
 // mac_host_* test files.
 //
-// spec: ING-006[1]
+// spec: ING-006.unauthorized-401-stops-retries
 func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {

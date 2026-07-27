@@ -483,7 +483,7 @@ func TestContactTaskService_CRMMarkerFormat(t *testing.T) {
 // calls is a regression guard — it fails loudly if anyone later adds an
 // outbound call to the unlink path.
 func TestDeleteTaskLink_IssuesNoOutboundTodoistCall(t *testing.T) {
-	// spec: CAD-039[0], CAD-039[1]
+	// spec: CAD-039.crm-deletes-only-own, CAD-039.no-outbound-call-made
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}

@@ -205,7 +205,7 @@ func TestContactTaskAPI_ListFilters(t *testing.T) {
 	}
 
 	t.Run("StateFilterEachClosedSetMember", func(t *testing.T) {
-		// spec: CAD-032[0]
+		// spec: CAD-032.task-listing-filters-state
 		for _, state := range stateClosedSet {
 			req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID.String()+"/tasks?state="+state, nil)
 			w := httptest.NewRecorder()
@@ -224,7 +224,7 @@ func TestContactTaskAPI_ListFilters(t *testing.T) {
 	})
 
 	t.Run("UnfilteredListReturnsAllStates", func(t *testing.T) {
-		// spec: CAD-032[0]
+		// spec: CAD-032.task-listing-filters-state
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID.String()+"/tasks", nil)
 		w := httptest.NewRecorder()
 		h.router.ServeHTTP(w, req)
@@ -306,7 +306,7 @@ func TestContactTaskAPI_ListFilters(t *testing.T) {
 	}
 
 	t.Run("KindFilterEachClosedSetMember", func(t *testing.T) {
-		// spec: CAD-032[0]
+		// spec: CAD-032.task-listing-filters-state
 		for _, kind := range kindClosedSet {
 			got := listExternalIDs(t, "/api/v1/contacts/"+filterContactID.String()+"/tasks?kind="+kind)
 			require.NotEmpty(t, got, "kind=%s should return the seeded task(s), not an empty list", kind)
@@ -316,7 +316,7 @@ func TestContactTaskAPI_ListFilters(t *testing.T) {
 	})
 
 	t.Run("LifecycleFilterEachClosedSetMember", func(t *testing.T) {
-		// spec: CAD-032[0]
+		// spec: CAD-032.task-listing-filters-state
 		for _, lifecycle := range lifecycleClosedSet {
 			got := listExternalIDs(t, "/api/v1/contacts/"+filterContactID.String()+"/tasks?lifecycle="+lifecycle)
 			require.NotEmpty(t, got, "lifecycle=%s should return the seeded task(s), not an empty list", lifecycle)
@@ -326,7 +326,7 @@ func TestContactTaskAPI_ListFilters(t *testing.T) {
 	})
 
 	t.Run("InvalidStateRejected", func(t *testing.T) {
-		// spec: CAD-032[0]
+		// spec: CAD-032.task-listing-filters-state
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID.String()+"/tasks?state=archived", nil)
 		w := httptest.NewRecorder()
 		h.router.ServeHTTP(w, req)
@@ -334,7 +334,7 @@ func TestContactTaskAPI_ListFilters(t *testing.T) {
 	})
 
 	t.Run("InvalidLifecycleRejected", func(t *testing.T) {
-		// spec: CAD-032[0]
+		// spec: CAD-032.task-listing-filters-state
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID.String()+"/tasks?lifecycle=recurring", nil)
 		w := httptest.NewRecorder()
 		h.router.ServeHTTP(w, req)
@@ -342,7 +342,7 @@ func TestContactTaskAPI_ListFilters(t *testing.T) {
 	})
 
 	t.Run("UnknownContactNotFound", func(t *testing.T) {
-		// spec: CAD-032[0]
+		// spec: CAD-032.task-listing-filters-state
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+uuid.NewString()+"/tasks", nil)
 		w := httptest.NewRecorder()
 		h.router.ServeHTTP(w, req)
@@ -373,7 +373,7 @@ func TestContactTaskAPI_CreateManualTask(t *testing.T) {
 	contactID := createContactTaskTestContact(t, h, "Task Create API Test "+uuid.NewString()[:8])
 
 	t.Run("ValidCreateReturns201WithCreatedTask", func(t *testing.T) {
-		// spec: CAD-032[1]
+		// spec: CAD-032.task-creation-requires-kind-text
 		w := postManualTask(t, h, contactID, map[string]any{
 			"kind": "reach_out",
 			"text": "Follow up about the conference",
@@ -401,7 +401,7 @@ func TestContactTaskAPI_CreateManualTask(t *testing.T) {
 	})
 
 	t.Run("PickableKindSendAccepted", func(t *testing.T) {
-		// spec: CAD-032[1]
+		// spec: CAD-032.task-creation-requires-kind-text
 		w := postManualTask(t, h, contactID, map[string]any{
 			"kind": "send",
 			"text": "Send the signed contract",
@@ -414,7 +414,7 @@ func TestContactTaskAPI_CreateManualTask(t *testing.T) {
 	})
 
 	t.Run("NonPickableKindRejected", func(t *testing.T) {
-		// spec: CAD-032[1]
+		// spec: CAD-032.task-creation-requires-kind-text
 		// action and meet are valid listing-filter kinds but NOT user-pickable
 		// for manual creation.
 		for _, kind := range []string{"action", "meet"} {
@@ -427,7 +427,7 @@ func TestContactTaskAPI_CreateManualTask(t *testing.T) {
 	})
 
 	t.Run("TextLengthBoundary", func(t *testing.T) {
-		// spec: CAD-032[1]
+		// spec: CAD-032.task-creation-requires-kind-text
 		// Min boundary accept side: a single-character text is valid.
 		w := postManualTask(t, h, contactID, map[string]any{
 			"kind": "reminder",
@@ -449,7 +449,7 @@ func TestContactTaskAPI_CreateManualTask(t *testing.T) {
 	})
 
 	t.Run("NotesLengthBoundary", func(t *testing.T) {
-		// spec: CAD-032[1]
+		// spec: CAD-032.task-creation-requires-kind-text
 		w := postManualTask(t, h, contactID, map[string]any{
 			"kind":  "reminder",
 			"text":  "boundary notes task",
@@ -466,7 +466,7 @@ func TestContactTaskAPI_CreateManualTask(t *testing.T) {
 	})
 
 	t.Run("MissingTextRejected", func(t *testing.T) {
-		// spec: CAD-032[1]
+		// spec: CAD-032.task-creation-requires-kind-text
 		w := postManualTask(t, h, contactID, map[string]any{
 			"kind": "reach_out",
 		})
@@ -488,7 +488,7 @@ func TestContactTaskAPI_DeleteTaskLink(t *testing.T) {
 	contactID := createContactTaskTestContact(t, h, "Task Unlink API Test "+suffix)
 
 	t.Run("UnlinkRemovesOnlyCRMLink", func(t *testing.T) {
-		// spec: CAD-032[2]
+		// spec: CAD-032.unlinking-removes-only-crm
 		task, err := h.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      contactID,
 			Provider:       todoist.SourceName,
@@ -519,7 +519,7 @@ func TestContactTaskAPI_DeleteTaskLink(t *testing.T) {
 	})
 
 	t.Run("TaskOfDifferentContactNotFound", func(t *testing.T) {
-		// spec: CAD-032[2]
+		// spec: CAD-032.unlinking-removes-only-crm
 		otherContactID := createContactTaskTestContact(t, h, "Task Unlink Other Contact "+suffix)
 		otherTask, err := h.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID:      otherContactID,

@@ -60,7 +60,7 @@ test.describe('Contact knowledge rows @area:contacts', () => {
     // Known location: a labeled row carrying the seeded value
     // (30s: this can be the suite's first page load, paying next dev's
     // on-demand route compilation on top of the data fetch)
-    // spec: KNW-034[0]
+    // spec: KNW-034.known-location-appears-labeled
     await page.goto(`/contacts/${locatedId}`)
     await expect(
       page.getByRole('heading', { name: `${testApi.prefix}-Located Contact` })
@@ -69,7 +69,7 @@ test.describe('Contact knowledge rows @area:contacts', () => {
     await expect(detailRow(page, 'Location')).toContainText(location)
 
     // Unknown location: no row renders at all
-    // spec: KNW-034[0]
+    // spec: KNW-034.known-location-appears-labeled
     await page.goto(`/contacts/${unlocatedId}`)
     await expect(
       page.getByRole('heading', { name: `${testApi.prefix}-Unlocated Contact` })
@@ -98,7 +98,7 @@ test.describe('Contact knowledge rows @area:contacts', () => {
     })
 
     // Known birthday: a labeled row with the human-readable date
-    // spec: KNW-034[1]
+    // spec: KNW-034.known-birthday-appears-labeled
     await page.goto(`/contacts/${birthdayId}`)
     await expect(
       page.getByRole('heading', { name: `${testApi.prefix}-Birthday Contact` })
@@ -107,7 +107,7 @@ test.describe('Contact knowledge rows @area:contacts', () => {
     await expect(detailRow(page, 'Birthday')).toContainText(expectedBirthday)
 
     // Unknown birthday: no row renders
-    // spec: KNW-034[1]
+    // spec: KNW-034.known-birthday-appears-labeled
     await page.goto(`/contacts/${plainId}`)
     await expect(
       page.getByRole('heading', { name: `${testApi.prefix}-No Birthday Contact` })
