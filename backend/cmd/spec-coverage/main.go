@@ -119,7 +119,7 @@ func report(w io.Writer, cov *spec.Coverage) error {
 				if contains(d.Settled, it.Surface) {
 					marker = "ORPHAN (blocking)"
 				}
-				if err := p("  %s %s: %s\n", marker, it.Ref(), it.Text); err != nil {
+				if err := p("  %s %s: %s\n", marker, orphanRef(it), it.Text); err != nil {
 					return err
 				}
 			case spec.ItemWaived:
@@ -161,6 +161,26 @@ func settledLabel(settled []string) string {
 		return "-"
 	}
 	return strings.Join(parts, ",")
+}
+
+// orphanRef renders an orphan's reference for the report, flagging the one form
+// that cannot be pasted into a `// spec:` marker.
+//
+// An item that already carries a key renders as ID.key, and that reference IS
+// the citable handle — an author whose citation was deleted or left dangling by
+// a half-finished rename pastes it straight back. An item that has never been
+// referenced has no key, so it renders positionally, and the positional form is
+// rejected by the scanner. Without the suffix the two are indistinguishable in
+// the report, and the second invites an author to paste a reference that fails.
+// Minting the key is the required step there; see spec/README.md.
+//
+// This is report-only. ItemCoverage.Ref() stays the item's canonical identity,
+// which the coverage tests use to look items up.
+func orphanRef(it spec.ItemCoverage) string {
+	if it.Key == "" && it.Then >= 0 {
+		return it.Ref() + " (no key yet)"
+	}
+	return it.Ref()
 }
 
 // contains reports whether s appears in list.
