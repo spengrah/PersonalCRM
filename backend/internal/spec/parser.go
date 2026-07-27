@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -578,12 +577,17 @@ func sortedKeys(f map[string]*yaml.Node) []string {
 }
 
 // behaviorWaivers extracts the waivers field: a sequence of mappings, each with
-// a `then` naming the waived item — a !!str then-item key (the current form) or
-// an !!int index (the legacy form) — and a string `reason`. Any shape deviation
-// (non-sequence, non-mapping item, missing/mistyped sub-field, duplicate key in
-// an item) is a behavior-field-tier structural violation that marks the whole
-// field broken — the semantic pass (key/index resolution, duplicates, reason
-// non-empty, ui-or-api placement) never sees a partially-parsed waiver list.
+// a `then` naming the waived item by its !!str then-item key (or the reserved
+// "statement" token) and a string `reason`. Any shape deviation (non-sequence,
+// non-mapping item, missing/mistyped sub-field, duplicate key in an item, the
+// retired !!int positional form) is a behavior-field-tier structural violation
+// that marks the whole field broken — the semantic pass (key resolution,
+// duplicates, reason non-empty, ui-or-api placement) never sees a
+// partially-parsed waiver list.
+//
+// Fail-closed, per FIELD: the first bad waiver emits and returns nil, so a
+// behavior carrying two bad waivers reports once. A fixture that needs to pin
+// two waiver deviations needs two behaviors.
 func (pf *parsedFile) behaviorWaivers(pb *parsedBehavior, fields map[string]*yaml.Node) []Waiver {
 	node, ok := fields["waivers"]
 	if !ok {
@@ -618,25 +622,24 @@ func (pf *parsedFile) behaviorWaivers(pb *parsedBehavior, fields map[string]*yam
 			return nil
 		}
 		thenNode, thenOK := wf["then"]
-		if !thenOK || thenNode.Kind != yaml.ScalarNode || (thenNode.Tag != tagInt && thenNode.Tag != tagStr) {
+		// The retired positional form gets its own message so the retirement is
+		// legible: the author wrote something the schema once accepted, and the
+		// residual shape message ("must be a then-item key") reads like a typo
+		// rather than a form that no longer exists. The raw scalar text is
+		// rendered, so `then: -1` says -1 rather than being reclassified.
+		if thenOK && thenNode.Kind == yaml.ScalarNode && thenNode.Tag == tagInt {
 			pb.broken["waivers"] = true
-			pf.emit(orderStructural, pb.idx, item.Line, pb.ref,
-				"waiver then must be a then-item key or an integer index")
+			pf.emit(orderStructural, pb.idx, thenNode.Line, pb.ref,
+				fmt.Sprintf("waiver then %s uses the retired positional form; waive the then item by its key", thenNode.Value))
 			return nil
 		}
-		w := Waiver{}
-		if thenNode.Tag == tagStr {
-			w.Key, w.Keyed = thenNode.Value, true
-		} else {
-			idx, err := strconv.Atoi(thenNode.Value)
-			if err != nil {
-				pb.broken["waivers"] = true
-				pf.emit(orderStructural, pb.idx, thenNode.Line, pb.ref,
-					"waiver then must be a then-item key or an integer index")
-				return nil
-			}
-			w.Index = idx
+		if !thenOK || thenNode.Kind != yaml.ScalarNode || thenNode.Tag != tagStr {
+			pb.broken["waivers"] = true
+			pf.emit(orderStructural, pb.idx, item.Line, pb.ref,
+				"waiver then must be a then-item key")
+			return nil
 		}
+		w := Waiver{Key: thenNode.Value}
 		reasonNode, reasonOK := wf["reason"]
 		if !reasonOK {
 			pb.broken["waivers"] = true

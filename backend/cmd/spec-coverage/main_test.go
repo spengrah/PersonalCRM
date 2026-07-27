@@ -64,8 +64,12 @@ func TestRunInvalidCitations(t *testing.T) {
 	// waived line, and the new per-surface totals line.
 	for _, line := range []string{
 		"alpha              [settled: -]  surface ui/api/none: 7/8/1  ui: 4 covered, 2 waived, 1 orphaned  api: 5 covered, 2 waived, 3 orphaned",
+		// ALP-003's item is UNCITED, so it carries no key and still renders
+		// positionally — the live proof that arc I6 holds after the
+		// retirement: the reference on an orphan line is a location, not a
+		// citable handle.
 		"  ORPHAN ALP-003[0]: the request carries the filter param",
-		"  waived ALP-001[1]: focus-driven freshness is not deterministically provable",
+		"  waived ALP-001.refocus-rechecks-freshness: focus-driven freshness is not deterministically provable",
 		"spec-coverage: 4 orphaned then-items (ui 1, api 3), 8 invalid citations",
 	} {
 		if !hasLine(stdout, line) {
@@ -167,8 +171,10 @@ func TestRunKeyedCitationsClean(t *testing.T) {
 
 // TestSpecCoverage_KeyedCorpusInsertionStable is acceptance criterion 2 at the
 // CLI boundary: the same corpus with one item inserted at position 1 keeps
-// every keyed citation's verdict, while the indexed citations in the same
-// fixture re-point and orphan the assertion they used to name.
+// every keyed citation's verdict. (The indexed contrast leg retired with the
+// form; the retirement tests now own that subject.) The anti-vacuity controls
+// are the base-corpus precondition and the fresh-orphan check on the inserted
+// item — the latter added here because the CLI side previously lacked it.
 func TestSpecCoverage_KeyedCorpusInsertionStable(t *testing.T) {
 	_, before, _ := runCLI(t, fixtures+"/coverage-keys")
 	code, after, _ := runCLI(t, fixtures+"/coverage-keys-inserted")
@@ -191,29 +197,51 @@ func TestSpecCoverage_KeyedCorpusInsertionStable(t *testing.T) {
 			t.Errorf("a keyed citation lost its item across the insertion: %q\n%s", line, after)
 		}
 	}
-	// Indexed, same insertion: the assertion the citation used to name is now
-	// an orphan. The precondition is asserted POSITIVELY — report() prints
-	// nothing for a covered item, so "no ORPHAN ALP-002[2] before" would be
-	// unfalsifiable (the fixture gives ALP-002 two items, so index 2 cannot
-	// exist before the insertion) and would prove nothing about coverage.
-	// Instead: the base corpus reports everything covered-or-waived, and
-	// ALP-002 carries no waiver, so both of its indexed items are covered —
-	// and if either were not, the clean summary would be replaced by the
-	// corresponding ORPHAN line. Both halves are checked.
+	// Anti-vacuity, both halves. The base corpus reports everything
+	// covered-or-waived, so if keying had silently stopped resolving the clean
+	// summary would be replaced by ORPHAN lines; and the inserted item shows up
+	// as a fresh orphan afterwards, which is what proves the insertion landed
+	// and coverage was recomputed rather than the two runs being identical.
 	if !hasLine(before, "spec-coverage: all ui- and api-surface then-items covered or waived") {
 		t.Fatalf("precondition: the base corpus must be fully covered-or-waived:\n%s", before)
 	}
-	for _, line := range []string{
-		"  ORPHAN ALP-002[0]: the indexed first outcome holds",
-		"  ORPHAN ALP-002[1]: the indexed second outcome holds",
-	} {
-		if hasLine(before, line) {
-			t.Fatalf("precondition: ALP-002's items must both be covered before the insertion, saw %q:\n%s", line, before)
-		}
+	const inserted = "  ORPHAN ALP-001.inserted-outcome: an outcome inserted at position 1"
+	if hasLine(before, inserted) {
+		t.Fatalf("precondition: the inserted item must not exist in the base corpus:\n%s", before)
 	}
-	const shifted = "  ORPHAN ALP-002[2]: the indexed second outcome holds"
-	if !hasLine(after, shifted) {
-		t.Errorf("indexed citation should have re-pointed, orphaning %q:\n%s", shifted, after)
+	if !hasLine(after, inserted) {
+		t.Errorf("the newly inserted keyed item must be a fresh orphan, missing %q:\n%s", inserted, after)
+	}
+}
+
+// TestSpecCoverage_IndexedCitationExitsOne pins the retirement at the CLI
+// boundary. The fixture is deliberately UNSETTLED and its single behavior is
+// surface: api (the marker lives in a Go test, and a Go cite of a ui behavior
+// grants no coverage even when valid), so the resulting orphan is a true
+// consequence of the rejection rather than something that would be there
+// either way — and exit 1 is attributable to the retired form, not to a
+// settled-domain block.
+func TestSpecCoverage_IndexedCitationExitsOne(t *testing.T) {
+	code, stdout, _ := runCLI(t, fixtures+"/coverage-indexed-rejected")
+	if code != 1 {
+		t.Fatalf("want exit 1 on a retired-form citation, got %d:\n%s", code, stdout)
+	}
+	want := `spec citation "ALP-001[0]" uses the retired positional form; cite the then-item by key (<ID>.<then-item-key>)`
+	if !strings.Contains(stdout, want) {
+		t.Errorf("stdout missing the targeted retirement message %q:\n%s", want, stdout)
+	}
+	if !strings.Contains(stdout, "alpha_test.go:3") {
+		t.Errorf("stdout must name the citing site:\n%s", stdout)
+	}
+	// The summary format takes no singular/plural branch, so this is the exact
+	// golden for a one-behavior api fixture.
+	if !hasLine(stdout, "spec-coverage: 1 orphaned then-items (ui 0, api 1), 1 invalid citations") {
+		t.Errorf("summary golden missing:\n%s", stdout)
+	}
+	// Unsettled: the orphan warns rather than blocking, so exit 1 came from the
+	// invalid citation alone.
+	if strings.Contains(stdout, "ORPHAN (blocking)") {
+		t.Errorf("the fixture must be unsettled so exit 1 is attributable to the citation:\n%s", stdout)
 	}
 }
 

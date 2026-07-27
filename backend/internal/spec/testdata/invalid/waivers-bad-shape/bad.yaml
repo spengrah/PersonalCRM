@@ -21,10 +21,10 @@ behaviors:
       - y
     waivers:
       - just a string
-  # `then` accepts both a key (a string) and an index (an integer), so this
-  # case must be a node that is NEITHER — a sequence, not a mistyped scalar.
+  # `then` must be a then-item key (a string), so this case is a node that is
+  # not a scalar at all — a sequence, not a mistyped scalar.
   - id: CON-003
-    title: waiver then is neither a key nor an integer
+    title: waiver then is not a then-item key
     type: ux
     status: current
     surface: ui
@@ -41,9 +41,10 @@ behaviors:
     surface: ui
     when: x
     then:
-      - y
+      - key: outcome-y
+        text: y
     waivers:
-      - then: 0
+      - then: outcome-y
   - id: CON-005
     title: waiver reason not a string
     type: ux
@@ -51,7 +52,8 @@ behaviors:
     surface: ui
     when: x
     then:
-      - y
+      - key: outcome-y
+        text: y
     waivers:
-      - then: 0
+      - then: outcome-y
         reason: 7

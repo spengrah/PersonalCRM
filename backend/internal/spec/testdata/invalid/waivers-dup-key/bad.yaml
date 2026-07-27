@@ -10,9 +10,10 @@ behaviors:
     when: x
     then:
       - y
-      - z
+      - key: outcome-z
+        text: z
     waivers:
-      - then: 1
+      - then: outcome-z
         reason: first reason
-      - then: 1
+      - then: outcome-z
         reason: second reason

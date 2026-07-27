@@ -9,7 +9,8 @@ behaviors:
     surface: none
     when: x
     then:
-      - y
+      - key: outcome-y
+        text: y
     waivers:
-      - then: 0
+      - then: outcome-y
         reason: not provable

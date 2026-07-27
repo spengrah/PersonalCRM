@@ -52,8 +52,16 @@ func with(b Behavior, mut func(*Behavior)) Behavior {
 	return b
 }
 
+// keyedGWT is baseGWT with its first then item keyed, so the waivers row has a
+// real key for its waiver to name. baseGWT itself stays unkeyed so
+// TestSpecDrift_KeyingOnlyEditIsSilent's premise (an entirely unkeyed base)
+// remains exactly true.
+func keyedGWT() Behavior {
+	return with(baseGWT(), func(b *Behavior) { b.Then[0].Key = "first-outcome" })
+}
+
 func cite(path string, line int, id string) Citation {
-	return Citation{Path: path, Line: line, ID: id, Then: -1}
+	return Citation{Path: path, Line: line, ID: id}
 }
 
 const citeFile = "backend/x_test.go"
@@ -148,8 +156,12 @@ func TestSpecDrift(t *testing.T) {
 			cites: defaultCites, wantIDs: nil,
 		},
 		{
-			name: "waivers changed", base: []Behavior{baseGWT()},
-			head:  []Behavior{with(baseGWT(), func(b *Behavior) { b.Waivers = []Waiver{{Index: 0, Reason: "r"}} })},
+			// Both sides carry the same keyed then item, so the only axis that
+			// varies is the waiver list itself.
+			name: "waivers changed", base: []Behavior{keyedGWT()},
+			head: []Behavior{with(keyedGWT(), func(b *Behavior) {
+				b.Waivers = []Waiver{{Key: "first-outcome", Reason: "r"}}
+			})},
 			cites: defaultCites, wantIDs: nil,
 		},
 

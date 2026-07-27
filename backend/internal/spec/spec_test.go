@@ -156,20 +156,22 @@ func TestLintViolationClasses(t *testing.T) {
 		{"surface-on-intent", 1, []string{"surface is not for intent behaviors"}},
 		{"waivers-on-non-ui", 1, []string{`waivers are only for ui- or api-surface behaviors (surface "none")`}},
 		{"waivers-on-intent", 1, []string{"waivers are not for intent behaviors"}},
-		{"waivers-bad-index", 2, []string{
-			"waiver then index 1 out of range (behavior has 1 then items)",
-			"waiver then index -1 out of range",
+		// TWO behaviors, one retired-form waiver each: behaviorWaivers fails
+		// closed per FIELD, so two waivers on one behavior would report once
+		// and the negative case would never be reached.
+		{"waiver-index-form", 2, []string{
+			"waiver then 1 uses the retired positional form; waive the then item by its key",
+			"waiver then -1 uses the retired positional form; waive the then item by its key",
 		}},
-		{"waivers-dup-index", 1, []string{"duplicate waiver for then item 1"}},
+		{"waivers-dup-key", 1, []string{`duplicate waiver for then item "outcome-z"`}},
 		{"waivers-empty-reason", 1, []string{"waiver reason must be non-empty"}},
 		{"waivers-bad-shape", 5, []string{
 			"waivers must be a list of {then, reason} mappings",
 			"waivers items must be {then, reason} mappings",
-			"waiver then must be a then-item key or an integer index",
+			"waiver then must be a then-item key",
 			"waiver must have a reason",
 			"waiver reason must be a string",
 		}},
-		{"waivers-bad-statement-index", 1, []string{"waiver then index 1 out of range (a statement behavior has one implicit item, index 0)"}},
 		{"settled-not-list", 1, []string{"settled must be a list of surfaces"}},
 		{"settled-mapping", 1, []string{"settled must be a list of surfaces"}},
 		{"settled-null", 1, []string{"settled must list at least one surface; omit the key entirely for a genuinely unsettled domain"}},
@@ -200,7 +202,7 @@ func TestLintViolationClasses(t *testing.T) {
 		{"waiver-key-unknown", 1, []string{`waiver then "no-such-key" names no then-item key of this behavior`}},
 		// An empty waiver key resolves to nothing, so it waives nothing. The
 		// fixture's then[1] is a PLAIN STRING on purpose: an unkeyed item
-		// carries an empty key, so without resolveWaiverIndex's it.Key != ""
+		// carries an empty key, so without waiverItemIndex's it.Key != ""
 		// guard this waiver would match it and silently waive a real
 		// assertion at whatever index the unkeyed item happens to sit.
 		{"waiver-key-empty", 1, []string{`waiver then "" names no then-item key of this behavior`}},
@@ -300,7 +302,7 @@ func TestLintSurfaceAndWaivers(t *testing.T) {
 		if b.Surface != "ui" {
 			t.Errorf("CON-001 surface = %q, want ui", b.Surface)
 		}
-		if len(b.Waivers) != 1 || b.Waivers[0].Keyed || b.Waivers[0].Index != 1 || b.Waivers[0].Reason == "" {
+		if len(b.Waivers) != 1 || b.Waivers[0].Key != "refocus-rechecks-freshness" || b.Waivers[0].Reason == "" {
 			t.Errorf("CON-001 waivers not parsed: %#v", b.Waivers)
 		}
 	}
@@ -317,7 +319,7 @@ func TestLintSurfaceAndWaivers(t *testing.T) {
 	// An api-surface behavior may carry a waiver (relaxed from ui-only).
 	if b := findBehavior(files, "CON-005"); b == nil {
 		t.Fatal("CON-005 missing")
-	} else if b.Surface != "api" || len(b.Waivers) != 1 || b.Waivers[0].Keyed || b.Waivers[0].Index != 0 || b.Waivers[0].Reason == "" {
+	} else if b.Surface != "api" || len(b.Waivers) != 1 || b.Waivers[0].Key != "body-is-chunked" || b.Waivers[0].Reason == "" {
 		t.Errorf("CON-005 api-surface waiver not parsed clean: %#v", b)
 	}
 }
@@ -345,8 +347,8 @@ func TestLintSettledAbsent(t *testing.T) {
 // TestLintThenKeysAndKeyedWaivers pins the keyed then-item form on a valid
 // corpus: keyed and plain items coexist in one then list, a keyed item carries
 // its Key/Text/Line, a plain one carries an empty Key, a waiver addresses an
-// item by key, the reserved "statement" token addresses a statement behavior's
-// implicit item, and the legacy index form still parses alongside them.
+// item by key, and the reserved "statement" token addresses a statement
+// behavior's implicit item.
 func TestLintThenKeysAndKeyedWaivers(t *testing.T) {
 	files, viol, err := Lint("testdata/valid-then-keys")
 	if err != nil {
@@ -376,22 +378,14 @@ func TestLintThenKeysAndKeyedWaivers(t *testing.T) {
 	if got := b.ThenTexts(); len(got) != 3 || got[0] != want[0].Text || got[1] != want[1].Text {
 		t.Errorf("KEY-001 ThenTexts() = %#v", got)
 	}
-	if len(b.Waivers) != 1 || !b.Waivers[0].Keyed || b.Waivers[0].Key != "pending-followup-count" {
+	if len(b.Waivers) != 1 || b.Waivers[0].Key != "pending-followup-count" {
 		t.Errorf("KEY-001 keyed waiver not parsed: %#v", b.Waivers)
 	}
 
 	if b := findBehavior(files, "KEY-002"); b == nil {
 		t.Fatal("KEY-002 missing")
-	} else if len(b.Waivers) != 1 || !b.Waivers[0].Keyed || b.Waivers[0].Key != "statement" {
+	} else if len(b.Waivers) != 1 || b.Waivers[0].Key != "statement" {
 		t.Errorf("KEY-002 statement waiver not parsed: %#v", b.Waivers)
-	}
-
-	// The legacy index form survives alongside the keyed one, and Keyed is what
-	// tells them apart — not a sentinel value of Index.
-	if b := findBehavior(files, "KEY-003"); b == nil {
-		t.Fatal("KEY-003 missing")
-	} else if len(b.Waivers) != 1 || b.Waivers[0].Keyed || b.Waivers[0].Index != 1 || b.Waivers[0].Key != "" {
-		t.Errorf("KEY-003 legacy index waiver not parsed: %#v", b.Waivers)
 	}
 }
 
@@ -482,50 +476,40 @@ func TestLint_ThenKeyDuplicateIgnoresEmptyKeys(t *testing.T) {
 	}
 }
 
-// TestLint_WaiverNegativeIndexStillOutOfRange is the union-soundness guard. A
-// negative index is a REPRESENTABLE legacy value, so it must never be read as a
-// "the keyed form is in use" sentinel — the discriminator is Waiver.Keyed. If
-// the sentinel encoding were ever reintroduced, this range check would become
-// unreachable and the assertion below would fail.
-func TestLint_WaiverNegativeIndexStillOutOfRange(t *testing.T) {
-	files, viol, err := Lint("testdata/invalid/waivers-bad-index")
+// TestLint_WaiverIndexFormRejected pins the retirement of the !!int waiver
+// form at the PARSER tier, including the negative case. The count of 2 is the
+// assertion that matters: the fixture is two behaviors with one retired-form
+// waiver each precisely because behaviorWaivers fails closed per FIELD, so a
+// single behavior carrying both would report once and `then: -1` would ship
+// untested. A `>= 1` assertion would pass on that weaker fixture.
+//
+// The message renders the RAW scalar text, so `then: -1` says -1 rather than
+// being silently reclassified into the residual shape message.
+func TestLint_WaiverIndexFormRejected(t *testing.T) {
+	files, viol, err := Lint("testdata/invalid/waiver-index-form")
 	if err != nil {
 		t.Fatalf("Lint returned error: %v", err)
 	}
-	b := findBehavior(files, "CON-001")
-	if b == nil {
-		t.Fatal("CON-001 missing")
+	if len(viol) != 2 {
+		t.Fatalf("want exactly 2 violations (one per behavior), got %d:\n%s", len(viol), joinViolations(viol))
 	}
-	var negative *Waiver
-	for i := range b.Waivers {
-		if b.Waivers[i].Index == -1 {
-			negative = &b.Waivers[i]
+	all := joinViolations(viol)
+	for _, want := range []string{
+		"waiver then 1 uses the retired positional form; waive the then item by its key",
+		"waiver then -1 uses the retired positional form; waive the then item by its key",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("violations missing %q; got:\n%s", want, all)
 		}
 	}
-	if negative == nil {
-		t.Fatalf("precondition: the fixture must carry a `then: -1` waiver, got %#v", b.Waivers)
-	}
-	if negative.Keyed {
-		t.Errorf("a negative index must parse as the INDEX form, not the keyed one: %#v", *negative)
-	}
-	if !strings.Contains(joinViolations(viol), "waiver then index -1 out of range") {
-		t.Errorf("negative index must still report out of range:\n%s", joinViolations(viol))
-	}
-}
-
-// TestLint_WaiverDuplicateAcrossForms pins that duplicate detection keys on the
-// RESOLVED item index: a key-form waiver and an index-form waiver naming the
-// same item are one duplicate, not two independent waivers.
-func TestLint_WaiverDuplicateAcrossForms(t *testing.T) {
-	_, viol, err := Lint("testdata/invalid/waiver-dup-across-forms")
-	if err != nil {
-		t.Fatalf("Lint returned error: %v", err)
-	}
-	if len(viol) != 1 {
-		t.Fatalf("want exactly 1 violation, got %d:\n%s", len(viol), joinViolations(viol))
-	}
-	if !strings.Contains(viol[0].Msg, "duplicate waiver for then item 1") {
-		t.Errorf("want the resolved-index duplicate message, got %q", viol[0].Msg)
+	// Fail-closed: the whole waivers field is marked broken, so nothing is
+	// carried into the semantic pass.
+	for _, id := range []string{"CON-001", "CON-002"} {
+		if b := findBehavior(files, id); b == nil {
+			t.Errorf("%s missing", id)
+		} else if len(b.Waivers) != 0 {
+			t.Errorf("%s: a retired-form waiver must not parse, got %#v", id, b.Waivers)
+		}
 	}
 }
 

@@ -4,7 +4,7 @@ maturity: reviewed
 behaviors:
   # then[1] is deliberately a PLAIN STRING, not a keyed mapping. An all-keyed
   # behavior would make this fixture non-discriminating: with the it.Key != ""
-  # guard removed from resolveWaiverIndex, an empty waiver key matches the
+  # guard removed from waiverItemIndex, an empty waiver key matches the
   # first item whose key is empty — so the violation only disappears when such
   # an item exists, and it sits at index 1 to show the waiver would silently
   # waive an arbitrary item rather than item 0.

@@ -1,0 +1,31 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  # One deviation per BEHAVIOR: behaviorWaivers fails closed per FIELD, so a
+  # second retired-form waiver on CON-001 would never be reached and the
+  # negative case would ship untested.
+  - id: CON-001
+    title: a waiver using the retired positional form
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: outcome-y
+        text: y
+    waivers:
+      - then: 1
+        reason: freshness is not deterministically provable
+  - id: CON-002
+    title: a waiver using the retired positional form with a negative index
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: outcome-z
+        text: z
+    waivers:
+      - then: -1
+        reason: negative index
