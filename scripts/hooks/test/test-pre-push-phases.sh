@@ -20,6 +20,7 @@ assert_eq "test-pre-push-filters -> CONCURRENT"         "CONCURRENT" "$(classify
 assert_eq "test-deploy-scripts -> CONCURRENT"           "CONCURRENT" "$(classify_command 'make test-deploy-scripts')"
 assert_eq "test-unit -> GO"                             "GO"         "$(classify_command 'make test-unit')"
 assert_eq "test-integration -> GO"                      "GO"         "$(classify_command 'make test-integration')"
+assert_eq "test-integration-fast -> GO"                 "GO"         "$(classify_command 'make test-integration-fast')"
 # Unrecognized command defaults to the GO (serial, DB-owning) lane — never concurrent.
 assert_eq "unrecognized command -> GO (safe default)"   "GO"         "$(classify_command 'make some-future-db-command')"
 

@@ -323,7 +323,7 @@ classify_command() {
 # FRONTEND, FILTER, E2E) so every .test.commands[] entry in a lane runs and its
 # `optional` flag is honored — matching the prior hook, which ran every command.
 # For today's two required GO commands this reduces to
-# `make test-unit && make test-integration`.
+# `make test-unit && make test-integration-fast`.
 run_lane() {
   # $@ alternates: cmd optional cmd optional ...
   local cmd optional
