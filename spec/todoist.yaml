@@ -396,8 +396,10 @@ behaviors:
     given: a connected Todoist account
     when: the user triggers a manual task sync
     then:
-      - a sync is requested for that account and its success or failure is indicated
-      - the account's read/write permission state is visible
+      - key: sync-requested-account-success
+        text: a sync is requested for that account and its success or failure is indicated
+      - key: read-write-permission-visible
+        text: the account's read/write permission state is visible
     provenance: [todoist-accounts-section.tsx sync badge, useTriggerSync]
     notes: The Todoist projection-target settings surface — the read/write settings endpoints, the project and label pickers, and the sync-configuration UI — is owned by the settings domain (SET-015, SET-016, SET-017, SET-018, SET-026), not re-minted here. This row pins only the on-demand sync trigger.
 
@@ -409,9 +411,12 @@ behaviors:
     given: a contact with tasks projected into Todoist
     when: the contact's tasks are shown
     then:
-      - the CRM link markers are stripped so the task shows human-readable content, falling back to a placeholder when empty
-      - each linked task offers a deep link that opens it in the Todoist app
-      - the cadence-due projection is not surfaced on the contact page (cadence is surfaced through the overdue and recent-activity surfaces instead)
+      - key: crm-link-markers-stripped
+        text: the CRM link markers are stripped so the task shows human-readable content, falling back to a placeholder when empty
+      - key: linked-task-deep-link
+        text: each linked task offers a deep link that opens it in the Todoist app
+      - key: cadence-due-not-surfaced
+        text: the cadence-due projection is not surfaced on the contact page (cadence is surfaced through the overdue and recent-activity surfaces instead)
     waivers:
       - then: 2
         reason: a structural-absence property with no deterministic browser observable — the provider-less E2E env cannot seed a real cadence_due row (the contact-page task routes are OAuth-gated and route-mocked in E2E, so an absence assertion would only prove the mock), and the exclusion is enforced by the contact page's lifecycle-scoped task queries (manual + followup_loop only), which structurally omit cadence_due projections

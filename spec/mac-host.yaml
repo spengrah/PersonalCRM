@@ -39,10 +39,14 @@ behaviors:
     given: a request to the pairing endpoint
     when: it is handled
     then:
-      - a valid token pairs the host and returns the host id, plaintext api key, and current cursor epoch, with the api key shown only once
-      - an invalid, already-consumed, or expired token all collapse to a single opaque gone response (410) that does not reveal which condition failed
-      - a second pairing attempt while a host is already live is rejected as a conflict (409)
-      - a missing pairing token or hostname is a validation error (400)
+      - key: valid-token-pairs-host
+        text: a valid token pairs the host and returns the host id, plaintext api key, and current cursor epoch, with the api key shown only once
+      - key: invalid-already-consumed-expired
+        text: an invalid, already-consumed, or expired token all collapse to a single opaque gone response (410) that does not reveal which condition failed
+      - key: second-pairing-attempt-conflict
+        text: a second pairing attempt while a host is already live is rejected as a conflict (409)
+      - key: missing-pairing-token-hostname
+        text: a missing pairing token or hostname is a validation error (400)
     provenance: [MacHostHandler.Pair, pairResponse]
     notes: The opaque 410 is deliberate — distinct token-state codes would let a caller probe whether a guessed token ever existed. Rotation deliberately does the opposite (MAC-010).
 
@@ -90,12 +94,18 @@ behaviors:
     given: a request to a daemon-authenticated endpoint
     when: authentication runs
     then:
-      - a missing or malformed host-id header is rejected (401)
-      - presenting global-api-key auth alongside daemon auth is rejected as ambiguous (400)
-      - a missing or empty bearer token is rejected (401)
-      - an unknown or revoked host is rejected (401)
-      - a bearer token that fails the constant-time key comparison is rejected (401)
-      - a route id parameter that does not match the header host id is rejected as an authorization failure (403), distinct from an authentication failure
+      - key: missing-malformed-host-id
+        text: a missing or malformed host-id header is rejected (401)
+      - key: presenting-global-api-key
+        text: presenting global-api-key auth alongside daemon auth is rejected as ambiguous (400)
+      - key: missing-empty-bearer-token
+        text: a missing or empty bearer token is rejected (401)
+      - key: unknown-revoked-host-rejected
+        text: an unknown or revoked host is rejected (401)
+      - key: bearer-token-fails-constant
+        text: a bearer token that fails the constant-time key comparison is rejected (401)
+      - key: route-id-mismatch-forbidden
+        text: a route id parameter that does not match the header host id is rejected as an authorization failure (403), distinct from an authentication failure
     provenance: [MacHostAuthMiddleware, abortAuth]
     notes: The then[4] constant-time qualifier is a timing property no test can observe — the cited test proves only the rejection (401 on a wrong bearer for a known host). The middleware's comparison is bcrypt.CompareHashAndPassword behind the injectable PasswordComparator seam (DefaultPasswordComparator in mac_host_middleware.go); timing safety is owned by code review of that seam.
 
@@ -137,10 +147,14 @@ behaviors:
     given: a rotate-key request
     when: it is handled
     then:
-      - success returns the new plaintext key and rotation timestamp (200), with the key shown only once
-      - token-state failures return distinct client-error codes for invalid, already-used, and expired, because the caller has already proven control of the current key
-      - a key rotated out from under the caller returns stale-auth (401)
-      - a missing or revoked host returns not-found (404)
+      - key: success-returns-new-plaintext
+        text: success returns the new plaintext key and rotation timestamp (200), with the key shown only once
+      - key: token-state-failures-distinct
+        text: token-state failures return distinct client-error codes for invalid, already-used, and expired, because the caller has already proven control of the current key
+      - key: rotated-out-key-stale-auth
+        text: a key rotated out from under the caller returns stale-auth (401)
+      - key: missing-revoked-host
+        text: a missing or revoked host returns not-found (404)
     provenance: [MacHostHandler.RotateKey, rotateKeyResponse]
     notes: The distinct token-state codes are the opposite choice from pairing (MAC-003) — leaking token state is safe here because the caller already holds the current key.
 
@@ -154,10 +168,14 @@ behaviors:
     given: an authenticated daemon heartbeat
     when: it is handled
     then:
-      - the host's last-heartbeat time, daemon version, protocol version, permissions, and source health are recorded
-      - the response echoes the current cursor epoch so the daemon can detect a backend backup-restore
-      - the response reports the server's current and minimum protocol versions
-      - a host revoked between authentication and the write returns unknown-host (401)
+      - key: heartbeat-fields-recorded
+        text: the host's last-heartbeat time, daemon version, protocol version, permissions, and source health are recorded
+      - key: response-echoes-current-cursor
+        text: the response echoes the current cursor epoch so the daemon can detect a backend backup-restore
+      - key: response-reports-protocol-versions
+        text: the response reports the server's current and minimum protocol versions
+      - key: host-revoked-between-authentication
+        text: a host revoked between authentication and the write returns unknown-host (401)
     provenance: [MacHostHandler.Heartbeat, UpdateMacHostHeartbeat, heartbeatResponse]
 
   - id: MAC-012
@@ -168,8 +186,10 @@ behaviors:
     given: a heartbeat whose protocol version is below the server minimum
     when: it is handled
     then:
-      - the request is rejected with an upgrade-required response (412) before any database write
-      - the response carries the minimum acceptable protocol version
+      - key: request-rejected-upgrade-required
+        text: the request is rejected with an upgrade-required response (412) before any database write
+      - key: response-carries-minimum-acceptable
+        text: the response carries the minimum acceptable protocol version
     provenance: [MacHostHandler.Heartbeat protocol gate, mac.MinProtocolVersion]
     notes: Newer additive versions are accepted (older daemons simply do not emit newer event kinds), so the floor moves only on breaking contract changes.
 
@@ -206,9 +226,12 @@ behaviors:
     given: a daemon reading its cursor for a source
     when: the read is handled
     then:
-      - a committed cursor is returned along with the daemon-owned backfill-complete flag
-      - before any commit, an empty cursor and the host's current epoch are returned
-      - the backfill-complete flag is opaque to the backend and defaults to false when absent or malformed
+      - key: committed-cursor-returned-along
+        text: a committed cursor is returned along with the daemon-owned backfill-complete flag
+      - key: before-commit-empty-cursor
+        text: before any commit, an empty cursor and the host's current epoch are returned
+      - key: backfill-complete-flag-opaque
+        text: the backfill-complete flag is opaque to the backend and defaults to false when absent or malformed
     provenance: [MacHostHandler.GetCursor, extractBackfillComplete, cursorResponse]
 
   # --- Admin & revoke ---
@@ -242,10 +265,14 @@ behaviors:
     given: admin requests (global api key) against the hosts collection
     when: they are handled
     then:
-      - the list returns the live hosts
-      - the detail view returns a single host including revoked ones, and not-found (404) for an unknown id
-      - per-source live counts distinguish a missing host (404) from a host with no rows (an empty count map)
-      - an admin can mint a fresh pairing token and revoke a host
+      - key: list-returns-live-hosts
+        text: the list returns the live hosts
+      - key: detail-view-returns-single
+        text: the detail view returns a single host including revoked ones, and not-found (404) for an unknown id
+      - key: per-source-live-counts
+        text: per-source live counts distinguish a missing host (404) from a host with no rows (an empty count map)
+      - key: admin-can-mint-fresh
+        text: an admin can mint a fresh pairing token and revoke a host
     provenance: [MacHostHandler.ListHosts/GetHostAdmin/GetSourceCounts/CreatePairingToken/DeleteHost, RegisterMacHostAdminRoutes]
     waivers:
       - then: 1
@@ -503,7 +530,9 @@ behaviors:
     given: a paired host whose source health includes a contacts source
     when: the source-health view renders that source's cursor state
     then:
-      - once the source reports backfill complete, the live contact count for the host and source is shown in place of the raw change-token cursor
-      - while backfill is still in progress, a neutral placeholder is shown — the raw change-token cursor is never displayed and no count is substituted
+      - key: backfill-complete-shows-count
+        text: once the source reports backfill complete, the live contact count for the host and source is shown in place of the raw change-token cursor
+      - key: backfill-in-progress-placeholder
+        text: while backfill is still in progress, a neutral placeholder is shown — the raw change-token cursor is never displayed and no count is substituted
     provenance: [settings/mac/cursor-cell.ts renderCursorCell/cursorCellState, useMacHostSourceCounts, MacHostHandler.GetSourceCounts]
     notes: 'The regression guard for issue #327: an iCloud change-token cursor is meaningless to the operator, so the cell shows a live count only when the count is trustworthy (backfill complete) and otherwise the neutral placeholder — never the raw change-token. The counts endpoint contract is MAC-018.'

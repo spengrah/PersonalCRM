@@ -11,7 +11,8 @@ behaviors:
     given: the application root is opened
     when: the entry route resolves
     then:
-      - the user is taken to the dashboard as the default destination
+      - key: user-taken-dashboard-default
+        text: the user is taken to the dashboard as the default destination
     serves: [DSH-011]
     provenance: [app/page.tsx, dashboard.spec.ts]
     notes: The dashboard's overdue content is CAD-026; this behavior only pins that the dashboard is where the app opens. A former second clause pinned the redirect's interim presentation (not broken/blank while resolving); the maintainer retired it at the first label session — the interim is imperceptibly brief in practice, so its presentation is not worth pinning at item level. Interim-surface quality remains judgeable holistically under the DSH-011 intent this behavior serves.
@@ -24,9 +25,12 @@ behaviors:
     given: any primary application surface, including the dashboard
     when: the global navigation renders
     then:
-      - at wide (>= sm) viewports, links to the dashboard, contacts, birthdays, imports, and settings sections are present
-      - the link matching the current section is visually marked active
-      - the navigation bar stays visible while the page scrolls (sticky)
+      - key: wide-sm-viewports-links
+        text: at wide (>= sm) viewports, links to the dashboard, contacts, birthdays, imports, and settings sections are present
+      - key: link-matching-current-section
+        text: the link matching the current section is visually marked active
+      - key: navigation-bar-stays-visible
+        text: the navigation bar stays visible while the page scrolls (sticky)
     provenance: [components/layout/navigation.tsx, dashboard.spec.ts]
     notes: The bar also hosts a time-acceleration control and an aggregate sync-status indicator on the imports link — those belong to the settings and imports domains respectively. The birthdays surface itself is CON-045. App-shell nav renders on every primary surface, not only the dashboard; it is captured here because no dedicated navigation domain exists. Scoped to wide (>= sm) viewports deliberately — at narrow (below-sm) widths the link list is hidden (`hidden sm:flex`) and collapses to a menu button that is currently non-functional (no open/close state, no menu panel rendered), so navigation is not reachable on mobile. That mobile gap is a known bug, not claimed as working here.
 
@@ -38,8 +42,10 @@ behaviors:
     given: the dashboard is open
     when: the surface renders in any state
     then:
-      - an add-contact action is always available from the header
-      - the caught-up state additionally offers a path to add a contact and to view the full contact list
+      - key: add-contact-action-always
+        text: an add-contact action is always available from the header
+      - key: caught-up-offers-add-and-list
+        text: the caught-up state additionally offers a path to add a contact and to view the full contact list
     serves: [DSH-011]
     provenance: [dashboard/page.tsx header CTA, EmptyState]
     notes: The caught-up (all-clear) state itself is CAD-026; this pins the follow-on affordances it offers.
@@ -52,9 +58,12 @@ behaviors:
     given: the overdue widget is loading or its request has failed
     when: the dashboard renders
     then:
-      - while loading, placeholder content is shown rather than an empty or caught-up state
-      - on request failure, an error state with a failure reason is shown rather than an empty or caught-up state
-      - the shown failure reason faithfully reflects the actual failure
+      - key: while-loading-placeholder-content
+        text: while loading, placeholder content is shown rather than an empty or caught-up state
+      - key: request-failure-error-state
+        text: on request failure, an error state with a failure reason is shown rather than an empty or caught-up state
+      - key: shown-failure-reason-faithfully
+        text: the shown failure reason faithfully reflects the actual failure
     serves: [DSH-011]
     provenance: [dashboard/page.tsx loading and error branches]
     notes: The populated and caught-up states are CAD-026; this fills the loading and error states CAD does not cover.
@@ -67,10 +76,14 @@ behaviors:
     given: an open dashboard whose overdue list has been fetched
     when: an action elsewhere changes who is overdue
     then:
-      - the overdue list refreshes to reflect the change without a manual page reload
-      - this covers logging an interaction, merging contacts, and resolving a meeting note that touches a contact's cadence
-      - purely cosmetic contact edits that do not change overdue membership do not disturb the list
-      - returning focus to the window re-checks freshness, but refetches only once the list has gone stale (a 5-minute staleTime); refocusing sooner does not refetch
+      - key: overdue-list-refreshes-reflect
+        text: the overdue list refreshes to reflect the change without a manual page reload
+      - key: covers-logging-interaction-merging
+        text: this covers logging an interaction, merging contacts, and resolving a meeting note that touches a contact's cadence
+      - key: purely-cosmetic-contact-edits
+        text: purely cosmetic contact edits that do not change overdue membership do not disturb the list
+      - key: refocus-refetches-only-when-stale
+        text: returning focus to the window re-checks freshness, but refetches only once the list has gone stale (a 5-minute staleTime); refocusing sooner does not refetch
     waivers:
       - then: 1
         reason: the per-flow freshness matrix is not deterministically provable in one browser test (documented at the DSH verifier→E2E migration); holistic freshness is judged under DSH-012
@@ -102,8 +115,10 @@ behaviors:
     given: a user wanting to find a contact by text
     when: they look for a search affordance
     then:
-      - contact text search is provided through the contact list's search input
-      - no dedicated dashboard-level or app-global search surface exists (no top-bar search box or command palette)
+      - key: contact-text-search-provided
+        text: contact text search is provided through the contact list's search input
+      - key: no-global-search-surface
+        text: no dedicated dashboard-level or app-global search surface exists (no top-bar search box or command palette)
     provenance: [components/layout/navigation.tsx, contacts/page.tsx search input, contacts-api.ts]
     notes: Full-text matching semantics and relevance ordering are CON-023; this behavior records that the domain's "search" scope resolves to the contact list rather than a distinct surface, so the boundary is explicit.
 

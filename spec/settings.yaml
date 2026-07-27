@@ -22,9 +22,12 @@ behaviors:
     given: a configured OAuth provider
     when: the frontend requests that provider's authorization URL
     then:
-      - a random CSRF state is generated and stored server-side
-      - the stored state expires after ten minutes
-      - the response returns the provider authorization URL and the state
+      - key: random-csrf-state-generated
+        text: a random CSRF state is generated and stored server-side
+      - key: stored-state-expires-ten-minutes
+        text: the stored state expires after ten minutes
+      - key: returns-authorization-url-and-state
+        text: the response returns the provider authorization URL and the state
     provenance: [OAuthHandler.GetGoogleAuthURL, OAuthHandler.GetTodoistAuthURL, storeState, google.GenerateState]
     notes: The state store is in-process and not persisted, so a backend restart between issuance and callback invalidates outstanding states (they then fail as invalid_state). Google and Todoist share one state namespace with no provider tag; states are 32 random bytes so cross-provider collision is not a practical concern.
 
@@ -36,10 +39,14 @@ behaviors:
     given: a provider redirect back to the callback route
     when: the callback is processed
     then:
-      - a provider-supplied error parameter short-circuits before any state check or code exchange
-      - the CSRF state is validated and consumed before the authorization code is exchanged
-      - a state is accepted at most once, so replaying the same state fails validation
-      - an expired, unknown, or already-used state aborts the flow without exchanging the code
+      - key: provider-supplied-error-parameter
+        text: a provider-supplied error parameter short-circuits before any state check or code exchange
+      - key: csrf-state-validated-consumed
+        text: the CSRF state is validated and consumed before the authorization code is exchanged
+      - key: state-accepted-at-most-once
+        text: a state is accepted at most once, so replaying the same state fails validation
+      - key: expired-unknown-already-used
+        text: an expired, unknown, or already-used state aborts the flow without exchanging the code
     provenance: [OAuthHandler.GoogleCallback, OAuthHandler.TodoistCallback, validateState]
 
   - id: SET-004
@@ -50,10 +57,14 @@ behaviors:
     given: a completed or failed OAuth callback
     when: the callback responds
     then:
-      - the response is a redirect back to the settings surface, never a rendered page or JSON body
-      - a success carries an outcome of success plus the provider name
-      - a failure carries an outcome of error plus the provider name and a typed reason (the provider error, invalid_state, or exchange_failed)
-      - all redirect query parameters are URL-encoded rather than string-concatenated
+      - key: response-redirect-back-settings
+        text: the response is a redirect back to the settings surface, never a rendered page or JSON body
+      - key: success-carries-outcome-success
+        text: a success carries an outcome of success plus the provider name
+      - key: failure-carries-outcome-error
+        text: a failure carries an outcome of error plus the provider name and a typed reason (the provider error, invalid_state, or exchange_failed)
+      - key: redirect-params-url-encoded
+        text: all redirect query parameters are URL-encoded rather than string-concatenated
     provenance: [OAuthHandler.GoogleCallback, OAuthHandler.TodoistCallback, url.Values.Encode]
     notes: Google's callback additionally runs email/gchat sync reconciliation post-exchange (SET-013); those steps are non-fatal and do not change the redirect outcome.
 
@@ -76,10 +87,14 @@ behaviors:
     given: a request to an API-key-protected route
     when: the API key is checked
     then:
-      - the key is read from an X-API-Key header, falling back to an Authorization header of the form ApiKey <key>
-      - a missing key is rejected with 401 and a missing-key error code
-      - a key that does not match the configured key is rejected with 401 and an invalid-key error code
-      - a matching key allows the request to proceed
+      - key: key-read-from-api-key-header
+        text: the key is read from an X-API-Key header, falling back to an Authorization header of the form ApiKey <key>
+      - key: missing-key-rejected-401
+        text: a missing key is rejected with 401 and a missing-key error code
+      - key: key-does-not-match
+        text: a key that does not match the configured key is rejected with 401 and an invalid-key error code
+      - key: matching-key-allows-request
+        text: a matching key allows the request to proceed
     provenance: [auth.APIKeyMiddleware]
 
   - id: SET-007
@@ -101,10 +116,14 @@ behaviors:
     given: a request to one of a provider's connected-account management routes (list, status read, or revoke)
     when: the request is handled
     then:
-      - listing returns an array of connected accounts (200)
-      - a malformed account id returns a validation error (400)
-      - an unknown account id returns not-found (404)
-      - a successful status read returns the account (200) and a successful revoke returns a confirmation (200)
+      - key: listing-returns-array-connected
+        text: listing returns an array of connected accounts (200)
+      - key: malformed-account-id
+        text: a malformed account id returns a validation error (400)
+      - key: unknown-account-id
+        text: an unknown account id returns not-found (404)
+      - key: status-and-revoke-return-200
+        text: a successful status read returns the account (200) and a successful revoke returns a confirmation (200)
     provenance: [OAuthHandler.ListGoogleAccounts, OAuthHandler.GetGoogleAccountStatus, OAuthHandler.RevokeGoogleAccount, OAuthHandler Todoist counterparts]
 
   - id: SET-009
@@ -230,9 +249,12 @@ behaviors:
     given: a connected Todoist account
     when: the available projects or labels are requested
     then:
-      - with no account connected the request returns not-found (404)
-      - the live provider is queried and deleted entries are filtered out of the result
-      - a token or provider-API failure surfaces as a server error (500)
+      - key: no-account-connected-404
+        text: with no account connected the request returns not-found (404)
+      - key: deleted-entries-filtered-out
+        text: the live provider is queried and deleted entries are filtered out of the result
+      - key: token-provider-api-failure
+        text: a token or provider-API failure surfaces as a server error (500)
     provenance: [TodoistHandler.ListProjects, TodoistHandler.ListLabels]
 
   # --- Settings surfaces (Track B) ---
@@ -245,9 +267,12 @@ behaviors:
     given: the settings page
     when: it renders
     then:
-      - each supported provider has its own section showing whether an account is connected
-      - a connected account shows its identity and when it was connected
-      - each section offers a way to connect an account and to disconnect a connected one
+      - key: each-provider-section-shows-state
+        text: each supported provider has its own section showing whether an account is connected
+      - key: connected-account-shows-identity
+        text: a connected account shows its identity and when it was connected
+      - key: section-offers-connect-disconnect
+        text: each section offers a way to connect an account and to disconnect a connected one
     provenance: [settings/page.tsx, google-accounts-section.tsx, todoist-accounts-section.tsx]
 
   - id: SET-020
@@ -258,7 +283,8 @@ behaviors:
     given: a provider section with a connect affordance
     when: the user starts connecting
     then:
-      - the app fetches the provider authorization URL and navigates the whole page to the provider's consent screen
+      - key: app-fetches-provider-authorization
+        text: the app fetches the provider authorization URL and navigates the whole page to the provider's consent screen
     provenance: [startGoogleOAuthFlow, startTodoistOAuthFlow, oauth-api.ts]
 
   - id: SET-021
@@ -269,9 +295,12 @@ behaviors:
     given: a redirect back to the settings surface carrying a connect outcome
     when: the settings page mounts
     then:
-      - a success outcome shows a success indication and refreshes the account list
-      - an error outcome shows the failure reason to the user
-      - the one-time outcome parameters are stripped from the URL so a refresh does not re-trigger the notification
+      - key: success-outcome-shows-success
+        text: a success outcome shows a success indication and refreshes the account list
+      - key: error-outcome-shows-failure
+        text: an error outcome shows the failure reason to the user
+      - key: one-time-outcome-parameters
+        text: the one-time outcome parameters are stripped from the URL so a refresh does not re-trigger the notification
     provenance: [google-accounts-section.tsx auth-param effect, todoist-accounts-section.tsx, .ai/rules/core.md one-time action gotcha]
 
   - id: SET-022
@@ -282,9 +311,12 @@ behaviors:
     given: a connected provider account
     when: the user asks to disconnect it
     then:
-      - a confirmation prompt identifies the account and warns what access is revoked
-      - only on confirmation is the account revoked
-      - the outcome is reported and the account list reflects the removal
+      - key: confirmation-identifies-account
+        text: a confirmation prompt identifies the account and warns what access is revoked
+      - key: only-confirmation-account-revoked
+        text: only on confirmation is the account revoked
+      - key: outcome-reported-account-list
+        text: the outcome is reported and the account list reflects the removal
     provenance: [google-accounts-section.tsx handleDisconnect, todoist-accounts-section.tsx handleDisconnect]
 
   - id: SET-023
@@ -295,8 +327,10 @@ behaviors:
     given: a provider whose credentials are not configured or whose account list failed to load
     when: its section renders
     then:
-      - the section shows a not-connected empty state rather than an error stack
-      - the section lists the configuration the deployment must supply to enable the provider
+      - key: section-shows-not-connected
+        text: the section shows a not-connected empty state rather than an error stack
+      - key: lists-required-configuration
+        text: the section lists the configuration the deployment must supply to enable the provider
     provenance: [google-accounts-section.tsx showEmptyState, todoist-accounts-section.tsx, Configuration Required panels]
     notes: Treating a not-configured provider (a 4xx from its routes per SET-005) as an empty state is deliberate — the surface degrades gracefully on a deployment that never set the provider up.
 
@@ -308,8 +342,10 @@ behaviors:
     given: a connected Google account with a stored scope set
     when: its section renders
     then:
-      - a per-source sync affordance appears only when the account holds the scope that source requires
-      - the Google Chat affordance appears only when all of the chat scopes are held; a partial grant shows a reconnect prompt instead
+      - key: per-source-sync-affordance
+        text: a per-source sync affordance appears only when the account holds the scope that source requires
+      - key: google-chat-affordance-appears
+        text: the Google Chat affordance appears only when all of the chat scopes are held; a partial grant shows a reconnect prompt instead
     provenance: [google-accounts-section.tsx accountHasChatScopes/GCHAT_REQUIRED_SCOPES, SyncBadge]
     notes: The badges key off the stored requested-scope list as a proxy, not a live grant check. What each triggered sync source does once run is calendar/contacts/gmail/gchat-domain scope.
 
@@ -321,8 +357,10 @@ behaviors:
     given: a connected account whose sync state is in an auth-related error
     when: its section renders
     then:
-      - a reconnect affordance appears for that account
-      - the prompt is suppressed once the account credential is newer than the failing sync state
+      - key: reconnect-affordance-appears-account
+        text: a reconnect affordance appears for that account
+      - key: prompt-suppressed-once-account
+        text: the prompt is suppressed once the account credential is newer than the failing sync state
     provenance: [use-sync-states.ts accountNeedsReconnection, google-accounts-section.tsx, todoist-accounts-section.tsx]
     notes: The error strings this keys on are produced by the sync providers (calendar/gmail/gchat/todoist domains); settings owns only the reconnect affordance the errored state drives.
 
@@ -334,9 +372,12 @@ behaviors:
     given: a connected Todoist account
     when: the Todoist configuration is shown
     then:
-      - project and label pickers are offered, each populated from the live provider lists
-      - selecting a project or label persists that choice and reports the outcome
-      - the surface indicates that both a project and a label must be chosen before cadence sync is active
+      - key: project-label-pickers-offered
+        text: project and label pickers are offered, each populated from the live provider lists
+      - key: selecting-project-label-persists
+        text: selecting a project or label persists that choice and reports the outcome
+      - key: both-project-and-label-required
+        text: the surface indicates that both a project and a label must be chosen before cadence sync is active
     provenance: [todoist-accounts-section.tsx Sync Configuration, use-todoist-settings.ts]
 
   - id: SET-027
@@ -347,8 +388,10 @@ behaviors:
     given: the settings page
     when: the Telegram section renders
     then:
-      - the section is present on the settings surface
-      - when the Telegram feature is not enabled on the backend, the section shows a not-configured state naming the configuration required to enable it
+      - key: section-present-settings-surface
+        text: the section is present on the settings surface
+      - key: not-configured-state-when-disabled
+        text: when the Telegram feature is not enabled on the backend, the section shows a not-configured state naming the configuration required to enable it
     provenance: [telegram-section.tsx not_configured state, use-telegram.ts status 404 handling]
     notes: The connect / code-verification / two-factor / disconnect flow and group-chat tracking live under this section but are telegram-domain scope; settings owns only that the section renders and its not-configured empty state.
 
@@ -362,9 +405,12 @@ behaviors:
     given: the settings page
     when: the data backup and restore section renders
     then:
-      - an export affordance downloads the user's data as a JSON backup file
-      - an import affordance accepts a backup file to restore from
-      - the surface communicates that import does not yet modify stored data
+      - key: export-affordance-downloads-user
+        text: an export affordance downloads the user's data as a JSON backup file
+      - key: import-affordance-accepts-backup
+        text: an import affordance accepts a backup file to restore from
+      - key: import-not-yet-functional
+        text: the surface communicates that import does not yet modify stored data
     provenance: [settings/page.tsx Data Backup & Restore section, handleExportData, handleImportData]
     notes: Export is live and its HTTP contract is SET-030; it streams the current dataset — contacts only today — as a JSON download, even though the surface copy frames it as a complete backup. The restore path itself is not yet implemented and is recorded as proposed (SET-029).
 
@@ -390,10 +436,14 @@ behaviors:
     given: a request to the data export endpoint
     when: the export is requested
     then:
-      - the response is a JSON attachment (a Content-Disposition download) wrapping an export envelope
-      - the envelope carries a version tag and an export timestamp
-      - the exported dataset contains the contact records only — interactions and notes are not included
-      - a failure to read the contacts returns a server error (500)
+      - key: response-json-attachment-content
+        text: the response is a JSON attachment (a Content-Disposition download) wrapping an export envelope
+      - key: envelope-carries-version-tag
+        text: the envelope carries a version tag and an export timestamp
+      - key: exported-dataset-contacts-only
+        text: the exported dataset contains the contact records only — interactions and notes are not included
+      - key: contacts-read-failure-500
+        text: a failure to read the contacts returns a server error (500)
     provenance: [SystemHandler.ExportData, system_routes.go RegisterDataExchangeRoutes]
     notes: The settings surface (SET-028) frames export as a complete backup, but today the endpoint serializes contacts only; widening the payload to interactions and notes is unbuilt and recorded as proposed (SET-033). The contacts read is bounded by a large fixed limit rather than true pagination.
 
@@ -464,7 +514,9 @@ behaviors:
     given: the settings page
     when: the system information section renders
     then:
-      - a system information section is present on the settings surface
-      - a non-empty application version is shown
+      - key: system-information-section-present
+        text: a system information section is present on the settings surface
+      - key: non-empty-application-version
+        text: a non-empty application version is shown
     provenance: [settings/page.tsx System Information section]
     notes: The version string is build-stamped (NEXT_PUBLIC_BUILD_VERSION, with a dev fallback when unstamped); the backend build stamp is covered separately by TestHealthEndpoint_StampedBuildInfo. Pinning the exact fallback copy is deliberately avoided.
