@@ -506,8 +506,8 @@ func checkWaivers(pf *parsedFile, pb *parsedBehavior, c *collector) {
 // the key names nothing — and the caller must then waive nothing.
 func waiverItemIndex(b *Behavior, w Waiver) (int, bool) {
 	if w.Key == waiverStatementKey {
-		// A statement behavior's single implicit item occupies index 0, the
-		// same slot the legacy index form addressed.
+		// A statement behavior's single implicit item occupies index 0 — the
+		// slot ComputeCoverage's index-keyed waived map reads for it.
 		return 0, b.Statement != ""
 	}
 	for i, it := range b.Then {
