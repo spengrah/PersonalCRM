@@ -930,7 +930,7 @@ behaviors:
         text: the whole request applies in one transaction, or none of it applies
       - key: outcome-not-order-dependent
         text: the outcome does not depend on the order operations appear in the request
-      - key: adding-method-already-exists
+      - key: adding-existing-method-succeeds
         text: adding a method that already exists succeeds without duplicating it
       - key: removing-method-already-absent
         text: removing a method that is already absent succeeds

@@ -75,26 +75,20 @@ func (b *Behavior) ThenTexts() []string {
 // is rejected as a then-item key so the two meanings can never collide.
 const waiverStatementKey = "statement"
 
+// thenKeyCharset is the then-item key charset: lowercase alphanumeric words
+// separated by single hyphens. ONE definition, used to build both the lint
+// pattern (validate.go thenKeyRegex) and the citation grammar's key
+// alternative (coverage.go citationRef) — a key outside it could never be
+// cited, so the two can never be allowed to diverge.
+const thenKeyCharset = `[a-z0-9]+(?:-[a-z0-9]+)*`
+
 // Waiver records the DROP verdict for one then-item of a ui- or api-surface
 // behavior: the item is neither deterministically provable nor worth a judge
 // intent, so the coverage scanner reports it as waived (with the reason)
 // instead of orphaned.
-//
-// A waiver addresses its item by key (the current form) or by 0-based index
-// (the legacy form); Keyed says which. Index and Keyed are TRANSITIONAL — they
-// exist only while the corpus still carries index-form waivers and are removed
-// once it does not.
 type Waiver struct {
 	// Key is a then-item key of the same behavior, or the reserved token
 	// "statement" addressing a statement behavior's single implicit item.
-	// Valid only when Keyed.
-	Key string
-	// Index is the legacy 0-based then-item index. Valid only when !Keyed. It
-	// may legitimately be NEGATIVE — a negative index is a linted violation
-	// (out of range), never a sentinel for "the keyed form is in use". That is
-	// what Keyed is for.
-	Index int
-	// Keyed discriminates which of Key/Index carries the reference.
-	Keyed  bool
+	Key    string
 	Reason string
 }

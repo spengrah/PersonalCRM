@@ -20,16 +20,6 @@ behaviors:
     waivers:
       - then: waived-outcome
         reason: not deterministically provable in the browser
-  - id: ALP-002
-    title: a ui behavior still cited positionally
-    type: ux
-    status: current
-    surface: ui
-    when: the trigger fires
-    then:
-      - the indexed first outcome holds
-      - an indexed outcome inserted at position 1
-      - the indexed second outcome holds
   - id: ALP-003
     title: a statement behavior waived by the reserved token
     type: invariant

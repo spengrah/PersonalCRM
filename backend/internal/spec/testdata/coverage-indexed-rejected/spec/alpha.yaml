@@ -1,0 +1,27 @@
+# A minimal, fully-keyed corpus whose single citation uses the RETIRED
+# positional form. Two properties are load-bearing:
+#
+#   surface: api — the marker lives in a Go test, and coverage credit is keyed
+#   on surface. A Go cite of a `ui` behavior grants no coverage even when it is
+#   valid, so on a ui behavior the resulting orphan would be evidence of
+#   nothing. On an api behavior the orphan is a true consequence of the
+#   rejection.
+#
+#   no `settled:` key — the rejected citation orphans the item it used to
+#   cover, and in a domain that lists `api` in settled that orphan would
+#   independently block, so exit 1 would no longer be attributable to the
+#   retired form. (An explicit `settled: []` is itself a lint violation, so the
+#   key is omitted entirely.)
+domain: alpha
+prefix: ALP
+maturity: reviewed
+behaviors:
+  - id: ALP-001
+    title: a keyed api behavior cited positionally
+    type: api
+    status: current
+    surface: api
+    when: the request is validated
+    then:
+      - key: rejects-bad-input
+        text: an invalid request is rejected with a validation error (400)

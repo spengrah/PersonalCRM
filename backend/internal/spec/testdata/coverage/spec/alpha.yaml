@@ -9,10 +9,12 @@ behaviors:
     surface: ui
     when: the list changes
     then:
-      - the list refreshes
-      - refocusing re-checks freshness
+      - key: list-refreshes
+        text: the list refreshes
+      - key: refocus-rechecks-freshness
+        text: refocusing re-checks freshness
     waivers:
-      - then: 1
+      - then: refocus-rechecks-freshness
         reason: focus-driven freshness is not deterministically provable
   - id: ALP-002
     title: a bare E2E citation covers every then item
@@ -71,9 +73,10 @@ behaviors:
     surface: ui
     when: x
     then:
-      - y
+      - key: stale-waiver-item
+        text: y
     waivers:
-      - then: 0
+      - then: stale-waiver-item
         reason: was thought unprovable
   - id: ALP-010
     title: a waived ui invariant has one implicit waivable item
@@ -82,7 +85,7 @@ behaviors:
     surface: ui
     statement: no surface ever renders a soft-deleted row
     waivers:
-      - then: 0
+      - then: statement
         reason: a universally-quantified absence is not provable by one browser test
   - id: ALP-011
     title: a bare Go citation covers every api then item
@@ -108,9 +111,10 @@ behaviors:
     surface: api
     when: the endpoint streams a large export
     then:
-      - the body is chunked
+      - key: body-is-chunked
+        text: the body is chunked
     waivers:
-      - then: 0
+      - then: body-is-chunked
         reason: streaming chunk boundaries are not deterministically assertable
   - id: ALP-014
     title: an api invariant is covered by a bare Go cite
@@ -119,22 +123,23 @@ behaviors:
     surface: api
     statement: every list endpoint filters soft-deleted rows
   - id: ALP-015
-    title: an indexed Go citation covers only that api then item
+    title: a keyed Go citation covers only that api then item
     type: api
     status: current
     surface: api
     when: the endpoint validates the payload
     then:
       - a missing field yields a 400
-      - the error body names the field
+      - key: error-body-names-field
+        text: the error body names the field
   - id: ALP-016
-    title: an api invariant can be waived at index 0
+    title: an api invariant can be waived by the reserved statement token
     type: invariant
     status: current
     surface: api
     statement: every endpoint enforces the api key
     waivers:
-      - then: 0
+      - then: statement
         reason: blanket auth enforcement is owned by middleware tests, not per-endpoint
   - id: ALP-017
     title: a waived api item that is also cited is a stale waiver
@@ -143,9 +148,10 @@ behaviors:
     surface: api
     when: the endpoint returns a conflict
     then:
-      - a 409 names the conflicting row
+      - key: conflict-409-named
+        text: a 409 names the conflicting row
     waivers:
-      - then: 0
+      - then: conflict-409-named
         reason: was thought unassertable
   - id: ALP-018
     title: a none-surface behavior mints no coverage item

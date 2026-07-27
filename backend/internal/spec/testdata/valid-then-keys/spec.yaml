@@ -27,16 +27,3 @@ behaviors:
     waivers:
       - then: statement
         reason: structural, enforced by the query layer rather than observable
-  - id: KEY-003
-    title: a behavior whose waiver still uses the legacy index form
-    type: api
-    status: current
-    surface: api
-    when: the request is validated
-    then:
-      - key: rejects-bad-input
-        text: an invalid request is rejected with a validation error (400)
-      - the legacy-waived outcome
-    waivers:
-      - then: 1
-        reason: the legacy index form is still accepted

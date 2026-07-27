@@ -559,7 +559,7 @@ func TestMethodOps_MixedOperationOrderYieldsIdenticalCompleteState(t *testing.T)
 
 // --- CON-062[3][4]: idempotency --------------------------------------------
 
-// spec: CON-062.adding-method-already-exists
+// spec: CON-062.adding-existing-method-succeeds
 func TestMethodOps_DuplicateAddIsNoOp(t *testing.T) {
 	t.Parallel()
 	f := newMethodOpsFx(t)

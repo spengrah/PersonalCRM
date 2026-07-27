@@ -8,5 +8,5 @@ behaviors:
     status: current
     statement: the dashboard tells the user who to reach out to
     waivers:
-      - then: 0
+      - then: statement
         reason: not provable

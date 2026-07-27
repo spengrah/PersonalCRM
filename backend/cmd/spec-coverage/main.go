@@ -14,10 +14,15 @@
 //
 // Exit codes:
 //
-//	0 — no invalid citations; orphans (if any) are warnings only
-//	1 — invalid citations found (dead IDs, bad indexes, intent/proposed/
-//	    retired cites, malformed markers) — always fatal — or orphaned
-//	    then-items on a surface that a domain lists in its settled: [...] list
+//	0 — no invalid citations, and no orphan on a settled surface. Orphans on
+//	    an UNSETTLED surface warn without failing; since every domain
+//	    currently declares settled: [ui, api], today that means exit 0
+//	    implies zero orphans
+//	1 — invalid citations found (dead IDs, a key the behavior does not carry,
+//	    the retired positional ID[n] form, a keyed cite of a statement
+//	    behavior, the reserved @ suffix, intent/proposed/retired cites,
+//	    malformed markers) — always fatal — or orphaned then-items on a
+//	    surface that a domain lists in its settled: [...] list
 //	2 — operational error (bad usage, unreadable tree, corpus lint failure)
 package main
 
@@ -50,8 +55,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	e2eDir := filepath.Join(root, "frontend", "tests", "e2e")
 
 	// Coverage semantics depend on a schema-valid corpus (surface tags,
-	// waiver indexes), so a corpus that does not lint clean is an operational
-	// error here — spec-lint owns reporting the violations.
+	// then-item keys, waiver keys resolving to them), so a corpus that does
+	// not lint clean is an operational error here — spec-lint owns reporting
+	// the violations.
 	files, lintViol, err := spec.Lint(specDir)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "spec-coverage: %v\n", err)

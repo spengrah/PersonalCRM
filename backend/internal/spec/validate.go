@@ -57,7 +57,7 @@ const (
 	orderServesType       = 28 // serves only on ux/intent behaviors
 	orderServesResolve    = 29 // serves targets resolve to intent behaviors
 	orderSurface          = 30 // surface enum + required for non-intent non-retired + forbidden on intent
-	orderWaivers          = 31 // waivers only on ui- or api-surface; index in range; no dups; reason non-empty
+	orderWaivers          = 31 // waivers only on ui- or api-surface; key resolves; no dups; reason non-empty
 	// orderThenKeys is APPENDED rather than slotted next to orderListItems so
 	// the 20-31 ranks (and the report-order assertions that pin them) do not
 	// renumber. Consequence: a bad or duplicated then-item key sorts AFTER the
@@ -87,11 +87,11 @@ func idRegex(prefix string) *regexp.Regexp {
 // can parse back out of a // spec: marker — keep the two in lockstep.
 var prefixRegex = regexp.MustCompile(`^[A-Z][A-Z0-9]*$`)
 
-// thenKeyRegex is the then-item key charset: lowercase alphanumeric words
-// separated by single hyphens. It must stay in lockstep with the key
-// alternative of coverage.go's citationRef — a key outside it could never be
-// cited.
-var thenKeyRegex = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+// thenKeyRegex is the lint pattern for a then-item key. It is BUILT from
+// thenKeyCharset (spec.go), the one definition it shares with the key
+// alternative of coverage.go's citationRef — a key outside that charset could
+// never be cited, so the two can never be allowed to diverge.
+var thenKeyRegex = regexp.MustCompile(`^` + thenKeyCharset + `$`)
 
 // Lint parses and validates the spec corpus in dir, returning the parsed files,
 // every violation (parse/structural + semantic + cross-file) in deterministic
@@ -416,14 +416,14 @@ func checkThenKeys(pf *parsedFile, pb *parsedBehavior, c *collector) {
 }
 
 // checkWaivers enforces waiver semantics: waivers may appear only on ui- or
-// api-surface behaviors (never on none, never on intents), every waived
-// reference must resolve to an item of this behavior (a key that names one, or
-// an index in range), references must be unique, and every reason must be
+// api-surface behaviors (never on none, never on intents), every waived key
+// must name a then item of this behavior (or be the reserved "statement" token
+// on a statement behavior), keys must be unique, and every reason must be
 // non-empty. Placement is decidable only when the fields it depends on (type,
 // surface) parsed clean; resolution needs a clean then list.
 //
-// Duplicate detection keys on the RESOLVED index, so a key-form waiver and an
-// index-form waiver naming the same item are one duplicate, not two waivers.
+// There is no range check: a waiver names an item by key, and a key that
+// resolves names an item that exists. "In range" is not a concept here.
 func checkWaivers(pf *parsedFile, pb *parsedBehavior, c *collector) {
 	if !pb.keys["waivers"] || pb.broken["waivers"] || len(pb.b.Waivers) == 0 {
 		return
@@ -454,74 +454,60 @@ func checkWaivers(pf *parsedFile, pb *parsedBehavior, c *collector) {
 	// item, addressed as index 0.
 	statement := typeClean && statementTypes[pb.b.Type]
 
-	seen := map[int]bool{}
+	seen := map[string]bool{}
 	for i, w := range pb.b.Waivers {
 		if w.Reason == "" {
 			c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref, "waiver reason must be non-empty")
 		}
-		if w.Keyed {
-			// A key that names nothing is the root cause — reporting it and
-			// stopping keeps one finding per bad reference.
-			switch {
-			case statement:
-				if w.Key != waiverStatementKey {
-					c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
-						fmt.Sprintf("waiver then %q is not valid for a statement behavior (use the reserved key %q)", w.Key, waiverStatementKey))
-					continue
-				}
-			case pb.broken["then"]:
-				continue // the then list never parsed; a key cannot be resolved
-			case w.Key == waiverStatementKey:
-				// The mirror of the case above, and it needs its own message:
-				// "statement" is reserved rather than merely absent, so the
-				// generic unknown-key wording would send the author looking for
-				// a then item they never meant to name.
-				c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
-					fmt.Sprintf("waiver then %q is reserved for statement behaviors; waive a then item of this behavior by its key", waiverStatementKey))
-				continue
-			default:
-				if _, ok := resolveWaiverIndex(pb.b, w); !ok {
-					c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
-						fmt.Sprintf("waiver then %q names no then-item key of this behavior", w.Key))
-					continue
-				}
-			}
-		}
-		idx, _ := resolveWaiverIndex(pb.b, w)
-		if seen[idx] {
-			c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
-				fmt.Sprintf("duplicate waiver for then item %d", idx))
-		}
-		seen[idx] = true
-		if w.Keyed {
-			continue // a resolved key is in range by construction
-		}
+		// A key that names nothing is the root cause — reporting it and
+		// stopping keeps one finding per bad reference.
 		switch {
 		case statement:
-			if idx != 0 {
+			if w.Key != waiverStatementKey {
 				c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
-					fmt.Sprintf("waiver then index %d out of range (a statement behavior has one implicit item, index 0)", idx))
+					fmt.Sprintf("waiver then %q is not valid for a statement behavior (use the reserved key %q)", w.Key, waiverStatementKey))
+				continue
 			}
-		case !pb.broken["then"] && (idx < 0 || idx >= len(pb.b.Then)):
+		case pb.broken["then"]:
+			continue // the then list never parsed; a key cannot be resolved
+		case w.Key == waiverStatementKey:
+			// The mirror of the case above, and it needs its own message:
+			// "statement" is reserved rather than merely absent, so the
+			// generic unknown-key wording would send the author looking for
+			// a then item they never meant to name.
 			c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
-				fmt.Sprintf("waiver then index %d out of range (behavior has %d then items)", idx, len(pb.b.Then)))
+				fmt.Sprintf("waiver then %q is reserved for statement behaviors; waive a then item of this behavior by its key", waiverStatementKey))
+			continue
+		default:
+			if _, ok := waiverItemIndex(pb.b, w); !ok {
+				c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
+					fmt.Sprintf("waiver then %q names no then-item key of this behavior", w.Key))
+				continue
+			}
 		}
+		// Duplicates key on the KEY, not on a resolved index: with only the key
+		// form left, reporting "then item 1" against a line the author wrote as
+		// `- then: some-key` would be positional leakage in an author-facing
+		// message. Keys are unique within a behavior by lint, so key and item
+		// are in bijection over everything that resolves.
+		if seen[w.Key] {
+			c.add(pf, orderWaivers, pb.idx, waiverLine(i), pb.ref,
+				fmt.Sprintf("duplicate waiver for then item %q", w.Key))
+		}
+		seen[w.Key] = true
 	}
 }
 
-// resolveWaiverIndex resolves a waiver's reference to a 0-based then-item
-// index. It reports ok=false only for a keyed waiver whose key names nothing:
-// the reserved "statement" token on a behavior that has no statement, or a key
-// that matches no then item. The legacy index form always resolves to itself —
-// whether the index is IN RANGE is checkWaivers' job, not this function's, so
-// a negative or past-the-end index still comes back ok.
-func resolveWaiverIndex(b *Behavior, w Waiver) (int, bool) {
-	if !w.Keyed {
-		return w.Index, true
-	}
+// waiverItemIndex finds the then item a waiver names, returning its 0-based
+// index. Two references resolve: the reserved "statement" token, which
+// addresses a statement behavior's single implicit item at index 0 and is ok
+// only on a behavior that actually has a statement; and a key matching one of
+// the behavior's keyed then items. It reports ok=false for exactly one thing —
+// the key names nothing — and the caller must then waive nothing.
+func waiverItemIndex(b *Behavior, w Waiver) (int, bool) {
 	if w.Key == waiverStatementKey {
-		// A statement behavior's single implicit item occupies index 0, the
-		// same slot the legacy index form addressed.
+		// A statement behavior's single implicit item occupies index 0 — the
+		// slot ComputeCoverage's index-keyed waived map reads for it.
 		return 0, b.Statement != ""
 	}
 	for i, it := range b.Then {

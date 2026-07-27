@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -17,10 +16,18 @@ import (
 // coverage keyed on surface — ui behaviors via E2E citations, api behaviors
 // via Go-test citations. The CLI wrapper lives in cmd/spec-coverage.
 
-// refString renders a reference as written in a marker: ID.key when the item
-// carries a key, the bare ID for then < 0, else ID[n]. The key wins because it
-// is the stable handle — the index is only how the same item was addressed
-// before it had one.
+// refString renders a coverage item's reference: ID.key when the item carries a
+// key, the bare ID for then < 0 (a statement behavior's implicit item), else
+// ID[n].
+//
+// Having a key and being cited are INDEPENDENT: a key is minted once and never
+// withdrawn, so an item whose citation was deleted or left dangling is orphaned
+// while still rendering as ID.key — and that reference is a citable handle an
+// author can paste straight back into a marker. Only an item that has never
+// been cited or waived falls through to ID[n], which is a LOCATION rather than
+// a handle: the positional form is no longer accepted in a // spec: marker, so
+// that author mints the key first (see the authoring recipe in
+// spec/README.md).
 func refString(id string, then int, key string) string {
 	switch {
 	case key != "":
@@ -37,13 +44,18 @@ type Citation struct {
 	Path string
 	Line int
 	ID   string
-	Key  string // then-item key; empty for a bare or indexed citation
-	Then int    // 0-based then-item index; -1 = bare (whole-behavior) or keyed citation
+	Key  string // then-item key; empty for a bare (whole-behavior) citation
 	E2E  bool   // from a Playwright E2E spec; E2E cites credit ui, Go cites credit api
 }
 
-// Ref renders the citation reference as written (ID, ID.key, or ID[n]).
-func (c Citation) Ref() string { return refString(c.ID, c.Then, c.Key) }
+// Ref renders the citation reference as written (ID or ID.key). A citation
+// carries a key or it is bare — there is no third form.
+func (c Citation) Ref() string {
+	if c.Key == "" {
+		return c.ID
+	}
+	return c.ID + "." + c.Key
+}
 
 // Item coverage states.
 const (
@@ -66,9 +78,10 @@ type ItemCoverage struct {
 }
 
 // Ref renders the item as ID.key when it has a key, ID[n] when it does not, and
-// the bare ID for a statement behavior's implicit item. An uncited item
-// legitimately has no key, so orphan lines keep reading ID[n] — the author mints
-// the key when they write the citing test.
+// the bare ID for a statement behavior's implicit item. Orphan lines therefore
+// read either way: ID.key for an item that carries a key but nothing currently
+// cites, ID[n] for one that has never been referenced at all. See refString for
+// why the difference matters to the author reading the report.
 func (ic ItemCoverage) Ref() string { return refString(ic.ID, ic.Then, ic.Key) }
 
 // DomainCoverage is one domain's slice of the coverage report.
@@ -132,10 +145,16 @@ type Coverage struct {
 // match prose that merely mentions a marker (e.g. "(see `// spec: CON-038`)").
 var citationLine = regexp.MustCompile(`^\s*// spec: (.+?)\s*$`)
 
-// citationRef parses one comma-separated reference: <ID>, <ID>.<then-item-key>,
-// or the legacy <ID>[<then-index>]. The key alternative must stay in lockstep
-// with validate.go's thenKeyRegex.
-var citationRef = regexp.MustCompile(`^([A-Z][A-Z0-9]*-\d+)(?:\[(\d+)\]|\.([a-z0-9]+(?:-[a-z0-9]+)*))?$`)
+// citationRef parses one comma-separated reference: <ID> or
+// <ID>.<then-item-key>. The key alternative is built from thenKeyCharset, the
+// single definition it shares with validate.go's thenKeyRegex.
+var citationRef = regexp.MustCompile(`^([A-Z][A-Z0-9]*-\d+)(?:\.(` + thenKeyCharset + `))?$`)
+
+// legacyIndexedRef RECOGNIZES the retired positional form; it never parses it.
+// It exists only so a stale ID[n] gets a targeted "cite by key" message instead
+// of degrading into the generic malformed one — the same reason the @
+// reservation is checked before the grammar.
+var legacyIndexedRef = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+\[\d+\]$`)
 
 // CollectCitations walks backendDir for *_test.go files and e2eDir for
 // *.spec.ts files, extracting every // spec: marker. Malformed references are
@@ -214,23 +233,22 @@ func scanFile(path string, e2e bool) ([]Citation, []Violation, error) {
 					Msg: fmt.Sprintf("spec citation %q uses the reserved @hash suffix, which is not yet supported", ref)})
 				continue
 			}
+			// The retired positional form is recognized before the grammar so
+			// a stale ID[n] is told what to do instead of being called
+			// malformed — the reference names a real behavior and a real item,
+			// it is only addressed the one way that can silently re-point.
+			if legacyIndexedRef.MatchString(ref) {
+				probs = append(probs, Violation{Path: path, Line: i + 1,
+					Msg: fmt.Sprintf("spec citation %q uses the retired positional form; cite the then-item by key (<ID>.<then-item-key>)", ref)})
+				continue
+			}
 			rm := citationRef.FindStringSubmatch(ref)
 			if rm == nil {
 				probs = append(probs, Violation{Path: path, Line: i + 1,
-					Msg: fmt.Sprintf("malformed spec citation %q (want <ID>, <ID>.<then-item-key>, or <ID>[<then-index>])", ref)})
+					Msg: fmt.Sprintf("malformed spec citation %q (want <ID> or <ID>.<then-item-key>)", ref)})
 				continue
 			}
-			then := -1
-			if rm[2] != "" {
-				n, err := strconv.Atoi(rm[2])
-				if err != nil {
-					probs = append(probs, Violation{Path: path, Line: i + 1,
-						Msg: fmt.Sprintf("malformed spec citation %q (bad then-index)", ref)})
-					continue
-				}
-				then = n
-			}
-			cites = append(cites, Citation{Path: path, Line: i + 1, ID: rm[1], Key: rm[3], Then: then, E2E: e2e})
+			cites = append(cites, Citation{Path: path, Line: i + 1, ID: rm[1], Key: rm[2], E2E: e2e})
 		}
 	}
 	return cites, probs, nil
@@ -266,8 +284,9 @@ func availableKeys(b *Behavior) string {
 // ComputeCoverage validates every citation against the parsed corpus and
 // derives per-then-item coverage for status-current behaviors keyed on
 // surface: ui behaviors are credited by E2E citations, api behaviors by
-// Go-test citations. Invalid citations (unknown ID, out-of-range index, cites
-// of intent / proposed / retired behaviors) land in Problems and never count
+// Go-test citations. Invalid citations (unknown ID, a key the behavior does not
+// carry, a keyed cite of a statement behavior, cites of intent / proposed /
+// retired behaviors) land in Problems and never count
 // toward coverage. citeProblems are CollectCitations' marker-level findings —
 // the same failure class, folded into Problems here so no caller can drop them.
 func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) *Coverage {
@@ -287,17 +306,9 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 	// Validate citations; index the valid ones for the coverage pass, keyed on
 	// harness: E2E cites feed ui coverage, Go cites feed api coverage.
 	e2eBare := map[string]bool{}           // ID cited bare by an E2E spec
-	e2eItem := map[string]map[int]bool{}   // ID -> then indexes cited by E2E specs
 	e2eKey := map[string]map[string]bool{} // ID -> then-item keys cited by E2E specs
 	goBare := map[string]bool{}            // ID cited bare by a Go test
-	goItem := map[string]map[int]bool{}    // ID -> then indexes cited by Go tests
 	goKey := map[string]map[string]bool{}  // ID -> then-item keys cited by Go tests
-	mark := func(m map[string]map[int]bool, id string, n int) {
-		if m[id] == nil {
-			m[id] = map[int]bool{}
-		}
-		m[id][n] = true
-	}
 	markKey := func(m map[string]map[string]bool, id, key string) {
 		if m[id] == nil {
 			m[id] = map[string]bool{}
@@ -326,18 +337,6 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 				Msg: fmt.Sprintf("citation %s names a proposed behavior (a citation asserts the behavior holds today)", c.Ref())})
 			continue
 		}
-		if c.Then >= 0 {
-			if b.Statement != "" {
-				cov.Problems = append(cov.Problems, Violation{Path: c.Path, Line: c.Line,
-					Msg: fmt.Sprintf("citation %s indexes a statement behavior (no then items)", c.Ref())})
-				continue
-			}
-			if c.Then >= len(b.Then) {
-				cov.Problems = append(cov.Problems, Violation{Path: c.Path, Line: c.Line,
-					Msg: fmt.Sprintf("citation %s is out of range (%d then items)", c.Ref(), len(b.Then))})
-				continue
-			}
-		}
 		if c.Key != "" {
 			if b.Statement != "" {
 				cov.Problems = append(cov.Problems, Violation{Path: c.Path, Line: c.Line,
@@ -355,13 +354,10 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 				cov.Warnings = append(cov.Warnings, Violation{Path: c.Path, Line: c.Line,
 					Msg: fmt.Sprintf("E2E citation %s names a %s-surface behavior (should this be surface: ui?)", c.Ref(), b.Surface)})
 			}
-			switch {
-			case c.Key != "":
+			if c.Key != "" {
 				markKey(e2eKey, c.ID, c.Key)
-			case c.Then < 0:
+			} else {
 				e2eBare[c.ID] = true
-			default:
-				mark(e2eItem, c.ID, c.Then)
 			}
 		} else {
 			// Go cites credit api coverage. There is deliberately NO
@@ -369,13 +365,10 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 			// warning): Go tests legitimately cite ui and none behaviors all
 			// over the tree, and the none cites are the future none-coverage
 			// corpus.
-			switch {
-			case c.Key != "":
+			if c.Key != "" {
 				markKey(goKey, c.ID, c.Key)
-			case c.Then < 0:
+			} else {
 				goBare[c.ID] = true
-			default:
-				mark(goItem, c.ID, c.Then)
 			}
 		}
 	}
@@ -415,18 +408,19 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 			}
 			// Coverage credit is keyed on surface: ui behaviors read the E2E
 			// citation maps, api behaviors read the Go-test maps. The two paths
-			// are otherwise identical (bare covers all items, indexed covers
-			// item n, a statement is one implicit item coverable bare).
-			bareMap, itemMap, keyMap, citeKind := e2eBare, e2eItem, e2eKey, "E2E"
+			// are otherwise identical (bare covers all items, a keyed cite
+			// covers the item carrying that key, a statement is one implicit
+			// item coverable bare).
+			bareMap, keyMap, citeKind := e2eBare, e2eKey, "E2E"
 			if b.Surface == "api" {
-				bareMap, itemMap, keyMap, citeKind = goBare, goItem, goKey, "Go"
+				bareMap, keyMap, citeKind = goBare, goKey, "Go"
 			}
-			// Both waiver forms are resolved to an item index here, so the rest
-			// of the pass stays index-keyed and form-agnostic. An unresolvable
-			// keyed waiver waives nothing (spec-lint reports it).
+			// Waivers are resolved to an item index here so the rest of the
+			// pass stays index-keyed. An unresolvable waiver waives nothing
+			// (spec-lint reports it).
 			waived := map[int]string{}
 			for _, w := range b.Waivers {
-				if n, ok := resolveWaiverIndex(b, w); ok {
+				if n, ok := waiverItemIndex(b, w); ok {
 					waived[n] = w.Reason
 				}
 			}
@@ -437,7 +431,7 @@ func ComputeCoverage(files []*File, cites []Citation, citeProblems []Violation) 
 				continue
 			}
 			for n, item := range b.Then {
-				covered := bareMap[b.ID] || itemMap[b.ID][n] || (item.Key != "" && keyMap[b.ID][item.Key])
+				covered := bareMap[b.ID] || (item.Key != "" && keyMap[b.ID][item.Key])
 				dc.Items = append(dc.Items, itemState(f.Path, b.ID, item.Key, n, item.Text, b.Surface, citeKind, covered, waived[n], cov))
 			}
 		}
