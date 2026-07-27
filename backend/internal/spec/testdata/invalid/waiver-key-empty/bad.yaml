@@ -1,0 +1,23 @@
+domain: contacts
+prefix: CON
+maturity: reviewed
+behaviors:
+  # then[1] is deliberately a PLAIN STRING, not a keyed mapping. An all-keyed
+  # behavior would make this fixture non-discriminating: with the it.Key != ""
+  # guard removed from resolveWaiverIndex, an empty waiver key matches the
+  # first item whose key is empty — so the violation only disappears when such
+  # an item exists, and it sits at index 1 to show the waiver would silently
+  # waive an arbitrary item rather than item 0.
+  - id: CON-001
+    title: a waiver whose then is an empty string
+    type: ux
+    status: current
+    surface: ui
+    when: x
+    then:
+      - key: real-key
+        text: y
+      - z
+    waivers:
+      - then: ""
+        reason: r

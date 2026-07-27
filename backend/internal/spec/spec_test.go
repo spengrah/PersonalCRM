@@ -198,6 +198,12 @@ func TestLintViolationClasses(t *testing.T) {
 			"then item text must be a string",
 		}},
 		{"waiver-key-unknown", 1, []string{`waiver then "no-such-key" names no then-item key of this behavior`}},
+		// An empty waiver key resolves to nothing, so it waives nothing. The
+		// fixture's then[1] is a PLAIN STRING on purpose: an unkeyed item
+		// carries an empty key, so without resolveWaiverIndex's it.Key != ""
+		// guard this waiver would match it and silently waive a real
+		// assertion at whatever index the unkeyed item happens to sit.
+		{"waiver-key-empty", 1, []string{`waiver then "" names no then-item key of this behavior`}},
 		// Both directions of misusing the reserved token, each with its own
 		// message — the generic unknown-key wording would misdirect either way.
 		{"waiver-statement-bad-key", 2, []string{

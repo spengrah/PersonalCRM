@@ -547,3 +547,59 @@ func TestCollectCitationsMissingRoot(t *testing.T) {
 		t.Error("missing backend root should return an error")
 	}
 }
+
+// TestComputeCoverage_UnresolvableKeyedWaiverWaivesNothing pins the `ok` guard
+// at coverage.go's waiver loop. It cannot be a CLI test: an unresolvable keyed
+// waiver is a lint violation, and spec-coverage exits before it ever reaches
+// ComputeCoverage — so the only place this behavior is observable is here.
+//
+// Dropping the ok check (`n, _ := resolveWaiverIndex(...)`) makes every
+// unresolvable waiver waive item 0, because that is what the resolver returns
+// alongside ok=false. The behavior below is built so that would be visible:
+// item 0 is orphaned and nothing else is, so a spurious waiver flips exactly
+// one verdict.
+func TestComputeCoverage_UnresolvableKeyedWaiverWaivesNothing(t *testing.T) {
+	files := []*File{{
+		Domain:  "alpha",
+		Prefix:  "ALP",
+		Path:    "spec/alpha.yaml",
+		Settled: []string{"ui"},
+		Behaviors: []Behavior{{
+			ID:      "ALP-001",
+			Title:   "a behavior whose waiver names a key no item carries",
+			Type:    "ux",
+			Status:  "current",
+			Surface: "ui",
+			When:    "x",
+			Then: []ThenItem{
+				{Key: "first", Text: "the first outcome"},
+				{Key: "second", Text: "the second outcome"},
+			},
+			Waivers: []Waiver{{Key: "no-such-key", Keyed: true, Reason: "r"}},
+		}},
+	}}
+
+	cov := ComputeCoverage(files, nil, nil)
+	if len(cov.Domains) != 1 {
+		t.Fatalf("want 1 domain, got %d", len(cov.Domains))
+	}
+	items := cov.Domains[0].Items
+	for _, want := range []struct {
+		ref   string
+		state string
+	}{
+		{"ALP-001.first", ItemOrphan},
+		{"ALP-001.second", ItemOrphan},
+	} {
+		it := findItem(items, want.ref)
+		if it == nil {
+			t.Fatalf("%s missing from the coverage report", want.ref)
+		}
+		if it.State != want.state {
+			t.Errorf("%s is %q, want %q — an unresolvable keyed waiver must waive nothing", want.ref, it.State, want.state)
+		}
+		if it.Reason != "" {
+			t.Errorf("%s carries waiver reason %q, want none", want.ref, it.Reason)
+		}
+	}
+}
