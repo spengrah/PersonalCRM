@@ -1,6 +1,6 @@
 # Behavior Specs — the intended-behavior SSOT
 
-This directory is the single source of truth (SSOT) for the application's intended behavior: durable, DOM-free statements of what the system is supposed to do, independent of how any test or UI currently expresses it. Consumers: deterministic tests (which cite behavior IDs — see [Test → behavior citations](#test--behavior-citations)), the traceability/coverage scanner (`make spec-coverage`), and the Track B agentic QA judge. (An MCP server was planned as a fourth consumer; none reads the corpus today.) Humans read it as the behavior index.
+This directory is the single source of truth (SSOT) for the application's intended behavior: durable, DOM-free statements of what the system is supposed to do, independent of how any test or UI currently expresses it. Consumers: deterministic tests (which cite behavior IDs — see [Test → behavior citations](#test--behavior-citations)), and the traceability/coverage scanner (`make spec-coverage`). The Track B agentic QA judge consumes the corpus *indirectly* — it grades against hand-maintained verbatim transcriptions (`judge/spec-catalog.ts`, `judge/intent-catalog.ts`), and the only judge code that parses `spec/*.yaml` is the offline sync guard `intent-catalog.test.ts`. (An MCP server was planned as a further consumer; none reads the corpus today.) Humans read it as the behavior index.
 
 It is deliberately distinct from `.ai/spec/`, which holds design documents. This directory holds product behavior, one YAML file per domain at `spec/<domain>.yaml`. The `.yaml` extension is required — the linter globs `*.yaml` only (this README, subdirectories, and `.yml` files are ignored).
 
@@ -44,7 +44,7 @@ Maturity semantics (per-file, so the paradigm switches on domain-by-domain):
 
 Field rules:
 
-- **`id`** — `<PREFIX>-NNN` (prefix from the file's `prefix` field; number zero-padded to 3 digits, growing naturally past 999 with no leading zero: `CON-001` … `CON-999`, then `CON-1000`). Monotonically assigned per domain. Never reused, never renumbered; gaps left by retirement are fine.
+- **`id`** — `<PREFIX>-NNN` (prefix from the file's `prefix` field; number zero-padded to 3 digits, growing naturally past 999 with no leading zero: `CON-001` … `CON-999`, then `CON-1000`). Monotonically assigned per domain. Never reused, never renumbered; gaps in the sequence are fine. (Retirement does *not* create one — a retired behavior keeps its row as a tombstone. The corpus's existing gaps are IDs that were drafted and dropped before ever being committed.)
 - **`title`** — one short line naming the durable intent.
 - **`type`** — what kind of consumer cares:
   - `business-logic` — domain rules observable through outcomes (state machines, computations).
@@ -68,7 +68,7 @@ Field rules:
 
 ## ID lifecycle
 
-IDs are monotonically assigned per domain, zero-padded to 3 digits, growing past 999 without a leading zero. Never reused, never renumbered; gaps are fine. There are no `version:`/`updated:` fields — behaviors are edited in place and **git history is the version record** (`git log -p spec/<domain>.yaml` carries author, date, and PR).
+IDs are monotonically assigned per domain, zero-padded to 3 digits, growing past 999 without a leading zero. Never reused, never renumbered; gaps are fine — and, per above, retirement is not what makes them. There are no `version:`/`updated:` fields — behaviors are edited in place and **git history is the version record** (`git log -p spec/<domain>.yaml` carries author, date, and PR).
 
 **Extend-in-place vs retire-and-mint:**
 
@@ -79,7 +79,7 @@ A behavior that moves domains gets a new ID; the old one is retired with a point
 
 ## Domain taxonomy and prefixes
 
-★ marks the exemplar-cycle domains (derived and curated first). All prefixes are reserved now so future files slot in without renaming; non-derived domains may still be split/merged at their own derivation time — a README table edit plus new prefixes, with the retirement rules covering any moves.
+★ marks the exemplar-cycle domains (derived and curated first). **The corpus is complete: all twelve rows have a shipped file at `maturity: reviewed`, and every prefix here is in use — none is held in reserve.** A domain split or merge from here is a README table edit plus new prefixes, with the retirement rules covering any moves.
 
 | Domain | Prefix | Covers |
 |---|---|---|
@@ -114,7 +114,7 @@ Deterministic tests cite the behavior IDs they cover with a source-comment marke
 - **Function level** — the marker sits on the line(s) immediately preceding the test declaration (`func TestXxx`, `test(...)`, `test.describe(...)`), separated from it only by blank or other comment lines. It binds to the whole test.
 - **Subtest level** — the marker is the first statement line(s) inside a `t.Run("name", func(t *testing.T) { ... })` body (or inside a `test(...)` body). It binds to that subtest. Prefer this when only some subtests prove the cited behavior — a function-level marker binds to every subtest, including generic ones that prove no behavior.
 
-**Granularity and cardinality.** E2E tests cite per then-item (`CON-045.placeholder-year-birthdays-no-age`) — the granularity the verifier→E2E migration established — so the coverage scanner can tell which facets of a behavior a test actually proves. A bare behavior-granular citation (`IMP-021`) is also legal and claims the whole behavior (every then-item); it is the norm for the Go API tests and for statement behaviors, which have no then list at all. A keyed citation binds to the item's **identity**, so reordering, inserting, and deleting sibling items cannot re-point it; a citation naming a key the behavior does not carry is a hard failure whose message **enumerates the behavior's available keys** (or says it has none, when the behavior carries no keyed items at all). Cardinality is free N:M: one test may cite several references, and one then-item may be cited by many tests. No uniqueness constraint. (An earlier rule said citations are behavior-granular only; the per-then-item convention supersedes it. An earlier revision addressed items positionally and warned that the scanner could not detect a reorder — that defect is what stable keys closed.)
+**Granularity and cardinality.** E2E tests cite per then-item (`CON-045.placeholder-year-birthdays-no-age`) — the granularity the verifier→E2E migration established — so the coverage scanner can tell which facets of a behavior a test actually proves. A bare behavior-granular citation (`IMP-021`) is also legal and claims the whole behavior (every then-item). **Keyed is the norm on both harnesses** — measured over the shipped tree, E2E citations are 291 keyed / 0 bare, and Go citations of `surface: api` behaviors are 298 keyed / 46 bare (6% bare inside `backend/tests/api/`). Reach for bare when the test really does prove every then-item, and for a statement behavior, which has no then list to key; prefer keyed otherwise, because a bare cite marks facets covered that the test may not actually prove and suppresses the orphan signal for them. A keyed citation binds to the item's **identity**, so reordering, inserting, and deleting sibling items cannot re-point it; a citation naming a key the behavior does not carry is a hard failure whose message **enumerates the behavior's available keys** (or says it has none, when the behavior carries no keyed items at all). Cardinality is free N:M: one test may cite several references, and one then-item may be cited by many tests. No uniqueness constraint. (An earlier rule said citations are behavior-granular only; the per-then-item convention supersedes it. An earlier revision addressed items positionally and warned that the scanner could not detect a reorder — that defect is what stable keys closed.)
 
 ### Citing an item that has no key yet
 

@@ -160,9 +160,9 @@ jobs:
         run: make spec-lint
       # Coverage scanner: citations live in backend tests AND frontend/tests/e2e,
       # so the frontend gate above matters — an E2E-only change can orphan or
-      # dead-reference a behavior. Every domain lists ui in settled, so ui
-      # orphans block; api orphans warn until a domain adds api to its settled
-      # list; invalid citations always block.
+      # dead-reference a behavior. Every domain lists BOTH ui and api in
+      # settled, so an orphan on either surface blocks; invalid citations
+      # always block.
       - name: Run spec coverage scanner
         run: make spec-coverage
       # Ensure origin/develop exists for spec-drift's merge-base. No `|| true`:

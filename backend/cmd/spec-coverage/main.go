@@ -14,7 +14,10 @@
 //
 // Exit codes:
 //
-//	0 — no invalid citations; orphans (if any) are warnings only
+//	0 — no invalid citations, and no orphan on a settled surface. Orphans on
+//	    an UNSETTLED surface warn without failing; since every domain
+//	    currently declares settled: [ui, api], today that means exit 0
+//	    implies zero orphans
 //	1 — invalid citations found (dead IDs, a key the behavior does not carry,
 //	    the retired positional ID[n] form, a keyed cite of a statement
 //	    behavior, the reserved @ suffix, intent/proposed/retired cites,

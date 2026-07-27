@@ -264,8 +264,8 @@ await candidateCard.getByRole('button', { name: /Import/i }).click()
 
 New and deliberately-relaxed tests cite the `spec/*.yaml` behaviors they prove with a line comment. Two reference forms:
 
-- `// spec: <ID>` — claims the **whole behavior** (every then-item). The norm for Go API tests and for statement behaviors, which have no then list.
-- `// spec: <ID>.<then-item-key>` — claims **one then-item**, by its permanent key. The norm for E2E tests.
+- `// spec: <ID>.<then-item-key>` — claims **one then-item**, by its permanent key. **This is the norm on both harnesses**: E2E citations are 291 keyed / 0 bare, and Go citations of `surface: api` behaviors are 298 keyed / 46 bare (6% bare inside `backend/tests/api/`).
+- `// spec: <ID>` — claims the **whole behavior**, every then-item at once. Legal and sometimes right: use it when the test genuinely proves every item, and for a statement behavior, which has no then list to key. Otherwise prefer keyed — a bare cite marks items covered that your test may not prove, and silences the orphan signal that would have asked for them.
 
 The positional `<ID>[n]` form is **retired** and blocks: `spec-coverage` rejects it with a targeted *cite the then-item by key* message. A key binds to the item's identity, so reordering, inserting, or deleting sibling items cannot silently re-point a citation.
 
