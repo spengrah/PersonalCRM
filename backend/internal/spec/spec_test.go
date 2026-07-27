@@ -851,3 +851,58 @@ func joinViolations(viol []Violation) string {
 	}
 	return sb.String()
 }
+
+// TestParser_UnknownThenSubKeyReportsTheSubKeyLine pins WHICH line an unknown
+// then-item sub-key is reported at: the offending sub-key's own line, not the
+// mapping's `- key:` line above it. The message itself is already pinned
+// elsewhere; the reported LINE is what tells the author where to look, and
+// nothing asserted it.
+//
+// The expected line is COMPUTED from the fixture rather than hard-coded: a
+// fixture edit that moved the sub-key would otherwise silently invert this into
+// a tautology (asserting whatever the parser happens to emit).
+func TestParser_UnknownThenSubKeyReportsTheSubKeyLine(t *testing.T) {
+	const path = "testdata/invalid/then-item-bad-shape/bad.yaml"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	// The offending sub-key ("txt:") and the mapping line that opens its item
+	// ("- key:" immediately above), both located in the fixture text.
+	var subKeyLine, mappingLine int
+	for i, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "txt:") {
+			subKeyLine = i + 1
+			mappingLine = i // the `- key: some-key` line directly above
+		}
+	}
+	if subKeyLine == 0 {
+		t.Fatalf("precondition: the fixture must carry a `txt:` sub-key")
+	}
+	if subKeyLine == mappingLine {
+		t.Fatal("precondition: the sub-key and the mapping line must differ, or the assertion proves nothing")
+	}
+
+	_, viol, err := Lint("testdata/invalid/then-item-bad-shape")
+	if err != nil {
+		t.Fatalf("Lint returned error: %v", err)
+	}
+	want := Violation{
+		Path: path,
+		Ref:  "CON-002",
+		Line: subKeyLine,
+		Msg:  `unknown key "txt" in then item mapping (want key, text)`,
+	}
+	found := false
+	for _, v := range viol {
+		if v.Ref == "CON-002" {
+			found = true
+			if v != want {
+				t.Errorf("CON-002 violation = %#v, want %#v (line %d is the mapping's, not the sub-key's)", v, want, mappingLine)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no CON-002 violation in:\n%s", joinViolations(viol))
+	}
+}

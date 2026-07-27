@@ -626,3 +626,56 @@ func TestComputeCoverage_UnresolvableKeyedWaiverWaivesNothing(t *testing.T) {
 		}
 	}
 }
+
+// TestComputeCoverage_StatementTokenWaiverOnGWTBehaviorWaivesNothing pins the
+// ok=false half of waiverItemIndex's statement branch: the reserved "statement"
+// token on a behavior that HAS no statement resolves to nothing, so it waives
+// nothing.
+//
+// It cannot be a CLI test — spec-lint blocks that waiver before spec-coverage
+// ever reaches ComputeCoverage — so a unit test is the only place the behavior
+// is observable. (The ok=true half is already exercised end to end by
+// testdata/coverage-keys' ALP-003 and its CLI golden.)
+//
+// Dropping the b.Statement != "" condition makes the token resolve to index 0
+// on any behavior, silently waiving a real assertion. The fixture is built so
+// that would be visible: both items are orphans, so a spurious waiver flips
+// exactly one verdict.
+func TestComputeCoverage_StatementTokenWaiverOnGWTBehaviorWaivesNothing(t *testing.T) {
+	files := []*File{{
+		Domain: "alpha",
+		Prefix: "ALP",
+		Path:   "spec/alpha.yaml",
+		Behaviors: []Behavior{{
+			ID:      "ALP-001",
+			Title:   "a GWT behavior whose waiver uses the statement token",
+			Type:    "ux",
+			Status:  "current",
+			Surface: "ui",
+			When:    "x",
+			Then: []ThenItem{
+				{Key: "first", Text: "the first outcome"},
+				{Key: "second", Text: "the second outcome"},
+			},
+			Waivers: []Waiver{{Key: waiverStatementKey, Reason: "r"}},
+		}},
+	}}
+
+	cov := ComputeCoverage(files, nil, nil)
+	if len(cov.Domains) != 1 {
+		t.Fatalf("want 1 domain, got %d", len(cov.Domains))
+	}
+	items := cov.Domains[0].Items
+	for _, ref := range []string{"ALP-001.first", "ALP-001.second"} {
+		it := findItem(items, ref)
+		if it == nil {
+			t.Fatalf("%s missing from the coverage report", ref)
+		}
+		if it.State != ItemOrphan {
+			t.Errorf("%s is %q, want %q — the statement token must waive nothing on a GWT behavior", ref, it.State, ItemOrphan)
+		}
+		if it.Reason != "" {
+			t.Errorf("%s carries waiver reason %q, want none", ref, it.Reason)
+		}
+	}
+}
