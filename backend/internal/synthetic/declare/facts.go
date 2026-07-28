@@ -1,0 +1,104 @@
+package declare
+
+import (
+	"os"
+	"sort"
+	"time"
+)
+
+// This file states PRODUCT FACTS locally — deliberate, tripwire-guarded
+// duplicates of the deployed cadence configuration (internal/cadence).
+//
+// The independence rule (arc #759 §1.6): a declaration translates domain terms
+// ("overdue by 3 days on a weekly cadence") into durations WITHOUT calling the
+// app's own cadence math. If GetCadenceDuration regressed (monthly → 300d), a
+// fixture derived from it would stay overdue and hide the regression; a locally
+// stated 30d fixture goes NOT-overdue and the satisfiability test + E2E fail
+// loudly. Non-test code in this package therefore must never import
+// internal/cadence — imports_test.go enforces that recursively, and
+// facts_test.go asserts these tables equal the cadence package's per env so an
+// intentional product change surfaces as a conscious two-sided edit.
+//
+// The CRM_ENV=testing table is NOT ratio-proportional to production (weekly is
+// 2min but monthly is 10min, not 30/7 × 2min), so the full per-env tables are
+// restated rather than one ratio table plus a scale factor.
+
+const day = 24 * time.Hour
+
+// productionPeriods is the real-world cadence table (production + staging).
+var productionPeriods = map[string]time.Duration{
+	"weekly":    7 * day,
+	"biweekly":  14 * day,
+	"monthly":   30 * day,
+	"quarterly": 90 * day,
+	"biannual":  180 * day,
+	"annual":    365 * day,
+}
+
+// testingPeriods is the compressed CRM_ENV=test/testing table (weeks in minutes).
+var testingPeriods = map[string]time.Duration{
+	"weekly":    2 * time.Minute,
+	"biweekly":  4 * time.Minute,
+	"monthly":   10 * time.Minute,
+	"quarterly": 30 * time.Minute,
+	"biannual":  1 * time.Hour,
+	"annual":    2 * time.Hour,
+}
+
+// acceleratedPeriods is the CRM_ENV=accelerated table (months in hours).
+var acceleratedPeriods = map[string]time.Duration{
+	"weekly":    10 * time.Minute,
+	"biweekly":  20 * time.Minute,
+	"monthly":   1 * time.Hour,
+	"quarterly": 3 * time.Hour,
+	"biannual":  6 * time.Hour,
+	"annual":    12 * time.Hour,
+}
+
+// activePeriods selects the table for the ambient environment, using the same
+// CRM_ENV discriminator the deployed cadence configuration uses. Anything
+// unrecognized falls back to production, matching that configuration's own
+// default-for-safety branch.
+func activePeriods() map[string]time.Duration {
+	switch os.Getenv("CRM_ENV") {
+	case "test", "testing":
+		return testingPeriods
+	case "accelerated":
+		return acceleratedPeriods
+	default:
+		return productionPeriods
+	}
+}
+
+// period returns the cadence period for the ambient environment. An unknown
+// cadence returns 0; callers validate the vocabulary at Register time, so a
+// zero here can only mean a programming error downstream of that validation.
+func period(cadence string) time.Duration {
+	return activePeriods()[cadence]
+}
+
+// dayLength is what one "day" is worth in the active table: weekly / 7. It
+// matches the scaled-day arithmetic the overdue-days display uses (2min/7 under
+// CRM_ENV=testing, 10min/7 under accelerated, 24h in production), so
+// `OverdueBy(Days(3))` renders as "3 days overdue" in every environment.
+func dayLength() time.Duration {
+	return activePeriods()["weekly"] / 7
+}
+
+// Cadences is the cadence vocabulary a declaration may use, sorted. It is the
+// validation set for Cadence(...) and the enumeration a satisfiability test can
+// iterate.
+func Cadences() []string {
+	out := make([]string, 0, len(productionPeriods))
+	for name := range productionPeriods {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// knownCadence reports whether name is in the vocabulary.
+func knownCadence(name string) bool {
+	_, ok := productionPeriods[name]
+	return ok
+}
