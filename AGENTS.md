@@ -9,27 +9,7 @@ Target deployment: Raspberry Pi backend, access via Tailscale.
 
 **Stack:** Go 1.24 + Gin + PostgreSQL 16 + sqlc | Next.js 15 + React 19 + TailwindCSS 4 | bun (never npm)
 
-**Structure:**
-```
-backend/internal/{api/handlers, service, repository, db/queries}
-frontend/src/{app, components, hooks}
-```
-
-## Commands
-
-From project root:
-
-```bash
-make setup          # First-time setup (install deps, git hooks)
-make dev            # Start dev server
-make test           # All backend tests
-make test-frontend  # All frontend tests
-make test-e2e       # Playwright E2E (for ci)
-make test-e2e-diff  # Diff-selected E2E (local default)
-make sqlc           # Regenerate from SQL
-make lint           # Run all linters
-make help           # Full command reference
-```
+Run `make help` from project root for the full command reference.
 
 ## Context Discovery
 
