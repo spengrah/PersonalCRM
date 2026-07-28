@@ -1,0 +1,5 @@
+# backend/CLAUDE.md is a symlink (to backend/AGENTS.md); spec-drift's `git archive`
+# of backend/ extracts into a hardened tar reader that rejects non-regular-file
+# entries by design (backend/cmd/spec-drift/main.go). Exclude it from archives —
+# it's never a spec-citing test file, so this has no effect on drift detection.
+backend/CLAUDE.md export-ignore

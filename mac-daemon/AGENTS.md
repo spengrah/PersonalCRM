@@ -4,6 +4,6 @@ Gotchas specific to `mac-daemon/` (Swift). Cross-cutting rules (git practices, c
 
 ## Common Gotchas
 
-| Mistake | Fix |
-|---------|-----|
+| Mistake                                                         | Fix                                                                                                                                                                                                    |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Setting `CI=1` to skip mac-daemon real-system tests in a script | The Swift suite gates real-Keychain/notification tests on `environment["CI"] == "true"` (string `"true"`, NOT `"1"`). Use `CI=true`; `CI=1` leaves those tests running against the real login Keychain |
