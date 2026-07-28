@@ -81,21 +81,8 @@ var saltedNamespace = regexp.MustCompile(`-s\d+$`)
 //	   occupied instead of stranding unreachable residue.
 func CleanupNamespaces(ctx context.Context, database *db.Database, namespaces []string, seed uint64) (CleanupResult, error) {
 	res := CleanupResult{Expansions: map[string][]string{}, Results: map[string]NamespaceCleanup{}}
-	if len(namespaces) == 0 {
-		return res, fmt.Errorf("%w: no namespaces given", ErrInvalidNamespace)
-	}
-	if len(namespaces) > maxCleanupNamespaces {
-		return res, fmt.Errorf("%w: %d namespaces exceeds the limit of %d", ErrInvalidNamespace, len(namespaces), maxCleanupNamespaces)
-	}
-	seen := map[string]bool{}
-	for _, ns := range namespaces {
-		if err := ValidateNamespaceToken(ns); err != nil {
-			return res, err
-		}
-		if seen[ns] {
-			return res, fmt.Errorf("%w: %q appears more than once", ErrInvalidNamespace, ns)
-		}
-		seen[ns] = true
+	if err := ValidateCleanupNamespaces(namespaces); err != nil {
+		return res, err
 	}
 
 	support := repository.NewSyntheticSupportRepository(database.Queries)
@@ -121,6 +108,31 @@ func CleanupNamespaces(ctx context.Context, database *db.Database, namespaces []
 		res.Results[ns] = cleanNamespace(ctx, database, support, ns, seedOrDefault(seed))
 	}
 	return res, nil
+}
+
+// ValidateCleanupNamespaces checks the request bounds WITHOUT touching the
+// database, so a caller can reject at its own boundary. Repeated cleanup must
+// not multiply DB work, hence the size cap and the duplicate rejection; the
+// token grammar is the laxer one, because cleanup legitimately receives
+// EFFECTIVE namespaces that carry a -sN suffix.
+func ValidateCleanupNamespaces(namespaces []string) error {
+	if len(namespaces) == 0 {
+		return fmt.Errorf("%w: no namespaces given", ErrInvalidNamespace)
+	}
+	if len(namespaces) > maxCleanupNamespaces {
+		return fmt.Errorf("%w: %d namespaces exceeds the limit of %d", ErrInvalidNamespace, len(namespaces), maxCleanupNamespaces)
+	}
+	seen := map[string]bool{}
+	for _, ns := range namespaces {
+		if err := ValidateNamespaceToken(ns); err != nil {
+			return err
+		}
+		if seen[ns] {
+			return fmt.Errorf("%w: %q appears more than once", ErrInvalidNamespace, ns)
+		}
+		seen[ns] = true
+	}
+	return nil
 }
 
 // expandNamespace maps a requested token to the set of live worlds it could

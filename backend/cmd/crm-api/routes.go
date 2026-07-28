@@ -237,7 +237,13 @@ func registerRoutes(deps routeDeps) {
 
 			testSeedService := service.NewTestSeedService(database, testExternalRepo, deps.ContactService, testCalendarRepo, deps.MacHostRepo, deps.MeetingNoteRepoForIngest)
 			testLockService := service.NewTestLockService(accelerated.GetCurrentTime)
-			testHandler := handlers.NewTestHandler(testSeedService, testLockService)
+			// The database is passed for the DECLARED seeding path only, which
+			// drives internal/synthetic/declare from the handler with no service
+			// in between: service cannot import synthetic (service → synthetic →
+			// replay → service cycles), and the toolkit writes through the real
+			// services itself, so the layer rule holds one level down. Documented
+			// on the TestHandler type too; do not "fix" it by minting a service.
+			testHandler := handlers.NewTestHandler(testSeedService, testLockService, database)
 			handlers.RegisterTestRoutes(v1, testHandler)
 			logger.Info().Msg("test API endpoints enabled (CRM_ENV=testing)")
 		}

@@ -118,14 +118,26 @@ definitions:
         description: |-
           HostID, when set, also hard-deletes every meeting_note owned by that
           mac_host (seeded session UUIDs are random, so there is no prefix to
-          match on — cleanup is by host instead).
+          match on — cleanup is by host instead). Prefix shape only.
         type: string
+      namespaces:
+        description: |-
+          Namespaces are the REQUESTED namespace tokens the client seeded under.
+          The server expands each to the effective (possibly re-salted) worlds, so
+          a client that never saw a seed response can still clean up.
+        items:
+          type: string
+        maxItems: 32
+        type: array
       prefix:
         maxLength: 50
         minLength: 1
         type: string
-    required:
-    - prefix
+      seed:
+        description: |-
+          Seed must match the seed the namespaces were created with; 0 or absent
+          uses the default.
+        type: integer
     type: object
   handlers.CleanupResponse:
     properties:
@@ -929,6 +941,50 @@ definitions:
           type: string
         type: array
     type: object
+  handlers.SeedDeclaredFailure:
+    properties:
+      cleaned:
+        type: boolean
+      namespace:
+        type: string
+    type: object
+  handlers.SeedDeclaredRequest:
+    properties:
+      behavior_id:
+        description: BehaviorID is a spec behavior id (e.g. "CAD-026").
+        maxLength: 64
+        minLength: 1
+        type: string
+      namespace:
+        description: |-
+          Namespace isolates this fixture's rows. It may not end in the reserved
+          -sN re-salt suffix.
+        maxLength: 60
+        minLength: 1
+        type: string
+      seed:
+        description: Seed overrides the generator seed; 0 or absent uses the default.
+        type: integer
+    required:
+    - behavior_id
+    - namespace
+    type: object
+  handlers.SeedDeclaredResponse:
+    properties:
+      anchor:
+        description: Anchor is the generator anchor the world was built against.
+        type: string
+      entities:
+        additionalProperties:
+          $ref: '#/definitions/handlers.SeededEntityResponse'
+        description: Entities maps declaration handle → created row.
+        type: object
+      namespace:
+        description: |-
+          Namespace is the EFFECTIVE namespace, which may carry a -sN suffix the
+          caller never asked for. Assertions must key off this, never the request.
+        type: string
+    type: object
   handlers.SeedExternalContactInput:
     properties:
       display_name:
@@ -1150,6 +1206,15 @@ definitions:
         items:
           type: string
         type: array
+    type: object
+  handlers.SeededEntityResponse:
+    properties:
+      id:
+        type: string
+      kind:
+        type: string
+      name:
+        type: string
     type: object
   handlers.SelectedMethodInput:
     properties:
@@ -4002,7 +4067,9 @@ paths:
     post:
       consumes:
       - application/json
-      description: Delete test data (contacts and external contacts) by prefix
+      description: Delete test data. Supply EXACTLY ONE of `prefix` (bespoke shape
+        — contacts, external contacts and calendar events by prefix) or `namespaces`
+        (declared shape — per-namespace outcomes, see CleanupNamespacesResponse).
       parameters:
       - description: Cleanup request
         in: body
@@ -4132,6 +4199,63 @@ paths:
                   $ref: '#/definitions/api.APIError'
               type: object
       summary: Seed contacts for testing
+      tags:
+      - test
+  /test/seed/declared:
+    post:
+      consumes:
+      - application/json
+      description: Execute the fixture declared for a spec behavior id in an isolated
+        namespace and return a manifest of what was created. Test-only (CRM_ENV=testing).
+      parameters:
+      - description: Declared seed request
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.SeedDeclaredRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.SeedDeclaredResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "409":
+          description: Conflict
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.SeedDeclaredFailure'
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Seed a spec behavior's declared fixture
       tags:
       - test
   /test/seed/external-contacts:

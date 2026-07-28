@@ -135,17 +135,29 @@ func ValidateRequestedNamespace(namespace string) error {
 // seed created still references its rows — which is what makes the later,
 // stateless cleanup safe to delete by id set.
 func Run(ctx context.Context, database *db.Database, behaviorID, namespace string, seed uint64) (Result, error) {
-	if reason, isNone := IsNone(behaviorID); isNone {
-		return Result{}, fmt.Errorf("%w: %s (%s)", ErrNoFixtureBehavior, behaviorID, reason)
-	}
-	d, ok := Lookup(behaviorID)
-	if !ok {
-		return Result{}, fmt.Errorf("%w: %s (%d declarations registered)", ErrUnknownBehavior, behaviorID, len(Registered()))
-	}
-	if err := ValidateRequestedNamespace(namespace); err != nil {
+	d, err := ValidateSeedRequest(behaviorID, namespace)
+	if err != nil {
 		return Result{}, err
 	}
 	return execute(ctx, database, d, namespace, seedOrDefault(seed))
+}
+
+// ValidateSeedRequest resolves the behavior and checks the namespace grammar
+// WITHOUT touching the database, so a caller can reject a malformed request at
+// its own boundary before doing any wiring-dependent work. Run calls it too, so
+// the two can never disagree about what is valid.
+func ValidateSeedRequest(behaviorID, namespace string) (Declaration, error) {
+	if reason, isNone := IsNone(behaviorID); isNone {
+		return Declaration{}, fmt.Errorf("%w: %s (%s)", ErrNoFixtureBehavior, behaviorID, reason)
+	}
+	d, ok := Lookup(behaviorID)
+	if !ok {
+		return Declaration{}, fmt.Errorf("%w: %s (%d declarations registered)", ErrUnknownBehavior, behaviorID, len(Registered()))
+	}
+	if err := ValidateRequestedNamespace(namespace); err != nil {
+		return Declaration{}, err
+	}
+	return d, nil
 }
 
 // RunDeclarationForTest executes a declaration VALUE rather than a registry

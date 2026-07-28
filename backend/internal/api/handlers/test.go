@@ -7,6 +7,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -18,22 +19,34 @@ import (
 // TestHandler handles test data management endpoints
 // These endpoints are only available when CRM_ENV=testing or CRM_ENV=test
 //
-// The handlers are thin: they parse + validate the HTTP request, map it to a
-// service.TestSeedService input, and encode the result. All synthetic-row
-// construction + persistence lives in the service (handler → service →
-// repository → DB; no queries are called from the handler).
+// Two provisioning paths live here during the migration to declared seeding:
+//
+//   - BESPOKE (the seven /test/seed/* endpoints and the prefix shape of
+//     /test/cleanup): thin handlers that parse + validate, map to a
+//     service.TestSeedService input, and encode the result. All row
+//     construction lives in the service (handler → service → repository → DB).
+//   - DECLARED (/test/seed/declared and the namespaces shape of /test/cleanup,
+//     in test_declared.go): the handler drives internal/synthetic/declare
+//     directly, under a documented layering exception — service cannot import
+//     synthetic without a cycle, and the toolkit itself writes through the real
+//     services and repositories, so the layer rule holds one level down.
+//
+// No handler in either path calls sqlc queries.
 type TestHandler struct {
-	seedSvc   *service.TestSeedService
-	lockSvc   *service.TestLockService
+	seedSvc *service.TestSeedService
+	lockSvc *service.TestLockService
+	// database backs the declared path only (see the layering exception above).
+	database  *db.Database
 	validator *validator.Validate
 }
 
-// NewTestHandler creates a new test handler over the test-seed service and
-// the named-mutex arbiter.
-func NewTestHandler(seedSvc *service.TestSeedService, lockSvc *service.TestLockService) *TestHandler {
+// NewTestHandler creates a new test handler over the test-seed service, the
+// named-mutex arbiter, and the database the declared-seeding path drives.
+func NewTestHandler(seedSvc *service.TestSeedService, lockSvc *service.TestLockService, database *db.Database) *TestHandler {
 	return &TestHandler{
 		seedSvc:   seedSvc,
 		lockSvc:   lockSvc,
+		database:  database,
 		validator: sharedValidator,
 	}
 }
@@ -585,13 +598,27 @@ func parseUUID(s string) (uuid.UUID, error) {
 	return uuid.Parse(s)
 }
 
-// CleanupRequest represents the request to cleanup test data
+// CleanupRequest represents the request to cleanup test data. It is dual-shape
+// during the migration to declared seeding, and the caller must supply EXACTLY
+// ONE of the two:
+//
+//   - prefix  — the bespoke shape: delete rows whose identifying strings carry
+//     the test's prefix. Unchanged behavior.
+//   - namespaces — the declared shape: remove the worlds those requested
+//     namespace tokens resolved to, per-namespace outcomes.
 type CleanupRequest struct {
-	Prefix string `json:"prefix" validate:"required,min=1,max=50"`
+	Prefix string `json:"prefix,omitempty" validate:"omitempty,min=1,max=50"`
 	// HostID, when set, also hard-deletes every meeting_note owned by that
 	// mac_host (seeded session UUIDs are random, so there is no prefix to
-	// match on — cleanup is by host instead).
+	// match on — cleanup is by host instead). Prefix shape only.
 	HostID string `json:"host_id,omitempty" validate:"omitempty,uuid"`
+	// Namespaces are the REQUESTED namespace tokens the client seeded under.
+	// The server expands each to the effective (possibly re-salted) worlds, so
+	// a client that never saw a seed response can still clean up.
+	Namespaces []string `json:"namespaces,omitempty" validate:"omitempty,max=32,dive,min=1,max=60"`
+	// Seed must match the seed the namespaces were created with; 0 or absent
+	// uses the default.
+	Seed uint64 `json:"seed,omitempty"`
 }
 
 // CleanupResponse represents the response from cleanup
@@ -601,9 +628,9 @@ type CleanupResponse struct {
 	DeletedCalendarEvents   int64 `json:"deleted_calendar_events"`
 }
 
-// Cleanup deletes test data by prefix
+// Cleanup deletes test data by prefix or by declared namespace
 // @Summary Cleanup test data
-// @Description Delete test data (contacts and external contacts) by prefix
+// @Description Delete test data. Supply EXACTLY ONE of `prefix` (bespoke shape — contacts, external contacts and calendar events by prefix) or `namespaces` (declared shape — per-namespace outcomes, see CleanupNamespacesResponse).
 // @Tags test
 // @Accept json
 // @Produce json
@@ -623,6 +650,23 @@ func (h *TestHandler) Cleanup(c *gin.Context) {
 
 	if err := h.validator.Struct(req); err != nil {
 		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Validation failed", err.Error())
+		return
+	}
+
+	// Exactly one shape. Accepting both would leave the response ambiguous
+	// (the two shapes report different things); accepting neither would be a
+	// silent no-op that a caller could mistake for a successful cleanup.
+	switch {
+	case len(req.Namespaces) > 0 && req.Prefix != "":
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation,
+			"Supply exactly one of prefix or namespaces", "both were provided")
+		return
+	case len(req.Namespaces) == 0 && req.Prefix == "":
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation,
+			"Supply exactly one of prefix or namespaces", "neither was provided")
+		return
+	case len(req.Namespaces) > 0:
+		h.cleanupNamespaces(c, req.Namespaces, req.Seed)
 		return
 	}
 
