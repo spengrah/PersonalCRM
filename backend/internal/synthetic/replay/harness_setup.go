@@ -315,6 +315,24 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	if err != nil {
 		return nil, nil, fmt.Errorf("seed revoked mac host: %w", err)
 	}
+
+	// From here on the namespace is OCCUPIED: the host row is the marker that
+	// callers use to detect an in-use namespace. A constructor failure past this
+	// point returns no teardown closure (there is no harness yet), so without a
+	// best-effort removal here the marker would claim the namespace forever with
+	// nothing behind it. When the removal itself fails the error is wrapped with
+	// ErrConstructorResidue so the caller can report the residue HONESTLY
+	// instead of assuming either outcome.
+	postHostFailure := func(cause error) (*Harness, func(context.Context) error, error) {
+		if _, delErr := support.DeleteMacHostByID(ctx, macHostID); delErr != nil {
+			return nil, nil, fmt.Errorf("%w: removing the namespaced synthetic host after a constructor failure failed (%v); original failure: %w",
+				ErrConstructorResidue, delErr, cause)
+		}
+		return nil, nil, cause
+	}
+	if fp := constructorFailpoint(); fp == constructorFailpointAfterHost {
+		return postHostFailure(fmt.Errorf("synthetic: constructor failpoint %q fired", fp))
+	}
 	ingestService := service.NewIngestService(
 		database, bus, identityService, messagesRepo, client, externalRepo,
 		nil, // hostLiveness = nil: skips the active-host re-check + dodges the singleton
@@ -329,7 +347,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 
 	// IMPORTANT: pass the OUTER ctx (not a timeout-derived one) to Start.
 	if err := client.Start(ctx); err != nil {
-		return nil, nil, fmt.Errorf("start river client: %w", err)
+		return postHostFailure(fmt.Errorf("start river client: %w", err))
 	}
 
 	h := &Harness{

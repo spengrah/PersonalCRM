@@ -81,6 +81,30 @@ func (h *Harness) Quiesce(ctx context.Context) error {
 	return nil
 }
 
+// SettleBudget is the toolkit's FIXED per-gate real-time wait. Exposed so a
+// caller stating a worst-case residence bound does the arithmetic from the real
+// value instead of copying a number that can drift.
+func SettleBudget() time.Duration { return defaultSettleTimeout }
+
+// TeardownGateBBudget is the FIXED real-time wait teardown gives Gate B before
+// it gives up and leaves the namespaced dataset intact. Exposed for the same
+// reason as SettleBudget.
+func TeardownGateBBudget() time.Duration { return teardownGateBBoundedWait }
+
+// DrainGateB bounded-waits Gate B (this run's River jobs finalizing) to zero
+// and errors loudly if it does not clear. It is teardown's step 2 exposed on
+// its own for the "seed and leave" callers that must be able to PROMISE a
+// quiescent namespace: a successful declared seed guarantees no job it created
+// still references its rows, which is what makes a later stateless, id-set
+// based cleanup safe. Unlike Quiesce it does NOT stop the client, so a caller
+// can drain, act, and drain again.
+func (h *Harness) DrainGateB(ctx context.Context) error {
+	if h.waitTeardownGateB(ctx) {
+		return nil
+	}
+	return fmt.Errorf("synthetic: Gate B did not clear within %s for namespace %q", teardownGateBBoundedWait, h.namespace)
+}
+
 // waitTeardownGateB bounded-waits until Gate B clears for BOTH aggregate sources
 // (messages + gchat). Returns false on timeout. The budget is REAL wall-clock
 // (see defaultSettleTimeout) so it does not collapse under TIME_ACCELERATION.
