@@ -1631,3 +1631,122 @@ func (r *SyntheticSupportRepository) ListOverdueContactIdsByNamePrefix(ctx conte
 	}
 	return out, nil
 }
+
+// --- declared-seeding support (internal/synthetic/declare) -----------------
+//
+// The declared-seed endpoint seeds in one request and cleans up in a LATER one,
+// so the harness's in-memory id ledger is gone by cleanup time. These wrappers
+// back the stateless, namespace-recoverable path: id sets rebuilt from the
+// namespace's own generator-derived tokens, a Gate-B-parity safety gate, and
+// the session advisory locks that serialize concurrent runs.
+//
+// The SELECTs deliberately include soft-deleted rows — see the soft-delete
+// exception documented on the queries themselves.
+
+// SelectContactIDsByFullNamePrefix returns every contact (tombstones included)
+// whose full_name carries the namespace prefix. Caller passes a BARE prefix.
+func (r *SyntheticSupportRepository) SelectContactIDsByFullNamePrefix(ctx context.Context, prefix string) ([]uuid.UUID, error) {
+	rows, err := r.queries.SyntheticSelectContactIdsByFullNamePrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
+// SelectVenueNodeIDsForContacts returns the venue nodes referenced by these
+// contacts' interactions. Must be read BEFORE the interaction delete — that
+// delete removes the only link back to them.
+func (r *SyntheticSupportRepository) SelectVenueNodeIDsForContacts(ctx context.Context, contactIDs []uuid.UUID) ([]uuid.UUID, error) {
+	if len(contactIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := r.queries.SyntheticSelectVenueNodeIdsForContacts(ctx, pgUUIDs(contactIDs))
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
+// DeleteInteractionsByContactIds hard-deletes interactions by contact.
+func (r *SyntheticSupportRepository) DeleteInteractionsByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
+	if len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteInteractionsByContactIds(ctx, pgUUIDs(contactIDs))
+}
+
+// SelectMacHostIDByHostname looks up a synthetic host by EXACT hostname. The
+// bool reports existence; a missing host is not an error (an un-seeded or
+// already-cleaned namespace legitimately has none).
+func (r *SyntheticSupportRepository) SelectMacHostIDByHostname(ctx context.Context, hostname string) (uuid.UUID, bool, error) {
+	row, err := r.queries.SyntheticSelectMacHostIdByHostname(ctx, hostname)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, nil
+		}
+		return uuid.Nil, false, err
+	}
+	if !row.Valid {
+		return uuid.Nil, false, nil
+	}
+	return uuid.UUID(row.Bytes), true, nil
+}
+
+// SelectLiveDescendantHostnames returns hostnames of namespaces nested under
+// this one. Caller passes a BARE 'synth-<ns>-' prefix and filters out the
+// namespace's own salt variants (which are expansion members, not descendants).
+func (r *SyntheticSupportRepository) SelectLiveDescendantHostnames(ctx context.Context, namespacePrefix string) ([]string, error) {
+	return r.queries.SyntheticSelectLiveDescendantHostnames(ctx, pgtype.Text{String: namespacePrefix, Valid: true})
+}
+
+// CountPendingJobsForNamespaceCleanup counts unfinalized River jobs still
+// referencing this namespace, across BOTH Gate-B linkage classes. Zero is the
+// precondition for deleting anything.
+func (r *SyntheticSupportRepository) CountPendingJobsForNamespaceCleanup(ctx context.Context, eventIDs, contactIDs []uuid.UUID) (int64, error) {
+	if len(eventIDs) == 0 && len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountPendingJobsForNamespaceCleanup(ctx, db.SyntheticCountPendingJobsForNamespaceCleanupParams{
+		EventIds:   contactIDStrings(eventIDs),
+		ContactIds: contactIDStrings(contactIDs),
+	})
+}
+
+// TryAdvisoryLock takes a NON-BLOCKING session advisory lock; false means
+// another session holds it. MUST run on a dedicated connection (session locks
+// belong to the connection that took them).
+func (r *SyntheticSupportRepository) TryAdvisoryLock(ctx context.Context, key int64) (bool, error) {
+	return r.queries.SyntheticTryAdvisoryLock(ctx, key)
+}
+
+// AdvisoryLock takes a BLOCKING session advisory lock, bounded by ctx. Same
+// dedicated-connection rule as TryAdvisoryLock.
+func (r *SyntheticSupportRepository) AdvisoryLock(ctx context.Context, key int64) error {
+	return r.queries.SyntheticAdvisoryLock(ctx, key)
+}
+
+// AdvisoryUnlock releases a session advisory lock on the same connection.
+func (r *SyntheticSupportRepository) AdvisoryUnlock(ctx context.Context, key int64) (bool, error) {
+	return r.queries.SyntheticAdvisoryUnlock(ctx, key)
+}
+
+// InsertUnfinalizedRecorderJobForEvent plants an event-linked unfinalized job.
+// Failure-injection fixture for the declared-seeding tests only.
+func (r *SyntheticSupportRepository) InsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID uuid.UUID) (int64, error) {
+	return r.queries.TestInsertUnfinalizedRecorderJobForEvent(ctx, eventID.String())
+}
+
+// InsertUnfinalizedAggregateJobForContact plants a contact-keyed unfinalized
+// aggregate job (the linkage class carrying no event id). Fixture only.
+func (r *SyntheticSupportRepository) InsertUnfinalizedAggregateJobForContact(ctx context.Context, contactID uuid.UUID, source string) (int64, error) {
+	return r.queries.TestInsertUnfinalizedAggregateJobForContact(ctx, db.TestInsertUnfinalizedAggregateJobForContactParams{
+		ContactID: contactID.String(),
+		Source:    source,
+	})
+}
+
+// FinalizeRiverJobByID finalizes a planted job so a "refuses while pending,
+// cleans once safe" test has an explicit safe-state step. Fixture only.
+func (r *SyntheticSupportRepository) FinalizeRiverJobByID(ctx context.Context, id int64) error {
+	return r.queries.TestFinalizeRiverJobByID(ctx, id)
+}

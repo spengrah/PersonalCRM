@@ -1863,6 +1863,15 @@ type Querier interface {
 	// for a broad delete the guard must match the exact clone-name prefix, not a
 	// looser pattern.
 	SweepRiverJobsInCloneForTest(ctx context.Context) (int64, error)
+	// Numeric-band claim: BLOCKING session advisory lock, bounded by the caller's
+	// context deadline. Unlike the namespace reservation, contention here is
+	// legitimate (two DIFFERENT namespaces hashing into the same phone area or
+	// telegram peer band), and serializing them is what makes the toolkit's
+	// detect-and-re-salt sound under concurrency. Same dedicated-connection rule.
+	SyntheticAdvisoryLock(ctx context.Context, lockKey int64) error
+	// Releases a session advisory lock on the SAME connection that took it.
+	// Returns false when the caller did not hold it.
+	SyntheticAdvisoryUnlock(ctx context.Context, lockKey int64) (bool, error)
 	// Assertion-store test support: count the assertions whose subject is a given
 	// node, so a test scopes its assertions to its own namespace's subject node on
 	// the shared test DB.
@@ -1978,6 +1987,14 @@ type Querier interface {
 	// so a test can scope assertions to its own namespace's nodes on the shared test
 	// DB. Caller passes a BARE prefix; '%' is appended here.
 	SyntheticCountNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error)
+	// Cleanup safety gate, at Gate-B parity: unfinalized River jobs that still
+	// dereference this namespace's rows. Two linkage classes, both required —
+	// event-linked jobs (args->>'event_id'), and messaging_aggregate_for_contact
+	// jobs, which key on {contact_id, source} and carry NO event id, so an
+	// event-only predicate would happily delete rows an aggregate job still
+	// references. The aggregate arm is deliberately source-agnostic: a superset of
+	// the two sources teardown checks, erring toward REFUSING to delete.
+	SyntheticCountPendingJobsForNamespaceCleanup(ctx context.Context, arg SyntheticCountPendingJobsForNamespaceCleanupParams) (int64, error)
 	// gcal seeded: the calendar_event for the gcal id has the contact in
 	// matched_contact_ids AND last_contacted_updated=true (the attended interaction
 	// published). Idempotent: a re-replay leaves the row processed.
@@ -2145,6 +2162,9 @@ type Querier interface {
 	// Cleanup step 8 (backstop): catches any ns-prefixed source_id rows the
 	// identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.
 	SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error)
+	// Cleanup ladder: interactions by contact (hard delete — the ledger's by-id
+	// variant is unavailable cross-request). Soft-deleted rows included.
+	SyntheticDeleteInteractionsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
 	// Cleanup step 2: interactions by tracked id.
 	SyntheticDeleteInteractionsByIds(ctx context.Context, interactionIds []pgtype.UUID) (int64, error)
 	// Cleanup step 14: the seeded revoked synthetic mac_host by id.
@@ -2261,6 +2281,50 @@ type Querier interface {
 	// prefix, so they are excluded here — their determinism rides the deterministic peer
 	// band + the run-to-run ProfileResult count equality.) Caller passes a BARE prefix.
 	SyntheticListExternalContactSourceIdsByPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) ([]*SyntheticListExternalContactSourceIdsByPrefixRow, error)
+	// ============================================================================
+	// Declared-seeding support (internal/synthetic/declare) — test-only.
+	//
+	// The declared-seed endpoint executes a fixture in a namespace and a LATER,
+	// SEPARATE request cleans it up, so cleanup cannot use the harness's in-memory
+	// ledger (it died with the request). Every id set is instead recovered from the
+	// DB by the namespace's own generator-derived tokens.
+	//
+	// SOFT-DELETE EXCEPTION, deliberate and confined to these queries: the id-set
+	// SELECTs below do NOT filter `deleted_at IS NULL`. Cleanup must find TOMBSTONES
+	// — an app action under test may soft-delete a seeded contact, and a later PR
+	// seeds soft-deleted contacts on purpose — and a child row is found by its
+	// contact id regardless of the parent's deleted_at. Leaving a tombstone behind
+	// would leak rows that no later run can reach by token.
+	// ============================================================================
+	// Cleanup id-set (step 1): every contact whose full_name carries the namespace
+	// prefix, INCLUDING soft-deleted rows (see the soft-delete exception above).
+	// Caller passes a BARE prefix; '%' is appended here. The namespace charset
+	// excludes the LIKE metacharacters, so the prefix can never over-match.
+	SyntheticSelectContactIdsByFullNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]pgtype.UUID, error)
+	// Cleanup descendant guard: hostnames of any namespace nested UNDER this one
+	// ('synth-<ns>-%-host'). A namespace whose prefix sweep would cross into a live
+	// descendant refuses to clean rather than deleting across it. Note
+	// 'synth-<ns>-host' itself does not match this pattern; the namespace's own
+	// salt variants do and are filtered out by the caller (they are expansion
+	// members, not descendants).
+	SyntheticSelectLiveDescendantHostnames(ctx context.Context, namespacePrefix pgtype.Text) ([]string, error)
+	// Cleanup ladder + namespace occupancy: the namespace's synthetic host, looked
+	// up by EXACT hostname. Deliberately not a prefix match: 'synth-foo-host' used
+	// as a LIKE prefix would also match namespace 'foo-hostile''s
+	// 'synth-foo-hostile-host' and delete another world's marker.
+	SyntheticSelectMacHostIdByHostname(ctx context.Context, hostname string) (pgtype.UUID, error)
+	// Cleanup id-set (step 2): the venue nodes the real recorders minted for this
+	// namespace's interactions. Venue nodes are not contacts and carry an empty
+	// canonical_label, so neither the person-node delete nor the label-prefix sweep
+	// finds them — they must be captured BEFORE the interaction delete removes the
+	// only link. Includes soft-deleted interactions for the same reason as above.
+	SyntheticSelectVenueNodeIdsForContacts(ctx context.Context, contactIds []pgtype.UUID) ([]pgtype.UUID, error)
+	// Namespace reservation (seed + cleanup): NON-BLOCKING session advisory lock.
+	// A held lock means a concurrent run owns the namespace, which is answered
+	// immediately (409 on seed, "busy" on cleanup) rather than queued behind. MUST
+	// be executed on a dedicated pooled connection — session advisory locks belong
+	// to the connection that took them.
+	SyntheticTryAdvisoryLock(ctx context.Context, lockKey int64) (bool, error)
 	// Reset integration test only: count ALL rows in a single table by name. Used by
 	// the clone-DB reset test to assert each wiped table is empty after the reset and
 	// that schema_migrations survives. The table name is validated against the wiped
@@ -2383,6 +2447,10 @@ type Querier interface {
 	// Tag-migration cleanup: hard-delete the legacy tag rows a test seeded, keyed by
 	// the tracked tag ids (scoped to the test's own tags on the shared DB).
 	TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID) (int64, error)
+	// Failure-injection fixture: finalizes a planted job so the "refuses while
+	// pending, cleans once safe" tests have an explicit, honest safe-state step
+	// rather than a hand-wave.
+	TestFinalizeRiverJobByID(ctx context.Context, id int64) error
 	// TEST ONLY. Probe a calendar_event row with FOR UPDATE NOWAIT: returns the
 	// row if no conflicting lock is held, or fails immediately (lock_not_available)
 	// when another tx holds a conflicting lock (e.g. a FOR SHARE from the attended
@@ -2524,6 +2592,15 @@ type Querier interface {
 	// Reset test only: a marker row in telegram_session (the Telegram auth session
 	// the reset wipes). session_data_encrypted + encryption_nonce are NOT NULL bytea.
 	TestInsertTelegramSessionMarker(ctx context.Context) error
+	// Failure-injection fixture: the SECOND Gate-B linkage class — an aggregate job
+	// keyed on {contact_id, source} with NO event id. A cleanup predicate that only
+	// looked at event ids would miss it and delete rows it still dereferences.
+	TestInsertUnfinalizedAggregateJobForContact(ctx context.Context, arg TestInsertUnfinalizedAggregateJobForContactParams) (int64, error)
+	// Failure-injection fixture (declare cleanup tests): plants ONE unfinalized
+	// event-linked river_job so the Gate-B-parity pending check has something real
+	// to refuse on. The generic TestInsertNonFinalRiverJob marker is deliberately
+	// UNLINKED and Gate B does not count it, so it cannot exercise this path.
+	TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID string) (int64, error)
 	// Tour capacity gate: for each live contact in the namespace, return the four
 	// CAD-029 activity flags (outreach / response / pending-followup / none) so the Go
 	// test can compute a maximum bipartite matching and prove the world has FOUR

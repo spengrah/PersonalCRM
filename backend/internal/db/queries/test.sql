@@ -1622,3 +1622,126 @@ WHERE c.full_name LIKE @name_prefix || '%'
   AND c.contact_by IS NOT NULL
   AND c.contact_by < sqlc.arg(today)::date
 ORDER BY c.contact_by ASC;
+
+-- ============================================================================
+-- Declared-seeding support (internal/synthetic/declare) — test-only.
+--
+-- The declared-seed endpoint executes a fixture in a namespace and a LATER,
+-- SEPARATE request cleans it up, so cleanup cannot use the harness's in-memory
+-- ledger (it died with the request). Every id set is instead recovered from the
+-- DB by the namespace's own generator-derived tokens.
+--
+-- SOFT-DELETE EXCEPTION, deliberate and confined to these queries: the id-set
+-- SELECTs below do NOT filter `deleted_at IS NULL`. Cleanup must find TOMBSTONES
+-- — an app action under test may soft-delete a seeded contact, and a later PR
+-- seeds soft-deleted contacts on purpose — and a child row is found by its
+-- contact id regardless of the parent's deleted_at. Leaving a tombstone behind
+-- would leak rows that no later run can reach by token.
+-- ============================================================================
+
+-- name: SyntheticSelectContactIdsByFullNamePrefix :many
+-- Cleanup id-set (step 1): every contact whose full_name carries the namespace
+-- prefix, INCLUDING soft-deleted rows (see the soft-delete exception above).
+-- Caller passes a BARE prefix; '%' is appended here. The namespace charset
+-- excludes the LIKE metacharacters, so the prefix can never over-match.
+SELECT id FROM contact
+WHERE full_name LIKE @name_prefix || '%'
+ORDER BY id;
+
+-- name: SyntheticSelectVenueNodeIdsForContacts :many
+-- Cleanup id-set (step 2): the venue nodes the real recorders minted for this
+-- namespace's interactions. Venue nodes are not contacts and carry an empty
+-- canonical_label, so neither the person-node delete nor the label-prefix sweep
+-- finds them — they must be captured BEFORE the interaction delete removes the
+-- only link. Includes soft-deleted interactions for the same reason as above.
+SELECT DISTINCT venue_id FROM interaction
+WHERE contact_id = ANY(@contact_ids::uuid[])
+  AND venue_id IS NOT NULL;
+
+-- name: SyntheticDeleteInteractionsByContactIds :execrows
+-- Cleanup ladder: interactions by contact (hard delete — the ledger's by-id
+-- variant is unavailable cross-request). Soft-deleted rows included.
+DELETE FROM interaction WHERE contact_id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticSelectMacHostIdByHostname :one
+-- Cleanup ladder + namespace occupancy: the namespace's synthetic host, looked
+-- up by EXACT hostname. Deliberately not a prefix match: 'synth-foo-host' used
+-- as a LIKE prefix would also match namespace 'foo-hostile''s
+-- 'synth-foo-hostile-host' and delete another world's marker.
+SELECT id FROM mac_host WHERE hostname = @hostname;
+
+-- name: SyntheticSelectLiveDescendantHostnames :many
+-- Cleanup descendant guard: hostnames of any namespace nested UNDER this one
+-- ('synth-<ns>-%-host'). A namespace whose prefix sweep would cross into a live
+-- descendant refuses to clean rather than deleting across it. Note
+-- 'synth-<ns>-host' itself does not match this pattern; the namespace's own
+-- salt variants do and are filtered out by the caller (they are expansion
+-- members, not descendants).
+SELECT hostname FROM mac_host
+WHERE hostname LIKE @namespace_prefix || '%-host'
+ORDER BY hostname;
+
+-- name: SyntheticCountPendingJobsForNamespaceCleanup :one
+-- Cleanup safety gate, at Gate-B parity: unfinalized River jobs that still
+-- dereference this namespace's rows. Two linkage classes, both required —
+-- event-linked jobs (args->>'event_id'), and messaging_aggregate_for_contact
+-- jobs, which key on {contact_id, source} and carry NO event id, so an
+-- event-only predicate would happily delete rows an aggregate job still
+-- references. The aggregate arm is deliberately source-agnostic: a superset of
+-- the two sources teardown checks, erring toward REFUSING to delete.
+SELECT COUNT(*) FROM river_job
+WHERE finalized_at IS NULL
+  AND (
+        (args->>'event_id') = ANY(@event_ids::text[])
+     OR (kind = 'messaging_aggregate_for_contact'
+         AND (args->>'contact_id') = ANY(@contact_ids::text[]))
+  );
+
+-- name: SyntheticTryAdvisoryLock :one
+-- Namespace reservation (seed + cleanup): NON-BLOCKING session advisory lock.
+-- A held lock means a concurrent run owns the namespace, which is answered
+-- immediately (409 on seed, "busy" on cleanup) rather than queued behind. MUST
+-- be executed on a dedicated pooled connection — session advisory locks belong
+-- to the connection that took them.
+SELECT pg_try_advisory_lock(@lock_key::bigint);
+
+-- name: SyntheticAdvisoryLock :exec
+-- Numeric-band claim: BLOCKING session advisory lock, bounded by the caller's
+-- context deadline. Unlike the namespace reservation, contention here is
+-- legitimate (two DIFFERENT namespaces hashing into the same phone area or
+-- telegram peer band), and serializing them is what makes the toolkit's
+-- detect-and-re-salt sound under concurrency. Same dedicated-connection rule.
+SELECT pg_advisory_lock(@lock_key::bigint);
+
+-- name: SyntheticAdvisoryUnlock :one
+-- Releases a session advisory lock on the SAME connection that took it.
+-- Returns false when the caller did not hold it.
+SELECT pg_advisory_unlock(@lock_key::bigint);
+
+-- name: TestInsertUnfinalizedRecorderJobForEvent :one
+-- Failure-injection fixture (declare cleanup tests): plants ONE unfinalized
+-- event-linked river_job so the Gate-B-parity pending check has something real
+-- to refuse on. The generic TestInsertNonFinalRiverJob marker is deliberately
+-- UNLINKED and Gate B does not count it, so it cannot exercise this path.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts)
+VALUES ('interaction_recorder', 'default', 'available',
+        jsonb_build_object('event_id', @event_id::text), '{}'::jsonb, 1, 1)
+RETURNING id;
+
+-- name: TestInsertUnfinalizedAggregateJobForContact :one
+-- Failure-injection fixture: the SECOND Gate-B linkage class — an aggregate job
+-- keyed on {contact_id, source} with NO event id. A cleanup predicate that only
+-- looked at event ids would miss it and delete rows it still dereferences.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts)
+VALUES ('messaging_aggregate_for_contact', 'default', 'available',
+        jsonb_build_object('contact_id', @contact_id::text, 'source', @source::text),
+        '{}'::jsonb, 1, 1)
+RETURNING id;
+
+-- name: TestFinalizeRiverJobByID :exec
+-- Failure-injection fixture: finalizes a planted job so the "refuses while
+-- pending, cleans once safe" tests have an explicit, honest safe-state step
+-- rather than a hand-wave.
+UPDATE river_job
+SET state = 'completed'::river_job_state, finalized_at = NOW()
+WHERE id = @id;

@@ -947,6 +947,33 @@ func (q *Queries) SweepRiverJobsInCloneForTest(ctx context.Context) (int64, erro
 	return result.RowsAffected(), nil
 }
 
+const SyntheticAdvisoryLock = `-- name: SyntheticAdvisoryLock :exec
+SELECT pg_advisory_lock($1::bigint)
+`
+
+// Numeric-band claim: BLOCKING session advisory lock, bounded by the caller's
+// context deadline. Unlike the namespace reservation, contention here is
+// legitimate (two DIFFERENT namespaces hashing into the same phone area or
+// telegram peer band), and serializing them is what makes the toolkit's
+// detect-and-re-salt sound under concurrency. Same dedicated-connection rule.
+func (q *Queries) SyntheticAdvisoryLock(ctx context.Context, lockKey int64) error {
+	_, err := q.db.Exec(ctx, SyntheticAdvisoryLock, lockKey)
+	return err
+}
+
+const SyntheticAdvisoryUnlock = `-- name: SyntheticAdvisoryUnlock :one
+SELECT pg_advisory_unlock($1::bigint)
+`
+
+// Releases a session advisory lock on the SAME connection that took it.
+// Returns false when the caller did not hold it.
+func (q *Queries) SyntheticAdvisoryUnlock(ctx context.Context, lockKey int64) (bool, error) {
+	row := q.db.QueryRow(ctx, SyntheticAdvisoryUnlock, lockKey)
+	var pg_advisory_unlock bool
+	err := row.Scan(&pg_advisory_unlock)
+	return pg_advisory_unlock, err
+}
+
 const SyntheticCountAssertionsForSubject = `-- name: SyntheticCountAssertionsForSubject :one
 SELECT COUNT(*) FROM assertion WHERE subject_node_id = $1
 `
@@ -1314,6 +1341,35 @@ SELECT COUNT(*) FROM node WHERE canonical_label LIKE $1 || '%'
 // DB. Caller passes a BARE prefix; '%' is appended here.
 func (q *Queries) SyntheticCountNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountNodesByLabelPrefix, labelPrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountPendingJobsForNamespaceCleanup = `-- name: SyntheticCountPendingJobsForNamespaceCleanup :one
+SELECT COUNT(*) FROM river_job
+WHERE finalized_at IS NULL
+  AND (
+        (args->>'event_id') = ANY($1::text[])
+     OR (kind = 'messaging_aggregate_for_contact'
+         AND (args->>'contact_id') = ANY($2::text[]))
+  )
+`
+
+type SyntheticCountPendingJobsForNamespaceCleanupParams struct {
+	EventIds   []string `json:"event_ids"`
+	ContactIds []string `json:"contact_ids"`
+}
+
+// Cleanup safety gate, at Gate-B parity: unfinalized River jobs that still
+// dereference this namespace's rows. Two linkage classes, both required —
+// event-linked jobs (args->>'event_id'), and messaging_aggregate_for_contact
+// jobs, which key on {contact_id, source} and carry NO event id, so an
+// event-only predicate would happily delete rows an aggregate job still
+// references. The aggregate arm is deliberately source-agnostic: a superset of
+// the two sources teardown checks, erring toward REFUSING to delete.
+func (q *Queries) SyntheticCountPendingJobsForNamespaceCleanup(ctx context.Context, arg SyntheticCountPendingJobsForNamespaceCleanupParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountPendingJobsForNamespaceCleanup, arg.EventIds, arg.ContactIds)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1923,6 +1979,20 @@ func (q *Queries) SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx context.
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteInteractionsByContactIds = `-- name: SyntheticDeleteInteractionsByContactIds :execrows
+DELETE FROM interaction WHERE contact_id = ANY($1::uuid[])
+`
+
+// Cleanup ladder: interactions by contact (hard delete — the ledger's by-id
+// variant is unavailable cross-request). Soft-deleted rows included.
+func (q *Queries) SyntheticDeleteInteractionsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteInteractionsByContactIds, contactIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteInteractionsByIds = `-- name: SyntheticDeleteInteractionsByIds :execrows
 DELETE FROM interaction WHERE id = ANY($1::uuid[])
 `
@@ -2379,6 +2449,146 @@ func (q *Queries) SyntheticListExternalContactSourceIdsByPrefix(ctx context.Cont
 	return items, nil
 }
 
+const SyntheticSelectContactIdsByFullNamePrefix = `-- name: SyntheticSelectContactIdsByFullNamePrefix :many
+
+SELECT id FROM contact
+WHERE full_name LIKE $1 || '%'
+ORDER BY id
+`
+
+// ============================================================================
+// Declared-seeding support (internal/synthetic/declare) — test-only.
+//
+// The declared-seed endpoint executes a fixture in a namespace and a LATER,
+// SEPARATE request cleans it up, so cleanup cannot use the harness's in-memory
+// ledger (it died with the request). Every id set is instead recovered from the
+// DB by the namespace's own generator-derived tokens.
+//
+// SOFT-DELETE EXCEPTION, deliberate and confined to these queries: the id-set
+// SELECTs below do NOT filter `deleted_at IS NULL`. Cleanup must find TOMBSTONES
+// — an app action under test may soft-delete a seeded contact, and a later PR
+// seeds soft-deleted contacts on purpose — and a child row is found by its
+// contact id regardless of the parent's deleted_at. Leaving a tombstone behind
+// would leak rows that no later run can reach by token.
+// ============================================================================
+// Cleanup id-set (step 1): every contact whose full_name carries the namespace
+// prefix, INCLUDING soft-deleted rows (see the soft-delete exception above).
+// Caller passes a BARE prefix; '%' is appended here. The namespace charset
+// excludes the LIKE metacharacters, so the prefix can never over-match.
+func (q *Queries) SyntheticSelectContactIdsByFullNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, SyntheticSelectContactIdsByFullNamePrefix, namePrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SyntheticSelectLiveDescendantHostnames = `-- name: SyntheticSelectLiveDescendantHostnames :many
+SELECT hostname FROM mac_host
+WHERE hostname LIKE $1 || '%-host'
+ORDER BY hostname
+`
+
+// Cleanup descendant guard: hostnames of any namespace nested UNDER this one
+// ('synth-<ns>-%-host'). A namespace whose prefix sweep would cross into a live
+// descendant refuses to clean rather than deleting across it. Note
+// 'synth-<ns>-host' itself does not match this pattern; the namespace's own
+// salt variants do and are filtered out by the caller (they are expansion
+// members, not descendants).
+func (q *Queries) SyntheticSelectLiveDescendantHostnames(ctx context.Context, namespacePrefix pgtype.Text) ([]string, error) {
+	rows, err := q.db.Query(ctx, SyntheticSelectLiveDescendantHostnames, namespacePrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var hostname string
+		if err := rows.Scan(&hostname); err != nil {
+			return nil, err
+		}
+		items = append(items, hostname)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SyntheticSelectMacHostIdByHostname = `-- name: SyntheticSelectMacHostIdByHostname :one
+SELECT id FROM mac_host WHERE hostname = $1
+`
+
+// Cleanup ladder + namespace occupancy: the namespace's synthetic host, looked
+// up by EXACT hostname. Deliberately not a prefix match: 'synth-foo-host' used
+// as a LIKE prefix would also match namespace 'foo-hostile”s
+// 'synth-foo-hostile-host' and delete another world's marker.
+func (q *Queries) SyntheticSelectMacHostIdByHostname(ctx context.Context, hostname string) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, SyntheticSelectMacHostIdByHostname, hostname)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const SyntheticSelectVenueNodeIdsForContacts = `-- name: SyntheticSelectVenueNodeIdsForContacts :many
+SELECT DISTINCT venue_id FROM interaction
+WHERE contact_id = ANY($1::uuid[])
+  AND venue_id IS NOT NULL
+`
+
+// Cleanup id-set (step 2): the venue nodes the real recorders minted for this
+// namespace's interactions. Venue nodes are not contacts and carry an empty
+// canonical_label, so neither the person-node delete nor the label-prefix sweep
+// finds them — they must be captured BEFORE the interaction delete removes the
+// only link. Includes soft-deleted interactions for the same reason as above.
+func (q *Queries) SyntheticSelectVenueNodeIdsForContacts(ctx context.Context, contactIds []pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, SyntheticSelectVenueNodeIdsForContacts, contactIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var venue_id pgtype.UUID
+		if err := rows.Scan(&venue_id); err != nil {
+			return nil, err
+		}
+		items = append(items, venue_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SyntheticTryAdvisoryLock = `-- name: SyntheticTryAdvisoryLock :one
+SELECT pg_try_advisory_lock($1::bigint)
+`
+
+// Namespace reservation (seed + cleanup): NON-BLOCKING session advisory lock.
+// A held lock means a concurrent run owns the namespace, which is answered
+// immediately (409 on seed, "busy" on cleanup) rather than queued behind. MUST
+// be executed on a dedicated pooled connection — session advisory locks belong
+// to the connection that took them.
+func (q *Queries) SyntheticTryAdvisoryLock(ctx context.Context, lockKey int64) (bool, error) {
+	row := q.db.QueryRow(ctx, SyntheticTryAdvisoryLock, lockKey)
+	var pg_try_advisory_lock bool
+	err := row.Scan(&pg_try_advisory_lock)
+	return pg_try_advisory_lock, err
+}
+
 const TestCountAllRows = `-- name: TestCountAllRows :one
 SELECT (xpath('/row/c/text()',
     query_to_xml(format('SELECT COUNT(*) AS c FROM %I', $1::text), false, true, '')))[1]::text::bigint
@@ -2770,6 +2980,20 @@ func (q *Queries) TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID)
 	return result.RowsAffected(), nil
 }
 
+const TestFinalizeRiverJobByID = `-- name: TestFinalizeRiverJobByID :exec
+UPDATE river_job
+SET state = 'completed'::river_job_state, finalized_at = NOW()
+WHERE id = $1
+`
+
+// Failure-injection fixture: finalizes a planted job so the "refuses while
+// pending, cleans once safe" tests have an explicit, honest safe-state step
+// rather than a hand-wave.
+func (q *Queries) TestFinalizeRiverJobByID(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, TestFinalizeRiverJobByID, id)
+	return err
+}
+
 const TestGetContactCacheColumnsByID = `-- name: TestGetContactCacheColumnsByID :one
 SELECT location, birthday, how_met FROM contact WHERE id = $1 AND deleted_at IS NULL
 `
@@ -3092,6 +3316,47 @@ VALUES ('\x00'::bytea, '\x00'::bytea, 'reset-marker')
 func (q *Queries) TestInsertTelegramSessionMarker(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, TestInsertTelegramSessionMarker)
 	return err
+}
+
+const TestInsertUnfinalizedAggregateJobForContact = `-- name: TestInsertUnfinalizedAggregateJobForContact :one
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts)
+VALUES ('messaging_aggregate_for_contact', 'default', 'available',
+        jsonb_build_object('contact_id', $1::text, 'source', $2::text),
+        '{}'::jsonb, 1, 1)
+RETURNING id
+`
+
+type TestInsertUnfinalizedAggregateJobForContactParams struct {
+	ContactID string `json:"contact_id"`
+	Source    string `json:"source"`
+}
+
+// Failure-injection fixture: the SECOND Gate-B linkage class — an aggregate job
+// keyed on {contact_id, source} with NO event id. A cleanup predicate that only
+// looked at event ids would miss it and delete rows it still dereferences.
+func (q *Queries) TestInsertUnfinalizedAggregateJobForContact(ctx context.Context, arg TestInsertUnfinalizedAggregateJobForContactParams) (int64, error) {
+	row := q.db.QueryRow(ctx, TestInsertUnfinalizedAggregateJobForContact, arg.ContactID, arg.Source)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const TestInsertUnfinalizedRecorderJobForEvent = `-- name: TestInsertUnfinalizedRecorderJobForEvent :one
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts)
+VALUES ('interaction_recorder', 'default', 'available',
+        jsonb_build_object('event_id', $1::text), '{}'::jsonb, 1, 1)
+RETURNING id
+`
+
+// Failure-injection fixture (declare cleanup tests): plants ONE unfinalized
+// event-linked river_job so the Gate-B-parity pending check has something real
+// to refuse on. The generic TestInsertNonFinalRiverJob marker is deliberately
+// UNLINKED and Gate B does not count it, so it cannot exercise this path.
+func (q *Queries) TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID string) (int64, error) {
+	row := q.db.QueryRow(ctx, TestInsertUnfinalizedRecorderJobForEvent, eventID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const TestListCadenceActivityFlagsByNamePrefix = `-- name: TestListCadenceActivityFlagsByNamePrefix :many
