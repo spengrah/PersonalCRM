@@ -107,12 +107,23 @@ func TestOverdueLoweringCarriesTheSourceSafetyLag(t *testing.T) {
 
 	// The wire field is epoch MILLIS, so compare at that resolution.
 	sentAt := time.UnixMilli(msg.Message.InternalDate).UTC()
-	want := anchor.Add(-overdueMessageAge(p)).Add(-2 * time.Hour).Truncate(time.Millisecond)
+	want := anchor.Add(-overdueMessageAge(p)).Add(-sourceHistoryLag).Truncate(time.Millisecond)
 	assert.Equal(t, want, sentAt,
-		"the Gmail factory's fixed pre-anchor safety lag is additive with the requested age")
+		"declare's locally stated source safety lag drifted from the factory's actual pre-anchor offset")
 	// The floor holds regardless: the message is at least one period + the
 	// declared amount before the anchor.
 	assert.True(t, sentAt.Before(anchor.Add(-overdueMessageAge(p))))
+
+	// ...and creation precedes that instant by a FULL PERIOD. That margin is
+	// what makes the app's forward-only, DATE-granular due-date update a strict
+	// move: the create-time due date is created_at + period, the derived one is
+	// last_contacted + period, and with this margin they are a whole period
+	// apart. A smaller margin can land both on the same calendar date, in which
+	// case the update is a no-op and the contact is never overdue.
+	createdAge, ok := creationAge(p)
+	require.True(t, ok, "OverdueBy must derive a creation age")
+	assert.Equal(t, overdueMessageAge(p)+sourceHistoryLag+period("weekly"), createdAge)
+	assert.True(t, anchor.Add(-createdAge).Before(sentAt), "a contact must exist before the history it carries")
 }
 
 // --- postconditions ---------------------------------------------------------
@@ -142,7 +153,8 @@ func TestPostconditionsDerivedPerProperty(t *testing.T) {
 	assert.True(t, *overdue.LastContacted)
 	require.NotNil(t, overdue.Cadence)
 	assert.Equal(t, "weekly", *overdue.Cadence)
-	assert.Nil(t, overdue.CreatedAgo)
+	require.NotNil(t, overdue.CreatedAgo, "the derived creation age is a checkable fact too")
+	assert.Equal(t, overdueMessageAge(d.Entities[0].(*contactPlan))+sourceHistoryLag+period("weekly"), *overdue.CreatedAgo)
 	assert.Equal(t, []string{MethodEmail}, overdue.MethodKinds)
 
 	// Overdue via created_at: two periods back is past one period, so it IS
@@ -172,23 +184,28 @@ func TestPostconditionsDerivedPerProperty(t *testing.T) {
 
 // --- test seams -------------------------------------------------------------
 
-func TestTestSeamsRequireATestEnvironment(t *testing.T) {
-	t.Setenv("CRM_ENV", "production")
-	for name, fn := range map[string]func(){
-		"SetFailpointForTest":       func() { SetFailpointForTest("") },
-		"SetTestHookForTest":        func() { SetTestHookForTest(HookAfterReplayBeforeDrain, nil) },
-		"SetCleanupFailStepForTest": func() { SetCleanupFailStepForTest("") },
-		"SetBudgetsForTest":         func() { SetBudgetsForTest(time.Second, time.Second) },
-	} {
-		t.Run(name, func(t *testing.T) {
-			defer func() {
-				r := recover()
-				require.NotNil(t, r, "%s must refuse to arm outside a test environment", name)
-				assert.Contains(t, r, "CRM_ENV=test|testing")
-			}()
-			fn()
-		})
-	}
+// The misuse guard cannot be observed end-to-end from inside a test binary —
+// testing.Testing() is true here by construction — so the PREDICATE is tested
+// directly and the panic path is tested against it. Between them they cover the
+// only case that matters: a non-test binary outside the test environment.
+func TestTestSeamsPredicate(t *testing.T) {
+	assert.True(t, testSeamsAllowed("production", true), "a go test binary may always arm a seam")
+	assert.True(t, testSeamsAllowed("", true))
+	assert.True(t, testSeamsAllowed("test", false))
+	assert.True(t, testSeamsAllowed("testing", false))
+	assert.False(t, testSeamsAllowed("production", false), "a production binary in production must not arm a seam")
+	assert.False(t, testSeamsAllowed("", false))
+	assert.False(t, testSeamsAllowed("staging", false))
+}
+
+func TestTestSeamsPanicWhenDisallowed(t *testing.T) {
+	assert.NotPanics(t, func() { requireSeamsAllowed("declare.Whatever", true) })
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "a disallowed seam must panic")
+		assert.Contains(t, r, "declare.Whatever is test-only support")
+	}()
+	requireSeamsAllowed("declare.Whatever", false)
 }
 
 func TestTestSeamsRejectUnknownNames(t *testing.T) {

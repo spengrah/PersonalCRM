@@ -1750,3 +1750,10 @@ func (r *SyntheticSupportRepository) InsertUnfinalizedAggregateJobForContact(ctx
 func (r *SyntheticSupportRepository) FinalizeRiverJobByID(ctx context.Context, id int64) error {
 	return r.queries.TestFinalizeRiverJobByID(ctx, id)
 }
+
+// InsertTelegramChatConfigInBand occupies a telegram peer band with a
+// contact-less row, so a test can force the toolkit's band-collision re-salt
+// cheaply. Fixture only.
+func (r *SyntheticSupportRepository) InsertTelegramChatConfigInBand(ctx context.Context, chatID int64) error {
+	return r.queries.TestInsertTelegramChatConfigInBand(ctx, chatID)
+}

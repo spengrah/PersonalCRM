@@ -76,8 +76,9 @@ func (p *contactPlan) postcondition() Postcondition {
 		pc.OverdueMember = &overdue
 	}
 
-	if p.createdAgo != nil {
-		age := p.createdAgo.resolve(p.cadence)
+	// Both the explicitly declared and the OverdueBy-derived creation ages are
+	// checkable facts, so both are asserted.
+	if age, ok := creationAge(p); ok {
 		pc.CreatedAgo = &age
 	}
 

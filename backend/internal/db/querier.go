@@ -2589,17 +2589,28 @@ type Querier interface {
 	// Reset test only: a marker row in tag (a standalone table the harness does not
 	// touch).
 	TestInsertTagMarker(ctx context.Context) error
+	// Failure-injection fixture (declared-seeding tests): occupies a namespace's
+	// telegram peer band with a row that belongs to NO contact, which is the
+	// cheapest way to force the toolkit's band-collision re-salt without seeding a
+	// whole world that would then need cleaning. Reclaimed by the existing
+	// chat-config delete.
+	TestInsertTelegramChatConfigInBand(ctx context.Context, telegramChatID int64) error
 	// Reset test only: a marker row in telegram_session (the Telegram auth session
 	// the reset wipes). session_data_encrypted + encryption_nonce are NOT NULL bytea.
 	TestInsertTelegramSessionMarker(ctx context.Context) error
 	// Failure-injection fixture: the SECOND Gate-B linkage class — an aggregate job
 	// keyed on {contact_id, source} with NO event id. A cleanup predicate that only
 	// looked at event ids would miss it and delete rows it still dereferences.
+	// Scheduled an hour out for the same reason as the recorder fixture above.
 	TestInsertUnfinalizedAggregateJobForContact(ctx context.Context, arg TestInsertUnfinalizedAggregateJobForContactParams) (int64, error)
-	// Failure-injection fixture (declare cleanup tests): plants ONE unfinalized
+	// Failure-injection fixture (declared-seeding tests): plants ONE unfinalized
 	// event-linked river_job so the Gate-B-parity pending check has something real
 	// to refuse on. The generic TestInsertNonFinalRiverJob marker is deliberately
 	// UNLINKED and Gate B does not count it, so it cannot exercise this path.
+	//
+	// Planted as SCHEDULED an hour out rather than available: a live River client
+	// would otherwise fetch and finalize it within milliseconds, and the assertion
+	// that depends on it staying unfinalized would pass or fail on a race.
 	TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID string) (int64, error)
 	// Tour capacity gate: for each live contact in the namespace, return the four
 	// CAD-029 activity flags (outreach / response / pending-followup / none) so the Go

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"testing"
 	"time"
 
 	"personal-crm/backend/internal/synthetic/replay"
@@ -15,9 +16,9 @@ import (
 // in backend/tests and backend/tests/api — EXTERNAL packages, the same reason
 // SeedHostForTest is exported from the repository layer.
 //
-// Every seam guards itself: it PANICS unless CRM_ENV is test/testing, so a
-// production build cannot arm one even by mistake. Each returns a restore func
-// the caller MUST defer.
+// Every seam guards itself: it PANICS unless the process is a `go test` binary
+// or already runs under CRM_ENV=test|testing, so a production build cannot arm
+// one even by mistake. Each returns a restore func the caller MUST defer.
 
 // Failpoint names. A run failpoint produces a DETERMINISTIC mid-world error so
 // the partial-world recovery path and the endpoint's 500 shape can be
@@ -155,6 +156,14 @@ func WorstCaseRunResidence() time.Duration {
 	return run + replay.SettleBudget() + replay.TeardownGateBBudget() + teardown
 }
 
+// AdvisoryKeyForTest exposes the reservation key derivation so a test can hold
+// the SAME lock a run would take (the held-lock refusal case). Recomputing the
+// hash test-side would prove nothing about the key the run actually uses.
+func AdvisoryKeyForTest(token string) int64 {
+	requireTestEnv("declare.AdvisoryKeyForTest")
+	return advisoryKey(token)
+}
+
 func currentFailpoint() string {
 	seamMu.Lock()
 	defer seamMu.Unlock()
@@ -185,12 +194,32 @@ func teardownBudget() time.Duration {
 	return budgetTeardown
 }
 
-// requireTestEnv panics unless the process is running under a test environment.
-func requireTestEnv(what string) {
-	switch os.Getenv("CRM_ENV") {
+// testSeamsAllowed is the misuse guard's pure predicate: a seam may be armed
+// only from a binary built by `go test`, or from a process already running
+// under the test environment that gates the whole test-route surface. The
+// test-binary arm is the strong one — it cannot be set by configuration — and
+// it is what lets an integration test arm a seam WITHOUT also switching the
+// process onto the compressed cadence table, which would change the meaning of
+// every duration the test asserts.
+func testSeamsAllowed(crmEnv string, testBinary bool) bool {
+	if testBinary {
+		return true
+	}
+	switch crmEnv {
 	case "test", "testing":
-		return
+		return true
 	default:
-		panic(fmt.Sprintf("%s is test-only support and requires CRM_ENV=test|testing (got %q)", what, os.Getenv("CRM_ENV")))
+		return false
+	}
+}
+
+// requireTestEnv panics unless test seams may be armed here.
+func requireTestEnv(what string) {
+	requireSeamsAllowed(what, testSeamsAllowed(os.Getenv("CRM_ENV"), testing.Testing()))
+}
+
+func requireSeamsAllowed(what string, allowed bool) {
+	if !allowed {
+		panic(fmt.Sprintf("%s is test-only support: it requires a test binary or CRM_ENV=test|testing (got %q)", what, os.Getenv("CRM_ENV")))
 	}
 }

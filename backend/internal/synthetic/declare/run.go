@@ -469,16 +469,24 @@ func runEntity(ctx context.Context, h *replay.Harness, e Entity) (Seeded, error)
 // The message is aged period(cadence) + amount, which puts last_contacted at
 // least `amount` past its due date.
 //
-// Honest caveat, worth knowing before reading a rendered day count: the Gmail
-// factory times every message at least 2h before the anchor (a safety lag so
-// the provider's closed scan window still reaches it), and that lag is ADDITIVE
-// with the requested age. Under CRM_ENV=testing — where the whole cadence table
-// is compressed and a "day" is ~17s — that fixed 2h dominates, so a contact
-// declared overdue by 3 days renders a much larger day count. The declared
-// semantics are a FLOOR ("overdue by AT LEAST the stated amount"), which holds
-// in every environment; the exact rendered number is only faithful where a real
-// day is long relative to 2h. A fixture that must pin an exact day count needs
-// a non-email history source, which the vocabulary does not have yet.
+// It ALSO backdates creation, and that is load-bearing rather than cosmetic:
+// the app's due date only ever moves FORWARD on an automated interaction. A
+// contact created now already has a due date one period in the FUTURE, so a
+// backdated inbound would move last_contacted and leave the due date untouched
+// — the contact would carry ten days of history and still not be overdue.
+// Creating it before the history it carries is both the honest shape (you
+// cannot have heard from someone before you added them) and the thing that
+// makes the derived due date land in the past.
+//
+// Honest caveat, worth knowing before reading a rendered day count: the source
+// safety lag is additive with the requested age. Under CRM_ENV=testing — where
+// the cadence table is compressed and a "day" is ~17s — that fixed lag
+// dominates, so a contact declared overdue by 3 days renders a much larger day
+// count. The declared semantics are a FLOOR ("overdue by AT LEAST the stated
+// amount"), which holds in every environment; the exact rendered number is only
+// faithful where a real day is long relative to the lag. A fixture that must
+// pin an exact day count needs a non-email history source, which the vocabulary
+// does not have yet.
 func runContact(ctx context.Context, h *replay.Harness, p *contactPlan) (Seeded, error) {
 	gen := h.Generator()
 
@@ -486,8 +494,8 @@ func runContact(ctx context.Context, h *replay.Harness, p *contactPlan) (Seeded,
 	if p.cadence != "" {
 		opts = append(opts, factory.WithCadence(p.cadence))
 	}
-	if p.createdAgo != nil {
-		opts = append(opts, factory.WithCreatedAge(p.createdAgo.resolve(p.cadence)))
+	if age, ok := creationAge(p); ok {
+		opts = append(opts, factory.WithCreatedAge(age))
 	}
 	if p.noMethods {
 		opts = append(opts, factory.WithNoMethods())
@@ -527,4 +535,25 @@ func runContact(ctx context.Context, h *replay.Harness, p *contactPlan) (Seeded,
 // facts rather than from the app's cadence math.
 func overdueMessageAge(p *contactPlan) time.Duration {
 	return p.overdueBy.resolve(p.cadence) + period(p.cadence)
+}
+
+// creationAge is how far before the anchor the contact is created, and whether
+// creation should be backdated at all.
+//
+// Declared explicitly: the declaration's own amount.
+// Derived (OverdueBy): the history's realized instant — the requested message
+// age plus the source's fixed safety lag — plus one further period of margin.
+// The margin is what makes the app's forward-only due-date update actually
+// MOVE: the create-time due date sits one period after creation, so creation
+// must precede the replayed instant by more than that or the update is a no-op
+// and the contact is never overdue. One period is the smallest margin that
+// guarantees a strict forward move for any declared amount.
+func creationAge(p *contactPlan) (time.Duration, bool) {
+	if p.createdAgo != nil {
+		return p.createdAgo.resolve(p.cadence), true
+	}
+	if p.overdueBy != nil {
+		return overdueMessageAge(p) + sourceHistoryLag + period(p.cadence), true
+	}
+	return 0, false
 }

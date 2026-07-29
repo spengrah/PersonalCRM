@@ -47,6 +47,9 @@ func TestRegisterRejectsMalformedDeclarations(t *testing.T) {
 		{"period amount without cadence", Declaration{Behavior: "ZZZ-014", Entities: []Entity{
 			Contact("a", NeverContacted(), CreatedAgo(Periods(2))),
 		}}, "declares no cadence"},
+		{"overdue with explicit created-ago", Declaration{Behavior: "ZZZ-015", Entities: []Entity{
+			Contact("a", Cadence("weekly"), OverdueBy(Days(1)), CreatedAgo(Days(2))),
+		}}, "DERIVES the creation age"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

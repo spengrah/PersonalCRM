@@ -85,6 +85,16 @@ func dayLength() time.Duration {
 	return activePeriods()["weekly"] / 7
 }
 
+// sourceHistoryLag is the fixed pre-anchor safety lag every replayed source
+// message carries: the providers scan already-CLOSED windows, so a payload
+// timestamped too close to the anchor would never be listed. It is additive
+// with any age a declaration requests, so the lowering has to account for it
+// when deriving the creation age (a contact must exist before the history it
+// carries). Stated locally for the same reason the cadence tables are —
+// deriving it from the factory would make a fixture track a regression instead
+// of failing on one — and pinned by a tripwire against the real factory output.
+const sourceHistoryLag = 2 * time.Hour
+
 // Cadences is the cadence vocabulary a declaration may use, sorted. It is the
 // validation set for Cadence(...) and the enumeration a satisfiability test can
 // iterate.

@@ -165,6 +165,9 @@ func (p *contactPlan) validate() error {
 		if p.neverContacted {
 			return fmt.Errorf("contact %q: OverdueBy and NeverContacted are mutually exclusive", p.name)
 		}
+		if p.createdAgo != nil {
+			return fmt.Errorf("contact %q: OverdueBy and CreatedAgo are mutually exclusive — OverdueBy DERIVES the creation age from the history it replays (a contact must exist before the connection it carries, and the app's due date only ever moves forward)", p.name)
+		}
 		if !p.hasEmail() {
 			return fmt.Errorf("contact %q: OverdueBy lowers to a replayed inbound EMAIL, so the contact must carry an email method", p.name)
 		}

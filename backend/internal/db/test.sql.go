@@ -3306,6 +3306,21 @@ func (q *Queries) TestInsertTagMarker(ctx context.Context) error {
 	return err
 }
 
+const TestInsertTelegramChatConfigInBand = `-- name: TestInsertTelegramChatConfigInBand :exec
+INSERT INTO telegram_chat_config (telegram_chat_id, chat_type, status)
+VALUES ($1, 'group', 'auto')
+`
+
+// Failure-injection fixture (declared-seeding tests): occupies a namespace's
+// telegram peer band with a row that belongs to NO contact, which is the
+// cheapest way to force the toolkit's band-collision re-salt without seeding a
+// whole world that would then need cleaning. Reclaimed by the existing
+// chat-config delete.
+func (q *Queries) TestInsertTelegramChatConfigInBand(ctx context.Context, telegramChatID int64) error {
+	_, err := q.db.Exec(ctx, TestInsertTelegramChatConfigInBand, telegramChatID)
+	return err
+}
+
 const TestInsertTelegramSessionMarker = `-- name: TestInsertTelegramSessionMarker :exec
 INSERT INTO telegram_session (session_data_encrypted, encryption_nonce, phone_number)
 VALUES ('\x00'::bytea, '\x00'::bytea, 'reset-marker')
@@ -3319,10 +3334,10 @@ func (q *Queries) TestInsertTelegramSessionMarker(ctx context.Context) error {
 }
 
 const TestInsertUnfinalizedAggregateJobForContact = `-- name: TestInsertUnfinalizedAggregateJobForContact :one
-INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts)
-VALUES ('messaging_aggregate_for_contact', 'default', 'available',
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('messaging_aggregate_for_contact', 'default', 'scheduled',
         jsonb_build_object('contact_id', $1::text, 'source', $2::text),
-        '{}'::jsonb, 1, 1)
+        '{}'::jsonb, 1, 1, NOW() + INTERVAL '1 hour')
 RETURNING id
 `
 
@@ -3334,6 +3349,7 @@ type TestInsertUnfinalizedAggregateJobForContactParams struct {
 // Failure-injection fixture: the SECOND Gate-B linkage class — an aggregate job
 // keyed on {contact_id, source} with NO event id. A cleanup predicate that only
 // looked at event ids would miss it and delete rows it still dereferences.
+// Scheduled an hour out for the same reason as the recorder fixture above.
 func (q *Queries) TestInsertUnfinalizedAggregateJobForContact(ctx context.Context, arg TestInsertUnfinalizedAggregateJobForContactParams) (int64, error) {
 	row := q.db.QueryRow(ctx, TestInsertUnfinalizedAggregateJobForContact, arg.ContactID, arg.Source)
 	var id int64
@@ -3342,16 +3358,21 @@ func (q *Queries) TestInsertUnfinalizedAggregateJobForContact(ctx context.Contex
 }
 
 const TestInsertUnfinalizedRecorderJobForEvent = `-- name: TestInsertUnfinalizedRecorderJobForEvent :one
-INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts)
-VALUES ('interaction_recorder', 'default', 'available',
-        jsonb_build_object('event_id', $1::text), '{}'::jsonb, 1, 1)
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('interaction_recorder', 'default', 'scheduled',
+        jsonb_build_object('event_id', $1::text), '{}'::jsonb, 1, 1,
+        NOW() + INTERVAL '1 hour')
 RETURNING id
 `
 
-// Failure-injection fixture (declare cleanup tests): plants ONE unfinalized
+// Failure-injection fixture (declared-seeding tests): plants ONE unfinalized
 // event-linked river_job so the Gate-B-parity pending check has something real
 // to refuse on. The generic TestInsertNonFinalRiverJob marker is deliberately
 // UNLINKED and Gate B does not count it, so it cannot exercise this path.
+//
+// Planted as SCHEDULED an hour out rather than available: a live River client
+// would otherwise fetch and finalize it within milliseconds, and the assertion
+// that depends on it staying unfinalized would pass or fail on a race.
 func (q *Queries) TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID string) (int64, error) {
 	row := q.db.QueryRow(ctx, TestInsertUnfinalizedRecorderJobForEvent, eventID)
 	var id int64

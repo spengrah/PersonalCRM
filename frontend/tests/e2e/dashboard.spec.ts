@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
 import { expectAddContactHeader, waitForOverdueListSettled } from './helpers/dashboard'
 import type { OverdueContactResponse } from '../../src/types/generated/contact'
 
@@ -97,19 +97,14 @@ test.describe('Dashboard @area:dashboard', () => {
 
 test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
   let testApi: TestAPI
-
-  const cardSeeds = ['Overdue Card One', 'Overdue Card Two', 'Overdue Card Three']
+  let seeded: SeedBehaviorResult
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
-    await testApi.seedOverdueContacts(
-      cardSeeds.map((name, i) => ({
-        full_name: name,
-        cadence: 'weekly' as const,
-        days_overdue: 3 + i,
-        email: `${name.toLowerCase().replace(/ /g, '-')}@example.com`,
-      }))
-    )
+    // CAD-026's own declared fixture: three graded-overdue contacts. The test
+    // provisions the behavior it cites, and the names come back in the
+    // manifest rather than being re-derived here.
+    seeded = await testApi.seedBehavior('CAD-026')
   })
 
   test.afterEach(async () => {
@@ -121,9 +116,10 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
     await page.goto('/dashboard')
     await page.waitForLoadState('domcontentloaded')
 
-    // Every seeded card renders (prefix-scoped names — parallel-safe).
-    for (const name of cardSeeds) {
-      await expect(page.getByRole('heading', { name: `${testApi.prefix}-${name}` })).toBeVisible()
+    // Every seeded card renders (namespace-scoped names — parallel-safe).
+    const cardNames = ['card-a', 'card-b', 'card-c'].map(handle => seeded.entities[handle].name)
+    for (const name of cardNames) {
+      await expect(page.getByRole('heading', { name })).toBeVisible()
     }
 
     // The header count is DERIVED from the same list the cards render from,
@@ -147,7 +143,7 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
           if (headerCount !== cardCount) return `${headerCount} !== ${cardCount}`
           if (headerCount < minimum) return `${headerCount} < seeded ${minimum}`
           return 'header equals cards'
-        }, cardSeeds.length)
+        }, cardNames.length)
       )
       .toBe('header equals cards')
   })
@@ -343,31 +339,19 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
 
 test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () => {
   let testApi: TestAPI
+  let seeded: SeedBehaviorResult
   let overdueContactId: string
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
 
-    // Seed the mark-contacted target plus a SENTINEL that stays overdue.
-    // Without the sentinel, marking the target can drop the total overdue
-    // count to zero on a clean run — the dashboard then renders the
-    // caught-up prose instead of a numeric header, and the header==cards
+    // DSH-005's declared fixture: the mark-contacted target plus a SENTINEL
+    // that stays overdue. Without the sentinel, marking the target can drop the
+    // total overdue count to zero on a clean run — the dashboard then renders
+    // the caught-up prose instead of a numeric header, and the header==cards
     // invariant below has nothing to parse.
-    const { ids } = await testApi.seedOverdueContacts([
-      {
-        full_name: 'Dashboard Test Contact',
-        cadence: 'weekly',
-        days_overdue: 3,
-        email: 'dashboard-test@example.com',
-      },
-      {
-        full_name: 'Dashboard Sentinel Contact',
-        cadence: 'weekly',
-        days_overdue: 5,
-        email: 'dashboard-sentinel@example.com',
-      },
-    ])
-    overdueContactId = ids[0]
+    seeded = await testApi.seedBehavior('DSH-005')
+    overdueContactId = seeded.entities['refresh-target'].id
   })
 
   test.afterEach(async () => {
@@ -379,7 +363,7 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     // Establish the POPULATED state first — the seeded overdue card must have
     // rendered (a loading or error mask would otherwise vacuously pass a
     // state-independent affordance check) — then assert the header CTA.
-    const contactName = `${testApi.prefix}-Dashboard Test Contact`
+    const contactName = seeded.entities['refresh-target'].name
     await page.goto('/dashboard')
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
@@ -401,8 +385,8 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     // leaves the overdue list without a reload and the header count updates.
     // CAD-028.change-consistent-across-dashboard (dashboard/list/detail consistency) is proved in
     // overdue-contact-updates.spec.ts.
-    const contactName = `${testApi.prefix}-Dashboard Test Contact`
-    const sentinelName = `${testApi.prefix}-Dashboard Sentinel Contact`
+    const contactName = seeded.entities['refresh-target'].name
+    const sentinelName = seeded.entities['refresh-sentinel'].name
 
     // Navigate to dashboard
     await page.goto('/dashboard')

@@ -1719,23 +1719,29 @@ SELECT pg_advisory_lock(@lock_key::bigint);
 SELECT pg_advisory_unlock(@lock_key::bigint);
 
 -- name: TestInsertUnfinalizedRecorderJobForEvent :one
--- Failure-injection fixture (declare cleanup tests): plants ONE unfinalized
+-- Failure-injection fixture (declared-seeding tests): plants ONE unfinalized
 -- event-linked river_job so the Gate-B-parity pending check has something real
 -- to refuse on. The generic TestInsertNonFinalRiverJob marker is deliberately
 -- UNLINKED and Gate B does not count it, so it cannot exercise this path.
-INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts)
-VALUES ('interaction_recorder', 'default', 'available',
-        jsonb_build_object('event_id', @event_id::text), '{}'::jsonb, 1, 1)
+--
+-- Planted as SCHEDULED an hour out rather than available: a live River client
+-- would otherwise fetch and finalize it within milliseconds, and the assertion
+-- that depends on it staying unfinalized would pass or fail on a race.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('interaction_recorder', 'default', 'scheduled',
+        jsonb_build_object('event_id', @event_id::text), '{}'::jsonb, 1, 1,
+        NOW() + INTERVAL '1 hour')
 RETURNING id;
 
 -- name: TestInsertUnfinalizedAggregateJobForContact :one
 -- Failure-injection fixture: the SECOND Gate-B linkage class — an aggregate job
 -- keyed on {contact_id, source} with NO event id. A cleanup predicate that only
 -- looked at event ids would miss it and delete rows it still dereferences.
-INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts)
-VALUES ('messaging_aggregate_for_contact', 'default', 'available',
+-- Scheduled an hour out for the same reason as the recorder fixture above.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('messaging_aggregate_for_contact', 'default', 'scheduled',
         jsonb_build_object('contact_id', @contact_id::text, 'source', @source::text),
-        '{}'::jsonb, 1, 1)
+        '{}'::jsonb, 1, 1, NOW() + INTERVAL '1 hour')
 RETURNING id;
 
 -- name: TestFinalizeRiverJobByID :exec
@@ -1745,3 +1751,12 @@ RETURNING id;
 UPDATE river_job
 SET state = 'completed'::river_job_state, finalized_at = NOW()
 WHERE id = @id;
+
+-- name: TestInsertTelegramChatConfigInBand :exec
+-- Failure-injection fixture (declared-seeding tests): occupies a namespace's
+-- telegram peer band with a row that belongs to NO contact, which is the
+-- cheapest way to force the toolkit's band-collision re-salt without seeding a
+-- whole world that would then need cleaning. Reclaimed by the existing
+-- chat-config delete.
+INSERT INTO telegram_chat_config (telegram_chat_id, chat_type, status)
+VALUES (@telegram_chat_id, 'group', 'auto');

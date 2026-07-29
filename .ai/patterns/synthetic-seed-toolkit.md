@@ -38,6 +38,39 @@ res, _ := h.ReplayGmail(ctx, alice.ID, gen.GmailMessage( /* target spec */, fact
 
 Heavy replay tests are LONG-gated and self-skip in the fast suite (see Slow-test routing). The harness's `t.Cleanup` deletes everything the run created.
 
+## Declared seeding (`synthetic/declare`) — the E2E provisioning path
+
+`backend/internal/synthetic/declare` is a layer ON TOP of the toolkit: a fixture is stated in DOMAIN terms and keyed by the SPEC BEHAVIOR ID it provisions, and the E2E suite asks for it by that id. It replaces per-test bespoke seed endpoints (arc #759) rather than replacing anything in the toolkit — a declaration lowers onto the same factory + harness primitives.
+
+```go
+// declare/dashboard.go — one registration file per spec domain, run at init.
+Register(Declaration{
+    Behavior: "CAD-026",
+    Entities: []Entity{
+        Contact("card-a", Cadence("weekly"), OverdueBy(Days(3))),
+        Contact("card-b", Cadence("weekly"), OverdueBy(Days(4))),
+    },
+})
+RegisterNone("DSH-002", "static navigation surface; nothing to seed")
+```
+
+```ts
+// the spec asks for the behavior, and reads names/ids from the manifest
+const seeded = await testApi.seedBehavior('CAD-026')
+await expect(page.getByRole('heading', { name: seeded.entities['card-a'].name })).toBeVisible()
+// testApi.cleanup() removes the declared worlds along with the prefix ones
+```
+
+Load-bearing properties, none of them optional:
+
+- **Every ui-surface spec behavior is resolved exactly once** — Declaration, `RegisterNone(reason)`, or a waiver in `declare/waivers.go`. A unit test in the existing `make test-unit` lane fails on anything unresolved, double-resolved, or naming a behavior that no longer exists. Each domain PR deletes its waiver lines.
+- **Fixture math is stated LOCALLY** (`declare/facts.go`), never read from `internal/cadence`. If the app's cadence math regresses, a fixture derived from it would track the regression silently; a locally stated one fails loudly. A tripwire test asserts the local tables equal the deployed ones per environment, and a recursive import guard (proven against a testdata fixture) fails on any import of `internal/cadence` under `declare/`.
+- **`OverdueBy` lowers to REPLAYED history, never a column write** — a backdated inbound email, plus a backdated creation. The creation backdating is load-bearing, not cosmetic: the app's due date only ever moves FORWARD on an automated interaction, so a contact created now stays not-overdue no matter how old the history you give it.
+- **Cleanup is stateless.** The seed and the cleanup are different requests, so the harness's in-memory id ledger is gone; every id set is rebuilt from the namespace's generator-derived tokens. It refuses rather than guesses: `busy` while a run holds the namespace, `pending` while an unfinalized River job still references the rows, `error` (naming them) when a live namespace is nested underneath.
+- **Growth rule**: every entity class a declaration can create MUST get a namespace-recoverable cleanup step in the same PR that makes it declarable.
+
+Endpoints (test-only, same `CRM_ENV` gate as the bespoke ones): `POST /api/v1/test/seed/declared` and the `namespaces` shape of `POST /api/v1/test/cleanup`. The handler drives `declare` directly under a documented layering exception — `service` cannot import `synthetic` without a cycle, and the toolkit writes through the real services one level down.
+
 ## Adding a factory for a new entity or source payload
 
 Factories are pure functions of `(seed, namespace)` for everything except timestamps. Read `synthetic/factory/factory.go` — its package doc spells out the two determinism claims (wall-clock-independent identifiers vs anchor-relative timestamps) and the PII / isolation rules.

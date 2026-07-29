@@ -170,6 +170,41 @@ export interface CleanupRequest {
   host_id?: string
 }
 
+/**
+ * Declared seeding: a test names a SPEC BEHAVIOR and the server executes that
+ * behavior's declared fixture, returning a manifest of what it created.
+ * Assertions read names and ids from the manifest — never re-derived strings —
+ * because the generator owns them.
+ */
+export interface SeededEntity {
+  kind: string
+  id: string
+  name: string
+}
+
+export interface SeedBehaviorResult {
+  /** The EFFECTIVE namespace, which may differ from the one requested. */
+  namespace: string
+  /** The generator anchor the world was built against. */
+  anchor: string
+  /** Declaration handle → created row. */
+  entities: Record<string, SeededEntity>
+}
+
+export type NamespaceCleanupStatus = 'cleaned' | 'busy' | 'pending' | 'error'
+
+export interface NamespaceCleanupOutcome {
+  status: NamespaceCleanupStatus
+  deleted?: Record<string, number>
+  descendants?: string[]
+  error?: string
+}
+
+export interface CleanupNamespacesResponse {
+  expansions: Record<string, string[]>
+  results: Record<string, NamespaceCleanupOutcome>
+}
+
 export interface CleanupResponse {
   deleted_contacts: number
   deleted_external_contacts: number
@@ -194,6 +229,11 @@ export class TestAPI {
   // The most recently seeded mac_host, so cleanup() can scope meeting_note
   // deletion to this test's host without the caller threading the id.
   private _seededHostId: string | null = null
+  // Every namespace this test has asked the server to seed. Entries are pushed
+  // BEFORE the request goes out, so a lost response still leaves a cleanup
+  // handle behind — see seedBehavior.
+  private _declaredNamespaces: string[] = []
+  private _seedBehaviorCalls = 0
 
   constructor(
     private request: APIRequestContext,
@@ -417,7 +457,50 @@ export class TestAPI {
   }
 
   /**
-   * Cleans up all test data created with this test's prefix.
+   * Seeds the fixture DECLARED for a spec behavior and returns its manifest.
+   *
+   * Each call gets its own namespace (`${prefix}-c${n}`): the generator is a
+   * pure function of (seed, namespace), so two calls sharing one namespace
+   * would mint identical names and emails and collide.
+   *
+   * The namespace is recorded LOCALLY BEFORE the request is issued. That is the
+   * durable cleanup handle: if the response never arrives, the rows may still
+   * exist, and this token is the only trace the client has of them. The server
+   * expands a requested token to whatever it actually created, so cleanup works
+   * even when the client never learned the effective namespace.
+   */
+  async seedBehavior(behaviorId: string): Promise<SeedBehaviorResult> {
+    const namespace = `${this._prefix}-c${++this._seedBehaviorCalls}`
+    this._declaredNamespaces.push(namespace)
+
+    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/seed/declared`, {
+      headers: API_HEADERS,
+      data: { behavior_id: behaviorId, namespace },
+    })
+
+    const body = await response.text()
+    let parsed: { data?: { namespace?: string; entities?: Record<string, SeededEntity> } } = {}
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      // Non-JSON body: nothing to learn from it beyond the status.
+    }
+    // Record the effective namespace whether the call succeeded or failed — a
+    // failed seed can still have left a partial world under a re-salted name.
+    const effective = parsed?.data?.namespace
+    if (effective && !this._declaredNamespaces.includes(effective)) {
+      this._declaredNamespaces.push(effective)
+    }
+
+    if (!response.ok()) {
+      throw new Error(`Failed to seed behavior ${behaviorId}: ${response.status()} ${body}`)
+    }
+    return parsed.data as SeedBehaviorResult
+  }
+
+  /**
+   * Cleans up all test data created with this test's prefix, plus every
+   * declared namespace this test seeded.
    * Call this in afterEach or afterAll to ensure test isolation.
    */
   async cleanup(): Promise<CleanupResponse> {
@@ -435,7 +518,53 @@ export class TestAPI {
     }
 
     const data = await response.json()
+    await this.cleanupDeclaredNamespaces()
     return data.data as CleanupResponse
+  }
+
+  /**
+   * Removes the declared worlds this test seeded. `busy` and `pending` mean the
+   * server refused to delete anything yet (a seed is in flight, or a background
+   * job still references the rows) and are retriable, so they get one bounded
+   * retry before failing loudly — silently leaving rows behind would poison the
+   * shared database for later runs.
+   */
+  private async cleanupDeclaredNamespaces(): Promise<void> {
+    if (this._declaredNamespaces.length === 0) return
+
+    const attempt = async (namespaces: string[]): Promise<CleanupNamespacesResponse> => {
+      const response = await this.request.post(`${API_BASE_URL}/api/v1/test/cleanup`, {
+        headers: API_HEADERS,
+        data: { namespaces },
+      })
+      const body = await response.text()
+      if (!response.ok()) {
+        throw new Error(`Failed to clean declared namespaces: ${response.status()} ${body}`)
+      }
+      return JSON.parse(body).data as CleanupNamespacesResponse
+    }
+
+    const retriable = (result: CleanupNamespacesResponse) =>
+      Object.entries(result.results)
+        .filter(([, outcome]) => outcome.status === 'busy' || outcome.status === 'pending')
+        .map(([namespace]) => namespace)
+
+    let result = await attempt(this._declaredNamespaces)
+    let pending = retriable(result)
+    if (pending.length > 0) {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      result = await attempt(pending)
+      pending = retriable(result)
+    }
+
+    const failures = Object.entries(result.results).filter(
+      ([, outcome]) => outcome.status !== 'cleaned'
+    )
+    if (failures.length > 0) {
+      throw new Error(
+        `Declared namespace cleanup did not finish: ${JSON.stringify(Object.fromEntries(failures))}`
+      )
+    }
   }
 
   /**

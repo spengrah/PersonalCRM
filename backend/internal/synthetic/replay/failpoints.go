@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"testing"
 )
 
 // ErrConstructorResidue marks a harness-construction failure that LEFT the
@@ -52,13 +53,18 @@ func constructorFailpoint() string {
 	return constructorFailpointName
 }
 
-// requireTestEnv panics unless the process is running under a test environment.
-// Fail-loud misuse guard for the exported test seams in this package.
+// requireTestEnv panics unless this is a binary built by `go test`, or a
+// process already running under the test environment that gates the whole
+// test-route surface. Fail-loud misuse guard for the exported test seams in
+// this package; the test-binary arm cannot be set by configuration.
 func requireTestEnv(what string) {
+	if testing.Testing() {
+		return
+	}
 	switch os.Getenv("CRM_ENV") {
 	case "test", "testing":
 		return
 	default:
-		panic(fmt.Sprintf("%s is test-only support and requires CRM_ENV=test|testing (got %q)", what, os.Getenv("CRM_ENV")))
+		panic(fmt.Sprintf("%s is test-only support: it requires a test binary or CRM_ENV=test|testing (got %q)", what, os.Getenv("CRM_ENV")))
 	}
 }
