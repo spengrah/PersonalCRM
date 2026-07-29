@@ -15,6 +15,7 @@ import (
 	"personal-crm/backend/internal/synthetic/declare"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/synthetic/replay"
+	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
@@ -45,10 +46,12 @@ func vocabularyDeclaration() declare.Declaration {
 	}
 }
 
-// TestDeclareRun_VocabularyExercise proves every vocabulary item lowers to a
-// world the API reads back the way the declaration says it should — not just
-// that the rows exist.
-func TestDeclareRun_VocabularyExercise(t *testing.T) {
+// TestSyntheticDeclareRun_VocabularyExercise proves every vocabulary item
+// lowers to a world the API reads back the way the declaration says it should —
+// not just that the rows exist.
+func TestSyntheticDeclareRun_VocabularyExercise(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	router := newDeclareReadRouter(t, database)
 
@@ -73,7 +76,9 @@ func TestDeclareRun_VocabularyExercise(t *testing.T) {
 // a pure function of (seed, namespace), so reusing one namespace would mint
 // byte-identical names and emails — which is why the client derives a per-call
 // namespace rather than reusing the test's prefix.
-func TestDeclareRun_TwoCallsTwoNamespaces(t *testing.T) {
+func TestSyntheticDeclareRun_TwoCallsTwoNamespaces(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 
 	base := declareNS(t)
@@ -100,7 +105,9 @@ func TestDeclareRun_TwoCallsTwoNamespaces(t *testing.T) {
 // Seeding into an occupied namespace is refused, and two concurrent runs on the
 // same namespace resolve to exactly one winner — by the reservation lock or by
 // the occupancy read, both of which are correct refusals.
-func TestDeclareRun_NamespaceOccupiedConflict(t *testing.T) {
+func TestSyntheticDeclareRun_NamespaceOccupiedConflict(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 
 	namespace := declareNS(t)
@@ -142,7 +149,9 @@ func TestDeclareRun_NamespaceOccupiedConflict(t *testing.T) {
 
 // A held reservation is answered IMMEDIATELY, not queued behind. A caller
 // blocked on a same-namespace lock is by definition a duplicate.
-func TestDeclareRun_HeldLockConflicts(t *testing.T) {
+func TestSyntheticDeclareRun_HeldLockConflicts(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	namespace := declareNS(t)
 
@@ -170,7 +179,9 @@ func TestDeclareRun_HeldLockConflicts(t *testing.T) {
 // A failed run must RELEASE its reservation. A stranded session lock would
 // serialize that namespace for the lifetime of the process, and the symptom
 // (every later seed reporting busy) looks nothing like its cause.
-func TestDeclareRun_LockReleasedOnFailure(t *testing.T) {
+func TestSyntheticDeclareRun_LockReleasedOnFailure(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	namespace := declareNS(t)
 
@@ -191,7 +202,9 @@ func TestDeclareRun_LockReleasedOnFailure(t *testing.T) {
 
 // A descendant of a LIVE namespace may never seed: its rows sit inside the
 // ancestor's prefix sweep, so a later cleanup of the ancestor would destroy them.
-func TestDeclareRun_DescendantNamespaceRejected(t *testing.T) {
+func TestSyntheticDeclareRun_DescendantNamespaceRejected(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 
 	parent := declareNS(t)
@@ -219,7 +232,9 @@ func TestDeclareRun_DescendantNamespaceRejected(t *testing.T) {
 // this run would re-salt onto the residue's variant (its own band being taken)
 // and materialize a second world on top of it — two worlds sharing one
 // namespace, one of which the next cleanup would half-delete.
-func TestDeclareRun_SaltedHostResidueOccupiesNamespace(t *testing.T) {
+func TestSyntheticDeclareRun_SaltedHostResidueOccupiesNamespace(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -256,7 +271,9 @@ func TestDeclareRun_SaltedHostResidueOccupiesNamespace(t *testing.T) {
 
 // A run failing mid-world reports honest recovery metadata, and the partial
 // world it left is fully reachable by the requested token afterwards.
-func TestDeclareRun_MidReplayFailureRecovery(t *testing.T) {
+func TestSyntheticDeclareRun_MidReplayFailureRecovery(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	namespace := declareNS(t)
 
@@ -286,7 +303,9 @@ func TestDeclareRun_MidReplayFailureRecovery(t *testing.T) {
 // inserted, and the metadata says so. Reporting a blanket cleaned=false here
 // would send a client cleaning up a namespace that is already empty; reporting
 // a blanket true would strand real residue.
-func TestDeclareRun_ConstructorFailureCleanedTruthful(t *testing.T) {
+func TestSyntheticDeclareRun_ConstructorFailureCleanedTruthful(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	namespace := declareNS(t)
 
@@ -319,7 +338,9 @@ func TestDeclareRun_ConstructorFailureCleanedTruthful(t *testing.T) {
 // fails, rows genuinely remain, and the metadata must say cleaned=false. Proving
 // only the true direction would leave a blanket `true` indistinguishable from an
 // honest one.
-func TestDeclareRun_ConstructorResidueReportsUncleaned(t *testing.T) {
+func TestSyntheticDeclareRun_ConstructorResidueReportsUncleaned(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 	namespace := declareNS(t)
@@ -366,7 +387,9 @@ func TestDeclareRun_ConstructorResidueReportsUncleaned(t *testing.T) {
 // every salted variant — because the run took all of them. Sampling two of the
 // eight would leave a release path that stranded any of the rest looking green,
 // and a stranded session lock serializes that token for the life of the process.
-func TestDeclareRun_UnlockFailureAbortsReSaltSwap(t *testing.T) {
+func TestSyntheticDeclareRun_UnlockFailureAbortsReSaltSwap(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, cfg, ctx := declareTestDBWithConfig(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 	// Off the run's own pool: see newForeignLockObserver — a shared pool can
@@ -414,7 +437,9 @@ func TestDeclareRun_UnlockFailureAbortsReSaltSwap(t *testing.T) {
 // A variant left unreserved could be seeded by a second run — or cleaned out
 // from under this one — in the window between "the run started" and "the run
 // discovered it had re-salted onto that variant".
-func TestDeclareRun_ReservationCoversSaltVariants(t *testing.T) {
+func TestSyntheticDeclareRun_ReservationCoversSaltVariants(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	namespace := declareNS(t)
 
@@ -469,7 +494,9 @@ func TestDeclareRun_ReservationCoversSaltVariants(t *testing.T) {
 // alone is also true of a job nobody looked at. The positive control that the
 // harness's client was genuinely alive and fetching is the seed itself: it
 // cannot succeed without draining its own Gate B.
-func TestDeclareRun_ForeignRiverJobIsNotFetched(t *testing.T) {
+func TestSyntheticDeclareRun_ForeignRiverJobIsNotFetched(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -544,7 +571,9 @@ func TestDeclareRun_ForeignRiverJobIsNotFetched(t *testing.T) {
 // forever — a database reset preserves River's internal tables. And a FAILED
 // declared seed drives this same closure and reports the namespace as cleaned
 // when it returns nil, which would be a false report while the row survives.
-func TestHarnessTeardown_RemovesPrivateQueueRow(t *testing.T) {
+func TestSyntheticDeclareHarnessTeardown_RemovesPrivateQueueRow(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -568,7 +597,9 @@ func TestHarnessTeardown_RemovesPrivateQueueRow(t *testing.T) {
 // A client disconnect must not cancel the run: River silently stops fetching
 // when its start context dies, so a request-scoped context would strand the
 // seed mid-settle. The detach is asserted, not assumed.
-func TestDeclareRun_ClientDisconnectDoesNotCancel(t *testing.T) {
+func TestSyntheticDeclareRun_ClientDisconnectDoesNotCancel(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	namespace := declareNS(t)
 
@@ -594,7 +625,9 @@ func TestDeclareRun_ClientDisconnectDoesNotCancel(t *testing.T) {
 // The run budget is a real bound, not a hope: with a tiny budget the run fails
 // LOUDLY and returns inside the honest worst case (budget + one in-flight
 // toolkit settle timer + teardown's own gate timer + the teardown budget).
-func TestDeclareRun_BudgetBoundsRun(t *testing.T) {
+func TestSyntheticDeclareRun_BudgetBoundsRun(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	namespace := declareNS(t)
 
@@ -636,7 +669,9 @@ func requireRetriableCleanup(t *testing.T, ctx context.Context, database *db.Dat
 // rows: the whole point of the drained Gate B is that a 2xx guarantees a
 // QUIESCENT namespace, which is what makes the later stateless, id-set based
 // cleanup safe to delete under.
-func TestDeclareRun_GateBUnclearedFailsSeed(t *testing.T) {
+func TestSyntheticDeclareRun_GateBUnclearedFailsSeed(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 	namespace := declareNS(t)
@@ -684,7 +719,9 @@ func TestDeclareRun_GateBUnclearedFailsSeed(t *testing.T) {
 // acquiring the effective ones; executing on the pre-swap read would recreate
 // exactly the collision the locks exist to prevent. The run must instead tear
 // down, retry construction, and land somewhere genuinely free.
-func TestDeclareRun_ReSaltSwapRevalidates(t *testing.T) {
+func TestSyntheticDeclareRun_ReSaltSwapRevalidates(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 

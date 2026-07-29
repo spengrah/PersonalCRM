@@ -32,6 +32,13 @@ import (
 
 // Shared support for the declared-seeding integration suite.
 //
+// ROUTING: every test here is slow-gated (TestSyntheticDeclare prefix +
+// testsupport.RequireLongTests). The prefix is what BACKEND_SLOW_TESTS_REGEX
+// selects on, so the nightly slow workflow runs them; the RequireLongTests call
+// is what makes them skip in the fast lane, which is both a CI job and a
+// pre-push phase. A clone plus a live River client per test is too expensive to
+// pay on every push.
+//
 // ISOLATION: every test here runs on its OWN clone (newIsolatedRiverTestDB).
 // declare.Run starts a live River client, and namespace scoping does not
 // isolate river_job CONSUMPTION — a client draining on a shared database steals

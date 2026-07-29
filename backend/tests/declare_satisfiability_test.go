@@ -11,6 +11,7 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/declare"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/tests/testsupport"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -23,17 +24,19 @@ import (
 // amount, so a mis-lowered created_at cannot hide inside it.
 const createdAtTolerance = 30 * time.Second
 
-// TestDeclareSatisfiability executes EVERY registered declaration and asserts
-// the postconditions its own properties imply, through the production API read
-// path. The subtests are minted from the registry itself
-// (TestDeclareSatisfiability/<behavior-id>), so a registered declaration cannot
-// lack coverage — there is no parallel list to drift from.
+// TestSyntheticDeclareSatisfiability executes EVERY registered declaration and
+// asserts the postconditions its own properties imply, through the production
+// API read path. The subtests are minted from the registry itself
+// (TestSyntheticDeclareSatisfiability/<behavior-id>), so a registered
+// declaration cannot lack coverage — there is no parallel list to drift from.
 //
 // Each declaration then gets its namespace cleaned and its residue asserted to
 // zero, TOMBSTONES INCLUDED: one seeded contact is soft-deleted through the
 // real service first, because a cleanup that only found live rows would leave
 // the tombstone's identifiers permanently claiming the namespace.
-func TestDeclareSatisfiability(t *testing.T) {
+func TestSyntheticDeclareSatisfiability(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	router := newDeclareReadRouter(t, database)
 	contactRepo := repository.NewContactRepository(database.Queries)

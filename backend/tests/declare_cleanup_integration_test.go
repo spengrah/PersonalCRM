@@ -13,6 +13,7 @@ import (
 	"personal-crm/backend/internal/synthetic/declare"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/synthetic/replay"
+	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -23,7 +24,9 @@ import (
 // where one is a prefix of another are a normal state (a client derives
 // per-call suffixes), so cleaning "foo" must never LIKE-sweep across a live
 // "foo-bar" world that "foo" itself never created.
-func TestCleanup_RefusesLiveDescendant(t *testing.T) {
+func TestSyntheticDeclareCleanup_RefusesLiveDescendant(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 
 	parent := declareNS(t)
@@ -62,7 +65,9 @@ func TestCleanup_RefusesLiveDescendant(t *testing.T) {
 // The residue assertion is deliberately BY ID rather than by prefix: a
 // prefix-scoped count cannot see a renamed row, so it would report zero residue
 // in exactly the broken case.
-func TestCleanup_SweepsRenamedContact(t *testing.T) {
+func TestSyntheticDeclareCleanup_SweepsRenamedContact(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 	router := newDeclareReadRouter(t, database)
@@ -96,7 +101,9 @@ func TestCleanup_SweepsRenamedContact(t *testing.T) {
 
 // Cleanup can never race an in-flight seed: a held reservation is reported as
 // busy and NOTHING is deleted under it.
-func TestCleanup_BusyWhileSeedInFlight(t *testing.T) {
+func TestSyntheticDeclareCleanup_BusyWhileSeedInFlight(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 
 	namespace := declareNS(t)
@@ -127,7 +134,9 @@ func TestCleanup_BusyWhileSeedInFlight(t *testing.T) {
 // The lost-response case: the client only ever knew the token it REQUESTED, and
 // the server re-salted. Cleaning by the requested token alone must still reach
 // the salted world, including its salted numeric-band tokens.
-func TestCleanup_SweepsSaltedVariants(t *testing.T) {
+func TestSyntheticDeclareCleanup_SweepsSaltedVariants(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 
 	requested, effective := seedWithForcedResalt(t, ctx, database)
@@ -146,7 +155,9 @@ func TestCleanup_SweepsSaltedVariants(t *testing.T) {
 }
 
 // The ordinary case: cleaning by the EFFECTIVE namespace from the manifest.
-func TestDeclareRun_ReSaltedNamespaceCleansUp(t *testing.T) {
+func TestSyntheticDeclareRun_ReSaltedNamespaceCleansUp(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 
 	_, effective := seedWithForcedResalt(t, ctx, database)
@@ -160,7 +171,9 @@ func TestDeclareRun_ReSaltedNamespaceCleansUp(t *testing.T) {
 // its own — so reporting it as a second (empty, "cleaned") namespace would tell
 // the client it swept two worlds when there was one. A reentrant double-acquire
 // would also strand a counted session lock and serialize the namespace forever.
-func TestCleanup_ClientListRequestedPlusEffective(t *testing.T) {
+func TestSyntheticDeclareCleanup_ClientListRequestedPlusEffective(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 
 	requested, effective := seedWithForcedResalt(t, ctx, database)
@@ -199,7 +212,9 @@ func TestCleanup_ClientListRequestedPlusEffective(t *testing.T) {
 // effective token, find it free, and delete a still-running harness's world out
 // from under it. Reserving the whole salt family before anything is
 // materialized is what makes this cleanup report busy and delete nothing.
-func TestCleanup_CannotDeleteInFlightResaltedRun(t *testing.T) {
+func TestSyntheticDeclareCleanup_CannotDeleteInFlightResaltedRun(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -247,7 +262,9 @@ func TestCleanup_CannotDeleteInFlightResaltedRun(t *testing.T) {
 
 // Cleanup refuses while an EVENT-LINKED unfinalized job still dereferences the
 // namespace's rows, and completes once it is finalized.
-func TestCleanup_PendingThenRetrySucceeds(t *testing.T) {
+func TestSyntheticDeclareCleanup_PendingThenRetrySucceeds(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -285,7 +302,9 @@ func TestCleanup_PendingThenRetrySucceeds(t *testing.T) {
 // The SECOND Gate-B linkage class, separately: an aggregate job keys on
 // {contact_id, source} and carries NO event id, so an event-only predicate
 // would happily delete rows it still dereferences.
-func TestCleanup_AggregateJobRefusal(t *testing.T) {
+func TestSyntheticDeclareCleanup_AggregateJobRefusal(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -320,7 +339,9 @@ func TestCleanup_AggregateJobRefusal(t *testing.T) {
 // renamed contact is still reachable by id), and a later un-failed retry
 // finishes the job. Dropping either on a failed sweep would make the residue
 // unreachable forever.
-func TestCleanup_LadderFailureKeepsMarker(t *testing.T) {
+func TestSyntheticDeclareCleanup_LadderFailureKeepsMarker(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -375,7 +396,9 @@ func TestCleanup_LadderFailureKeepsMarker(t *testing.T) {
 // nothing was deleted (the general invariant), and the by-id claim and venue
 // counts say the specific orphan classes are gone after the retry — measured on
 // rows that a prefix-scoped residue read cannot see once their parents are gone.
-func TestCleanup_LadderFailureDeletesNothing(t *testing.T) {
+func TestSyntheticDeclareCleanup_LadderFailureDeletesNothing(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -440,7 +463,9 @@ func TestCleanup_LadderFailureDeletesNothing(t *testing.T) {
 // it. Admitting the parent then creates a world whose own cleanup refuses
 // forever — the descendant guard names the child and aborts every sweep — and
 // the parent's rows can never be removed by the client that made them.
-func TestDeclareRun_RefusesAncestorOfHostOnlyDescendant(t *testing.T) {
+func TestSyntheticDeclareRun_RefusesAncestorOfHostOnlyDescendant(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -486,7 +511,9 @@ func TestDeclareRun_RefusesAncestorOfHostOnlyDescendant(t *testing.T) {
 // band claim serializes them, so the second sees the first's committed rows and
 // re-salts — the outcome being that no phone value is ever shared between two
 // worlds, which identity matching resolves DB-wide with no namespace scoping.
-func TestDeclareRun_ConcurrentBandCollisionSerializes(t *testing.T) {
+func TestSyntheticDeclareRun_ConcurrentBandCollisionSerializes(t *testing.T) {
+	testsupport.RequireLongTests(t)
+
 	database, ctx := declareTestDB(t)
 
 	first, second := collidingNamespaces(t)
