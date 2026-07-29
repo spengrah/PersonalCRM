@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/synthetic/replay"
 
 	"github.com/google/uuid"
 )
@@ -74,11 +75,16 @@ var saltedNamespace = regexp.MustCompile(`-s\d+$`)
 //	reserve — the same non-blocking advisory lock the seed takes. A held lock
 //	   means a seed is in flight: report busy, delete nothing.
 //	descendant guard — refuse rather than LIKE-sweep across a live nested world.
-//	pending gate — refuse while any unfinalized River job still dereferences
-//	   the namespace's rows.
-//	ladder — FK-ordered deletes, with the host marker deleted LAST and only on a
-//	   clean run, so a partial failure leaves the namespace discoverable and
-//	   occupied instead of stranding unreachable residue.
+//	orphan drain — drop the namespace's own unfinalized jobs from its private
+//	   queue, whose client is provably gone (the reservation is held). Nothing
+//	   else will ever work them, so leaving them would make the pending gate
+//	   below refuse this namespace forever.
+//	pending gate — refuse while any unfinalized job on a queue somebody else
+//	   works still dereferences the namespace's rows.
+//	ladder — FK-ordered deletes, with the host marker and the ownership records
+//	   deleted LAST and only on a clean run, so a partial failure leaves the
+//	   namespace discoverable and occupied instead of stranding unreachable
+//	   residue.
 func CleanupNamespaces(ctx context.Context, database *db.Database, namespaces []string, seed uint64) (CleanupResult, error) {
 	res := CleanupResult{Expansions: map[string][]string{}, Results: map[string]NamespaceCleanup{}}
 	if err := ValidateCleanupNamespaces(namespaces); err != nil {
@@ -229,13 +235,25 @@ func cleanNamespace(
 		}
 	}
 
-	contactIDs, err := support.SelectContactIDsByFullNamePrefix(ctx, prefix)
+	contactIDs, err := namespaceContactIDs(ctx, support, namespace, prefix)
 	if err != nil {
-		return NamespaceCleanup{Status: StatusError, Err: fmt.Sprintf("select contacts: %v", err)}
+		return NamespaceCleanup{Status: StatusError, Err: err.Error()}
 	}
 	eventIDs, err := namespaceEventIDs(ctx, support, contactIDs, prefix)
 	if err != nil {
 		return NamespaceCleanup{Status: StatusError, Err: err.Error()}
+	}
+
+	// Orphan drain, BEFORE the pending gate. The harness works only its own
+	// private queue, so an unfinalized job left there once its client stopped can
+	// never be worked by anyone — and the pending gate would refuse this
+	// namespace forever, which is the one outcome that makes residue permanent.
+	// Safe precisely here: the reservation is held, so no run owns these rows.
+	// Jobs on `default` belong to the live application and are deliberately left
+	// alone; they still gate the sweep below, which is correct — someone will
+	// work them.
+	if _, err := support.DeleteUnfinalizedJobsInQueue(ctx, replay.SyntheticQueueName(namespace), eventIDs, contactIDs); err != nil {
+		return NamespaceCleanup{Status: StatusError, Err: fmt.Sprintf("drain orphaned jobs: %v", err)}
 	}
 
 	// Pending gate, at Gate-B parity. Deleting rows an unfinalized job still
@@ -249,6 +267,45 @@ func cleanNamespace(
 	}
 
 	return runLadder(ctx, support, gen, namespace, contactIDs, eventIDs)
+}
+
+// namespaceContactIDs is the UNION of the two ways a namespace's contacts can be
+// recovered, and it needs both.
+//
+// The name prefix reaches rows seeded before ownership was recorded, and rows
+// whose ownership record was lost. The ownership record reaches rows whose
+// full_name no longer carries the prefix — the contact API lets a test rename a
+// seeded contact, and rewrites node.canonical_label to match, so a renamed
+// contact is invisible to EVERY name-derived sweep in the ladder. Recovering it
+// by id is what keeps the contact, its methods, interactions, tasks, notes and
+// person node reachable; without it cleanup would skip all of them, delete the
+// namespace's discovery marker, and report "cleaned" over live rows.
+func namespaceContactIDs(
+	ctx context.Context,
+	support *repository.SyntheticSupportRepository,
+	namespace, prefix string,
+) ([]uuid.UUID, error) {
+	byName, err := support.SelectContactIDsByFullNamePrefix(ctx, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("select contacts by name prefix: %w", err)
+	}
+	owned, err := support.SelectNamespaceEntityIDs(ctx, namespace, repository.EntityKindContact)
+	if err != nil {
+		return nil, fmt.Errorf("select owned contacts: %w", err)
+	}
+
+	seen := make(map[uuid.UUID]bool, len(byName)+len(owned))
+	union := make([]uuid.UUID, 0, len(byName)+len(owned))
+	for _, ids := range [][]uuid.UUID{byName, owned} {
+		for _, id := range ids {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			union = append(union, id)
+		}
+	}
+	return union, nil
 }
 
 // liveDescendants returns the hostnames of namespaces nested under this one,
@@ -328,10 +385,12 @@ var declaredRootEventSources = []string{repository.InteractionSourceEmail}
 // Best-effort per step (record and continue, first error wins), mirroring the
 // harness's own teardown: one failing table must not strand the rest.
 //
-// MARKER RETENTION: step "mac_host" — and the meeting notes hanging off it —
-// runs ONLY when every prior step succeeded. The host row is how expansion and
-// the descendant guard DISCOVER this namespace, so deleting it after a partial
-// sweep would make the residue unreachable by token forever. Keeping it leaves
+// MARKER RETENTION: the final block — the host row, the meeting notes hanging
+// off it, and the namespace's ownership records — runs ONLY when every prior
+// step succeeded. Those two are how a later cleanup DISCOVERS this namespace
+// (expansion and the descendant guard find the host; the ownership records find
+// contacts whose names no longer carry the prefix), so dropping them after a
+// partial sweep would make the residue unreachable forever. Keeping them leaves
 // the namespace both discoverable and occupied, so a retry is possible and a
 // re-seed is refused.
 func runLadder(
@@ -465,6 +524,29 @@ func runLadder(
 		}
 		deleted["mac_hosts"] = n
 	}
+
+	// The ownership records are the OTHER discovery mechanism, so they go with
+	// the marker: last, and only on a clean run. A partial sweep that dropped
+	// them would leave a renamed contact unreachable by any route at all.
+	owned, err := support.DeleteNamespaceEntities(ctx, namespace)
+	if err != nil {
+		return NamespaceCleanup{
+			Status: StatusError,
+			Err:    fmt.Sprintf("cleanup namespace ownership: %v (namespace %q left discoverable)", err, namespace),
+		}
+	}
+	deleted["namespace_entities"] = owned
+
+	// The private queue's own row, which the harness's producer upserted on
+	// start. Without this every declared seed would leave one behind.
+	queues, err := support.DeleteRiverQueue(ctx, replay.SyntheticQueueName(namespace))
+	if err != nil {
+		return NamespaceCleanup{
+			Status: StatusError,
+			Err:    fmt.Sprintf("cleanup river_queue: %v (namespace %q left discoverable)", err, namespace),
+		}
+	}
+	deleted["river_queues"] = queues
 
 	return NamespaceCleanup{Status: StatusCleaned, Deleted: deleted}
 }

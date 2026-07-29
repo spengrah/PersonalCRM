@@ -250,7 +250,7 @@ func execute(parent context.Context, database *db.Database, d Declaration, names
 		}
 	}
 
-	res, err := runEntities(ctx, h, d)
+	res, err := runEntities(ctx, h, support, d)
 	if err != nil {
 		return Result{}, &RunError{Namespace: h.Namespace(), Cleaned: driveTeardown(teardown), Err: err}
 	}
@@ -539,7 +539,12 @@ func bandsFree(ctx context.Context, support *repository.SyntheticSupportReposito
 
 // runEntities executes a declaration's entities in declared order, then drains
 // Gate B. Success therefore means "quiescent", not merely "written".
-func runEntities(ctx context.Context, h *replay.Harness, d Declaration) (Result, error) {
+func runEntities(
+	ctx context.Context,
+	h *replay.Harness,
+	support *repository.SyntheticSupportRepository,
+	d Declaration,
+) (Result, error) {
 	res := Result{
 		Namespace: h.Namespace(),
 		Anchor:    h.Generator().Anchor(),
@@ -549,7 +554,7 @@ func runEntities(ctx context.Context, h *replay.Harness, d Declaration) (Result,
 		if err := ctx.Err(); err != nil {
 			return Result{}, fmt.Errorf("declare: run budget expired before entity %q: %w", e.handle(), err)
 		}
-		seeded, err := runEntity(ctx, h, e)
+		seeded, err := runEntity(ctx, h, support, e)
 		if err != nil {
 			return Result{}, fmt.Errorf("declare: entity %q: %w", e.handle(), err)
 		}
@@ -570,10 +575,15 @@ func runEntities(ctx context.Context, h *replay.Harness, d Declaration) (Result,
 	return res, nil
 }
 
-func runEntity(ctx context.Context, h *replay.Harness, e Entity) (Seeded, error) {
+func runEntity(
+	ctx context.Context,
+	h *replay.Harness,
+	support *repository.SyntheticSupportRepository,
+	e Entity,
+) (Seeded, error) {
 	switch p := e.(type) {
 	case *contactPlan:
-		return runContact(ctx, h, p)
+		return runContact(ctx, h, support, p)
 	default:
 		return Seeded{}, fmt.Errorf("unsupported entity kind %q", e.kind())
 	}
@@ -605,7 +615,12 @@ func runEntity(ctx context.Context, h *replay.Harness, e Entity) (Seeded, error)
 // faithful where a real day is long relative to the lag. A fixture that must
 // pin an exact day count needs a non-email history source, which the vocabulary
 // does not have yet.
-func runContact(ctx context.Context, h *replay.Harness, p *contactPlan) (Seeded, error) {
+func runContact(
+	ctx context.Context,
+	h *replay.Harness,
+	support *repository.SyntheticSupportRepository,
+	p *contactPlan,
+) (Seeded, error) {
 	gen := h.Generator()
 
 	var opts []factory.ContactOption
@@ -633,6 +648,16 @@ func runContact(ctx context.Context, h *replay.Harness, p *contactPlan) (Seeded,
 	contact, err := h.SeedContact(ctx, spec)
 	if err != nil {
 		return Seeded{}, err
+	}
+	// Record ownership by ID before anything else can happen to the row.
+	// Cleanup runs in a LATER request and otherwise recovers contacts by their
+	// generated full_name — which the contact API lets a test rewrite, taking
+	// node.canonical_label with it. A renamed contact would then be invisible to
+	// every name-derived sweep, so cleanup would skip it and its children,
+	// delete the namespace's discovery marker, and report success over live
+	// residue. This record is keyed by the contact id, which nothing rewrites.
+	if err := support.RecordNamespaceEntity(ctx, h.Namespace(), repository.EntityKindContact, contact.ID); err != nil {
+		return Seeded{}, fmt.Errorf("record namespace ownership: %w", err)
 	}
 
 	if p.overdueBy != nil {

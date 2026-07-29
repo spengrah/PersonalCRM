@@ -333,8 +333,21 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteMacHostByID(ctx, h.macHostID)
 		return err
 	})
+	// 14a. namespace ownership records. Only the DECLARED seed path writes them
+	// (keyed by this namespace), but this teardown is the failure path that same
+	// path drives — and it reports whether the namespace came out CLEAN, so
+	// leaving bookkeeping behind would make that report false.
+	step("synthetic_namespace_entity", func() error {
+		_, err := h.support.DeleteNamespaceEntities(ctx, h.namespace)
+		return err
+	})
 	// 15. river_job: NEVER deleted here (D5a row 15) — finalized jobs are
-	// reclaimed by River retention / DB reset.
+	// reclaimed by River retention / DB reset, and this teardown only runs once
+	// Gate B is clear, so there is nothing unfinalized to reclaim. (The
+	// CROSS-REQUEST declared cleanup does delete a namespace's own unfinalized
+	// jobs, but only from its private queue and only while holding the
+	// reservation — the case this teardown cannot reach, because its client is
+	// already gone. See declare.CleanupNamespaces.)
 
 	return firstErr
 }

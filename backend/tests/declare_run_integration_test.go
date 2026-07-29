@@ -17,6 +17,7 @@ import (
 	"personal-crm/backend/internal/synthetic/replay"
 
 	"github.com/google/uuid"
+	"github.com/riverqueue/river"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -447,22 +448,28 @@ func TestDeclareRun_ReservationCoversSaltVariants(t *testing.T) {
 	}
 }
 
-// The harness runs a live River client on the shared `default` queue, and River
-// fetches ANY available job there — no kind or namespace filter — while a nil
-// Work result FINALIZES the job. The two kinds the harness registers no-op
-// workers for would therefore swallow another process's work silently. A foreign
-// job must come back un-finalized, and the snooze counter is what makes that a
-// POSITIVE observation: a job nobody ever fetched is also un-finalized.
+// A seeding harness must never take a job off the queue the live application
+// works.
 //
-// BOTH no-op kinds are planted, because they resolve ownership by DIFFERENT
-// routes and a regression in one is invisible to the other:
-//   - rematch_dispatcher's args carry the contact id, so ownership is a direct
-//     contact lookup;
-//   - knowledge_cache_updater's args carry only an event id, so ownership has to
-//     resolve the event's SUBJECT contact first. A broken event-subject
-//     predicate (or a kind that quietly stopped being ownership-checked at all)
-//     would finalize the cache job while the rematch job still looked correct.
-func TestDeclareRun_ForeignRiverJobIsNotStolen(t *testing.T) {
+// River's fetch selects ANY available job in the queues its client is
+// configured for — no kind filter, no owner filter — so a harness sharing
+// `default` damages every kind it can reach, in three different ways:
+//   - a NO-OP kind (rematch_dispatcher, knowledge_cache_updater) is finalized
+//     without its work ever happening — silently lost;
+//   - a kind the harness registers a REAL worker for under replay semantics
+//     (followup_manager, deliberately wired in OFF mode) is finalized having
+//     skipped the cutover work it was enqueued for;
+//   - a production kind the harness does NOT register (todoist_task_op) is
+//     fetched and failed as an unknown kind, burning the job's attempts.
+//
+// All four kinds are planted, because a per-kind guard fixes at most the first
+// two and the failure modes are invisible to each other. The proof is the
+// ATTEMPT counter: River increments it on fetch, so attempt == 0 states
+// positively that no worker was ever handed the job — where "not finalized"
+// alone is also true of a job nobody looked at. The positive control that the
+// harness's client was genuinely alive and fetching is the seed itself: it
+// cannot succeed without draining its own Gate B.
+func TestDeclareRun_ForeignRiverJobIsNotFetched(t *testing.T) {
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -474,50 +481,55 @@ func TestDeclareRun_ForeignRiverJobIsNotStolen(t *testing.T) {
 	rematchJobID, err := support.InsertAvailableRematchJobForContact(ctx, foreignContactID)
 	require.NoError(t, err)
 
-	// The cache job must point at a REAL foreign event: an unresolvable event id
-	// is refused by the "not provably ours" fallback and would prove nothing
-	// about the subject resolution itself.
+	// The event-keyed kinds point at a REAL foreign event, so a fetch would have
+	// something resolvable to act on rather than erroring its way to safety.
 	foreignEventIDs, err := support.ListEventIdsForContacts(ctx, []uuid.UUID{foreignContactID})
 	require.NoError(t, err)
-	require.NotEmpty(t, foreignEventIDs, "the foreign world must own an event for the cache job to reference")
-	foreignPrefix := factory.NewGenerator(factory.DefaultSeed, foreign.Namespace).Prefix()
-	ownedByForeign, err := support.NamespaceOwnsEventSubject(ctx, foreignEventIDs[0], foreignPrefix)
-	require.NoError(t, err)
-	require.True(t, ownedByForeign,
-		"the planted event must resolve to the FOREIGN namespace's subject — otherwise the seeding harness would be refusing an id it simply could not resolve")
-	cacheJobID, err := support.InsertAvailableKnowledgeCacheJobForEvent(ctx, foreignEventIDs[0])
-	require.NoError(t, err)
+	require.NotEmpty(t, foreignEventIDs, "the foreign world must own an event for the planted jobs to reference")
 
-	// Observe while the SECOND namespace's client is alive and fetching.
-	var observedRematch, observedCache repository.RiverJobDisposition
+	planted := map[string]int64{"rematch_dispatcher": rematchJobID}
+	for _, kind := range []string{"knowledge_cache_updater", "followup_manager", "todoist_task_op"} {
+		id, insertErr := support.InsertAvailableJobOfKind(ctx, kind, foreignEventIDs[0])
+		require.NoError(t, insertErr)
+		planted[kind] = id
+	}
+
+	// Observe while the SECOND namespace's client is alive and fetching. The
+	// poll returns early only if something touches a job, so the ordinary
+	// outcome is that it burns its (short) budget — which is the point.
+	observed := map[string]repository.RiverJobDisposition{}
 	restore := declare.SetTestHookForTest(declare.HookAfterReplayBeforeDrain,
 		func(hookCtx context.Context, _ *replay.Harness) error {
-			observedRematch = pollJobDisposition(hookCtx, support, rematchJobID, 30*time.Second)
-			observedCache = pollJobDisposition(hookCtx, support, cacheJobID, 30*time.Second)
+			for kind, id := range planted {
+				observed[kind] = pollJobDisposition(hookCtx, support, id, 5*time.Second)
+			}
 			return nil
 		})
 	namespace := declareNS(t)
 	seeded, err := declare.Run(ctx, database, "DSH-005", namespace, factory.DefaultSeed)
 	restore()
-	require.NoError(t, err)
+	require.NoError(t, err, "the seed must have completed — that is what proves its client was fetching at all")
 
-	for _, observed := range []struct {
-		kind string
-		got  repository.RiverJobDisposition
-	}{
-		{"rematch_dispatcher", observedRematch},
-		{"knowledge_cache_updater", observedCache},
-	} {
-		assert.Greater(t, observed.got.Snoozes, int64(0),
-			"the harness must have FETCHED the foreign %s job — without that, un-finalized proves nothing", observed.kind)
-		assert.False(t, observed.got.Finalized,
-			"the harness finalized a foreign %s job", observed.kind)
-		assert.NotEqual(t, "completed", observed.got.State, "foreign %s job", observed.kind)
+	for kind, got := range observed {
+		assert.Equal(t, int32(0), got.Attempt,
+			"the harness FETCHED a foreign %s job (attempt %d, state %q)", kind, got.Attempt, got.State)
+		assert.Zero(t, got.Snoozes, "the harness worked a foreign %s job", kind)
+		assert.False(t, got.Finalized, "the harness finalized a foreign %s job", kind)
+		assert.Equal(t, "available", got.State, "foreign %s job", kind)
 	}
 
-	require.NoError(t, support.FinalizeRiverJobByID(ctx, rematchJobID))
-	require.NoError(t, support.FinalizeRiverJobByID(ctx, cacheJobID))
-	requireCleaned(t, ctx, database, []string{foreignNS, namespace}, factory.DefaultSeed)
+	require.NotEqual(t, river.QueueDefault, replay.SyntheticQueueName(seeded.Namespace),
+		"a harness queue that resolved to `default` would isolate nothing")
+
+	for _, id := range planted {
+		require.NoError(t, support.FinalizeRiverJobByID(ctx, id))
+	}
+	res := requireCleaned(t, ctx, database, []string{foreignNS, namespace}, factory.DefaultSeed)
+	// A producer upserts a river_queue row when it starts, so a swept namespace
+	// reporting exactly one is the other half of the isolation claim: the
+	// harness really did run on a queue of its own, and cleanup took it with it.
+	assert.Equal(t, int64(1), res.Results[seeded.Namespace].Deleted["river_queues"],
+		"the namespace's private queue row must exist and be swept")
 	assert.Equal(t, int64(0), measureResidue(t, ctx, database, seeded.Namespace, factory.DefaultSeed).total())
 }
 

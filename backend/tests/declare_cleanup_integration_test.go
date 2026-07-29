@@ -14,6 +14,7 @@ import (
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/synthetic/replay"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,6 +45,53 @@ func TestCleanup_RefusesLiveDescendant(t *testing.T) {
 	assert.Equal(t, before, after, "the descendant's world must be byte-intact")
 
 	requireCleaned(t, ctx, database, []string{childRes.Namespace}, factory.DefaultSeed)
+}
+
+// A test that RENAMES a seeded contact through the ordinary contact API must
+// not thereby hide it from cleanup.
+//
+// The hazard is specific and silent. Cleanup runs in a later request with no
+// handle on what the seed created, so it recovers contacts from the namespace
+// prefix their generated full_name carries — and full_name is user-editable.
+// The update also rewrites node.canonical_label, so the label sweep loses the
+// person node too. With only name-derived recovery the whole cleanup then walks
+// past the contact AND everything hanging off it, deletes the namespace's
+// discovery marker, and reports "cleaned" over live rows that nothing can ever
+// find again. This is not hypothetical: the contacts domain's specs edit names.
+//
+// The residue assertion is deliberately BY ID rather than by prefix: a
+// prefix-scoped count cannot see a renamed row, so it would report zero residue
+// in exactly the broken case.
+func TestCleanup_SweepsRenamedContact(t *testing.T) {
+	database, ctx := declareTestDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+	router := newDeclareReadRouter(t, database)
+
+	namespace := declareNS(t)
+	seeded := mustRun(t, ctx, database, "DSH-005", namespace)
+	target := uuid.MustParse(seeded.Entities["refresh-target"].ID)
+	sentinel := uuid.MustParse(seeded.Entities["refresh-sentinel"].ID)
+
+	renameContact(t, router, target.String(), "Renamed Away From The Namespace")
+
+	// Prove the hazard is real before proving the fix: the name-derived lookup
+	// the ladder used to rely on no longer finds this contact.
+	byName, err := support.SelectContactIDsByFullNamePrefix(ctx,
+		factory.NewGenerator(factory.DefaultSeed, seeded.Namespace).Prefix())
+	require.NoError(t, err)
+	require.NotContains(t, byName, target,
+		"the rename must actually have taken the contact out of the prefix sweep")
+	require.Contains(t, byName, sentinel, "the untouched sibling must still be found by name")
+
+	requireCleaned(t, ctx, database, []string{namespace}, factory.DefaultSeed)
+
+	surviving, err := support.CountContactsByIds(ctx, []uuid.UUID{target, sentinel})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), surviving, "the renamed contact must be swept like any other")
+	liveNodes, err := support.CountLiveNodesByIds(ctx, []uuid.UUID{target, sentinel})
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), liveNodes, "the renamed contact's person node must go with it")
+	assert.Equal(t, int64(0), measureResidue(t, ctx, database, seeded.Namespace, factory.DefaultSeed).total())
 }
 
 // Cleanup can never race an in-flight seed: a held reservation is reported as
@@ -266,10 +314,12 @@ func TestCleanup_AggregateJobRefusal(t *testing.T) {
 	requireCleaned(t, ctx, database, []string{namespace}, factory.DefaultSeed)
 }
 
-// A partially failed ladder KEEPS the host marker, so the namespace stays
-// discoverable (expansion finds it) and occupied (a re-seed is refused), and a
-// later un-failed retry finishes the job. Deleting the marker on a failed sweep
-// would make the residue unreachable by token forever.
+// A partially failed ladder KEEPS both discovery mechanisms — the host marker
+// and the namespace's ownership records — so the namespace stays discoverable
+// (expansion finds it), occupied (a re-seed is refused) and RECOVERABLE (a
+// renamed contact is still reachable by id), and a later un-failed retry
+// finishes the job. Dropping either on a failed sweep would make the residue
+// unreachable forever.
 func TestCleanup_LadderFailureKeepsMarker(t *testing.T) {
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
@@ -286,6 +336,11 @@ func TestCleanup_LadderFailureKeepsMarker(t *testing.T) {
 	_, exists, err := support.SelectMacHostIDByHostname(ctx, hostnameFor(seeded.Namespace))
 	require.NoError(t, err)
 	assert.True(t, exists, "the discovery marker must SURVIVE a partially failed sweep")
+
+	owned, err := support.SelectNamespaceEntityIDs(ctx, seeded.Namespace, repository.EntityKindContact)
+	require.NoError(t, err)
+	assert.Len(t, owned, len(seeded.Entities),
+		"the ownership records must SURVIVE too — they are how a renamed contact stays reachable")
 
 	// Still occupied: a re-seed of the same namespace is refused.
 	_, err = declare.Run(ctx, database, "DSH-005", namespace, factory.DefaultSeed)

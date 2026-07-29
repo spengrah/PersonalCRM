@@ -234,6 +234,16 @@ export interface TriggerErrorRequest {
 const DECLARED_CLEANUP_POLL_BUDGET_MS = 200_000
 const DECLARED_CLEANUP_POLL_INTERVAL_MS = 2_000
 
+// The server's per-request namespace cap (maxCleanupNamespaces in
+// backend/internal/synthetic/declare/cleanup.go). It exists so a repeated
+// cleanup cannot multiply database work, and it is enforced as a 400 BEFORE
+// anything is deleted — so a single oversized request would leave EVERY
+// declared world of that test behind, not just the ones past the limit. A test
+// reaches it sooner than the number suggests: each seed can record two tokens
+// (the requested one and the effective one a re-salt produced), so 16 seeds are
+// enough. Cleanup therefore sends in batches of this size.
+const DECLARED_CLEANUP_MAX_PER_REQUEST = 32
+
 /**
  * TestAPI provides methods to seed and cleanup test data via the backend test endpoints.
  * These endpoints are only available when CRM_ENV=testing.
@@ -549,7 +559,7 @@ export class TestAPI {
   private async cleanupDeclaredNamespaces(): Promise<void> {
     if (this._declaredNamespaces.length === 0) return
 
-    const attempt = async (namespaces: string[]): Promise<CleanupNamespacesResponse> => {
+    const post = async (namespaces: string[]): Promise<CleanupNamespacesResponse> => {
       const response = await this.request.post(`${API_BASE_URL}/api/v1/test/cleanup`, {
         headers: API_HEADERS,
         data: { namespaces },
@@ -559,6 +569,19 @@ export class TestAPI {
         throw new Error(`Failed to clean declared namespaces: ${response.status()} ${body}`)
       }
       return JSON.parse(body).data as CleanupNamespacesResponse
+    }
+
+    // Batched: the server rejects an oversized list outright, and that 400
+    // arrives before it has deleted anything, so one long-running test could
+    // strand every world it seeded.
+    const attempt = async (namespaces: string[]): Promise<CleanupNamespacesResponse> => {
+      const merged: CleanupNamespacesResponse = { expansions: {}, results: {} }
+      for (let i = 0; i < namespaces.length; i += DECLARED_CLEANUP_MAX_PER_REQUEST) {
+        const batch = await post(namespaces.slice(i, i + DECLARED_CLEANUP_MAX_PER_REQUEST))
+        Object.assign(merged.expansions, batch.expansions)
+        Object.assign(merged.results, batch.results)
+      }
+      return merged
     }
 
     const retriable = (result: CleanupNamespacesResponse) =>

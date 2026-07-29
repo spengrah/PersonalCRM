@@ -723,6 +723,7 @@ TRUNCATE TABLE
     relationship_signal,
     river_job,
     sync_staleness_breach,
+    synthetic_namespace_entity,
     tag,
     telegram_channel_state,
     telegram_chat_config,
@@ -1327,59 +1328,6 @@ SELECT COUNT(*) FROM node WHERE id = ANY($1::uuid[]) AND merged_into IS NOT NULL
 // the soft-delete set.
 func (q *Queries) SyntheticCountMergedIntoNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountMergedIntoNodesByIds, nodeIds)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const SyntheticCountNamespaceOwnedContact = `-- name: SyntheticCountNamespaceOwnedContact :one
-SELECT COUNT(*) FROM contact
-WHERE id = $1::uuid
-  AND full_name LIKE $2 || '%'
-`
-
-type SyntheticCountNamespaceOwnedContactParams struct {
-	ContactID  pgtype.UUID `json:"contact_id"`
-	NamePrefix pgtype.Text `json:"name_prefix"`
-}
-
-// Harness job-ownership predicate (part 1): does this contact belong to the
-// harness's OWN namespace? A harness runs a real River client on the shared
-// `default` queue, and River does not partition river_job by owner — so a
-// worker that no-ops unconditionally would silently finalize a job another
-// process enqueued. Every no-op worker asks this first and snoozes anything it
-// does not own. Tombstones count as owned: a soft-deleted seeded contact's
-// jobs are still this namespace's to finalize.
-func (q *Queries) SyntheticCountNamespaceOwnedContact(ctx context.Context, arg SyntheticCountNamespaceOwnedContactParams) (int64, error) {
-	row := q.db.QueryRow(ctx, SyntheticCountNamespaceOwnedContact, arg.ContactID, arg.NamePrefix)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const SyntheticCountNamespaceOwnedEventSubject = `-- name: SyntheticCountNamespaceOwnedEventSubject :one
-SELECT COUNT(*) FROM event e
-WHERE e.id = $1::uuid
-  AND EXISTS (
-    SELECT 1 FROM contact c
-    WHERE c.id::text = COALESCE(e.payload->>'contact_id', e.payload->>'subject_node_id')
-      AND c.full_name LIKE $2 || '%'
-  )
-`
-
-type SyntheticCountNamespaceOwnedEventSubjectParams struct {
-	EventID    pgtype.UUID `json:"event_id"`
-	NamePrefix pgtype.Text `json:"name_prefix"`
-}
-
-// Harness job-ownership predicate (part 2): for the job kinds whose args carry
-// only an event id, resolve the event to its subject contact and ask the same
-// question. Cascade payloads carry a scalar contact_id; assertion payloads
-// carry subject_node_id, which for a person node IS the contact id (the graph
-// dual-write keeps node.id == contact.id) — so one COALESCE covers both
-// without a per-kind payload decode.
-func (q *Queries) SyntheticCountNamespaceOwnedEventSubject(ctx context.Context, arg SyntheticCountNamespaceOwnedEventSubjectParams) (int64, error) {
-	row := q.db.QueryRow(ctx, SyntheticCountNamespaceOwnedEventSubject, arg.EventID, arg.NamePrefix)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2086,6 +2034,21 @@ func (q *Queries) SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteNamespaceEntities = `-- name: SyntheticDeleteNamespaceEntities :execrows
+DELETE FROM synthetic_namespace_entity WHERE namespace = $1
+`
+
+// Cleanup ladder (final block): drops the namespace's ownership records. Runs
+// with the host-marker delete — only after every earlier step succeeded — so a
+// partially failed sweep keeps the namespace both discoverable AND recoverable.
+func (q *Queries) SyntheticDeleteNamespaceEntities(ctx context.Context, namespace string) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteNamespaceEntities, namespace)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteNodesByIds = `-- name: SyntheticDeleteNodesByIds :execrows
 DELETE FROM node WHERE id = ANY($1::uuid[])
 `
@@ -2162,6 +2125,21 @@ func (q *Queries) SyntheticDeleteRelationshipSignalsForNodes(ctx context.Context
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteRiverQueue = `-- name: SyntheticDeleteRiverQueue :execrows
+DELETE FROM river_queue WHERE name = $1
+`
+
+// Cleanup ladder: drops the river_queue row a harness producer created for the
+// namespace's private queue. Without it every declared seed would leave one
+// permanent row behind on the shared database.
+func (q *Queries) SyntheticDeleteRiverQueue(ctx context.Context, name string) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteRiverQueue, name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteTelegramChatConfigsByChatIds = `-- name: SyntheticDeleteTelegramChatConfigsByChatIds :execrows
 DELETE FROM telegram_chat_config WHERE telegram_chat_id = ANY($1::bigint[])
 `
@@ -2208,6 +2186,39 @@ WHERE source = 'telegram' AND source_id = ANY($1::text[])
 // delete via ON DELETE SET NULL and would otherwise pollute future matching).
 func (q *Queries) SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteTelegramExternalIdentitiesByPeerIds, peerIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteUnfinalizedJobsInQueue = `-- name: SyntheticDeleteUnfinalizedJobsInQueue :execrows
+DELETE FROM river_job
+WHERE queue = $1
+  AND finalized_at IS NULL
+  AND (
+        (args->>'event_id') = ANY($2::text[])
+     OR (args->>'contact_id') = ANY($3::text[])
+  )
+`
+
+type SyntheticDeleteUnfinalizedJobsInQueueParams struct {
+	Queue      string   `json:"queue"`
+	EventIds   []string `json:"event_ids"`
+	ContactIds []string `json:"contact_ids"`
+}
+
+// Cleanup ladder: drops the namespace's own ORPHANED River jobs.
+//
+// A harness client fetches only its own private queue, so a job left in that
+// queue after the client stopped can never be worked by anyone — and the
+// pending gate would refuse to sweep the namespace forever. Cleanup holds the
+// namespace reservation while this runs, so no live run owns these rows.
+// Deliberately scoped to ONE queue and to unfinalized rows: a `default`-queue
+// job belongs to the live application and must still gate the sweep, and
+// finalized rows are River's own retention business.
+func (q *Queries) SyntheticDeleteUnfinalizedJobsInQueue(ctx context.Context, arg SyntheticDeleteUnfinalizedJobsInQueueParams) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteUnfinalizedJobsInQueue, arg.Queue, arg.EventIds, arg.ContactIds)
 	if err != nil {
 		return 0, err
 	}
@@ -2502,6 +2513,31 @@ func (q *Queries) SyntheticListExternalContactSourceIdsByPrefix(ctx context.Cont
 	return items, nil
 }
 
+const SyntheticRecordNamespaceEntity = `-- name: SyntheticRecordNamespaceEntity :exec
+INSERT INTO synthetic_namespace_entity (namespace, entity_kind, entity_id)
+VALUES ($1, $2, $3::uuid)
+ON CONFLICT (namespace, entity_kind, entity_id) DO NOTHING
+`
+
+type SyntheticRecordNamespaceEntityParams struct {
+	Namespace  string      `json:"namespace"`
+	EntityKind string      `json:"entity_kind"`
+	EntityID   pgtype.UUID `json:"entity_id"`
+}
+
+// Namespace ownership, written at seed time. The declared-seed endpoint seeds
+// in one request and cleans up in another, and every other id set is recovered
+// from a generator-derived token carried by the row — which for contacts means
+// full_name, a USER-EDITABLE column. A test that renames a seeded contact
+// through the ordinary contact API makes it invisible to the name-derived
+// sweeps (node.canonical_label is rewritten with it), so cleanup would skip it
+// and report success over live residue. This record is keyed by the entity's
+// own id, which nothing in the application rewrites.
+func (q *Queries) SyntheticRecordNamespaceEntity(ctx context.Context, arg SyntheticRecordNamespaceEntityParams) error {
+	_, err := q.db.Exec(ctx, SyntheticRecordNamespaceEntity, arg.Namespace, arg.EntityKind, arg.EntityID)
+	return err
+}
+
 const SyntheticSelectContactIdsByFullNamePrefix = `-- name: SyntheticSelectContactIdsByFullNamePrefix :many
 
 SELECT id FROM contact
@@ -2593,6 +2629,40 @@ func (q *Queries) SyntheticSelectMacHostIdByHostname(ctx context.Context, hostna
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const SyntheticSelectNamespaceEntityIds = `-- name: SyntheticSelectNamespaceEntityIds :many
+SELECT entity_id FROM synthetic_namespace_entity
+WHERE namespace = $1 AND entity_kind = $2
+ORDER BY entity_id
+`
+
+type SyntheticSelectNamespaceEntityIdsParams struct {
+	Namespace  string `json:"namespace"`
+	EntityKind string `json:"entity_kind"`
+}
+
+// Cleanup id-set: the entity ids this namespace recorded ownership of. Unioned
+// with the prefix sweep rather than replacing it — the prefix still finds rows
+// a pre-ownership run seeded, and ownership still finds rows the prefix lost.
+func (q *Queries) SyntheticSelectNamespaceEntityIds(ctx context.Context, arg SyntheticSelectNamespaceEntityIdsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, SyntheticSelectNamespaceEntityIds, arg.Namespace, arg.EntityKind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var entity_id pgtype.UUID
+		if err := rows.Scan(&entity_id); err != nil {
+			return nil, err
+		}
+		items = append(items, entity_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const SyntheticSelectVenueNodeIdsForContacts = `-- name: SyntheticSelectVenueNodeIdsForContacts :many
@@ -3129,7 +3199,8 @@ func (q *Queries) TestGetLiveFollowUpByNamePrefix(ctx context.Context, namePrefi
 const TestGetRiverJobDispositionByID = `-- name: TestGetRiverJobDispositionByID :one
 SELECT state::text AS state,
        (finalized_at IS NOT NULL)::bool AS finalized,
-       COALESCE((metadata->>'snoozes')::bigint, 0)::bigint AS snoozes
+       COALESCE((metadata->>'snoozes')::bigint, 0)::bigint AS snoozes,
+       attempt::int AS attempt
 FROM river_job WHERE id = $1
 `
 
@@ -3137,38 +3208,50 @@ type TestGetRiverJobDispositionByIDRow struct {
 	State     string `json:"state"`
 	Finalized bool   `json:"finalized"`
 	Snoozes   int64  `json:"snoozes"`
+	Attempt   int32  `json:"attempt"`
 }
 
 // Test assertion — a planted job's disposition: its state, whether it is
-// finalized, and how many times it has been snoozed (River records the count in
-// metadata->>'snoozes' every time a worker returns JobSnooze). The snooze count
-// is what makes "the harness left it alone" a POSITIVE observation rather than
-// the absence of one: a job nobody ever fetched is also un-finalized.
+// finalized, how many times a worker snoozed it (River records the count in
+// metadata->>'snoozes'), and its attempt counter. `attempt` is the load-bearing
+// one for queue isolation: River increments it on FETCH, so attempt = 0 says
+// the job was never handed to a worker at all — a positive statement, unlike
+// "not finalized", which a job nobody ever looked at also satisfies.
 func (q *Queries) TestGetRiverJobDispositionByID(ctx context.Context, id int64) (*TestGetRiverJobDispositionByIDRow, error) {
 	row := q.db.QueryRow(ctx, TestGetRiverJobDispositionByID, id)
 	var i TestGetRiverJobDispositionByIDRow
-	err := row.Scan(&i.State, &i.Finalized, &i.Snoozes)
+	err := row.Scan(
+		&i.State,
+		&i.Finalized,
+		&i.Snoozes,
+		&i.Attempt,
+	)
 	return &i, err
 }
 
-const TestInsertAvailableKnowledgeCacheJobForEvent = `-- name: TestInsertAvailableKnowledgeCacheJobForEvent :one
+const TestInsertAvailableJobOfKind = `-- name: TestInsertAvailableJobOfKind :one
 INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
-VALUES ('knowledge_cache_updater', 'default', 'available',
-        jsonb_build_object('event_id', $1::text),
+VALUES ($1, 'default', 'available',
+        jsonb_build_object('event_id', $2::text),
         '{}'::jsonb, 1, 5, NOW())
 RETURNING id
 `
 
-// Failure-injection fixture: the SECOND no-op kind the harness registers, and
-// the one whose ownership CANNOT be read off the args — knowledge_cache_updater
-// carries only an event id, so ownership has to resolve the event's subject
-// contact. Pointed at a FOREIGN namespace's event this makes that resolution's
-// failure mode concrete: a regression in the event-subject predicate (or in the
-// worker registration) would finalize the job, silently dropping another
-// process's cache refresh. Available, not scheduled, for the same reason as the
-// rematch fixture: the fetch has to happen for the assertion to mean anything.
-func (q *Queries) TestInsertAvailableKnowledgeCacheJobForEvent(ctx context.Context, eventID string) (int64, error) {
-	row := q.db.QueryRow(ctx, TestInsertAvailableKnowledgeCacheJobForEvent, eventID)
+type TestInsertAvailableJobOfKindParams struct {
+	Kind    string `json:"kind"`
+	EventID string `json:"event_id"`
+}
+
+// Isolation fixture, generalized: an AVAILABLE `default`-queue job of ANY kind,
+// carrying an event id. Two classes matter beyond the no-op kinds, and neither
+// is covered by a rematch fixture:
+//   - a kind the harness registers a REAL worker for (followup_manager), which
+//     the harness wires in off mode — fetching one would finalize it without
+//     doing the work;
+//   - a production kind the harness does NOT register (todoist_task_op), which
+//     a fetching client fails as an unknown kind, burning the job's attempts.
+func (q *Queries) TestInsertAvailableJobOfKind(ctx context.Context, arg TestInsertAvailableJobOfKindParams) (int64, error) {
+	row := q.db.QueryRow(ctx, TestInsertAvailableJobOfKind, arg.Kind, arg.EventID)
 	var id int64
 	err := row.Scan(&id)
 	return id, err
@@ -3191,12 +3274,11 @@ type TestInsertAvailableRematchJobForContactParams struct {
 	RematchJobID string `json:"rematch_job_id"`
 }
 
-// Failure-injection fixture: plants an AVAILABLE (immediately fetchable)
-// rematch_dispatcher job for a contact of the caller's choosing. Pointed at a
-// FOREIGN contact it is the job-stealing hazard made concrete: a live harness
-// client will fetch it, and the test asserts the harness snoozed it instead of
-// finalizing it. Available (not scheduled) precisely because the fetch has to
-// happen for the assertion to mean anything.
+// Isolation fixture: plants an AVAILABLE (immediately fetchable)
+// rematch_dispatcher job on the `default` queue — the queue the live
+// application works. A harness that fetched it would be stealing another
+// process's job. Available (not scheduled) precisely because the fetch has to
+// be POSSIBLE for "it was never fetched" to mean anything.
 func (q *Queries) TestInsertAvailableRematchJobForContact(ctx context.Context, arg TestInsertAvailableRematchJobForContactParams) (int64, error) {
 	row := q.db.QueryRow(ctx, TestInsertAvailableRematchJobForContact, arg.EventID, arg.ContactID, arg.RematchJobID)
 	var id int64

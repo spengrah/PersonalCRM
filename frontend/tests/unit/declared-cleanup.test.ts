@@ -174,6 +174,30 @@ describe('declared namespace cleanup', () => {
   })
 
   /**
+   * The server caps one cleanup request at 32 namespaces and rejects an
+   * oversized list with a 400 BEFORE deleting anything — so a single oversized
+   * request would strand every declared world the test seeded, not just the
+   * ones past the cap. A test reaches the cap at 32 seeds, or at 16 once each
+   * seed records both its requested and its re-salted name.
+   */
+  it('splits an over-cap namespace list into requests the server accepts', async () => {
+    vi.useFakeTimers()
+    const seeds = 40
+    const { api, cleanupCalls } = harness([all('cleaned')])
+    for (let i = 0; i < seeds; i++) await api.seedBehavior('DSH-005')
+
+    await expect(runCleanup(api)).resolves.toBe('resolved')
+
+    expect(cleanupCalls.length).toBe(2)
+    for (const sent of cleanupCalls) expect(sent.length).toBeLessThanOrEqual(32)
+    // Every namespace is still asked about exactly once: batching must split
+    // the work, not drop or duplicate any of it.
+    const sent = cleanupCalls.flat()
+    expect(sent.length).toBe(seeds)
+    expect(new Set(sent).size).toBe(seeds)
+  })
+
+  /**
    * Expansion can move a token's verdict to a different key between attempts:
    * an in-flight run answers under the REQUESTED token, and under `<ns>-sN`
    * once it finishes and the salted world becomes discoverable. Carrying the

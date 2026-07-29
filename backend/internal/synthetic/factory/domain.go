@@ -193,6 +193,22 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 	if cfg.nameMarker != "" {
 		display += " " + cfg.nameMarker
 	}
+	// Names are drawn WITH REPLACEMENT from a 16×10 pool, so one namespace can
+	// mint the same display name twice — measured at ~1.8% for a three-contact
+	// fixture, which is a flake, not a rarity. A duplicate breaks any selector
+	// that resolves a contact BY NAME (Playwright's strict mode fails outright
+	// on two matching headings) and makes a manifest ambiguous to read. The
+	// repeat therefore carries this contact's sequence number, which is unique
+	// within the generator by construction.
+	//
+	// Disambiguating here rather than redrawing is deliberate: a redraw would
+	// consume extra rng values and shift every later draw for that namespace,
+	// so worlds that DON'T collide would still have to be re-derived. This way
+	// a non-colliding namespace's output is byte-identical to before.
+	if g.usedDisplay[display] {
+		display = fmt.Sprintf("%s %d", display, n)
+	}
+	g.usedDisplay[display] = true
 	// Namespace-prefixed full_name so the prefix cleanup backstop finds it.
 	fullName := g.Prefix() + display
 

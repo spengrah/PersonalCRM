@@ -941,6 +941,7 @@ TRUNCATE TABLE
     relationship_signal,
     river_job,
     sync_staleness_breach,
+    synthetic_namespace_entity,
     tag,
     telegram_channel_state,
     telegram_chat_config,
@@ -1761,40 +1762,63 @@ WHERE id = @id;
 INSERT INTO telegram_chat_config (telegram_chat_id, chat_type, status)
 VALUES (@telegram_chat_id, 'group', 'auto');
 
--- name: SyntheticCountNamespaceOwnedContact :one
--- Harness job-ownership predicate (part 1): does this contact belong to the
--- harness's OWN namespace? A harness runs a real River client on the shared
--- `default` queue, and River does not partition river_job by owner — so a
--- worker that no-ops unconditionally would silently finalize a job another
--- process enqueued. Every no-op worker asks this first and snoozes anything it
--- does not own. Tombstones count as owned: a soft-deleted seeded contact's
--- jobs are still this namespace's to finalize.
-SELECT COUNT(*) FROM contact
-WHERE id = @contact_id::uuid
-  AND full_name LIKE @name_prefix || '%';
+-- name: SyntheticRecordNamespaceEntity :exec
+-- Namespace ownership, written at seed time. The declared-seed endpoint seeds
+-- in one request and cleans up in another, and every other id set is recovered
+-- from a generator-derived token carried by the row — which for contacts means
+-- full_name, a USER-EDITABLE column. A test that renames a seeded contact
+-- through the ordinary contact API makes it invisible to the name-derived
+-- sweeps (node.canonical_label is rewritten with it), so cleanup would skip it
+-- and report success over live residue. This record is keyed by the entity's
+-- own id, which nothing in the application rewrites.
+INSERT INTO synthetic_namespace_entity (namespace, entity_kind, entity_id)
+VALUES (@namespace, @entity_kind, @entity_id::uuid)
+ON CONFLICT (namespace, entity_kind, entity_id) DO NOTHING;
 
--- name: SyntheticCountNamespaceOwnedEventSubject :one
--- Harness job-ownership predicate (part 2): for the job kinds whose args carry
--- only an event id, resolve the event to its subject contact and ask the same
--- question. Cascade payloads carry a scalar contact_id; assertion payloads
--- carry subject_node_id, which for a person node IS the contact id (the graph
--- dual-write keeps node.id == contact.id) — so one COALESCE covers both
--- without a per-kind payload decode.
-SELECT COUNT(*) FROM event e
-WHERE e.id = @event_id::uuid
-  AND EXISTS (
-    SELECT 1 FROM contact c
-    WHERE c.id::text = COALESCE(e.payload->>'contact_id', e.payload->>'subject_node_id')
-      AND c.full_name LIKE @name_prefix || '%'
+-- name: SyntheticSelectNamespaceEntityIds :many
+-- Cleanup id-set: the entity ids this namespace recorded ownership of. Unioned
+-- with the prefix sweep rather than replacing it — the prefix still finds rows
+-- a pre-ownership run seeded, and ownership still finds rows the prefix lost.
+SELECT entity_id FROM synthetic_namespace_entity
+WHERE namespace = @namespace AND entity_kind = @entity_kind
+ORDER BY entity_id;
+
+-- name: SyntheticDeleteNamespaceEntities :execrows
+-- Cleanup ladder (final block): drops the namespace's ownership records. Runs
+-- with the host-marker delete — only after every earlier step succeeded — so a
+-- partially failed sweep keeps the namespace both discoverable AND recoverable.
+DELETE FROM synthetic_namespace_entity WHERE namespace = @namespace;
+
+-- name: SyntheticDeleteUnfinalizedJobsInQueue :execrows
+-- Cleanup ladder: drops the namespace's own ORPHANED River jobs.
+--
+-- A harness client fetches only its own private queue, so a job left in that
+-- queue after the client stopped can never be worked by anyone — and the
+-- pending gate would refuse to sweep the namespace forever. Cleanup holds the
+-- namespace reservation while this runs, so no live run owns these rows.
+-- Deliberately scoped to ONE queue and to unfinalized rows: a `default`-queue
+-- job belongs to the live application and must still gate the sweep, and
+-- finalized rows are River's own retention business.
+DELETE FROM river_job
+WHERE queue = @queue
+  AND finalized_at IS NULL
+  AND (
+        (args->>'event_id') = ANY(@event_ids::text[])
+     OR (args->>'contact_id') = ANY(@contact_ids::text[])
   );
 
+-- name: SyntheticDeleteRiverQueue :execrows
+-- Cleanup ladder: drops the river_queue row a harness producer created for the
+-- namespace's private queue. Without it every declared seed would leave one
+-- permanent row behind on the shared database.
+DELETE FROM river_queue WHERE name = @name;
+
 -- name: TestInsertAvailableRematchJobForContact :one
--- Failure-injection fixture: plants an AVAILABLE (immediately fetchable)
--- rematch_dispatcher job for a contact of the caller's choosing. Pointed at a
--- FOREIGN contact it is the job-stealing hazard made concrete: a live harness
--- client will fetch it, and the test asserts the harness snoozed it instead of
--- finalizing it. Available (not scheduled) precisely because the fetch has to
--- happen for the assertion to mean anything.
+-- Isolation fixture: plants an AVAILABLE (immediately fetchable)
+-- rematch_dispatcher job on the `default` queue — the queue the live
+-- application works. A harness that fetched it would be stealing another
+-- process's job. Available (not scheduled) precisely because the fetch has to
+-- be POSSIBLE for "it was never fetched" to mean anything.
 INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
 VALUES ('rematch_dispatcher', 'default', 'available',
         jsonb_build_object(
@@ -1804,28 +1828,30 @@ VALUES ('rematch_dispatcher', 'default', 'available',
         '{}'::jsonb, 1, 5, NOW())
 RETURNING id;
 
--- name: TestInsertAvailableKnowledgeCacheJobForEvent :one
--- Failure-injection fixture: the SECOND no-op kind the harness registers, and
--- the one whose ownership CANNOT be read off the args — knowledge_cache_updater
--- carries only an event id, so ownership has to resolve the event's subject
--- contact. Pointed at a FOREIGN namespace's event this makes that resolution's
--- failure mode concrete: a regression in the event-subject predicate (or in the
--- worker registration) would finalize the job, silently dropping another
--- process's cache refresh. Available, not scheduled, for the same reason as the
--- rematch fixture: the fetch has to happen for the assertion to mean anything.
+-- name: TestInsertAvailableJobOfKind :one
+-- Isolation fixture, generalized: an AVAILABLE `default`-queue job of ANY kind,
+-- carrying an event id. Two classes matter beyond the no-op kinds, and neither
+-- is covered by a rematch fixture:
+--   - a kind the harness registers a REAL worker for (followup_manager), which
+--     the harness wires in off mode — fetching one would finalize it without
+--     doing the work;
+--   - a production kind the harness does NOT register (todoist_task_op), which
+--     a fetching client fails as an unknown kind, burning the job's attempts.
 INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
-VALUES ('knowledge_cache_updater', 'default', 'available',
+VALUES (@kind, 'default', 'available',
         jsonb_build_object('event_id', @event_id::text),
         '{}'::jsonb, 1, 5, NOW())
 RETURNING id;
 
 -- name: TestGetRiverJobDispositionByID :one
 -- Test assertion — a planted job's disposition: its state, whether it is
--- finalized, and how many times it has been snoozed (River records the count in
--- metadata->>'snoozes' every time a worker returns JobSnooze). The snooze count
--- is what makes "the harness left it alone" a POSITIVE observation rather than
--- the absence of one: a job nobody ever fetched is also un-finalized.
+-- finalized, how many times a worker snoozed it (River records the count in
+-- metadata->>'snoozes'), and its attempt counter. `attempt` is the load-bearing
+-- one for queue isolation: River increments it on FETCH, so attempt = 0 says
+-- the job was never handed to a worker at all — a positive statement, unlike
+-- "not finalized", which a job nobody ever looked at also satisfies.
 SELECT state::text AS state,
        (finalized_at IS NOT NULL)::bool AS finalized,
-       COALESCE((metadata->>'snoozes')::bigint, 0)::bigint AS snoozes
+       COALESCE((metadata->>'snoozes')::bigint, 0)::bigint AS snoozes,
+       attempt::int AS attempt
 FROM river_job WHERE id = @id;

@@ -542,6 +542,14 @@ type RiverJob struct {
 	UniqueStates pgtype.Bits        `json:"unique_states"`
 }
 
+type RiverQueue struct {
+	Name      string             `json:"name"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	Metadata  []byte             `json:"metadata"`
+	PausedAt  pgtype.Timestamptz `json:"paused_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 type SyncStalenessBreach struct {
 	ID               pgtype.UUID        `json:"id"`
 	Source           string             `json:"source"`
@@ -554,6 +562,13 @@ type SyncStalenessBreach struct {
 	LastObservedAt   pgtype.Timestamptz `json:"last_observed_at"`
 	ResolvedAt       pgtype.Timestamptz `json:"resolved_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
+type SyntheticNamespaceEntity struct {
+	Namespace  string             `json:"namespace"`
+	EntityKind string             `json:"entity_kind"`
+	EntityID   pgtype.UUID        `json:"entity_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 type Tag struct {

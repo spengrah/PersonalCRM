@@ -3,6 +3,7 @@
 package tests
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -170,6 +171,22 @@ func getJSON(t *testing.T, router *gin.Engine, url string, out any) {
 	require.NoError(t, json.Unmarshal(envelope.Data, out))
 }
 
+// renameContact renames a contact through the PRODUCTION update endpoint — the
+// same path a spec takes when it edits a name in the UI. Driving the real
+// handler is the point: it is what also rewrites node.canonical_label, which is
+// half of what makes a renamed contact invisible to name-derived cleanup.
+func renameContact(t *testing.T, router *gin.Engine, id, newName string) {
+	t.Helper()
+	body, err := json.Marshal(handlers.UpdateContactRequest{FullName: newName})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/contacts/"+id, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "PUT /contacts/%s → %d: %s", id, w.Code, w.Body.String())
+}
+
 func listContacts(t *testing.T, router *gin.Engine, search string) []handlers.ContactResponse {
 	t.Helper()
 	var out []handlers.ContactResponse
@@ -216,12 +233,16 @@ type namespaceResidue struct {
 	TelegramPeerBand  int64
 	PhoneMethodsInNS  int64
 	VenueNodesTracked int64
+	// OwnershipRecords are the namespace's synthetic_namespace_entity rows —
+	// cleanup's own bookkeeping, and residue like anything else if it survives.
+	OwnershipRecords int
 }
 
 func (r namespaceResidue) total() int64 {
 	return int64(r.Contacts) + int64(r.Interactions) + int64(r.Events) +
 		r.ExternalIdentity + r.ExternalContacts + r.Nodes + int64(r.Hosts) +
-		r.CommsMessages + r.TelegramPeerBand + r.PhoneMethodsInNS + r.VenueNodesTracked
+		r.CommsMessages + r.TelegramPeerBand + r.PhoneMethodsInNS + r.VenueNodesTracked +
+		int64(r.OwnershipRecords)
 }
 
 // measureResidue reads the namespace's surviving rows through the support
@@ -255,6 +276,8 @@ func measureResidue(t *testing.T, ctx context.Context, database *db.Database, na
 	require.NoError(t, err)
 	commsLinked, err := support.CountUnmatchedExternalContactByEmailPrefix(ctx, prefix)
 	require.NoError(t, err)
+	owned, err := support.SelectNamespaceEntityIDs(ctx, namespace, repository.EntityKindContact)
+	require.NoError(t, err)
 
 	hosts := 0
 	if _, exists, err := support.SelectMacHostIDByHostname(ctx, prefix+"host"); err == nil && exists {
@@ -273,6 +296,7 @@ func measureResidue(t *testing.T, ctx context.Context, database *db.Database, na
 		TelegramPeerBand:  peers,
 		PhoneMethodsInNS:  phones,
 		VenueNodesTracked: int64(len(venues)),
+		OwnershipRecords:  len(owned),
 	}
 }
 

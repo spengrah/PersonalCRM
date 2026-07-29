@@ -914,9 +914,10 @@ func (r *SyntheticSupportRepository) InsertNonFinalRiverJob(ctx context.Context)
 
 // InsertResetMarkers seeds a marker row into the standalone (harness-untouched)
 // wiped tables — oauth_credential, external_sync_state, telegram_session, tag,
-// the derived-storage projections (embedding, relationship_signal), and
-// job_exec_sample — so the reset test proves TRUNCATE empties tables the
-// synthetic harness does not populate. These tables start empty otherwise, so
+// the derived-storage projections (embedding, relationship_signal),
+// synthetic_namespace_entity and job_exec_sample — so the reset test proves
+// TRUNCATE empties tables the synthetic harness does not populate. These tables
+// start empty otherwise, so
 // without a marker the catalog guard could not catch their omission from the
 // TRUNCATE list. Test only.
 func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) error {
@@ -940,6 +941,13 @@ func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) err
 		return err
 	}
 	if err := r.queries.TestInsertRelationshipSignalMarker(ctx); err != nil {
+		return err
+	}
+	// synthetic_namespace_entity is written only by the DECLARED seed path, which
+	// a profile reset never takes, so it starts empty too — plant a row through
+	// the production insert so the guard genuinely fails if the table drops out
+	// of the TRUNCATE list.
+	if err := r.RecordNamespaceEntity(ctx, "reset-marker", EntityKindContact, uuid.New()); err != nil {
 		return err
 	}
 	// job_exec_sample is written only by the live Subscribe recorder, never by
@@ -1712,6 +1720,64 @@ func (r *SyntheticSupportRepository) CountPendingJobsForNamespaceCleanup(ctx con
 	})
 }
 
+// --- namespace ownership -----------------------------------------------------
+//
+// Cross-request cleanup recovers most id sets from a generator-derived token
+// carried by the row itself. For contacts that token is full_name, which the
+// application lets a user rewrite (and rewrites node.canonical_label with it),
+// so a renamed seeded contact is invisible to every name-derived sweep. These
+// three wrap the durable, id-keyed ownership record that closes that hole.
+
+// EntityKindContact is the ownership record's kind for a seeded contact. It
+// grows with the declarable vocabulary.
+const EntityKindContact = "contact"
+
+// RecordNamespaceEntity records that a namespace created an entity. Idempotent.
+func (r *SyntheticSupportRepository) RecordNamespaceEntity(ctx context.Context, namespace, kind string, entityID uuid.UUID) error {
+	return r.queries.SyntheticRecordNamespaceEntity(ctx, db.SyntheticRecordNamespaceEntityParams{
+		Namespace:  namespace,
+		EntityKind: kind,
+		EntityID:   uuidToPgUUID(entityID),
+	})
+}
+
+// SelectNamespaceEntityIDs returns the ids a namespace recorded for one kind.
+func (r *SyntheticSupportRepository) SelectNamespaceEntityIDs(ctx context.Context, namespace, kind string) ([]uuid.UUID, error) {
+	rows, err := r.queries.SyntheticSelectNamespaceEntityIds(ctx, db.SyntheticSelectNamespaceEntityIdsParams{
+		Namespace:  namespace,
+		EntityKind: kind,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
+// DeleteNamespaceEntities drops a namespace's ownership records.
+func (r *SyntheticSupportRepository) DeleteNamespaceEntities(ctx context.Context, namespace string) (int64, error) {
+	return r.queries.SyntheticDeleteNamespaceEntities(ctx, namespace)
+}
+
+// DeleteUnfinalizedJobsInQueue drops the namespace's ORPHANED River jobs — the
+// unfinalized ones sitting in the private queue whose client is gone. Scoped to
+// that one queue, so the live application's `default`-queue jobs still gate the
+// sweep. Caller must hold the namespace reservation.
+func (r *SyntheticSupportRepository) DeleteUnfinalizedJobsInQueue(ctx context.Context, queue string, eventIDs, contactIDs []uuid.UUID) (int64, error) {
+	if len(eventIDs) == 0 && len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteUnfinalizedJobsInQueue(ctx, db.SyntheticDeleteUnfinalizedJobsInQueueParams{
+		Queue:      queue,
+		EventIds:   contactIDStrings(eventIDs),
+		ContactIds: contactIDStrings(contactIDs),
+	})
+}
+
+// DeleteRiverQueue drops the river_queue row a harness producer left behind.
+func (r *SyntheticSupportRepository) DeleteRiverQueue(ctx context.Context, name string) (int64, error) {
+	return r.queries.SyntheticDeleteRiverQueue(ctx, name)
+}
+
 // TryAdvisoryLock takes a NON-BLOCKING session advisory lock; false means
 // another session holds it. MUST run on a dedicated connection (session locks
 // belong to the connection that took them).
@@ -1758,45 +1824,9 @@ func (r *SyntheticSupportRepository) InsertTelegramChatConfigInBand(ctx context.
 	return r.queries.TestInsertTelegramChatConfigInBand(ctx, chatID)
 }
 
-// --- harness job ownership --------------------------------------------------
-//
-// A harness runs a live River client on the shared `default` queue, and River
-// does not partition river_job by owner. These two predicates let the harness's
-// no-op workers tell their OWN namespace's jobs (safe to finalize without
-// doing work) from anyone else's (which must be left for their real worker).
-
-// NamespaceOwnsContact reports whether contactID is one of the namespace's own
-// contacts. Tombstones count as owned. Caller passes a BARE 'synth-<ns>-'
-// prefix.
-func (r *SyntheticSupportRepository) NamespaceOwnsContact(ctx context.Context, contactID uuid.UUID, namePrefix string) (bool, error) {
-	n, err := r.queries.SyntheticCountNamespaceOwnedContact(ctx, db.SyntheticCountNamespaceOwnedContactParams{
-		ContactID:  uuidToPgUUID(contactID),
-		NamePrefix: pgtype.Text{String: namePrefix, Valid: true},
-	})
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
-// NamespaceOwnsEventSubject reports whether the event's subject contact belongs
-// to the namespace — the ownership question for job kinds whose args carry only
-// an event id. A missing event answers false: an unresolvable job is not
-// provably ours, and the safe direction is to leave it alone.
-func (r *SyntheticSupportRepository) NamespaceOwnsEventSubject(ctx context.Context, eventID uuid.UUID, namePrefix string) (bool, error) {
-	n, err := r.queries.SyntheticCountNamespaceOwnedEventSubject(ctx, db.SyntheticCountNamespaceOwnedEventSubjectParams{
-		EventID:    uuidToPgUUID(eventID),
-		NamePrefix: pgtype.Text{String: namePrefix, Valid: true},
-	})
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
 // InsertAvailableRematchJobForContact plants an immediately fetchable
-// rematch_dispatcher job. Pointed at a FOREIGN contact it makes the
-// job-stealing hazard concrete. Fixture only.
+// `default`-queue rematch_dispatcher job. It belongs to the live application;
+// a harness that fetched it would be stealing its work. Fixture only.
 func (r *SyntheticSupportRepository) InsertAvailableRematchJobForContact(ctx context.Context, contactID uuid.UUID) (int64, error) {
 	return r.queries.TestInsertAvailableRematchJobForContact(ctx, db.TestInsertAvailableRematchJobForContactParams{
 		EventID:      uuid.New().String(),
@@ -1805,20 +1835,26 @@ func (r *SyntheticSupportRepository) InsertAvailableRematchJobForContact(ctx con
 	})
 }
 
-// InsertAvailableKnowledgeCacheJobForEvent plants an immediately fetchable
-// knowledge_cache_updater job. Its args carry only an event id, so pointing it
-// at a FOREIGN namespace's event exercises the event-SUBJECT ownership path —
-// the one the args-carried contact id cannot short-circuit. Fixture only.
-func (r *SyntheticSupportRepository) InsertAvailableKnowledgeCacheJobForEvent(ctx context.Context, eventID uuid.UUID) (int64, error) {
-	return r.queries.TestInsertAvailableKnowledgeCacheJobForEvent(ctx, eventID.String())
+// InsertAvailableJobOfKind plants an immediately fetchable `default`-queue job
+// of an arbitrary kind, carrying an event id. Fixture only — it exists so the
+// isolation proof can cover the kinds a rematch fixture cannot: one the harness
+// registers a REAL (off-mode) worker for, and one it does not register at all.
+func (r *SyntheticSupportRepository) InsertAvailableJobOfKind(ctx context.Context, kind string, eventID uuid.UUID) (int64, error) {
+	return r.queries.TestInsertAvailableJobOfKind(ctx, db.TestInsertAvailableJobOfKindParams{
+		Kind:    kind,
+		EventID: eventID.String(),
+	})
 }
 
 // RiverJobDisposition is a planted job's outcome: its state, whether it is
-// finalized, and how many times a worker snoozed it.
+// finalized, how many times a worker snoozed it, and its attempt counter.
+// Attempt is what makes "never fetched" observable — River increments it when a
+// job is handed to a worker.
 type RiverJobDisposition struct {
 	State     string
 	Finalized bool
 	Snoozes   int64
+	Attempt   int32
 }
 
 // GetRiverJobDisposition reads a planted job's disposition. Fixture only.
@@ -1827,5 +1863,10 @@ func (r *SyntheticSupportRepository) GetRiverJobDisposition(ctx context.Context,
 	if err != nil {
 		return RiverJobDisposition{}, err
 	}
-	return RiverJobDisposition{State: row.State, Finalized: row.Finalized, Snoozes: row.Snoozes}, nil
+	return RiverJobDisposition{
+		State:     row.State,
+		Finalized: row.Finalized,
+		Snoozes:   row.Snoozes,
+		Attempt:   row.Attempt,
+	}, nil
 }

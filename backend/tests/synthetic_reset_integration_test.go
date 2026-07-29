@@ -54,6 +54,7 @@ var wipedTables = []string{
 	"relationship_signal",
 	"river_job",
 	"sync_staleness_breach",
+	"synthetic_namespace_entity",
 	"tag",
 	"telegram_channel_state",
 	"telegram_chat_config",

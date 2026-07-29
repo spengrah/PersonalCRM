@@ -704,6 +704,11 @@
     "tags": ["@area:dashboard", "@area:overdue"]
   },
   {
+    "_comment": "sqlc's generated table structs. A schema change reaches E2E through the queries, handlers and migrations that accompany it — those carry the areas — so this file contributes none of its own.",
+    "pattern": "^backend/internal/db/models\\.go$",
+    "tags": []
+  },
+  {
     "pattern": "^frontend/src/.*/__tests__/",
     "tags": []
   }

@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"regexp"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -177,23 +179,24 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	river.AddWorker(workers, cadenceShim)
 	river.AddWorker(workers, emailShim)
 	river.AddWorker(workers, followUpShim)
-	// The two no-op kinds are namespace-scoped: this client shares the `default`
-	// queue with every other River client on the database, and a nil Work result
-	// FINALIZES the job. Ownership-checking them is what keeps a seed running
-	// inside the live E2E server from silently swallowing another process's work.
-	ownership := &jobOwnership{support: support, prefix: factory.SyntheticSourcePrefix + namespace + "-"}
-	river.AddWorker(workers, &rematchNoopWorker{owner: ownership})
+	river.AddWorker(workers, &rematchNoopWorker{})
 	// assertion.accepted/superseded route a knowledge_cache_updater job (the
 	// location/birthday/how_met authority flip); register the kind so a seeded
 	// contact-with-knowledge publish enqueues legally. The cache is filled inline
 	// via ContactService's RefreshTx, so a no-op async worker is sufficient here.
-	river.AddWorker(workers, &knowledgeCacheNoopWorker{owner: ownership})
+	river.AddWorker(workers, &knowledgeCacheNoopWorker{})
 
+	// QUEUE ISOLATION (see SyntheticQueueName): this client fetches ONLY the
+	// namespace's private queue, and an insert hook rewrites every job it
+	// enqueues onto that same queue. Both halves are required and neither is
+	// optional — see the doc comment on syntheticQueueRouter.
+	queueName := SyntheticQueueName(namespace)
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
+			queueName: {MaxWorkers: cfg.River.WorkerConcurrency},
 		},
 		Workers:  workers,
+		Hooks:    []rivertype.Hook{&syntheticQueueRouter{queue: queueName}},
 		TestOnly: true, // immediate processing, no staggered maintenance
 	})
 	if err != nil {
@@ -447,59 +450,73 @@ func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportR
 	return nil, "", fmt.Errorf("synthetic: could not find free numeric bands for namespace %q after %d re-salts", namespace, bandResaltAttempts)
 }
 
-// foreignJobSnooze is how long a no-op worker defers a job it does not own.
-// Long enough that the harness does not hot-loop on it, short enough that the
-// job's REAL worker — in the E2E lane, the live crm-api client sharing this
-// queue — gets it back promptly. river.JobSnooze raises MaxAttempts as it
-// snoozes, so a job deferred repeatedly is never discarded.
-const foreignJobSnooze = 5 * time.Second
+// syntheticQueuePrefix names every queue a replay harness owns. Cleanup and the
+// isolation tests key off it, so it is a constant rather than a literal.
+const syntheticQueuePrefix = "synthetic-"
 
-// jobOwnership answers "is this river job one of MY namespace's?" for the
-// harness's no-op workers.
+// SyntheticQueueName is the PRIVATE River queue a harness works for a namespace.
 //
-// Why it exists: a harness starts a real River client on the shared `default`
-// queue, and River's fetch selects any available job in that queue — there is no
-// kind or namespace filter, and a nil Work result marks the job COMPLETED. For
-// the kinds the harness registers a real worker for, a fetched foreign job still
-// gets done, just on the wrong client. For the two no-op kinds it would be
-// silently DROPPED: finalized without its work ever happening. Integration tests
-// dodge this with per-test database clones; the E2E lane has one database, one
-// live crm-api, and seeds running inside it, so it cannot.
+// Why a private queue rather than a per-worker ownership check. A harness starts
+// a real River client, and River's fetch selects ANY available job in the queues
+// it is configured for — there is no kind or namespace filter. Sharing `default`
+// with the live application therefore has three distinct failure modes, and no
+// per-worker guard covers all of them:
+//   - a no-op worker (rematch_dispatcher, knowledge_cache_updater) FINALIZES a
+//     foreign job without doing its work — silently lost work;
+//   - a real worker wired for replay semantics (followup_manager, which this
+//     harness deliberately runs in OFF mode) finalizes a foreign job having
+//     skipped the work it was enqueued for;
+//   - a production kind the harness does not register at all is fetched and
+//     failed as an unknown kind, burning the job's attempts until it discards.
 //
-// The rule is deliberately asymmetric: complete only what is provably ours,
-// snooze everything else — including anything we could not resolve. A wrongly
-// snoozed job of our own is a no-op deferred (harmless: the cache these kinds
-// feed is written inline, and Gate B does not count them); a wrongly completed
-// foreign job is lost work.
-type jobOwnership struct {
-	support *repository.SyntheticSupportRepository
-	// prefix is this namespace's 'synth-<ns>-' contact-name prefix.
-	prefix string
+// Fetching only this queue closes all three at once, and the insert hook that
+// routes the harness's own jobs here closes the mirror image: the application's
+// client, which fetches only `default`, can never take a seed's job either.
+//
+// The name is DERIVED, not random, so a later cleanup — which has no handle on
+// the client that made it — can find the queue's leftovers. FNV-1a of the
+// namespace keeps it inside River's queue-name grammar (lowercase alphanumerics
+// with single separators, ≤64 chars) for any namespace, which a sanitized
+// namespace would not be: the toolkit charset admits leading, trailing and
+// doubled hyphens.
+func SyntheticQueueName(namespace string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(namespace))
+	return fmt.Sprintf("%s%016x", syntheticQueuePrefix, h.Sum64())
 }
 
-// noopIfOwned is every no-op worker's body: run the ownership predicate, return
-// nil (complete, having done nothing) when it holds, snooze otherwise.
-func (o *jobOwnership) noopIfOwned(owned func() (bool, error)) error {
-	ours, err := owned()
-	if err != nil || !ours {
-		return river.JobSnooze(foreignJobSnooze)
-	}
+// syntheticQueueRouter forces every job this harness inserts onto its private
+// queue, whatever queue the job args or insert opts asked for.
+//
+// It is the other half of the isolation: a client that only FETCHES its private
+// queue would still leave its own jobs on `default`, where the live application
+// would work them with production wiring the seed did not ask for (the harness
+// runs follow-up in off mode precisely so a seed does not create real
+// follow-ups). River runs insert hooks on every insert path — Insert, InsertTx,
+// InsertMany, InsertManyTx, and the fast variants all funnel through the same
+// shared insert — and builds the final insert params AFTER the hooks, so
+// rewriting Queue here is sufficient and complete.
+type syntheticQueueRouter struct {
+	river.HookDefaults
+	queue string
+}
+
+func (r *syntheticQueueRouter) InsertBegin(_ context.Context, params *rivertype.JobInsertParams) error {
+	params.Queue = r.queue
 	return nil
 }
 
-// rematchNoopWorker drains the rematch_dispatcher kind for THIS namespace
-// (rematch is out of the Element-1 inbound replay graph; pending states come
-// from the unknown-sender path, not a rematch pass). Its args carry the contact
-// id directly, so ownership needs no event lookup.
+// rematchNoopWorker drains the rematch_dispatcher kind: rematch is out of the
+// Element-1 inbound replay graph (pending states come from the unknown-sender
+// path, not a rematch pass), so the job only has to finalize. It can no-op
+// unconditionally because queue isolation guarantees the job is this harness's
+// own — see SyntheticQueueName.
 type rematchNoopWorker struct {
 	river.WorkerDefaults[consumerjobs.RematchDispatcherJobArgs]
-	owner *jobOwnership
 }
 
-func (w *rematchNoopWorker) Work(ctx context.Context, job *river.Job[consumerjobs.RematchDispatcherJobArgs]) error {
-	return w.owner.noopIfOwned(func() (bool, error) {
-		return w.owner.support.NamespaceOwnsContact(ctx, job.Args.ContactID, w.owner.prefix)
-	})
+func (*rematchNoopWorker) Work(_ context.Context, _ *river.Job[consumerjobs.RematchDispatcherJobArgs]) error {
+	return nil
 }
 
 func (*rematchNoopWorker) Timeout(_ *river.Job[consumerjobs.RematchDispatcherJobArgs]) time.Duration {
@@ -509,18 +526,14 @@ func (*rematchNoopWorker) Timeout(_ *river.Job[consumerjobs.RematchDispatcherJob
 // knowledgeCacheNoopWorker registers the knowledge_cache_updater kind so the
 // harness's River client accepts the assertion.accepted/superseded enqueues that
 // a seeded contact's location/birthday/how_met assertions produce. The cache is
-// filled inline by ContactService, so the async worker is a no-op here — for our
-// OWN assertions. Its args carry only an event id, so ownership resolves the
-// event's subject contact.
+// filled inline by ContactService, so the async worker is a no-op — and, by the
+// same queue-isolation argument, only ever sees this harness's own jobs.
 type knowledgeCacheNoopWorker struct {
 	river.WorkerDefaults[consumerjobs.KnowledgeCacheUpdaterJobArgs]
-	owner *jobOwnership
 }
 
-func (w *knowledgeCacheNoopWorker) Work(ctx context.Context, job *river.Job[consumerjobs.KnowledgeCacheUpdaterJobArgs]) error {
-	return w.owner.noopIfOwned(func() (bool, error) {
-		return w.owner.support.NamespaceOwnsEventSubject(ctx, job.Args.EventID, w.owner.prefix)
-	})
+func (*knowledgeCacheNoopWorker) Work(_ context.Context, _ *river.Job[consumerjobs.KnowledgeCacheUpdaterJobArgs]) error {
+	return nil
 }
 
 func (*knowledgeCacheNoopWorker) Timeout(_ *river.Job[consumerjobs.KnowledgeCacheUpdaterJobArgs]) time.Duration {
