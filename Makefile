@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export qa-obs-smoke qa-model-prices qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export qa-obs-smoke qa-model-prices qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -368,10 +368,6 @@ dev-native: postgres-native
 	@tail -f logs/frontend-dev.log logs/backend-dev.log 2>/dev/null || sleep infinity
 
 test-e2e: e2e-db
-	@echo "Cleaning up any conflicting processes..."
-	@-lsof -ti:$(E2E_FRONTEND_PORT) | xargs -r kill -9 2>/dev/null || true
-	@-lsof -ti:$(E2E_BACKEND_PORT) | xargs -r kill -9 2>/dev/null || true
-	@sleep 1
 	@echo "Running Playwright E2E tests..."
 	@ENV_FILE=$${ENV_FILE:-$(REPO_ROOT)/.env.example.testing}; \
 	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
@@ -387,10 +383,6 @@ test-e2e: e2e-db
 	exit $$EXIT_CODE
 
 test-e2e-local: e2e-db
-	@echo "Cleaning up any conflicting processes..."
-	@-lsof -ti:$(E2E_FRONTEND_PORT) | xargs -r kill -9 2>/dev/null || true
-	@-lsof -ti:$(E2E_BACKEND_PORT) | xargs -r kill -9 2>/dev/null || true
-	@sleep 1
 	@echo "Running Playwright E2E tests (local selection)..."
 	@ENV_FILE=$${ENV_FILE:-$(REPO_ROOT)/.env.example.testing}; \
 	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
@@ -410,25 +402,24 @@ test-e2e-local: e2e-db
 test-e2e-diff: e2e-db
 	@PLAYWRIGHT_WORKERS=1 node "$(REPO_ROOT)/scripts/run-e2e-local.mjs"
 
-e2e-db:
+# Free the ports the E2E stack owns. A prerequisite of e2e-db (rather than a
+# step in each test-e2e* recipe) because it MUST run before the reset script:
+# a crm-api left on E2E_BACKEND_PORT by an interrupted run is still attached to
+# the E2E database, so the script's reconnect guard would refuse the run
+# instead of this cleanup silently fixing it. Only a foreign API on some OTHER
+# port — another worktree's stack — should trip that refusal.
+# lsof is absent in some dev containers; there these kills are no-ops and a
+# stale backend has to be stopped by hand (the guard then says which process).
+e2e-ports-free:
+	@echo "Cleaning up any conflicting processes..."
+	@-lsof -ti:$(E2E_FRONTEND_PORT) | xargs kill -9 2>/dev/null || true
+	@-lsof -ti:$(E2E_BACKEND_PORT) | xargs kill -9 2>/dev/null || true
+	@sleep 1
+
+e2e-db: e2e-ports-free
 	@bash "$(REPO_ROOT)/scripts/ensure-postgres-for-tests.sh"
 	@echo "Setting up isolated E2E test database ($(E2E_DATABASE_NAME))..."
-	@case "$(E2E_DATABASE_NAME)" in (*[!A-Za-z0-9_]*|'') echo "Invalid E2E_DATABASE_NAME: $(E2E_DATABASE_NAME)" >&2; exit 1;; esac
-	@case "$(E2E_DATABASE_NAME)" in (personal_crm_test|personal_crm_test_[A-Za-z0-9_]*) ;; (*) echo "Invalid E2E_DATABASE_NAME: $(E2E_DATABASE_NAME) (must be personal_crm_test or personal_crm_test_<suffix>)" >&2; exit 1;; esac
-	@if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
-		docker exec crm-postgres psql -U crm_user -d postgres -c "DROP DATABASE IF EXISTS \"$(E2E_DATABASE_NAME)\";" 2>/dev/null || true; \
-		docker exec crm-postgres psql -U crm_user -d postgres -c "CREATE DATABASE \"$(E2E_DATABASE_NAME)\";" 2>/dev/null; \
-		docker exec crm-postgres psql -U crm_user -d "$(E2E_DATABASE_NAME)" -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \
-	else \
-		if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='crm_user';" | grep -q 1; then \
-			echo "crm_user role missing; run scripts/start-postgres-native.sh first" >&2; \
-			exit 1; \
-		fi; \
-		sudo -u postgres psql -c "DROP DATABASE IF EXISTS \"$(E2E_DATABASE_NAME)\";" 2>/dev/null || true; \
-		sudo -u postgres psql -c "CREATE DATABASE \"$(E2E_DATABASE_NAME)\" OWNER crm_user;" 2>/dev/null; \
-		sudo -u postgres psql -d "$(E2E_DATABASE_NAME)" -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \
-		sudo -u postgres psql -d "$(E2E_DATABASE_NAME)" -c "GRANT ALL ON SCHEMA public TO crm_user;" 2>/dev/null; \
-	fi
+	@E2E_DATABASE_NAME="$(E2E_DATABASE_NAME)" bash "$(REPO_ROOT)/scripts/e2e-db-reset.sh"
 	@echo "✓ E2E test database ready"
 
 # Build
