@@ -412,8 +412,8 @@ test-e2e-diff: e2e-db
 # stale backend has to be stopped by hand (the guard then says which process).
 e2e-ports-free:
 	@echo "Cleaning up any conflicting processes..."
-	@-lsof -ti:$(E2E_FRONTEND_PORT) | xargs -r kill -9 2>/dev/null || true
-	@-lsof -ti:$(E2E_BACKEND_PORT) | xargs -r kill -9 2>/dev/null || true
+	@-lsof -ti:$(E2E_FRONTEND_PORT) | xargs kill -9 2>/dev/null || true
+	@-lsof -ti:$(E2E_BACKEND_PORT) | xargs kill -9 2>/dev/null || true
 	@sleep 1
 
 e2e-db: e2e-ports-free
