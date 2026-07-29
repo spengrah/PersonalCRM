@@ -23,6 +23,18 @@ import (
 // holds one level down — the toolkit itself writes exclusively through the real
 // services and repositories, which is what makes a declared fixture reachable
 // by the product. Do not "fix" this by minting a service.
+//
+// KNOWN PROPERTY of running the toolkit inside a live server: a seed builds a
+// replay harness with its OWN River client, and River clients do not partition
+// river_job by owner. For the ~1s a seed is in flight, that client can fetch a
+// job another concurrent test enqueued. For the kinds the harness registers a
+// REAL worker for, the work still happens correctly, just on the other client.
+// Two kinds are registered as NO-OPS (rematch_dispatcher, knowledge_cache_updater),
+// and for those the steal is silent: the job finalizes without doing its work.
+// Integration tests avoid this with per-test database clones; the E2E lane has
+// one database and cannot. The exposure scales with the number of concurrent
+// declared seeds, so it is worth revisiting as more domains migrate — a
+// namespace check plus river.JobSnooze in those two workers would close it.
 
 // SeedDeclaredRequest asks for one behavior's declared fixture.
 type SeedDeclaredRequest struct {
