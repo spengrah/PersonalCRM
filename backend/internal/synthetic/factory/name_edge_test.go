@@ -120,6 +120,75 @@ func TestWithNameTwinOf_RejectsAnotherNamespace(t *testing.T) {
 	target.Contact(WithNameTwinOf(source))
 }
 
+func TestWithNameTwinOf_RejectsGeneratorNamespaceSiblings(t *testing.T) {
+	tests := []struct {
+		name     string
+		targetNS string
+		sourceNS string
+	}{
+		{
+			name:     "hierarchical namespace",
+			targetNS: "family",
+			sourceNS: "family-child",
+		},
+		{
+			name:     "re-salted namespace",
+			targetNS: "family",
+			sourceNS: "family-s1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := NewGeneratorAt(DefaultSeed, tt.sourceNS, nameAnchor).Contact()
+			target := NewGeneratorAt(DefaultSeed, tt.targetNS, nameAnchor)
+
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("generator namespace sibling %q was accepted by %q", tt.sourceNS, tt.targetNS)
+				}
+			}()
+			target.Contact(WithNameTwinOf(source))
+		})
+	}
+}
+
+func TestWithNameTwinOf_RejectsAnotherGeneratorWithSameNamespace(t *testing.T) {
+	source := NewGeneratorAt(DefaultSeed, "same-ns", nameAnchor).Contact()
+	target := NewGeneratorAt(DefaultSeed, "same-ns", nameAnchor)
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a different generator instance with the same namespace was accepted")
+		}
+	}()
+	target.Contact(WithNameTwinOf(source))
+}
+
+func TestWithNameTwinOf_RejectsForgedSpec(t *testing.T) {
+	gen := NewGeneratorAt(DefaultSeed, "forged-ns", nameAnchor)
+	source := gen.Contact()
+	forged := ContactSpec{FullName: source.FullName}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a spec carrying only a generator-shaped full name was accepted")
+		}
+	}()
+	gen.Contact(WithNameTwinOf(forged))
+}
+
+func TestWithNameTwinOf_AcceptsSameGeneratorSpecCopy(t *testing.T) {
+	gen := NewGeneratorAt(DefaultSeed, "copy-ns", nameAnchor)
+	source := gen.Contact()
+	sourceCopy := source
+
+	twin := gen.Contact(WithNameTwinOf(sourceCopy))
+	if twin.FullName != source.FullName {
+		t.Fatalf("twin rendered %q, want copied source name %q", twin.FullName, source.FullName)
+	}
+}
+
 // The bypass must not shift the PRNG stream: every contact drawn AFTER a twin
 // must be byte-identical to what it would have been without one. The twin still
 // consumes its sequence number, given name and surname; only the rendered result

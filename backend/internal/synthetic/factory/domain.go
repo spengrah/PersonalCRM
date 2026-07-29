@@ -24,10 +24,11 @@ type MethodSpec struct {
 // exposed so source-payload factories targeting THIS contact reuse the exact
 // same identifiers (so matching links the replay to the seeded contact).
 type ContactSpec struct {
-	FullName  string
-	Methods   []MethodSpec
-	Cadence   *string
-	CreatedAt *time.Time
+	FullName   string
+	Methods    []MethodSpec
+	Cadence    *string
+	CreatedAt  *time.Time
+	provenance *generatorProvenance
 	// No LastContacted field: creation never seeds last_contacted (CON-001); only a
 	// replayed inbound/mutual interaction moves it, so the seed cannot manufacture a
 	// connection that never happened (the #641 regression class).
@@ -352,9 +353,9 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 		// The deliberate duplicate (WithNameTwinOf): take the source's rendered
 		// name verbatim, AFTER the draws above, so the stream position for every
 		// later contact is unchanged.
-		if !strings.HasPrefix(cfg.twinOf.FullName, g.Prefix()) {
+		if cfg.twinOf.provenance != g.provenance {
 			panic(fmt.Sprintf(
-				"synthetic: WithNameTwinOf source %q is outside generator namespace %q",
+				"synthetic: WithNameTwinOf source %q is outside generator provenance for namespace %q",
 				cfg.twinOf.FullName, g.Namespace()))
 		}
 		fullName = cfg.twinOf.FullName
@@ -363,11 +364,12 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 	g.usedDisplay[display] = true
 
 	spec := ContactSpec{
-		FullName: fullName,
-		Cadence:  cfg.cadence,
-		Birthday: cfg.birthday,
-		HowMet:   cfg.howMet,
-		Location: cfg.location,
+		FullName:   fullName,
+		Cadence:    cfg.cadence,
+		Birthday:   cfg.birthday,
+		HowMet:     cfg.howMet,
+		Location:   cfg.location,
+		provenance: g.provenance,
 	}
 
 	if cfg.withEmail {

@@ -33,8 +33,16 @@ func runStandardProfile(ctx context.Context, h *Harness, params SeedParams, res 
 	return out, err
 }
 
-// StandardWorldForTest is runStandardProfile with the WORLD MANIFEST returned
-// alongside the profile result.
+type standardWorldCaptureKey struct{}
+
+type standardWorldCapture struct {
+	world declare.WorldResult
+	set   bool
+}
+
+// StandardWorldForTest runs the real RunProfile entrypoint with a private,
+// per-call manifest capture. The capture keeps the test on production dispatch:
+// removing or misrouting ProfileStandard cannot leave the world assertions green.
 //
 // The manifest carries the world's own EXECUTION-order creation log, which is
 // the only sound way to assert that the pinned tour fixtures really do draw
@@ -42,8 +50,16 @@ func runStandardProfile(ctx context.Context, h *Harness, params SeedParams, res 
 // fixtures are deliberately backdated (one by three hundred days), so every
 // edge contact created at the anchor sorts after them.
 func StandardWorldForTest(ctx context.Context, h *Harness, params SeedParams) (declare.WorldResult, ProfileResult, error) {
-	res := ProfileResult{Profile: params.Profile, Namespace: h.Namespace(), Seed: params.Seed}
-	return buildStandardWorld(ctx, h, params, res)
+	capture := &standardWorldCapture{}
+	res, err := RunProfile(context.WithValue(ctx, standardWorldCaptureKey{}, capture), h, params)
+	if err != nil {
+		return capture.world, res, err
+	}
+	if !capture.set {
+		return declare.WorldResult{}, res, fmt.Errorf(
+			"synthetic: profile %q did not dispatch through the standard world builder", params.Profile)
+	}
+	return capture.world, res, nil
 }
 
 func buildStandardWorld(ctx context.Context, h *Harness, params SeedParams, res ProfileResult) (declare.WorldResult, ProfileResult, error) {
@@ -55,6 +71,10 @@ func buildStandardWorld(ctx context.Context, h *Harness, params SeedParams, res 
 			return seedStandardTail(ctx, h, params, &res)
 		},
 	})
+	if capture, ok := ctx.Value(standardWorldCaptureKey{}).(*standardWorldCapture); ok {
+		capture.world = world
+		capture.set = true
+	}
 	// The step log is mapped on BOTH paths: a world that failed mid-run carries
 	// the steps that completed, and naming where it stopped is the whole point of
 	// recording them.
