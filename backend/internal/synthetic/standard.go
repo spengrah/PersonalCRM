@@ -118,37 +118,20 @@ func seedStandardTail(ctx context.Context, h *Harness, params SeedParams, res *P
 	// The three riders first, in the order the catalog profile creates them, then
 	// the replay-free pinned block — which stays genuinely last, as its own
 	// contract requires.
-	pending, _, err := seedPendingFollowUpFixture(ctx, h, gen)
-	if err != nil {
-		if pending != nil {
-			out = append(out, seededContact(pending))
-		}
+	pending, seedErr := seedPendingFollowUpFixture(ctx, h, gen)
+	if err := accountStandardTailRider(riderPendingFollowUp, pending, seedErr, res, &out); err != nil {
 		return out, fmt.Errorf("profile %s: %w", params.Profile, err)
 	}
-	res.SettledInteractions++
-	res.SeededTasks++
-	res.SeededPendingFollowUps = 1
-	out = append(out, seededContact(pending))
 
-	outreach, _, err := seedOutreachFixture(ctx, h, gen)
-	if err != nil {
-		if outreach != nil {
-			out = append(out, seededContact(outreach))
-		}
+	outreach, seedErr := seedOutreachFixture(ctx, h, gen)
+	if err := accountStandardTailRider(riderOutreach, outreach, seedErr, res, &out); err != nil {
 		return out, fmt.Errorf("profile %s: %w", params.Profile, err)
 	}
-	res.OutboundOnlyContacts++
-	out = append(out, seededContact(outreach))
 
-	response, _, err := seedResponseFixture(ctx, h, gen)
-	if err != nil {
-		if response != nil {
-			out = append(out, seededContact(response))
-		}
+	response, seedErr := seedResponseFixture(ctx, h, gen)
+	if err := accountStandardTailRider(riderResponse, response, seedErr, res, &out); err != nil {
 		return out, fmt.Errorf("profile %s: %w", params.Profile, err)
 	}
-	res.MutualMessageContacts++
-	out = append(out, seededContact(response))
 
 	for _, plan := range buildPinnedTourFixtures(gen) {
 		contact, err := h.SeedContact(ctx, plan.spec)
@@ -163,6 +146,77 @@ func seedStandardTail(ctx context.Context, h *Harness, params SeedParams, res *P
 
 func seededContact(c *repository.Contact) declare.Seeded {
 	return declare.Seeded{Kind: "contact", ID: c.ID.String(), Name: c.FullName}
+}
+
+type riderKind uint8
+
+const (
+	riderPendingFollowUp riderKind = iota
+	riderOutreach
+	riderResponse
+)
+
+type riderSeedResult struct {
+	contact  *repository.Contact
+	payloads int
+}
+
+// accountCatalogRider records facts the helper proved before propagating its
+// error. The named rider counters describe the completed scenario, so they move
+// only when the helper completed without error.
+func accountCatalogRider(
+	kind riderKind,
+	rider riderSeedResult,
+	seedErr error,
+	res *ProfileResult,
+	phasePayloads *int,
+) error {
+	if rider.contact != nil {
+		res.Contacts++
+	}
+	*phasePayloads += rider.payloads
+	if kind == riderPendingFollowUp {
+		res.SettledInteractions += rider.payloads
+	}
+	if seedErr != nil {
+		return seedErr
+	}
+	accountCompletedRider(kind, res)
+	return nil
+}
+
+// accountStandardTailRider mirrors the catalog accounting, except contact
+// totals come from the world's returned creation log in mapStandardWorldResult.
+func accountStandardTailRider(
+	kind riderKind,
+	rider riderSeedResult,
+	seedErr error,
+	res *ProfileResult,
+	out *[]declare.Seeded,
+) error {
+	if rider.contact != nil {
+		*out = append(*out, seededContact(rider.contact))
+	}
+	if kind == riderPendingFollowUp {
+		res.SettledInteractions += rider.payloads
+	}
+	if seedErr != nil {
+		return seedErr
+	}
+	accountCompletedRider(kind, res)
+	return nil
+}
+
+func accountCompletedRider(kind riderKind, res *ProfileResult) {
+	switch kind {
+	case riderPendingFollowUp:
+		res.SeededTasks++
+		res.SeededPendingFollowUps = 1
+	case riderOutreach:
+		res.OutboundOnlyContacts++
+	case riderResponse:
+		res.MutualMessageContacts++
+	}
 }
 
 // --- the three marker-bearing rider fixtures --------------------------------
@@ -189,36 +243,36 @@ func seededContact(c *repository.Contact) declare.Seeded {
 // property of the cadence engine, applied asynchronously by its River worker,
 // which is also why this cannot ASSERT on last_outreach_at (the job has not run
 // yet). The coverage checks assert it post-Quiesce, which is the honest place.
-func seedPendingFollowUpFixture(ctx context.Context, h *Harness, gen *factory.Generator) (*repository.Contact, int, error) {
+func seedPendingFollowUpFixture(ctx context.Context, h *Harness, gen *factory.Generator) (riderSeedResult, error) {
 	spec := gen.Contact(factory.WithEmail(), factory.WithCadence(followUpScenarioCadence), factory.WithNameMarker(FixtureMarkerPending))
 	contact, err := h.SeedContact(ctx, spec)
 	if err != nil {
-		return nil, 0, fmt.Errorf("seed awaiting-reply contact: %w", err)
+		return riderSeedResult{}, fmt.Errorf("seed awaiting-reply contact: %w", err)
 	}
 	if _, err := h.ReplayGCal(ctx, contact.ID, gen.GCalEvent(spec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(0, 0)))); err != nil {
-		return contact, 0, fmt.Errorf("replay gcal for awaiting-reply contact: %w", err)
+		return riderSeedResult{contact: contact}, fmt.Errorf("replay gcal for awaiting-reply contact: %w", err)
 	}
 	if _, err := h.SeedPendingFollowUp(ctx, contact.ID, contact.FullName); err != nil {
-		return contact, 1, fmt.Errorf("seed pending follow-up: %w", err)
+		return riderSeedResult{contact: contact, payloads: 1}, fmt.Errorf("seed pending follow-up: %w", err)
 	}
 	h.SetPinnedFixtureID(FixtureMarkerPending, contact.ID)
-	return contact, 1, nil
+	return riderSeedResult{contact: contact, payloads: 1}, nil
 }
 
 // seedOutreachFixture builds the outbound-only "last outreach" fixture: one
 // outbound gmail message, so last_outreach_at is set and last_contacted stays
 // NULL (an outbound touches neither last_contacted nor last_interaction_at).
-func seedOutreachFixture(ctx context.Context, h *Harness, gen *factory.Generator) (*repository.Contact, int, error) {
+func seedOutreachFixture(ctx context.Context, h *Harness, gen *factory.Generator) (riderSeedResult, error) {
 	spec := gen.Contact(factory.WithEmail(), factory.WithNameMarker(FixtureMarkerOutreach))
 	contact, err := h.SeedContact(ctx, spec)
 	if err != nil {
-		return nil, 0, fmt.Errorf("seed outbound gmail contact: %w", err)
+		return riderSeedResult{}, fmt.Errorf("seed outbound gmail contact: %w", err)
 	}
 	if _, err := h.ReplayGmail(ctx, contact.ID, gen.GmailMessage(spec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(messageOutboundAge))); err != nil {
-		return contact, 0, fmt.Errorf("replay outbound gmail: %w", err)
+		return riderSeedResult{contact: contact}, fmt.Errorf("replay outbound gmail: %w", err)
 	}
 	h.SetPinnedFixtureID(FixtureMarkerOutreach, contact.ID)
-	return contact, 1, nil
+	return riderSeedResult{contact: contact, payloads: 1}, nil
 }
 
 // seedResponseFixture builds the reply-bridged telegram MUTUAL fixture (the
@@ -233,15 +287,15 @@ func seedOutreachFixture(ctx context.Context, h *Harness, gen *factory.Generator
 // inside the 48h bridge window. The inbound's aggregation finds the outbound
 // interaction and promotes it in place: one mutual row, last_contacted ==
 // last_interaction_at == last_outreach_at == last_response_at.
-func seedResponseFixture(ctx context.Context, h *Harness, gen *factory.Generator) (*repository.Contact, int, error) {
+func seedResponseFixture(ctx context.Context, h *Harness, gen *factory.Generator) (riderSeedResult, error) {
 	spec := gen.Contact(factory.WithTelegram(), factory.WithNameMarker(FixtureMarkerResponse))
 	contact, err := h.SeedContact(ctx, spec)
 	if err != nil {
-		return nil, 0, fmt.Errorf("seed mutual telegram contact: %w", err)
+		return riderSeedResult{}, fmt.Errorf("seed mutual telegram contact: %w", err)
 	}
 	outbound := gen.TelegramMessage(spec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(messageMutualOutboundAge))
 	if _, err := h.ReplayTelegram(ctx, contact.ID, outbound); err != nil {
-		return contact, 0, fmt.Errorf("replay mutual telegram outbound: %w", err)
+		return riderSeedResult{contact: contact}, fmt.Errorf("replay mutual telegram outbound: %w", err)
 	}
 	reply := outbound // clone: same peer + chat, so the bridge can fire
 	reply.TelegramMessageID = outbound.TelegramMessageID + 1
@@ -249,9 +303,9 @@ func seedResponseFixture(ctx context.Context, h *Harness, gen *factory.Generator
 	// Newer than the outbound by exactly (outboundAge − replyAge) = 6h (< 48h).
 	reply.SentAt = outbound.SentAt.Add(messageMutualOutboundAge - messageMutualReplyAge)
 	if _, err := h.ReplayTelegram(ctx, contact.ID, reply); err != nil {
-		return contact, 1, fmt.Errorf("replay mutual telegram reply: %w", err)
+		return riderSeedResult{contact: contact, payloads: 1}, fmt.Errorf("replay mutual telegram reply: %w", err)
 	}
 	h.SetMutualMessageContactID(contact.ID)
 	h.SetPinnedFixtureID(FixtureMarkerResponse, contact.ID)
-	return contact, 2, nil
+	return riderSeedResult{contact: contact, payloads: 2}, nil
 }

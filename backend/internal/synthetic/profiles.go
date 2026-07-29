@@ -1085,15 +1085,10 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		// recipe is stated ONCE, in standard.go, and shared with the declared world's
 		// tail; this call site keeps the SeededTasks gate, which is a profile
 		// decision rather than part of the recipe.
-		_, payloads, err := seedPendingFollowUpFixture(ctx, h, gen)
-		if err != nil {
+		rider, seedErr := seedPendingFollowUpFixture(ctx, h, gen)
+		if err := accountCatalogRider(riderPendingFollowUp, rider, seedErr, &res, &followUpPayloads); err != nil {
 			return res, fmt.Errorf("profile %s: %w", params.Profile, err)
 		}
-		res.Contacts++
-		res.SettledInteractions++
-		followUpPayloads += payloads
-		res.SeededTasks++
-		res.SeededPendingFollowUps = 1
 	}
 	stop(followUpPayloads)
 
@@ -1122,13 +1117,10 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// The gmail one is marker-bearing: it IS the pinned "last outreach" fixture.
 	// Its recipe is stated once, in standard.go, and shared with the declared
 	// world's tail.
-	_, outreachPayloads, err := seedOutreachFixture(ctx, h, gen)
-	if err != nil {
+	outreach, seedErr := seedOutreachFixture(ctx, h, gen)
+	if err := accountCatalogRider(riderOutreach, outreach, seedErr, &res, &directionPayloads); err != nil {
 		return res, fmt.Errorf("profile %s: %w", params.Profile, err)
 	}
-	res.Contacts++
-	res.OutboundOnlyContacts++
-	directionPayloads += outreachPayloads
 
 	obGChatSpec := gen.Contact(factory.WithEmail())
 	obGChatContact, err := h.SeedContact(ctx, obGChatSpec)
@@ -1163,13 +1155,10 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	// from the outreach fixture above. Its recipe, including the hand-cloned reply
 	// that is the only way the bridge fires, is stated once in standard.go and
 	// shared with the declared world's tail.
-	_, responsePayloads, err := seedResponseFixture(ctx, h, gen)
-	if err != nil {
+	response, seedErr := seedResponseFixture(ctx, h, gen)
+	if err := accountCatalogRider(riderResponse, response, seedErr, &res, &directionPayloads); err != nil {
 		return res, fmt.Errorf("profile %s: %w", params.Profile, err)
 	}
-	res.Contacts++
-	directionPayloads += responsePayloads
-	res.MutualMessageContacts++
 	stop(directionPayloads)
 
 	// --- Additional clock-anchored birthday fixtures (seeded LAST) --------------
