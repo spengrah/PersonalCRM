@@ -32,6 +32,16 @@
 #
 #    The refusal is decided BEFORE the DROP, so a run that is refused leaves
 #    the database exactly as it was — see the ordering note below.
+#
+# TESTING: this guard has no committed shell test, deliberately. It cannot be
+# exercised at all without a live PostgreSQL, no CI job invokes `make e2e-db`,
+# and giving it one would mean adding a pre-push phase — `.ai/pre-push.json`,
+# the hook's lane classifier, and the phase-guard test — for a script that only
+# ever runs locally. It is covered instead by empirical falsification on every
+# change: each leg is proven to FAIL on the bad input (a foreign consumer → exit
+# 1, database intact) and to pass on the good one (a stale holder → exit 0, with
+# a planted canary table gone, which is what proves the reset was real and not a
+# silent no-op), reading exit codes directly. That is a trade, not an oversight.
 set -euo pipefail
 
 # `-` not `:-`: an explicitly EMPTY name must reach the validation below and be
@@ -80,19 +90,30 @@ psql_target() {
   fi
 }
 
+# Only a CLIENT backend can be the second crm-api this guard looks for, and only
+# client backends are stable enough to reason about across the settle window.
+# PostgreSQL starts server workers on its own schedule — an autovacuum worker
+# above all, and an E2E suite leaves exactly the dead tuples that provoke one —
+# and such a worker carries the target datname, so an unqualified count sees a
+# PID that was not there before the terminate and reports a foreign crm-api that
+# does not exist. Every statement below that COUNTS, REPORTS or SUBTRACTS a
+# session carries this fragment, so the subtraction compares like with like.
+# `backend_type` has been in pg_stat_activity since PG 10; this repo runs PG 16.
+CLIENT_ONLY="AND backend_type = 'client backend'"
+
 # SQL fragment that subtracts the pre-terminate PIDs, filled in below. Empty
 # when nothing was attached, which is the common case.
 NOT_PREEXISTING=""
 
-# Sessions on the target database, minus the ones that were already there before
-# the terminate — i.e. only clients that dialed in AFTER it.
+# Client sessions on the target database, minus the ones that were already there
+# before the terminate — i.e. only clients that dialed in AFTER it.
 attached_count() {
-  psql_admin -tAc "SELECT count(*) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid() $NOT_PREEXISTING;"
+  psql_admin -tAc "SELECT count(*) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid() $CLIENT_ONLY $NOT_PREEXISTING;"
 }
 
 # The same set, with the columns worth printing when a run is refused.
 attached_report() {
-  psql_admin -c "SELECT pid, application_name, client_addr, client_port, state, backend_start FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid() $NOT_PREEXISTING;"
+  psql_admin -c "SELECT pid, application_name, client_addr, client_port, state, backend_start FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid() $CLIENT_ONLY $NOT_PREEXISTING;"
 }
 
 # ORDERING: nothing irreversible happens until the refusal decision is made.
@@ -106,8 +127,10 @@ attached_report() {
 # database intact.
 #
 # Terminating also satisfies invariant 1: the DROP cannot fail on "database is
-# being accessed by other users". crm_user may signal its own backends, which
-# is all of them; the native path runs as the postgres superuser.
+# being accessed by other users". crm_user may signal its own client backends,
+# which is all of the ones a reset has to clear; the native path runs as the
+# postgres superuser. Server workers are deliberately not signalled here — see
+# the DROP note below for what deals with those.
 #
 # Record the attached PIDs first. pg_terminate_backend() with its default zero
 # timeout only SIGNALS the backend; it does not wait for the process to go away,
@@ -125,7 +148,7 @@ attached_report() {
 # nothing — these PIDs are only ever subtracted, so a stale idle holder can
 # still only be excluded from the refusal, never be the cause of one.
 pre_pids="$(psql_admin -tAc \
-  "SELECT coalesce(string_agg(pid::text, ','), '') FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();")"
+  "SELECT coalesce(string_agg(pid::text, ','), '') FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid() $CLIENT_ONLY;")"
 case "$pre_pids" in
   '') ;;
   *[!0-9,]*)
@@ -134,7 +157,7 @@ case "$pre_pids" in
 esac
 
 psql_admin -tAc \
-  "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();" \
+  "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid() $CLIENT_ONLY;" \
   >/dev/null
 
 # Watch for a reconnect. Nothing legitimate is attached at this point: e2e-db is
@@ -197,6 +220,17 @@ fi
 # DROP fail under ON_ERROR_STOP=1 — non-zero exit, database untouched — which
 # is the same safe outcome as the refusal above, just with a psql error for a
 # message.
+#
+# SERVER WORKERS are this statement's problem, not the terminate's. DROP
+# DATABASE's own wait loop SIGTERMs autovacuum workers on the target and retries
+# for ~5s, and a parallel worker dies with the leader that was already
+# terminated — so the two kinds that actually carry a datname are covered.
+# Signalling them above would buy nothing (an autovacuum worker respawns) and
+# could make things worse: on the docker path psql runs as crm_user, and
+# pg_terminate_backend on a superuser-owned worker is refused outright, so under
+# ON_ERROR_STOP=1 a harmless worker would abort the reset. Anything else still
+# attached stops here, loudly, with PostgreSQL's own "being accessed by other
+# users" message rather than a guard message blaming a crm-api.
 psql_admin -c "DROP DATABASE IF EXISTS \"$DB_NAME\";" >/dev/null
 if [ "$MODE" = docker ]; then
   psql_admin -c "CREATE DATABASE \"$DB_NAME\";" >/dev/null
