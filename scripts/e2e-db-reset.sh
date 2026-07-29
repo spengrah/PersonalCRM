@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Reset the isolated E2E database, then refuse to continue if another process
-# is still attached to it. Run by `make e2e-db`, the prerequisite of every
+# Refuse to continue if another process is still attached to the isolated E2E
+# database, then reset it. Run by `make e2e-db`, the prerequisite of every
 # test-e2e* target.
 #
 # Two invariants, each of which fails silently if not enforced here:
@@ -25,17 +25,20 @@
 #    one process), so it presents purely as local flake, and a bigger timeout
 #    does nothing — the job itself finishes in ~10ms.
 #
-#    Detection: after the reset, watch for a client reconnecting. A live
-#    consumer's pool comes back in well under a second (measured 0.27s-0.69s
-#    over three trials); a stale psql session that was just terminated does
-#    not come back at all.
+#    Detection: terminate the attached sessions and watch for a client
+#    reconnecting. A live consumer's pool comes back in well under a second
+#    (measured 0.27s-0.69s over three trials); a stale psql session that was
+#    just terminated does not come back at all.
+#
+#    The refusal is decided BEFORE the DROP, so a run that is refused leaves
+#    the database exactly as it was — see the ordering note below.
 set -euo pipefail
 
 # `-` not `:-`: an explicitly EMPTY name must reach the validation below and be
 # rejected, not silently fall back to the default.
 DB_NAME="${E2E_DATABASE_NAME-personal_crm_test}"
-# How long to watch for a foreign client reconnecting after the reset. Set to 0
-# to skip the check entirely (escape hatch; the reset itself still runs).
+# How long to watch for a foreign client reconnecting before the reset. Set to
+# 0 to skip the check entirely (escape hatch; the reset itself still runs).
 SETTLE_SECONDS="${E2E_DB_SETTLE_SECONDS:-3}"
 
 case "$DB_NAME" in
@@ -81,22 +84,22 @@ attached_count() {
   psql_admin -tAc "SELECT count(*) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();"
 }
 
-# Terminate every holder so the DROP below cannot fail on "database is being
-# accessed by other users". crm_user may signal its own backends, which is all
-# of them; the native path runs as the postgres superuser.
+# ORDERING: nothing irreversible happens until the refusal decision is made.
+#
+# Terminating a concurrent run's sessions does disrupt it, and that is
+# unavoidable: the reconnect IS the signal, so it has to be provoked. But it is
+# recoverable — a live pgxpool dials again on its own (that is precisely what
+# the watch below observes), so the other run keeps its schema and its rows.
+# Dropping its database is not recoverable. So the terminate happens first, the
+# DROP happens only after nothing has come back. A refused run leaves the
+# database intact.
+#
+# Terminating also satisfies invariant 1: the DROP cannot fail on "database is
+# being accessed by other users". crm_user may signal its own backends, which
+# is all of them; the native path runs as the postgres superuser.
 psql_admin -tAc \
   "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();" \
   >/dev/null
-
-psql_admin -c "DROP DATABASE IF EXISTS \"$DB_NAME\";" >/dev/null
-if [ "$MODE" = docker ]; then
-  psql_admin -c "CREATE DATABASE \"$DB_NAME\";" >/dev/null
-  psql_target -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"; CREATE EXTENSION IF NOT EXISTS vector;' >/dev/null
-else
-  psql_admin -c "CREATE DATABASE \"$DB_NAME\" OWNER crm_user;" >/dev/null
-  psql_target -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"; CREATE EXTENSION IF NOT EXISTS vector;' >/dev/null
-  psql_target -c "GRANT ALL ON SCHEMA public TO crm_user;" >/dev/null
-fi
 
 # Watch for a reconnect. Nothing legitimate is attached at this point: e2e-db is
 # a prerequisite of the test-e2e* targets, so Playwright has not started the
@@ -106,6 +109,21 @@ fi
 # and the pre-push hook runs E2E exclusively after every other lane has
 # finished. What is left to catch is a crm-api on some OTHER port — another
 # worktree's stack, or a hand-started one — which no port cleanup can find.
+#
+# What the window buys, and what it does not: a live pgxpool came back in
+# 0.27s/0.27s/0.69s over three trials, so 3s is roughly 4x the measured worst
+# case. A consumer that reconnects more slowly than that is MISSED and the run
+# proceeds — deliberately, because a longer wait is paid by every invocation to
+# cover a case that has not been observed, and the missed case degrades to the
+# flake this file documents rather than to data loss. Raise
+# E2E_DB_SETTLE_SECONDS if you have a client with a slower backoff.
+#
+# Sampling pg_stat_activity BEFORE the terminate would be nearly free, but it
+# does not discriminate: a live pool's parked connection and an abandoned
+# holder's are the same `idle` row, from the same user, usually with the same
+# empty application_name. Gating on that would refuse every run that follows an
+# interrupted one. The reconnect is the signal precisely because presence is
+# not, so no pre-terminate probe is reported here.
 if [ "$SETTLE_SECONDS" != "0" ]; then
   deadline=$(( $(date +%s) + SETTLE_SECONDS ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -120,6 +138,10 @@ if [ "$SETTLE_SECONDS" != "0" ]; then
       echo "  steal jobs from the backend under test — rematch and follow-up specs" >&2
       echo "  then fail on state that never becomes terminal. Stop it and re-run." >&2
       echo "" >&2
+      echo "  $DB_NAME was NOT reset: its schema and rows are intact. The other" >&2
+      echo "  run's connections were dropped to test for this, so it may need a" >&2
+      echo "  retry, but it has lost no data." >&2
+      echo "" >&2
       # -x matches the process NAME, so it finds both a built ./crm-api and the
       # `go run ./cmd/crm-api` child Playwright starts (whose name is crm-api),
       # without matching every shell whose command line mentions the string.
@@ -132,4 +154,19 @@ if [ "$SETTLE_SECONDS" != "0" ]; then
     fi
     sleep 0.25
   done
+fi
+
+# Nothing came back: no foreign consumer to destroy. Reset for real. A client
+# that attaches in the gap between the last poll and this statement makes the
+# DROP fail under ON_ERROR_STOP=1 — non-zero exit, database untouched — which
+# is the same safe outcome as the refusal above, just with a psql error for a
+# message.
+psql_admin -c "DROP DATABASE IF EXISTS \"$DB_NAME\";" >/dev/null
+if [ "$MODE" = docker ]; then
+  psql_admin -c "CREATE DATABASE \"$DB_NAME\";" >/dev/null
+  psql_target -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"; CREATE EXTENSION IF NOT EXISTS vector;' >/dev/null
+else
+  psql_admin -c "CREATE DATABASE \"$DB_NAME\" OWNER crm_user;" >/dev/null
+  psql_target -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"; CREATE EXTENSION IF NOT EXISTS vector;' >/dev/null
+  psql_target -c "GRANT ALL ON SCHEMA public TO crm_user;" >/dev/null
 fi
