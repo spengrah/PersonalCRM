@@ -3151,6 +3151,29 @@ func (q *Queries) TestGetRiverJobDispositionByID(ctx context.Context, id int64) 
 	return &i, err
 }
 
+const TestInsertAvailableKnowledgeCacheJobForEvent = `-- name: TestInsertAvailableKnowledgeCacheJobForEvent :one
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('knowledge_cache_updater', 'default', 'available',
+        jsonb_build_object('event_id', $1::text),
+        '{}'::jsonb, 1, 5, NOW())
+RETURNING id
+`
+
+// Failure-injection fixture: the SECOND no-op kind the harness registers, and
+// the one whose ownership CANNOT be read off the args — knowledge_cache_updater
+// carries only an event id, so ownership has to resolve the event's subject
+// contact. Pointed at a FOREIGN namespace's event this makes that resolution's
+// failure mode concrete: a regression in the event-subject predicate (or in the
+// worker registration) would finalize the job, silently dropping another
+// process's cache refresh. Available, not scheduled, for the same reason as the
+// rematch fixture: the fetch has to happen for the assertion to mean anything.
+func (q *Queries) TestInsertAvailableKnowledgeCacheJobForEvent(ctx context.Context, eventID string) (int64, error) {
+	row := q.db.QueryRow(ctx, TestInsertAvailableKnowledgeCacheJobForEvent, eventID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const TestInsertAvailableRematchJobForContact = `-- name: TestInsertAvailableRematchJobForContact :one
 INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
 VALUES ('rematch_dispatcher', 'default', 'available',

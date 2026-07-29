@@ -159,8 +159,8 @@ func (s *lockSession) unlock(key int64) error {
 // unlockOnce is the single unlock call site, so the injected-failure seam has
 // exactly one place to intercept.
 func (s *lockSession) unlockOnce(ctx context.Context, key int64) (bool, error) {
-	if err := unlockFailpointError(); err != nil {
-		return false, err
+	if injected, released, err := unlockFailpoint(); injected {
+		return released, err
 	}
 	return s.repo.AdvisoryUnlock(ctx, key)
 }

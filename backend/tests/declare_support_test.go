@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/api/handlers"
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
@@ -50,9 +51,37 @@ func declareNS(t *testing.T) string {
 // declareTestDB opens a per-test clone.
 func declareTestDB(t *testing.T) (*db.Database, context.Context) {
 	t.Helper()
-	ctx := context.Background()
-	database, _ := newIsolatedRiverTestDB(t, ctx)
+	database, _, ctx := declareTestDBWithConfig(t)
 	return database, ctx
+}
+
+// declareTestDBWithConfig is declareTestDB plus the clone's config, for the
+// tests that need to reach the same database over a connection the run's own
+// pool cannot possibly hand them.
+func declareTestDBWithConfig(t *testing.T) (*db.Database, *config.Config, context.Context) {
+	t.Helper()
+	ctx := context.Background()
+	database, cfg := newIsolatedRiverTestDB(t, ctx)
+	return database, cfg, ctx
+}
+
+// newForeignLockObserver pins one connection from a SEPARATE pool against the
+// same clone, and answers advisory-lock questions over it.
+//
+// The separation is the whole point. Session advisory locks are re-entrant on
+// their OWN connection, so an observer sharing the run's pool can be handed back
+// the very connection a failed release stranded them on — and then reports every
+// stranded lock as free. Only a connection that provably belongs to a different
+// backend session can falsify "the run released everything".
+func newForeignLockObserver(t *testing.T, ctx context.Context, cfg *config.Config) *repository.SyntheticSupportRepository {
+	t.Helper()
+	observerDB, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	t.Cleanup(observerDB.Close)
+	conn, err := observerDB.Pool.Acquire(ctx)
+	require.NoError(t, err)
+	t.Cleanup(conn.Release)
+	return repository.NewSyntheticSupportRepository(db.New(conn))
 }
 
 // --- API read path ----------------------------------------------------------

@@ -207,6 +207,52 @@ func TestDeclareRun_DescendantNamespaceRejected(t *testing.T) {
 	requireCleaned(t, ctx, database, []string{child.Namespace}, factory.DefaultSeed)
 }
 
+// A HOST-ONLY residue under a SALTED variant occupies the requested namespace,
+// and the refusal happens BEFORE construction.
+//
+// The residue shape is real: a constructor failure whose best-effort host
+// removal also failed leaves exactly this — a marker and nothing else, under a
+// token the client never asked for. The occupancy check has to probe every
+// salted variant by EXACT hostname to see it, because the contact sweep finds no
+// contacts and the requested token's own host does not exist. Without that probe
+// this run would re-salt onto the residue's variant (its own band being taken)
+// and materialize a second world on top of it — two worlds sharing one
+// namespace, one of which the next cleanup would half-delete.
+func TestDeclareRun_SaltedHostResidueOccupiesNamespace(t *testing.T) {
+	database, ctx := declareTestDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	requested := declareNS(t)
+	firstSalt := requested + "-s1"
+
+	_, err := support.SeedRevokedMacHost(ctx, hostnameFor(firstSalt))
+	require.NoError(t, err)
+
+	// Occupy the REQUESTED namespace's band, which is what would push
+	// construction onto the residue's variant.
+	requestedGen := factory.NewGenerator(factory.DefaultSeed, requested)
+	require.NoError(t, support.InsertTelegramChatConfigInBand(ctx, requestedGen.PeerBandStart()))
+	t.Cleanup(func() {
+		_, _ = support.DeleteTelegramChatConfigsByChatIds(context.Background(), []int64{requestedGen.PeerBandStart()})
+	})
+
+	_, err = declare.Run(ctx, database, "DSH-005", requested, factory.DefaultSeed)
+	require.ErrorIs(t, err, declare.ErrNamespaceOccupied)
+
+	// Before construction: the prefix covers the salted variants too, so an
+	// empty result means no world was built under ANY token of this family.
+	contactIDs, err := support.SelectContactIDsByFullNamePrefix(ctx, requestedGen.Prefix())
+	require.NoError(t, err)
+	assert.Empty(t, contactIDs, "the run must be refused before it constructs anything")
+
+	// The refusal is actionable: the residue is reachable and reclaimable by the
+	// REQUESTED token, which is the only token the client ever knew.
+	requireCleaned(t, ctx, database, []string{requested}, factory.DefaultSeed)
+	_, exists, err := support.SelectMacHostIDByHostname(ctx, hostnameFor(firstSalt))
+	require.NoError(t, err)
+	assert.False(t, exists, "cleanup must reclaim the salted host-only residue")
+}
+
 // A run failing mid-world reports honest recovery metadata, and the partial
 // world it left is fully reachable by the requested token afterwards.
 func TestDeclareRun_MidReplayFailureRecovery(t *testing.T) {
@@ -308,39 +354,97 @@ func TestDeclareRun_ConstructorResidueReportsUncleaned(t *testing.T) {
 // to prevent. The run must abort — and the locks must not survive it, because
 // destroying the session's connection is the only thing that can free a session
 // lock nobody can account for.
+//
+// BOTH of pg_advisory_unlock's failure shapes are exercised. The `not-held`
+// return is the one worth spelling out: it carries no error, so a caller that
+// inspected only `err` would walk straight past it — while the state it reports
+// (the session did not hold what it thought it held) is precisely the state the
+// abort rule exists to refuse to continue from.
+//
+// The freed set is the COMPLETE reservation family — the requested token plus
+// every salted variant — because the run took all of them. Sampling two of the
+// eight would leave a release path that stranded any of the rest looking green,
+// and a stranded session lock serializes that token for the life of the process.
 func TestDeclareRun_UnlockFailureAbortsReSaltSwap(t *testing.T) {
-	database, ctx := declareTestDB(t)
+	database, cfg, ctx := declareTestDBWithConfig(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
+	// Off the run's own pool: see newForeignLockObserver — a shared pool can
+	// hand back the stranded connection, on which every lock looks free.
+	holder := newForeignLockObserver(t, ctx, cfg)
 
-	requested := declareNS(t)
-	gen := factory.NewGenerator(factory.DefaultSeed, requested)
-	require.NoError(t, support.InsertTelegramChatConfigInBand(ctx, gen.PeerBandStart()))
-	t.Cleanup(func() {
-		_, _ = support.DeleteTelegramChatConfigsByChatIds(context.Background(), []int64{gen.PeerBandStart()})
-	})
+	for _, mode := range []string{declare.UnlockFailpointError, declare.UnlockFailpointNotHeld} {
+		t.Run(mode, func(t *testing.T) {
+			requested := declareNS(t)
+			gen := factory.NewGenerator(factory.DefaultSeed, requested)
+			require.NoError(t, support.InsertTelegramChatConfigInBand(ctx, gen.PeerBandStart()))
+			t.Cleanup(func() {
+				_, _ = support.DeleteTelegramChatConfigsByChatIds(context.Background(), []int64{gen.PeerBandStart()})
+			})
 
-	restore := declare.SetUnlockFailpointForTest(true)
-	_, err := declare.Run(ctx, database, "DSH-005", requested, factory.DefaultSeed)
-	restore()
-	require.Error(t, err, "a release that failed must abort the run, not be swallowed")
+			restore := declare.SetUnlockFailpointForTest(mode)
+			_, err := declare.Run(ctx, database, "DSH-005", requested, factory.DefaultSeed)
+			restore()
+			require.Error(t, err, "a release that failed must abort the run, not be swallowed")
+			// Non-vacuous: the run must have failed AT the swap's release, not
+			// somewhere earlier that never exercised the rule.
+			require.ErrorContains(t, err, "before the re-salt swap")
 
-	// Every reservation the run took is free again: the broken session's
-	// connection was destroyed rather than returned to the pool still holding.
+			// Every reservation the run took is free again: the broken session's
+			// connection was destroyed rather than returned to the pool still holding.
+			for _, token := range declare.NamespaceFamilyForTest(requested) {
+				key := declare.AdvisoryKeyForTest("declare:" + token)
+				acquired, lockErr := holder.TryAdvisoryLock(ctx, key)
+				require.NoError(t, lockErr)
+				assert.True(t, acquired, "the reservation for %s was stranded by the failed release", token)
+				if acquired {
+					_, _ = holder.AdvisoryUnlock(ctx, key)
+				}
+			}
+
+			requireRetriableCleanup(t, ctx, database, requested)
+		})
+	}
+}
+
+// The other half of the complete-family guarantee: the reservation ACQUIRES the
+// whole family, so holding any single salted variant stands a run down.
+//
+// This matters because construction picks the effective namespace INTERNALLY.
+// A variant left unreserved could be seeded by a second run — or cleaned out
+// from under this one — in the window between "the run started" and "the run
+// discovered it had re-salted onto that variant".
+func TestDeclareRun_ReservationCoversSaltVariants(t *testing.T) {
+	database, ctx := declareTestDB(t)
+	namespace := declareNS(t)
+
+	// The run's own pool is sound HERE (unlike the release test): the holder
+	// keeps its connection checked out for the whole test, so the pool cannot
+	// hand that same session to the run and let it re-enter its own lock.
 	conn, err := database.Pool.Acquire(ctx)
 	require.NoError(t, err)
 	defer conn.Release()
 	holder := repository.NewSyntheticSupportRepository(db.New(conn))
-	for _, token := range []string{requested, requested + "-s1"} {
-		key := declare.AdvisoryKeyForTest("declare:" + token)
-		acquired, lockErr := holder.TryAdvisoryLock(ctx, key)
-		require.NoError(t, lockErr)
-		assert.True(t, acquired, "the reservation for %s was stranded by the failed release", token)
-		if acquired {
-			_, _ = holder.AdvisoryUnlock(ctx, key)
-		}
-	}
 
-	requireRetriableCleanup(t, ctx, database, requested)
+	family := declare.NamespaceFamilyForTest(namespace)
+	require.Equal(t, namespace, family[0], "the requested token leads the family")
+	require.Contains(t, family, namespace+"-s7", "the family must span the whole salt budget")
+
+	// One variant at a time: a reservation that covered only some of them would
+	// let the run straight through on the ones it missed.
+	for _, variant := range family[1:] {
+		key := declare.AdvisoryKeyForTest("declare:" + variant)
+		held, lockErr := holder.TryAdvisoryLock(ctx, key)
+		require.NoError(t, lockErr)
+		require.True(t, held, "the test could not take the variant lock for %s", variant)
+
+		_, runErr := declare.Run(ctx, database, "DSH-005", namespace, factory.DefaultSeed)
+		assert.ErrorIs(t, runErr, declare.ErrNamespaceBusy,
+			"a held reservation on variant %s must stand the run down", variant)
+
+		released, unlockErr := holder.AdvisoryUnlock(ctx, key)
+		require.NoError(t, unlockErr)
+		require.True(t, released)
+	}
 }
 
 // The harness runs a live River client on the shared `default` queue, and River
@@ -349,6 +453,15 @@ func TestDeclareRun_UnlockFailureAbortsReSaltSwap(t *testing.T) {
 // workers for would therefore swallow another process's work silently. A foreign
 // job must come back un-finalized, and the snooze counter is what makes that a
 // POSITIVE observation: a job nobody ever fetched is also un-finalized.
+//
+// BOTH no-op kinds are planted, because they resolve ownership by DIFFERENT
+// routes and a regression in one is invisible to the other:
+//   - rematch_dispatcher's args carry the contact id, so ownership is a direct
+//     contact lookup;
+//   - knowledge_cache_updater's args carry only an event id, so ownership has to
+//     resolve the event's SUBJECT contact first. A broken event-subject
+//     predicate (or a kind that quietly stopped being ownership-checked at all)
+//     would finalize the cache job while the rematch job still looked correct.
 func TestDeclareRun_ForeignRiverJobIsNotStolen(t *testing.T) {
 	database, ctx := declareTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
@@ -358,14 +471,29 @@ func TestDeclareRun_ForeignRiverJobIsNotStolen(t *testing.T) {
 	foreign := mustRun(t, ctx, database, "DSH-005", foreignNS)
 	foreignContactID := uuid.MustParse(foreign.Entities["refresh-target"].ID)
 
-	jobID, err := support.InsertAvailableRematchJobForContact(ctx, foreignContactID)
+	rematchJobID, err := support.InsertAvailableRematchJobForContact(ctx, foreignContactID)
+	require.NoError(t, err)
+
+	// The cache job must point at a REAL foreign event: an unresolvable event id
+	// is refused by the "not provably ours" fallback and would prove nothing
+	// about the subject resolution itself.
+	foreignEventIDs, err := support.ListEventIdsForContacts(ctx, []uuid.UUID{foreignContactID})
+	require.NoError(t, err)
+	require.NotEmpty(t, foreignEventIDs, "the foreign world must own an event for the cache job to reference")
+	foreignPrefix := factory.NewGenerator(factory.DefaultSeed, foreign.Namespace).Prefix()
+	ownedByForeign, err := support.NamespaceOwnsEventSubject(ctx, foreignEventIDs[0], foreignPrefix)
+	require.NoError(t, err)
+	require.True(t, ownedByForeign,
+		"the planted event must resolve to the FOREIGN namespace's subject — otherwise the seeding harness would be refusing an id it simply could not resolve")
+	cacheJobID, err := support.InsertAvailableKnowledgeCacheJobForEvent(ctx, foreignEventIDs[0])
 	require.NoError(t, err)
 
 	// Observe while the SECOND namespace's client is alive and fetching.
-	var observed repository.RiverJobDisposition
+	var observedRematch, observedCache repository.RiverJobDisposition
 	restore := declare.SetTestHookForTest(declare.HookAfterReplayBeforeDrain,
 		func(hookCtx context.Context, _ *replay.Harness) error {
-			observed = pollJobDisposition(hookCtx, support, jobID, 30*time.Second)
+			observedRematch = pollJobDisposition(hookCtx, support, rematchJobID, 30*time.Second)
+			observedCache = pollJobDisposition(hookCtx, support, cacheJobID, 30*time.Second)
 			return nil
 		})
 	namespace := declareNS(t)
@@ -373,12 +501,22 @@ func TestDeclareRun_ForeignRiverJobIsNotStolen(t *testing.T) {
 	restore()
 	require.NoError(t, err)
 
-	assert.Greater(t, observed.Snoozes, int64(0),
-		"the harness must have FETCHED the foreign job — without that, un-finalized proves nothing")
-	assert.False(t, observed.Finalized, "the harness finalized a job belonging to another namespace")
-	assert.NotEqual(t, "completed", observed.State)
+	for _, observed := range []struct {
+		kind string
+		got  repository.RiverJobDisposition
+	}{
+		{"rematch_dispatcher", observedRematch},
+		{"knowledge_cache_updater", observedCache},
+	} {
+		assert.Greater(t, observed.got.Snoozes, int64(0),
+			"the harness must have FETCHED the foreign %s job — without that, un-finalized proves nothing", observed.kind)
+		assert.False(t, observed.got.Finalized,
+			"the harness finalized a foreign %s job", observed.kind)
+		assert.NotEqual(t, "completed", observed.got.State, "foreign %s job", observed.kind)
+	}
 
-	require.NoError(t, support.FinalizeRiverJobByID(ctx, jobID))
+	require.NoError(t, support.FinalizeRiverJobByID(ctx, rematchJobID))
+	require.NoError(t, support.FinalizeRiverJobByID(ctx, cacheJobID))
 	requireCleaned(t, ctx, database, []string{foreignNS, namespace}, factory.DefaultSeed)
 	assert.Equal(t, int64(0), measureResidue(t, ctx, database, seeded.Namespace, factory.DefaultSeed).total())
 }

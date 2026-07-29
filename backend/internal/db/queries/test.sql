@@ -1804,6 +1804,21 @@ VALUES ('rematch_dispatcher', 'default', 'available',
         '{}'::jsonb, 1, 5, NOW())
 RETURNING id;
 
+-- name: TestInsertAvailableKnowledgeCacheJobForEvent :one
+-- Failure-injection fixture: the SECOND no-op kind the harness registers, and
+-- the one whose ownership CANNOT be read off the args — knowledge_cache_updater
+-- carries only an event id, so ownership has to resolve the event's subject
+-- contact. Pointed at a FOREIGN namespace's event this makes that resolution's
+-- failure mode concrete: a regression in the event-subject predicate (or in the
+-- worker registration) would finalize the job, silently dropping another
+-- process's cache refresh. Available, not scheduled, for the same reason as the
+-- rematch fixture: the fetch has to happen for the assertion to mean anything.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('knowledge_cache_updater', 'default', 'available',
+        jsonb_build_object('event_id', @event_id::text),
+        '{}'::jsonb, 1, 5, NOW())
+RETURNING id;
+
 -- name: TestGetRiverJobDispositionByID :one
 -- Test assertion — a planted job's disposition: its state, whether it is
 -- finalized, and how many times it has been snoozed (River records the count in

@@ -1805,6 +1805,14 @@ func (r *SyntheticSupportRepository) InsertAvailableRematchJobForContact(ctx con
 	})
 }
 
+// InsertAvailableKnowledgeCacheJobForEvent plants an immediately fetchable
+// knowledge_cache_updater job. Its args carry only an event id, so pointing it
+// at a FOREIGN namespace's event exercises the event-SUBJECT ownership path —
+// the one the args-carried contact id cannot short-circuit. Fixture only.
+func (r *SyntheticSupportRepository) InsertAvailableKnowledgeCacheJobForEvent(ctx context.Context, eventID uuid.UUID) (int64, error) {
+	return r.queries.TestInsertAvailableKnowledgeCacheJobForEvent(ctx, eventID.String())
+}
+
 // RiverJobDisposition is a planted job's outcome: its state, whether it is
 // finalized, and how many times a worker snoozed it.
 type RiverJobDisposition struct {

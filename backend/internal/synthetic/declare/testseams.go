@@ -53,7 +53,7 @@ var (
 	armedFailpoint   string
 	armedHooks       = map[string]TestHook{}
 	armedCleanupFail string
-	armedUnlockFail  bool
+	armedUnlockFail  string
 	budgetRun        = defaultRunBudget
 	budgetTeardown   = defaultTeardownBudget
 )
@@ -129,23 +129,54 @@ func SetCleanupFailStepForTest(step string) (restore func()) {
 	}
 }
 
-// SetUnlockFailpointForTest makes every advisory-lock RELEASE fail without
-// actually releasing anything, which is the shape a lost/broken connection
-// produces. It is the only way to exercise the abort-on-failed-release rule:
-// pg_advisory_unlock against a live healthy session does not fail on demand,
-// and a release that silently "succeeded" while the lock stayed held is exactly
-// the state the rule exists to refuse to continue from. Pass false to disarm.
-func SetUnlockFailpointForTest(armed bool) (restore func()) {
+// Unlock failpoint modes. pg_advisory_unlock has TWO failure shapes and the
+// abort rule covers both, so both have to be injectable — neither can be
+// produced on demand against a live healthy session.
+const (
+	// UnlockFailpointError is the call itself failing, the shape a lost or
+	// broken connection produces.
+	UnlockFailpointError = "error"
+	// UnlockFailpointNotHeld is pg_advisory_unlock returning FALSE: no error,
+	// but the session did not hold the lock it thought it held. That means the
+	// caller's model of what it holds is wrong and the lock may still be held
+	// by someone — a silent "success" here is exactly the state the abort rule
+	// exists to refuse to continue from.
+	UnlockFailpointNotHeld = "not-held"
+)
+
+var knownUnlockFailpoints = map[string]bool{
+	UnlockFailpointError:   true,
+	UnlockFailpointNotHeld: true,
+}
+
+// SetUnlockFailpointForTest makes every advisory-lock RELEASE fail in the named
+// mode without actually releasing anything. It is the only way to exercise the
+// abort-on-failed-release rule. Pass "" to disarm; panics on an unknown mode,
+// for the same reason as SetFailpointForTest.
+func SetUnlockFailpointForTest(mode string) (restore func()) {
 	requireTestEnv("declare.SetUnlockFailpointForTest")
+	if mode != "" && !knownUnlockFailpoints[mode] {
+		panic(fmt.Sprintf("declare: unknown unlock failpoint mode %q", mode))
+	}
 	seamMu.Lock()
 	prev := armedUnlockFail
-	armedUnlockFail = armed
+	armedUnlockFail = mode
 	seamMu.Unlock()
 	return func() {
 		seamMu.Lock()
 		armedUnlockFail = prev
 		seamMu.Unlock()
 	}
+}
+
+// NamespaceFamilyForTest is the COMPLETE set of tokens one run's reservation
+// covers: the requested namespace plus every salted variant re-salting can
+// mint. A test that spelled this family out itself would silently stop covering
+// the whole thing the day the salt budget changed, so it comes from the same
+// derivation the reservation uses.
+func NamespaceFamilyForTest(namespace string) []string {
+	requireTestEnv("declare.NamespaceFamilyForTest")
+	return append([]string{namespace}, saltVariants(namespace)...)
 }
 
 // SetBudgetsForTest shrinks the run/teardown budgets so the bounded-run
@@ -203,15 +234,22 @@ func currentCleanupFailStep() string {
 	return armedCleanupFail
 }
 
-// unlockFailpointError is the injected release failure, or nil.
-func unlockFailpointError() error {
+// unlockFailpoint reports the injected release outcome. `injected` is false
+// when no mode is armed, in which case the caller performs the real release.
+func unlockFailpoint() (injected, released bool, err error) {
 	seamMu.Lock()
-	armed := armedUnlockFail
+	mode := armedUnlockFail
 	seamMu.Unlock()
-	if armed {
-		return errors.New("declare: unlock failpoint fired")
+	switch mode {
+	case UnlockFailpointError:
+		return true, false, errors.New("declare: unlock failpoint fired")
+	case UnlockFailpointNotHeld:
+		// No error, but the lock was NOT released — the branch a caller that
+		// only inspected `err` would walk straight past.
+		return true, false, nil
+	default:
+		return false, false, nil
 	}
-	return nil
 }
 
 func runBudget() time.Duration {

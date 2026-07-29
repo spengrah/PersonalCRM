@@ -2514,6 +2514,15 @@ type Querier interface {
 	// accidentally dropped them). to_regclass returns NULL when the index
 	// does not exist.
 	TestIndexExists(ctx context.Context, indexName string) (bool, error)
+	// Failure-injection fixture: the SECOND no-op kind the harness registers, and
+	// the one whose ownership CANNOT be read off the args — knowledge_cache_updater
+	// carries only an event id, so ownership has to resolve the event's subject
+	// contact. Pointed at a FOREIGN namespace's event this makes that resolution's
+	// failure mode concrete: a regression in the event-subject predicate (or in the
+	// worker registration) would finalize the job, silently dropping another
+	// process's cache refresh. Available, not scheduled, for the same reason as the
+	// rematch fixture: the fetch has to happen for the assertion to mean anything.
+	TestInsertAvailableKnowledgeCacheJobForEvent(ctx context.Context, eventID string) (int64, error)
 	// Failure-injection fixture: plants an AVAILABLE (immediately fetchable)
 	// rematch_dispatcher job for a contact of the caller's choosing. Pointed at a
 	// FOREIGN contact it is the job-stealing hazard made concrete: a live harness
