@@ -413,22 +413,7 @@ test-e2e-diff: e2e-db
 e2e-db:
 	@bash "$(REPO_ROOT)/scripts/ensure-postgres-for-tests.sh"
 	@echo "Setting up isolated E2E test database ($(E2E_DATABASE_NAME))..."
-	@case "$(E2E_DATABASE_NAME)" in (*[!A-Za-z0-9_]*|'') echo "Invalid E2E_DATABASE_NAME: $(E2E_DATABASE_NAME)" >&2; exit 1;; esac
-	@case "$(E2E_DATABASE_NAME)" in (personal_crm_test|personal_crm_test_[A-Za-z0-9_]*) ;; (*) echo "Invalid E2E_DATABASE_NAME: $(E2E_DATABASE_NAME) (must be personal_crm_test or personal_crm_test_<suffix>)" >&2; exit 1;; esac
-	@if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then \
-		docker exec crm-postgres psql -U crm_user -d postgres -c "DROP DATABASE IF EXISTS \"$(E2E_DATABASE_NAME)\";" 2>/dev/null || true; \
-		docker exec crm-postgres psql -U crm_user -d postgres -c "CREATE DATABASE \"$(E2E_DATABASE_NAME)\";" 2>/dev/null; \
-		docker exec crm-postgres psql -U crm_user -d "$(E2E_DATABASE_NAME)" -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \
-	else \
-		if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='crm_user';" | grep -q 1; then \
-			echo "crm_user role missing; run scripts/start-postgres-native.sh first" >&2; \
-			exit 1; \
-		fi; \
-		sudo -u postgres psql -c "DROP DATABASE IF EXISTS \"$(E2E_DATABASE_NAME)\";" 2>/dev/null || true; \
-		sudo -u postgres psql -c "CREATE DATABASE \"$(E2E_DATABASE_NAME)\" OWNER crm_user;" 2>/dev/null; \
-		sudo -u postgres psql -d "$(E2E_DATABASE_NAME)" -c "CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"; CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null; \
-		sudo -u postgres psql -d "$(E2E_DATABASE_NAME)" -c "GRANT ALL ON SCHEMA public TO crm_user;" 2>/dev/null; \
-	fi
+	@E2E_DATABASE_NAME="$(E2E_DATABASE_NAME)" bash "$(REPO_ROOT)/scripts/e2e-db-reset.sh"
 	@echo "✓ E2E test database ready"
 
 # Build
