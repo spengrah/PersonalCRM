@@ -651,9 +651,17 @@ behaviors:
         text: placeholder-year birthdays display without an age
       - key: page-follows-accelerated-time
         text: the page follows the app's accelerated time
+      - key: leap-day-next-occurrence
+        text: a February 29 birthday is observed on February 29 in a leap year and on March 1 in a common year
     serves: [CON-052]
     provenance: [birthdays/page.tsx, birthdays.spec.ts, isPlaceholderBirthday]
-    notes: Month/day-only birthdays are stored with a placeholder year (1900) — the sentinel drives the age suppression.
+    notes: >-
+      Month/day-only birthdays are stored with a placeholder year (1900) — the sentinel drives the age suppression.
+      1900 is not a leap year, so February 29 is not representable as a month/day-only birthday at all; a leap-day
+      birthday needs a real leap birth year. The page projects a stored birthday onto the current year with
+      new Date(year, month, day), which rolls February 29 to March 1 in a common year — that roll is the
+      leap-day-next-occurrence behavior, made explicit here rather than left as an emergent property of the
+      date arithmetic.
 
   - id: CON-046
     title: Failed quick actions surface an error to the user

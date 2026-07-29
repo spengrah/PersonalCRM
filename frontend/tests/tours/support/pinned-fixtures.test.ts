@@ -37,7 +37,9 @@ function stubApiCtx(rows: Array<{ id: string; full_name: string }>): APIRequestC
 describe('assertOverdueFitsCapture', () => {
   it('throws above the cap, naming the tour and the count', () => {
     expect(() => assertOverdueFitsCapture(OVERDUE_CAPTURE_CAP + 1, 'dashboard')).toThrow(
-      /dashboard tour: 65 overdue contacts exceed the capture cap of 64/
+      new RegExp(
+        `dashboard tour: ${OVERDUE_CAPTURE_CAP + 1} overdue contacts exceed the capture cap of ${OVERDUE_CAPTURE_CAP}`
+      )
     )
   })
 
@@ -50,6 +52,8 @@ describe('assertOverdueFitsCapture', () => {
     // prod-shaped world. The guard must not fire on the shipping seed — a cap that
     // rejects the intended population is as broken as one that never fires.
     expect(() => assertOverdueFitsCapture(52, 'relationship-loop')).not.toThrow()
+    // ...and the declared `standard` world, measured at 65.
+    expect(() => assertOverdueFitsCapture(65, 'relationship-loop')).not.toThrow()
   })
 
   it('leaves headroom over the default array cap', () => {
@@ -114,5 +118,25 @@ describe('marker parity with the Go seed', () => {
 
   it('declares exactly the markers the seed declares', () => {
     expect([...ALL_FIXTURE_MARKERS].sort()).toEqual([...goMarkers()].sort())
+  })
+})
+
+describe('overdue capture cap parity with the Go seed', () => {
+  // The cap is a two-sided contract: the Go side asserts the seeded world stays
+  // under it, the TS side refuses to tour a world that exceeds it. Hand-copied
+  // across the language boundary, so a one-sided change would either let a
+  // truncated list reach the judge or stop a perfectly good world from touring.
+  const goCap = (): number | null => {
+    const src = fs.readFileSync(FIXTURES_GO, 'utf8')
+    const m = src.match(/^const TourOverdueCaptureCap = (\d+)$/m)
+    return m ? Number(m[1]) : null
+  }
+
+  it('finds the Go constant at all (the regex is load-bearing)', () => {
+    expect(goCap()).not.toBeNull()
+  })
+
+  it('equals synthetic.TourOverdueCaptureCap', () => {
+    expect(OVERDUE_CAPTURE_CAP).toBe(goCap())
   })
 })

@@ -2,6 +2,8 @@ package factory
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -54,9 +56,9 @@ type contactConfig struct {
 	birthday             *time.Time
 	howMet               *string
 	location             *string
-	unicodeName          bool
-	descender            bool
+	nameEdge             NameEdge
 	nameMarker           string
+	twinOf               *ContactSpec
 }
 
 // WithEmail adds an email contact_method (default ON if no method option is
@@ -104,11 +106,55 @@ func WithRecentCreation(window time.Duration) ContactOption {
 
 // WithBirthday1900Sentinel sets the prod 1900-MM-DD month/day-only sentinel —
 // a representative edge case the catalog can build on.
+//
+// It PANICS when the requested (month, day) does not round-trip through the
+// sentinel year. 1900 is not a leap year (divisible by 100, not by 400), so
+// time.Date normalizes February 29 to March 1 — and a seed that silently stores
+// a different date than the one it was asked for is a fixture lying about what
+// it represents. The sharper statement is that a year-UNKNOWN February 29
+// birthday is not expressible in the product's storage convention at all (1900
+// is the year-unknown sentinel the UI keys its age suppression on), so the
+// caller has to choose a real leap birth year instead — see LeapSafeBirthYear.
+// A panic is right here: this is a programming error in deterministic seed code,
+// the same class as exhausting the phone block, not a runtime condition.
 func WithBirthday1900Sentinel(month time.Month, day int) ContactOption {
-	return func(c *contactConfig) {
-		b := time.Date(1900, month, day, 0, 0, 0, 0, time.UTC)
-		c.birthday = &b
+	b := time.Date(sentinelBirthYear, month, day, 0, 0, 0, 0, time.UTC)
+	if b.Month() != month || b.Day() != day {
+		panic(fmt.Sprintf(
+			"synthetic: WithBirthday1900Sentinel(%s, %d) normalizes to %s in the year-unknown sentinel year %d — "+
+				"use WithBirthday on LeapSafeBirthYear(anchor) instead",
+			month, day, b.Format("2006-01-02"), sentinelBirthYear))
 	}
+	return func(c *contactConfig) {
+		bday := b
+		c.birthday = &bday
+	}
+}
+
+// sentinelBirthYear is the product's year-unknown birthday sentinel (see
+// PLACEHOLDER_BIRTHDAY_YEAR in the frontend, which suppresses the rendered age
+// for it).
+const sentinelBirthYear = 1900
+
+// LeapSafeBirthYear is the birth year a generated birthday should use when the
+// month/day must survive verbatim: the largest leap year on or before
+// anchor.Year()-30. Leap-safety is what preserves a February 29 target as
+// February 29 (a Feb-28 clamp would move a "today" fixture on a Feb-29 anchor
+// into the already-celebrated group), and the ~30-33 year offset keeps the
+// rendered age plausible.
+//
+// It lives in factory rather than beside the birthday fixtures so both the
+// synthetic root and the declare vocabulary can use it without a cycle.
+func LeapSafeBirthYear(anchor time.Time) int {
+	y := anchor.UTC().Year() - 30
+	for !isLeapYear(y) {
+		y--
+	}
+	return y
+}
+
+func isLeapYear(y int) bool {
+	return y%4 == 0 && (y%100 != 0 || y%400 == 0)
 }
 
 // WithBirthday sets a general (real-year) birthday. The caller supplies an
@@ -147,12 +193,107 @@ func WithLocation(s string) ContactOption {
 	}
 }
 
+// NameEdge names a display-name edge case: a token injected between the given
+// name and the surname so the rendered name exercises a specific truncation,
+// shaping or bidirectional-rendering hazard. The zero value is "no edge".
+type NameEdge string
+
+const (
+	// NameEdgeUnicode is a diacritic-bearing name (accent composition).
+	NameEdgeUnicode NameEdge = "unicode"
+	// NameEdgeDescender is a name with descenders (g, y, j, p, q) — the
+	// line-height clipping hazard.
+	NameEdgeDescender NameEdge = "descender"
+	// NameEdgeLong is a deliberately long name: the truncation/ellipsis and
+	// layout-overflow hazard. Bounded so the rendered full_name stays inside the
+	// 255-character limit the contact API's own validator enforces — a longer
+	// name is a state the product itself refuses, so seeding one would break the
+	// toolkit's honesty rule rather than test anything.
+	NameEdgeLong NameEdge = "long"
+	// NameEdgeRTL is a right-to-left (Arabic) segment: the bidirectional
+	// rendering hazard, where a mixed-direction name reorders visually.
+	NameEdgeRTL NameEdge = "rtl"
+	// NameEdgeEmoji is an emoji-bearing name: astral-plane code points, where a
+	// naive byte or UTF-16 truncation splits a surrogate pair.
+	NameEdgeEmoji NameEdge = "emoji"
+)
+
+// nameEdgeLongRepeat is the repeat count behind the long token. It is stated as
+// arithmetic rather than as a literal so the 255-character bound is checkable:
+// worst case is prefix (6 + 60-char namespace + 1) + given (7) + space (1) +
+// token + surname (11) + the disambiguation suffix, which the name-edge unit
+// test pins.
+const nameEdgeLongRepeat = 9
+
+// nameEdgeTokens is the injected token per edge kind. Each ends in "-" so it
+// reads as a name segment rather than a separate word.
+var nameEdgeTokens = map[NameEdge]string{
+	NameEdgeUnicode:   "Ünïcödé-",
+	NameEdgeDescender: "Gregory-", // descenders: g, y, p, q
+	NameEdgeLong:      strings.Repeat("Verylongname", nameEdgeLongRepeat) + "-",
+	NameEdgeRTL:       "مرحبا-",
+	NameEdgeEmoji:     "🎉🚀-",
+}
+
+// NameEdgeKinds is every edge kind, sorted, so a test can iterate the set
+// instead of restating it.
+func NameEdgeKinds() []NameEdge {
+	out := make([]NameEdge, 0, len(nameEdgeTokens))
+	for kind := range nameEdgeTokens {
+		out = append(out, kind)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+// NameEdgeToken is the token WithNameEdge injects for a kind, and false for an
+// unknown one.
+func NameEdgeToken(kind NameEdge) (string, bool) {
+	token, ok := nameEdgeTokens[kind]
+	return token, ok
+}
+
+// WithNameEdge uses a display name carrying the named edge case's token. It
+// PANICS on an unknown kind — a typo would otherwise produce an ordinary name
+// and the edge would silently stop being tested. The token stays inside the
+// display-name dedupe, so two contacts with the same edge still get distinct
+// names.
+func WithNameEdge(kind NameEdge) ContactOption {
+	if _, ok := nameEdgeTokens[kind]; !ok {
+		panic(fmt.Sprintf("synthetic: unknown name edge %q", kind))
+	}
+	return func(c *contactConfig) { c.nameEdge = kind }
+}
+
 // WithUnicodeName uses a unicode-bearing display name (edge case).
-func WithUnicodeName() ContactOption { return func(c *contactConfig) { c.unicodeName = true } }
+func WithUnicodeName() ContactOption { return WithNameEdge(NameEdgeUnicode) }
 
 // WithDescenderName uses a name with descenders (g, y, j, p, q) — a UI
 // rendering edge case.
-func WithDescenderName() ContactOption { return func(c *contactConfig) { c.descender = true } }
+func WithDescenderName() ContactOption { return WithNameEdge(NameEdgeDescender) }
+
+// WithNameTwinOf gives this contact the SAME full_name as an already-generated
+// spec — the deliberate, narrow opt-out of the display-name dedupe below.
+//
+// The dedupe exists because names are drawn with replacement, so an accidental
+// repeat is a flake that breaks every by-name selector. A DELIBERATE duplicate
+// is a different thing: it is the fuzzy-collision fixture (two people who really
+// do share a name), and it is the only shape that exercises what the matcher
+// does with an ambiguous display-name tie. This option is the single route to
+// one, and it is deliberately explicit — it needs the source spec in hand, so it
+// cannot happen by accident.
+//
+// It preserves the PRNG stream exactly: the draw still consumes its sequence
+// number, given name and surname, and only the rendered result is overridden
+// afterwards, so every LATER contact in the namespace is byte-identical to what
+// it would have been. The copied name is still recorded in the dedupe set, so a
+// later ordinary draw that lands on the same base is disambiguated as usual.
+func WithNameTwinOf(other ContactSpec) ContactOption {
+	return func(c *contactConfig) {
+		spec := other
+		c.twinOf = &spec
+	}
+}
 
 // WithNameMarker appends a resolution marker token to the contact's display name,
 // so a hand-authored fixture can be resolved over the API by search instead of by
@@ -184,11 +325,8 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 	sur := g.surname()
 
 	display := given + " " + sur
-	switch {
-	case cfg.unicodeName:
-		display = given + " Ünïcödé-" + sur
-	case cfg.descender:
-		display = given + " Gregory-" + sur // descenders: g, y, p, q
+	if token, ok := nameEdgeTokens[cfg.nameEdge]; ok {
+		display = given + " " + token + sur
 	}
 	if cfg.nameMarker != "" {
 		display += " " + cfg.nameMarker
@@ -205,12 +343,24 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 	// consume extra rng values and shift every later draw for that namespace,
 	// so worlds that DON'T collide would still have to be re-derived. This way
 	// a non-colliding namespace's output is byte-identical to before.
-	if g.usedDisplay[display] {
+	if cfg.twinOf == nil && g.usedDisplay[display] {
 		display = fmt.Sprintf("%s %d", display, n)
 	}
-	g.usedDisplay[display] = true
 	// Namespace-prefixed full_name so the prefix cleanup backstop finds it.
 	fullName := g.Prefix() + display
+	if cfg.twinOf != nil {
+		// The deliberate duplicate (WithNameTwinOf): take the source's rendered
+		// name verbatim, AFTER the draws above, so the stream position for every
+		// later contact is unchanged.
+		if !strings.HasPrefix(cfg.twinOf.FullName, g.Prefix()) {
+			panic(fmt.Sprintf(
+				"synthetic: WithNameTwinOf source %q is outside generator namespace %q",
+				cfg.twinOf.FullName, g.Namespace()))
+		}
+		fullName = cfg.twinOf.FullName
+		display = strings.TrimPrefix(fullName, g.Prefix())
+	}
+	g.usedDisplay[display] = true
 
 	spec := ContactSpec{
 		FullName: fullName,

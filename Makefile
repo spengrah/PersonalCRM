@@ -487,13 +487,27 @@ test-integration-fast: worktree-test-pg-ensure
 	@echo "Running backend integration tests (default set)..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE)$(INTEGRATION_RUN_FLAG)
 
+# LONG_TESTS_TIMEOUT is the per-PACKAGE wall-clock bound for the two LONG lanes.
+#
+# It is a HANG guard, not a performance budget: a wedged River client or a
+# never-clearing settle gate must still fail loudly rather than pin the lane
+# forever. It has to be stated because Go's implicit default is 10 minutes, and
+# `backend/tests` under LONG_TESTS is a River-DRAINING suite that legitimately
+# runs most of that — measured at 504s on develop @10c0c83, i.e. 84% of the
+# implicit budget with nothing said about it. At that margin ANY slow-test
+# addition tips the whole lane into `panic: test timed out`, which reads as a
+# failure of whatever test happened to be running rather than as the budget it
+# actually is. Fifteen minutes leaves substantial headroom over the measured
+# package while preserving useful hang detection.
+LONG_TESTS_TIMEOUT ?= 15m
+
 test-integration: worktree-test-pg-ensure
 	@echo "Running backend integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE)$(INTEGRATION_RUN_FLAG)
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -timeout $(LONG_TESTS_TIMEOUT) -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE)$(INTEGRATION_RUN_FLAG)
 
 test-integration-slow: worktree-test-pg-ensure
 	@echo "Running backend slow integration tests..."
-	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
+	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -timeout $(LONG_TESTS_TIMEOUT) -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
 
 # Per-worktree test-Postgres lifecycle (gh #433). All operate ONLY on
 # this worktree's own instance under $CRM_WORKTREE_PG_HOME — never the shared
@@ -548,7 +562,7 @@ test-api:
 # inside <string> values, so it parses fine); plutil is macOS-only and not used here.
 test-deploy-scripts:
 	@echo "Running deploy-script shell tests (parallel)..."
-	@tests="scripts/deploy-artifact.test.sh scripts/backup-db.test.sh scripts/restore-db.test.sh scripts/deploy-staging.test.sh scripts/staging-reset.test.sh scripts/ci/staging-reseed-decision.test.sh scripts/ci/ghcr-retention.test.sh scripts/ci/qa-round-cadence-gate.test.sh scripts/ci/qa-nightly-round.test.sh scripts/ci/qa-fn-backfill-guard.test.sh scripts/staging-deployed-sha.test.sh scripts/staging-reseed.test.sh scripts/admin/setup-staging-reseed-host.sh.test.sh scripts/run-tours.test.sh scripts/reconcile-mac-daemon.test.sh scripts/setup-mac-deploy.test.sh scripts/trigger-mac-deploy.test.sh scripts/test/test-promote-preflight.sh"; \
+	@tests="scripts/deploy-artifact.test.sh scripts/backup-db.test.sh scripts/restore-db.test.sh scripts/deploy-staging.test.sh scripts/staging-reset.test.sh scripts/dev-seed.test.sh scripts/check-tour-markers.test.sh scripts/ci/staging-reseed-decision.test.sh scripts/ci/ghcr-retention.test.sh scripts/ci/qa-round-cadence-gate.test.sh scripts/ci/qa-nightly-round.test.sh scripts/ci/qa-fn-backfill-guard.test.sh scripts/staging-deployed-sha.test.sh scripts/staging-reseed.test.sh scripts/admin/setup-staging-reseed-host.sh.test.sh scripts/run-tours.test.sh scripts/reconcile-mac-daemon.test.sh scripts/setup-mac-deploy.test.sh scripts/trigger-mac-deploy.test.sh scripts/test/test-promote-preflight.sh"; \
 	tmp="$$(mktemp -d)"; \
 	for t in $$tests; do \
 	  ( bash "$$t" >"$$tmp/$$(echo "$$t" | tr / _).out" 2>&1; echo "$$?" >"$$tmp/$$(echo "$$t" | tr / _).rc" ) & \

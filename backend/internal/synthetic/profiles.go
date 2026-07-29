@@ -327,9 +327,17 @@ func ProfileParams(name Profile) (SeedParams, error) {
 				ImportCandidatesPerSource: 4,
 			},
 		}, nil
+	case ProfileStandard:
+		// No Counts: the declared world has no volume knobs — it is exactly what
+		// the declaration and edge registries say it is.
+		return SeedParams{
+			Namespace: "standard",
+			Seed:      factory.DefaultSeed,
+			Profile:   ProfileStandard,
+		}, nil
 	default:
-		return SeedParams{}, fmt.Errorf("synthetic: unknown profile %q (want one of %q, %q, %q)",
-			name, ProfileMinimalScoped, ProfileDev, ProfileProdShaped)
+		return SeedParams{}, fmt.Errorf("synthetic: unknown profile %q (want one of %q, %q, %q, %q)",
+			name, ProfileMinimalScoped, ProfileDev, ProfileProdShaped, ProfileStandard)
 	}
 }
 
@@ -356,6 +364,8 @@ func RunProfile(ctx context.Context, h *Harness, params SeedParams) (ProfileResu
 		res, err = runMinimalScoped(ctx, h, params, res)
 	case ProfileDev, ProfileProdShaped:
 		res, err = runCatalogProfile(ctx, h, params, res)
+	case ProfileStandard:
+		res, err = runStandardProfile(ctx, h, params, res)
 	default:
 		err = fmt.Errorf("synthetic: RunProfile: unknown profile %q", params.Profile)
 	}
@@ -512,7 +522,7 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 		if i%3 != 0 {
 			continue
 		}
-		if err := h.SeedNote(ctx, contactID, fmt.Sprintf("catalog notepad note %d", i)); err != nil {
+		if _, err := h.SeedNote(ctx, contactID, fmt.Sprintf("catalog notepad note %d", i)); err != nil {
 			return res, fmt.Errorf("profile %s: seed catalog note %d: %w", params.Profile, i, err)
 		}
 		res.ContactsWithNotes++
@@ -1071,24 +1081,19 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	if params.Counts.SeededTasks > 0 {
 		// Marker-bearing: this contact IS the pinned "awaiting reply" fixture, so the
 		// tour resolves it by name rather than probing every contact's detail endpoint
-		// looking for has_pending_followup (the list payload never carries it).
-		fuSpec := gen.Contact(factory.WithEmail(), factory.WithCadence(followUpScenarioCadence), factory.WithNameMarker(FixtureMarkerPending))
-		fuContact, err := h.SeedContact(ctx, fuSpec)
+		// looking for has_pending_followup (the list payload never carries it). The
+		// recipe is stated ONCE, in standard.go, and shared with the declared world's
+		// tail; this call site keeps the SeededTasks gate, which is a profile
+		// decision rather than part of the recipe.
+		_, payloads, err := seedPendingFollowUpFixture(ctx, h, gen)
 		if err != nil {
-			return res, fmt.Errorf("profile %s: seed awaiting-reply contact: %w", params.Profile, err)
+			return res, fmt.Errorf("profile %s: %w", params.Profile, err)
 		}
 		res.Contacts++
-		if _, err := h.ReplayGCal(ctx, fuContact.ID, gen.GCalEvent(fuSpec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(0, 0)))); err != nil {
-			return res, fmt.Errorf("profile %s: replay gcal for awaiting-reply contact: %w", params.Profile, err)
-		}
 		res.SettledInteractions++
-		followUpPayloads++
-		if _, err := h.SeedPendingFollowUp(ctx, fuContact.ID, fuContact.FullName); err != nil {
-			return res, fmt.Errorf("profile %s: seed pending follow-up: %w", params.Profile, err)
-		}
+		followUpPayloads += payloads
 		res.SeededTasks++
 		res.SeededPendingFollowUps = 1
-		h.SetPinnedFixtureID(FixtureMarkerPending, fuContact.ID)
 	}
 	stop(followUpPayloads)
 
@@ -1115,18 +1120,15 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	stop = phase("direction-cohort")
 	directionPayloads := 0
 	// The gmail one is marker-bearing: it IS the pinned "last outreach" fixture.
-	obGmailSpec := gen.Contact(factory.WithEmail(), factory.WithNameMarker(FixtureMarkerOutreach))
-	obGmailContact, err := h.SeedContact(ctx, obGmailSpec)
+	// Its recipe is stated once, in standard.go, and shared with the declared
+	// world's tail.
+	_, outreachPayloads, err := seedOutreachFixture(ctx, h, gen)
 	if err != nil {
-		return res, fmt.Errorf("profile %s: seed outbound gmail contact: %w", params.Profile, err)
+		return res, fmt.Errorf("profile %s: %w", params.Profile, err)
 	}
 	res.Contacts++
-	if _, err := h.ReplayGmail(ctx, obGmailContact.ID, gen.GmailMessage(obGmailSpec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(messageOutboundAge))); err != nil {
-		return res, fmt.Errorf("profile %s: replay outbound gmail: %w", params.Profile, err)
-	}
 	res.OutboundOnlyContacts++
-	directionPayloads++
-	h.SetPinnedFixtureID(FixtureMarkerOutreach, obGmailContact.ID)
+	directionPayloads += outreachPayloads
 
 	obGChatSpec := gen.Contact(factory.WithEmail())
 	obGChatContact, err := h.SeedContact(ctx, obGChatSpec)
@@ -1156,40 +1158,17 @@ func runCatalogProfile(ctx context.Context, h *Harness, params SeedParams, res P
 	res.OutboundOnlyContacts++
 	directionPayloads++
 
-	// One MUTUAL (reply-bridged) telegram contact. Telegram runs its aggregation
-	// engine INLINE in ReplayTelegram (worker-free), so the promote is reliable.
-	// Build one OUTBOUND spec, then CLONE it for the inbound reply — keeping the SAME
-	// PeerUserID + TelegramChatID (the bridge requires prev.chatID == b.chatID; a
-	// second gen.TelegramMessage call would allocate a fresh peer/chat and never
-	// bridge), bumping the message id, flipping Out to false, and dating it strictly
-	// NEWER than the outbound but within the 48h bridge window. The inbound reply's
-	// aggregation finds the outbound interaction and PromoteInteractionToMutualTx
-	// flips it in place: one mutual row, last_contacted == last_interaction_at ==
-	// last_outreach_at == last_response_at.
-	// Marker-bearing: this contact IS the pinned "last response" fixture (a mutual
-	// sets last_response_at), distinct from the outreach fixture above.
-	mutualSpec := gen.Contact(factory.WithTelegram(), factory.WithNameMarker(FixtureMarkerResponse))
-	mutualContact, err := h.SeedContact(ctx, mutualSpec)
+	// One MUTUAL (reply-bridged) telegram contact — marker-bearing: it IS the
+	// pinned "last response" fixture (a mutual sets last_response_at), distinct
+	// from the outreach fixture above. Its recipe, including the hand-cloned reply
+	// that is the only way the bridge fires, is stated once in standard.go and
+	// shared with the declared world's tail.
+	_, responsePayloads, err := seedResponseFixture(ctx, h, gen)
 	if err != nil {
-		return res, fmt.Errorf("profile %s: seed mutual telegram contact: %w", params.Profile, err)
+		return res, fmt.Errorf("profile %s: %w", params.Profile, err)
 	}
 	res.Contacts++
-	tgOutbound := gen.TelegramMessage(mutualSpec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(messageMutualOutboundAge))
-	if _, err := h.ReplayTelegram(ctx, mutualContact.ID, tgOutbound); err != nil {
-		return res, fmt.Errorf("profile %s: replay mutual telegram outbound: %w", params.Profile, err)
-	}
-	directionPayloads++
-	tgReply := tgOutbound // clone: same peer + chat, so the bridge can fire
-	tgReply.TelegramMessageID = tgOutbound.TelegramMessageID + 1
-	tgReply.Out = false
-	// Newer than the outbound by exactly (outboundAge − replyAge) = 6h (< 48h).
-	tgReply.SentAt = tgOutbound.SentAt.Add(messageMutualOutboundAge - messageMutualReplyAge)
-	if _, err := h.ReplayTelegram(ctx, mutualContact.ID, tgReply); err != nil {
-		return res, fmt.Errorf("profile %s: replay mutual telegram reply: %w", params.Profile, err)
-	}
-	directionPayloads++
-	h.SetMutualMessageContactID(mutualContact.ID)
-	h.SetPinnedFixtureID(FixtureMarkerResponse, mutualContact.ID)
+	directionPayloads += responsePayloads
 	res.MutualMessageContacts++
 	stop(directionPayloads)
 

@@ -587,17 +587,54 @@ func (h *Harness) SeedMergedContact(ctx context.Context, winnerSpec, loserSpec f
 	return winner.ID, loser.ID, nil
 }
 
+// SoftDeleteSeededContact routes an ALREADY-SEEDED contact through the
+// PRODUCTION ContactService.DeleteContact path, tombstoning it and its person
+// node exactly as SeedSoftDeletedContact does for a fresh one.
+//
+// The difference from SeedSoftDeletedContact is the whole point: this one takes
+// an id, so the contact can be given children (notes, interactions, tasks)
+// BEFORE it is deleted. "Soft-deleted parent with live children" is not
+// reachable through a primitive that seeds and deletes in one call.
+func (h *Harness) SoftDeleteSeededContact(ctx context.Context, contactID uuid.UUID) error {
+	if err := h.contactService.DeleteContact(ctx, contactID); err != nil {
+		return fmt.Errorf("soft-delete seeded contact %s: %w", contactID, err)
+	}
+	h.track(func(c *created) { c.addSoftDeletedNode(contactID) })
+	return nil
+}
+
+// MergeSeededContacts merges an ALREADY-SEEDED loser INTO an already-seeded
+// winner through the PRODUCTION ContactService.MergeContacts path — the same
+// re-point / tombstone / soft-delete effects SeedMergedContact produces.
+//
+// The difference from SeedMergedContact is again the point: that one seeds both
+// sides itself, so calling it twice yields two independent pairs rather than a
+// CHAIN. Taking ids lets a world merge A into B and then B into C, which is what
+// makes two-hop reparenting observable.
+func (h *Harness) MergeSeededContacts(ctx context.Context, winnerID, loserID uuid.UUID) error {
+	if _, err := h.contactService.MergeContacts(ctx, service.MergeContactsRequest{
+		SourceContactID: loserID,  // source = archived loser
+		TargetContactID: winnerID, // target = surviving winner
+	}); err != nil {
+		return fmt.Errorf("merge contact %s into %s: %w", loserID, winnerID, err)
+	}
+	h.track(func(c *created) { c.addMergedPair(winnerID, loserID) })
+	return nil
+}
+
 // SeedNote attaches a notepad note to a seeded contact via the EXISTING
 // NoteRepository (orchestration over an existing repo, not new machinery). The
 // contact must be one the harness seeded (so the teardown's note step — delete
 // by tracked contact id — cleans it). Gives the catalog its "≥1 contact with
-// notes" bucket. The body is namespace-tagged so it is identifiable.
-func (h *Harness) SeedNote(ctx context.Context, contactID uuid.UUID, body string) error {
+// notes" bucket. The body is namespace-tagged so it is identifiable. Returns the
+// created note id so a manifest can name the row.
+func (h *Harness) SeedNote(ctx context.Context, contactID uuid.UUID, body string) (uuid.UUID, error) {
 	noteRepo := repository.NewNoteRepository(h.database.Queries)
-	if _, err := noteRepo.CreateNotepad(ctx, contactID, h.gen.Prefix()+body); err != nil {
-		return fmt.Errorf("seed note: %w", err)
+	note, err := noteRepo.CreateNotepad(ctx, contactID, h.gen.Prefix()+body)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("seed note: %w", err)
 	}
-	return nil
+	return note.ID, nil
 }
 
 // SeedOrphanMeetingNote inserts a single orphan_needs_review meeting_note row

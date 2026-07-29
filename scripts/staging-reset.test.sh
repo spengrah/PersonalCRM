@@ -256,6 +256,28 @@ test_happy_path_ordering() {
     cleanup_sandbox
 }
 
+test_profile_override_reaches_the_invocation() {
+    echo "test: STAGING_RESET_PROFILE reaches the crm-admin invocation (and prod-shaped is the default)"
+    make_sandbox
+    # The default, restated here so the override case cannot pass by accident.
+    run_local
+    if [ "$RC" -eq 0 ]; then ok; else fail "default profile run should exit 0, got $RC"; fi
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--profile prod-shaped'; then ok
+    else fail "default must still be --profile prod-shaped: $(grep -F 'podman run' "$CALL_LOG" | head -1)"; fi
+    cleanup_sandbox
+
+    # The whole staging leg of the standard-world gate rides this knob, so it is
+    # covered here rather than discovered to be broken during the gate.
+    make_sandbox
+    STAGING_RESET_PROFILE=standard run_local
+    if [ "$RC" -eq 0 ]; then ok; else fail "profile-override run should exit 0, got $RC ($(cat "$SANDBOX/stderr"))"; fi
+    local run
+    run="$(grep -F 'podman run' "$CALL_LOG" | grep -F -- '--reset-and-seed' | head -1)"
+    if [[ "$run" == *"--profile standard"* ]]; then ok; else fail "override did not reach the invocation: $run"; fi
+    if [[ "$run" == *"--profile prod-shaped"* ]]; then fail "the default profile must not survive the override: $run"; else ok; fi
+    cleanup_sandbox
+}
+
 test_image_ref_digest_verbatim() {
     echo "test: reset uses the pinned @sha256 digest ref verbatim, not :latest"
     make_sandbox
@@ -513,6 +535,7 @@ test_oauth_flag_is_the_gate() {
 # ---------------------------------------------------------------------------
 main() {
     test_happy_path_ordering
+    test_profile_override_reaches_the_invocation
     test_image_ref_digest_verbatim
     test_never_podman_exec
     test_staging_proceeds
