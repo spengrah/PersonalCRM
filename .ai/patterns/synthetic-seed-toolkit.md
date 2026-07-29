@@ -38,6 +38,44 @@ res, _ := h.ReplayGmail(ctx, alice.ID, gen.GmailMessage( /* target spec */, fact
 
 Heavy replay tests are LONG-gated and self-skip in the fast suite (see Slow-test routing). The harness's `t.Cleanup` deletes everything the run created.
 
+## Declared seeding (`synthetic/declare`) — the E2E provisioning path
+
+`backend/internal/synthetic/declare` is a layer ON TOP of the toolkit: a fixture is stated in DOMAIN terms and keyed by the SPEC BEHAVIOR ID it provisions, and the E2E suite asks for it by that id. It replaces per-test bespoke seed endpoints (arc #759) rather than replacing anything in the toolkit — a declaration lowers onto the same factory + harness primitives.
+
+```go
+// declare/dashboard.go — one registration file per spec domain, run at init.
+Register(Declaration{
+    Behavior: "CAD-026",
+    Entities: []Entity{
+        Contact("card-a", Cadence("weekly"), OverdueBy(Days(3))),
+        Contact("card-b", Cadence("weekly"), OverdueBy(Days(4))),
+    },
+})
+RegisterNone("DSH-002", "static navigation surface; nothing to seed")
+```
+
+```ts
+// the spec asks for the behavior, and reads names/ids from the manifest
+const seeded = await testApi.seedBehavior('CAD-026')
+await expect(page.getByRole('heading', { name: seeded.entities['card-a'].name })).toBeVisible()
+// testApi.cleanup() removes the declared worlds along with the prefix ones
+```
+
+Load-bearing properties, none of them optional:
+
+- **Every ui-surface spec behavior is resolved exactly once** — Declaration, `RegisterNone(reason)`, or a waiver in `declare/waivers.go`. A unit test in the existing `make test-unit` lane fails on anything unresolved, double-resolved, or naming a behavior that no longer exists. Each domain PR deletes its waiver lines.
+- **Fixture math is stated LOCALLY** (`declare/facts.go`), never read from `internal/cadence`. If the app's cadence math regresses, a fixture derived from it would track the regression silently; a locally stated one fails loudly. A tripwire test asserts the local tables equal the deployed ones per environment, and a recursive import guard (proven against a testdata fixture) fails on any import of `internal/cadence` under `declare/`.
+- **`OverdueBy` lowers to REPLAYED history, never a column write** — a backdated inbound email, plus a backdated creation. The creation backdating is load-bearing, not cosmetic: the app's due date only ever moves FORWARD on an automated interaction, so a contact created now stays not-overdue no matter how old the history you give it.
+- **Cleanup is stateless.** The seed and the cleanup are different requests, so the harness's in-memory id ledger is gone; every id set is rebuilt from the namespace's generator-derived tokens. It refuses rather than guesses: `busy` while a run holds the namespace, `pending` while an unfinalized River job still references the rows, `error` (naming them) when a live namespace is nested underneath.
+- **Contacts are additionally recovered by RECORDED OWNERSHIP, not just by name.** A generator-derived token only works while the row still carries it, and `contact.full_name` is user-editable — the update path rewrites `node.canonical_label` with it, so a renamed seeded contact vanishes from every name-derived sweep at once. `declare` therefore records `(namespace, kind, entity_id)` in `synthetic_namespace_entity` at seed time and cleanup unions that with the prefix sweep. Those records are dropped LAST, with the host marker and only on a clean run, so a partial sweep leaves the namespace both discoverable and recoverable. Any new declarable entity class whose recovery token is user-editable owes the same record.
+- **The requested and effective namespace grammars are asymmetric, on purpose.** A REQUESTED namespace is 1-57 characters and may not end in `-sN`; the EFFECTIVE one the manifest returns may be up to 60 and may carry that suffix, because construction re-salts on a numeric-band collision and never revalidates the result. Those three reserved characters are what keep a re-salted world's own token acceptable to cleanup — fill all 60 and the seed succeeds while its cleanup request is rejected outright, stranding the rows in the shared E2E database.
+- **The E2E client polls retriable cleanup outcomes for as long as a run can hold the namespace.** A seed whose response was lost keeps executing server-side (detached, ~90s run budget plus settle/teardown), holding the reservation that answers `busy`, so `cleanup()` polls rather than retrying once — and raises the Playwright test timeout, since an `afterEach` shares the test's timeout slot and would otherwise be killed mid-poll. Outcomes accumulate ACROSS attempts (a retry names only the retriable namespaces), so one namespace's `error` can never be masked by another's later success.
+- **Every harness owns a PRIVATE River queue** (`replay.SyntheticQueueName(namespace)`, derived so a later cleanup can find it). River's fetch has no kind or owner filter, so a harness sharing `default` with the live application damages three separate classes: a no-op kind is finalized without its work (a nil `Work` result FINALIZES the job), a worker wired for replay semantics (`followup_manager` in off mode) finalizes a production job having skipped the work, and a kind the harness does not register at all is fetched and failed as unknown. The client fetches only its own queue and a River insert hook rewrites every job it enqueues onto that queue, so neither side can see the other's work — including harness-versus-harness on a shared test database. Cleanup drops the queue's orphaned unfinalized jobs (its client is provably gone: the reservation is held) and the `river_queue` row itself. Adding a worker to the harness needs no ownership check; do not reintroduce one.
+- **A generator never mints the same display name twice.** Names are drawn WITH REPLACEMENT from a 16×10 pool, so a three-contact fixture repeated one ~1.8% of runs (measured) — enough to break any selector that resolves a contact BY NAME, which is how a manifest-driven spec addresses its fixtures (Playwright's strict mode fails outright on two matching headings). A repeat now carries its contact sequence number. It is disambiguated rather than redrawn on purpose: a redraw would consume extra rng values and shift every later draw, so a namespace that does NOT collide stays byte-identical.
+- **Growth rule**: every entity class a declaration can create MUST get a namespace-recoverable cleanup step in the same PR that makes it declarable.
+
+Endpoints (test-only, same `CRM_ENV` gate as the bespoke ones): `POST /api/v1/test/seed/declared` and the `namespaces` shape of `POST /api/v1/test/cleanup`. The handler drives `declare` directly under a documented layering exception — `service` cannot import `synthetic` without a cycle, and the toolkit writes through the real services one level down.
+
 ## Adding a factory for a new entity or source payload
 
 Factories are pure functions of `(seed, namespace)` for everything except timestamps. Read `synthetic/factory/factory.go` — its package doc spells out the two determinism claims (wall-clock-independent identifiers vs anchor-relative timestamps) and the PII / isolation rules.
@@ -139,4 +177,4 @@ Rules of thumb when adding one of these gates:
 
 ## Slow-test routing
 
-Replay integration tests are River-draining and therefore slow, so they are gated out of the fast suite. Call `testsupport.RequireLongTests(t)` at the top of any replay test — it skips unless `LONG_TESTS` is set (and short mode is off). The slow workflow (`make test-integration-slow`, run by `.github/workflows/backend-slow-tests.yml`) sets `LONG_TESTS=1` and selects by `BACKEND_SLOW_TESTS_REGEX` (Makefile), which includes `TestSynthetic` — so name synthetic replay tests with the `TestSynthetic` prefix to route them onto the slow path. Factory-only unit tests (no replay) need neither.
+Replay integration tests are River-draining and therefore slow, so they are gated out of the fast suite. Call `testsupport.RequireLongTests(t)` at the top of any replay test — it skips unless `LONG_TESTS` is set (and short mode is off). The slow workflow (`make test-integration-slow`, run by `.github/workflows/backend-slow-tests.yml`) sets `LONG_TESTS=1` and selects by `BACKEND_SLOW_TESTS_REGEX` (Makefile), which includes `TestSynthetic` — so name synthetic replay tests with the `TestSynthetic` prefix to route them onto the slow path. Both are load-bearing and they do different jobs: the prefix is the only thing the slow lane SELECTS on, and the `RequireLongTests` call is the only thing that makes the fast lane SKIP. Declared-seeding integration tests are in this class too (a clone plus a live River client per test) — they carry the `TestSyntheticDeclare` prefix, so any new one added by a later arc PR must keep it and call `RequireLongTests`. Factory-only unit tests (no replay) need neither.

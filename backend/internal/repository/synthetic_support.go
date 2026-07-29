@@ -914,9 +914,10 @@ func (r *SyntheticSupportRepository) InsertNonFinalRiverJob(ctx context.Context)
 
 // InsertResetMarkers seeds a marker row into the standalone (harness-untouched)
 // wiped tables — oauth_credential, external_sync_state, telegram_session, tag,
-// the derived-storage projections (embedding, relationship_signal), and
-// job_exec_sample — so the reset test proves TRUNCATE empties tables the
-// synthetic harness does not populate. These tables start empty otherwise, so
+// the derived-storage projections (embedding, relationship_signal),
+// synthetic_namespace_entity and job_exec_sample — so the reset test proves
+// TRUNCATE empties tables the synthetic harness does not populate. These tables
+// start empty otherwise, so
 // without a marker the catalog guard could not catch their omission from the
 // TRUNCATE list. Test only.
 func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) error {
@@ -940,6 +941,13 @@ func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) err
 		return err
 	}
 	if err := r.queries.TestInsertRelationshipSignalMarker(ctx); err != nil {
+		return err
+	}
+	// synthetic_namespace_entity is written only by the DECLARED seed path, which
+	// a profile reset never takes, so it starts empty too — plant a row through
+	// the production insert so the guard genuinely fails if the table drops out
+	// of the TRUNCATE list.
+	if err := r.RecordNamespaceEntity(ctx, "reset-marker", EntityKindContact, uuid.New()); err != nil {
 		return err
 	}
 	// job_exec_sample is written only by the live Subscribe recorder, never by
@@ -1630,4 +1638,251 @@ func (r *SyntheticSupportRepository) ListOverdueContactIdsByNamePrefix(ctx conte
 		out = append(out, uuid.UUID(row.Bytes))
 	}
 	return out, nil
+}
+
+// --- declared-seeding support (internal/synthetic/declare) -----------------
+//
+// The declared-seed endpoint seeds in one request and cleans up in a LATER one,
+// so the harness's in-memory id ledger is gone by cleanup time. These wrappers
+// back the stateless, namespace-recoverable path: id sets rebuilt from the
+// namespace's own generator-derived tokens, a Gate-B-parity safety gate, and
+// the session advisory locks that serialize concurrent runs.
+//
+// The SELECTs deliberately include soft-deleted rows — see the soft-delete
+// exception documented on the queries themselves.
+
+// SelectContactIDsByFullNamePrefix returns every contact (tombstones included)
+// whose full_name carries the namespace prefix. Caller passes a BARE prefix.
+func (r *SyntheticSupportRepository) SelectContactIDsByFullNamePrefix(ctx context.Context, prefix string) ([]uuid.UUID, error) {
+	rows, err := r.queries.SyntheticSelectContactIdsByFullNamePrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
+// SelectVenueNodeIDsForContacts returns the venue nodes referenced by these
+// contacts' interactions. Must be read BEFORE the interaction delete — that
+// delete removes the only link back to them.
+func (r *SyntheticSupportRepository) SelectVenueNodeIDsForContacts(ctx context.Context, contactIDs []uuid.UUID) ([]uuid.UUID, error) {
+	if len(contactIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := r.queries.SyntheticSelectVenueNodeIdsForContacts(ctx, pgUUIDs(contactIDs))
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
+// DeleteInteractionsByContactIds hard-deletes interactions by contact.
+func (r *SyntheticSupportRepository) DeleteInteractionsByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
+	if len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteInteractionsByContactIds(ctx, pgUUIDs(contactIDs))
+}
+
+// SelectMacHostIDByHostname looks up a synthetic host by EXACT hostname. The
+// bool reports existence; a missing host is not an error (an un-seeded or
+// already-cleaned namespace legitimately has none).
+func (r *SyntheticSupportRepository) SelectMacHostIDByHostname(ctx context.Context, hostname string) (uuid.UUID, bool, error) {
+	row, err := r.queries.SyntheticSelectMacHostIdByHostname(ctx, hostname)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, nil
+		}
+		return uuid.Nil, false, err
+	}
+	if !row.Valid {
+		return uuid.Nil, false, nil
+	}
+	return uuid.UUID(row.Bytes), true, nil
+}
+
+// SelectLiveDescendantHostnames returns hostnames of namespaces nested under
+// this one. Caller passes a BARE 'synth-<ns>-' prefix and filters out the
+// namespace's own salt variants (which are expansion members, not descendants).
+func (r *SyntheticSupportRepository) SelectLiveDescendantHostnames(ctx context.Context, namespacePrefix string) ([]string, error) {
+	return r.queries.SyntheticSelectLiveDescendantHostnames(ctx, pgtype.Text{String: namespacePrefix, Valid: true})
+}
+
+// CountPendingJobsForNamespaceCleanup counts unfinalized River jobs still
+// referencing this namespace, across BOTH Gate-B linkage classes. Zero is the
+// precondition for deleting anything.
+func (r *SyntheticSupportRepository) CountPendingJobsForNamespaceCleanup(ctx context.Context, eventIDs, contactIDs []uuid.UUID) (int64, error) {
+	if len(eventIDs) == 0 && len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountPendingJobsForNamespaceCleanup(ctx, db.SyntheticCountPendingJobsForNamespaceCleanupParams{
+		EventIds:   contactIDStrings(eventIDs),
+		ContactIds: contactIDStrings(contactIDs),
+	})
+}
+
+// --- namespace ownership -----------------------------------------------------
+//
+// Cross-request cleanup recovers most id sets from a generator-derived token
+// carried by the row itself. For contacts that token is full_name, which the
+// application lets a user rewrite (and rewrites node.canonical_label with it),
+// so a renamed seeded contact is invisible to every name-derived sweep. These
+// three wrap the durable, id-keyed ownership record that closes that hole.
+
+// EntityKindContact is the ownership record's kind for a seeded contact. It
+// grows with the declarable vocabulary.
+const EntityKindContact = "contact"
+
+// RecordNamespaceEntity records that a namespace created an entity. Idempotent.
+func (r *SyntheticSupportRepository) RecordNamespaceEntity(ctx context.Context, namespace, kind string, entityID uuid.UUID) error {
+	return r.queries.SyntheticRecordNamespaceEntity(ctx, db.SyntheticRecordNamespaceEntityParams{
+		Namespace:  namespace,
+		EntityKind: kind,
+		EntityID:   uuidToPgUUID(entityID),
+	})
+}
+
+// SelectNamespaceEntityIDs returns the ids a namespace recorded for one kind.
+func (r *SyntheticSupportRepository) SelectNamespaceEntityIDs(ctx context.Context, namespace, kind string) ([]uuid.UUID, error) {
+	rows, err := r.queries.SyntheticSelectNamespaceEntityIds(ctx, db.SyntheticSelectNamespaceEntityIdsParams{
+		Namespace:  namespace,
+		EntityKind: kind,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
+// DeleteNamespaceEntities drops a namespace's ownership records.
+func (r *SyntheticSupportRepository) DeleteNamespaceEntities(ctx context.Context, namespace string) (int64, error) {
+	return r.queries.SyntheticDeleteNamespaceEntities(ctx, namespace)
+}
+
+// DeleteUnfinalizedJobsInQueue drops the namespace's ORPHANED River jobs — the
+// unfinalized ones sitting in the private queue whose client is gone. Scoped to
+// that one queue, so the live application's `default`-queue jobs still gate the
+// sweep. Caller must hold the namespace reservation.
+func (r *SyntheticSupportRepository) DeleteUnfinalizedJobsInQueue(ctx context.Context, queue string, eventIDs, contactIDs []uuid.UUID) (int64, error) {
+	if len(eventIDs) == 0 && len(contactIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteUnfinalizedJobsInQueue(ctx, db.SyntheticDeleteUnfinalizedJobsInQueueParams{
+		Queue:      queue,
+		EventIds:   contactIDStrings(eventIDs),
+		ContactIds: contactIDStrings(contactIDs),
+	})
+}
+
+// DeleteRiverQueue drops the river_queue row a harness producer left behind.
+func (r *SyntheticSupportRepository) DeleteRiverQueue(ctx context.Context, name string) (int64, error) {
+	return r.queries.SyntheticDeleteRiverQueue(ctx, name)
+}
+
+// CountRiverQueue reports whether a namespace's private queue row survives
+// (cleanup assertion).
+func (r *SyntheticSupportRepository) CountRiverQueue(ctx context.Context, name string) (int64, error) {
+	return r.queries.SyntheticCountRiverQueue(ctx, name)
+}
+
+// CountEventConsumerClaimsByEventIds counts surviving claims for a set of event
+// ids (cleanup assertion). The caller must capture the ids BEFORE the sweep —
+// once the events are gone nothing can re-derive them.
+func (r *SyntheticSupportRepository) CountEventConsumerClaimsByEventIds(ctx context.Context, eventIDs []uuid.UUID) (int64, error) {
+	if len(eventIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountEventConsumerClaimsByEventIds(ctx, pgUUIDs(eventIDs))
+}
+
+// TryAdvisoryLock takes a NON-BLOCKING session advisory lock; false means
+// another session holds it. MUST run on a dedicated connection (session locks
+// belong to the connection that took them).
+func (r *SyntheticSupportRepository) TryAdvisoryLock(ctx context.Context, key int64) (bool, error) {
+	return r.queries.SyntheticTryAdvisoryLock(ctx, key)
+}
+
+// AdvisoryLock takes a BLOCKING session advisory lock, bounded by ctx. Same
+// dedicated-connection rule as TryAdvisoryLock.
+func (r *SyntheticSupportRepository) AdvisoryLock(ctx context.Context, key int64) error {
+	return r.queries.SyntheticAdvisoryLock(ctx, key)
+}
+
+// AdvisoryUnlock releases a session advisory lock on the same connection.
+func (r *SyntheticSupportRepository) AdvisoryUnlock(ctx context.Context, key int64) (bool, error) {
+	return r.queries.SyntheticAdvisoryUnlock(ctx, key)
+}
+
+// InsertUnfinalizedRecorderJobForEvent plants an event-linked unfinalized job.
+// Failure-injection fixture for the declared-seeding tests only.
+func (r *SyntheticSupportRepository) InsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID uuid.UUID) (int64, error) {
+	return r.queries.TestInsertUnfinalizedRecorderJobForEvent(ctx, eventID.String())
+}
+
+// InsertUnfinalizedAggregateJobForContact plants a contact-keyed unfinalized
+// aggregate job (the linkage class carrying no event id). Fixture only.
+func (r *SyntheticSupportRepository) InsertUnfinalizedAggregateJobForContact(ctx context.Context, contactID uuid.UUID, source string) (int64, error) {
+	return r.queries.TestInsertUnfinalizedAggregateJobForContact(ctx, db.TestInsertUnfinalizedAggregateJobForContactParams{
+		ContactID: contactID.String(),
+		Source:    source,
+	})
+}
+
+// FinalizeRiverJobByID finalizes a planted job so a "refuses while pending,
+// cleans once safe" test has an explicit safe-state step. Fixture only.
+func (r *SyntheticSupportRepository) FinalizeRiverJobByID(ctx context.Context, id int64) error {
+	return r.queries.TestFinalizeRiverJobByID(ctx, id)
+}
+
+// InsertTelegramChatConfigInBand occupies a telegram peer band with a
+// contact-less row, so a test can force the toolkit's band-collision re-salt
+// cheaply. Fixture only.
+func (r *SyntheticSupportRepository) InsertTelegramChatConfigInBand(ctx context.Context, chatID int64) error {
+	return r.queries.TestInsertTelegramChatConfigInBand(ctx, chatID)
+}
+
+// InsertAvailableRematchJobForContact plants an immediately fetchable
+// `default`-queue rematch_dispatcher job. It belongs to the live application;
+// a harness that fetched it would be stealing its work. Fixture only.
+func (r *SyntheticSupportRepository) InsertAvailableRematchJobForContact(ctx context.Context, contactID uuid.UUID) (int64, error) {
+	return r.queries.TestInsertAvailableRematchJobForContact(ctx, db.TestInsertAvailableRematchJobForContactParams{
+		EventID:      uuid.New().String(),
+		ContactID:    contactID.String(),
+		RematchJobID: uuid.New().String(),
+	})
+}
+
+// InsertAvailableJobOfKind plants an immediately fetchable `default`-queue job
+// of an arbitrary kind, carrying an event id. Fixture only — it exists so the
+// isolation proof can cover the kinds a rematch fixture cannot: one the harness
+// registers a REAL (off-mode) worker for, and one it does not register at all.
+func (r *SyntheticSupportRepository) InsertAvailableJobOfKind(ctx context.Context, kind string, eventID uuid.UUID) (int64, error) {
+	return r.queries.TestInsertAvailableJobOfKind(ctx, db.TestInsertAvailableJobOfKindParams{
+		Kind:    kind,
+		EventID: eventID.String(),
+	})
+}
+
+// RiverJobDisposition is a planted job's outcome: its state, whether it is
+// finalized, how many times a worker snoozed it, and its attempt counter.
+// Attempt is what makes "never fetched" observable — River increments it when a
+// job is handed to a worker.
+type RiverJobDisposition struct {
+	State     string
+	Finalized bool
+	Snoozes   int64
+	Attempt   int32
+}
+
+// GetRiverJobDisposition reads a planted job's disposition. Fixture only.
+func (r *SyntheticSupportRepository) GetRiverJobDisposition(ctx context.Context, id int64) (RiverJobDisposition, error) {
+	row, err := r.queries.TestGetRiverJobDispositionByID(ctx, id)
+	if err != nil {
+		return RiverJobDisposition{}, err
+	}
+	return RiverJobDisposition{
+		State:     row.State,
+		Finalized: row.Finalized,
+		Snoozes:   row.Snoozes,
+		Attempt:   row.Attempt,
+	}, nil
 }

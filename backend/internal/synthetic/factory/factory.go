@@ -136,6 +136,10 @@ type Generator struct {
 	// peer ids (issued from the bottom by peerSeq) yet remain in the same
 	// collision-checked band.
 	groupChatSeq int64
+
+	// usedDisplay is the set of display names this generator has already issued,
+	// so a repeated draw can be disambiguated. See Contact.
+	usedDisplay map[string]bool
 }
 
 // NewGenerator builds a Generator with the live accelerated anchor. Use
@@ -155,6 +159,7 @@ func NewGeneratorAt(seed uint64, namespace string, anchor time.Time) *Generator 
 		nsBucket:    int64(seedHash(namespace)%uint64(telegramPeerBucketCount)) * telegramPeerBucketWidth,
 		nsMsgBucket: int32(seedHash(namespace)%uint64(telegramMsgBucketCount)) * telegramMsgBucketWidth,
 		nsPhoneArea: phoneAreaForHash(seedHash(namespace)),
+		usedDisplay: map[string]bool{},
 	}
 }
 

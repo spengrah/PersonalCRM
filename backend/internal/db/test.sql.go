@@ -723,6 +723,7 @@ TRUNCATE TABLE
     relationship_signal,
     river_job,
     sync_staleness_breach,
+    synthetic_namespace_entity,
     tag,
     telegram_channel_state,
     telegram_chat_config,
@@ -947,6 +948,33 @@ func (q *Queries) SweepRiverJobsInCloneForTest(ctx context.Context) (int64, erro
 	return result.RowsAffected(), nil
 }
 
+const SyntheticAdvisoryLock = `-- name: SyntheticAdvisoryLock :exec
+SELECT pg_advisory_lock($1::bigint)
+`
+
+// Numeric-band claim: BLOCKING session advisory lock, bounded by the caller's
+// context deadline. Unlike the namespace reservation, contention here is
+// legitimate (two DIFFERENT namespaces hashing into the same phone area or
+// telegram peer band), and serializing them is what makes the toolkit's
+// detect-and-re-salt sound under concurrency. Same dedicated-connection rule.
+func (q *Queries) SyntheticAdvisoryLock(ctx context.Context, lockKey int64) error {
+	_, err := q.db.Exec(ctx, SyntheticAdvisoryLock, lockKey)
+	return err
+}
+
+const SyntheticAdvisoryUnlock = `-- name: SyntheticAdvisoryUnlock :one
+SELECT pg_advisory_unlock($1::bigint)
+`
+
+// Releases a session advisory lock on the SAME connection that took it.
+// Returns false when the caller did not hold it.
+func (q *Queries) SyntheticAdvisoryUnlock(ctx context.Context, lockKey int64) (bool, error) {
+	row := q.db.QueryRow(ctx, SyntheticAdvisoryUnlock, lockKey)
+	var pg_advisory_unlock bool
+	err := row.Scan(&pg_advisory_unlock)
+	return pg_advisory_unlock, err
+}
+
 const SyntheticCountAssertionsForSubject = `-- name: SyntheticCountAssertionsForSubject :one
 SELECT COUNT(*) FROM assertion WHERE subject_node_id = $1
 `
@@ -1079,6 +1107,22 @@ SELECT COUNT(*) FROM contact WHERE id = ANY($1::uuid[])
 // Cleanup assertion — count surviving contact rows for the given ids.
 func (q *Queries) SyntheticCountContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountContactsByIds, contactIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountEventConsumerClaimsByEventIds = `-- name: SyntheticCountEventConsumerClaimsByEventIds :one
+SELECT COUNT(*) FROM event_consumer_claim WHERE event_id = ANY($1::uuid[])
+`
+
+// Cleanup assertion — surviving claims for a set of event ids. event_consumer_claim
+// has NO fk to event, so deleting an event does not take its claims with it: a
+// sweep that dropped the events while its claim delete failed would leave rows
+// that no later cleanup can even name (the event ids are derived FROM the events).
+// The ids must therefore be captured before the sweep and asserted against after.
+func (q *Queries) SyntheticCountEventConsumerClaimsByEventIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountEventConsumerClaimsByEventIds, eventIds)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1319,6 +1363,35 @@ func (q *Queries) SyntheticCountNodesByLabelPrefix(ctx context.Context, labelPre
 	return count, err
 }
 
+const SyntheticCountPendingJobsForNamespaceCleanup = `-- name: SyntheticCountPendingJobsForNamespaceCleanup :one
+SELECT COUNT(*) FROM river_job
+WHERE finalized_at IS NULL
+  AND (
+        (args->>'event_id') = ANY($1::text[])
+     OR (kind = 'messaging_aggregate_for_contact'
+         AND (args->>'contact_id') = ANY($2::text[]))
+  )
+`
+
+type SyntheticCountPendingJobsForNamespaceCleanupParams struct {
+	EventIds   []string `json:"event_ids"`
+	ContactIds []string `json:"contact_ids"`
+}
+
+// Cleanup safety gate, at Gate-B parity: unfinalized River jobs that still
+// dereference this namespace's rows. Two linkage classes, both required —
+// event-linked jobs (args->>'event_id'), and messaging_aggregate_for_contact
+// jobs, which key on {contact_id, source} and carry NO event id, so an
+// event-only predicate would happily delete rows an aggregate job still
+// references. The aggregate arm is deliberately source-agnostic: a superset of
+// the two sources teardown checks, erring toward REFUSING to delete.
+func (q *Queries) SyntheticCountPendingJobsForNamespaceCleanup(ctx context.Context, arg SyntheticCountPendingJobsForNamespaceCleanupParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountPendingJobsForNamespaceCleanup, arg.EventIds, arg.ContactIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountProcessedCalendarEventByGcalId = `-- name: SyntheticCountProcessedCalendarEventByGcalId :one
 SELECT COUNT(*) FROM calendar_event
 WHERE gcal_event_id = $1
@@ -1351,6 +1424,20 @@ SELECT COUNT(*) FROM relationship_signal WHERE subject_node_id = ANY($1::uuid[])
 // the seeded nodes (coverage) and that 0 remain after teardown.
 func (q *Queries) SyntheticCountRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountRelationshipSignalsForNodes, nodeIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountRiverQueue = `-- name: SyntheticCountRiverQueue :one
+SELECT COUNT(*) FROM river_queue WHERE name = $1
+`
+
+// Cleanup assertion — does a namespace's private river_queue row still exist?
+// Every harness starts a producer that upserts one, and a database reset
+// preserves River's own tables, so an un-deleted row is permanent residue.
+func (q *Queries) SyntheticCountRiverQueue(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountRiverQueue, name)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1923,6 +2010,20 @@ func (q *Queries) SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx context.
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteInteractionsByContactIds = `-- name: SyntheticDeleteInteractionsByContactIds :execrows
+DELETE FROM interaction WHERE contact_id = ANY($1::uuid[])
+`
+
+// Cleanup ladder: interactions by contact (hard delete — the ledger's by-id
+// variant is unavailable cross-request). Soft-deleted rows included.
+func (q *Queries) SyntheticDeleteInteractionsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteInteractionsByContactIds, contactIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteInteractionsByIds = `-- name: SyntheticDeleteInteractionsByIds :execrows
 DELETE FROM interaction WHERE id = ANY($1::uuid[])
 `
@@ -1957,6 +2058,21 @@ DELETE FROM messages_message WHERE guid LIKE $1 || '%'
 // Caller passes a BARE prefix; '%' is appended here.
 func (q *Queries) SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix pgtype.Text) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteMessagesMessageByGuidPrefix, guidPrefix)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteNamespaceEntities = `-- name: SyntheticDeleteNamespaceEntities :execrows
+DELETE FROM synthetic_namespace_entity WHERE namespace = $1
+`
+
+// Cleanup ladder (final block): drops the namespace's ownership records. Runs
+// with the host-marker delete — only after every earlier step succeeded — so a
+// partially failed sweep keeps the namespace both discoverable AND recoverable.
+func (q *Queries) SyntheticDeleteNamespaceEntities(ctx context.Context, namespace string) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteNamespaceEntities, namespace)
 	if err != nil {
 		return 0, err
 	}
@@ -2039,6 +2155,21 @@ func (q *Queries) SyntheticDeleteRelationshipSignalsForNodes(ctx context.Context
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteRiverQueue = `-- name: SyntheticDeleteRiverQueue :execrows
+DELETE FROM river_queue WHERE name = $1
+`
+
+// Cleanup ladder: drops the river_queue row a harness producer created for the
+// namespace's private queue. Without it every declared seed would leave one
+// permanent row behind on the shared database.
+func (q *Queries) SyntheticDeleteRiverQueue(ctx context.Context, name string) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteRiverQueue, name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteTelegramChatConfigsByChatIds = `-- name: SyntheticDeleteTelegramChatConfigsByChatIds :execrows
 DELETE FROM telegram_chat_config WHERE telegram_chat_id = ANY($1::bigint[])
 `
@@ -2085,6 +2216,39 @@ WHERE source = 'telegram' AND source_id = ANY($1::text[])
 // delete via ON DELETE SET NULL and would otherwise pollute future matching).
 func (q *Queries) SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteTelegramExternalIdentitiesByPeerIds, peerIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeleteUnfinalizedJobsInQueue = `-- name: SyntheticDeleteUnfinalizedJobsInQueue :execrows
+DELETE FROM river_job
+WHERE queue = $1
+  AND finalized_at IS NULL
+  AND (
+        (args->>'event_id') = ANY($2::text[])
+     OR (args->>'contact_id') = ANY($3::text[])
+  )
+`
+
+type SyntheticDeleteUnfinalizedJobsInQueueParams struct {
+	Queue      string   `json:"queue"`
+	EventIds   []string `json:"event_ids"`
+	ContactIds []string `json:"contact_ids"`
+}
+
+// Cleanup ladder: drops the namespace's own ORPHANED River jobs.
+//
+// A harness client fetches only its own private queue, so a job left in that
+// queue after the client stopped can never be worked by anyone — and the
+// pending gate would refuse to sweep the namespace forever. Cleanup holds the
+// namespace reservation while this runs, so no live run owns these rows.
+// Deliberately scoped to ONE queue and to unfinalized rows: a `default`-queue
+// job belongs to the live application and must still gate the sweep, and
+// finalized rows are River's own retention business.
+func (q *Queries) SyntheticDeleteUnfinalizedJobsInQueue(ctx context.Context, arg SyntheticDeleteUnfinalizedJobsInQueueParams) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteUnfinalizedJobsInQueue, arg.Queue, arg.EventIds, arg.ContactIds)
 	if err != nil {
 		return 0, err
 	}
@@ -2377,6 +2541,205 @@ func (q *Queries) SyntheticListExternalContactSourceIdsByPrefix(ctx context.Cont
 		return nil, err
 	}
 	return items, nil
+}
+
+const SyntheticRecordNamespaceEntity = `-- name: SyntheticRecordNamespaceEntity :exec
+INSERT INTO synthetic_namespace_entity (namespace, entity_kind, entity_id)
+VALUES ($1, $2, $3::uuid)
+ON CONFLICT (namespace, entity_kind, entity_id) DO NOTHING
+`
+
+type SyntheticRecordNamespaceEntityParams struct {
+	Namespace  string      `json:"namespace"`
+	EntityKind string      `json:"entity_kind"`
+	EntityID   pgtype.UUID `json:"entity_id"`
+}
+
+// Namespace ownership, written at seed time. The declared-seed endpoint seeds
+// in one request and cleans up in another, and every other id set is recovered
+// from a generator-derived token carried by the row — which for contacts means
+// full_name, a USER-EDITABLE column. A test that renames a seeded contact
+// through the ordinary contact API makes it invisible to the name-derived
+// sweeps (node.canonical_label is rewritten with it), so cleanup would skip it
+// and report success over live residue. This record is keyed by the entity's
+// own id, which nothing in the application rewrites.
+func (q *Queries) SyntheticRecordNamespaceEntity(ctx context.Context, arg SyntheticRecordNamespaceEntityParams) error {
+	_, err := q.db.Exec(ctx, SyntheticRecordNamespaceEntity, arg.Namespace, arg.EntityKind, arg.EntityID)
+	return err
+}
+
+const SyntheticSelectContactIdsByFullNamePrefix = `-- name: SyntheticSelectContactIdsByFullNamePrefix :many
+
+SELECT id FROM contact
+WHERE full_name LIKE $1 || '%'
+ORDER BY id
+`
+
+// ============================================================================
+// Declared-seeding support (internal/synthetic/declare) — test-only.
+//
+// The declared-seed endpoint executes a fixture in a namespace and a LATER,
+// SEPARATE request cleans it up, so cleanup cannot use the harness's in-memory
+// ledger (it died with the request). Every id set is instead recovered from the
+// DB by the namespace's own generator-derived tokens.
+//
+// SOFT-DELETE EXCEPTION, deliberate and confined to these queries: the id-set
+// SELECTs below do NOT filter `deleted_at IS NULL`. Cleanup must find TOMBSTONES
+// — an app action under test may soft-delete a seeded contact, and a later PR
+// seeds soft-deleted contacts on purpose — and a child row is found by its
+// contact id regardless of the parent's deleted_at. Leaving a tombstone behind
+// would leak rows that no later run can reach by token.
+// ============================================================================
+// Cleanup id-set (step 1): every contact whose full_name carries the namespace
+// prefix, INCLUDING soft-deleted rows (see the soft-delete exception above).
+// Caller passes a BARE prefix; '%' is appended here. The namespace charset
+// excludes the LIKE metacharacters, so the prefix can never over-match.
+func (q *Queries) SyntheticSelectContactIdsByFullNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, SyntheticSelectContactIdsByFullNamePrefix, namePrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SyntheticSelectLiveDescendantHostnames = `-- name: SyntheticSelectLiveDescendantHostnames :many
+SELECT hostname FROM mac_host
+WHERE hostname LIKE $1 || '%-host'
+ORDER BY hostname
+`
+
+// Cleanup descendant guard: hostnames of any namespace nested UNDER this one
+// ('synth-<ns>-%-host'). A namespace whose prefix sweep would cross into a live
+// descendant refuses to clean rather than deleting across it. Note
+// 'synth-<ns>-host' itself does not match this pattern; the namespace's own
+// salt variants do and are filtered out by the caller (they are expansion
+// members, not descendants).
+func (q *Queries) SyntheticSelectLiveDescendantHostnames(ctx context.Context, namespacePrefix pgtype.Text) ([]string, error) {
+	rows, err := q.db.Query(ctx, SyntheticSelectLiveDescendantHostnames, namespacePrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var hostname string
+		if err := rows.Scan(&hostname); err != nil {
+			return nil, err
+		}
+		items = append(items, hostname)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SyntheticSelectMacHostIdByHostname = `-- name: SyntheticSelectMacHostIdByHostname :one
+SELECT id FROM mac_host WHERE hostname = $1
+`
+
+// Cleanup ladder + namespace occupancy: the namespace's synthetic host, looked
+// up by EXACT hostname. Deliberately not a prefix match: 'synth-foo-host' used
+// as a LIKE prefix would also match namespace 'foo-hostile”s
+// 'synth-foo-hostile-host' and delete another world's marker.
+func (q *Queries) SyntheticSelectMacHostIdByHostname(ctx context.Context, hostname string) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, SyntheticSelectMacHostIdByHostname, hostname)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const SyntheticSelectNamespaceEntityIds = `-- name: SyntheticSelectNamespaceEntityIds :many
+SELECT entity_id FROM synthetic_namespace_entity
+WHERE namespace = $1 AND entity_kind = $2
+ORDER BY entity_id
+`
+
+type SyntheticSelectNamespaceEntityIdsParams struct {
+	Namespace  string `json:"namespace"`
+	EntityKind string `json:"entity_kind"`
+}
+
+// Cleanup id-set: the entity ids this namespace recorded ownership of. Unioned
+// with the prefix sweep rather than replacing it — the prefix still finds rows
+// a pre-ownership run seeded, and ownership still finds rows the prefix lost.
+func (q *Queries) SyntheticSelectNamespaceEntityIds(ctx context.Context, arg SyntheticSelectNamespaceEntityIdsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, SyntheticSelectNamespaceEntityIds, arg.Namespace, arg.EntityKind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var entity_id pgtype.UUID
+		if err := rows.Scan(&entity_id); err != nil {
+			return nil, err
+		}
+		items = append(items, entity_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SyntheticSelectVenueNodeIdsForContacts = `-- name: SyntheticSelectVenueNodeIdsForContacts :many
+SELECT DISTINCT venue_id FROM interaction
+WHERE contact_id = ANY($1::uuid[])
+  AND venue_id IS NOT NULL
+`
+
+// Cleanup id-set (step 2): the venue nodes the real recorders minted for this
+// namespace's interactions. Venue nodes are not contacts and carry an empty
+// canonical_label, so neither the person-node delete nor the label-prefix sweep
+// finds them — they must be captured BEFORE the interaction delete removes the
+// only link. Includes soft-deleted interactions for the same reason as above.
+func (q *Queries) SyntheticSelectVenueNodeIdsForContacts(ctx context.Context, contactIds []pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, SyntheticSelectVenueNodeIdsForContacts, contactIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var venue_id pgtype.UUID
+		if err := rows.Scan(&venue_id); err != nil {
+			return nil, err
+		}
+		items = append(items, venue_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const SyntheticTryAdvisoryLock = `-- name: SyntheticTryAdvisoryLock :one
+SELECT pg_try_advisory_lock($1::bigint)
+`
+
+// Namespace reservation (seed + cleanup): NON-BLOCKING session advisory lock.
+// A held lock means a concurrent run owns the namespace, which is answered
+// immediately (409 on seed, "busy" on cleanup) rather than queued behind. MUST
+// be executed on a dedicated pooled connection — session advisory locks belong
+// to the connection that took them.
+func (q *Queries) SyntheticTryAdvisoryLock(ctx context.Context, lockKey int64) (bool, error) {
+	row := q.db.QueryRow(ctx, SyntheticTryAdvisoryLock, lockKey)
+	var pg_try_advisory_lock bool
+	err := row.Scan(&pg_try_advisory_lock)
+	return pg_try_advisory_lock, err
 }
 
 const TestCountAllRows = `-- name: TestCountAllRows :one
@@ -2770,6 +3133,20 @@ func (q *Queries) TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID)
 	return result.RowsAffected(), nil
 }
 
+const TestFinalizeRiverJobByID = `-- name: TestFinalizeRiverJobByID :exec
+UPDATE river_job
+SET state = 'completed'::river_job_state, finalized_at = NOW()
+WHERE id = $1
+`
+
+// Failure-injection fixture: finalizes a planted job so the "refuses while
+// pending, cleans once safe" tests have an explicit, honest safe-state step
+// rather than a hand-wave.
+func (q *Queries) TestFinalizeRiverJobByID(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, TestFinalizeRiverJobByID, id)
+	return err
+}
+
 const TestGetContactCacheColumnsByID = `-- name: TestGetContactCacheColumnsByID :one
 SELECT location, birthday, how_met FROM contact WHERE id = $1 AND deleted_at IS NULL
 `
@@ -2847,6 +3224,96 @@ func (q *Queries) TestGetLiveFollowUpByNamePrefix(ctx context.Context, namePrefi
 	var i TestGetLiveFollowUpByNamePrefixRow
 	err := row.Scan(&i.ContactID, &i.ExternalTaskID, &i.Metadata)
 	return &i, err
+}
+
+const TestGetRiverJobDispositionByID = `-- name: TestGetRiverJobDispositionByID :one
+SELECT state::text AS state,
+       (finalized_at IS NOT NULL)::bool AS finalized,
+       COALESCE((metadata->>'snoozes')::bigint, 0)::bigint AS snoozes,
+       attempt::int AS attempt
+FROM river_job WHERE id = $1
+`
+
+type TestGetRiverJobDispositionByIDRow struct {
+	State     string `json:"state"`
+	Finalized bool   `json:"finalized"`
+	Snoozes   int64  `json:"snoozes"`
+	Attempt   int32  `json:"attempt"`
+}
+
+// Test assertion — a planted job's disposition: its state, whether it is
+// finalized, how many times a worker snoozed it (River records the count in
+// metadata->>'snoozes'), and its attempt counter. `attempt` is the load-bearing
+// one for queue isolation: River increments it on FETCH, so attempt = 0 says
+// the job was never handed to a worker at all — a positive statement, unlike
+// "not finalized", which a job nobody ever looked at also satisfies.
+func (q *Queries) TestGetRiverJobDispositionByID(ctx context.Context, id int64) (*TestGetRiverJobDispositionByIDRow, error) {
+	row := q.db.QueryRow(ctx, TestGetRiverJobDispositionByID, id)
+	var i TestGetRiverJobDispositionByIDRow
+	err := row.Scan(
+		&i.State,
+		&i.Finalized,
+		&i.Snoozes,
+		&i.Attempt,
+	)
+	return &i, err
+}
+
+const TestInsertAvailableJobOfKind = `-- name: TestInsertAvailableJobOfKind :one
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ($1, 'default', 'available',
+        jsonb_build_object('event_id', $2::text),
+        '{}'::jsonb, 1, 5, NOW())
+RETURNING id
+`
+
+type TestInsertAvailableJobOfKindParams struct {
+	Kind    string `json:"kind"`
+	EventID string `json:"event_id"`
+}
+
+// Isolation fixture, generalized: an AVAILABLE `default`-queue job of ANY kind,
+// carrying an event id. Two classes matter beyond the no-op kinds, and neither
+// is covered by a rematch fixture:
+//   - a kind the harness registers a REAL worker for (followup_manager), which
+//     the harness wires in off mode — fetching one would finalize it without
+//     doing the work;
+//   - a production kind the harness does NOT register (todoist_task_op), which
+//     a fetching client fails as an unknown kind, burning the job's attempts.
+func (q *Queries) TestInsertAvailableJobOfKind(ctx context.Context, arg TestInsertAvailableJobOfKindParams) (int64, error) {
+	row := q.db.QueryRow(ctx, TestInsertAvailableJobOfKind, arg.Kind, arg.EventID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const TestInsertAvailableRematchJobForContact = `-- name: TestInsertAvailableRematchJobForContact :one
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('rematch_dispatcher', 'default', 'available',
+        jsonb_build_object(
+          'event_id', $1::text,
+          'contact_id', $2::text,
+          'rematch_job_id', $3::text),
+        '{}'::jsonb, 1, 5, NOW())
+RETURNING id
+`
+
+type TestInsertAvailableRematchJobForContactParams struct {
+	EventID      string `json:"event_id"`
+	ContactID    string `json:"contact_id"`
+	RematchJobID string `json:"rematch_job_id"`
+}
+
+// Isolation fixture: plants an AVAILABLE (immediately fetchable)
+// rematch_dispatcher job on the `default` queue — the queue the live
+// application works. A harness that fetched it would be stealing another
+// process's job. Available (not scheduled) precisely because the fetch has to
+// be POSSIBLE for "it was never fetched" to mean anything.
+func (q *Queries) TestInsertAvailableRematchJobForContact(ctx context.Context, arg TestInsertAvailableRematchJobForContactParams) (int64, error) {
+	row := q.db.QueryRow(ctx, TestInsertAvailableRematchJobForContact, arg.EventID, arg.ContactID, arg.RematchJobID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const TestInsertContactAtID = `-- name: TestInsertContactAtID :exec
@@ -3082,6 +3549,21 @@ func (q *Queries) TestInsertTagMarker(ctx context.Context) error {
 	return err
 }
 
+const TestInsertTelegramChatConfigInBand = `-- name: TestInsertTelegramChatConfigInBand :exec
+INSERT INTO telegram_chat_config (telegram_chat_id, chat_type, status)
+VALUES ($1, 'group', 'auto')
+`
+
+// Failure-injection fixture (declared-seeding tests): occupies a namespace's
+// telegram peer band with a row that belongs to NO contact, which is the
+// cheapest way to force the toolkit's band-collision re-salt without seeding a
+// whole world that would then need cleaning. Reclaimed by the existing
+// chat-config delete.
+func (q *Queries) TestInsertTelegramChatConfigInBand(ctx context.Context, telegramChatID int64) error {
+	_, err := q.db.Exec(ctx, TestInsertTelegramChatConfigInBand, telegramChatID)
+	return err
+}
+
 const TestInsertTelegramSessionMarker = `-- name: TestInsertTelegramSessionMarker :exec
 INSERT INTO telegram_session (session_data_encrypted, encryption_nonce, phone_number)
 VALUES ('\x00'::bytea, '\x00'::bytea, 'reset-marker')
@@ -3092,6 +3574,53 @@ VALUES ('\x00'::bytea, '\x00'::bytea, 'reset-marker')
 func (q *Queries) TestInsertTelegramSessionMarker(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, TestInsertTelegramSessionMarker)
 	return err
+}
+
+const TestInsertUnfinalizedAggregateJobForContact = `-- name: TestInsertUnfinalizedAggregateJobForContact :one
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('messaging_aggregate_for_contact', 'default', 'scheduled',
+        jsonb_build_object('contact_id', $1::text, 'source', $2::text),
+        '{}'::jsonb, 1, 1, NOW() + INTERVAL '1 hour')
+RETURNING id
+`
+
+type TestInsertUnfinalizedAggregateJobForContactParams struct {
+	ContactID string `json:"contact_id"`
+	Source    string `json:"source"`
+}
+
+// Failure-injection fixture: the SECOND Gate-B linkage class — an aggregate job
+// keyed on {contact_id, source} with NO event id. A cleanup predicate that only
+// looked at event ids would miss it and delete rows it still dereferences.
+// Scheduled an hour out for the same reason as the recorder fixture above.
+func (q *Queries) TestInsertUnfinalizedAggregateJobForContact(ctx context.Context, arg TestInsertUnfinalizedAggregateJobForContactParams) (int64, error) {
+	row := q.db.QueryRow(ctx, TestInsertUnfinalizedAggregateJobForContact, arg.ContactID, arg.Source)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
+const TestInsertUnfinalizedRecorderJobForEvent = `-- name: TestInsertUnfinalizedRecorderJobForEvent :one
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('interaction_recorder', 'default', 'scheduled',
+        jsonb_build_object('event_id', $1::text), '{}'::jsonb, 1, 1,
+        NOW() + INTERVAL '1 hour')
+RETURNING id
+`
+
+// Failure-injection fixture (declared-seeding tests): plants ONE unfinalized
+// event-linked river_job so the Gate-B-parity pending check has something real
+// to refuse on. The generic TestInsertNonFinalRiverJob marker is deliberately
+// UNLINKED and Gate B does not count it, so it cannot exercise this path.
+//
+// Planted as SCHEDULED an hour out rather than available: a live River client
+// would otherwise fetch and finalize it within milliseconds, and the assertion
+// that depends on it staying unfinalized would pass or fail on a race.
+func (q *Queries) TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID string) (int64, error) {
+	row := q.db.QueryRow(ctx, TestInsertUnfinalizedRecorderJobForEvent, eventID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const TestListCadenceActivityFlagsByNamePrefix = `-- name: TestListCadenceActivityFlagsByNamePrefix :many

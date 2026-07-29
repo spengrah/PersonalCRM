@@ -4301,7 +4301,7 @@ const docTemplate = `{
         },
         "/test/cleanup": {
             "post": {
-                "description": "Delete test data (contacts and external contacts) by prefix",
+                "description": "Delete test data. Supply EXACTLY ONE of ` + "`" + `prefix` + "`" + ` (bespoke shape — returns the CleanupResponse fields: contacts, external contacts and calendar events deleted by prefix) or ` + "`" + `namespaces` + "`" + ` (declared shape — returns the CleanupNamespacesResponse fields: per-requested-token expansions plus a per-effective-namespace outcome). ` + "`" + `host_id` + "`" + ` belongs to the prefix shape and is rejected alongside ` + "`" + `namespaces` + "`" + `. The documented 200 schema is the union of the two; a given response carries one group, never both.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4335,7 +4335,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/handlers.CleanupResponse"
+                                            "$ref": "#/definitions/handlers.CleanupResponseData"
                                         }
                                     }
                                 }
@@ -4534,6 +4534,109 @@ const docTemplate = `{
                                 {
                                     "type": "object",
                                     "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/test/seed/declared": {
+            "post": {
+                "description": "Execute the fixture declared for a spec behavior id in an isolated namespace and return a manifest of what was created. Test-only (CRM_ENV=testing).",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "test"
+                ],
+                "summary": "Seed a spec behavior's declared fixture",
+                "parameters": [
+                    {
+                        "description": "Declared seed request",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.SeedDeclaredRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.SeedDeclaredResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.SeedDeclaredFailure"
+                                        },
                                         "error": {
                                             "$ref": "#/definitions/api.APIError"
                                         }
@@ -5400,22 +5503,31 @@ const docTemplate = `{
         },
         "handlers.CleanupRequest": {
             "type": "object",
-            "required": [
-                "prefix"
-            ],
             "properties": {
                 "host_id": {
-                    "description": "HostID, when set, also hard-deletes every meeting_note owned by that\nmac_host (seeded session UUIDs are random, so there is no prefix to\nmatch on — cleanup is by host instead).",
+                    "description": "HostID, when set, also hard-deletes every meeting_note owned by that\nmac_host (seeded session UUIDs are random, so there is no prefix to\nmatch on — cleanup is by host instead). Prefix shape only.",
                     "type": "string"
+                },
+                "namespaces": {
+                    "description": "Namespaces are the REQUESTED namespace tokens the client seeded under.\nThe server expands each to the effective (possibly re-salted) worlds, so\na client that never saw a seed response can still clean up.",
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "prefix": {
                     "type": "string",
                     "maxLength": 50,
                     "minLength": 1
+                },
+                "seed": {
+                    "description": "Seed must match the seed the namespaces were created with; 0 or absent\nuses the default.",
+                    "type": "integer"
                 }
             }
         },
-        "handlers.CleanupResponse": {
+        "handlers.CleanupResponseData": {
             "type": "object",
             "properties": {
                 "deleted_calendar_events": {
@@ -5426,6 +5538,21 @@ const docTemplate = `{
                 },
                 "deleted_external_contacts": {
                     "type": "integer"
+                },
+                "expansions": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "results": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/handlers.NamespaceCleanupResponse"
+                    }
                 }
             }
         },
@@ -6128,6 +6255,30 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.NamespaceCleanupResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                },
+                "descendants": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "error": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.NoteResponse": {
             "type": "object",
             "properties": {
@@ -6524,6 +6675,62 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.SeedDeclaredFailure": {
+            "type": "object",
+            "properties": {
+                "cleaned": {
+                    "type": "boolean"
+                },
+                "namespace": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.SeedDeclaredRequest": {
+            "type": "object",
+            "required": [
+                "behavior_id",
+                "namespace"
+            ],
+            "properties": {
+                "behavior_id": {
+                    "description": "BehaviorID is a spec behavior id (e.g. \"CAD-026\").",
+                    "type": "string",
+                    "maxLength": 64,
+                    "minLength": 1
+                },
+                "namespace": {
+                    "description": "Namespace isolates this fixture's rows. It may not end in the reserved\n-sN re-salt suffix, and it stops short of the 60-character token limit so\nthat a re-salted EFFECTIVE namespace still fits — see\ndeclare.maxRequestedNamespaceLen, which this bound mirrors and\nTestSeedDeclaredEndpoint_MaxLengthNamespaceResalts holds it to.",
+                    "type": "string",
+                    "maxLength": 57,
+                    "minLength": 1
+                },
+                "seed": {
+                    "description": "Seed overrides the generator seed; 0 or absent uses the default.",
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.SeedDeclaredResponse": {
+            "type": "object",
+            "properties": {
+                "anchor": {
+                    "description": "Anchor is the generator anchor the world was built against.",
+                    "type": "string"
+                },
+                "entities": {
+                    "description": "Entities maps declaration handle → created row.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/handlers.SeededEntityResponse"
+                    }
+                },
+                "namespace": {
+                    "description": "Namespace is the EFFECTIVE namespace, which may carry a -sN suffix the\ncaller never asked for. Assertions must key off this, never the request.",
+                    "type": "string"
+                }
+            }
+        },
         "handlers.SeedExternalContactInput": {
             "type": "object",
             "properties": {
@@ -6817,6 +7024,20 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
+                }
+            }
+        },
+        "handlers.SeededEntityResponse": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
                 }
             }
         },

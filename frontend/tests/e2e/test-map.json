@@ -689,6 +689,26 @@
     "tags": []
   },
   {
+    "_comment": "Test-only provisioning surface. It has no product behavior of its own, but every seeded spec depends on it, so a change here selects the areas that already provision through it (dashboard today; more as the arc migrates domains).",
+    "pattern": "^backend/internal/api/handlers/test(_declared|_routes)?\\.go$",
+    "tags": ["@area:dashboard", "@area:overdue"]
+  },
+  {
+    "_comment": "Go unit tests for the test-only handlers carry no E2E area of their own.",
+    "pattern": "^backend/internal/api/handlers/.*_test\\.go$",
+    "tags": []
+  },
+  {
+    "_comment": "Test-only seed/cleanup SQL and its generated bindings — same rationale as the test handlers above.",
+    "pattern": "^backend/internal/db/(queries/test\\.sql|test\\.sql\\.go|querier\\.go)$",
+    "tags": ["@area:dashboard", "@area:overdue"]
+  },
+  {
+    "_comment": "sqlc's generated table structs. A schema change reaches E2E through the queries, handlers and migrations that accompany it — those carry the areas — so this file contributes none of its own.",
+    "pattern": "^backend/internal/db/models\\.go$",
+    "tags": []
+  },
+  {
     "pattern": "^frontend/src/.*/__tests__/",
     "tags": []
   }

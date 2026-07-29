@@ -251,6 +251,14 @@ WHERE source = @source::text
 -- Cleanup step 1: claims for this replay's events (by tracked event id).
 DELETE FROM event_consumer_claim WHERE event_id = ANY(@event_ids::uuid[]);
 
+-- name: SyntheticCountEventConsumerClaimsByEventIds :one
+-- Cleanup assertion — surviving claims for a set of event ids. event_consumer_claim
+-- has NO fk to event, so deleting an event does not take its claims with it: a
+-- sweep that dropped the events while its claim delete failed would leave rows
+-- that no later cleanup can even name (the event ids are derived FROM the events).
+-- The ids must therefore be captured before the sweep and asserted against after.
+SELECT COUNT(*) FROM event_consumer_claim WHERE event_id = ANY(@event_ids::uuid[]);
+
 -- name: SyntheticDeleteInteractionsByIds :execrows
 -- Cleanup step 2: interactions by tracked id.
 DELETE FROM interaction WHERE id = ANY(@interaction_ids::uuid[]);
@@ -941,6 +949,7 @@ TRUNCATE TABLE
     relationship_signal,
     river_job,
     sync_staleness_breach,
+    synthetic_namespace_entity,
     tag,
     telegram_channel_state,
     telegram_chat_config,
@@ -1622,3 +1631,241 @@ WHERE c.full_name LIKE @name_prefix || '%'
   AND c.contact_by IS NOT NULL
   AND c.contact_by < sqlc.arg(today)::date
 ORDER BY c.contact_by ASC;
+
+-- ============================================================================
+-- Declared-seeding support (internal/synthetic/declare) — test-only.
+--
+-- The declared-seed endpoint executes a fixture in a namespace and a LATER,
+-- SEPARATE request cleans it up, so cleanup cannot use the harness's in-memory
+-- ledger (it died with the request). Every id set is instead recovered from the
+-- DB by the namespace's own generator-derived tokens.
+--
+-- SOFT-DELETE EXCEPTION, deliberate and confined to these queries: the id-set
+-- SELECTs below do NOT filter `deleted_at IS NULL`. Cleanup must find TOMBSTONES
+-- — an app action under test may soft-delete a seeded contact, and a later PR
+-- seeds soft-deleted contacts on purpose — and a child row is found by its
+-- contact id regardless of the parent's deleted_at. Leaving a tombstone behind
+-- would leak rows that no later run can reach by token.
+-- ============================================================================
+
+-- name: SyntheticSelectContactIdsByFullNamePrefix :many
+-- Cleanup id-set (step 1): every contact whose full_name carries the namespace
+-- prefix, INCLUDING soft-deleted rows (see the soft-delete exception above).
+-- Caller passes a BARE prefix; '%' is appended here. The namespace charset
+-- excludes the LIKE metacharacters, so the prefix can never over-match.
+SELECT id FROM contact
+WHERE full_name LIKE @name_prefix || '%'
+ORDER BY id;
+
+-- name: SyntheticSelectVenueNodeIdsForContacts :many
+-- Cleanup id-set (step 2): the venue nodes the real recorders minted for this
+-- namespace's interactions. Venue nodes are not contacts and carry an empty
+-- canonical_label, so neither the person-node delete nor the label-prefix sweep
+-- finds them — they must be captured BEFORE the interaction delete removes the
+-- only link. Includes soft-deleted interactions for the same reason as above.
+SELECT DISTINCT venue_id FROM interaction
+WHERE contact_id = ANY(@contact_ids::uuid[])
+  AND venue_id IS NOT NULL;
+
+-- name: SyntheticDeleteInteractionsByContactIds :execrows
+-- Cleanup ladder: interactions by contact (hard delete — the ledger's by-id
+-- variant is unavailable cross-request). Soft-deleted rows included.
+DELETE FROM interaction WHERE contact_id = ANY(@contact_ids::uuid[]);
+
+-- name: SyntheticSelectMacHostIdByHostname :one
+-- Cleanup ladder + namespace occupancy: the namespace's synthetic host, looked
+-- up by EXACT hostname. Deliberately not a prefix match: 'synth-foo-host' used
+-- as a LIKE prefix would also match namespace 'foo-hostile''s
+-- 'synth-foo-hostile-host' and delete another world's marker.
+SELECT id FROM mac_host WHERE hostname = @hostname;
+
+-- name: SyntheticSelectLiveDescendantHostnames :many
+-- Cleanup descendant guard: hostnames of any namespace nested UNDER this one
+-- ('synth-<ns>-%-host'). A namespace whose prefix sweep would cross into a live
+-- descendant refuses to clean rather than deleting across it. Note
+-- 'synth-<ns>-host' itself does not match this pattern; the namespace's own
+-- salt variants do and are filtered out by the caller (they are expansion
+-- members, not descendants).
+SELECT hostname FROM mac_host
+WHERE hostname LIKE @namespace_prefix || '%-host'
+ORDER BY hostname;
+
+-- name: SyntheticCountPendingJobsForNamespaceCleanup :one
+-- Cleanup safety gate, at Gate-B parity: unfinalized River jobs that still
+-- dereference this namespace's rows. Two linkage classes, both required —
+-- event-linked jobs (args->>'event_id'), and messaging_aggregate_for_contact
+-- jobs, which key on {contact_id, source} and carry NO event id, so an
+-- event-only predicate would happily delete rows an aggregate job still
+-- references. The aggregate arm is deliberately source-agnostic: a superset of
+-- the two sources teardown checks, erring toward REFUSING to delete.
+SELECT COUNT(*) FROM river_job
+WHERE finalized_at IS NULL
+  AND (
+        (args->>'event_id') = ANY(@event_ids::text[])
+     OR (kind = 'messaging_aggregate_for_contact'
+         AND (args->>'contact_id') = ANY(@contact_ids::text[]))
+  );
+
+-- name: SyntheticTryAdvisoryLock :one
+-- Namespace reservation (seed + cleanup): NON-BLOCKING session advisory lock.
+-- A held lock means a concurrent run owns the namespace, which is answered
+-- immediately (409 on seed, "busy" on cleanup) rather than queued behind. MUST
+-- be executed on a dedicated pooled connection — session advisory locks belong
+-- to the connection that took them.
+SELECT pg_try_advisory_lock(@lock_key::bigint);
+
+-- name: SyntheticAdvisoryLock :exec
+-- Numeric-band claim: BLOCKING session advisory lock, bounded by the caller's
+-- context deadline. Unlike the namespace reservation, contention here is
+-- legitimate (two DIFFERENT namespaces hashing into the same phone area or
+-- telegram peer band), and serializing them is what makes the toolkit's
+-- detect-and-re-salt sound under concurrency. Same dedicated-connection rule.
+SELECT pg_advisory_lock(@lock_key::bigint);
+
+-- name: SyntheticAdvisoryUnlock :one
+-- Releases a session advisory lock on the SAME connection that took it.
+-- Returns false when the caller did not hold it.
+SELECT pg_advisory_unlock(@lock_key::bigint);
+
+-- name: TestInsertUnfinalizedRecorderJobForEvent :one
+-- Failure-injection fixture (declared-seeding tests): plants ONE unfinalized
+-- event-linked river_job so the Gate-B-parity pending check has something real
+-- to refuse on. The generic TestInsertNonFinalRiverJob marker is deliberately
+-- UNLINKED and Gate B does not count it, so it cannot exercise this path.
+--
+-- Planted as SCHEDULED an hour out rather than available: a live River client
+-- would otherwise fetch and finalize it within milliseconds, and the assertion
+-- that depends on it staying unfinalized would pass or fail on a race.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('interaction_recorder', 'default', 'scheduled',
+        jsonb_build_object('event_id', @event_id::text), '{}'::jsonb, 1, 1,
+        NOW() + INTERVAL '1 hour')
+RETURNING id;
+
+-- name: TestInsertUnfinalizedAggregateJobForContact :one
+-- Failure-injection fixture: the SECOND Gate-B linkage class — an aggregate job
+-- keyed on {contact_id, source} with NO event id. A cleanup predicate that only
+-- looked at event ids would miss it and delete rows it still dereferences.
+-- Scheduled an hour out for the same reason as the recorder fixture above.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('messaging_aggregate_for_contact', 'default', 'scheduled',
+        jsonb_build_object('contact_id', @contact_id::text, 'source', @source::text),
+        '{}'::jsonb, 1, 1, NOW() + INTERVAL '1 hour')
+RETURNING id;
+
+-- name: TestFinalizeRiverJobByID :exec
+-- Failure-injection fixture: finalizes a planted job so the "refuses while
+-- pending, cleans once safe" tests have an explicit, honest safe-state step
+-- rather than a hand-wave.
+UPDATE river_job
+SET state = 'completed'::river_job_state, finalized_at = NOW()
+WHERE id = @id;
+
+-- name: TestInsertTelegramChatConfigInBand :exec
+-- Failure-injection fixture (declared-seeding tests): occupies a namespace's
+-- telegram peer band with a row that belongs to NO contact, which is the
+-- cheapest way to force the toolkit's band-collision re-salt without seeding a
+-- whole world that would then need cleaning. Reclaimed by the existing
+-- chat-config delete.
+INSERT INTO telegram_chat_config (telegram_chat_id, chat_type, status)
+VALUES (@telegram_chat_id, 'group', 'auto');
+
+-- name: SyntheticRecordNamespaceEntity :exec
+-- Namespace ownership, written at seed time. The declared-seed endpoint seeds
+-- in one request and cleans up in another, and every other id set is recovered
+-- from a generator-derived token carried by the row — which for contacts means
+-- full_name, a USER-EDITABLE column. A test that renames a seeded contact
+-- through the ordinary contact API makes it invisible to the name-derived
+-- sweeps (node.canonical_label is rewritten with it), so cleanup would skip it
+-- and report success over live residue. This record is keyed by the entity's
+-- own id, which nothing in the application rewrites.
+INSERT INTO synthetic_namespace_entity (namespace, entity_kind, entity_id)
+VALUES (@namespace, @entity_kind, @entity_id::uuid)
+ON CONFLICT (namespace, entity_kind, entity_id) DO NOTHING;
+
+-- name: SyntheticSelectNamespaceEntityIds :many
+-- Cleanup id-set: the entity ids this namespace recorded ownership of. Unioned
+-- with the prefix sweep rather than replacing it — the prefix still finds rows
+-- a pre-ownership run seeded, and ownership still finds rows the prefix lost.
+SELECT entity_id FROM synthetic_namespace_entity
+WHERE namespace = @namespace AND entity_kind = @entity_kind
+ORDER BY entity_id;
+
+-- name: SyntheticDeleteNamespaceEntities :execrows
+-- Cleanup ladder (final block): drops the namespace's ownership records. Runs
+-- with the host-marker delete — only after every earlier step succeeded — so a
+-- partially failed sweep keeps the namespace both discoverable AND recoverable.
+DELETE FROM synthetic_namespace_entity WHERE namespace = @namespace;
+
+-- name: SyntheticDeleteUnfinalizedJobsInQueue :execrows
+-- Cleanup ladder: drops the namespace's own ORPHANED River jobs.
+--
+-- A harness client fetches only its own private queue, so a job left in that
+-- queue after the client stopped can never be worked by anyone — and the
+-- pending gate would refuse to sweep the namespace forever. Cleanup holds the
+-- namespace reservation while this runs, so no live run owns these rows.
+-- Deliberately scoped to ONE queue and to unfinalized rows: a `default`-queue
+-- job belongs to the live application and must still gate the sweep, and
+-- finalized rows are River's own retention business.
+DELETE FROM river_job
+WHERE queue = @queue
+  AND finalized_at IS NULL
+  AND (
+        (args->>'event_id') = ANY(@event_ids::text[])
+     OR (args->>'contact_id') = ANY(@contact_ids::text[])
+  );
+
+-- name: SyntheticDeleteRiverQueue :execrows
+-- Cleanup ladder: drops the river_queue row a harness producer created for the
+-- namespace's private queue. Without it every declared seed would leave one
+-- permanent row behind on the shared database.
+DELETE FROM river_queue WHERE name = @name;
+
+-- name: SyntheticCountRiverQueue :one
+-- Cleanup assertion — does a namespace's private river_queue row still exist?
+-- Every harness starts a producer that upserts one, and a database reset
+-- preserves River's own tables, so an un-deleted row is permanent residue.
+SELECT COUNT(*) FROM river_queue WHERE name = @name;
+
+-- name: TestInsertAvailableRematchJobForContact :one
+-- Isolation fixture: plants an AVAILABLE (immediately fetchable)
+-- rematch_dispatcher job on the `default` queue — the queue the live
+-- application works. A harness that fetched it would be stealing another
+-- process's job. Available (not scheduled) precisely because the fetch has to
+-- be POSSIBLE for "it was never fetched" to mean anything.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('rematch_dispatcher', 'default', 'available',
+        jsonb_build_object(
+          'event_id', @event_id::text,
+          'contact_id', @contact_id::text,
+          'rematch_job_id', @rematch_job_id::text),
+        '{}'::jsonb, 1, 5, NOW())
+RETURNING id;
+
+-- name: TestInsertAvailableJobOfKind :one
+-- Isolation fixture, generalized: an AVAILABLE `default`-queue job of ANY kind,
+-- carrying an event id. Two classes matter beyond the no-op kinds, and neither
+-- is covered by a rematch fixture:
+--   - a kind the harness registers a REAL worker for (followup_manager), which
+--     the harness wires in off mode — fetching one would finalize it without
+--     doing the work;
+--   - a production kind the harness does NOT register (todoist_task_op), which
+--     a fetching client fails as an unknown kind, burning the job's attempts.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES (@kind, 'default', 'available',
+        jsonb_build_object('event_id', @event_id::text),
+        '{}'::jsonb, 1, 5, NOW())
+RETURNING id;
+
+-- name: TestGetRiverJobDispositionByID :one
+-- Test assertion — a planted job's disposition: its state, whether it is
+-- finalized, how many times a worker snoozed it (River records the count in
+-- metadata->>'snoozes'), and its attempt counter. `attempt` is the load-bearing
+-- one for queue isolation: River increments it on FETCH, so attempt = 0 says
+-- the job was never handed to a worker at all — a positive statement, unlike
+-- "not finalized", which a job nobody ever looked at also satisfies.
+SELECT state::text AS state,
+       (finalized_at IS NOT NULL)::bool AS finalized,
+       COALESCE((metadata->>'snoozes')::bigint, 0)::bigint AS snoozes,
+       attempt::int AS attempt
+FROM river_job WHERE id = @id;

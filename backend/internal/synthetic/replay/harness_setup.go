@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"regexp"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -184,11 +186,17 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	// via ContactService's RefreshTx, so a no-op async worker is sufficient here.
 	river.AddWorker(workers, &knowledgeCacheNoopWorker{})
 
+	// QUEUE ISOLATION (see SyntheticQueueName): this client fetches ONLY the
+	// namespace's private queue, and an insert hook rewrites every job it
+	// enqueues onto that same queue. Both halves are required and neither is
+	// optional — see the doc comment on syntheticQueueRouter.
+	queueName := SyntheticQueueName(namespace)
 	client, err := river.NewClient(riverpgxv5.New(database.Pool), &river.Config{
 		Queues: map[string]river.QueueConfig{
-			river.QueueDefault: {MaxWorkers: cfg.River.WorkerConcurrency},
+			queueName: {MaxWorkers: cfg.River.WorkerConcurrency},
 		},
 		Workers:  workers,
+		Hooks:    []rivertype.Hook{&syntheticQueueRouter{queue: queueName}},
 		TestOnly: true, // immediate processing, no staggered maintenance
 	})
 	if err != nil {
@@ -315,6 +323,28 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	if err != nil {
 		return nil, nil, fmt.Errorf("seed revoked mac host: %w", err)
 	}
+
+	// From here on the namespace is OCCUPIED: the host row is the marker that
+	// callers use to detect an in-use namespace. A constructor failure past this
+	// point returns no teardown closure (there is no harness yet), so without a
+	// best-effort removal here the marker would claim the namespace forever with
+	// nothing behind it. When the removal itself fails the error is wrapped with
+	// ErrConstructorResidue so the caller can report the residue HONESTLY
+	// instead of assuming either outcome.
+	postHostFailure := func(cause error) (*Harness, func(context.Context) error, error) {
+		delErr := forcedHostRemovalFailure()
+		if delErr == nil {
+			_, delErr = support.DeleteMacHostByID(ctx, macHostID)
+		}
+		if delErr != nil {
+			return nil, nil, fmt.Errorf("%w: removing the namespaced synthetic host after a constructor failure failed (%v); original failure: %w",
+				ErrConstructorResidue, delErr, cause)
+		}
+		return nil, nil, cause
+	}
+	if fp := constructorFailpoint(); fp == ConstructorFailpointAfterHost || fp == ConstructorFailpointAfterHostResidue {
+		return postHostFailure(fmt.Errorf("synthetic: constructor failpoint %q fired", fp))
+	}
 	ingestService := service.NewIngestService(
 		database, bus, identityService, messagesRepo, client, externalRepo,
 		nil, // hostLiveness = nil: skips the active-host re-check + dodges the singleton
@@ -329,7 +359,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 
 	// IMPORTANT: pass the OUTER ctx (not a timeout-derived one) to Start.
 	if err := client.Start(ctx); err != nil {
-		return nil, nil, fmt.Errorf("start river client: %w", err)
+		return postHostFailure(fmt.Errorf("start river client: %w", err))
 	}
 
 	h := &Harness{
@@ -420,9 +450,67 @@ func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportR
 	return nil, "", fmt.Errorf("synthetic: could not find free numeric bands for namespace %q after %d re-salts", namespace, bandResaltAttempts)
 }
 
-// rematchNoopWorker drains the rematch_dispatcher kind (rematch is out of the
-// Element-1 inbound replay graph; pending states come from the unknown-sender
-// path, not a rematch pass).
+// syntheticQueuePrefix names every queue a replay harness owns. Cleanup and the
+// isolation tests key off it, so it is a constant rather than a literal.
+const syntheticQueuePrefix = "synthetic-"
+
+// SyntheticQueueName is the PRIVATE River queue a harness works for a namespace.
+//
+// Why a private queue rather than a per-worker ownership check. A harness starts
+// a real River client, and River's fetch selects ANY available job in the queues
+// it is configured for — there is no kind or namespace filter. Sharing `default`
+// with the live application therefore has three distinct failure modes, and no
+// per-worker guard covers all of them:
+//   - a no-op worker (rematch_dispatcher, knowledge_cache_updater) FINALIZES a
+//     foreign job without doing its work — silently lost work;
+//   - a real worker wired for replay semantics (followup_manager, which this
+//     harness deliberately runs in OFF mode) finalizes a foreign job having
+//     skipped the work it was enqueued for;
+//   - a production kind the harness does not register at all is fetched and
+//     failed as an unknown kind, burning the job's attempts until it discards.
+//
+// Fetching only this queue closes all three at once, and the insert hook that
+// routes the harness's own jobs here closes the mirror image: the application's
+// client, which fetches only `default`, can never take a seed's job either.
+//
+// The name is DERIVED, not random, so a later cleanup — which has no handle on
+// the client that made it — can find the queue's leftovers. FNV-1a of the
+// namespace keeps it inside River's queue-name grammar (lowercase alphanumerics
+// with single separators, ≤64 chars) for any namespace, which a sanitized
+// namespace would not be: the toolkit charset admits leading, trailing and
+// doubled hyphens.
+func SyntheticQueueName(namespace string) string {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(namespace))
+	return fmt.Sprintf("%s%016x", syntheticQueuePrefix, h.Sum64())
+}
+
+// syntheticQueueRouter forces every job this harness inserts onto its private
+// queue, whatever queue the job args or insert opts asked for.
+//
+// It is the other half of the isolation: a client that only FETCHES its private
+// queue would still leave its own jobs on `default`, where the live application
+// would work them with production wiring the seed did not ask for (the harness
+// runs follow-up in off mode precisely so a seed does not create real
+// follow-ups). River runs insert hooks on every insert path — Insert, InsertTx,
+// InsertMany, InsertManyTx, and the fast variants all funnel through the same
+// shared insert — and builds the final insert params AFTER the hooks, so
+// rewriting Queue here is sufficient and complete.
+type syntheticQueueRouter struct {
+	river.HookDefaults
+	queue string
+}
+
+func (r *syntheticQueueRouter) InsertBegin(_ context.Context, params *rivertype.JobInsertParams) error {
+	params.Queue = r.queue
+	return nil
+}
+
+// rematchNoopWorker drains the rematch_dispatcher kind: rematch is out of the
+// Element-1 inbound replay graph (pending states come from the unknown-sender
+// path, not a rematch pass), so the job only has to finalize. It can no-op
+// unconditionally because queue isolation guarantees the job is this harness's
+// own — see SyntheticQueueName.
 type rematchNoopWorker struct {
 	river.WorkerDefaults[consumerjobs.RematchDispatcherJobArgs]
 }
@@ -438,7 +526,8 @@ func (*rematchNoopWorker) Timeout(_ *river.Job[consumerjobs.RematchDispatcherJob
 // knowledgeCacheNoopWorker registers the knowledge_cache_updater kind so the
 // harness's River client accepts the assertion.accepted/superseded enqueues that
 // a seeded contact's location/birthday/how_met assertions produce. The cache is
-// filled inline by ContactService, so the async worker is a no-op here.
+// filled inline by ContactService, so the async worker is a no-op — and, by the
+// same queue-isolation argument, only ever sees this harness's own jobs.
 type knowledgeCacheNoopWorker struct {
 	river.WorkerDefaults[consumerjobs.KnowledgeCacheUpdaterJobArgs]
 }
