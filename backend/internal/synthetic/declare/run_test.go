@@ -2,6 +2,8 @@ package declare
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +38,40 @@ func TestValidateRequestedNamespace(t *testing.T) {
 func TestValidateNamespaceTokenAcceptsSaltedValues(t *testing.T) {
 	assert.NoError(t, ValidateNamespaceToken("w3-1700-c1-s1"))
 	assert.Error(t, ValidateNamespaceToken("w3-1700-c1-s1_"))
+}
+
+// The grammars of the two paths must MEET: every namespace a seed can produce
+// has to be a namespace cleanup accepts. Re-salting appends a suffix the caller
+// never asked for and the effective token is never revalidated, so a requested
+// namespace accepted right up against the token limit would seed a world under
+// an over-long token — which the client then hands back to cleanup, whose
+// validator rejects the whole request and leaves the rows in the shared
+// database. The longest ACCEPTED requested namespace is derived here rather
+// than read from the constant, so the property is proven about the validator's
+// actual behavior.
+func TestSaltVariantsOfTheLongestRequestedNamespaceStayValidTokens(t *testing.T) {
+	longest := ""
+	for n := 1; n <= maxNamespaceLen+maxSaltSuffixLen; n++ {
+		candidate := strings.Repeat("a", n)
+		if ValidateRequestedNamespace(candidate) == nil {
+			longest = candidate
+		}
+	}
+	require.NotEmpty(t, longest, "the validator accepted no namespace at all")
+
+	for _, variant := range saltVariants(longest) {
+		assert.NoError(t, ValidateNamespaceToken(variant),
+			"re-salting the longest accepted requested namespace (%d chars) minted %q, which cleanup rejects",
+			len(longest), variant)
+		assert.NoError(t, ValidateCleanupNamespaces([]string{variant}),
+			"a cleanup request naming %q must be accepted", variant)
+	}
+}
+
+// The reserved room is a literal (a const cannot format one), so hold it to the
+// widest suffix re-salting can actually mint.
+func TestSaltSuffixFitsItsReservedRoom(t *testing.T) {
+	assert.Equal(t, maxSaltSuffixLen, len(fmt.Sprintf("-s%d", maxSaltAttempt)))
 }
 
 func TestHyphenAncestors(t *testing.T) {

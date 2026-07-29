@@ -89,10 +89,26 @@ func (e *RunError) Unwrap() error { return e.Err }
 // saltSuffix matches the re-salt segment resolveNamespace mints (-s1..-s7).
 var saltSuffix = regexp.MustCompile(`^s\d+$`)
 
-// maxNamespaceLen bounds a namespace token. The salt suffix and the
-// 'synth-<ns>-' prefix are added on top, so this leaves ample room under any
+// maxNamespaceLen bounds a namespace token — requested or EFFECTIVE. The
+// 'synth-<ns>-' prefix is added on top, so this leaves ample room under any
 // column width.
 const maxNamespaceLen = 60
+
+// maxSaltSuffixLen is the width of the widest suffix re-salting can append.
+// maxSaltAttempt is a single digit, so that is len("-s") plus one digit;
+// TestSaltSuffixFitsItsReservedRoom keeps the two in step.
+const maxSaltSuffixLen = len("-s") + 1
+
+// maxRequestedNamespaceLen bounds a REQUESTED namespace, reserving room for the
+// suffix re-salting may append. Construction resolves the effective namespace
+// internally and never revalidates it, so a requested token that filled the
+// whole budget would seed a world under a token LONGER than the token grammar
+// allows — and that token is exactly what the client hands back to cleanup.
+// Cleanup would then reject the whole request and the rows would survive the
+// test that created them. Reserving the room here is what keeps the seed and
+// cleanup grammars consistent: every namespace a seed can produce is a
+// namespace cleanup accepts.
+const maxRequestedNamespaceLen = maxNamespaceLen - maxSaltSuffixLen
 
 // ValidateNamespaceToken checks charset and length. Cleanup uses it, because
 // cleanup legitimately receives EFFECTIVE namespaces that end in -sN.
@@ -106,13 +122,18 @@ func ValidateNamespaceToken(namespace string) error {
 	return nil
 }
 
-// ValidateRequestedNamespace is ValidateNamespaceToken plus the reserved salt
-// grammar: a REQUESTED namespace may not end in -sN, because that is the suffix
-// re-salting mints internally. Reserving it is what makes cleanup's
-// requested → salted-variant expansion unambiguous.
+// ValidateRequestedNamespace is ValidateNamespaceToken plus the two reservations
+// a REQUESTED namespace owes the re-salt suffix: it may not END in -sN (that is
+// the suffix re-salting mints internally, and reserving it is what makes
+// cleanup's requested → salted-variant expansion unambiguous), and it must leave
+// ROOM for one (so the effective namespace stays a valid token).
 func ValidateRequestedNamespace(namespace string) error {
 	if err := ValidateNamespaceToken(namespace); err != nil {
 		return err
+	}
+	if l := len(namespace); l > maxRequestedNamespaceLen {
+		return fmt.Errorf("%w: %q has length %d, want 1..%d for a requested namespace (%d characters are reserved for the -sN re-salt suffix)",
+			ErrInvalidNamespace, namespace, l, maxRequestedNamespaceLen, maxSaltSuffixLen)
 	}
 	segments := strings.Split(namespace, "-")
 	if saltSuffix.MatchString(segments[len(segments)-1]) {

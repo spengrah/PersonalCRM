@@ -984,8 +984,11 @@ definitions:
       namespace:
         description: |-
           Namespace isolates this fixture's rows. It may not end in the reserved
-          -sN re-salt suffix.
-        maxLength: 60
+          -sN re-salt suffix, and it stops short of the 60-character token limit so
+          that a re-salted EFFECTIVE namespace still fits — see
+          declare.maxRequestedNamespaceLen, which this bound mirrors and
+          TestSeedDeclaredEndpoint_MaxLengthNamespaceResalts holds it to.
+        maxLength: 57
         minLength: 1
         type: string
       seed:

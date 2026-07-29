@@ -57,6 +57,10 @@ func TestSeedDeclaredRejectsMalformedRequests(t *testing.T) {
 		{"missing namespace", map[string]any{"behavior_id": "CAD-026"}},
 		{"empty namespace", map[string]any{"behavior_id": "CAD-026", "namespace": ""}},
 		{"oversize namespace", map[string]any{"behavior_id": "CAD-026", "namespace": strings.Repeat("a", 61)}},
+		// Inside the 60-character TOKEN grammar, but with no room left for the
+		// -sN suffix construction may append. Accepting it would seed a world
+		// whose effective namespace cleanup then refuses to accept back.
+		{"no room for the re-salt suffix", map[string]any{"behavior_id": "CAD-026", "namespace": strings.Repeat("a", 58)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

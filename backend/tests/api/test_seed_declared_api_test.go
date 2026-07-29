@@ -177,6 +177,57 @@ func TestSeedDeclaredEndpoint_EffectiveNamespace(t *testing.T) {
 	_, _ = support.DeleteTelegramChatConfigsByChatIds(ctx, []int64{gen.PeerBandStart()})
 }
 
+// The seed and cleanup grammars have to MEET at the boundary. A requested
+// namespace right at the accepted limit can still be re-salted — the effective
+// token grows by the suffix and is never revalidated — and that longer token is
+// what the client hands straight back to cleanup. If the requested limit does
+// not reserve room for the suffix, this round trip seeds a world whose own
+// cleanup request is rejected outright, leaving rows in the shared E2E database.
+//
+// The longest accepted requested namespace is DERIVED from the validator rather
+// than read off a constant, so the test also holds the handler's own max= bound
+// to it: a bound tighter than the package's rejects the seed, a looser one lets
+// the over-long effective token through to the cleanup call below.
+func TestSeedDeclaredEndpoint_MaxLengthNamespaceResalts(t *testing.T) {
+	router, database, ctx := newDeclaredSeedRouter(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	namespace := longestAcceptedNamespace(t, declaredAPINS(t))
+	gen := factory.NewGenerator(factory.DefaultSeed, namespace)
+	require.NoError(t, support.InsertTelegramChatConfigInBand(ctx, gen.PeerBandStart()))
+	t.Cleanup(func() {
+		_, _ = support.DeleteTelegramChatConfigsByChatIds(context.Background(), []int64{gen.PeerBandStart()})
+	})
+
+	w := postDeclared(t, router, "/api/v1/test/seed/declared", map[string]any{
+		"behavior_id": "DSH-005", "namespace": namespace,
+	})
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+
+	manifest := decodeDeclaredSeed(t, w)
+	require.NotEqual(t, namespace, manifest.Namespace, "the occupied band must have forced a re-salt")
+
+	// Cleanup by the EFFECTIVE token, which is what a client that received the
+	// manifest sends. cleanupNamespaces requires a 200, so an effective token
+	// the cleanup grammar rejects fails here.
+	res := cleanupNamespaces(t, router, []string{manifest.Namespace}, 0)
+	assert.Equal(t, declare.StatusCleaned, res.Results[manifest.Namespace].Status)
+}
+
+// longestAcceptedNamespace pads a unique base to the longest string
+// ValidateRequestedNamespace still accepts.
+func longestAcceptedNamespace(t *testing.T, base string) string {
+	t.Helper()
+	longest := ""
+	for candidate := base; len(candidate) <= 128; candidate += "a" {
+		if declare.ValidateRequestedNamespace(candidate) == nil {
+			longest = candidate
+		}
+	}
+	require.NotEmpty(t, longest, "no accepted requested namespace found from base %q", base)
+	return longest
+}
+
 func TestSeedDeclaredEndpoint_Conflict409(t *testing.T) {
 	router, _, _ := newDeclaredSeedRouter(t)
 	namespace := declaredAPINS(t)

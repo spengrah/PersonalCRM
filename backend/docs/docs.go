@@ -6700,9 +6700,9 @@ const docTemplate = `{
                     "minLength": 1
                 },
                 "namespace": {
-                    "description": "Namespace isolates this fixture's rows. It may not end in the reserved\n-sN re-salt suffix.",
+                    "description": "Namespace isolates this fixture's rows. It may not end in the reserved\n-sN re-salt suffix, and it stops short of the 60-character token limit so\nthat a re-salted EFFECTIVE namespace still fits — see\ndeclare.maxRequestedNamespaceLen, which this bound mirrors and\nTestSeedDeclaredEndpoint_MaxLengthNamespaceResalts holds it to.",
                     "type": "string",
-                    "maxLength": 60,
+                    "maxLength": 57,
                     "minLength": 1
                 },
                 "seed": {

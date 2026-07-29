@@ -220,6 +220,20 @@ export interface TriggerErrorRequest {
 // Test API Client
 // ============================================================================
 
+// How long declared-namespace cleanup keeps polling a retriable outcome.
+//
+// A declared seed runs DETACHED on the server: a seedBehavior call that timed
+// out or lost its response does not stop it, and it holds the namespace
+// reservation — which cleanup reports as `busy` — for its whole residence. The
+// server's own constants bound that residence: a 90s run budget, at most one
+// in-flight 30s settle timer, a 30s Gate-B wait in the failure-path teardown
+// and a 45s teardown budget (backend/internal/synthetic/declare/run.go,
+// backend/internal/synthetic/replay). A poll that gives up before that window
+// closes leaves the run's rows in the shared E2E database, which is exactly
+// what the pre-registered cleanup handle exists to prevent.
+const DECLARED_CLEANUP_POLL_BUDGET_MS = 200_000
+const DECLARED_CLEANUP_POLL_INTERVAL_MS = 2_000
+
 /**
  * TestAPI provides methods to seed and cleanup test data via the backend test endpoints.
  * These endpoints are only available when CRM_ENV=testing.
@@ -234,6 +248,9 @@ export class TestAPI {
   // handle behind — see seedBehavior.
   private _declaredNamespaces: string[] = []
   private _seedBehaviorCalls = 0
+  // Whether the declared-cleanup poll has already bought itself room in the
+  // test's timeout slot — see grantDeclaredCleanupBudget.
+  private _cleanupBudgetGranted = false
 
   constructor(
     private request: APIRequestContext,
@@ -525,9 +542,9 @@ export class TestAPI {
   /**
    * Removes the declared worlds this test seeded. `busy` and `pending` mean the
    * server refused to delete anything yet (a seed is in flight, or a background
-   * job still references the rows) and are retriable, so they get one bounded
-   * retry before failing loudly — silently leaving rows behind would poison the
-   * shared database for later runs.
+   * job still references the rows) and are retriable, so they are POLLED until
+   * they resolve or the budget runs out, then failed loudly — silently leaving
+   * rows behind would poison the shared database for later runs.
    */
   private async cleanupDeclaredNamespaces(): Promise<void> {
     if (this._declaredNamespaces.length === 0) return
@@ -549,21 +566,62 @@ export class TestAPI {
         .filter(([, outcome]) => outcome.status === 'busy' || outcome.status === 'pending')
         .map(([namespace]) => namespace)
 
-    let result = await attempt(this._declaredNamespaces)
-    let pending = retriable(result)
-    if (pending.length > 0) {
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      result = await attempt(pending)
-      pending = retriable(result)
+    // Outcomes accumulate ACROSS attempts, because a retry only names the
+    // namespaces that were retriable. A namespace that came back with a
+    // non-retriable `error` is absent from every later response, so replacing
+    // the result wholesale would report success while its residue is still
+    // there. Re-sent tokens are dropped first: expansion can move a token's
+    // verdict to a different key between attempts (a requested token whose run
+    // had not published its marker yet answers under ITSELF, and under
+    // `<ns>-sN` once that run finishes and the salted world becomes
+    // discoverable), so keeping the earlier entry would report a phantom
+    // `busy` for a world that has since been swept.
+    const outcomes = new Map<string, NamespaceCleanupOutcome>()
+    let sending = this._declaredNamespaces
+    const deadline = Date.now() + DECLARED_CLEANUP_POLL_BUDGET_MS
+
+    for (;;) {
+      const result = await attempt(sending)
+      for (const namespace of sending) outcomes.delete(namespace)
+      for (const [namespace, outcome] of Object.entries(result.results)) {
+        outcomes.set(namespace, outcome)
+      }
+
+      sending = retriable(result)
+      if (sending.length === 0) break
+      if (Date.now() + DECLARED_CLEANUP_POLL_INTERVAL_MS >= deadline) break
+      this.grantDeclaredCleanupBudget()
+      await new Promise(resolve => setTimeout(resolve, DECLARED_CLEANUP_POLL_INTERVAL_MS))
     }
 
-    const failures = Object.entries(result.results).filter(
-      ([, outcome]) => outcome.status !== 'cleaned'
-    )
+    const failures = [...outcomes].filter(([, outcome]) => outcome.status !== 'cleaned')
     if (failures.length > 0) {
       throw new Error(
-        `Declared namespace cleanup did not finish: ${JSON.stringify(Object.fromEntries(failures))}`
+        'Declared namespace cleanup left rows behind (retriable outcomes were polled for up to ' +
+          `${DECLARED_CLEANUP_POLL_BUDGET_MS}ms): ${JSON.stringify(Object.fromEntries(failures))}`
       )
+    }
+  }
+
+  /**
+   * Buys the cleanup poll the wall-clock it needs, once, on the path that
+   * actually polls.
+   *
+   * afterEach hooks share the TEST's timeout slot (Playwright's TimeoutManager
+   * charges hook time against the same budget), and the declared-seed run this
+   * poll is waiting out can hold its reservation for minutes. Without this the
+   * poll's bound is a bound in name only: the hook is killed part way through
+   * and the rows survive anyway. A timeout of 0 means timeouts are disabled for
+   * this test — setting one would IMPOSE a ceiling that is not there.
+   *
+   * It cannot help a test that had already exhausted its slot before afterEach
+   * started; that hook is rejected on entry, before any client code runs.
+   */
+  private grantDeclaredCleanupBudget(): void {
+    if (this._cleanupBudgetGranted) return
+    this._cleanupBudgetGranted = true
+    if (this.testInfo.timeout > 0) {
+      this.testInfo.setTimeout(this.testInfo.timeout + DECLARED_CLEANUP_POLL_BUDGET_MS)
     }
   }
 

@@ -42,8 +42,11 @@ type SeedDeclaredRequest struct {
 	// BehaviorID is a spec behavior id (e.g. "CAD-026").
 	BehaviorID string `json:"behavior_id" validate:"required,min=1,max=64"`
 	// Namespace isolates this fixture's rows. It may not end in the reserved
-	// -sN re-salt suffix.
-	Namespace string `json:"namespace" validate:"required,min=1,max=60"`
+	// -sN re-salt suffix, and it stops short of the 60-character token limit so
+	// that a re-salted EFFECTIVE namespace still fits — see
+	// declare.maxRequestedNamespaceLen, which this bound mirrors and
+	// TestSeedDeclaredEndpoint_MaxLengthNamespaceResalts holds it to.
+	Namespace string `json:"namespace" validate:"required,min=1,max=57"`
 	// Seed overrides the generator seed; 0 or absent uses the default.
 	Seed uint64 `json:"seed,omitempty"`
 }
