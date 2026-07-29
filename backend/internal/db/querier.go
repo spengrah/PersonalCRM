@@ -1914,6 +1914,12 @@ type Querier interface {
 	SyntheticCountContactsByFullName(ctx context.Context, fullName string) (int64, error)
 	// Cleanup assertion — count surviving contact rows for the given ids.
 	SyntheticCountContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	// Cleanup assertion — surviving claims for a set of event ids. event_consumer_claim
+	// has NO fk to event, so deleting an event does not take its claims with it: a
+	// sweep that dropped the events while its claim delete failed would leave rows
+	// that no later cleanup can even name (the event ids are derived FROM the events).
+	// The ids must therefore be captured before the sweep and asserted against after.
+	SyntheticCountEventConsumerClaimsByEventIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
 	// Harness setup collision detection (D5): count external_identity rows whose
 	// normalized identifier shares the namespace's phone-digit prefix. Non-zero means
 	// another namespace already occupies this phone sub-block, so NewHarness re-salts.
@@ -2004,6 +2010,10 @@ type Querier interface {
 	// seeding their own signals on the shared DB). Used to assert ≥1 signal exists for
 	// the seeded nodes (coverage) and that 0 remain after teardown.
 	SyntheticCountRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	// Cleanup assertion — does a namespace's private river_queue row still exist?
+	// Every harness starts a producer that upserts one, and a database reset
+	// preserves River's own tables, so an un-deleted row is permanent residue.
+	SyntheticCountRiverQueue(ctx context.Context, name string) (int64, error)
 	// Batch replay Settle Gate A — set-widened forms of the per-message predicates
 	// above. A batch adapter drives N payloads through one provider pass and then
 	// settles ONCE, so its gate is a single COUNT over the batch's identifiers

@@ -251,6 +251,14 @@ WHERE source = @source::text
 -- Cleanup step 1: claims for this replay's events (by tracked event id).
 DELETE FROM event_consumer_claim WHERE event_id = ANY(@event_ids::uuid[]);
 
+-- name: SyntheticCountEventConsumerClaimsByEventIds :one
+-- Cleanup assertion — surviving claims for a set of event ids. event_consumer_claim
+-- has NO fk to event, so deleting an event does not take its claims with it: a
+-- sweep that dropped the events while its claim delete failed would leave rows
+-- that no later cleanup can even name (the event ids are derived FROM the events).
+-- The ids must therefore be captured before the sweep and asserted against after.
+SELECT COUNT(*) FROM event_consumer_claim WHERE event_id = ANY(@event_ids::uuid[]);
+
 -- name: SyntheticDeleteInteractionsByIds :execrows
 -- Cleanup step 2: interactions by tracked id.
 DELETE FROM interaction WHERE id = ANY(@interaction_ids::uuid[]);
@@ -1812,6 +1820,12 @@ WHERE queue = @queue
 -- namespace's private queue. Without it every declared seed would leave one
 -- permanent row behind on the shared database.
 DELETE FROM river_queue WHERE name = @name;
+
+-- name: SyntheticCountRiverQueue :one
+-- Cleanup assertion — does a namespace's private river_queue row still exist?
+-- Every harness starts a producer that upserts one, and a database reset
+-- preserves River's own tables, so an un-deleted row is permanent residue.
+SELECT COUNT(*) FROM river_queue WHERE name = @name;
 
 -- name: TestInsertAvailableRematchJobForContact :one
 -- Isolation fixture: plants an AVAILABLE (immediately fetchable)

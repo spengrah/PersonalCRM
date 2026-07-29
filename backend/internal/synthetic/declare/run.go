@@ -345,11 +345,20 @@ func saltVariants(namespace string) []string {
 //	               residue from an earlier re-salted run is invisible here, and
 //	               the next run could re-salt onto that same variant and
 //	               materialize a second world on top of it.
+//	descendant   — a live host for any namespace NESTED under this one. The
+//	               direct check only closes the descendant direction for worlds
+//	               that still have CONTACTS: a child carrying nothing but a host
+//	               marker (constructor residue, or a child whose ladder failed
+//	               before its marker) has no contact under this prefix and is not
+//	               one of the exact tokens above, so nothing else here sees it.
+//	               Admitting the parent then creates a world whose OWN cleanup
+//	               refuses forever, because the descendant guard names that child
+//	               and aborts every sweep.
 //	hierarchical — a live host for any proper hyphen-boundary ANCESTOR of the
-//	               namespace. This closes the foo/foo-bar hole: foo-bar's rows are
-//	               invisible to foo's own occupancy check, but a later cleanup of
-//	               foo would LIKE-sweep 'synth-foo-%' straight across them. The
-//	               ancestor direction is already closed by the direct check.
+//	               namespace. This closes the other half of the foo/foo-bar hole:
+//	               foo-bar's rows are invisible to foo's own occupancy check, but
+//	               a later cleanup of foo would LIKE-sweep 'synth-foo-%' straight
+//	               across them.
 func checkNamespaceFree(ctx context.Context, support *repository.SyntheticSupportRepository, namespace string) error {
 	prefix := factory.SyntheticSourcePrefix + namespace + "-"
 
@@ -367,6 +376,19 @@ func checkNamespaceFree(ctx context.Context, support *repository.SyntheticSuppor
 		} else if exists {
 			return fmt.Errorf("%w: %q already holds a synthetic host row", ErrNamespaceOccupied, token)
 		}
+	}
+
+	// Descendants are found by the SAME query and the same salt-variant filter
+	// the cleanup guard uses, so the two can never disagree about what counts as
+	// a nested world — a seed admitted here whose cleanup would then refuse is
+	// exactly the state that strands rows.
+	descendants, err := liveDescendants(ctx, support, namespace, prefix)
+	if err != nil {
+		return fmt.Errorf("declare: descendant check for %q: %w", namespace, err)
+	}
+	if len(descendants) > 0 {
+		return fmt.Errorf("%w: %q has %d live namespace(s) nested under it (%s)",
+			ErrNamespaceOccupied, namespace, len(descendants), strings.Join(descendants, ", "))
 	}
 
 	for _, ancestor := range hyphenAncestors(namespace) {

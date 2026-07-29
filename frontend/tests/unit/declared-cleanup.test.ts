@@ -25,6 +25,11 @@ interface Harness {
   timeoutGrants: number[]
 }
 
+interface HarnessOptions {
+  /** Makes the legacy prefix-shape cleanup fail, as a transient 500 would. */
+  prefixCleanup?: 'ok' | 'fails'
+}
+
 const TEST_TIMEOUT_MS = 30_000
 
 function jsonResponse(status: number, payload: unknown) {
@@ -42,7 +47,7 @@ function jsonResponse(status: number, payload: unknown) {
  * POSTs in order; the last step repeats for any further attempt, which is what
  * lets a test model "still busy forever".
  */
-function harness(steps: CleanupStep[]): Harness {
+function harness(steps: CleanupStep[], harnessOptions: HarnessOptions = {}): Harness {
   const cleanupCalls: string[][] = []
   const timeoutGrants: number[] = []
 
@@ -58,6 +63,12 @@ function harness(steps: CleanupStep[]): Harness {
         const namespaces = options.data.namespaces as string[] | undefined
         if (!namespaces) {
           // The legacy prefix shape cleanup() issues first.
+          if (harnessOptions.prefixCleanup === 'fails') {
+            return jsonResponse(500, {
+              success: false,
+              error: { message: 'prefix sweep exploded' },
+            })
+          }
           return jsonResponse(200, {
             success: true,
             data: { deleted_contacts: 0, deleted_external_contacts: 0, deleted_calendar_events: 0 },
@@ -213,5 +224,40 @@ describe('declared namespace cleanup', () => {
     await api.seedBehavior('DSH-005')
 
     await expect(runCleanup(api)).resolves.toBe('resolved')
+  })
+
+  /**
+   * The two sweeps delete disjoint rows by unrelated mechanisms, so a failure of
+   * the legacy prefix one says nothing about the declared worlds. Returning
+   * early on it would leave every declared world alive in the shared E2E
+   * database, turning one test's transient 500 into an isolation failure for
+   * everything that runs afterwards.
+   */
+  it('cleans declared namespaces even when the prefix sweep fails, and reports both', async () => {
+    vi.useFakeTimers()
+    const { api, cleanupCalls } = harness([all('cleaned')], { prefixCleanup: 'fails' })
+    const seeded = await api.seedBehavior('DSH-005')
+
+    const outcome = await runCleanup(api)
+    expect(outcome).toBeInstanceOf(Error)
+    // The prefix failure is reported...
+    expect((outcome as Error).message).toContain('Failed to cleanup test data')
+    // ...and the declared sweep still ran, for the namespace it seeded.
+    expect(cleanupCalls).toEqual([[seeded.namespace]])
+  })
+
+  /**
+   * The mirror case: a prefix failure must not swallow a declared failure
+   * either. Both errors reach the caller, because either one alone leaves rows.
+   */
+  it('reports the declared failure alongside the prefix failure', async () => {
+    vi.useFakeTimers()
+    const { api } = harness([all('error')], { prefixCleanup: 'fails' })
+    const seeded = await api.seedBehavior('DSH-005')
+
+    const outcome = await runCleanup(api)
+    expect(outcome).toBeInstanceOf(Error)
+    expect((outcome as Error).message).toContain('Failed to cleanup test data')
+    expect((outcome as Error).message).toContain(seeded.namespace)
   })
 })

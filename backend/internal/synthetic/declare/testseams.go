@@ -113,9 +113,9 @@ func SetTestHookForTest(point string, fn TestHook) (restore func()) {
 }
 
 // SetCleanupFailStepForTest makes the cleanup ladder fail at the named step
-// instead of executing it, so the marker-retention contract (a partially failed
-// ladder keeps the namespace discoverable AND occupied) can be proven rather
-// than assumed. Pass "" to disarm.
+// instead of executing it, so the all-or-nothing contract (a failed sweep
+// deletes nothing, leaving the namespace discoverable, occupied and fully
+// recoverable by a retry) can be proven rather than assumed. Pass "" to disarm.
 func SetCleanupFailStepForTest(step string) (restore func()) {
 	requireTestEnv("declare.SetCleanupFailStepForTest")
 	seamMu.Lock()

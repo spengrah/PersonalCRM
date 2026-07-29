@@ -529,24 +529,51 @@ export class TestAPI {
    * Cleans up all test data created with this test's prefix, plus every
    * declared namespace this test seeded.
    * Call this in afterEach or afterAll to ensure test isolation.
+   *
+   * The two sweeps are INDEPENDENT and both always run. They delete disjoint
+   * rows by unrelated mechanisms, so a failure of one says nothing about the
+   * other — and returning early on the prefix sweep's error (a transient 500, a
+   * dropped request) would leave every declared world this test seeded alive in
+   * the shared E2E database, compounding one failing test into an isolation
+   * failure for everything that runs after it. Both errors are reported.
    */
   async cleanup(): Promise<CleanupResponse> {
-    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/cleanup`, {
-      headers: API_HEADERS,
-      data: {
-        prefix: this.prefix,
-        ...(this._seededHostId ? { host_id: this._seededHostId } : {}),
-      } satisfies CleanupRequest,
-    })
-
-    if (!response.ok()) {
-      const body = await response.text()
-      throw new Error(`Failed to cleanup test data: ${response.status()} ${body}`)
+    let prefixResult: CleanupResponse | undefined
+    let prefixError: unknown
+    try {
+      const response = await this.request.post(`${API_BASE_URL}/api/v1/test/cleanup`, {
+        headers: API_HEADERS,
+        data: {
+          prefix: this.prefix,
+          ...(this._seededHostId ? { host_id: this._seededHostId } : {}),
+        } satisfies CleanupRequest,
+      })
+      if (!response.ok()) {
+        throw new Error(
+          `Failed to cleanup test data: ${response.status()} ${await response.text()}`
+        )
+      }
+      prefixResult = (await response.json()).data as CleanupResponse
+    } catch (error) {
+      prefixError = error
     }
 
-    const data = await response.json()
-    await this.cleanupDeclaredNamespaces()
-    return data.data as CleanupResponse
+    let declaredError: unknown
+    try {
+      await this.cleanupDeclaredNamespaces()
+    } catch (error) {
+      declaredError = error
+    }
+
+    if (prefixError || declaredError) {
+      throw new Error(
+        [prefixError, declaredError]
+          .filter(Boolean)
+          .map(error => (error instanceof Error ? error.message : String(error)))
+          .join('\n')
+      )
+    }
+    return prefixResult as CleanupResponse
   }
 
   /**

@@ -1112,6 +1112,22 @@ func (q *Queries) SyntheticCountContactsByIds(ctx context.Context, contactIds []
 	return count, err
 }
 
+const SyntheticCountEventConsumerClaimsByEventIds = `-- name: SyntheticCountEventConsumerClaimsByEventIds :one
+SELECT COUNT(*) FROM event_consumer_claim WHERE event_id = ANY($1::uuid[])
+`
+
+// Cleanup assertion — surviving claims for a set of event ids. event_consumer_claim
+// has NO fk to event, so deleting an event does not take its claims with it: a
+// sweep that dropped the events while its claim delete failed would leave rows
+// that no later cleanup can even name (the event ids are derived FROM the events).
+// The ids must therefore be captured before the sweep and asserted against after.
+func (q *Queries) SyntheticCountEventConsumerClaimsByEventIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountEventConsumerClaimsByEventIds, eventIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountExternalIdentitiesByIdentifierPrefix = `-- name: SyntheticCountExternalIdentitiesByIdentifierPrefix :one
 SELECT COUNT(*) FROM external_identity
 WHERE identifier LIKE $1 || '%'
@@ -1408,6 +1424,20 @@ SELECT COUNT(*) FROM relationship_signal WHERE subject_node_id = ANY($1::uuid[])
 // the seeded nodes (coverage) and that 0 remain after teardown.
 func (q *Queries) SyntheticCountRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountRelationshipSignalsForNodes, nodeIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountRiverQueue = `-- name: SyntheticCountRiverQueue :one
+SELECT COUNT(*) FROM river_queue WHERE name = $1
+`
+
+// Cleanup assertion — does a namespace's private river_queue row still exist?
+// Every harness starts a producer that upserts one, and a database reset
+// preserves River's own tables, so an un-deleted row is permanent residue.
+func (q *Queries) SyntheticCountRiverQueue(ctx context.Context, name string) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountRiverQueue, name)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

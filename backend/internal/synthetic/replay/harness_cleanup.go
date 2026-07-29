@@ -341,6 +341,17 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteNamespaceEntities(ctx, h.namespace)
 		return err
 	})
+	// 14b. river_queue: the row this harness's own producer upserted for its
+	// PRIVATE queue when the client started. The client is stopped by step 1, so
+	// nothing will ever fetch that queue again and the row is pure residue — one
+	// per harness, accumulating on the shared database because a reset preserves
+	// River's internal tables. It also has to go here specifically: the declared
+	// seed's FAILURE path drives this teardown and reports the namespace as
+	// cleaned when it returns nil, which would be false while the row survived.
+	step("river_queue", func() error {
+		_, err := h.support.DeleteRiverQueue(ctx, SyntheticQueueName(h.namespace))
+		return err
+	})
 	// 15. river_job: NEVER deleted here (D5a row 15) — finalized jobs are
 	// reclaimed by River retention / DB reset, and this teardown only runs once
 	// Gate B is clear, so there is nothing unfinalized to reclaim. (The

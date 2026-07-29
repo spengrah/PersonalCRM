@@ -1778,6 +1778,22 @@ func (r *SyntheticSupportRepository) DeleteRiverQueue(ctx context.Context, name 
 	return r.queries.SyntheticDeleteRiverQueue(ctx, name)
 }
 
+// CountRiverQueue reports whether a namespace's private queue row survives
+// (cleanup assertion).
+func (r *SyntheticSupportRepository) CountRiverQueue(ctx context.Context, name string) (int64, error) {
+	return r.queries.SyntheticCountRiverQueue(ctx, name)
+}
+
+// CountEventConsumerClaimsByEventIds counts surviving claims for a set of event
+// ids (cleanup assertion). The caller must capture the ids BEFORE the sweep —
+// once the events are gone nothing can re-derive them.
+func (r *SyntheticSupportRepository) CountEventConsumerClaimsByEventIds(ctx context.Context, eventIDs []uuid.UUID) (int64, error) {
+	if len(eventIDs) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticCountEventConsumerClaimsByEventIds(ctx, pgUUIDs(eventIDs))
+}
+
 // TryAdvisoryLock takes a NON-BLOCKING session advisory lock; false means
 // another session holds it. MUST run on a dedicated connection (session locks
 // belong to the connection that took them).

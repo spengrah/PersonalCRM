@@ -328,6 +328,30 @@ func TestCleanupEndpoint_DualShape(t *testing.T) {
 		assert.Equal(t, []string{namespace}, res.Expansions[namespace])
 	})
 
+	// host_id belongs to the prefix shape. The declared branch has no host to
+	// scope meeting-note deletion to, so a request carrying both used to validate
+	// cleanly, take the declared branch, and answer 200 — telling the caller its
+	// cleanup succeeded while the host's meeting notes were never touched. A
+	// combination whose work cannot be done must be refused, not half-honoured.
+	t.Run("rejects host_id alongside namespaces", func(t *testing.T) {
+		host := postDeclared(t, router, "/api/v1/test/seed/mac-hosts", map[string]any{
+			"hostname": "declared-shape-host-" + declaredAPINS(t),
+		})
+		require.Equal(t, http.StatusOK, host.Code, "body: %s", host.Body.String())
+		var hostEnvelope struct {
+			Data handlers.SeedMacHostResponse `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(host.Body.Bytes(), &hostEnvelope))
+		require.NotEmpty(t, hostEnvelope.Data.HostID)
+
+		w := postDeclared(t, router, "/api/v1/test/cleanup", map[string]any{
+			"namespaces": []string{declaredAPINS(t)},
+			"host_id":    hostEnvelope.Data.HostID,
+		})
+		require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+		assert.Contains(t, w.Body.String(), "host_id")
+	})
+
 	t.Run("rejects an ambiguous or empty request", func(t *testing.T) {
 		cases := []map[string]any{
 			{}, // neither

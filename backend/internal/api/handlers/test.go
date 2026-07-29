@@ -646,7 +646,7 @@ type CleanupResponseData struct {
 
 // Cleanup deletes test data by prefix or by declared namespace
 // @Summary Cleanup test data
-// @Description Delete test data. Supply EXACTLY ONE of `prefix` (bespoke shape — returns the CleanupResponse fields: contacts, external contacts and calendar events deleted by prefix) or `namespaces` (declared shape — returns the CleanupNamespacesResponse fields: per-requested-token expansions plus a per-effective-namespace outcome). The documented 200 schema is the union of the two; a given response carries one group, never both.
+// @Description Delete test data. Supply EXACTLY ONE of `prefix` (bespoke shape — returns the CleanupResponse fields: contacts, external contacts and calendar events deleted by prefix) or `namespaces` (declared shape — returns the CleanupNamespacesResponse fields: per-requested-token expansions plus a per-effective-namespace outcome). `host_id` belongs to the prefix shape and is rejected alongside `namespaces`. The documented 200 schema is the union of the two; a given response carries one group, never both.
 // @Tags test
 // @Accept json
 // @Produce json
@@ -680,6 +680,14 @@ func (h *TestHandler) Cleanup(c *gin.Context) {
 	case len(req.Namespaces) == 0 && req.Prefix == "":
 		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation,
 			"Supply exactly one of prefix or namespaces", "neither was provided")
+		return
+	case len(req.Namespaces) > 0 && req.HostID != "":
+		// host_id is prefix-shape only: the declared branch below has no host to
+		// scope meeting notes to and would return 200 without ever looking at it.
+		// A caller that sent one asked for cleanup work that silently would not
+		// happen, so refuse rather than under-deliver behind a success.
+		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation,
+			"host_id belongs to the prefix shape", "host_id cannot be combined with namespaces")
 		return
 	case len(req.Namespaces) > 0:
 		h.cleanupNamespaces(c, req.Namespaces, req.Seed)

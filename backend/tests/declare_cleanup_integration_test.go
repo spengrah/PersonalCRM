@@ -351,6 +351,136 @@ func TestCleanup_LadderFailureKeepsMarker(t *testing.T) {
 	assert.Equal(t, int64(0), measureResidue(t, ctx, database, seeded.Namespace, factory.DefaultSeed).total())
 }
 
+// A failed ladder must delete NOTHING, because several of the ladder's own
+// steps are the only source of a LATER step's recovery key.
+//
+// Cleanup is stateless: it runs in a different request from the seed, so every
+// id set is re-derived at sweep time — events from the contacts that reference
+// them, venue nodes from those contacts' interactions. A ladder that recorded a
+// failure and kept going would therefore destroy keys it still needed, and the
+// retry would sweep what it could still see and report "cleaned" over rows
+// nothing can ever find again.
+//
+// Both derivation chains are injected, because they break in opposite halves of
+// the ladder and neither failure is visible to the other:
+//
+//   - event_consumer_claims → events. event_consumer_claim has NO foreign key to
+//     event, so deleting the events under a failed claim delete strands claims
+//     whose ids no later cleanup can even name.
+//   - interactions → venue_nodes. interaction.venue_id is the only link back to
+//     a venue node, so deleting the interactions under a failed venue delete
+//     strands the nodes.
+//
+// The assertions are deliberately of two kinds: the residue comparison says
+// nothing was deleted (the general invariant), and the by-id claim and venue
+// counts say the specific orphan classes are gone after the retry — measured on
+// rows that a prefix-scoped residue read cannot see once their parents are gone.
+func TestCleanup_LadderFailureDeletesNothing(t *testing.T) {
+	database, ctx := declareTestDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	for _, failStep := range []string{"event_consumer_claims", "venue_nodes"} {
+		t.Run(failStep, func(t *testing.T) {
+			namespace := declareNS(t)
+			seeded := mustRun(t, ctx, database, "DSH-005", namespace)
+
+			// Captured BEFORE any sweep: once the events and interactions are
+			// gone nothing can re-derive these, which is the hazard under test.
+			prefix := factory.SyntheticSourcePrefix + seeded.Namespace + "-"
+			contactIDs, err := support.SelectContactIDsByFullNamePrefix(ctx, prefix)
+			require.NoError(t, err)
+			require.NotEmpty(t, contactIDs)
+			eventIDs, err := support.ListEventIdsForContacts(ctx, contactIDs)
+			require.NoError(t, err)
+			require.NotEmpty(t, eventIDs, "the seeded world must have produced events")
+			venueIDs, err := support.SelectVenueNodeIDsForContacts(ctx, contactIDs)
+			require.NoError(t, err)
+			require.NotEmpty(t, venueIDs, "the replayed history must have minted venue nodes")
+
+			claimsBefore, err := support.CountEventConsumerClaimsByEventIds(ctx, eventIDs)
+			require.NoError(t, err)
+			require.Greater(t, claimsBefore, int64(0), "the seeded world must have produced claims to orphan")
+
+			before := measureResidue(t, ctx, database, seeded.Namespace, factory.DefaultSeed)
+
+			restore := declare.SetCleanupFailStepForTest(failStep)
+			res, err := declare.CleanupNamespaces(ctx, database, []string{namespace}, factory.DefaultSeed)
+			restore()
+			require.NoError(t, err)
+			require.Equal(t, declare.StatusError, res.Results[seeded.Namespace].Status)
+
+			assert.Equal(t, before, measureResidue(t, ctx, database, seeded.Namespace, factory.DefaultSeed),
+				"a failed sweep must have deleted nothing at all — every recovery key the retry needs is in these rows")
+			claimsAfterFailure, err := support.CountEventConsumerClaimsByEventIds(ctx, eventIDs)
+			require.NoError(t, err)
+			assert.Equal(t, claimsBefore, claimsAfterFailure)
+
+			// The retry re-derives from intact sources and finishes the job.
+			requireCleaned(t, ctx, database, []string{namespace}, factory.DefaultSeed)
+			assert.Equal(t, int64(0), measureResidue(t, ctx, database, seeded.Namespace, factory.DefaultSeed).total())
+
+			claimsAfter, err := support.CountEventConsumerClaimsByEventIds(ctx, eventIDs)
+			require.NoError(t, err)
+			assert.Equal(t, int64(0), claimsAfter,
+				"claims whose events were deleted under a failed sweep are unreachable forever")
+			venuesAfter, err := support.CountVenueNodesByIds(ctx, venueIDs)
+			require.NoError(t, err)
+			assert.Equal(t, int64(0), venuesAfter,
+				"venue nodes whose interactions were deleted under a failed sweep are unreachable forever")
+		})
+	}
+}
+
+// The ancestor direction of the foo/foo-bar hole, for a child that carries
+// NOTHING BUT a host marker.
+//
+// A host-only child is a real state: constructor residue leaves exactly that.
+// It has no contact under the parent's name prefix, and it is not one of the
+// parent's own salt variants, so every other occupancy check walks straight past
+// it. Admitting the parent then creates a world whose own cleanup refuses
+// forever — the descendant guard names the child and aborts every sweep — and
+// the parent's rows can never be removed by the client that made them.
+func TestDeclareRun_RefusesAncestorOfHostOnlyDescendant(t *testing.T) {
+	database, ctx := declareTestDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	parent := declareNS(t)
+	child := parent + "-bar"
+
+	// The residue failpoint fails construction after the host row lands AND makes
+	// the best-effort removal fail, which is the only way to produce a genuine
+	// host-only world.
+	restore := replay.SetConstructorFailpointForTest(replay.ConstructorFailpointAfterHostResidue)
+	_, runErr := declare.Run(ctx, database, "DSH-005", child, factory.DefaultSeed)
+	restore()
+	require.Error(t, runErr)
+
+	// Prove the setup produced the state under test, and that it is invisible to
+	// the checks that already existed — otherwise the refusal below could be
+	// coming from somewhere else entirely.
+	_, exists, err := support.SelectMacHostIDByHostname(ctx, hostnameFor(child))
+	require.NoError(t, err)
+	require.True(t, exists, "the failpoint must have left the child's host marker behind")
+	underParent, err := support.SelectContactIDsByFullNamePrefix(ctx, factory.SyntheticSourcePrefix+parent+"-")
+	require.NoError(t, err)
+	require.Empty(t, underParent, "a host-only world has no contact for the prefix check to find")
+	for _, token := range declare.NamespaceFamilyForTest(parent) {
+		_, familyHost, err := support.SelectMacHostIDByHostname(ctx, hostnameFor(token))
+		require.NoError(t, err)
+		require.False(t, familyHost, "the child is not one of the parent's exact-match tokens")
+	}
+
+	_, err = declare.Run(ctx, database, "DSH-005", parent, factory.DefaultSeed)
+	require.ErrorIs(t, err, declare.ErrNamespaceOccupied)
+	assert.Contains(t, err.Error(), hostnameFor(child), "the refusal must name the descendant that caused it")
+
+	_, parentExists, err := support.SelectMacHostIDByHostname(ctx, hostnameFor(parent))
+	require.NoError(t, err)
+	assert.False(t, parentExists, "the refused seed must not have materialized a world")
+
+	requireCleaned(t, ctx, database, []string{child}, factory.DefaultSeed)
+}
+
 // D13's forced collision: two DIFFERENT namespaces whose phone bands hash to
 // the same area code, run concurrently with phone-bearing declarations. The
 // band claim serializes them, so the second sees the first's committed rows and

@@ -26,8 +26,9 @@ const (
 	// StatusPending: unfinalized River jobs still reference the namespace's
 	// rows. Nothing was deleted; retriable once they finalize.
 	StatusPending = "pending"
-	// StatusError: the sweep refused or failed. Nothing was deleted, or the
-	// ladder stopped part way with the namespace's marker deliberately retained.
+	// StatusError: the sweep refused or failed. Nothing was deleted — a guard
+	// refused before the ladder, or the ladder's transaction rolled back — so the
+	// namespace stays discoverable, occupied and retriable.
 	StatusError = "error"
 )
 
@@ -81,10 +82,9 @@ var saltedNamespace = regexp.MustCompile(`-s\d+$`)
 //	   below refuse this namespace forever.
 //	pending gate — refuse while any unfinalized job on a queue somebody else
 //	   works still dereferences the namespace's rows.
-//	ladder — FK-ordered deletes, with the host marker and the ownership records
-//	   deleted LAST and only on a clean run, so a partial failure leaves the
-//	   namespace discoverable and occupied instead of stranding unreachable
-//	   residue.
+//	ladder — FK-ordered deletes in ONE transaction, so a partial failure
+//	   deletes nothing at all and every one of the namespace's recovery keys
+//	   survives for the retry.
 func CleanupNamespaces(ctx context.Context, database *db.Database, namespaces []string, seed uint64) (CleanupResult, error) {
 	res := CleanupResult{Expansions: map[string][]string{}, Results: map[string]NamespaceCleanup{}}
 	if err := ValidateCleanupNamespaces(namespaces); err != nil {
@@ -266,7 +266,7 @@ func cleanNamespace(
 		return NamespaceCleanup{Status: StatusPending}
 	}
 
-	return runLadder(ctx, support, gen, namespace, contactIDs, eventIDs)
+	return runLadder(ctx, database, gen, namespace, contactIDs, eventIDs)
 }
 
 // namespaceContactIDs is the UNION of the two ways a namespace's contacts can be
@@ -380,44 +380,73 @@ func namespaceEventIDs(
 // cleanup step in the PR that makes it declarable.
 var declaredRootEventSources = []string{repository.InteractionSourceEmail}
 
-// runLadder executes the FK-ordered deletes and returns per-class counts.
+// runLadder executes the FK-ordered deletes in ONE transaction and returns
+// per-class counts.
 //
-// Best-effort per step (record and continue, first error wins), mirroring the
-// harness's own teardown: one failing table must not strand the rest.
+// ALL-OR-NOTHING, and that is the load-bearing property rather than a tidiness
+// preference. Cleanup is STATELESS: it runs in a later request than the seed, so
+// every id set it works from is DERIVED at the top of this function — contacts
+// from the ownership records and the name prefix, events from those contacts,
+// venue nodes from those contacts' interactions, the host from the namespace
+// prefix. Several of those derivations read rows the ladder itself deletes, so a
+// ladder that kept going after a failure would destroy the recovery key of a
+// step that had not run yet: with the claim delete failed and the event delete
+// done, no later cleanup can reconstruct those event ids, and the orphaned
+// claims (event_consumer_claim has no FK to event) are unreachable forever; with
+// the interaction delete done and the venue delete failed, the only link back to
+// the venue nodes is gone. The retry would then sweep what it could still see
+// and report "cleaned" over rows nothing can ever find again — precisely the
+// undiscoverable-residue-plus-false-report outcome this whole path exists to
+// prevent.
 //
-// MARKER RETENTION: the final block — the host row, the meeting notes hanging
-// off it, and the namespace's ownership records — runs ONLY when every prior
-// step succeeded. Those two are how a later cleanup DISCOVERS this namespace
-// (expansion and the descendant guard find the host; the ownership records find
-// contacts whose names no longer carry the prefix), so dropping them after a
-// partial sweep would make the residue unreachable forever. Keeping them leaves
-// the namespace both discoverable and occupied, so a retry is possible and a
-// re-seed is refused.
+// One transaction makes the invariant unconditional and independent of the step
+// ORDER: after any failure NOTHING was deleted, so the namespace is byte-identical
+// to what the seed left, every derivation source is intact, and a retry can
+// finish the job. The step loop therefore also stops at the first failure — after
+// a failed statement the transaction is aborted and every further query would
+// fail with 25P02 anyway.
+//
+// MARKER RETENTION falls out of the same property: the host row (which expansion
+// and the descendant guard use to DISCOVER this namespace) and the ownership
+// records (which find contacts whose names no longer carry the prefix) are
+// deleted in the same transaction as everything else, so a failed sweep leaves
+// the namespace both discoverable and occupied.
 func runLadder(
 	ctx context.Context,
-	support *repository.SyntheticSupportRepository,
+	database *db.Database,
 	gen *factory.Generator,
 	namespace string,
 	contactIDs []uuid.UUID,
 	eventIDs []uuid.UUID,
 ) NamespaceCleanup {
+	tx, err := database.Pool.Begin(ctx)
+	if err != nil {
+		return NamespaceCleanup{Status: StatusError, Err: fmt.Sprintf("begin cleanup transaction: %v", err)}
+	}
+	// Rolls back every path that does not reach the commit below, and is a no-op
+	// once the commit has landed.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	support := repository.NewSyntheticSupportRepository(database.Queries.WithTx(tx))
 	prefix := gen.Prefix()
 	deleted := map[string]int64{"mac_hosts": 0, "meeting_notes": 0}
 	var firstErr error
 
 	failStep := currentCleanupFailStep()
 	step := func(label string, fn func() (int64, error)) {
+		if firstErr != nil {
+			return // aborted: the transaction is unusable and will roll back
+		}
 		if failStep == label {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("cleanup %s: injected failure", label)
-			}
+			firstErr = fmt.Errorf("cleanup %s: injected failure", label)
 			return
 		}
 		n, err := fn()
-		deleted[label] += n
-		if err != nil && firstErr == nil {
+		if err != nil {
 			firstErr = fmt.Errorf("cleanup %s: %w", label, err)
+			return
 		}
+		deleted[label] += n
 	}
 
 	// Captured BEFORE the interaction delete removes the only link to them.
@@ -495,58 +524,52 @@ func runLadder(
 		return support.DeleteVenueNodesByIds(ctx, venueIDs)
 	})
 
-	hostID, hostExists, err := support.SelectMacHostIDByHostname(ctx, prefix+"host")
-	if err != nil && firstErr == nil {
-		firstErr = fmt.Errorf("cleanup host lookup: %w", err)
+	// The host lookup is a READ inside the same transaction, so it must not run
+	// once a statement has failed — the transaction is aborted and every query
+	// after that point returns 25P02 instead of an answer.
+	var hostID uuid.UUID
+	var hostExists bool
+	if firstErr == nil {
+		hostID, hostExists, err = support.SelectMacHostIDByHostname(ctx, prefix+"host")
+		if err != nil {
+			firstErr = fmt.Errorf("cleanup host lookup: %w", err)
+		}
 	}
+	if hostExists {
+		// Meeting notes hang off the host by a SET NULL fk, so they go first.
+		step("meeting_notes", func() (int64, error) {
+			return 0, support.DeleteMeetingNotesByHostID(ctx, hostID)
+		})
+		step("mac_hosts", func() (int64, error) {
+			return support.DeleteMacHostByID(ctx, hostID)
+		})
+	}
+	// The ownership records are the OTHER discovery mechanism, so they go with
+	// the marker. A sweep that dropped them without dropping the rows they point
+	// at would leave a renamed contact unreachable by any route at all — which
+	// the transaction, not the ordering, is what actually prevents.
+	step("namespace_entities", func() (int64, error) {
+		return support.DeleteNamespaceEntities(ctx, namespace)
+	})
+	// The private queue's own row, which the harness's producer upserted on
+	// start. Without this every declared seed would leave one behind.
+	step("river_queues", func() (int64, error) {
+		return support.DeleteRiverQueue(ctx, replay.SyntheticQueueName(namespace))
+	})
 
 	if firstErr != nil {
 		return NamespaceCleanup{
 			Status: StatusError,
-			Err: fmt.Sprintf("%v (namespace %q left discoverable and occupied so a retry can finish it)",
+			Err: fmt.Sprintf("%v (nothing was deleted — the whole sweep rolled back, so namespace %q stays discoverable, occupied and fully recoverable by a retry)",
 				firstErr, namespace),
 		}
 	}
-
-	if hostExists {
-		if err := support.DeleteMeetingNotesByHostID(ctx, hostID); err != nil {
-			return NamespaceCleanup{
-				Status: StatusError,
-				Err:    fmt.Sprintf("cleanup meeting_notes: %v (namespace %q left discoverable)", err, namespace),
-			}
-		}
-		n, err := support.DeleteMacHostByID(ctx, hostID)
-		if err != nil {
-			return NamespaceCleanup{
-				Status: StatusError,
-				Err:    fmt.Sprintf("cleanup mac_host: %v (namespace %q left discoverable)", err, namespace),
-			}
-		}
-		deleted["mac_hosts"] = n
-	}
-
-	// The ownership records are the OTHER discovery mechanism, so they go with
-	// the marker: last, and only on a clean run. A partial sweep that dropped
-	// them would leave a renamed contact unreachable by any route at all.
-	owned, err := support.DeleteNamespaceEntities(ctx, namespace)
-	if err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		return NamespaceCleanup{
 			Status: StatusError,
-			Err:    fmt.Sprintf("cleanup namespace ownership: %v (namespace %q left discoverable)", err, namespace),
+			Err:    fmt.Sprintf("commit cleanup transaction: %v (nothing was deleted; namespace %q stays recoverable)", err, namespace),
 		}
 	}
-	deleted["namespace_entities"] = owned
-
-	// The private queue's own row, which the harness's producer upserted on
-	// start. Without this every declared seed would leave one behind.
-	queues, err := support.DeleteRiverQueue(ctx, replay.SyntheticQueueName(namespace))
-	if err != nil {
-		return NamespaceCleanup{
-			Status: StatusError,
-			Err:    fmt.Sprintf("cleanup river_queue: %v (namespace %q left discoverable)", err, namespace),
-		}
-	}
-	deleted["river_queues"] = queues
 
 	return NamespaceCleanup{Status: StatusCleaned, Deleted: deleted}
 }

@@ -4301,7 +4301,7 @@ const docTemplate = `{
         },
         "/test/cleanup": {
             "post": {
-                "description": "Delete test data. Supply EXACTLY ONE of ` + "`" + `prefix` + "`" + ` (bespoke shape — returns the CleanupResponse fields: contacts, external contacts and calendar events deleted by prefix) or ` + "`" + `namespaces` + "`" + ` (declared shape — returns the CleanupNamespacesResponse fields: per-requested-token expansions plus a per-effective-namespace outcome). The documented 200 schema is the union of the two; a given response carries one group, never both.",
+                "description": "Delete test data. Supply EXACTLY ONE of ` + "`" + `prefix` + "`" + ` (bespoke shape — returns the CleanupResponse fields: contacts, external contacts and calendar events deleted by prefix) or ` + "`" + `namespaces` + "`" + ` (declared shape — returns the CleanupNamespacesResponse fields: per-requested-token expansions plus a per-effective-namespace outcome). ` + "`" + `host_id` + "`" + ` belongs to the prefix shape and is rejected alongside ` + "`" + `namespaces` + "`" + `. The documented 200 schema is the union of the two; a given response carries one group, never both.",
                 "consumes": [
                     "application/json"
                 ],

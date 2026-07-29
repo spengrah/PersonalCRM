@@ -533,6 +533,38 @@ func TestDeclareRun_ForeignRiverJobIsNotFetched(t *testing.T) {
 	assert.Equal(t, int64(0), measureResidue(t, ctx, database, seeded.Namespace, factory.DefaultSeed).total())
 }
 
+// The harness's OWN teardown must take the private queue's river_queue row with
+// it — not just the cross-request declared cleanup.
+//
+// Every harness starts a producer on a queue of its own and River upserts a
+// river_queue row for it. That row belongs to the harness alone: teardown has
+// already stopped the client, so nothing will ever fetch the queue again. Two
+// consequences make leaving it a real defect rather than untidiness. This is the
+// closure EVERY direct harness test runs, so the rows accumulate one per test
+// forever — a database reset preserves River's internal tables. And a FAILED
+// declared seed drives this same closure and reports the namespace as cleaned
+// when it returns nil, which would be a false report while the row survives.
+func TestHarnessTeardown_RemovesPrivateQueueRow(t *testing.T) {
+	database, ctx := declareTestDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	namespace := declareNS(t)
+	h, teardown, err := replay.NewHarnessWithDBForNamespace(ctx, database, namespace, factory.DefaultSeed)
+	require.NoError(t, err)
+
+	queue := replay.SyntheticQueueName(h.Namespace())
+	waitFor(t, 15*time.Second, "the harness producer to register its private queue", func() bool {
+		n, countErr := support.CountRiverQueue(ctx, queue)
+		return countErr == nil && n > 0
+	})
+
+	require.NoError(t, teardown(ctx))
+
+	remaining, err := support.CountRiverQueue(ctx, queue)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), remaining, "teardown must remove the private queue's own row")
+}
+
 // A client disconnect must not cancel the run: River silently stops fetching
 // when its start context dies, so a request-scoped context would strand the
 // seed mid-settle. The detach is asserted, not assumed.
