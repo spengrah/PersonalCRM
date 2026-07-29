@@ -100,8 +100,12 @@ fi
 
 # Watch for a reconnect. Nothing legitimate is attached at this point: e2e-db is
 # a prerequisite of the test-e2e* targets, so Playwright has not started the
-# backend yet, and the pre-push hook runs E2E exclusively after every other lane
-# has finished.
+# backend yet; the `e2e-ports-free` prerequisite ordered ahead of this script
+# has already killed anything holding the E2E frontend/backend ports, so a
+# leftover from an interrupted run on those ports is gone rather than reported;
+# and the pre-push hook runs E2E exclusively after every other lane has
+# finished. What is left to catch is a crm-api on some OTHER port — another
+# worktree's stack, or a hand-started one — which no port cleanup can find.
 if [ "$SETTLE_SECONDS" != "0" ]; then
   deadline=$(( $(date +%s) + SETTLE_SECONDS ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
