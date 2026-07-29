@@ -135,30 +135,58 @@ func ValidateCleanupNamespaces(namespaces []string) error {
 	return nil
 }
 
-// expandNamespace maps a requested token to the set of live worlds it could
-// name: itself, plus any salted variant whose host marker exists. The requested
-// token is always included — an empty world is a no-op ladder, and including it
-// unconditionally is what makes a lost-response cleanup work.
+// expandNamespace maps a REQUESTED token to the EFFECTIVE namespaces it names —
+// the worlds that actually exist under it.
+//
+// A world is identified by its host marker, so the requested token is an
+// effective namespace only when it carries one of its own. When it re-salted
+// away, the salted variants ARE the effective namespaces and the requested token
+// is not a second world: the client's normal [requested, effective] pair must
+// canonicalize to ONE entry, one lock, one ladder run.
+//
+// The exception is the empty case: a token that resolved to nothing at all still
+// expands to itself, so a lost-response cleanup gets a real (no-op) sweep and a
+// reportable outcome instead of silence — and so an in-flight seed that has not
+// published its marker yet is still reported busy rather than missing. That
+// sweep is also the backstop for marker-less residue: its 'synth-<ns>-' prefix
+// is a superset of every salted variant's, so rows whose marker was lost are
+// still reachable by the requested token.
 func expandNamespace(ctx context.Context, support *repository.SyntheticSupportRepository, namespace string) ([]string, error) {
-	out := []string{namespace}
 	// A token that is ALREADY a salted variant cannot have salted children:
 	// re-salting appends to the ORIGINAL token (foo → foo-s1, foo-s2), never to
 	// a salted one. Probing would be harmless but pointless.
 	if saltedNamespace.MatchString(namespace) {
-		return out, nil
+		return []string{namespace}, nil
 	}
+
+	hasMarker := func(token string) (bool, error) {
+		_, exists, err := support.SelectMacHostIDByHostname(ctx, factory.SyntheticSourcePrefix+token+"-host")
+		if err != nil {
+			return false, fmt.Errorf("declare: expand namespace %q: %w", namespace, err)
+		}
+		return exists, nil
+	}
+
+	var variants []string
 	for i := 1; i <= maxSaltAttempt; i++ {
 		candidate := fmt.Sprintf("%s-s%d", namespace, i)
-		hostname := factory.SyntheticSourcePrefix + candidate + "-host"
-		_, exists, err := support.SelectMacHostIDByHostname(ctx, hostname)
+		exists, err := hasMarker(candidate)
 		if err != nil {
-			return nil, fmt.Errorf("declare: expand namespace %q: %w", namespace, err)
+			return nil, err
 		}
 		if exists {
-			out = append(out, candidate)
+			variants = append(variants, candidate)
 		}
 	}
-	return out, nil
+
+	self, err := hasMarker(namespace)
+	if err != nil {
+		return nil, err
+	}
+	if self || len(variants) == 0 {
+		return append([]string{namespace}, variants...), nil
+	}
+	return variants, nil
 }
 
 // cleanNamespace runs the guards and the ladder for ONE effective namespace.

@@ -16,6 +16,7 @@ import (
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/synthetic/replay"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -154,9 +155,12 @@ func TestDeclareRun_HeldLockConflicts(t *testing.T) {
 	require.True(t, held)
 	defer func() { _, _ = holder.AdvisoryUnlock(context.Background(), key) }()
 
-	start := time.Now()
+	// replay.NewStopwatch is the toolkit's single audited real-clock site (the
+	// repo bans direct time.Now()); elapsed wall time is infrastructure timing,
+	// not domain time, so it must not be read off the accelerated clock either.
+	sw := replay.NewStopwatch()
 	_, err = declare.Run(ctx, database, "DSH-005", namespace, factory.DefaultSeed)
-	elapsed := time.Since(start)
+	elapsed := sw.Elapsed()
 
 	require.ErrorIs(t, err, declare.ErrNamespaceBusy)
 	assert.Less(t, elapsed, 5*time.Second, "a held reservation must be reported, not waited on")
@@ -239,7 +243,7 @@ func TestDeclareRun_ConstructorFailureCleanedTruthful(t *testing.T) {
 	database, ctx := declareTestDB(t)
 	namespace := declareNS(t)
 
-	restore := replay.SetConstructorFailpointForTest("after-host")
+	restore := replay.SetConstructorFailpointForTest(replay.ConstructorFailpointAfterHost)
 	_, err := declare.Run(ctx, database, "DSH-005", namespace, factory.DefaultSeed)
 	restore()
 
@@ -262,6 +266,121 @@ func TestDeclareRun_ConstructorFailureCleanedTruthful(t *testing.T) {
 	_, exists, err = support.SelectMacHostIDByHostname(ctx, hostnameFor(namespace))
 	require.NoError(t, err)
 	assert.False(t, exists, "cleanup must reclaim a host-only residue world")
+}
+
+// The constructor-residue direction: when the best-effort host removal ITSELF
+// fails, rows genuinely remain, and the metadata must say cleaned=false. Proving
+// only the true direction would leave a blanket `true` indistinguishable from an
+// honest one.
+func TestDeclareRun_ConstructorResidueReportsUncleaned(t *testing.T) {
+	database, ctx := declareTestDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+	namespace := declareNS(t)
+
+	restore := replay.SetConstructorFailpointForTest(replay.ConstructorFailpointAfterHostResidue)
+	_, err := declare.Run(ctx, database, "DSH-005", namespace, factory.DefaultSeed)
+	restore()
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, replay.ErrConstructorResidue)
+	var runErr *declare.RunError
+	require.ErrorAs(t, err, &runErr)
+	assert.Equal(t, namespace, runErr.Namespace)
+	assert.False(t, runErr.Cleaned, "the removal failed, so residue remains and cleaned must report it")
+
+	// The claim is checkable: the marker the removal failed to delete is there.
+	_, exists, err := support.SelectMacHostIDByHostname(ctx, hostnameFor(namespace))
+	require.NoError(t, err)
+	require.True(t, exists, "cleaned=false must correspond to real residue, not a pessimistic default")
+
+	// And the residue is reclaimable by the requested token, which is what makes
+	// the honest report actionable.
+	requireCleaned(t, ctx, database, []string{namespace}, factory.DefaultSeed)
+	_, exists, err = support.SelectMacHostIDByHostname(ctx, hostnameFor(namespace))
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+// A failed lock RELEASE is not something to log and continue past. The re-salt
+// swap releases the requested namespace's bands and then BLOCKS on the effective
+// namespace's; continuing with a hold it can no longer account for is
+// hold-and-wait, the deadlock shape the release-before-acquire ordering exists
+// to prevent. The run must abort — and the locks must not survive it, because
+// destroying the session's connection is the only thing that can free a session
+// lock nobody can account for.
+func TestDeclareRun_UnlockFailureAbortsReSaltSwap(t *testing.T) {
+	database, ctx := declareTestDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	requested := declareNS(t)
+	gen := factory.NewGenerator(factory.DefaultSeed, requested)
+	require.NoError(t, support.InsertTelegramChatConfigInBand(ctx, gen.PeerBandStart()))
+	t.Cleanup(func() {
+		_, _ = support.DeleteTelegramChatConfigsByChatIds(context.Background(), []int64{gen.PeerBandStart()})
+	})
+
+	restore := declare.SetUnlockFailpointForTest(true)
+	_, err := declare.Run(ctx, database, "DSH-005", requested, factory.DefaultSeed)
+	restore()
+	require.Error(t, err, "a release that failed must abort the run, not be swallowed")
+
+	// Every reservation the run took is free again: the broken session's
+	// connection was destroyed rather than returned to the pool still holding.
+	conn, err := database.Pool.Acquire(ctx)
+	require.NoError(t, err)
+	defer conn.Release()
+	holder := repository.NewSyntheticSupportRepository(db.New(conn))
+	for _, token := range []string{requested, requested + "-s1"} {
+		key := declare.AdvisoryKeyForTest("declare:" + token)
+		acquired, lockErr := holder.TryAdvisoryLock(ctx, key)
+		require.NoError(t, lockErr)
+		assert.True(t, acquired, "the reservation for %s was stranded by the failed release", token)
+		if acquired {
+			_, _ = holder.AdvisoryUnlock(ctx, key)
+		}
+	}
+
+	requireRetriableCleanup(t, ctx, database, requested)
+}
+
+// The harness runs a live River client on the shared `default` queue, and River
+// fetches ANY available job there — no kind or namespace filter — while a nil
+// Work result FINALIZES the job. The two kinds the harness registers no-op
+// workers for would therefore swallow another process's work silently. A foreign
+// job must come back un-finalized, and the snooze counter is what makes that a
+// POSITIVE observation: a job nobody ever fetched is also un-finalized.
+func TestDeclareRun_ForeignRiverJobIsNotStolen(t *testing.T) {
+	database, ctx := declareTestDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	// A contact in a DIFFERENT namespace than the one about to seed.
+	foreignNS := declareNS(t)
+	foreign := mustRun(t, ctx, database, "DSH-005", foreignNS)
+	foreignContactID := uuid.MustParse(foreign.Entities["refresh-target"].ID)
+
+	jobID, err := support.InsertAvailableRematchJobForContact(ctx, foreignContactID)
+	require.NoError(t, err)
+
+	// Observe while the SECOND namespace's client is alive and fetching.
+	var observed repository.RiverJobDisposition
+	restore := declare.SetTestHookForTest(declare.HookAfterReplayBeforeDrain,
+		func(hookCtx context.Context, _ *replay.Harness) error {
+			observed = pollJobDisposition(hookCtx, support, jobID, 30*time.Second)
+			return nil
+		})
+	namespace := declareNS(t)
+	seeded, err := declare.Run(ctx, database, "DSH-005", namespace, factory.DefaultSeed)
+	restore()
+	require.NoError(t, err)
+
+	assert.Greater(t, observed.Snoozes, int64(0),
+		"the harness must have FETCHED the foreign job — without that, un-finalized proves nothing")
+	assert.False(t, observed.Finalized, "the harness finalized a job belonging to another namespace")
+	assert.NotEqual(t, "completed", observed.State)
+
+	require.NoError(t, support.FinalizeRiverJobByID(ctx, jobID))
+	requireCleaned(t, ctx, database, []string{foreignNS, namespace}, factory.DefaultSeed)
+	assert.Equal(t, int64(0), measureResidue(t, ctx, database, seeded.Namespace, factory.DefaultSeed).total())
 }
 
 // A client disconnect must not cancel the run: River silently stops fetching
@@ -299,9 +418,9 @@ func TestDeclareRun_BudgetBoundsRun(t *testing.T) {
 
 	restore := declare.SetBudgetsForTest(1*time.Millisecond, 20*time.Second)
 	bound := declare.WorstCaseRunResidence()
-	start := time.Now()
+	sw := replay.NewStopwatch()
 	_, err := declare.Run(ctx, database, "CAD-026", namespace, factory.DefaultSeed)
-	elapsed := time.Since(start)
+	elapsed := sw.Elapsed()
 	restore()
 
 	require.Error(t, err, "an expired budget must fail loudly rather than hang")

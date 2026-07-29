@@ -20,8 +20,8 @@ func init() {
 	Register(Declaration{
 		Behavior: "DSH-005",
 		Entities: []Entity{
-			Contact("refresh-target", Cadence("weekly"), OverdueBy(Days(3))),
-			Contact("refresh-sentinel", Cadence("weekly"), OverdueBy(Days(5))),
+			Contact("refresh-target", Cadence("weekly"), OverdueBy(Days(5))),
+			Contact("refresh-sentinel", Cadence("weekly"), OverdueBy(Days(3))),
 		},
 	})
 

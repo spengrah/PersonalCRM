@@ -4301,7 +4301,7 @@ const docTemplate = `{
         },
         "/test/cleanup": {
             "post": {
-                "description": "Delete test data. Supply EXACTLY ONE of ` + "`" + `prefix` + "`" + ` (bespoke shape — contacts, external contacts and calendar events by prefix) or ` + "`" + `namespaces` + "`" + ` (declared shape — per-namespace outcomes, see CleanupNamespacesResponse).",
+                "description": "Delete test data. Supply EXACTLY ONE of ` + "`" + `prefix` + "`" + ` (bespoke shape — returns the CleanupResponse fields: contacts, external contacts and calendar events deleted by prefix) or ` + "`" + `namespaces` + "`" + ` (declared shape — returns the CleanupNamespacesResponse fields: per-requested-token expansions plus a per-effective-namespace outcome). The documented 200 schema is the union of the two; a given response carries one group, never both.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4335,7 +4335,7 @@ const docTemplate = `{
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "$ref": "#/definitions/handlers.CleanupResponse"
+                                            "$ref": "#/definitions/handlers.CleanupResponseData"
                                         }
                                     }
                                 }
@@ -5527,7 +5527,7 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.CleanupResponse": {
+        "handlers.CleanupResponseData": {
             "type": "object",
             "properties": {
                 "deleted_calendar_events": {
@@ -5538,6 +5538,21 @@ const docTemplate = `{
                 },
                 "deleted_external_contacts": {
                     "type": "integer"
+                },
+                "expansions": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "results": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/handlers.NamespaceCleanupResponse"
+                    }
                 }
             }
         },
@@ -6236,6 +6251,30 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "value": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.NamespaceCleanupResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "int64"
+                    }
+                },
+                "descendants": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "error": {
+                    "type": "string"
+                },
+                "status": {
                     "type": "string"
                 }
             }

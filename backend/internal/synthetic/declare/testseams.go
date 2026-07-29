@@ -2,6 +2,7 @@ package declare
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -52,6 +53,7 @@ var (
 	armedFailpoint   string
 	armedHooks       = map[string]TestHook{}
 	armedCleanupFail string
+	armedUnlockFail  bool
 	budgetRun        = defaultRunBudget
 	budgetTeardown   = defaultTeardownBudget
 )
@@ -127,6 +129,25 @@ func SetCleanupFailStepForTest(step string) (restore func()) {
 	}
 }
 
+// SetUnlockFailpointForTest makes every advisory-lock RELEASE fail without
+// actually releasing anything, which is the shape a lost/broken connection
+// produces. It is the only way to exercise the abort-on-failed-release rule:
+// pg_advisory_unlock against a live healthy session does not fail on demand,
+// and a release that silently "succeeded" while the lock stayed held is exactly
+// the state the rule exists to refuse to continue from. Pass false to disarm.
+func SetUnlockFailpointForTest(armed bool) (restore func()) {
+	requireTestEnv("declare.SetUnlockFailpointForTest")
+	seamMu.Lock()
+	prev := armedUnlockFail
+	armedUnlockFail = armed
+	seamMu.Unlock()
+	return func() {
+		seamMu.Lock()
+		armedUnlockFail = prev
+		seamMu.Unlock()
+	}
+}
+
 // SetBudgetsForTest shrinks the run/teardown budgets so the bounded-run
 // assertion does not have to wait out the production values.
 func SetBudgetsForTest(run, teardown time.Duration) (restore func()) {
@@ -180,6 +201,17 @@ func currentCleanupFailStep() string {
 	seamMu.Lock()
 	defer seamMu.Unlock()
 	return armedCleanupFail
+}
+
+// unlockFailpointError is the injected release failure, or nil.
+func unlockFailpointError() error {
+	seamMu.Lock()
+	armed := armedUnlockFail
+	seamMu.Unlock()
+	if armed {
+		return errors.New("declare: unlock failpoint fired")
+	}
+	return nil
 }
 
 func runBudget() time.Duration {

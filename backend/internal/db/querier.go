@@ -1983,6 +1983,21 @@ type Querier interface {
 	// count); a soft-deleted (non-merged) node has merged_into NULL, so this stays 0 for
 	// the soft-delete set.
 	SyntheticCountMergedIntoNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	// Harness job-ownership predicate (part 1): does this contact belong to the
+	// harness's OWN namespace? A harness runs a real River client on the shared
+	// `default` queue, and River does not partition river_job by owner — so a
+	// worker that no-ops unconditionally would silently finalize a job another
+	// process enqueued. Every no-op worker asks this first and snoozes anything it
+	// does not own. Tombstones count as owned: a soft-deleted seeded contact's
+	// jobs are still this namespace's to finalize.
+	SyntheticCountNamespaceOwnedContact(ctx context.Context, arg SyntheticCountNamespaceOwnedContactParams) (int64, error)
+	// Harness job-ownership predicate (part 2): for the job kinds whose args carry
+	// only an event id, resolve the event to its subject contact and ask the same
+	// question. Cascade payloads carry a scalar contact_id; assertion payloads
+	// carry subject_node_id, which for a person node IS the contact id (the graph
+	// dual-write keeps node.id == contact.id) — so one COALESCE covers both
+	// without a per-kind payload decode.
+	SyntheticCountNamespaceOwnedEventSubject(ctx context.Context, arg SyntheticCountNamespaceOwnedEventSubjectParams) (int64, error)
 	// Graph identity test support: count nodes whose canonical_label is ns-prefixed,
 	// so a test can scope assertions to its own namespace's nodes on the shared test
 	// DB. Caller passes a BARE prefix; '%' is appended here.
@@ -2474,6 +2489,12 @@ type Querier interface {
 	// marker and confirm it points at the row's own contact. Caller passes a BARE
 	// prefix; expects exactly one live follow-up in the namespace.
 	TestGetLiveFollowUpByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (*TestGetLiveFollowUpByNamePrefixRow, error)
+	// Test assertion — a planted job's disposition: its state, whether it is
+	// finalized, and how many times it has been snoozed (River records the count in
+	// metadata->>'snoozes' every time a worker returns JobSnooze). The snooze count
+	// is what makes "the harness left it alone" a POSITIVE observation rather than
+	// the absence of one: a job nobody ever fetched is also un-finalized.
+	TestGetRiverJobDispositionByID(ctx context.Context, id int64) (*TestGetRiverJobDispositionByIDRow, error)
 	// TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
 	// by integration tests that exercise the "target row vanished between
 	// snapshot and resolve-link" path. Production code must NOT call this.
@@ -2493,6 +2514,13 @@ type Querier interface {
 	// accidentally dropped them). to_regclass returns NULL when the index
 	// does not exist.
 	TestIndexExists(ctx context.Context, indexName string) (bool, error)
+	// Failure-injection fixture: plants an AVAILABLE (immediately fetchable)
+	// rematch_dispatcher job for a contact of the caller's choosing. Pointed at a
+	// FOREIGN contact it is the job-stealing hazard made concrete: a live harness
+	// client will fetch it, and the test asserts the harness snoozed it instead of
+	// finalizing it. Available (not scheduled) precisely because the fetch has to
+	// happen for the assertion to mean anything.
+	TestInsertAvailableRematchJobForContact(ctx context.Context, arg TestInsertAvailableRematchJobForContactParams) (int64, error)
 	// TEST ONLY. See TestInsertExternalContactRawEmails. Same rationale for
 	// calendar_event.attendees.
 	TestInsertCalendarEventRawAttendees(ctx context.Context, arg TestInsertCalendarEventRawAttendeesParams) (*CalendarEvent, error)

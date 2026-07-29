@@ -201,12 +201,8 @@ func execute(parent context.Context, database *db.Database, d Declaration, names
 	}
 	defer locks.close()
 
-	acquired, err := locks.tryLock(ctx, advisoryKey("declare:"+namespace))
-	if err != nil {
-		return Result{}, fmt.Errorf("declare: reserve namespace %q: %w", namespace, err)
-	}
-	if !acquired {
-		return Result{}, fmt.Errorf("%w: %s", ErrNamespaceBusy, namespace)
+	if err := reserveNamespaceFamily(ctx, locks, namespace); err != nil {
+		return Result{}, err
 	}
 
 	support := repository.NewSyntheticSupportRepository(database.Queries)
@@ -216,6 +212,13 @@ func execute(parent context.Context, database *db.Database, d Declaration, names
 
 	h, teardown, err := buildHarness(ctx, database, support, locks, namespace, seed)
 	if err != nil {
+		// The paths that built a harness and then tore it down already know
+		// whether the namespace came out clean, and say so; pass those through
+		// rather than re-deriving a worse answer here.
+		var runErr *RunError
+		if errors.As(err, &runErr) {
+			return Result{}, err
+		}
 		// A pre-host constructor failure leaves nothing; a post-host one removes
 		// the marker best-effort and wraps ErrConstructorResidue only when THAT
 		// removal failed. Report the actual outcome.
@@ -235,6 +238,15 @@ func execute(parent context.Context, database *db.Database, d Declaration, names
 	return res, nil
 }
 
+// teardownError drives the failure-path teardown for a run that HAS a harness
+// and wraps the cause with the outcome the teardown actually produced. Deriving
+// `cleaned` any other way at these sites would be a guess: the teardown's own
+// contract is to LEAVE the rows when Gate B is uncleared, so only its return
+// value knows.
+func teardownError(teardown func(context.Context) error, namespace string, cause error) error {
+	return &RunError{Namespace: namespace, Cleaned: driveTeardown(teardown), Err: cause}
+}
+
 // driveTeardown runs the failure-path teardown under its OWN deadline-bounded
 // context (not the run's, which may already have expired) and reports whether
 // the namespace came out clean. The teardown's documented contract is to LEAVE
@@ -248,11 +260,70 @@ func driveTeardown(teardown func(context.Context) error) bool {
 	return teardown(ctx) == nil
 }
 
+// reserveNamespaceFamily takes the run's namespace reservation.
+//
+// The reservation covers the whole FAMILY — the requested token plus every
+// salted variant re-salting can mint — and that scope is load-bearing rather
+// than cautious. Construction resolves the effective namespace INTERNALLY and
+// materializes its host marker before returning, so a run that re-salts has
+// already published a discoverable world under a token it was never asked
+// about. Cleanup discovers exactly that way (requested → live -sN variants) and
+// try-locks the EFFECTIVE token, so a reservation covering only the requested
+// one would let a lost-response cleanup delete a still-running harness out from
+// under it. Reserving the family before anything is materialized closes it:
+// whatever construction picks is already ours.
+//
+// Order matters. The requested token goes FIRST and alone decides the winner of
+// a same-namespace race — two concurrent runs contend on exactly one key, so
+// exactly one proceeds. A variant key can then only be held by a cleanup of that
+// variant, where reporting busy is the correct, retriable answer.
+func reserveNamespaceFamily(ctx context.Context, locks *lockSession, namespace string) error {
+	acquired, err := locks.tryLock(ctx, advisoryKey("declare:"+namespace))
+	if err != nil {
+		return fmt.Errorf("declare: reserve namespace %q: %w", namespace, err)
+	}
+	if !acquired {
+		return fmt.Errorf("%w: %s", ErrNamespaceBusy, namespace)
+	}
+
+	variantKeys := make([]int64, 0, maxSaltAttempt)
+	for _, variant := range saltVariants(namespace) {
+		variantKeys = append(variantKeys, advisoryKey("declare:"+variant))
+	}
+	sort.Slice(variantKeys, func(i, j int) bool { return variantKeys[i] < variantKeys[j] })
+
+	acquired, err = locks.tryLockAll(ctx, variantKeys)
+	if err != nil {
+		return fmt.Errorf("declare: reserve re-salt variants of %q: %w", namespace, err)
+	}
+	if !acquired {
+		return fmt.Errorf("%w: a salted variant of %s is held (a cleanup of an earlier world under this token is in flight)",
+			ErrNamespaceBusy, namespace)
+	}
+	return nil
+}
+
+// saltVariants are the namespaces re-salting can mint for this token, in order.
+func saltVariants(namespace string) []string {
+	out := make([]string, 0, maxSaltAttempt)
+	for i := 1; i <= maxSaltAttempt; i++ {
+		out = append(out, fmt.Sprintf("%s-s%d", namespace, i))
+	}
+	return out
+}
+
 // checkNamespaceFree runs the two occupancy checks, under the reservation lock.
 //
 //	direct       — any contact under 'synth-<ns>-' (LIVE OR TOMBSTONED, because a
 //	               tombstone still owns the namespace's identifiers), or an exact
-//	               'synth-<ns>-host' row.
+//	               'synth-<ns>-host' row — and the same host check for every
+//	               salted variant the reservation covers. The contact sweep
+//	               already reaches a salted world (its names carry the requested
+//	               token as a prefix); the host check must be spelled out per
+//	               variant because it is an EXACT match. Without it a HOST-ONLY
+//	               residue from an earlier re-salted run is invisible here, and
+//	               the next run could re-salt onto that same variant and
+//	               materialize a second world on top of it.
 //	hierarchical — a live host for any proper hyphen-boundary ANCESTOR of the
 //	               namespace. This closes the foo/foo-bar hole: foo-bar's rows are
 //	               invisible to foo's own occupancy check, but a later cleanup of
@@ -268,10 +339,13 @@ func checkNamespaceFree(ctx context.Context, support *repository.SyntheticSuppor
 	if len(contactIDs) > 0 {
 		return fmt.Errorf("%w: %q already holds %d contact rows", ErrNamespaceOccupied, namespace, len(contactIDs))
 	}
-	if _, exists, err := support.SelectMacHostIDByHostname(ctx, prefix+"host"); err != nil {
-		return fmt.Errorf("declare: occupancy check (host) for %q: %w", namespace, err)
-	} else if exists {
-		return fmt.Errorf("%w: %q already holds a synthetic host row", ErrNamespaceOccupied, namespace)
+	for _, token := range append([]string{namespace}, saltVariants(namespace)...) {
+		hostname := factory.SyntheticSourcePrefix + token + "-host"
+		if _, exists, err := support.SelectMacHostIDByHostname(ctx, hostname); err != nil {
+			return fmt.Errorf("declare: occupancy check (host) for %q: %w", token, err)
+		} else if exists {
+			return fmt.Errorf("%w: %q already holds a synthetic host row", ErrNamespaceOccupied, token)
+		}
 	}
 
 	for _, ancestor := range hyphenAncestors(namespace) {
@@ -332,7 +406,7 @@ func buildHarness(
 
 		h, teardown, err := replay.NewHarnessWithDBForNamespace(ctx, database, namespace, seed)
 		if err != nil {
-			locks.unlockAll(requestedKeys)
+			_ = locks.unlockAll(requestedKeys)
 			return nil, nil, err
 		}
 
@@ -341,28 +415,40 @@ func buildHarness(
 			return h, teardown, nil
 		}
 
-		// Re-salted: swap the band claim onto the effective namespace.
-		locks.unlockAll(requestedKeys)
+		// Re-salted: swap the band claim onto the effective namespace. The
+		// release comes FIRST and its outcome is decisive — going on to block
+		// on the effective namespace's bands while still holding the requested
+		// ones is hold-and-wait, the deadlock shape this ordering exists to
+		// avoid. A release that errored (or reported the lock not held) leaves
+		// the true state unknowable from here, so the run aborts and closes the
+		// session immediately: destroying the connection is the only thing that
+		// can settle a session lock we can no longer account for.
+		if err := locks.unlockAll(requestedKeys); err != nil {
+			locks.close()
+			return nil, nil, teardownError(teardown, effective,
+				fmt.Errorf("declare: release the requested bands of %q before the re-salt swap: %w", namespace, err))
+		}
 		effectiveGen := factory.NewGeneratorAt(seed, effective, h.Generator().Anchor())
 		effectiveKeys := bandKeys(effectiveGen)
 		if err := locks.lockAll(ctx, effectiveKeys); err != nil {
-			driveTeardown(teardown)
-			return nil, nil, fmt.Errorf("declare: claim numeric bands for re-salted namespace %q: %w", effective, err)
+			return nil, nil, teardownError(teardown, effective,
+				fmt.Errorf("declare: claim numeric bands for re-salted namespace %q: %w", effective, err))
 		}
 
 		if hook := currentHook(HookAfterBandSwapBeforeRevalidate); hook != nil {
 			if err := hook(ctx, h); err != nil {
-				locks.unlockAll(effectiveKeys)
-				driveTeardown(teardown)
-				return nil, nil, fmt.Errorf("declare: %s hook: %w", HookAfterBandSwapBeforeRevalidate, err)
+				// Terminal path: the deferred close settles whatever is held.
+				_ = locks.unlockAll(effectiveKeys)
+				return nil, nil, teardownError(teardown, effective,
+					fmt.Errorf("declare: %s hook: %w", HookAfterBandSwapBeforeRevalidate, err))
 			}
 		}
 
 		free, err := bandsFree(ctx, support, effectiveGen)
 		if err != nil {
-			locks.unlockAll(effectiveKeys)
-			driveTeardown(teardown)
-			return nil, nil, fmt.Errorf("declare: revalidate bands for %q: %w", effective, err)
+			_ = locks.unlockAll(effectiveKeys)
+			return nil, nil, teardownError(teardown, effective,
+				fmt.Errorf("declare: revalidate bands for %q: %w", effective, err))
 		}
 		if free {
 			return h, teardown, nil
@@ -370,9 +456,20 @@ func buildHarness(
 
 		// Somebody claimed the effective namespace's band during the swap gap.
 		// Tear this harness down and retry construction from scratch — the
-		// retry's own collision check sees their rows and salts onward.
-		locks.unlockAll(effectiveKeys)
-		driveTeardown(teardown)
+		// retry's own collision check sees their rows and salts onward. The
+		// release is decisive for the same reason as the swap's: the next
+		// attempt BLOCKS on the requested bands, so continuing with an
+		// unaccountable hold would be hold-and-wait.
+		releaseErr := locks.unlockAll(effectiveKeys)
+		cleaned := driveTeardown(teardown)
+		if releaseErr != nil {
+			locks.close()
+			return nil, nil, &RunError{
+				Namespace: effective,
+				Cleaned:   cleaned,
+				Err:       fmt.Errorf("declare: release the re-salted bands of %q before retrying: %w", effective, releaseErr),
+			}
+		}
 		lastErr = fmt.Errorf("numeric bands for re-salted namespace %q were claimed during the lock swap", effective)
 	}
 	return nil, nil, fmt.Errorf("declare: could not claim free numeric bands for %q after %d attempts: %w",

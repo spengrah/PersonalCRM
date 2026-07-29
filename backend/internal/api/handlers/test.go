@@ -621,21 +621,37 @@ type CleanupRequest struct {
 	Seed uint64 `json:"seed,omitempty"`
 }
 
-// CleanupResponse represents the response from cleanup
+// CleanupResponse represents the response from cleanup by prefix
 type CleanupResponse struct {
 	DeletedContacts         int64 `json:"deleted_contacts"`
 	DeletedExternalContacts int64 `json:"deleted_external_contacts"`
 	DeletedCalendarEvents   int64 `json:"deleted_calendar_events"`
 }
 
+// CleanupResponseData is the DOCUMENTED shape of this endpoint's 200 payload.
+// The endpoint is dual-shape and Swagger 2.0 has no oneOf, so the documented
+// schema is the union of the two real payloads — embedded, never re-declared,
+// so it cannot drift from what the handler actually returns:
+//
+//   - a `prefix` request returns exactly CleanupResponse's fields;
+//   - a `namespaces` request returns exactly CleanupNamespacesResponse's.
+//
+// No response ever carries both groups. This type exists only to make both
+// schemas — including the per-namespace outcome — reachable in the generated
+// spec; the handler serializes the concrete types.
+type CleanupResponseData struct {
+	CleanupResponse
+	CleanupNamespacesResponse
+}
+
 // Cleanup deletes test data by prefix or by declared namespace
 // @Summary Cleanup test data
-// @Description Delete test data. Supply EXACTLY ONE of `prefix` (bespoke shape — contacts, external contacts and calendar events by prefix) or `namespaces` (declared shape — per-namespace outcomes, see CleanupNamespacesResponse).
+// @Description Delete test data. Supply EXACTLY ONE of `prefix` (bespoke shape — returns the CleanupResponse fields: contacts, external contacts and calendar events deleted by prefix) or `namespaces` (declared shape — returns the CleanupNamespacesResponse fields: per-requested-token expansions plus a per-effective-namespace outcome). The documented 200 schema is the union of the two; a given response carries one group, never both.
 // @Tags test
 // @Accept json
 // @Produce json
 // @Param body body CleanupRequest true "Cleanup request"
-// @Success 200 {object} api.APIResponse{data=CleanupResponse}
+// @Success 200 {object} api.APIResponse{data=CleanupResponseData}
 // @Failure 400 {object} api.APIResponse{error=api.APIError}
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /test/cleanup [post]

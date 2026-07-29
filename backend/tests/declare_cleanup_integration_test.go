@@ -12,6 +12,7 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/declare"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/internal/synthetic/replay"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -107,8 +108,10 @@ func TestDeclareRun_ReSaltedNamespaceCleansUp(t *testing.T) {
 
 // The list the real client sends after a re-salt is [requested, effective].
 // Canonicalization must collapse that to ONE world: one lock acquisition, one
-// ladder, one result. A reentrant double-acquire would strand a counted session
-// lock and serialize the namespace forever.
+// ladder, one result. The requested token re-salted AWAY — it names no world of
+// its own — so reporting it as a second (empty, "cleaned") namespace would tell
+// the client it swept two worlds when there was one. A reentrant double-acquire
+// would also strand a counted session lock and serialize the namespace forever.
 func TestCleanup_ClientListRequestedPlusEffective(t *testing.T) {
 	database, ctx := declareTestDB(t)
 
@@ -116,11 +119,12 @@ func TestCleanup_ClientListRequestedPlusEffective(t *testing.T) {
 
 	res, err := declare.CleanupNamespaces(ctx, database, []string{requested, effective}, factory.DefaultSeed)
 	require.NoError(t, err)
-	require.Len(t, res.Results, 2,
-		"the requested token names an EMPTY world and the effective one the real world; both are reported, each once")
-	assert.Equal(t, declare.StatusCleaned, res.Results[requested].Status)
+	require.Len(t, res.Results, 1,
+		"the pair names ONE world; canonicalization must not report the re-salted-away token as a second one")
+	require.Contains(t, res.Results, effective)
 	assert.Equal(t, declare.StatusCleaned, res.Results[effective].Status)
-	assert.Contains(t, res.Expansions[requested], effective)
+	assert.Equal(t, []string{effective}, res.Expansions[requested],
+		"the requested token's expansion IS the effective namespace, not itself plus it")
 
 	assert.Equal(t, int64(0), measureResidue(t, ctx, database, effective, factory.DefaultSeed).total())
 
@@ -137,6 +141,60 @@ func TestCleanup_ClientListRequestedPlusEffective(t *testing.T) {
 		assert.True(t, acquired, "namespace %s reservation was left held", ns)
 		_, _ = holder.AdvisoryUnlock(ctx, key)
 	}
+}
+
+// A re-salted run publishes the EFFECTIVE namespace's host marker during
+// CONSTRUCTION — before any declaration executes and before the caller learns
+// the token. That marker is exactly what cleanup's expansion discovers, so a
+// reservation covering only the REQUESTED token would leave the effective world
+// unlocked: a lost-response cleanup arriving mid-run would try-lock the
+// effective token, find it free, and delete a still-running harness's world out
+// from under it. Reserving the whole salt family before anything is
+// materialized is what makes this cleanup report busy and delete nothing.
+func TestCleanup_CannotDeleteInFlightResaltedRun(t *testing.T) {
+	database, ctx := declareTestDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	requested := declareNS(t)
+	gen := factory.NewGenerator(factory.DefaultSeed, requested)
+	require.NoError(t, support.InsertTelegramChatConfigInBand(ctx, gen.PeerBandStart()))
+	t.Cleanup(func() {
+		_, _ = support.DeleteTelegramChatConfigsByChatIds(context.Background(), []int64{gen.PeerBandStart()})
+	})
+
+	// The hook fires with the world fully seeded and the run still holding its
+	// reservation — the exact instant a lost-response cleanup would arrive.
+	var midRun declare.CleanupResult
+	var midRunErr error
+	restore := declare.SetTestHookForTest(declare.HookAfterReplayBeforeDrain,
+		func(hookCtx context.Context, _ *replay.Harness) error {
+			midRun, midRunErr = declare.CleanupNamespaces(hookCtx, database, []string{requested}, factory.DefaultSeed)
+			return nil
+		})
+	res, err := declare.Run(ctx, database, "DSH-005", requested, factory.DefaultSeed)
+	restore()
+	require.NoError(t, err)
+	require.NotEqual(t, requested, res.Namespace, "the pre-occupied band must have forced a re-salt")
+
+	require.NoError(t, midRunErr)
+	// Prove the cleanup actually REACHED the effective world first: a cleanup
+	// that never discovered it would refuse nothing and look identical to one
+	// that was correctly blocked.
+	require.Contains(t, midRun.Expansions[requested], res.Namespace,
+		"the mid-run cleanup must have discovered the effective namespace")
+	require.NotEmpty(t, midRun.Results)
+	for ns, outcome := range midRun.Results {
+		assert.Equal(t, declare.StatusBusy, outcome.Status,
+			"namespace %s must be refused while its run is in flight: %s (%s)", ns, outcome.Status, outcome.Err)
+	}
+
+	// The world survived: the manifest's contacts are all still there.
+	contactIDs, err := support.SelectContactIDsByFullNamePrefix(ctx, factory.SyntheticSourcePrefix+res.Namespace+"-")
+	require.NoError(t, err)
+	assert.Len(t, contactIDs, len(res.Entities), "the in-flight world lost rows to the racing cleanup")
+
+	requireCleaned(t, ctx, database, []string{requested}, factory.DefaultSeed)
+	assert.Equal(t, int64(0), measureResidue(t, ctx, database, res.Namespace, factory.DefaultSeed).total())
 }
 
 // Cleanup refuses while an EVENT-LINKED unfinalized job still dereferences the

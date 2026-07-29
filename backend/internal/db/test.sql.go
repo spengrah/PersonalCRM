@@ -1332,6 +1332,59 @@ func (q *Queries) SyntheticCountMergedIntoNodesByIds(ctx context.Context, nodeId
 	return count, err
 }
 
+const SyntheticCountNamespaceOwnedContact = `-- name: SyntheticCountNamespaceOwnedContact :one
+SELECT COUNT(*) FROM contact
+WHERE id = $1::uuid
+  AND full_name LIKE $2 || '%'
+`
+
+type SyntheticCountNamespaceOwnedContactParams struct {
+	ContactID  pgtype.UUID `json:"contact_id"`
+	NamePrefix pgtype.Text `json:"name_prefix"`
+}
+
+// Harness job-ownership predicate (part 1): does this contact belong to the
+// harness's OWN namespace? A harness runs a real River client on the shared
+// `default` queue, and River does not partition river_job by owner — so a
+// worker that no-ops unconditionally would silently finalize a job another
+// process enqueued. Every no-op worker asks this first and snoozes anything it
+// does not own. Tombstones count as owned: a soft-deleted seeded contact's
+// jobs are still this namespace's to finalize.
+func (q *Queries) SyntheticCountNamespaceOwnedContact(ctx context.Context, arg SyntheticCountNamespaceOwnedContactParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountNamespaceOwnedContact, arg.ContactID, arg.NamePrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const SyntheticCountNamespaceOwnedEventSubject = `-- name: SyntheticCountNamespaceOwnedEventSubject :one
+SELECT COUNT(*) FROM event e
+WHERE e.id = $1::uuid
+  AND EXISTS (
+    SELECT 1 FROM contact c
+    WHERE c.id::text = COALESCE(e.payload->>'contact_id', e.payload->>'subject_node_id')
+      AND c.full_name LIKE $2 || '%'
+  )
+`
+
+type SyntheticCountNamespaceOwnedEventSubjectParams struct {
+	EventID    pgtype.UUID `json:"event_id"`
+	NamePrefix pgtype.Text `json:"name_prefix"`
+}
+
+// Harness job-ownership predicate (part 2): for the job kinds whose args carry
+// only an event id, resolve the event to its subject contact and ask the same
+// question. Cascade payloads carry a scalar contact_id; assertion payloads
+// carry subject_node_id, which for a person node IS the contact id (the graph
+// dual-write keeps node.id == contact.id) — so one COALESCE covers both
+// without a per-kind payload decode.
+func (q *Queries) SyntheticCountNamespaceOwnedEventSubject(ctx context.Context, arg SyntheticCountNamespaceOwnedEventSubjectParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountNamespaceOwnedEventSubject, arg.EventID, arg.NamePrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountNodesByLabelPrefix = `-- name: SyntheticCountNodesByLabelPrefix :one
 SELECT COUNT(*) FROM node WHERE canonical_label LIKE $1 || '%'
 `
@@ -3071,6 +3124,61 @@ func (q *Queries) TestGetLiveFollowUpByNamePrefix(ctx context.Context, namePrefi
 	var i TestGetLiveFollowUpByNamePrefixRow
 	err := row.Scan(&i.ContactID, &i.ExternalTaskID, &i.Metadata)
 	return &i, err
+}
+
+const TestGetRiverJobDispositionByID = `-- name: TestGetRiverJobDispositionByID :one
+SELECT state::text AS state,
+       (finalized_at IS NOT NULL)::bool AS finalized,
+       COALESCE((metadata->>'snoozes')::bigint, 0)::bigint AS snoozes
+FROM river_job WHERE id = $1
+`
+
+type TestGetRiverJobDispositionByIDRow struct {
+	State     string `json:"state"`
+	Finalized bool   `json:"finalized"`
+	Snoozes   int64  `json:"snoozes"`
+}
+
+// Test assertion — a planted job's disposition: its state, whether it is
+// finalized, and how many times it has been snoozed (River records the count in
+// metadata->>'snoozes' every time a worker returns JobSnooze). The snooze count
+// is what makes "the harness left it alone" a POSITIVE observation rather than
+// the absence of one: a job nobody ever fetched is also un-finalized.
+func (q *Queries) TestGetRiverJobDispositionByID(ctx context.Context, id int64) (*TestGetRiverJobDispositionByIDRow, error) {
+	row := q.db.QueryRow(ctx, TestGetRiverJobDispositionByID, id)
+	var i TestGetRiverJobDispositionByIDRow
+	err := row.Scan(&i.State, &i.Finalized, &i.Snoozes)
+	return &i, err
+}
+
+const TestInsertAvailableRematchJobForContact = `-- name: TestInsertAvailableRematchJobForContact :one
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('rematch_dispatcher', 'default', 'available',
+        jsonb_build_object(
+          'event_id', $1::text,
+          'contact_id', $2::text,
+          'rematch_job_id', $3::text),
+        '{}'::jsonb, 1, 5, NOW())
+RETURNING id
+`
+
+type TestInsertAvailableRematchJobForContactParams struct {
+	EventID      string `json:"event_id"`
+	ContactID    string `json:"contact_id"`
+	RematchJobID string `json:"rematch_job_id"`
+}
+
+// Failure-injection fixture: plants an AVAILABLE (immediately fetchable)
+// rematch_dispatcher job for a contact of the caller's choosing. Pointed at a
+// FOREIGN contact it is the job-stealing hazard made concrete: a live harness
+// client will fetch it, and the test asserts the harness snoozed it instead of
+// finalizing it. Available (not scheduled) precisely because the fetch has to
+// happen for the assertion to mean anything.
+func (q *Queries) TestInsertAvailableRematchJobForContact(ctx context.Context, arg TestInsertAvailableRematchJobForContactParams) (int64, error) {
+	row := q.db.QueryRow(ctx, TestInsertAvailableRematchJobForContact, arg.EventID, arg.ContactID, arg.RematchJobID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const TestInsertContactAtID = `-- name: TestInsertContactAtID :exec

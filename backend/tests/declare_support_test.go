@@ -265,17 +265,64 @@ func hostnameFor(namespace string) string {
 	return factory.SyntheticSourcePrefix + namespace + "-host"
 }
 
-// waitFor polls predicate until it holds or the budget expires.
+// waitFor polls predicate until it holds or the budget expires. The budget is a
+// timer context rather than a wall-clock deadline comparison: the repo bans
+// direct time.Now() reads, and a context deadline is the audited way to bound a
+// poll loop.
 func waitFor(t *testing.T, budget time.Duration, what string, predicate func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(budget)
-	for time.Now().Before(deadline) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
 		if predicate() {
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			// One last look: the predicate may have become true inside the tick
+			// that the deadline interrupted.
+			require.True(t, predicate(), "timed out after %s waiting for %s", budget, what)
+			return
+		case <-ticker.C:
+		}
 	}
-	require.True(t, predicate(), "timed out after %s waiting for %s", budget, what)
+}
+
+// pollJobDisposition watches a planted river job until a worker touches it
+// (snoozes or finalizes it) or the budget expires, returning the last
+// disposition it managed to read.
+//
+// It deliberately makes no assertions: it runs inside a test hook, on the run's
+// own goroutine, where a failed require would abandon declare.Run mid-flight —
+// leaking its River client and leaving the hook armed for the next test. The
+// caller asserts on the returned value after the run completes.
+func pollJobDisposition(
+	ctx context.Context,
+	support *repository.SyntheticSupportRepository,
+	jobID int64,
+	budget time.Duration,
+) repository.RiverJobDisposition {
+	deadline, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	var last repository.RiverJobDisposition
+	for {
+		if d, err := support.GetRiverJobDisposition(deadline, jobID); err == nil {
+			last = d
+			if d.Snoozes > 0 || d.Finalized {
+				return last
+			}
+		}
+		select {
+		case <-deadline.Done():
+			return last
+		case <-ticker.C:
+		}
+	}
 }
 
 func mustRun(t *testing.T, ctx context.Context, database *db.Database, behaviorID, namespace string) declare.Result {

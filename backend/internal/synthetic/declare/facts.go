@@ -80,7 +80,17 @@ func period(cadence string) time.Duration {
 // dayLength is what one "day" is worth in the active table: weekly / 7. It
 // matches the scaled-day arithmetic the overdue-days display uses (2min/7 under
 // CRM_ENV=testing, 10min/7 under accelerated, 24h in production), so
-// `OverdueBy(Days(3))` renders as "3 days overdue" in every environment.
+// `OverdueBy(Days(n))` is n scaled days of overdue-ness in whichever environment
+// it runs.
+//
+// It does NOT make the RENDERED day count equal n. The declared semantics are a
+// floor — overdue by AT LEAST the stated amount — and a replayed history source
+// carries a fixed pre-anchor safety lag on top (sourceHistoryLag, below), which
+// is additive with the requested age. Where a day is long relative to that lag
+// the rendered number is close to n; under the compressed CRM_ENV=testing table,
+// where a day is ~17 seconds, the lag dominates and the card renders a much
+// larger count. A fixture that must pin an exact rendered day count needs a
+// non-email history source, which the vocabulary does not have yet.
 func dayLength() time.Duration {
 	return activePeriods()["weekly"] / 7
 }

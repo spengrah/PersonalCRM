@@ -2,6 +2,7 @@ package declare
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 
@@ -42,6 +43,7 @@ type lockSession struct {
 	repo   *repository.SyntheticSupportRepository
 	held   map[int64]bool
 	broken bool
+	closed bool
 }
 
 func newLockSession(ctx context.Context, database *db.Database) (*lockSession, error) {
@@ -56,8 +58,14 @@ func newLockSession(ctx context.Context, database *db.Database) (*lockSession, e
 	}, nil
 }
 
-// tryLock takes a non-blocking session lock.
+// tryLock takes a non-blocking session lock. A key this session already holds
+// is reported held without re-acquiring: session locks are COUNTED, so a second
+// acquire would need a second release, and the mismatch would leave a lock alive
+// on a connection returned to the pool.
 func (s *lockSession) tryLock(ctx context.Context, key int64) (bool, error) {
+	if s.held[key] {
+		return true, nil
+	}
 	ok, err := s.repo.TryAdvisoryLock(ctx, key)
 	if err != nil {
 		return false, err
@@ -66,6 +74,25 @@ func (s *lockSession) tryLock(ctx context.Context, key int64) (bool, error) {
 		s.held[key] = true
 	}
 	return ok, nil
+}
+
+// tryLockAll takes every key non-blockingly, in the given order, and releases
+// what it got if any one is unavailable — so a refused claim never leaves a
+// partial hold behind. Reports false when a key was held elsewhere; the error is
+// reserved for a genuine lock/unlock failure.
+func (s *lockSession) tryLockAll(ctx context.Context, keys []int64) (bool, error) {
+	var taken []int64
+	for _, key := range keys {
+		ok, err := s.tryLock(ctx, key)
+		if err != nil {
+			return false, errors.Join(err, s.unlockAll(taken))
+		}
+		if !ok {
+			return false, s.unlockAll(taken)
+		}
+		taken = append(taken, key)
+	}
+	return true, nil
 }
 
 // lockAll takes blocking session locks for keys, in the given (sorted) order.
@@ -85,38 +112,73 @@ func (s *lockSession) lockAll(ctx context.Context, keys []int64) error {
 	return nil
 }
 
-// unlockAll releases keys under a fresh short context. Failures mark the
-// session broken so close() destroys the connection.
-func (s *lockSession) unlockAll(keys []int64) {
+// unlockAll releases keys under a fresh short context and returns the FIRST
+// failure. Every key is attempted regardless, so one bad release cannot strand
+// the others, and any failure marks the session broken so close() destroys the
+// connection.
+//
+// The returned error is not advisory: a caller that goes on to BLOCK on another
+// lock after a failed release is holding-and-waiting, which is the deadlock
+// shape the release-before-acquire discipline exists to prevent. Callers abort.
+func (s *lockSession) unlockAll(keys []int64) error {
+	var firstErr error
 	for _, key := range keys {
-		s.unlock(key)
+		if err := s.unlock(key); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
+	return firstErr
 }
 
-func (s *lockSession) unlock(key int64) {
+// unlock releases one session lock. It treats BOTH failure modes as failure:
+// an error, and a false return — pg_advisory_unlock reports false when the
+// session did not hold the lock, which means the caller's model of what it
+// holds is wrong and the lock may still be held by someone. Either way the only
+// thing that can settle it is the connection, so the session is marked broken
+// and the key is dropped from the held set (close() destroys the connection,
+// which releases anything still held on it).
+func (s *lockSession) unlock(key int64) error {
 	if !s.held[key] {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), lockOpBudget)
 	defer cancel()
-	if _, err := s.repo.AdvisoryUnlock(ctx, key); err != nil {
-		// The lock may or may not still be held; the connection is the only
-		// thing that can settle it, so retire the connection instead of
-		// pretending the unlock succeeded.
-		s.broken = true
-	}
+	released, err := s.unlockOnce(ctx, key)
 	delete(s.held, key)
+	switch {
+	case err != nil:
+		s.broken = true
+		return fmt.Errorf("declare: release advisory lock %d: %w", key, err)
+	case !released:
+		s.broken = true
+		return fmt.Errorf("declare: advisory lock %d reported not held on release", key)
+	}
+	return nil
+}
+
+// unlockOnce is the single unlock call site, so the injected-failure seam has
+// exactly one place to intercept.
+func (s *lockSession) unlockOnce(ctx context.Context, key int64) (bool, error) {
+	if err := unlockFailpointError(); err != nil {
+		return false, err
+	}
+	return s.repo.AdvisoryUnlock(ctx, key)
 }
 
 // close releases every remaining lock and returns the connection to the pool —
 // or destroys it when an unlock failed, so the session (and any lock it still
-// holds) dies with it.
+// holds) dies with it. Idempotent: a caller that closed early on an abort path
+// leaves the deferred close a no-op.
 func (s *lockSession) close() {
+	if s.closed {
+		return
+	}
+	s.closed = true
 	remaining := make([]int64, 0, len(s.held))
 	for key := range s.held {
 		remaining = append(remaining, key)
 	}
-	s.unlockAll(remaining)
+	_ = s.unlockAll(remaining)
 	if s.broken {
 		ctx, cancel := context.WithTimeout(context.Background(), lockOpBudget)
 		_ = s.conn.Conn().Close(ctx)

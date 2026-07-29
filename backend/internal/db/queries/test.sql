@@ -1760,3 +1760,57 @@ WHERE id = @id;
 -- chat-config delete.
 INSERT INTO telegram_chat_config (telegram_chat_id, chat_type, status)
 VALUES (@telegram_chat_id, 'group', 'auto');
+
+-- name: SyntheticCountNamespaceOwnedContact :one
+-- Harness job-ownership predicate (part 1): does this contact belong to the
+-- harness's OWN namespace? A harness runs a real River client on the shared
+-- `default` queue, and River does not partition river_job by owner — so a
+-- worker that no-ops unconditionally would silently finalize a job another
+-- process enqueued. Every no-op worker asks this first and snoozes anything it
+-- does not own. Tombstones count as owned: a soft-deleted seeded contact's
+-- jobs are still this namespace's to finalize.
+SELECT COUNT(*) FROM contact
+WHERE id = @contact_id::uuid
+  AND full_name LIKE @name_prefix || '%';
+
+-- name: SyntheticCountNamespaceOwnedEventSubject :one
+-- Harness job-ownership predicate (part 2): for the job kinds whose args carry
+-- only an event id, resolve the event to its subject contact and ask the same
+-- question. Cascade payloads carry a scalar contact_id; assertion payloads
+-- carry subject_node_id, which for a person node IS the contact id (the graph
+-- dual-write keeps node.id == contact.id) — so one COALESCE covers both
+-- without a per-kind payload decode.
+SELECT COUNT(*) FROM event e
+WHERE e.id = @event_id::uuid
+  AND EXISTS (
+    SELECT 1 FROM contact c
+    WHERE c.id::text = COALESCE(e.payload->>'contact_id', e.payload->>'subject_node_id')
+      AND c.full_name LIKE @name_prefix || '%'
+  );
+
+-- name: TestInsertAvailableRematchJobForContact :one
+-- Failure-injection fixture: plants an AVAILABLE (immediately fetchable)
+-- rematch_dispatcher job for a contact of the caller's choosing. Pointed at a
+-- FOREIGN contact it is the job-stealing hazard made concrete: a live harness
+-- client will fetch it, and the test asserts the harness snoozed it instead of
+-- finalizing it. Available (not scheduled) precisely because the fetch has to
+-- happen for the assertion to mean anything.
+INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
+VALUES ('rematch_dispatcher', 'default', 'available',
+        jsonb_build_object(
+          'event_id', @event_id::text,
+          'contact_id', @contact_id::text,
+          'rematch_job_id', @rematch_job_id::text),
+        '{}'::jsonb, 1, 5, NOW())
+RETURNING id;
+
+-- name: TestGetRiverJobDispositionByID :one
+-- Test assertion — a planted job's disposition: its state, whether it is
+-- finalized, and how many times it has been snoozed (River records the count in
+-- metadata->>'snoozes' every time a worker returns JobSnooze). The snooze count
+-- is what makes "the harness left it alone" a POSITIVE observation rather than
+-- the absence of one: a job nobody ever fetched is also un-finalized.
+SELECT state::text AS state,
+       (finalized_at IS NOT NULL)::bool AS finalized,
+       COALESCE((metadata->>'snoozes')::bigint, 0)::bigint AS snoozes
+FROM river_job WHERE id = @id;

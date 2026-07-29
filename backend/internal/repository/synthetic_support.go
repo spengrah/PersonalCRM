@@ -1757,3 +1757,67 @@ func (r *SyntheticSupportRepository) FinalizeRiverJobByID(ctx context.Context, i
 func (r *SyntheticSupportRepository) InsertTelegramChatConfigInBand(ctx context.Context, chatID int64) error {
 	return r.queries.TestInsertTelegramChatConfigInBand(ctx, chatID)
 }
+
+// --- harness job ownership --------------------------------------------------
+//
+// A harness runs a live River client on the shared `default` queue, and River
+// does not partition river_job by owner. These two predicates let the harness's
+// no-op workers tell their OWN namespace's jobs (safe to finalize without
+// doing work) from anyone else's (which must be left for their real worker).
+
+// NamespaceOwnsContact reports whether contactID is one of the namespace's own
+// contacts. Tombstones count as owned. Caller passes a BARE 'synth-<ns>-'
+// prefix.
+func (r *SyntheticSupportRepository) NamespaceOwnsContact(ctx context.Context, contactID uuid.UUID, namePrefix string) (bool, error) {
+	n, err := r.queries.SyntheticCountNamespaceOwnedContact(ctx, db.SyntheticCountNamespaceOwnedContactParams{
+		ContactID:  uuidToPgUUID(contactID),
+		NamePrefix: pgtype.Text{String: namePrefix, Valid: true},
+	})
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// NamespaceOwnsEventSubject reports whether the event's subject contact belongs
+// to the namespace — the ownership question for job kinds whose args carry only
+// an event id. A missing event answers false: an unresolvable job is not
+// provably ours, and the safe direction is to leave it alone.
+func (r *SyntheticSupportRepository) NamespaceOwnsEventSubject(ctx context.Context, eventID uuid.UUID, namePrefix string) (bool, error) {
+	n, err := r.queries.SyntheticCountNamespaceOwnedEventSubject(ctx, db.SyntheticCountNamespaceOwnedEventSubjectParams{
+		EventID:    uuidToPgUUID(eventID),
+		NamePrefix: pgtype.Text{String: namePrefix, Valid: true},
+	})
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// InsertAvailableRematchJobForContact plants an immediately fetchable
+// rematch_dispatcher job. Pointed at a FOREIGN contact it makes the
+// job-stealing hazard concrete. Fixture only.
+func (r *SyntheticSupportRepository) InsertAvailableRematchJobForContact(ctx context.Context, contactID uuid.UUID) (int64, error) {
+	return r.queries.TestInsertAvailableRematchJobForContact(ctx, db.TestInsertAvailableRematchJobForContactParams{
+		EventID:      uuid.New().String(),
+		ContactID:    contactID.String(),
+		RematchJobID: uuid.New().String(),
+	})
+}
+
+// RiverJobDisposition is a planted job's outcome: its state, whether it is
+// finalized, and how many times a worker snoozed it.
+type RiverJobDisposition struct {
+	State     string
+	Finalized bool
+	Snoozes   int64
+}
+
+// GetRiverJobDisposition reads a planted job's disposition. Fixture only.
+func (r *SyntheticSupportRepository) GetRiverJobDisposition(ctx context.Context, id int64) (RiverJobDisposition, error) {
+	row, err := r.queries.TestGetRiverJobDispositionByID(ctx, id)
+	if err != nil {
+		return RiverJobDisposition{}, err
+	}
+	return RiverJobDisposition{State: row.State, Finalized: row.Finalized, Snoozes: row.Snoozes}, nil
+}

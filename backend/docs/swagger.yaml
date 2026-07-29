@@ -139,7 +139,7 @@ definitions:
           uses the default.
         type: integer
     type: object
-  handlers.CleanupResponse:
+  handlers.CleanupResponseData:
     properties:
       deleted_calendar_events:
         type: integer
@@ -147,6 +147,16 @@ definitions:
         type: integer
       deleted_external_contacts:
         type: integer
+      expansions:
+        additionalProperties:
+          items:
+            type: string
+          type: array
+        type: object
+      results:
+        additionalProperties:
+          $ref: '#/definitions/handlers.NamespaceCleanupResponse'
+        type: object
     type: object
   handlers.ContactMethodOperation:
     description: A single contact-method operation
@@ -654,6 +664,22 @@ definitions:
     required:
     - type
     - value
+    type: object
+  handlers.NamespaceCleanupResponse:
+    properties:
+      deleted:
+        additionalProperties:
+          format: int64
+          type: integer
+        type: object
+      descendants:
+        items:
+          type: string
+        type: array
+      error:
+        type: string
+      status:
+        type: string
     type: object
   handlers.NoteResponse:
     properties:
@@ -4067,9 +4093,12 @@ paths:
     post:
       consumes:
       - application/json
-      description: Delete test data. Supply EXACTLY ONE of `prefix` (bespoke shape
-        — contacts, external contacts and calendar events by prefix) or `namespaces`
-        (declared shape — per-namespace outcomes, see CleanupNamespacesResponse).
+      description: 'Delete test data. Supply EXACTLY ONE of `prefix` (bespoke shape
+        — returns the CleanupResponse fields: contacts, external contacts and calendar
+        events deleted by prefix) or `namespaces` (declared shape — returns the CleanupNamespacesResponse
+        fields: per-requested-token expansions plus a per-effective-namespace outcome).
+        The documented 200 schema is the union of the two; a given response carries
+        one group, never both.'
       parameters:
       - description: Cleanup request
         in: body
@@ -4087,7 +4116,7 @@ paths:
             - $ref: '#/definitions/api.APIResponse'
             - properties:
                 data:
-                  $ref: '#/definitions/handlers.CleanupResponse'
+                  $ref: '#/definitions/handlers.CleanupResponseData'
               type: object
         "400":
           description: Bad Request

@@ -27,14 +27,15 @@ import (
 // KNOWN PROPERTY of running the toolkit inside a live server: a seed builds a
 // replay harness with its OWN River client, and River clients do not partition
 // river_job by owner. For the ~1s a seed is in flight, that client can fetch a
-// job another concurrent test enqueued. For the kinds the harness registers a
-// REAL worker for, the work still happens correctly, just on the other client.
-// Two kinds are registered as NO-OPS (rematch_dispatcher, knowledge_cache_updater),
-// and for those the steal is silent: the job finalizes without doing its work.
-// Integration tests avoid this with per-test database clones; the E2E lane has
-// one database and cannot. The exposure scales with the number of concurrent
-// declared seeds, so it is worth revisiting as more domains migrate — a
-// namespace check plus river.JobSnooze in those two workers would close it.
+// job another process enqueued on the shared `default` queue. For the kinds the
+// harness registers a REAL worker for, the work still happens correctly, just on
+// the other client. The two kinds registered as no-ops (rematch_dispatcher,
+// knowledge_cache_updater) would have been the silent-loss case — a nil Work
+// result FINALIZES the job — so those workers are namespace-scoped: they
+// complete only jobs they can prove belong to the seeding namespace and snooze
+// everything else back for its real worker (replay.jobOwnership). Integration
+// tests get the same protection for free from per-test database clones; the E2E
+// lane has one database and needs the check.
 
 // SeedDeclaredRequest asks for one behavior's declared fixture.
 type SeedDeclaredRequest struct {
