@@ -80,8 +80,19 @@ psql_target() {
   fi
 }
 
+# SQL fragment that subtracts the pre-terminate PIDs, filled in below. Empty
+# when nothing was attached, which is the common case.
+NOT_PREEXISTING=""
+
+# Sessions on the target database, minus the ones that were already there before
+# the terminate — i.e. only clients that dialed in AFTER it.
 attached_count() {
-  psql_admin -tAc "SELECT count(*) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();"
+  psql_admin -tAc "SELECT count(*) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid() $NOT_PREEXISTING;"
+}
+
+# The same set, with the columns worth printing when a run is refused.
+attached_report() {
+  psql_admin -c "SELECT pid, application_name, client_addr, client_port, state, backend_start FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid() $NOT_PREEXISTING;"
 }
 
 # ORDERING: nothing irreversible happens until the refusal decision is made.
@@ -97,6 +108,31 @@ attached_count() {
 # Terminating also satisfies invariant 1: the DROP cannot fail on "database is
 # being accessed by other users". crm_user may signal its own backends, which
 # is all of them; the native path runs as the postgres superuser.
+#
+# Record the attached PIDs first. pg_terminate_backend() with its default zero
+# timeout only SIGNALS the backend; it does not wait for the process to go away,
+# so a session that was already there can still be listed for a moment after it
+# is killed. Without this the poll below would count that dying session as a
+# reconnect and refuse a run that nothing foreign is attached to — the same
+# false-refusal failure mode this guard exists to avoid, but silent and
+# intermittent. Subtracting the pre-terminate PIDs is exact (a reconnecting
+# client gets a new backend, hence a new PID) and costs nothing: the window
+# below keeps its length, and the answer does not depend on how quickly a
+# signalled backend exits. pg_terminate_backend(pid, timeout_ms) (PG 14+) is the
+# documented alternative, but it buys the same certainty by waiting for it.
+#
+# This is NOT the pre-terminate probe rejected below. Presence still gates
+# nothing — these PIDs are only ever subtracted, so a stale idle holder can
+# still only be excluded from the refusal, never be the cause of one.
+pre_pids="$(psql_admin -tAc \
+  "SELECT coalesce(string_agg(pid::text, ','), '') FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();")"
+case "$pre_pids" in
+  '') ;;
+  *[!0-9,]*)
+    echo "Unexpected pid list from pg_stat_activity: $pre_pids" >&2; exit 1 ;;
+  *) NOT_PREEXISTING="AND pid <> ALL (ARRAY[$pre_pids])" ;;
+esac
+
 psql_admin -tAc \
   "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();" \
   >/dev/null
@@ -123,16 +159,16 @@ psql_admin -tAc \
 # holder's are the same `idle` row, from the same user, usually with the same
 # empty application_name. Gating on that would refuse every run that follows an
 # interrupted one. The reconnect is the signal precisely because presence is
-# not, so no pre-terminate probe is reported here.
+# not, so no pre-terminate probe is reported here — the PIDs captured above are
+# subtracted from this poll, never gated on.
 if [ "$SETTLE_SECONDS" != "0" ]; then
   deadline=$(( $(date +%s) + SETTLE_SECONDS ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if [ "$(attached_count)" -gt 0 ]; then
       echo "" >&2
-      echo "✗ Another process is connected to $DB_NAME." >&2
+      echo "✗ Another process reconnected to $DB_NAME." >&2
       echo "" >&2
-      psql_admin -c \
-        "SELECT pid, application_name, client_addr, client_port, state, backend_start FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();" >&2 || true
+      attached_report >&2 || true
       echo "" >&2
       echo "  A second crm-api on this database runs its own River client and will" >&2
       echo "  steal jobs from the backend under test — rematch and follow-up specs" >&2
