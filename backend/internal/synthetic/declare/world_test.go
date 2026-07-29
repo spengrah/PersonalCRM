@@ -1,8 +1,11 @@
 package declare
 
 import (
+	"context"
+	"errors"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -99,4 +102,83 @@ func TestWorldPlan_CoversEveryRegisteredUnit(t *testing.T) {
 	plan := WorldPlan("tail")
 	assert.Len(t, plan, len(Registered())+len(Edges())+1,
 		"the world is minted from the registries, so a new declaration or edge joins it automatically")
+}
+
+func TestExecuteWorld_FinalDrainFailureUsesTheProductionErrorPath(t *testing.T) {
+	res, err := executeWorld(
+		context.Background(),
+		WorldResult{Entities: map[string]Seeded{}},
+		[]WorldStep{{Kind: WorldStepTail, Key: "minimal-tail"}},
+		func(WorldStep) ([]string, []Seeded, error) { return nil, nil, nil },
+		func() []string { return nil },
+		func() error { return nil },
+		func() error { return errors.New("injected drain failure") },
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "world drain")
+	require.NotNil(t, res.Current)
+	assert.Equal(t, WorldStepDrain, res.Current.Kind)
+	assert.Equal(t, "gate-b", res.Current.Key)
+	require.Len(t, res.Steps, 1)
+	assert.Equal(t, []WorldStepResult{{
+		Kind: WorldStepTail, Key: "minimal-tail", Entities: 0, Duration: res.Steps[0].Duration,
+	}}, res.Steps)
+	assert.Less(t, res.Steps[0].Duration, time.Second)
+}
+
+func TestExecuteWorld_FailuresNameTheActualStepAndKeepPartialEntities(t *testing.T) {
+	plan := []WorldStep{
+		{Kind: WorldStepDeclaration, Key: "early"},
+		{Kind: WorldStepEdge, Key: "middle"},
+		{Kind: WorldStepTail, Key: "final"},
+	}
+	for failAt := range plan {
+		t.Run(plan[failAt].Key, func(t *testing.T) {
+			res, err := executeWorld(
+				context.Background(),
+				WorldResult{Entities: map[string]Seeded{}},
+				plan,
+				func(step WorldStep) ([]string, []Seeded, error) {
+					produced := []Seeded{{Kind: "contact", ID: step.Key}}
+					if step.Key == plan[failAt].Key {
+						return []string{"subject"}, produced, errors.New("injected step failure")
+					}
+					return []string{"subject"}, produced, nil
+				},
+				func() []string { return nil },
+				func() error { return nil },
+				func() error { return nil },
+			)
+
+			require.Error(t, err)
+			require.NotNil(t, res.Current)
+			assert.Equal(t, plan[failAt].Kind, res.Current.Kind)
+			assert.Equal(t, plan[failAt].Key, res.Current.Key)
+			assert.Equal(t, 1, res.Current.Entities)
+			assert.Len(t, res.Steps, failAt)
+			assert.Len(t, res.Order, failAt+1,
+				"the failing step's completed partial entity must remain observable")
+		})
+	}
+}
+
+func TestExecuteWorld_RejectsAnUnreportedTailContact(t *testing.T) {
+	res, err := executeWorld(
+		context.Background(),
+		WorldResult{Entities: map[string]Seeded{}},
+		[]WorldStep{{Kind: WorldStepTail, Key: "fixtures"}},
+		func(WorldStep) ([]string, []Seeded, error) {
+			return nil, []Seeded{{Kind: "contact", ID: "fixture-a"}}, nil
+		},
+		func() []string { return []string{"fixture-a", "created-after-fixtures"} },
+		func() error { return nil },
+		func() error { return nil },
+	)
+
+	require.Error(t, err, "an extra contact omitted from the tail report must fail")
+	assert.Contains(t, err.Error(), "reported 1 contact IDs but harness observed 2")
+	require.NotNil(t, res.Current)
+	assert.Equal(t, WorldStepValidation, res.Current.Kind)
+	assert.Equal(t, "contact-manifest", res.Current.Key)
 }

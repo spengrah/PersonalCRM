@@ -337,30 +337,6 @@ func TestSyntheticDeclareWorldStepFailure(t *testing.T) {
 		assert.Equal(t, int64(0), after.total(), "residue after teardown: %+v", after)
 	})
 
-	t.Run("a drain failure at the END of the world is surfaced too", func(t *testing.T) {
-		database, ctx := declareTestDB(t)
-		restoreHook := declare.SetTestHookForTest(declare.HookAfterReplayBeforeDrain,
-			func(context.Context, *synthetic.Harness) error {
-				return assert.AnError
-			})
-		defer restoreHook()
-
-		namespace := declareNS(t)
-		h, teardown, err := synthetic.NewHarnessWithDBForNamespaceAt(
-			ctx, database, namespace, factory.DefaultSeed, accelerated.GetCurrentTime())
-		require.NoError(t, err)
-
-		support := repository.NewSyntheticSupportRepository(database.Queries)
-		_, err = declare.World(ctx, h, support, declare.WorldTail{
-			Name: "test-tail",
-			Run: func(context.Context, *synthetic.Harness) ([]declare.Seeded, error) {
-				return nil, nil
-			},
-		})
-		require.Error(t, err, "a settle/drain failure at the end of the world must not be swallowed by the single drain")
-		assert.Contains(t, err.Error(), declare.HookAfterReplayBeforeDrain)
-		require.NoError(t, teardown(context.Background()))
-	})
 }
 
 // --- helpers -----------------------------------------------------------------

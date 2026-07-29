@@ -72,7 +72,7 @@
 //	                              per-host pair-key.
 //
 //	--seed [--profile P]          Seed the selected synthetic world (P =
-//	      [--namespace N]         minimal-scoped|dev|prod-shaped; default dev)
+//	      [--namespace N]         minimal-scoped|dev|prod-shaped|standard; default dev)
 //	      [--prng-seed S] --yes   into the DB (ADDITIVE). REFUSED in production
 //	                              (CRM_ENV gate) and when the river_job queue is
 //	                              not drained. The crm-api service MUST be

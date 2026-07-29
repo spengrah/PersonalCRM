@@ -3,6 +3,7 @@
 package tests
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/api/handlers"
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/declare"
@@ -50,7 +52,7 @@ func TestSyntheticDeclareEdges(t *testing.T) {
 	edges := declare.Edges()
 	require.NotEmpty(t, edges, "the adversarial catalog must not be empty")
 
-	checks := edgeChecks()
+	checks := edgeChecks(ctx, database)
 	for _, e := range edges {
 		require.Contains(t, checks, e.Name,
 			"every registered edge owes an API-read postcondition — an edge nobody reads back is not an edge, it is a row")
@@ -176,7 +178,7 @@ func assertEdgePostcondition(
 
 type edgeCheck func(t *testing.T, router *gin.Engine, res declare.Result)
 
-func edgeChecks() map[string]edgeCheck {
+func edgeChecks(ctx context.Context, database *db.Database) map[string]edgeCheck {
 	return map[string]edgeCheck{
 		"long-history":         checkLongHistory,
 		"zero-method":          checkZeroMethod,
@@ -185,10 +187,12 @@ func edgeChecks() map[string]edgeCheck {
 		"fully-empty":          checkFullyEmpty,
 		"deep-import-queue":    checkDeepImportQueue,
 		"merge-chain":          checkMergeChain,
-		"soft-deleted-parent":  checkSoftDeletedParent,
-		"page-overflow":        checkPageOverflow,
-		"same-name-pair":       checkSameNamePair,
-		"birthday-window":      checkBirthdayWindow,
+		"soft-deleted-parent": func(t *testing.T, router *gin.Engine, res declare.Result) {
+			checkSoftDeletedParent(t, ctx, database, router, res)
+		},
+		"page-overflow":   checkPageOverflow,
+		"same-name-pair":  checkSameNamePair,
+		"birthday-window": checkBirthdayWindow,
 	}
 }
 
@@ -393,8 +397,15 @@ func checkMergeChain(t *testing.T, router *gin.Engine, res declare.Result) {
 	}
 }
 
-func checkSoftDeletedParent(t *testing.T, router *gin.Engine, res declare.Result) {
+func checkSoftDeletedParent(
+	t *testing.T,
+	ctx context.Context,
+	database *db.Database,
+	router *gin.Engine,
+	res declare.Result,
+) {
 	parent := res.Entities["parent"]
+	note := res.Entities["parent-note"]
 
 	assert.False(t, containsContactID(listContacts(t, router, url.QueryEscape(parent.Name)), parent.ID),
 		"a tombstoned contact must leave the contact list")
@@ -404,11 +415,20 @@ func checkSoftDeletedParent(t *testing.T, router *gin.Engine, res declare.Result
 	env := getEnvelope(t, router, "/api/v1/contacts/"+parent.ID)
 	assert.Equal(t, http.StatusNotFound, env.Status, "detail read of a tombstoned contact")
 
-	// THE ASYMMETRY, which is the useful adversarial fact here: notes and tasks
-	// pre-check the parent (GetContact filters deleted_at IS NULL) and 404, while
-	// interactions go straight to the repository and still serve the orphaned
-	// rows. The orphans exist either way; only one surface reveals them. Pinning
-	// today's answer is what makes a change to it deliberate.
+	// The note row survives independently of its tombstoned parent. Read it
+	// through the repository itself because the notes service deliberately checks
+	// parent liveness first and therefore cannot prove row survival.
+	parentID := uuidMust(t, parent.ID)
+	storedNote, err := repository.NewNoteRepository(database.Queries).GetContactNotepad(ctx, parentID)
+	require.NoError(t, err)
+	require.NotNil(t, storedNote, "the declared note row must survive the parent tombstone")
+	assert.Equal(t, uuidMust(t, note.ID), storedNote.ID)
+	assert.Equal(t, note.Name, storedNote.Body)
+
+	// THE API ASYMMETRY: notes pre-check the parent and 404 even though the row
+	// survives, while interactions go straight to the repository and serve their
+	// surviving rows. The edge declares no task; the tasks 404 pins only the
+	// parent-existence contract and makes no task-child survival claim.
 	assert.Equal(t, http.StatusNotFound, getJSONStatus(t, router, "/api/v1/contacts/"+parent.ID+"/notes", nil),
 		"the notes surface pre-checks the parent")
 	assert.Equal(t, http.StatusNotFound, getJSONStatus(t, router, "/api/v1/contacts/"+parent.ID+"/tasks", nil),

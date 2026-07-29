@@ -166,6 +166,14 @@ func (h *Harness) SettleStats() SettleTimings {
 	return h.settle
 }
 
+// CreatedContactIDs returns the exact contact IDs SeedContact has created in
+// this harness. The ledger is owned by SeedContact itself, so a higher-level
+// world builder can verify its caller-reported manifest without trusting that
+// caller to report every row it created.
+func (h *Harness) CreatedContactIDs() []uuid.UUID {
+	return h.snapshotContactIDs()
+}
+
 // created is the ID ledger the harness/adapters accumulate during a run so
 // Cleanup can delete by exact id (never by a DB-wide source/kind value) and
 // Gate B can scope to this replay's contacts. eventIDs is the UNION of

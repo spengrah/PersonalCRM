@@ -75,20 +75,23 @@ func buildStandardWorld(ctx context.Context, h *Harness, params SeedParams, res 
 		capture.world = world
 		capture.set = true
 	}
-	// The step log is mapped on BOTH paths: a world that failed mid-run carries
-	// the steps that completed, and naming where it stopped is the whole point of
-	// recording them.
+	res = mapStandardWorldResult(world, res)
+	res.Timings.Settle = h.SettleStats()
+	return world, res, err
+}
+
+func mapStandardWorldResult(world declare.WorldResult, res ProfileResult) ProfileResult {
+	// The step log and partial counts are mapped on both paths. A failed world
+	// still carries every completed step and entity plus the actual phase that
+	// stopped it.
 	for _, step := range world.Steps {
 		res.Timings.Phases = append(res.Timings.Phases, PhaseTiming{
 			Name:     step.Kind + ":" + step.Key,
 			Duration: step.Duration,
 		})
 	}
-	if err != nil {
-		if n := len(world.Steps); n > 0 {
-			res.Timings.Current = world.Steps[n-1].Kind + ":" + world.Steps[n-1].Key
-		}
-		return world, res, err
+	if world.Current != nil {
+		res.Timings.Current = world.Current.Kind + ":" + world.Current.Key
 	}
 
 	for _, seeded := range world.Order {
@@ -96,8 +99,7 @@ func buildStandardWorld(ctx context.Context, h *Harness, params SeedParams, res 
 			res.Contacts++
 		}
 	}
-	res.Timings.Settle = h.SettleStats()
-	return world, res, nil
+	return res
 }
 
 // seedStandardTail seeds the ELEVEN pinned tour fixtures and reports them in
@@ -118,7 +120,10 @@ func seedStandardTail(ctx context.Context, h *Harness, params SeedParams, res *P
 	// contract requires.
 	pending, _, err := seedPendingFollowUpFixture(ctx, h, gen)
 	if err != nil {
-		return nil, fmt.Errorf("profile %s: %w", params.Profile, err)
+		if pending != nil {
+			out = append(out, seededContact(pending))
+		}
+		return out, fmt.Errorf("profile %s: %w", params.Profile, err)
 	}
 	res.SettledInteractions++
 	res.SeededTasks++
@@ -127,14 +132,20 @@ func seedStandardTail(ctx context.Context, h *Harness, params SeedParams, res *P
 
 	outreach, _, err := seedOutreachFixture(ctx, h, gen)
 	if err != nil {
-		return nil, fmt.Errorf("profile %s: %w", params.Profile, err)
+		if outreach != nil {
+			out = append(out, seededContact(outreach))
+		}
+		return out, fmt.Errorf("profile %s: %w", params.Profile, err)
 	}
 	res.OutboundOnlyContacts++
 	out = append(out, seededContact(outreach))
 
 	response, _, err := seedResponseFixture(ctx, h, gen)
 	if err != nil {
-		return nil, fmt.Errorf("profile %s: %w", params.Profile, err)
+		if response != nil {
+			out = append(out, seededContact(response))
+		}
+		return out, fmt.Errorf("profile %s: %w", params.Profile, err)
 	}
 	res.MutualMessageContacts++
 	out = append(out, seededContact(response))
@@ -142,7 +153,7 @@ func seedStandardTail(ctx context.Context, h *Harness, params SeedParams, res *P
 	for _, plan := range buildPinnedTourFixtures(gen) {
 		contact, err := h.SeedContact(ctx, plan.spec)
 		if err != nil {
-			return nil, fmt.Errorf("profile %s: seed pinned fixture %s: %w", params.Profile, plan.marker, err)
+			return out, fmt.Errorf("profile %s: seed pinned fixture %s: %w", params.Profile, plan.marker, err)
 		}
 		h.SetPinnedFixtureID(plan.marker, contact.ID)
 		out = append(out, seededContact(contact))
@@ -185,10 +196,10 @@ func seedPendingFollowUpFixture(ctx context.Context, h *Harness, gen *factory.Ge
 		return nil, 0, fmt.Errorf("seed awaiting-reply contact: %w", err)
 	}
 	if _, err := h.ReplayGCal(ctx, contact.ID, gen.GCalEvent(spec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(0, 0)))); err != nil {
-		return nil, 0, fmt.Errorf("replay gcal for awaiting-reply contact: %w", err)
+		return contact, 0, fmt.Errorf("replay gcal for awaiting-reply contact: %w", err)
 	}
 	if _, err := h.SeedPendingFollowUp(ctx, contact.ID, contact.FullName); err != nil {
-		return nil, 0, fmt.Errorf("seed pending follow-up: %w", err)
+		return contact, 1, fmt.Errorf("seed pending follow-up: %w", err)
 	}
 	h.SetPinnedFixtureID(FixtureMarkerPending, contact.ID)
 	return contact, 1, nil
@@ -204,7 +215,7 @@ func seedOutreachFixture(ctx context.Context, h *Harness, gen *factory.Generator
 		return nil, 0, fmt.Errorf("seed outbound gmail contact: %w", err)
 	}
 	if _, err := h.ReplayGmail(ctx, contact.ID, gen.GmailMessage(spec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(messageOutboundAge))); err != nil {
-		return nil, 0, fmt.Errorf("replay outbound gmail: %w", err)
+		return contact, 0, fmt.Errorf("replay outbound gmail: %w", err)
 	}
 	h.SetPinnedFixtureID(FixtureMarkerOutreach, contact.ID)
 	return contact, 1, nil
@@ -230,7 +241,7 @@ func seedResponseFixture(ctx context.Context, h *Harness, gen *factory.Generator
 	}
 	outbound := gen.TelegramMessage(spec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(messageMutualOutboundAge))
 	if _, err := h.ReplayTelegram(ctx, contact.ID, outbound); err != nil {
-		return nil, 0, fmt.Errorf("replay mutual telegram outbound: %w", err)
+		return contact, 0, fmt.Errorf("replay mutual telegram outbound: %w", err)
 	}
 	reply := outbound // clone: same peer + chat, so the bridge can fire
 	reply.TelegramMessageID = outbound.TelegramMessageID + 1
@@ -238,7 +249,7 @@ func seedResponseFixture(ctx context.Context, h *Harness, gen *factory.Generator
 	// Newer than the outbound by exactly (outboundAge − replyAge) = 6h (< 48h).
 	reply.SentAt = outbound.SentAt.Add(messageMutualOutboundAge - messageMutualReplyAge)
 	if _, err := h.ReplayTelegram(ctx, contact.ID, reply); err != nil {
-		return nil, 0, fmt.Errorf("replay mutual telegram reply: %w", err)
+		return contact, 1, fmt.Errorf("replay mutual telegram reply: %w", err)
 	}
 	h.SetMutualMessageContactID(contact.ID)
 	h.SetPinnedFixtureID(FixtureMarkerResponse, contact.ID)

@@ -200,14 +200,11 @@ func NoMethods() ContactProp {
 // mutually exclusive with CreatedAgo and OverdueBy (two derivations of one
 // field) and with NeverContacted (a contradiction in terms).
 //
-// Honest caveat about WHERE it produces n interaction ROWS. The spread is stated
-// in domain days, which the active cadence table resolves — so under the
-// compressed CRM_ENV=testing table (a "day" is ~17 seconds) the whole history
-// lands inside a few minutes, well inside the interaction dedup window, and
-// collapses to far fewer than n rows. The derived InteractionCount postcondition
-// then FAILS LOUDLY, which is the right outcome, but it means History belongs in
-// a world running the production table (the declared `standard` profile and the
-// declare integration suite both do) rather than in an E2E fixture.
+// Each generated Gmail message has a distinct thread id, and email interaction
+// identity includes that thread id. History therefore produces n interaction
+// rows even when the compressed CRM_ENV=testing table places adjacent messages
+// inside the manual interaction window; that window applies only when no
+// source_ref exists.
 func History(n int) ContactProp {
 	return func(p *contactPlan) {
 		count := n

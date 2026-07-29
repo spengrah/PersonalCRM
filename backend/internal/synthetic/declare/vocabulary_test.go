@@ -80,6 +80,34 @@ func TestHistory_PostconditionsAreDerivedFromTheSpread(t *testing.T) {
 	assert.False(t, *pc.OverdueMember)
 }
 
+func TestHistory_CompressedAdjacentMessagesStillHaveDistinctEmailKeys(t *testing.T) {
+	t.Setenv("CRM_ENV", "testing")
+	gen := factory.NewGenerator(factory.DefaultSeed, "history-compressed")
+	contact := gen.Contact(factory.WithEmail())
+	const n = 48
+
+	threads := make(map[string]struct{}, n)
+	var previous time.Time
+	foundInsideManualWindow := false
+	for i := 0; i < n; i++ {
+		message := gen.GmailMessage(contact, factory.MatchSeeded, factory.WithMessageAge(historyMessageAge(i, n)))
+		thread := message.Message.ThreadId
+		require.NotEmpty(t, thread)
+		require.NotContains(t, threads, thread,
+			"email source_ref includes thread id, so every History message needs a distinct thread")
+		threads[thread] = struct{}{}
+
+		sentAt := time.UnixMilli(message.Message.InternalDate)
+		if !previous.IsZero() && sentAt.Sub(previous) < 30*time.Minute {
+			foundInsideManualWindow = true
+		}
+		previous = sentAt
+	}
+	assert.True(t, foundInsideManualWindow,
+		"the boundary must include adjacent compressed messages inside the manual dedup window")
+	assert.Len(t, threads, n)
+}
+
 func TestHistory_MutualExclusions(t *testing.T) {
 	n := 3
 	cases := map[string]*contactPlan{

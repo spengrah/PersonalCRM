@@ -7,13 +7,17 @@ import (
 
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/replay"
+
+	"github.com/google/uuid"
 )
 
-// Step kinds a world is composed of.
+// World step and final protocol-phase kinds.
 const (
 	WorldStepDeclaration = "declaration"
 	WorldStepEdge        = "edge"
 	WorldStepTail        = "tail"
+	WorldStepValidation  = "validation"
+	WorldStepDrain       = "drain"
 )
 
 // WorldStep is one composable unit of a world, in execution order.
@@ -61,6 +65,10 @@ type WorldResult struct {
 	// Order is a single monotonic creation log in EXECUTION order, appended to by
 	// every declaration, every edge and finally the tail.
 	Order []Seeded
+	// Current names the step or final world phase that was running when World
+	// returned an error. Completed steps remain in Steps; any entities completed
+	// inside Current before its error remain in Order and Current.Entities.
+	Current *WorldStepResult
 }
 
 // WorldPlan is the ORDERING, computed with NO database and no harness, so the
@@ -115,14 +123,14 @@ func World(
 		Anchor:    h.Generator().Anchor(),
 		Entities:  map[string]Seeded{},
 	}
+	beforeContacts := stringSet(h.CreatedContactIDs())
 
 	declarations := map[string]Declaration{}
 	for _, d := range Registered() {
 		declarations[d.Behavior] = d
 	}
 
-	for _, step := range WorldPlan(tail.Name) {
-		sw := replay.NewStopwatch()
+	runStep := func(step WorldStep) ([]string, []Seeded, error) {
 		var handles []string
 		var produced []Seeded
 		var err error
@@ -133,8 +141,7 @@ func World(
 		case WorldStepEdge:
 			edge, ok := LookupEdge(step.Key)
 			if !ok {
-				err = fmt.Errorf("edge %q disappeared from the registry mid-run", step.Key)
-				break
+				return nil, nil, fmt.Errorf("edge %q disappeared from the registry mid-run", step.Key)
 			}
 			handles, produced, err = runWorldEntities(ctx, h, support, edge.Entities)
 		case WorldStepTail:
@@ -142,6 +149,48 @@ func World(
 		default:
 			err = fmt.Errorf("unknown world step kind %q", step.Kind)
 		}
+		return handles, produced, err
+	}
+
+	return executeWorld(
+		ctx,
+		res,
+		WorldPlan(tail.Name),
+		runStep,
+		func() []string {
+			return newStringsSince(beforeContacts, h.CreatedContactIDs())
+		},
+		func() error {
+			if hook := currentHook(HookAfterReplayBeforeDrain); hook != nil {
+				return hook(ctx, h)
+			}
+			return nil
+		},
+		func() error { return h.DrainGateB(ctx) },
+	)
+}
+
+type worldStepRunner func(WorldStep) ([]string, []Seeded, error)
+
+// executeWorld is the small execution protocol behind World. Keeping the plan,
+// step runner, observer and final drain injectable lets failure propagation be
+// tested without constructing the full registered world.
+func executeWorld(
+	ctx context.Context,
+	res WorldResult,
+	plan []WorldStep,
+	runStep worldStepRunner,
+	observedContactIDs func() []string,
+	beforeDrain func() error,
+	drain func() error,
+) (WorldResult, error) {
+	for _, step := range plan {
+		if err := ctx.Err(); err != nil {
+			res.Current = &WorldStepResult{Kind: step.Kind, Key: step.Key}
+			return res, fmt.Errorf("declare: world step %s %q: %w", step.Kind, step.Key, err)
+		}
+		sw := replay.NewStopwatch()
+		handles, produced, err := runStep(step)
 		// The failpoint fires as the STEP's OWN error, deliberately: routing it
 		// down the same path a real step failure takes is what makes the
 		// fault-injection test cover error PROPAGATION rather than a private
@@ -152,16 +201,22 @@ func World(
 				err = fmt.Errorf("failpoint %q fired", FailpointAfterWorldStep)
 			}
 		}
-		if err != nil {
-			// The failing step is NOT recorded: Steps is the log of what
-			// COMPLETED, and the error is what names where the run stopped.
-			return res, fmt.Errorf("declare: world step %s %q: %w", step.Kind, step.Key, err)
-		}
-
 		for i, seeded := range produced {
 			res.Entities[worldEntityKey(step, handles, i)] = seeded
 		}
 		res.Order = append(res.Order, produced...)
+		if err != nil {
+			// The failing step is not in Steps, but it remains explicitly visible
+			// with any completed partial entities it produced before returning.
+			res.Current = &WorldStepResult{
+				Kind:     step.Kind,
+				Key:      step.Key,
+				Entities: len(produced),
+				Duration: sw.Elapsed(),
+			}
+			return res, fmt.Errorf("declare: world step %s %q: %w", step.Kind, step.Key, err)
+		}
+
 		res.Steps = append(res.Steps, WorldStepResult{
 			Kind:     step.Kind,
 			Key:      step.Key,
@@ -170,16 +225,62 @@ func World(
 		})
 	}
 
-	// ONE drain for the whole world (see the doc comment).
-	if hook := currentHook(HookAfterReplayBeforeDrain); hook != nil {
-		if err := hook(ctx, h); err != nil {
-			return res, fmt.Errorf("declare: %s hook: %w", HookAfterReplayBeforeDrain, err)
-		}
+	if err := validateWorldContactManifest(res.Order, observedContactIDs()); err != nil {
+		res.Current = &WorldStepResult{Kind: WorldStepValidation, Key: "contact-manifest"}
+		return res, fmt.Errorf("declare: world contact manifest: %w", err)
 	}
-	if err := h.DrainGateB(ctx); err != nil {
+
+	// ONE drain for the whole world (see the doc comment).
+	if err := beforeDrain(); err != nil {
+		res.Current = &WorldStepResult{Kind: WorldStepDrain, Key: HookAfterReplayBeforeDrain}
+		return res, fmt.Errorf("declare: %s hook: %w", HookAfterReplayBeforeDrain, err)
+	}
+	if err := drain(); err != nil {
+		res.Current = &WorldStepResult{Kind: WorldStepDrain, Key: "gate-b"}
 		return res, fmt.Errorf("declare: world drain: %w", err)
 	}
 	return res, nil
+}
+
+func stringSet(ids []uuid.UUID) map[string]struct{} {
+	out := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		out[id.String()] = struct{}{}
+	}
+	return out
+}
+
+func newStringsSince(before map[string]struct{}, after []uuid.UUID) []string {
+	out := make([]string, 0, len(after))
+	for _, id := range after {
+		value := id.String()
+		if _, existed := before[value]; !existed {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func validateWorldContactManifest(order []Seeded, observed []string) error {
+	reported := make(map[string]int)
+	for _, seeded := range order {
+		if seeded.Kind == "contact" {
+			reported[seeded.ID]++
+		}
+	}
+	actual := make(map[string]int, len(observed))
+	for _, id := range observed {
+		actual[id]++
+	}
+	if len(reported) != len(actual) {
+		return fmt.Errorf("reported %d contact IDs but harness observed %d", len(reported), len(actual))
+	}
+	for id, count := range actual {
+		if reported[id] != count {
+			return fmt.Errorf("contact %s observed %d times but reported %d", id, count, reported[id])
+		}
+	}
+	return nil
 }
 
 // runWorldEntities executes one step's entities against the shared harness and
@@ -192,10 +293,8 @@ func runWorldEntities(
 	entities []Entity,
 ) ([]string, []Seeded, error) {
 	st := newRunState(len(entities))
-	if err := runEntityList(ctx, h, support, entities, st); err != nil {
-		return nil, nil, err
-	}
-	return st.orderHandles, st.order, nil
+	err := runEntityList(ctx, h, support, entities, st)
+	return st.orderHandles, st.order, err
 }
 
 // worldEntityKey qualifies a step-local handle for the composed manifest. The

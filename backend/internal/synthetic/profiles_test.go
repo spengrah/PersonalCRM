@@ -60,6 +60,16 @@ func TestProfileParams(t *testing.T) {
 		})
 	}
 
+	t.Run(string(ProfileStandard), func(t *testing.T) {
+		p, err := ProfileParams(ProfileStandard)
+		require.NoError(t, err)
+		require.Equal(t, ProfileStandard, p.Profile)
+		require.Equal(t, "standard", p.Namespace)
+		require.Equal(t, factory.DefaultSeed, p.Seed)
+		require.Equal(t, Counts{}, p.Counts,
+			"standard is registry-defined and intentionally has no volume knobs")
+	})
+
 	t.Run("unknown", func(t *testing.T) {
 		_, err := ProfileParams("nope")
 		require.Error(t, err)
