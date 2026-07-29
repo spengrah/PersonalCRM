@@ -304,6 +304,11 @@ func gmailBatchExternalIDs(items []GmailBatchItem) []string {
 	return out
 }
 
+// GmailBatchMaxSpan is the oldest-to-newest age span one Gmail batch may cover.
+// Exposed so a caller sizing a declared history spread checks the REAL bound
+// rather than a copy of it that can drift.
+func GmailBatchMaxSpan() time.Duration { return gmailBatchMaxSpan }
+
 // gmailBatchSpanWithinReach rejects a batch wider than one Sync can reach. The
 // provider scans forward from backfill_since in 7-day windows, at most 24 of
 // them, and the floor is the OLDEST payload — so a payload newer than

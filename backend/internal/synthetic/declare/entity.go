@@ -4,11 +4,15 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
+
+	"personal-crm/backend/internal/synthetic/factory"
 )
 
-// Entity is one thing a declaration creates. PR1 ships Contact; later domain
-// PRs add ExternalCandidate / CalendarEvent / MacHost / MeetingNote / Note /
-// Task as their domains migrate.
+// Entity is one thing a declaration creates. PR1 shipped Contact; the
+// adversarial catalog adds ExternalCandidate / Note / Merge / SoftDelete, and
+// later domain PRs add CalendarEvent / MacHost / MeetingNote / Task as their
+// domains migrate.
 type Entity interface {
 	// handle is the declaration-local name the manifest keys the created row by.
 	handle() string
@@ -16,6 +20,11 @@ type Entity interface {
 	kind() string
 	// validate is called at Register time; a returned error becomes a panic.
 	validate() error
+	// refs are the handles this entity requires to have ALREADY been created,
+	// EARLIER in the same entity list. They are resolved against the run's own
+	// manifest, so a forward or self reference has nothing to resolve against —
+	// which is why it is a registration-time error rather than a runtime nil.
+	refs() []string
 }
 
 // Method kinds a Contact may declare.
@@ -31,6 +40,71 @@ var methodKinds = map[string]bool{
 	MethodTelegram: true,
 }
 
+// Name edges a Contact may declare. They name the RENDERING hazard, not the
+// glyphs, and lower onto the factory's own edge tokens.
+const (
+	NameEdgeLong  = string(factory.NameEdgeLong)
+	NameEdgeRTL   = string(factory.NameEdgeRTL)
+	NameEdgeEmoji = string(factory.NameEdgeEmoji)
+)
+
+// Candidate sources a declaration may name. Stated LOCALLY, like the cadence
+// table, and deliberately restricted to the two shapes
+// Harness.SeedExternalContactCandidate can actually key: an id-keyed address
+// book and an email-keyed correspondence discoverer. A source outside this set
+// would either produce a row the sync path cannot produce or silently fall into
+// the address-book branch.
+const (
+	SourceGContacts      = "gcontacts"
+	SourceCorrespondence = "gmail_correspondence"
+)
+
+var candidateSources = map[string]bool{
+	SourceGContacts:      true,
+	SourceCorrespondence: true,
+}
+
+// --- prop plumbing ----------------------------------------------------------
+//
+// SameNameAs is valid on BOTH a Contact and an ExternalCandidate (a collision
+// needs the two twins AND the candidate that collides with them), so the two
+// entity constructors take an INTERFACE rather than their own func type. The
+// existing func-typed props satisfy it through a method on the named func type,
+// so every prop constructor below keeps its original shape.
+
+// ContactProp customizes a declared contact.
+type ContactProp func(*contactPlan)
+
+func (f ContactProp) applyContact(p *contactPlan) { f(p) }
+
+// CandidateProp customizes a declared import candidate.
+type CandidateProp func(*externalCandidatePlan)
+
+func (f CandidateProp) applyCandidate(p *externalCandidatePlan) { f(p) }
+
+// ContactPropSource is anything Contact accepts.
+type ContactPropSource interface{ applyContact(*contactPlan) }
+
+// CandidatePropSource is anything ExternalCandidate accepts.
+type CandidatePropSource interface{ applyCandidate(*externalCandidatePlan) }
+
+// TwinProp is a prop valid on either entity kind.
+type TwinProp interface {
+	ContactPropSource
+	CandidatePropSource
+}
+
+// --- contacts ---------------------------------------------------------------
+
+// birthdayPlan is a declared birthday: either an offset in days from the run
+// anchor, or an explicit month/day. Both resolve at run time on a leap-safe
+// birth year, so February 29 is representable rather than silently normalized.
+type birthdayPlan struct {
+	inDays *int
+	month  time.Month
+	day    int
+}
+
 // contactPlan is the lowered form of a Contact declaration.
 type contactPlan struct {
 	name           string
@@ -40,22 +114,29 @@ type contactPlan struct {
 	createdAgo     *Amount
 	methods        []string
 	noMethods      bool
+	history        *int
+	nameEdge       string
+	sameNameAs     string
+	birthday       *birthdayPlan
 }
 
 func (p *contactPlan) handle() string { return p.name }
 func (p *contactPlan) kind() string   { return "contact" }
-
-// ContactProp customizes a declared contact.
-type ContactProp func(*contactPlan)
+func (p *contactPlan) refs() []string {
+	if p.sameNameAs == "" {
+		return nil
+	}
+	return []string{p.sameNameAs}
+}
 
 // Contact declares one contact under a declaration-local handle. The handle is
 // how a test reads the created row out of the manifest (`entities["card-a"]`)
 // and is never rendered — the UI name is generator-derived and comes back in
 // the manifest.
-func Contact(handle string, props ...ContactProp) Entity {
+func Contact(handle string, props ...ContactPropSource) Entity {
 	p := &contactPlan{name: handle}
 	for _, prop := range props {
-		prop(p)
+		prop.applyContact(p)
 	}
 	return p
 }
@@ -107,6 +188,70 @@ func Methods(kinds ...string) ContactProp {
 func NoMethods() ContactProp {
 	return func(p *contactPlan) { p.noMethods = true }
 }
+
+// History declares n inbound emails spread deterministically across the recent
+// past, driven through the BATCH replay adapter (one settle per dependency
+// generation rather than n full settles).
+//
+// It lowers to replayed history for the same reason OverdueBy does — only a real
+// interaction may move last_contacted — so it likewise requires an addressable
+// email, and it DERIVES its own creation backdate from the oldest message it
+// replays: a contact must exist before the connection it carries. That makes it
+// mutually exclusive with CreatedAgo and OverdueBy (two derivations of one
+// field) and with NeverContacted (a contradiction in terms).
+//
+// Each generated Gmail message has a distinct thread id, and email interaction
+// identity includes that thread id. History therefore produces n interaction
+// rows even when the compressed CRM_ENV=testing table places adjacent messages
+// inside the manual interaction window; that window applies only when no
+// source_ref exists.
+func History(n int) ContactProp {
+	return func(p *contactPlan) {
+		count := n
+		p.history = &count
+	}
+}
+
+// NameEdge declares a display name carrying a rendering-hazard token
+// (NameEdgeLong / NameEdgeRTL / NameEdgeEmoji). The rendered name stays inside
+// the 255-character bound the contact API's own validator enforces.
+func NameEdge(kind string) ContactProp {
+	return func(p *contactPlan) { p.nameEdge = kind }
+}
+
+// BirthdayInDays declares a birthday whose next occurrence is n days from the
+// run anchor (0 is "today"), on a leap-safe birth year.
+func BirthdayInDays(n int) ContactProp {
+	return func(p *contactPlan) {
+		days := n
+		p.birthday = &birthdayPlan{inDays: &days}
+	}
+}
+
+// BirthdayOn declares an explicit month/day birthday on a leap-safe birth year,
+// so BirthdayOn(time.February, 29) is well defined for every anchor.
+func BirthdayOn(month time.Month, day int) ContactProp {
+	return func(p *contactPlan) { p.birthday = &birthdayPlan{month: month, day: day} }
+}
+
+// sameNameProp is the twin-name prop. It implements BOTH entity kinds' prop
+// interfaces because a name collision needs a contact twin AND an import
+// candidate that collides with the pair.
+type sameNameProp struct{ handle string }
+
+func (s sameNameProp) applyContact(p *contactPlan)             { p.sameNameAs = s.handle }
+func (s sameNameProp) applyCandidate(p *externalCandidatePlan) { p.sameNameAs = s.handle }
+
+// SameNameAs gives this entity the SAME rendered name as an earlier CONTACT
+// handle in the same entity list.
+//
+// On a Contact it is the single, deliberate opt-out of the factory's
+// display-name dedupe — the fixture for "two people really do share a name",
+// which is the only shape that exercises what the import matcher does with an
+// ambiguous name tie. On an ExternalCandidate it overrides the generated display
+// name, which is what turns two same-named rows into an actual matching
+// collision rather than a cosmetic one.
+func SameNameAs(handle string) TwinProp { return sameNameProp{handle: handle} }
 
 // hasEmail reports whether the declared method set includes an email — either
 // explicitly, or by the factory default when no method option was given.
@@ -172,8 +317,206 @@ func (p *contactPlan) validate() error {
 			return fmt.Errorf("contact %q: OverdueBy lowers to a replayed inbound EMAIL, so the contact must carry an email method", p.name)
 		}
 	}
+	if p.history != nil {
+		if *p.history < 1 {
+			return fmt.Errorf("contact %q: History(%d) must be at least 1", p.name, *p.history)
+		}
+		if p.overdueBy != nil {
+			return fmt.Errorf("contact %q: History and OverdueBy are mutually exclusive — both DERIVE the creation age from the history they replay", p.name)
+		}
+		if p.createdAgo != nil {
+			return fmt.Errorf("contact %q: History and CreatedAgo are mutually exclusive — History derives the creation age from its oldest replayed message", p.name)
+		}
+		if p.neverContacted {
+			return fmt.Errorf("contact %q: History and NeverContacted are mutually exclusive", p.name)
+		}
+		if !p.hasEmail() {
+			return fmt.Errorf("contact %q: History lowers to replayed inbound EMAIL, so the contact must carry an email method", p.name)
+		}
+		if err := historySpanWithinBatchReach(*p.history); err != nil {
+			return fmt.Errorf("contact %q: %w", p.name, err)
+		}
+	}
+	if p.nameEdge != "" {
+		if _, ok := factory.NameEdgeToken(factory.NameEdge(p.nameEdge)); !ok {
+			return fmt.Errorf("contact %q: unknown name edge %q (valid: %s)",
+				p.name, p.nameEdge, strings.Join(nameEdgeVocabulary(), ", "))
+		}
+		if p.sameNameAs != "" {
+			return fmt.Errorf("contact %q: NameEdge and SameNameAs are mutually exclusive — a twin copies the source's rendered name, edge token included", p.name)
+		}
+	}
+	if p.sameNameAs == p.name && p.sameNameAs != "" {
+		return fmt.Errorf("contact %q: SameNameAs cannot reference itself", p.name)
+	}
+	if p.birthday != nil {
+		if err := p.birthday.validate(p.name); err != nil {
+			return err
+		}
+	}
 	return nil
 }
+
+func (b *birthdayPlan) validate(handle string) error {
+	if b.inDays != nil {
+		return nil
+	}
+	if b.month < time.January || b.month > time.December {
+		return fmt.Errorf("contact %q: BirthdayOn month %d is out of range", handle, b.month)
+	}
+	// Day-of-month is checked against the LEAP maximum, so February 29 is
+	// accepted (it is representable on a leap-safe birth year) while February 30
+	// is not.
+	if b.day < 1 || b.day > leapDaysInMonth(b.month) {
+		return fmt.Errorf("contact %q: BirthdayOn(%s, %d) is not a real date", handle, b.month, b.day)
+	}
+	return nil
+}
+
+func leapDaysInMonth(m time.Month) int {
+	// A leap year, so February is 29.
+	return time.Date(2024, m+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
+func nameEdgeVocabulary() []string {
+	kinds := factory.NameEdgeKinds()
+	out := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, string(k))
+	}
+	return out
+}
+
+// --- import candidates ------------------------------------------------------
+
+// externalCandidatePlan is the lowered form of an ExternalCandidate declaration.
+type externalCandidatePlan struct {
+	name       string
+	source     string
+	sameNameAs string
+}
+
+func (p *externalCandidatePlan) handle() string { return p.name }
+func (p *externalCandidatePlan) kind() string   { return "external_contact" }
+func (p *externalCandidatePlan) refs() []string {
+	if p.sameNameAs == "" {
+		return nil
+	}
+	return []string{p.sameNameAs}
+}
+
+// ExternalCandidate declares one UNMATCHED import-queue candidate.
+//
+// match_status is deliberately NOT declarable: the write path hardcodes
+// 'unmatched' on insert, so a matched or linked candidate would be a row the
+// sync path cannot produce.
+func ExternalCandidate(handle string, props ...CandidatePropSource) Entity {
+	p := &externalCandidatePlan{name: handle}
+	for _, prop := range props {
+		prop.applyCandidate(p)
+	}
+	return p
+}
+
+// Source names the import candidate's source.
+func Source(name string) CandidateProp {
+	return func(p *externalCandidatePlan) { p.source = name }
+}
+
+func (p *externalCandidatePlan) validate() error {
+	if strings.TrimSpace(p.name) == "" {
+		return fmt.Errorf("external candidate handle must be non-empty")
+	}
+	if !candidateSources[p.source] {
+		return fmt.Errorf("external candidate %q: unknown source %q (valid: %s)",
+			p.name, p.source, strings.Join(sortedCandidateSources(), ", "))
+	}
+	return nil
+}
+
+// --- notes ------------------------------------------------------------------
+
+// notePlan is the lowered form of a Note declaration.
+type notePlan struct {
+	name    string
+	contact string
+}
+
+func (p *notePlan) handle() string { return p.name }
+func (p *notePlan) kind() string   { return "note" }
+func (p *notePlan) refs() []string { return []string{p.contact} }
+func (p *notePlan) validate() error {
+	if strings.TrimSpace(p.name) == "" {
+		return fmt.Errorf("note handle must be non-empty")
+	}
+	if strings.TrimSpace(p.contact) == "" {
+		return fmt.Errorf("note %q: a contact handle is required", p.name)
+	}
+	return nil
+}
+
+// Note declares a notepad note on an EARLIER contact handle. The body is
+// generator-derived, never a literal, so the world stays deterministic and
+// PII-free by construction.
+func Note(handle, contactHandle string) Entity {
+	return &notePlan{name: handle, contact: contactHandle}
+}
+
+// --- merges -----------------------------------------------------------------
+
+// mergePlan is the lowered form of a Merge declaration.
+type mergePlan struct {
+	loser  string
+	winner string
+}
+
+func (p *mergePlan) handle() string { return "merge-" + p.loser + "-into-" + p.winner }
+func (p *mergePlan) kind() string   { return "merge" }
+func (p *mergePlan) refs() []string { return []string{p.loser, p.winner} }
+func (p *mergePlan) validate() error {
+	if strings.TrimSpace(p.loser) == "" || strings.TrimSpace(p.winner) == "" {
+		return fmt.Errorf("merge: both a loser and a winner contact handle are required")
+	}
+	if p.loser == p.winner {
+		return fmt.Errorf("merge %q: a contact cannot be merged into itself", p.handle())
+	}
+	return nil
+}
+
+// Merge merges an EARLIER contact handle (the loser, archived) into another
+// earlier contact handle (the winner, kept), through the production merge path.
+// Chaining two of them — a into b, then b into c — is what makes two-hop
+// reparenting observable.
+func Merge(loser, winner string) Entity {
+	return &mergePlan{loser: loser, winner: winner}
+}
+
+// --- soft deletes -----------------------------------------------------------
+
+// softDeletePlan is the lowered form of a SoftDelete declaration.
+type softDeletePlan struct {
+	target string
+}
+
+func (p *softDeletePlan) handle() string { return "soft-delete-" + p.target }
+func (p *softDeletePlan) kind() string   { return "soft_delete" }
+func (p *softDeletePlan) refs() []string { return []string{p.target} }
+func (p *softDeletePlan) validate() error {
+	if strings.TrimSpace(p.target) == "" {
+		return fmt.Errorf("soft delete: a contact handle is required")
+	}
+	return nil
+}
+
+// SoftDelete tombstones an EARLIER contact handle through the production delete
+// path. Declaring it AFTER the contact's children is what produces a
+// soft-deleted parent with live children — a state a seed-and-delete primitive
+// cannot reach.
+func SoftDelete(contactHandle string) Entity {
+	return &softDeletePlan{target: contactHandle}
+}
+
+// --- shared -----------------------------------------------------------------
 
 func sortedMethodKinds() []string {
 	out := make([]string, 0, len(methodKinds))
@@ -182,4 +525,43 @@ func sortedMethodKinds() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func sortedCandidateSources() []string {
+	out := make([]string, 0, len(candidateSources))
+	for k := range candidateSources {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// validateEntityOrder checks that every entity's refs name a CONTACT declared
+// EARLIER in the same list, and that no handle repeats. Callers (Register,
+// RegisterEdge, RunDeclarationForTest) share it so the three cannot disagree
+// about what a well-formed entity list is.
+func validateEntityOrder(entities []Entity) error {
+	seen := map[string]Entity{}
+	for i, e := range entities {
+		if e == nil {
+			return fmt.Errorf("entity %d is nil", i)
+		}
+		if err := e.validate(); err != nil {
+			return err
+		}
+		for _, ref := range e.refs() {
+			target, ok := seen[ref]
+			if !ok {
+				return fmt.Errorf("entity %q references handle %q, which is not declared EARLIER in the same list", e.handle(), ref)
+			}
+			if target.kind() != "contact" {
+				return fmt.Errorf("entity %q references handle %q, which is a %s — only a contact can be referenced", e.handle(), ref, target.kind())
+			}
+		}
+		if _, dup := seen[e.handle()]; dup {
+			return fmt.Errorf("duplicate entity handle %q", e.handle())
+		}
+		seen[e.handle()] = e
+	}
+	return nil
 }

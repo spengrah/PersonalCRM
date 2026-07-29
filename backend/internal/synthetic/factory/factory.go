@@ -112,9 +112,10 @@ const (
 // monotonic local counters so repeated calls produce distinct-but-deterministic
 // identifiers within the run.
 type Generator struct {
-	rng       *rand.Rand
-	namespace string
-	anchor    time.Time
+	rng        *rand.Rand
+	namespace  string
+	anchor     time.Time
+	provenance *generatorProvenance
 
 	// nsBucket is the 1e9-wide telegram peer bucket for this namespace.
 	nsBucket int64
@@ -142,6 +143,13 @@ type Generator struct {
 	usedDisplay map[string]bool
 }
 
+// generatorProvenance is an instance identity carried privately by specs minted
+// from a Generator. The byte keeps separately allocated tokens at distinct
+// addresses; zero-sized allocations are permitted to share an address in Go.
+type generatorProvenance struct {
+	nonZero byte
+}
+
 // NewGenerator builds a Generator with the live accelerated anchor. Use
 // NewGeneratorAt to pin the anchor for determinism assertions.
 func NewGenerator(seed uint64, namespace string) *Generator {
@@ -156,6 +164,7 @@ func NewGeneratorAt(seed uint64, namespace string, anchor time.Time) *Generator 
 		rng:         rand.New(rand.NewPCG(seed, seedHash(namespace))),
 		namespace:   namespace,
 		anchor:      anchor,
+		provenance:  &generatorProvenance{nonZero: 1},
 		nsBucket:    int64(seedHash(namespace)%uint64(telegramPeerBucketCount)) * telegramPeerBucketWidth,
 		nsMsgBucket: int32(seedHash(namespace)%uint64(telegramMsgBucketCount)) * telegramMsgBucketWidth,
 		nsPhoneArea: phoneAreaForHash(seedHash(namespace)),

@@ -81,6 +81,26 @@ const (
 	FixtureMarkerBirthday = "fxbirthday"
 )
 
+// TourOverdueCaptureCap is the maximum overdue population a QA tour capture may
+// carry. It is a CAPTURE bound, not a product limit: the tours' overdue evidence
+// is a JSON array the capture normalizer slices, so a population above the cap
+// would reach the judge as an unnamed subset — which is why both overdue-bearing
+// tours check the live population against it BEFORE their first capture and stop
+// rather than grade a truncated list.
+//
+// It is deliberately a DECISION THRESHOLD rather than a capacity forecast. No
+// headroom is reserved for anyone: the standard world's own test asserts its
+// overdue population stays at or under this number, so the change that would
+// exceed it fails a named test and has to make a conscious call (raise it again
+// with a stated reason, split the world, or exclude a declaration class) with
+// the information in hand. The value only sets WHERE that decision happens.
+//
+// The TypeScript side (OVERDUE_CAPTURE_CAP in
+// frontend/tests/tours/support/pinned-fixtures.ts) must equal this, and the
+// tour-support drift test reads this file to assert it — changing one without
+// the other fails a test.
+const TourOverdueCaptureCap = 96
+
 // PinnedFixtureMarkers is every pinned tour-fixture marker: first the ones this
 // block seeds, then the ones that ride contacts other blocks seed. Within each
 // group the order is declaration order and is NOT load-bearing — nothing reads

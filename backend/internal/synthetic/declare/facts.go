@@ -1,9 +1,12 @@
 package declare
 
 import (
+	"fmt"
 	"os"
 	"sort"
 	"time"
+
+	"personal-crm/backend/internal/synthetic/replay"
 )
 
 // This file states PRODUCT FACTS locally — deliberate, tripwire-guarded
@@ -104,6 +107,55 @@ func dayLength() time.Duration {
 // deriving it from the factory would make a fixture track a regression instead
 // of failing on one — and pinned by a tripwire against the real factory output.
 const sourceHistoryLag = 2 * time.Hour
+
+// History spread. A declared History(n) lays its n inbound messages linearly
+// across ages historyOldestDays … historyNewestDays before the anchor, with no
+// PRNG: the spread is a pure function of (i, n) so the same declaration always
+// produces the same timeline.
+const (
+	historyOldestDays = 120
+	historyNewestDays = 1
+)
+
+// historyMessageAge is how far before the anchor message i of n sits — the
+// oldest first, which is the chronological order the batch adapter requires.
+func historyMessageAge(i, n int) time.Duration {
+	days := historyOldestDays
+	if n > 1 {
+		days = historyOldestDays - ((historyOldestDays-historyNewestDays)*i)/(n-1)
+	}
+	return time.Duration(days) * dayLength()
+}
+
+// historyCreationMargin is how much EARLIER than its oldest message a
+// History-bearing contact is created. It has to be strictly positive: a
+// creation instant exactly equal to the oldest message would mean the first
+// email arrived at the very instant the contact was added, which is not the
+// "a contact exists before the connection it carries" property the margin is
+// for — and which the edge's read-path assertion (created_at STRICTLY before
+// the oldest occurred_at) would fail. One day in the active table, so it is a
+// real margin in production and a proportional one under the compressed tables.
+//
+// Unlike OverdueBy's margin it does NOT need a further period: History is not
+// dragging a forward-only due date backwards (its newest message is recent, so
+// the derived due date moves forward, which the app does anyway).
+func historyCreationMargin() time.Duration { return dayLength() }
+
+// historySpanWithinBatchReach rejects a history whose oldest-to-newest span
+// exceeds what ONE Gmail batch sync can reach. The bound comes from the batch
+// adapter itself rather than a copy of its number, and it is checked against
+// the ACTIVE table so a future change to `weekly` in either environment's
+// cadence configuration surfaces here rather than as a Gate A timeout.
+func historySpanWithinBatchReach(n int) error {
+	if n < 2 {
+		return nil
+	}
+	span := historyMessageAge(0, n) - historyMessageAge(n-1, n)
+	if reach := replay.GmailBatchMaxSpan(); span > reach {
+		return fmt.Errorf("History(%d) spans %s from oldest to newest message but one batch sync reaches only %s", n, span, reach)
+	}
+	return nil
+}
 
 // Cadences is the cadence vocabulary a declaration may use, sorted. It is the
 // validation set for Cadence(...) and the enumeration a satisfiability test can

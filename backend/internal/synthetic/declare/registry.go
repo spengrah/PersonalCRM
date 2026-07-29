@@ -48,18 +48,8 @@ func Register(d Declaration) {
 	if len(d.Entities) == 0 {
 		panic(fmt.Sprintf("declare: Register(%s) with no entities — use RegisterNone for a behavior that needs no fixture", d.Behavior))
 	}
-	handles := map[string]bool{}
-	for i, e := range d.Entities {
-		if e == nil {
-			panic(fmt.Sprintf("declare: Register(%s) entity %d is nil", d.Behavior, i))
-		}
-		if err := e.validate(); err != nil {
-			panic(fmt.Sprintf("declare: Register(%s): %v", d.Behavior, err))
-		}
-		if handles[e.handle()] {
-			panic(fmt.Sprintf("declare: Register(%s): duplicate entity handle %q", d.Behavior, e.handle()))
-		}
-		handles[e.handle()] = true
+	if err := validateEntityOrder(d.Entities); err != nil {
+		panic(fmt.Sprintf("declare: Register(%s): %v", d.Behavior, err))
 	}
 
 	registryMu.Lock()

@@ -13,6 +13,8 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/synthetic/replay"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -187,21 +189,34 @@ func ValidateSeedRequest(behaviorID, namespace string) (Declaration, error) {
 // registered under a spec behavior id. Same Result/RunError semantics as Run.
 func RunDeclarationForTest(ctx context.Context, database *db.Database, d Declaration, namespace string, seed uint64) (Result, error) {
 	requireTestEnv("declare.RunDeclarationForTest")
-	for _, e := range d.Entities {
-		if e == nil {
-			return Result{}, errors.New("declare: declaration carries a nil entity")
-		}
-		if err := e.validate(); err != nil {
-			return Result{}, fmt.Errorf("declare: %w", err)
-		}
-	}
 	if len(d.Entities) == 0 {
 		return Result{}, errors.New("declare: declaration carries no entities")
+	}
+	if err := validateEntityOrder(d.Entities); err != nil {
+		return Result{}, fmt.Errorf("declare: %w", err)
 	}
 	if err := ValidateRequestedNamespace(namespace); err != nil {
 		return Result{}, err
 	}
 	return execute(ctx, database, d, namespace, seedOrDefault(seed))
+}
+
+// RunEdgeForTest executes a registered adversarial EDGE by name, sharing
+// execute's whole protocol (reservation, band claim, Gate-B drain, failure
+// teardown) with the declaration path. It is the edge-side twin of
+// RunDeclarationForTest and exists for the same reason: the satisfiability suite
+// lives in an external package and an edge is deliberately NOT keyed by a spec
+// behavior id, so it can never be reached through Run.
+func RunEdgeForTest(ctx context.Context, database *db.Database, edgeName, namespace string, seed uint64) (Result, error) {
+	requireTestEnv("declare.RunEdgeForTest")
+	e, ok := LookupEdge(edgeName)
+	if !ok {
+		return Result{}, fmt.Errorf("declare: unknown edge %q (%d registered)", edgeName, len(Edges()))
+	}
+	if err := ValidateRequestedNamespace(namespace); err != nil {
+		return Result{}, err
+	}
+	return execute(ctx, database, Declaration{Behavior: "edge:" + e.Name, Entities: e.Entities}, namespace, seedOrDefault(seed))
 }
 
 func seedOrDefault(seed uint64) uint64 {
@@ -559,6 +574,47 @@ func bandsFree(ctx context.Context, support *repository.SyntheticSupportReposito
 	return peers == 0 && chatConfigs == 0 && barePeers == 0 && methodPhones == 0 && identityPhones == 0, nil
 }
 
+// runState carries what a running entity list already produced: the generated
+// spec of every contact (so a later entity can copy its rendered name) and the
+// manifest entry of every handle (so a later entity can act on its row), plus a
+// single monotonic creation log in EXECUTION order.
+type runState struct {
+	specs  map[string]factory.ContactSpec
+	seeded map[string]Seeded
+	// order and orderHandles are the creation log and its parallel handle list,
+	// both in EXECUTION order.
+	order        []Seeded
+	orderHandles []string
+}
+
+func newRunState(size int) *runState {
+	return &runState{
+		specs:  make(map[string]factory.ContactSpec, size),
+		seeded: make(map[string]Seeded, size),
+	}
+}
+
+func (st *runState) record(handle string, seeded Seeded) {
+	st.seeded[handle] = seeded
+	st.order = append(st.order, seeded)
+	st.orderHandles = append(st.orderHandles, handle)
+}
+
+// contactID resolves an earlier CONTACT handle's id. Register-time validation
+// guarantees the handle exists and is a contact, so a failure here is a
+// programming error in the lowering rather than a bad declaration.
+func (st *runState) contactID(handle string) (uuid.UUID, error) {
+	seeded, ok := st.seeded[handle]
+	if !ok {
+		return uuid.Nil, fmt.Errorf("handle %q has not been created", handle)
+	}
+	id, err := uuid.Parse(seeded.ID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("handle %q: %w", handle, err)
+	}
+	return id, nil
+}
+
 // runEntities executes a declaration's entities in declared order, then drains
 // Gate B. Success therefore means "quiescent", not merely "written".
 func runEntities(
@@ -567,23 +623,9 @@ func runEntities(
 	support *repository.SyntheticSupportRepository,
 	d Declaration,
 ) (Result, error) {
-	res := Result{
-		Namespace: h.Namespace(),
-		Anchor:    h.Generator().Anchor(),
-		Entities:  make(map[string]Seeded, len(d.Entities)),
-	}
-	for i, e := range d.Entities {
-		if err := ctx.Err(); err != nil {
-			return Result{}, fmt.Errorf("declare: run budget expired before entity %q: %w", e.handle(), err)
-		}
-		seeded, err := runEntity(ctx, h, support, e)
-		if err != nil {
-			return Result{}, fmt.Errorf("declare: entity %q: %w", e.handle(), err)
-		}
-		res.Entities[e.handle()] = seeded
-		if i == 0 && currentFailpoint() == FailpointAfterFirstEntity {
-			return Result{}, fmt.Errorf("declare: failpoint %q fired after entity %q", FailpointAfterFirstEntity, e.handle())
-		}
+	st := newRunState(len(d.Entities))
+	if err := runEntityList(ctx, h, support, d.Entities, st); err != nil {
+		return Result{}, err
 	}
 
 	if hook := currentHook(HookAfterReplayBeforeDrain); hook != nil {
@@ -594,7 +636,38 @@ func runEntities(
 	if err := h.DrainGateB(ctx); err != nil {
 		return Result{}, err
 	}
-	return res, nil
+	return Result{
+		Namespace: h.Namespace(),
+		Anchor:    h.Generator().Anchor(),
+		Entities:  st.seeded,
+	}, nil
+}
+
+// runEntityList executes entities in declared order, recording each outcome in
+// st. It performs NO Gate-B drain: the drain is a whole-NAMESPACE predicate, so
+// it belongs to the caller — once per declaration for Run, once per composed
+// world for World.
+func runEntityList(
+	ctx context.Context,
+	h *replay.Harness,
+	support *repository.SyntheticSupportRepository,
+	entities []Entity,
+	st *runState,
+) error {
+	for i, e := range entities {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("declare: run budget expired before entity %q: %w", e.handle(), err)
+		}
+		seeded, err := runEntity(ctx, h, support, e, st)
+		if err != nil {
+			return fmt.Errorf("declare: entity %q: %w", e.handle(), err)
+		}
+		st.record(e.handle(), seeded)
+		if i == 0 && currentFailpoint() == FailpointAfterFirstEntity {
+			return fmt.Errorf("declare: failpoint %q fired after entity %q", FailpointAfterFirstEntity, e.handle())
+		}
+	}
+	return nil
 }
 
 func runEntity(
@@ -602,13 +675,104 @@ func runEntity(
 	h *replay.Harness,
 	support *repository.SyntheticSupportRepository,
 	e Entity,
+	st *runState,
 ) (Seeded, error) {
 	switch p := e.(type) {
 	case *contactPlan:
-		return runContact(ctx, h, support, p)
+		return runContact(ctx, h, support, p, st)
+	case *externalCandidatePlan:
+		return runExternalCandidate(ctx, h, p, st)
+	case *notePlan:
+		return runNote(ctx, h, p, st)
+	case *mergePlan:
+		return runMerge(ctx, h, p, st)
+	case *softDeletePlan:
+		return runSoftDelete(ctx, h, p, st)
 	default:
 		return Seeded{}, fmt.Errorf("unsupported entity kind %q", e.kind())
 	}
+}
+
+// runExternalCandidate lowers a declared import candidate onto the direct-upsert
+// seeding primitive. SameNameAs overrides the generated display name with an
+// earlier contact's rendered name, which is what makes the candidate collide
+// with that contact in the matcher rather than merely resemble it.
+func runExternalCandidate(
+	ctx context.Context,
+	h *replay.Harness,
+	p *externalCandidatePlan,
+	st *runState,
+) (Seeded, error) {
+	spec := h.Generator().ExternalContactCandidate(p.source)
+	if p.sameNameAs != "" {
+		twin, ok := st.specs[p.sameNameAs]
+		if !ok {
+			return Seeded{}, fmt.Errorf("SameNameAs(%q): no such contact in this run", p.sameNameAs)
+		}
+		spec.DisplayName = twin.FullName
+	}
+	id, err := h.SeedExternalContactCandidate(ctx, spec)
+	if err != nil {
+		return Seeded{}, err
+	}
+	return Seeded{Kind: "external_contact", ID: id.String(), Name: spec.DisplayName}, nil
+}
+
+// runNote lowers a declared note onto the notepad seeding primitive. The body is
+// generator-derived rather than a literal, so the world stays deterministic and
+// carries no authored content.
+func runNote(ctx context.Context, h *replay.Harness, p *notePlan, st *runState) (Seeded, error) {
+	contactID, err := st.contactID(p.contact)
+	if err != nil {
+		return Seeded{}, err
+	}
+	body := noteBody(h.Generator())
+	id, err := h.SeedNote(ctx, contactID, body)
+	if err != nil {
+		return Seeded{}, err
+	}
+	// SeedNote namespace-prefixes the body it writes; the manifest reports what
+	// is actually stored so a test can assert on the value it will read back.
+	return Seeded{Kind: "note", ID: id.String(), Name: h.Generator().Prefix() + body}, nil
+}
+
+// noteBody is a generator-derived notepad body. gen.Note already prefixes its
+// own body and SeedNote prefixes again, so the prefix is stripped here and the
+// single one SeedNote applies is what lands.
+func noteBody(gen *factory.Generator) string {
+	return strings.TrimPrefix(gen.Note().Body, gen.Prefix())
+}
+
+// runMerge merges one earlier contact into another through the production merge
+// path. Both handles must already exist, which is what lets a chain reparent
+// children across two hops.
+func runMerge(ctx context.Context, h *replay.Harness, p *mergePlan, st *runState) (Seeded, error) {
+	loserID, err := st.contactID(p.loser)
+	if err != nil {
+		return Seeded{}, err
+	}
+	winnerID, err := st.contactID(p.winner)
+	if err != nil {
+		return Seeded{}, err
+	}
+	if err := h.MergeSeededContacts(ctx, winnerID, loserID); err != nil {
+		return Seeded{}, err
+	}
+	return Seeded{Kind: "merge", ID: winnerID.String(), Name: st.seeded[p.winner].Name}, nil
+}
+
+// runSoftDelete tombstones an earlier contact through the production delete
+// path. Declaring it after that contact's children is what produces the
+// soft-deleted-parent-with-live-children state.
+func runSoftDelete(ctx context.Context, h *replay.Harness, p *softDeletePlan, st *runState) (Seeded, error) {
+	contactID, err := st.contactID(p.target)
+	if err != nil {
+		return Seeded{}, err
+	}
+	if err := h.SoftDeleteSeededContact(ctx, contactID); err != nil {
+		return Seeded{}, err
+	}
+	return Seeded{Kind: "soft_delete", ID: contactID.String(), Name: st.seeded[p.target].Name}, nil
 }
 
 // runContact lowers a declared contact onto the toolkit primitives.
@@ -642,6 +806,7 @@ func runContact(
 	h *replay.Harness,
 	support *repository.SyntheticSupportRepository,
 	p *contactPlan,
+	st *runState,
 ) (Seeded, error) {
 	gen := h.Generator()
 
@@ -665,8 +830,22 @@ func runContact(
 			opts = append(opts, factory.WithTelegram())
 		}
 	}
+	if p.nameEdge != "" {
+		opts = append(opts, factory.WithNameEdge(factory.NameEdge(p.nameEdge)))
+	}
+	if p.sameNameAs != "" {
+		twin, ok := st.specs[p.sameNameAs]
+		if !ok {
+			return Seeded{}, fmt.Errorf("SameNameAs(%q): no such contact in this run", p.sameNameAs)
+		}
+		opts = append(opts, factory.WithNameTwinOf(twin))
+	}
+	if p.birthday != nil {
+		opts = append(opts, factory.WithBirthday(p.birthday.resolve(gen.Anchor())))
+	}
 
 	spec := gen.Contact(opts...)
+	st.specs[p.name] = spec
 	contact, err := h.SeedContact(ctx, spec)
 	if err != nil {
 		return Seeded{}, err
@@ -689,7 +868,36 @@ func runContact(
 		}
 	}
 
+	// History drives its messages through the BATCH adapter, which settles once
+	// per dependency generation instead of once per message. n single replays
+	// would be n full settles, which is the difference between a usable long
+	// timeline and one nobody can afford to seed.
+	if p.history != nil {
+		n := *p.history
+		items := make([]replay.GmailBatchItem, 0, n)
+		for i := 0; i < n; i++ {
+			// Oldest first — the chronological order the batch adapter requires.
+			message := gen.GmailMessage(spec, factory.MatchSeeded, factory.WithMessageAge(historyMessageAge(i, n)))
+			items = append(items, replay.GmailBatchItem{ContactID: contact.ID, Spec: message})
+		}
+		if _, err := h.ReplayGmailBatch(ctx, items); err != nil {
+			return Seeded{}, fmt.Errorf("replay declared history: %w", err)
+		}
+	}
+
 	return Seeded{Kind: "contact", ID: contact.ID.String(), Name: contact.FullName}, nil
+}
+
+// resolve turns a declared birthday into a stored date. Both forms land on a
+// LEAP-SAFE birth year, never the year-unknown 1900 sentinel: 1900 is not a leap
+// year, so a February 29 birthday stored against it silently becomes March 1.
+func (b *birthdayPlan) resolve(anchor time.Time) time.Time {
+	year := factory.LeapSafeBirthYear(anchor)
+	if b.inDays != nil {
+		target := anchor.UTC().AddDate(0, 0, *b.inDays)
+		return time.Date(year, target.Month(), target.Day(), 0, 0, 0, 0, time.UTC)
+	}
+	return time.Date(year, b.month, b.day, 0, 0, 0, 0, time.UTC)
 }
 
 // overdueMessageAge is how far before the anchor the history message is dated:
@@ -719,6 +927,13 @@ func creationAge(p *contactPlan) (time.Duration, bool) {
 	}
 	if p.overdueBy != nil {
 		return overdueMessageAge(p) + sourceHistoryLag + period(p.cadence), true
+	}
+	if p.history != nil {
+		// Derived (History): the OLDEST message's realized instant — its
+		// requested age plus the source's fixed safety lag — plus a strictly
+		// positive margin, so creation precedes the first email rather than
+		// coinciding with it.
+		return historyMessageAge(0, *p.history) + sourceHistoryLag + historyCreationMargin(), true
 	}
 	return 0, false
 }

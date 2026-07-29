@@ -72,7 +72,7 @@
 //	                              per-host pair-key.
 //
 //	--seed [--profile P]          Seed the selected synthetic world (P =
-//	      [--namespace N]         minimal-scoped|dev|prod-shaped; default dev)
+//	      [--namespace N]         minimal-scoped|dev|prod-shaped|standard; default dev)
 //	      [--prng-seed S] --yes   into the DB (ADDITIVE). REFUSED in production
 //	                              (CRM_ENV gate) and when the river_job queue is
 //	                              not drained. The crm-api service MUST be
@@ -599,8 +599,8 @@ func parseArgs(args []string) (runOptions, error) {
 			"REFUSED in production. The crm-api service MUST be stopped (use `make staging-reset`). "+
 			"Requires --yes.")
 	fs.StringVar(&opts.seedProfile, "profile", "",
-		"Synthetic profile to seed: minimal-scoped | dev | prod-shaped. Defaults to `dev` for "+
-			"--seed and `prod-shaped` for --reset-and-seed.")
+		"Synthetic profile to seed: minimal-scoped | dev | prod-shaped | standard. Defaults to "+
+			"`dev` for --seed and `prod-shaped` for --reset-and-seed.")
 	fs.StringVar(&opts.seedNamespace, "namespace", "",
 		"Override the stable per-profile namespace (default: the profile's stable token, so a "+
 			"reseed reproduces the same world). Rarely needed.")

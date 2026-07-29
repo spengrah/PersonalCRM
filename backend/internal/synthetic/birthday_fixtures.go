@@ -1,6 +1,10 @@
 package synthetic
 
-import "time"
+import (
+	"time"
+
+	"personal-crm/backend/internal/synthetic/factory"
+)
 
 // BirthdayFixture is one clock-anchored birthday fixture: an offset in days from
 // the (UTC) anchor day and the birthdays-page section it is meant to demonstrate.
@@ -60,8 +64,7 @@ func BirthdayFixturePlan(anchor time.Time) []BirthdayFixture {
 // clamping/normalization; UTC throughout.
 func BirthdayFixtureDate(anchor time.Time, offsetDays int) time.Time {
 	target := anchor.UTC().AddDate(0, 0, offsetDays)
-	birthYear := largestLeapYearOnOrBefore(anchor.UTC().Year() - 30)
-	return time.Date(birthYear, target.Month(), target.Day(), 0, 0, 0, 0, time.UTC)
+	return time.Date(factory.LeapSafeBirthYear(anchor), target.Month(), target.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 // BirthdaylessCatalogCount mirrors catalogOptionsFor's birthday rule: a catalog
@@ -122,21 +125,18 @@ func startOfUTCDay(t time.Time) time.Time {
 	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
 }
 
+// isLeapYear is the calendar rule the leap-safe birth year rests on. The rule
+// itself lives in factory.LeapSafeBirthYear (where both this package and the
+// declare vocabulary can reach it); this predicate stays here so the fixture
+// tests can state the property they are checking directly.
+func isLeapYear(y int) bool {
+	return y%4 == 0 && (y%100 != 0 || y%400 == 0)
+}
+
 // birthdayInYear projects a stored birthday onto a given year, matching the page's
 // new Date(year, month, day): a Feb-29 birthday in a non-leap year rolls to Mar 1
 // exactly as JS does, so the mirror stays faithful.
 func birthdayInYear(bday time.Time, year int) time.Time {
 	b := bday.UTC()
 	return time.Date(year, b.Month(), b.Day(), 0, 0, 0, 0, time.UTC)
-}
-
-func largestLeapYearOnOrBefore(y int) int {
-	for !isLeapYear(y) {
-		y--
-	}
-	return y
-}
-
-func isLeapYear(y int) bool {
-	return y%4 == 0 && (y%100 != 0 || y%400 == 0)
 }

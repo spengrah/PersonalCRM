@@ -275,6 +275,73 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     await expect(giftSection.getByText(febName)).toBeVisible()
   })
 
+  test('a February 29 birthday is observed on February 29 in a leap year', async ({
+    page,
+    request,
+  }) => {
+    // spec: CON-045.leap-day-next-occurrence
+    // A REAL leap birth year (1996): the year-unknown placeholder is 1900, which
+    // is not a leap year, so February 29 is not expressible as a month/day-only
+    // birthday at all.
+    await mockFrozenSystemTime(page, '2028-02-29T12:00:00Z')
+    const leapName = `${testApi.prefix}-Leap Day`
+    await createContactWithBirthday(request, testApi, {
+      fullName: 'Leap Day',
+      birthday: '1996-02-29',
+    })
+
+    await page.goto('/birthdays')
+    await page.waitForLoadState('domcontentloaded')
+
+    const todaySection = page.locator('section', {
+      has: page.getByRole('heading', { name: /Today's Birthdays/ }),
+    })
+    await expect(todaySection).toBeVisible({ timeout: 15000 })
+    const card = todaySection.getByTestId('birthday-card').filter({ hasText: leapName })
+    await expect(card).toBeVisible()
+    await expect(card).toContainText('February 29')
+    await expect(card).toContainText('Today!')
+  })
+
+  test('a February 29 birthday is observed on March 1 in a common year', async ({
+    page,
+    request,
+  }) => {
+    // spec: CON-045.leap-day-next-occurrence
+    // This is the case worth pinning ON THE PAGE. The page projects a stored
+    // birthday onto the current year with new Date(year, month, day), which rolls
+    // February 29 to March 1 in a common year — so from a February 27 frame the
+    // next occurrence is TWO days out, not 367 and not "already celebrated".
+    // Asserting it against the rendered DOM rather than against the Go mirror is
+    // the point: the mirror is a restatement of this arithmetic, so agreeing with
+    // it would prove only self-consistency.
+    await mockFrozenSystemTime(page, '2027-02-27T12:00:00Z')
+    const leapName = `${testApi.prefix}-Leap Common`
+    await createContactWithBirthday(request, testApi, {
+      fullName: 'Leap Common',
+      birthday: '1996-02-29',
+    })
+
+    await page.goto('/birthdays')
+    await page.waitForLoadState('domcontentloaded')
+
+    const upcomingSection = page.locator('section', {
+      has: page.getByRole('heading', { name: /Upcoming Birthdays/ }),
+    })
+    await expect(upcomingSection).toBeVisible({ timeout: 15000 })
+    const card = upcomingSection.getByTestId('birthday-card').filter({ hasText: leapName })
+    await expect(card).toBeVisible()
+    await expect(card).toContainText('March 1')
+    await expect(card).toContainText('2 days')
+
+    // And it is NOT filed as already celebrated: the occurrence is ahead, not
+    // behind, which is the half a naive Feb-28 clamp would get wrong.
+    const celebratedSection = page.locator('section', {
+      has: page.getByRole('heading', { name: /Already Celebrated This Year/ }),
+    })
+    await expect(celebratedSection.getByText(leapName)).toHaveCount(0)
+  })
+
   test('hides the gift-planning section away from year end', async ({ page, request }) => {
     // spec: CON-045.gift-planning-near-year-end
     // June frame → no gift-planning section, even with a Jan-Mar birthday.

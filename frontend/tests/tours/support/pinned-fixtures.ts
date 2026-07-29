@@ -57,9 +57,15 @@ export const ALL_FIXTURE_MARKERS = [
 // overdue contacts are in it. A capture array longer than its cap is sliced
 // head-first, so the tail is dropped — and under the name and last-contacted sorts
 // that tail has nothing to do with urgency, which is how a designated fixture can
-// end up in it. The prod-shaped overdue population measures 52, above the 50-row
-// default, so the overdue-bearing captures carry this EXPLICIT cap instead.
-export const OVERDUE_CAPTURE_CAP = 64
+// end up in it. The prod-shaped overdue population measures 52 and the declared
+// `standard` world 65, both above the 50-row default, so the overdue-bearing
+// captures carry this EXPLICIT cap instead.
+//
+// This MUST equal synthetic.TourOverdueCaptureCap in
+// backend/internal/synthetic/fixtures.go, which carries the reasoning behind the
+// value; pinned-fixtures.test.ts reads that file and fails on drift in either
+// direction.
+export const OVERDUE_CAPTURE_CAP = 96
 
 // Refuse to tour a world whose overdue population has outgrown the capture cap.
 // Truncation is recorded in the capture but the dropped rows are not, so a judge

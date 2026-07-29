@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
@@ -42,8 +43,9 @@ import (
 // ISOLATION: every test here runs on its OWN clone (newIsolatedRiverTestDB).
 // declare.Run starts a live River client, and namespace scoping does not
 // isolate river_job CONSUMPTION — a client draining on a shared database steals
-// sibling tests' jobs. None of these call t.Parallel() for the same reason;
-// this is the case the testing rules sanction the clone for.
+// sibling tests' jobs. The private clone makes t.Parallel safe by construction,
+// and new tests use it by default per the repository testing rules. Tests that
+// arm package-global seams stay serial.
 //
 // The suite deliberately does NOT set CRM_ENV. Under the ambient (production)
 // cadence table a week is a week, so "overdue by three days" is three days
@@ -112,7 +114,6 @@ func (*declareKnowledgeCacheNoopWorker) Work(_ context.Context, _ *river.Job[con
 // API is not a usable fixture.
 func newDeclareReadRouter(t *testing.T, database *db.Database) *gin.Engine {
 	t.Helper()
-	gin.SetMode(gin.TestMode)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
@@ -159,6 +160,25 @@ func newDeclareReadRouter(t *testing.T, database *db.Database) *gin.Engine {
 		Note: handlers.NewNoteHandler(service.NewNoteService(
 			repository.NewNoteRepository(database.Queries), contactRepo)),
 	})
+
+	// The contact-task read surface. The adversarial soft-delete edge pins that
+	// a tombstoned parent's tasks read 404s (the service pre-checks the parent),
+	// which is only assertable through the production handler.
+	handlers.RegisterContactTaskRoutes(v1, handlers.NewContactTaskHandler(
+		service.NewContactTaskServiceForTest(
+			repository.NewContactTaskRepository(database.Queries), contactRepo,
+			repository.NewSyncRepository(database.Queries), "http://localhost:3000"),
+	))
+
+	// The imports read surface. The deep-import-queue and same-name-pair edges
+	// assert per-source pagination, per-candidate keying and the matcher's
+	// suggestion, all of which only exist on the production read path.
+	externalRepo := repository.NewExternalContactRepository(database.Queries)
+	matchSvc := service.NewImportMatchService(contactRepo)
+	suggestionSvc := service.NewSuggestionService(externalRepo, contactRepo, methodRepo, nil, matchSvc, database)
+	handlers.RegisterImportRoutes(v1, handlers.ImportRouteDeps{
+		Import: handlers.NewImportHandler(externalRepo, nil, contactService, matchSvc, nil, suggestionSvc),
+	})
 	return router
 }
 
@@ -176,6 +196,48 @@ func getJSON(t *testing.T, router *gin.Engine, url string, out any) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 	require.True(t, envelope.Success)
 	require.NoError(t, json.Unmarshal(envelope.Data, out))
+}
+
+// apiEnvelope is the full response shape, for the reads whose META is the claim
+// (pagination) and the reads whose STATUS is the claim (a tombstoned id).
+type apiEnvelope struct {
+	Status  int
+	Success bool              `json:"success"`
+	Data    json.RawMessage   `json:"data"`
+	Meta    *api.Meta         `json:"meta"`
+	Error   *apiEnvelopeError `json:"error"`
+}
+
+type apiEnvelopeError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// getEnvelope drives a GET and returns the WHOLE response without requiring 200.
+// The merge-chain and soft-deleted-parent edges assert what the API does with a
+// tombstoned id, and that assertion cannot be written with a helper that
+// requires success.
+func getEnvelope(t *testing.T, router *gin.Engine, url string) apiEnvelope {
+	t.Helper()
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, url, nil))
+
+	env := apiEnvelope{Status: w.Code}
+	// A body that is not the standard envelope is itself a finding, so the
+	// decode failure is reported with the body rather than swallowed.
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &env), "GET %s → %d: %s", url, w.Code, w.Body.String())
+	return env
+}
+
+// getJSONStatus drives a GET, asserts nothing about the status, and decodes
+// `data` into out when the call succeeded. Returns the status code.
+func getJSONStatus(t *testing.T, router *gin.Engine, url string, out any) int {
+	t.Helper()
+	env := getEnvelope(t, router, url)
+	if env.Status == http.StatusOK && out != nil && len(env.Data) > 0 {
+		require.NoError(t, json.Unmarshal(env.Data, out))
+	}
+	return env.Status
 }
 
 // renameContact renames a contact through the PRODUCTION update endpoint — the
