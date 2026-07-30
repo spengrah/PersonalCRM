@@ -126,14 +126,22 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
 
   test('should preserve URL context (sort, search) during navigation', async ({ page }) => {
     // spec: CON-060.sort-order-search-context
+    // The declared fixture PINS both names, so under sort=name&order=asc the
+    // origin ("a") is first and a forward move genuinely exists. That matters
+    // for more than tidiness: at the end of the list the Next control is
+    // disabled and ArrowRight does nothing, and the context assertions below
+    // would then be satisfied by the origin's own unchanged URL — a destination
+    // that was never produced. The destination id is asserted for the same
+    // reason, as an independent guard against a no-op navigation.
     const seeded = await testApi.seedBehavior('CON-060')
+    const originId = seeded.entities['a'].id
+    const nextId = seeded.entities['b'].id
+    const searchTerm = declaredWorldSearch(seeded)
 
     // Go directly to a contact detail page with sort params
     // This tests that the detail page preserves context when navigating
     await page.goto(
-      `/contacts/${seeded.entities['a'].id}?sort=name&order=asc&search=${encodeURIComponent(
-        declaredWorldSearch(seeded)
-      )}`
+      `/contacts/${originId}?sort=name&order=asc&search=${encodeURIComponent(searchTerm)}`
     )
     await page.waitForLoadState('domcontentloaded')
 
@@ -146,11 +154,16 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
 
     // Navigate to next contact using keyboard
     await page.keyboard.press('ArrowRight')
-    await page.waitForLoadState('domcontentloaded')
 
-    // URL should still contain sort params after navigation
-    expect(page.url()).toContain('sort=name')
-    expect(page.url()).toContain('order=asc')
+    // A real destination: the pinned name-ascending neighbour, not the origin.
+    await expect(page).toHaveURL(new RegExp(`/contacts/${nextId}\\?`), { timeout: 10000 })
+    const destination = new URL(page.url())
+    expect(destination.pathname).toBe(`/contacts/${nextId}`)
+
+    // The destination URL carries the whole list context it was reached with.
+    expect(destination.searchParams.get('sort')).toBe('name')
+    expect(destination.searchParams.get('order')).toBe('asc')
+    expect(destination.searchParams.get('search')).toBe(searchTerm)
   })
 
   test('should navigate via navigation bar buttons', async ({ page }) => {

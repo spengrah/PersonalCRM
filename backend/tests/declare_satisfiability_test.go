@@ -4,6 +4,7 @@ package tests
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +111,29 @@ func assertPostcondition(
 
 	detail := getContact(t, router, seeded.ID)
 	assert.Equal(t, seeded.Name, detail.FullName, "manifest name must match the stored full_name")
+
+	if pc.ExplicitName != nil {
+		// The one check that is NOT self-referential: the expectation is the
+		// literal the declaration wrote, so an unwired lowering renders a drawn
+		// name and fails here. A declared NameMarker is appended because the
+		// factory appends it after the pinned pair; nothing else may come between
+		// them (a name edge splices a token INTO the pair, which is why the
+		// vocabulary refuses that combination).
+		expected := factory.SyntheticSourcePrefix + res.Namespace + "-" + *pc.ExplicitName
+		if pc.NameMarker != nil {
+			expected += " " + *pc.NameMarker
+		}
+		assert.Equal(t, expected, detail.FullName,
+			"handle %q pinned an explicit name, so the stored full_name must be exactly that literal", pc.Handle)
+	}
+
+	if pc.NameMarker != nil {
+		// A suffix, not an equality: the marker decorates a base the expectation
+		// cannot predict when the name is drawn.
+		assert.True(t, strings.HasSuffix(detail.FullName, " "+*pc.NameMarker),
+			"handle %q declared the resolution marker %q, which the stored full_name %q does not carry",
+			pc.Handle, *pc.NameMarker, detail.FullName)
+	}
 
 	if pc.Cadence != nil {
 		require.NotNil(t, detail.Cadence, "handle %q should carry a cadence", pc.Handle)

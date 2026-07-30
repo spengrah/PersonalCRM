@@ -833,7 +833,7 @@ func runContact(
 	if p.nameEdge != "" {
 		opts = append(opts, factory.WithNameEdge(factory.NameEdge(p.nameEdge)))
 	}
-	if p.explicitGiven != "" {
+	if p.explicitNameSet {
 		opts = append(opts, factory.WithExplicitName(p.explicitGiven, p.explicitSurname))
 	}
 	if p.nameMarker != nil {

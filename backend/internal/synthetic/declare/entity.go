@@ -293,8 +293,14 @@ func Location(s string) ContactProp {
 // which is a different ordering.
 //
 // It skips the factory's display-name dedupe (an exact literal is the point), so
-// no two entities in one declaration may declare the same pair — checked at
-// registration time.
+// no two entities may declare the same pair. Registration checks that within one
+// entity list; the composed world — where every declaration and edge runs against
+// ONE namespace — is checked across lists by its own guard, because registration
+// order makes a cross-list check at init time impossible.
+//
+// It is mutually exclusive with SameNameAs and NameEdge: a twin copies another
+// contact's rendered name, and an edge splices a token into the pair, so either
+// one would render something other than the literal that was pinned.
 func ExplicitName(given, surname string) ContactProp {
 	return func(p *contactPlan) {
 		p.explicitNameSet = true
@@ -436,6 +442,9 @@ func (p *contactPlan) validate() error {
 		}
 		if p.sameNameAs != "" {
 			return fmt.Errorf("contact %q: ExplicitName and SameNameAs are mutually exclusive — both state what the rendered name is", p.name)
+		}
+		if p.nameEdge != "" {
+			return fmt.Errorf("contact %q: ExplicitName and NameEdge are mutually exclusive — a name edge splices its token between the given name and the surname, so the rendered name would not be the literal that was pinned", p.name)
 		}
 	}
 	if p.nameMarker != nil && strings.TrimSpace(*p.nameMarker) == "" {

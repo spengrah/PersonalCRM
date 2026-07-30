@@ -182,3 +182,40 @@ func TestExecuteWorld_RejectsAnUnreportedTailContact(t *testing.T) {
 	assert.Equal(t, WorldStepValidation, res.Current.Kind)
 	assert.Equal(t, "contact-manifest", res.Current.Key)
 }
+
+// ExplicitName is exempt from the factory's display-name dedupe — an exact
+// literal is the whole point — and World() runs every declaration and every edge
+// against ONE namespace. So two lists pinning the same literal put two
+// identically-named contacts in the composed world, which is precisely the
+// ambiguity the exemption cannot resolve for itself (Playwright's strict mode
+// fails outright on two matching headings, and a manifest read becomes
+// guesswork). validateEntityOrder catches a collision INSIDE one Entities list;
+// nothing but a whole-registry pass can see one across lists, and registration
+// order makes an init-time check unable to (a declaration cannot know about an
+// edge registered after it).
+func TestComposedWorld_PinsNoExplicitNameTwice(t *testing.T) {
+	owner := map[string]string{}
+	claim := func(list string, entities []Entity) {
+		for _, e := range entities {
+			p, ok := e.(*contactPlan)
+			if !ok || !p.explicitNameSet {
+				continue
+			}
+			display := p.explicitGiven + " " + p.explicitSurname
+			here := list + "/" + p.name
+			if prior, dup := owner[display]; dup {
+				t.Errorf("%s and %s both pin the explicit name %q — the composed world would hold two contacts under one name",
+					prior, here, display)
+				continue
+			}
+			owner[display] = here
+		}
+	}
+	for _, d := range Registered() {
+		claim(d.Behavior, d.Entities)
+	}
+	for _, e := range Edges() {
+		claim(e.Name, e.Entities)
+	}
+	require.NotEmpty(t, owner, "the registry must pin at least one explicit name, or this guard proves nothing")
+}

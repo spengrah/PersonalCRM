@@ -547,17 +547,17 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
 
-    // Two-phase search. Phase 1 searches the bare worker prefix (matches ALL
-    // four seeded fixtures) and establishes the non-matching contact IS
+    // Two-phase search. Phase 1 searches the declared world's own term (matches
+    // ALL four seeded fixtures) and establishes the non-matching contact IS
     // reachable via search on this page — without this, its later absence
     // could vacuously pass (e.g. an ignored filter leaving it on page 2 of
-    // the shared DB). Phase 2 narrows to the FilterCadence term and asserts
-    // the non-matching row disappears: only an applied text filter can
-    // remove a row that phase 1 proved present. Each response listener is
-    // registered BEFORE .fill() (a param-carrying request can fire before a
-    // listener added after the fill) and requires the EXACT search term.
+    // the shared DB). Phase 2 appends the resolution marker and asserts the
+    // non-matching row disappears: only an applied text filter can remove a
+    // row that phase 1 proved present. Each response listener is registered
+    // BEFORE .fill() (a param-carrying request can fire before a listener
+    // added after the fill) and requires the EXACT search term.
     const searchInput = page.getByPlaceholder('Search contacts...')
-    const prefixResponse = page.waitForResponse(
+    const worldResponse = page.waitForResponse(
       resp =>
         resp.request().method() === 'GET' &&
         resp.url().includes('/api/v1/contacts') &&
@@ -566,7 +566,7 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     )
     await searchInput.fill(worldTerm)
     await searchInput.press('Enter')
-    await prefixResponse
+    await worldResponse
     await expect(page.getByText(weeklyName)).toBeVisible({ timeout: 10000 })
     await expect(page.getByText(unrelatedName)).toBeVisible()
 

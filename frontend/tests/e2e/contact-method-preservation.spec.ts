@@ -127,7 +127,6 @@ test.describe('Contact method preservation @area:contacts', () => {
     // spec: CON-063.method-added-another-writer
     const seeded = await testApi.seedBehavior('CON-063')
     const contactId = seeded.entities['target'].id
-    const emailA = await seededEmail(request, contactId)
     const emailB = `pres-b-${Date.now()}@example.com`
 
     await openEditMode(page, contactId)

@@ -146,11 +146,17 @@ func init() {
 		},
 	})
 
-	// Two contacts, so moving between them is a real move that has to carry the
-	// list context.
+	// Two contacts whose name-ascending order is known at declaration time, so
+	// opening "a" always leaves a real forward move available. With drawn names
+	// "a" sorts last about half the time, and at the end of the list the Next
+	// control is disabled and the arrow key is a no-op — the citing test would
+	// then assert the carried context against a URL that never changed.
 	Register(Declaration{
 		Behavior: "CON-060",
-		Entities: []Entity{Contact("a"), Contact("b")},
+		Entities: []Entity{
+			Contact("a", ExplicitName("Context", "Carry Alpha")),
+			Contact("b", ExplicitName("Context", "Carry Bravo")),
+		},
 	})
 
 	// A contact whose derived next-contact date is non-null, beside one with no
@@ -183,11 +189,11 @@ func init() {
 	// subtest.
 	Register(Declaration{
 		Behavior: "CON-065",
-		Entities: backNavFixtureEntities(),
+		Entities: backNavFixtureEntities(backNavStemBack),
 	})
 	Register(Declaration{
 		Behavior: "CON-066",
-		Entities: backNavFixtureEntities(),
+		Entities: backNavFixtureEntities(backNavStemReset),
 	})
 }
 
@@ -206,16 +212,27 @@ const backNavFixtureSize = 21
 // satisfiable by an off-by-one.
 const paginationFixtureSize = 22
 
+// The two back-navigation cohorts' name stems. They differ because the composed
+// world runs EVERY declaration against one namespace: a shared stem would put 21
+// pairs of byte-identical full_names in it, which is the ambiguity ExplicitName's
+// dedupe exemption cannot resolve for itself.
+const (
+	backNavStemBack  = "Back"
+	backNavStemReset = "Reset"
+)
+
 // backNavFixtureEntities is the back-navigation cohort: zero-padded pinned names,
 // so name-ASCENDING order equals insertion order and p21 is the sole page-2 row
-// by construction rather than by whatever the name PRNG happened to draw.
-func backNavFixtureEntities() []Entity {
+// by construction rather than by whatever the name PRNG happened to draw. The
+// stem is a parameter so two declarations can share the SHAPE without sharing the
+// literals.
+func backNavFixtureEntities(stem string) []Entity {
 	entities := make([]Entity, 0, backNavFixtureSize)
 	for i := 1; i <= backNavFixtureSize; i++ {
 		entities = append(entities, Contact(
 			fmt.Sprintf("p%02d", i),
 			Cadence("monthly"),
-			ExplicitName("Back", fmt.Sprintf("Nav %02d", i)),
+			ExplicitName(stem, fmt.Sprintf("Nav %02d", i)),
 		))
 	}
 	return entities

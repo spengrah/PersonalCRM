@@ -681,6 +681,18 @@
     "tags": []
   },
   {
+    "_comment": "The declarative fixture definitions. A declaration IS the fixture a migrated spec seeds, so changing one selects the same areas the provisioning handler does. The wider synthetic/ tree below stays untagged: profiles and factories back every area, and mapping them would select the whole suite.",
+    "pattern": "^backend/internal/synthetic/declare/",
+    "tags": [
+      "@area:dashboard",
+      "@area:overdue",
+      "@area:contacts",
+      "@area:contact-navigation",
+      "@area:contact-merge",
+      "@area:birthdays"
+    ]
+  },
+  {
     "pattern": "^backend/internal/synthetic/",
     "tags": []
   },
@@ -689,9 +701,16 @@
     "tags": []
   },
   {
-    "_comment": "Test-only provisioning surface. It has no product behavior of its own, but every seeded spec depends on it, so a change here selects the areas that already provision through it (dashboard today; more as the arc migrates domains).",
+    "_comment": "Test-only provisioning surface. It has no product behavior of its own, but every seeded spec depends on it, so a change here selects every area that provisions through it. Add the next domain's areas here as the arc migrates it.",
     "pattern": "^backend/internal/api/handlers/test(_declared|_routes)?\\.go$",
-    "tags": ["@area:dashboard", "@area:overdue"]
+    "tags": [
+      "@area:dashboard",
+      "@area:overdue",
+      "@area:contacts",
+      "@area:contact-navigation",
+      "@area:contact-merge",
+      "@area:birthdays"
+    ]
   },
   {
     "_comment": "Go unit tests for the test-only handlers carry no E2E area of their own.",

@@ -2,8 +2,10 @@ package declare
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,28 +43,83 @@ func TestContactsDeclarations_RegisterTheExpectedHandleCounts(t *testing.T) {
 	}
 }
 
-// The back-nav fixture's whole purpose is that name-ASCENDING order equals
+// The back-nav fixtures' whole purpose is that name-ASCENDING order equals
 // insertion order, so p21 is the sole row of page 2 at a twenty-row page size.
-// That only holds while the pinned literals stay zero-padded.
-func TestBackNavFixtureEntities_AreNameOrderedByConstruction(t *testing.T) {
-	entities := backNavFixtureEntities()
-	require.Len(t, entities, 21)
+// That only holds while the pinned literals stay zero-padded. Both cohorts are
+// read out of the REGISTRY rather than from the builder, so what the declarations
+// actually pass is what gets checked.
+func TestBackNavCohorts_AreNameOrderedByConstruction(t *testing.T) {
+	for _, id := range []string{"CON-065", "CON-066"} {
+		d, ok := Lookup(id)
+		require.True(t, ok, "%s must be registered", id)
+		require.Len(t, d.Entities, backNavFixtureSize)
 
-	names := make([]string, 0, len(entities))
-	for i, e := range entities {
-		p, ok := e.(*contactPlan)
-		require.True(t, ok)
-		assert.Equal(t, fmt.Sprintf("p%02d", i+1), p.name, "handle order must mirror the rendered order")
-		require.NotEmpty(t, p.explicitGiven, "the fixture depends on a PINNED name, not a drawn one")
-		names = append(names, p.explicitGiven+" "+p.explicitSurname)
+		names := make([]string, 0, len(d.Entities))
+		for i, e := range d.Entities {
+			p, isContact := e.(*contactPlan)
+			require.True(t, isContact)
+			assert.Equal(t, fmt.Sprintf("p%02d", i+1), p.name, "%s: handle order must mirror the rendered order", id)
+			require.True(t, p.explicitNameSet, "%s: the fixture depends on a PINNED name, not a drawn one", id)
+			// The zero padding IS the ordering: "Nav 9" would sort after "Nav 10".
+			assert.Equal(t, fmt.Sprintf("Nav %02d", i+1), p.explicitSurname, "%s: entity %d surname", id, i)
+			names = append(names, p.explicitGiven+" "+p.explicitSurname)
+		}
+
+		for i := 1; i < len(names); i++ {
+			assert.Negative(t, strings.Compare(names[i-1], names[i]),
+				"%s: name-ascending order must equal insertion order: %q is not before %q", id, names[i-1], names[i])
+		}
+	}
+}
+
+// CON-038's fixture exists to be ANTI-CORRELATED: its three pinned names order
+// differently from the cadence order the list defaults to, so an implementation
+// that ignored sort=cadence and fell back to name order cannot accidentally pass.
+// The citing E2E test asserts the cadence order, which holds under ANY names — so
+// a rename to alphabetical literals would leave it green while deleting the
+// property the fixture exists to be. This is where that property is pinned.
+func TestCadenceSortDeclaration_NamesAreAntiCorrelatedWithCadenceOrder(t *testing.T) {
+	d, ok := Lookup("CON-038")
+	require.True(t, ok)
+	require.Len(t, d.Entities, 3)
+
+	type row struct {
+		display string
+		period  time.Duration
+	}
+	rows := make([]row, 0, len(d.Entities))
+	periods := map[time.Duration]bool{}
+	for _, e := range d.Entities {
+		p, isContact := e.(*contactPlan)
+		require.True(t, isContact)
+		require.True(t, p.explicitNameSet,
+			"handle %q must PIN its name — a drawn name cannot be anti-correlated on purpose", p.name)
+		require.NotEmpty(t, p.cadence, "handle %q must carry a cadence", p.name)
+		require.NotZero(t, period(p.cadence), "handle %q: unknown cadence %q", p.name, p.cadence)
+		rows = append(rows, row{display: p.explicitGiven + " " + p.explicitSurname, period: period(p.cadence)})
+		periods[period(p.cadence)] = true
+	}
+	require.Len(t, periods, 3, "the three cadences must have distinct periods, or 'cadence order' is not a total order here")
+
+	displays := func(less func(a, b row) bool) []string {
+		sorted := append([]row(nil), rows...)
+		sort.Slice(sorted, func(i, j int) bool { return less(sorted[i], sorted[j]) })
+		out := make([]string, 0, len(sorted))
+		for _, r := range sorted {
+			out = append(out, r.display)
+		}
+		return out
 	}
 
-	for i := 1; i < len(names); i++ {
-		assert.Negative(t, strings.Compare(names[i-1], names[i]),
-			"name-ascending order must equal insertion order: %q is not before %q", names[i-1], names[i])
-	}
-	assert.Equal(t, "Back Nav 01", names[0])
-	assert.Equal(t, "Back Nav 21", names[20])
+	// The list's default is most-frequent-first, i.e. shortest period first.
+	byCadenceDesc := displays(func(a, b row) bool { return a.period < b.period })
+	byNameAsc := displays(func(a, b row) bool { return a.display < b.display })
+	byNameDesc := displays(func(a, b row) bool { return a.display > b.display })
+
+	assert.NotEqual(t, byCadenceDesc, byNameAsc,
+		"name-ascending order must DIFFER from cadence order, or a name-order fallback passes the citing test")
+	assert.NotEqual(t, byCadenceDesc, byNameDesc,
+		"name-descending order must differ too — a reversed fallback is the same defect")
 }
 
 // CON-054's fixture works by a two-phase search: one phase reaches all four

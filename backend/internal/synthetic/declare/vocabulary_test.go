@@ -378,10 +378,48 @@ func TestExplicitName_RejectsTwoEntitiesPinningTheSameLiteral(t *testing.T) {
 	}))
 }
 
+func TestExplicitName_RejectsANameEdge(t *testing.T) {
+	err := validateEntityOrder([]Entity{Contact("x", ExplicitName("Kbd", "Move Alpha"), NameEdge(NameEdgeRTL))})
+	require.Error(t, err, "a name edge splices its token INTO the pinned pair, so the rendered name is not the literal")
+	assert.Contains(t, err.Error(), "NameEdge")
+}
+
 func TestNameMarker_RejectsABlankToken(t *testing.T) {
 	assert.Error(t, validateEntityOrder([]Entity{Contact("a", NameMarker(""))}))
 	assert.Error(t, validateEntityOrder([]Entity{Contact("a", NameMarker("  "))}))
 	assert.NoError(t, validateEntityOrder([]Entity{Contact("a", NameMarker("cadflt"))}))
+}
+
+// The two name props whose whole purpose is a KNOWN rendered string are the two
+// with nothing to compare against end-to-end unless the declaration states what
+// that string is: the manifest name and the stored full_name are one value read
+// twice. These are the derived facts the read-path assertion turns into an
+// oracle.
+func TestExplicitNameAndMarker_PostconditionsCarryTheDeclaredStrings(t *testing.T) {
+	pcs := postconditionsFor([]Entity{
+		Contact("pinned", ExplicitName("Cadence", "Sort Yankee")),
+		Contact("marked", NameMarker("cadflt")),
+		Contact("both", ExplicitName("Kbd", "Move Alpha"), NameMarker("cadflt")),
+		Contact("drawn"),
+	})
+	require.Len(t, pcs, 4)
+
+	require.NotNil(t, pcs[0].ExplicitName)
+	assert.Equal(t, "Cadence Sort Yankee", *pcs[0].ExplicitName,
+		"the postcondition holds the rendered display literal; the assertion prefixes it with the run's own namespace")
+	assert.Nil(t, pcs[0].NameMarker)
+
+	assert.Nil(t, pcs[1].ExplicitName, "a drawn name cannot be predicted, so nothing is claimed about it")
+	require.NotNil(t, pcs[1].NameMarker)
+	assert.Equal(t, "cadflt", *pcs[1].NameMarker)
+
+	require.NotNil(t, pcs[2].ExplicitName)
+	require.NotNil(t, pcs[2].NameMarker)
+	assert.Equal(t, "Kbd Move Alpha", *pcs[2].ExplicitName,
+		"the marker is NOT folded in here — the assertion appends it, in the order the factory renders it")
+
+	assert.Nil(t, pcs[3].ExplicitName)
+	assert.Nil(t, pcs[3].NameMarker)
 }
 
 // --- shared helpers ---------------------------------------------------------
