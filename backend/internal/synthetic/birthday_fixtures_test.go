@@ -5,55 +5,8 @@ import (
 	"time"
 )
 
-func TestBirthdayFixturePlan_Ordering(t *testing.T) {
-	anchor := time.Date(2026, time.June, 15, 9, 0, 0, 0, time.UTC)
-	plan := BirthdayFixturePlan(anchor)
-
-	// The strict {today, +1, distant} triple is always the first three, in order.
-	if len(plan) < 3 {
-		t.Fatalf("plan must carry the strict triple, got %d fixtures", len(plan))
-	}
-	want := []struct {
-		offset int
-		role   string
-	}{
-		{0, BirthdayRoleToday},
-		{1, BirthdayRoleImminent},
-		{90, BirthdayRoleDistant},
-		{5, BirthdayRoleThisWeek},
-		{150, BirthdayRoleDistant2},
-		{-3, BirthdayRoleCelebrated},
-	}
-	for i, w := range want {
-		if plan[i].OffsetDays != w.offset || plan[i].Role != w.role {
-			t.Errorf("plan[%d] = {%d, %q}, want {%d, %q}", i, plan[i].OffsetDays, plan[i].Role, w.offset, w.role)
-		}
-	}
-}
-
-func TestBirthdayFixturePlan_CelebratedDateGating(t *testing.T) {
-	// In the first three days of January a 3-days-ago birthday falls in the
-	// previous calendar year, so celebrated is dropped and the plan is length 5.
-	for _, day := range []int{1, 2, 3} {
-		anchor := time.Date(2026, time.January, day, 12, 0, 0, 0, time.UTC)
-		if got := len(BirthdayFixturePlan(anchor)); got != 5 {
-			t.Errorf("Jan %d: plan length = %d, want 5 (celebrated gated out)", day, got)
-		}
-	}
-	// From January 4 onward (and every other day of the year) celebrated applies.
-	for _, anchor := range []time.Time{
-		time.Date(2026, time.January, 4, 12, 0, 0, 0, time.UTC),
-		time.Date(2026, time.June, 15, 12, 0, 0, 0, time.UTC),
-		time.Date(2026, time.December, 31, 12, 0, 0, 0, time.UTC),
-	} {
-		if got := len(BirthdayFixturePlan(anchor)); got != 6 {
-			t.Errorf("%s: plan length = %d, want 6 (celebrated applies)", anchor.Format("2006-01-02"), got)
-		}
-	}
-}
-
 func TestBirthdayFixtureDate_LeapSafe(t *testing.T) {
-	// A Feb-29 anchor: the today fixture must store Feb 29 (not roll to Mar 1 nor
+	// A Feb-29 anchor: a today fixture must store Feb 29 (not roll to Mar 1 nor
 	// clamp to Feb 28) so the page still classifies it as today, not celebrated.
 	anchor := time.Date(2024, time.February, 29, 8, 0, 0, 0, time.UTC)
 	bday := BirthdayFixtureDate(anchor, 0)
@@ -68,15 +21,6 @@ func TestBirthdayFixtureDate_LeapSafe(t *testing.T) {
 	}
 	if got := BirthdayBucket(bday, anchor); got != "today" {
 		t.Errorf("Feb-29 today fixture bucket = %q, want today", got)
-	}
-}
-
-func TestBirthdaylessCatalogCount(t *testing.T) {
-	cases := map[int]int{5: 3, 18: 13, 150: 119}
-	for n, want := range cases {
-		if got := BirthdaylessCatalogCount(n); got != want {
-			t.Errorf("BirthdaylessCatalogCount(%d) = %d, want %d", n, got, want)
-		}
 	}
 }
 
@@ -102,17 +46,21 @@ func TestBirthdayBucket_BoundaryOffsets(t *testing.T) {
 	}
 }
 
-func TestBirthdayFixtureDate_PlanRolesLandAsIntended(t *testing.T) {
-	// Every fixture's next-occurrence distance is DATE-INDEPENDENT: a fixture at
-	// offset o (0<=o<365) is always exactly o days out, regardless of where in the
-	// year the anchor sits. The PAGE SECTION is NOT date-independent — a +5 fixture
-	// seeded on Dec 27 wraps to Jan 1, whose occurrence THIS year is already past, so
-	// the page files it under "Already Celebrated This Year" though it is 5 days out.
-	// So we pin the robust daysUntil==offset for the forward fixtures (not a fragile
-	// section bucket), and past-this-year for the celebrated fixture (which its
-	// date-gating keeps same-year). The section→offset mapping is verified against the
-	// real page by the frontend parity test. Anchors deliberately include the
-	// year-end boundary (Dec 27–31, Jan 1) where the wrap bites.
+func TestBirthdayFixtureDate_OffsetIsDateIndependent(t *testing.T) {
+	// A fixture at offset o (0<=o<365) is always exactly o days out, regardless of
+	// where in the year the anchor sits — which is what lets the pinned birthday
+	// fixture's day count be stated as a contract rather than measured per reseed.
+	// The PAGE SECTION is NOT date-independent: a +5 fixture seeded on Dec 27 wraps
+	// to Jan 1, whose occurrence THIS year is already past, so the page files it
+	// under "Already Celebrated This Year" though it is 5 days out. So we pin the
+	// robust daysUntil==offset for forward fixtures (not a fragile section bucket),
+	// and past-this-year for a backward one (which only holds when the offset stays
+	// inside the anchor's calendar year, so it is checked only for anchors where it
+	// does). The section→offset mapping is verified against the real page by the
+	// frontend parity test. Anchors deliberately include the year-end boundary
+	// (Dec 27–31, Jan 1) where the wrap bites, plus Feb 29 and a +90 that LANDS on
+	// Feb 29.
+	forward := []int{0, FixtureBirthdayOffsetDays, 1, 5, 7, 90, 150}
 	for _, anchor := range []time.Time{
 		time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC),
 		time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC),
@@ -124,17 +72,23 @@ func TestBirthdayFixtureDate_PlanRolesLandAsIntended(t *testing.T) {
 		time.Date(2026, time.December, 31, 12, 0, 0, 0, time.UTC),
 		time.Date(2023, time.December, 1, 12, 0, 0, 0, time.UTC), // +90 lands Feb 29 2024
 	} {
-		for _, f := range BirthdayFixturePlan(anchor) {
-			bday := BirthdayFixtureDate(anchor, f.OffsetDays)
-			if f.OffsetDays >= 0 {
-				if got := BirthdayDaysUntil(bday, anchor); got != f.OffsetDays {
-					t.Errorf("%s role %q: daysUntil = %d, want %d (offset)",
-						anchor.Format("2006-01-02"), f.Role, got, f.OffsetDays)
-				}
-			} else if !BirthdayIsPastThisYear(bday, anchor) {
-				t.Errorf("%s role %q (offset %d): want past-this-year (celebrated)",
-					anchor.Format("2006-01-02"), f.Role, f.OffsetDays)
+		for _, offset := range forward {
+			bday := BirthdayFixtureDate(anchor, offset)
+			if got := BirthdayDaysUntil(bday, anchor); got != offset {
+				t.Errorf("%s offset %d: daysUntil = %d, want %d",
+					anchor.Format("2006-01-02"), offset, got, offset)
 			}
+		}
+		// A backward offset reads as past-this-year only while it stays inside the
+		// anchor's calendar year — in the first days of January a 3-days-ago birthday
+		// belongs to the PREVIOUS year, so its next annual occurrence is ~362 days out
+		// and the page classifies it distant. That date-dependence is the reason the
+		// pinned fixture uses a forward offset.
+		bday := BirthdayFixtureDate(anchor, -3)
+		sameYear := anchor.UTC().AddDate(0, 0, -3).Year() == anchor.UTC().Year()
+		if got := BirthdayIsPastThisYear(bday, anchor); got != sameYear {
+			t.Errorf("%s offset -3: pastThisYear = %v, want %v (same calendar year = %v)",
+				anchor.Format("2006-01-02"), got, sameYear, sameYear)
 		}
 	}
 }

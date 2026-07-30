@@ -2,6 +2,8 @@
 
 **Issue:** #635 · **Date:** 2026-07-12 · **Status:** plan, not implemented · **Depends on:** [`2026-07-12-qa-architecture-restructuring.md`](./2026-07-12-qa-architecture-restructuring.md) · **Companion to:** [`2026-07-11-llm-observability-platform-spike-decision.md`](./2026-07-11-llm-observability-platform-spike-decision.md)
 
+> **Superseded on the seed profile (2026-07-30, gh #759).** The `dev` and `prod-shaped` catalog profiles — and the whole invented-distribution layer behind them (bands, quotas, archetypes, margins) — are deleted. There are now exactly two worlds: the declared `standard` world (the default for local dev, staging, the automated staging reseed, and the QA tours) and `minimal-scoped` (an explicit operator override). Historical measurements below were taken against the world that existed at the time and are left as recorded; operational commands and provenance assumptions have been updated to `standard` / `synth-standard-`. See `.ai/patterns/synthetic-seed-toolkit.md` for the current story.
+
 The spike proved the round trip end to end: a draft label was annotated in the Langfuse UI and exported back to git as ground truth. That proof deliberately kept **git as SSOT**, because #635 asked for it. This doc plans the inversion — Langfuse becomes the source of truth for the evidence and the human judgment, and the corresponding files leave git tracking.
 
 ## Why this is possible now (and was not last week)
@@ -40,12 +42,12 @@ Evidence and judgment are runtime artifacts. Graders, renderers, tours, and the 
 
 ### 2. The PII gate moves from the repo to the wire
 
-`corpus/pii-audit.ts` is the P0 gate: it greps every committed artifact for UUIDs, real hostnames, emails, phones, secrets, and asserts the `synth-prodshaped-` name prefix. It runs as a vitest over the committed tree. If the corpus leaves the tree, **that gate stops protecting anything** — and worse, the destination is a rented VPS.
+`corpus/pii-audit.ts` is the P0 gate: it greps every committed artifact for UUIDs, real hostnames, emails, phones, secrets, and asserts the seed's `synth-<namespace>-` name prefix (`synth-standard-` on the shipping world). It runs as a vitest over the committed tree. If the corpus leaves the tree, **that gate stops protecting anything** — and worse, the destination is a rented VPS.
 
 Two changes, and the second is the one that matters:
 
 - **The audit becomes a pre-upload gate**, not a pre-commit one. The push tool runs `pii-audit` over the payload and refuses to upload on any finding. Same code, new call site.
-- **Pixels cannot be grepped.** The README already flags this ("the PII audit can grep JSON, not pixels") — which is exactly why screenshots were never committed. Sending them to Langfuse re-opens the question. The answer cannot be content inspection; it must be **provenance**: refuse to push a run unless it was seeded from a synthetic profile (`TOURS_SEED_PROFILE=prod-shaped` against a `crm-admin --reset-and-seed` world), and record that provenance on the dataset. The captures are *provably* synthetic today because every contact name carries the `synth-prodshaped-` factory prefix; the screenshots are pictures of that same synthetic world. **The invariant to enforce mechanically is "this run never saw real data," not "these bytes contain no PII."** A push tool that will happily upload a run taken against the maintainer's real local CRM is the single most dangerous thing in this plan.
+- **Pixels cannot be grepped.** The README already flags this ("the PII audit can grep JSON, not pixels") — which is exactly why screenshots were never committed. Sending them to Langfuse re-opens the question. The answer cannot be content inspection; it must be **provenance**: refuse to push a run unless it was seeded from a synthetic profile (`TOURS_SEED_PROFILE=standard` against a `crm-admin --reset-and-seed` world), and record that provenance on the dataset. The captures are *provably* synthetic today because every contact name carries the seed's `synth-<namespace>-` factory prefix; the screenshots are pictures of that same synthetic world. **The invariant to enforce mechanically is "this run never saw real data," not "these bytes contain no PII."** A push tool that will happily upload a run taken against the maintainer's real local CRM is the single most dangerous thing in this plan.
 
 ### 3. Reproducing a past eval
 

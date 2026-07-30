@@ -2,14 +2,14 @@ import { describe, it, expect } from 'vitest'
 import { buildManifest, redactHost } from './manifest'
 
 describe('buildManifest seed-profile provenance', () => {
-  it('defaults an unset seedProfile to "unknown" (NOT "prod-shaped")', () => {
+  it('defaults an unset seedProfile to "unknown" (NOT "standard")', () => {
     const m = buildManifest({ runId: 'r1' })
     expect(m.seedProfile).toBe('unknown')
   })
 
   it('honors an operator-declared seedProfile override', () => {
-    const m = buildManifest({ runId: 'r1', seedProfile: 'prod-shaped' })
-    expect(m.seedProfile).toBe('prod-shaped')
+    const m = buildManifest({ runId: 'r1', seedProfile: 'minimal-scoped' })
+    expect(m.seedProfile).toBe('minimal-scoped')
   })
 
   it('stamps both version fields and the runId', () => {

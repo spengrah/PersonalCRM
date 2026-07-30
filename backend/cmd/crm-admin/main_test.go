@@ -760,7 +760,7 @@ func TestParseArgsAllFlags(t *testing.T) {
 			// --seed (bool subcommand) and --prng-seed (uint64) are DISTINCT
 			// flags — Go's flag cannot bind one name to both.
 			"seed with distinct prng-seed + profile + yes",
-			[]string{"--seed", "--profile", "dev", "--prng-seed", "42", "--namespace", "ns1", "--yes"},
+			[]string{"--seed", "--profile", "minimal-scoped", "--prng-seed", "42", "--namespace", "ns1", "--yes"},
 			func(t *testing.T, o runOptions) {
 				if !o.doSeed {
 					t.Fatal("--seed bool not set")
@@ -768,8 +768,8 @@ func TestParseArgsAllFlags(t *testing.T) {
 				if o.prngSeed != 42 {
 					t.Fatalf("expected prng-seed 42, got %d", o.prngSeed)
 				}
-				if o.seedProfile != "dev" {
-					t.Fatalf("expected profile dev, got %q", o.seedProfile)
+				if o.seedProfile != "minimal-scoped" {
+					t.Fatalf("expected profile minimal-scoped, got %q", o.seedProfile)
 				}
 				if o.seedNamespace != "ns1" {
 					t.Fatalf("expected namespace ns1, got %q", o.seedNamespace)
@@ -934,7 +934,7 @@ func TestRunSeedDispatchesAdditiveWithDefaults(t *testing.T) {
 	seed := &fakeSeedRunner{}
 	deps.seed = seed
 
-	// --yes confirms; default profile for --seed is `dev`.
+	// --yes confirms; the default profile for --seed is the declared `standard` world.
 	err := run(context.Background(), runOptions{doSeed: true, seedYes: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -942,12 +942,15 @@ func TestRunSeedDispatchesAdditiveWithDefaults(t *testing.T) {
 	if seed.seedCalls != 1 || seed.resetCalls != 0 {
 		t.Fatalf("expected exactly one additive Seed call, got seed=%d reset=%d", seed.seedCalls, seed.resetCalls)
 	}
-	if seed.lastParams.Profile != synthetic.ProfileDev {
-		t.Fatalf("expected default --seed profile dev, got %q", seed.lastParams.Profile)
+	if seed.lastParams.Profile != synthetic.ProfileStandard {
+		t.Fatalf("expected default --seed profile standard, got %q", seed.lastParams.Profile)
+	}
+	if seed.lastParams.Namespace != "standard" {
+		t.Fatalf("expected default --seed namespace standard, got %q", seed.lastParams.Namespace)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "seed summary (profile=dev") {
-		t.Fatalf("expected counts-only summary, got %q", out)
+	if !strings.Contains(out, "seed summary (profile=standard namespace=standard") {
+		t.Fatalf("expected counts-only summary with standard provenance, got %q", out)
 	}
 }
 
@@ -963,11 +966,14 @@ func TestRunResetAndSeedDispatchesWithDefaults(t *testing.T) {
 	if seed.resetCalls != 1 || seed.seedCalls != 0 {
 		t.Fatalf("expected exactly one ResetAndSeed call, got seed=%d reset=%d", seed.seedCalls, seed.resetCalls)
 	}
-	if seed.lastParams.Profile != synthetic.ProfileProdShaped {
-		t.Fatalf("expected default --reset-and-seed profile prod-shaped, got %q", seed.lastParams.Profile)
+	if seed.lastParams.Profile != synthetic.ProfileStandard {
+		t.Fatalf("expected default --reset-and-seed profile standard, got %q", seed.lastParams.Profile)
 	}
-	if !strings.Contains(stdout.String(), "seed summary (profile=prod-shaped") {
-		t.Fatalf("expected counts-only summary, got %q", stdout.String())
+	if seed.lastParams.Namespace != "standard" {
+		t.Fatalf("expected default --reset-and-seed namespace standard, got %q", seed.lastParams.Namespace)
+	}
+	if !strings.Contains(stdout.String(), "seed summary (profile=standard namespace=standard") {
+		t.Fatalf("expected counts-only summary with standard provenance, got %q", stdout.String())
 	}
 }
 

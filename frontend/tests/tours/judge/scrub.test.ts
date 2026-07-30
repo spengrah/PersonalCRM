@@ -5,10 +5,10 @@ import { EMAIL_RE, PHONE_RES } from './pii-patterns'
 describe('scrub email/phone → placeholders', () => {
   it('maps emails to stable <email:N> placeholders (first-seen)', () => {
     const s = createScrubber()
-    expect(s.scrub('reach synth-prodshaped-brux.dummond-52@synthetic.example now')).toBe(
+    expect(s.scrub('reach synth-standard-brux.dummond-52@synthetic.example now')).toBe(
       'reach <email:1> now'
     )
-    expect(s.scrub('a@b.com and synth-prodshaped-brux.dummond-52@synthetic.example')).toBe(
+    expect(s.scrub('a@b.com and synth-standard-brux.dummond-52@synthetic.example')).toBe(
       '<email:2> and <email:1>'
     )
   })

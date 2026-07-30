@@ -72,7 +72,7 @@
 //	                              per-host pair-key.
 //
 //	--seed [--profile P]          Seed the selected synthetic world (P =
-//	      [--namespace N]         minimal-scoped|dev|prod-shaped|standard; default dev)
+//	      [--namespace N]         minimal-scoped|standard; default standard)
 //	      [--prng-seed S] --yes   into the DB (ADDITIVE). REFUSED in production
 //	                              (CRM_ENV gate) and when the river_job queue is
 //	                              not drained. The crm-api service MUST be
@@ -88,7 +88,7 @@
 //	                                internals + the migration-seeded curated
 //	                                catalog [predicate/entity_type, provisional
 //	                                rows cleared]), then reseed (default profile
-//	                                prod-shaped). REFUSED in production.
+//	                                standard). REFUSED in production.
 //	                                The crm-api service MUST be STOPPED (use
 //	                                `make staging-reset`). Requires --yes. The
 //	                                stable namespace makes the reseed reproducible.
@@ -599,8 +599,8 @@ func parseArgs(args []string) (runOptions, error) {
 			"REFUSED in production. The crm-api service MUST be stopped (use `make staging-reset`). "+
 			"Requires --yes.")
 	fs.StringVar(&opts.seedProfile, "profile", "",
-		"Synthetic profile to seed: minimal-scoped | dev | prod-shaped | standard. Defaults to "+
-			"`dev` for --seed and `prod-shaped` for --reset-and-seed.")
+		"Synthetic profile to seed: minimal-scoped | standard. Defaults to `standard` for both "+
+			"--seed and --reset-and-seed; `minimal-scoped` is an explicit override for a tiny world.")
 	fs.StringVar(&opts.seedNamespace, "namespace", "",
 		"Override the stable per-profile namespace (default: the profile's stable token, so a "+
 			"reseed reproduces the same world). Rarely needed.")
@@ -791,9 +791,8 @@ func requireSeedConfirm(opts runOptions) error {
 }
 
 // resolveSeedParams builds the SeedParams for a seed/reset run: the profile
-// (defaulting per command), the stable namespace (overridable), and the PRNG
-// seed (overridable). defaultProfile is `dev` for --seed, `prod-shaped` for
-// --reset-and-seed.
+// (defaulting to `standard` for both commands), the stable namespace
+// (overridable), and the PRNG seed (overridable).
 func resolveSeedParams(opts runOptions, defaultProfile synthetic.Profile) (synthetic.SeedParams, error) {
 	profile := defaultProfile
 	if opts.seedProfile != "" {
@@ -827,7 +826,7 @@ func runSeed(ctx context.Context, opts runOptions, deps adminDeps) error {
 	if err := requireSeedConfirm(opts); err != nil {
 		return err
 	}
-	params, err := resolveSeedParams(opts, synthetic.ProfileDev)
+	params, err := resolveSeedParams(opts, synthetic.ProfileStandard)
 	if err != nil {
 		return fmt.Errorf("--seed: %w", err)
 	}
@@ -846,7 +845,7 @@ func runResetAndSeed(ctx context.Context, opts runOptions, deps adminDeps) error
 	if err := requireSeedConfirm(opts); err != nil {
 		return err
 	}
-	params, err := resolveSeedParams(opts, synthetic.ProfileProdShaped)
+	params, err := resolveSeedParams(opts, synthetic.ProfileStandard)
 	if err != nil {
 		return fmt.Errorf("--reset-and-seed: %w", err)
 	}
@@ -898,27 +897,19 @@ func writeSeedSummary(w io.Writer, res synthetic.ProfileResult, partial bool) er
 		"  contacts:             %d\n"+
 		"  gmail_settled:        %d\n"+
 		"  telegram_settled:     %d\n"+
-		"  gcal_settled:         %d\n"+
-		"  gchat_settled:        %d\n"+
-		"  imessage_settled:     %d\n"+
-		"  unmatched_external:   %d\n"+
-		"  stranded_telegram:    %d\n"+
-		"  stranded_messages:    %d\n"+
-		"  unmatched_calendar:   %d\n"+
-		"  orphan_meeting_notes: %d\n"+
-		// Three archetype figures in three different UNITS, which is why they are
-		// reported separately rather than reconciled: payloads driven, interaction
-		// rows landed (smaller by design — aggregation collapses a promotion pair
-		// into one mutual and a burst into one session), and settle gates waited on
-		// (one per dependency generation, not per payload — the phase's real cost).
-		"  archetype_payloads:   %d\n"+
-		"  archetype_rows:       %d\n"+
-		"  archetype_settles:    %d\n",
+		// settled_interactions is the replay-CALL count, so it is the upper bound on
+		// the interaction rows produced rather than a row count: same-day messages on
+		// one contact aggregate, and the mutual rider's two calls collapse to one
+		// promoted row (which is why that rider is reported separately below).
+		"  settled_interactions: %d\n"+
+		"  tasks:                %d\n"+
+		"  pending_followups:    %d\n"+
+		"  outbound_only:        %d\n"+
+		"  mutual_messages:      %d\n",
 		res.Profile, res.Namespace, res.Seed, marker,
-		res.Contacts, res.GmailSettled, res.TelegramSettled, res.GCalSettled, res.GChatSettled,
-		res.IMessageSettled, res.UnmatchedExternal, res.StrandedTelegram, res.StrandedMessages,
-		res.UnmatchedCalendar, res.OrphanMeetingNote,
-		res.ArchetypePayloads, res.ArchetypeInteractions, res.ArchetypeSettleCalls); err != nil {
+		res.Contacts, res.GmailSettled, res.TelegramSettled,
+		res.SettledInteractions, res.SeededTasks, res.SeededPendingFollowUps,
+		res.OutboundOnlyContacts, res.MutualMessageContacts); err != nil {
 		return fmt.Errorf("write seed summary: %w", err)
 	}
 	if err := writeSeedTimings(w, res.Timings); err != nil {

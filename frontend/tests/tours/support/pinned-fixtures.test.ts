@@ -48,11 +48,9 @@ describe('assertOverdueFitsCapture', () => {
   })
 
   it('accepts the population the seed actually ships', () => {
-    // 50 catalog overdue slots + the 2 designated fixtures, measured on a
-    // prod-shaped world. The guard must not fire on the shipping seed — a cap that
-    // rejects the intended population is as broken as one that never fires.
-    expect(() => assertOverdueFitsCapture(52, 'relationship-loop')).not.toThrow()
-    // ...and the declared `standard` world, measured at 65.
+    // The guard must not fire on the shipping seed — a cap that rejects the
+    // intended population is as broken as one that never fires. The declared
+    // `standard` world's overdue population is measured at 65.
     expect(() => assertOverdueFitsCapture(65, 'relationship-loop')).not.toThrow()
   })
 

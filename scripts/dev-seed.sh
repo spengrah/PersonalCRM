@@ -10,7 +10,7 @@
 # CRM_ENV gate; --yes is mandatory.
 #
 # Knobs:
-#   DEV_SEED_PROFILE  which world to seed (default: dev)
+#   DEV_SEED_PROFILE  which world to seed (default: standard)
 #   DEV_SEED_RESET=1  HARD-wipe first (--reset-and-seed) instead of the additive
 #                     --seed. An additive seed leaves whatever world was there
 #                     before, so anything MEASURING a world (a tour rehearsal, a
@@ -42,7 +42,7 @@ export CRM_ENV="${CALLER_CRM_ENV:-${CRM_ENV:-testing}}"
 # (NOT backend/migrations — that would resolve to backend/backend/migrations).
 export MIGRATIONS_PATH="migrations"
 
-PROFILE="${DEV_SEED_PROFILE:-dev}"
+PROFILE="${DEV_SEED_PROFILE:-standard}"
 
 SEED_FLAG="--seed"
 SEED_VERB="Seeding"

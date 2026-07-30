@@ -135,7 +135,7 @@ help:
 	@echo "  dev-native   - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  worktree-env - Symlink the main checkout's gitignored env files into this worktree"
 	@echo "  worktree-deps - Install per-worktree frontend deps (node_modules) into this worktree"
-	@echo "  staging-reset - HARD reset + reseed STAGING with the prod-shaped synthetic world — the manual force path / escape hatch (full wipe regardless of oauth; deploy-staging.yml auto-reseeds on seed-surface changes). Fail-closed: refuses a production-alias/empty CRM_ENV"
+	@echo "  staging-reset - HARD reset + reseed STAGING with the declared 'standard' synthetic world — the manual force path / escape hatch (full wipe regardless of oauth; deploy-staging.yml auto-reseeds on seed-surface changes). Fail-closed: refuses a production-alias/empty CRM_ENV. Override the world with STAGING_RESET_PROFILE=minimal-scoped"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
 	@echo "  mac-daemon  - Build the macOS daemon app bundle (optionally set CRM_MAC_CODESIGN_IDENTITY)"
@@ -295,7 +295,7 @@ dev-api-restart:
 	@make dev-api-start
 
 staging-reset: ## HARD reset + reseed STAGING — manual force / escape hatch (full wipe regardless of oauth; deploy-staging.yml auto-reseeds on seed-surface changes; fail-closed production refuse; STAGING-only)
-	@bash scripts/staging-reset.sh   # ssh STAGING_HOST -> refuse if CRM_ENV is a production alias or empty -> stop backend -> ephemeral crm-admin --reset-and-seed --profile prod-shaped --yes (deployed image) -> start backend
+	@bash scripts/staging-reset.sh   # ssh STAGING_HOST -> refuse if CRM_ENV is a production alias or empty -> stop backend -> ephemeral crm-admin --reset-and-seed --profile standard --yes (deployed image) -> start backend
 
 tours: ## Reset staging + run the agentic UX QA tours. Config from env only: TOURS_BASE_URL, TOURS_API_KEY, TOURS_API_URL. Captures land in frontend/tests/tours/.runs/ (gitignored). TOURS_SKIP_RESET=1 skips the reset.
 	@scripts/run-tours.sh

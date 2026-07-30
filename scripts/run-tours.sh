@@ -1,7 +1,7 @@
 #!/bin/bash
 # Reset-before-run wrapper for the agentic UX QA tours.
 #
-# Runs staging-reset.sh (ssh) for a known prod-shaped world BEFORE Playwright
+# Runs staging-reset.sh (ssh) for a known `standard` world BEFORE Playwright
 # launches, resolves the deployed staging image digest (read-only ssh, mirroring
 # staging-reset.sh's read_image_ref WITHOUT modifying that shared script),
 # exports the run env, then launches the dedicated tours config.
@@ -11,7 +11,7 @@
 #   TOURS_API_KEY    staging X-API-Key         (required)
 #   TOURS_API_URL    staging backend base URL  (optional; defaults to TOURS_BASE_URL)
 #   TOURS_SKIP_RESET=1  skip staging-reset (dev iteration against a seeded staging)
-#   TOURS_RESEED_SSH    forced-command ssh dest for the prod-shaped reseed (e.g.
+#   TOURS_RESEED_SSH    forced-command ssh dest for the standard reseed (e.g.
 #                       qa-staging@10.100.0.1). When set (and not skipped), reseed via
 #                       this instead of staging-reset.sh — the QA-sandbox path, since
 #                       staging-reset.sh's ssh->STAGING_HOST + sudo -u <tenant> does
@@ -53,21 +53,24 @@ if [[ ! "$TOURS_RUN_ID" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
     exit 1
 fi
 
-# --- Reset staging to the prod-shaped world (unless skipped) ---
+# --- Reset staging to the standard world (unless skipped) ---
 if [ "${TOURS_SKIP_RESET:-0}" = "1" ]; then
     echo "run-tours: TOURS_SKIP_RESET=1 — skipping staging-reset (using existing seeded staging)" >&2
 elif [ -n "${TOURS_RESEED_SSH:-}" ]; then
     # QA reseed path: a locked-down forced-command ssh key whose remote
-    # authorized_keys pins the prod-shaped reseed on the staging host. Reaches it
-    # over the same network route the tours use — unlike staging-reset.sh, whose
-    # `ssh $STAGING_HOST` + `sudo -u <tenant>` does NOT route from the sandbox.
-    # Fail loud (set -e): never sweep against an unreseeded/unknown world.
-    echo "run-tours: reseeding staging (prod-shaped) via qa-reseed ssh ($TOURS_RESEED_SSH)..." >&2
+    # authorized_keys pins the reseed on the staging host. That forced command
+    # execs the root-owned staging-reseed.sh wrapper, which pins
+    # STAGING_RESET_PROFILE=standard — so this path builds the SAME world the
+    # manual reset does, and the token carries no profile argument. Reaches the
+    # host over the same network route the tours use — unlike staging-reset.sh,
+    # whose `ssh $STAGING_HOST` + `sudo -u <tenant>` does NOT route from the
+    # sandbox. Fail loud (set -e): never sweep against an unreseeded/unknown world.
+    echo "run-tours: reseeding staging (standard) via qa-reseed ssh ($TOURS_RESEED_SSH)..." >&2
     reseed_ssh=(ssh -o BatchMode=yes -o ConnectTimeout=10)
     [ -n "${TOURS_RESEED_KEY:-}" ] && reseed_ssh+=(-i "$TOURS_RESEED_KEY")
     "${reseed_ssh[@]}" "$TOURS_RESEED_SSH" reseed
 else
-    echo "run-tours: resetting + reseeding staging (prod-shaped)..." >&2
+    echo "run-tours: resetting + reseeding staging (standard)..." >&2
     bash "$REPO_ROOT/scripts/staging-reset.sh"
 fi
 
@@ -102,20 +105,21 @@ export TOURS_IMAGE_DIGEST="$IMAGE_DIGEST"
 
 # Seed-profile provenance recorded in the manifest:
 #   - an explicit TOURS_SEED_PROFILE (operator-declared) always wins — this is
-#     how a LOCAL corpus sweep declares the 'prod-shaped' provenance it
-#     established out-of-band (crm-admin --reset-and-seed --profile prod-shaped);
+#     how a LOCAL corpus sweep declares the provenance it established out-of-band
+#     (crm-admin --reset-and-seed, or `make dev-seed` with DEV_SEED_RESET=1);
 #   - else, when the staging reset was SKIPPED, the seed is whatever was already
-#     on the target → 'unknown' (do NOT assert 'prod-shaped');
-#   - else (this wrapper ran the prod-shaped reset — staging-reset.sh OR the
-#     TOURS_RESEED_SSH forced-command reseed) → 'prod-shaped'.
+#     on the target → 'unknown' (do NOT assert 'standard');
+#   - else (this wrapper ran the standard reset — staging-reset.sh OR the
+#     TOURS_RESEED_SSH forced-command reseed, both of which default/pin to
+#     `standard`) → 'standard'.
 # The manifest label is a hint only; the binding PII guarantee is the corpus
-# data audit (synth-prodshaped- name gate + email/phone scrub).
+# data audit (synth-standard- name gate + email/phone scrub).
 if [ -n "${TOURS_SEED_PROFILE:-}" ]; then
     export TOURS_SEED_PROFILE
 elif [ "${TOURS_SKIP_RESET:-0}" = "1" ]; then
     export TOURS_SEED_PROFILE="unknown"
 else
-    export TOURS_SEED_PROFILE="prod-shaped"
+    export TOURS_SEED_PROFILE="standard"
 fi
 
 echo "run-tours: launching tours (runId=$TOURS_RUN_ID)..." >&2

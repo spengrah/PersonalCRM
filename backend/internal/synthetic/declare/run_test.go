@@ -15,7 +15,7 @@ import (
 )
 
 func TestValidateRequestedNamespace(t *testing.T) {
-	valid := []string{"w3-1753700000000-c1", "a", "dev", "prodshaped", "w0-1-c12"}
+	valid := []string{"w3-1753700000000-c1", "a", "standard", "seedall", "w0-1-c12"}
 	for _, ns := range valid {
 		assert.NoError(t, ValidateRequestedNamespace(ns), "%q should be valid", ns)
 	}

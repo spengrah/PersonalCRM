@@ -210,17 +210,6 @@ type created struct {
 	// subject_node_id → node FK is NO ACTION, so cleanup MUST delete these rows by
 	// the tracked node ids BEFORE the node deletes.
 	signalNodeIDs []uuid.UUID
-	// softDeletedNodeIDs / mergedLoserNodeIDs / mergedWinnerNodeIDs are person node
-	// ids a soft-delete / merge scenario produced, tracked ONLY for the seed-shape
-	// invariant assertions (tombstone + assertion re-point checks). Teardown needs no
-	// separate step for them: each is a node.id == contact.id that SeedContact already
-	// added to contactIDs, so the existing by-id assertion → person_node → contact
-	// sweeps remove the tombstoned (soft-deleted / merged-loser) and live (merge
-	// winner) rows. The merged_into self-FK is NO ACTION, so the single-statement
-	// person_node delete drops a merged pair together without ordering grief.
-	softDeletedNodeIDs  []uuid.UUID
-	mergedLoserNodeIDs  []uuid.UUID
-	mergedWinnerNodeIDs []uuid.UUID
 	// directSources is the set of sources the adapters published root events
 	// under, so Cleanup can capture no-contact root events that the
 	// contact-scoped read misses.
@@ -231,17 +220,10 @@ func newCreated() *created {
 	return &created{directSources: map[string]struct{}{}}
 }
 
-func (c *created) addContact(id uuid.UUID)     { c.contactIDs = append(c.contactIDs, id) }
-func (c *created) addInteraction(id uuid.UUID) { c.interactionIDs = append(c.interactionIDs, id) }
-func (c *created) addVenueNode(id uuid.UUID)   { c.venueNodeIDs = append(c.venueNodeIDs, id) }
-func (c *created) addSignalNode(id uuid.UUID)  { c.signalNodeIDs = append(c.signalNodeIDs, id) }
-func (c *created) addSoftDeletedNode(id uuid.UUID) {
-	c.softDeletedNodeIDs = append(c.softDeletedNodeIDs, id)
-}
-func (c *created) addMergedPair(winner, loser uuid.UUID) {
-	c.mergedWinnerNodeIDs = append(c.mergedWinnerNodeIDs, winner)
-	c.mergedLoserNodeIDs = append(c.mergedLoserNodeIDs, loser)
-}
+func (c *created) addContact(id uuid.UUID)       { c.contactIDs = append(c.contactIDs, id) }
+func (c *created) addInteraction(id uuid.UUID)   { c.interactionIDs = append(c.interactionIDs, id) }
+func (c *created) addVenueNode(id uuid.UUID)     { c.venueNodeIDs = append(c.venueNodeIDs, id) }
+func (c *created) addSignalNode(id uuid.UUID)    { c.signalNodeIDs = append(c.signalNodeIDs, id) }
 func (c *created) addTelegramPeer(id int64)      { c.telegramPeerIDs = append(c.telegramPeerIDs, id) }
 func (c *created) addTelegramChat(id int64)      { c.telegramChatIDs = append(c.telegramChatIDs, id) }
 func (c *created) addContactTask(id uuid.UUID)   { c.contactTaskIDs = append(c.contactTaskIDs, id) }
@@ -285,67 +267,25 @@ type Harness struct {
 	// harness tracks the production default rather than hard-coding a copy.
 	groupMaxMembers int
 
-	// mutualMessageContactID is the contact the two-sided message-direction block
-	// (profiles.go) seeded as a reply-bridged telegram MUTUAL. A profile sets it via
-	// SetMutualMessageContactID after seeding; the coverage check reads it via
-	// MutualMessageContactID to assert the promote-to-mutual collapse. It is NOT a
-	// ProfileResult field: contact ids come from uuid_generate_v4() (non-deterministic),
-	// so it must stay off the counts-only, determinism-compared result struct.
-	mutualMessageContactID uuid.UUID
+	// manualCohortIDs records the reserved contacts the visible-task spread
+	// (SeedVisibleTaskSpread) gave manual tasks. The spread sets it via
+	// SetManualCohortIDs; a caller reads it via ManualCohortIDs to assert the
+	// visible-task cohorts subject-scoped. It is NOT a ProfileResult field: contact
+	// ids come from uuid_generate_v4() (non-deterministic), so it stays off the
+	// counts-only, determinism-compared result struct.
+	manualCohortIDs []uuid.UUID
 
-	// dateFactContactID is the contact the profile seeded the toolkit-authored
-	// date-fact birthday on (via ReplayAssertion). A profile sets it via
-	// SetDateFactContactID after the seed; the coverage check reads it via
-	// DateFactContactID to assert that contact's derived birthday cache — the row
-	// that would otherwise be left stranded — is now populated. Like
-	// mutualMessageContactID it is NOT a
-	// ProfileResult field: the contact id is non-deterministic (uuid_generate_v4),
-	// so it stays off the counts-only, determinism-compared result struct.
-	dateFactContactID uuid.UUID
-
-	// catalogContactIDs / manualCohortIDs record the ids the visible-task spread
-	// (SeedVisibleTaskSpread) touched: every catalog contact (the universe the
-	// 0-visible majority is proven over via a LEFT JOIN) and the reserved subset
-	// that received manual tasks. A profile sets them via SetCatalogContactIDs /
-	// SetManualCohortIDs; the coverage check reads them via CatalogContactIDs /
-	// ManualCohortIDs to assert the 0/1/>1 visible-task cohorts subject-scoped.
-	// Like the ids above they are NOT ProfileResult fields: contact ids come from
-	// uuid_generate_v4() (non-deterministic), so they stay off the counts-only,
-	// determinism-compared result struct.
-	catalogContactIDs []uuid.UUID
-	manualCohortIDs   []uuid.UUID
-
-	// birthdayFixtureIDs is the ORDERED reserved set of catalog contacts the profile
-	// seeded a clock-anchored birthday date-fact on (position i ⇄
-	// BirthdayFixturePlan[i]: [0]=today, [1]=+1, [2]=distant, …). The coverage +
-	// determinism tests read it via BirthdayFixtureIDs to assert the fixtures
-	// subject-scoped and to fingerprint them by stable identity. Like the ids above
-	// it is NOT a ProfileResult field: contact ids come from uuid_generate_v4()
-	// (non-deterministic), so it stays off the counts-only, determinism-compared
-	// result struct.
-	birthdayFixtureIDs []uuid.UUID
-
-	// pinnedFixtureIDs maps a pinned tour-fixture MARKER to the contact the profile
-	// seeded (or re-used) for it. The marker is the fixture's stable identity — it is
+	// pinnedFixtureIDs maps a pinned tour-fixture MARKER to the contact the world
+	// seeded for it. The marker is the fixture's stable identity — it is
 	// what a tour searches for over the API and what the coverage checks resolve — so
 	// one marker-keyed map replaces what would otherwise be a Set/Get pair per
-	// fixture. A profile records entries via SetPinnedFixtureID; the coverage checks
+	// fixture. The world records entries via SetPinnedFixtureID; the coverage checks
 	// read the whole map via PinnedFixtureIDs to scope the per-fixture assertions to
 	// their exact subjects. Like the ids above it is NOT a
 	// ProfileResult field: contact ids come from uuid_generate_v4()
 	// (non-deterministic), so it stays off the counts-only, determinism-compared
 	// result struct.
 	pinnedFixtureIDs map[string]uuid.UUID
-
-	// archetypeSamples is the per-catalog-slot record of which archetype the
-	// profile gave it, how many payloads its timeline drove, and how many
-	// interaction rows that timeline is EXPECTED to land after aggregation
-	// collapse. Recorded for EVERY slot including the history-free ones, so an
-	// assertion can prove absence as well as presence. Like the ids above it is NOT
-	// a ProfileResult field: it carries contact ids, which come from
-	// uuid_generate_v4() (non-deterministic), so it stays off the counts-only,
-	// determinism-compared result struct.
-	archetypeSamples []ArchetypeSample
 
 	created   *created
 	createdMu sync.Mutex
@@ -540,9 +480,7 @@ func (h *Harness) SeedRelationshipSignal(ctx context.Context, subjectNodeID uuid
 // graph reads while remaining in the assertion table. The contact id is already in
 // the cleanup ledger (SeedContact tracked it) and the assertion rides the node, so
 // the existing by-id assertion → node → contact teardown sweeps remove the whole
-// set — no extra cleanup step. The node id is tracked separately ONLY so the
-// coverage check can assert the tombstone + retained-vs-live-assertion invariant.
-// Returns the soft-deleted contact id.
+// set — no extra cleanup step. Returns the soft-deleted contact id.
 func (h *Harness) SeedSoftDeletedContact(ctx context.Context, spec factory.ContactSpec, fact factory.AssertionSpec) (uuid.UUID, error) {
 	contact, err := h.SeedContact(ctx, spec)
 	if err != nil {
@@ -554,7 +492,6 @@ func (h *Harness) SeedSoftDeletedContact(ctx context.Context, spec factory.Conta
 	if err := h.contactService.DeleteContact(ctx, contact.ID); err != nil {
 		return uuid.Nil, fmt.Errorf("soft-delete contact %s: %w", contact.ID, err)
 	}
-	h.track(func(c *created) { c.addSoftDeletedNode(contact.ID) })
 	return contact.ID, nil
 }
 
@@ -568,8 +505,7 @@ func (h *Harness) SeedSoftDeletedContact(ctx context.Context, spec factory.Conta
 // exhaustively covered elsewhere; this is a SEED, not a re-derivation). Both contact
 // ids are already in the cleanup ledger (SeedContact); the merged_into self-FK is NO
 // ACTION, so the existing single-statement by-id person_node sweep drops the pair
-// together at teardown. The winner/loser node ids are tracked separately ONLY for
-// the coverage check's tombstone + re-point invariants. Returns (winnerID, loserID).
+// together at teardown. Returns (winnerID, loserID).
 func (h *Harness) SeedMergedContact(ctx context.Context, winnerSpec, loserSpec factory.ContactSpec, winnerFact, loserFact factory.AssertionSpec) (winnerID, loserID uuid.UUID, err error) {
 	winner, err := h.SeedContact(ctx, winnerSpec)
 	if err != nil {
@@ -591,7 +527,6 @@ func (h *Harness) SeedMergedContact(ctx context.Context, winnerSpec, loserSpec f
 	}); err != nil {
 		return uuid.Nil, uuid.Nil, fmt.Errorf("merge contact %s into %s: %w", loser.ID, winner.ID, err)
 	}
-	h.track(func(c *created) { c.addMergedPair(winner.ID, loser.ID) })
 	return winner.ID, loser.ID, nil
 }
 
@@ -607,7 +542,6 @@ func (h *Harness) SoftDeleteSeededContact(ctx context.Context, contactID uuid.UU
 	if err := h.contactService.DeleteContact(ctx, contactID); err != nil {
 		return fmt.Errorf("soft-delete seeded contact %s: %w", contactID, err)
 	}
-	h.track(func(c *created) { c.addSoftDeletedNode(contactID) })
 	return nil
 }
 
@@ -626,7 +560,6 @@ func (h *Harness) MergeSeededContacts(ctx context.Context, winnerID, loserID uui
 	}); err != nil {
 		return fmt.Errorf("merge contact %s into %s: %w", loserID, winnerID, err)
 	}
-	h.track(func(c *created) { c.addMergedPair(winnerID, loserID) })
 	return nil
 }
 
@@ -852,93 +785,8 @@ func (h *Harness) snapshotSignalNodeIDs() []uuid.UUID {
 	return append([]uuid.UUID(nil), h.created.signalNodeIDs...)
 }
 
-// SoftDeletedNodeIDs / MergedLoserNodeIDs / MergedWinnerNodeIDs return THIS run's
-// tracked soft-delete / merge person node ids so a coverage test can scope its
-// tombstone + assertion-re-point invariant assertions to its own namespace's nodes
-// on the shared DB. Snapshots (mutex-guarded copies), so a caller can range them
-// without holding the ledger lock.
-func (h *Harness) SoftDeletedNodeIDs() []uuid.UUID {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	return append([]uuid.UUID(nil), h.created.softDeletedNodeIDs...)
-}
-
-func (h *Harness) MergedLoserNodeIDs() []uuid.UUID {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	return append([]uuid.UUID(nil), h.created.mergedLoserNodeIDs...)
-}
-
-func (h *Harness) MergedWinnerNodeIDs() []uuid.UUID {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	return append([]uuid.UUID(nil), h.created.mergedWinnerNodeIDs...)
-}
-
-// SetMutualMessageContactID records the contact the two-sided message block seeded
-// as a reply-bridged telegram mutual, so the coverage check can resolve it via
-// MutualMessageContactID. Called by the seeding block (package synthetic) after it
-// seeds the mutual pair — hence exported. Guarded by the ledger mutex for parity
-// with the other tracked ids.
-func (h *Harness) SetMutualMessageContactID(id uuid.UUID) {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	h.mutualMessageContactID = id
-}
-
-// MutualMessageContactID returns the contact the two-sided message block seeded as
-// a reply-bridged telegram mutual (uuid.Nil if the block did not run — e.g. a
-// profile with it disabled). Read by the coverage check to assert the promote.
-func (h *Harness) MutualMessageContactID() uuid.UUID {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	return h.mutualMessageContactID
-}
-
-// SetDateFactContactID records the contact the profile seeded the toolkit
-// date-fact birthday on, so the coverage check can resolve it via
-// DateFactContactID. Called by the seeding block (package synthetic) after the
-// date-fact ReplayAssertion — hence exported. Guarded by the ledger mutex for
-// parity with the other tracked ids.
-func (h *Harness) SetDateFactContactID(id uuid.UUID) {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	h.dateFactContactID = id
-}
-
-// DateFactContactID returns the contact the profile seeded the toolkit date-fact
-// birthday on (uuid.Nil if the block did not run). Read by the coverage check to
-// assert that contact's derived birthday cache is populated (the target row that
-// exercises the cutover-predicate refresh).
-func (h *Harness) DateFactContactID() uuid.UUID {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	return h.dateFactContactID
-}
-
-// SetCatalogContactIDs records the full catalog contact id set the visible-task
-// spread ran over, so the coverage check can prove the 0-visible majority via a
-// LEFT JOIN of the catalog universe against its visible tasks (grouping task rows
-// alone can't produce the zero-task contacts). Called by the seeding block after
-// the catalog is populated — hence exported. Guarded by the ledger mutex for
-// parity with the other tracked ids.
-func (h *Harness) SetCatalogContactIDs(ids []uuid.UUID) {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	h.catalogContactIDs = append([]uuid.UUID(nil), ids...)
-}
-
-// CatalogContactIDs returns the catalog contact ids the visible-task spread ran
-// over (nil if the spread did not run). Read by the coverage check to scope the
-// 0/1/>1 visible-task cohort assertions to the catalog universe.
-func (h *Harness) CatalogContactIDs() []uuid.UUID {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	return append([]uuid.UUID(nil), h.catalogContactIDs...)
-}
-
-// SetManualCohortIDs records the reserved catalog contacts the visible-task
-// spread gave manual tasks (the 1-visible + >1-visible cohorts). Called by
+// SetManualCohortIDs records the reserved contacts the visible-task spread gave
+// manual tasks (the 1-visible + >1-visible cohorts). Called by
 // SeedVisibleTaskSpread — hence exported. Guarded by the ledger mutex.
 func (h *Harness) SetManualCohortIDs(ids []uuid.UUID) {
 	h.createdMu.Lock()
@@ -946,35 +794,13 @@ func (h *Harness) SetManualCohortIDs(ids []uuid.UUID) {
 	h.manualCohortIDs = append([]uuid.UUID(nil), ids...)
 }
 
-// ManualCohortIDs returns the reserved catalog contacts that received manual
-// tasks (nil if the spread did not run). Read by the coverage check to assert
-// the manual cohorts subject-scoped without putting UUIDs in ProfileResult.
+// ManualCohortIDs returns the reserved contacts that received manual tasks (nil
+// if the spread did not run). Read by a caller to assert the manual cohorts
+// subject-scoped without putting UUIDs in ProfileResult.
 func (h *Harness) ManualCohortIDs() []uuid.UUID {
 	h.createdMu.Lock()
 	defer h.createdMu.Unlock()
 	return append([]uuid.UUID(nil), h.manualCohortIDs...)
-}
-
-// SetBirthdayFixtureIDs records the ORDERED reserved catalog contacts the profile
-// seeded clock-anchored birthday date-facts on (position i ⇄
-// BirthdayFixturePlan[i]). Called by the seeding block after the birthday fixtures
-// are seeded — hence exported. Guarded by the ledger mutex for parity with the
-// other tracked ids.
-func (h *Harness) SetBirthdayFixtureIDs(ids []uuid.UUID) {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	h.birthdayFixtureIDs = append([]uuid.UUID(nil), ids...)
-}
-
-// BirthdayFixtureIDs returns the ORDERED reserved catalog contacts the profile
-// seeded clock-anchored birthday date-facts on (nil if the block did not run).
-// Read by the coverage + determinism checks to scope the fixture assertions and
-// fingerprint to just those subjects (the catalog seeds its own birthdays in the
-// same namespace).
-func (h *Harness) BirthdayFixtureIDs() []uuid.UUID {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	return append([]uuid.UUID(nil), h.birthdayFixtureIDs...)
 }
 
 // SetPinnedFixtureID records the contact seeded (or re-used) for one pinned
@@ -1000,41 +826,6 @@ func (h *Harness) PinnedFixtureIDs() map[string]uuid.UUID {
 		out[marker] = id
 	}
 	return out
-}
-
-// ArchetypeSample is one archetype-assigned catalog contact: which frozen slot
-// it occupies, which relationship shape it was given, how many source payloads
-// that shape drove, and how many interaction ROWS those payloads are expected to
-// land once the pipeline has aggregated them.
-//
-// The expectation is derived from the timeline's structure and the pipeline's
-// aggregation semantics, never measured, so comparing it against the database is
-// a real test rather than a tautology.
-type ArchetypeSample struct {
-	ContactID            uuid.UUID
-	SlotIndex            int
-	Archetype            factory.Archetype
-	Payloads             int
-	ExpectedInteractions int
-}
-
-// SetArchetypeSamples records the archetype assignment the profile actually
-// seeded, one entry per catalog slot. Called by the seeding block (package
-// synthetic) — hence exported. Guarded by the ledger mutex for parity with the
-// other tracked ids.
-func (h *Harness) SetArchetypeSamples(samples []ArchetypeSample) {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	h.archetypeSamples = append([]ArchetypeSample(nil), samples...)
-}
-
-// ArchetypeSamples returns the per-slot archetype record (nil if the block did
-// not run). Read by the coverage checks to scope each archetype assertion to its
-// exact subject without putting contact ids in ProfileResult.
-func (h *Harness) ArchetypeSamples() []ArchetypeSample {
-	h.createdMu.Lock()
-	defer h.createdMu.Unlock()
-	return append([]ArchetypeSample(nil), h.archetypeSamples...)
 }
 
 // gateBClear reports whether Gate B has reached zero for this replay's contacts.

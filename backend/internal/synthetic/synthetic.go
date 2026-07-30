@@ -12,8 +12,10 @@
 //	// graph is settled here; assert via h.InteractionRepo() etc.
 //
 // SeedParams + SeedAll provide the mode-(b) "fast full-seed" shape (the function
-// surface + a minimal default dataset). The populated prod-shaped/dev profiles
-// and entrypoint wiring are later elements; this is the forward-compatible seam.
+// surface + a minimal default dataset), which is exactly what the
+// `minimal-scoped` profile builds. The populated world is `standard`, whose
+// content comes from the declaration + adversarial-edge registries in
+// synthetic/declare rather than from volume knobs.
 package synthetic
 
 import (
@@ -77,85 +79,13 @@ func NewHarnessWithDBForNamespaceAt(ctx context.Context, database *db.Database, 
 	return replay.NewHarnessWithDBForNamespaceAt(ctx, database, namespace, seed, anchor)
 }
 
-// Counts tunes the per-entity volume a profile produces. The per-profile
-// distribution knobs the profiles read; only the knobs a profile actually
-// consumes are present (no distribution DSL). DefaultParams supplies the small
-// "minimal-scoped" shape.
+// Counts tunes the per-entity volume a profile produces. Only `minimal-scoped`
+// consumes it: DefaultParams supplies its small shape. `standard` has no volume
+// knobs at all — it is exactly what the declaration + adversarial-edge
+// registries say it is, which is why its content can be asserted as named states
+// rather than as statistics.
 type Counts struct {
-	SeededContacts    int // contacts seeded with a matching identifier per source
-	UnmatchedExternal int // import-candidate (unmatched external_contact) rows
-	StrandedTelegram  int // stranded telegram_message rows (matched_contact_id IS NULL)
-	StrandedMessages  int // stranded messages_message (iMessage) rows
-	UnmatchedCalendar int // calendar_event rows with an unmatched attendee
-	OrphanMeetingNote int // orphan_needs_review meeting_note rows
-	SeededAssertions  int // graph (SP1) text-fact assertions spread across catalog contact nodes
-	// SeededBoolFacts is the number of bool-fact assertions (job_seeking /
-	// on_sabbatical / traveling, all auto-if-confident → accepted) seeded across
-	// distinct catalog person nodes; bounded by the catalog size at run time. >0
-	// also gates the single toolkit-authored date fact (both exercise the new
-	// value-type assert plumbing). 0 disables.
-	SeededBoolFacts int
-	// SeededRelationships is the number of person→person EDGE assertions seeded
-	// among already-seeded catalog person nodes (knows/introduced_by → accepted,
-	// sibling_of → proposed, so the spread covers both review surfaces); bounded by
-	// the catalog size at run time. Needs ≥2 catalog contacts. 0 disables.
-	SeededRelationships int
-	// SeededTasks is a >0 GATE (not a hard cap) for Todoist cadence-task seeding:
-	// when non-zero the profile runs ReplayTodoist, whose reconcile creates one
-	// `managed` cadence task per cadence-bearing catalog contact (catalog-wide, like
-	// prod), then drives ONE to `unmanaged` via the real recurring-edit path — the
-	// two states cadence_due can hold in prod (completed/dismissed are unreachable
-	// for this lifecycle). ProfileResult.SeededTasks reports the actual rows. 0
-	// disables (minimal-scoped stays task-free / byte-stable).
-	SeededTasks int
-	// SeededEntities is the size of the org/topic/tag entity pool the profile
-	// creates (round-robin across the three subtypes, so a value ≥3 yields ≥1 of
-	// each). The pool is intentionally SMALL so the person→entity edges below draw
-	// objects from it repeatedly (prod-like: many people share a few orgs/topics/
-	// tags). >0 enables the entity pool + person→entity edge seeding; 0 disables.
-	SeededEntities int
-	// SeededEntityEdges is the number of person→entity EDGE assertions seeded across
-	// the catalog person nodes (cycling works_at→org / interested_in→topic /
-	// tagged_as→tag, all auto-if-confident → accepted), with objects drawn from the
-	// SeededEntities pool. Bounded by the catalog size at run time (works_at and
-	// lives_in are single-cardinality, so one per subject). Needs SeededEntities ≥3
-	// so every edge type has an object. 0 disables. (lives_in is NOT counted here —
-	// it rides the contact-create authority flip via WithLocation, index-spread like
-	// the birthday/how_met bio facts.)
-	SeededEntityEdges int
-	// SeededSignals is the number of relationship_signal rows seeded across distinct
-	// catalog person nodes (one signal per node, rotating a small fixed signal-key
-	// pool so a few signal kinds repeat prod-like). Bounded by the catalog size at
-	// run time. Written through the production UpsertRelationshipSignal path
-	// (storage-only — SP1 has no signal generators). 0 disables.
-	SeededSignals int
-	// SeededSoftDeleted is the number of soft-deleted contact scenarios to seed: a
-	// contact with one assertion routed through ContactService.DeleteContact, so its
-	// person node is tombstoned and the assertion drops from live graph reads while
-	// remaining in the table. Each is a standalone contact (not a catalog slot). 0
-	// disables.
-	SeededSoftDeleted int
-	// SeededMerged is the number of merge scenarios to seed: a pair of contacts
-	// (winner + loser, each with one assertion) merged via ContactService.MergeContacts
-	// so the loser node is tombstoned (merged_into=winner) and its assertions are
-	// re-pointed onto the winner. Each pair is two standalone contacts. 0 disables.
-	SeededMerged int
-	// MessagesPerContact is how many settled interactions each DEDICATED per-source
-	// settled contact receives, spread back over time on distinct days (a prod-like
-	// interaction history) rather than a single ~1h window. The source replay for a
-	// contact is looped this many times with growing per-message ages; 1 (or 0,
-	// which clamps to 1) reproduces the single-interaction shape. Applies only to
-	// the dedicated settled contacts — the edge-case catalog stays interaction-free
-	// so its overdue / never-contacted / no-method buckets survive.
-	MessagesPerContact int
-	// ImportCandidatesPerSource is how many UNMATCHED import candidates to seed for
-	// EACH Imports subtab the icloud_contacts (UnmatchedExternal) + gcal_attendee
-	// (UnmatchedCalendar) knobs do not already cover: gcontacts + gmail_correspondence
-	// (direct repo upsert — NOT ingest-allowed, mirroring the Google sync providers),
-	// anarlog_humans (ingest path), and telegram discovery (≥3 group messages from one
-	// unknown peer crossing the discovery threshold). All land match_status='unmatched'.
-	// 0 disables (minimal-scoped stays import-free / byte-stable).
-	ImportCandidatesPerSource int
+	SeededContacts int // contacts seeded with a matching identifier per source
 }
 
 // SeedParams is the profile/volume seam consumed by the seed orchestration.

@@ -1143,9 +1143,9 @@ func TestSyntheticBatchReplay_GChatBucketsAcrossBudget(t *testing.T) {
 
 // TestSyntheticBatchReplay_GChatPromotionBarrier exercises the GChat
 // MULTI-GENERATION path, which no other test reaches: the Telegram barrier tests
-// drive telegram and the local-day test drives gmail. It matters because the
-// frozen catalog's messaging coverage rides entirely on gchat, so a burst
-// archetype carrying a promotion pair will be this path's first real caller.
+// drive telegram and the local-day test drives gmail. It matters because a
+// declared world that gives one contact a gchat history with a promotion pair
+// would be this path's first real caller.
 //
 // A second generation re-enters the bucket loop, re-points the fake world at a
 // different message set, re-reads the sync state, and re-presents an

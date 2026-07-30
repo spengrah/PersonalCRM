@@ -5,6 +5,8 @@
 **Author:** spengrah (brainstormed with Claude)
 **Parent:** `2026-06-07-deploy-and-staging-overview-design.md`
 
+> **Superseded on the seed profile (2026-07-30, gh #759).** The `dev` and `prod-shaped` catalog profiles — and the whole invented-distribution layer behind them (bands, quotas, archetypes, margins) — are deleted. There are now exactly two worlds: the declared `standard` world (the default for local dev, staging, the automated staging reseed, and the QA tours) and `minimal-scoped` (an explicit operator override). Historical measurements below were taken against the world that existed at the time and are left as recorded; operational commands and provenance assumptions have been updated to `standard` / `synth-standard-`. See `.ai/patterns/synthetic-seed-toolkit.md` for the current story.
+
 ## Scope
 
 An **always-on staging instance** of the CRM on the VPS, deployed from a **`develop`** branch, running the **identical container image set as prod** (Podman Quadlets), with all read sync sources disabled, Todoist outbound writes structurally guarded, reachable from the operator's phone over Tailscale, resettable to a known seed dataset on demand, and serving as the target for the agentic UX QA harness (#380). Cures the "can only verify UI changes in prod" pain.
@@ -65,13 +67,13 @@ Since this spec was written (2026-06-07), the primitives it depends on all shipp
 **Dependencies — now satisfied:**
 
 - **B (VPS substrate) — LIVE.** `<vps-host>` is provisioned (netcup arm64); the `staging` tenant exists (uid 1995, linger on, rootless Podman, the `~/.config/containers/systemd` Quadlet drop-in dir already created at home `/var/lib/staging`), under its cgroup slice ceiling, behind the host nftables (host→Pi DROP + sandbox→tailnet DROP). The deferred sandbox↔staging observe path (observe network + rule-3 ALLOW + read-only PG role) is still spec C's to land.
-- **D (synthetic seed) — COMPLETE.** `crm-admin --seed` / `--reset-and-seed --profile prod-shaped` exist and back the reset.
+- **D (synthetic seed) — COMPLETE.** `crm-admin --seed` / `--reset-and-seed` exist and back the reset (the world they build is now `standard`).
 - **A (deploy automation + A0 containerization) — COMPLETE + LIVE in prod.** Prod runs the GHCR image set under Podman Quadlets; `scripts/deploy-artifact.sh` does pull → migrate-check → snapshot → migrate → image-swap → health-gate → auto-rollback-with-restore; a self-hosted runner (`gha-runner`, a system user ≠ workload ≠ root, single sudoers → one root-owned script) deploys on `push: main` via `.github/workflows/deploy-prod.yml`.
 
 **Original open threads — resolved by shipped work (no longer TODO):**
 
 - ~~**`CRM_ENV` guard implementation**~~ → **BUILT.** `backend/internal/todoist/sync.go` returns `ErrNonProdWriteRefused` from both write methods (`Sync` when commands are present, and `QuickAdd`) via `NewSyncClientForEnv`; the factory is wired once in `cmd/crm-api/main.go` with the running `CRM_ENV`; `config.IsProductionCRMEnv` treats unset as prod; tests cover the non-prod refuse set. The spec's "single chokepoint" landed as the two write methods on the client (still the client layer). Audit done (see the scope correction in "Decisions locked"): Todoist `Sync`/`QuickAdd` are the only guarded outbound *data* writes (Google + Telegram are read-only ingest); the `oauth.go` connect/revoke POSTs are unguarded but cred-gated, so harmless on a cred-less staging.
-- **`make staging-reset` → PARTIALLY built; needs a rootless-tenant variant** (moved to remaining-TODO). The reset *primitive* is done (`crm-admin --reset-and-seed --profile prod-shaped` = HARD wipe of every live data table + reseed, resolving the soft-delete-doesn't-cascade concern). But `scripts/staging-reset.sh` as written drives a *system* `systemctl` service + a repo-local `.env` + `go run` — it does NOT drive the rootless `staging` tenant (uid 1995, `systemctl --user`, container-only, no Go toolchain on the box).
+- **`make staging-reset` → PARTIALLY built; needs a rootless-tenant variant** (moved to remaining-TODO). The reset *primitive* is done (`crm-admin --reset-and-seed` = HARD wipe of every live data table + reseed, resolving the soft-delete-doesn't-cascade concern). But `scripts/staging-reset.sh` as written drives a *system* `systemctl` service + a repo-local `.env` + `go run` — it does NOT drive the rootless `staging` tenant (uid 1995, `systemctl --user`, container-only, no Go toolchain on the box).
 - ~~**QA harness (#380) targeting**~~ → the reset hook will be harness-callable once the rootless variant lands; the tour/scheduling internals remain #380's.
 
 **Forks — now DECIDED (integration detail, not open design):**
@@ -81,7 +83,7 @@ Since this spec was written (2026-06-07), the primitives it depends on all shipp
 
 ## Open threads / TODO — genuinely remaining (the plan's actual work)
 
-Two workstreams: **deploy plumbing** (adapt A's reusable-but-prod-shaped scripts/workflow for a second tenant) and **host provisioning** (stand the staging stack + edge up on the VPS). Order: plumbing + host provisioning land before the first-run bootstrap, which lands before turning on the automated runner.
+Two workstreams: **deploy plumbing** (adapt A's reusable-but-production-shaped scripts/workflow for a second tenant) and **host provisioning** (stand the staging stack + edge up on the VPS). Order: plumbing + host provisioning land before the first-run bootstrap, which lands before turning on the automated runner.
 
 **Deploy plumbing:**
 

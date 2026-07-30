@@ -2,6 +2,8 @@
 
 **Date:** 2026-07-08
 **Status:** Designed; implementation not started
+> **Superseded on the seed profile (2026-07-30, gh #759).** The `dev` and `prod-shaped` catalog profiles — and the whole invented-distribution layer behind them (bands, quotas, archetypes, margins) — are deleted. There are now exactly two worlds: the declared `standard` world (the default for local dev, staging, the automated staging reseed, and the QA tours) and `minimal-scoped` (an explicit operator override). Historical measurements below were taken against the world that existed at the time and are left as recorded; operational commands and provenance assumptions have been updated to `standard` / `synth-standard-`. See `.ai/patterns/synthetic-seed-toolkit.md` for the current story.
+
 **Author:** spengrah (brainstormed with Claude)
 **Parent:** #380 umbrella (`.ai/spec/2026-05-31-agentic-ux-qa-and-behavior-ssot-design.md`), Piece 4
 
@@ -12,8 +14,8 @@ The umbrella design split UX quality assurance into a deterministic part (tours)
 ## Current state this design builds on
 
 - **SSOT is ready.** All 12 domains at `maturity: reviewed` (consumers may act), ~394 behaviors, of which 56 are `type: ux` — Track B's targets. The schema was written for this consumer: `then` items are independently checkable facts the judge verifies item-by-item.
-- **Staging shipped** (#556 deploy plumbing, #566/#569 auto-reseed, #570 host provisioning) — the umbrella's "no target to tour" gap is closed. `scripts/staging-reset.sh` explicitly documents this harness as its programmatic caller: stop → `crm-admin --reset-and-seed --profile prod-shaped` off the pinned image digest → start.
-- **Seed substrate is ready.** The synthetic toolkit (spec D) provides the deterministic, prod-shaped world tours walk through.
+- **Staging shipped** (#556 deploy plumbing, #566/#569 auto-reseed, #570 host provisioning) — the umbrella's "no target to tour" gap is closed. `scripts/staging-reset.sh` explicitly documents this harness as its programmatic caller: stop → `crm-admin --reset-and-seed` off the pinned image digest → start.
+- **Seed substrate is ready.** The synthetic toolkit (spec D) provides the deterministic, production-shaped world tours walk through.
 - **Piece 2 completed while this design was in review (#596–#604); Piece 3 is unstarted — neither blocks this work.** Piece 4 depends only on the SSOT. Structurally, Piece 3 consumes coverage links that Pieces 2 and 4 produce, so building Piece 4 first gives Piece 3's scanner a second producer to index.
 
 ## Decisions (this brainstorm)
@@ -22,7 +24,7 @@ The umbrella design split UX quality assurance into a deterministic part (tours)
 - **Explicit behavior annotations.** Each capture declares the behavior IDs it exercises, mirroring Track A's `// spec:` citation convention. Authoring a tour requires reading the domain's spec file — which is the point.
 - **Staging is the primary target from day one**; the harness stays host-agnostic ("a seeded app instance at a URL") so any host can run it.
 - **Prove phase runs from the dev sandbox**, which requires un-deferring the sandbox→staging network path (ops prerequisite, see Environment).
-- **First cut: contacts + dashboard + cadence-followup** (~23 ux behaviors) — richest purely-web surfaces, fully tourable against the prod-shaped seed, no external-service entanglement.
+- **First cut: contacts + dashboard + cadence-followup** (~23 ux behaviors) — richest purely-web surfaces, fully tourable against the seeded world, no external-service entanglement.
 - **Eval-driven prove cycle**: the judge ships with its own eval harness and golden corpus; issue-filing turns on only when eval metrics clear a bar.
 - **Judge invoker: `@openai/codex-sdk`** (TypeScript, subscription-covered) primary, `codex exec --json --output-schema` as degraded mode; an OpenAI-compatible adapter seam keeps the brain swappable.
 - **Instrumentation is designed as shared tooling with the LLM extraction program (#379)**: same span conventions, same eval-runner pattern, same (future) self-hosted observability platform. Consistency lives in the instrumentation layer, not the brain.
@@ -89,7 +91,7 @@ The LLM extraction program (#379) and this harness are structurally twins — bo
 
 ## Environment & prerequisites
 
-- **Target:** staging (auto-deploys `develop`, deterministic prod-shaped reseed, reset contract shipped). Config via env: `TOURS_BASE_URL` + staging API key, never committed.
+- **Target:** staging (auto-deploys `develop`, deterministic reseed of the `standard` world, reset contract shipped). Config via env: `TOURS_BASE_URL` + staging API key, never committed.
 - **Ops prerequisite (personal-ops repo, not this repo):** un-defer the sandbox→staging path — the deferred "observe path" covered only a read-only PG role; touring needs staging's HTTP endpoint plus a reset trigger reachable from the sandbox.
 - **Nightly autonomous wiring is out of scope for the first cut** — it lands after the prove phase demonstrates judge precision, reusing the umbrella's cadence/host decisions.
 
@@ -140,7 +142,7 @@ The **sandbox→staging network exception is complete** (the ops prerequisite in
 
 ### Decisions
 
-- **Reset-before-run per sweep.** Each tour sweep first invokes `scripts/staging-reset.sh` (ssh mode) to obtain a known prod-shaped world, then runs all tours against it. This makes the destructive `when`s in the contacts scope (CON-042 delete, CON-043 merge, CON-044 mark-contacted) repeatable, and the run manifest pins the resulting staging image digest.
+- **Reset-before-run per sweep.** Each tour sweep first invokes `scripts/staging-reset.sh` (ssh mode) to obtain a known `standard` world, then runs all tours against it. This makes the destructive `when`s in the contacts scope (CON-042 delete, CON-043 merge, CON-044 mark-contacted) repeatable, and the run manifest pins the resulting staging image digest.
 - **Hybrid grader (refines "Judge").** Each `then` item is classified as **deterministic-verifiable** (checkable in code from captured evidence — e.g. CON-041 URL-param stripped via regex, CON-044 interaction logged via a `/api/v1` JSON-path, "arrows inert" via aria-node presence) or **judge-only** (semantic — e.g. CON-042 "warns the action cannot be undone"). Deterministic items are checked by verifiers with ordinary unit tests; the LLM judge owns only the semantic residue, and **fail-precision (the north star) is measured over the judge's residual items**. This follows the surveyed "verifiers before judges" rule and directly lifts judge precision by removing mechanical noise. Consequence for the capture contract: captures must be stored **parseably** (queryable aria structure, `/api/v1` responses keyed by endpoint, URL as a field), not as opaque text blobs.
 - **Server-time frame per capture (refines "Capture contract").** Accelerated time cannot be frozen — `accelerated.GetCurrentTime()` returns `TIME_BASE + wall_elapsed × TIME_ACCELERATION`, always advancing. Rather than perturb staging's clock, each capture records the app's current accelerated `now` plus the acceleration factor (read from the system-time endpoint); the judge and verifiers evaluate time-dependent `then` items (CON-045 birthdays, CAD due-dates, DSH widgets) **in that recorded frame**, and time-dependent before/after brackets are kept tight enough not to straddle a day boundary.
 - **Before/after state-delta captures (refines "Capture contract").** Behaviors whose `when` mutates state are captured as an explicit before/after **pair** the grader can diff, rather than two independent snapshots — the "grade what changed in the world" discipline.

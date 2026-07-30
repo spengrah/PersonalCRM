@@ -5,9 +5,11 @@
 **Author:** spengrah (brainstormed with Claude)
 **Parent:** `2026-06-07-deploy-and-staging-overview-design.md`
 
+> **Superseded on the seed profile (2026-07-30, gh #759).** The `dev` and `prod-shaped` catalog profiles — and the whole invented-distribution layer behind them (bands, quotas, archetypes, margins) — are deleted. There are now exactly two worlds: the declared `standard` world (the default for local dev, staging, the automated staging reseed, and the QA tours) and `minimal-scoped` (an explicit operator override). Historical measurements below were taken against the world that existed at the time and are left as recorded; operational commands and provenance assumptions have been updated to `standard` / `synth-standard-`. See `.ai/patterns/synthetic-seed-toolkit.md` for the current story.
+
 ## Scope
 
-A generator that produces **prod-shaped, PII-free, deterministic** synthetic data for the CRM. It is two things at once:
+A generator that produces **production-shaped, PII-free, deterministic** synthetic data for the CRM. It is two things at once:
 
 1. **A data source** for staging (spec C) and a richer local `make dev`.
 2. **A shared synthetic-data toolkit** reused across unit, integration, and E2E tests.
@@ -24,7 +26,7 @@ Four layers, and each test level reuses a *different* one:
 |---|---|---|
 | **Factories** | deterministic constructors for each entity *and* each synthetic source payload | **unit** (factories only — replay is too heavy here), integration, E2E, seed |
 | **Replay adapters** | per-source injectors that feed synthetic input through the *real* ingestion pipeline | **integration** (this *is* the sync integration-test harness), seed, staging |
-| **Scenario catalog** | named bundles = edge cases + prod-shaped distributions | **E2E** (named scenarios), staging, QA harness (#380) |
+| **Scenario catalog** | named bundles = edge cases + production-shaped distributions | **E2E** (named scenarios), staging, QA harness (#380) |
 | **Entrypoints** | `crm-admin --seed`, `/seed/*` routes, Go test helpers | staging/local, CI |
 
 There is **no single uniform injector** — the grounding pass found three ingestion topologies (scheduler-pull, HTTP-push, persistent-MTProto), so the replay layer is a small **per-source adapter set**, each wrapping that source's existing seam.
@@ -41,7 +43,7 @@ The dataset must contain three states, and the key finding is that they fall out
 
 - **Replay is the default** (for staging + showcase fidelity). It derives `last_contacted` / `contact_by` / cadence / interactions *correctly* via the real consumers, and exercises matching + the sync flow. Cost: slower (River jobs, drained synchronously) — fine for a one-time staging seed.
 - **Direct-write is an optional "volume padding" profile** (local/CI, or bulk filler in staging) — fast, but must hand-replicate the consumers' derived fields, so it carries drift risk and is used only where exact derived fields matter less.
-- Same toolkit, selected by **profile** (this generalizes the volume/distribution parameter): e.g. `prod-shaped` (replay-heavy, hundreds of contacts) for staging; `minimal-scoped` (small, namespaced) for CI/E2E; `dev` for local.
+- Same toolkit, selected by **profile** (this generalizes the volume/distribution parameter): e.g. `prod-shaped` (replay-heavy, hundreds of contacts) for staging; `minimal-scoped` (small, namespaced) for CI/E2E; `dev` for local. *(As designed. The volume/distribution parameter is what #759 removed: `standard` replaced the three-profile split and is defined by declaration + adversarial-edge registries, not by counts.)*
 
 ## Per-source injection (provider-fetch boundary wherever not too expensive)
 
@@ -104,7 +106,7 @@ Do **not** delete a gotcha while any unmigrated test still relies on the old pat
 ## QA harness (#380) support
 
 D as scoped supports the agentic UX QA harness. The contract is clean: **D provides the world, #380 provides the tour.**
-- **Deterministic, prod-shaped world** with the full downstream graph → every UI surface has content (the `prod-shaped` profile).
+- **Deterministic, production-shaped world** with the full downstream graph → every UI surface has content (today: the `standard` profile).
 - **Programmatic reset** (`make staging-reset` / callable reseed) → a known baseline before each tour.
 - **All surfaces + states covered**, including the pending-state UX (Imports queue, rematch, needs-review) and the edge-case catalog → nothing the harness tours is empty. The **coverage check** (open thread) is the load-bearing hook — it guarantees the harness has something to assert on every surface, so it stays in (lightweight).
 - **Deterministic timestamps** anchored to `accelerated.GetCurrentTime()` → cadence/overdue states are reproducible given staging's time config, so tours are comparable across runs.
@@ -143,7 +145,7 @@ Pending/unprocessed states (each produced naturally by replaying an unknown-send
 - [ ] **GCal `calendarFetcher` extraction.** The one new seam: interface wrapping `calendar.Service.Events.List/Watch`, a `newFetcher` factory field on `CalendarSyncProvider`, and `SetFetcherFactoryForTest` — mirroring Gmail/GChat. Lands as its own small change (standing testability win).
 - [ ] **Telegram synthetic-input builder.** Helper to construct `tg.Message` + `tg.Entities` and drive `HandleNewMessage` (handler uses the API client only for group-participant counts — basic messages work with a nil/stub client). Reuse the pure `ParseMessage` where useful.
 - [ ] **River draining in the seed context.** Replay enqueues River jobs (interactions, cadence, aggregation, Todoist). The seed must drain them synchronously and wait for completion (mirror the integration-test harness) so the graph is settled when the seed returns. Confirm the drain mechanism + that no consumer is leader-gated in a way that blocks the CLI context.
-- [ ] **Profiles + volume/distribution params.** `prod-shaped` / `minimal-scoped` / `dev`; configurable counts and distributions; per-test **namespacing** (unique prefixes/ids) so integration/E2E reuse can't collide on the shared DB (the cross-test-pollution class the determinism arc fights).
+- [ ] **Profiles + volume/distribution params.** `prod-shaped` / `minimal-scoped` / `dev`; configurable counts and distributions; per-test **namespacing** (unique prefixes/ids) so integration/E2E reuse can't collide on the shared DB (the cross-test-pollution class the determinism arc fights). *(Shipped, then partly reversed: namespacing stands; the configurable counts/distributions and the three-profile split were deleted by #759 in favour of `standard` + `minimal-scoped`.)*
 - [ ] **Isolation primitive / parallelization readiness.** Make the namespacing primitive an explicit design decision and build it to support **both** modes: (a) **prefix-scoping within one DB** (lightweight tests) and (b) a fast full-seed suitable for **DB/schema-per-worker** isolation (heavy replay tests, CI sharding). This keeps D parallelization-ready so the follow-on test-parallelization project (`2026-06-07-test-parallelization-design.md`, gh #413) is a cheap successor rather than a rework. **D builds the foundation only** — the actual parallel flip (`t.Parallel()`, per-worker DB provisioning, CI shards) is out of D's scope.
 - [ ] **Determinism details.** PRNG seeding strategy; mapping generated timestamps onto accelerated time so cadence/overdue states are reproducible; stable synthetic source-ids/guids for idempotent replay.
 - [ ] **Reset mechanism (`make staging-reset`).** Truncate-respecting-FK vs drop/migrate/reseed (soft-delete does NOT cascade → a true wipe is a hard reset). Must be **programmatically callable** by the QA harness, not just interactive. Pairs with C.

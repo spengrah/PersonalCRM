@@ -4,7 +4,7 @@
 # PATH-shadowed stubs (id/sudo/podman/systemctl/sed/ssh), fixture env + unit
 # files, call-log assertions. No Pi/podman/root/real account. Covers:
 #   - Ordering: stop backend -> ephemeral `podman run ... --entrypoint crm-admin
-#     ... --reset-and-seed --profile prod-shaped --yes` -> start backend.
+#     ... --reset-and-seed --profile standard --yes` -> start backend.
 #   - The reset runs against the image ref read VERBATIM from the unit's pinned
 #     Image= line (:<sha> / @sha256:), NEVER a hardcoded :latest, and NEVER via
 #     `podman exec` into the (stopped) running container.
@@ -228,7 +228,7 @@ assert_reset_run_line() {
     for needle in "--rm" "--network crm" "--env-file" "-e MIGRATIONS_PATH=/migrations" \
                   "-e TZ=UTC" \
                   "--entrypoint /usr/local/bin/crm-admin" "$want_ref" \
-                  "--reset-and-seed" "--profile prod-shaped" "--yes"; do
+                  "--reset-and-seed" "--profile standard" "--yes"; do
         if [[ "$run" == *"$needle"* ]]; then ok; else fail "reset run line missing '$needle': $run"; fi
     done
     # NEVER the mutable :latest tag.
@@ -257,24 +257,24 @@ test_happy_path_ordering() {
 }
 
 test_profile_override_reaches_the_invocation() {
-    echo "test: STAGING_RESET_PROFILE reaches the crm-admin invocation (and prod-shaped is the default)"
+    echo "test: STAGING_RESET_PROFILE reaches the crm-admin invocation (and standard is the default)"
     make_sandbox
     # The default, restated here so the override case cannot pass by accident.
     run_local
     if [ "$RC" -eq 0 ]; then ok; else fail "default profile run should exit 0, got $RC"; fi
-    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--profile prod-shaped'; then ok
-    else fail "default must still be --profile prod-shaped: $(grep -F 'podman run' "$CALL_LOG" | head -1)"; fi
+    if grep -F 'podman run' "$CALL_LOG" | grep -q -- '--profile standard'; then ok
+    else fail "default must be --profile standard: $(grep -F 'podman run' "$CALL_LOG" | head -1)"; fi
     cleanup_sandbox
 
-    # The whole staging leg of the standard-world gate rides this knob, so it is
-    # covered here rather than discovered to be broken during the gate.
+    # The override is the operator escape hatch to the tiny world, so it is covered
+    # here rather than discovered to be broken when someone reaches for it.
     make_sandbox
-    STAGING_RESET_PROFILE=standard run_local
+    STAGING_RESET_PROFILE=minimal-scoped run_local
     if [ "$RC" -eq 0 ]; then ok; else fail "profile-override run should exit 0, got $RC ($(cat "$SANDBOX/stderr"))"; fi
     local run
     run="$(grep -F 'podman run' "$CALL_LOG" | grep -F -- '--reset-and-seed' | head -1)"
-    if [[ "$run" == *"--profile standard"* ]]; then ok; else fail "override did not reach the invocation: $run"; fi
-    if [[ "$run" == *"--profile prod-shaped"* ]]; then fail "the default profile must not survive the override: $run"; else ok; fi
+    if [[ "$run" == *"--profile minimal-scoped"* ]]; then ok; else fail "override did not reach the invocation: $run"; fi
+    if [[ "$run" == *"--profile standard"* ]]; then fail "the default profile must not survive the override: $run"; else ok; fi
     cleanup_sandbox
 }
 

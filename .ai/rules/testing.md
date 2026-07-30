@@ -64,7 +64,9 @@ See [Layered Architecture](../guides/architecture.md#why-layered) for how these 
 - **Namespace isolation** is automatic: give each sub-test a unique namespace via `synthetic.NewHarnessForNamespace` so shared-test-DB reuse can't collide (supersedes the manual randomized-suffix pattern).
 - **Heavy replay tests are slow** (River-draining): call `testsupport.RequireLongTests(t)` and name them with the `TestSynthetic` prefix so they route onto the slow suite (see Slow-test routing in `.ai/patterns/synthetic-seed-toolkit.md`).
 
-See [`.ai/patterns/synthetic-seed-toolkit.md`](../patterns/synthetic-seed-toolkit.md) for the factory/replay/profile how-to.
+- **E2E specs that need a seeded world** post `POST /api/v1/test/seed/declared` with a `behavior_id`, and the fixture shape is DECLARED in `backend/internal/synthetic/declare/<domain>.go` beside its spec behavior. The bespoke `/api/v1/test/seed/*` endpoints and their `TestAPI` helper methods still exist and are still the path for the not-yet-migrated specs; they are deleted once their last consumer migrates.
+
+See [`.ai/patterns/synthetic-seed-toolkit.md`](../patterns/synthetic-seed-toolkit.md) for the factory/replay/declare how-to.
 
 ## Backend Integration-Test Parallelism
 

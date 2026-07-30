@@ -53,7 +53,7 @@ func (syntheticTodoistOAuth) HasAnyAccount(_ context.Context) bool { return true
 // MatchIntent is n/a for Todoist. Two behaviors, both always on:
 //
 //   - It ALWAYS finalizes item_add commands. For each command carrying a TempID
-//     (only item_add sets one), Sync returns TempIDMap[TempID] = a prod-shaped
+//     (only item_add sets one), Sync returns TempIDMap[TempID] = a production-shaped
 //     alphanumeric id, so the provider's inline processTempIDMappings swaps the
 //     temp UUID for a finalized Todoist-v1 id WITHIN the same Sync call — leaving
 //     every reconcile-created cadence_due row with an alphanumeric external_task_id
@@ -514,7 +514,7 @@ func base62UUID(id uuid.UUID) string {
 	return new(big.Int).SetBytes(id[:]).Text(62)
 }
 
-// finalizeTempID maps an item_add command's temp id to the prod-shaped
+// finalizeTempID maps an item_add command's temp id to the production-shaped
 // alphanumeric id the fake Sync returns for it (mirroring the temp→real handoff
 // the real Todoist Sync API performs). The provider mints temp ids via
 // uuid.New().String(), so the normal path parses + base62-encodes the UUID to
