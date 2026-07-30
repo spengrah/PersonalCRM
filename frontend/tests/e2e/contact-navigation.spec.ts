@@ -149,8 +149,13 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     expect(page.url()).toContain('sort=name')
     expect(page.url()).toContain('order=asc')
 
-    // Wait for navigation bar to be ready
-    await expect(page.getByRole('button', { name: 'Next contact' })).toBeVisible({ timeout: 10000 })
+    // Keyboard nav is disabled until the navigation id list loads, and the Next
+    // control renders DISABLED while it does — an ArrowRight inside that window
+    // is a silent no-op with no retry, which the destination assertion below
+    // would then read as a real failure. Same gate as every other arrow-pressing
+    // test in this file.
+    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole('button', { name: 'Next contact' })).toBeEnabled()
 
     // Navigate to next contact using keyboard
     await page.keyboard.press('ArrowRight')

@@ -38,23 +38,46 @@ func TestContact_DisplayNamesAreUniqueWithinANamespace(t *testing.T) {
 		}
 		seen[name] = true
 	}
-	// The disambiguated one carries this contact's sequence number.
-	if !strings.HasSuffix(names[2], " 3") {
-		t.Fatalf("expected the repeated draw to carry its sequence number, got %q", names[2])
+	// The disambiguated one carries this contact's sequence number BETWEEN the
+	// given name and the surname. The placement, not just the presence, is the
+	// property: a trailing number would leave the earlier name a prefix of this
+	// one, and the selectors that resolve these fixtures match on substring.
+	if want := "synth-d382da5be-c1-Kestrel 3 Dummond"; names[2] != want {
+		t.Fatalf("expected the repeated draw to carry its sequence number mid-name: got %q, want %q", names[2], want)
+	}
+	if strings.Contains(names[2], names[0]) || strings.Contains(names[0], names[2]) {
+		t.Fatalf("neither disambiguated name may CONTAIN the other: %q vs %q", names[0], names[2])
 	}
 }
 
-// Exhausting the pool must not produce duplicates either — the suffix is the
-// sequence number, which is unique within a generator by construction.
+// Exhausting the pool must not produce duplicates either — the disambiguator is
+// the sequence number, which is unique within a generator by construction.
+//
+// Uniqueness is asserted in the stronger form the fixtures actually need: no
+// rendered name may be a SUBSTRING of another. Equality is what breaks
+// Playwright's strict mode, but containment is what makes a substring selector
+// resolve two rows while looking like a legitimate hit. Two things could produce
+// it: a disambiguator appended at the END of an existing name, and a pool entry
+// that is a prefix of another (which TestNamePools_AreEmailSafeByConstruction
+// forbids). This is the drawn-name half of the rule; the pinned half is enforced
+// over the whole declare registry, and the marker half over the pinned markers.
 func TestContact_DisplayNamesStayUniquePastThePool(t *testing.T) {
 	beyondPool := len(syntheticGivenNames)*len(syntheticSurnames) + 25
 
+	names := namesFor(t, "pool-exhaustion", beyondPool)
 	seen := map[string]bool{}
-	for _, name := range namesFor(t, "pool-exhaustion", beyondPool) {
+	for _, name := range names {
 		if seen[name] {
 			t.Fatalf("duplicate display name %q after %d contacts", name, beyondPool)
 		}
 		seen[name] = true
+	}
+	for i, a := range names {
+		for _, b := range names[i+1:] {
+			if strings.Contains(a, b) || strings.Contains(b, a) {
+				t.Fatalf("display name %q CONTAINS %q — a substring selector would resolve both", a, b)
+			}
+		}
 	}
 }
 

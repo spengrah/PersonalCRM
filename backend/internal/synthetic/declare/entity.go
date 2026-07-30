@@ -293,10 +293,15 @@ func Location(s string) ContactProp {
 // which is a different ordering.
 //
 // It skips the factory's display-name dedupe (an exact literal is the point), so
-// no two entities may declare the same pair. Registration checks that within one
-// entity list; the composed world — where every declaration and edge runs against
-// ONE namespace — is checked across lists by its own guard, because registration
-// order makes a cross-list check at init time impossible.
+// no two entities may declare the same pair — nor may one pinned name CONTAIN
+// another, since the selectors that resolve these fixtures match on substring.
+// Registration checks the duplicate case within one entity list; the composed
+// world — where every declaration and edge runs against ONE namespace — is
+// checked across lists by a unit test. An accumulate-and-compare inside Register
+// could see the cross-list pairs too (each pair is examined when its later member
+// registers); a test is preferred because Register PANICS and this package is
+// linked into crm-api, so a cross-list collision would abort the API at startup
+// instead of failing a named test.
 //
 // It is mutually exclusive with SameNameAs and NameEdge: a twin copies another
 // contact's rendered name, and an edge splices a token into the pair, so either

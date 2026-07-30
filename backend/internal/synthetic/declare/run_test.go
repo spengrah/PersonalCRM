@@ -218,6 +218,65 @@ func TestPostconditionsDerivedPerProperty(t *testing.T) {
 	assert.Equal(t, []string{"email", "phone", "telegram"}, byHandle["multi"].MethodKinds)
 }
 
+// A removed contact's detail read is a 404, so its postcondition must carry NO
+// fact that is checked against that read — the two NAME facts included, since
+// both are asserted against the detail read's full_name. Every consumer today
+// branches on Present before it reads anything else, which is exactly why the
+// derivation itself is pinned here: the next one that reads a name fact first
+// would assert a display name against a 404.
+func TestPostconditionsForRemovedContactDropEveryDetailReadFact(t *testing.T) {
+	t.Setenv("CRM_ENV", "testing")
+
+	anchor := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	d := Declaration{Behavior: "ZZZ-901", Entities: []Entity{
+		Contact("gone",
+			Cadence("weekly"),
+			OverdueBy(Days(3)),
+			ExplicitName("Kbd", "Move Alpha"),
+			NameMarker("cadflt"),
+			Location("Placeholderton"),
+			BirthdayInDays(3),
+			Methods("email", "phone"),
+		),
+		Contact("survivor"),
+		SoftDelete("gone"),
+	}}
+
+	// The fixture must be a LEGAL declaration, or the derivation it exercises
+	// describes a world that could never be registered.
+	require.NoError(t, validateEntityOrder(d.Entities))
+
+	byHandle := map[string]Postcondition{}
+	for _, pc := range d.PostconditionsAt(anchor) {
+		byHandle[pc.Handle] = pc
+	}
+
+	gone := byHandle["gone"]
+	require.NotNil(t, gone.Present)
+	assert.False(t, *gone.Present)
+	assert.False(t, gone.Listed)
+	assert.Nil(t, gone.Cadence)
+	assert.Nil(t, gone.LastContacted)
+	assert.Nil(t, gone.CreatedAgo)
+	assert.Nil(t, gone.MethodKinds)
+	assert.Nil(t, gone.Birthday)
+	assert.Nil(t, gone.Location)
+	assert.Nil(t, gone.InteractionCount)
+	assert.Nil(t, gone.ExplicitName, "a pinned name is read off the 404ing detail response")
+	assert.Nil(t, gone.NameMarker, "so is the resolution marker")
+	assert.False(t, gone.CreatedBeforeOldestInteraction)
+	require.NotNil(t, gone.OverdueMember)
+	assert.False(t, *gone.OverdueMember,
+		"leaving the overdue read is the one observable consequence that stays assertable")
+
+	// The survivor proves the nil-out is SCOPED to the removed handle — a blanket
+	// one would satisfy every assertion above.
+	survivor := byHandle["survivor"]
+	assert.Nil(t, survivor.Present)
+	assert.True(t, survivor.Listed)
+	assert.NotNil(t, survivor.MethodKinds)
+}
+
 // --- test seams -------------------------------------------------------------
 
 // The misuse guard cannot be observed end-to-end from inside a test binary —

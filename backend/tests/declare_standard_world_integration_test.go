@@ -177,6 +177,11 @@ func TestSyntheticDeclareStandardWorld(t *testing.T) {
 			w.harness.Generator().SyntheticPhonePrefix())
 		require.NoError(t, err)
 		assert.Less(t, phones, int64(100), "the namespace's phone block is exhausted at 100 and exhaustion PANICS")
+
+		// The doc asks a PR that grows the world to report its occupancy, so the
+		// subtest prints it rather than making every author instrument the test.
+		t.Logf("standard-world occupancy: contacts=%d/500 overdue=%d/%d phones=%d/100",
+			len(contacts), overdue, synthetic.TourOverdueCaptureCap, phones)
 	})
 
 	t.Run("the composed import queue holds both keying shapes", func(t *testing.T) {

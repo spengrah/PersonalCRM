@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,27 +189,33 @@ func TestExecuteWorld_RejectsAnUnreportedTailContact(t *testing.T) {
 // against ONE namespace. So two lists pinning the same literal put two
 // identically-named contacts in the composed world, which is precisely the
 // ambiguity the exemption cannot resolve for itself (Playwright's strict mode
-// fails outright on two matching headings, and a manifest read becomes
-// guesswork). validateEntityOrder catches a collision INSIDE one Entities list;
-// nothing but a whole-registry pass can see one across lists, and registration
-// order makes an init-time check unable to (a declaration cannot know about an
-// edge registered after it).
-func TestComposedWorld_PinsNoExplicitNameTwice(t *testing.T) {
-	owner := map[string]string{}
+// fails outright on two matching headings, and a manifest read becomes guesswork).
+//
+// A SUBSTRING pair is rejected for the same reason and not only an exact one:
+// getByText matches on substring, so "Button Nav 1" beside "Button Nav 10" would
+// resolve two rows for the shorter literal — a mis-resolution that looks like a
+// legitimate hit to anything weaker than the exactly-one rule. Zero padding is
+// what keeps today's cohorts clear of that; this is what keeps them there.
+//
+// validateEntityOrder catches a duplicate INSIDE one Entities list; only a
+// whole-registry pass sees one across lists. An accumulate-and-compare inside
+// Register/RegisterEdge could see every cross-list pair too — each is examined
+// when its later member registers — but Register PANICS and this package is
+// linked into crm-api, so a collision would abort the API at startup rather than
+// fail this named test.
+func TestComposedWorld_PinsNoAmbiguousExplicitName(t *testing.T) {
+	type pin struct{ display, owner string }
+	var pins []pin
 	claim := func(list string, entities []Entity) {
 		for _, e := range entities {
 			p, ok := e.(*contactPlan)
 			if !ok || !p.explicitNameSet {
 				continue
 			}
-			display := p.explicitGiven + " " + p.explicitSurname
-			here := list + "/" + p.name
-			if prior, dup := owner[display]; dup {
-				t.Errorf("%s and %s both pin the explicit name %q — the composed world would hold two contacts under one name",
-					prior, here, display)
-				continue
-			}
-			owner[display] = here
+			pins = append(pins, pin{
+				display: p.explicitGiven + " " + p.explicitSurname,
+				owner:   list + "/" + p.name,
+			})
 		}
 	}
 	for _, d := range Registered() {
@@ -217,5 +224,18 @@ func TestComposedWorld_PinsNoExplicitNameTwice(t *testing.T) {
 	for _, e := range Edges() {
 		claim(e.Name, e.Entities)
 	}
-	require.NotEmpty(t, owner, "the registry must pin at least one explicit name, or this guard proves nothing")
+	require.NotEmpty(t, pins, "the registry must pin at least one explicit name, or this guard proves nothing")
+
+	for i, a := range pins {
+		for _, b := range pins[i+1:] {
+			switch {
+			case a.display == b.display:
+				t.Errorf("%s and %s both pin the explicit name %q — the composed world would hold two contacts under one name",
+					a.owner, b.owner, a.display)
+			case strings.Contains(a.display, b.display) || strings.Contains(b.display, a.display):
+				t.Errorf("%s pins %q and %s pins %q — one CONTAINS the other, so a substring selector resolves both and a mis-resolution reads as a legitimate hit",
+					a.owner, a.display, b.owner, b.display)
+			}
+		}
+	}
 }

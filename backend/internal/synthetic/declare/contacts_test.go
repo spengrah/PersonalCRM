@@ -48,6 +48,12 @@ func TestContactsDeclarations_RegisterTheExpectedHandleCounts(t *testing.T) {
 // That only holds while the pinned literals stay zero-padded. Both cohorts are
 // read out of the REGISTRY rather than from the builder, so what the declarations
 // actually pass is what gets checked.
+//
+// The order below is Go BYTE order, a valid stand-in for the PostgreSQL collation
+// the list actually sorts under ONLY because these literals are pure ASCII over a
+// common prefix. ExplicitName exists precisely because the two orderings differ in
+// general — so an accented or non-ASCII literal added here needs its order
+// established against the database, not against strings.Compare.
 func TestBackNavCohorts_AreNameOrderedByConstruction(t *testing.T) {
 	for _, id := range []string{"CON-065", "CON-066"} {
 		d, ok := Lookup(id)
@@ -111,7 +117,11 @@ func TestCadenceSortDeclaration_NamesAreAntiCorrelatedWithCadenceOrder(t *testin
 		return out
 	}
 
-	// The list's default is most-frequent-first, i.e. shortest period first.
+	// The list's default is most-frequent-first, i.e. shortest period first. The
+	// two name orders are Go byte order — sound here only because these literals
+	// are pure ASCII (see the back-nav cohort test above), and because the claim is
+	// an INEQUALITY: a collation that reorders them still differs from the cadence
+	// order these names were chosen to contradict.
 	byCadenceDesc := displays(func(a, b row) bool { return a.period < b.period })
 	byNameAsc := displays(func(a, b row) bool { return a.display < b.display })
 	byNameDesc := displays(func(a, b row) bool { return a.display > b.display })

@@ -718,9 +718,16 @@
     "tags": []
   },
   {
-    "_comment": "Test-only seed/cleanup SQL and its generated bindings — same rationale as the test handlers above.",
+    "_comment": "Test-only seed/cleanup SQL and its generated bindings — same rationale, and the same area list, as the test handlers above: the declared seed and cleanup queries live here, so every area that provisions through them is selected.",
     "pattern": "^backend/internal/db/(queries/test\\.sql|test\\.sql\\.go|querier\\.go)$",
-    "tags": ["@area:dashboard", "@area:overdue"]
+    "tags": [
+      "@area:dashboard",
+      "@area:overdue",
+      "@area:contacts",
+      "@area:contact-navigation",
+      "@area:contact-merge",
+      "@area:birthdays"
+    ]
   },
   {
     "_comment": "sqlc's generated table structs. A schema change reaches E2E through the queries, handlers and migrations that accompany it — those carry the areas — so this file contributes none of its own.",

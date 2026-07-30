@@ -348,6 +348,20 @@ func TestNamePools_AreEmailSafeByConstruction(t *testing.T) {
 				}
 			}
 		}
+		// No entry may be a PREFIX of another. This is what makes two distinct
+		// drawn display names unable to nest: both are rendered as
+		// prefix+given+" "+surname, so containment would need one given name to be
+		// a prefix of another (with the following space still lining up) or one
+		// surname to be a prefix of another. A substring pair breaks any selector
+		// that resolves a fixture by name on substring, which is how the E2E specs
+		// address them.
+		for i, a := range entries {
+			for _, b := range entries[i+1:] {
+				if strings.HasPrefix(a, b) || strings.HasPrefix(b, a) {
+					t.Errorf("%s entries %q and %q — one is a prefix of the other, so two rendered names could nest", pool, a, b)
+				}
+			}
+		}
 	}
 }
 
