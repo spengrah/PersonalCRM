@@ -131,11 +131,11 @@ help:
 	@echo ""
 	@echo "Development:"
 	@echo "  dev          - Start development servers (uses Docker for PostgreSQL)"
-	@echo "  dev-seed     - Seed the dev synthetic world, then start dev servers (opt-in; dev is unchanged)"
+	@echo "  dev-seed     - Seed the declared 'standard' synthetic world into local Postgres, then start dev servers (opt-in; dev is unchanged). Override the world with DEV_SEED_PROFILE=minimal-scoped"
 	@echo "  dev-native   - Start dev servers with native PostgreSQL (no Docker)"
 	@echo "  worktree-env - Symlink the main checkout's gitignored env files into this worktree"
 	@echo "  worktree-deps - Install per-worktree frontend deps (node_modules) into this worktree"
-	@echo "  staging-reset - HARD reset + reseed STAGING with the prod-shaped synthetic world — the manual force path / escape hatch (full wipe regardless of oauth; deploy-staging.yml auto-reseeds on seed-surface changes). Fail-closed: refuses a production-alias/empty CRM_ENV"
+	@echo "  staging-reset - HARD reset + reseed STAGING with the declared 'standard' synthetic world — the manual force path / escape hatch (full wipe regardless of oauth; deploy-staging.yml auto-reseeds on seed-surface changes). Fail-closed: refuses a production-alias/empty CRM_ENV. Override the world with STAGING_RESET_PROFILE=minimal-scoped"
 	@echo "  build       - Build both frontend and backend"
 	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
 	@echo "  mac-daemon  - Build the macOS daemon app bundle (optionally set CRM_MAC_CODESIGN_IDENTITY)"
@@ -219,12 +219,12 @@ dev:
 	@echo "Press Ctrl+C to exit (servers will keep running)"
 	@tail -f logs/frontend-dev.log logs/backend-dev.log 2>/dev/null || sleep infinity
 
-dev-seed: ## Seed the `dev` synthetic world into local Postgres, then start dev servers (opt-in; `make dev` is unchanged)
-	@echo "Seeding dev synthetic world, then starting development environment..."
+dev-seed: ## Seed the declared `standard` synthetic world into local Postgres, then start dev servers (opt-in; `make dev` is unchanged)
+	@echo "Seeding the standard synthetic world, then starting development environment..."
 	@make dev-api-stop                        # stop any detached backend so the seed harness owns the River queue
 	@make docker-up
 	@bash scripts/sync-postgres-auth.sh
-	@bash scripts/dev-seed.sh                 # exports DATABASE_URL, migrates + crm-admin --seed --profile dev --yes (backend NOT running)
+	@bash scripts/dev-seed.sh                 # exports DATABASE_URL, migrates + crm-admin --seed --profile standard --yes (backend NOT running; DEV_SEED_PROFILE overrides the world)
 	@echo "Starting backend server..."
 	@bash scripts/start-backend.sh
 	@echo "✅ Backend server started (logs: logs/backend-dev.log)"
@@ -295,7 +295,7 @@ dev-api-restart:
 	@make dev-api-start
 
 staging-reset: ## HARD reset + reseed STAGING — manual force / escape hatch (full wipe regardless of oauth; deploy-staging.yml auto-reseeds on seed-surface changes; fail-closed production refuse; STAGING-only)
-	@bash scripts/staging-reset.sh   # ssh STAGING_HOST -> refuse if CRM_ENV is a production alias or empty -> stop backend -> ephemeral crm-admin --reset-and-seed --profile prod-shaped --yes (deployed image) -> start backend
+	@bash scripts/staging-reset.sh   # ssh STAGING_HOST -> refuse if CRM_ENV is a production alias or empty -> stop backend -> ephemeral crm-admin --reset-and-seed --profile standard --yes (deployed image) -> start backend
 
 tours: ## Reset staging + run the agentic UX QA tours. Config from env only: TOURS_BASE_URL, TOURS_API_KEY, TOURS_API_URL. Captures land in frontend/tests/tours/.runs/ (gitignored). TOURS_SKIP_RESET=1 skips the reset.
 	@scripts/run-tours.sh

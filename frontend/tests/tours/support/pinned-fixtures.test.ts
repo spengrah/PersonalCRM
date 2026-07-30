@@ -35,6 +35,16 @@ function stubApiCtx(rows: Array<{ id: string; full_name: string }>): APIRequestC
 }
 
 describe('assertOverdueFitsCapture', () => {
+  // Only the FUNCTION's contract is checkable here. The other half of the
+  // two-sided cap contract — that the cap is not set below the world actually
+  // shipped — needs the seeded population, and this lane has no database: any
+  // "the seed ships N" figure written here would be a literal restating itself,
+  // and would keep passing after the world changed. It is asserted where the
+  // population is real, by TestSyntheticDeclareStandardWorld/budgets in
+  // backend/tests/declare_standard_world_integration_test.go (LONG_TESTS lane),
+  // which measures the live overdue population as above fifty AND at or under
+  // synthetic.TourOverdueCaptureCap — so a shrunken cap and an outgrown world
+  // both fail a named test.
   it('throws above the cap, naming the tour and the count', () => {
     expect(() => assertOverdueFitsCapture(OVERDUE_CAPTURE_CAP + 1, 'dashboard')).toThrow(
       new RegExp(
@@ -45,15 +55,6 @@ describe('assertOverdueFitsCapture', () => {
 
   it('accepts a population exactly at the cap', () => {
     expect(() => assertOverdueFitsCapture(OVERDUE_CAPTURE_CAP, 'dashboard')).not.toThrow()
-  })
-
-  it('accepts the population the seed actually ships', () => {
-    // 50 catalog overdue slots + the 2 designated fixtures, measured on a
-    // prod-shaped world. The guard must not fire on the shipping seed — a cap that
-    // rejects the intended population is as broken as one that never fires.
-    expect(() => assertOverdueFitsCapture(52, 'relationship-loop')).not.toThrow()
-    // ...and the declared `standard` world, measured at 65.
-    expect(() => assertOverdueFitsCapture(65, 'relationship-loop')).not.toThrow()
   })
 
   it('leaves headroom over the default array cap', () => {

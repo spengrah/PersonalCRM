@@ -6,55 +6,6 @@ import (
 	"personal-crm/backend/internal/synthetic/factory"
 )
 
-// BirthdayFixture is one clock-anchored birthday fixture: an offset in days from
-// the (UTC) anchor day and the birthdays-page section it is meant to demonstrate.
-// The offset is applied to the reseed clock so "imminent birthdays visibly stand
-// apart" is demonstrable on a real-clock staging run rather than on an arbitrary
-// fixed date that only lands in the highlight window a few days a year.
-type BirthdayFixture struct {
-	OffsetDays int
-	Role       string
-}
-
-const (
-	// BirthdayRoleToday / Imminent / Distant are the STRICT triple, always seeded
-	// when the catalog has ≥3 birthdayless slots: a {today, +1} redundancy pair so
-	// at least one lands in the ≤7-day highlight window under any residual ±1-day
-	// skew, plus one distant fixture that recedes out of it.
-	BirthdayRoleToday    = "today"
-	BirthdayRoleImminent = "imminent"
-	BirthdayRoleDistant  = "distant"
-	// BirthdayRoleThisWeek / Distant2 / Celebrated are the best-effort extras that
-	// fill out the spread at larger catalog sizes. Celebrated is date-gated (see
-	// BirthdayFixturePlan).
-	BirthdayRoleThisWeek   = "this_week"
-	BirthdayRoleDistant2   = "distant2"
-	BirthdayRoleCelebrated = "celebrated"
-)
-
-// BirthdayFixturePlan is the ordered, degrading list of fixtures to seed for a
-// reseed anchor: the strict {today, +1, distant} triple first (always applicable),
-// then the best-effort extras. celebrated (a "few days ago" birthday) is appended
-// only when it still falls in the anchor's calendar year — in the first days of
-// January a 3-days-ago birthday belongs to the previous year, so its next annual
-// occurrence is ~362 days out and the page classifies it distant, not
-// past-this-year. That single date-dependence is why the strict triple, which is
-// date-independent, is always the first three entries. All math is UTC.
-func BirthdayFixturePlan(anchor time.Time) []BirthdayFixture {
-	day := anchor.UTC()
-	plan := []BirthdayFixture{
-		{OffsetDays: 0, Role: BirthdayRoleToday},
-		{OffsetDays: 1, Role: BirthdayRoleImminent},
-		{OffsetDays: 90, Role: BirthdayRoleDistant},
-		{OffsetDays: 5, Role: BirthdayRoleThisWeek},
-		{OffsetDays: 150, Role: BirthdayRoleDistant2},
-	}
-	if day.AddDate(0, 0, -3).Year() == day.Year() {
-		plan = append(plan, BirthdayFixture{OffsetDays: -3, Role: BirthdayRoleCelebrated})
-	}
-	return plan
-}
-
 // BirthdayFixtureDate is the stored birthday date-only value for a fixture: the
 // anchor's day shifted by offsetDays, taken as month/day, on a historical LEAP
 // birth year (the largest leap year ≤ anchor.Year()-30). The leap birth year keeps
@@ -65,21 +16,6 @@ func BirthdayFixturePlan(anchor time.Time) []BirthdayFixture {
 func BirthdayFixtureDate(anchor time.Time, offsetDays int) time.Time {
 	target := anchor.UTC().AddDate(0, 0, offsetDays)
 	return time.Date(factory.LeapSafeBirthYear(anchor), target.Month(), target.Day(), 0, 0, 0, 0, time.UTC)
-}
-
-// BirthdaylessCatalogCount mirrors catalogOptionsFor's birthday rule: a catalog
-// slot carries a contact-path birthday iff i==0 (the 1900 sentinel) or i%5==2 (a
-// real-year birthday). The complement is the birthdayless set the clock-anchored
-// date-fact fixtures occupy.
-func BirthdaylessCatalogCount(n int) int {
-	count := 0
-	for i := 0; i < n; i++ {
-		if i == 0 || i%5 == 2 {
-			continue
-		}
-		count++
-	}
-	return count
 }
 
 // BirthdayDaysUntil mirrors birthdays/page.tsx (getNextBirthday +

@@ -13,9 +13,17 @@
 # oauth_credential) disables the destructive wipe and staging keeps its data.
 # Manual `make staging-reset` runs staging-reset.sh WITHOUT the flag (operator
 # force = full wipe regardless of oauth).
+#
+# STAGING_RESET_PROFILE is pinned here too, for the same reason the tenant
+# identity is: which WORLD the automated reseed builds belongs inside the
+# runner-immutable trust seam, not to an ambient default that a caller could
+# shift or a future default flip could change under us. staging-reset.sh's own
+# default is the same value; stating it here makes the automated path's world
+# selection an explicit property of the wrapper.
 set -euo pipefail
 
 export CRM_USER=staging
 export CRM_HOME=/var/lib/staging
+export STAGING_RESET_PROFILE=standard
 
 exec /usr/local/sbin/staging-reset.sh --local --require-oauth-empty

@@ -62,7 +62,7 @@ func TestPinnedTourFixturesCarryTheirMarkers(t *testing.T) {
 
 	plans := buildPinnedTourFixtures(newFixtureTestGenerator())
 
-	// The three fixtures that ride EXISTING seeded contacts are declared in
+	// The three fixtures whose causal chain needs its own recipe are declared in
 	// PinnedFixtureMarkers but are not built here, so the built set is the
 	// complement — stated as a set difference rather than a hardcoded count so
 	// adding a fixture to either side cannot silently pass.
@@ -93,38 +93,26 @@ func TestPinnedTourFixturesCarryTheirMarkers(t *testing.T) {
 	}
 }
 
-// TestPinnedOverdueFixturesCloseTheDiversityGap asserts the two designated overdue
-// fixtures do what the frozen catalog cannot: supply the third distinct old
-// creation age and additional cadences the dashboard's urgency-diversity gate
-// needs at small catalog sizes, while staying genuinely overdue under PRODUCTION
-// cadence durations. Prod durations are read from the cadence package's own source
-// of truth (not hardcoded) so the test cannot drift from prod semantics.
-func TestPinnedOverdueFixturesCloseTheDiversityGap(t *testing.T) {
+// overdueFixtureMargin is the slack every pinned overdue fixture must clear its
+// cadence period by. A created_age within a day of its period is overdue by less
+// than a day, so whether DateOnly(created_at + period) has crossed today's date
+// depends on where the reseed anchor sits in the day — a fixture the tours treat
+// as reliably overdue would then be wall-clock dependent. A full day removes the
+// boundary; today's entries clear by far more, and this keeps that a property
+// rather than a coincidence.
+const overdueFixtureMargin = 24 * time.Hour
+
+// TestPinnedOverdueFixturesAreGenuinelyOverdueAndSpanTiers asserts the pinned
+// overdue pair's own contract: both are CHECK-valid, genuinely overdue under
+// PRODUCTION cadence durations by at least a day's margin, backdated past the
+// coherence gate's 14-day floor, mutually distinct in age AND cadence, and
+// spanning >=2 dashboard urgency tiers. Prod durations are read from the cadence
+// package's own source of truth (not hardcoded) so the test cannot drift from prod
+// semantics.
+func TestPinnedOverdueFixturesAreGenuinelyOverdueAndSpanTiers(t *testing.T) {
 	t.Setenv("CRM_ENV", "production")
 
 	require.Len(t, pinnedOverdueFixtures, 2, "both overdue tours consume one overdue contact per sweep")
-
-	// The catalog's BACKDATED cadence-bearing slots are creation indices 0 and 3,
-	// both drawn from the overdue ladder — derived here from catalogOptionsFor rather
-	// than restated, so a catalog change is visible to this test.
-	//
-	// Derived at n = 5, and the cadence half of the claim below is a SMALL-n claim
-	// only: the ladder rotates, so a larger world reaches later backdated slots whose
-	// cadences do overlap the fixtures'. Nothing depends on cadence-newness at scale
-	// (see the table's own comment); the AGE half is checked against the whole ladder
-	// here and against the whole world in the integration gate, which runs at the two
-	// n values its call sites use — 18 (dev) and 9 (the prod-shaped coverage check).
-	catalogBackdatedCadences := map[string]bool{}
-	catalogCreatedAges := map[time.Duration]bool{}
-	for _, pair := range catalogOverdueLadder {
-		catalogCreatedAges[pair.createdAge] = true
-	}
-	for _, i := range []int{0, 3} {
-		spec := newFixtureTestGenerator().Contact(catalogOptionsFor(i, 5, fixtureTestAnchor, "synth-fixtureshape-")...)
-		require.NotNil(t, spec.Cadence, "catalog index %d must be cadence-bearing", i)
-		require.NotNil(t, spec.CreatedAt, "catalog index %d must be backdated", i)
-		catalogBackdatedCadences[*spec.Cadence] = true
-	}
 
 	const d1Floor = 14 * 24 * time.Hour
 	distinctAges := map[time.Duration]bool{}
@@ -136,28 +124,14 @@ func TestPinnedOverdueFixturesCloseTheDiversityGap(t *testing.T) {
 		ct, err := cadence.ParseCadence(pair.cadence)
 		require.NoError(t, err)
 		period := cadence.GetCadenceDuration(ct)
-		// Same bound the catalog ladder is held to (TestCatalogOverdueLadderWellFormed),
-		// and for the same two reasons: these fixtures are counted into the coverage
-		// gate's exact equalities through PinnedOverdueFixtureCount, which assumes
-		// every one of them is overdue in the PERSISTED contact_by column; and an
-		// entry overdue by less than a day makes whether DateOnly(created_at + period)
-		// has crossed today's date depend on where the anchor sits in the day. The
-		// margin removes both.
-		require.GreaterOrEqual(t, pair.createdAge, period+calmMargin,
-			"fixture %s (%s, age %s) must be overdue under prod durations by at least the calm margin (age >= period %s + %s) — PinnedOverdueFixtureCount counts it as endpoint-overdue, and a sub-day margin makes that wall-clock dependent",
-			pair.marker, pair.cadence, pair.createdAge, period, calmMargin)
+		require.GreaterOrEqual(t, pair.createdAge, period+overdueFixtureMargin,
+			"fixture %s (%s, age %s) must be overdue under prod durations by at least a day's margin (age >= period %s + %s)",
+			pair.marker, pair.cadence, pair.createdAge, period, overdueFixtureMargin)
 
 		// Backdated past the coherence gate's 14-day floor, so each fixture is a
 		// genuine backdated-overdue contact rather than a recent one that merely
 		// computes overdue.
 		require.Greater(t, pair.createdAge, d1Floor, "fixture %s must be backdated past the 14d floor", pair.marker)
-
-		// The gap the frozen catalog cannot close: a NEW distinct creation age and a
-		// NEW distinct cadence.
-		require.False(t, catalogCreatedAges[pair.createdAge],
-			"fixture %s created age %s duplicates a catalog ladder entry — it adds no new distinct creation age", pair.marker, pair.createdAge)
-		require.False(t, catalogBackdatedCadences[pair.cadence],
-			"fixture %s cadence %q duplicates a catalog backdated slot's — it adds no new distinct cadence", pair.marker, pair.cadence)
 
 		require.False(t, distinctAges[pair.createdAge], "fixture %s created age %s duplicates the other overdue fixture's", pair.marker, pair.createdAge)
 		distinctAges[pair.createdAge] = true
@@ -167,15 +141,14 @@ func TestPinnedOverdueFixturesCloseTheDiversityGap(t *testing.T) {
 		tiers[overdueUrgencyTier(pair.createdAge-period)] = true
 	}
 
-	// Spanning ≥2 urgency tiers is the property the dashboard's most-urgent ordering
+	// Spanning >=2 urgency tiers is the property the dashboard's most-urgent ordering
 	// is evidence OF: two overdue fixtures at the same magnitude would be
 	// indistinguishable on the card list.
-	require.GreaterOrEqual(t, len(tiers), 2, "the overdue fixtures must span ≥2 urgency tiers, got %v", tiers)
+	require.GreaterOrEqual(t, len(tiers), 2, "the overdue fixtures must span >=2 urgency tiers, got %v", tiers)
 }
 
 // overdueUrgencyTier buckets a days-overdue magnitude into the single-digit / tens
-// / hundreds tiers the dashboard's urgency ordering exists to separate — the same
-// split the catalog ladder's own well-formedness test uses.
+// / hundreds tiers the dashboard's urgency ordering exists to separate.
 func overdueUrgencyTier(overdue time.Duration) string {
 	switch {
 	case overdue < 10*24*time.Hour:
@@ -190,10 +163,10 @@ func overdueUrgencyTier(overdue time.Duration) string {
 // TestPinnedFixturesAvoidTheFirstRankedCadence protects a POSITIONAL selection the
 // contacts tour deliberately keeps: it mutates the first row of the default
 // cadence-ordered list. That order is cadence frequency ascending, so the shortest
-// production cadence ranks first — and the catalog always seeds one at creation
-// index 0. If a pinned fixture also carried it, the fixture could take that row and
-// collide with the tour's own reservations. Derived from the cadence package's
-// durations rather than from the SQL's rank literals.
+// production cadence ranks first. A pinned fixture carrying that cadence could take
+// that row and collide with the tour's own reservations — the row is meant to be an
+// ordinary declared contact. Derived from the cadence package's durations rather
+// than from the SQL's rank literals.
 func TestPinnedFixturesAvoidTheFirstRankedCadence(t *testing.T) {
 	t.Setenv("CRM_ENV", "production")
 
@@ -208,8 +181,6 @@ func TestPinnedFixturesAvoidTheFirstRankedCadence(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, firstRanked)
-	require.Equal(t, firstRanked, catalogOverdueLadder[0].cadence,
-		"catalog creation index 0 must hold the first-ranked cadence, else nothing guarantees the tour's first row is a catalog contact")
 
 	for _, plan := range buildPinnedTourFixtures(newFixtureTestGenerator()) {
 		if plan.spec.Cadence == nil {
@@ -253,19 +224,15 @@ func TestPinnedMergeFixturesConflict(t *testing.T) {
 }
 
 // TestPinnedBirthdayFixtureLandsInTheHighlightWindow asserts the dedicated
-// birthday fixture is exactly its offset days out — a DATE-INDEPENDENT
-// classification (a year-wrap changes which calendar year the next occurrence
-// falls in, never the day count) — inside the page's ≤7-day highlight window, and
-// on a day the catalog-riding clock-anchored fixtures do not already occupy.
+// birthday fixture's own contract: a forward offset inside the birthdays page's
+// 1..7-day highlight window, whose rendered day count is DATE-INDEPENDENT (a
+// year-wrap changes which calendar year the next occurrence falls in, never the
+// day count).
 func TestPinnedBirthdayFixtureLandsInTheHighlightWindow(t *testing.T) {
 	t.Parallel()
 
 	require.Greater(t, FixtureBirthdayOffsetDays, 0, "the fixture must be upcoming, not today or past")
-	require.LessOrEqual(t, FixtureBirthdayOffsetDays, 7, "the fixture must land in the ≤7-day highlight window")
-	for _, planned := range BirthdayFixturePlan(fixtureTestAnchor) {
-		require.NotEqual(t, planned.OffsetDays, FixtureBirthdayOffsetDays,
-			"the dedicated fixture must not duplicate the catalog-riding %s fixture's offset", planned.Role)
-	}
+	require.LessOrEqual(t, FixtureBirthdayOffsetDays, 7, "the fixture must land in the <=7-day highlight window")
 
 	// Verified against several anchors, including the year boundary and the leap-day
 	// neighbourhood, so the day-count claim is not an artifact of one date.
@@ -276,9 +243,8 @@ func TestPinnedBirthdayFixtureLandsInTheHighlightWindow(t *testing.T) {
 	// it under "Already Celebrated This Year" — while its next occurrence is still
 	// exactly `offset` days away. That is the page's own behavior, the section is
 	// therefore date-dependent, and pinning it would be a fixture that passes until a
-	// particular week of the year. The date-independent imminent guarantee is the
-	// catalog-riding "today" fixture (offset 0 can never be past-this-year), which
-	// already exists.
+	// particular week of the year. So the tour resolves this fixture's card by
+	// identity rather than by section.
 	for _, anchor := range []time.Time{
 		fixtureTestAnchor,
 		time.Date(2026, time.December, 30, 23, 0, 0, 0, time.UTC),

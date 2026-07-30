@@ -60,7 +60,7 @@ func NewHarnessWithDB(ctx context.Context, database *db.Database) (*Harness, fun
 // NewHarnessWithDBForNamespace builds a harness without a *testing.T for an
 // EXPLICIT namespace + seed (non-test callers — the crm-admin profile
 // entrypoints). It lets the seed entrypoints pin a STABLE per-profile namespace
-// (e.g. "prodshaped") + DefaultSeed so a reset reproduces a byte-identical world,
+// (e.g. "standard") + DefaultSeed so a reset reproduces a byte-identical world,
 // rather than the time-derived namespace NewHarnessWithDB uses. The
 // collision-checked re-salt still applies; on a freshly-reset DB the band is free
 // so the stable namespace is used verbatim. Returns the harness + the quiesce/

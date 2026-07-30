@@ -3,6 +3,7 @@ package synthetic
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/declare"
@@ -24,6 +25,33 @@ const ProfileStandard Profile = "standard"
 // shared name PRNG, and a shifted numeric identifier can land on one another
 // contact already owns.
 const standardTailName = "pinned-tour-fixtures"
+
+// followUpScenarioCadence is the cadence on the "awaiting reply" rider. A
+// follow-up loop only opens for a contact that HAS a cadence (CAD-011/CAD-012),
+// so the scenario cannot express the state without one.
+const followUpScenarioCadence = "monthly"
+
+// Message ages for the two riders that carry message history. All are backward
+// offsets from the generator anchor (applied via the factories' WithMessageAge),
+// so they stay anchor-relative/deterministic (no time.Now()). The mutual reply is
+// strictly NEWER than the mutual outbound (smaller age) and their gap is well
+// under the aggregation reply-bridge window (replyBridgeHours=48h), so the inbound
+// reply promotes the outbound interaction in place to mutual.
+const (
+	// riderGCalAge dates the awaiting-reply rider's GCal event at the anchor
+	// itself, so the mutual interaction it records is the contact's newest and
+	// drives last_contacted.
+	riderGCalAge time.Duration = 0
+	// messageOutboundAge dates the OUTBOUND-only rider's single message a few
+	// days back — recent enough to be plainly current, not so recent it collides
+	// with the ~2h/1h source default windows.
+	messageOutboundAge = 3 * 24 * time.Hour
+	// messageMutualOutboundAge dates the mutual pair's OUTBOUND half.
+	messageMutualOutboundAge = 5 * 24 * time.Hour
+	// messageMutualReplyAge dates the mutual pair's INBOUND reply: 6h newer than the
+	// outbound (age 6h smaller), well within the 48h bridge window.
+	messageMutualReplyAge = messageMutualOutboundAge - 6*time.Hour
+)
 
 // runStandardProfile builds the declared world and maps it onto the shared
 // ProfileResult / SeedTimings shape, so crm-admin's existing summary printer
@@ -105,19 +133,16 @@ func mapStandardWorldResult(world declare.WorldResult, res ProfileResult) Profil
 // seedStandardTail seeds the ELEVEN pinned tour fixtures and reports them in
 // creation order.
 //
-// All eleven, not eight: three of the markers ride contacts the catalog profile
-// creates inside its own phase blocks (an awaiting-reply contact with the whole
-// causal chain behind it, an outbound-only contact, a reply-bridged mutual
-// contact), and a world meant to replace that profile cannot inherit them from
-// it. The three helpers below are the SHARED statements of those recipes — the
-// catalog profile calls the same ones, at the same positions it always did.
+// All eleven, not eight: three of the markers need a whole causal chain behind
+// them rather than a bare contact — an awaiting-reply contact, an outbound-only
+// contact, and a reply-bridged mutual contact — so they are seeded by their own
+// recipes below instead of by the replay-free pinned block.
 func seedStandardTail(ctx context.Context, h *Harness, params SeedParams, res *ProfileResult) ([]declare.Seeded, error) {
 	gen := h.Generator()
 	out := make([]declare.Seeded, 0, len(PinnedFixtureMarkers))
 
-	// The three riders first, in the order the catalog profile creates them, then
-	// the replay-free pinned block — which stays genuinely last, as its own
-	// contract requires.
+	// The three riders first, then the replay-free pinned block — which stays
+	// genuinely last, as its own contract requires.
 	pending, seedErr := seedPendingFollowUpFixture(ctx, h, gen)
 	if err := accountStandardTailRider(riderPendingFollowUp, pending, seedErr, res, &out); err != nil {
 		return out, fmt.Errorf("profile %s: %w", params.Profile, err)
@@ -161,32 +186,13 @@ type riderSeedResult struct {
 	payloads int
 }
 
-// accountCatalogRider records facts the helper proved before propagating its
-// error. The named rider counters describe the completed scenario, so they move
-// only when the helper completed without error.
-func accountCatalogRider(
-	kind riderKind,
-	rider riderSeedResult,
-	seedErr error,
-	res *ProfileResult,
-	phasePayloads *int,
-) error {
-	if rider.contact != nil {
-		res.Contacts++
-	}
-	*phasePayloads += rider.payloads
-	if kind == riderPendingFollowUp {
-		res.SettledInteractions += rider.payloads
-	}
-	if seedErr != nil {
-		return seedErr
-	}
-	accountCompletedRider(kind, res)
-	return nil
-}
-
-// accountStandardTailRider mirrors the catalog accounting, except contact
-// totals come from the world's returned creation log in mapStandardWorldResult.
+// accountStandardTailRider records the facts a rider helper PROVED before
+// propagating its error, so a partial failure still reports what landed: the
+// contact goes into the world's creation log the moment it exists, and the
+// payload-derived counters move with the payloads actually driven. The named
+// whole-rider counters describe the COMPLETED scenario, so they move only when
+// the helper returned no error. Contact totals come from the creation log in
+// mapStandardWorldResult, not from here.
 func accountStandardTailRider(
 	kind riderKind,
 	rider riderSeedResult,
@@ -221,12 +227,10 @@ func accountCompletedRider(kind riderKind, res *ProfileResult) {
 
 // --- the three marker-bearing rider fixtures --------------------------------
 //
-// These three recipes are stated ONCE, here, and called from both the catalog
-// profile (at the positions it has always created them) and the standard
-// world's tail. Each returns the contact it created and the number of source
-// payloads it drove, leaving the ProfileResult bookkeeping to the caller — which
-// is what keeps the catalog's own `SeededTasks > 0` gate at its call site rather
-// than absorbed into a helper where it could silently stop applying.
+// Each returns the contact it created and the number of source payloads it
+// drove, leaving the ProfileResult bookkeeping to the caller — which is what
+// lets a partial failure still be accounted for what it proved (see
+// accountStandardTailRider) instead of being swallowed inside the recipe.
 
 // seedPendingFollowUpFixture builds the "awaiting reply" fixture COHERENTLY BY
 // CONSTRUCTION, and the causal chain is the whole point.
@@ -249,7 +253,7 @@ func seedPendingFollowUpFixture(ctx context.Context, h *Harness, gen *factory.Ge
 	if err != nil {
 		return riderSeedResult{}, fmt.Errorf("seed awaiting-reply contact: %w", err)
 	}
-	if _, err := h.ReplayGCal(ctx, contact.ID, gen.GCalEvent(spec, factory.MatchSeeded, factory.WithMessageAge(interactionSpreadAge(0, 0)))); err != nil {
+	if _, err := h.ReplayGCal(ctx, contact.ID, gen.GCalEvent(spec, factory.MatchSeeded, factory.WithMessageAge(riderGCalAge))); err != nil {
 		return riderSeedResult{contact: contact}, fmt.Errorf("replay gcal for awaiting-reply contact: %w", err)
 	}
 	if _, err := h.SeedPendingFollowUp(ctx, contact.ID, contact.FullName); err != nil {
@@ -305,7 +309,6 @@ func seedResponseFixture(ctx context.Context, h *Harness, gen *factory.Generator
 	if _, err := h.ReplayTelegram(ctx, contact.ID, reply); err != nil {
 		return riderSeedResult{contact: contact, payloads: 1}, fmt.Errorf("replay mutual telegram reply: %w", err)
 	}
-	h.SetMutualMessageContactID(contact.ID)
 	h.SetPinnedFixtureID(FixtureMarkerResponse, contact.ID)
 	return riderSeedResult{contact: contact, payloads: 2}, nil
 }

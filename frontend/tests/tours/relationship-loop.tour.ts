@@ -38,8 +38,8 @@ const DETAIL_PAGE_PATH = /^\/contacts\/[0-9a-f-]{36}$/ // frontend route (waitFo
 // The rendered overdue cards in DOM order with the DOM/CSS-only bits the aria
 // tree cannot express: the urgency tier is a color class, and the card's
 // contact id (from its View-details href) is the identity anchor the judge
-// needs to see the acted-on contact leave the list (names are not unique in
-// the prod-shaped seed). Ids inside fields are uuid-mapped by the normalizer,
+// needs to see the acted-on contact leave the list (names are not guaranteed
+// unique in a seeded world). Ids inside fields are uuid-mapped by the normalizer,
 // so they match the detail url's placeholder.
 async function readOverdueCards(
   page: Page

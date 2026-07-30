@@ -79,7 +79,7 @@ test_seed_default_is_preserved() {
     run_seed
     if [ "$RC" -eq 0 ]; then ok; else fail "expected exit 0, got $RC: $(cat "$SANDBOX/stderr")"; fi
     assert_seed_env testing "no override"
-    if grep -q -- '--seed --profile dev --yes' "$CALL_LOG"; then ok; else fail "default must stay the ADDITIVE --seed of the dev profile: $(cat "$CALL_LOG")"; fi
+    if grep -q -- '--seed --profile standard --yes' "$CALL_LOG"; then ok; else fail "default must be the ADDITIVE --seed of the standard profile: $(cat "$CALL_LOG")"; fi
     cleanup_sandbox
 }
 

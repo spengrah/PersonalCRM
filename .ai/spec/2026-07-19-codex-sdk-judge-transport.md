@@ -41,7 +41,7 @@ The UXQA judge is **not** an autonomous agent and this work does not make it one
 
 **luna intent-model swap — DECIDED (hold gpt-5.5), not open.** The experiment ran 2026-07-14 (`qa-intent-eval-20260714`): luna ~5× cheaper but less self-consistent; verdict = **hold `DEFAULT_INTENT_MODEL=gpt-5.5`**. Future arms (`luna-3vote` majority-vote, `gpt-5.6-terra`) are queued as candidates, sequenced after #642 — revisit only against a labeled held-out comparison, do not flip without evidence (gpt-5.5 is what caught the CAD-036 class of finding).
 
-**Scrubber name-bigram pass — OPEN (low urgency).** `judge/scrub.ts` scrubs email/phone (`pii-patterns.ts`) but not name bigrams. Harmless today (the judge quotes only `synth-prodshaped-`-prefixed synthetic evidence) but the channel is live; extend the scrubber with a name-bigram pass at its next touch.
+**Scrubber name-bigram pass — OPEN (low urgency).** `judge/scrub.ts` scrubs email/phone (`pii-patterns.ts`) but not name bigrams. Harmless today (the judge quotes only `synth-<namespace>-`-prefixed synthetic evidence) but the channel is live; extend the scrubber with a name-bigram pass at its next touch.
 
 **promptfoo spike — OPEN, likely superseded.** Nothing built. Direction has shifted toward Langfuse dataset-runs (`2026-07-14-qa-labeling-langfuse-wiring.md`) as the eval-harness plan; the adapter conventions are kept tool-neutral so either could inherit them. Low priority.
 

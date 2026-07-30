@@ -53,7 +53,7 @@ func (syntheticTodoistOAuth) HasAnyAccount(_ context.Context) bool { return true
 // MatchIntent is n/a for Todoist. Two behaviors, both always on:
 //
 //   - It ALWAYS finalizes item_add commands. For each command carrying a TempID
-//     (only item_add sets one), Sync returns TempIDMap[TempID] = a prod-shaped
+//     (only item_add sets one), Sync returns TempIDMap[TempID] = a production-shaped
 //     alphanumeric id, so the provider's inline processTempIDMappings swaps the
 //     temp UUID for a finalized Todoist-v1 id WITHIN the same Sync call — leaving
 //     every reconcile-created cadence_due row with an alphanumeric external_task_id
@@ -308,8 +308,11 @@ func (h *Harness) ReplayTodoistRecurringEdit(ctx context.Context, contactID uuid
 // this seed first hung a follow-up on an arbitrary contact.) This is NOT asserted
 // here: the cadence engine writes last_outreach_at asynchronously from its River
 // worker (and is its sole writer — CAD-005, CI-guarded), so it is still nil at seed
-// time. The caller establishes the chain by construction (see the awaiting-reply
-// scenario in profiles.go), and the profile coverage check proves it post-Quiesce.
+// time. The caller establishes the chain by construction (seedPendingFollowUpFixture
+// in standard.go), and the standard world's rider subtest proves it post-Quiesce
+// through the API read path: TestSyntheticDeclareStandardWorld / "the three rider
+// fixtures carry the states the tours check" requires the pending fixture to carry
+// BOTH a live follow-up and a last_outreach_at.
 func (h *Harness) SeedPendingFollowUp(ctx context.Context, contactID uuid.UUID, fullName string) (uuid.UUID, error) {
 	taskRepo := repository.NewContactTaskRepository(h.database.Queries)
 	deadline := accelerated.GetCurrentTime().Add(followUpSeedWindow)
@@ -514,7 +517,7 @@ func base62UUID(id uuid.UUID) string {
 	return new(big.Int).SetBytes(id[:]).Text(62)
 }
 
-// finalizeTempID maps an item_add command's temp id to the prod-shaped
+// finalizeTempID maps an item_add command's temp id to the production-shaped
 // alphanumeric id the fake Sync returns for it (mirroring the temp→real handoff
 // the real Todoist Sync API performs). The provider mints temp ids via
 // uuid.New().String(), so the normal path parses + base62-encodes the UUID to

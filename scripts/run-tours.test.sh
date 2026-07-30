@@ -6,6 +6,10 @@
 #   TOURS_RESEED_SSH set -> qa forced-command ssh reseed (the QA-sandbox path)
 #   else                 -> bash scripts/staging-reset.sh (the Mac / ssh-to-host path)
 #
+# It also derives the manifest's seed-profile PROVENANCE from that choice, which is
+# a separate decision from the reset selection and is asserted separately below: a
+# skipped reset must NOT claim a world it did not establish.
+#
 # We run a REWRITTEN COPY of run-tours.sh with the real staging-reset.sh invocation
 # rewritten to a recording stub (sed to stdout; the committed script stays byte-pure),
 # and `ssh` / `bunx` shadowed on PATH by recording stubs so nothing touches the
@@ -35,10 +39,13 @@ make_sandbox() {
 echo "ssh \$*" >> "$CALL_LOG"
 exit \${SSH_STUB_RC:-0}
 EOF
-    # bunx stub: record the playwright launch; exit 0 (no real browser).
+    # bunx stub: record the playwright launch AND the seed-profile provenance the
+    # script exported into its environment (the manifest's own input); exit 0 (no
+    # real browser).
     cat > "$SANDBOX/bin/bunx" <<EOF
 #!/usr/bin/env bash
 echo "bunx \$*" >> "$CALL_LOG"
+echo "provenance TOURS_SEED_PROFILE=\${TOURS_SEED_PROFILE:-<unset>}" >> "$CALL_LOG"
 exit 0
 EOF
     # staging-reset.sh stub (the default Mac path): record the call.
@@ -120,6 +127,28 @@ run TOURS_SKIP_RESET=1 TOURS_RESEED_SSH="qa-staging@10.100.0.1" TOURS_RESEED_KEY
 grep -qE 'ssh .*reseed' "$CALL_LOG" && fail "precedence: skip must win over reseed ssh" || ok
 grep -q 'staging-reset.sh' "$CALL_LOG" && fail "precedence: staging-reset must NOT run" || ok
 grep -q 'bunx .*playwright' "$CALL_LOG" && ok || fail "precedence: playwright should launch"
+
+# 4b. Manifest seed-profile PROVENANCE, all three branches. This is what the
+#     corpus is labelled with, so a wrong value silently mislabels a whole run.
+run TOURS_SKIP_RESET=1
+grep -qF 'provenance TOURS_SEED_PROFILE=unknown' "$CALL_LOG" && ok \
+    || fail "skipped reset must record 'unknown' provenance (got: $(grep provenance "$CALL_LOG"))"
+
+run
+grep -qF 'provenance TOURS_SEED_PROFILE=standard' "$CALL_LOG" && ok \
+    || fail "a successful staging-reset must record 'standard' provenance (got: $(grep provenance "$CALL_LOG"))"
+
+run TOURS_RESEED_SSH="qa-staging@10.100.0.1"
+grep -qF 'provenance TOURS_SEED_PROFILE=standard' "$CALL_LOG" && ok \
+    || fail "the forced-command reseed must record 'standard' provenance (got: $(grep provenance "$CALL_LOG"))"
+
+run TOURS_SEED_PROFILE=minimal-scoped
+grep -qF 'provenance TOURS_SEED_PROFILE=minimal-scoped' "$CALL_LOG" && ok \
+    || fail "an explicit TOURS_SEED_PROFILE must win (got: $(grep provenance "$CALL_LOG"))"
+
+run TOURS_SKIP_RESET=1 TOURS_SEED_PROFILE=minimal-scoped
+grep -qF 'provenance TOURS_SEED_PROFILE=minimal-scoped' "$CALL_LOG" && ok \
+    || fail "an explicit TOURS_SEED_PROFILE must win over the skip default (got: $(grep provenance "$CALL_LOG"))"
 
 # 5. A pre-set TOURS_RUN_ID is HONORED (not clobbered) — the nightly-round
 #    orchestrator relies on this to know the run dir deterministically.

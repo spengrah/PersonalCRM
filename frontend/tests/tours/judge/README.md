@@ -53,12 +53,12 @@ A **liveness guard** compares the judge-RENDERED PROMPT before vs after the muta
 There is no committed corpus — `make qa-report` grades a live run dir, and the detection self-test doctors the round's own captures. Seed a clean world, run the app in the accelerated `testing` frame, and run the tours:
 
 ```bash
-crm-admin --reset-and-seed --profile prod-shaped --yes    # synthetic prod-shaped seed (synth-prodshaped- names)
+crm-admin --reset-and-seed --yes    # the declared `standard` world (synth-standard- names)
 # start native Postgres + `go run ./cmd/crm-api` (CRM_ENV=testing, accelerated TIME_*) + `next dev`
-TOURS_SEED_PROFILE=prod-shaped TOURS_SKIP_RESET=1 make tours   # runs ALL *.tour.ts against localhost
+TOURS_SEED_PROFILE=standard TOURS_SKIP_RESET=1 make tours   # runs ALL *.tour.ts against localhost
 ```
 
-Captures land in `frontend/tests/tours/.runs/<runId>/captures/{contacts,dashboard,cadence-followup}/` (gitignored). Provenance is synthetic by construction: the prod-shaped seed gives every contact a `synth-prodshaped-` factory prefix, and the normalizer UUID-maps + host-redacts every capture. Point `make qa-report RUNDIR=<run dir>` at the run to grade it; live→Langfuse PII is handled by the export scrubber (`judge/scrub.ts`), the single chokepoint (above), not by a committed-tree audit.
+Captures land in `frontend/tests/tours/.runs/<runId>/captures/{contacts,dashboard,cadence-followup}/` (gitignored). Provenance is synthetic by construction: the `standard` seed gives every contact a `synth-standard-` factory prefix, and the normalizer UUID-maps + host-redacts every capture. Point `make qa-report RUNDIR=<run dir>` at the run to grade it; live→Langfuse PII is handled by the export scrubber (`judge/scrub.ts`), the single chokepoint (above), not by a committed-tree audit.
 
 ## Labeling (Langfuse-native)
 

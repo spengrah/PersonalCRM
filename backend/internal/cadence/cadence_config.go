@@ -52,7 +52,7 @@ func GetCadenceConfig() CadenceConfig {
 	case "accelerated":
 		// Compressed-time preview environments: validate months in hours.
 		// CRM_ENV=staging deliberately does NOT take this branch: the
-		// persistent staging environment hosts a prod-shaped QA world whose
+		// persistent staging environment hosts a production-shaped QA world whose
 		// rendered dates must agree with production duration semantics, so
 		// staging falls through to the production cadences below.
 		return CadenceConfig{
@@ -65,7 +65,7 @@ func GetCadenceConfig() CadenceConfig {
 		}
 	case "staging", "production", "prod", "":
 		// Production semantics: real-world cadences. Staging shares them —
-		// its QA world is prod-shaped by construction, not by compressed time.
+		// its QA world is production-shaped by construction, not by compressed time.
 		return ProductionCadenceConfig()
 	default:
 		// Default to production for safety

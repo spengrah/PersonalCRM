@@ -1,8 +1,6 @@
 package synthetic
 
 import (
-	"context"
-	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/synthetic/factory"
@@ -43,18 +41,19 @@ const (
 	// FixtureMarkerNoActivity is the contact with no outreach, no response, no
 	// pending follow-up and zero product-visible tasks — the "no recent activity"
 	// and "no tasks yet" subject. Cadence-bearing with recent creation, so it also
-	// supplies the recent-never-connected coherence floor at small catalog sizes.
+	// supplies the recent-never-connected coherence floor.
 	FixtureMarkerNoActivity = "fxnoactivity"
 	// FixtureMarkerOutreach marks the outbound-only contact (last_outreach_at set,
-	// last_contacted NULL) — the "last outreach" subject. Rides an existing seeded
-	// contact from the two-sided direction cohort.
+	// last_contacted NULL) — the "last outreach" subject. Seeded by its own recipe
+	// (it needs an outbound message), not by the replay-free pinned block.
 	FixtureMarkerOutreach = "fxoutreach"
 	// FixtureMarkerResponse marks the reply-bridged telegram mutual contact
 	// (last_response_at set) — the "last response" subject, distinct from the
-	// outreach one. Rides an existing seeded contact.
+	// outreach one. Seeded by its own recipe (it needs a bridged message pair).
 	FixtureMarkerResponse = "fxresponse"
 	// FixtureMarkerPending marks the contact carrying a live follow-up loop — the
-	// "awaiting reply" subject. Rides the existing awaiting-reply scenario contact.
+	// "awaiting reply" subject. Seeded by its own recipe (it needs the whole causal
+	// chain: a cadence, an outbound-bearing interaction, then the live loop).
 	FixtureMarkerPending = "fxpending"
 	// FixtureMarkerOverdueA / FixtureMarkerOverdueB mark the two designated overdue
 	// contacts. They are STATE guarantees, not subject bindings: the dashboard and
@@ -75,9 +74,7 @@ const (
 	// sweep and re-established by the next reseed.
 	FixtureMarkerDelete = "fxdeletevictim"
 	// FixtureMarkerBirthday marks the dedicated birthday fixture inside the
-	// birthdays page's highlight window. It is a NEW contact rather than one of the
-	// clock-anchored catalog fixtures: those ride catalog slots whose names are
-	// frozen, so a catalog fixture cannot be both unchanged and marker-bearing.
+	// birthdays page's highlight window.
 	FixtureMarkerBirthday = "fxbirthday"
 )
 
@@ -101,13 +98,13 @@ const (
 // the other fails a test.
 const TourOverdueCaptureCap = 96
 
-// PinnedFixtureMarkers is every pinned tour-fixture marker: first the ones this
-// block seeds, then the ones that ride contacts other blocks seed. Within each
-// group the order is declaration order and is NOT load-bearing — nothing reads
-// this slice positionally, and the fixtures are not built in this sequence (the
-// overdue pair is appended from its own table, after the birthday fixture). The
-// coverage checks iterate it, so a fixture added without a marker entry is not
-// silently unasserted.
+// PinnedFixtureMarkers is every pinned tour-fixture marker: first the ones
+// buildPinnedTourFixtures builds from a bare contact spec, then the three whose
+// causal chain needs its own recipe. Within each group the order is declaration
+// order and is NOT load-bearing — nothing reads this slice positionally, and the
+// fixtures are not built in this sequence (the overdue pair is appended from its
+// own table, after the birthday fixture). The coverage checks iterate it, so a
+// fixture added without a marker entry is not silently unasserted.
 var PinnedFixtureMarkers = []string{
 	FixtureMarkerNoActivity,
 	FixtureMarkerOverdueA,
@@ -124,29 +121,20 @@ var PinnedFixtureMarkers = []string{
 
 // pinnedOverdueFixtures is the (cadence, created-age) table for the two
 // designated overdue fixtures. Both pairs are genuinely overdue under PRODUCTION
-// cadence durations, and both are chosen to close a gap the FROZEN catalog cannot:
-// at SMALL n the catalog supplies backdated cadence-bearing slots only at creation
-// indices 0 and 3, so such a world has two distinct old creation ages where the
-// dashboard's urgency-diversity gate needs three. Each pair therefore carries a
-// created age distinct from every catalog ladder entry AND from the other pair's,
-// and — again at small n, where the scarcity bites — a cadence distinct from the
-// two the catalog's backdated slots use. That cadence-newness claim is about small
-// worlds only: the overdue ladder rotates, so at n >= 18 a later catalog slot
-// carries quarterly too. Nothing depends on cadence-newness at scale; the
-// load-bearing distinctness is the AGES, which are checked ladder-wide in the unit
-// test and world-wide in the integration gate. Their days-overdue magnitudes
-// deliberately land in different urgency tiers.
+// cadence durations, and each carries a created age distinct from the other's, so
+// their days-overdue magnitudes deliberately land in different urgency tiers —
+// which is what lets the dashboard's urgency-diversity rendering be exercised
+// rather than assumed.
 //
 // Neither cadence may be the FIRST-RANKED one (weekly): the contact list's default
 // order is cadence-frequency ascending, and the contacts tour mutates its first
-// row. A pinned fixture at rank 1 could displace the catalog contact that row is
-// meant to be and collide with the tour's own fixture reservations.
+// row. A pinned fixture at rank 1 could displace the contact that row is meant to
+// be and collide with the tour's own fixture reservations.
 //
 // These two are the ONLY contacts this block adds to the overdue population, and
 // the population is capture-bounded, not just seed-bounded: the tours' overdue
 // evidence is a JSON array that the capture normalizer slices at a cap, dropping
-// the tail. The prod-shaped catalog already supplies 50 overdue contacts, so this
-// pair takes the set to 52 — measured, not assumed.
+// the tail.
 //
 // What the tours do about that, stated exactly: in BOTH tours that expose the
 // overdue set (dashboard, relationship-loop) every capture carries the explicit
@@ -181,9 +169,7 @@ const (
 )
 
 // FixtureBirthdayOffsetDays places the dedicated birthday fixture inside the
-// birthdays page's ≤7-day highlight window, and away from the offsets the
-// catalog-riding clock-anchored fixtures already occupy so the imminent group
-// gains a distinct additional member.
+// birthdays page's ≤7-day highlight window.
 //
 // It is a forward offset, so the fixture's card always reads exactly this many
 // days out — a year-wrap changes which calendar year the next occurrence falls in,
@@ -194,10 +180,10 @@ const (
 const FixtureBirthdayOffsetDays = 2
 
 // fixtureMergeLocationStems are the two DISTINCT location stems the merge pair
-// carries, drawn from the catalog's pool so places keep repeating across the world
-// (prod-like). Distinct values are what make location a second genuine merge
-// conflict alongside cadence.
-var fixtureMergeLocationStems = [2]string{catalogLocationStems[0], catalogLocationStems[1]}
+// carries. Distinct values are what make location a second genuine merge conflict
+// alongside cadence. The values are flat (no comma/hierarchy) so EnsurePlaceTx
+// mints a flat place node with no `within` parent edge.
+var fixtureMergeLocationStems = [2]string{"riverton", "lakeside"}
 
 // pinnedFixturePlan is one pinned fixture's marker paired with the contact spec it
 // is built from.
@@ -213,7 +199,7 @@ type pinnedFixturePlan struct {
 // constants proves only that the copy matches.
 //
 // Draws the shared name PRNG once per fixture, so it may only be called from the
-// profile's append-last block.
+// world's append-last tail step.
 func buildPinnedTourFixtures(gen *factory.Generator) []pinnedFixturePlan {
 	anchor := gen.Anchor()
 	prefix := gen.Prefix()
@@ -223,12 +209,11 @@ func buildPinnedTourFixtures(gen *factory.Generator) []pinnedFixturePlan {
 		opts   []factory.ContactOption
 	}{
 		// No activity of any kind, plus a cadence and a recent creation date so the
-		// contact also satisfies the recent-never-connected floor at small catalog
-		// sizes.
+		// contact also supplies the recent-never-connected coherence floor.
 		{FixtureMarkerNoActivity, []factory.ContactOption{
 			factory.WithEmail(),
 			factory.WithCadence(fixtureNoActivityCadence),
-			factory.WithRecentCreation(catalogRecentWindow),
+			factory.WithRecentCreation(fixtureRecentWindow),
 		}},
 		// The merge pair: cadence AND location both differ, so the preview surfaces
 		// two genuine conflicts rather than relying on one.
@@ -279,28 +264,6 @@ func buildPinnedTourFixtures(gen *factory.Generator) []pinnedFixturePlan {
 	return plans
 }
 
-// seedPinnedTourFixtures seeds the hand-authored fixtures the QA tours depend on
-// and records each one's contact id against its marker on the harness.
-//
-// It runs at the VERY END of the catalog profile, after every other
-// generator-drawing block, because gen.Contact draws the shared name PRNG:
-// inserting these calls anywhere earlier would shift every later allocation and a
-// shifted numeric identifier can land on an id another contact already owns.
-// Running last also means these contacts are created after the task reconcile, so
-// they carry no cadence task — which is what lets the no-activity fixture hold its
-// zero-visible-tasks property. That is a consequence to understand, not a thing to
-// rely on elsewhere; the coverage check asserts the property directly.
-//
-// The fixtures deliberately carry NO replayed source payloads, so none of them
-// disturbs the settled-interaction accounting.
-func seedPinnedTourFixtures(ctx context.Context, h *Harness, gen *factory.Generator, profile Profile, res *ProfileResult) error {
-	for _, plan := range buildPinnedTourFixtures(gen) {
-		contact, err := h.SeedContact(ctx, plan.spec)
-		if err != nil {
-			return fmt.Errorf("profile %s: seed pinned fixture %s: %w", profile, plan.marker, err)
-		}
-		res.Contacts++
-		h.SetPinnedFixtureID(plan.marker, contact.ID)
-	}
-	return nil
-}
+// fixtureRecentWindow bounds a "recently created" fixture within the last ~48h
+// (anchor-relative).
+const fixtureRecentWindow = 48 * time.Hour

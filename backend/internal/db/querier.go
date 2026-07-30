@@ -1346,29 +1346,11 @@ type Querier interface {
 	// output and the reconcile diff. Used both by the watchdog (to compute the
 	// resolve set) and by the read endpoint (active breaches only).
 	ListOpenStalenessBreaches(ctx context.Context) ([]*SyncStalenessBreach, error)
-	// Pinned tour-fixture proof: the namespace's live contacts that the overdue
-	// endpoint would return. The predicate is a deliberate copy of ListOverdueContacts
-	// in contact.sql — contact_by set and strictly before TODAY'S DATE, which is a
-	// different comparison from the `now` the fixture's column checks use, and the
-	// reason this read proves something they do not. Scoped to one namespace and
-	// unbounded, because the production query's global LIMIT would let an accumulated
-	// shared test DB push a fixture out of the window and turn a coverage claim into a
-	// flake. Caller passes a BARE prefix; '%' appended. Test only.
-	ListOverdueContactIdsByNamePrefix(ctx context.Context, arg ListOverdueContactIdsByNamePrefixParams) ([]pgtype.UUID, error)
 	// Lists contacts whose contact_by date is before today (overdue).
 	// Returns contacts ordered by how overdue they are (most overdue first).
 	ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error)
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
-	// Pinned tour-fixture proof: the namespace's live contacts with the columns the
-	// fixture assertions read, returned in the SAME order the tours' default contact
-	// list uses (cadence rank ascending == 'most frequent first', then the full_name /
-	// id tiebreakers) — a copy of ListContacts' cadence-desc ORDER BY, so the
-	// positional (B-group) selections the tours make can be checked for degeneracy
-	// against the order they will actually see. Marker resolution is done Go-side over
-	// full_name so the exactly-one-match rule is asserted rather than assumed. Caller
-	// passes a BARE prefix; '%' appended. Test only.
-	ListPinnedFixtureContactsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*ListPinnedFixtureContactsByNamePrefixRow, error)
 	ListPredicatesByStatus(ctx context.Context, status string) ([]*ListPredicatesByStatusRow, error)
 	// All locators for an assertion, oldest first.
 	ListProvenance(ctx context.Context, assertionID pgtype.UUID) ([]*AssertionProvenance, error)
@@ -1876,12 +1858,6 @@ type Querier interface {
 	// node, so a test scopes its assertions to its own namespace's subject node on
 	// the shared test DB.
 	SyntheticCountAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error)
-	// Merge/soft-delete coverage test support: count ALL assertions (live or not — no
-	// node-liveness join) whose subject is one of the given nodes, scoped to THIS run's
-	// tracked node ids. Used to assert (a) a soft-deleted contact's assertions are
-	// RETAINED in the table (≥1) even though its node is tombstoned, and (b) a merge
-	// loser's assertions are re-pointed OFF the loser (==0) onto the winner.
-	SyntheticCountAssertionsForSubjects(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Settle Gate A (GCal decline terminal): count ALL calendar_event rows for the
 	// gcal id regardless of status/match. The cutover decline branch DELETES the
 	// row, so the decline test settles on this reaching 0. calendar_event has no
@@ -1902,12 +1878,6 @@ type Querier interface {
 	// rows whose normalized value shares the namespace's phone prefix. Caller passes
 	// a BARE prefix; '%' is appended here.
 	SyntheticCountContactMethodsByValueNormalizedPrefix(ctx context.Context, valueNormalizedPrefix pgtype.Text) (int64, error)
-	// Profile coverage test only: count legacy contact_tag rows whose contact's
-	// full_name is ns-prefixed. The prod-shaped seed models tags as `tagged_as` graph
-	// edges (the SP1 live path), NOT legacy contact_tag rows, so this MUST stay ZERO —
-	// a positive guard so a future reader does not "fix" a perceived gap by re-seeding
-	// the legacy table. Caller passes a BARE prefix; '%' is appended here.
-	SyntheticCountContactTagsByContactNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
 	// Contact→node dual-write test support: count contacts with an exact full_name
 	// (namespace-prefixed names are unique per test), so a rollback test asserts a
 	// failed-tx contact did not survive without paging the whole contact list.
@@ -1940,34 +1910,6 @@ type Querier interface {
 	// checked; scoping by both means a colliding-message-id row in another namespace
 	// (necessarily a different peer band) can never satisfy this predicate early.
 	SyntheticCountLinkedTelegramMessageByMessageId(ctx context.Context, arg SyntheticCountLinkedTelegramMessageByMessageIdParams) (int64, error)
-	// Merge/soft-delete coverage test support: count the LIVE assertions whose subject
-	// is one of the given nodes, scoped to THIS run's tracked node ids. LIVE mirrors the
-	// production live-graph read: subject node live (deleted_at IS NULL) AND — for an
-	// edge (object_node_id set) — object node live AND status IN (proposed,accepted) AND
-	// knowledge-open (knowledge_to IS NULL). A fact (object_node_id NULL) is gated on the
-	// subject endpoint only. The object join MUST be a LEFT JOIN: facts carry a NULL
-	// object_node_id and an inner join would silently drop every fact row. Used to assert
-	// (a) a soft-deleted contact's assertions DROP from live graph reads (==0, node
-	// tombstoned), and (b) a merge winner carries its own + the re-pointed loser
-	// assertions as LIVE on its still-live node (≥1) — so the count proves re-pointing,
-	// not just presence of a terminal/closed row.
-	SyntheticCountLiveAssertionsForSubjects(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
-	// Profile coverage test only: count LIVE follow-up loops (the "awaiting reply" state
-	// behind has_pending_followup) on ns-prefixed contacts. Mirrors FindPendingFollowUp's
-	// predicate exactly — lifecycle 'followup_loop' AND state IN ('managed',
-	// 'pending_remote_create') — so the coverage check asserts the same state the API
-	// surfaces, not a lookalike. Guards a real regression: with zero such rows the state is
-	// absent from the seeded world, the tours cannot capture it, and the agentic judge reads
-	// that absence as a missing feature. contact_task has no deleted_at; the contact
-	// soft-delete filter scopes to live catalog contacts. Caller passes a BARE prefix.
-	//
-	// last_outreach_at IS NOT NULL is part of the CONTRACT, not a filter of convenience: a
-	// follow-up is opened BY an outbound (CAD-011), so one hanging on a contact with no
-	// outbound renders as "Awaiting reply" with nothing to await a reply to — a state
-	// production cannot reach. The first version of this seed produced exactly that, and the
-	// agentic judge (correctly) failed the contact page for it. Counting only COHERENT
-	// follow-ups is what makes this assertion mean what it says.
-	SyntheticCountLiveFollowUpsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
 	// Merge/soft-delete coverage test support: count the live (deleted_at IS NULL) nodes
 	// among the given ids, scoped to THIS run's tracked node ids. Used to assert a merge
 	// winner node stays live (== id count) while soft-deleted + merge-loser nodes are
@@ -1983,12 +1925,6 @@ type Querier interface {
 	// Settle Gate A (Mac-contact seeded): the external_contact row for the entity
 	// id exists linked to a CRM contact (match_status='matched').
 	SyntheticCountMatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
-	// Merge coverage test support: count the nodes among the given ids that carry a
-	// merge alias (merged_into IS NOT NULL), scoped to THIS run's tracked node ids. Used
-	// to assert every merge-loser node was tombstoned via SetNodeMergedInto (== loser
-	// count); a soft-deleted (non-merged) node has merged_into NULL, so this stays 0 for
-	// the soft-delete set.
-	SyntheticCountMergedIntoNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
 	// Graph identity test support: count nodes whose canonical_label is ns-prefixed,
 	// so a test can scope assertions to its own namespace's nodes on the shared test
 	// DB. Caller passes a BARE prefix; '%' is appended here.
@@ -2014,14 +1950,6 @@ type Querier interface {
 	// Every harness starts a producer that upserts one, and a database reset
 	// preserves River's own tables, so an un-deleted row is permanent residue.
 	SyntheticCountRiverQueue(ctx context.Context, name string) (int64, error)
-	// Batch replay Settle Gate A — set-widened forms of the per-message predicates
-	// above. A batch adapter drives N payloads through one provider pass and then
-	// settles ONCE, so its gate is a single COUNT over the batch's identifiers
-	// compared against len(batch) rather than N separate reads. Each query keeps the
-	// terminal condition of the single-message predicate it widens (the derived
-	// interaction actually landed) and stays scoped to the passed identifiers, never
-	// DB-wide. COUNT(DISTINCT <key>) so a duplicate row can never push the count past
-	// the batch size and satisfy the gate on a partial batch.
 	// gmail/gchat batch: how many of these external ids have a comms_message row for
 	// the source with an interaction_id. Shared by BOTH sources (the single-message
 	// predicate SyntheticCountLinkedCommsMessageByExternalId is likewise shared) —
@@ -2107,22 +2035,9 @@ type Querier interface {
 	// unmatched candidates for this namespace. Caller passes a BARE prefix; '%'
 	// appended here.
 	SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error)
-	// Coverage (Imports subtabs): count UNMATCHED external_contact candidates for a
-	// given source whose source_id is ns-prefixed. The direct-upsert (gcontacts,
-	// gmail_correspondence) + ingest (anarlog_humans) import producers all carry an
-	// ns-prefixed source_id, so the prod-shaped coverage check asserts each subtab has
-	// ≥1 candidate scoped to its own namespace on the shared test DB. Caller passes a
-	// BARE prefix; '%' appended here.
-	SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefix(ctx context.Context, arg SyntheticCountUnmatchedExternalContactBySourceAndSourceIdPrefixParams) (int64, error)
 	// Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
 	// entity id exists with match_status='unmatched'.
 	SyntheticCountUnmatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
-	// Coverage (Imports telegram-discovery subtab): count UNMATCHED telegram discovery
-	// external_contact candidates whose source_id (the BARE peer id, NOT ns-prefixed)
-	// falls in this namespace's reserved peer band [band_start, band_end). The CASE
-	// guards the bigint cast for non-numeric telegram source_ids (other tests create
-	// text source ids), mirroring SyntheticCountTelegramBarePeerRowsInBand.
-	SyntheticCountUnmatchedTelegramDiscoveryInBand(ctx context.Context, arg SyntheticCountUnmatchedTelegramDiscoveryInBandParams) (int64, error)
 	// Cleanup assertion — count surviving venue nodes among the given ids (scoped to
 	// THIS run's tracked venue node ids, so it is immune to parallel tests creating
 	// their own venue nodes on the shared DB, unlike a global venue-node count).
@@ -2250,43 +2165,12 @@ type Querier interface {
 	// (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
 	// test can assert the dual-write created it with the expected type/label.
 	SyntheticGetNodeForContact(ctx context.Context, id pgtype.UUID) (*Node, error)
-	// Profile coverage + determinism test support: list the LIVE assertions whose
-	// subject node is ns-prefixed (catalog person nodes own ns-prefixed
-	// canonical_labels). LIVE mirrors the production live-graph read: subject node
-	// live (deleted_at IS NULL) AND — for an edge (object_node_id set) — object node
-	// live AND status IN (proposed,accepted) AND knowledge-open (knowledge_to IS
-	// NULL). A fact (object_node_id NULL) is gated on the subject endpoint only. So a
-	// soft-deleted/merged-away (tombstoned) endpoint, a terminal/superseded row, or a
-	// knowledge-closed row drops from this projection, matching the graph read path.
-	// The object join MUST be a LEFT JOIN: facts carry a NULL object_node_id and an
-	// inner join would silently drop every fact row. The coverage check uses
-	// (predicate_key, status) to assert the accepted vs proposed split; the
-	// determinism check fingerprints (value_text, value_date, value_bool) across a
-	// re-run — exactly one value column is set per fact (text → value_text, birthday
-	// → value_date, bool facts → value_bool) and edges set none, so all three are
-	// projected so no value-type surface is a blind spot. The object node id (and
-	// proposition_key) are NOT used because they embed the per-run subject/object
-	// UUID and so are not run-stable; an edge therefore contributes only
-	// (predicate_key, status) to the fingerprint. Deterministically ordered so the
-	// fingerprint is stable. Caller passes a BARE prefix; '%' is appended here.
-	SyntheticListAssertionsByNodePrefix(ctx context.Context, labelPrefix pgtype.Text) ([]*SyntheticListAssertionsByNodePrefixRow, error)
 	// Todoist replay: snapshot the set of contact_task ids for a provider so the
 	// replay can diff before/after its (globally-scoped) reconcile and track the
 	// rows it created — even for cadence-bearing contacts it did not seed — so
 	// cleanup removes exactly those rows and never strands a task on an unrelated
 	// contact in the shared test DB.
 	SyntheticListContactTaskIdsByProvider(ctx context.Context, provider string) ([]pgtype.UUID, error)
-	// Profile coverage + determinism + teardown test support: list the entity subtype
-	// rows whose node's canonical_label is ns-prefixed — the org/topic/tag pool nodes
-	// (SeedEntity) AND the place nodes the contact-create authority flip minted from
-	// WithLocation. The coverage check asserts each expected subtype (place/
-	// organization/topic/tag) is present; the determinism check fingerprints the sorted
-	// (subtype, normalized_name) set across a re-run (these are deterministic
-	// ns-prefixed synthetic strings — the entity-node generated-id kind); the
-	// teardown check asserts the list is EMPTY after cleanup (the entity nodes were
-	// swept). Deterministically ordered so the fingerprint is stable. Caller passes a
-	// BARE prefix; '%' is appended here.
-	SyntheticListEntityNamesByNodePrefix(ctx context.Context, labelPrefix pgtype.Text) ([]*SyntheticListEntityNamesByNodePrefixRow, error)
 	// Cleanup event-id capture (part 2): adapter-direct root events that carry NO
 	// CRM contact id (raw_message.* / external_contact.upserted roots, and
 	// unknown/pending replays that touch no seeded contact). Keyed by the
@@ -2302,13 +2186,6 @@ type Querier interface {
 	// (interaction.recorded uses interaction.ID as source_id, calendar.attended
 	// uses an internal ref, etc.) generically via payload->>'contact_id'.
 	SyntheticListEventIdsForContacts(ctx context.Context, contactIds []string) ([]pgtype.UUID, error)
-	// Determinism fingerprint (import producers): the (source, source_id) of every live
-	// external_contact whose source_id is ns-prefixed, sorted, so a determinism test can
-	// assert the import-candidate source_ids are byte-identical across two seed runs in
-	// the same namespace. (Telegram discovery candidates key on the bare peer id, not the
-	// prefix, so they are excluded here — their determinism rides the deterministic peer
-	// band + the run-to-run ProfileResult count equality.) Caller passes a BARE prefix.
-	SyntheticListExternalContactSourceIdsByPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) ([]*SyntheticListExternalContactSourceIdsByPrefixRow, error)
 	// Namespace ownership, written at seed time. The declared-seed endpoint seeds
 	// in one request and cleans up in another, and every other id set is recovered
 	// from a generator-derived token carried by the row — which for contacts means
@@ -2318,21 +2195,6 @@ type Querier interface {
 	// and report success over live residue. This record is keyed by the entity's
 	// own id, which nothing in the application rewrites.
 	SyntheticRecordNamespaceEntity(ctx context.Context, arg SyntheticRecordNamespaceEntityParams) error
-	// ============================================================================
-	// Declared-seeding support (internal/synthetic/declare) — test-only.
-	//
-	// The declared-seed endpoint executes a fixture in a namespace and a LATER,
-	// SEPARATE request cleans it up, so cleanup cannot use the harness's in-memory
-	// ledger (it died with the request). Every id set is instead recovered from the
-	// DB by the namespace's own generator-derived tokens.
-	//
-	// SOFT-DELETE EXCEPTION, deliberate and confined to these queries: the id-set
-	// SELECTs below do NOT filter `deleted_at IS NULL`. Cleanup must find TOMBSTONES
-	// — an app action under test may soft-delete a seeded contact, and a later PR
-	// seeds soft-deleted contacts on purpose — and a child row is found by its
-	// contact id regardless of the parent's deleted_at. Leaving a tombstone behind
-	// would leak rows that no later run can reach by token.
-	// ============================================================================
 	// Cleanup id-set (step 1): every contact whose full_name carries the namespace
 	// prefix, INCLUDING soft-deleted rows (see the soft-delete exception above).
 	// Caller passes a BARE prefix; '%' is appended here. The namespace charset
@@ -2372,104 +2234,9 @@ type Querier interface {
 	// list by the test before it reaches here; format() with %I quotes the
 	// identifier so it can never be an injection vector.
 	TestCountAllRows(ctx context.Context, tableName string) (int64, error)
-	// Coherence gate (F7, positive): count the namespace's cadence_due contact_tasks in
-	// a given state, so the coverage check can assert BOTH prod-reachable persistent
-	// states are present — `managed` (>= 1, the reconcile default) and `unmanaged`
-	// (>= 1, reached only via the real recurring edit). Scoped to the namespace so the
-	// shared test DB's other rows do not count. contact_task has no deleted_at; the
-	// contact soft-delete filter scopes to live catalog contacts. Caller passes a BARE
-	// prefix; '%' appended.
-	TestCountCadenceDueByStateAndNamePrefix(ctx context.Context, arg TestCountCadenceDueByStateAndNamePrefixParams) (int64, error)
-	// Exact task accounting (visible-task spread): count EVERY contact_task row on the
-	// namespace's live contacts (all lifecycles + states), so the coverage/determinism
-	// test can assert the total equals ProfileResult.SeededTasks. contact_task has no
-	// deleted_at; the contact soft-delete filter scopes to live contacts. Caller passes
-	// a BARE prefix; '%' appended.
-	TestCountContactTasksByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
-	// Coverage gate (F6): count the namespace's LIVE contacts that carry a NON-EMPTY
-	// NOTEPAD note — the category the contact-detail endpoint renders via GetContactNotepad.
-	// The category='notepad' filter is load-bearing: SeedNote writes via CreateNotepad, and
-	// without the filter the gate could pass on some other note category while the contact
-	// detail page still renders empty. The non-empty-body filter matters too (issue #648):
-	// MergeContacts writes a spurious empty-body notepad note onto every merge winner (an
-	// always-true nil-check on GetContactNoteByCategory's ErrNoRows return), which carries no
-	// rendered content and so is not "a contact with notes" for coverage purposes — counting
-	// it would make this gate disagree with res.ContactsWithNotes by the merge count. `note`
-	// has NO deleted_at column (it is hard-deleted at teardown), so there is no soft-delete
-	// predicate on the join. Caller passes a BARE prefix.
-	TestCountContactsWithNotepadByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
-	// Coherence gate (F7): count the namespace's cadence_due contact_tasks in a
-	// prod-impossible shape. Asserted == 0. Two incoherence classes:
-	//   - state: `dismissed` is unreachable for cadence_due (a skip routes to a managed
-	//     replacement, never to dismissed), and a persistent `completed` row is deleted
-	//     by the next reconcile — so neither state can persist on this lifecycle.
-	//   - external id: must be a FINALIZED Todoist-v1 alphanumeric id. The strict
-	//     '^[A-Za-z0-9]+$' rejects empty, a raw UUID (hyphens), and any punctuation; a
-	//     lingering pending_temp_id metadata key means the temp→real finalize never ran.
-	// contact_task has no deleted_at; the contact soft-delete filter scopes to live
-	// catalog contacts. Caller passes a BARE prefix; '%' appended.
-	TestCountIncoherentCadenceDueByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
-	// Coherence gate: count the namespace's contacts whose last_contacted is NOT backed
-	// by a live inbound/mutual interaction at the same occurred_at, or whose
-	// last_interaction_at is not in lockstep with last_contacted. Asserted == 0.
-	// Every non-NULL last_contacted is now interaction-driven: creation leaves the column
-	// NULL (CON-001), so there is no creation stamp to exempt, and a last_contacted equal
-	// to created_at with no backing interaction is exactly the fabricated-connection state
-	// this gate exists to catch — it must NOT be exempted. A moved last_contacted must
-	// (i) equal last_interaction_at (the cadence updater writes both to occurred_at under
-	// one guard) and (ii) be backed by a live inbound/mutual interaction at the same
-	// occurred_at (CAD-010). Caller passes a BARE prefix.
-	TestCountIncoherentLastContactedByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
-	// Coherence gate (F3): count the namespace's managed follow-up loop tasks that do
-	// NOT carry the production Todoist shape. Asserted == 0. COALESCE(...,'') is
-	// load-bearing: a JSON-null or absent key makes metadata->>k return SQL NULL, and
-	// `NULL NOT LIKE x` is NULL (not TRUE) — it would silently pass. COALESCE collapses
-	// NULL/absent to '' so the LIKE fails and the row is flagged. Caller passes a BARE
-	// prefix.
-	TestCountIncoherentManagedFollowUpsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
-	// Coherence gate (F4, d): count the namespace's contacts whose last_outreach_at is
-	// set but NOT backed by a live outbound/mutual interaction at that exact
-	// occurred_at. Asserted == 0. last_outreach_at is sole-written by the cadence
-	// updater from an outbound/mutual interaction (CAD-006), so a moved value with no
-	// backing outbound/mutual row is a production-impossible seed shape. Caller passes
-	// a BARE prefix.
-	TestCountIncoherentOutreachByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
-	// Coherence gate (positive): count the namespace's contacts whose last_contacted
-	// IS backed by a live inbound/mutual interaction at the same occurred_at AND whose
-	// last_interaction_at is in lockstep. Asserted >= 1, proving the zero-violation gate
-	// is not vacuous — the interaction-moved cohort exists and sets last_interaction_at
-	// in lockstep where an interaction drove the write. Caller passes a BARE prefix.
-	TestCountInteractionBackedLastContactedByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
-	// Coherence gate (F4, d-positive): count the LIVE outbound-or-mutual interactions of
-	// ONE message source on the namespace's contacts. F4 measured 0 for EACH of the four
-	// message sources (email/telegram/gchat/messages), so the test calls this once per
-	// source and asserts >= 1 for every one. The allowlist is hardcoded in the test and
-	// deliberately EXCLUDES gcal (the awaiting-reply GCal event is already mutual, so
-	// including it would let the assertion pass without exercising any message-source
-	// direction). Caller passes a BARE prefix + the source.
-	TestCountNonInboundMessageInteractionsBySourceByNamePrefix(ctx context.Context, arg TestCountNonInboundMessageInteractionsBySourceByNamePrefixParams) (int64, error)
 	// Test-only: counts venue-type nodes that no live interaction references via
 	// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
 	TestCountOrphanVenueNodes(ctx context.Context) (int64, error)
-	// Coverage gate (D3, F4 not-vacuous): count the namespace's LIVE contacts in the
-	// PURE-OUTBOUND shape — last_outreach_at set while last_contacted is NULL. This is the
-	// "I messaged them, no reply yet" cohort (an outbound moves only last_outreach_at,
-	// CAD-006). Asserted >= 1 so the zero-violation TestCountIncoherentOutreachByNamePrefix
-	// gate is not vacuously satisfied by a world with no last_outreach_at at all. Caller
-	// passes a BARE prefix.
-	TestCountPureOutboundContactsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (int64, error)
-	// Coherence gate (F8): count the namespace's LIVE contacts that hold a
-	// current-accepted cutover assertion (lives_in / birthday / how_met) whose matching
-	// derived cache column is NULL — a production-impossible state (KnowledgeCacheUpdater
-	// is the sole writer and always populates the column when an accepted assertion
-	// exists). Asserted == 0. "current-accepted" mirrors GetCurrentAccepted: accepted,
-	// knowledge-open, valid-time window contains @now, subject node live, and (for the
-	// lives_in edge) the place object node live. A proposed/pending assertion or one on a
-	// soft-deleted contact is correctly excluded. Single-cardinality predicates mean at
-	// most one current-accepted row per (subject, predicate), so COUNT(*) over this WHERE
-	// is row-equivalent to GetCurrentAccepted's ORDER BY created_at LIMIT 1 per slot.
-	// Caller passes a BARE prefix; '%' appended.
-	TestCountStrandedKnowledgeCacheByNamePrefix(ctx context.Context, arg TestCountStrandedKnowledgeCacheByNamePrefixParams) (int64, error)
 	// Tag-migration test only: count the LIVE accepted `tagged_as` assertions whose
 	// subject is a given node, so a test asserts exactly one per migrated contact_tag
 	// and that an idempotent re-run creates no duplicates.
@@ -2499,22 +2266,6 @@ type Querier interface {
 	// test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
 	// without a sleep/timeout. Production code must NOT call this.
 	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
-	// F8 target-row proof: return the three derived knowledge-cache columns for one
-	// contact id so the coverage test can assert the ReplayAssertion date-fact birthday's
-	// own contact has a populated birthday cache (proving F8's exact stranded row is now
-	// coherent, not just that SOME cutover cache is populated).
-	TestGetContactCacheColumnsByID(ctx context.Context, id pgtype.UUID) (*TestGetContactCacheColumnsByIDRow, error)
-	// Coherence gate (F4, d-mutual-verify timestamps): return one contact's four cadence
-	// timestamp columns so the test can assert the promoted mutual set them all together
-	// (mutual writes last_contacted / last_interaction_at / last_outreach_at /
-	// last_response_at to the same replyAt). Covers last_response_at, which the
-	// direction-count query alone does not prove.
-	TestGetContactCadenceTimestampsForContact(ctx context.Context, contactID pgtype.UUID) (*TestGetContactCadenceTimestampsForContactRow, error)
-	// Coherence gate (F3, Go-side): return the namespace's live managed follow-up loop
-	// task's contact_id, external_task_id, and metadata so the test can decode the
-	// marker and confirm it points at the row's own contact. Caller passes a BARE
-	// prefix; expects exactly one live follow-up in the namespace.
-	TestGetLiveFollowUpByNamePrefix(ctx context.Context, namePrefix pgtype.Text) (*TestGetLiveFollowUpByNamePrefixRow, error)
 	// Test assertion — a planted job's disposition: its state, whether it is
 	// finalized, how many times a worker snoozed it (River records the count in
 	// metadata->>'snoozes'), and its attempt counter. `attempt` is the load-bearing
@@ -2675,64 +2426,15 @@ type Querier interface {
 	// would otherwise fetch and finalize it within milliseconds, and the assertion
 	// that depends on it staying unfinalized would pass or fail on a race.
 	TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID string) (int64, error)
-	// Tour capacity gate: for each live contact in the namespace, return the four
-	// CAD-029 activity flags (outreach / response / pending-followup / none) so the Go
-	// test can compute a maximum bipartite matching and prove the world has FOUR
-	// DISTINCT assignable contacts (the precondition for cadence-followup.tour.ts).
-	// has_pending mirrors FindPendingFollowUp's live followup_loop predicate. Caller
-	// passes a BARE prefix.
-	TestListCadenceActivityFlagsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListCadenceActivityFlagsByNamePrefixRow, error)
-	// CON-052 birthday-fixture proof: (id, full_name, birthday) for the reserved
-	// clock-anchored birthday fixture contacts, so the coverage/determinism tests can
-	// classify each subject-scoped (id-list bounded) and fingerprint by stable identity
-	// (GetContactCacheColumns is per-id and lacks full_name). Test only.
-	TestListContactBirthdayFixturesByIds(ctx context.Context, ids []pgtype.UUID) ([]*TestListContactBirthdayFixturesByIdsRow, error)
-	// Profile coverage test only: list the namespace's contacts (by full_name
-	// prefix) with the bucket-defining columns + a method count, so the test can
-	// assert the catalog produced ≥1 overdue (cadence + last_contacted in the past),
-	// ≥1 never-contacted (cadence + NULL last_contacted), and ≥1 no-method contact —
-	// proving the cadence/no-method states SURVIVE (a settling replay would
-	// overwrite last_contacted). Caller passes a BARE prefix; '%' appended.
-	TestListContactBucketsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListContactBucketsByNamePrefixRow, error)
 	// Index-definition test only: enumerate every index on comms_message with
 	// Postgres's own deterministic indexdef reconstruction, so a test can assert the
 	// exact key columns + partial predicate of the eligible/stale-claim indexes
 	// (migration 073). Read-only catalog access, mirroring TestListPublicTables.
 	TestListIndexDefsForComms(ctx context.Context) ([]*TestListIndexDefsForCommsRow, error)
-	// Coherence gate (F4, d-mutual-verify): for one contact + source, return (direction,
-	// count) over live interactions, so the test can assert the telegram-mutual contact's
-	// two seeded messages COLLAPSED into a single promoted mutual row — proving
-	// PromoteInteractionToMutualTx ran, not that an outbound and an inbound merely coexist
-	// as two rows. A mis-set bridge window (2 rows, or an un-promoted outbound) fails
-	// loudly.
-	TestListInteractionDirectionCountsForContact(ctx context.Context, arg TestListInteractionDirectionCountsForContactParams) ([]*TestListInteractionDirectionCountsForContactRow, error)
-	// Profile coverage test only: for the namespace's contacts (by full_name prefix)
-	// that have interactions, return the per-contact interaction count and the span
-	// (in seconds) between the earliest and latest interaction, so the test can
-	// assert the dedicated settled contacts carry MULTIPLE interactions spread over
-	// TIME (count ≥ 2 with a multi-day span) rather than a single ~1h window. The
-	// INNER JOIN excludes the interaction-free edge-case catalog contacts. Caller
-	// passes a BARE prefix; '%' appended.
-	TestListInteractionSpreadByContactNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListInteractionSpreadByContactNamePrefixRow, error)
 	// Reset integration test only: enumerate every base table in the public schema
 	// so the catalog guard can assert each is in the wiped list, is schema_migrations,
 	// or matches the river_% allowlist. Read-only catalog access.
 	TestListPublicTables(ctx context.Context) ([]string, error)
-	// Visible-task coverage + determinism fingerprint source: every contact_task row on
-	// the namespace's live contacts, joined to its contact for the stable-identity
-	// full_name. Feeds the kind/lifecycle/state coverage checks, the link-age bucket
-	// spread (from created_at), the non-empty content check, and the run-to-run task
-	// fingerprint (keyed by full_name + kind + lifecycle + state + created_at age bucket
-	// — external_task_id and raw UUIDs excluded). Caller passes a BARE prefix; '%'
-	// appended.
-	TestListTaskRowsByNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]*TestListTaskRowsByNamePrefixRow, error)
-	// Visible-task cohort accounting: for each given contact, the count of its
-	// PRODUCT-VISIBLE tasks — the ones the contact page lists (state='managed' AND
-	// lifecycle IN ('manual','followup_loop')); it never lists cadence_due. A LEFT JOIN
-	// (not a task-side GROUP BY) so a contact with zero visible tasks still appears with
-	// count 0 — the 0-visible majority cannot be produced from task rows alone. Scoped to
-	// the passed catalog id set. Test only.
-	TestListVisibleTaskCountsByContactIds(ctx context.Context, contactIds []pgtype.UUID) ([]*TestListVisibleTaskCountsByContactIdsRow, error)
 	// TEST ONLY. Probe a contact row with FOR UPDATE NOWAIT: fails immediately
 	// (lock_not_available) when another tx holds a conflicting lock on the row.
 	// Used by the recompute lock-ordering regression test to prove (without a

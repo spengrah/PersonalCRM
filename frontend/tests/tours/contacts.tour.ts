@@ -53,7 +53,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   const listResp = await tour.apiCtx.get('/api/v1/contacts?limit=500&sort=cadence&order=desc')
   const contacts = ((await listResp.json())?.data ?? []) as TourContact[]
   if (contacts.length < 5) {
-    throw new Error(`tour: prod-shaped seed too small (${contacts.length} contacts) for the tour`)
+    throw new Error(`tour: seeded world too small (${contacts.length} contacts) for the tour`)
   }
 
   const nameCount = new Map<string, number>()

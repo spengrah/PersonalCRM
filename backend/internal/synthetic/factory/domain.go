@@ -72,8 +72,8 @@ func WithPhone() ContactOption { return func(c *contactConfig) { c.withPhone = t
 // WithTelegram adds a telegram contact_method (handle).
 func WithTelegram() ContactOption { return func(c *contactConfig) { c.withTelegram = true } }
 
-// WithNoMethods builds a contact carrying NO contact_method (the "no methods"
-// catalog bucket — the Imports/rematch surfaces + the empty-methods UI state).
+// WithNoMethods builds a contact carrying NO contact_method (the zero-method
+// adversarial shape — the Imports/rematch surfaces + the empty-methods UI state).
 // It overrides the email default; a contact with WithNoMethods cannot be the
 // target of a MatchSeeded replay (there is no identifier to match on).
 func WithNoMethods() ContactOption { return func(c *contactConfig) { c.noMethods = true } }
@@ -106,7 +106,7 @@ func WithRecentCreation(window time.Duration) ContactOption {
 }
 
 // WithBirthday1900Sentinel sets the prod 1900-MM-DD month/day-only sentinel —
-// a representative edge case the catalog can build on.
+// a representative edge case a declaration or adversarial edge can build on.
 //
 // It PANICS when the requested (month, day) does not round-trip through the
 // sentinel year. 1900 is not a leap year (divisible by 100, not by 400), so

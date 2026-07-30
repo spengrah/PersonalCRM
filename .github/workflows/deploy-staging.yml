@@ -232,7 +232,7 @@ jobs:
           {
             echo "### Staging: schema changed, seed code did not"
             echo ""
-            echo "Migrations changed but the seed surface (\`backend/internal/synthetic/**\`) did not, so staging kept its accumulated world (migrations transform it in place; an auto-wipe would rob us of the migration canary). Run \`make staging-reset\` to exercise the new model with fresh prod-shaped seed data."
+            echo "Migrations changed but the seed surface (\`backend/internal/synthetic/**\`) did not, so staging kept its accumulated world (migrations transform it in place; an auto-wipe would rob us of the migration canary). Run \`make staging-reset\` to exercise the new model with a fresh \`standard\` seed world."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Nudge — reseed base unknown (no auto-reseed attempted)

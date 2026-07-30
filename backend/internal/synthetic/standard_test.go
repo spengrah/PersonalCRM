@@ -81,51 +81,35 @@ func TestRiderAccounting_PartialHelperFailuresStayTruthful(t *testing.T) {
 		name            string
 		kind            riderKind
 		rider           riderSeedResult
-		wantContacts    int
-		wantPayloads    int
 		wantSettled     int
 		wantWorldEntity int
 	}{
 		{name: "before contact", kind: riderPendingFollowUp},
 		{
 			name: "pending after contact", kind: riderPendingFollowUp,
-			rider: riderSeedResult{contact: contact}, wantContacts: 1, wantWorldEntity: 1,
+			rider: riderSeedResult{contact: contact}, wantWorldEntity: 1,
 		},
 		{
 			name: "pending after gcal", kind: riderPendingFollowUp,
-			rider:        riderSeedResult{contact: contact, payloads: 1},
-			wantContacts: 1, wantPayloads: 1, wantSettled: 1, wantWorldEntity: 1,
+			rider:       riderSeedResult{contact: contact, payloads: 1},
+			wantSettled: 1, wantWorldEntity: 1,
 		},
 		{
 			name: "outreach after contact", kind: riderOutreach,
-			rider: riderSeedResult{contact: contact}, wantContacts: 1, wantWorldEntity: 1,
+			rider: riderSeedResult{contact: contact}, wantWorldEntity: 1,
 		},
 		{
 			name: "response after contact", kind: riderResponse,
-			rider: riderSeedResult{contact: contact}, wantContacts: 1, wantWorldEntity: 1,
+			rider: riderSeedResult{contact: contact}, wantWorldEntity: 1,
 		},
 		{
 			name: "response after outbound", kind: riderResponse,
-			rider:        riderSeedResult{contact: contact, payloads: 1},
-			wantContacts: 1, wantPayloads: 1, wantWorldEntity: 1,
+			rider: riderSeedResult{contact: contact, payloads: 1}, wantWorldEntity: 1,
 		},
 	}
 
 	for _, tc := range cases {
-		t.Run("catalog/"+tc.name, func(t *testing.T) {
-			var res ProfileResult
-			phasePayloads := 0
-
-			err := accountCatalogRider(tc.kind, tc.rider, seedErr, &res, &phasePayloads)
-
-			require.ErrorIs(t, err, seedErr)
-			assert.Equal(t, tc.wantContacts, res.Contacts)
-			assert.Equal(t, tc.wantPayloads, phasePayloads)
-			assert.Equal(t, tc.wantSettled, res.SettledInteractions)
-			assertUncompletedRiderCounters(t, res)
-		})
-
-		t.Run("standard/"+tc.name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			var res ProfileResult
 			var out []declare.Seeded
 
@@ -165,19 +149,18 @@ func TestRiderAccounting_ClaimsWholeRiderCountersOnlyOnSuccess(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var res ProfileResult
-			phasePayloads := 0
+			var out []declare.Seeded
 
-			err := accountCatalogRider(
+			err := accountStandardTailRider(
 				tc.kind,
 				riderSeedResult{contact: contact, payloads: tc.payloads},
 				nil,
 				&res,
-				&phasePayloads,
+				&out,
 			)
 
 			require.NoError(t, err)
-			assert.Equal(t, 1, res.Contacts)
-			assert.Equal(t, tc.payloads, phasePayloads)
+			assert.Len(t, out, 1, "a completed rider contributes its contact to the world manifest")
 			assert.Equal(t, tc.wantSettled, res.SettledInteractions)
 			assert.Equal(t, tc.wantTasks, res.SeededTasks)
 			assert.Equal(t, tc.wantFollowUps, res.SeededPendingFollowUps)

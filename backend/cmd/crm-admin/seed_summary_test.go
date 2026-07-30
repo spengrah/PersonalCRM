@@ -22,21 +22,25 @@ import (
 // rendering cannot coincidentally print the right string.
 func timingFixture() synthetic.ProfileResult {
 	return synthetic.ProfileResult{
-		Profile:   synthetic.ProfileProdShaped,
-		Namespace: "prodshaped",
+		Profile:   synthetic.ProfileStandard,
+		Namespace: "standard",
 		Seed:      42,
-		Contacts:  179,
+		Contacts:  93,
 		// Distinct from each other and from every other count in the fixture, so a
 		// rendering that printed the wrong field cannot coincidentally match.
-		ArchetypePayloads:     943,
-		ArchetypeInteractions: 771,
-		ArchetypeSettleCalls:  7,
+		GmailSettled:           11,
+		TelegramSettled:        13,
+		SettledInteractions:    17,
+		SeededTasks:            19,
+		SeededPendingFollowUps: 1,
+		OutboundOnlyContacts:   23,
+		MutualMessageContacts:  29,
 		Timings: synthetic.SeedTimings{
 			Total: 100 * time.Second,
 			Phases: []synthetic.PhaseTiming{
-				{Name: "catalog-contacts", Duration: 9500 * time.Millisecond, Payloads: 0},
-				{Name: "follow-up-loop", Duration: 1500 * time.Millisecond, Payloads: 1},
-				{Name: "per-source-settled", Duration: 48 * time.Second, Payloads: 60},
+				{Name: "declaration:DSH-001", Duration: 9500 * time.Millisecond, Payloads: 0},
+				{Name: "edge:long-history", Duration: 1500 * time.Millisecond, Payloads: 1},
+				{Name: "tail:pinned-tour-fixtures", Duration: 48 * time.Second, Payloads: 60},
 			},
 			Settle: replay.SettleTimings{
 				Calls:           104,
@@ -57,7 +61,7 @@ func TestWriteSeedSummaryRendersTimingBlock(t *testing.T) {
 	require.NoError(t, writeSeedSummary(&buf, timingFixture(), false))
 	out := buf.String()
 
-	require.Contains(t, out, "seed summary (profile=prod-shaped namespace=prodshaped prng_seed=42):")
+	require.Contains(t, out, "seed summary (profile=standard namespace=standard prng_seed=42):")
 	require.NotContains(t, out, "PARTIAL", "a successful run is never marked partial")
 	require.Contains(t, out, "  duration:             100.00s")
 	require.Contains(t, out, "  settle_calls:         104")
@@ -70,12 +74,24 @@ func TestWriteSeedSummaryRendersTimingBlock(t *testing.T) {
 	// 100s total − (40+18+9)s of gate wait.
 	require.Contains(t, out, "  outside_gates:        33.00s")
 	require.Contains(t, out, "NOT a hypothesis test", "the residual is labelled as bookkeeping")
-	// The archetype block reports payloads driven and interaction ROWS landed as
-	// two separate figures: they measure different units, and the second is
-	// smaller by design because aggregation collapses.
-	require.Contains(t, out, "  archetype_payloads:   943")
-	require.Contains(t, out, "  archetype_rows:       771")
-	require.Contains(t, out, "  archetype_settles:    7")
+}
+
+// Every surviving count reaches the rendering, each from its OWN field. The
+// fixture's values are mutually distinct, so a line printing the wrong field
+// cannot coincidentally match.
+func TestWriteSeedSummaryRendersEverySurvivingCount(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, writeSeedSummary(&buf, timingFixture(), false))
+	out := buf.String()
+
+	require.Contains(t, out, "  contacts:             93")
+	require.Contains(t, out, "  gmail_settled:        11")
+	require.Contains(t, out, "  telegram_settled:     13")
+	require.Contains(t, out, "  settled_interactions: 17")
+	require.Contains(t, out, "  tasks:                19")
+	require.Contains(t, out, "  pending_followups:    1")
+	require.Contains(t, out, "  outbound_only:        23")
+	require.Contains(t, out, "  mutual_messages:      29")
 }
 
 func TestWriteSeedSummaryRendersEveryPhaseWithPayloadVolume(t *testing.T) {
@@ -86,29 +102,29 @@ func TestWriteSeedSummaryRendersEveryPhaseWithPayloadVolume(t *testing.T) {
 	require.Contains(t, out, "  phases (3):")
 	// A phase with no source payloads prints `-`, so "none by design" reads
 	// differently from "expected payloads, got none".
-	require.Regexp(t, `\n    catalog-contacts\s+9\.50s\s+-\n`, out)
-	require.Regexp(t, `\n    per-source-settled\s+48\.00s\s+60 payloads\n`, out)
+	require.Regexp(t, `\n    declaration:DSH-001\s+9\.50s\s+-\n`, out)
+	require.Regexp(t, `\n    tail:pinned-tour-fixtures\s+48\.00s\s+60 payloads\n`, out)
 	// Singular for one — a "1 payloads" row in a summary a human reads once per
 	// reseed is the kind of thing that erodes trust in the numbers beside it.
-	require.Regexp(t, `\n    follow-up-loop\s+1\.50s\s+1 payload\n`, out)
+	require.Regexp(t, `\n    edge:long-history\s+1\.50s\s+1 payload\n`, out)
 }
 
 func TestWriteSeedSummaryRendersPartialFailure(t *testing.T) {
 	res := timingFixture()
 	// A run that died mid-block: the phases before it completed, the failing one
 	// is named, and the counts are whatever had accumulated.
-	res.Timings.Current = "per-source-settled"
+	res.Timings.Current = "tail:pinned-tour-fixtures"
 	res.Timings.Phases = res.Timings.Phases[:2]
 
 	var buf bytes.Buffer
 	require.NoError(t, writeSeedSummary(&buf, res, true))
 	out := buf.String()
 
-	require.Contains(t, out, `(PARTIAL — run failed during phase "per-source-settled")`)
+	require.Contains(t, out, `(PARTIAL — run failed during phase "tail:pinned-tour-fixtures")`)
 	require.Contains(t, out, "  phases (2):")
 	// The failing phase is NAMED in the header but must not appear as a completed
 	// row: the phase table is exactly the blocks that finished.
-	require.Equal(t, []string{"catalog-contacts", "follow-up-loop"}, phaseTableNames(out))
+	require.Equal(t, []string{"declaration:DSH-001", "edge:long-history"}, phaseTableNames(out))
 }
 
 // phaseTableNames extracts the phase rows (four-space-indented) from a rendered
@@ -165,8 +181,8 @@ func TestWriteSeedSummaryZeroTimings(t *testing.T) {
 func TestRunSeedEntrypointsPrintPartialSummaryOnFailure(t *testing.T) {
 	partial := synthetic.SeedTimings{
 		Total:   90 * time.Second,
-		Current: "per-source-settled",
-		Phases:  []synthetic.PhaseTiming{{Name: "catalog-contacts", Duration: time.Second}},
+		Current: "edge:long-history",
+		Phases:  []synthetic.PhaseTiming{{Name: "declaration:DSH-001", Duration: time.Second}},
 		Settle:  replay.SettleTimings{Calls: 12},
 	}
 
@@ -189,7 +205,7 @@ func TestRunSeedEntrypointsPrintPartialSummaryOnFailure(t *testing.T) {
 			require.Contains(t, err.Error(), "boom")
 
 			out := stdout.String()
-			require.Contains(t, out, `(PARTIAL — run failed during phase "per-source-settled")`)
+			require.Contains(t, out, `(PARTIAL — run failed during phase "edge:long-history")`)
 			require.Contains(t, out, "  contacts:             37", "the counts that accumulated are reported")
 			require.Contains(t, out, "  duration:             90.00s")
 			require.Contains(t, out, "  settle_calls:         12")
@@ -205,7 +221,7 @@ func TestRunSeedEntrypointsPrintPartialSummaryOnFailure(t *testing.T) {
 func TestRunSeedPrintsCompleteSummaryWhenOnlyPostSeedStepFailed(t *testing.T) {
 	deps, stdout, _, _, _, _ := newTestDeps()
 	deps.seed = &fakeSeedRunner{
-		result: synthetic.ProfileResult{Contacts: 170, Timings: synthetic.SeedTimings{Total: 71 * time.Second}},
+		result: synthetic.ProfileResult{Contacts: 93, Timings: synthetic.SeedTimings{Total: 71 * time.Second}},
 		// The shape seedAdapter.runProfile produces on a Quiesce failure.
 		err: fmt.Errorf("%w: quiesce after seed: %w", errSeedWorldIntact, errors.New("stop river client")),
 	}
@@ -217,14 +233,14 @@ func TestRunSeedPrintsCompleteSummaryWhenOnlyPostSeedStepFailed(t *testing.T) {
 	out := stdout.String()
 	require.NotContains(t, out, "PARTIAL", "a completed seed is never labelled a failed run")
 	require.NotContains(t, out, "torn down", "an intact world is not described as torn down")
-	require.Contains(t, out, "  contacts:             170")
+	require.Contains(t, out, "  contacts:             93")
 }
 
 // The counterpart: a genuine PROFILE failure still gets the marker, and says the
 // rows it counts no longer exist.
 func TestWriteSeedSummaryOnErrorMarksProfileFailurePartial(t *testing.T) {
 	res := timingFixture()
-	res.Timings.Current = "per-source-settled"
+	res.Timings.Current = "edge:long-history"
 
 	var partialBuf, intactBuf bytes.Buffer
 	writeSeedSummaryOnError(&partialBuf, res, errors.New("replay gmail 3 msg 1: boom"))

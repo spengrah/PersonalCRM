@@ -29,9 +29,9 @@ export function buildManifest(env: ManifestEnv): Manifest {
     captureGeneratorVersion: CAPTURE_GENERATOR_VERSION,
     gitSha: env.gitSha || 'unknown',
     stagingImageDigest: env.stagingImageDigest || 'unknown',
-    // Default to 'unknown', NOT 'prod-shaped': an unset profile means the seed
+    // Default to 'unknown', NOT 'standard': an unset profile means the seed
     // is whatever was already on the target (e.g. a TOURS_SKIP_RESET run). The
-    // caller (run-tours.sh) declares 'prod-shaped' only when it actually
+    // caller (run-tours.sh) declares 'standard' only when it actually
     // established that provenance. Never assert a provenance we did not create.
     seedProfile: env.seedProfile || 'unknown',
     baseUrl: env.baseUrl ? redactHost(env.baseUrl) : '<staging>',

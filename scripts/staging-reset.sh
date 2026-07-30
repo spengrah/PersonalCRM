@@ -1,5 +1,6 @@
 #!/bin/bash
-# HARD reset + reseed the STAGING tenant to the prod-shaped synthetic world.
+# HARD reset + reseed the STAGING tenant to the declared `standard` synthetic
+# world (STAGING_RESET_PROFILE=minimal-scoped overrides it).
 #
 # Drives the rootless `staging` tenant (CRM_USER/CRM_HOME, defaults staging /
 # /var/lib/staging) the way deploy-artifact.sh does: stop the backend service via
@@ -66,7 +67,7 @@ CRM_HOME="${CRM_HOME:-/var/lib/staging}"
 STAGING_HOST="${STAGING_HOST:-}"
 ENV_FILE="${STAGING_ENV_FILE:-/srv/personalcrm/.env}"
 BACKEND_UNIT="${STAGING_BACKEND_UNIT:-$CRM_HOME/.config/containers/systemd/personalcrm-backend.container}"
-PROFILE="${STAGING_RESET_PROFILE:-prod-shaped}"
+PROFILE="${STAGING_RESET_PROFILE:-standard}"
 PODMAN_NETWORK="${STAGING_PODMAN_NETWORK:-crm}"
 MIGRATIONS_PATH="${STAGING_MIGRATIONS_PATH:-/migrations}"
 CRM_ADMIN="${STAGING_CRM_ADMIN:-/usr/local/bin/crm-admin}"
