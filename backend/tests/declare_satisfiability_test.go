@@ -57,7 +57,10 @@ func TestSyntheticDeclareSatisfiability(t *testing.T) {
 
 			overdue := listOverdue(t, router)
 
-			for _, pc := range d.Postconditions() {
+			// PostconditionsAt, not Postconditions: the anchor-dependent facts
+			// (a birthday) are only populated when the run's own anchor is
+			// supplied, so the anchor-free call would silently skip them.
+			for _, pc := range d.PostconditionsAt(res.Anchor) {
 				seeded, ok := res.Entities[pc.Handle]
 				require.True(t, ok, "manifest is missing handle %q", pc.Handle)
 				assertPostcondition(t, router, overdue, res, pc, seeded)
@@ -148,6 +151,19 @@ func assertPostcondition(
 	if pc.MethodKinds != nil {
 		assert.ElementsMatch(t, pc.MethodKinds, methodKindsOf(detail),
 			"handle %q method set", pc.Handle)
+	}
+
+	if pc.Birthday != nil {
+		require.NotNil(t, detail.Birthday, "handle %q declared a birthday", pc.Handle)
+		assert.Equal(t, pc.Birthday.UTC().Format("2006-01-02"), detail.Birthday.UTC().Format("2006-01-02"),
+			"handle %q birthday must survive the read byte-identically", pc.Handle)
+	}
+
+	if pc.Location != nil {
+		require.NotNil(t, detail.Location, "handle %q declared a location", pc.Handle)
+		expected := factory.SyntheticSourcePrefix + res.Namespace + "-" + *pc.Location
+		assert.Equal(t, expected, *detail.Location,
+			"handle %q location must survive the read with its namespace prefix", pc.Handle)
 	}
 }
 

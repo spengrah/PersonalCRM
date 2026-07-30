@@ -247,4 +247,147 @@ func TestBirthday_PostconditionCarriesTheResolvedDate(t *testing.T) {
 	assert.Equal(t, 29, byHandle["bday-leap"].Day())
 }
 
+// The clamp, pinned as a NON-PANICKING substitution. This proves ONLY the
+// crash-safety half of the placeholder-year gap: the composed world executes
+// every declaration on every reseed, on every calendar day, and February 29 has
+// no placeholder-year representation at all, so a panic here would break SEEDING
+// rather than fail one assertion. It says nothing about how the app CLASSIFIES
+// the clamped date, which is a rendering concern the birthdays spec owns.
+func TestBirthdayPlaceholderToday_ClampsFebruary29WithoutPanicking(t *testing.T) {
+	leapAnchor := time.Date(2028, time.February, 29, 12, 0, 0, 0, time.UTC)
+	plan := placeholderPlanFor(t, BirthdayPlaceholderToday())
+
+	month, day := plan.placeholderMonthDay(leapAnchor)
+	assert.Equal(t, time.February, month)
+	assert.Equal(t, 28, day, "1900 is not a leap year, so February 29 has to become February 28")
+
+	require.NotPanics(t, func() { factory.WithBirthday1900Sentinel(month, day) },
+		"the clamped date must be one the sentinel builder accepts")
+	assert.Equal(t, "1900-02-28", plan.resolvePlaceholder(leapAnchor).Format("2006-01-02"))
+}
+
+func TestBirthdayPlaceholderToday_UsesTheAnchorsOwnDayOtherwise(t *testing.T) {
+	anchor := time.Date(2026, time.June, 15, 8, 0, 0, 0, time.UTC)
+	plan := placeholderPlanFor(t, BirthdayPlaceholderToday())
+
+	month, day := plan.placeholderMonthDay(anchor)
+	assert.Equal(t, time.June, month)
+	assert.Equal(t, 15, day)
+	assert.Equal(t, "1900-06-15", plan.resolvePlaceholder(anchor).Format("2006-01-02"))
+}
+
+// The declared month/day bounds check must not reject the placeholder's
+// zero-valued month/day struct fields: they are never read for it.
+func TestBirthdayPlaceholderToday_PassesValidation(t *testing.T) {
+	assert.NoError(t, validateEntityOrder([]Entity{Contact("a", BirthdayPlaceholderToday())}))
+}
+
+func TestBirthdayPlaceholderToday_PostconditionUsesTheSameClamp(t *testing.T) {
+	entities := []Entity{Contact("real-today", BirthdayPlaceholderToday())}
+
+	leapAnchor := time.Date(2028, time.February, 29, 12, 0, 0, 0, time.UTC)
+	pcs := postconditionsAt(entities, leapAnchor)
+	require.Len(t, pcs, 1)
+	require.NotNil(t, pcs[0].Birthday)
+	assert.Equal(t, "1900-02-28", pcs[0].Birthday.UTC().Format("2006-01-02"),
+		"the expectation must predict what the lowering actually stored, clamp included")
+
+	ordinary := postconditionsAt(entities, time.Date(2026, time.July, 30, 4, 0, 0, 0, time.UTC))
+	require.NotNil(t, ordinary[0].Birthday)
+	assert.Equal(t, "1900-07-30", ordinary[0].Birthday.UTC().Format("2006-01-02"))
+
+	// A real-year February 29 birthday is untouched by the placeholder path.
+	realYear := postconditionsAt([]Entity{Contact("leap", BirthdayOn(time.February, 29))}, leapAnchor)
+	require.NotNil(t, realYear[0].Birthday)
+	assert.Equal(t, factory.LeapSafeBirthYear(leapAnchor), realYear[0].Birthday.Year())
+	assert.Equal(t, "02-29", realYear[0].Birthday.UTC().Format("01-02"))
+}
+
+// --- locations --------------------------------------------------------------
+
+// The prefix is the whole point of the helper: the auto-created place node
+// carries this label, and the entity teardown's label-prefix sweep is the only
+// thing that deletes it. It gets its own executable seam because the end-to-end
+// postcondition check cannot tell "correctly prefixed" from "the expectation
+// computed the same wrong prefix".
+func TestPrefixedLabel(t *testing.T) {
+	cases := []struct {
+		namespace string
+		label     string
+		want      string
+	}{
+		{"loc-ns", "New York", "synth-loc-ns-New York"},
+		{"other", "San Francisco", "synth-other-San Francisco"},
+	}
+	for _, tc := range cases {
+		gen := factory.NewGeneratorAt(factory.DefaultSeed, tc.namespace, vocabularyAnchor)
+		assert.Equal(t, tc.want, prefixedLabel(gen, tc.label))
+	}
+}
+
+func TestLocation_RejectsABlankLabel(t *testing.T) {
+	for _, blank := range []string{"", "   ", "\t"} {
+		label := blank
+		assert.Error(t, (&contactPlan{name: "x", location: &label}).validate(),
+			"the service normalizes a blank location away, so the postcondition could never hold: %q", blank)
+	}
+	assert.NoError(t, validateEntityOrder([]Entity{Contact("x", Location("New York"))}))
+}
+
+func TestLocation_PostconditionCarriesTheRawDeclaredLabel(t *testing.T) {
+	pcs := postconditionsFor([]Entity{Contact("here", Location("New York"))})
+	require.Len(t, pcs, 1)
+	require.NotNil(t, pcs[0].Location)
+	assert.Equal(t, "New York", *pcs[0].Location,
+		"the postcondition holds the RAW label; the assertion prefixes it with the run's own namespace")
+
+	plain := postconditionsFor([]Entity{Contact("nowhere")})
+	require.Len(t, plain, 1)
+	assert.Nil(t, plain[0].Location, "a declaration that says nothing about location must not assert one")
+}
+
+// --- explicit names + markers -----------------------------------------------
+
+func TestExplicitName_RequiresBothComponents(t *testing.T) {
+	assert.Error(t, (&contactPlan{name: "x", explicitGiven: "Cadence"}).validate())
+	assert.Error(t, (&contactPlan{name: "x", explicitSurname: "Sort Yankee"}).validate())
+	assert.Error(t, (&contactPlan{name: "x", explicitGiven: " ", explicitSurname: "Sort Yankee"}).validate())
+	assert.Error(t, (&contactPlan{name: "x", explicitGiven: "Cadence", explicitSurname: "Sort Yankee", sameNameAs: "other"}).validate(),
+		"an explicit literal and a twin both state what the rendered name is")
+	assert.NoError(t, (&contactPlan{name: "x", explicitGiven: "Cadence", explicitSurname: "Sort Yankee"}).validate())
+}
+
+func TestExplicitName_RejectsTwoEntitiesPinningTheSameLiteral(t *testing.T) {
+	err := validateEntityOrder([]Entity{
+		Contact("a", ExplicitName("Kbd", "Move Alpha")),
+		Contact("b", ExplicitName("Kbd", "Move Alpha")),
+	})
+	require.Error(t, err, "ExplicitName skips the dedupe, so a repeated literal renders one ambiguous name")
+	assert.Contains(t, err.Error(), "Kbd Move Alpha")
+
+	assert.NoError(t, validateEntityOrder([]Entity{
+		Contact("a", ExplicitName("Kbd", "Move Alpha")),
+		Contact("b", ExplicitName("Kbd", "Move Bravo")),
+	}))
+}
+
+func TestNameMarker_RejectsABlankToken(t *testing.T) {
+	assert.Error(t, validateEntityOrder([]Entity{Contact("a", NameMarker(""))}))
+	assert.Error(t, validateEntityOrder([]Entity{Contact("a", NameMarker("  "))}))
+	assert.NoError(t, validateEntityOrder([]Entity{Contact("a", NameMarker("cadflt"))}))
+}
+
+// --- shared helpers ---------------------------------------------------------
+
+var vocabularyAnchor = time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+
+func placeholderPlanFor(t *testing.T, prop ContactProp) *birthdayPlan {
+	t.Helper()
+	p := &contactPlan{name: "x"}
+	prop(p)
+	require.NotNil(t, p.birthday)
+	require.True(t, p.birthday.placeholder)
+	return p.birthday
+}
+
 func intPtr(n int) *int { return &n }

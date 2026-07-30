@@ -30,10 +30,39 @@ func (g *Generator) surname() string {
 	return syntheticSurnames[g.rng.IntN(len(syntheticSurnames))]
 }
 
-// slug builds a lowercase, hyphen-free token from a given+surname pair, suitable
-// for an email local-part or handle segment.
+// slug builds a lowercase, email-local-part-safe token from a given+surname
+// pair, suitable for an email local-part or handle segment.
+//
+// Each component is sanitized independently, which is a no-op for every
+// generator-drawn component (single alphanumeric ASCII words — an invariant
+// TestNamePools_AreEmailSafeByConstruction enforces). It matters for a
+// caller-supplied literal (WithExplicitName), whose surname may be several
+// words: an unsanitized slug would put a raw SPACE inside the email address,
+// which is not a valid unquoted local-part and which the declared-seed path
+// would persist silently because it does not go through the contact API's own
+// validator.
 func slug(given, surname string) string {
-	return strings.ToLower(given) + "." + strings.ToLower(surname)
+	return emailSafeComponent(given) + "." + emailSafeComponent(surname)
+}
+
+// emailSafeComponent lowercases s and collapses every run of non-alphanumeric
+// characters to a single hyphen, with leading and trailing hyphens dropped.
+func emailSafeComponent(s string) string {
+	var b strings.Builder
+	prevHyphen := true // suppresses a LEADING hyphen the way TrimRight drops trailing ones
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevHyphen = false
+		default:
+			if !prevHyphen {
+				b.WriteByte('-')
+				prevHyphen = true
+			}
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
 }
 
 // emailFor builds a namespace-prefixed email on the RFC-2606 reserved .example

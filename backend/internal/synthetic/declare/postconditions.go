@@ -34,8 +34,12 @@ type Postcondition struct {
 	// (empty and non-nil means "exactly zero methods").
 	MethodKinds []string
 	// Birthday: the date the detail read must show, derived from BirthdayInDays
-	// / BirthdayOn against the run anchor.
+	// / BirthdayOn / BirthdayPlaceholderToday against the run anchor.
 	Birthday *time.Time
+	// Location: the RAW (unprefixed) declared location. The assertion computes
+	// the expected stored value by prefixing it with the run's own namespace, so
+	// this field stays a pure function of the declaration like every other one.
+	Location *string
 	// InteractionCount: the EXACT number of rows the interactions read must
 	// return, derived from History(n).
 	InteractionCount *int
@@ -106,6 +110,7 @@ func postconditionsFor(entities []Entity) []Postcondition {
 			pc.CreatedAgo = nil
 			pc.MethodKinds = nil
 			pc.Birthday = nil
+			pc.Location = nil
 			pc.InteractionCount = nil
 			pc.CreatedBeforeOldestInteraction = false
 			notOverdue := false
@@ -201,6 +206,10 @@ func (p *contactPlan) postcondition() Postcondition {
 		twin := p.sameNameAs
 		pc.NameTwinOf = &twin
 	}
+	if p.location != nil {
+		loc := *p.location
+		pc.Location = &loc
+	}
 	return pc
 }
 
@@ -210,6 +219,13 @@ func (p *contactPlan) postcondition() Postcondition {
 // expectation drift from the row.
 func (pc *Postcondition) resolveBirthday(p *contactPlan, anchor time.Time) {
 	if p.birthday == nil {
+		return
+	}
+	// The placeholder form goes through the SAME clamp the lowering uses, so the
+	// expectation and the stored row cannot disagree about the one day it fires.
+	if p.birthday.placeholder {
+		bday := p.birthday.resolvePlaceholder(anchor)
+		pc.Birthday = &bday
 		return
 	}
 	bday := p.birthday.resolve(anchor)
