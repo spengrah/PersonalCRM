@@ -77,8 +77,9 @@ func TestWithNameEdge_PanicsOnAnUnknownKind(t *testing.T) {
 	WithNameEdge(NameEdge("no-such-edge"))
 }
 
-// The retained wrappers must keep producing exactly what they always produced,
-// so the catalog profiles are untouched by the refactor.
+// The retained wrappers must keep producing exactly what they always produced:
+// they are byte-stable generic factory API, so any caller drawing through them
+// keeps getting the same names.
 func TestNameEdge_LegacyWrappersAreUnchanged(t *testing.T) {
 	gen := NewGeneratorAt(DefaultSeed, "legacy-ns", nameAnchor)
 	uni := gen.Contact(WithUnicodeName()).FullName

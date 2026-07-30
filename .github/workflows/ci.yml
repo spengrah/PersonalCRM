@@ -114,6 +114,13 @@ jobs:
       - name: Check ingest-registry descriptor invariant
         run: ./scripts/check-ingest-registry.sh
 
+      - name: Check for retired-seed-profile references
+        # Path-gated with this job (the `backend` group covers scripts/** and
+        # Makefile, the operator surfaces that matter most here). The pre-push
+        # LINT lane runs it unconditionally via `make lint`, which is what covers
+        # a docs-only change.
+        run: ./scripts/check-retired-seed-profiles.sh
+
       - name: Cross-compile for ARM64
         working-directory: backend
         env:

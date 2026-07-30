@@ -1,5 +1,6 @@
 #!/bin/bash
-# HARD reset + reseed the STAGING tenant to the prod-shaped synthetic world.
+# HARD reset + reseed the STAGING tenant to the declared `standard` synthetic
+# world (STAGING_RESET_PROFILE=minimal-scoped overrides it).
 #
 # Drives the rootless `staging` tenant (CRM_USER/CRM_HOME, defaults staging /
 # /var/lib/staging) the way deploy-artifact.sh does: stop the backend service via
