@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import { createTestAPI, declaredWorldSearch, TestAPI } from './helpers/test-api'
 
 // API configuration for direct backend assertions in E2E tests.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
@@ -8,6 +8,13 @@ const API_HEADERS = {
   'X-API-Key': API_KEY,
   'Content-Type': 'application/json',
 }
+
+// The resolution marker CON-054's declared fixture appends to the three contacts
+// its narrowing search must keep (declare.CadenceFilterMarker on the Go side,
+// which owns the value). Restated here because declare vocabulary constants have
+// no generated bridge into the E2E suite; which entities carry it is pinned by
+// the declaration's own unit test.
+const CADENCE_FILTER_MARKER = 'cadflt'
 
 test.describe('Contacts - TestAPI Seeded @area:contacts', () => {
   let testApi: TestAPI
@@ -128,9 +135,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // The modal posts to POST /contacts/:id/interactions; the backend
     // applies cadence math from the chosen direction. This test
     // exercises the happy path (mutual + a backdated date).
-    const { ids } = await testApi.seedContacts([{ full_name: 'Log Interaction Test' }])
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Log Interaction Test`
+    const seeded = await testApi.seedBehavior('CON-053')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -212,10 +219,8 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
   test('should navigate to edit mode via context menu Edit action', async ({ page }) => {
     // spec: CON-041.action-runs-once-edit, CON-041.parameter-stripped-from-url
-    const { ids } = await testApi.seedContacts([{ full_name: 'Context Edit Test' }])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Context Edit Test`
+    const seeded = await testApi.seedBehavior('CON-041')
+    const fullName = seeded.entities['target'].name
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
@@ -242,10 +247,8 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
   test('should navigate to merge modal via context menu Merge action', async ({ page }) => {
     // spec: CON-041.action-runs-once-edit, CON-041.parameter-stripped-from-url
-    const { ids } = await testApi.seedContacts([{ full_name: 'Context Merge Test' }])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Context Merge Test`
+    const seeded = await testApi.seedBehavior('CON-041')
+    const fullName = seeded.entities['target'].name
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
@@ -279,11 +282,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // direction bumps is CAD-006 (backend-owned) — asserted by
     // internal/consumer/cadence_updater_test.go and
     // tests/api/direction_api_test.go, not re-checked through the browser.
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Mark Contacted Default', cadence: 'weekly' },
-    ])
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Mark Contacted Default`
+    const seeded = await testApi.seedBehavior('CON-053')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -310,9 +311,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // The modal's direction picker reaches the API: choosing Outbound posts
     // direction=outbound. The cadence timestamp effects of each direction are
     // CAD-006 (backend-owned, Go-covered).
-    const { ids } = await testApi.seedContacts([{ full_name: 'Outbound Interaction Test' }])
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Outbound Interaction Test`
+    const seeded = await testApi.seedBehavior('CON-053')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -338,9 +339,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // The modal's direction picker reaches the API: choosing Inbound posts
     // direction=inbound. The cadence timestamp effects of each direction are
     // CAD-006 (backend-owned, Go-covered).
-    const { ids } = await testApi.seedContacts([{ full_name: 'Inbound Interaction Test' }])
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Inbound Interaction Test`
+    const seeded = await testApi.seedBehavior('CON-053')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -368,11 +369,10 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // back to name order would pass this test. Cadence-desc = Yankee(weekly) →
     // Alpha(monthly) → Mike(annual); name-asc = Alpha, Mike, Yankee; name-desc =
     // Yankee, Mike, Alpha. All three orders are distinct.
-    await testApi.seedContacts([
-      { full_name: 'Cadence Sort Mike', cadence: 'annual' },
-      { full_name: 'Cadence Sort Yankee', cadence: 'weekly' },
-      { full_name: 'Cadence Sort Alpha', cadence: 'monthly' },
-    ])
+    const seeded = await testApi.seedBehavior('CON-038')
+    const weeklyName = seeded.entities['weekly'].name
+    const monthlyName = seeded.entities['monthly'].name
+    const annualName = seeded.entities['annual'].name
 
     // A BARE load resolves the default context: the request the app issues
     // carries the cadence-desc default, with no user having chosen a sort.
@@ -392,18 +392,16 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // workers' contacts cannot satisfy or break the ordering, then assert the
     // three seeded rows render most-frequent-first (weekly → monthly → annual)
     // in DOM order.
-    await page.getByPlaceholder('Search contacts...').fill(testApi.prefix)
+    await page.getByPlaceholder('Search contacts...').fill(declaredWorldSearch(seeded))
     await page.getByPlaceholder('Search contacts...').press('Enter')
-    await expect(
-      page.locator('tbody tr', {
-        has: page.getByText(`${testApi.prefix}-Cadence Sort Alpha`),
-      })
-    ).toBeVisible({ timeout: 15000 })
+    await expect(page.locator('tbody tr', { has: page.getByText(monthlyName) })).toBeVisible({
+      timeout: 15000,
+    })
 
     const rowText = await page.locator('tbody tr').allTextContents()
-    const weeklyIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Sort Yankee`))
-    const monthlyIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Sort Alpha`))
-    const annualIdx = rowText.findIndex(t => t.includes(`${testApi.prefix}-Cadence Sort Mike`))
+    const weeklyIdx = rowText.findIndex(t => t.includes(weeklyName))
+    const monthlyIdx = rowText.findIndex(t => t.includes(monthlyName))
+    const annualIdx = rowText.findIndex(t => t.includes(annualName))
     expect(weeklyIdx).toBeGreaterThanOrEqual(0)
     expect(monthlyIdx).toBeGreaterThan(weeklyIdx)
     expect(annualIdx).toBeGreaterThan(monthlyIdx)
@@ -414,9 +412,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     request,
   }) => {
     // spec: CON-042.confirmation-prompt-warns-action, CON-042.only-confirmation-contact-deleted, CON-042.success-user-returned-contact
-    const { ids } = await testApi.seedContacts([{ full_name: 'Delete Confirm Test' }])
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Delete Confirm Test`
+    const seeded = await testApi.seedBehavior('CON-042')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -477,11 +475,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // spec: CON-044.mutual-direction-interaction-logged
     // The LIST-row context-menu quick action (distinct from the detail-page Log
     // Interaction modal): it posts a mutual, server-timestamped interaction.
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'List Mark Contacted', cadence: 'weekly' },
-    ])
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-List Mark Contacted`
+    const seeded = await testApi.seedBehavior('CON-044')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
@@ -529,14 +525,16 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     // `search=` list request that FILTERS the results (the matching fixtures
     // render, a seeded non-matching one does not) — not merely that an input
     // exists.
-    // Seed contacts with and without cadence, plus a NON-MATCHING contact the
-    // search must filter out.
-    await testApi.seedContacts([
-      { full_name: 'FilterCadence WithWeekly', cadence: 'weekly' },
-      { full_name: 'FilterCadence WithMonthly', cadence: 'monthly' },
-      { full_name: 'FilterCadence NoCadence' },
-      { full_name: 'Unrelated Zebra' },
-    ])
+    // The declared fixture seeds contacts with and without cadence, plus a
+    // NON-MATCHING contact (the only one carrying no resolution marker) that the
+    // narrowed search must filter out.
+    const seeded = await testApi.seedBehavior('CON-054')
+    const weeklyName = seeded.entities['weekly'].name
+    const monthlyName = seeded.entities['monthly'].name
+    const noCadenceName = seeded.entities['none'].name
+    const unrelatedName = seeded.entities['unrelated'].name
+    const worldTerm = declaredWorldSearch(seeded)
+    const markerTerm = declaredWorldSearch(seeded, CADENCE_FILTER_MARKER)
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
@@ -555,41 +553,36 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
       resp =>
         resp.request().method() === 'GET' &&
         resp.url().includes('/api/v1/contacts') &&
-        new URL(resp.url()).searchParams.get('search') === testApi.prefix &&
+        new URL(resp.url()).searchParams.get('search') === worldTerm &&
         !new URL(resp.url()).searchParams.has('ids_only')
     )
-    await searchInput.fill(testApi.prefix)
+    await searchInput.fill(worldTerm)
     await searchInput.press('Enter')
     await prefixResponse
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
-      timeout: 10000,
-    })
-    await expect(page.getByText(`${testApi.prefix}-Unrelated Zebra`)).toBeVisible()
+    await expect(page.getByText(weeklyName)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(unrelatedName)).toBeVisible()
 
-    const searchTerm = `${testApi.prefix}-FilterCadence`
     const searchResponse = page.waitForResponse(
       resp =>
         resp.request().method() === 'GET' &&
         resp.url().includes('/api/v1/contacts') &&
-        new URL(resp.url()).searchParams.get('search') === searchTerm &&
+        new URL(resp.url()).searchParams.get('search') === markerTerm &&
         !new URL(resp.url()).searchParams.has('ids_only')
     )
-    await searchInput.fill(searchTerm)
+    await searchInput.fill(markerTerm)
     await searchInput.press('Enter')
     await searchResponse
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByText(weeklyName)).toBeVisible({ timeout: 10000 })
     // The search FILTERS: the non-matching contact phase 1 proved present is
     // now absent.
-    await expect(page.getByText(`${testApi.prefix}-Unrelated Zebra`)).not.toBeVisible()
+    await expect(page.getByText(unrelatedName)).not.toBeVisible()
 
     // Verify all 3 contacts visible with "All contacts" (default)
     const filterSelect = page.getByLabel('Filter by cadence')
     await expect(filterSelect).toHaveValue('')
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
+    await expect(page.getByText(weeklyName)).toBeVisible()
+    await expect(page.getByText(monthlyName)).toBeVisible()
+    await expect(page.getByText(noCadenceName)).toBeVisible()
 
     // Select "Has cadence" - should show only contacts with cadence
     const hasCadenceResponse = page.waitForResponse(
@@ -598,9 +591,9 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     await filterSelect.selectOption('has_cadence')
     await hasCadenceResponse
 
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).not.toBeVisible()
+    await expect(page.getByText(weeklyName)).toBeVisible()
+    await expect(page.getByText(monthlyName)).toBeVisible()
+    await expect(page.getByText(noCadenceName)).not.toBeVisible()
 
     // Select "No cadence" - should show only contacts without cadence
     const noCadenceResponse = page.waitForResponse(
@@ -609,17 +602,15 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     await filterSelect.selectOption('no_cadence')
     await noCadenceResponse
 
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).not.toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).not.toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
+    await expect(page.getByText(weeklyName)).not.toBeVisible()
+    await expect(page.getByText(monthlyName)).not.toBeVisible()
+    await expect(page.getByText(noCadenceName)).toBeVisible()
 
     // Reset to "All contacts" - should show all again
     await filterSelect.selectOption('')
 
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
-      timeout: 10000,
-    })
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
+    await expect(page.getByText(weeklyName)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(noCadenceName)).toBeVisible()
   })
 })
 
@@ -765,22 +756,19 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     // contact without a cadence renders the '-' placeholder there, and the
     // cadence value renders as its formatted label. Column resolved by its
     // header position at runtime (no hard-coded cell index).
-    await testApi.seedContacts([
-      { full_name: 'ColDisplay Weekly', cadence: 'weekly', last_contacted_days_ago: 3 },
-      { full_name: 'ColDisplay None' },
-    ])
+    const seeded = await testApi.seedBehavior('CON-061')
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
     const searchInput = page.getByPlaceholder('Search contacts...')
-    await searchInput.fill(`${testApi.prefix}-ColDisplay`)
+    await searchInput.fill(declaredWorldSearch(seeded))
     await searchInput.press('Enter')
 
     const weeklyRow = page.locator('tr', {
-      has: page.getByText(`${testApi.prefix}-ColDisplay Weekly`),
+      has: page.getByText(seeded.entities['with-cadence'].name),
     })
     const noneRow = page.locator('tr', {
-      has: page.getByText(`${testApi.prefix}-ColDisplay None`),
+      has: page.getByText(seeded.entities['without-cadence'].name),
     })
     await expect(weeklyRow).toBeVisible({ timeout: 15000 })
     await expect(noneRow).toBeVisible()
@@ -804,22 +792,17 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     // Two sequential click -> response round trips under real parallel
     // worker load can exceed the default 30s budget; give this test room.
     test.setTimeout(60000)
-    await testApi.seedContacts([
-      {
-        full_name: 'SortNext Contact',
-        cadence: 'weekly',
-        last_contacted_days_ago: 3,
-      },
-    ])
+    const seeded = await testApi.seedBehavior('CON-057')
+    const targetName = seeded.entities['target'].name
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
 
     // Search for our test contact to isolate it
     const searchInput = page.getByPlaceholder('Search contacts...')
-    await searchInput.fill(`${testApi.prefix}-SortNext`)
+    await searchInput.fill(declaredWorldSearch(seeded))
     await searchInput.press('Enter')
-    await expect(page.getByText(`${testApi.prefix}-SortNext Contact`)).toBeVisible()
+    await expect(page.getByText(targetName)).toBeVisible()
 
     // Click Next Contact header - verify sort=contact_by&order=asc is sent to API
     const nextContactHeader = page.getByRole('columnheader').filter({ hasText: 'Next Contact' })
@@ -842,7 +825,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await expect(nextContactHeader).toHaveAttribute('aria-sort', 'descending')
 
     // Contact should still be visible after sort toggling
-    await expect(page.getByText(`${testApi.prefix}-SortNext Contact`)).toBeVisible()
+    await expect(page.getByText(targetName)).toBeVisible()
   })
 
   // spec: CON-057.list-refetches-column-sort-field
@@ -850,7 +833,8 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     // Two sequential click -> response round trips under real parallel
     // worker load can exceed the default 30s budget; give this test room.
     test.setTimeout(60000)
-    await testApi.seedContacts([{ full_name: 'SortResp Contact' }])
+    const seeded = await testApi.seedBehavior('CON-057')
+    const targetName = seeded.entities['target'].name
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
@@ -860,9 +844,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     // Isolate our test contact via search so the sort click reliably
     // produces a fetch we can listen for.
     const searchInput = page.getByPlaceholder('Search contacts...')
-    await searchInput.fill(`${testApi.prefix}-SortResp`)
+    await searchInput.fill(declaredWorldSearch(seeded))
     await searchInput.press('Enter')
-    await expect(page.getByText(`${testApi.prefix}-SortResp Contact`)).toBeVisible()
+    await expect(page.getByText(targetName)).toBeVisible()
 
     // First click → desc (default direction for last_response_at, matching the
     // existing cadence-column convention of "most recent first").
@@ -883,25 +867,23 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await ascResponse
     await expect(lastResponseHeader).toHaveAttribute('aria-sort', 'ascending')
 
-    await expect(page.getByText(`${testApi.prefix}-SortResp Contact`)).toBeVisible()
+    await expect(page.getByText(targetName)).toBeVisible()
   })
 
   // spec: CON-058.page-number-buttons-move, CON-058.previous-next-controls-disable
   test('should show page number buttons and top/bottom pagination when multiple pages exist', async ({
     page,
   }) => {
-    // Create 22 contacts to trigger pagination (default limit is 20)
-    const contacts = Array.from({ length: 22 }, (_, i) => ({
-      full_name: `Paginated Contact ${String(i).padStart(2, '0')}`,
-    }))
-    await testApi.seedContacts(contacts)
+    // The declared fixture is 22 contacts, two past the twenty-row default page
+    // size, so page 2 holds exactly two rows.
+    const seeded = await testApi.seedBehavior('CON-058')
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
 
     // Search for our test contacts to isolate them
     const searchInput = page.getByPlaceholder('Search contacts...')
-    await searchInput.fill(`${testApi.prefix}-Paginated`)
+    await searchInput.fill(declaredWorldSearch(seeded))
     const searchResponse = page.waitForResponse(
       resp => resp.url().includes('/api/v1/contacts') && resp.url().includes('search=')
     )

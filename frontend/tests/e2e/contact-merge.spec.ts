@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import type { APIRequestContext, Page } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import { createTestAPI, declaredWorldSearch, TestAPI } from './helpers/test-api'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
@@ -9,26 +9,36 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 }
 
-// Create a contact directly (the seed endpoint does not take a birthday), so a
-// merge test can build target/source pairs that conflict on cadence, location,
-// AND birthday. Name is prefixed for cleanup.
-async function seedMergeContact(
-  request: APIRequestContext,
-  testApi: TestAPI,
-  input: { fullName: string; cadence: string; location: string; birthday: string }
-): Promise<string> {
-  const response = await request.post(`${API_BASE_URL}/api/v1/contacts`, {
+interface ContactRead {
+  location?: string
+  birthday?: string
+  methods?: { type: string; value: string }[]
+}
+
+// Read a declared contact back through the API. The declaration owns every
+// generated value (a location is namespace-prefixed, a birthday lands on a
+// leap-safe year, a phone comes from the namespace's own block), so an assertion
+// that needs one of them reads it rather than restating a literal that would
+// silently stop matching.
+async function readContact(request: APIRequestContext, contactId: string): Promise<ContactRead> {
+  const response = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
     headers: API_HEADERS,
-    data: {
-      full_name: `${testApi.prefix}-${input.fullName}`,
-      cadence: input.cadence,
-      location: input.location,
-      birthday: input.birthday,
-    },
   })
   expect(response.ok()).toBeTruthy()
-  const body = await response.json()
-  return (body.data as { id: string }).id
+  return (await response.json()).data as ContactRead
+}
+
+// The merge modal's own birthday-button label: the same conversion
+// merge-contact-modal.tsx applies, so the label is derived rather than guessed.
+// The stored year comes from the generator's leap-safe birth year, so it must
+// never be hard-coded.
+function mergeBirthdayLabel(birthday: string | undefined): string {
+  expect(birthday, 'the declared contact must carry a birthday').toBeTruthy()
+  return new Date(birthday as string).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
 }
 
 // The merge modal is a labeled dialog (role="dialog", accessible name
@@ -37,11 +47,12 @@ function mergeModal(page: Page) {
   return page.getByRole('dialog', { name: 'Merge Contacts' })
 }
 
-// Open the source selector, search by the worker prefix, and pick the named
+// Open the source selector, search the declared world (which reaches the target
+// too, so its ABSENCE from the options is a real claim), and pick the named
 // source from the selector's listbox options.
-async function selectMergeSource(page: Page, prefix: string, sourceName: string) {
+async function selectMergeSource(page: Page, searchTerm: string, sourceName: string) {
   await page.getByText('Search for a contact to merge...').click()
-  await page.getByPlaceholder('Search for a contact to merge...').fill(prefix)
+  await page.getByPlaceholder('Search for a contact to merge...').fill(searchTerm)
   const sourceOption = page.getByRole('option', { name: sourceName })
   await expect(sourceOption).toBeVisible({ timeout: 5000 })
   await sourceOption.click()
@@ -60,15 +71,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
   test('should display target contact as "Keeping"', async ({ page }) => {
     // spec: CON-043.current-contact-marked-kept
-    // Create a contact to be the merge target
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Target Contact Display',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Target Contact Display`
+    const seeded = await testApi.seedBehavior('CON-043')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -86,21 +91,10 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
   test('should search and select source contact', async ({ page }) => {
     // spec: CON-043.current-contact-marked-kept, CON-043.selecting-source-loads-preview
-    // Create target and source contacts
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Select Source Target',
-        cadence: 'monthly',
-      },
-      {
-        full_name: 'Select Source Contact',
-        cadence: 'weekly',
-      },
-    ])
-
-    const targetId = ids[0]
-    const targetName = `${testApi.prefix}-Select Source Target`
-    const sourceName = `${testApi.prefix}-Select Source Contact`
+    const seeded = await testApi.seedBehavior('CON-043')
+    const targetId = seeded.entities['target'].id
+    const targetName = seeded.entities['target'].name
+    const sourceName = seeded.entities['source'].name
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -112,7 +106,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // Search for the source contact and wait for its option to appear
     await page.getByText('Search for a contact to merge...').click()
-    await page.getByPlaceholder('Search for a contact to merge...').fill(testApi.prefix)
+    await page
+      .getByPlaceholder('Search for a contact to merge...')
+      .fill(declaredWorldSearch(seeded))
     const sourceOption = page.getByRole('option', { name: sourceName })
     await expect(sourceOption).toBeVisible({ timeout: 5000 })
 
@@ -131,23 +127,23 @@ test.describe('Contact Merge @area:contact-merge', () => {
     // spec: CON-043.conflicting-fields-cadence-location
     // Conflicts span all three fields the spec names (cadence, location,
     // birthday), so the default-keeps-target proof covers the full clause, not
-    // just location. Seeded via direct POST because the seed endpoint has no
-    // birthday field.
-    const targetId = await seedMergeContact(request, testApi, {
-      fullName: 'Toggle Target',
-      cadence: 'monthly',
-      location: 'New York',
-      birthday: '1990-03-15',
-    })
-    await seedMergeContact(request, testApi, {
-      fullName: 'Toggle Source',
-      cadence: 'weekly',
-      location: 'San Francisco',
-      birthday: '1985-07-20',
-    })
+    // just location.
+    const seeded = await testApi.seedBehavior('CON-043')
+    const targetId = seeded.entities['target'].id
+    const targetName = seeded.entities['target'].name
+    const sourceName = seeded.entities['source'].name
 
-    const targetName = `${testApi.prefix}-Toggle Target`
-    const sourceName = `${testApi.prefix}-Toggle Source`
+    // The button labels come from the STORED values, which the declaration owns:
+    // a location is namespace-prefixed and a birthday lands on the generator's
+    // leap-safe birth year, so neither literal can be written here.
+    const target = await readContact(request, targetId)
+    const source = await readContact(request, seeded.entities['source'].id)
+    const targetLocation = target.location as string
+    const sourceLocation = source.location as string
+    expect(targetLocation, 'the declared target must carry a location').toBeTruthy()
+    expect(sourceLocation, 'the declared source must carry a location').toBeTruthy()
+    const targetBirthdayText = mergeBirthdayLabel(target.birthday)
+    const sourceBirthdayText = mergeBirthdayLabel(source.birthday)
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -157,7 +153,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select source contact
-    await selectMergeSource(page, testApi.prefix, sourceName)
+    await selectMergeSource(page, declaredWorldSearch(seeded), sourceName)
 
     // Wait for conflicts section
     await expect(page.getByText('Resolve Conflicts')).toBeVisible({ timeout: 5000 })
@@ -167,17 +163,12 @@ test.describe('Contact Merge @area:contact-merge', () => {
     // exposed as aria-pressed on the toggle buttons. The birthday label is
     // computed the same way the modal formats it, so the assertion is stable
     // across the runner's timezone.
-    const targetBirthdayText = new Date('1990-03-15').toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
     await expect(page.getByRole('button', { name: 'Monthly' })).toHaveAttribute(
       'aria-pressed',
       'true'
     )
-    const nyButton = page.getByRole('button', { name: 'New York' })
-    await expect(nyButton).toHaveAttribute('aria-pressed', 'true')
+    const targetLocationButton = page.getByRole('button', { name: targetLocation })
+    await expect(targetLocationButton).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByRole('button', { name: targetBirthdayText })).toHaveAttribute(
       'aria-pressed',
       'true'
@@ -185,11 +176,11 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // Each field toggles to its SOURCE value independently — location, cadence,
     // and birthday.
-    const sfButton = page.getByRole('button', { name: 'San Francisco' })
-    await expect(sfButton).toBeVisible()
-    await sfButton.click()
-    await expect(sfButton).toHaveAttribute('aria-pressed', 'true')
-    await expect(nyButton).toHaveAttribute('aria-pressed', 'false')
+    const sourceLocationButton = page.getByRole('button', { name: sourceLocation })
+    await expect(sourceLocationButton).toBeVisible()
+    await sourceLocationButton.click()
+    await expect(sourceLocationButton).toHaveAttribute('aria-pressed', 'true')
+    await expect(targetLocationButton).toHaveAttribute('aria-pressed', 'false')
 
     const weeklyButton = page.getByRole('button', { name: 'Weekly' })
     await weeklyButton.click()
@@ -199,11 +190,6 @@ test.describe('Contact Merge @area:contact-merge', () => {
       'false'
     )
 
-    const sourceBirthdayText = new Date('1985-07-20').toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
     const sourceBirthdayButton = page.getByRole('button', { name: sourceBirthdayText })
     await sourceBirthdayButton.click()
     await expect(sourceBirthdayButton).toHaveAttribute('aria-pressed', 'true')
@@ -215,19 +201,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
   test('should edit merged contact name', async ({ page }) => {
     // spec: CON-043.merged-name-editable
-    // Create contacts
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Name Edit Target',
-      },
-      {
-        full_name: 'Name Edit Source',
-      },
-    ])
-
-    const targetId = ids[0]
-    const targetName = `${testApi.prefix}-Name Edit Target`
-    const sourceName = `${testApi.prefix}-Name Edit Source`
+    const seeded = await testApi.seedBehavior('CON-043')
+    const targetId = seeded.entities['target'].id
+    const targetName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -258,14 +234,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
     // spec: CON-043.merged-name-editable
     // The editable-name contract's discard path: Escape must not adopt the
     // typed name (no accidental rename baked into the merge).
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Escape Edit Test',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Escape Edit Test`
+    const seeded = await testApi.seedBehavior('CON-043')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -303,14 +274,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
     // gated on an open modal, so Escape today closes the modal AND navigates
     // back to the list in the same press — a double-action to fix before an
     // Escape-dismisses-in-place assertion can hold.
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Dismiss Modal Test',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Dismiss Modal Test`
+    const seeded = await testApi.seedBehavior('CON-043')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -341,25 +307,20 @@ test.describe('Contact Merge @area:contact-merge', () => {
     expect(mergeFired).toBe(false)
   })
 
-  test('should successfully merge contacts', async ({ page }) => {
+  test('should successfully merge contacts', async ({ page, request }) => {
     // spec: CON-043.outcome-reported-auto-dismissed
-    // Create contacts with some methods
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Merge Complete Target',
-        cadence: 'monthly',
-        methods: [{ type: 'email', value: 'target@example.com', is_primary: true }],
-      },
-      {
-        full_name: 'Merge Complete Source',
-        methods: [{ type: 'phone', value: '+1-555-0100' }],
-      },
-    ])
+    const seeded = await testApi.seedBehavior('CON-043')
+    const targetId = seeded.entities['target'].id
+    const sourceId = seeded.entities['source'].id
+    const targetName = seeded.entities['target'].name
+    const sourceName = seeded.entities['source'].name
 
-    const targetId = ids[0]
-    const sourceId = ids[1]
-    const targetName = `${testApi.prefix}-Merge Complete Target`
-    const sourceName = `${testApi.prefix}-Merge Complete Source`
+    // The source's phone comes from the namespace's own number block, so its
+    // value is read BEFORE the merge and asserted afterwards. Hard-coding a
+    // literal here would fail as a real bug rather than a flake.
+    const source = await readContact(request, sourceId)
+    const sourcePhone = source.methods?.find(m => m.type === 'phone')?.value
+    expect(sourcePhone, 'the declared source must carry a phone to transfer').toBeTruthy()
 
     // Seed note for source contact (notes are in separate table now)
     await testApi.seedContactNote(sourceId, 'Source notes to transfer')
@@ -372,7 +333,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select source contact
-    await selectMergeSource(page, testApi.prefix, sourceName)
+    await selectMergeSource(page, declaredWorldSearch(seeded), sourceName)
 
     // Wait for preview to load
     await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 10000 })
@@ -403,7 +364,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await expect(mergeModal(page)).not.toBeVisible()
 
     // Verify source contact's phone was added
-    await expect(page.getByText('+1-555-0100')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(sourcePhone as string)).toBeVisible({ timeout: 5000 })
 
     // Verify source contact's notes were transferred
     await expect(page.getByText('Source notes to transfer')).toBeVisible()
@@ -414,19 +375,12 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
   test('should show quick-fill name option when source has different name', async ({ page }) => {
     // spec: CON-043.merged-name-editable
-    // Create contacts with different names
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'QuickFill Target',
-      },
-      {
-        full_name: 'QuickFill Source Name',
-      },
-    ])
-
-    const targetId = ids[0]
-    const targetName = `${testApi.prefix}-QuickFill Target`
-    const sourceName = `${testApi.prefix}-QuickFill Source Name`
+    // The declared target and source render different names, which is what makes
+    // the quick-fill affordance appear at all.
+    const seeded = await testApi.seedBehavior('CON-043')
+    const targetId = seeded.entities['target'].id
+    const targetName = seeded.entities['target'].name
+    const sourceName = seeded.entities['source'].name
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -436,7 +390,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select source contact
-    await selectMergeSource(page, testApi.prefix, sourceName)
+    await selectMergeSource(page, declaredWorldSearch(seeded), sourceName)
 
     // Wait for preview
     await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 5000 })
@@ -456,15 +410,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
   test('should disable merge button when no source selected', async ({ page }) => {
     // spec: CON-043.merge-cannot-submit-until-ready
-    // Create a contact
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Disabled Button Test',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Disabled Button Test`
+    const seeded = await testApi.seedBehavior('CON-043')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -481,13 +429,10 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
   test('keeps the merge submit disabled while the preview is loading', async ({ page }) => {
     // spec: CON-043.merge-cannot-submit-until-ready
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Preview Loading Target' },
-      { full_name: 'Preview Loading Source' },
-    ])
-    const targetId = ids[0]
-    const targetName = `${testApi.prefix}-Preview Loading Target`
-    const sourceName = `${testApi.prefix}-Preview Loading Source`
+    const seeded = await testApi.seedBehavior('CON-043')
+    const targetId = seeded.entities['target'].id
+    const targetName = seeded.entities['target'].name
+    const sourceName = seeded.entities['source'].name
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -502,7 +447,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     })
 
     // Select the source.
-    await selectMergeSource(page, testApi.prefix, sourceName)
+    await selectMergeSource(page, declaredWorldSearch(seeded), sourceName)
 
     // While the preview loads, the submit cannot be pressed.
     const mergeButton = page.getByRole('button', { name: /Merge Contacts/i })
@@ -516,13 +461,10 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
   test('keeps the merge submit disabled while the merge is in flight', async ({ page }) => {
     // spec: CON-043.merge-cannot-submit-until-ready
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'In Flight Target' },
-      { full_name: 'In Flight Source' },
-    ])
-    const targetId = ids[0]
-    const targetName = `${testApi.prefix}-In Flight Target`
-    const sourceName = `${testApi.prefix}-In Flight Source`
+    const seeded = await testApi.seedBehavior('CON-043')
+    const targetId = seeded.entities['target'].id
+    const targetName = seeded.entities['target'].name
+    const sourceName = seeded.entities['source'].name
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -531,7 +473,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select the source and wait for the preview to settle.
-    await selectMergeSource(page, testApi.prefix, sourceName)
+    await selectMergeSource(page, declaredWorldSearch(seeded), sourceName)
     await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 10000 })
 
     const mergeButton = page.getByRole('button', { name: /Merge Contacts/i })

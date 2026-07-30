@@ -191,6 +191,27 @@ export interface SeedBehaviorResult {
   entities: Record<string, SeededEntity>
 }
 
+/**
+ * The contact-search term that reaches EVERY contact of one declared world, and
+ * only that world.
+ *
+ * Declared names are `synth-<namespace>-<display>`, and the contact list search
+ * is PostgreSQL full-text search, so the term has to be built out of lexemes the
+ * STORED name actually tokenizes into. Two forms that look right do not work:
+ * the bare test prefix (`w0-1712…`) tokenizes its numeric segment as a SIGNED
+ * integer (`-1712…`) which no stored name carries, and the hyphenated namespace
+ * (`synth-w0-1712…-c1-s1`) asks for compound lexemes (`c1-s1`) that the stored
+ * name splits differently. Feeding the segments as separate words asks only for
+ * the parts, all of which are present — and `plainto_tsquery` ANDs them, so a
+ * neighbouring namespace (`…-c2`, `…-c10`, another worker, another timestamp)
+ * misses at least one term and is excluded.
+ *
+ * Extra terms may be appended (e.g. a NameMarker token) to narrow further.
+ */
+export function declaredWorldSearch(seeded: SeedBehaviorResult, ...extraTerms: string[]): string {
+  return ['synth', ...seeded.namespace.split('-'), ...extraTerms].join(' ')
+}
+
 export type NamespaceCleanupStatus = 'cleaned' | 'busy' | 'pending' | 'error'
 
 export interface NamespaceCleanupOutcome {
