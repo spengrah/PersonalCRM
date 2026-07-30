@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import type { APIRequestContext, Page } from '@playwright/test'
-import { createTestAPI, declaredWorldSearch, TestAPI } from './helpers/test-api'
+import { createTestAPI, declaredWorldNamePrefix, TestAPI } from './helpers/test-api'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
@@ -50,6 +50,10 @@ function mergeModal(page: Page) {
 // Open the source selector, search the declared world (which reaches the target
 // too, so its ABSENCE from the options is a real claim), and pick the named
 // source from the selector's listbox options.
+//
+// The term is the world's NAME PREFIX, not its full-text search term: this
+// selector filters client-side by plain substring over the contacts it has
+// already loaded, so a space-separated tsquery term matches nothing here.
 async function selectMergeSource(page: Page, searchTerm: string, sourceName: string) {
   await page.getByText('Search for a contact to merge...').click()
   await page.getByPlaceholder('Search for a contact to merge...').fill(searchTerm)
@@ -108,7 +112,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByText('Search for a contact to merge...').click()
     await page
       .getByPlaceholder('Search for a contact to merge...')
-      .fill(declaredWorldSearch(seeded))
+      .fill(declaredWorldNamePrefix(seeded))
     const sourceOption = page.getByRole('option', { name: sourceName })
     await expect(sourceOption).toBeVisible({ timeout: 5000 })
 
@@ -153,7 +157,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select source contact
-    await selectMergeSource(page, declaredWorldSearch(seeded), sourceName)
+    await selectMergeSource(page, declaredWorldNamePrefix(seeded), sourceName)
 
     // Wait for conflicts section
     await expect(page.getByText('Resolve Conflicts')).toBeVisible({ timeout: 5000 })
@@ -333,7 +337,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select source contact
-    await selectMergeSource(page, declaredWorldSearch(seeded), sourceName)
+    await selectMergeSource(page, declaredWorldNamePrefix(seeded), sourceName)
 
     // Wait for preview to load
     await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 10000 })
@@ -390,7 +394,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select source contact
-    await selectMergeSource(page, declaredWorldSearch(seeded), sourceName)
+    await selectMergeSource(page, declaredWorldNamePrefix(seeded), sourceName)
 
     // Wait for preview
     await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 5000 })
@@ -447,7 +451,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     })
 
     // Select the source.
-    await selectMergeSource(page, declaredWorldSearch(seeded), sourceName)
+    await selectMergeSource(page, declaredWorldNamePrefix(seeded), sourceName)
 
     // While the preview loads, the submit cannot be pressed.
     const mergeButton = page.getByRole('button', { name: /Merge Contacts/i })
@@ -473,7 +477,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select the source and wait for the preview to settle.
-    await selectMergeSource(page, declaredWorldSearch(seeded), sourceName)
+    await selectMergeSource(page, declaredWorldNamePrefix(seeded), sourceName)
     await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 10000 })
 
     const mergeButton = page.getByRole('button', { name: /Merge Contacts/i })

@@ -222,7 +222,10 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const seeded = await testApi.seedBehavior('CON-041')
     const fullName = seeded.entities['target'].name
 
-    await page.goto('/contacts')
+    // The list is scoped to this world by search: the default order is cadence
+    // DESCENDING, which files a cadence-less contact last, so first-page
+    // visibility is not something to rely on in a shared database.
+    await page.goto(`/contacts?search=${encodeURIComponent(declaredWorldSearch(seeded))}`)
     await page.waitForLoadState('domcontentloaded')
 
     // Find the row and open context menu
@@ -250,7 +253,10 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const seeded = await testApi.seedBehavior('CON-041')
     const fullName = seeded.entities['target'].name
 
-    await page.goto('/contacts')
+    // The list is scoped to this world by search: the default order is cadence
+    // DESCENDING, which files a cadence-less contact last, so first-page
+    // visibility is not something to rely on in a shared database.
+    await page.goto(`/contacts?search=${encodeURIComponent(declaredWorldSearch(seeded))}`)
     await page.waitForLoadState('domcontentloaded')
 
     // Find the row and open context menu
@@ -479,7 +485,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const contactId = seeded.entities['target'].id
     const fullName = seeded.entities['target'].name
 
-    await page.goto('/contacts')
+    // Scoped to this world by search: the shared database holds many other
+    // cadence-bearing contacts, so the seeded row's page is not predictable.
+    await page.goto(`/contacts?search=${encodeURIComponent(declaredWorldSearch(seeded))}`)
     await page.waitForLoadState('domcontentloaded')
 
     const row = page.locator('tr', { has: page.getByText(fullName) })
