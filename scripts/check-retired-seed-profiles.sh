@@ -10,10 +10,19 @@
 # A bare "zero hits in the tree" scan CANNOT gate this, because some occurrences
 # must survive: the refusal test names both retired literals, and the retirement
 # rationale plus the dated design docs describe what was removed. A scan that
-# cannot tell those from a stale operator instruction is not a gate. So every
-# permitted occurrence is enumerated below WITH ITS REASON, anything outside the
-# allowlist fails, and an allowlisted path that no longer matches ALSO fails —
-# the allowlist cannot outlive its subject.
+# cannot tell those from a stale operator instruction is not a gate. So the
+# allowlist below permits a COUNT of matching lines per file WITH A REASON, which
+# makes permission per occurrence rather than per file:
+#
+#   - a match in an unlisted file fails;
+#   - MORE matches than the count in a listed file fails, so an allowlisted file
+#     cannot absorb a newly added stale instruction behind its real history;
+#   - FEWER — including zero — fails too: the allowlist cannot outlive its
+#     subject.
+#
+# A count cannot tell one permitted occurrence from another, so a same-count swap
+# inside an allowlisted file is beyond its reach; reviewing that file's own diff
+# is what covers that.
 #
 # Scope is the tracked tree (`git ls-files`): that is what ships, and it excludes
 # build output, node_modules, linked worktrees and the gitignored plan/progress
@@ -24,8 +33,8 @@
 # Backend Quality job, which the `backend` path group gates (scripts/** and
 # Makefile are in it).
 #
-# Exits 0 when every match is allowlisted and every allowlist entry still
-# matches, 1 otherwise.
+# Exits 0 when every match is allowlisted and every allowlist entry still matches
+# exactly as often as it claims, 1 otherwise.
 
 set -euo pipefail
 
@@ -39,8 +48,11 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
-# Retired names, in the shapes they actually appear in. Deliberately NOT the bare
-# word `dev`, which is a legitimate everyday word in this tree.
+# Retired names, in the shapes a stale instruction actually takes. Deliberately
+# NOT the bare word `dev`, which is legitimate everyday English in this tree
+# (`dev-seed`, `make dev`, `development`, `devDependencies`, `/home/dev/...`):
+# every pattern below pins `dev` to a profile flag, a profile assignment, or the
+# retired world's prose name.
 PATTERNS=(
   # Deleted Go identifiers.
   'ProfileDev\b'
@@ -48,12 +60,15 @@ PATTERNS=(
   'runCatalogProfile\b'
   # The retired world name in any spelling.
   'prod-?shaped'
-  # Retired operator command, script default, and summary/provenance forms.
-  '--profile[ =]+(dev|prod-shaped)\b'
-  '(DEV_SEED|STAGING_RESET|TOURS_SEED)_PROFILE(:-|=)"?(dev|prod-shaped)\b'
-  'profile=(dev|prod-shaped)\b'
-  # The retired world's prose name, bare or quoted (`dev`, "dev", 'dev').
-  '[[:punct:]]?dev[[:punct:]]? synthetic world'
+  # A retired value on a profile flag, quoted or bare, separated by spaces or
+  # `=`: --profile dev, --profile=dev, --profile "dev", --profile 'prod-shaped'.
+  '--profile[[:space:]=]+[[:punct:]]?(dev|prod-shaped)\b'
+  # A retired value assigned to a profile key, in env, shell-default and YAML
+  # form: SEED_PROFILE=dev, ${TOURS_SEED_PROFILE:-dev}, TOURS_SEED_PROFILE: dev.
+  '[[:alnum:]_]*profile[[:space:]]*(:-|:|=)[[:space:]]*[[:punct:]]?(dev|prod-shaped)\b'
+  # The retired world in prose, bare or quoted: the dev profile, the `dev`
+  # world, the "dev" synthetic world.
+  '[[:punct:]]?dev[[:punct:]]?[[:space:]]+(synthetic[[:space:]]+)?(world|profile)\b'
 )
 
 COMBINED=""
@@ -61,17 +76,23 @@ for p in "${PATTERNS[@]}"; do
   COMBINED="${COMBINED:+$COMBINED|}$p"
 done
 
-# Allowlist: `path|reason`, one per line. Keep it NARROW — an entry here is a
-# statement that this exact file is supposed to name a retired profile.
-ALLOWLIST='scripts/check-retired-seed-profiles.sh|this guard names the retired profiles in its own pattern list
-scripts/check-retired-seed-profiles.test.sh|the guard self-test feeds retired literals to the guard as fixtures
-backend/internal/synthetic/profiles_test.go|TestProfileParams asserts both retired names are REFUSED with an unknown-profile error
-.ai/patterns/synthetic-seed-toolkit.md|records what the retired catalog profiles were and why they were deleted
-.ai/spec/2026-06-07-synthetic-seed-generator-design.md|dated design doc, superseded in place
-.ai/spec/2026-06-07-staging-environment-design.md|dated design doc, superseded in place
-.ai/spec/2026-07-08-piece4-track-b-agentic-qa-harness-design.md|dated design doc, superseded in place
-.ai/spec/2026-07-12-langfuse-as-qa-ssot-plan.md|dated design doc, superseded in place
-.ai/spec/2026-07-13-synthetic-seed-fidelity-audit.md|dated design doc, superseded in place'
+# Every grep below shares these flags, or the tree scan and the per-file counts
+# would disagree about what a match is. `-i` so `PROFILE:` and `profile:` are one
+# shape; `-I` so an unreadable binary cannot contribute a match.
+MATCH_FLAGS='-IiE'
+
+# Allowlist: `path|expected matching lines|reason`, one per line. Keep it
+# NARROW — an entry here is a statement that this exact file is supposed to name
+# a retired profile, on exactly that many lines.
+ALLOWLIST='scripts/check-retired-seed-profiles.sh|12|this guard names the retired profiles in its own pattern list
+scripts/check-retired-seed-profiles.test.sh|14|the guard self-test feeds retired literals to the guard as fixtures
+backend/internal/synthetic/profiles_test.go|2|TestProfileParams asserts both retired names are REFUSED with an unknown-profile error
+.ai/patterns/synthetic-seed-toolkit.md|1|records what the retired catalog profiles were and why they were deleted
+.ai/spec/2026-06-07-synthetic-seed-generator-design.md|3|dated design doc, superseded in place
+.ai/spec/2026-06-07-staging-environment-design.md|1|dated design doc, superseded in place
+.ai/spec/2026-07-08-piece4-track-b-agentic-qa-harness-design.md|1|dated design doc, superseded in place
+.ai/spec/2026-07-12-langfuse-as-qa-ssot-plan.md|1|dated design doc, superseded in place
+.ai/spec/2026-07-13-synthetic-seed-fidelity-audit.md|2|dated design doc, superseded in place'
 
 # History is permitted only when it SAYS it is history: an allowlisted
 # `.ai/spec/` doc must carry the supersession note, so a dated doc cannot quietly
@@ -87,17 +108,14 @@ if [ -z "$(git ls-files | head -n 1)" ]; then
   exit 1
 fi
 
-HITS="$(git ls-files -z | xargs -0 grep -InHE "$COMBINED" -- 2>/dev/null || true)"
+HITS="$(git ls-files -z | xargs -0 grep -nH "$MATCH_FLAGS" "$COMBINED" -- 2>/dev/null || true)"
 
 STALE=""
-ALLOWED_COUNT=0
 if [ -n "$HITS" ]; then
   while IFS= read -r hit; do
     [ -n "$hit" ] || continue
     file="${hit%%:*}"
-    if is_allowed "$file"; then
-      ALLOWED_COUNT=$((ALLOWED_COUNT + 1))
-    else
+    if ! is_allowed "$file"; then
       STALE="${STALE}${hit}
 "
     fi
@@ -119,22 +137,50 @@ if [ -n "$STALE" ]; then
   FAILED=1
 fi
 
-# An allowlist entry whose subject is gone is a hole in the gate, not a comment.
+# An allowlist entry whose subject is gone is a hole in the gate, not a comment;
+# an entry that matches MORE often than it claims is the same hole, opened by an
+# occurrence nobody vouched for.
+ALLOWED_COUNT=0
 while IFS= read -r entry; do
   [ -n "$entry" ] || continue
   path="${entry%%|*}"
-  reason="${entry#*|}"
+  rest="${entry#*|}"
+  expected="${rest%%|*}"
+  reason="${rest#*|}"
+  # A non-numeric count would make the comparison below return 2, which bash
+  # reads as "false" — the count check would silently stop running.
+  case "$expected" in
+    '' | *[!0-9]*)
+      echo "❌ retired-seed-profile guard: malformed ALLOWLIST entry, want 'path|count|reason': $entry" >&2
+      FAILED=1
+      continue
+      ;;
+  esac
   if [ ! -f "$path" ]; then
     echo "❌ retired-seed-profile guard: allowlisted path no longer exists: $path ($reason)" >&2
     echo "   Remove the entry." >&2
     FAILED=1
     continue
   fi
-  if ! grep -qIE "$COMBINED" -- "$path"; then
+  actual="$(grep -c "$MATCH_FLAGS" "$COMBINED" -- "$path" || true)"
+  ALLOWED_COUNT=$((ALLOWED_COUNT + actual))
+  if [ "$actual" -eq 0 ]; then
     echo "❌ retired-seed-profile guard: allowlisted path no longer names a retired profile: $path" >&2
     echo "   Remove the entry — a stale allowlist silently widens the gate." >&2
     FAILED=1
     continue
+  fi
+  if [ "$actual" -ne "$expected" ]; then
+    echo "❌ retired-seed-profile guard: $path names a retired profile on $actual line(s)," >&2
+    echo "   but the allowlist expects $expected:" >&2
+    grep -n "$MATCH_FLAGS" "$COMBINED" -- "$path" | sed 's/^/   /' >&2
+    if [ "$actual" -gt "$expected" ]; then
+      echo "   An occurrence nobody vouched for appeared in an allowlisted file. If it is a" >&2
+      echo "   stale instruction, fix it; if it is more permitted history, raise the count." >&2
+    else
+      echo "   A vouched-for occurrence is gone. Lower the count." >&2
+    fi
+    FAILED=1
   fi
   case "$path" in
     .ai/spec/*)

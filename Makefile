@@ -638,10 +638,12 @@ lint-ingest-registry:
 	@$(REPO_ROOT)/scripts/check-ingest-registry.sh
 
 # Retired-seed-profile guard: fails if the tracked tree still names one of the
-# two deleted catalog seed profiles outside a narrow allowlist of files that are
-# SUPPOSED to name them (the refusal test, the retirement rationale, dated design
-# docs). The guard carries the names; naming them here would trip it. Falsified
-# by scripts/check-retired-seed-profiles.test.sh.
+# two deleted catalog seed profiles outside a narrow allowlist of counted
+# occurrences in the files that are SUPPOSED to name them (the refusal test, the
+# retirement rationale, dated design docs) — counted, so an allowlisted file
+# cannot absorb a newly added stale instruction. The guard carries the names;
+# naming them here would trip it. Falsified by
+# scripts/check-retired-seed-profiles.test.sh.
 lint-retired-seed-profiles:
 	@$(REPO_ROOT)/scripts/check-retired-seed-profiles.sh
 
