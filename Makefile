@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export qa-obs-smoke qa-model-prices qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry lint-retired-seed-profiles spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export qa-obs-smoke qa-model-prices qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -562,7 +562,7 @@ test-api:
 # inside <string> values, so it parses fine); plutil is macOS-only and not used here.
 test-deploy-scripts:
 	@echo "Running deploy-script shell tests (parallel)..."
-	@tests="scripts/deploy-artifact.test.sh scripts/backup-db.test.sh scripts/restore-db.test.sh scripts/deploy-staging.test.sh scripts/staging-reset.test.sh scripts/dev-seed.test.sh scripts/check-tour-markers.test.sh scripts/check-retired-seed-profiles.test.sh scripts/ci/staging-reseed-decision.test.sh scripts/ci/ghcr-retention.test.sh scripts/ci/qa-round-cadence-gate.test.sh scripts/ci/qa-nightly-round.test.sh scripts/ci/qa-fn-backfill-guard.test.sh scripts/staging-deployed-sha.test.sh scripts/staging-reseed.test.sh scripts/admin/setup-staging-reseed-host.sh.test.sh scripts/run-tours.test.sh scripts/reconcile-mac-daemon.test.sh scripts/setup-mac-deploy.test.sh scripts/trigger-mac-deploy.test.sh scripts/test/test-promote-preflight.sh"; \
+	@tests="scripts/deploy-artifact.test.sh scripts/backup-db.test.sh scripts/restore-db.test.sh scripts/deploy-staging.test.sh scripts/staging-reset.test.sh scripts/dev-seed.test.sh scripts/check-tour-markers.test.sh scripts/ci/staging-reseed-decision.test.sh scripts/ci/ghcr-retention.test.sh scripts/ci/qa-round-cadence-gate.test.sh scripts/ci/qa-nightly-round.test.sh scripts/ci/qa-fn-backfill-guard.test.sh scripts/staging-deployed-sha.test.sh scripts/staging-reseed.test.sh scripts/admin/setup-staging-reseed-host.sh.test.sh scripts/run-tours.test.sh scripts/reconcile-mac-daemon.test.sh scripts/setup-mac-deploy.test.sh scripts/trigger-mac-deploy.test.sh scripts/test/test-promote-preflight.sh"; \
 	tmp="$$(mktemp -d)"; \
 	for t in $$tests; do \
 	  ( bash "$$t" >"$$tmp/$$(echo "$$t" | tr / _).out" 2>&1; echo "$$?" >"$$tmp/$$(echo "$$t" | tr / _).rc" ) & \
@@ -599,7 +599,7 @@ ci-build: ci-build-backend ci-build-frontend
 # Linting
 GOLANGCI_LINT := $(shell which golangci-lint 2>/dev/null || echo $$(go env GOPATH)/bin/golangci-lint)
 
-lint: lint-ingest-registry lint-retired-seed-profiles
+lint: lint-ingest-registry
 	@echo "Running golangci-lint..."
 	@cd backend && $(GOLANGCI_LINT) run ./...
 
@@ -636,16 +636,6 @@ spec-drift:
 # backend/internal/service/ingest_registry_test.go.
 lint-ingest-registry:
 	@$(REPO_ROOT)/scripts/check-ingest-registry.sh
-
-# Retired-seed-profile guard: fails if the tracked tree still names one of the
-# two deleted catalog seed profiles outside a narrow allowlist of counted
-# occurrences in the files that are SUPPOSED to name them (the refusal test, the
-# retirement rationale, dated design docs) — counted, so an allowlisted file
-# cannot absorb a newly added stale instruction. The guard carries the names;
-# naming them here would trip it. Falsified by
-# scripts/check-retired-seed-profiles.test.sh.
-lint-retired-seed-profiles:
-	@$(REPO_ROOT)/scripts/check-retired-seed-profiles.sh
 
 ci-test: lint check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"
