@@ -122,6 +122,7 @@ type contactPlan struct {
 	history         *int
 	nameEdge        string
 	nameMarker      *string
+	explicitNameSet bool
 	explicitGiven   string
 	explicitSurname string
 	sameNameAs      string
@@ -296,6 +297,7 @@ func Location(s string) ContactProp {
 // registration time.
 func ExplicitName(given, surname string) ContactProp {
 	return func(p *contactPlan) {
+		p.explicitNameSet = true
 		p.explicitGiven, p.explicitSurname = given, surname
 	}
 }
@@ -428,7 +430,7 @@ func (p *contactPlan) validate() error {
 	if p.location != nil && strings.TrimSpace(*p.location) == "" {
 		return fmt.Errorf("contact %q: Location must be non-empty — the service normalizes a blank location away, silently contradicting a non-nil Location postcondition", p.name)
 	}
-	if p.explicitGiven != "" || p.explicitSurname != "" {
+	if p.explicitNameSet {
 		if strings.TrimSpace(p.explicitGiven) == "" || strings.TrimSpace(p.explicitSurname) == "" {
 			return fmt.Errorf("contact %q: ExplicitName needs BOTH a given name and a surname — a half-pinned name is not the literal the caller asked for", p.name)
 		}
@@ -650,7 +652,7 @@ func validateEntityOrder(entities []Entity) error {
 		if err := e.validate(); err != nil {
 			return err
 		}
-		if p, ok := e.(*contactPlan); ok && p.explicitGiven != "" {
+		if p, ok := e.(*contactPlan); ok && p.explicitNameSet {
 			display := p.explicitGiven + " " + p.explicitSurname
 			if prior, dup := explicitNames[display]; dup {
 				return fmt.Errorf("entities %q and %q both declare the explicit name %q — ExplicitName skips the display-name dedupe, so the two would render as one name", prior, p.name, display)

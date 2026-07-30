@@ -349,12 +349,19 @@ func TestLocation_PostconditionCarriesTheRawDeclaredLabel(t *testing.T) {
 // --- explicit names + markers -----------------------------------------------
 
 func TestExplicitName_RequiresBothComponents(t *testing.T) {
-	assert.Error(t, (&contactPlan{name: "x", explicitGiven: "Cadence"}).validate())
-	assert.Error(t, (&contactPlan{name: "x", explicitSurname: "Sort Yankee"}).validate())
-	assert.Error(t, (&contactPlan{name: "x", explicitGiven: " ", explicitSurname: "Sort Yankee"}).validate())
-	assert.Error(t, (&contactPlan{name: "x", explicitGiven: "Cadence", explicitSurname: "Sort Yankee", sameNameAs: "other"}).validate(),
-		"an explicit literal and a twin both state what the rendered name is")
-	assert.NoError(t, (&contactPlan{name: "x", explicitGiven: "Cadence", explicitSurname: "Sort Yankee"}).validate())
+	// Written through the PROP, not the struct: a wholly blank pair sets no
+	// component at all, so a field-presence check would miss it and the contact
+	// would silently fall back to a drawn name — the exact silent degradation
+	// pinning an exact literal exists to prevent.
+	for _, blank := range [][2]string{{"Cadence", ""}, {"", "Sort Yankee"}, {" ", "Sort Yankee"}, {"", ""}} {
+		assert.Error(t, validateEntityOrder([]Entity{Contact("x", ExplicitName(blank[0], blank[1]))}),
+			"ExplicitName(%q, %q) must be rejected", blank[0], blank[1])
+	}
+	assert.Error(t, validateEntityOrder([]Entity{
+		Contact("src"),
+		Contact("x", ExplicitName("Cadence", "Sort Yankee"), SameNameAs("src")),
+	}), "an explicit literal and a twin both state what the rendered name is")
+	assert.NoError(t, validateEntityOrder([]Entity{Contact("x", ExplicitName("Cadence", "Sort Yankee"))}))
 }
 
 func TestExplicitName_RejectsTwoEntitiesPinningTheSameLiteral(t *testing.T) {
