@@ -833,6 +833,12 @@ func runContact(
 	if p.nameEdge != "" {
 		opts = append(opts, factory.WithNameEdge(factory.NameEdge(p.nameEdge)))
 	}
+	if p.explicitNameSet {
+		opts = append(opts, factory.WithExplicitName(p.explicitGiven, p.explicitSurname))
+	}
+	if p.location != nil {
+		opts = append(opts, factory.WithLocation(prefixedLabel(gen, *p.location)))
+	}
 	if p.sameNameAs != "" {
 		twin, ok := st.specs[p.sameNameAs]
 		if !ok {
@@ -841,7 +847,12 @@ func runContact(
 		opts = append(opts, factory.WithNameTwinOf(twin))
 	}
 	if p.birthday != nil {
-		opts = append(opts, factory.WithBirthday(p.birthday.resolve(gen.Anchor())))
+		if p.birthday.placeholder {
+			month, day := p.birthday.placeholderMonthDay(gen.Anchor())
+			opts = append(opts, factory.WithBirthday1900Sentinel(month, day))
+		} else {
+			opts = append(opts, factory.WithBirthday(p.birthday.resolve(gen.Anchor())))
+		}
 	}
 
 	spec := gen.Contact(opts...)
@@ -888,16 +899,62 @@ func runContact(
 	return Seeded{Kind: "contact", ID: contact.ID.String(), Name: contact.FullName}, nil
 }
 
-// resolve turns a declared birthday into a stored date. Both forms land on a
-// LEAP-SAFE birth year, never the year-unknown 1900 sentinel: 1900 is not a leap
-// year, so a February 29 birthday stored against it silently becomes March 1.
-func (b *birthdayPlan) resolve(anchor time.Time) time.Time {
-	year := factory.LeapSafeBirthYear(anchor)
+// monthDay is the calendar month/day a declared birthday names: the anchor
+// shifted by the declared offset, or the explicitly declared pair.
+func (b *birthdayPlan) monthDay(anchor time.Time) (time.Month, int) {
 	if b.inDays != nil {
 		target := anchor.UTC().AddDate(0, 0, *b.inDays)
-		return time.Date(year, target.Month(), target.Day(), 0, 0, 0, 0, time.UTC)
+		return target.Month(), target.Day()
 	}
-	return time.Date(year, b.month, b.day, 0, 0, 0, 0, time.UTC)
+	return b.month, b.day
+}
+
+// placeholderMonthDay is monthDay with the ONE substitution a placeholder-year
+// birthday needs: 1900 is not a leap year, so February 29 has no
+// placeholder-year representation at all and is clamped to February 28 rather
+// than handed to a sentinel builder that must panic on it.
+//
+// The clamp is what keeps SEEDING safe on every calendar day — the composed
+// world executes every declaration on every reseed, so a panic here would break
+// seeding itself once every four years, not merely fail one assertion. It does
+// NOT make the clamped contact's rendered "today" classification correct on the
+// one day it fires: the app reads February 28 as already-celebrated on a
+// February 29, which is a gap in the product's own year-unknown storage
+// convention. It is applied identically in the lowering and in the derived
+// postcondition, so the two cannot disagree about what was stored.
+//
+// BirthdayOn / BirthdayInDays need no such clamp: they resolve a REAL leap-safe
+// year, which represents February 29 exactly.
+func (b *birthdayPlan) placeholderMonthDay(anchor time.Time) (time.Month, int) {
+	month, day := b.monthDay(anchor)
+	if month == time.February && day == 29 {
+		return time.February, 28
+	}
+	return month, day
+}
+
+// resolve turns a declared birthday into a stored date. Both non-placeholder
+// forms land on a LEAP-SAFE birth year, never the year-unknown 1900 sentinel:
+// 1900 is not a leap year, so a February 29 birthday stored against it silently
+// becomes March 1.
+func (b *birthdayPlan) resolve(anchor time.Time) time.Time {
+	month, day := b.monthDay(anchor)
+	return time.Date(factory.LeapSafeBirthYear(anchor), month, day, 0, 0, 0, 0, time.UTC)
+}
+
+// resolvePlaceholder turns a declared PLACEHOLDER birthday into the stored
+// year-unknown sentinel date, clamp included.
+func (b *birthdayPlan) resolvePlaceholder(anchor time.Time) time.Time {
+	month, day := b.placeholderMonthDay(anchor)
+	return time.Date(factory.SentinelBirthYear, month, day, 0, 0, 0, 0, time.UTC)
+}
+
+// prefixedLabel namespace-prefixes a caller-supplied label. The prefix is
+// load-bearing rather than cosmetic: the place node the location write
+// auto-creates carries this label, and the entity teardown's label-prefix sweep
+// is the only thing that deletes it.
+func prefixedLabel(gen *factory.Generator, s string) string {
+	return gen.Prefix() + s
 }
 
 // overdueMessageAge is how far before the anchor the history message is dated:

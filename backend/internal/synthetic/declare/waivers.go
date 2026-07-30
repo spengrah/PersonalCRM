@@ -32,28 +32,11 @@ var Waivers = map[string]string{
 	"CAL-029": "not yet migrated — calendar (arc #759 PR5)",
 	"CAL-030": "not yet migrated — calendar (arc #759 PR5)",
 
-	// spec/contacts.yaml — 21 behaviors.
-	"CON-038": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-039": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-040": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-041": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-042": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-043": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-044": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-045": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-046": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-053": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-054": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-055": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-056": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-057": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-058": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-059": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-060": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-061": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-063": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-065": "not yet migrated — contacts (arc #759 PR2)",
-	"CON-066": "not yet migrated — contacts (arc #759 PR2)",
+	// spec/contacts.yaml — 4 behaviors; the other 17 are resolved in contacts.go.
+	"CON-039": "proposed — exact tie-break determinism (CON-026) is not implemented and has no citing test",
+	"CON-046": "proposed — a failed mark-contacted is console-only and a failed delete is swallowed, so there is no surface to assert and no citing test",
+	"CON-054": "the citing test resolves three of its four fixtures by a marker token shared across their DRAWN names, and the factory's display-name dedupe keys on the marker-INCLUSIVE string: a marked contact that draws an unmarked one's given+surname pair gets no disambiguator, so one rendered name nests inside the other and a substring locator resolves both rows. Declaring it needs the shared name composition changed, which a spec migration is the wrong place to do",
+	"CON-056": "the citing test needs a gchat method AND a non-default (telegram) primary; factory.Contact() has no generic method-kind builder and always makes email primary when one is present, so this needs a factory extension",
 
 	// spec/imports-matching.yaml — 14 behaviors.
 	"IMP-007": "not yet migrated — imports-matching (arc #759 PR3)",

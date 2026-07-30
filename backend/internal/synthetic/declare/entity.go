@@ -99,25 +99,34 @@ type TwinProp interface {
 // birthdayPlan is a declared birthday: either an offset in days from the run
 // anchor, or an explicit month/day. Both resolve at run time on a leap-safe
 // birth year, so February 29 is representable rather than silently normalized.
+//
+// The one exception is the PLACEHOLDER form, which deliberately stores the
+// product's own year-unknown sentinel year instead — see
+// BirthdayPlaceholderToday.
 type birthdayPlan struct {
-	inDays *int
-	month  time.Month
-	day    int
+	inDays      *int
+	month       time.Month
+	day         int
+	placeholder bool
 }
 
 // contactPlan is the lowered form of a Contact declaration.
 type contactPlan struct {
-	name           string
-	cadence        string
-	overdueBy      *Amount
-	neverContacted bool
-	createdAgo     *Amount
-	methods        []string
-	noMethods      bool
-	history        *int
-	nameEdge       string
-	sameNameAs     string
-	birthday       *birthdayPlan
+	name            string
+	cadence         string
+	overdueBy       *Amount
+	neverContacted  bool
+	createdAgo      *Amount
+	methods         []string
+	noMethods       bool
+	history         *int
+	nameEdge        string
+	explicitNameSet bool
+	explicitGiven   string
+	explicitSurname string
+	sameNameAs      string
+	birthday        *birthdayPlan
+	location        *string
 }
 
 func (p *contactPlan) handle() string { return p.name }
@@ -232,6 +241,75 @@ func BirthdayInDays(n int) ContactProp {
 // so BirthdayOn(time.February, 29) is well defined for every anchor.
 func BirthdayOn(month time.Month, day int) ContactProp {
 	return func(p *contactPlan) { p.birthday = &birthdayPlan{month: month, day: day} }
+}
+
+// BirthdayPlaceholderToday declares a birthday on TODAY's month/day stored
+// against the product's year-unknown PLACEHOLDER year (1900), which is what the
+// UI keys its age suppression on.
+//
+// It is the only prop that reaches that state: BirthdayInDays / BirthdayOn both
+// resolve a REAL leap-safe birth year, which the frontend correctly reads as a
+// known birth year and renders an age for. A fixture for "the birthday is known
+// but the year is not" therefore cannot be expressed through them.
+//
+// One calendar day is not representable: 1900 is not a leap year, so a
+// placeholder-year February 29 does not exist at all. Rather than hand the
+// sentinel builder a date it must panic on — this runs on every composed-world
+// seed, so a panic would break SEEDING once every four years — the lowering
+// clamps that one day to February 28. The clamp keeps seeding safe; it does not
+// make the app classify the clamped contact as having a birthday TODAY on that
+// day, which is a gap in the product's own storage convention rather than
+// something a fixture can paper over.
+func BirthdayPlaceholderToday() ContactProp {
+	return func(p *contactPlan) {
+		days := 0
+		p.birthday = &birthdayPlan{inDays: &days, placeholder: true}
+	}
+}
+
+// Location declares the contact's location (a flat place label).
+//
+// The stored value is namespace-PREFIXED, like every other generated identifier,
+// because the auto-created place node's label has to carry the prefix for the
+// entity teardown's label-prefix sweep to find it. A test that needs the rendered
+// string therefore reads it back from the API rather than restating the literal
+// it asked for.
+func Location(s string) ContactProp {
+	return func(p *contactPlan) {
+		v := s
+		p.location = &v
+	}
+}
+
+// ExplicitName pins the contact's rendered name to a caller-supplied literal.
+//
+// It exists for fixtures whose citing test depends on knowing the rendered
+// name's relative ORDER before the data is seeded: a list that must come back in
+// a known name-ascending order, or a name set deliberately anti-correlated with
+// the property under test so an implementation that fell back to name ordering
+// cannot accidentally pass. Deriving that order in the browser from
+// generator-drawn names would compare JavaScript collation against PostgreSQL's,
+// which is a different ordering.
+//
+// It skips the factory's display-name dedupe (an exact literal is the point), so
+// no two entities may declare the same pair — nor may one pinned name CONTAIN
+// another, since the selectors that resolve these fixtures match on substring.
+// Registration checks the duplicate case within one entity list; the composed
+// world — where every declaration and edge runs against ONE namespace — is
+// checked across lists by a unit test. An accumulate-and-compare inside Register
+// could see the cross-list pairs too (each pair is examined when its later member
+// registers); a test is preferred because Register PANICS and this package is
+// linked into crm-api, so a cross-list collision would abort the API at startup
+// instead of failing a named test.
+//
+// It is mutually exclusive with SameNameAs and NameEdge: a twin copies another
+// contact's rendered name, and an edge splices a token into the pair, so either
+// one would render something other than the literal that was pinned.
+func ExplicitName(given, surname string) ContactProp {
+	return func(p *contactPlan) {
+		p.explicitNameSet = true
+		p.explicitGiven, p.explicitSurname = given, surname
+	}
 }
 
 // sameNameProp is the twin-name prop. It implements BOTH entity kinds' prop
@@ -349,6 +427,20 @@ func (p *contactPlan) validate() error {
 	if p.sameNameAs == p.name && p.sameNameAs != "" {
 		return fmt.Errorf("contact %q: SameNameAs cannot reference itself", p.name)
 	}
+	if p.location != nil && strings.TrimSpace(*p.location) == "" {
+		return fmt.Errorf("contact %q: Location must be non-empty — the service normalizes a blank location away, silently contradicting a non-nil Location postcondition", p.name)
+	}
+	if p.explicitNameSet {
+		if strings.TrimSpace(p.explicitGiven) == "" || strings.TrimSpace(p.explicitSurname) == "" {
+			return fmt.Errorf("contact %q: ExplicitName needs BOTH a given name and a surname — a half-pinned name is not the literal the caller asked for", p.name)
+		}
+		if p.sameNameAs != "" {
+			return fmt.Errorf("contact %q: ExplicitName and SameNameAs are mutually exclusive — both state what the rendered name is", p.name)
+		}
+		if p.nameEdge != "" {
+			return fmt.Errorf("contact %q: ExplicitName and NameEdge are mutually exclusive — a name edge splices its token between the given name and the surname, so the rendered name would not be the literal that was pinned", p.name)
+		}
+	}
 	if p.birthday != nil {
 		if err := p.birthday.validate(p.name); err != nil {
 			return err
@@ -358,6 +450,12 @@ func (p *contactPlan) validate() error {
 }
 
 func (b *birthdayPlan) validate(handle string) error {
+	if b.placeholder {
+		// A placeholder birthday derives its month/day from the run anchor through
+		// the clamp, which is a valid calendar date by construction; the zero-valued
+		// month/day struct fields below are never read for it.
+		return nil
+	}
 	if b.inDays != nil {
 		return nil
 	}
@@ -542,12 +640,24 @@ func sortedCandidateSources() []string {
 // about what a well-formed entity list is.
 func validateEntityOrder(entities []Entity) error {
 	seen := map[string]Entity{}
+	// ExplicitName deliberately skips the factory's runtime dedupe, so two
+	// entities pinning the SAME literal would render one ambiguous name. Caught
+	// here, at registration, rather than as a confusing strict-mode locator
+	// failure in whichever test happens to run first.
+	explicitNames := map[string]string{}
 	for i, e := range entities {
 		if e == nil {
 			return fmt.Errorf("entity %d is nil", i)
 		}
 		if err := e.validate(); err != nil {
 			return err
+		}
+		if p, ok := e.(*contactPlan); ok && p.explicitNameSet {
+			display := p.explicitGiven + " " + p.explicitSurname
+			if prior, dup := explicitNames[display]; dup {
+				return fmt.Errorf("entities %q and %q both declare the explicit name %q — ExplicitName skips the display-name dedupe, so the two would render as one name", prior, p.name, display)
+			}
+			explicitNames[display] = p.name
 		}
 		for _, ref := range e.refs() {
 			target, ok := seen[ref]

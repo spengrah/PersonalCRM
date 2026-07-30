@@ -60,6 +60,8 @@ type contactConfig struct {
 	nameEdge             NameEdge
 	nameMarker           string
 	twinOf               *ContactSpec
+	explicitGiven        string
+	explicitSurname      string
 }
 
 // WithEmail adds an email contact_method (default ON if no method option is
@@ -119,12 +121,12 @@ func WithRecentCreation(window time.Duration) ContactOption {
 // A panic is right here: this is a programming error in deterministic seed code,
 // the same class as exhausting the phone block, not a runtime condition.
 func WithBirthday1900Sentinel(month time.Month, day int) ContactOption {
-	b := time.Date(sentinelBirthYear, month, day, 0, 0, 0, 0, time.UTC)
+	b := time.Date(SentinelBirthYear, month, day, 0, 0, 0, 0, time.UTC)
 	if b.Month() != month || b.Day() != day {
 		panic(fmt.Sprintf(
 			"synthetic: WithBirthday1900Sentinel(%s, %d) normalizes to %s in the year-unknown sentinel year %d — "+
 				"use WithBirthday on LeapSafeBirthYear(anchor) instead",
-			month, day, b.Format("2006-01-02"), sentinelBirthYear))
+			month, day, b.Format("2006-01-02"), SentinelBirthYear))
 	}
 	return func(c *contactConfig) {
 		bday := b
@@ -132,10 +134,11 @@ func WithBirthday1900Sentinel(month time.Month, day int) ContactOption {
 	}
 }
 
-// sentinelBirthYear is the product's year-unknown birthday sentinel (see
+// SentinelBirthYear is the product's year-unknown birthday sentinel (see
 // PLACEHOLDER_BIRTHDAY_YEAR in the frontend, which suppresses the rendered age
-// for it).
-const sentinelBirthYear = 1900
+// for it). Exported so the declare vocabulary can build the same sentinel date
+// its own postcondition has to predict, rather than restating the literal.
+const SentinelBirthYear = 1900
 
 // LeapSafeBirthYear is the birth year a generated birthday should use when the
 // month/day must survive verbatim: the largest leap year on or before
@@ -296,6 +299,34 @@ func WithNameTwinOf(other ContactSpec) ContactOption {
 	}
 }
 
+// WithExplicitName pins the contact's given name and surname to caller-supplied
+// literals, so the RENDERED display name is exactly `given + " " + surname`
+// (namespace prefix aside).
+//
+// It exists for fixtures whose assertion depends on knowing the rendered name's
+// relative ORDER in advance — a list that must come back in a known name-asc
+// order, or a set of names deliberately anti-correlated with the property under
+// test so a fallback to name ordering cannot accidentally pass. The alternative
+// is computing the expected order in the browser from generator-drawn names,
+// which compares JavaScript collation against PostgreSQL's and is not the same
+// ordering.
+//
+// Like WithNameTwinOf it skips the display-name dedupe: an exact literal is the
+// whole point, and silently appending a disambiguating suffix would defeat it.
+// Uniqueness within one declaration is therefore the caller's responsibility
+// (the declare vocabulary validates it at registration time).
+//
+// It PRESERVES the PRNG stream exactly, the same way WithNameTwinOf does: the
+// ordinary given-name and surname draws still happen and only their result is
+// overwritten, so every LATER contact in the namespace is byte-identical to what
+// it would have been.
+func WithExplicitName(given, surname string) ContactOption {
+	return func(c *contactConfig) {
+		c.explicitGiven = given
+		c.explicitSurname = surname
+	}
+}
+
 // WithNameMarker appends a resolution marker token to the contact's display name,
 // so a hand-authored fixture can be resolved over the API by search instead of by
 // an ad-hoc predicate over whatever the population happens to contain. The marker
@@ -324,6 +355,12 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 	n := g.contactSeq
 	given := g.givenName()
 	sur := g.surname()
+	if cfg.explicitGiven != "" {
+		// WithExplicitName: overwrite AFTER the draws above, never instead of
+		// them, so the stream position for every later contact is unchanged (the
+		// same discipline WithNameTwinOf follows below).
+		given, sur = cfg.explicitGiven, cfg.explicitSurname
+	}
 
 	display := given + " " + sur
 	if token, ok := nameEdgeTokens[cfg.nameEdge]; ok {
@@ -344,7 +381,10 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 	// consume extra rng values and shift every later draw for that namespace,
 	// so worlds that DON'T collide would still have to be re-derived. This way
 	// a non-colliding namespace's output is byte-identical to before.
-	if cfg.twinOf == nil && g.usedDisplay[display] {
+	// An explicit name is exempt for the same reason a twin is: both are
+	// deliberate, caller-owned literals, and a disambiguating suffix would
+	// silently change the string the caller asked for.
+	if cfg.twinOf == nil && cfg.explicitGiven == "" && g.usedDisplay[display] {
 		display = fmt.Sprintf("%s %d", display, n)
 	}
 	// Namespace-prefixed full_name so the prefix cleanup backstop finds it.

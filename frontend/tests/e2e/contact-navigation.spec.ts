@@ -1,5 +1,10 @@
 import { test, expect, type Page } from '@playwright/test'
-import { createTestAPI, TestAPI, type SeedContactInput } from './helpers/test-api'
+import {
+  createTestAPI,
+  declaredWorldSearch,
+  TestAPI,
+  type SeedBehaviorResult,
+} from './helpers/test-api'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
@@ -21,16 +26,13 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
 
   test('should disable keyboard navigation in edit mode', async ({ page }) => {
     // spec: CON-040.arrows-inert-while-editing
-    // Create 2 contacts
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Edit Mode Test A' },
-      { full_name: 'Edit Mode Test B' },
-    ])
+    const seeded = await testApi.seedBehavior('CON-040')
+    const contactA = seeded.entities['a']
+    const fullNameA = contactA.name
 
-    const fullNameA = `${testApi.prefix}-Edit Mode Test A`
-
-    // Go to list first, then to first contact
-    await page.goto('/contacts')
+    // Go to the list first, scoped to this world so the seeded row is on the
+    // first page whatever else the shared database holds, then open the contact.
+    await page.goto(`/contacts?search=${encodeURIComponent(declaredWorldSearch(seeded))}`)
     await page.waitForLoadState('domcontentloaded')
     await page.getByText(fullNameA).click()
     await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+/)
@@ -66,7 +68,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     // asserted here, not raced.
     const currentUrl = page.url()
     const navProbe = page
-      .waitForURL(u => u.pathname.startsWith('/contacts/') && !u.pathname.includes(ids[0]), {
+      .waitForURL(u => u.pathname.startsWith('/contacts/') && !u.pathname.includes(contactA.id), {
         timeout: 1000,
       })
       .then(
@@ -81,16 +83,12 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
 
   test('should not navigate when typing in input fields', async ({ page }) => {
     // spec: CON-040.arrows-inert-while-editing
-    // Create 2 contacts
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Input Field Test A' },
-      { full_name: 'Input Field Test B' },
-    ])
-
-    const fullNameA = `${testApi.prefix}-Input Field Test A`
+    const seeded = await testApi.seedBehavior('CON-040')
+    const contactA = seeded.entities['a']
+    const fullNameA = contactA.name
 
     // Go to contact detail and enter edit mode
-    await page.goto('/contacts')
+    await page.goto(`/contacts?search=${encodeURIComponent(declaredWorldSearch(seeded))}`)
     await page.waitForLoadState('domcontentloaded')
     await page.getByText(fullNameA).click()
     await page.waitForURL(/\/contacts\/[A-Za-z0-9-]+/)
@@ -112,7 +110,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     // Register the unexpected-navigation probe BEFORE the keypresses; resolve to
     // a boolean so a real regression is asserted, not raced.
     const navProbe = page
-      .waitForURL(u => u.pathname.startsWith('/contacts/') && !u.pathname.includes(ids[0]), {
+      .waitForURL(u => u.pathname.startsWith('/contacts/') && !u.pathname.includes(contactA.id), {
         timeout: 1000,
       })
       .then(
@@ -128,16 +126,22 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
 
   test('should preserve URL context (sort, search) during navigation', async ({ page }) => {
     // spec: CON-060.sort-order-search-context
-    // Create contacts
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Context Test Alpha', location: 'New York' },
-      { full_name: 'Context Test Beta', location: 'Los Angeles' },
-    ])
+    // The declared fixture PINS both names, so under sort=name&order=asc the
+    // origin ("a") is first and a forward move genuinely exists. That matters
+    // for more than tidiness: at the end of the list the Next control is
+    // disabled and ArrowRight does nothing, and the context assertions below
+    // would then be satisfied by the origin's own unchanged URL — a destination
+    // that was never produced. The destination id is asserted for the same
+    // reason, as an independent guard against a no-op navigation.
+    const seeded = await testApi.seedBehavior('CON-060')
+    const originId = seeded.entities['a'].id
+    const nextId = seeded.entities['b'].id
+    const searchTerm = declaredWorldSearch(seeded)
 
     // Go directly to a contact detail page with sort params
     // This tests that the detail page preserves context when navigating
     await page.goto(
-      `/contacts/${ids[0]}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
+      `/contacts/${originId}?sort=name&order=asc&search=${encodeURIComponent(searchTerm)}`
     )
     await page.waitForLoadState('domcontentloaded')
 
@@ -145,32 +149,43 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     expect(page.url()).toContain('sort=name')
     expect(page.url()).toContain('order=asc')
 
-    // Wait for navigation bar to be ready
-    await expect(page.getByRole('button', { name: 'Next contact' })).toBeVisible({ timeout: 10000 })
+    // Keyboard nav is disabled until the navigation id list loads, and the Next
+    // control renders DISABLED while it does — an ArrowRight inside that window
+    // is a silent no-op with no retry, which the destination assertion below
+    // would then read as a real failure. Same gate as every other arrow-pressing
+    // test in this file.
+    await expect(page.getByText(/\d+ of \d+/)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole('button', { name: 'Next contact' })).toBeEnabled()
 
     // Navigate to next contact using keyboard
     await page.keyboard.press('ArrowRight')
-    await page.waitForLoadState('domcontentloaded')
 
-    // URL should still contain sort params after navigation
-    expect(page.url()).toContain('sort=name')
-    expect(page.url()).toContain('order=asc')
+    // A real destination: the pinned name-ascending neighbour, not the origin.
+    await expect(page).toHaveURL(new RegExp(`/contacts/${nextId}\\?`), { timeout: 10000 })
+    const destination = new URL(page.url())
+    expect(destination.pathname).toBe(`/contacts/${nextId}`)
+
+    // The destination URL carries the whole list context it was reached with.
+    expect(destination.searchParams.get('sort')).toBe('name')
+    expect(destination.searchParams.get('order')).toBe('asc')
+    expect(destination.searchParams.get('search')).toBe(searchTerm)
   })
 
   test('should navigate via navigation bar buttons', async ({ page }) => {
     // spec: CON-059.buttons-move-adjacent-contact, CON-059.position-indicator-reports-contact
-    // Create 3 contacts with a known name-asc order so a pass proves real
-    // movement to the ADJACENT contact, not just "some navigation happened".
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Button Nav 1' },
-      { full_name: 'Button Nav 2' },
-      { full_name: 'Button Nav 3' },
-    ])
-    const secondName = `${testApi.prefix}-Button Nav 2`
+    // The declared fixture pins three names whose name-ascending order is known
+    // before the data exists, so a pass proves real movement to the ADJACENT
+    // contact rather than just "some navigation happened".
+    const seeded = await testApi.seedBehavior('CON-059')
+    const firstId = seeded.entities['a'].id
+    const secondId = seeded.entities['b'].id
+    const secondName = seeded.entities['b'].name
 
     // Go directly to first contact with sort param and search filter to isolate IDs
     await page.goto(
-      `/contacts/${ids[0]}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
+      `/contacts/${firstId}?sort=name&order=asc&search=${encodeURIComponent(
+        declaredWorldSearch(seeded)
+      )}`
     )
     await page.waitForLoadState('domcontentloaded')
 
@@ -181,30 +196,29 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await expect(page.getByText('1 of 3')).toBeVisible({ timeout: 10000 })
 
     // Click next: it moves to the ADJACENT contact under the carried
-    // name-asc order — ids[1], "Button Nav 2" (CON-059.buttons-move-adjacent-contact) — and the
-    // position indicator advances with it.
+    // name-asc order — entity b, the pinned "Button Nav 2"
+    // (CON-059.buttons-move-adjacent-contact) — and the position indicator
+    // advances with it.
     const nextButton = page.getByRole('button', { name: 'Next contact' })
     await expect(nextButton).toBeEnabled({ timeout: 5000 })
     await nextButton.click()
-    await page.waitForURL(u => u.pathname === `/contacts/${ids[1]}`)
+    await page.waitForURL(u => u.pathname === `/contacts/${secondId}`)
     await expect(page.getByRole('heading', { name: secondName })).toBeVisible({ timeout: 10000 })
     await expect(page.getByText('2 of 3')).toBeVisible({ timeout: 10000 })
   })
 
   test('should restore search and sort state after Escape back to list', async ({ page }) => {
     // spec: CON-040.escape-discards-edit-mode
-    // Two contacts so search + sort visibly shape the list
-    await testApi.seedContacts([
-      { full_name: 'Restore State Alpha' },
-      { full_name: 'Restore State Beta' },
-    ])
-
-    const fullNameAlpha = `${testApi.prefix}-Restore State Alpha`
+    // The declared fixture's pinned names make search + sort visibly shape the
+    // list.
+    const seeded = await testApi.seedBehavior('CON-040')
+    const searchTerm = declaredWorldSearch(seeded)
+    const fullNameAlpha = seeded.entities['a'].name
 
     // Apply a search and a name-asc sort on the list
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
-    await page.getByPlaceholder('Search contacts...').fill(testApi.prefix)
+    await page.getByPlaceholder('Search contacts...').fill(searchTerm)
     await expect(page.getByText(fullNameAlpha)).toBeVisible({ timeout: 15000 })
     await page.getByRole('columnheader').filter({ hasText: /^Name/ }).click()
 
@@ -226,7 +240,7 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await expect(page.getByRole('heading', { name: 'Contacts' })).toBeVisible()
     await expect(page).toHaveURL(/sort=name/)
     await expect(page).toHaveURL(/order=asc/)
-    await expect(page.getByPlaceholder('Search contacts...')).toHaveValue(testApi.prefix)
+    await expect(page.getByPlaceholder('Search contacts...')).toHaveValue(searchTerm)
   })
 
   test('detail prev/next follows the same default (cadence) ordering as the list', async ({
@@ -235,27 +249,24 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     // spec: CON-038.detail-prev-next-same-default
     // Navigate by CLICKING the seeded row in the default (cadence) list — the
     // detail must CARRY that ordering context, so prev/next walks the same
-    // cadence order rather than an ordering hand-fed through the URL. Names are
-    // scrambled so alphabetical order (either direction) differs from cadence
-    // order: cadence-desc = Yankee(weekly) → Alpha(monthly) → Mike(annual).
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Default Nav Mike', cadence: 'annual' },
-      { full_name: 'Default Nav Yankee', cadence: 'weekly' },
-      { full_name: 'Default Nav Alpha', cadence: 'monthly' },
-    ])
-    const annualId = ids[0]
-    const weeklyId = ids[1]
-    const monthlyId = ids[2]
-    const weeklyName = `${testApi.prefix}-Default Nav Yankee`
-    const monthlyName = `${testApi.prefix}-Default Nav Alpha`
-    const annualName = `${testApi.prefix}-Default Nav Mike`
+    // cadence order rather than an ordering hand-fed through the URL. The
+    // declaration pins names that are scrambled against the cadence order, so
+    // alphabetical order (either direction) differs from it: cadence-desc =
+    // Yankee(weekly) → Alpha(monthly) → Mike(annual).
+    const seeded = await testApi.seedBehavior('CON-038')
+    const annualId = seeded.entities['annual'].id
+    const weeklyId = seeded.entities['weekly'].id
+    const monthlyId = seeded.entities['monthly'].id
+    const weeklyName = seeded.entities['weekly'].name
+    const monthlyName = seeded.entities['monthly'].name
+    const annualName = seeded.entities['annual'].name
 
     // Filter the default list to just these three, then open the most-frequent
     // (weekly) contact by clicking its row. Capture the detail's ids_only nav
     // request to prove the traversal order itself is cadence, not name.
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
-    await page.getByPlaceholder('Search contacts...').fill(testApi.prefix)
+    await page.getByPlaceholder('Search contacts...').fill(declaredWorldSearch(seeded))
     await page.getByPlaceholder('Search contacts...').press('Enter')
     await expect(page.getByText(weeklyName)).toBeVisible({ timeout: 15000 })
 
@@ -299,23 +310,21 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     page,
   }) => {
     // spec: CON-040.left-right-arrows-move
-    // Seed a known name-asc order and isolate the set via search, so a pass
-    // proves real movement to the adjacent contact.
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Kbd Move Alpha' },
-      { full_name: 'Kbd Move Bravo' },
-      { full_name: 'Kbd Move Charlie' },
-    ])
-    const alphaId = ids[0]
-    const bravoId = ids[1]
-    const charlieId = ids[2]
-    const alphaName = `${testApi.prefix}-Kbd Move Alpha`
-    const bravoName = `${testApi.prefix}-Kbd Move Bravo`
-    const charlieName = `${testApi.prefix}-Kbd Move Charlie`
+    // The declaration pins a known name-asc order and the search isolates the
+    // set, so a pass proves real movement to the adjacent contact.
+    const seeded = await testApi.seedBehavior('CON-040')
+    const alphaId = seeded.entities['a'].id
+    const bravoId = seeded.entities['b'].id
+    const charlieId = seeded.entities['c'].id
+    const alphaName = seeded.entities['a'].name
+    const bravoName = seeded.entities['b'].name
+    const charlieName = seeded.entities['c'].name
 
     // Open the middle contact under an explicit name-asc order.
     await page.goto(
-      `/contacts/${bravoId}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
+      `/contacts/${bravoId}?sort=name&order=asc&search=${encodeURIComponent(
+        declaredWorldSearch(seeded)
+      )}`
     )
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: bravoName })).toBeVisible({ timeout: 15000 })
@@ -350,10 +359,10 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
 
   test('Enter opens edit mode when focus is outside an input', async ({ page }) => {
     // spec: CON-040.enter-opens-edit-mode
-    const { ids } = await testApi.seedContacts([{ full_name: 'Enter Edit Test' }])
-    const fullName = `${testApi.prefix}-Enter Edit Test`
+    const seeded = await testApi.seedBehavior('CON-040')
+    const fullName = seeded.entities['a'].name
 
-    await page.goto(`/contacts/${ids[0]}`)
+    await page.goto(`/contacts/${seeded.entities['a'].id}`)
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
@@ -372,10 +381,13 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     request,
   }) => {
     // spec: CON-040.escape-discards-edit-mode
-    const { ids } = await testApi.seedContacts([{ full_name: 'Discard Edit Test' }])
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Discard Edit Test`
-    const changedName = `${testApi.prefix}-Discard Edit CHANGED`
+    const seeded = await testApi.seedBehavior('CON-040')
+    const contactId = seeded.entities['a'].id
+    const fullName = seeded.entities['a'].name
+    // Derived from the seeded name so that even if the discard DID persist (the
+    // regression this test exists to catch), the row stays reachable by the
+    // namespace's own name-derived sweep.
+    const changedName = `${fullName} CHANGED`
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -424,15 +436,15 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     // mode), so focusing its input exercises the hook's input-target guard
     // specifically — unlike edit mode, which disables the whole hook and would
     // mask a regression in that guard.
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Modal Input Nav A' },
-      { full_name: 'Modal Input Nav B' },
-    ])
-    const firstName = `${testApi.prefix}-Modal Input Nav A`
+    const seeded = await testApi.seedBehavior('CON-040')
+    const firstName = seeded.entities['a'].name
+    const secondId = seeded.entities['b'].id
 
     // Open the first of two contacts with nav context so Next is a real move.
     await page.goto(
-      `/contacts/${ids[0]}?sort=name&order=asc&search=${encodeURIComponent(testApi.prefix)}`
+      `/contacts/${seeded.entities['a'].id}?sort=name&order=asc&search=${encodeURIComponent(
+        declaredWorldSearch(seeded)
+      )}`
     )
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: firstName })).toBeVisible({ timeout: 15000 })
@@ -450,13 +462,13 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     // cursor within the input, not the contact.
     const dateInput = page.getByTestId('log-interaction-date-input')
     await dateInput.focus()
-    // A broken input-target guard would move to the Next contact (ids[1], "Modal
-    // Input Nav B" under sort=name asc). Register the observation window BEFORE
-    // the keypresses — waitForURL only sees navigations that begin after it is
-    // called, so starting it afterward could miss the very nav it must catch.
-    // Resolve to a boolean rather than throwing so a real regression is asserted
-    // here, not killed before the assertion.
-    const navProbe = page.waitForURL(`**/contacts/${ids[1]}**`, { timeout: 1000 }).then(
+    // A broken input-target guard would move to the Next contact (entity b, the
+    // pinned "Kbd Move Bravo" under sort=name asc). Register the observation
+    // window BEFORE the keypresses — waitForURL only sees navigations that begin
+    // after it is called, so starting it afterward could miss the very nav it must
+    // catch. Resolve to a boolean rather than throwing so a real regression is
+    // asserted here, not killed before the assertion.
+    const navProbe = page.waitForURL(`**/contacts/${secondId}**`, { timeout: 1000 }).then(
       () => true,
       () => false
     )
@@ -486,28 +498,22 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
     await testApi.cleanup()
   })
 
-  // 21 prefix-isolated contacts, each with a cadence and no followup, named
-  // Back Nav 01..21 in insertion order so name-asc order == ids[0..20]. Under
-  // has_cadence + no_followup the filtered set is all 21, and ids[20] ("Back
-  // Nav 21") is the first (only) row of page 2 (CONTACTS_PAGE_SIZE=20).
-  async function seedBackNavFixture(): Promise<string[]> {
-    const contacts: SeedContactInput[] = Array.from({ length: 21 }, (_, i) => ({
-      full_name: `Back Nav ${String(i + 1).padStart(2, '0')}`,
-      cadence: 'monthly',
-    }))
-    const { ids } = await testApi.seedContacts(contacts)
-    return ids
-  }
-
   // Walk the REAL journey — filtered/sorted list → page 2 → open the first
-  // page-2 contact (global index 20) → reload the DETAIL page — leaving the
-  // page on the reloaded detail view ready to return. The reload tears down the
-  // QueryClient so the list's staleTime:2min cache can't serve the return from
-  // cache and hang a return waitForResponse. Also asserts the list→detail URL
-  // is page-free.
-  async function journeyToBackNav21Detail(page: Page, ids: string[]): Promise<void> {
-    const prefix = testApi.prefix
-    await page.goto(`/contacts?search=${encodeURIComponent(prefix)}&followup_filter=no_followup`)
+  // page-2 contact (the 21st under name-asc) → reload the DETAIL page — leaving
+  // the page on the reloaded detail view ready to return. The reload tears down
+  // the QueryClient so the list's staleTime:2min cache can't serve the return
+  // from cache and hang a return waitForResponse. Also asserts the list→detail
+  // URL is page-free.
+  //
+  // The declared cohort is 21 cadence-bearing contacts with pinned, zero-padded
+  // names, so under has_cadence + no_followup the filtered set is all 21 and
+  // entity p21 is the first (only) row of page 2 (CONTACTS_PAGE_SIZE=20).
+  async function journeyToBackNav21Detail(page: Page, seeded: SeedBehaviorResult): Promise<void> {
+    const searchTerm = declaredWorldSearch(seeded)
+    const last = seeded.entities['p21']
+    await page.goto(
+      `/contacts?search=${encodeURIComponent(searchTerm)}&followup_filter=no_followup`
+    )
     await page.waitForLoadState('domcontentloaded')
 
     // Real sort interaction, then settle on the applied state before the next
@@ -528,16 +534,15 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
     await pager.getByRole('button', { name: '2' }).click()
     await expect(page).toHaveURL(/page=2/)
 
-    // Open the first page-2 contact (global index 20 → "Back Nav 21").
-    const backNav21 = `${prefix}-Back Nav 21`
-    await page.getByText(backNav21).click()
-    await page.waitForURL(u => u.pathname === `/contacts/${ids[20]}`)
+    // Open the first page-2 contact (the 21st under name-asc).
+    await page.getByText(last.name).click()
+    await page.waitForURL(u => u.pathname === `/contacts/${last.id}`)
 
     // The list→detail URL carries the full context but NEVER a page.
     const detail = new URL(page.url())
     expect(detail.searchParams.get('sort')).toBe('name')
     expect(detail.searchParams.get('order')).toBe('asc')
-    expect(detail.searchParams.get('search')).toBe(prefix)
+    expect(detail.searchParams.get('search')).toBe(searchTerm)
     expect(detail.searchParams.get('cadence_filter')).toBe('has_cadence')
     expect(detail.searchParams.get('followup_filter')).toBe('no_followup')
     expect(detail.searchParams.get('page')).toBeNull()
@@ -546,7 +551,7 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
     // ready so Back computes the real page, not the page-1 fallback.
     await page.reload()
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: backNav21 })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: last.name })).toBeVisible({ timeout: 15000 })
     await expect(page.getByText('21 of 21')).toBeVisible({ timeout: 10000 })
   }
 
@@ -555,13 +560,13 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
   async function expectFullContextRestored(
     page: Page,
     reqUrl: string,
-    expectedPage: string
+    expectedPage: string,
+    searchTerm: string
   ): Promise<void> {
-    const prefix = testApi.prefix
     const params = new URL(reqUrl).searchParams
     expect(params.get('sort')).toBe('name')
     expect(params.get('order')).toBe('asc')
-    expect(params.get('search')).toBe(prefix)
+    expect(params.get('search')).toBe(searchTerm)
     expect(params.get('cadence_filter')).toBe('has_cadence')
     expect(params.get('followup_filter')).toBe('no_followup')
     expect(params.get('page')).toBe(expectedPage)
@@ -571,7 +576,7 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
         u.pathname === '/contacts' &&
         u.searchParams.get('sort') === 'name' &&
         u.searchParams.get('order') === 'asc' &&
-        u.searchParams.get('search') === prefix &&
+        u.searchParams.get('search') === searchTerm &&
         u.searchParams.get('cadence_filter') === 'has_cadence' &&
         u.searchParams.get('followup_filter') === 'no_followup' &&
         u.searchParams.get('page') === expectedPage
@@ -582,26 +587,26 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
     page,
   }) => {
     // spec: CON-065.visible-return-list-control, CON-065.returning-lands-list-page
-    const ids = await seedBackNavFixture()
-    await journeyToBackNav21Detail(page, ids)
+    const seeded = await testApi.seedBehavior('CON-065')
+    await journeyToBackNav21Detail(page, seeded)
 
     const listReq = page.waitForResponse(
       r => r.request().method() === 'GET' && isListRequest(r.url())
     )
     await page.getByRole('button', { name: 'Back to list' }).click()
-    await expectFullContextRestored(page, (await listReq).url(), '2')
+    await expectFullContextRestored(page, (await listReq).url(), '2', declaredWorldSearch(seeded))
   })
 
   test('Escape restores full context AND page identically to the button', async ({ page }) => {
     // spec: CON-040.escape-discards-edit-mode, CON-065.returning-lands-list-page
-    const ids = await seedBackNavFixture()
-    await journeyToBackNav21Detail(page, ids)
+    const seeded = await testApi.seedBehavior('CON-065')
+    await journeyToBackNav21Detail(page, seeded)
 
     const listReq = page.waitForResponse(
       r => r.request().method() === 'GET' && isListRequest(r.url())
     )
     await page.keyboard.press('Escape')
-    await expectFullContextRestored(page, (await listReq).url(), '2')
+    await expectFullContextRestored(page, (await listReq).url(), '2', declaredWorldSearch(seeded))
   })
 
   test('an out-of-range ?page deep-link clamps to the last valid page', async ({ page }) => {
@@ -609,10 +614,10 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
     // A stale bookmark / hand-edited URL asking for a page past the end must
     // land on the last valid page with real rows, not an empty table with the
     // pagination controls hidden. The fixture is 21 has_cadence contacts → 2
-    // pages, so ?page=9999 must clamp to page 2 (holding "Back Nav 21").
-    await seedBackNavFixture()
-    const prefix = testApi.prefix
-    const backNav21 = `${prefix}-Back Nav 21`
+    // pages, so ?page=9999 must clamp to page 2 (holding the 21st contact).
+    const seeded = await testApi.seedBehavior('CON-065')
+    const searchTerm = declaredWorldSearch(seeded)
+    const backNav21 = seeded.entities['p21'].name
 
     // The clamp fires after the first response reveals the real page count, so
     // a page-2 list request follows the out-of-range page-9999 request.
@@ -620,7 +625,7 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
       r => isListRequest(r.url()) && new URL(r.url()).searchParams.get('page') === '2'
     )
     await page.goto(
-      `/contacts?search=${encodeURIComponent(prefix)}` +
+      `/contacts?search=${encodeURIComponent(searchTerm)}` +
         `&sort=name&order=asc&cadence_filter=has_cadence&followup_filter=no_followup&page=9999`
     )
     await page.waitForLoadState('domcontentloaded')
@@ -641,32 +646,34 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
     // spec: CON-058.page-past-end-clamps
     // When the whole filtered set fits on one page, the clamp target is page 1,
     // which buildContactListUrl renders as the bare (page-less) URL — the
-    // distinct recovery branch from the multi-page clamp above.
-    await testApi.seedContacts([{ full_name: 'Solo Page A' }, { full_name: 'Solo Page B' }])
-    const prefix = testApi.prefix
+    // distinct recovery branch from the multi-page clamp above. It needs only a
+    // population that fits on one page, so it rides CON-040's three-contact
+    // declaration rather than owning a fixture of its own.
+    const seeded = await testApi.seedBehavior('CON-040')
+    const searchTerm = declaredWorldSearch(seeded)
 
     // The clamp re-fetches page 1 (the request carries page=1 even though the
     // browser URL becomes page-less).
     const clampReq = page.waitForResponse(
       r => isListRequest(r.url()) && new URL(r.url()).searchParams.get('page') === '1'
     )
-    await page.goto(`/contacts?search=${encodeURIComponent(prefix)}&page=2`)
+    await page.goto(`/contacts?search=${encodeURIComponent(searchTerm)}&page=2`)
     await page.waitForLoadState('domcontentloaded')
     await clampReq
 
     // URL is rewritten to the bare page-1 form (no page param at all) and the
     // rows are on screen — not an empty table.
     await expect(page).not.toHaveURL(/[?&]page=/)
-    await expect(page.getByText(`${prefix}-Solo Page A`)).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(seeded.entities['a'].name)).toBeVisible({ timeout: 15000 })
   })
 
   test('changing sort/search/filter from a later page resets to page 1', async ({ page }) => {
     // spec: CON-066.list-returns-first-page
-    await seedBackNavFixture()
-    const prefix = testApi.prefix
-    const backNav21 = `${prefix}-Back Nav 21`
+    const seeded = await testApi.seedBehavior('CON-066')
+    const searchTerm = declaredWorldSearch(seeded)
+    const backNav21 = seeded.entities['p21'].name
     const page2Url =
-      `/contacts?search=${encodeURIComponent(prefix)}` +
+      `/contacts?search=${encodeURIComponent(searchTerm)}` +
       `&sort=name&order=asc&cadence_filter=has_cadence&followup_filter=no_followup&page=2`
 
     // (a) sort-FIELD change: name → cadence.
@@ -689,7 +696,7 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
     await page.goto(page2Url)
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByText(backNav21)).toBeVisible({ timeout: 15000 })
-    const newTerm = `${prefix}x`
+    const newTerm = `${searchTerm} nosuchcontact`
     reset = page.waitForResponse(r => {
       if (!isListRequest(r.url())) return false
       const p = new URL(r.url()).searchParams
@@ -732,14 +739,13 @@ test.describe('Contact Back-to-list navigation @area:contact-navigation', () => 
     page,
   }) => {
     // spec: CON-058.current-page-reflected-in-url
-    await seedBackNavFixture()
-    const prefix = testApi.prefix
+    const seeded = await testApi.seedBehavior('CON-065')
     await page.goto(
-      `/contacts?search=${encodeURIComponent(prefix)}` +
+      `/contacts?search=${encodeURIComponent(declaredWorldSearch(seeded))}` +
         `&sort=name&order=asc&cadence_filter=has_cadence&followup_filter=no_followup`
     )
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByText(`${prefix}-Back Nav 01`)).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(seeded.entities['p01'].name)).toBeVisible({ timeout: 15000 })
 
     // USE the Pagination control → the URL gains ?page=2. Await the click's
     // OWN page-2 fetch to settle first, so the reload waiter below cannot

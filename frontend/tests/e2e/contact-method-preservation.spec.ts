@@ -30,6 +30,25 @@ async function getMethods(request: APIRequestContext, contactId: string): Promis
   return (body?.data?.methods ?? []) as MethodRow[]
 }
 
+/**
+ * The value the DECLARATION seeded for one method kind. The generator owns it
+ * (namespace-prefixed email, namespace-blocked phone), so every assertion reads
+ * it back rather than restating a literal that would silently stop matching.
+ */
+async function seededMethodValue(
+  request: APIRequestContext,
+  contactId: string,
+  type: string
+): Promise<string> {
+  const method = (await getMethods(request, contactId)).find(m => m.type === type)
+  expect(method, `the declared contact should carry a seeded ${type}`).toBeTruthy()
+  return method!.value
+}
+
+function seededEmail(request: APIRequestContext, contactId: string): Promise<string> {
+  return seededMethodValue(request, contactId, 'email')
+}
+
 /** Adds a method out of band, the way another writer (enrichment) would. */
 async function addMethodOutOfBand(
   request: APIRequestContext,
@@ -106,12 +125,9 @@ test.describe('Contact method preservation @area:contacts', () => {
     request,
   }) => {
     // spec: CON-063.method-added-another-writer
-    const emailA = `pres-a-${Date.now()}@example.com`
+    const seeded = await testApi.seedBehavior('CON-063')
+    const contactId = seeded.entities['target'].id
     const emailB = `pres-b-${Date.now()}@example.com`
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Preservation Target', methods: [{ type: 'email', value: emailA }] },
-    ])
-    const contactId = ids[0]
 
     await openEditMode(page, contactId)
 
@@ -132,17 +148,13 @@ test.describe('Contact method preservation @area:contacts', () => {
 
   test('removes a method the user deleted in the form', async ({ page, request }) => {
     // spec: CON-063.method-user-explicitly-deleted
-    const emailA = `del-a-${Date.now()}@example.com`
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Deletion Target',
-        methods: [
-          { type: 'email', value: emailA },
-          { type: 'phone', value: '5555550143' },
-        ],
-      },
-    ])
-    const contactId = ids[0]
+    // The two-method entity: this is the one citing test whose subject has to
+    // carry a second method BEFORE the form opens, so there is something the user
+    // can explicitly delete.
+    const seeded = await testApi.seedBehavior('CON-063')
+    const contactId = seeded.entities['two-methods'].id
+    const emailA = await seededEmail(request, contactId)
+    const seededPhone = await seededMethodValue(request, contactId, 'phone')
 
     await openEditMode(page, contactId)
     await expect(methodValues(page)).toHaveCount(2)
@@ -152,7 +164,7 @@ test.describe('Contact method preservation @area:contacts', () => {
     // attribute selector matches nothing.
     const rowIndex = await methodValues(page).evaluateAll(
       (inputs, target) => inputs.findIndex(i => (i as HTMLInputElement).value === target),
-      '5555550143'
+      seededPhone
     )
     expect(rowIndex, 'the seeded phone row should be on screen').toBeGreaterThanOrEqual(0)
     await page.getByRole('button', { name: 'Remove' }).nth(rowIndex).click()
@@ -166,11 +178,8 @@ test.describe('Contact method preservation @area:contacts', () => {
 
   test('reports which parts of the save succeeded when one step fails', async ({ page }) => {
     // spec: CON-063.partial-failure-names-saved-parts
-    const emailA = `part-a-${Date.now()}@example.com`
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Partial Target', methods: [{ type: 'email', value: emailA }] },
-    ])
-    const contactId = ids[0]
+    const seeded = await testApi.seedBehavior('CON-063')
+    const contactId = seeded.entities['target'].id
 
     await openEditMode(page, contactId)
     await failNotesStep(page, contactId)
@@ -192,12 +201,9 @@ test.describe('Contact method preservation @area:contacts', () => {
     request,
   }) => {
     // spec: CON-063.retrying-after-partial-failure
-    const emailA = `retry-a-${Date.now()}@example.com`
+    const seeded = await testApi.seedBehavior('CON-063')
+    const contactId = seeded.entities['target'].id
     const emailB = `retry-b-${Date.now()}@example.com`
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Retry Target', methods: [{ type: 'email', value: emailA }] },
-    ])
-    const contactId = ids[0]
 
     await openEditMode(page, contactId)
     await failNotesStep(page, contactId)
@@ -225,12 +231,10 @@ test.describe('Contact method preservation @area:contacts', () => {
     // is genuinely unseen; adding it before would make it legitimately part of
     // the acknowledged state, and an implementation that assigns the whole
     // response method list would pass the pin written to catch it.
-    const emailA = `addrm-a-${Date.now()}@example.com`
     const phoneC = '5555550144'
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Add Remove Target', methods: [{ type: 'email', value: emailA }] },
-    ])
-    const contactId = ids[0]
+    const seeded = await testApi.seedBehavior('CON-063')
+    const contactId = seeded.entities['target'].id
+    const emailA = await seededEmail(request, contactId)
 
     await openEditMode(page, contactId)
     await addMethodOutOfBand(request, contactId, 'phone', '5555550145')
@@ -271,13 +275,10 @@ test.describe('Contact method preservation @area:contacts', () => {
     request,
   }) => {
     // spec: CON-063.partial-save-add-can-be-edited
-    const emailA = `addedit-a-${Date.now()}@example.com`
     const phoneC = '5555550146'
     const phoneCEdited = '5555550147'
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Add Edit Target', methods: [{ type: 'email', value: emailA }] },
-    ])
-    const contactId = ids[0]
+    const seeded = await testApi.seedBehavior('CON-063')
+    const contactId = seeded.entities['target'].id
 
     await openEditMode(page, contactId)
     await failNotesStep(page, contactId)
@@ -316,12 +317,10 @@ test.describe('Contact method preservation @area:contacts', () => {
     request,
   }) => {
     // spec: CON-063.reverting-method-value-restores
-    const emailA = `revert-a-${Date.now()}@example.com`
     const emailIntermediate = `revert-b-${Date.now()}@example.com`
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Revert Target', methods: [{ type: 'email', value: emailA }] },
-    ])
-    const contactId = ids[0]
+    const seeded = await testApi.seedBehavior('CON-063')
+    const contactId = seeded.entities['target'].id
+    const emailA = await seededEmail(request, contactId)
 
     await openEditMode(page, contactId)
     await failNotesStep(page, contactId)

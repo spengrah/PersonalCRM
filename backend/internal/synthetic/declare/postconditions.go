@@ -34,8 +34,12 @@ type Postcondition struct {
 	// (empty and non-nil means "exactly zero methods").
 	MethodKinds []string
 	// Birthday: the date the detail read must show, derived from BirthdayInDays
-	// / BirthdayOn against the run anchor.
+	// / BirthdayOn / BirthdayPlaceholderToday against the run anchor.
 	Birthday *time.Time
+	// Location: the RAW (unprefixed) declared location. The assertion computes
+	// the expected stored value by prefixing it with the run's own namespace, so
+	// this field stays a pure function of the declaration like every other one.
+	Location *string
 	// InteractionCount: the EXACT number of rows the interactions read must
 	// return, derived from History(n).
 	InteractionCount *int
@@ -43,6 +47,12 @@ type Postcondition struct {
 	// the oldest interaction's occurred_at (History's creation-margin rule,
 	// checked through the read path rather than only in a unit test).
 	CreatedBeforeOldestInteraction bool
+	// ExplicitName: the EXACT rendered display name (namespace prefix aside) a
+	// pinned literal must produce. It is the only checkable fact ExplicitName
+	// implies, and without it the lowering has no oracle at all: the manifest
+	// name and the stored full_name are the same value read twice, so comparing
+	// them cannot tell a pinned name from a drawn one.
+	ExplicitName *string
 	// NameEdge: the name-edge kind whose token the manifest name must carry.
 	NameEdge *string
 	// NameTwinOf: the handle whose rendered name this one must equal exactly.
@@ -98,15 +108,19 @@ func postconditionsFor(entities []Entity) []Postcondition {
 			pc.Present = &absent
 			pc.Listed = false
 			// A removed contact's detail read is a 404, so nothing derived from
-			// its own columns is assertable any more. Overdue membership stays,
-			// as false: leaving the overdue read is the observable consequence
-			// of the removal, and it is the half most likely to regress.
+			// its own columns is assertable any more — the rendered NAME included,
+			// since it is checked against the detail read's full_name. Overdue
+			// membership stays, as false: leaving the overdue read is the
+			// observable consequence of the removal, and it is the half most likely
+			// to regress.
 			pc.Cadence = nil
 			pc.LastContacted = nil
 			pc.CreatedAgo = nil
 			pc.MethodKinds = nil
 			pc.Birthday = nil
+			pc.Location = nil
 			pc.InteractionCount = nil
+			pc.ExplicitName = nil
 			pc.CreatedBeforeOldestInteraction = false
 			notOverdue := false
 			pc.OverdueMember = &notOverdue
@@ -193,6 +207,10 @@ func (p *contactPlan) postcondition() Postcondition {
 
 	pc.MethodKinds = p.expectedMethodKinds()
 
+	if p.explicitNameSet {
+		display := p.explicitGiven + " " + p.explicitSurname
+		pc.ExplicitName = &display
+	}
 	if p.nameEdge != "" {
 		kind := p.nameEdge
 		pc.NameEdge = &kind
@@ -200,6 +218,10 @@ func (p *contactPlan) postcondition() Postcondition {
 	if p.sameNameAs != "" {
 		twin := p.sameNameAs
 		pc.NameTwinOf = &twin
+	}
+	if p.location != nil {
+		loc := *p.location
+		pc.Location = &loc
 	}
 	return pc
 }
@@ -210,6 +232,13 @@ func (p *contactPlan) postcondition() Postcondition {
 // expectation drift from the row.
 func (pc *Postcondition) resolveBirthday(p *contactPlan, anchor time.Time) {
 	if p.birthday == nil {
+		return
+	}
+	// The placeholder form goes through the SAME clamp the lowering uses, so the
+	// expectation and the stored row cannot disagree about the one day it fires.
+	if p.birthday.placeholder {
+		bday := p.birthday.resolvePlaceholder(anchor)
+		pc.Birthday = &bday
 		return
 	}
 	bday := p.birthday.resolve(anchor)

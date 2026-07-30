@@ -35,9 +35,9 @@ func TestWithBirthday1900Sentinel_EveryOtherDateRoundTrips(t *testing.T) {
 			if spec.Birthday.Month() != month || spec.Birthday.Day() != day {
 				t.Errorf("%s %d stored as %s", month, day, spec.Birthday.Format("01-02"))
 			}
-			if spec.Birthday.Year() != sentinelBirthYear {
+			if spec.Birthday.Year() != SentinelBirthYear {
 				t.Errorf("%s %d stored in year %d, want the year-unknown sentinel %d",
-					month, day, spec.Birthday.Year(), sentinelBirthYear)
+					month, day, spec.Birthday.Year(), SentinelBirthYear)
 			}
 		}
 	}

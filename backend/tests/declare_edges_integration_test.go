@@ -152,13 +152,6 @@ func assertEdgePostcondition(
 		assert.Equal(t, twin.Name, seeded.Name, "handle %q must render exactly its twin's name", pc.Handle)
 	}
 
-	if pc.Birthday != nil {
-		detail := getContact(t, router, seeded.ID)
-		require.NotNil(t, detail.Birthday, "handle %q declared a birthday", pc.Handle)
-		assert.Equal(t, pc.Birthday.UTC().Format("2006-01-02"), detail.Birthday.UTC().Format("2006-01-02"),
-			"handle %q birthday must survive the read byte-identically", pc.Handle)
-	}
-
 	if pc.InteractionCount != nil {
 		interactions := listInteractions(t, router, seeded.ID)
 		assert.Len(t, interactions, *pc.InteractionCount,

@@ -224,6 +224,133 @@ func TestWithNameTwinOf_PreservesTheStreamForLaterDraws(t *testing.T) {
 	}
 }
 
+// --- WithExplicitName -------------------------------------------------------
+
+func TestWithExplicitName_PinsTheRenderedNameVerbatim(t *testing.T) {
+	gen := NewGeneratorAt(DefaultSeed, "explicit-ns", nameAnchor)
+	spec := gen.Contact(WithExplicitName("Cadence", "Sort Yankee"))
+
+	if want := gen.Prefix() + "Cadence Sort Yankee"; spec.FullName != want {
+		t.Fatalf("explicit name rendered %q, want %q", spec.FullName, want)
+	}
+}
+
+// The pin must not shift the PRNG stream: every contact drawn AFTER an explicit
+// name must be byte-identical to what it would have been without one. The
+// explicit contact still consumes its sequence number, given name and surname;
+// only the rendered result is overridden — the same contract WithNameTwinOf
+// carries, verified the same way.
+func TestWithExplicitName_PreservesTheStreamForLaterDraws(t *testing.T) {
+	const n = 12
+
+	plain := NewGeneratorAt(DefaultSeed, "explicit-stream-ns", nameAnchor)
+	_ = plain.Contact() // the draw the explicit name will replace
+	var withoutExplicit []string
+	for i := 0; i < n; i++ {
+		withoutExplicit = append(withoutExplicit, plain.Contact().FullName)
+	}
+
+	explicit := NewGeneratorAt(DefaultSeed, "explicit-stream-ns", nameAnchor)
+	_ = explicit.Contact(WithExplicitName("Kbd", "Move Alpha"))
+	var withExplicit []string
+	for i := 0; i < n; i++ {
+		withExplicit = append(withExplicit, explicit.Contact().FullName)
+	}
+
+	for i := range withoutExplicit {
+		if withoutExplicit[i] != withExplicit[i] {
+			t.Fatalf("draw %d after the explicit name: got %q, want %q — the pin shifted the stream",
+				i, withExplicit[i], withoutExplicit[i])
+		}
+	}
+}
+
+// The dedupe exemption: an explicit name that collides with an EARLIER contact's
+// drawn name is NOT auto-disambiguated, because the caller asked for that exact
+// literal. Every ordinary draw stays covered by the dedupe.
+func TestWithExplicitName_ExemptFromDedupe(t *testing.T) {
+	gen := NewGeneratorAt(DefaultSeed, "explicit-dedupe-ns", nameAnchor)
+	drawn := gen.Contact()
+	base := strings.TrimPrefix(drawn.FullName, gen.Prefix())
+	given, sur, ok := strings.Cut(base, " ")
+	if !ok {
+		t.Fatalf("generated display name %q has no given/surname split", base)
+	}
+
+	collider := gen.Contact(WithExplicitName(given, sur))
+	if collider.FullName != drawn.FullName {
+		t.Fatalf("explicit name rendered %q, want the un-disambiguated %q", collider.FullName, drawn.FullName)
+	}
+	if collider.Email == drawn.Email {
+		t.Error("only the NAME may repeat — a shared email would make it the same person to the matcher")
+	}
+}
+
+// The identifier derivation, not just the display name: a multi-word literal
+// must not put a raw space (or any other invalid character) inside the generated
+// email's local part, and a single-word generator-drawn pair must be byte-identical
+// to what it always was.
+func TestWithExplicitName_ProducesAValidEmailLocalPart(t *testing.T) {
+	gen := NewGeneratorAt(DefaultSeed, "explicit-email-ns", nameAnchor)
+	spec := gen.Contact(WithExplicitName("Cadence", "Sort Yankee"))
+
+	local, _, ok := strings.Cut(spec.Email, "@")
+	if !ok {
+		t.Fatalf("generated email %q has no domain", spec.Email)
+	}
+	if !strings.Contains(local, "cadence.sort-yankee") {
+		t.Errorf("email local part %q does not carry the sanitized literal", local)
+	}
+	for _, r := range local {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '.':
+		default:
+			t.Errorf("email local part %q carries %q, which an unquoted local part may not hold", local, r)
+		}
+	}
+
+	// The ordinary path is unchanged: a single-word drawn pair slugs exactly as
+	// lowercase(given) + "." + lowercase(surname), as it always did.
+	if got, want := slug("Zeta", "Testwell"), "zeta.testwell"; got != want {
+		t.Errorf("slug(%q, %q) = %q, want the unchanged %q", "Zeta", "Testwell", got, want)
+	}
+}
+
+// slug()'s sanitization is a safe no-op only while every pool entry is plain
+// alphanumeric ASCII. That has held by accident, not by any enforced constraint:
+// a future entry carrying an apostrophe or a hyphen ("O'Malley", "Smith-Jones")
+// would silently change the generated email identifier on EVERY synthetic path
+// that draws through slug/emailFor, and neither the sanitization spot-check above
+// nor any golden-stream test exercises more than a couple of pairs. This turns
+// the assumption into one that holds by construction and fails loudly, naming the
+// offending entry, the moment it stops being true.
+func TestNamePools_AreEmailSafeByConstruction(t *testing.T) {
+	pools := map[string][]string{
+		"syntheticGivenNames": syntheticGivenNames,
+		"syntheticSurnames":   syntheticSurnames,
+	}
+	for pool, entries := range pools {
+		if len(entries) == 0 {
+			t.Fatalf("%s is empty", pool)
+		}
+		for _, entry := range entries {
+			if entry == "" {
+				t.Errorf("%s carries an empty entry", pool)
+				continue
+			}
+			for _, r := range entry {
+				switch {
+				case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+				default:
+					t.Errorf("%s entry %q carries %q — pool entries must be plain alphanumeric ASCII, "+
+						"because slug() only sanitizes and cannot preserve a punctuation-bearing identifier",
+						pool, entry, r)
+				}
+			}
+		}
+	}
+}
+
 // Everything except the deliberate pair must still be unique: the twin's name is
 // recorded in the dedupe set, so a later ordinary draw landing on the same base
 // is disambiguated exactly as before.

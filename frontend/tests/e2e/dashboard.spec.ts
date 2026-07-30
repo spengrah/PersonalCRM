@@ -117,9 +117,17 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // Every seeded card renders (namespace-scoped names — parallel-safe).
+    //
+    // Matched EXACTLY. The three names are generator-drawn, and two contacts in
+    // one namespace that draw the same given+surname render as "<name>" and
+    // "<name> N" — and getByRole matches an accessible name by SUBSTRING, so a
+    // non-exact match on the shorter one resolves BOTH headings and fails strict
+    // mode. The disambiguator lands on the later contact, so it is the earlier
+    // card's name that is at risk; the whole loop is exact rather than only the
+    // first two entries.
     const cardNames = ['card-a', 'card-b', 'card-c'].map(handle => seeded.entities[handle].name)
     for (const name of cardNames) {
-      await expect(page.getByRole('heading', { name })).toBeVisible()
+      await expect(page.getByRole('heading', { name, exact: true })).toBeVisible()
     }
 
     // The header count is DERIVED from the same list the cards render from,
@@ -363,10 +371,14 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     // Establish the POPULATED state first — the seeded overdue card must have
     // rendered (a loading or error mask would otherwise vacuously pass a
     // state-independent affordance check) — then assert the header CTA.
+    // Matched EXACTLY: the target and the sentinel are both generator-drawn and
+    // both render as cards here, so when the two draw the same given+surname the
+    // later one renders as "<target name> N" and a substring match on the
+    // target's own name resolves both headings.
     const contactName = seeded.entities['refresh-target'].name
     await page.goto('/dashboard')
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
+    await expect(page.getByRole('heading', { name: contactName, exact: true })).toBeVisible()
 
     await expectAddContactHeader(page)
   })
@@ -392,8 +404,11 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     await page.goto('/dashboard')
     await page.waitForLoadState('domcontentloaded')
 
-    // Verify our seeded contact is visible
-    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
+    // Verify our seeded contact is visible. Exact, for the same reason the
+    // card-resolution and disappearance assertions below are: the target and the
+    // sentinel can draw the same name, and the sentinel then renders as the
+    // target's name plus a sequence number.
+    await expect(page.getByRole('heading', { name: contactName, exact: true })).toBeVisible()
 
     // No-reload sentinel: a window marker survives only if no full navigation
     // or reload happens between the mutation and the refreshed list. Its
@@ -402,8 +417,13 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
       ;(window as Window & { __dsh005NoReload?: boolean }).__dsh005NoReload = true
     })
 
-    // Find the "Mark as Contacted" button for our contact
-    const contactCard = page.getByRole('listitem').filter({ hasText: contactName })
+    // Find the "Mark as Contacted" button for our contact. The card is resolved
+    // by its NAME HEADING matched exactly, not by hasText: a substring filter
+    // would keep the sentinel's card too whenever the two drawn names collide,
+    // and the button lookup below would then be ambiguous.
+    const contactCard = page
+      .getByRole('listitem')
+      .filter({ has: page.getByRole('heading', { name: contactName, exact: true }) })
     const markContactedButton = contactCard.getByRole('button', { name: /Mark as Contacted/i })
     await expect(markContactedButton).toBeVisible()
 
@@ -460,8 +480,15 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     // dashboard's own refetch no longer includes it.
     await overdueRefetchPromise
 
-    // The card vanishes from the live dashboard without navigation.
-    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible({
+    // The card vanishes from the live dashboard without navigation. Exact again,
+    // and here exactness is what makes the negative meaningful rather than
+    // weaker: on a name collision the sentinel's heading CONTAINS the target's
+    // name, so a substring match would still resolve it and the assertion would
+    // fail for a reason unrelated to the claim. The negative is not vacuous
+    // either — the same heading was asserted VISIBLE above, and the sentinel's
+    // card is asserted still visible below, so the list is proven to be
+    // rendering cards at this point.
+    await expect(page.getByRole('heading', { name: contactName, exact: true })).not.toBeVisible({
       timeout: 5000,
     })
 

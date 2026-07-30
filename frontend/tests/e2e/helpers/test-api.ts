@@ -191,6 +191,40 @@ export interface SeedBehaviorResult {
   entities: Record<string, SeededEntity>
 }
 
+/**
+ * The literal prefix every name in one declared world starts with.
+ *
+ * This is the term for a surface that filters by plain SUBSTRING on the client
+ * (the merge modal's source selector does exactly that over an already-loaded
+ * page of contacts). It is NOT interchangeable with declaredWorldSearch below —
+ * see that function for why the two surfaces need different strings.
+ */
+export function declaredWorldNamePrefix(seeded: SeedBehaviorResult): string {
+  return `synth-${seeded.namespace}-`
+}
+
+/**
+ * The contact-list SEARCH term that reaches EVERY contact of one declared world,
+ * and only that world.
+ *
+ * The contact list search is PostgreSQL full-text search, so the term has to be
+ * built out of lexemes the STORED name (`synth-<namespace>-<display>`) actually
+ * tokenizes into — which is why this is not simply the name prefix. Two forms
+ * that look right do not work: the bare test prefix (`w0-1712…`) tokenizes its
+ * numeric segment as a SIGNED integer (`-1712…`) that no stored name carries,
+ * and the hyphenated prefix (`synth-w0-1712…-c1-s1`) asks for compound lexemes
+ * (`c1-s1`) the stored name splits differently. Feeding the segments as separate
+ * words asks only for the parts, all of which are present — and
+ * `plainto_tsquery` ANDs them, so a neighbouring namespace (`…-c2`, `…-c10`,
+ * another worker, another timestamp) misses at least one term and is excluded.
+ *
+ * Because it contains spaces it is NOT a substring of any stored name, so a
+ * client-side substring filter needs declaredWorldNamePrefix instead.
+ */
+export function declaredWorldSearch(seeded: SeedBehaviorResult): string {
+  return ['synth', ...seeded.namespace.split('-')].join(' ')
+}
+
 export type NamespaceCleanupStatus = 'cleaned' | 'busy' | 'pending' | 'error'
 
 export interface NamespaceCleanupOutcome {
