@@ -121,7 +121,6 @@ type contactPlan struct {
 	noMethods       bool
 	history         *int
 	nameEdge        string
-	nameMarker      *string
 	explicitNameSet bool
 	explicitGiven   string
 	explicitSurname string
@@ -313,16 +312,6 @@ func ExplicitName(given, surname string) ContactProp {
 	}
 }
 
-// NameMarker appends a caller-chosen token to the contact's rendered name, so a
-// SET of declared contacts can be resolved over the API by search instead of by
-// an ad-hoc predicate. It composes with everything else and draws no PRNG.
-func NameMarker(marker string) ContactProp {
-	return func(p *contactPlan) {
-		m := marker
-		p.nameMarker = &m
-	}
-}
-
 // sameNameProp is the twin-name prop. It implements BOTH entity kinds' prop
 // interfaces because a name collision needs a contact twin AND an import
 // candidate that collides with the pair.
@@ -451,9 +440,6 @@ func (p *contactPlan) validate() error {
 		if p.nameEdge != "" {
 			return fmt.Errorf("contact %q: ExplicitName and NameEdge are mutually exclusive — a name edge splices its token between the given name and the surname, so the rendered name would not be the literal that was pinned", p.name)
 		}
-	}
-	if p.nameMarker != nil && strings.TrimSpace(*p.nameMarker) == "" {
-		return fmt.Errorf("contact %q: NameMarker must be a non-blank token — a blank marker resolves nothing", p.name)
 	}
 	if p.birthday != nil {
 		if err := p.birthday.validate(p.name); err != nil {

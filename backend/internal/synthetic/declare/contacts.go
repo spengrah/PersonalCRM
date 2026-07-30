@@ -8,9 +8,10 @@ import (
 // Contacts-domain resolutions (spec/contacts.yaml).
 //
 // Every ui-surface CON behavior is resolved here or waived in waivers.go; the
-// completeness test enforces that there is no fourth state. Three remain waived
+// completeness test enforces that there is no fourth state. Four remain waived
 // and say why there: CON-039 and CON-046 are proposed behaviors with no citing
-// test, and CON-056 needs a method-kind the factory cannot build yet.
+// test, CON-054 needs a name composition that can carry a resolution marker
+// unambiguously, and CON-056 needs a method-kind the factory cannot build yet.
 func init() {
 	RegisterNone("CON-055", "the new-contact form CREATES the contact under test; there is no pre-existing data to provision")
 
@@ -105,20 +106,6 @@ func init() {
 		Entities: []Entity{Contact("target")},
 	})
 
-	// The cadence filter's fixture is resolved by a TWO-PHASE search: one phase
-	// reaches all four contacts, the second narrows to the marker. The unmarked
-	// fourth contact is what makes the narrowing meaningful — only an applied text
-	// filter can remove a row the first phase proved present.
-	Register(Declaration{
-		Behavior: "CON-054",
-		Entities: []Entity{
-			Contact("weekly", Cadence("weekly"), NameMarker(CadenceFilterMarker)),
-			Contact("monthly", Cadence("monthly"), NameMarker(CadenceFilterMarker)),
-			Contact("none", NameMarker(CadenceFilterMarker)),
-			Contact("unrelated"),
-		},
-	})
-
 	// One cadence-bearing contact. Neither sort test reads row order or
 	// last_contacted — they assert the request the header click issues and the
 	// applied aria-sort state — so nothing more is declared.
@@ -196,11 +183,6 @@ func init() {
 		Entities: backNavFixtureEntities(backNavStemReset),
 	})
 }
-
-// CadenceFilterMarker is the resolution marker CON-054's fixture puts on the
-// three contacts its narrowing search must keep. It is exported so the citing
-// spec searches for the same token the declaration writes.
-const CadenceFilterMarker = "cadflt"
 
 // backNavFixtureSize is the back-navigation cohort: one more than the twenty-row
 // default page size, so page 2 holds exactly one row and that row's identity is

@@ -9,13 +9,6 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 }
 
-// The resolution marker CON-054's declared fixture appends to the three contacts
-// its narrowing search must keep (declare.CadenceFilterMarker on the Go side,
-// which owns the value). Restated here because declare vocabulary constants have
-// no generated bridge into the E2E suite; which entities carry it is pinned by
-// the declaration's own unit test.
-const CADENCE_FILTER_MARKER = 'cadflt'
-
 test.describe('Contacts - TestAPI Seeded @area:contacts', () => {
   let testApi: TestAPI
 
@@ -533,64 +526,67 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     // `search=` list request that FILTERS the results (the matching fixtures
     // render, a seeded non-matching one does not) — not merely that an input
     // exists.
-    // The declared fixture seeds contacts with and without cadence, plus a
-    // NON-MATCHING contact (the only one carrying no resolution marker) that the
-    // narrowed search must filter out.
-    const seeded = await testApi.seedBehavior('CON-054')
-    const weeklyName = seeded.entities['weekly'].name
-    const monthlyName = seeded.entities['monthly'].name
-    const noCadenceName = seeded.entities['none'].name
-    const unrelatedName = seeded.entities['unrelated'].name
-    const worldTerm = declaredWorldSearch(seeded)
-    const markerTerm = declaredWorldSearch(seeded, CADENCE_FILTER_MARKER)
+    // Seed contacts with and without cadence, plus a NON-MATCHING contact the
+    // search must filter out.
+    await testApi.seedContacts([
+      { full_name: 'FilterCadence WithWeekly', cadence: 'weekly' },
+      { full_name: 'FilterCadence WithMonthly', cadence: 'monthly' },
+      { full_name: 'FilterCadence NoCadence' },
+      { full_name: 'Unrelated Zebra' },
+    ])
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
 
-    // Two-phase search. Phase 1 searches the declared world's own term (matches
-    // ALL four seeded fixtures) and establishes the non-matching contact IS
+    // Two-phase search. Phase 1 searches the bare worker prefix (matches ALL
+    // four seeded fixtures) and establishes the non-matching contact IS
     // reachable via search on this page — without this, its later absence
     // could vacuously pass (e.g. an ignored filter leaving it on page 2 of
-    // the shared DB). Phase 2 appends the resolution marker and asserts the
-    // non-matching row disappears: only an applied text filter can remove a
-    // row that phase 1 proved present. Each response listener is registered
-    // BEFORE .fill() (a param-carrying request can fire before a listener
-    // added after the fill) and requires the EXACT search term.
+    // the shared DB). Phase 2 narrows to the FilterCadence term and asserts
+    // the non-matching row disappears: only an applied text filter can
+    // remove a row that phase 1 proved present. Each response listener is
+    // registered BEFORE .fill() (a param-carrying request can fire before a
+    // listener added after the fill) and requires the EXACT search term.
     const searchInput = page.getByPlaceholder('Search contacts...')
-    const worldResponse = page.waitForResponse(
+    const prefixResponse = page.waitForResponse(
       resp =>
         resp.request().method() === 'GET' &&
         resp.url().includes('/api/v1/contacts') &&
-        new URL(resp.url()).searchParams.get('search') === worldTerm &&
+        new URL(resp.url()).searchParams.get('search') === testApi.prefix &&
         !new URL(resp.url()).searchParams.has('ids_only')
     )
-    await searchInput.fill(worldTerm)
+    await searchInput.fill(testApi.prefix)
     await searchInput.press('Enter')
-    await worldResponse
-    await expect(page.getByText(weeklyName)).toBeVisible({ timeout: 10000 })
-    await expect(page.getByText(unrelatedName)).toBeVisible()
+    await prefixResponse
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
+      timeout: 10000,
+    })
+    await expect(page.getByText(`${testApi.prefix}-Unrelated Zebra`)).toBeVisible()
 
+    const searchTerm = `${testApi.prefix}-FilterCadence`
     const searchResponse = page.waitForResponse(
       resp =>
         resp.request().method() === 'GET' &&
         resp.url().includes('/api/v1/contacts') &&
-        new URL(resp.url()).searchParams.get('search') === markerTerm &&
+        new URL(resp.url()).searchParams.get('search') === searchTerm &&
         !new URL(resp.url()).searchParams.has('ids_only')
     )
-    await searchInput.fill(markerTerm)
+    await searchInput.fill(searchTerm)
     await searchInput.press('Enter')
     await searchResponse
-    await expect(page.getByText(weeklyName)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
+      timeout: 10000,
+    })
     // The search FILTERS: the non-matching contact phase 1 proved present is
     // now absent.
-    await expect(page.getByText(unrelatedName)).not.toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-Unrelated Zebra`)).not.toBeVisible()
 
     // Verify all 3 contacts visible with "All contacts" (default)
     const filterSelect = page.getByLabel('Filter by cadence')
     await expect(filterSelect).toHaveValue('')
-    await expect(page.getByText(weeklyName)).toBeVisible()
-    await expect(page.getByText(monthlyName)).toBeVisible()
-    await expect(page.getByText(noCadenceName)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
 
     // Select "Has cadence" - should show only contacts with cadence
     const hasCadenceResponse = page.waitForResponse(
@@ -599,9 +595,9 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     await filterSelect.selectOption('has_cadence')
     await hasCadenceResponse
 
-    await expect(page.getByText(weeklyName)).toBeVisible()
-    await expect(page.getByText(monthlyName)).toBeVisible()
-    await expect(page.getByText(noCadenceName)).not.toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).not.toBeVisible()
 
     // Select "No cadence" - should show only contacts without cadence
     const noCadenceResponse = page.waitForResponse(
@@ -610,15 +606,17 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     await filterSelect.selectOption('no_cadence')
     await noCadenceResponse
 
-    await expect(page.getByText(weeklyName)).not.toBeVisible()
-    await expect(page.getByText(monthlyName)).not.toBeVisible()
-    await expect(page.getByText(noCadenceName)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).not.toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).not.toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
 
     // Reset to "All contacts" - should show all again
     await filterSelect.selectOption('')
 
-    await expect(page.getByText(weeklyName)).toBeVisible({ timeout: 10000 })
-    await expect(page.getByText(noCadenceName)).toBeVisible()
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
+      timeout: 10000,
+    })
+    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
   })
 })
 
@@ -772,11 +770,14 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await searchInput.fill(declaredWorldSearch(seeded))
     await searchInput.press('Enter')
 
+    // Matched EXACTLY: the two declared names are generator-drawn, and two
+    // contacts in one namespace that draw the same pair render "<name>" and
+    // "<name> N", so a substring match on the shorter one would resolve both rows.
     const weeklyRow = page.locator('tr', {
-      has: page.getByText(seeded.entities['with-cadence'].name),
+      has: page.getByText(seeded.entities['with-cadence'].name, { exact: true }),
     })
     const noneRow = page.locator('tr', {
-      has: page.getByText(seeded.entities['without-cadence'].name),
+      has: page.getByText(seeded.entities['without-cadence'].name, { exact: true }),
     })
     await expect(weeklyRow).toBeVisible({ timeout: 15000 })
     await expect(noneRow).toBeVisible()

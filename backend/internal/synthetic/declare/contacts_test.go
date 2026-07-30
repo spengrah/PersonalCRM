@@ -21,7 +21,6 @@ func TestContactsDeclarations_RegisterTheExpectedHandleCounts(t *testing.T) {
 		"CON-044": 1,
 		"CON-045": 8,
 		"CON-053": 1,
-		"CON-054": 4,
 		"CON-057": 1,
 		"CON-058": 22,
 		"CON-059": 3,
@@ -130,27 +129,4 @@ func TestCadenceSortDeclaration_NamesAreAntiCorrelatedWithCadenceOrder(t *testin
 		"name-ascending order must DIFFER from cadence order, or a name-order fallback passes the citing test")
 	assert.NotEqual(t, byCadenceDesc, byNameDesc,
 		"name-descending order must differ too — a reversed fallback is the same defect")
-}
-
-// CON-054's fixture works by a two-phase search: one phase reaches all four
-// contacts, the second narrows to the marker and must DROP the unmarked one. A
-// marker on all four (or on none) would make the narrowing vacuous.
-func TestCadenceFilterDeclaration_MarksAllButTheUnrelatedContact(t *testing.T) {
-	d, ok := Lookup("CON-054")
-	require.True(t, ok)
-
-	marked, unmarked := map[string]bool{}, map[string]bool{}
-	for _, e := range d.Entities {
-		p, isContact := e.(*contactPlan)
-		require.True(t, isContact)
-		if p.nameMarker != nil {
-			require.NotEmpty(t, *p.nameMarker)
-			marked[p.name] = true
-			continue
-		}
-		unmarked[p.name] = true
-	}
-	assert.Equal(t, map[string]bool{"weekly": true, "monthly": true, "none": true}, marked)
-	assert.Equal(t, map[string]bool{"unrelated": true}, unmarked,
-		"the unmarked contact is what proves the narrowing search actually filters")
 }

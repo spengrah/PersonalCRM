@@ -312,8 +312,7 @@ func WithNameTwinOf(other ContactSpec) ContactOption {
 // ordering.
 //
 // Like WithNameTwinOf it skips the display-name dedupe: an exact literal is the
-// whole point, and silently splicing a disambiguating token into it would defeat
-// the promise.
+// whole point, and silently appending a disambiguating suffix would defeat it.
 // Uniqueness within one declaration is therefore the caller's responsibility
 // (the declare vocabulary validates it at registration time).
 //
@@ -363,26 +362,13 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 		given, sur = cfg.explicitGiven, cfg.explicitSurname
 	}
 
-	// renderDisplay composes the name from its parts. The disambiguator is empty
-	// for the ordinary case and carries this contact's sequence number when the
-	// drawn pair repeats — spliced between the given name and the surname, which
-	// the dedupe note below explains is load-bearing.
-	renderDisplay := func(disambiguator string) string {
-		out := given
-		if disambiguator != "" {
-			out += " " + disambiguator
-		}
-		if token, ok := nameEdgeTokens[cfg.nameEdge]; ok {
-			out += " " + token + sur
-		} else {
-			out += " " + sur
-		}
-		if cfg.nameMarker != "" {
-			out += " " + cfg.nameMarker
-		}
-		return out
+	display := given + " " + sur
+	if token, ok := nameEdgeTokens[cfg.nameEdge]; ok {
+		display = given + " " + token + sur
 	}
-	display := renderDisplay("")
+	if cfg.nameMarker != "" {
+		display += " " + cfg.nameMarker
+	}
 	// Names are drawn WITH REPLACEMENT from a 16×10 pool, so one namespace can
 	// mint the same display name twice — measured at ~1.8% for a three-contact
 	// fixture, which is a flake, not a rarity. A duplicate breaks any selector
@@ -391,27 +377,15 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 	// repeat therefore carries this contact's sequence number, which is unique
 	// within the generator by construction.
 	//
-	// The number sits in the MIDDLE rather than at the end, and that placement is
-	// load-bearing twice over. A TRAILING number would leave the first contact's
-	// whole name a prefix of the second's, and the selectors that resolve these
-	// fixtures match on SUBSTRING (Playwright's getByText, a manifest name fed to
-	// a search) — so the shorter name would resolve both rows and the
-	// mis-resolution would read as a legitimate hit. It would also displace a
-	// declared resolution marker from the end of the name. Nothing else can put a
-	// drawn name inside another: both carry the same namespace prefix, so
-	// containment would need one given name to be a prefix of another (the space
-	// then fails to line up) or one surname to be a prefix of another (no pool
-	// pair is).
-	//
 	// Disambiguating here rather than redrawing is deliberate: a redraw would
 	// consume extra rng values and shift every later draw for that namespace,
 	// so worlds that DON'T collide would still have to be re-derived. This way
 	// a non-colliding namespace's output is byte-identical to before.
 	// An explicit name is exempt for the same reason a twin is: both are
-	// deliberate, caller-owned literals, and a disambiguating token would
+	// deliberate, caller-owned literals, and a disambiguating suffix would
 	// silently change the string the caller asked for.
 	if cfg.twinOf == nil && cfg.explicitGiven == "" && g.usedDisplay[display] {
-		display = renderDisplay(fmt.Sprintf("%d", n))
+		display = fmt.Sprintf("%s %d", display, n)
 	}
 	// Namespace-prefixed full_name so the prefix cleanup backstop finds it.
 	fullName := g.Prefix() + display

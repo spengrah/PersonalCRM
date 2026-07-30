@@ -53,12 +53,6 @@ type Postcondition struct {
 	// name and the stored full_name are the same value read twice, so comparing
 	// them cannot tell a pinned name from a drawn one.
 	ExplicitName *string
-	// NameMarker: the resolution token the rendered name must carry as a whole
-	// TOKEN. Not an equality, because the marker composes with a DRAWN base the
-	// expectation cannot predict; a token rather than a suffix, because a marker
-	// exists to be SEARCHABLE and its position in the name is the factory's
-	// business, not this derivation's.
-	NameMarker *string
 	// NameEdge: the name-edge kind whose token the manifest name must carry.
 	NameEdge *string
 	// NameTwinOf: the handle whose rendered name this one must equal exactly.
@@ -115,10 +109,10 @@ func postconditionsFor(entities []Entity) []Postcondition {
 			pc.Listed = false
 			// A removed contact's detail read is a 404, so nothing derived from
 			// its own columns is assertable any more — the rendered NAME included,
-			// since both name facts are checked against the detail read's
-			// full_name. Overdue membership stays, as false: leaving the overdue
-			// read is the observable consequence of the removal, and it is the half
-			// most likely to regress.
+			// since it is checked against the detail read's full_name. Overdue
+			// membership stays, as false: leaving the overdue read is the
+			// observable consequence of the removal, and it is the half most likely
+			// to regress.
 			pc.Cadence = nil
 			pc.LastContacted = nil
 			pc.CreatedAgo = nil
@@ -127,7 +121,6 @@ func postconditionsFor(entities []Entity) []Postcondition {
 			pc.Location = nil
 			pc.InteractionCount = nil
 			pc.ExplicitName = nil
-			pc.NameMarker = nil
 			pc.CreatedBeforeOldestInteraction = false
 			notOverdue := false
 			pc.OverdueMember = &notOverdue
@@ -217,10 +210,6 @@ func (p *contactPlan) postcondition() Postcondition {
 	if p.explicitNameSet {
 		display := p.explicitGiven + " " + p.explicitSurname
 		pc.ExplicitName = &display
-	}
-	if p.nameMarker != nil {
-		marker := *p.nameMarker
-		pc.NameMarker = &marker
 	}
 	if p.nameEdge != "" {
 		kind := p.nameEdge

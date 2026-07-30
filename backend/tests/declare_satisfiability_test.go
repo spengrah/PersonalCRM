@@ -4,7 +4,6 @@ package tests
 
 import (
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
@@ -115,32 +114,13 @@ func assertPostcondition(
 	if pc.ExplicitName != nil {
 		// The one check that is NOT self-referential: the expectation is the
 		// literal the declaration wrote, so an unwired lowering renders a drawn
-		// name and fails here. Byte equality survives a declared NameMarker
-		// because the factory appends the marker last and a pinned name is exempt
-		// from the display-name dedupe, so nothing can be spliced into the pair.
-		// (A name edge WOULD splice a token into it, which is why the vocabulary
-		// refuses that combination.)
+		// name and fails here. A pinned name is exempt from the display-name
+		// dedupe, so nothing can be appended to the pair. (A name edge WOULD
+		// splice a token into it, which is why the vocabulary refuses that
+		// combination.)
 		expected := factory.SyntheticSourcePrefix + res.Namespace + "-" + *pc.ExplicitName
-		if pc.NameMarker != nil {
-			expected += " " + *pc.NameMarker
-		}
 		assert.Equal(t, expected, detail.FullName,
 			"handle %q pinned an explicit name, so the stored full_name must be exactly that literal", pc.Handle)
-	}
-
-	if pc.NameMarker != nil {
-		// A whole TOKEN, not an equality: the marker decorates a base the
-		// expectation cannot predict when the name is drawn. Token membership
-		// rather than a suffix because searchability is the whole point of a
-		// marker, and because the marker's POSITION is owned by the factory and
-		// pinned by the factory's own deterministic tests — an oracle that
-		// re-asserted it here would turn a placement change into a ~1.8%
-		// name-collision flake instead of a named failure. A marker is a single
-		// lowercase alphanumeric token, which no drawn name part can be, so
-		// membership cannot be satisfied by accident.
-		assert.Contains(t, strings.Fields(detail.FullName), *pc.NameMarker,
-			"handle %q declared the resolution marker %q, which the stored full_name %q does not carry",
-			pc.Handle, *pc.NameMarker, detail.FullName)
 	}
 
 	if pc.Cadence != nil {

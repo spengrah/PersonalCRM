@@ -118,7 +118,15 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // The selector excludes the merge target — it appears only as the kept
     // heading, never as a selectable option (CON-043.current-contact-marked-kept).
-    await expect(page.getByRole('option', { name: targetName })).toHaveCount(0)
+    //
+    // Matched on the option's NAME line, exactly: an option's accessible name also
+    // carries its primary method, so an exact role-name match would be vacuous —
+    // and a bare substring one would be satisfied by the SOURCE option whenever the
+    // two drawn names collide, since the repeat renders as the target's name plus a
+    // sequence number.
+    await expect(
+      page.getByRole('option').filter({ has: page.getByText(targetName, { exact: true }) })
+    ).toHaveCount(0)
 
     // Select the source contact
     await sourceOption.click()

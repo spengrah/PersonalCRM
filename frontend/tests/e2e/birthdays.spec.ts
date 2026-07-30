@@ -61,6 +61,10 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     return { month, day }
   }
 
+  // Every locator below that resolves a fixture BY NAME matches EXACTLY. The
+  // declared names are generator-drawn, and two of the eight contacts that draw
+  // the same given+surname pair render "<name>" and "<name> N" — so a substring
+  // match on the shorter one resolves both cards and fails strict mode.
   function isLeapDayAnchor(seeded: SeedBehaviorResult): boolean {
     const anchor = new Date(seeded.anchor)
     return anchor.getUTCMonth() === 1 && anchor.getUTCDate() === 29
@@ -95,7 +99,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     await page.waitForLoadState('domcontentloaded')
     await page.getByPlaceholder('Search contacts...').fill(contact.name)
     await page.getByPlaceholder('Search contacts...').press('Enter')
-    const row = page.locator('tr', { has: page.getByText(contact.name) })
+    const row = page.locator('tr', { has: page.getByText(contact.name, { exact: true }) })
     await expect(row).toBeVisible({ timeout: 15000 })
     await expect(row).toContainText(expectedListDate)
     await expect(row).not.toContainText('/00')
@@ -112,7 +116,9 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     // Deliberately NOT scoped to a section: the claim is "no age is shown", which
     // holds wherever the card lands — including the already-celebrated group on
     // the one anchor where the clamp moves it there.
-    const card = page.getByTestId('birthday-card').filter({ hasText: contact.name })
+    const card = page
+      .getByTestId('birthday-card')
+      .filter({ has: page.getByText(contact.name, { exact: true }) })
     await expect(card).toBeVisible({ timeout: 15000 })
     await expect(card).toContainText(expectedBirthdayPageDate)
     await expect(card).not.toContainText(/Turning|Turned/)
@@ -142,7 +148,9 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
       has: page.getByRole('heading', { name: /Today's Birthdays/ }),
     })
     await expect(todaySection).toBeVisible({ timeout: 15000 })
-    const card = todaySection.getByTestId('birthday-card').filter({ hasText: contact.name })
+    const card = todaySection
+      .getByTestId('birthday-card')
+      .filter({ has: page.getByText(contact.name, { exact: true }) })
     await expect(card).toBeVisible()
     await expect(card).toContainText('Today!')
   })
@@ -175,9 +183,9 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     await expect(celebratedSection).toBeVisible()
 
     // Each seeded contact lands in the correct group.
-    await expect(todaySection.getByText(todayName)).toBeVisible()
-    await expect(upcomingSection.getByText(upcomingName)).toBeVisible()
-    await expect(celebratedSection.getByText(celebratedName)).toBeVisible()
+    await expect(todaySection.getByText(todayName, { exact: true })).toBeVisible()
+    await expect(upcomingSection.getByText(upcomingName, { exact: true })).toBeVisible()
+    await expect(celebratedSection.getByText(celebratedName, { exact: true })).toBeVisible()
   })
 
   test('sorts upcoming birthdays soonest-first and sinks celebrated to the end', async ({
@@ -204,17 +212,23 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
 
     // Within upcoming, the sooner birthday (3 days) precedes the later (10 days)
     // in DOM order — manifest card names, not viewport coordinates.
-    await expect(upcomingSection.getByText(soonName)).toBeVisible()
-    await expect(upcomingSection.getByText(laterName)).toBeVisible()
-    const upcomingCards = await upcomingSection.getByTestId('birthday-card').allTextContents()
-    const soonIdx = upcomingCards.findIndex(t => t.includes(soonName))
-    const laterIdx = upcomingCards.findIndex(t => t.includes(laterName))
+    await expect(upcomingSection.getByText(soonName, { exact: true })).toBeVisible()
+    await expect(upcomingSection.getByText(laterName, { exact: true })).toBeVisible()
+    // The card NAMES in DOM order, compared exactly: matching a card by substring
+    // over its whole text would let the later card answer for the sooner one
+    // whenever the two drawn names collide.
+    const upcomingNames = await upcomingSection
+      .getByTestId('birthday-card')
+      .getByRole('heading', { level: 3 })
+      .allTextContents()
+    const soonIdx = upcomingNames.indexOf(soonName)
+    const laterIdx = upcomingNames.indexOf(laterName)
     expect(soonIdx).toBeGreaterThanOrEqual(0)
     expect(laterIdx).toBeGreaterThan(soonIdx)
 
     // The seeded celebrated contact sits in the celebrated section, which renders
     // AFTER the upcoming section (section headings compared in DOM order).
-    await expect(celebratedSection.getByText(celebratedName)).toBeVisible()
+    await expect(celebratedSection.getByText(celebratedName, { exact: true })).toBeVisible()
     const headings = await page.getByRole('heading', { level: 2 }).allTextContents()
     const upcomingHeadingIdx = headings.findIndex(h => /Upcoming Birthdays/.test(h))
     const celebratedHeadingIdx = headings.findIndex(h => /Already Celebrated This Year/.test(h))
@@ -253,7 +267,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
       has: page.getByRole('heading', { name: /Gift Planning/ }),
     })
     await expect(giftSection).toBeVisible({ timeout: 15000 })
-    await expect(giftSection.getByText(febName)).toBeVisible()
+    await expect(giftSection.getByText(febName, { exact: true })).toBeVisible()
   })
 
   test('a February 29 birthday is observed on February 29 in a leap year', async ({ page }) => {
@@ -272,7 +286,9 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
       has: page.getByRole('heading', { name: /Today's Birthdays/ }),
     })
     await expect(todaySection).toBeVisible({ timeout: 15000 })
-    const card = todaySection.getByTestId('birthday-card').filter({ hasText: leapName })
+    const card = todaySection
+      .getByTestId('birthday-card')
+      .filter({ has: page.getByText(leapName, { exact: true }) })
     await expect(card).toBeVisible()
     await expect(card).toContainText('February 29')
     await expect(card).toContainText('Today!')
@@ -298,7 +314,9 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
       has: page.getByRole('heading', { name: /Upcoming Birthdays/ }),
     })
     await expect(upcomingSection).toBeVisible({ timeout: 15000 })
-    const card = upcomingSection.getByTestId('birthday-card').filter({ hasText: leapName })
+    const card = upcomingSection
+      .getByTestId('birthday-card')
+      .filter({ has: page.getByText(leapName, { exact: true }) })
     await expect(card).toBeVisible()
     await expect(card).toContainText('March 1')
     await expect(card).toContainText('2 days')
@@ -308,7 +326,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     const celebratedSection = page.locator('section', {
       has: page.getByRole('heading', { name: /Already Celebrated This Year/ }),
     })
-    await expect(celebratedSection.getByText(leapName)).toHaveCount(0)
+    await expect(celebratedSection.getByText(leapName, { exact: true })).toHaveCount(0)
   })
 
   test('hides the gift-planning section away from year end', async ({ page }) => {
@@ -322,7 +340,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     await page.waitForLoadState('domcontentloaded')
     // Wait for the sections to render (the Feb contact shows as celebrated),
     // then assert the gift-planning section is absent.
-    await expect(page.getByText(febName)).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(febName, { exact: true })).toBeVisible({ timeout: 15000 })
     await expect(page.getByRole('heading', { name: /Gift Planning/ })).toHaveCount(0)
   })
 })

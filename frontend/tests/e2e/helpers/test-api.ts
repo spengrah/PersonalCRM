@@ -218,13 +218,11 @@ export function declaredWorldNamePrefix(seeded: SeedBehaviorResult): string {
  * `plainto_tsquery` ANDs them, so a neighbouring namespace (`…-c2`, `…-c10`,
  * another worker, another timestamp) misses at least one term and is excluded.
  *
- * Extra terms may be appended (e.g. a NameMarker token) to narrow further.
- *
  * Because it contains spaces it is NOT a substring of any stored name, so a
  * client-side substring filter needs declaredWorldNamePrefix instead.
  */
-export function declaredWorldSearch(seeded: SeedBehaviorResult, ...extraTerms: string[]): string {
-  return ['synth', ...seeded.namespace.split('-'), ...extraTerms].join(' ')
+export function declaredWorldSearch(seeded: SeedBehaviorResult): string {
+  return ['synth', ...seeded.namespace.split('-')].join(' ')
 }
 
 export type NamespaceCleanupStatus = 'cleaned' | 'busy' | 'pending' | 'error'

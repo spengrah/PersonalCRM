@@ -219,11 +219,11 @@ func TestPostconditionsDerivedPerProperty(t *testing.T) {
 }
 
 // A removed contact's detail read is a 404, so its postcondition must carry NO
-// fact that is checked against that read — the two NAME facts included, since
-// both are asserted against the detail read's full_name. Every consumer today
-// branches on Present before it reads anything else, which is exactly why the
-// derivation itself is pinned here: the next one that reads a name fact first
-// would assert a display name against a 404.
+// fact that is checked against that read — the NAME fact included, since it is
+// asserted against the detail read's full_name. Every consumer today branches on
+// Present before it reads anything else, which is exactly why the derivation
+// itself is pinned here: the next one that reads a name fact first would assert a
+// display name against a 404.
 func TestPostconditionsForRemovedContactDropEveryDetailReadFact(t *testing.T) {
 	t.Setenv("CRM_ENV", "testing")
 
@@ -233,7 +233,6 @@ func TestPostconditionsForRemovedContactDropEveryDetailReadFact(t *testing.T) {
 			Cadence("weekly"),
 			OverdueBy(Days(3)),
 			ExplicitName("Kbd", "Move Alpha"),
-			NameMarker("cadflt"),
 			Location("Placeholderton"),
 			BirthdayInDays(3),
 			Methods("email", "phone"),
@@ -263,7 +262,6 @@ func TestPostconditionsForRemovedContactDropEveryDetailReadFact(t *testing.T) {
 	assert.Nil(t, gone.Location)
 	assert.Nil(t, gone.InteractionCount)
 	assert.Nil(t, gone.ExplicitName, "a pinned name is read off the 404ing detail response")
-	assert.Nil(t, gone.NameMarker, "so is the resolution marker")
 	assert.False(t, gone.CreatedBeforeOldestInteraction)
 	require.NotNil(t, gone.OverdueMember)
 	assert.False(t, *gone.OverdueMember,

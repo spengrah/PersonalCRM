@@ -836,9 +836,6 @@ func runContact(
 	if p.explicitNameSet {
 		opts = append(opts, factory.WithExplicitName(p.explicitGiven, p.explicitSurname))
 	}
-	if p.nameMarker != nil {
-		opts = append(opts, factory.WithNameMarker(*p.nameMarker))
-	}
 	if p.location != nil {
 		opts = append(opts, factory.WithLocation(prefixedLabel(gen, *p.location)))
 	}
