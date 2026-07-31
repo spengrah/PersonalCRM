@@ -302,9 +302,26 @@ func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "cleaned=true must mean the partial world is GONE, not that teardown returned nil")
 
-	// The namespace is reclaimable regardless of which way `cleaned` reported.
+	// Contacts are only ONE residue class. The harness teardown independently
+	// owns rows no contact-keyed read can see — the namespaced mac_host marker,
+	// the meeting_notes hung off it, the namespace ownership records and the
+	// harness's PRIVATE river_queue row — and a teardown that dropped the
+	// contacts but leaked any of those still returns nil, so `cleaned` still
+	// reports true.
+	//
+	// The cross-request cleanup ladder deletes every one of those classes and
+	// reports its per-class counts, so running it as the fallback and requiring
+	// EVERY count to be zero says "the harness left nothing for me to find" over
+	// the whole class list at once — including classes added later, which a
+	// hand-written list here would silently stop covering. It is deliberately
+	// paired with the contact read above rather than replacing it: this check is
+	// comprehensive but trusts the ladder's own accounting, while that one is
+	// narrow but reads the table directly.
 	res := cleanupNamespaces(t, router, []string{namespace}, 0)
 	assert.Equal(t, declare.StatusCleaned, res.Results[namespace].Status)
+	for class, n := range res.Results[namespace].Deleted {
+		assert.Zero(t, n, "the failure teardown reported cleaned=true but left %d %s row(s) for the fallback sweep", n, class)
+	}
 }
 
 func TestCleanupEndpoint_DualShape(t *testing.T) {

@@ -24,7 +24,7 @@ These rules apply to all AI agents working on this project.
 
 Seed, fixture, and harness code is verification layer. A test of it is second-order and presumed unnecessary.
 
-One thing overcomes the presumption: a silent failure there would make first-order tests pass vacuously. Diagnostics never count — a consuming test that fails confusingly still fails.
+One thing overcomes the presumption: a silent failure there would make first-order tests pass vacuously. Diagnostics never count.
 
 1. If this fixture broke silently, would any currently-passing test become meaningless?
 2. No → delete it. The consuming test is the verification.
@@ -41,7 +41,7 @@ Write the second-order test — the injected defect, the mutation, the probe —
 
 Record in the PR body: the defect injected, the command run, and the exit code observed.
 
-Commit nothing. This trades regression protection for authoring-time confidence, deliberately.
+Commit nothing.
 
 ### Proportionality
 
