@@ -276,12 +276,16 @@ func TestSeedDeclaredEndpoint_Conflict409(t *testing.T) {
 // as its recovery token cannot address the world it just seeded, which is the
 // contract this test exists to verify.
 //
-// The suffix INDEX is deliberately left unbounded rather than pinned to the
-// production re-salt budget: N is an internal retry count, not part of the
-// recovery-token grammar a client depends on, and a well-formed "-s8" would only
-// appear if that budget grew — in which case it is a correct token, not a
-// corrupt one. Restating the bound here would duplicate a production constant
-// this test cannot see, which is the parallel-list defect rather than coverage.
+// The suffix INDEX is deliberately left unbounded. Cleanup does NOT discover
+// family members: expandNamespace probes exactly "-s1".."-s<maxSaltAttempt>" for
+// a host marker, so an out-of-range variant would be unreachable from the
+// requested token. What makes the bound safe to omit here is that minting and
+// probing read the SAME constant — saltVariants and expandNamespace both loop to
+// maxSaltAttempt, declared once — so every variant the toolkit can mint is one
+// expansion probes, by construction. An out-of-range "-sN" can therefore only be
+// a corrupted namespace, and grammar cannot tell a corrupt "-s8" from a
+// legitimate one without restating a production constant this test cannot see,
+// which is the parallel-list defect rather than coverage.
 func inRequestedFamily(effective, requested string) bool {
 	if effective == requested {
 		return true

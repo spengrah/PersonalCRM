@@ -2266,6 +2266,12 @@ type Querier interface {
 	// test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
 	// without a sleep/timeout. Production code must NOT call this.
 	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
+	// Test assertion — a planted job's disposition: its state, whether it is
+	// finalized, and its attempt counter. `attempt` is the load-bearing one for
+	// queue isolation: River increments it on FETCH, so attempt = 0 says the job was
+	// never handed to a worker at all — a positive statement, unlike "not
+	// finalized", which a job nobody ever looked at also satisfies.
+	TestGetRiverJobDispositionByID(ctx context.Context, id int64) (*TestGetRiverJobDispositionByIDRow, error)
 	// TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
 	// by integration tests that exercise the "target row vanished between
 	// snapshot and resolve-link" path. Production code must NOT call this.

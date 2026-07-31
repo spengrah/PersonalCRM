@@ -29,8 +29,9 @@ const (
 )
 
 var (
-	seamMu         sync.Mutex
-	armedFailpoint string
+	seamMu           sync.Mutex
+	armedFailpoint   string
+	armedCleanupFail string
 )
 
 var knownFailpoints = map[string]bool{
@@ -54,6 +55,31 @@ func SetFailpointForTest(name string) (restore func()) {
 		armedFailpoint = prev
 		seamMu.Unlock()
 	}
+}
+
+// SetCleanupFailStepForTest makes the cleanup ladder fail at the named step
+// instead of executing it, so the all-or-nothing contract (a failed sweep
+// deletes NOTHING, leaving the namespace discoverable, occupied and fully
+// recoverable by a retry) can be proven rather than assumed. A mid-ladder
+// failure cannot be produced on demand any other way: every step is a delete by
+// tracked id against rows the run itself created. Pass "" to disarm.
+func SetCleanupFailStepForTest(step string) (restore func()) {
+	requireTestEnv("declare.SetCleanupFailStepForTest")
+	seamMu.Lock()
+	prev := armedCleanupFail
+	armedCleanupFail = step
+	seamMu.Unlock()
+	return func() {
+		seamMu.Lock()
+		armedCleanupFail = prev
+		seamMu.Unlock()
+	}
+}
+
+func currentCleanupFailStep() string {
+	seamMu.Lock()
+	defer seamMu.Unlock()
+	return armedCleanupFail
 }
 
 func currentFailpoint() string {

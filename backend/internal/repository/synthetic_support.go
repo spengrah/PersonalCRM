@@ -1185,6 +1185,28 @@ func (r *SyntheticSupportRepository) InsertTelegramChatConfigInBand(ctx context.
 // InsertAvailableRematchJobForContact plants an immediately fetchable
 // `default`-queue rematch_dispatcher job. It belongs to the live application;
 // a harness that fetched it would be stealing its work. Fixture only.
+// RiverJobDisposition is a planted job's outcome: its state, whether it is
+// finalized, and its attempt counter. Attempt is what makes "never fetched"
+// observable — River increments it when a job is handed to a worker.
+type RiverJobDisposition struct {
+	State     string
+	Finalized bool
+	Attempt   int32
+}
+
+// GetRiverJobDisposition reads a planted job's disposition. Fixture only.
+func (r *SyntheticSupportRepository) GetRiverJobDisposition(ctx context.Context, id int64) (RiverJobDisposition, error) {
+	row, err := r.queries.TestGetRiverJobDispositionByID(ctx, id)
+	if err != nil {
+		return RiverJobDisposition{}, err
+	}
+	return RiverJobDisposition{
+		State:     row.State,
+		Finalized: row.Finalized,
+		Attempt:   row.Attempt,
+	}, nil
+}
+
 func (r *SyntheticSupportRepository) InsertAvailableRematchJobForContact(ctx context.Context, contactID uuid.UUID) (int64, error) {
 	return r.queries.TestInsertAvailableRematchJobForContact(ctx, db.TestInsertAvailableRematchJobForContactParams{
 		EventID:      uuid.New().String(),

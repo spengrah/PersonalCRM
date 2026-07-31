@@ -1231,3 +1231,14 @@ VALUES ('rematch_dispatcher', 'default', 'available',
           'rematch_job_id', @rematch_job_id::text),
         '{}'::jsonb, 1, 5, NOW())
 RETURNING id;
+
+-- name: TestGetRiverJobDispositionByID :one
+-- Test assertion — a planted job's disposition: its state, whether it is
+-- finalized, and its attempt counter. `attempt` is the load-bearing one for
+-- queue isolation: River increments it on FETCH, so attempt = 0 says the job was
+-- never handed to a worker at all — a positive statement, unlike "not
+-- finalized", which a job nobody ever looked at also satisfies.
+SELECT state::text AS state,
+       (finalized_at IS NOT NULL)::bool AS finalized,
+       attempt::int AS attempt
+FROM river_job WHERE id = @id;

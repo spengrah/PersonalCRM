@@ -2366,6 +2366,31 @@ func (q *Queries) TestFinalizeRiverJobByID(ctx context.Context, id int64) error 
 	return err
 }
 
+const TestGetRiverJobDispositionByID = `-- name: TestGetRiverJobDispositionByID :one
+SELECT state::text AS state,
+       (finalized_at IS NOT NULL)::bool AS finalized,
+       attempt::int AS attempt
+FROM river_job WHERE id = $1
+`
+
+type TestGetRiverJobDispositionByIDRow struct {
+	State     string `json:"state"`
+	Finalized bool   `json:"finalized"`
+	Attempt   int32  `json:"attempt"`
+}
+
+// Test assertion — a planted job's disposition: its state, whether it is
+// finalized, and its attempt counter. `attempt` is the load-bearing one for
+// queue isolation: River increments it on FETCH, so attempt = 0 says the job was
+// never handed to a worker at all — a positive statement, unlike "not
+// finalized", which a job nobody ever looked at also satisfies.
+func (q *Queries) TestGetRiverJobDispositionByID(ctx context.Context, id int64) (*TestGetRiverJobDispositionByIDRow, error) {
+	row := q.db.QueryRow(ctx, TestGetRiverJobDispositionByID, id)
+	var i TestGetRiverJobDispositionByIDRow
+	err := row.Scan(&i.State, &i.Finalized, &i.Attempt)
+	return &i, err
+}
+
 const TestInsertAvailableRematchJobForContact = `-- name: TestInsertAvailableRematchJobForContact :one
 INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
 VALUES ('rematch_dispatcher', 'default', 'available',
