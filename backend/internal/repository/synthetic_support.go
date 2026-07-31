@@ -1192,39 +1192,3 @@ func (r *SyntheticSupportRepository) InsertAvailableRematchJobForContact(ctx con
 		RematchJobID: uuid.New().String(),
 	})
 }
-
-// InsertAvailableJobOfKind plants an immediately fetchable `default`-queue job
-// of an arbitrary kind, carrying an event id. Fixture only — it exists so the
-// isolation proof can cover the kinds a rematch fixture cannot: one the harness
-// registers a REAL (off-mode) worker for, and one it does not register at all.
-func (r *SyntheticSupportRepository) InsertAvailableJobOfKind(ctx context.Context, kind string, eventID uuid.UUID) (int64, error) {
-	return r.queries.TestInsertAvailableJobOfKind(ctx, db.TestInsertAvailableJobOfKindParams{
-		Kind:    kind,
-		EventID: eventID.String(),
-	})
-}
-
-// RiverJobDisposition is a planted job's outcome: its state, whether it is
-// finalized, how many times a worker snoozed it, and its attempt counter.
-// Attempt is what makes "never fetched" observable — River increments it when a
-// job is handed to a worker.
-type RiverJobDisposition struct {
-	State     string
-	Finalized bool
-	Snoozes   int64
-	Attempt   int32
-}
-
-// GetRiverJobDisposition reads a planted job's disposition. Fixture only.
-func (r *SyntheticSupportRepository) GetRiverJobDisposition(ctx context.Context, id int64) (RiverJobDisposition, error) {
-	row, err := r.queries.TestGetRiverJobDispositionByID(ctx, id)
-	if err != nil {
-		return RiverJobDisposition{}, err
-	}
-	return RiverJobDisposition{
-		State:     row.State,
-		Finalized: row.Finalized,
-		Snoozes:   row.Snoozes,
-		Attempt:   row.Attempt,
-	}, nil
-}

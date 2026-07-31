@@ -69,17 +69,6 @@ func NewHarnessWithDBForNamespace(ctx context.Context, database *db.Database, na
 	return newHarness(ctx, database, namespace, seed, accelerated.GetCurrentTime())
 }
 
-// NewHarnessWithDBForNamespaceAt is NewHarnessWithDBForNamespace with an EXPLICIT
-// generator anchor instead of the live accelerated clock. A determinism test
-// pins the anchor so two runs at the same (namespace, seed) produce byte-
-// identical TIMESTAMPED output too (last_contacted, birthday date) — not just the
-// non-timestamp identifiers — per the factory's anchor-relative determinism
-// contract (NewGeneratorAt). Production seed paths use the live-anchor
-// constructor above.
-func NewHarnessWithDBForNamespaceAt(ctx context.Context, database *db.Database, namespace string, seed uint64, anchor time.Time) (*Harness, func(context.Context) error, error) {
-	return newHarness(ctx, database, namespace, seed, anchor)
-}
-
 // NewHarnessForNamespace builds a harness with an explicit namespace + seed.
 // Tests use this to give each sub-test a unique namespace so shared-test-DB
 // reuse cannot collide.

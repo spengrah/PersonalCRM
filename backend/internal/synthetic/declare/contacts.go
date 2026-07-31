@@ -172,8 +172,7 @@ func init() {
 	// Back-to-list and list-context-reset both need the same shape: enough
 	// cadence-bearing contacts to fill a second page, in a known name order so the
 	// sole page-2 row is identifiable in advance. They are registered separately
-	// rather than sharing one fixture so each gets its own named satisfiability
-	// subtest.
+	// rather than sharing one fixture so each behavior owns its own namespace.
 	Register(Declaration{
 		Behavior: "CON-065",
 		Entities: backNavFixtureEntities(backNavStemBack),

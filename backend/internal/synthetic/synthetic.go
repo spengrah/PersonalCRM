@@ -22,7 +22,6 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/synthetic/factory"
@@ -69,14 +68,6 @@ func NewHarnessWithDB(ctx context.Context, database *db.Database) (*Harness, fun
 // calls the returned teardown closure (stop client + clean the partial world).
 func NewHarnessWithDBForNamespace(ctx context.Context, database *db.Database, namespace string, seed uint64) (*Harness, func(context.Context) error, error) {
 	return replay.NewHarnessWithDBForNamespace(ctx, database, namespace, seed)
-}
-
-// NewHarnessWithDBForNamespaceAt is NewHarnessWithDBForNamespace with an EXPLICIT
-// generator anchor (instead of the live accelerated clock), so a determinism test
-// can pin the anchor and get byte-identical TIMESTAMPED output across two runs at
-// the same namespace + seed. Re-exported for the profile determinism check.
-func NewHarnessWithDBForNamespaceAt(ctx context.Context, database *db.Database, namespace string, seed uint64, anchor time.Time) (*Harness, func(context.Context) error, error) {
-	return replay.NewHarnessWithDBForNamespaceAt(ctx, database, namespace, seed, anchor)
 }
 
 // Counts tunes the per-entity volume a profile produces. Only `minimal-scoped`

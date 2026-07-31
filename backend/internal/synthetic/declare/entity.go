@@ -635,9 +635,8 @@ func sortedCandidateSources() []string {
 }
 
 // validateEntityOrder checks that every entity's refs name a CONTACT declared
-// EARLIER in the same list, and that no handle repeats. Callers (Register,
-// RegisterEdge, RunDeclarationForTest) share it so the three cannot disagree
-// about what a well-formed entity list is.
+// EARLIER in the same list, and that no handle repeats. Register and RegisterEdge
+// share it so the two cannot disagree about what a well-formed entity list is.
 func validateEntityOrder(entities []Entity) error {
 	seen := map[string]Entity{}
 	// ExplicitName deliberately skips the factory's runtime dedupe, so two

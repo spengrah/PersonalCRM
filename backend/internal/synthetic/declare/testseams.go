@@ -30,11 +30,6 @@ const (
 	// FailpointAfterFirstEntity fires immediately after the FIRST entity of a
 	// declaration is created, leaving a genuinely partial world behind.
 	FailpointAfterFirstEntity = "after-first-entity"
-	// FailpointAfterWorldStep fires immediately after a NAMED world step
-	// completes. World drains Gate B once for the whole world rather than once
-	// per step, which genuinely changes the error surface — so a mid-world step
-	// failure has to be shown to surface with the step named, not argued to.
-	FailpointAfterWorldStep = "after-world-step"
 )
 
 // Test-hook points. A hook runs at a named point in the protocol with the live
@@ -56,7 +51,6 @@ type TestHook func(ctx context.Context, h *replay.Harness) error
 var (
 	seamMu           sync.Mutex
 	armedFailpoint   string
-	armedWorldStep   string
 	armedHooks       = map[string]TestHook{}
 	armedCleanupFail string
 	armedUnlockFail  string
@@ -88,24 +82,6 @@ func SetFailpointForTest(name string) (restore func()) {
 	return func() {
 		seamMu.Lock()
 		armedFailpoint = prev
-		seamMu.Unlock()
-	}
-}
-
-// SetWorldStepFailpointForTest arms FailpointAfterWorldStep on a named world
-// step key (a behavior id, an edge name, or the tail's name). Pass "" to
-// disarm. Unlike the other failpoints the key cannot be validated against a
-// fixed set — the world's step keys come from the registries — so a typo shows
-// up as "the failpoint never fired", which the test asserts against.
-func SetWorldStepFailpointForTest(stepKey string) (restore func()) {
-	requireTestEnv("declare.SetWorldStepFailpointForTest")
-	seamMu.Lock()
-	prev := armedWorldStep
-	armedWorldStep = stepKey
-	seamMu.Unlock()
-	return func() {
-		seamMu.Lock()
-		armedWorldStep = prev
 		seamMu.Unlock()
 	}
 }
@@ -193,16 +169,6 @@ func SetUnlockFailpointForTest(mode string) (restore func()) {
 	}
 }
 
-// NamespaceFamilyForTest is the COMPLETE set of tokens one run's reservation
-// covers: the requested namespace plus every salted variant re-salting can
-// mint. A test that spelled this family out itself would silently stop covering
-// the whole thing the day the salt budget changed, so it comes from the same
-// derivation the reservation uses.
-func NamespaceFamilyForTest(namespace string) []string {
-	requireTestEnv("declare.NamespaceFamilyForTest")
-	return append([]string{namespace}, saltVariants(namespace)...)
-}
-
 // SetBudgetsForTest shrinks the run/teardown budgets so the bounded-run
 // assertion does not have to wait out the production values.
 func SetBudgetsForTest(run, teardown time.Duration) (restore func()) {
@@ -232,24 +198,10 @@ func WorstCaseRunResidence() time.Duration {
 	return run + replay.SettleBudget() + replay.TeardownGateBBudget() + teardown
 }
 
-// AdvisoryKeyForTest exposes the reservation key derivation so a test can hold
-// the SAME lock a run would take (the held-lock refusal case). Recomputing the
-// hash test-side would prove nothing about the key the run actually uses.
-func AdvisoryKeyForTest(token string) int64 {
-	requireTestEnv("declare.AdvisoryKeyForTest")
-	return advisoryKey(token)
-}
-
 func currentFailpoint() string {
 	seamMu.Lock()
 	defer seamMu.Unlock()
 	return armedFailpoint
-}
-
-func currentWorldStepFailpoint() string {
-	seamMu.Lock()
-	defer seamMu.Unlock()
-	return armedWorldStep
 }
 
 func currentHook(point string) TestHook {

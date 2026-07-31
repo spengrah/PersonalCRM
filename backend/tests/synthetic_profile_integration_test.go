@@ -24,12 +24,11 @@ const fixedAccelBaseUnix int64 = 1735689600 // 2025-01-01T00:00:00Z
 //
 // What they cover is the profile ORCHESTRATION contract — dispatch, the phase/
 // settle accounting, and the seed/quiesce/teardown lifecycle. The declared
-// `standard` world's CONTENT is asserted by TestSyntheticDeclareStandardWorld
-// and TestSyntheticDeclareEdges, which read it back through the API.
+// `standard` world's CONTENT is asserted by the E2E specs that cite each
+// declaration.
 
 // TestSyntheticProfile_MinimalScopedMatchesSeedAll proves the minimal-scoped
-// profile is byte-stable == today's SeedAll + DefaultParams (the golden-scenario
-// regression depends on this).
+// profile is byte-stable == today's SeedAll + DefaultParams.
 func TestSyntheticProfile_MinimalScopedMatchesSeedAll(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	database, ctx := newSyntheticDB(t)

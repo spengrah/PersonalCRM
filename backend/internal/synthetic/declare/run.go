@@ -46,8 +46,8 @@ type Result struct {
 	// Namespace is the EFFECTIVE namespace — it may carry a -sN re-salt suffix
 	// the caller never asked for. Callers assert against this, never the input.
 	Namespace string `json:"namespace"`
-	// Anchor is the generator anchor the world was built against. Postconditions
-	// time against it, two-sided.
+	// Anchor is the generator anchor the world was built against, so a caller can
+	// time anchor-relative facts (a birthday, a backdated created_at) against it.
 	Anchor time.Time `json:"anchor"`
 	// Entities maps each declared handle to what was created.
 	Entities map[string]Seeded `json:"entities"`
@@ -181,42 +181,6 @@ func ValidateSeedRequest(behaviorID, namespace string) (Declaration, error) {
 		return Declaration{}, err
 	}
 	return d, nil
-}
-
-// RunDeclarationForTest executes a declaration VALUE rather than a registry
-// key. The satisfiability suite lives in backend/tests — an external package —
-// and needs to exercise vocabulary combinations that are not (and must not be)
-// registered under a spec behavior id. Same Result/RunError semantics as Run.
-func RunDeclarationForTest(ctx context.Context, database *db.Database, d Declaration, namespace string, seed uint64) (Result, error) {
-	requireTestEnv("declare.RunDeclarationForTest")
-	if len(d.Entities) == 0 {
-		return Result{}, errors.New("declare: declaration carries no entities")
-	}
-	if err := validateEntityOrder(d.Entities); err != nil {
-		return Result{}, fmt.Errorf("declare: %w", err)
-	}
-	if err := ValidateRequestedNamespace(namespace); err != nil {
-		return Result{}, err
-	}
-	return execute(ctx, database, d, namespace, seedOrDefault(seed))
-}
-
-// RunEdgeForTest executes a registered adversarial EDGE by name, sharing
-// execute's whole protocol (reservation, band claim, Gate-B drain, failure
-// teardown) with the declaration path. It is the edge-side twin of
-// RunDeclarationForTest and exists for the same reason: the satisfiability suite
-// lives in an external package and an edge is deliberately NOT keyed by a spec
-// behavior id, so it can never be reached through Run.
-func RunEdgeForTest(ctx context.Context, database *db.Database, edgeName, namespace string, seed uint64) (Result, error) {
-	requireTestEnv("declare.RunEdgeForTest")
-	e, ok := LookupEdge(edgeName)
-	if !ok {
-		return Result{}, fmt.Errorf("declare: unknown edge %q (%d registered)", edgeName, len(Edges()))
-	}
-	if err := ValidateRequestedNamespace(namespace); err != nil {
-		return Result{}, err
-	}
-	return execute(ctx, database, Declaration{Behavior: "edge:" + e.Name, Entities: e.Entities}, namespace, seedOrDefault(seed))
 }
 
 func seedOrDefault(seed uint64) uint64 {

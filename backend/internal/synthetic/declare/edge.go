@@ -10,10 +10,9 @@ import (
 // spec behavior id.
 //
 // Edges are never asserted STATISTICALLY. An edge either exists in the world or
-// it does not, and the satisfiability suite proves the difference through the
-// API read path — which is the whole point of replacing a distribution-matching
+// it does not — which is the whole point of replacing a distribution-matching
 // layer with named adversarial states: a distribution can be "close enough"
-// forever, whereas a missing edge fails a named subtest.
+// forever, whereas a missing state is a missing state.
 //
 // Edges live in their own ordered registry rather than the declaration one, so
 // the ui-behavior completeness universe is untouched: an edge is not a behavior

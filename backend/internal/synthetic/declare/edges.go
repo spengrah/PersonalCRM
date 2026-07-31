@@ -13,10 +13,9 @@ import (
 // it a single explicit literal rather than an emergent property of init() order
 // across files is what keeps it checkable: a second init() in another file could
 // otherwise slip an edge in at a filename-dependent position and silently
-// renumber every PRNG draw in the composed world. Two unit tests hold the line —
-// one pins EdgeNames() against a literal expected slice (so inserting in the
-// middle fails, which IS the append-only property), and one asserts every
-// registered edge came from this slice.
+// renumber every PRNG draw in the composed world. TestWorldPlan_EdgesKeepCatalogOrder
+// holds the line: the world plan's edge segment must equal EdgeNames() rather
+// than any sort of it.
 var adversarialCatalog = []Edge{
 	{
 		Name: "long-history",

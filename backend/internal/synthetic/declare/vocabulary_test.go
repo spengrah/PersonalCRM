@@ -62,24 +62,6 @@ func TestHistory_CreationPrecedesTheOldestMessageStrictly(t *testing.T) {
 	assert.Positive(t, historyCreationMargin())
 }
 
-func TestHistory_PostconditionsAreDerivedFromTheSpread(t *testing.T) {
-	e, ok := LookupEdge("long-history")
-	require.True(t, ok)
-	pcs := e.Postconditions()
-	require.Len(t, pcs, 1)
-	pc := pcs[0]
-
-	require.NotNil(t, pc.InteractionCount)
-	assert.Equal(t, 48, *pc.InteractionCount)
-	require.NotNil(t, pc.LastContacted)
-	assert.True(t, *pc.LastContacted, "replayed history moves last_contacted")
-	assert.True(t, pc.CreatedBeforeOldestInteraction)
-	require.NotNil(t, pc.OverdueMember)
-	// Derived, not restated: the newest message is one day old and the cadence is
-	// monthly, so the contact is NOT overdue.
-	assert.False(t, *pc.OverdueMember)
-}
-
 func TestHistory_CompressedAdjacentMessagesStillHaveDistinctEmailKeys(t *testing.T) {
 	t.Setenv("CRM_ENV", "testing")
 	gen := factory.NewGenerator(factory.DefaultSeed, "history-compressed")
@@ -228,25 +210,6 @@ func TestBirthday_ValidationRejectsImpossibleDates(t *testing.T) {
 	assert.NoError(t, (&contactPlan{name: "x", birthday: &birthdayPlan{month: time.February, day: 29}}).validate())
 }
 
-func TestBirthday_PostconditionCarriesTheResolvedDate(t *testing.T) {
-	anchor := time.Date(2026, time.July, 29, 8, 0, 0, 0, time.UTC)
-	e, ok := LookupEdge("birthday-window")
-	require.True(t, ok)
-
-	byHandle := map[string]*time.Time{}
-	for _, pc := range e.PostconditionsAt(anchor) {
-		byHandle[pc.Handle] = pc.Birthday
-	}
-	require.NotNil(t, byHandle["bday-today"])
-	assert.Equal(t, time.July, byHandle["bday-today"].Month())
-	assert.Equal(t, 29, byHandle["bday-today"].Day())
-	require.NotNil(t, byHandle["bday-tomorrow"])
-	assert.Equal(t, 30, byHandle["bday-tomorrow"].Day())
-	require.NotNil(t, byHandle["bday-leap"])
-	assert.Equal(t, time.February, byHandle["bday-leap"].Month())
-	assert.Equal(t, 29, byHandle["bday-leap"].Day())
-}
-
 // The clamp, pinned as a NON-PANICKING substitution. This proves ONLY the
 // crash-safety half of the placeholder-year gap: the composed world executes
 // every declaration on every reseed, on every calendar day, and February 29 has
@@ -282,27 +245,6 @@ func TestBirthdayPlaceholderToday_PassesValidation(t *testing.T) {
 	assert.NoError(t, validateEntityOrder([]Entity{Contact("a", BirthdayPlaceholderToday())}))
 }
 
-func TestBirthdayPlaceholderToday_PostconditionUsesTheSameClamp(t *testing.T) {
-	entities := []Entity{Contact("real-today", BirthdayPlaceholderToday())}
-
-	leapAnchor := time.Date(2028, time.February, 29, 12, 0, 0, 0, time.UTC)
-	pcs := postconditionsAt(entities, leapAnchor)
-	require.Len(t, pcs, 1)
-	require.NotNil(t, pcs[0].Birthday)
-	assert.Equal(t, "1900-02-28", pcs[0].Birthday.UTC().Format("2006-01-02"),
-		"the expectation must predict what the lowering actually stored, clamp included")
-
-	ordinary := postconditionsAt(entities, time.Date(2026, time.July, 30, 4, 0, 0, 0, time.UTC))
-	require.NotNil(t, ordinary[0].Birthday)
-	assert.Equal(t, "1900-07-30", ordinary[0].Birthday.UTC().Format("2006-01-02"))
-
-	// A real-year February 29 birthday is untouched by the placeholder path.
-	realYear := postconditionsAt([]Entity{Contact("leap", BirthdayOn(time.February, 29))}, leapAnchor)
-	require.NotNil(t, realYear[0].Birthday)
-	assert.Equal(t, factory.LeapSafeBirthYear(leapAnchor), realYear[0].Birthday.Year())
-	assert.Equal(t, "02-29", realYear[0].Birthday.UTC().Format("01-02"))
-}
-
 // --- locations --------------------------------------------------------------
 
 // The prefix is the whole point of the helper: the auto-created place node
@@ -332,18 +274,6 @@ func TestLocation_RejectsABlankLabel(t *testing.T) {
 			"the service normalizes a blank location away, so the postcondition could never hold: %q", blank)
 	}
 	assert.NoError(t, validateEntityOrder([]Entity{Contact("x", Location("New York"))}))
-}
-
-func TestLocation_PostconditionCarriesTheRawDeclaredLabel(t *testing.T) {
-	pcs := postconditionsFor([]Entity{Contact("here", Location("New York"))})
-	require.Len(t, pcs, 1)
-	require.NotNil(t, pcs[0].Location)
-	assert.Equal(t, "New York", *pcs[0].Location,
-		"the postcondition holds the RAW label; the assertion prefixes it with the run's own namespace")
-
-	plain := postconditionsFor([]Entity{Contact("nowhere")})
-	require.Len(t, plain, 1)
-	assert.Nil(t, plain[0].Location, "a declaration that says nothing about location must not assert one")
 }
 
 // --- explicit names ---------------------------------------------------------
@@ -382,25 +312,6 @@ func TestExplicitName_RejectsANameEdge(t *testing.T) {
 	err := validateEntityOrder([]Entity{Contact("x", ExplicitName("Kbd", "Move Alpha"), NameEdge(NameEdgeRTL))})
 	require.Error(t, err, "a name edge splices its token INTO the pinned pair, so the rendered name is not the literal")
 	assert.Contains(t, err.Error(), "NameEdge")
-}
-
-// ExplicitName is the one name prop whose whole purpose is a KNOWN rendered
-// string, and it has nothing to compare against end-to-end unless the
-// declaration states what that string is: the manifest name and the stored
-// full_name are one value read twice. This is the derived fact the read-path
-// assertion turns into an oracle.
-func TestExplicitName_PostconditionCarriesTheDeclaredLiteral(t *testing.T) {
-	pcs := postconditionsFor([]Entity{
-		Contact("pinned", ExplicitName("Cadence", "Sort Yankee")),
-		Contact("drawn"),
-	})
-	require.Len(t, pcs, 2)
-
-	require.NotNil(t, pcs[0].ExplicitName)
-	assert.Equal(t, "Cadence Sort Yankee", *pcs[0].ExplicitName,
-		"the postcondition holds the rendered display literal; the assertion prefixes it with the run's own namespace")
-
-	assert.Nil(t, pcs[1].ExplicitName, "a drawn name cannot be predicted, so nothing is claimed about it")
 }
 
 // --- shared helpers ---------------------------------------------------------

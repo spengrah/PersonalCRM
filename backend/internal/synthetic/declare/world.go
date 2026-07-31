@@ -191,16 +191,6 @@ func executeWorld(
 		}
 		sw := replay.NewStopwatch()
 		handles, produced, err := runStep(step)
-		// The failpoint fires as the STEP's OWN error, deliberately: routing it
-		// down the same path a real step failure takes is what makes the
-		// fault-injection test cover error PROPAGATION rather than a private
-		// branch that happens to also return. Its rows are already written, so
-		// the world it leaves behind is genuinely partial.
-		if err == nil {
-			if key := currentWorldStepFailpoint(); key != "" && key == step.Key {
-				err = fmt.Errorf("failpoint %q fired", FailpointAfterWorldStep)
-			}
-		}
 		for i, seeded := range produced {
 			res.Entities[worldEntityKey(step, handles, i)] = seeded
 		}

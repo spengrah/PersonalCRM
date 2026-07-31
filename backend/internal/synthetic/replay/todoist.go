@@ -309,10 +309,8 @@ func (h *Harness) ReplayTodoistRecurringEdit(ctx context.Context, contactID uuid
 // here: the cadence engine writes last_outreach_at asynchronously from its River
 // worker (and is its sole writer — CAD-005, CI-guarded), so it is still nil at seed
 // time. The caller establishes the chain by construction (seedPendingFollowUpFixture
-// in standard.go), and the standard world's rider subtest proves it post-Quiesce
-// through the API read path: TestSyntheticDeclareStandardWorld / "the three rider
-// fixtures carry the states the tours check" requires the pending fixture to carry
-// BOTH a live follow-up and a last_outreach_at.
+// in standard.go): a follow-up loop is opened BY an outbound, so the fixture is
+// seeded with the outbound first and the follow-up hung on it.
 func (h *Harness) SeedPendingFollowUp(ctx context.Context, contactID uuid.UUID, fullName string) (uuid.UUID, error) {
 	taskRepo := repository.NewContactTaskRepository(h.database.Queries)
 	deadline := accelerated.GetCurrentTime().Add(followUpSeedWindow)

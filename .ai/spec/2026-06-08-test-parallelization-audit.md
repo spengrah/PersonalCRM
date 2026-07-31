@@ -117,7 +117,7 @@ Format: `file` — **bucket** (func count; river; long-gated) — action.
 - `gchat_provider_integration_test.go` — mixed (18; river=True; no) — flip the 17 `setupGChatProviderTest` funcs (scoped-safe, namespaced); leave `TestGChatRematchHandler_ScansAndAggregates` serial (`setupGChatEngineTest` → live River client).
 - `identity_integration_test.go` — mixed (3; river=False; no) — scope `TestIdentityRepository_Integration` + `TestIdentityService_Integration` (action 14), then flip all 3 (`NormalizationPolicy` already safe via tx-rollback + uuid suffixes).
 - `integration_test.go` — mixed (6; river=False; no) — keep `TestRunMigrations_Integration` + `TestMigration020_UnifyEmailDedup` serial (schema/trigger mutation on the shared DB); scope `TestContactRepository_Integration` + `TestSyncRepository_Integration` + `TestOAuthRepository_Integration` (action 15), then flip those 3 + the already-safe `TestContactMethodRepository_Integration` + `TestFindSimilarContactsBatch_Integration`. (Carries an inline `DatabaseConfig` literal → conn fields lowered in the tune commit.)
-- `synthetic_golden_scenario_integration_test.go` — mixed (2; river=True; long-gated=True) — both funcs stay serial (one River via `NewHarnessForNamespace`; one process-global `-update` flag + shared on-disk golden). No flip.
+- `synthetic_golden_scenario_integration_test.go` — mixed (2; river=True; long-gated=True) — both funcs stay serial (one River via `NewHarnessForNamespace`; one process-global `-update` flag + shared on-disk golden). No flip. *(File since deleted: the oracle was long-gated, so it never ran in a merge-gating lane.)*
 
 ### river-heavy (30 files) — all stay serial
 
