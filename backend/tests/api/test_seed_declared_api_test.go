@@ -286,6 +286,11 @@ func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
 	assert.False(t, envelope.Success)
 	assert.NotEmpty(t, envelope.Error)
 	assert.Equal(t, namespace, envelope.Data.Namespace)
+	// The other half of the advertised contract. A failpoint fires after the
+	// FIRST entity, so the run's own failure teardown ran and returned cleanly —
+	// the endpoint must SAY so. Without this the handler could hardcode false, or
+	// omit the field entirely, and the later cleanup would still pass.
+	assert.True(t, envelope.Data.Cleaned, "the failure body must report that the partial world was cleaned")
 
 	// The namespace is reclaimable regardless of which way `cleaned` reported.
 	res := cleanupNamespaces(t, router, []string{namespace}, 0)

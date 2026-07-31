@@ -33,6 +33,16 @@ One thing overcomes the presumption: a silent failure there would make first-ord
 
 A second-order test that does not gate a merge is deleted, not fixed.
 
+### Ephemeral second-order verification
+
+Prove your first-order verification works, then delete the proof.
+
+Write the second-order test — the injected defect, the mutation, the probe — run it, confirm it turns red, discard it. Keep mutants outside the repository (`/tmp`, `go test -overlay`) so nothing is committed by accident.
+
+Record in the PR body: the defect injected, the command run, and the exit code observed.
+
+Commit nothing. This trades regression protection for authoring-time confidence, deliberately.
+
 ### Proportionality
 
 Before adding a permanent gate (lint rule, CI step, hook phase, guard script):
