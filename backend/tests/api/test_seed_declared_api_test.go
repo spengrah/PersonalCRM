@@ -267,6 +267,37 @@ func TestSeedDeclaredEndpoint_Conflict409(t *testing.T) {
 // A 500 must carry enough for a client to recover: which namespace, and whether
 // anything was left behind. The failpoint exists precisely so a VALID request
 // can be made to fail at the HTTP tier.
+// inRequestedFamily reports whether `effective` is a namespace the REQUESTED
+// token can still address: the token itself, or the token plus the `-sN` re-salt
+// suffix saltVariants mints, and nothing else.
+//
+// Anchored on purpose. A prefix test would also accept "<token>x" and
+// "<token>-child", which are DIFFERENT namespaces — a client handed one of those
+// as its recovery token cannot address the world it just seeded, which is the
+// contract this test exists to verify.
+//
+// The suffix INDEX is deliberately left unbounded rather than pinned to the
+// production re-salt budget: N is an internal retry count, not part of the
+// recovery-token grammar a client depends on, and a well-formed "-s8" would only
+// appear if that budget grew — in which case it is a correct token, not a
+// corrupt one. Restating the bound here would duplicate a production constant
+// this test cannot see, which is the parallel-list defect rather than coverage.
+func inRequestedFamily(effective, requested string) bool {
+	if effective == requested {
+		return true
+	}
+	index, ok := strings.CutPrefix(effective, requested+"-s")
+	if !ok || index == "" {
+		return false
+	}
+	for _, digit := range index {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
 	router, database, ctx := newDeclaredSeedRouter(t)
 	namespace := declaredAPINS(t)
@@ -291,8 +322,8 @@ func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
 	// response; what the contract promises is that the reported namespace belongs
 	// to the requested token's family, which is what makes it cleanable.
 	effective := envelope.Data.Namespace
-	assert.True(t, strings.HasPrefix(effective, namespace),
-		"the reported namespace %q must be the requested token %q or one of its salt variants", effective, namespace)
+	assert.True(t, inRequestedFamily(effective, namespace),
+		"the reported namespace %q must be the requested token %q or one of its -sN salt variants", effective, namespace)
 	// The other half of the advertised contract. A failpoint fires after the
 	// FIRST entity, so the run's own failure teardown ran and returned cleanly —
 	// the endpoint must SAY so. Without this the handler could hardcode false, or
@@ -337,7 +368,7 @@ func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
 	res := cleanupNamespaces(t, router, []string{namespace}, 0)
 	require.NotEmpty(t, res.Results, "cleanup reported no results at all for %q", namespace)
 	for ns, result := range res.Results {
-		assert.True(t, strings.HasPrefix(ns, namespace),
+		assert.True(t, inRequestedFamily(ns, namespace),
 			"cleanup reported namespace %q, which is outside the requested token %q family", ns, namespace)
 		assert.Equal(t, declare.StatusCleaned, result.Status, "namespace %s", ns)
 		require.NotEmpty(t, result.Deleted,
