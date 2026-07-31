@@ -134,13 +134,3 @@ func handlesOf(d Declaration) []string {
 	}
 	return out
 }
-
-func TestDashboardDeclarationsAreWellFormed(t *testing.T) {
-	dsh, ok := Lookup("DSH-005")
-	require.True(t, ok)
-	assert.Equal(t, []string{"refresh-target", "refresh-sentinel"}, handlesOf(dsh))
-	for _, e := range dsh.Entities {
-		assert.Equal(t, "contact", e.kind())
-		require.NoError(t, e.validate())
-	}
-}

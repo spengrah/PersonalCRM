@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -266,8 +267,50 @@ func TestSeedDeclaredEndpoint_Conflict409(t *testing.T) {
 // A 500 must carry enough for a client to recover: which namespace, and whether
 // anything was left behind. The failpoint exists precisely so a VALID request
 // can be made to fail at the HTTP tier.
+// inRequestedFamily reports whether `effective` is a namespace the REQUESTED
+// token can still address: the token itself, or the token plus the `-sN` re-salt
+// suffix saltVariants mints, and nothing else.
+//
+// Anchored on purpose. A prefix test would also accept "<token>x" and
+// "<token>-child", which are DIFFERENT namespaces — a client handed one of those
+// as its recovery token cannot address the world it just seeded, which is the
+// contract this test exists to verify.
+//
+// The suffix INDEX is deliberately left unbounded, and that is a CONSIDERED
+// decision rather than an oversight — reviewers have raised it three times, so the
+// argument is recorded here to be met rather than re-raised.
+//
+// Cleanup does NOT discover family members: expandNamespace probes exactly
+// "-s1".."-s<maxSaltAttempt>" for a host marker, so an out-of-range variant really
+// would be unreachable from the requested token. What makes the bound safe to omit
+// is that minting and probing read the SAME constant — saltVariants and
+// expandNamespace both loop to maxSaltAttempt, declared once — so every variant the
+// toolkit can mint is one expansion probes, by construction. An out-of-range "-sN"
+// can therefore only be a CORRUPTED namespace, and grammar cannot tell a corrupt
+// "-s8" from a legitimate one without restating a production constant this test
+// cannot see, which is the parallel-list defect rather than coverage.
+//
+// The obvious alternative was tried and does not work: asserting the reported
+// namespace appears in the cleanup response's own Expansions list fails on the
+// happy path, because a truthful teardown leaves no marker for expansion to find.
+func inRequestedFamily(effective, requested string) bool {
+	if effective == requested {
+		return true
+	}
+	index, ok := strings.CutPrefix(effective, requested+"-s")
+	if !ok || index == "" {
+		return false
+	}
+	for _, digit := range index {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
-	router, _, _ := newDeclaredSeedRouter(t)
+	router, database, ctx := newDeclaredSeedRouter(t)
 	namespace := declaredAPINS(t)
 
 	restore := declare.SetFailpointForTest(declare.FailpointAfterFirstEntity)
@@ -285,11 +328,67 @@ func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 	assert.False(t, envelope.Success)
 	assert.NotEmpty(t, envelope.Error)
-	assert.Equal(t, namespace, envelope.Data.Namespace)
+	// The EFFECTIVE namespace, which may legitimately carry a -sN re-salt suffix
+	// the caller never asked for. Asserting equality would reject a correct
+	// response; what the contract promises is that the reported namespace belongs
+	// to the requested token's family, which is what makes it cleanable.
+	effective := envelope.Data.Namespace
+	assert.True(t, inRequestedFamily(effective, namespace),
+		"the reported namespace %q must be the requested token %q or one of its -sN salt variants", effective, namespace)
+	// The other half of the advertised contract. A failpoint fires after the
+	// FIRST entity, so the run's own failure teardown ran and returned cleanly —
+	// the endpoint must SAY so. Without this the handler could hardcode false, or
+	// omit the field entirely, and the later cleanup would still pass.
+	assert.True(t, envelope.Data.Cleaned, "the failure body must report that the partial world was cleaned")
 
-	// The namespace is reclaimable regardless of which way `cleaned` reported.
+	// And `cleaned` must be TRUE OF THE DATABASE, not merely of a function that
+	// returned nil. The flag is derived from the teardown's error return, so a
+	// teardown that silently deleted nothing would still advertise cleaned=true
+	// and leave the partial world standing. Read the namespace's own rows back.
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+	prefix := factory.NewGenerator(factory.DefaultSeed, effective).Prefix()
+	remaining, err := support.SelectContactIDsByFullNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "cleaned=true must mean the partial world is GONE, not that teardown returned nil")
+
+	// Contacts are only ONE residue class. The harness teardown independently
+	// owns rows no contact-keyed read can see — the namespaced mac_host marker,
+	// the meeting_notes hung off it, the namespace ownership records and the
+	// harness's PRIVATE river_queue row — and a teardown that dropped the
+	// contacts but leaked any of those still returns nil, so `cleaned` still
+	// reports true.
+	//
+	// The cross-request cleanup ladder deletes every one of those classes and
+	// reports its per-class counts, so running it as the fallback and requiring
+	// EVERY count to be zero says "the harness left nothing for me to find" over
+	// the whole class list at once — including classes added later, which a
+	// hand-written list here would silently stop covering. It is deliberately
+	// paired with the contact read above rather than replacing it: this check is
+	// comprehensive but trusts the ladder's own accounting, while that one is
+	// narrow but reads the table directly.
+	// Checked over EVERY result the cleanup returns rather than one looked up by
+	// name. Keying the lookup on a single name is what makes this check fragile:
+	// the request names one token, and the response is keyed by whichever
+	// namespace the sweep actually resolved — the EFFECTIVE name when residue is
+	// still discoverable, the REQUESTED token when the family is already empty
+	// (which is this test's own happy path after a re-salt). A lookup that missed
+	// would yield a zero-value result whose Deleted map is empty, and the loop
+	// would then iterate NOTHING and pass. Requiring at least one result, and a
+	// non-empty class map inside each, is what stops this from silently becoming
+	// no check at all.
 	res := cleanupNamespaces(t, router, []string{namespace}, 0)
-	assert.Equal(t, declare.StatusCleaned, res.Results[namespace].Status)
+	require.NotEmpty(t, res.Results, "cleanup reported no results at all for %q", namespace)
+	for ns, result := range res.Results {
+		assert.True(t, inRequestedFamily(ns, namespace),
+			"cleanup reported namespace %q, which is outside the requested token %q family", ns, namespace)
+		assert.Equal(t, declare.StatusCleaned, result.Status, "namespace %s", ns)
+		require.NotEmpty(t, result.Deleted,
+			"namespace %s must report per-class counts, or the residue check below checks nothing", ns)
+		for class, n := range result.Deleted {
+			assert.Zero(t, n,
+				"the failure teardown reported cleaned=true but left %d %s row(s) in %s for the fallback sweep", n, class, ns)
+		}
+	}
 }
 
 func TestCleanupEndpoint_DualShape(t *testing.T) {

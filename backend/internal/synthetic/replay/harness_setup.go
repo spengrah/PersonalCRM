@@ -2,6 +2,7 @@ package replay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"regexp"
@@ -28,6 +29,15 @@ import (
 	"github.com/riverqueue/river/rivertype"
 	"github.com/stretchr/testify/require"
 )
+
+// ErrConstructorResidue marks a harness-construction failure that LEFT the
+// namespace's synthetic host row behind. newHarness removes that row
+// best-effort on its own post-host failure paths; when the removal itself
+// fails, the returned error wraps this sentinel so a caller can report the
+// residue truthfully (errors.Is) rather than guessing. The residue is still
+// reachable — the declared-seed cleanup path finds a host-only world from the
+// requested namespace token.
+var ErrConstructorResidue = errors.New("synthetic: harness construction left namespaced rows behind")
 
 // NewHarness builds a replay harness for a test. ctx is MANDATORY and is the
 // exact context passed to client.Start (NOT a timeout-derived ctx — River
@@ -67,17 +77,6 @@ func NewHarnessWithDB(ctx context.Context, database *db.Database) (*Harness, fun
 // conditional-cleanup teardown closure + an error.
 func NewHarnessWithDBForNamespace(ctx context.Context, database *db.Database, namespace string, seed uint64) (*Harness, func(context.Context) error, error) {
 	return newHarness(ctx, database, namespace, seed, accelerated.GetCurrentTime())
-}
-
-// NewHarnessWithDBForNamespaceAt is NewHarnessWithDBForNamespace with an EXPLICIT
-// generator anchor instead of the live accelerated clock. A determinism test
-// pins the anchor so two runs at the same (namespace, seed) produce byte-
-// identical TIMESTAMPED output too (last_contacted, birthday date) — not just the
-// non-timestamp identifiers — per the factory's anchor-relative determinism
-// contract (NewGeneratorAt). Production seed paths use the live-anchor
-// constructor above.
-func NewHarnessWithDBForNamespaceAt(ctx context.Context, database *db.Database, namespace string, seed uint64, anchor time.Time) (*Harness, func(context.Context) error, error) {
-	return newHarness(ctx, database, namespace, seed, anchor)
 }
 
 // NewHarnessForNamespace builds a harness with an explicit namespace + seed.
@@ -332,18 +331,11 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	// ErrConstructorResidue so the caller can report the residue HONESTLY
 	// instead of assuming either outcome.
 	postHostFailure := func(cause error) (*Harness, func(context.Context) error, error) {
-		delErr := forcedHostRemovalFailure()
-		if delErr == nil {
-			_, delErr = support.DeleteMacHostByID(ctx, macHostID)
-		}
-		if delErr != nil {
+		if _, delErr := support.DeleteMacHostByID(ctx, macHostID); delErr != nil {
 			return nil, nil, fmt.Errorf("%w: removing the namespaced synthetic host after a constructor failure failed (%v); original failure: %w",
 				ErrConstructorResidue, delErr, cause)
 		}
 		return nil, nil, cause
-	}
-	if fp := constructorFailpoint(); fp == ConstructorFailpointAfterHost || fp == ConstructorFailpointAfterHostResidue {
-		return postHostFailure(fmt.Errorf("synthetic: constructor failpoint %q fired", fp))
 	}
 	ingestService := service.NewIngestService(
 		database, bus, identityService, messagesRepo, client, externalRepo,

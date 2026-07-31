@@ -40,11 +40,8 @@ describe('assertOverdueFitsCapture', () => {
   // shipped — needs the seeded population, and this lane has no database: any
   // "the seed ships N" figure written here would be a literal restating itself,
   // and would keep passing after the world changed. It is asserted where the
-  // population is real, by TestSyntheticDeclareStandardWorld/budgets in
-  // backend/tests/declare_standard_world_integration_test.go (LONG_TESTS lane),
-  // which measures the live overdue population as above fifty AND at or under
-  // synthetic.TourOverdueCaptureCap — so a shrunken cap and an outgrown world
-  // both fail a named test.
+  // population is real: assertOverdueFitsCapture runs at tour time against the
+  // live overdue count and throws, naming the tour and the count.
   it('throws above the cap, naming the tour and the count', () => {
     expect(() => assertOverdueFitsCapture(OVERDUE_CAPTURE_CAP + 1, 'dashboard')).toThrow(
       new RegExp(

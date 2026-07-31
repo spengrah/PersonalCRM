@@ -1185,33 +1185,12 @@ func (r *SyntheticSupportRepository) InsertTelegramChatConfigInBand(ctx context.
 // InsertAvailableRematchJobForContact plants an immediately fetchable
 // `default`-queue rematch_dispatcher job. It belongs to the live application;
 // a harness that fetched it would be stealing its work. Fixture only.
-func (r *SyntheticSupportRepository) InsertAvailableRematchJobForContact(ctx context.Context, contactID uuid.UUID) (int64, error) {
-	return r.queries.TestInsertAvailableRematchJobForContact(ctx, db.TestInsertAvailableRematchJobForContactParams{
-		EventID:      uuid.New().String(),
-		ContactID:    contactID.String(),
-		RematchJobID: uuid.New().String(),
-	})
-}
-
-// InsertAvailableJobOfKind plants an immediately fetchable `default`-queue job
-// of an arbitrary kind, carrying an event id. Fixture only — it exists so the
-// isolation proof can cover the kinds a rematch fixture cannot: one the harness
-// registers a REAL (off-mode) worker for, and one it does not register at all.
-func (r *SyntheticSupportRepository) InsertAvailableJobOfKind(ctx context.Context, kind string, eventID uuid.UUID) (int64, error) {
-	return r.queries.TestInsertAvailableJobOfKind(ctx, db.TestInsertAvailableJobOfKindParams{
-		Kind:    kind,
-		EventID: eventID.String(),
-	})
-}
-
 // RiverJobDisposition is a planted job's outcome: its state, whether it is
-// finalized, how many times a worker snoozed it, and its attempt counter.
-// Attempt is what makes "never fetched" observable — River increments it when a
-// job is handed to a worker.
+// finalized, and its attempt counter. Attempt is what makes "never fetched"
+// observable — River increments it when a job is handed to a worker.
 type RiverJobDisposition struct {
 	State     string
 	Finalized bool
-	Snoozes   int64
 	Attempt   int32
 }
 
@@ -1224,7 +1203,14 @@ func (r *SyntheticSupportRepository) GetRiverJobDisposition(ctx context.Context,
 	return RiverJobDisposition{
 		State:     row.State,
 		Finalized: row.Finalized,
-		Snoozes:   row.Snoozes,
 		Attempt:   row.Attempt,
 	}, nil
+}
+
+func (r *SyntheticSupportRepository) InsertAvailableRematchJobForContact(ctx context.Context, contactID uuid.UUID) (int64, error) {
+	return r.queries.TestInsertAvailableRematchJobForContact(ctx, db.TestInsertAvailableRematchJobForContactParams{
+		EventID:      uuid.New().String(),
+		ContactID:    contactID.String(),
+		RematchJobID: uuid.New().String(),
+	})
 }

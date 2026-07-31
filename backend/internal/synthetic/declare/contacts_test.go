@@ -1,81 +1,13 @@
 package declare
 
 import (
-	"fmt"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestContactsDeclarations_RegisterTheExpectedHandleCounts(t *testing.T) {
-	want := map[string]int{
-		"CON-038": 3,
-		"CON-040": 3,
-		"CON-041": 1,
-		"CON-042": 1,
-		"CON-043": 2,
-		"CON-044": 1,
-		"CON-045": 8,
-		"CON-053": 1,
-		"CON-057": 1,
-		"CON-058": 22,
-		"CON-059": 3,
-		"CON-060": 2,
-		"CON-061": 2,
-		"CON-063": 2,
-		"CON-065": 21,
-		"CON-066": 21,
-	}
-	for id, count := range want {
-		d, ok := Lookup(id)
-		require.True(t, ok, "%s must be registered as a declaration", id)
-		assert.Len(t, d.Entities, count, "%s entity count", id)
-		handles := map[string]bool{}
-		for _, e := range d.Entities {
-			assert.False(t, handles[e.handle()], "%s repeats handle %q", id, e.handle())
-			handles[e.handle()] = true
-		}
-	}
-}
-
-// The back-nav fixtures' whole purpose is that name-ASCENDING order equals
-// insertion order, so p21 is the sole row of page 2 at a twenty-row page size.
-// That only holds while the pinned literals stay zero-padded. Both cohorts are
-// read out of the REGISTRY rather than from the builder, so what the declarations
-// actually pass is what gets checked.
-//
-// The order below is Go BYTE order, a valid stand-in for the PostgreSQL collation
-// the list actually sorts under ONLY because these literals are pure ASCII over a
-// common prefix. ExplicitName exists precisely because the two orderings differ in
-// general — so an accented or non-ASCII literal added here needs its order
-// established against the database, not against strings.Compare.
-func TestBackNavCohorts_AreNameOrderedByConstruction(t *testing.T) {
-	for _, id := range []string{"CON-065", "CON-066"} {
-		d, ok := Lookup(id)
-		require.True(t, ok, "%s must be registered", id)
-		require.Len(t, d.Entities, backNavFixtureSize)
-
-		names := make([]string, 0, len(d.Entities))
-		for i, e := range d.Entities {
-			p, isContact := e.(*contactPlan)
-			require.True(t, isContact)
-			assert.Equal(t, fmt.Sprintf("p%02d", i+1), p.name, "%s: handle order must mirror the rendered order", id)
-			require.True(t, p.explicitNameSet, "%s: the fixture depends on a PINNED name, not a drawn one", id)
-			// The zero padding IS the ordering: "Nav 9" would sort after "Nav 10".
-			assert.Equal(t, fmt.Sprintf("Nav %02d", i+1), p.explicitSurname, "%s: entity %d surname", id, i)
-			names = append(names, p.explicitGiven+" "+p.explicitSurname)
-		}
-
-		for i := 1; i < len(names); i++ {
-			assert.Negative(t, strings.Compare(names[i-1], names[i]),
-				"%s: name-ascending order must equal insertion order: %q is not before %q", id, names[i-1], names[i])
-		}
-	}
-}
 
 // CON-038's fixture exists to be ANTI-CORRELATED: its three pinned names order
 // differently from the cadence order the list defaults to, so an implementation

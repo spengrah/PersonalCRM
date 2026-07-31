@@ -2369,7 +2369,6 @@ func (q *Queries) TestFinalizeRiverJobByID(ctx context.Context, id int64) error 
 const TestGetRiverJobDispositionByID = `-- name: TestGetRiverJobDispositionByID :one
 SELECT state::text AS state,
        (finalized_at IS NOT NULL)::bool AS finalized,
-       COALESCE((metadata->>'snoozes')::bigint, 0)::bigint AS snoozes,
        attempt::int AS attempt
 FROM river_job WHERE id = $1
 `
@@ -2377,54 +2376,19 @@ FROM river_job WHERE id = $1
 type TestGetRiverJobDispositionByIDRow struct {
 	State     string `json:"state"`
 	Finalized bool   `json:"finalized"`
-	Snoozes   int64  `json:"snoozes"`
 	Attempt   int32  `json:"attempt"`
 }
 
 // Test assertion — a planted job's disposition: its state, whether it is
-// finalized, how many times a worker snoozed it (River records the count in
-// metadata->>'snoozes'), and its attempt counter. `attempt` is the load-bearing
-// one for queue isolation: River increments it on FETCH, so attempt = 0 says
-// the job was never handed to a worker at all — a positive statement, unlike
-// "not finalized", which a job nobody ever looked at also satisfies.
+// finalized, and its attempt counter. `attempt` is the load-bearing one for
+// queue isolation: River increments it on FETCH, so attempt = 0 says the job was
+// never handed to a worker at all — a positive statement, unlike "not
+// finalized", which a job nobody ever looked at also satisfies.
 func (q *Queries) TestGetRiverJobDispositionByID(ctx context.Context, id int64) (*TestGetRiverJobDispositionByIDRow, error) {
 	row := q.db.QueryRow(ctx, TestGetRiverJobDispositionByID, id)
 	var i TestGetRiverJobDispositionByIDRow
-	err := row.Scan(
-		&i.State,
-		&i.Finalized,
-		&i.Snoozes,
-		&i.Attempt,
-	)
+	err := row.Scan(&i.State, &i.Finalized, &i.Attempt)
 	return &i, err
-}
-
-const TestInsertAvailableJobOfKind = `-- name: TestInsertAvailableJobOfKind :one
-INSERT INTO river_job (kind, queue, state, args, metadata, priority, max_attempts, scheduled_at)
-VALUES ($1, 'default', 'available',
-        jsonb_build_object('event_id', $2::text),
-        '{}'::jsonb, 1, 5, NOW())
-RETURNING id
-`
-
-type TestInsertAvailableJobOfKindParams struct {
-	Kind    string `json:"kind"`
-	EventID string `json:"event_id"`
-}
-
-// Isolation fixture, generalized: an AVAILABLE `default`-queue job of ANY kind,
-// carrying an event id. Two classes matter beyond the no-op kinds, and neither
-// is covered by a rematch fixture:
-//   - a kind the harness registers a REAL worker for (followup_manager), which
-//     the harness wires in off mode — fetching one would finalize it without
-//     doing the work;
-//   - a production kind the harness does NOT register (todoist_task_op), which
-//     a fetching client fails as an unknown kind, burning the job's attempts.
-func (q *Queries) TestInsertAvailableJobOfKind(ctx context.Context, arg TestInsertAvailableJobOfKindParams) (int64, error) {
-	row := q.db.QueryRow(ctx, TestInsertAvailableJobOfKind, arg.Kind, arg.EventID)
-	var id int64
-	err := row.Scan(&id)
-	return id, err
 }
 
 const TestInsertAvailableRematchJobForContact = `-- name: TestInsertAvailableRematchJobForContact :one

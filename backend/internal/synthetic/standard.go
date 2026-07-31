@@ -61,35 +61,6 @@ func runStandardProfile(ctx context.Context, h *Harness, params SeedParams, res 
 	return out, err
 }
 
-type standardWorldCaptureKey struct{}
-
-type standardWorldCapture struct {
-	world declare.WorldResult
-	set   bool
-}
-
-// StandardWorldForTest runs the real RunProfile entrypoint with a private,
-// per-call manifest capture. The capture keeps the test on production dispatch:
-// removing or misrouting ProfileStandard cannot leave the world assertions green.
-//
-// The manifest carries the world's own EXECUTION-order creation log, which is
-// the only sound way to assert that the pinned tour fixtures really do draw
-// last: created_at order is NOT execution order, because several of those
-// fixtures are deliberately backdated (one by three hundred days), so every
-// edge contact created at the anchor sorts after them.
-func StandardWorldForTest(ctx context.Context, h *Harness, params SeedParams) (declare.WorldResult, ProfileResult, error) {
-	capture := &standardWorldCapture{}
-	res, err := RunProfile(context.WithValue(ctx, standardWorldCaptureKey{}, capture), h, params)
-	if err != nil {
-		return capture.world, res, err
-	}
-	if !capture.set {
-		return declare.WorldResult{}, res, fmt.Errorf(
-			"synthetic: profile %q did not dispatch through the standard world builder", params.Profile)
-	}
-	return capture.world, res, nil
-}
-
 func buildStandardWorld(ctx context.Context, h *Harness, params SeedParams, res ProfileResult) (declare.WorldResult, ProfileResult, error) {
 	support := repository.NewSyntheticSupportRepository(h.Database().Queries)
 
@@ -99,10 +70,6 @@ func buildStandardWorld(ctx context.Context, h *Harness, params SeedParams, res 
 			return seedStandardTail(ctx, h, params, &res)
 		},
 	})
-	if capture, ok := ctx.Value(standardWorldCaptureKey{}).(*standardWorldCapture); ok {
-		capture.world = world
-		capture.set = true
-	}
 	res = mapStandardWorldResult(world, res)
 	res.Timings.Settle = h.SettleStats()
 	return world, res, err
@@ -163,7 +130,6 @@ func seedStandardTail(ctx context.Context, h *Harness, params SeedParams, res *P
 		if err != nil {
 			return out, fmt.Errorf("profile %s: seed pinned fixture %s: %w", params.Profile, plan.marker, err)
 		}
-		h.SetPinnedFixtureID(plan.marker, contact.ID)
 		out = append(out, seededContact(contact))
 	}
 	return out, nil
@@ -259,7 +225,6 @@ func seedPendingFollowUpFixture(ctx context.Context, h *Harness, gen *factory.Ge
 	if _, err := h.SeedPendingFollowUp(ctx, contact.ID, contact.FullName); err != nil {
 		return riderSeedResult{contact: contact, payloads: 1}, fmt.Errorf("seed pending follow-up: %w", err)
 	}
-	h.SetPinnedFixtureID(FixtureMarkerPending, contact.ID)
 	return riderSeedResult{contact: contact, payloads: 1}, nil
 }
 
@@ -275,7 +240,6 @@ func seedOutreachFixture(ctx context.Context, h *Harness, gen *factory.Generator
 	if _, err := h.ReplayGmail(ctx, contact.ID, gen.GmailMessage(spec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(messageOutboundAge))); err != nil {
 		return riderSeedResult{contact: contact}, fmt.Errorf("replay outbound gmail: %w", err)
 	}
-	h.SetPinnedFixtureID(FixtureMarkerOutreach, contact.ID)
 	return riderSeedResult{contact: contact, payloads: 1}, nil
 }
 
@@ -309,6 +273,5 @@ func seedResponseFixture(ctx context.Context, h *Harness, gen *factory.Generator
 	if _, err := h.ReplayTelegram(ctx, contact.ID, reply); err != nil {
 		return riderSeedResult{contact: contact, payloads: 1}, fmt.Errorf("replay mutual telegram reply: %w", err)
 	}
-	h.SetPinnedFixtureID(FixtureMarkerResponse, contact.ID)
 	return riderSeedResult{contact: contact, payloads: 2}, nil
 }

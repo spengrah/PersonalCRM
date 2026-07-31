@@ -46,8 +46,8 @@ type Result struct {
 	// Namespace is the EFFECTIVE namespace — it may carry a -sN re-salt suffix
 	// the caller never asked for. Callers assert against this, never the input.
 	Namespace string `json:"namespace"`
-	// Anchor is the generator anchor the world was built against. Postconditions
-	// time against it, two-sided.
+	// Anchor is the generator anchor the world was built against, so a caller can
+	// time anchor-relative facts (a birthday, a backdated created_at) against it.
 	Anchor time.Time `json:"anchor"`
 	// Entities maps each declared handle to what was created.
 	Entities map[string]Seeded `json:"entities"`
@@ -183,42 +183,6 @@ func ValidateSeedRequest(behaviorID, namespace string) (Declaration, error) {
 	return d, nil
 }
 
-// RunDeclarationForTest executes a declaration VALUE rather than a registry
-// key. The satisfiability suite lives in backend/tests — an external package —
-// and needs to exercise vocabulary combinations that are not (and must not be)
-// registered under a spec behavior id. Same Result/RunError semantics as Run.
-func RunDeclarationForTest(ctx context.Context, database *db.Database, d Declaration, namespace string, seed uint64) (Result, error) {
-	requireTestEnv("declare.RunDeclarationForTest")
-	if len(d.Entities) == 0 {
-		return Result{}, errors.New("declare: declaration carries no entities")
-	}
-	if err := validateEntityOrder(d.Entities); err != nil {
-		return Result{}, fmt.Errorf("declare: %w", err)
-	}
-	if err := ValidateRequestedNamespace(namespace); err != nil {
-		return Result{}, err
-	}
-	return execute(ctx, database, d, namespace, seedOrDefault(seed))
-}
-
-// RunEdgeForTest executes a registered adversarial EDGE by name, sharing
-// execute's whole protocol (reservation, band claim, Gate-B drain, failure
-// teardown) with the declaration path. It is the edge-side twin of
-// RunDeclarationForTest and exists for the same reason: the satisfiability suite
-// lives in an external package and an edge is deliberately NOT keyed by a spec
-// behavior id, so it can never be reached through Run.
-func RunEdgeForTest(ctx context.Context, database *db.Database, edgeName, namespace string, seed uint64) (Result, error) {
-	requireTestEnv("declare.RunEdgeForTest")
-	e, ok := LookupEdge(edgeName)
-	if !ok {
-		return Result{}, fmt.Errorf("declare: unknown edge %q (%d registered)", edgeName, len(Edges()))
-	}
-	if err := ValidateRequestedNamespace(namespace); err != nil {
-		return Result{}, err
-	}
-	return execute(ctx, database, Declaration{Behavior: "edge:" + e.Name, Entities: e.Entities}, namespace, seedOrDefault(seed))
-}
-
 func seedOrDefault(seed uint64) uint64 {
 	if seed == 0 {
 		return factory.DefaultSeed
@@ -228,7 +192,7 @@ func seedOrDefault(seed uint64) uint64 {
 
 // execute is the full protocol: reserve, claim bands, construct, run, drain.
 func execute(parent context.Context, database *db.Database, d Declaration, namespace string, seed uint64) (Result, error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), runBudget())
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), defaultRunBudget)
 	defer cancel()
 
 	locks, err := newLockSession(ctx, database)
@@ -291,7 +255,7 @@ func driveTeardown(teardown func(context.Context) error) bool {
 	if teardown == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), teardownBudget())
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTeardownBudget)
 	defer cancel()
 	return teardown(ctx) == nil
 }
@@ -493,15 +457,6 @@ func buildHarness(
 				fmt.Errorf("declare: claim numeric bands for re-salted namespace %q: %w", effective, err))
 		}
 
-		if hook := currentHook(HookAfterBandSwapBeforeRevalidate); hook != nil {
-			if err := hook(ctx, h); err != nil {
-				// Terminal path: the deferred close settles whatever is held.
-				_ = locks.unlockAll(effectiveKeys)
-				return nil, nil, teardownError(teardown, effective,
-					fmt.Errorf("declare: %s hook: %w", HookAfterBandSwapBeforeRevalidate, err))
-			}
-		}
-
 		free, err := bandsFree(ctx, support, effectiveGen)
 		if err != nil {
 			_ = locks.unlockAll(effectiveKeys)
@@ -626,12 +581,6 @@ func runEntities(
 	st := newRunState(len(d.Entities))
 	if err := runEntityList(ctx, h, support, d.Entities, st); err != nil {
 		return Result{}, err
-	}
-
-	if hook := currentHook(HookAfterReplayBeforeDrain); hook != nil {
-		if err := hook(ctx, h); err != nil {
-			return Result{}, fmt.Errorf("declare: %s hook: %w", HookAfterReplayBeforeDrain, err)
-		}
 	}
 	if err := h.DrainGateB(ctx); err != nil {
 		return Result{}, err

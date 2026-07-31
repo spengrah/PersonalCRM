@@ -59,8 +59,8 @@ export const ALL_FIXTURE_MARKERS = [
 // that tail has nothing to do with urgency, which is how a designated fixture can
 // end up in it. The declared `standard` world's overdue population sits above the
 // 50-row default, so the overdue-bearing captures carry this EXPLICIT cap
-// instead; TestSyntheticDeclareStandardWorld/budgets is what measures the live
-// population against the cap, in both directions.
+// instead; assertOverdueFitsCapture below is what measures the live population
+// against it, at tour time.
 //
 // This MUST equal synthetic.TourOverdueCaptureCap in
 // backend/internal/synthetic/fixtures.go, which carries the reasoning behind the

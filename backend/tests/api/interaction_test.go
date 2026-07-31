@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -445,4 +447,112 @@ func TestInteraction_FutureDateRejected(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
+}
+
+// TestInteraction_ListPaginatesAWholeHistory is FIRST-ORDER product coverage of
+// the interaction list's pagination read path: a history long enough to span
+// several pages, walked page by page.
+//
+// It is NOT the fixture test that used to assert the `long-history` adversarial
+// edge produced 48 rows — that one checked the SEED and was deleted. This one
+// checks the API: whether the handler reports a truthful total and page count and
+// serves every row exactly once. Nothing else covers it. TestInteraction_CreateAndList
+// asserts only `Total >= 2` on an unpaginated read, which is a one-sided bound —
+// it keeps passing if later pages vanish or the total is wrong.
+func TestInteraction_ListPaginatesAWholeHistory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	t.Parallel()
+	router, cleanup := setupInteractionTestRouter(t)
+	defer cleanup()
+
+	// The subject's identifiers come from the synthetic factory rather than a
+	// hand-rolled literal, and its namespace is unique to this test so the shared
+	// package DB cannot collide.
+	gen := factory.NewGenerator(factory.DefaultSeed, "i"+uuid.NewString()[:8])
+	contactID := createInteractionTestContact(t, router, gen.Contact().FullName)
+	defer deleteInteractionTestContact(t, router, contactID)
+
+	const (
+		history   = 48
+		pageSize  = 20
+		wantPages = 3 // 48 rows at 20 per page
+	)
+
+	// Manual interactions dedupe inside a 30-minute window, so the rows are spaced
+	// an hour apart: 48 DISTINCT interactions rather than one created 48 times.
+	base := accelerated.GetCurrentTime()
+	for i := 1; i <= history; i++ {
+		body, _ := json.Marshal(map[string]string{
+			"occurred_at": base.Add(-time.Duration(i) * time.Hour).Format(time.RFC3339),
+			"description": fmt.Sprintf("history row %02d", i),
+		})
+		req, _ := http.NewRequest("POST", "/api/v1/contacts/"+contactID+"/interactions", bytes.NewBuffer(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusCreated, w.Code, "seeding row %d: %s", i, w.Body.String())
+	}
+
+	// Page 1 is FULL and the metadata describes the whole history, not the page.
+	first := listInteractionPage(t, router, contactID, pageSize, 1)
+	assert.Len(t, first.rows, pageSize, "page 1 must be full")
+	assert.Equal(t, int64(history), first.total, "the read must report the WHOLE history, not the page")
+	assert.Equal(t, wantPages, first.pages, "%d rows at %d per page is %d pages", history, pageSize, wantPages)
+
+	// And walking every page really does yield the whole history exactly once — a
+	// dropped last page or a row served on two pages both fail here.
+	seen := map[string]bool{}
+	for page := 1; page <= first.pages; page++ {
+		got := listInteractionPage(t, router, contactID, pageSize, page)
+		assert.NotEmpty(t, got.rows, "page %d must not be empty", page)
+		for _, id := range got.rows {
+			assert.False(t, seen[id], "interaction %s appears on more than one page", id)
+			seen[id] = true
+		}
+	}
+	assert.Len(t, seen, history, "walking the pages must yield every interaction exactly once")
+}
+
+// interactionPage is one page of the interaction list plus its paging metadata.
+type interactionPage struct {
+	rows  []string
+	total int64
+	pages int
+}
+
+func listInteractionPage(t *testing.T, router *gin.Engine, contactID string, limit, page int) interactionPage {
+	t.Helper()
+	path := fmt.Sprintf("/api/v1/contacts/%s/interactions?limit=%d&page=%d", contactID, limit, page)
+	req, _ := http.NewRequest("GET", path, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "GET %s: %s", path, w.Body.String())
+
+	var response api.APIResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	require.NotNil(t, response.Meta, "the interaction list must carry meta")
+	require.NotNil(t, response.Meta.Pagination, "the interaction list must carry pagination meta")
+
+	rows, ok := response.Data.([]interface{})
+	require.True(t, ok, "data must be an array: %s", w.Body.String())
+	ids := make([]string, 0, len(rows))
+	for _, item := range rows {
+		row, isObject := item.(map[string]interface{})
+		require.True(t, isObject)
+		id, hasID := row["id"].(string)
+		require.True(t, hasID, "every interaction row must carry an id")
+		ids = append(ids, id)
+	}
+	return interactionPage{
+		rows:  ids,
+		total: response.Meta.Pagination.Total,
+		pages: response.Meta.Pagination.Pages,
+	}
 }

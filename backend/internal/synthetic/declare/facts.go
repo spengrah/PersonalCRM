@@ -16,8 +16,7 @@ import (
 // ("overdue by 3 days on a weekly cadence") into durations WITHOUT calling the
 // app's own cadence math. If GetCadenceDuration regressed (monthly → 300d), a
 // fixture derived from it would stay overdue and hide the regression; a locally
-// stated 30d fixture goes NOT-overdue and the satisfiability test + E2E fail
-// loudly. Non-test code in this package therefore must never import
+// stated 30d fixture goes NOT-overdue and the citing E2E spec fails loudly. Non-test code in this package therefore must never import
 // internal/cadence — imports_test.go enforces that recursively, and
 // facts_test.go asserts these tables equal the cadence package's per env so an
 // intentional product change surfaces as a conscious two-sided edit.
@@ -158,8 +157,7 @@ func historySpanWithinBatchReach(n int) error {
 }
 
 // Cadences is the cadence vocabulary a declaration may use, sorted. It is the
-// validation set for Cadence(...) and the enumeration a satisfiability test can
-// iterate.
+// validation set for Cadence(...).
 func Cadences() []string {
 	out := make([]string, 0, len(productionPeriods))
 	for name := range productionPeriods {

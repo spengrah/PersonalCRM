@@ -2267,11 +2267,10 @@ type Querier interface {
 	// without a sleep/timeout. Production code must NOT call this.
 	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
 	// Test assertion — a planted job's disposition: its state, whether it is
-	// finalized, how many times a worker snoozed it (River records the count in
-	// metadata->>'snoozes'), and its attempt counter. `attempt` is the load-bearing
-	// one for queue isolation: River increments it on FETCH, so attempt = 0 says
-	// the job was never handed to a worker at all — a positive statement, unlike
-	// "not finalized", which a job nobody ever looked at also satisfies.
+	// finalized, and its attempt counter. `attempt` is the load-bearing one for
+	// queue isolation: River increments it on FETCH, so attempt = 0 says the job was
+	// never handed to a worker at all — a positive statement, unlike "not
+	// finalized", which a job nobody ever looked at also satisfies.
 	TestGetRiverJobDispositionByID(ctx context.Context, id int64) (*TestGetRiverJobDispositionByIDRow, error)
 	// TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
 	// by integration tests that exercise the "target row vanished between
@@ -2292,15 +2291,6 @@ type Querier interface {
 	// accidentally dropped them). to_regclass returns NULL when the index
 	// does not exist.
 	TestIndexExists(ctx context.Context, indexName string) (bool, error)
-	// Isolation fixture, generalized: an AVAILABLE `default`-queue job of ANY kind,
-	// carrying an event id. Two classes matter beyond the no-op kinds, and neither
-	// is covered by a rematch fixture:
-	//   - a kind the harness registers a REAL worker for (followup_manager), which
-	//     the harness wires in off mode — fetching one would finalize it without
-	//     doing the work;
-	//   - a production kind the harness does NOT register (todoist_task_op), which
-	//     a fetching client fails as an unknown kind, burning the job's attempts.
-	TestInsertAvailableJobOfKind(ctx context.Context, arg TestInsertAvailableJobOfKindParams) (int64, error)
 	// Isolation fixture: plants an AVAILABLE (immediately fetchable)
 	// rematch_dispatcher job on the `default` queue — the queue the live
 	// application works. A harness that fetched it would be stealing another

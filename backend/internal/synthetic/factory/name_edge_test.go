@@ -320,8 +320,8 @@ func TestWithExplicitName_ProducesAValidEmailLocalPart(t *testing.T) {
 // alphanumeric ASCII. That has held by accident, not by any enforced constraint:
 // a future entry carrying an apostrophe or a hyphen ("O'Malley", "Smith-Jones")
 // would silently change the generated email identifier on EVERY synthetic path
-// that draws through slug/emailFor, and neither the sanitization spot-check above
-// nor any golden-stream test exercises more than a couple of pairs. This turns
+// that draws through slug/emailFor, and the sanitization spot-check above
+// exercises only a couple of pairs. This turns
 // the assumption into one that holds by construction and fails loudly, naming the
 // offending entry, the moment it stops being true.
 func TestNamePools_AreEmailSafeByConstruction(t *testing.T) {

@@ -104,8 +104,7 @@ func IsNone(behaviorID string) (string, bool) {
 }
 
 // Registered returns every declaration sorted by behavior id. The sort is the
-// iteration order for satisfiability subtests and (from a later PR) World()
-// composition, so it must stay deterministic.
+// iteration order for World() composition, so it must stay deterministic.
 func Registered() []Declaration {
 	registryMu.RLock()
 	defer registryMu.RUnlock()

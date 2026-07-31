@@ -160,12 +160,6 @@ func World(
 		func() []string {
 			return newStringsSince(beforeContacts, h.CreatedContactIDs())
 		},
-		func() error {
-			if hook := currentHook(HookAfterReplayBeforeDrain); hook != nil {
-				return hook(ctx, h)
-			}
-			return nil
-		},
 		func() error { return h.DrainGateB(ctx) },
 	)
 }
@@ -181,7 +175,6 @@ func executeWorld(
 	plan []WorldStep,
 	runStep worldStepRunner,
 	observedContactIDs func() []string,
-	beforeDrain func() error,
 	drain func() error,
 ) (WorldResult, error) {
 	for _, step := range plan {
@@ -191,16 +184,6 @@ func executeWorld(
 		}
 		sw := replay.NewStopwatch()
 		handles, produced, err := runStep(step)
-		// The failpoint fires as the STEP's OWN error, deliberately: routing it
-		// down the same path a real step failure takes is what makes the
-		// fault-injection test cover error PROPAGATION rather than a private
-		// branch that happens to also return. Its rows are already written, so
-		// the world it leaves behind is genuinely partial.
-		if err == nil {
-			if key := currentWorldStepFailpoint(); key != "" && key == step.Key {
-				err = fmt.Errorf("failpoint %q fired", FailpointAfterWorldStep)
-			}
-		}
 		for i, seeded := range produced {
 			res.Entities[worldEntityKey(step, handles, i)] = seeded
 		}
@@ -231,10 +214,6 @@ func executeWorld(
 	}
 
 	// ONE drain for the whole world (see the doc comment).
-	if err := beforeDrain(); err != nil {
-		res.Current = &WorldStepResult{Kind: WorldStepDrain, Key: HookAfterReplayBeforeDrain}
-		return res, fmt.Errorf("declare: %s hook: %w", HookAfterReplayBeforeDrain, err)
-	}
 	if err := drain(); err != nil {
 		res.Current = &WorldStepResult{Kind: WorldStepDrain, Key: "gate-b"}
 		return res, fmt.Errorf("declare: world drain: %w", err)

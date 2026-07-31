@@ -86,11 +86,13 @@ const (
 // rather than grade a truncated list.
 //
 // It is deliberately a DECISION THRESHOLD rather than a capacity forecast. No
-// headroom is reserved for anyone: the standard world's own test asserts its
-// overdue population stays at or under this number, so the change that would
-// exceed it fails a named test and has to make a conscious call (raise it again
-// with a stated reason, split the world, or exclude a declaration class) with
-// the information in hand. The value only sets WHERE that decision happens.
+// headroom is reserved for anyone. Enforcement is at TOUR TIME: both
+// overdue-bearing tours call assertOverdueFitsCapture (see below) against the
+// LIVE overdue count before their first capture and throw, naming the tour and
+// the count, rather than grading a truncated list. So the change that would
+// exceed the cap has to make a conscious call (raise it again with a stated
+// reason, split the world, or exclude a declaration class) with the information
+// in hand. The value only sets WHERE that decision happens.
 //
 // The TypeScript side (OVERDUE_CAPTURE_CAP in
 // frontend/tests/tours/support/pinned-fixtures.ts) must equal this, and the
