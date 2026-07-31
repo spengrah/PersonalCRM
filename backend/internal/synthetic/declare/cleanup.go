@@ -432,14 +432,9 @@ func runLadder(
 	deleted := map[string]int64{"mac_hosts": 0, "meeting_notes": 0}
 	var firstErr error
 
-	failStep := currentCleanupFailStep()
 	step := func(label string, fn func() (int64, error)) {
 		if firstErr != nil {
 			return // aborted: the transaction is unusable and will roll back
-		}
-		if failStep == label {
-			firstErr = fmt.Errorf("cleanup %s: injected failure", label)
-			return
 		}
 		n, err := fn()
 		if err != nil {

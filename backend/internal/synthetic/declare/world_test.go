@@ -111,7 +111,6 @@ func TestExecuteWorld_FinalDrainFailureUsesTheProductionErrorPath(t *testing.T) 
 		[]WorldStep{{Kind: WorldStepTail, Key: "minimal-tail"}},
 		func(WorldStep) ([]string, []Seeded, error) { return nil, nil, nil },
 		func() []string { return nil },
-		func() error { return nil },
 		func() error { return errors.New("injected drain failure") },
 	)
 
@@ -148,7 +147,6 @@ func TestExecuteWorld_FailuresNameTheActualStepAndKeepPartialEntities(t *testing
 				},
 				func() []string { return nil },
 				func() error { return nil },
-				func() error { return nil },
 			)
 
 			require.Error(t, err)
@@ -172,7 +170,6 @@ func TestExecuteWorld_RejectsAnUnreportedTailContact(t *testing.T) {
 			return nil, []Seeded{{Kind: "contact", ID: "fixture-a"}}, nil
 		},
 		func() []string { return []string{"fixture-a", "created-after-fixtures"} },
-		func() error { return nil },
 		func() error { return nil },
 	)
 

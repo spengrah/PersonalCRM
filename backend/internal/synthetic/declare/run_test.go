@@ -1,14 +1,12 @@
 package declare
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/synthetic/factory"
-	"personal-crm/backend/internal/synthetic/replay"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -186,39 +184,4 @@ func TestTestSeamsPanicWhenDisallowed(t *testing.T) {
 		assert.Contains(t, r, "declare.Whatever is test-only support")
 	}()
 	requireSeamsAllowed("declare.Whatever", false)
-}
-
-func TestTestSeamsRejectUnknownNames(t *testing.T) {
-	t.Setenv("CRM_ENV", "testing")
-	assert.PanicsWithValue(t, `declare: unknown failpoint "nope"`, func() { SetFailpointForTest("nope") })
-	assert.PanicsWithValue(t, `declare: unknown test-hook point "nope"`, func() { SetTestHookForTest("nope", nil) })
-}
-
-func TestSeamsRestoreCleanly(t *testing.T) {
-	t.Setenv("CRM_ENV", "testing")
-
-	restoreFailpoint := SetFailpointForTest(FailpointAfterFirstEntity)
-	assert.Equal(t, FailpointAfterFirstEntity, currentFailpoint())
-	restoreFailpoint()
-	assert.Equal(t, "", currentFailpoint())
-
-	hook := func(context.Context, *replay.Harness) error { return nil }
-	restoreHook := SetTestHookForTest(HookAfterReplayBeforeDrain, hook)
-	assert.NotNil(t, currentHook(HookAfterReplayBeforeDrain))
-	restoreHook()
-	assert.Nil(t, currentHook(HookAfterReplayBeforeDrain))
-
-	restoreStep := SetCleanupFailStepForTest("contacts")
-	assert.Equal(t, "contacts", currentCleanupFailStep())
-	restoreStep()
-	assert.Equal(t, "", currentCleanupFailStep())
-}
-
-func TestWorstCaseRunResidenceIsFiniteAndSumsTheRealTimers(t *testing.T) {
-	t.Setenv("CRM_ENV", "testing")
-	restore := SetBudgetsForTest(2*time.Second, 3*time.Second)
-	defer restore()
-	bound := WorstCaseRunResidence()
-	assert.Greater(t, bound, 5*time.Second, "the bound must include the toolkit's own fixed settle timers")
-	assert.Less(t, bound, 5*time.Minute, "the bound must be finite and small enough to be meaningful")
 }

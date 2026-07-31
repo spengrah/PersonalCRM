@@ -160,12 +160,6 @@ func World(
 		func() []string {
 			return newStringsSince(beforeContacts, h.CreatedContactIDs())
 		},
-		func() error {
-			if hook := currentHook(HookAfterReplayBeforeDrain); hook != nil {
-				return hook(ctx, h)
-			}
-			return nil
-		},
 		func() error { return h.DrainGateB(ctx) },
 	)
 }
@@ -181,7 +175,6 @@ func executeWorld(
 	plan []WorldStep,
 	runStep worldStepRunner,
 	observedContactIDs func() []string,
-	beforeDrain func() error,
 	drain func() error,
 ) (WorldResult, error) {
 	for _, step := range plan {
@@ -221,10 +214,6 @@ func executeWorld(
 	}
 
 	// ONE drain for the whole world (see the doc comment).
-	if err := beforeDrain(); err != nil {
-		res.Current = &WorldStepResult{Kind: WorldStepDrain, Key: HookAfterReplayBeforeDrain}
-		return res, fmt.Errorf("declare: %s hook: %w", HookAfterReplayBeforeDrain, err)
-	}
 	if err := drain(); err != nil {
 		res.Current = &WorldStepResult{Kind: WorldStepDrain, Key: "gate-b"}
 		return res, fmt.Errorf("declare: world drain: %w", err)

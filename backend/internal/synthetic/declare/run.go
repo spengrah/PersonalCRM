@@ -192,7 +192,7 @@ func seedOrDefault(seed uint64) uint64 {
 
 // execute is the full protocol: reserve, claim bands, construct, run, drain.
 func execute(parent context.Context, database *db.Database, d Declaration, namespace string, seed uint64) (Result, error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), runBudget())
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), defaultRunBudget)
 	defer cancel()
 
 	locks, err := newLockSession(ctx, database)
@@ -255,7 +255,7 @@ func driveTeardown(teardown func(context.Context) error) bool {
 	if teardown == nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), teardownBudget())
+	ctx, cancel := context.WithTimeout(context.Background(), defaultTeardownBudget)
 	defer cancel()
 	return teardown(ctx) == nil
 }
@@ -457,15 +457,6 @@ func buildHarness(
 				fmt.Errorf("declare: claim numeric bands for re-salted namespace %q: %w", effective, err))
 		}
 
-		if hook := currentHook(HookAfterBandSwapBeforeRevalidate); hook != nil {
-			if err := hook(ctx, h); err != nil {
-				// Terminal path: the deferred close settles whatever is held.
-				_ = locks.unlockAll(effectiveKeys)
-				return nil, nil, teardownError(teardown, effective,
-					fmt.Errorf("declare: %s hook: %w", HookAfterBandSwapBeforeRevalidate, err))
-			}
-		}
-
 		free, err := bandsFree(ctx, support, effectiveGen)
 		if err != nil {
 			_ = locks.unlockAll(effectiveKeys)
@@ -590,12 +581,6 @@ func runEntities(
 	st := newRunState(len(d.Entities))
 	if err := runEntityList(ctx, h, support, d.Entities, st); err != nil {
 		return Result{}, err
-	}
-
-	if hook := currentHook(HookAfterReplayBeforeDrain); hook != nil {
-		if err := hook(ctx, h); err != nil {
-			return Result{}, fmt.Errorf("declare: %s hook: %w", HookAfterReplayBeforeDrain, err)
-		}
 	}
 	if err := h.DrainGateB(ctx); err != nil {
 		return Result{}, err

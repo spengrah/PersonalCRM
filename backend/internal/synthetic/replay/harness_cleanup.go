@@ -81,16 +81,6 @@ func (h *Harness) Quiesce(ctx context.Context) error {
 	return nil
 }
 
-// SettleBudget is the toolkit's FIXED per-gate real-time wait. Exposed so a
-// caller stating a worst-case residence bound does the arithmetic from the real
-// value instead of copying a number that can drift.
-func SettleBudget() time.Duration { return defaultSettleTimeout }
-
-// TeardownGateBBudget is the FIXED real-time wait teardown gives Gate B before
-// it gives up and leaves the namespaced dataset intact. Exposed for the same
-// reason as SettleBudget.
-func TeardownGateBBudget() time.Duration { return teardownGateBBoundedWait }
-
 // DrainGateB bounded-waits Gate B (this run's River jobs finalizing) to zero
 // and errors loudly if it does not clear. It is teardown's step 2 exposed on
 // its own for the "seed and leave" callers that must be able to PROMISE a
