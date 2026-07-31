@@ -4,7 +4,9 @@
 // DSH-004[2]), plus a single-point mutation that manufactures a KNOWN fail on
 // that item AND is visible in the JUDGE-PROJECTED evidence.
 //
-// Two hard constraints on every entry (both guarded by trap-config.test.ts):
+// Two hard constraints on every entry. Both are enforced at RUN TIME by the
+// self-test, which reports `error` (and so a non-zero exit) rather than a silent
+// pass when either is violated — see `trap-selftest.ts`:
 //   1. `{ targetBehavior, targetItem }` MUST be a judge-graded residue item
 //      (`judgeItemsFor(targetBehavior)`) — a behavior with no judge residue
 //      produces `items: []` and the judge short-circuits, never failing.
