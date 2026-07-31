@@ -267,7 +267,7 @@ func TestSeedDeclaredEndpoint_Conflict409(t *testing.T) {
 // anything was left behind. The failpoint exists precisely so a VALID request
 // can be made to fail at the HTTP tier.
 func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
-	router, _, _ := newDeclaredSeedRouter(t)
+	router, database, ctx := newDeclaredSeedRouter(t)
 	namespace := declaredAPINS(t)
 
 	restore := declare.SetFailpointForTest(declare.FailpointAfterFirstEntity)
@@ -291,6 +291,16 @@ func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
 	// the endpoint must SAY so. Without this the handler could hardcode false, or
 	// omit the field entirely, and the later cleanup would still pass.
 	assert.True(t, envelope.Data.Cleaned, "the failure body must report that the partial world was cleaned")
+
+	// And `cleaned` must be TRUE OF THE DATABASE, not merely of a function that
+	// returned nil. The flag is derived from the teardown's error return, so a
+	// teardown that silently deleted nothing would still advertise cleaned=true
+	// and leave the partial world standing. Read the namespace's own rows back.
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+	prefix := factory.NewGenerator(factory.DefaultSeed, envelope.Data.Namespace).Prefix()
+	remaining, err := support.SelectContactIDsByFullNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	assert.Empty(t, remaining, "cleaned=true must mean the partial world is GONE, not that teardown returned nil")
 
 	// The namespace is reclaimable regardless of which way `cleaned` reported.
 	res := cleanupNamespaces(t, router, []string{namespace}, 0)

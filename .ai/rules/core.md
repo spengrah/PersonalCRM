@@ -31,7 +31,7 @@ One thing overcomes the presumption: a silent failure there would make first-ord
 3. Yes → add the smallest assertion that catches the lie, in the lane that gates a merge.
 4. Never add a guard whose own correctness requires a further guard.
 
-A second-order test that does not gate a merge is deleted, not fixed.
+A second-order test that does not gate a merge is deleted — unless it qualifies above, in which case move it into the gating lane.
 
 ### Ephemeral second-order verification
 
