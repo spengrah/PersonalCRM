@@ -749,10 +749,10 @@ func (h *Harness) SeedNote(ctx context.Context, contactID uuid.UUID, body string
 // SeedOrphanMeetingNote inserts a single orphan_needs_review meeting_note row
 // against the harness's seeded synthetic mac_host (the Imports Interactions
 // "orphan" surface). It uses the EXISTING MeetingNoteRepository — not a new
-// replay adapter — so it is orchestration over an existing repo, mirroring the
-// /seed/meeting-notes route. The session id is a fresh random UUID; cleanup is by
-// the harness's host id (the teardown's meeting_note step), so no namespace
-// prefix is needed. Returns the created session id.
+// replay adapter — so it is orchestration over an existing repo. The session id
+// is a fresh random UUID; cleanup is by the harness's host id (the teardown's
+// meeting_note step), so no namespace prefix is needed. Returns the created
+// session id.
 //
 // Only the orphan state is produced here: conflict_pending needs a well-formed
 // conflict_candidates snapshot referencing real events, which has no toolkit
