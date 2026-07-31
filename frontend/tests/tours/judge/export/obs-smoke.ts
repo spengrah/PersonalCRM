@@ -1012,8 +1012,8 @@ async function main(): Promise<number> {
   }
 }
 
-// Import-guarded: importing this module (as obs-smoke.test.ts does) runs NO side
-// effects; main() executes only when the file is the process entry point.
+// Import-guarded: importing this module runs NO side effects; main() executes
+// only when the file is the process entry point.
 if (typeof import.meta !== 'undefined' && (import.meta as ImportMeta).main) {
   void main().then(code => {
     process.exitCode = code
