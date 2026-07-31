@@ -236,6 +236,15 @@ func (r *SyntheticSupportRepository) DeleteExternalContactsBySourceIDPrefix(ctx 
 	return r.queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
+// DeleteExternalContactsByIds removes external_contact rows by the namespace's
+// ownership records (cleanup step 9, unioned with the source_id-prefix sweep).
+func (r *SyntheticSupportRepository) DeleteExternalContactsByIds(ctx context.Context, ids []uuid.UUID) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteExternalContactsByIds(ctx, pgUUIDs(ids))
+}
+
 // DeleteContactTasksByContactIds removes contact_task rows by contact (cleanup
 // step 10; contact_task has no deleted_at, so a hard delete).
 func (r *SyntheticSupportRepository) DeleteContactTasksByContactIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
@@ -1070,9 +1079,18 @@ func (r *SyntheticSupportRepository) CountPendingJobsForNamespaceCleanup(ctx con
 // so a renamed seeded contact is invisible to every name-derived sweep. These
 // three wrap the durable, id-keyed ownership record that closes that hole.
 
-// EntityKindContact is the ownership record's kind for a seeded contact. It
-// grows with the declarable vocabulary.
-const EntityKindContact = "contact"
+// Ownership-record kinds. They grow with the declarable vocabulary.
+const (
+	// EntityKindContact is a seeded contact, whose recoverable token (full_name)
+	// the application lets a user rewrite.
+	EntityKindContact = "contact"
+	// EntityKindExternalContact is a seeded import candidate. Three of the seven
+	// declarable sources have a production source_id that carries no
+	// namespace-prefixed string at all — a decimal telegram peer id, a SHA-256
+	// (token ‖ session) digest — so for those the prefix sweep has nothing to match
+	// and this record is the ONLY way cleanup can find the row.
+	EntityKindExternalContact = "external_contact"
+)
 
 // RecordNamespaceEntity records that a namespace created an entity. Idempotent.
 func (r *SyntheticSupportRepository) RecordNamespaceEntity(ctx context.Context, namespace, kind string, entityID uuid.UUID) error {

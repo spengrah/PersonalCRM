@@ -17,14 +17,17 @@ package replay
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/anarlog"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/google"
+	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic/factory"
@@ -402,35 +405,85 @@ func (h *Harness) SeedEntity(ctx context.Context, spec factory.EntitySpec) (uuid
 	return nodeID, nil
 }
 
+// CorrespondenceEvidence is the co-occurrence evidence a gmail_correspondence
+// candidate carries: how many messages the discoverer aggregated, and the known
+// contact it most often co-appeared with.
+//
+// CoOccurringContactID is deliberately a STRING and deliberately allowed to be
+// empty. The production discoverer degrades to id-only evidence when the contact
+// name lookup fails and writes the id as a JSON string, so the empty-id shape is
+// one the card must render; passing the contact's real uuid here instead would
+// seed a state the seed cannot distinguish from the degraded one.
+type CorrespondenceEvidence struct {
+	MessageCount         int
+	CoOccurringContactID string
+	CoOccurringName      string
+}
+
 // SeedExternalContactCandidate writes one UNMATCHED external_contact import
 // candidate through the PRODUCTION ExternalContactRepository.Upsert path — the
-// SAME write the Google sync providers use for sources the ingest registry does
+// SAME write the Google sync providers use for the sources the ingest registry does
 // NOT allow (gcontacts: google/contacts.go; gmail_correspondence:
-// google/gmail_correspondence.go). The Upsert hardcodes match_status='unmatched'
-// on insert, so this produces an Imports-queue candidate only (matched/linked
-// candidates need the match path and are out of scope here). The field shape
-// mirrors each provider so the Imports UI renders the candidate: gcontacts is
-// account-scoped with first/last name and an id-shaped source_id; the
-// correspondence source keys its source_id on the email and carries the evidence
-// metadata the card reads. The ns-prefixed source_id is reclaimed by the
-// teardown's external_contact source_id-prefix sweep — no per-id tracking needed.
-// Returns the created row id.
-func (h *Harness) SeedExternalContactCandidate(ctx context.Context, spec factory.ExternalContactCandidateSpec) (uuid.UUID, error) {
+// google/gmail_correspondence.go; gcal_attendee: google/calendar.go). The Upsert
+// hardcodes match_status='unmatched' on insert, so this produces an Imports-queue
+// candidate only (matched/linked candidates need the match path and are out of
+// scope here). The field shape mirrors each provider so the Imports UI renders the
+// candidate: gcontacts is account-scoped with first/last name and an id-shaped
+// source_id; gcal_attendee is account-scoped and keys its source_id on the
+// normalized attendee email; the correspondence source keys its source_id on the
+// email and carries the evidence metadata the card reads.
+//
+// The ns-prefixed source_id is reclaimed by the teardown's external_contact
+// source_id-prefix sweep; the declared-seeding caller ALSO records namespace
+// ownership by row id, which is what covers the sources whose production source_id
+// carries no prefix. Returns the created row id.
+func (h *Harness) SeedExternalContactCandidate(
+	ctx context.Context,
+	spec factory.ExternalContactCandidateSpec,
+	evidence *CorrespondenceEvidence,
+) (uuid.UUID, error) {
 	now := accelerated.GetCurrentTime()
+	emails := make([]repository.EmailEntry, 0, len(spec.Emails))
+	for i, address := range spec.Emails {
+		emails = append(emails, repository.EmailEntry{Value: address, Type: "personal", Primary: i == 0})
+	}
+	phones := make([]repository.PhoneEntry, 0, len(spec.Phones))
+	for i, number := range spec.Phones {
+		phones = append(phones, repository.PhoneEntry{Value: number, Type: "mobile", Primary: i == 0})
+	}
 	req := repository.UpsertExternalContactRequest{
 		Source:      spec.Source,
 		DisplayName: &spec.DisplayName,
-		Emails:      []repository.EmailEntry{{Value: spec.Email, Primary: true}},
+		Emails:      emails,
+		Phones:      phones,
 		SyncedAt:    &now,
 	}
 	switch spec.Source {
 	case google.CorrespondenceSource:
 		// The correspondence discoverer keys source_id on the email address and
 		// attaches the evidence metadata the card renders (observed names + count).
-		req.SourceID = spec.Email
-		req.Metadata = map[string]any{
+		req.SourceID = spec.Emails[0]
+		metadata := map[string]any{
 			"display_names_seen": []string{spec.DisplayName},
 			"message_count":      1,
+		}
+		if evidence != nil {
+			metadata["message_count"] = evidence.MessageCount
+			metadata["co_occurring_contact"] = map[string]any{
+				"id":   evidence.CoOccurringContactID,
+				"name": evidence.CoOccurringName,
+			}
+		}
+		req.Metadata = metadata
+	case google.CalendarAttendeeSource:
+		// The calendar provider dedupes attendees on the NORMALIZED email, and
+		// attaches the meeting context the card's "From: <title>" badge reads.
+		req.SourceID = matching.NormalizeEmail(spec.Emails[0])
+		req.AccountID = &spec.AccountID
+		req.Metadata = map[string]any{
+			"meeting_title": spec.DisplayName + " sync",
+			"meeting_date":  now.Format(time.RFC3339),
+			"discovered_at": now.Format(time.RFC3339),
 		}
 	default:
 		// Address-book sources (gcontacts) are account-scoped, id-keyed, and carry
@@ -445,6 +498,133 @@ func (h *Harness) SeedExternalContactCandidate(ctx context.Context, spec factory
 		return uuid.Nil, fmt.Errorf("seed external contact candidate (%s): %w", spec.Source, err)
 	}
 	return ec.ID, nil
+}
+
+// SeedTelegramDiscoveryCandidate writes one telegram discovery candidate through
+// the PRODUCTION ExternalContactRepository.UpsertTelegramDiscoveryCandidate path —
+// the dedicated upsert PeerMatcher uses (telegram/matcher.go), which merges
+// metadata and never clears a captured name. The source_id keeps the matcher's own
+// recipe (the decimal peer user id), so the row is exactly what a discovery pass
+// would have produced and carries no namespace-prefixed string; the caller records
+// namespace ownership by row id. Returns the created row id.
+func (h *Harness) SeedTelegramDiscoveryCandidate(ctx context.Context, spec factory.TelegramDiscoveryCandidateSpec) (uuid.UUID, string, error) {
+	now := accelerated.GetCurrentTime()
+	metadata := map[string]any{
+		"message_count":  spec.MessageCount,
+		"outbound_count": 0,
+		"inbound_count":  spec.MessageCount,
+	}
+	if spec.Username != "" {
+		metadata["username"] = spec.Username
+	}
+	req := repository.UpsertTelegramDiscoveryCandidateRequest{
+		SourceID:    strconv.FormatInt(spec.PeerUserID, 10),
+		DisplayName: nilIfBlank(spec.DisplayName),
+		FirstName:   nilIfBlank(spec.FirstName),
+		LastName:    nilIfBlank(spec.LastName),
+		Metadata:    metadata,
+		SyncedAt:    &now,
+	}
+	ec, err := h.externalRepo.UpsertTelegramDiscoveryCandidate(ctx, req)
+	if err != nil {
+		return uuid.Nil, "", fmt.Errorf("seed telegram discovery candidate: %w", err)
+	}
+	return ec.ID, derefOrEmpty(ec.DisplayName), nil
+}
+
+// SeedTitleCandidate writes ONE anarlog_title weak candidate through the
+// PRODUCTION anarlog.DiscoveryWriter — orchestration over the real writer, so the
+// row keeps its SHA-256 (token ‖ session) source_id and the writer's own
+// title-casing of the display token. Each call mints a fresh session uuid, so two
+// calls sharing a token produce one grouped candidate with evidence count two.
+// Returns the created row id and the display token AS STORED — the writer
+// title-cases it, so re-deriving that casing in a caller would be a second copy of
+// production logic that could silently disagree with it.
+func (h *Harness) SeedTitleCandidate(ctx context.Context, spec factory.AnarlogTitleCandidateSpec) (uuid.UUID, string, error) {
+	sessionID := uuid.New()
+	tx, err := h.database.Pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, "", fmt.Errorf("seed title candidate: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	writer := anarlog.NewDiscoveryWriter(h.externalRepo)
+	if err := writer.UpsertTitleCandidateTx(ctx, tx, sessionID, spec.NormalizedToken, spec.DisplayToken); err != nil {
+		return uuid.Nil, "", fmt.Errorf("seed title candidate: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, "", fmt.Errorf("seed title candidate: commit: %w", err)
+	}
+
+	ec, err := h.externalRepo.GetBySource(ctx, anarlogTitleSource, anarlog.ComputeAnarlogTitleSourceIDForTest(spec.NormalizedToken, sessionID), nil)
+	if err != nil {
+		return uuid.Nil, "", fmt.Errorf("seed title candidate: read back: %w", err)
+	}
+	if ec == nil {
+		return uuid.Nil, "", fmt.Errorf("seed title candidate: the writer reported success but no row exists for token %q", spec.NormalizedToken)
+	}
+	return ec.ID, derefOrEmpty(ec.DisplayName), nil
+}
+
+// anarlogTitleSource is the source the discovery writer stamps on its rows.
+const anarlogTitleSource = "anarlog_title"
+
+// SeedMethodSuggestion turns an ALREADY-SEEDED contact into the method-suggestion
+// surface: a LINKED `imported` address-book row carrying one pending method the
+// contact does not have yet. It mirrors the production reconcile outcome by
+// composing the same three repository writes the reconciler ends at — upsert the
+// address-book row, link it to the contact as imported, then store the pending
+// suggestion set. Returns the external row id and the pending email.
+func (h *Harness) SeedMethodSuggestion(
+	ctx context.Context,
+	contactID uuid.UUID,
+	spec factory.ExternalContactCandidateSpec,
+	displayName string,
+) (uuid.UUID, string, error) {
+	now := accelerated.GetCurrentTime()
+	pendingEmail := spec.Emails[0]
+	external, err := h.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:      spec.Source,
+		SourceID:    spec.EntityID,
+		AccountID:   &spec.AccountID,
+		DisplayName: &displayName,
+		Emails:      []repository.EmailEntry{{Value: pendingEmail, Type: "personal", Primary: true}},
+		SyncedAt:    &now,
+	})
+	if err != nil {
+		return uuid.Nil, "", fmt.Errorf("seed method suggestion: upsert external: %w", err)
+	}
+	if _, err := h.externalRepo.UpdateMatch(ctx, external.ID, &contactID, repository.MatchStatusImported); err != nil {
+		return uuid.Nil, "", fmt.Errorf("seed method suggestion: link external: %w", err)
+	}
+	pending := []repository.PendingMethodSuggestion{{
+		Type:  "email",
+		Value: repository.NormalizeContactMethodValue("email", pendingEmail),
+	}}
+	if _, err := h.externalRepo.SetMethodSuggestions(ctx, external.ID, pending); err != nil {
+		return uuid.Nil, "", fmt.Errorf("seed method suggestion: set pending: %w", err)
+	}
+	return external.ID, pendingEmail, nil
+}
+
+// nilIfBlank maps "" to nil so a blanked name field lands NULL rather than an
+// empty string. The unresolved-peer predicate treats both as absent, but the
+// production matcher normalizes empty peer fields to nil for exactly this reason
+// and the seed must not store a shape it would not.
+func nilIfBlank(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// derefOrEmpty reads a nullable stored string, so a manifest reports what the
+// column actually holds rather than a value the caller hoped for.
+func derefOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // SeedRelationshipSignal writes one relationship_signal row for a seeded node

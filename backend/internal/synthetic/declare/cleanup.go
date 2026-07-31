@@ -378,7 +378,15 @@ func namespaceEventIDs(
 // ROOT events for the entity kinds the vocabulary can currently declare. It
 // grows with the vocabulary: every declarable class owes a namespace-recoverable
 // cleanup step in the PR that makes it declarable.
-var declaredRootEventSources = []string{repository.InteractionSourceEmail}
+//
+// The two ingest sources are here because an external_contact.upserted replay
+// publishes a ROOT event that carries no CRM contact id, so the contact-scoped
+// query alone cannot see it and the event would leak.
+var declaredRootEventSources = []string{
+	repository.InteractionSourceEmail,
+	SourceICloudContacts,
+	SourceAnarlogHumans,
+}
 
 // runLadder executes the FK-ordered deletes in ONE transaction and returns
 // per-class counts.
@@ -454,6 +462,13 @@ func runLadder(
 	if err != nil {
 		return NamespaceCleanup{Status: StatusError, Err: fmt.Sprintf("select venue nodes: %v", err)}
 	}
+	// The namespace's OWNED import candidates. Read here, with every other
+	// derivation, because a read issued after a failed statement would return 25P02
+	// instead of an answer.
+	ownedCandidateIDs, err := support.SelectNamespaceEntityIDs(ctx, namespace, repository.EntityKindExternalContact)
+	if err != nil {
+		return NamespaceCleanup{Status: StatusError, Err: fmt.Sprintf("select owned import candidates: %v", err)}
+	}
 
 	step("event_consumer_claims", func() (int64, error) {
 		return support.DeleteEventConsumerClaimsByEventIds(ctx, eventIDs)
@@ -485,8 +500,15 @@ func runLadder(
 	step("external_identities", func() (int64, error) {
 		return support.DeleteExternalIdentitiesBySourceIDPrefix(ctx, prefix)
 	})
+	// Two sweeps under one label, the shape external_identities already uses: the
+	// ns-prefixed source_ids, then the namespace's ownership records — which are
+	// the ONLY thing that reaches a telegram peer id or an anarlog_title digest,
+	// neither of which carries a prefix to match on.
 	step("external_contacts", func() (int64, error) {
 		return support.DeleteExternalContactsBySourceIDPrefix(ctx, prefix)
+	})
+	step("external_contacts", func() (int64, error) {
+		return support.DeleteExternalContactsByIds(ctx, ownedCandidateIDs)
 	})
 	step("contact_tasks", func() (int64, error) {
 		return support.DeleteContactTasksByContactIds(ctx, contactIDs)

@@ -140,14 +140,110 @@ func TestSameNameAs_MustReferenceAnEarlierContact(t *testing.T) {
 
 // --- import candidates ------------------------------------------------------
 
-func TestExternalCandidate_OnlyTheTwoKeyableSourcesAreDeclarable(t *testing.T) {
-	for _, source := range []string{SourceGContacts, SourceCorrespondence} {
+// Every source the vocabulary admits must have a production writer the lowering
+// dispatches to; a source outside the set would fall into whichever branch was
+// last and produce a row its own sync path cannot.
+func TestExternalCandidate_OnlyWriterBackedSourcesAreDeclarable(t *testing.T) {
+	// anarlog_title's row IS a token, so it is declared with one.
+	for _, source := range []string{
+		SourceGContacts, SourceCorrespondence, SourceCalendarAttendee,
+		SourceICloudContacts, SourceAnarlogHumans, SourceTelegram,
+	} {
 		assert.NoError(t, validateEntityOrder([]Entity{ExternalCandidate("c", Source(source))}), source)
 	}
-	for _, source := range []string{"", "telegram", "anarlog_humans", "icloud_contacts"} {
+	assert.NoError(t, validateEntityOrder([]Entity{
+		ExternalCandidate("c", Source(SourceAnarlogTitle), TitleToken("lena")),
+	}))
+
+	for _, source := range []string{"", "test", "gcal", "anarlog_sessions"} {
 		assert.Error(t, validateEntityOrder([]Entity{ExternalCandidate("c", Source(source))}),
-			"source %q is not one the seeding primitive can key", source)
+			"source %q has no production writer the lowering can dispatch to", source)
 	}
+}
+
+// The props are the reason the source set can be this wide: each one is only
+// meaningful for the writers that can actually store it, so the validator refuses
+// the combinations that would silently produce an unproducible row.
+func TestCandidateProps_AreRefusedOnSourcesThatCannotStoreThem(t *testing.T) {
+	cases := map[string][]Entity{
+		"methods on an ingest source": {
+			ExternalCandidate("c", Source(SourceICloudContacts), Emails(2)),
+		},
+		"methods on correspondence, whose single address is its source_id": {
+			ExternalCandidate("c", Source(SourceCorrespondence), Emails(2)),
+		},
+		"phones on a discovery source": {
+			ExternalCandidate("c", Source(SourceTelegram), Phones(1)),
+		},
+		"a twin name on an ingest source, which mints its own": {
+			Contact("a"),
+			ExternalCandidate("c", Source(SourceAnarlogHumans), SameNameAs("a")),
+		},
+		"a telegram handle on a non-telegram source": {
+			ExternalCandidate("c", Source(SourceGContacts), TelegramHandle()),
+		},
+		"no identity on a non-telegram source": {
+			ExternalCandidate("c", Source(SourceGContacts), NoIdentity()),
+		},
+		"no identity together with a pinned twin name": {
+			Contact("a"),
+			ExternalCandidate("c", Source(SourceTelegram), NoIdentity(), SameNameAs("a")),
+		},
+		"a title token on a non-title source": {
+			ExternalCandidate("c", Source(SourceGContacts), TitleToken("lena")),
+		},
+		"a title source with no token": {
+			ExternalCandidate("c", Source(SourceAnarlogTitle)),
+		},
+		"correspondence evidence on a non-correspondence source": {
+			Contact("a"),
+			ExternalCandidate("c", Source(SourceGContacts), CorrespondenceEvidence(4, "a")),
+		},
+		"a same email as a contact that carries none": {
+			Contact("a", NoMethods()),
+			ExternalCandidate("c", Source(SourceGContacts), SameEmailAs("a")),
+		},
+		"a same email as a handle declared later": {
+			ExternalCandidate("c", Source(SourceGContacts), SameEmailAs("a")),
+			Contact("a"),
+		},
+	}
+	for name, entities := range cases {
+		t.Run(name, func(t *testing.T) { assert.Error(t, validateEntityOrder(entities)) })
+	}
+
+	assert.NoError(t, validateEntityOrder([]Entity{
+		Contact("a", Methods(MethodEmail)),
+		ExternalCandidate("c", Source(SourceCalendarAttendee),
+			SameNameAs("a"), SameEmailAs("a"), Emails(2), Phones(1)),
+		ExternalCandidate("tg", Source(SourceTelegram), NoIdentity(), TelegramHandle()),
+		ExternalCandidate("corr", Source(SourceCorrespondence), CorrespondenceEvidence(4, "a")),
+	}))
+}
+
+// --- meeting notes + method suggestions -------------------------------------
+
+func TestMethodSuggestion_NeedsAnEarlierContactAndAnAddressBookSource(t *testing.T) {
+	assert.Error(t, validateEntityOrder([]Entity{
+		MethodSuggestion("s", "target", SourceGContacts),
+		Contact("target"),
+	}), "a forward reference has nothing to resolve against at run time")
+
+	assert.Error(t, validateEntityOrder([]Entity{
+		Contact("target"),
+		MethodSuggestion("s", "target", SourceICloudContacts),
+	}), "icloud_contacts rows come from the ingest pipeline, which cannot produce a linked suggestion row")
+
+	assert.NoError(t, validateEntityOrder([]Entity{
+		Contact("target"),
+		MethodSuggestion("s", "target", SourceGContacts),
+	}))
+}
+
+func TestMeetingNote_NeedsAHandleAndReferencesNothing(t *testing.T) {
+	assert.Error(t, validateEntityOrder([]Entity{MeetingNote("")}))
+	assert.Empty(t, MeetingNote("orphan-a").refs())
+	assert.NoError(t, validateEntityOrder([]Entity{MeetingNote("orphan-a"), MeetingNote("orphan-b")}))
 }
 
 // --- merges / soft deletes / notes ------------------------------------------

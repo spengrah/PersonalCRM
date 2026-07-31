@@ -1682,6 +1682,25 @@ func (q *Queries) SyntheticDeleteEventsByIds(ctx context.Context, eventIds []pgt
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteExternalContactsByIds = `-- name: SyntheticDeleteExternalContactsByIds :execrows
+DELETE FROM external_contact WHERE id = ANY($1::uuid[])
+`
+
+// Cleanup step 9 (ownership): import candidates by the namespace's OWNERSHIP
+// record, unioned with the source_id-prefix delete above rather than replacing
+// it. Three of the declarable candidate sources have a production source_id that
+// carries no namespace-prefixed string — telegram keys on a decimal peer id and
+// anarlog_title on a SHA-256 (token || session) digest — so the prefix sweep has
+// nothing to match for them and this is the only delete that reaches those rows.
+// A hard DELETE, like every other cleanup step.
+func (q *Queries) SyntheticDeleteExternalContactsByIds(ctx context.Context, externalContactIds []pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteExternalContactsByIds, externalContactIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteExternalIdentitiesByIdentifierPrefix = `-- name: SyntheticDeleteExternalIdentitiesByIdentifierPrefix :execrows
 DELETE FROM external_identity WHERE identifier LIKE $1 || '%'
 `

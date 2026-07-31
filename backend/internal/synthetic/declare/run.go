@@ -630,7 +630,11 @@ func runEntity(
 	case *contactPlan:
 		return runContact(ctx, h, support, p, st)
 	case *externalCandidatePlan:
-		return runExternalCandidate(ctx, h, p, st)
+		return runExternalCandidate(ctx, h, support, p, st)
+	case *methodSuggestionPlan:
+		return runMethodSuggestion(ctx, h, support, p, st)
+	case *meetingNotePlan:
+		return runMeetingNote(ctx, h, p)
 	case *notePlan:
 		return runNote(ctx, h, p, st)
 	case *mergePlan:
@@ -642,29 +646,217 @@ func runEntity(
 	}
 }
 
-// runExternalCandidate lowers a declared import candidate onto the direct-upsert
-// seeding primitive. SameNameAs overrides the generated display name with an
-// earlier contact's rendered name, which is what makes the candidate collide
-// with that contact in the matcher rather than merely resemble it.
+// runExternalCandidate lowers a declared import candidate onto the PRODUCTION
+// writer its source actually has — the direct upsert, the mac-daemon ingest
+// pipeline, or one of the two dedicated discovery writers (see candidateSources).
+// Dispatching on the source is what keeps a declared candidate a row the sync path
+// could have produced; a single writer for all seven would produce rows five of
+// them cannot.
+//
+// Whatever the path, the row's namespace ownership is recorded by ID. The prefix
+// sweep recovers only the sources whose production source_id is a
+// namespace-prefixed string; telegram keys on a decimal peer id and anarlog_title
+// on a SHA-256 digest, and prefixing either would forfeit exactly the fidelity
+// using the real writer buys. The ownership record is keyed by the row id, which
+// nothing in the application rewrites, and its id-set is unioned with the prefix
+// sweep rather than replacing it.
 func runExternalCandidate(
+	ctx context.Context,
+	h *replay.Harness,
+	support *repository.SyntheticSupportRepository,
+	p *externalCandidatePlan,
+	st *runState,
+) (Seeded, error) {
+	var (
+		id   uuid.UUID
+		name string
+		err  error
+	)
+	switch p.source {
+	case SourceICloudContacts, SourceAnarlogHumans:
+		id, name, err = seedIngestedCandidate(ctx, h, p)
+	case SourceTelegram:
+		id, name, err = seedTelegramCandidate(ctx, h, p)
+	case SourceAnarlogTitle:
+		id, name, err = seedTitleCandidate(ctx, h, p)
+	default:
+		id, name, err = seedUpsertCandidate(ctx, h, p, st)
+	}
+	if err != nil {
+		return Seeded{}, err
+	}
+	if err := support.RecordNamespaceEntity(ctx, h.Namespace(), repository.EntityKindExternalContact, id); err != nil {
+		return Seeded{}, fmt.Errorf("record namespace ownership: %w", err)
+	}
+	return Seeded{Kind: "external_contact", ID: id.String(), Name: name}, nil
+}
+
+// seedUpsertCandidate is the direct-upsert path (gcontacts, gcal_attendee,
+// gmail_correspondence). SameNameAs overrides the generated display name with an
+// earlier contact's rendered name, which is what makes the candidate collide with
+// that contact in the matcher rather than merely resemble it; SameEmailAs does the
+// same for the primary email, which is what lifts that collision to a
+// high-confidence match.
+func seedUpsertCandidate(
 	ctx context.Context,
 	h *replay.Harness,
 	p *externalCandidatePlan,
 	st *runState,
-) (Seeded, error) {
-	spec := h.Generator().ExternalContactCandidate(p.source)
+) (uuid.UUID, string, error) {
+	emails := p.emails
+	if emails < 1 {
+		emails = 1
+	}
+	spec := h.Generator().ExternalContactCandidate(p.source, emails, p.phones)
 	if p.sameNameAs != "" {
 		twin, ok := st.specs[p.sameNameAs]
 		if !ok {
-			return Seeded{}, fmt.Errorf("SameNameAs(%q): no such contact in this run", p.sameNameAs)
+			return uuid.Nil, "", fmt.Errorf("SameNameAs(%q): no such contact in this run", p.sameNameAs)
 		}
 		spec.DisplayName = twin.FullName
 	}
-	id, err := h.SeedExternalContactCandidate(ctx, spec)
+	if p.sameEmailAs != "" {
+		twin, ok := st.specs[p.sameEmailAs]
+		if !ok {
+			return uuid.Nil, "", fmt.Errorf("SameEmailAs(%q): no such contact in this run", p.sameEmailAs)
+		}
+		spec.Emails[0] = twin.Email
+	}
+
+	var evidence *replay.CorrespondenceEvidence
+	if p.coOccurringWith != "" {
+		co, ok := st.seeded[p.coOccurringWith]
+		if !ok {
+			return uuid.Nil, "", fmt.Errorf("CorrespondenceEvidence(%q): no such contact in this run", p.coOccurringWith)
+		}
+		evidence = &replay.CorrespondenceEvidence{
+			MessageCount: p.messageCount,
+			// The id is deliberately EMPTY: the discoverer degrades to id-only
+			// evidence when its name lookup fails and writes the id as a JSON
+			// string, so a fixture that supplied the real uuid would be seeding the
+			// one shape the badge does not have to render.
+			CoOccurringContactID: "",
+			CoOccurringName:      co.Name,
+		}
+	}
+
+	id, err := h.SeedExternalContactCandidate(ctx, spec, evidence)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	return id, spec.DisplayName, nil
+}
+
+// seedIngestedCandidate is the mac-daemon INGEST path (icloud_contacts,
+// anarlog_humans), the only writer the ingest registry admits for those two
+// sources. It reuses the existing factory payload and replay adapter, then reads
+// the row back so the manifest reports the display name the pipeline actually
+// stored rather than one re-derived here.
+func seedIngestedCandidate(
+	ctx context.Context,
+	h *replay.Harness,
+	p *externalCandidatePlan,
+) (uuid.UUID, string, error) {
+	spec, err := h.Generator().MacContactForSource(factory.ContactSpec{}, factory.MatchUnknown, h.MacHostID(), p.source)
+	if err != nil {
+		return uuid.Nil, "", fmt.Errorf("build %s ingest payload: %w", p.source, err)
+	}
+	if _, err := h.ReplayMacContacts(ctx, uuid.Nil, spec); err != nil {
+		return uuid.Nil, "", fmt.Errorf("ingest %s candidate: %w", p.source, err)
+	}
+	rows, err := h.ExternalContactRepo().FindBySourceAndSourceID(ctx, p.source, spec.EntityID)
+	if err != nil {
+		return uuid.Nil, "", fmt.Errorf("read back %s candidate: %w", p.source, err)
+	}
+	if len(rows) != 1 {
+		return uuid.Nil, "", fmt.Errorf("read back %s candidate %q: want exactly 1 row, got %d", p.source, spec.EntityID, len(rows))
+	}
+	name := ""
+	if rows[0].DisplayName != nil {
+		name = *rows[0].DisplayName
+	}
+	return rows[0].ID, name, nil
+}
+
+// seedTelegramCandidate is the telegram discovery path. NoIdentity and a missing
+// TelegramHandle SUBTRACT from a fully-identified peer, because both states are
+// defined by what the discovery pass did not learn.
+func seedTelegramCandidate(
+	ctx context.Context,
+	h *replay.Harness,
+	p *externalCandidatePlan,
+) (uuid.UUID, string, error) {
+	spec := h.Generator().TelegramDiscoveryCandidate()
+	if p.noIdentity {
+		spec.DisplayName, spec.FirstName, spec.LastName = "", "", ""
+	}
+	if !p.telegramHandle {
+		spec.Username = ""
+	}
+	return h.SeedTelegramDiscoveryCandidate(ctx, spec)
+}
+
+// seedTitleCandidate is the anarlog_title discovery path. The manifest reports the
+// display token AS STORED, because the writer title-cases it.
+func seedTitleCandidate(
+	ctx context.Context,
+	h *replay.Harness,
+	p *externalCandidatePlan,
+) (uuid.UUID, string, error) {
+	return h.SeedTitleCandidate(ctx, h.Generator().AnarlogTitleCandidate(p.titleToken))
+}
+
+// runMethodSuggestion links an address-book row to an EARLIER contact and leaves
+// one pending method suggestion on it. The row is an external_contact like any
+// declared candidate, so it records namespace ownership the same way and rides the
+// same cleanup steps.
+func runMethodSuggestion(
+	ctx context.Context,
+	h *replay.Harness,
+	support *repository.SyntheticSupportRepository,
+	p *methodSuggestionPlan,
+	st *runState,
+) (Seeded, error) {
+	contactID, err := st.contactID(p.contact)
 	if err != nil {
 		return Seeded{}, err
 	}
-	return Seeded{Kind: "external_contact", ID: id.String(), Name: spec.DisplayName}, nil
+	spec := h.Generator().ExternalContactCandidate(p.source, 1, 0)
+	// The reconciler's address-book row is the SAME person as the contact it is
+	// linked to, so it carries that contact's name — which is also the name the
+	// suggestion card renders.
+	id, pendingEmail, err := h.SeedMethodSuggestion(ctx, contactID, spec, st.seeded[p.contact].Name)
+	if err != nil {
+		return Seeded{}, err
+	}
+	if err := support.RecordNamespaceEntity(ctx, h.Namespace(), repository.EntityKindExternalContact, id); err != nil {
+		return Seeded{}, fmt.Errorf("record namespace ownership: %w", err)
+	}
+	// Name is the PENDING METHOD, not the row's display name: the card is keyed on
+	// the linked contact's name (already in the manifest under that handle) and the
+	// value under review is what a test has no other way to learn.
+	return Seeded{Kind: "method_suggestion", ID: id.String(), Name: pendingEmail}, nil
+}
+
+// runMeetingNote lowers a declared orphan meeting note onto the existing seeding
+// primitive. The manifest ID is the SESSION uuid rather than the row id, because
+// that is the value the ?session deep link carries.
+func runMeetingNote(ctx context.Context, h *replay.Harness, p *meetingNotePlan) (Seeded, error) {
+	gen := h.Generator()
+	title := meetingNoteTitle(gen, p.name)
+	summary := noteBody(gen)
+	sessionID, err := h.SeedOrphanMeetingNote(ctx, title, summary)
+	if err != nil {
+		return Seeded{}, err
+	}
+	return Seeded{Kind: "meeting_note", ID: sessionID.String(), Name: title}, nil
+}
+
+// meetingNoteTitle is the namespace-prefixed session title. The handle is part of
+// it so two orphans in one declaration render distinguishably, which is what lets a
+// test resolve ONE of them and assert the sibling stayed.
+func meetingNoteTitle(gen *factory.Generator, handle string) string {
+	return gen.Prefix() + "Session " + handle
 }
 
 // runNote lowers a declared note onto the notepad seeding primitive. The body is

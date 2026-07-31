@@ -526,17 +526,21 @@ func (g *Generator) MacContactForSource(target ContactSpec, intent MatchIntent, 
 // ExternalContactCandidateSpec is a direct-upsert (non-ingest) external_contact
 // import candidate — the shape the Google sync providers write straight through
 // ExternalContactRepository.Upsert (gcontacts via contacts.go, gmail_correspondence
-// via gmail_correspondence.go). Those sources are NOT ingest-allowed, so the seed
-// mirrors the providers' write path rather than the ingest envelope path. The
-// replay harness maps this neutral spec into an UpsertExternalContactRequest and
-// chooses the source_id keying + extra fields per source. All identifiers are
-// ns-prefixed (so the teardown's source_id-prefix sweep reclaims the row); the
-// email is an unknown *.example address no seeded contact owns, so the upsert lands
-// match_status='unmatched' (the Imports-queue surface).
+// via gmail_correspondence.go, gcal_attendee via calendar.go). Those sources are NOT
+// ingest-allowed, so the seed mirrors the providers' write path rather than the
+// ingest envelope path. The replay harness maps this neutral spec into an
+// UpsertExternalContactRequest and chooses the source_id keying + extra fields per
+// source. All identifiers are ns-prefixed (so the teardown's source_id-prefix sweep
+// reclaims the row); every email is an unknown *.example address no seeded contact
+// owns, so the upsert lands match_status='unmatched' (the Imports-queue surface).
 type ExternalContactCandidateSpec struct {
-	Source      string
-	EntityID    string // ns-prefixed id-shaped key (the source_id for id-keyed sources, e.g. gcontacts)
-	Email       string // unknown *.example address (the source_id for email-keyed sources, e.g. gmail_correspondence)
+	Source   string
+	EntityID string // ns-prefixed id-shaped key (the source_id for id-keyed sources, e.g. gcontacts)
+	// Emails is at least one unknown *.example address. Emails[0] is the primary,
+	// and it is the source_id for email-keyed sources (gmail_correspondence keys on
+	// the address; gcal_attendee keys on the normalized attendee email).
+	Emails      []string
+	Phones      []string
 	DisplayName string
 	FirstName   string
 	LastName    string
@@ -544,21 +548,115 @@ type ExternalContactCandidateSpec struct {
 }
 
 // ExternalContactCandidate builds a neutral UNMATCHED import-candidate spec for a
-// direct-upsert source. It generates deterministic ns-prefixed identifiers (id +
-// unknown email) plus display/name parts; the harness's SeedExternalContactCandidate
-// decides which become the external_contact.source_id and which extra fields apply
-// for the given source. Deterministic (source seq), no PRNG name draw.
-func (g *Generator) ExternalContactCandidate(source string) ExternalContactCandidateSpec {
+// direct-upsert source carrying `emails` addresses and `phones` numbers (emails is
+// floored at one, because the email-keyed sources use the first address as their
+// source_id). It generates deterministic ns-prefixed identifiers plus display/name
+// parts; the harness's SeedExternalContactCandidate decides which become the
+// external_contact.source_id and which extra fields apply for the given source.
+// Deterministic (source seq), no PRNG name draw.
+func (g *Generator) ExternalContactCandidate(source string, emails, phones int) ExternalContactCandidateSpec {
 	seq := g.bumpSourceSeq()
 	ns := g.Prefix()
+	if emails < 1 {
+		emails = 1
+	}
+	addresses := make([]string, 0, emails)
+	for i := 0; i < emails; i++ {
+		addresses = append(addresses, fmt.Sprintf("%scand-%d-%d@synthetic.example", ns, seq, i))
+	}
+	numbers := make([]string, 0, phones)
+	for i := 0; i < phones; i++ {
+		numbers = append(numbers, g.phoneFor())
+	}
 	return ExternalContactCandidateSpec{
 		Source:      source,
 		EntityID:    fmt.Sprintf("%scand-%d", ns, seq),
-		Email:       fmt.Sprintf("%scand-%d@synthetic.example", ns, seq),
+		Emails:      addresses,
+		Phones:      numbers,
 		DisplayName: fmt.Sprintf("%sImport Candidate %d", ns, seq),
 		FirstName:   ns + "Import",
 		LastName:    fmt.Sprintf("Candidate%d", seq),
 		AccountID:   g.accountEmail(),
+	}
+}
+
+// --- Telegram discovery candidates ------------------------------------------
+
+// TelegramDiscoveryCandidateSpec is a telegram discovery candidate — the shape
+// PeerMatcher.UpdateDiscoveryCandidates writes through
+// ExternalContactRepository.UpsertTelegramDiscoveryCandidate (telegram/matcher.go).
+// Its source_id is the DECIMAL peer user id, so the row carries no ns-prefixed
+// string at all and the prefix sweep cannot recover it — the namespace ownership
+// record is what makes it cleanable.
+//
+// A caller that wants an UNRESOLVED peer (no name, no handle, no methods — the
+// state the Imports UI hides behind its opt-in toggle) blanks DisplayName,
+// FirstName, LastName and Username; the telegram upsert's COALESCE preserves
+// nothing on a first insert, so the blanked fields land NULL.
+type TelegramDiscoveryCandidateSpec struct {
+	// PeerUserID is drawn from this namespace's reserved peer sub-block.
+	PeerUserID  int64
+	DisplayName string
+	FirstName   string
+	LastName    string
+	// Username is the '@handle' form the matcher stores in metadata.username.
+	Username string
+	// MessageCount is the observed conversation volume the matcher records. Any
+	// row it writes has already passed its discovery threshold, so this is a
+	// small plausible count above the default minimum; nothing renders it.
+	MessageCount int64
+}
+
+// TelegramDiscoveryCandidate builds a fully-identified telegram discovery
+// candidate. Deterministic (source seq + the namespace peer band), no PRNG name
+// draw. The handle uses underscores because a telegram username is
+// [A-Za-z0-9_] and the namespace prefix carries hyphens.
+func (g *Generator) TelegramDiscoveryCandidate() TelegramDiscoveryCandidateSpec {
+	seq := g.bumpSourceSeq()
+	ns := g.Prefix()
+	first := ns + "Telegram"
+	last := fmt.Sprintf("Peer%d", seq)
+	return TelegramDiscoveryCandidateSpec{
+		PeerUserID:   g.nextPeerUserID(),
+		DisplayName:  first + " " + last,
+		FirstName:    first,
+		LastName:     last,
+		Username:     fmt.Sprintf("@%stg%d", sanitizeHandle(ns), seq),
+		MessageCount: telegramDiscoveryMessageCount,
+	}
+}
+
+// telegramDiscoveryMessageCount is the conversation volume a seeded discovery
+// candidate reports. The matcher only writes a candidate once the peer is past
+// its configured minimum, so any value it could have written is at least that
+// minimum; the exact number is not rendered anywhere.
+const telegramDiscoveryMessageCount = 5
+
+// --- anarlog_title weak candidates ------------------------------------------
+
+// AnarlogTitleCandidateSpec is ONE (token, session) anarlog_title pair — the
+// shape anarlog.DiscoveryWriter.UpsertTitleCandidateTx writes. Its source_id is a
+// SHA-256 digest of (normalized token ‖ session uuid), so like the telegram peer id
+// it carries no ns-prefixed string and is recovered by the namespace ownership
+// record.
+//
+// The token is ns-prefixed so two namespaces cannot land in one grouped row: the
+// Imports discovery surface groups by token_normalized DB-wide, with no namespace
+// scoping. NormalizedToken is the lower-cased form of DisplayToken, which is the
+// invariant the grouped-row test ids depend on.
+type AnarlogTitleCandidateSpec struct {
+	NormalizedToken string
+	DisplayToken    string
+}
+
+// AnarlogTitleCandidate builds the token pair for one anarlog_title row. Callers
+// sharing a `group` share a token, which is what makes their rows ONE grouped
+// candidate whose evidence count is the number of members.
+func (g *Generator) AnarlogTitleCandidate(group string) AnarlogTitleCandidateSpec {
+	token := g.Prefix() + group
+	return AnarlogTitleCandidateSpec{
+		NormalizedToken: strings.ToLower(token),
+		DisplayToken:    token,
 	}
 }
 

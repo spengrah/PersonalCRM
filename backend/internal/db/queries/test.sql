@@ -298,6 +298,16 @@ DELETE FROM external_identity WHERE identifier LIKE @identifier_prefix || '%';
 -- identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.
 DELETE FROM external_identity WHERE source_id LIKE @source_id_prefix || '%';
 
+-- name: SyntheticDeleteExternalContactsByIds :execrows
+-- Cleanup step 9 (ownership): import candidates by the namespace's OWNERSHIP
+-- record, unioned with the source_id-prefix delete above rather than replacing
+-- it. Three of the declarable candidate sources have a production source_id that
+-- carries no namespace-prefixed string — telegram keys on a decimal peer id and
+-- anarlog_title on a SHA-256 (token || session) digest — so the prefix sweep has
+-- nothing to match for them and this is the only delete that reaches those rows.
+-- A hard DELETE, like every other cleanup step.
+DELETE FROM external_contact WHERE id = ANY(@external_contact_ids::uuid[]);
+
 -- name: SyntheticDeleteContactTasksByContactIds :execrows
 -- Cleanup step 10: contact_task has no deleted_at; hard delete by contact.
 DELETE FROM contact_task WHERE contact_id = ANY(@contact_ids::uuid[]);

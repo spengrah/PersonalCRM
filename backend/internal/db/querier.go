@@ -2071,6 +2071,14 @@ type Querier interface {
 	// Cleanup step 3: events by tracked id (NOT by source — that would wipe
 	// other tests' rows sharing the source value on the shared DB).
 	SyntheticDeleteEventsByIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
+	// Cleanup step 9 (ownership): import candidates by the namespace's OWNERSHIP
+	// record, unioned with the source_id-prefix delete above rather than replacing
+	// it. Three of the declarable candidate sources have a production source_id that
+	// carries no namespace-prefixed string — telegram keys on a decimal peer id and
+	// anarlog_title on a SHA-256 (token || session) digest — so the prefix sweep has
+	// nothing to match for them and this is the only delete that reaches those rows.
+	// A hard DELETE, like every other cleanup step.
+	SyntheticDeleteExternalContactsByIds(ctx context.Context, externalContactIds []pgtype.UUID) (int64, error)
 	// Cleanup step 8: identities whose normalized identifier shares an ns-scoped
 	// prefix. MatchOrCreate for GCal attendee / external_contact email matching
 	// creates identities with source_id NULL keyed by the synthetic IDENTIFIER (e.g.
