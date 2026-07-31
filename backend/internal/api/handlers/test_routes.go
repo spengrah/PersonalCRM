@@ -7,11 +7,9 @@ import "github.com/gin-gonic/gin"
 //
 //   - POST /api/v1/test/seed/contacts
 //   - POST /api/v1/test/seed/external-contacts
-//   - POST /api/v1/test/seed/method-suggestions
 //   - POST /api/v1/test/seed/overdue-contacts
 //   - POST /api/v1/test/seed/calendar-events
 //   - POST /api/v1/test/seed/mac-hosts
-//   - POST /api/v1/test/seed/meeting-notes
 //   - POST /api/v1/test/seed/declared   (declared seeding — see test_declared.go)
 //   - POST /api/v1/test/cleanup         (dual-shape: prefix | namespaces)
 //   - POST /api/v1/test/trigger-error
@@ -25,11 +23,9 @@ func RegisterTestRoutes(v1 *gin.RouterGroup, handler *TestHandler) {
 	{
 		testRoutes.POST("/seed/contacts", handler.SeedContacts)
 		testRoutes.POST("/seed/external-contacts", handler.SeedExternalContacts)
-		testRoutes.POST("/seed/method-suggestions", handler.SeedMethodSuggestions)
 		testRoutes.POST("/seed/overdue-contacts", handler.SeedOverdueContacts)
 		testRoutes.POST("/seed/calendar-events", handler.SeedCalendarEvents)
 		testRoutes.POST("/seed/mac-hosts", handler.SeedMacHost)
-		testRoutes.POST("/seed/meeting-notes", handler.SeedMeetingNotes)
 		// Declared seeding drives internal/synthetic/declare directly — the
 		// documented layering exception, see the TestHandler doc comment.
 		testRoutes.POST("/seed/declared", handler.SeedDeclared)

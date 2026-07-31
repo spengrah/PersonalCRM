@@ -151,74 +151,6 @@ func (s *TestSeedService) SeedExternalContacts(ctx context.Context, inputs []See
 	return ids, nil
 }
 
-// --- /test/seed/method-suggestions -----------------------------------------
-
-// SeedMethodSuggestionsInput captures the linked address-book row + pending/
-// dismissed suggestions to seed. ContactName + DisplayName + SourceID are
-// prefix-aware (built by the caller); Pending/Dismissed are normalized.
-type SeedMethodSuggestionsInput struct {
-	Source      string
-	ContactName string
-	DisplayName string
-	SourceID    string
-	Emails      []repository.EmailEntry
-	Phones      []repository.PhoneEntry
-	Pending     []repository.PendingMethodSuggestion
-	Dismissed   []repository.PendingMethodSuggestion
-}
-
-// SeedMethodSuggestionsResult echoes the seeded ids.
-type SeedMethodSuggestionsResult struct {
-	ExternalContactID string
-	ContactID         string
-}
-
-// SeedMethodSuggestions creates a linked imported address-book row carrying
-// pending (and optional dismissed) method suggestions, plus the CRM contact.
-func (s *TestSeedService) SeedMethodSuggestions(ctx context.Context, input SeedMethodSuggestionsInput) (SeedMethodSuggestionsResult, error) {
-	now := accelerated.GetCurrentTime()
-	var res SeedMethodSuggestionsResult
-
-	contact, _, err := s.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
-		FullName:      input.ContactName,
-		LastContacted: &now,
-	}, nil)
-	if err != nil {
-		return res, fmt.Errorf("seed method-suggestions: create contact: %w", err)
-	}
-
-	displayName := input.DisplayName
-	external, err := s.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
-		Source:      input.Source,
-		SourceID:    input.SourceID,
-		DisplayName: &displayName,
-		Emails:      input.Emails,
-		Phones:      input.Phones,
-		SyncedAt:    &now,
-	})
-	if err != nil {
-		return res, fmt.Errorf("seed method-suggestions: upsert external: %w", err)
-	}
-
-	if _, err := s.externalRepo.UpdateMatch(ctx, external.ID, &contact.ID, repository.MatchStatusImported); err != nil {
-		return res, fmt.Errorf("seed method-suggestions: link external: %w", err)
-	}
-
-	if _, err := s.externalRepo.SetMethodSuggestions(ctx, external.ID, input.Pending); err != nil {
-		return res, fmt.Errorf("seed method-suggestions: set pending: %w", err)
-	}
-
-	if len(input.Dismissed) > 0 {
-		if _, err := s.externalRepo.SetDismissedMethodSuggestionsForTest(ctx, external.ID, input.Dismissed); err != nil {
-			return res, fmt.Errorf("seed method-suggestions: set dismissed: %w", err)
-		}
-	}
-
-	res.ExternalContactID = external.ID.String()
-	res.ContactID = contact.ID.String()
-	return res, nil
-}
-
 // --- /test/seed/overdue-contacts -------------------------------------------
 
 // SeedOverdueContactInput is one overdue contact. FullName is prefix-prepended;
@@ -368,57 +300,6 @@ func (s *TestSeedService) SeedMacHost(ctx context.Context, input SeedMacHostInpu
 		return "", fmt.Errorf("seed mac host: %w", err)
 	}
 	return host.ID.String(), nil
-}
-
-// --- /test/seed/meeting-notes ----------------------------------------------
-
-// SeedMeetingNoteInput is one orphan meeting_note to seed.
-type SeedMeetingNoteInput struct {
-	AnarlogSessionID uuid.UUID
-	Title            string
-	Summary          string
-}
-
-// SeedMeetingNotes creates orphan_needs_review meeting_note rows against a
-// mac_host (transactional, mirroring the route).
-func (s *TestSeedService) SeedMeetingNotes(ctx context.Context, hostID uuid.UUID, notes []SeedMeetingNoteInput) ([]string, error) {
-	tx, err := s.database.Pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("seed meeting notes: begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck
-
-	now := accelerated.GetCurrentTime()
-	ids := make([]string, 0, len(notes))
-	for _, note := range notes {
-		params := repository.InsertMeetingNoteParams{
-			AnarlogSessionID: note.AnarlogSessionID,
-			MacHostID:        &hostID,
-			LinkageState:     repository.LinkageStateOrphanNeedsReview,
-			MeetingAt:        now,
-			InputHash:        "",
-			ResolvedSetHash:  "",
-		}
-		if note.Title != "" {
-			title := note.Title
-			params.Title = &title
-		}
-		if note.Summary != "" {
-			summary := note.Summary
-			params.Summary = &summary
-		}
-
-		row, insErr := s.meetingNoteRepo.InsertMeetingNoteTx(ctx, tx, params)
-		if insErr != nil {
-			return nil, fmt.Errorf("seed meeting notes: insert: %w", insErr)
-		}
-		ids = append(ids, row.ID.String())
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("seed meeting notes: commit: %w", err)
-	}
-	return ids, nil
 }
 
 // --- /test/cleanup ---------------------------------------------------------

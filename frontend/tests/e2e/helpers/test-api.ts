@@ -47,54 +47,6 @@ export interface SeedContactsResponse {
   ids: string[]
 }
 
-export interface SeedExternalContactInput {
-  display_name?: string
-  first_name?: string
-  last_name?: string
-  source?:
-    | 'test'
-    | 'telegram'
-    | 'gcontacts'
-    | 'gcal_attendee'
-    | 'icloud_contacts'
-    | 'anarlog_humans'
-    | 'anarlog_title'
-    | 'gmail_correspondence'
-  emails?: string[]
-  phones?: string[]
-  organization?: string
-  job_title?: string
-  metadata?: Record<string, unknown>
-}
-
-export interface SeedExternalContactsRequest {
-  prefix: string
-  contacts: SeedExternalContactInput[]
-}
-
-export interface SeedExternalContactsResponse {
-  created: number
-  ids: string[]
-}
-
-export interface SeedMethodSuggestionMethodInput {
-  type: 'email' | 'phone'
-  value: string
-}
-
-export interface SeedMethodSuggestionsRequest {
-  prefix: string
-  contact_name: string
-  source?: 'gcontacts' | 'icloud_contacts'
-  pending: SeedMethodSuggestionMethodInput[]
-  dismissed?: SeedMethodSuggestionMethodInput[]
-}
-
-export interface SeedMethodSuggestionsResponse {
-  external_contact_id: string
-  contact_id: string
-}
-
 export interface SeedOverdueContactInput {
   full_name: string
   cadence: 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'biannual' | 'annual'
@@ -136,38 +88,8 @@ export interface SeedCalendarEventsResponse {
   ids: string[]
 }
 
-export interface SeedMacHostRequest {
-  hostname?: string
-  daemon_version?: string
-  protocol_version?: number
-  permissions?: Record<string, unknown>
-  source_health?: Record<string, unknown>
-}
-
-export interface SeedMacHostResponse {
-  host_id: string
-}
-
-export interface SeedMeetingNoteInput {
-  anarlog_session_id: string
-  title?: string
-  summary?: string
-}
-
-export interface SeedMeetingNotesRequest {
-  host_id: string
-  notes: SeedMeetingNoteInput[]
-}
-
-export interface SeedMeetingNotesResponse {
-  created: number
-  ids: string[]
-}
-
 export interface CleanupRequest {
   prefix: string
-  // When set, also hard-deletes the host's seeded meeting_note rows.
-  host_id?: string
 }
 
 /**
@@ -284,9 +206,6 @@ const DECLARED_CLEANUP_MAX_PER_REQUEST = 32
  */
 export class TestAPI {
   private _prefix: string
-  // The most recently seeded mac_host, so cleanup() can scope meeting_note
-  // deletion to this test's host without the caller threading the id.
-  private _seededHostId: string | null = null
   // Every namespace this test has asked the server to seed. Entries are pushed
   // BEFORE the request goes out, so a lost response still leaves a cleanup
   // handle behind — see seedBehavior.
@@ -337,58 +256,6 @@ export class TestAPI {
   }
 
   /**
-   * Seeds external contacts (import candidates) in the database.
-   * These will appear on the Imports page.
-   */
-  async seedExternalContacts(
-    contacts: SeedExternalContactInput[]
-  ): Promise<SeedExternalContactsResponse> {
-    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/seed/external-contacts`, {
-      headers: API_HEADERS,
-      data: {
-        prefix: this.prefix,
-        contacts,
-      } satisfies SeedExternalContactsRequest,
-    })
-
-    if (!response.ok()) {
-      const body = await response.text()
-      throw new Error(`Failed to seed external contacts: ${response.status()} ${body}`)
-    }
-
-    const data = await response.json()
-    return data.data as SeedExternalContactsResponse
-  }
-
-  /**
-   * Seeds a linked `imported` address-book row carrying pending (and
-   * optional dismissed) method suggestions, plus the CRM contact it links
-   * to. Used to drive the method-suggestion card on the People tab.
-   */
-  async seedMethodSuggestions(
-    input: Omit<SeedMethodSuggestionsRequest, 'prefix'>
-  ): Promise<SeedMethodSuggestionsResponse> {
-    const response = await this.request.post(
-      `${API_BASE_URL}/api/v1/test/seed/method-suggestions`,
-      {
-        headers: API_HEADERS,
-        data: {
-          prefix: this.prefix,
-          ...input,
-        } satisfies SeedMethodSuggestionsRequest,
-      }
-    )
-
-    if (!response.ok()) {
-      const body = await response.text()
-      throw new Error(`Failed to seed method suggestions: ${response.status()} ${body}`)
-    }
-
-    const data = await response.json()
-    return data.data as SeedMethodSuggestionsResponse
-  }
-
-  /**
    * Seeds contacts with backdated last_contacted timestamps so they appear as overdue.
    * Useful for testing dashboard and overdue contact lists.
    */
@@ -436,68 +303,6 @@ export class TestAPI {
 
     const data = await response.json()
     return data.data as SeedCalendarEventsResponse
-  }
-
-  /**
-   * Deletes every existing mac_host so the singleton unique index is free
-   * before seeding a fresh host. The mac_host table allows only one host
-   * at a time, so paired-host tests must run serially and reset first.
-   */
-  async resetMacHosts(): Promise<void> {
-    const resp = await this.request.get(`${API_BASE_URL}/api/v1/host`, { headers: API_HEADERS })
-    if (!resp.ok()) return
-    const json = (await resp.json()) as { data?: Array<{ id: string }> }
-    for (const host of json.data ?? []) {
-      await this.request.delete(`${API_BASE_URL}/api/v1/host/${host.id}`, { headers: API_HEADERS })
-    }
-  }
-
-  /**
-   * Seeds a paired mac_host row and remembers its id so cleanup() can scope
-   * meeting_note deletion to it. Returns the host id.
-   */
-  async seedMacHost(req: SeedMacHostRequest = {}): Promise<string> {
-    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/seed/mac-hosts`, {
-      headers: API_HEADERS,
-      data: {
-        hostname: req.hostname ?? `${this.prefix}-host`,
-        protocol_version: req.protocol_version ?? 1,
-        ...req,
-      },
-    })
-
-    if (!response.ok()) {
-      const body = await response.text()
-      throw new Error(`Failed to seed mac host: ${response.status()} ${body}`)
-    }
-
-    const data = await response.json()
-    const hostId = (data.data as SeedMacHostResponse).host_id
-    this._seededHostId = hostId
-    return hostId
-  }
-
-  /**
-   * Seeds orphan meeting_note rows against a paired host so the Imports
-   * Interactions tab has rows to render. Caller supplies the session UUIDs
-   * (used by the ?session deep-link). Cleanup is by host id.
-   */
-  async seedMeetingNotes(
-    hostId: string,
-    notes: SeedMeetingNoteInput[]
-  ): Promise<SeedMeetingNotesResponse> {
-    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/seed/meeting-notes`, {
-      headers: API_HEADERS,
-      data: { host_id: hostId, notes } satisfies SeedMeetingNotesRequest,
-    })
-
-    if (!response.ok()) {
-      const body = await response.text()
-      throw new Error(`Failed to seed meeting notes: ${response.status()} ${body}`)
-    }
-
-    const data = await response.json()
-    return data.data as SeedMeetingNotesResponse
   }
 
   /**
@@ -577,10 +382,7 @@ export class TestAPI {
     try {
       const response = await this.request.post(`${API_BASE_URL}/api/v1/test/cleanup`, {
         headers: API_HEADERS,
-        data: {
-          prefix: this.prefix,
-          ...(this._seededHostId ? { host_id: this._seededHostId } : {}),
-        } satisfies CleanupRequest,
+        data: { prefix: this.prefix } satisfies CleanupRequest,
       })
       if (!response.ok()) {
         throw new Error(
@@ -734,8 +536,8 @@ export class TestAPI {
  * ```ts
  * test('my test', async ({ request }, testInfo) => {
  *   const testApi = createTestAPI(request, testInfo)
- *   await testApi.seedExternalContacts([{ display_name: 'Test User' }])
- *   // ... run test ...
+ *   const seeded = await testApi.seedBehavior('IMP-007')
+ *   // ... run test against seeded.entities ...
  *   await testApi.cleanup()
  * })
  * ```

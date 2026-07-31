@@ -179,16 +179,16 @@ Tests that create/modify data should use the `TestAPI` helper:
 
 ```typescript
 import { test, expect } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
 
 test.describe('My Feature', () => {
   let testApi: TestAPI
+  let seeded: SeedBehaviorResult
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
-    await testApi.seedExternalContacts([
-      { display_name: 'Test User', emails: ['test@example.com'] }
-    ])
+    // Declared seeding: name a SPEC BEHAVIOR and read the manifest back.
+    seeded = await testApi.seedBehavior('IMP-007')
   })
 
   test.afterEach(async () => {
@@ -196,7 +196,7 @@ test.describe('My Feature', () => {
   })
 
   test('should do something', async ({ page }) => {
-    // Test code - data is isolated per worker
+    // Assertions read names and ids from seeded.entities, never re-derived strings
   })
 })
 ```
@@ -218,11 +218,12 @@ test.describe.configure({ mode: 'serial' })
 
 | Method | Purpose |
 |--------|---------|
+| `seedBehavior()` | Seed the fixture DECLARED for a spec behavior and return its manifest (the path new tests use) |
 | `seedExternalContacts()` | Create import candidates |
 | `seedOverdueContacts()` | Create contacts with backdated last_contacted |
 | `seedCalendarEvents()` | Create calendar events for a contact |
 | `seedContacts()` | Create contacts directly |
-| `cleanup()` | Remove all data with this test's prefix |
+| `cleanup()` | Remove all data with this test's prefix, plus every declared namespace it seeded |
 
 ### Parallel E2E Testing Gotchas
 
