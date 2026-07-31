@@ -3,7 +3,7 @@
 // files NO issues. Label-gated metrics (held-out fail-precision, error-analysis
 // taxonomy) print N/A.
 //
-// Pure `renderReport` + a bun CLI that loads a .runs run dir.
+// Pure `renderReport` (testable) + a bun CLI that loads a .runs run dir.
 
 import { SPEC_CATALOG } from '../spec-catalog'
 import { SKIP_LIST } from './skip-list'
@@ -239,11 +239,11 @@ export function renderReport(input: ReportInput): string {
 // presence IS the `--judge` opt-in: `undefined` = today's bare report (pending
 // labels, no intent pass, no traps, zero judge calls, exit 0). Every dep is
 // INJECTED, so `runJudgeRound` never consults env config or spawns an adapter —
-// the CLI builds them from `selectJudge` under `--judge`.
+// tests pass mocks; production builds them from `selectJudge` under `--judge`.
 // Which judge adapters can attach screenshots as model images: the codex
 // adapters can (codex-exec via `-i`, codex-sdk via local_image entries); the
-// text-only http stub cannot. Pure, and the CLI gate keys off it, so enabling a
-// new adapter can't silently drop visual grounding.
+// text-only http stub cannot. Pure; the CLI gate and its regression test both
+// key off this so enabling a new adapter can't silently drop visual grounding.
 export function canAttachImagesFor(kind: string): boolean {
   return kind === 'codex-exec' || kind === 'codex-sdk'
 }
@@ -267,9 +267,8 @@ export interface JudgeRoundResult {
   exitCode: 0 | 1
 }
 
-// Orchestrate one report round over already-loaded captures. Purely
-// dependency-injected: the CLI builds the bundle only under `--judge`, so this
-// never consults env config or spawns an adapter on its own.
+// Orchestrate one report round over already-loaded captures. Exported + purely
+// dependency-injected so the hard-exit path is unit-testable without a CLI spawn.
 // With `judges`: residue grading + intent pass + trap self-test, exit driven by
 // the traps. Without it: the bare advisory report, exit 0.
 //
@@ -350,8 +349,8 @@ export async function runJudgeRound(
 }
 
 // CLI (bun): bun run tests/tours/judge/report/render.ts <runDir> [outFile]
-// It NEVER calls process.exit() — every path
-// sets the DEFERRED `process.exitCode` and returns, so the process
+// Exported so its exit behavior is unit-testable. It NEVER calls process.exit()
+// — every path sets the DEFERRED `process.exitCode` and returns, so the process
 // finishes naturally (flushing the report + the QA_JUDGE_TRACE JSONL) before the
 // status is read.
 export async function main(): Promise<void> {
