@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import type { APIRequestContext } from '@playwright/test'
+import { createTestAPI, TestAPI, declaredWorldNamePrefix } from './helpers/test-api'
 import {
   expectModalCandidate,
   findCandidateByName,
@@ -51,31 +52,28 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 }
 
+/** The candidate's stored methods, read back because the generator owns them. */
+async function candidateMethods(
+  request: APIRequestContext,
+  candidateId: string
+): Promise<{ emails: string[]; phones: string[] }> {
+  const res = await request.get(`${API_BASE_URL}/api/v1/imports/${candidateId}`, {
+    headers: API_HEADERS,
+  })
+  expect(res.ok()).toBe(true)
+  const data = (await res.json())?.data
+  return {
+    emails: (data?.emails ?? []).map((e: { value: string }) => e.value),
+    phones: (data?.phones ?? []).map((p: { value: string }) => p.value),
+  }
+}
+
 test.describe('Imports Modal @area:imports', () => {
   test.describe('Queue Navigation', () => {
     let testApi: TestAPI
 
     test.beforeEach(async ({ request }, testInfo) => {
       testApi = createTestAPI(request, testInfo)
-
-      // Seed multiple candidates for navigation testing.
-      await testApi.seedExternalContacts([
-        {
-          display_name: 'Modal Test Contact A',
-          source: 'gcontacts',
-          emails: ['modal-test-a@example.com'],
-        },
-        {
-          display_name: 'Modal Test Contact B',
-          source: 'gcontacts',
-          emails: ['modal-test-b@example.com'],
-        },
-        {
-          display_name: 'Modal Test Contact C',
-          source: 'gcontacts',
-          emails: ['modal-test-c@example.com'],
-        },
-      ])
     })
 
     test.afterEach(async () => {
@@ -84,12 +82,14 @@ test.describe('Imports Modal @area:imports', () => {
 
     // spec: IMP-028.position-pager-arrow-keys
     test('should navigate with arrow keys and the position pager', async ({ page }) => {
-      const displayName = `${testApi.prefix}-Modal Test Contact A`
+      // IMP-028 declares exactly two queued candidates, which is what gives the
+      // pager a neighbour to move to.
+      const seeded = await testApi.seedBehavior('IMP-028')
+      const displayName = seeded.entities['one'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Find our seeded candidate (may need to paginate)
       await findCandidateByName(page, displayName)
 
       // The modal pages the whole queue independent of list pagination:
@@ -101,7 +101,7 @@ test.describe('Imports Modal @area:imports', () => {
           res.url().includes('limit=1000')
       )
 
-      // Open modal on our own contact
+      // Open modal on our own candidate
       await candidateCardByName(page, displayName)
         .getByRole('button', { name: /Import/i })
         .click()
@@ -152,7 +152,7 @@ test.describe('Imports Modal @area:imports', () => {
       const nameInput = modal.getByRole('textbox').first()
       await expect(nameInput).toBeVisible({ timeout: 5000 })
       await nameInput.press('ArrowRight')
-      await expect(nameInput).toHaveValue(new RegExp(displayName))
+      await expect(nameInput).toHaveValue(displayName)
       await nameInput.press('Escape')
       await expect(heading).toHaveText(initialName!, { timeout: 5000 })
     })
@@ -171,28 +171,16 @@ test.describe('Imports Modal @area:imports', () => {
 
     // spec: IMP-027.cadence-chosen-or-prefilled
     test('link mode pre-fills the cadence from the existing contact', async ({ page }) => {
-      // Seed a candidate and a target contact with an existing cadence
-      await testApi.seedExternalContacts([
-        {
-          display_name: 'Cadence Link Candidate',
-          emails: ['cadence-link@example.com'],
-        },
-      ])
-
-      await testApi.seedOverdueContacts([
-        {
-          full_name: 'Cadence Link Target',
-          email: 'cadence-target@example.com',
-          cadence: 'quarterly',
-          days_overdue: 1,
-        },
-      ])
+      // IMP-027's quarterly link pair: an unrelated candidate plus a contact
+      // whose cadence the modal must adopt.
+      const seeded = await testApi.seedBehavior('IMP-027')
+      const candidateName = seeded.entities['link-a'].name
+      const targetName = seeded.entities['cadenced'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
 
       // Open link modal
-      const candidateName = `${testApi.prefix}-Cadence Link Candidate`
       const candidateCard = candidateCardByName(page, candidateName)
       await expect(candidateCard).toBeVisible({ timeout: 10000 })
       await candidateCard.getByRole('button', { name: /Link/i }).click()
@@ -205,42 +193,30 @@ test.describe('Imports Modal @area:imports', () => {
       const dialog = resolverDialog(page)
       await dialog.getByText('Search for a contact...').click()
       const searchInput = dialog.getByPlaceholder('Search for a contact...')
-      await searchInput.fill(testApi.prefix)
+      await searchInput.fill(declaredWorldNamePrefix(seeded))
 
-      const contactOption = dialog.getByText(`${testApi.prefix}-Cadence Link Target`).last()
+      const contactOption = dialog.getByText(targetName, { exact: true }).last()
       await expect(contactOption).toBeVisible({ timeout: 5000 })
       await contactOption.click()
 
-      // The cadence selector pre-fills from the existing contact.
+      // The cadence selector pre-fills from the existing contact. The literal
+      // MIRRORS the declaration's Cadence("quarterly").
       const cadenceSelect = page.locator('#contact-cadence')
       await expect(cadenceSelect).toHaveValue('quarterly', { timeout: 5000 })
     })
 
     // spec: IMP-027.cadence-chosen-or-prefilled
     test('should update cadence when linking contact', async ({ page, request }) => {
-      await testApi.seedExternalContacts([
-        {
-          display_name: 'Link Cadence Update Test',
-          emails: ['link-update@example.com'],
-        },
-      ])
-
-      const { ids: targetIds } = await testApi.seedOverdueContacts([
-        {
-          full_name: 'Link Cadence Target',
-          email: 'link-target@example.com',
-          cadence: 'monthly', // Use monthly, will change to weekly
-          days_overdue: 1,
-        },
-      ])
-      const targetContactId = targetIds[0]
+      // IMP-027's monthly link pair — monthly so the test can change it to
+      // weekly and prove the chosen value, not the pre-filled one, is stored.
+      const seeded = await testApi.seedBehavior('IMP-027')
+      const displayName = seeded.entities['link-b'].name
+      const targetContactId = seeded.entities['cadenced2'].id
+      const targetName = seeded.entities['cadenced2'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      const displayName = `${testApi.prefix}-Link Cadence Update Test`
-
-      // Find our seeded candidate (may need to paginate)
       await findCandidateByName(page, displayName)
 
       // Open link modal
@@ -254,9 +230,9 @@ test.describe('Imports Modal @area:imports', () => {
       const dialog = resolverDialog(page)
       await dialog.getByText('Search for a contact...').click()
       const searchInput = dialog.getByPlaceholder('Search for a contact...')
-      await searchInput.fill(testApi.prefix)
+      await searchInput.fill(declaredWorldNamePrefix(seeded))
 
-      const contactOption = dialog.getByText(`${testApi.prefix}-Link Cadence Target`).last()
+      const contactOption = dialog.getByText(targetName, { exact: true }).last()
       await expect(contactOption).toBeVisible({ timeout: 5000 })
       await contactOption.click()
 
@@ -309,20 +285,12 @@ test.describe('Imports Modal @area:imports', () => {
 
     // spec: IMP-027.name-editable-empty-blocks
     test('should enter edit mode when clicking name', async ({ page }) => {
-      // Seed a candidate
-      await testApi.seedExternalContacts([
-        {
-          display_name: 'Click Edit Test',
-          emails: ['click-edit@example.com'],
-        },
-      ])
-
-      const displayName = `${testApi.prefix}-Click Edit Test`
+      const seeded = await testApi.seedBehavior('IMP-027')
+      const displayName = seeded.entities['plain'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Find our seeded candidate (may need to paginate)
       await findCandidateByName(page, displayName)
 
       // Open import modal
@@ -342,26 +310,20 @@ test.describe('Imports Modal @area:imports', () => {
       // Verify input field appears with the name value
       const nameInput = modal.getByRole('textbox').first()
       await expect(nameInput).toBeVisible({ timeout: 5000 })
-      await expect(nameInput).toHaveValue(new RegExp(displayName))
+      await expect(nameInput).toHaveValue(displayName)
     })
 
     // spec: IMP-027.name-editable-empty-blocks, IMP-012.crm-contact-created-normal-path, IMP-031.item-leaves-queue-counts-update
     test('should edit name and persist on import', async ({ page, request }) => {
-      // Seed a candidate
-      await testApi.seedExternalContacts([
-        {
-          display_name: 'Original Import Name',
-          emails: ['persist-name@example.com'],
-        },
-      ])
+      const seeded = await testApi.seedBehavior('IMP-027')
+      const displayName = seeded.entities['plain'].name
+      // The edited name stays inside the declared world's prefix so the prefix
+      // sweep still reaches the contact the import creates.
+      const newName = `${declaredWorldNamePrefix(seeded)}Edited Name For Import`
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      const displayName = `${testApi.prefix}-Original Import Name`
-      const newName = `${testApi.prefix}-Edited Name For Import`
-
-      // Find our seeded candidate (may need to paginate)
       await findCandidateByName(page, displayName)
 
       // Open import modal
@@ -429,15 +391,10 @@ test.describe('Imports Modal @area:imports', () => {
 
     // spec: IMP-027.methods-selectable-one-primary
     test('should only allow one primary method at a time', async ({ page }) => {
-      // Seed a candidate with multiple contact methods
-      await testApi.seedExternalContacts([
-        {
-          display_name: 'Single Primary Test',
-          emails: ['single1@example.com', 'single2@example.com'],
-        },
-      ])
-
-      const displayName = `${testApi.prefix}-Single Primary Test`
+      // IMP-027's two-email candidate: exactly-one-primary is only observable
+      // when there is a second method to move the star to.
+      const seeded = await testApi.seedBehavior('IMP-027')
+      const displayName = seeded.entities['multi-method'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
@@ -485,20 +442,12 @@ test.describe('Imports Modal @area:imports', () => {
 
     // spec: IMP-027.cadence-chosen-or-prefilled, IMP-031.item-leaves-queue-counts-update
     test('should import contact with selected cadence', async ({ page, request }) => {
-      // Seed a candidate for this isolated test
-      await testApi.seedExternalContacts([
-        {
-          display_name: 'Cadence Import User',
-          emails: ['cadence-import-user@example.com'],
-        },
-      ])
-
-      const displayName = `${testApi.prefix}-Cadence Import User`
+      const seeded = await testApi.seedBehavior('IMP-027')
+      const displayName = seeded.entities['plain'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Find our seeded candidate (may need to paginate)
       await findCandidateByName(page, displayName)
 
       // Open import modal on our contact
@@ -558,14 +507,9 @@ test.describe('Imports Modal @area:imports', () => {
 
     // spec: IMP-027.name-editable-empty-blocks
     test('an empty name blocks resolution', async ({ page }) => {
-      const { ids } = await testApi.seedExternalContacts([
-        {
-          display_name: 'Empty Name Guard',
-          emails: ['empty-name-guard@example.com'],
-        },
-      ])
-      const externalId = ids[0]
-      const displayName = `${testApi.prefix}-Empty Name Guard`
+      const seeded = await testApi.seedBehavior('IMP-027')
+      const externalId = seeded.entities['plain'].id
+      const displayName = seeded.entities['plain'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
@@ -599,7 +543,7 @@ test.describe('Imports Modal @area:imports', () => {
 
       // Restore a valid name and import — this one goes through, proving the
       // earlier click was processed and rejected (else the count would be 2).
-      await nameInput.fill(`${testApi.prefix}-Renamed After Block`)
+      await nameInput.fill(`${declaredWorldNamePrefix(seeded)}Renamed After Block`)
       await nameInput.press('Enter')
       const importResponsePromise = page.waitForResponse(
         res =>
@@ -613,27 +557,31 @@ test.describe('Imports Modal @area:imports', () => {
 
     // spec: IMP-027.name-editable-empty-blocks
     test('an unresolved telegram peer requires a name edit before import', async ({ page }) => {
-      // An unresolved peer: telegram source with no name fields, no
-      // username, and no methods. Hidden by default behind the opt-in
-      // "Show unresolved" toggle. Every unresolved peer displays as
-      // "Unknown", so a unique organization marker (which does NOT affect
-      // the unresolved classification) binds the CARD to this worker's row.
-      const orgMarker = `${testApi.prefix}-tg-org`
-      const { ids } = await testApi.seedExternalContacts([
-        { source: 'telegram', organization: orgMarker },
-      ])
-      const externalId = ids[0]
+      // IMP-027's unresolved peer: a telegram source whose discovery pass
+      // learned no name, no handle and no methods. Hidden by default behind the
+      // opt-in "Show unresolved" toggle, and every unresolved peer displays as
+      // "Unknown".
+      //
+      // There is NO namespace-unique marker to bind the card by: the telegram
+      // discovery writer stores only names, a handle and metadata, so an
+      // unresolved peer carrying any of them would stop being unresolved. The
+      // card is therefore bound by its unresolved badge, and the import POST
+      // below is pinned to OUR external id — so binding the wrong card makes the
+      // response wait time out and importPosts stay 0 rather than pass quietly.
+      const seeded = await testApi.seedBehavior('IMP-027')
+      const externalId = seeded.entities['unresolved-tg'].id
 
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
       await page.getByRole('button', { name: 'Telegram', exact: true }).click()
 
-      // Opt in to unresolved peers, then open OUR card (bound by the org
-      // marker, not the shared "Unknown" display name).
+      // Opt in to unresolved peers, then open the unresolved card.
       const unresolvedToggle = page.getByRole('switch')
       await expect(unresolvedToggle).toBeVisible({ timeout: 10000 })
       await unresolvedToggle.click()
-      const ourCard = page.locator('div.border', { hasText: orgMarker }).last()
+      const ourCard = page
+        .locator('div.border', { has: page.getByText('Unresolved Telegram peer') })
+        .last()
       await expect(ourCard).toBeVisible({ timeout: 10000 })
       await ourCard.getByRole('button', { name: /Import/i }).click()
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
@@ -660,7 +608,7 @@ test.describe('Imports Modal @area:imports', () => {
       await expect(modal).toBeVisible()
 
       // Editing the name unblocks the import.
-      const editedName = `${testApi.prefix}-Named Telegram Peer`
+      const editedName = `${declaredWorldNamePrefix(seeded)}Named Telegram Peer`
       await modal.getByRole('heading', { level: 3 }).first().click()
       const nameInput = modal.getByRole('textbox').first()
       await expect(nameInput).toBeVisible({ timeout: 5000 })
@@ -678,31 +626,24 @@ test.describe('Imports Modal @area:imports', () => {
     })
 
     // spec: IMP-027.methods-selectable-one-primary
-    test('link mode disables already-present methods and offers additions', async ({ page }) => {
-      // The CRM contact already carries email X; the candidate carries the
-      // identical X, a same-type different-value email Z, and a phone Y.
-      const emailX = `x-${testApi.prefix}@example.invalid`
-      const emailZ = `z-${testApi.prefix}@example.invalid`
-      const phoneY = '+15550001234'
-      await testApi.seedContacts([
-        {
-          full_name: 'Method Buckets Target',
-          methods: [{ type: 'email', value: emailX }],
-        },
-      ])
-      await testApi.seedExternalContacts([
-        {
-          display_name: 'Method Buckets Target',
-          source: 'icloud_contacts',
-          emails: [emailX, emailZ],
-          phones: [phoneY],
-        },
-      ])
+    test('link mode disables already-present methods and offers additions', async ({
+      page,
+      request,
+    }) => {
+      // IMP-027's method-bucket pair: the contact already carries email X; the
+      // candidate carries the identical X (SameEmailAs), a same-type different
+      // -value email Z, and a phone Y.
+      const seeded = await testApi.seedBehavior('IMP-027')
+      const cardName = seeded.entities['buckets-cand'].name
+      const { emails, phones } = await candidateMethods(request, seeded.entities['buckets-cand'].id)
+      expect(emails.length).toBe(2)
+      expect(phones.length).toBe(1)
+      const [emailX, emailZ] = emails
+      const phoneY = phones[0]
 
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
 
-      const cardName = `${testApi.prefix}-Method Buckets Target`
       await findCandidateByName(page, cardName)
       await candidateCardByName(page, cardName).getByRole('button', { name: /Link/i }).click()
       await expect(page.getByRole('button', { name: 'Link to Existing' })).toBeVisible()
@@ -711,7 +652,7 @@ test.describe('Imports Modal @area:imports', () => {
       // Ensure the same-named CRM contact is selected (trigram usually
       // pre-selects it; select explicitly if not).
       const dialog = resolverDialog(page)
-      await selectContactIfNeeded(page, dialog, 'Method Buckets Target', cardName)
+      await selectContactIfNeeded(page, dialog, cardName, cardName)
       await expect(page.getByRole('button', { name: /Link Contact/i })).toBeEnabled()
 
       const methodRow = (value: string) => dialog.locator('div.border', { hasText: value }).last()
@@ -747,21 +688,11 @@ test.describe('Imports Modal @area:imports', () => {
     test('advances to the next candidate after resolving, closing only when the queue is exhausted', async ({
       page,
     }) => {
-      const { ids } = await testApi.seedExternalContacts([
-        {
-          display_name: 'Advance Test One',
-          source: 'icloud_contacts',
-          emails: [`advance-one-${testApi.prefix}@example.invalid`],
-        },
-        {
-          display_name: 'Advance Test Two',
-          source: 'icloud_contacts',
-          emails: [`advance-two-${testApi.prefix}@example.invalid`],
-        },
-      ])
-      const [idOne, idTwo] = ids
-      const nameOne = `${testApi.prefix}-Advance Test One`
-      const nameTwo = `${testApi.prefix}-Advance Test Two`
+      const seeded = await testApi.seedBehavior('IMP-028')
+      const idOne = seeded.entities['one'].id
+      const idTwo = seeded.entities['two'].id
+      const nameOne = seeded.entities['one'].name
+      const nameTwo = seeded.entities['two'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
@@ -846,14 +777,9 @@ test.describe('Imports Modal @area:imports', () => {
 
     // spec: IMP-039.pressing-escape-closes-modal, IMP-039.clicking-backdrop-closes-modal, IMP-039.cancel-action-closes-modal, IMP-039.dismissal-resolves-nothing
     test('Escape, backdrop, and Cancel dismiss without resolving', async ({ page, request }) => {
-      const { ids } = await testApi.seedExternalContacts([
-        {
-          display_name: 'Dismiss Modal Test',
-          emails: ['dismiss-modal@example.com'],
-        },
-      ])
-      const externalId = ids[0]
-      const displayName = `${testApi.prefix}-Dismiss Modal Test`
+      const seeded = await testApi.seedBehavior('IMP-039')
+      const externalId = seeded.entities['cand'].id
+      const displayName = seeded.entities['cand'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')

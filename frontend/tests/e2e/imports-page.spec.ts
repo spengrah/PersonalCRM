@@ -15,30 +15,14 @@ test.describe('Imports Page @area:imports', () => {
 
   // spec: IMP-026.people-tab-default-holds
   test('renders candidates confidence-ranked on the People tab', async ({ page }) => {
-    // Two CRM contacts; the high external matches one on name AND email
-    // (high confidence), the med external matches the other on name only
-    // (lower confidence). Both render as suggested candidates and the
-    // higher-confidence one must appear first among this worker's rows.
-    const highEmail = `order-ui-high-${testApi.prefix}@example.invalid`
-    await testApi.seedContacts([
-      { full_name: 'Order Ui High', methods: [{ type: 'email', value: highEmail }] },
-      { full_name: 'Order Ui Med' },
-    ])
-    await testApi.seedExternalContacts([
-      // Seeded low-confidence first so a seed-order artifact cannot pass.
-      {
-        display_name: 'Order Ui Med',
-        source: 'gcal_attendee',
-        emails: [`order-ui-med-${testApi.prefix}@example.invalid`],
-      },
-      {
-        display_name: 'Order Ui High',
-        source: 'gcal_attendee',
-        emails: [highEmail],
-      },
-    ])
-    const highName = `${testApi.prefix}-Order Ui High`
-    const medName = `${testApi.prefix}-Order Ui Med`
+    // IMP-029's declared fixture: two CRM contacts, where one candidate matches
+    // its contact on name AND email (high confidence) and the other matches on
+    // name only (lower confidence). The declaration lists the low-confidence
+    // candidate FIRST — entity order is seed order — so a seed-order artifact
+    // cannot pass this.
+    const seeded = await testApi.seedBehavior('IMP-029')
+    const highName = seeded.entities['matching'].name
+    const medName = seeded.entities['name-collide'].name
 
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')

@@ -9,7 +9,6 @@ import {
 
 // Unified People-tab suggestions surface: the method-suggestion group
 // (above the confidence-ranked candidates) + the link-only candidate case.
-// All data is seeded with a per-worker prefix for parallel isolation.
 test.describe('Imports suggestions surface @area:imports', () => {
   let testApi: TestAPI
 
@@ -25,18 +24,16 @@ test.describe('Imports suggestions surface @area:imports', () => {
   test('method-suggestion card appears at the top; Review confirms and clears it', async ({
     page,
   }) => {
-    const email = `suggest-${testApi.prefix}@example.invalid`
-    await testApi.seedMethodSuggestions({
-      contact_name: 'Suggest Target',
-      pending: [{ type: 'email', value: email }],
-    })
+    const seeded = await testApi.seedBehavior('IMP-030')
+    const contactName = seeded.entities['target'].name
 
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    // The card renders "‹contact› — N new methods" (contact name is prefixed
-    // by the seed route). Scope to THIS worker's card to stay parallel-safe.
-    const cardText = `${testApi.prefix}-Suggest Target — 1 new method`
+    // The card renders "‹contact› — N new methods". The count is literal because
+    // it MIRRORS the declaration's single pending method, not a generated value.
+    // Scope to THIS worker's card to stay parallel-safe.
+    const cardText = `${contactName} — 1 new method`
     const card = page.locator('div.border', { hasText: cardText }).first()
     await expect(card).toBeVisible({ timeout: 10000 })
 
@@ -44,7 +41,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     // ContactSelector, NO Import.
     await card.getByRole('button', { name: 'Review' }).click()
     const dialog = page.getByRole('dialog', { name: 'Review method suggestions' })
-    await expect(dialog.getByText(`Adding to ${testApi.prefix}-Suggest Target`)).toBeVisible()
+    await expect(dialog.getByText(`Adding to ${contactName}`)).toBeVisible()
     await expect(dialog.getByRole('button', { name: /Import as New/i })).toHaveCount(0)
     await expect(dialog.getByPlaceholder(/Search for a contact/i)).toHaveCount(0)
 
@@ -75,16 +72,13 @@ test.describe('Imports suggestions surface @area:imports', () => {
 
   // spec: IMP-030.confirm-requires-one-method, IMP-031.item-leaves-queue-counts-update
   test('Dismiss removes the card and it does not return after reload', async ({ page }) => {
-    const email = `dismiss-${testApi.prefix}@example.invalid`
-    await testApi.seedMethodSuggestions({
-      contact_name: 'Dismiss Target',
-      pending: [{ type: 'email', value: email }],
-    })
+    const seeded = await testApi.seedBehavior('IMP-030')
+    const contactName = seeded.entities['target'].name
 
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    const cardText = `${testApi.prefix}-Dismiss Target — 1 new method`
+    const cardText = `${contactName} — 1 new method`
     const card = page.locator('div.border', { hasText: cardText }).first()
     await expect(card).toBeVisible({ timeout: 10000 })
 
@@ -99,19 +93,14 @@ test.describe('Imports suggestions surface @area:imports', () => {
 
   // spec: IMP-029.import-not-offered-link, IMP-027.user-chooses-import-new
   test('link-only source hides Import on the card and in the modal', async ({ page }) => {
-    // Seed a gmail_correspondence unmatched candidate (link-only source).
-    await testApi.seedExternalContacts([
-      {
-        display_name: 'LinkOnly Person',
-        source: 'gmail_correspondence',
-        emails: [`linkonly-${testApi.prefix}@example.invalid`],
-      },
-    ])
+    // Rides IMP-029's declared fixture for its gmail_correspondence candidate —
+    // the only link-only source.
+    const seeded = await testApi.seedBehavior('IMP-029')
+    const cardName = seeded.entities['unmatched-corr'].name
 
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    const cardName = `${testApi.prefix}-LinkOnly Person`
     await expect(page.getByText(cardName).first()).toBeVisible({ timeout: 10000 })
 
     // Scope to the candidate card via its exact heading (shared helper).
@@ -132,23 +121,17 @@ test.describe('Imports suggestions surface @area:imports', () => {
 
   // spec: IMP-013.any-curation-signal-imports, IMP-027.methods-selectable-one-primary, IMP-031.item-leaves-queue-counts-update
   test('deselect-all link removes the candidate', async ({ page }) => {
-    // Seed a CRM contact + a same-named candidate so the modal opens with the
-    // contact auto-selected (suggested match). Use icloud_contacts (not
-    // gcontacts) so this candidate does not pollute gcontacts-scoped tests
-    // under parallel runs.
-    await testApi.seedContacts([{ full_name: 'Deselect Target' }])
-    await testApi.seedExternalContacts([
-      {
-        display_name: 'Deselect Target',
-        source: 'icloud_contacts',
-        emails: [`deselect-${testApi.prefix}@example.invalid`],
-      },
-    ])
+    // IMP-013's name-collision pair: a contact and a same-named candidate, so
+    // the modal opens with the contact auto-selected (suggested match). The
+    // candidate is gcal_attendee rather than gcontacts so it does not pollute
+    // gcontacts-scoped tests under parallel runs; the source pill is never
+    // clicked here and gcal_attendee is importable, so the claim is unaffected.
+    const seeded = await testApi.seedBehavior('IMP-013')
+    const cardName = seeded.entities['collides'].name
 
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    const cardName = `${testApi.prefix}-Deselect Target`
     const candidateCard = (): import('@playwright/test').Locator =>
       candidateCardByName(page, cardName)
     await expect(candidateCard()).toBeVisible({ timeout: 10000 })
@@ -163,7 +146,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     // pre-selects the same-named CRM contact (ContactSelector then shows the
     // name, not the search input); if it did not, select explicitly.
     const dialog = resolverDialog(page)
-    await selectContactIfNeeded(page, dialog, 'Deselect Target', cardName)
+    await selectContactIfNeeded(page, dialog, cardName, cardName)
     // The Link button is enabled only once a contact is selected.
     await expect(page.getByRole('button', { name: /Link Contact/i })).toBeEnabled()
 

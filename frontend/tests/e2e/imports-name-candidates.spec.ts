@@ -1,41 +1,34 @@
 import { test, expect } from './fixtures'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
 
 // People-tab name candidates: grouped anarlog_title tokens lifted from session
 // titles. Each (token, session) pair is one external_contact row; the Imports
 // UI groups them by normalized token and resolves the whole group in one call.
+//
+// Every test here rides IMP-026's declared queue, which carries two
+// anarlog_title rows under ONE namespace-prefixed token — so they group into a
+// single row whose evidence count is two, and no sibling worker's token can join
+// the group (the grouping is DB-wide and has no namespace scoping).
 test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
   let testApi: TestAPI
-  // A per-run unique token so parallel workers don't collide on grouping.
-  let token: string
+  let seeded: SeedBehaviorResult
+  // The grouped row's display token, as the discovery writer stored it (it
+  // title-cases what it is given), and the normalized token the row's test id
+  // and the resolve request body both key on.
   let display: string
+  let token: string
 
   test.beforeEach(async ({ request }, testInfo) => {
+    // IMP-026's queue includes an ingest-pipeline candidate, which settles a
+    // River cascade — hence the wider budget.
+    test.setTimeout(60_000)
     testApi = createTestAPI(request, testInfo)
-    // The display name carries testApi.prefix verbatim so the CRM contact
-    // created by the import path is cleaned up by DeleteContactsByNamePrefix
-    // in afterEach (the prefix would otherwise be lost on the imported name).
-    display = `${testApi.prefix}-Lena`
+    seeded = await testApi.seedBehavior('IMP-026')
+    display = seeded.entities['token-a'].name
+    // The writer's own invariant: token_normalized is the lower-cased display
+    // token. Both declared rows share it, which is what makes them one group.
     token = display.toLowerCase()
-    // Two sessions surfacing the same token → evidence_count = 2.
-    await testApi.seedExternalContacts([
-      {
-        source: 'anarlog_title',
-        metadata: {
-          token_normalized: token,
-          token_display: display,
-          session_uuid: crypto.randomUUID(),
-        },
-      },
-      {
-        source: 'anarlog_title',
-        metadata: {
-          token_normalized: token,
-          token_display: display,
-          session_uuid: crypto.randomUUID(),
-        },
-      },
-    ])
+    expect(seeded.entities['token-b'].name).toBe(display)
   })
 
   test.afterEach(async () => {
@@ -55,7 +48,9 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
       timeout: 10000,
     })
     await expect(page.getByText(display, { exact: true }).first()).toBeVisible()
-    // Evidence count reflects the two seeded (token, session) rows.
+    // Evidence count reflects the two declared (token, session) rows. The
+    // literal MIRRORS the declaration's own two token entities rather than a
+    // generated value.
     await expect(page.getByText(/Seen in 2 session titles/).first()).toBeVisible()
   })
 
@@ -114,9 +109,9 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
 
   // spec: IMP-031.item-leaves-queue-counts-update
   test('links the token group to an existing contact', async ({ page }) => {
-    const seeded = await testApi.seedContacts([{ full_name: 'Link Target Person' }])
-    const targetName = `${testApi.prefix}-Link Target Person`
-    expect(seeded.created).toBe(1)
+    // The link target is IMP-026's own declared contact, so it lives in the same
+    // namespace as the token group and the selector's substring filter reaches it.
+    const targetName = seeded.entities['link-target'].name
 
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
@@ -129,7 +124,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     const dialog = page.getByRole('dialog', { name: /Create contact from name candidate/ })
     await expect(dialog.getByText(/No contact methods/)).toBeVisible()
 
-    // Toggle to link mode and pick the seeded contact.
+    // Toggle to link mode and pick the declared contact.
     await dialog.getByRole('button', { name: 'Link to existing' }).click()
     await dialog.getByText('Search contacts...').click()
     await page.getByText(targetName).first().click()

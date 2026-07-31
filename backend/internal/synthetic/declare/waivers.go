@@ -38,21 +38,8 @@ var Waivers = map[string]string{
 	"CON-054": "the citing test resolves three of its four fixtures by a marker token shared across their DRAWN names, and the factory's display-name dedupe keys on the marker-INCLUSIVE string: a marked contact that draws an unmarked one's given+surname pair gets no disambiguator, so one rendered name nests inside the other and a substring locator resolves both rows. Declaring it needs the shared name composition changed, which a spec migration is the wrong place to do",
 	"CON-056": "the citing test needs a gchat method AND a non-default (telegram) primary; factory.Contact() has no generic method-kind builder and always makes email primary when one is present, so this needs a factory extension",
 
-	// spec/imports-matching.yaml — 14 behaviors.
-	"IMP-007": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-012": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-013": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-026": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-027": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-028": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-029": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-030": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-031": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-036": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-037": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-038": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-039": "not yet migrated — imports-matching (arc #759 PR3)",
-	"IMP-040": "not yet migrated — imports-matching (arc #759 PR3)",
+	// spec/imports-matching.yaml — every ui-surface IMP behavior is resolved in
+	// imports_domain.go; nothing is owed here.
 
 	// spec/knowledge.yaml — 2 behaviors.
 	"KNW-034": "not yet migrated — knowledge (arc #759 PR6)",

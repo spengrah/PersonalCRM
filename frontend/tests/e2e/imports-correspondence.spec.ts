@@ -16,10 +16,9 @@ const API_HEADERS = {
 
 // gmail_correspondence source: a link-only candidate carries an evidence badge
 // (co-occurring contact + message count) and links to an existing contact,
-// adding the email as a contact method. Data is seeded per-worker for parallel
-// isolation. The link-only Import-hidden policy is enforced by the shared
-// import-suggestions surface; this spec covers the evidence badge + the
-// end-to-end link.
+// adding the email as a contact method. The link-only Import-hidden policy is
+// enforced by the shared import-suggestions surface; this spec covers the
+// evidence badge + the end-to-end link.
 test.describe('Imports gmail_correspondence evidence @area:imports', () => {
   let testApi: TestAPI
 
@@ -36,37 +35,37 @@ test.describe('Imports gmail_correspondence evidence @area:imports', () => {
     page,
     request,
   }) => {
-    // Seed the CRM contact the candidate should suggest (same name so the
-    // trigram suggested-match pre-selects it), then the gmail_correspondence
-    // candidate with evidence metadata. The seed route prefixes display names,
-    // so the candidate's effective name matches the prefixed contact name.
-    const correspondenceEmail = `correspondence-${testApi.prefix}@example.invalid`
-    const { ids: contactIds } = await testApi.seedContacts([{ full_name: 'Correspondence Person' }])
-    const targetContactId = contactIds[0]
-    await testApi.seedExternalContacts([
-      {
-        display_name: 'Correspondence Person',
-        source: 'gmail_correspondence',
-        emails: [correspondenceEmail],
-        metadata: {
-          display_names_seen: ['Correspondence Person'],
-          message_count: 4,
-          co_occurring_contact: { id: '', name: `${testApi.prefix}-Correspondence Person` },
-        },
-      },
-    ])
+    // IMP-037's fixture is the CRM contact the candidate should suggest (same
+    // name, so the trigram suggested-match pre-selects it) plus the
+    // gmail_correspondence candidate carrying its co-occurrence evidence.
+    const seeded = await testApi.seedBehavior('IMP-037')
+    const targetContactId = seeded.entities['cooccur'].id
+    const cardName = seeded.entities['corr'].name
+
+    // The candidate's email is generator-derived, so it is read back from the
+    // API rather than restated here — this is the value the link must copy onto
+    // the contact.
+    const candidateRes = await request.get(
+      `${API_BASE_URL}/api/v1/imports/${seeded.entities['corr'].id}`,
+      { headers: API_HEADERS }
+    )
+    expect(candidateRes.ok()).toBe(true)
+    const candidateBody = await candidateRes.json()
+    const correspondenceEmail: string = candidateBody?.data?.emails?.[0]?.value
+    expect(correspondenceEmail, 'the seeded candidate must carry an email to link').toBeTruthy()
 
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    const cardName = `${testApi.prefix}-Correspondence Person`
     await expect(page.getByText(cardName).first()).toBeVisible({ timeout: 10000 })
 
     const card = candidateCardByName(page, cardName)
 
-    // The evidence badge: the seeded co-occurring contact name + the seeded
-    // message count (both metadata-driven data, not static copy).
-    await expect(card.getByText(`Seen with ${testApi.prefix}-Correspondence Person`)).toBeVisible()
+    // The evidence badge: the seeded co-occurring contact name + the declared
+    // message count (both metadata-driven data, not static copy). The count is
+    // literal because it MIRRORS the declaration's own
+    // CorrespondenceEvidence(4, …) rather than a generated value.
+    await expect(card.getByText(`Seen with ${seeded.entities['cooccur'].name}`)).toBeVisible()
     await expect(card.getByText('4 messages')).toBeVisible()
 
     // Link-only: no Import button on the card.
@@ -81,7 +80,7 @@ test.describe('Imports gmail_correspondence evidence @area:imports', () => {
 
     // Ensure a contact is selected (the trigram match usually pre-selects it).
     const dialog = resolverDialog(page)
-    await selectContactIfNeeded(page, dialog, 'Correspondence Person', cardName)
+    await selectContactIfNeeded(page, dialog, cardName, cardName)
     await expect(page.getByRole('button', { name: /Link Contact/i })).toBeEnabled()
 
     // Link succeeds (200 response).

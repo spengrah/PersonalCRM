@@ -1,14 +1,22 @@
 import { test, expect } from './fixtures'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
 import { acquireGlobalLock } from './helpers/global-lock'
 
-// Cross-file mutex: settings-mac.spec.ts also resets/reseeds the mac_host
-// singleton, and nothing else stops the two files landing in different
-// workers and nuking each other's host mid-test. The lock is held for the
-// WHOLE file (beforeAll → afterAll): per-test cycling lets this worker
-// instantly re-acquire between its serial tests, starving the other file's
-// waiter. afterAll has its own timeout slot, and if the worker dies without
-// running it the renew heartbeat stops and the lease lapses at the
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+const API_HEADERS = { 'X-API-Key': API_KEY }
+
+// Cross-file mutex: settings-mac.spec.ts resets and reseeds the mac_host
+// singleton. This file no longer seeds a PAIRED host of its own — its orphans
+// hang off the declared namespace's REVOKED synthetic host, which is invisible
+// to GET /api/v1/host and therefore to that file's reset — so the two files may
+// well be disjoint now. Removing the lock is a concurrency-model change rather
+// than a provisioning swap, and it is the mac-host migration (which holds BOTH
+// files) that can prove disjointness from both sides; until then the lock stays.
+// The lock is held for the WHOLE file (beforeAll → afterAll): per-test cycling
+// lets this worker instantly re-acquire between its serial tests, starving the
+// other file's waiter. afterAll has its own timeout slot, and if the worker dies
+// without running it the renew heartbeat stops and the lease lapses at the
 // arbiter, freeing the lock.
 let releaseMacHostLock: (() => Promise<void>) | null = null
 
@@ -23,54 +31,49 @@ test.afterAll(async () => {
   releaseMacHostLock = null
 })
 
-// Interactions tab: the conflict/orphan queue. These specs seed orphan
-// (orphan_needs_review) meeting notes against a paired host — enough to drive
-// the amber badge, the orphan card + "Log as impromptu", the
-// ?tab=needs-attention alias, and the ?session deep-link. Conflict
-// candidate-table rendering and resolution are covered by component +
-// backend integration tests (they require event snapshots that are fragile
-// to seed via the browser).
+// Interactions tab: the conflict/orphan queue. IMP-038 declares two orphan
+// (orphan_needs_review) sessions — enough to drive the amber badge, the orphan
+// card + "Log as impromptu", the ?tab=needs-attention alias, and the ?session
+// deep-link. Conflict candidate-table rendering and resolution are covered by
+// component + backend integration tests (they require event snapshots that are
+// fragile to seed via the browser).
 test.describe('Imports Interactions tab @area:imports', () => {
-  // The mac_host table is a singleton, so these host-seeding tests must run
-  // serially within the file and reset existing hosts before seeding.
+  // Serial WITHIN the file, on its own terms: the needs-attention badge is
+  // host-unfiltered, so a sibling test's orphans would move the count the
+  // assertions below read.
   test.describe.configure({ mode: 'serial' })
-  // Headroom for slow singleton cleanup on a loaded machine.
+  // Headroom for slow declared seeding on a loaded machine.
   test.setTimeout(60_000)
 
   let testApi: TestAPI
-  let hostId: string
-  let sessionA: string
+  let seeded: SeedBehaviorResult
   let sessionB: string
   let titleA: string
   let titleB: string
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
-    // Free the singleton host index before seeding a fresh host.
-    await testApi.resetMacHosts()
-    hostId = await testApi.seedMacHost({ hostname: `${testApi.prefix}-int-host` })
-    sessionA = crypto.randomUUID()
-    sessionB = crypto.randomUUID()
-    titleA = `${testApi.prefix} Orphan Session A`
-    titleB = `${testApi.prefix} Orphan Session B`
-    await testApi.seedMeetingNotes(hostId, [
-      { anarlog_session_id: sessionA, title: titleA, summary: 'First orphan.' },
-      { anarlog_session_id: sessionB, title: titleB, summary: 'Second orphan.' },
-    ])
+    seeded = await testApi.seedBehavior('IMP-038')
+    // The manifest keys a meeting note by its SESSION uuid, which is what the
+    // ?session deep link carries; the name is the stored session title.
+    sessionB = seeded.entities['orphan-b'].id
+    titleA = seeded.entities['orphan-a'].name
+    titleB = seeded.entities['orphan-b'].name
   })
 
   test.afterEach(async () => {
-    // Delete this test's seeded notes (by host) before the next test resets
-    // the host, then clear the host so the singleton index is free. The
-    // cross-file mutex stays held until afterAll.
     await testApi.cleanup()
-    await testApi.resetMacHosts()
   })
 
   // spec: IMP-026.interactions-tab-holds-conflicts
   test('shows the attention badge and renders orphan cards on the Interactions tab', async ({
     page,
+    request,
   }) => {
+    // This test seeds a SECOND declared world mid-run (see below), and IMP-026's
+    // queue includes an ingest-pipeline candidate that settles a River cascade.
+    test.setTimeout(120_000)
+
     await page.goto('/imports?tab=interactions')
     await page.waitForLoadState('domcontentloaded')
 
@@ -87,25 +90,28 @@ test.describe('Imports Interactions tab @area:imports', () => {
       'hyprnote://'
     )
 
-    // The attention badge counts the two seeded orphans. This file is serial
-    // with a freshly-reset singleton host, so the count reflects our seeds.
+    // The attention badge counts at least the two declared orphans. This file is
+    // serial, so no sibling test's orphans are in flight.
     const badge = page.getByLabel(/\d+ needing attention/)
     await expect(badge).toBeVisible()
     const badgeCount = parseInt((await badge.getAttribute('aria-label'))!, 10)
     expect(badgeCount).toBeGreaterThanOrEqual(2)
 
-    // Discovery items are excluded from the badge: seeding a title-derived
-    // discovery token must not move the count.
-    await testApi.seedExternalContacts([
-      {
-        source: 'anarlog_title',
-        metadata: {
-          token_normalized: `${testApi.prefix}-badgetoken`.toLowerCase(),
-          token_display: `${testApi.prefix}-Badgetoken`,
-          session_uuid: crypto.randomUUID(),
-        },
-      },
-    ])
+    // Discovery items are excluded from the badge: creating a title-derived
+    // discovery token mid-test must not move the count. Seeding it here rather
+    // than in the fixture IS the claim — a token that already existed when the
+    // first count was read could not show that the count ignores it.
+    const discovery = await testApi.seedBehavior('IMP-026')
+
+    // Positive anchor, without which the assertion below is satisfiable by
+    // absence: a token that was never created also fails to move the count.
+    const tokenRes = await request.get(
+      `${API_BASE_URL}/api/v1/imports/${discovery.entities['token-a'].id}`,
+      { headers: API_HEADERS }
+    )
+    expect(tokenRes.ok(), 'the mid-test discovery token must actually exist').toBe(true)
+    expect((await tokenRes.json())?.data?.source).toBe('anarlog_title')
+
     await page.reload()
     await page.waitForLoadState('domcontentloaded')
     const badgeAfter = page.getByLabel(/\d+ needing attention/)
@@ -137,7 +143,7 @@ test.describe('Imports Interactions tab @area:imports', () => {
   }) => {
     // The backend transitions orphan_needs_review → linked_impromptu on
     // resolve-link {none_of_these}, so the card actually leaves the queue.
-    // Both seeded orphans share meeting_at and the list orders only by
+    // Both declared orphans share meeting_at and the list orders only by
     // meeting_at DESC, so we bind the click + assertions to titleA's card by
     // its heading (never list position) and scope the disappearance check to
     // the card heading (the success toast is a separate element and cannot

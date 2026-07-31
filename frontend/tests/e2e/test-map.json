@@ -689,7 +689,8 @@
       "@area:contacts",
       "@area:contact-navigation",
       "@area:contact-merge",
-      "@area:birthdays"
+      "@area:birthdays",
+      "@area:imports"
     ]
   },
   {
@@ -709,13 +710,27 @@
       "@area:contacts",
       "@area:contact-navigation",
       "@area:contact-merge",
-      "@area:birthdays"
+      "@area:birthdays",
+      "@area:imports"
     ]
   },
   {
     "_comment": "Go unit tests for the test-only handlers carry no E2E area of their own.",
     "pattern": "^backend/internal/api/handlers/.*_test\\.go$",
     "tags": []
+  },
+  {
+    "_comment": "The bespoke seed service behind the /test/seed/* handlers — same rationale and same area list as those handlers: every area that still provisions through a bespoke endpoint depends on it.",
+    "pattern": "^backend/internal/service/test_seed_service\\.go$",
+    "tags": [
+      "@area:dashboard",
+      "@area:overdue",
+      "@area:contacts",
+      "@area:contact-navigation",
+      "@area:contact-merge",
+      "@area:birthdays",
+      "@area:imports"
+    ]
   },
   {
     "_comment": "Test-only seed/cleanup SQL and its generated bindings — same rationale, and the same area list, as the test handlers above: the declared seed and cleanup queries live here, so every area that provisions through them is selected.",
@@ -726,7 +741,8 @@
       "@area:contacts",
       "@area:contact-navigation",
       "@area:contact-merge",
-      "@area:birthdays"
+      "@area:birthdays",
+      "@area:imports"
     ]
   },
   {

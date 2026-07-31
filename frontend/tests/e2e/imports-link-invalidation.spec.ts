@@ -8,7 +8,12 @@
 // invalidation and this file would become decorative. A later "standardize the
 // imports specs onto ./fixtures" edit silently deletes the coverage.
 import { test, expect, Page } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import {
+  createTestAPI,
+  TestAPI,
+  declaredWorldNamePrefix,
+  declaredWorldSearch,
+} from './helpers/test-api'
 import {
   candidateCardByName,
   expectModalCandidate,
@@ -63,30 +68,36 @@ test.describe('Import link invalidates contact detail @area:imports', () => {
     // budget is not enough for that route on the dev server.
     test.setTimeout(120_000)
 
-    const prefix = testApi.prefix
-    // Distinct values so the candidate does not auto-match the contact: the
-    // link must be the explicit user action this spec drives.
-    const seededEmail = `${prefix}-seeded@example.test`
-    const candidateEmail = `${prefix}-linked@example.test`
-    const contactName = `${prefix}-Invalidation Target`
-    const candidateName = `${prefix}-Invalidation Candidate`
+    // IMP-040 declares a contact carrying an email and a SINGLE candidate that
+    // shares neither its name nor its email, so nothing auto-matches: the link
+    // is the explicit user action this spec drives, and linking it empties this
+    // world's review queue, which exercises the resolver's empty-queue unwind.
+    // That path used to dereference the now-absent candidate and crash the host
+    // page; the error-boundary assertion below now guards it.
+    const seeded = await testApi.seedBehavior('IMP-040')
+    const contactId = seeded.entities['target'].id
+    const contactName = seeded.entities['target'].name
+    const externalId = seeded.entities['cand'].id
+    const candidateName = seeded.entities['cand'].name
 
-    const { ids: contactIds } = await testApi.seedContacts([
-      {
-        full_name: 'Invalidation Target',
-        methods: [{ type: 'email', value: seededEmail, is_primary: true }],
-      },
-    ])
-    const contactId = contactIds[0]
+    // Both addresses are generator-derived, so they are read back rather than
+    // restated: the seeded one anchors "the detail query resolved", and the
+    // candidate one is the value the link must add.
+    const contactBefore = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(contactBefore.ok()).toBe(true)
+    const seededMethods: Array<{ type: string; value: string }> =
+      (await contactBefore.json())?.data?.methods ?? []
+    const seededEmail = seededMethods.find(m => m.type === 'email')?.value
+    expect(seededEmail, 'the declared contact must carry an email').toBeTruthy()
 
-    // A single candidate: linking it empties the review queue, so this run
-    // exercises the resolver modal's empty-queue unwind. That path used to
-    // dereference the now-absent candidate and crash the host page; the
-    // error-boundary assertion below now guards it.
-    const { ids: externalIds } = await testApi.seedExternalContacts([
-      { display_name: 'Invalidation Candidate', emails: [candidateEmail] },
-    ])
-    const externalId = externalIds[0]
+    const candidateRes = await request.get(`${API_BASE_URL}/api/v1/imports/${externalId}`, {
+      headers: API_HEADERS,
+    })
+    expect(candidateRes.ok()).toBe(true)
+    const candidateEmail: string = (await candidateRes.json())?.data?.emails?.[0]?.value
+    expect(candidateEmail, 'the declared candidate must carry an email to link').toBeTruthy()
 
     // --- Step 1: populate the contact detail cache -------------------------
     // The only hard navigation in this test. Everything after the sentinel is
@@ -97,7 +108,7 @@ test.describe('Import link invalidates contact detail @area:imports', () => {
     // The seeded method proves the detail query actually resolved and is now
     // cached — without this, "candidate email absent" would be trivially true
     // on a page that never loaded, and the cache under test would not exist.
-    await expect(page.getByText(seededEmail)).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(seededEmail!)).toBeVisible({ timeout: 15000 })
     await expect(page.getByText(candidateEmail)).toHaveCount(0)
 
     await plantNoReloadSentinel(page)
@@ -156,8 +167,8 @@ test.describe('Import link invalidates contact detail @area:imports', () => {
 
     const dialog = resolverDialog(page)
     await dialog.getByText('Search for a contact...').click()
-    await dialog.getByPlaceholder('Search for a contact...').fill(prefix)
-    const contactOption = dialog.getByText(contactName, { exact: false }).last()
+    await dialog.getByPlaceholder('Search for a contact...').fill(declaredWorldNamePrefix(seeded))
+    const contactOption = dialog.getByText(contactName, { exact: true }).last()
     await expect(contactOption).toBeVisible({ timeout: 5000 })
     await contactOption.click()
 
@@ -214,7 +225,9 @@ test.describe('Import link invalidates contact detail @area:imports', () => {
 
     await nav.getByRole('link', { name: 'Contacts' }).click()
     await expect(page).toHaveURL(/\/contacts/)
-    await page.getByPlaceholder('Search contacts...').fill(prefix)
+    // The contact list search is PostgreSQL full-text search, so it needs the
+    // world's lexeme form rather than its name prefix.
+    await page.getByPlaceholder('Search contacts...').fill(declaredWorldSearch(seeded))
     const contactLink = page.getByRole('link', { name: contactName, exact: true })
     await expect(contactLink).toBeVisible({ timeout: 15000 })
     await contactLink.click()
