@@ -164,3 +164,47 @@ func TestSyntheticDeclareCleanup_FailedSweepDeletesNothing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "the retry must empty the namespace")
 }
+
+// TestSyntheticDeclareRun_ClientDisconnectDoesNotAbortTheSeed pins the detachment
+// at the top of execute: the run bounds itself with its OWN budget derived from
+// context.WithoutCancel(parent), so a caller that goes away mid-request does not
+// abort a partially-seeded world.
+//
+// That detachment is what stops an abandoned HTTP request from leaving rows no
+// caller was ever told about — the client never learns which namespace to clean,
+// and the world becomes reachable only through the prefix backstop.
+//
+// The request context is cancelled BEFORE Run is called, deliberately. Cancelling
+// mid-flight needs a sleep whose race decides whether the test proves anything: if
+// the cancel lands after the run finishes, the test passes vacuously.
+// WithoutCancel ignores the parent's cancellation whether it happened before or
+// during, so an already-dead parent exercises the same seam with no timing in the
+// test at all. Nothing reads the parent context before the detachment — Run
+// validates without touching the database, then execute detaches on its first
+// line — so an already-cancelled parent cannot fail somewhere earlier and be
+// mistaken for the contract holding.
+func TestSyntheticDeclareRun_ClientDisconnectDoesNotAbortTheSeed(t *testing.T) {
+	database, ctx := declareIsolationDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+	namespace := declareIsolationNS(t)
+
+	requestCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	require.Error(t, requestCtx.Err(), "the request context must be dead before the run starts")
+
+	seeded, err := declare.Run(requestCtx, database, "DSH-005", namespace, factory.DefaultSeed)
+	require.NoError(t, err, "a cancelled request context must not abort the detached run")
+	assert.Equal(t, namespace, seeded.Namespace, "the run must still report its namespace to the caller")
+	require.NotEmpty(t, seeded.Entities, "the run must still report what it created")
+
+	// The world is really there, so the run completed rather than returning an
+	// empty success.
+	prefix := factory.NewGenerator(factory.DefaultSeed, seeded.Namespace).Prefix()
+	contacts, err := support.SelectContactIDsByFullNamePrefix(ctx, prefix)
+	require.NoError(t, err)
+	assert.Len(t, contacts, len(seeded.Entities), "every reported entity must exist")
+
+	res, err := declare.CleanupNamespaces(ctx, database, []string{seeded.Namespace}, factory.DefaultSeed)
+	require.NoError(t, err)
+	assert.Equal(t, declare.StatusCleaned, res.Results[seeded.Namespace].Status)
+}
