@@ -2,6 +2,7 @@ package declare
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -355,6 +356,16 @@ func checkNamespaceFree(ctx context.Context, support *repository.SyntheticSuppor
 		} else if exists {
 			return fmt.Errorf("%w: %q already holds a synthetic host row", ErrNamespaceOccupied, token)
 		}
+		// The LIVE paired host is a separate row under a separate name, and the
+		// failure-path teardown is best-effort per step — so the marker can be gone
+		// while it survives. Left unprobed, this namespace would look free and its
+		// next seed would fail mid-run on the singleton index instead of being
+		// refused up front with a name to clean.
+		if _, exists, err := support.SelectMacHostIDByHostname(ctx, PairedMacHostname(token)); err != nil {
+			return fmt.Errorf("declare: occupancy check (paired host) for %q: %w", token, err)
+		} else if exists {
+			return fmt.Errorf("%w: %q already holds a live paired host row", ErrNamespaceOccupied, token)
+		}
 	}
 
 	// Descendants are found by the SAME query and the same salt-variant filter
@@ -512,6 +523,12 @@ type runState struct {
 	// both in EXECUTION order.
 	order        []Seeded
 	orderHandles []string
+	// macHostID is the LIVE paired host a MacHost entity created, if the
+	// declaration has one. Ingest-sourced candidates are stamped with it instead
+	// of the harness's revoked marker, because the per-host source-count route the
+	// settings surface reads counts strictly by that column. Registration
+	// guarantees the host runs first (validateIngestCandidatesFollowHost).
+	macHostID *uuid.UUID
 }
 
 func newRunState(size int) *runState {
@@ -603,6 +620,10 @@ func runEntity(
 		return runContact(ctx, h, support, p, st)
 	case *externalCandidatePlan:
 		return runExternalCandidate(ctx, h, support, p, st)
+	case *calendarEventPlan:
+		return runCalendarEvent(ctx, h, p, st)
+	case *macHostPlan:
+		return runMacHost(ctx, h, p, st)
 	case *methodSuggestionPlan:
 		return runMethodSuggestion(ctx, h, support, p, st)
 	case *meetingNotePlan:
@@ -660,7 +681,7 @@ func runExternalCandidate(
 	)
 	switch p.source {
 	case SourceICloudContacts, SourceAnarlogHumans:
-		id, name, err = seedIngestedCandidate(ctx, h, p)
+		id, name, err = seedIngestedCandidate(ctx, h, p, st)
 	case SourceTelegram:
 		id, name, err = seedTelegramCandidate(ctx, h, p)
 	case SourceAnarlogTitle:
@@ -745,8 +766,18 @@ func seedIngestedCandidate(
 	ctx context.Context,
 	h *replay.Harness,
 	p *externalCandidatePlan,
+	st *runState,
 ) (uuid.UUID, string, error) {
-	spec, err := h.Generator().MacContactForSource(factory.ContactSpec{}, factory.MatchUnknown, h.MacHostID(), p.source)
+	// A declared world that pairs a LIVE host owns its ingest candidates on THAT
+	// host: the per-host source-count route counts strictly by host_id, and the
+	// upsert never reassigns an existing owner. Registration guarantees the host
+	// ran first. Without one, the harness's revoked marker is the only host there
+	// is.
+	hostID := h.MacHostID()
+	if st.macHostID != nil {
+		hostID = *st.macHostID
+	}
+	spec, err := h.Generator().MacContactForSource(factory.ContactSpec{}, factory.MatchUnknown, hostID, p.source)
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("build %s ingest payload: %w", p.source, err)
 	}
@@ -848,6 +879,203 @@ func runMeetingNote(ctx context.Context, h *replay.Harness, p *meetingNotePlan) 
 // test resolve ONE of them and assert the sibling stayed.
 func meetingNoteTitle(gen *factory.Generator, handle string) string {
 	return gen.Prefix() + "Session " + handle
+}
+
+// runCalendarEvent lowers a declared meeting onto the REAL calendar sync
+// provider, through the fake-fetcher seam. Every stored column is one the
+// provider derived from the inbound event, so the row is one a sync could have
+// produced — which the bespoke path it replaces was not: writing through the
+// repository directly could express titles, locations and attendee counts the
+// provider has no way to store.
+//
+// Which adapter drives it is decided by the placement, and the two are not
+// interchangeable. A past event's terminal state includes the attendance
+// projection (an attended event, a mutual interaction, a venue node) and its gate
+// waits for the processed flag; a future or in-progress event's end time is ahead
+// of now, so the projection never reads it, nothing is published, and the flag is
+// never set. Driving a future event on the past gate would time out over a world
+// that is in fact complete.
+//
+// The manifest reports the stored row's uuid — the id the contact events API
+// returns — and its rendered title, so a citing test reads both rather than
+// restating them.
+func runCalendarEvent(ctx context.Context, h *replay.Harness, p *calendarEventPlan, st *runState) (Seeded, error) {
+	gen := h.Generator()
+
+	shape := factory.GCalEventShape{StartOffset: calendarStartOffset(p)}
+	if p.inProgress {
+		shape.Duration = inProgressEventDuration
+	}
+	title := calendarEventTitle(gen, p.name)
+	if p.untitled {
+		title = ""
+	}
+	shape.Title = &title
+	if p.location {
+		shape.Location = calendarEventLocation(gen, p.name)
+	}
+	if p.sourceLink {
+		shape.HTMLLink = calendarEventLink(gen, p.name)
+	}
+	shape.SoleAttendee = p.soleAttendee
+
+	intent := factory.MatchSeeded
+	var contactID uuid.UUID
+	target := factory.ContactSpec{}
+	if p.unmatched {
+		intent = factory.MatchUnknown
+	} else {
+		var err error
+		if contactID, err = st.contactID(p.contact); err != nil {
+			return Seeded{}, err
+		}
+		spec, ok := st.specs[p.contact]
+		if !ok {
+			return Seeded{}, fmt.Errorf("calendar event %q: no such contact in this run: %q", p.name, p.contact)
+		}
+		target = spec
+	}
+
+	event := gen.GCalEventWithShape(target, intent, shape)
+	if p.unmatched || p.startedDaysAgo != nil {
+		if _, err := h.ReplayGCal(ctx, contactID, event); err != nil {
+			return Seeded{}, fmt.Errorf("replay declared calendar event %q: %w", p.name, err)
+		}
+	} else {
+		items := []replay.GCalBatchItem{{ContactID: contactID, Spec: event}}
+		if _, err := h.ReplayGCalUpcoming(ctx, items); err != nil {
+			return Seeded{}, fmt.Errorf("replay declared upcoming calendar event %q: %w", p.name, err)
+		}
+	}
+
+	row, err := h.CalendarEventRepo().GetByGcalID(ctx, event.GcalEventID, "primary", event.AccountID)
+	if err != nil {
+		return Seeded{}, fmt.Errorf("read back declared calendar event %q: %w", p.name, err)
+	}
+	// For the unmatched form the reported name is the ATTENDEE EMAIL, not the
+	// title: the citing flow types that address into a contact's edit form and has
+	// no other route to it, whereas the title is not read at all.
+	name := title
+	if p.unmatched {
+		name = event.PeerEmail
+	}
+	return Seeded{Kind: "calendar_event", ID: row.ID.String(), Name: name}, nil
+}
+
+// inProgressEventDuration is the span of the anchor-straddling meeting: an hour
+// either side, so its start is past and its end is not.
+const inProgressEventDuration = 2 * time.Hour
+
+// calendarStartOffset is the declared placement as an offset from the run anchor.
+// A past meeting keeps the factory's own two-hour lead-in so a "started n days
+// ago" meeting also ENDED n days ago, which is what the day count on the card
+// reads.
+func calendarStartOffset(p *calendarEventPlan) time.Duration {
+	switch {
+	case p.startsInDays != nil:
+		return time.Duration(*p.startsInDays) * 24 * time.Hour
+	case p.startedDaysAgo != nil:
+		return -(time.Duration(*p.startedDaysAgo)*24*time.Hour + 2*time.Hour)
+	default:
+		return -inProgressEventDuration / 2
+	}
+}
+
+// calendarEventTitle is the namespace-prefixed meeting title. The handle is part
+// of it so several meetings in one declaration render distinguishably, which is
+// what lets a test address ONE card.
+func calendarEventTitle(gen *factory.Generator, handle string) string {
+	return gen.Prefix() + "Meeting " + handle
+}
+
+// calendarEventLocation is the namespace-prefixed place, generated rather than
+// authored so the world carries no content of its own.
+func calendarEventLocation(gen *factory.Generator, handle string) string {
+	return gen.Prefix() + "Room " + handle
+}
+
+// calendarEventLink is the event's source link in the shape Google emits, so the
+// stored value is one the provider could have received.
+func calendarEventLink(gen *factory.Generator, handle string) string {
+	return "https://calendar.google.com/calendar/event?eid=" + gen.Prefix() + handle
+}
+
+// runMacHost lowers a declared paired host onto the real pairing services and
+// records its id in the run state, so the ingest candidates declared after it are
+// stamped with THIS host rather than the harness's revoked marker.
+//
+// The manifest reports the hostname, which is both what the settings row renders
+// and — deliberately — a deterministic, namespace-derived token the cleanup
+// ladder recovers the row by in a LATER request. It must not end in "-host": that
+// is the pattern the descendant guard reads as a nested live namespace, and a
+// world matching it would refuse to clean itself forever.
+func runMacHost(ctx context.Context, h *replay.Harness, p *macHostPlan, st *runState) (Seeded, error) {
+	gen := h.Generator()
+	permissions, err := json.Marshal(declaredHostPermissions)
+	if err != nil {
+		return Seeded{}, fmt.Errorf("marshal declared host permissions: %w", err)
+	}
+	sourceHealth, err := json.Marshal(declaredSourceHealth(gen, p.sources))
+	if err != nil {
+		return Seeded{}, fmt.Errorf("marshal declared host source health: %w", err)
+	}
+	hostname := PairedMacHostname(h.Namespace())
+	hostID, err := h.SeedPairedMacHost(ctx, hostname, declaredHostDaemonVersion, declaredHostProtocolVersion, permissions, sourceHealth)
+	if err != nil {
+		return Seeded{}, err
+	}
+	id := hostID
+	st.macHostID = &id
+	return Seeded{Kind: "mac_host", ID: hostID.String(), Name: hostname}, nil
+}
+
+// PairedMacHostname is the deterministic hostname of a namespace's LIVE paired
+// host. Cleanup runs in a later request with no memory of the seed, so the name
+// IS the recovery key — an exact-match lookup, never a prefix one.
+//
+// The "-mac" suffix is load-bearing. The descendant guard finds nested live
+// namespaces by matching 'synth-<ns>-%-host', so a name ending in "-host" would
+// be read as a live descendant of this very namespace and cleanup would refuse
+// the whole world permanently. "synth-<ns>-mac" is invisible to that pattern and
+// still exactly recoverable.
+func PairedMacHostname(namespace string) string {
+	return factory.SyntheticSourcePrefix + namespace + "-mac"
+}
+
+const (
+	// declaredHostDaemonVersion / declaredHostProtocolVersion are the daemon
+	// identity every declared host reports. Fixed: no consuming surface
+	// distinguishes versions, and the protocol version is the current one.
+	declaredHostDaemonVersion   = "0.1.2"
+	declaredHostProtocolVersion = 2
+)
+
+// declaredHostPermissions is the permission set every declared host reports: one
+// granted and one denied, the single shape that makes BOTH badge states
+// observable on one host.
+var declaredHostPermissions = map[string]bool{"fda": true, "contacts": false}
+
+// declaredSourceHealth builds the source_health blob for a declared host, in the
+// daemon's documented emit shape. last_pushed_at is the run ANCHOR — fresh, so
+// the sync-staleness watchdog cannot open a push_stale breach. That matters
+// beyond this fixture: the breach surfaces on a GLOBAL settings banner that
+// another spec asserts is quiet, so a stale value here would fail a test in a
+// different file.
+func declaredSourceHealth(gen *factory.Generator, sources []macHostSource) map[string]map[string]any {
+	out := make(map[string]map[string]any, len(sources))
+	pushedAt := gen.Anchor().UTC().Format(time.RFC3339)
+	for _, s := range sources {
+		out[s.name] = map[string]any{
+			"enabled":           true,
+			"last_scheduled_at": pushedAt,
+			"last_pushed_at":    pushedAt,
+			"observed_cursor":   gen.Prefix() + "cursor-" + s.name,
+			"pushed_cursor":     gen.Prefix() + "cursor-" + s.name,
+			"schema_version":    1,
+			"backfill_complete": s.backfillComplete,
+		}
+	}
+	return out
 }
 
 // runNote lowers a declared note onto the notepad seeding primitive. The body is

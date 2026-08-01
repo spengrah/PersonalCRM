@@ -481,7 +481,7 @@ func runLadder(
 
 	support := repository.NewSyntheticSupportRepository(database.Queries.WithTx(tx))
 	prefix := gen.Prefix()
-	deleted := map[string]int64{"mac_hosts": 0, "meeting_notes": 0}
+	deleted := map[string]int64{"mac_hosts": 0, "mac_host_pairing_tokens": 0, "meeting_notes": 0}
 	var firstErr error
 
 	failStep := currentCleanupFailStep()
@@ -615,9 +615,48 @@ func runLadder(
 		return support.DeleteVenueNodesByIds(ctx, venueIDs)
 	})
 
-	// The host lookup is a READ inside the same transaction, so it must not run
-	// once a statement has failed — the transaction is aborted and every query
-	// after that point returns 25P02 instead of an answer.
+	// The LIVE paired host, if this world declared one. It is a SECOND mac_host row
+	// alongside the revoked marker below, and it is the one that matters most:
+	// while it survives it holds the database-wide singleton slot against every
+	// later world that pairs one, and the staleness watchdog — which runs every
+	// five minutes against live hosts — opens a heartbeat breach that lights a
+	// global banner other specs assert is quiet.
+	//
+	// Recovered by its deterministic hostname, because cleanup is stateless: the
+	// seed took its in-memory ledger away with the request that created it. The
+	// name deliberately does NOT end in "-host" (see PairedMacHostname) so the
+	// descendant guard above cannot mistake it for a nested live namespace.
+	//
+	// Both lookups are READS inside the same transaction, so they must not run once
+	// a statement has failed — the transaction is aborted and every query after
+	// that point returns 25P02 instead of an answer.
+	var pairedHostID uuid.UUID
+	var pairedExists bool
+	if firstErr == nil {
+		pairedHostID, pairedExists, err = support.SelectMacHostIDByHostname(ctx, PairedMacHostname(namespace))
+		if err != nil {
+			firstErr = fmt.Errorf("cleanup paired host lookup: %w", err)
+		}
+	}
+	if pairedExists {
+		// The CONSUMED pairing token the host was paired with, BEFORE the host
+		// delete. consumed_host_id is ON DELETE SET NULL and is the token's only
+		// recovery key — the service returns the plaintext and the expiry, never the
+		// row id, and only a hash is stored — so a host deleted first strands the row
+		// permanently. The production janitor sweeps unconsumed tokens only, so it
+		// cannot stand in. Deliberately not the whole-table test delete, which would
+		// destroy a concurrent world's token.
+		step("mac_host_pairing_tokens", func() (int64, error) {
+			return support.DeletePairingTokensByConsumedHostID(ctx, pairedHostID)
+		})
+		// The host itself, AFTER the external_contact steps above:
+		// external_contact.host_id is ON DELETE SET NULL, so deleting the host first
+		// would orphan this world's ingest candidates from every host-scoped route.
+		step("mac_hosts", func() (int64, error) {
+			return support.DeleteMacHostByID(ctx, pairedHostID)
+		})
+	}
+
 	var hostID uuid.UUID
 	var hostExists bool
 	if firstErr == nil {

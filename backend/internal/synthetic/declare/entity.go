@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"personal-crm/backend/internal/google"
+	"personal-crm/backend/internal/mac"
 	"personal-crm/backend/internal/synthetic/factory"
 )
 
@@ -921,6 +923,300 @@ func MeetingNote(handle string) Entity {
 	return &meetingNotePlan{name: handle}
 }
 
+// --- calendar events --------------------------------------------------------
+
+// Offsets a declared calendar event may carry, bounded by the provider's OWN
+// initial fetch window (now − CalendarPastSyncDays … now + CalendarFutureSyncDays).
+// The fake fetcher ignores the window, so nothing enforces it at runtime — which
+// is precisely why it is enforced at REGISTRATION: an event outside it is a row
+// the real sync could never have fetched.
+//
+// Each bound loses a day to the meeting's own extent. An upcoming meeting starts
+// n days out and runs an hour, a past one started n days plus two hours ago, so
+// the last fully-inside day in each direction is one short of the window.
+var (
+	maxCalendarDaysAhead = google.CalendarFutureSyncDays - 1
+	maxCalendarDaysAgo   = google.CalendarPastSyncDays - 1
+)
+
+// calendarEventPlan is the lowered form of a CalendarEvent declaration.
+type calendarEventPlan struct {
+	name    string
+	contact string
+	// unmatched marks the UnmatchedCalendarEvent form: the only non-self attendee
+	// is an address no contact owns, so the row lands with an empty matched set
+	// plus a gcal_attendee import candidate.
+	unmatched      bool
+	startsInDays   *int
+	startedDaysAgo *int
+	inProgress     bool
+	untitled       bool
+	location       bool
+	sourceLink     bool
+	soleAttendee   bool
+}
+
+func (p *calendarEventPlan) handle() string { return p.name }
+func (p *calendarEventPlan) kind() string   { return "calendar_event" }
+func (p *calendarEventPlan) refs() []string {
+	if p.contact == "" {
+		return nil
+	}
+	return []string{p.contact}
+}
+
+func (p *calendarEventPlan) validate() error {
+	if strings.TrimSpace(p.name) == "" {
+		return fmt.Errorf("calendar event handle must be non-empty")
+	}
+	if p.unmatched {
+		if p.contact != "" {
+			return fmt.Errorf("calendar event %q: an unmatched event names no contact — its attendee is an address no contact owns", p.name)
+		}
+	} else if strings.TrimSpace(p.contact) == "" {
+		return fmt.Errorf("calendar event %q: a contact handle is required", p.name)
+	}
+
+	offsets := 0
+	if p.startsInDays != nil {
+		offsets++
+	}
+	if p.startedDaysAgo != nil {
+		offsets++
+	}
+	if p.inProgress {
+		offsets++
+	}
+	if offsets != 1 {
+		return fmt.Errorf("calendar event %q: declare exactly ONE of StartsInDays, StartedDaysAgo or InProgress (got %d) — the three are mutually exclusive placements of the same meeting",
+			p.name, offsets)
+	}
+	if n := p.startsInDays; n != nil && (*n < 1 || *n > maxCalendarDaysAhead) {
+		return fmt.Errorf("calendar event %q: StartsInDays(%d) is outside 1..%d — the calendar provider's initial fetch reaches %d days ahead, so a later event is a row no sync could produce",
+			p.name, *n, maxCalendarDaysAhead, google.CalendarFutureSyncDays)
+	}
+	if n := p.startedDaysAgo; n != nil && (*n < 1 || *n > maxCalendarDaysAgo) {
+		return fmt.Errorf("calendar event %q: StartedDaysAgo(%d) is outside 1..%d — the calendar provider's initial fetch reaches %d days back, so an older event is a row no sync could produce",
+			p.name, *n, maxCalendarDaysAgo, google.CalendarPastSyncDays)
+	}
+	if p.untitled && p.sourceLink {
+		// The title IS the link (meetings.tsx renders the anchor around it), so an
+		// untitled event with a link renders the fallback label as the link text —
+		// a state whose two declared intents contradict each other at the surface
+		// they both name.
+		return fmt.Errorf("calendar event %q: Untitled and SourceLink contradict — the card renders the link AS the title, so a link on an untitled event has no title to become", p.name)
+	}
+	return nil
+}
+
+// CalendarEvent declares one meeting the connected account attended together
+// with an EARLIER contact handle, stored by the real calendar sync provider.
+//
+// Placement is mandatory and singular: exactly one of StartsInDays,
+// StartedDaysAgo or InProgress. That is not decoration — the Meetings section
+// classifies a meeting by comparing its END time against the app's accelerated
+// clock, and the three placements are the three sides of that comparison.
+//
+// The offsets resolve to REAL days (n × 24h), deliberately NOT through the
+// cadence-scaled Amount type. Under CRM_ENV=testing a cadence "day" compresses to
+// roughly seventeen seconds, so a cadence-scaled "upcoming in 3 days" would sit
+// under a minute ahead and flip to past mid-test. Nothing in the comparison the
+// component performs has a cadence dimension, so scaling it is not independence
+// but a category error — and the failure it buys is a flake, not a red test.
+//
+// The title and the location are generator-derived and reported in the manifest;
+// a citing test reads them from there or from the events API rather than
+// restating a literal.
+func CalendarEvent(handle, contactHandle string, props ...CalendarEventProp) Entity {
+	p := &calendarEventPlan{name: handle, contact: contactHandle}
+	for _, prop := range props {
+		prop(p)
+	}
+	return p
+}
+
+// UnmatchedCalendarEvent declares a stored meeting whose only non-self attendee
+// is an address NO seeded contact owns — the state the calendar sync leaves when
+// it cannot match an attendee: an empty matched set plus one gcal_attendee import
+// candidate holding exactly that email.
+//
+// The manifest reports the ATTENDEE EMAIL as the row's name, because a citing
+// test has no other way to learn it (the rematch flow types that address into a
+// contact's edit form). The manifest ID stays the calendar_event row uuid, which
+// is what the contact events API returns as its `id`.
+//
+// The email is generator-derived and no declared contact can own it, which is
+// also what keeps the row producible: the calendar rematch handler claims any
+// stored gcal_attendee row whose email a contact holds, so a candidate coupled to
+// a declared contact's address is a row that cannot survive its own sync.
+func UnmatchedCalendarEvent(handle string, props ...CalendarEventProp) Entity {
+	p := &calendarEventPlan{name: handle, unmatched: true}
+	for _, prop := range props {
+		prop(p)
+	}
+	return p
+}
+
+// CalendarEventProp customizes a declared calendar event.
+type CalendarEventProp func(*calendarEventPlan)
+
+// StartsInDays places the meeting n real days ahead of the run anchor. Upcoming
+// by the component's end-time comparison, and — because the past-event projection
+// reads only events that have ended — it publishes nothing at all: no attended
+// event, no interaction, no venue node.
+func StartsInDays(n int) CalendarEventProp {
+	return func(p *calendarEventPlan) { p.startsInDays = &n }
+}
+
+// StartedDaysAgo places the meeting n real days before the run anchor. Past, so
+// the provider projects the attendance: a calendar.attended event, a MUTUAL
+// interaction, and a venue node.
+func StartedDaysAgo(n int) CalendarEventProp {
+	return func(p *calendarEventPlan) { p.startedDaysAgo = &n }
+}
+
+// InProgress places a two-hour meeting STRADDLING the run anchor — started an
+// hour before it, ending an hour after. It is the one shape that separates
+// end-time classification from start-time classification: its start is past and
+// its end is not, so a component that classified on start would call it past.
+//
+// Deliberately a single fixed shape rather than a general duration knob: one
+// consumer needs exactly "straddles now", and its end time is after the anchor,
+// so like an upcoming meeting it publishes nothing.
+func InProgress() CalendarEventProp {
+	return func(p *calendarEventPlan) { p.inProgress = true }
+}
+
+// Untitled leaves the meeting's summary empty, which the provider stores as the
+// empty STRING (never NULL) and the card renders with its fallback label.
+func Untitled() CalendarEventProp {
+	return func(p *calendarEventPlan) { p.untitled = true }
+}
+
+// EventLocation gives the meeting a generator-derived place. Without it the
+// provider maps the empty location to NULL and the response omits the key
+// entirely, which is the no-location state the card's absence assertion reads —
+// so there is no blank-location value to declare.
+func EventLocation() CalendarEventProp {
+	return func(p *calendarEventPlan) { p.location = true }
+}
+
+// SourceLink gives the meeting an external event link, omitted the same way when
+// absent. The card renders the title as an anchor when it is present.
+func SourceLink() CalendarEventProp {
+	return func(p *calendarEventPlan) { p.sourceLink = true }
+}
+
+// SoleAttendee makes the stored attendee list hold exactly the peer, the only
+// shape that yields an attendee count of one. The provider stores every attendee
+// INCLUDING the account, so a default meeting always stores two and the card
+// always renders its count row; a one-attendee meeting is one the account
+// ORGANIZES without being on the attendee list.
+func SoleAttendee() CalendarEventProp {
+	return func(p *calendarEventPlan) { p.soleAttendee = true }
+}
+
+// --- paired Mac host --------------------------------------------------------
+
+// macHostPlan is the lowered form of a MacHost declaration.
+type macHostPlan struct {
+	name    string
+	sources []macHostSource
+}
+
+// macHostSource is one source_health entry the declared host reports.
+type macHostSource struct {
+	name             string
+	backfillComplete bool
+}
+
+func (p *macHostPlan) handle() string { return p.name }
+func (p *macHostPlan) kind() string   { return "mac_host" }
+func (p *macHostPlan) refs() []string { return nil }
+
+func (p *macHostPlan) validate() error {
+	if strings.TrimSpace(p.name) == "" {
+		return fmt.Errorf("mac host handle must be non-empty")
+	}
+	if len(p.sources) == 0 {
+		return fmt.Errorf("mac host %q: declare at least one source — the source-health table renders nothing for an empty blob, so a host with no sources provisions a surface no assertion can read", p.name)
+	}
+	seen := map[string]bool{}
+	for _, s := range p.sources {
+		if !mac.IsAllowedPushSource(s.name) {
+			return fmt.Errorf("mac host %q: %q is not a source the daemon may push (allowed: %s)", p.name, s.name, strings.Join(sortedPushSources(), ", "))
+		}
+		if seen[s.name] {
+			return fmt.Errorf("mac host %q: source %q declared twice — source_health is a map, so the second entry would silently replace the first", p.name, s.name)
+		}
+		seen[s.name] = true
+	}
+	return nil
+}
+
+// MacHost declares the ONE LIVE paired Mac host a world may hold, created through
+// the real pairing services (mint a token, pair with it, heartbeat the
+// daemon-supplied fields) rather than inserted.
+//
+// The real path is not a preference. The harness's own marker host is REVOKED —
+// which is how it dodges the database-wide singleton index — and a revoked host is
+// invisible to every host-listing route, so the settings surface cannot see it.
+// Un-revoking it would be a new test-only mutation of a column production only
+// ever moves one way.
+//
+// Consequences a declaration inherits: the host takes the singleton slot, so two
+// paired worlds cannot coexist and the second one's seed fails rather than
+// queues; and it is LIVE, so it is visible to the sync-staleness watchdog. Both
+// are bounded by cleanup deleting the row, which is why the live host is tracked
+// in the failure-path teardown as well as the cross-request ladder.
+//
+// Permissions are fixed rather than declarable: one granted and one denied is the
+// single shape that makes both badge states observable on one host, and no
+// consuming surface distinguishes any other combination.
+func MacHost(handle string, props ...MacHostProp) Entity {
+	p := &macHostPlan{name: handle}
+	for _, prop := range props {
+		prop(p)
+	}
+	return p
+}
+
+// MacHostProp customizes a declared paired host.
+type MacHostProp func(*macHostPlan)
+
+// PushedSource adds a source-health entry in the MID-PUSH state: enabled, pushed
+// recently, carrying a cursor, backfill not complete. That is the ordinary steady
+// state of a paired source and — for the sources that report backfill progress —
+// the state whose cell must withhold the opaque change token.
+//
+// last_pushed_at is the run anchor, deliberately fresh. A stale one would open a
+// push_stale breach, and the staleness banner it raises is a GLOBAL surface that
+// another spec asserts is quiet, so a stale fixture here would fail a test in a
+// different file on a different worker.
+func PushedSource(name string) MacHostProp {
+	return func(p *macHostPlan) { p.sources = append(p.sources, macHostSource{name: name}) }
+}
+
+// BackfilledSource adds a source-health entry whose backfill has COMPLETED. For a
+// source that reports backfill progress this is what licenses the cell to
+// substitute the live per-host contact count for the change token — so a
+// declaration using it also owes that host some candidates to count.
+func BackfilledSource(name string) MacHostProp {
+	return func(p *macHostPlan) {
+		p.sources = append(p.sources, macHostSource{name: name, backfillComplete: true})
+	}
+}
+
+// sortedPushSources is the daemon's push-source allowlist, sorted, for error text.
+func sortedPushSources() []string {
+	out := make([]string, 0, len(mac.AllowedPushSources))
+	for src := range mac.AllowedPushSources {
+		out = append(out, src)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // --- method suggestions -----------------------------------------------------
 
 // methodSuggestionPlan is the lowered form of a MethodSuggestion declaration.
@@ -1069,6 +1365,9 @@ func sortedKeys(set map[string]bool) []string {
 // EARLIER in the same list, and that no handle repeats. Register and RegisterEdge
 // share it so the two cannot disagree about what a well-formed entity list is.
 func validateEntityOrder(entities []Entity) error {
+	if err := validateIngestCandidatesFollowHost(entities); err != nil {
+		return err
+	}
 	seen := map[string]Entity{}
 	// ExplicitName deliberately skips the factory's runtime dedupe, so two
 	// entities pinning the SAME literal would render one ambiguous name. Caught
@@ -1113,4 +1412,51 @@ func validateEntityOrder(entities []Entity) error {
 		seen[e.handle()] = e
 	}
 	return nil
+}
+
+// validateIngestCandidatesFollowHost enforces the ONE ordering rule the mac-host
+// entity introduces. An ingest-sourced candidate is stamped with the host it was
+// pushed from, and the per-host source-count route the settings surface reads
+// counts strictly by that column — so when a declaration pairs a LIVE host, its
+// ingest candidates must land on that host rather than on the harness's revoked
+// marker. The lowering routes them there implicitly (a world has at most one
+// paired host, so there is nothing to disambiguate), which means a candidate
+// declared BEFORE the host would silently land on the marker and be invisible to
+// every host-scoped read — a fixture that provisions rows no assertion can see.
+//
+// The upsert makes it unrecoverable rather than merely wrong: host_id is set on
+// insert and thereafter only via COALESCE(existing, new), so an existing owner is
+// never reassigned.
+func validateIngestCandidatesFollowHost(entities []Entity) error {
+	hostIndex := -1
+	hostHandle := ""
+	for i, e := range entities {
+		if p, ok := e.(*macHostPlan); ok {
+			hostIndex = i
+			hostHandle = p.name
+			break
+		}
+	}
+	if hostIndex < 0 {
+		return nil
+	}
+	for i, e := range entities {
+		if i > hostIndex {
+			break
+		}
+		p, ok := e.(*externalCandidatePlan)
+		if !ok || !ingestCandidateSources[p.source] {
+			continue
+		}
+		return fmt.Errorf("external candidate %q (source %s) is declared BEFORE the paired mac host %q — an ingest candidate is stamped with the host it was pushed from, and the per-host count route reads only that column, so declare the host first",
+			p.name, p.source, hostHandle)
+	}
+	return nil
+}
+
+// ingestCandidateSources are the candidate sources written by the mac-daemon
+// ingest pipeline, and therefore the ones that carry a host id.
+var ingestCandidateSources = map[string]bool{
+	SourceICloudContacts: true,
+	SourceAnarlogHumans:  true,
 }
