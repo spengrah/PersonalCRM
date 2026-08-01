@@ -304,6 +304,12 @@ func PrimaryMethod(kind string) ContactProp {
 // write — so it requires an addressable email. Unlike OverdueBy it does not
 // backdate creation: no forward-only due date has to be dragged backwards here,
 // and the outbound-only fixture the standard world already seeds does not either.
+// The corollary is the caller's to hold: pairing it with CreatedAgo(small) dates
+// the message before the contact existed, which nothing rejects because the
+// toolkit's own outbound-only reference fixture has that same shape.
+//
+// It is mutually exclusive with NeverContacted, which claims the opposite about
+// the same timeline.
 func Outreach(a Amount) ContactProp {
 	return func(p *contactPlan) {
 		amount := a
@@ -318,6 +324,11 @@ func Outreach(a Amount) ContactProp {
 //
 // It lowers to a REPLAYED GCal event, which addresses the contact by its email
 // address, so it likewise requires an addressable email.
+//
+// Because a mutual moves last_contacted and recomputes contact_by forward, it is
+// mutually exclusive with OverdueBy (which would come out not overdue) and with
+// NeverContacted (which claims no history at all), and because a mutual is a
+// REPLY it is mutually exclusive with AwaitingReply.
 func MutualMeeting(a Amount) ContactProp {
 	return func(p *contactPlan) {
 		amount := a
@@ -570,6 +581,17 @@ func (p *contactPlan) validate() error {
 	if p.outreach != nil || p.mutualMeeting != nil {
 		if !p.hasEmail() {
 			return fmt.Errorf("contact %q: Outreach and MutualMeeting lower to a replayed EMAIL-addressed source payload, so the contact must carry an email method", p.name)
+		}
+		// NeverContacted is a claim by OMISSION — no interaction history at all,
+		// which is what keeps last_contacted null — so it cannot coexist with a prop
+		// that replays one. OverdueBy and History are rejected in their own blocks;
+		// these two are the rest of the set.
+		if p.neverContacted {
+			prop, records := "Outreach", "an OUTBOUND email interaction"
+			if p.mutualMeeting != nil {
+				prop, records = "MutualMeeting", "a MUTUAL calendar interaction, which also sets last_contacted"
+			}
+			return fmt.Errorf("contact %q: NeverContacted and %s are mutually exclusive — %s replays %s, so the two state opposite things about the same timeline", p.name, prop, prop, records)
 		}
 	}
 	if p.awaitingReply {
