@@ -128,7 +128,8 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     const contactGate = new Promise<void>(resolve => {
       releaseContact = resolve
     })
-    let noteCompleted = false
+    let noteCompletedAt = 0
+    let contactResumedAt = 0
 
     // Held: the contact detail. Its glob has no trailing wildcard, so it cannot
     // also match the /notes or /tasks paths.
@@ -143,6 +144,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
       if (route.request().method() !== 'GET') return route.continue()
       await contactGate
       await new Promise(resolve => setTimeout(resolve, contactHoldAfterNoteMs))
+      contactResumedAt = Date.now()
       return route.continue()
     })
     // The releaser: fetch the real note response, mark it done, then let the
@@ -150,7 +152,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.route(`**/api/v1/contacts/${contactId}/notes`, async route => {
       if (route.request().method() !== 'GET') return route.continue()
       const response = await route.fetch()
-      noteCompleted = true
+      noteCompletedAt = Date.now()
       releaseContact()
       return route.fulfill({ response })
     })
@@ -159,9 +161,11 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
     await expect(notesRow(page)).toContainText('First paragraph')
 
-    // The ordering actually held — otherwise this test would be asserting the
-    // same thing the previous one does, under a different name.
-    expect(noteCompleted).toBe(true)
+    // The forced ordering actually held, quantitatively. Without this the test
+    // degrades silently: delete the hold above and it still passes, while quietly
+    // becoming a copy of its neighbour that the buggy implementation survives.
+    expect(noteCompletedAt).toBeGreaterThan(0)
+    expect(contactResumedAt - noteCompletedAt).toBeGreaterThanOrEqual(contactHoldAfterNoteMs)
 
     // The claim: the expand control is present even though the note won the race.
     await expect(notesRow(page).getByRole('button', { name: 'Show more' })).toBeVisible()
