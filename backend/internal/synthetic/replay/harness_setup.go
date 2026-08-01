@@ -404,42 +404,70 @@ func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportR
 	candidate := namespace
 	for attempt := 0; attempt < bandResaltAttempts; attempt++ {
 		gen := factory.NewGeneratorAt(seed, candidate, anchor)
-		peerOccupied, err := support.CountTelegramMessagesInPeerBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
+		free, err := BandsFree(ctx, support, gen)
 		if err != nil {
-			return nil, "", fmt.Errorf("peer-band collision check: %w", err)
+			return nil, "", err
 		}
-		// Group chat ids are drawn from the SAME peer band; telegram_chat_config
-		// keys on telegram_chat_id with no namespace column, so a leftover config
-		// row in this band (e.g. from a crashed prior run whose cleanup never ran)
-		// must also trigger a re-salt.
-		chatConfigOccupied, err := support.CountTelegramChatConfigInChatIdBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
-		if err != nil {
-			return nil, "", fmt.Errorf("chat-config band collision check: %w", err)
-		}
-		// Telegram discovery/stranded replays create external_contact +
-		// external_identity rows keyed by a bare peer-id source_id in this band. A
-		// crashed prior run can leave them with no telegram_message row, so the
-		// telegram_message check above would miss them — check them too.
-		barePeerOccupied, err := support.CountTelegramBarePeerRowsInBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
-		if err != nil {
-			return nil, "", fmt.Errorf("bare-peer band collision check: %w", err)
-		}
-		phonePrefix := gen.SyntheticPhonePrefix()
-		methodPhones, err := support.CountContactMethodsByValueNormalizedPrefix(ctx, phonePrefix)
-		if err != nil {
-			return nil, "", fmt.Errorf("phone-band collision check (contact_method): %w", err)
-		}
-		identityPhones, err := support.CountExternalIdentitiesByIdentifierPrefix(ctx, phonePrefix)
-		if err != nil {
-			return nil, "", fmt.Errorf("phone-band collision check (external_identity): %w", err)
-		}
-		if peerOccupied == 0 && chatConfigOccupied == 0 && barePeerOccupied == 0 && methodPhones == 0 && identityPhones == 0 {
+		if free {
 			return gen, candidate, nil
 		}
 		// Collision in either band: re-salt and retry.
 		candidate = fmt.Sprintf("%s-s%d", namespace, attempt+1)
 	}
 	return nil, "", fmt.Errorf("synthetic: could not find free numeric bands for namespace %q after %d re-salts", namespace, bandResaltAttempts)
+}
+
+// BandsFree reports whether every numeric band this generator would draw from is
+// unoccupied. It is THE definition of band occupancy for the whole toolkit:
+// setup-time re-salting asks it, and so does the declared runner's revalidation
+// after the re-salt lock swap. Those two once kept hand-maintained copies of the
+// same list and drifted apart by one predicate, so they share this function now —
+// a band that only one of them can see is a collision nothing detects.
+//
+// Every band here is matched DB-WIDE with no namespace scoping, which is why
+// occupancy has to be checked at all rather than assumed from the namespace.
+func BandsFree(ctx context.Context, support *repository.SyntheticSupportRepository, gen *factory.Generator) (bool, error) {
+	peerOccupied, err := support.CountTelegramMessagesInPeerBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
+	if err != nil {
+		return false, fmt.Errorf("peer-band collision check: %w", err)
+	}
+	// Group chat ids are drawn from the SAME peer band; telegram_chat_config
+	// keys on telegram_chat_id with no namespace column, so a leftover config
+	// row in this band (e.g. from a crashed prior run whose cleanup never ran)
+	// must also trigger a re-salt.
+	chatConfigOccupied, err := support.CountTelegramChatConfigInChatIdBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
+	if err != nil {
+		return false, fmt.Errorf("chat-config band collision check: %w", err)
+	}
+	// Telegram discovery/stranded replays create external_contact +
+	// external_identity rows keyed by a bare peer-id source_id in this band. A
+	// crashed prior run can leave them with no telegram_message row, so the
+	// telegram_message check above would miss them — check them too.
+	barePeerOccupied, err := support.CountTelegramBarePeerRowsInBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
+	if err != nil {
+		return false, fmt.Errorf("bare-peer band collision check: %w", err)
+	}
+	phonePrefix := gen.SyntheticPhonePrefix()
+	methodPhones, err := support.CountContactMethodsByValueNormalizedPrefix(ctx, phonePrefix)
+	if err != nil {
+		return false, fmt.Errorf("phone-band collision check (contact_method): %w", err)
+	}
+	identityPhones, err := support.CountExternalIdentitiesByIdentifierPrefix(ctx, phonePrefix)
+	if err != nil {
+		return false, fmt.Errorf("phone-band collision check (external_identity): %w", err)
+	}
+	// A declared import candidate is not a contact and its direct-upsert
+	// writer creates no identity, so its phones live ONLY in the
+	// external_contact JSON — invisible to both checks above. The import
+	// matcher still scores them against contact_method rows DB-wide, so a
+	// later namespace that reused this area code would suggest a foreign
+	// contact for this namespace's candidate.
+	candidatePhones, err := support.CountExternalContactPhonesInBand(ctx, phonePrefix)
+	if err != nil {
+		return false, fmt.Errorf("phone-band collision check (external_contact phones): %w", err)
+	}
+	return peerOccupied == 0 && chatConfigOccupied == 0 && barePeerOccupied == 0 &&
+		methodPhones == 0 && identityPhones == 0 && candidatePhones == 0, nil
 }
 
 // syntheticQueuePrefix names every queue a replay harness owns. Cleanup and the

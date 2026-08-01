@@ -2,6 +2,13 @@ import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import { findCandidateByName } from './helpers/imports-helpers'
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+const API_HEADERS = {
+  'X-API-Key': API_KEY,
+  'Content-Type': 'application/json',
+}
+
 test.describe('Imports Page @area:imports', () => {
   let testApi: TestAPI
 
@@ -14,47 +21,59 @@ test.describe('Imports Page @area:imports', () => {
   })
 
   // spec: IMP-026.people-tab-default-holds
-  test('renders candidates confidence-ranked on the People tab', async ({ page }) => {
-    // Two CRM contacts; the high external matches one on name AND email
-    // (high confidence), the med external matches the other on name only
-    // (lower confidence). Both render as suggested candidates and the
-    // higher-confidence one must appear first among this worker's rows.
-    const highEmail = `order-ui-high-${testApi.prefix}@example.invalid`
-    await testApi.seedContacts([
-      { full_name: 'Order Ui High', methods: [{ type: 'email', value: highEmail }] },
-      { full_name: 'Order Ui Med' },
-    ])
-    await testApi.seedExternalContacts([
-      // Seeded low-confidence first so a seed-order artifact cannot pass.
-      {
-        display_name: 'Order Ui Med',
-        source: 'gcal_attendee',
-        emails: [`order-ui-med-${testApi.prefix}@example.invalid`],
-      },
-      {
-        display_name: 'Order Ui High',
-        source: 'gcal_attendee',
-        emails: [highEmail],
-      },
-    ])
-    const highName = `${testApi.prefix}-Order Ui High`
-    const medName = `${testApi.prefix}-Order Ui Med`
+  test('renders candidates confidence-ranked on the People tab', async ({ page, request }) => {
+    // IMP-029's declared fixture: two CRM contacts, where one candidate matches
+    // its contact on name AND email (high confidence) and the other matches on
+    // name only (lower confidence). The declaration lists the low-confidence
+    // candidate FIRST — entity order is seed order — so a seed-order artifact
+    // cannot pass this.
+    const seeded = await testApi.seedBehavior('IMP-029')
+    const highName = seeded.entities['matching'].name
+    const medName = seeded.entities['name-collide'].name
 
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    // Scope the list to the Calendar source to keep the page small, then
-    // find both of our rows.
-    await page.getByRole('button', { name: 'Calendar', exact: true }).click()
-    await findCandidateByName(page, highName)
-    await expect(page.getByRole('heading', { name: medName })).toBeVisible({ timeout: 10000 })
+    // Scope the list to the ranked pair's own source. Google Contacts rather than
+    // Calendar: an unmatched Calendar candidate cannot hold a contact's email (the
+    // sync matches it, and the calendar rematch handler flips any stored row), so
+    // the high-confidence half of this ladder is only producible on the address
+    // book.
+    await page.getByRole('button', { name: 'Google Contacts', exact: true }).click()
 
-    // Relative render order among OUR rows: higher confidence first.
-    const headings = await page.getByRole('heading', { level: 3 }).allTextContents()
-    const highIdx = headings.findIndex(t => t.includes(highName))
-    const medIdx = headings.findIndex(t => t.includes(medName))
-    expect(highIdx).toBeGreaterThanOrEqual(0)
-    expect(medIdx).toBeGreaterThanOrEqual(0)
+    // Both rows really do render on the People tab. findCandidateByName paginates,
+    // so neither anchor assumes the two are on the same page.
+    await findCandidateByName(page, highName)
+    await findCandidateByName(page, medName)
+
+    // The ORDER is compared over the whole ranked list rather than over one
+    // rendered page. Google Contacts is the busiest source in the shared E2E
+    // database, so sibling workers' high-confidence rows can sit between ours and
+    // push one of them onto a later page — which would fail a page-local
+    // comparison while the global ranking was perfectly correct.
+    const rankedRes = await request.get(
+      `${API_BASE_URL}/api/v1/imports/suggestions?source=gcontacts&limit=1000`,
+      { headers: API_HEADERS }
+    )
+    expect(rankedRes.ok()).toBe(true)
+    const ranked: Array<{ kind: string; candidate?: { display_name?: string } }> =
+      (await rankedRes.json())?.data ?? []
+    const rankedNames = ranked
+      .filter(item => item.kind === 'contact')
+      .map(item => item.candidate?.display_name ?? '')
+    const highIdx = rankedNames.indexOf(highName)
+    const medIdx = rankedNames.indexOf(medName)
+
+    // Both must have been FOUND before their positions mean anything — an empty
+    // or truncated list would otherwise satisfy the comparison below vacuously.
+    expect(
+      highIdx,
+      'the high-confidence candidate must appear in the ranked list'
+    ).toBeGreaterThanOrEqual(0)
+    expect(
+      medIdx,
+      'the medium-confidence candidate must appear in the ranked list'
+    ).toBeGreaterThanOrEqual(0)
     expect(highIdx).toBeLessThan(medIdx)
   })
 

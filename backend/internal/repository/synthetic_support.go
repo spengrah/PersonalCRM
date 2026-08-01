@@ -230,10 +230,66 @@ func (r *SyntheticSupportRepository) DeleteExternalIdentitiesBySourceIDPrefix(ct
 	return r.queries.SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
+// DeleteIdentitiesForOwnedCandidates removes the external_identity rows a
+// post-import hook derived from a namespace's own import candidates, matched on
+// the (source, source_id) pair the hook copies off the candidate. It is the
+// stateless counterpart of DeleteTelegramExternalIdentitiesByPeerIds, for the
+// cross-request cleanup that has no tracked peer-id list — and the only route to
+// a telegram peer identity, whose decimal source_id and underscore-normalized
+// handle both escape the ns-prefix sweeps.
+func (r *SyntheticSupportRepository) DeleteIdentitiesForOwnedCandidates(ctx context.Context, ids []uuid.UUID) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteIdentitiesForOwnedCandidates(ctx, pgUUIDs(ids))
+}
+
 // DeleteExternalContactsBySourceIDPrefix removes external_contact rows whose
 // source_id is ns-prefixed (cleanup step 9). Reuses the existing query.
 func (r *SyntheticSupportRepository) DeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) (int64, error) {
 	return r.queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
+// SelectLinkedContactIDsByExternalContactIDs returns the CRM contacts the product
+// linked to a namespace's own import candidates — the third way cleanup recovers a
+// contact, beside the name prefix and the ownership record.
+//
+// The namespace is what makes the route safe to hard-delete behind: the query
+// refuses bare 'matched' links, contacts another namespace owns, and contacts
+// another namespace's own candidate links to. See the query for the full argument.
+func (r *SyntheticSupportRepository) SelectLinkedContactIDsByExternalContactIDs(ctx context.Context, ids []uuid.UUID, namespace string) ([]uuid.UUID, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := r.queries.SyntheticSelectLinkedContactIdsByExternalContactIds(ctx, db.SyntheticSelectLinkedContactIdsByExternalContactIdsParams{
+		ExternalContactIds: pgUUIDs(ids),
+		Namespace:          namespace,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
+// DeleteExternalContactsByIds removes external_contact rows by the namespace's
+// ownership records (cleanup step 9, unioned with the source_id-prefix sweep).
+func (r *SyntheticSupportRepository) DeleteExternalContactsByIds(ctx context.Context, ids []uuid.UUID) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteExternalContactsByIds(ctx, pgUUIDs(ids))
+}
+
+// DeleteTelegramCandidatesInPeerBand removes telegram import candidates whose bare
+// decimal peer-id source_id falls in a namespace's reserved band. It is the
+// recovery for a row whose ownership record never landed — the telegram writer
+// commits separately from that record — and the band is derivable from the
+// namespace alone, so cleanup reconstructs it statelessly.
+func (r *SyntheticSupportRepository) DeleteTelegramCandidatesInPeerBand(ctx context.Context, bandStart, bandEnd int64) (int64, error) {
+	return r.queries.SyntheticDeleteTelegramCandidatesInPeerBand(ctx, db.SyntheticDeleteTelegramCandidatesInPeerBandParams{
+		BandStart: bandStart,
+		BandEnd:   bandEnd,
+	})
 }
 
 // DeleteContactTasksByContactIds removes contact_task rows by contact (cleanup
@@ -301,6 +357,37 @@ func (r *SyntheticSupportRepository) DeleteMeetingNotesByHostID(ctx context.Cont
 	return r.queries.TestHardDeleteMeetingNotesByHostID(ctx, uuidToPgUUID(hostID))
 }
 
+// SelectLinkedContactIDsForHostSessionTitleCandidates returns the CRM contacts
+// the product created by resolving an anarlog_title candidate derived from one of
+// this namespace's meeting notes. It is the composition partner of
+// DeleteTitleCandidatesForHostSessions: that delete removes the only rows linking
+// back to these contacts, so this must be read first. Contacts another namespace
+// recorded ownership of are excluded — the resolve marks siblings by normalized
+// token DB-wide, so a shared token can point our rows at a live neighbour's
+// contact.
+func (r *SyntheticSupportRepository) SelectLinkedContactIDsForHostSessionTitleCandidates(
+	ctx context.Context,
+	hostname, namespace string,
+) ([]uuid.UUID, error) {
+	rows, err := r.queries.SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates(
+		ctx,
+		db.SyntheticSelectLinkedContactIdsForHostSessionTitleCandidatesParams{Hostname: hostname, Namespace: namespace},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
+// DeleteTitleCandidatesForHostSessions removes the anarlog_title candidates the
+// product derived from this namespace's meeting notes when a user resolved one.
+// Their SHA-256 source_id and bare-token display_name carry nothing
+// namespace-derived, so the session uuid is the only route to them — which means
+// this MUST run before the meeting notes it reads are deleted.
+func (r *SyntheticSupportRepository) DeleteTitleCandidatesForHostSessions(ctx context.Context, hostID uuid.UUID) (int64, error) {
+	return r.queries.SyntheticDeleteTitleCandidatesForHostSessions(ctx, uuidToPgUUID(hostID))
+}
+
 // DeleteMacHostByID removes the seeded revoked synthetic mac_host by id
 // (cleanup step 14).
 func (r *SyntheticSupportRepository) DeleteMacHostByID(ctx context.Context, id uuid.UUID) (int64, error) {
@@ -332,6 +419,15 @@ func (r *SyntheticSupportRepository) CountTelegramMessagesInPeerBand(ctx context
 // time phone-band collision detection (the synthetic phone-digit prefix).
 func (r *SyntheticSupportRepository) CountExternalIdentitiesByIdentifierPrefix(ctx context.Context, prefix string) (int64, error) {
 	return r.queries.SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+}
+
+// CountExternalContactPhonesInBand counts live external_contact rows holding a
+// phone in the given namespace's area-code band. Used by NewHarness for setup-
+// time phone-band collision detection: a declared import candidate keeps its
+// phones only in that JSON array, where neither the contact_method nor the
+// external_identity phone check can see them.
+func (r *SyntheticSupportRepository) CountExternalContactPhonesInBand(ctx context.Context, phonePrefix string) (int64, error) {
+	return r.queries.SyntheticCountExternalContactPhonesInBand(ctx, phonePrefix)
 }
 
 // CountTelegramChatConfigInChatIdBand counts telegram_chat_config rows whose
@@ -1070,9 +1166,18 @@ func (r *SyntheticSupportRepository) CountPendingJobsForNamespaceCleanup(ctx con
 // so a renamed seeded contact is invisible to every name-derived sweep. These
 // three wrap the durable, id-keyed ownership record that closes that hole.
 
-// EntityKindContact is the ownership record's kind for a seeded contact. It
-// grows with the declarable vocabulary.
-const EntityKindContact = "contact"
+// Ownership-record kinds. They grow with the declarable vocabulary.
+const (
+	// EntityKindContact is a seeded contact, whose recoverable token (full_name)
+	// the application lets a user rewrite.
+	EntityKindContact = "contact"
+	// EntityKindExternalContact is a seeded import candidate. Three of the seven
+	// declarable sources have a production source_id that carries no
+	// namespace-prefixed string at all — a decimal telegram peer id, a SHA-256
+	// (token ‖ session) digest — so for those the prefix sweep has nothing to match
+	// and this record is the ONLY way cleanup can find the row.
+	EntityKindExternalContact = "external_contact"
+)
 
 // RecordNamespaceEntity records that a namespace created an entity. Idempotent.
 func (r *SyntheticSupportRepository) RecordNamespaceEntity(ctx context.Context, namespace, kind string, entityID uuid.UUID) error {

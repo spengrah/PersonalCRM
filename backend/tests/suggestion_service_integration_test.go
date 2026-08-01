@@ -125,9 +125,15 @@ func TestSuggestions_List_SourceScopeExcludesNonAddressBook(t *testing.T) {
 	contact, err := env.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Tg Suggestion " + sfx})
 	require.NoError(t, err)
 	display := "Tg External " + sfx
+	// source_id prefix is deliberately NOT "tg-suggestion-": telegram_import_
+	// suggestion_test owns that space and clears it with a DB-WIDE
+	// `source_id LIKE 'tg-suggestion-%'` delete in its suite cleanup. Both tests
+	// are t.Parallel() on the shared database, so squatting there let that delete
+	// remove this row between the UpdateMatch and SetMethodSuggestions below —
+	// surfacing as `record not found` on a line that reads like setup.
 	external, err := env.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source:      "telegram",
-		SourceID:    "tg-suggestion-" + sfx,
+		SourceID:    "tg-sourcescope-" + sfx,
 		DisplayName: &display,
 		Emails:      []repository.EmailEntry{{Value: "tg-" + sfx + "@example.com"}},
 	})

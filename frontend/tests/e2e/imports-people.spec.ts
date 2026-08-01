@@ -16,13 +16,12 @@ test.describe('Imports People tab — Anarlog source @area:imports', () => {
 
   // spec: IMP-026.people-tab-default-holds
   test('filters to anarlog_humans candidates via the Anarlog pill', async ({ page }) => {
-    await testApi.seedExternalContacts([
-      {
-        display_name: 'Anarlog Person',
-        source: 'anarlog_humans',
-        emails: [`anarlog-${testApi.prefix}@example.invalid`],
-      },
-    ])
+    // The declared queue's anarlog_humans candidate goes through the mac-daemon
+    // ingest pipeline (the only writer for that source), which settles a River
+    // cascade — hence the wider budget.
+    test.setTimeout(60_000)
+    const seeded = await testApi.seedBehavior('IMP-026')
+    const anarlogName = seeded.entities['anarlog'].name
 
     const suggestionsResponse = page.waitForResponse(
       res =>
@@ -39,10 +38,9 @@ test.describe('Imports People tab — Anarlog source @area:imports', () => {
     await suggestionsResponse
     await expect(anarlogPill).toHaveAttribute('aria-pressed', 'true')
 
-    // The seeded candidate card is visible (display name is prefixed by the
-    // seed route).
-    await expect(page.getByText(`${testApi.prefix}-Anarlog Person`).first()).toBeVisible({
-      timeout: 10000,
-    })
+    // The seeded candidate card is visible under the Anarlog filter. Its name is
+    // read from the manifest — the ingest pipeline mints it, so re-deriving it
+    // here would assert against a string this test invented.
+    await expect(page.getByText(anarlogName).first()).toBeVisible({ timeout: 10000 })
   })
 })

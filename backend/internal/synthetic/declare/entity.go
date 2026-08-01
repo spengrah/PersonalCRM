@@ -49,19 +49,94 @@ const (
 )
 
 // Candidate sources a declaration may name. Stated LOCALLY, like the cadence
-// table, and deliberately restricted to the two shapes
-// Harness.SeedExternalContactCandidate can actually key: an id-keyed address
-// book and an email-keyed correspondence discoverer. A source outside this set
-// would either produce a row the sync path cannot produce or silently fall into
-// the address-book branch.
+// table. The set is bounded by what the lowering can write through the source's
+// OWN production writer, because a candidate written any other way is a row the
+// sync path cannot produce:
+//
+//	gcontacts, gmail_correspondence, gcal_attendee — ExternalContactRepository.Upsert,
+//	    the direct write the Google providers use (google/contacts.go,
+//	    google/gmail_correspondence.go, google/calendar.go). The ingest registry
+//	    does not admit these sources at all.
+//	icloud_contacts, anarlog_humans — the mac-daemon ingest pipeline, which is the
+//	    ONLY writer for them (service.externalContactAllowedSources admits exactly
+//	    these two and rejects every other source).
+//	telegram — UpsertTelegramDiscoveryCandidate, the dedicated merge-preserving
+//	    upsert PeerMatcher uses.
+//	anarlog_title — anarlog.DiscoveryWriter.UpsertTitleCandidateTx.
+//
+// The last two key their source_id on a decimal peer id and a SHA-256 digest, so
+// neither carries the namespace prefix cleanup's name-derived sweep looks for.
+// That is why every declared candidate also records namespace ownership by row id.
 const (
-	SourceGContacts      = "gcontacts"
-	SourceCorrespondence = "gmail_correspondence"
+	SourceGContacts        = "gcontacts"
+	SourceCorrespondence   = "gmail_correspondence"
+	SourceCalendarAttendee = "gcal_attendee"
+	SourceICloudContacts   = "icloud_contacts"
+	SourceAnarlogHumans    = "anarlog_humans"
+	SourceTelegram         = "telegram"
+	SourceAnarlogTitle     = "anarlog_title"
 )
 
 var candidateSources = map[string]bool{
-	SourceGContacts:      true,
-	SourceCorrespondence: true,
+	SourceGContacts:        true,
+	SourceCorrespondence:   true,
+	SourceCalendarAttendee: true,
+	SourceICloudContacts:   true,
+	SourceAnarlogHumans:    true,
+	SourceTelegram:         true,
+	SourceAnarlogTitle:     true,
+}
+
+// directUpsertSources are the sources whose production writer is the plain
+// ExternalContactRepository.Upsert, and therefore the only ones whose emails,
+// phones and display name a declaration can choose. The ingest sources mint their
+// own display name and email inside the factory payload, and the two dedicated
+// writers store no methods at all.
+var directUpsertSources = map[string]bool{
+	SourceGContacts:        true,
+	SourceCorrespondence:   true,
+	SourceCalendarAttendee: true,
+}
+
+// methodBearingSources are the direct-upsert sources whose row carries a
+// declarable EMAIL. gmail_correspondence is excluded: its single email IS its
+// source_id, so choosing it independently would not be a row the discoverer can
+// produce.
+var methodBearingSources = map[string]bool{
+	SourceGContacts:        true,
+	SourceCalendarAttendee: true,
+}
+
+// multiMethodSources are the sources whose production writer emits MORE than one
+// email, or any phone at all. Only the address-book provider does: it maps every
+// address and number off the Person record (google/contacts.go
+// convertPersonToRequest).
+//
+// gcal_attendee is deliberately absent even though it is method-bearing. The
+// calendar provider stores exactly ONE email — the attendee's, which is also the
+// row's source_id — and never writes a phone (google/calendar.go
+// storeUnmatchedAttendee). No ordering of writes produces a Calendar candidate with
+// a second address or a number, so declaring one would be a row the sync path
+// cannot reach.
+var multiMethodSources = map[string]bool{
+	SourceGContacts: true,
+}
+
+// rematchClaimedSources are the sources whose stored EMAIL a rematch handler keys
+// on, so an UNMATCHED row of that source can never hold an email a contact owns.
+// The calendar handler looks its rows up by source_id == the email just added to a
+// contact and marks them matched, explicitly so they leave the import queue
+// (google/calendar_rematch.go). That closes both write orders: a sync MATCHES such
+// an attendee instead of storing it, and a contact created after the row was stored
+// makes the handler claim it. Coupling a candidate's email to a contact is
+// therefore unproducible here, however the email got there.
+//
+// The address book is deliberately absent: no registered rematch handler reads
+// gcontacts rows, and its own matcher runs only during a sync of that record, so a
+// stored row whose email a later-created contact shares stays unmatched — the state
+// the resolver's already-present-method bucket exists to serve.
+var rematchClaimedSources = map[string]bool{
+	SourceCalendarAttendee: true,
 }
 
 // --- prop plumbing ----------------------------------------------------------
@@ -489,23 +564,41 @@ func nameEdgeVocabulary() []string {
 
 // externalCandidatePlan is the lowered form of an ExternalCandidate declaration.
 type externalCandidatePlan struct {
-	name       string
-	source     string
-	sameNameAs string
+	name            string
+	source          string
+	sameNameAs      string
+	sameEmailAs     string
+	emails          int
+	phones          int
+	telegramHandle  bool
+	noIdentity      bool
+	titleToken      string
+	messageCount    int
+	coOccurringWith string
 }
 
 func (p *externalCandidatePlan) handle() string { return p.name }
 func (p *externalCandidatePlan) kind() string   { return "external_contact" }
+
+// refs are the earlier contact handles this candidate reads. Every handle-bearing
+// prop appears here so the ONE earlier-and-is-a-contact check in
+// validateEntityOrder covers all of them.
 func (p *externalCandidatePlan) refs() []string {
-	if p.sameNameAs == "" {
-		return nil
+	var out []string
+	seen := map[string]bool{}
+	for _, ref := range []string{p.sameNameAs, p.sameEmailAs, p.coOccurringWith} {
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		out = append(out, ref)
 	}
-	return []string{p.sameNameAs}
+	return out
 }
 
 // ExternalCandidate declares one UNMATCHED import-queue candidate.
 //
-// match_status is deliberately NOT declarable: the write path hardcodes
+// match_status is deliberately NOT declarable: every write path hardcodes
 // 'unmatched' on insert, so a matched or linked candidate would be a row the
 // sync path cannot produce.
 func ExternalCandidate(handle string, props ...CandidatePropSource) Entity {
@@ -516,9 +609,65 @@ func ExternalCandidate(handle string, props ...CandidatePropSource) Entity {
 	return p
 }
 
-// Source names the import candidate's source.
+// Source names the import candidate's source. There is no default: which writer
+// produces the row, what its source_id looks like, and which fields it can carry
+// all follow from the source, so leaving it implicit would hide all three.
 func Source(name string) CandidateProp {
 	return func(p *externalCandidatePlan) { p.source = name }
+}
+
+// SameEmailAs gives this candidate the SAME primary email as an earlier CONTACT
+// handle. That email overlap is what raises a name collision to a high-confidence
+// suggested match, and it is what puts the shared method in the resolver modal's
+// already-present bucket rather than its to-add one.
+func SameEmailAs(contactHandle string) CandidateProp {
+	return func(p *externalCandidatePlan) { p.sameEmailAs = contactHandle }
+}
+
+// Emails declares how many email addresses the candidate carries (default one).
+// The addresses are generator-derived and unknown to every seeded contact unless
+// SameEmailAs overrides the first one.
+func Emails(n int) CandidateProp {
+	return func(p *externalCandidatePlan) { p.emails = n }
+}
+
+// Phones declares how many phone numbers the candidate carries (default none).
+func Phones(n int) CandidateProp {
+	return func(p *externalCandidatePlan) { p.phones = n }
+}
+
+// TelegramHandle gives a telegram candidate the '@handle' the matcher stores in
+// metadata.username — the value the card renders as a t.me chip, and the
+// last-resort display name for a peer with no name fields.
+func TelegramHandle() CandidateProp {
+	return func(p *externalCandidatePlan) { p.telegramHandle = true }
+}
+
+// NoIdentity declares a telegram peer with NO name fields at all. Combined with
+// TelegramHandle it is the handle-only peer whose heading falls back to the
+// handle; on its own it is the UNRESOLVED peer the Imports queue hides behind its
+// opt-in toggle. Fixture-by-omission: the state is defined by what the discovery
+// pass did NOT learn, so there is nothing to set.
+func NoIdentity() CandidateProp {
+	return func(p *externalCandidatePlan) { p.noIdentity = true }
+}
+
+// TitleToken declares an anarlog_title weak candidate for the named token group.
+// Two candidates sharing a group share the normalized token and get DISTINCT
+// session uuids, which is what makes them ONE grouped row whose evidence count is
+// the number of members.
+func TitleToken(group string) CandidateProp {
+	return func(p *externalCandidatePlan) { p.titleToken = group }
+}
+
+// CorrespondenceEvidence declares the co-occurrence evidence a
+// gmail_correspondence candidate's badge renders: the aggregated message count and
+// an EARLIER contact handle this address most often co-appeared with.
+func CorrespondenceEvidence(messageCount int, coOccurringContactHandle string) CandidateProp {
+	return func(p *externalCandidatePlan) {
+		p.messageCount = messageCount
+		p.coOccurringWith = coOccurringContactHandle
+	}
 }
 
 func (p *externalCandidatePlan) validate() error {
@@ -529,7 +678,135 @@ func (p *externalCandidatePlan) validate() error {
 		return fmt.Errorf("external candidate %q: unknown source %q (valid: %s)",
 			p.name, p.source, strings.Join(sortedCandidateSources(), ", "))
 	}
+	if p.sameNameAs != "" && !directUpsertSources[p.source] {
+		return fmt.Errorf("external candidate %q: SameNameAs needs a direct-upsert source (%s) — the ingest payload and the telegram/title writers mint their own display name",
+			p.name, strings.Join(sortedKeys(directUpsertSources), ", "))
+	}
+	if p.emails < 0 || p.phones < 0 {
+		return fmt.Errorf("external candidate %q: Emails/Phones cannot be negative", p.name)
+	}
+	if (p.emails > 0 || p.phones > 0 || p.sameEmailAs != "") && !methodBearingSources[p.source] {
+		return fmt.Errorf("external candidate %q: a declared method set needs source %s — gmail_correspondence keys its source_id on its single address, and the ingest and discovery writers do not take one",
+			p.name, strings.Join(sortedKeys(methodBearingSources), ", "))
+	}
+	// The coupling, not just the COUNT. SameEmailAs sets no count at all, so it
+	// slips past the shape check below while putting a contact's own address on the
+	// row — which for a rematch-claimed source is the one email value that cannot
+	// coexist with an unmatched status.
+	if p.sameEmailAs != "" && rematchClaimedSources[p.source] {
+		return fmt.Errorf("external candidate %q: source %q cannot hold an email a contact owns — its rematch handler claims such a row the moment the contact gains that address, and a sync matches the attendee rather than storing it, so an unmatched row with SameEmailAs(%q) is unreachable in either write order (a generated single email is fine; %s is the source that keeps an unmatched row on a shared address)",
+			p.name, p.source, p.sameEmailAs, strings.Join(sortedKeys(multiMethodSources), ", "))
+	}
+	// The per-source method SHAPE, not just whether methods are declarable at all.
+	// The calendar provider writes exactly one email and no phone on every write, so
+	// a wider Calendar candidate is unproducible in any order.
+	if !multiMethodSources[p.source] {
+		if p.emails > 1 {
+			return fmt.Errorf("external candidate %q: source %q stores exactly ONE email (its source_id), so Emails(%d) is a row its writer cannot produce — %s is the source whose provider emits every address off the record",
+				p.name, p.source, p.emails, strings.Join(sortedKeys(multiMethodSources), ", "))
+		}
+		if p.phones > 0 {
+			return fmt.Errorf("external candidate %q: source %q never stores a phone, so Phones(%d) is a row its writer cannot produce — %s is the source whose provider emits phone numbers",
+				p.name, p.source, p.phones, strings.Join(sortedKeys(multiMethodSources), ", "))
+		}
+	}
+	if p.telegramHandle && p.source != SourceTelegram {
+		return fmt.Errorf("external candidate %q: TelegramHandle requires Source(%q)", p.name, SourceTelegram)
+	}
+	if p.noIdentity {
+		if p.source != SourceTelegram {
+			return fmt.Errorf("external candidate %q: NoIdentity requires Source(%q) — every other writer stores a name", p.name, SourceTelegram)
+		}
+		if p.sameNameAs != "" {
+			return fmt.Errorf("external candidate %q: NoIdentity and SameNameAs are mutually exclusive — one omits every name field, the other pins one", p.name)
+		}
+	}
+	if (p.titleToken != "") != (p.source == SourceAnarlogTitle) {
+		return fmt.Errorf("external candidate %q: TitleToken and Source(%q) require each other — an anarlog_title row IS a session-title token",
+			p.name, SourceAnarlogTitle)
+	}
+	if p.messageCount != 0 || p.coOccurringWith != "" {
+		if p.source != SourceCorrespondence {
+			return fmt.Errorf("external candidate %q: CorrespondenceEvidence requires Source(%q)", p.name, SourceCorrespondence)
+		}
+		if p.messageCount < 1 || p.coOccurringWith == "" {
+			return fmt.Errorf("external candidate %q: CorrespondenceEvidence needs a positive message count AND a co-occurring contact handle", p.name)
+		}
+	}
 	return nil
+}
+
+// --- meeting notes ----------------------------------------------------------
+
+// meetingNotePlan is the lowered form of a MeetingNote declaration.
+type meetingNotePlan struct {
+	name string
+}
+
+func (p *meetingNotePlan) handle() string { return p.name }
+func (p *meetingNotePlan) kind() string   { return "meeting_note" }
+func (p *meetingNotePlan) refs() []string { return nil }
+func (p *meetingNotePlan) validate() error {
+	if strings.TrimSpace(p.name) == "" {
+		return fmt.Errorf("meeting note handle must be non-empty")
+	}
+	return nil
+}
+
+// MeetingNote declares one ORPHANED meeting note — a recorded session the linker
+// could not attach to any calendar event, which is the Imports Interactions tab's
+// needs-attention surface. Title and summary are generator-derived.
+//
+// It hangs off the namespace's own synthetic mac_host, which the harness already
+// seeds REVOKED — invisible to every host-listing route, so it neither contends
+// for the paired-host singleton index nor can be deleted by a spec that resets
+// hosts. The cleanup ladder already deletes meeting notes by that host id.
+//
+// Only the orphan state is declarable: a conflict row needs a well-formed
+// conflict_candidates snapshot referencing real events, which no toolkit producer
+// can build.
+func MeetingNote(handle string) Entity {
+	return &meetingNotePlan{name: handle}
+}
+
+// --- method suggestions -----------------------------------------------------
+
+// methodSuggestionPlan is the lowered form of a MethodSuggestion declaration.
+type methodSuggestionPlan struct {
+	name    string
+	contact string
+	source  string
+}
+
+func (p *methodSuggestionPlan) handle() string { return p.name }
+func (p *methodSuggestionPlan) kind() string   { return "method_suggestion" }
+func (p *methodSuggestionPlan) refs() []string { return []string{p.contact} }
+func (p *methodSuggestionPlan) validate() error {
+	if strings.TrimSpace(p.name) == "" {
+		return fmt.Errorf("method suggestion handle must be non-empty")
+	}
+	if strings.TrimSpace(p.contact) == "" {
+		return fmt.Errorf("method suggestion %q: a contact handle is required", p.name)
+	}
+	if p.source != SourceGContacts {
+		return fmt.Errorf("method suggestion %q: source must be %q — it is the only address-book source written by the direct upsert this lowering composes (icloud_contacts rows come from the ingest pipeline, which cannot produce a linked row carrying a pending suggestion)",
+			p.name, SourceGContacts)
+	}
+	return nil
+}
+
+// MethodSuggestion declares an address-book row already LINKED to an earlier
+// contact handle and carrying ONE pending method the contact does not have — the
+// state the address-book reconciler leaves behind, and the fixture behind the
+// method-suggestion card at the top of the Imports People tab.
+//
+// The pending method is a single generator-derived email because that is what both
+// consuming surfaces exercise; a dismissed set is deliberately absent rather than
+// declared-and-unread. The row rides the external_contact cleanup steps: the
+// suggestion columns are JSONB on the row itself, and external_contacts is swept
+// before contacts, which is the order its crm_contact_id FK needs.
+func MethodSuggestion(handle, contactHandle, source string) Entity {
+	return &methodSuggestionPlan{name: handle, contact: contactHandle, source: source}
 }
 
 // --- notes ------------------------------------------------------------------
@@ -625,9 +902,11 @@ func sortedMethodKinds() []string {
 	return out
 }
 
-func sortedCandidateSources() []string {
-	out := make([]string, 0, len(candidateSources))
-	for k := range candidateSources {
+func sortedCandidateSources() []string { return sortedKeys(candidateSources) }
+
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
 		out = append(out, k)
 	}
 	sort.Strings(out)
@@ -665,6 +944,15 @@ func validateEntityOrder(entities []Entity) error {
 			}
 			if target.kind() != "contact" {
 				return fmt.Errorf("entity %q references handle %q, which is a %s — only a contact can be referenced", e.handle(), ref, target.kind())
+			}
+			// SameEmailAs copies the referenced contact's PRIMARY email, so a
+			// contact that carries none would silently leave the candidate with its
+			// own generated address and no overlap at all — the opposite of the
+			// state the prop names.
+			if p, ok := e.(*externalCandidatePlan); ok && p.sameEmailAs == ref {
+				if contact, isContact := target.(*contactPlan); !isContact || !contact.hasEmail() {
+					return fmt.Errorf("external candidate %q: SameEmailAs(%q) needs a contact that carries an email method", e.handle(), ref)
+				}
 			}
 		}
 		if _, dup := seen[e.handle()]; dup {

@@ -1890,6 +1890,22 @@ type Querier interface {
 	// that no later cleanup can even name (the event ids are derived FROM the events).
 	// The ids must therefore be captured before the sweep and asserted against after.
 	SyntheticCountEventConsumerClaimsByEventIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
+	// Harness setup collision detection: count live external_contact rows holding a
+	// phone in this namespace's reserved area-code band. A declared import candidate
+	// stores its phones ONLY in this JSON array — it is not a CRM contact, so no
+	// contact_method row exists, and the direct-upsert sources write no identity
+	// either — so neither the contact_method nor the external_identity phone check
+	// can see it. Without this a later namespace hashing to the same area code would
+	// find the band free, mint the SAME number for a real contact_method, and the
+	// import matcher (service/import_matching.go buildMethodMaps + countMethodOverlap)
+	// would score that foreign contact as a method overlap for this namespace's
+	// candidate. Same reason the bare-peer check exists beside the telegram_message
+	// one: an external_contact-borne identifier the primary check cannot reach.
+	//
+	// Both sides are reduced to DIGITS before comparing: the prefix is the
+	// normalized form (+1<area>55501) while the JSON stores the provider-shaped
+	// value (+1-<area>-555-01NN), so a literal LIKE would never match.
+	SyntheticCountExternalContactPhonesInBand(ctx context.Context, phonePrefix string) (int64, error)
 	// Harness setup collision detection (D5): count external_identity rows whose
 	// normalized identifier shares the namespace's phone-digit prefix. Non-zero means
 	// another namespace already occupies this phone sub-block, so NewHarness re-salts.
@@ -2071,6 +2087,14 @@ type Querier interface {
 	// Cleanup step 3: events by tracked id (NOT by source — that would wipe
 	// other tests' rows sharing the source value on the shared DB).
 	SyntheticDeleteEventsByIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
+	// Cleanup step 9 (ownership): import candidates by the namespace's OWNERSHIP
+	// record, unioned with the source_id-prefix delete above rather than replacing
+	// it. Three of the declarable candidate sources have a production source_id that
+	// carries no namespace-prefixed string — telegram keys on a decimal peer id and
+	// anarlog_title on a SHA-256 (token || session) digest — so the prefix sweep has
+	// nothing to match for them and this is the only delete that reaches those rows.
+	// A hard DELETE, like every other cleanup step.
+	SyntheticDeleteExternalContactsByIds(ctx context.Context, externalContactIds []pgtype.UUID) (int64, error)
 	// Cleanup step 8: identities whose normalized identifier shares an ns-scoped
 	// prefix. MatchOrCreate for GCal attendee / external_contact email matching
 	// creates identities with source_id NULL keyed by the synthetic IDENTIFIER (e.g.
@@ -2087,6 +2111,21 @@ type Querier interface {
 	// Cleanup step 8 (backstop): catches any ns-prefixed source_id rows the
 	// identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.
 	SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error)
+	// Cleanup: the STATELESS variant of the delete above, for the cross-request path
+	// that has no tracked peer-id list. Importing or linking a telegram candidate
+	// makes the post-import hook write an external_identity keyed by
+	// (source='telegram', source_id = the candidate's own bare peer id), so the
+	// namespace's ownership records reach it through the candidate rows themselves.
+	// Neither ns-prefix identity sweep can: the source_id is a decimal peer id and
+	// the synthetic handle normalizes to 'synth_<ns>_<n>' (underscores). Leaving it
+	// would both orphan the row on a contact delete (ON DELETE SET NULL) and occupy
+	// this namespace's telegram peer band, forcing a later run to re-salt.
+	//
+	// Matched on the (source, source_id) PAIR rather than source_id alone, so it
+	// reaches any identity a post-import hook keys to the candidate it came from and
+	// nothing else. MUST run before the owned-candidate external_contact delete,
+	// which removes the rows this reads.
+	SyntheticDeleteIdentitiesForOwnedCandidates(ctx context.Context, externalContactIds []pgtype.UUID) (int64, error)
 	// Cleanup ladder: interactions by contact (hard delete — the ledger's by-id
 	// variant is unavailable cross-request). Soft-deleted rows included.
 	SyntheticDeleteInteractionsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
@@ -2126,6 +2165,24 @@ type Querier interface {
 	// namespace's private queue. Without it every declared seed would leave one
 	// permanent row behind on the shared database.
 	SyntheticDeleteRiverQueue(ctx context.Context, name string) (int64, error)
+	// Cleanup step 9 (band recovery): telegram candidates in this namespace's own
+	// reserved peer band, whether or not an ownership record survives for them.
+	//
+	// The telegram writer commits its row in its own transaction and the ownership
+	// record is written afterwards, in a second statement. A crash in that window
+	// leaves a row whose source_id is a bare decimal peer id — no namespace-derived
+	// string for the prefix sweep, no ownership record for the id sweep — and the
+	// occupancy check counts it, so the band it sits in is poisoned for every later
+	// run of this namespace. The band is the recovery key that window cannot lose:
+	// it is derived from the namespace hash alone (factory.Generator.PeerBandStart),
+	// so cleanup reconstructs it statelessly from the namespace token, and the same
+	// derivation is what BandsFree calls occupancy. No deleted_at filter — a
+	// tombstoned row occupies the source key just as well.
+	//
+	// The cast is wrapped in a CASE for the reason the occupancy counter documents:
+	// PostgreSQL may reorder a bare `source_id ~ '...' AND source_id::bigint >= ...`
+	// and run the cast on one of the text telegram source_ids other tests create.
+	SyntheticDeleteTelegramCandidatesInPeerBand(ctx context.Context, arg SyntheticDeleteTelegramCandidatesInPeerBandParams) (int64, error)
 	// Cleanup: delete the group telegram_chat_config rows a group replay created, by
 	// the exact tracked chat ids (telegram_chat_config has no namespace column —
 	// keyed only by telegram_chat_id).
@@ -2143,6 +2200,19 @@ type Querier interface {
 	// tracked peer ids before the contact delete (external_identity survives contact
 	// delete via ON DELETE SET NULL and would otherwise pollute future matching).
 	SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error)
+	// Cleanup: the anarlog_title candidates the PRODUCT derives from a namespace's own
+	// meeting notes. Resolving an orphan session ("Log as impromptu") upserts one weak
+	// candidate per unmatched title token, keyed by (session_uuid, token) with the
+	// writer's SHA-256 source_id and a display_name that is the bare token — so the
+	// row carries NO namespace-derived string at all, the harness never saw its id,
+	// and no ownership record exists. metadata.session_uuid is the only link back, and
+	// it points at a meeting_note this namespace's host owns.
+	//
+	// Left behind, the row is permanent: nothing can ever find it again, and the
+	// discovery surface groups anarlog_title rows by normalized token DB-WIDE, so it
+	// keeps inflating that token's group for every later run. Runs BEFORE the
+	// meeting_note delete, which removes the rows this reads.
+	SyntheticDeleteTitleCandidatesForHostSessions(ctx context.Context, macHostID pgtype.UUID) (int64, error)
 	// Cleanup ladder: drops the namespace's own ORPHANED River jobs.
 	//
 	// A harness client fetches only its own private queue, so a job left in that
@@ -2200,6 +2270,74 @@ type Querier interface {
 	// Caller passes a BARE prefix; '%' is appended here. The namespace charset
 	// excludes the LIKE metacharacters, so the prefix can never over-match.
 	SyntheticSelectContactIdsByFullNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]pgtype.UUID, error)
+	// Cleanup id-set: the CRM contacts the product linked to this namespace's own
+	// import candidates. It is a third recovery route for contacts, unioned with the
+	// name prefix and the ownership records rather than replacing either.
+	//
+	// It exists because resolving a candidate CREATES a contact whose name the
+	// product derives from the candidate, not from the namespace: an anarlog_title
+	// import takes the writer's title-cased token ('Synth-<ns>-…') and a handle-only
+	// telegram import takes the '@handle' — and LIKE is case-sensitive, so neither
+	// matches the lower-case 'synth-<ns>-' prefix. The harness never saw those
+	// contacts, so no ownership record exists either. crm_contact_id is the FK the
+	// product itself writes, which is what makes them findable at all.
+	//
+	// The harvested contact is HARD-DELETED, so the three exclusions are the route's
+	// whole safety argument. Each answers a different part of "is this contact ours to
+	// destroy?", exactly rather than heuristically.
+	//
+	//   match_status: a 'matched' link is a BARE link to a contact that already
+	//   existed — every writer of that status resolves an existing contact through a
+	//   matcher (telegram peer matcher, calendar rematch, gcontacts sync match,
+	//   ingest's email/phone auto-match) and none of them creates a row. 'imported' is
+	//   NOT the complement, because the link endpoint stamps it on any CURATED link
+	//   too (method selections, conflict resolutions, a cadence, a name override), so
+	//   it cannot stand in for "created from this candidate". The exact direction is
+	//   the other one: 'matched' never accompanies a creation.
+	//
+	//   contact ownership: a contact ANOTHER namespace recorded ownership of is that
+	//   world's seeded row and that world's to delete. Same predicate as the
+	//   host-session route below, for the same reason.
+	//
+	//   candidate ownership: a contact another namespace's OWN candidate links to is
+	//   that world's import-CREATED contact — this route's own class, seen from the
+	//   other side. The product created it, so no contact ownership record exists and
+	//   the exclusion above cannot see it; the neighbour's candidate IS
+	//   ownership-recorded and carries the crm_contact_id, so this one can.
+	//
+	// Cross-namespace stamping is not hypothetical: the anarlog_title resolve marks
+	// siblings by normalized token DB-WIDE, so one world's resolve can write its own
+	// contact id onto a candidate THIS namespace owns.
+	SyntheticSelectLinkedContactIdsByExternalContactIds(ctx context.Context, arg SyntheticSelectLinkedContactIdsByExternalContactIdsParams) ([]pgtype.UUID, error)
+	// Cleanup id-set: the CRM contacts the product created by resolving an
+	// anarlog_title candidate that was itself DERIVED from one of this namespace's
+	// meeting notes. A FOURTH contact-recovery route, and the composition partner of
+	// the delete below: that delete removes the only rows carrying crm_contact_id for
+	// these contacts, so the link has to be harvested before it runs. The contact
+	// takes the writer's title-cased token as its name ('Session'), which carries no
+	// namespace token at all, and the harness never saw it, so neither the name
+	// prefix nor an ownership record reaches it.
+	//
+	// The NOT EXISTS is load-bearing, not defensive. The resolve marks siblings by
+	// NORMALIZED TOKEN with no namespace or session scoping
+	// (MarkAnarlogTitleSiblingsImportedByToken / ...MatchedByToken), and a
+	// title-derived token routinely IS namespace-agnostic, so one resolve can stamp
+	// its contact id onto several namespaces' rows. Harvesting blindly would let this
+	// namespace delete a contact a LIVE neighbouring world owns. A contact another
+	// namespace recorded ownership of is that world's to delete; anything else is
+	// product-derived and belongs to whichever world reclaims it first.
+	//
+	// The match_status exclusion is the same predicate the owned-candidate route
+	// above carries, for the same reason and against the same stamping mechanism:
+	// MarkAnarlogTitleSiblingsMatchedByToken is the LINK arm of that resolve, so a
+	// 'matched' row here points at a contact that already existed and was merely
+	// linked — never one this route's delete created. The candidate-ownership
+	// exclusion the other route carries is deliberately NOT repeated: the rows this
+	// one reads are product-derived and carry no ownership record, and for a
+	// NEIGHBOUR's owned candidate to reach the same contact its declared token would
+	// have to collide with a meeting-note title token, which the namespace-hashed
+	// declared token makes unreachable.
+	SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates(ctx context.Context, arg SyntheticSelectLinkedContactIdsForHostSessionTitleCandidatesParams) ([]pgtype.UUID, error)
 	// Cleanup descendant guard: hostnames of any namespace nested UNDER this one
 	// ('synth-<ns>-%-host'). A namespace whose prefix sweep would cross into a live
 	// descendant refuses to clean rather than deleting across it. Note

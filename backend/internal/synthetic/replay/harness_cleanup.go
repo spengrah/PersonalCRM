@@ -225,6 +225,17 @@ func (h *Harness) cleanup(ctx context.Context) error {
 		_, err := h.support.DeleteTelegramExternalContactsByPeerIds(ctx, c.telegramPeerIDs)
 		return err
 	})
+	// external_contact rows the Seed* primitives created, by tracked id. The two
+	// deletes above cannot reach all of them: a telegram DISCOVERY candidate's peer
+	// id is only in the ledger when a MESSAGE replay tracked it, and an
+	// anarlog_title row's source_id is a SHA-256 digest with no prefix to match at
+	// all. This is the failure path of the declared seed, which reports the
+	// namespace CLEAN when it returns nil — so a row it could not find would make
+	// that report false.
+	step("external_contact_tracked", func() error {
+		_, err := h.support.DeleteExternalContactsByIds(ctx, c.externalContactIDs)
+		return err
+	})
 	// 10. contact_task (by contact, hard delete — no deleted_at), plus the
 	// Todoist-reconcile delta rows tracked by id (which may attach to
 	// cadence-bearing contacts this run did not seed).

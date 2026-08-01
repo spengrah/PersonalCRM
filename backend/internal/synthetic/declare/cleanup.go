@@ -269,8 +269,8 @@ func cleanNamespace(
 	return runLadder(ctx, database, gen, namespace, contactIDs, eventIDs)
 }
 
-// namespaceContactIDs is the UNION of the two ways a namespace's contacts can be
-// recovered, and it needs both.
+// namespaceContactIDs is the UNION of the three ways a namespace's contacts can be
+// recovered, and it needs all three.
 //
 // The name prefix reaches rows seeded before ownership was recorded, and rows
 // whose ownership record was lost. The ownership record reaches rows whose
@@ -280,6 +280,15 @@ func cleanNamespace(
 // by id is what keeps the contact, its methods, interactions, tasks, notes and
 // person node reachable; without it cleanup would skip all of them, delete the
 // namespace's discovery marker, and report "cleaned" over live rows.
+//
+// The third route reaches contacts the HARNESS NEVER SAW: resolving an import
+// candidate makes the product create a contact, and it derives that contact's name
+// from the candidate rather than from the namespace — an anarlog_title import
+// takes the discovery writer's title-cased token ('Synth-<ns>-…'), a handle-only
+// telegram import takes the '@handle'. LIKE is case-sensitive and neither shape
+// carries the lower-case prefix, and no ownership record exists because the
+// harness did not create the row. The candidate's own crm_contact_id is the only
+// link back, so cleanup follows it from the candidates the namespace owns.
 func namespaceContactIDs(
 	ctx context.Context,
 	support *repository.SyntheticSupportRepository,
@@ -293,10 +302,45 @@ func namespaceContactIDs(
 	if err != nil {
 		return nil, fmt.Errorf("select owned contacts: %w", err)
 	}
+	ownedCandidates, err := support.SelectNamespaceEntityIDs(ctx, namespace, repository.EntityKindExternalContact)
+	if err != nil {
+		return nil, fmt.Errorf("select owned import candidates: %w", err)
+	}
+	// The ladder HARD-DELETES what this route returns, so the same-world assumption
+	// it once rested on is ENFORCED IN THE PREDICATE rather than assumed from the
+	// fixtures — three exclusions, argued in full at the query.
+	//
+	// ACCEPTED RESIDUAL, recorded so a later reader does not read it as an
+	// oversight: a contact in NO namespace's records, created by neither this world
+	// nor any other world's candidate, linked to one of our candidates WITH curation
+	// (so the link reads 'imported', not 'matched'), is still harvested. Reaching it
+	// takes a fixture that links outside its own manifest and curates while doing so.
+	// A temporal cutoff would close it and was rejected: contact created_at comes
+	// from accelerated.GetCurrentTime while every namespace instant is DB now(), so
+	// the two clocks disagree under CRM_ENV=accelerated and the skew fails toward
+	// silent permanent leaks rather than loud over-deletion.
+	linked, err := support.SelectLinkedContactIDsByExternalContactIDs(ctx, ownedCandidates, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("select contacts linked from owned import candidates: %w", err)
+	}
+	// FOURTH route, and it exists because the third one cannot see these rows.
+	// An anarlog_title candidate the PRODUCT derived from one of this namespace's
+	// meeting notes carries no ownership record, so the sweep above never reads its
+	// crm_contact_id — while the ladder's session-uuid delete removes that row, the
+	// only thing linking the contact back. The contact's name is the writer's
+	// title-cased token, which carries no namespace token, so nothing else reaches
+	// it either. Harvest before the delete; the query itself refuses contacts
+	// another namespace owns, because the resolve marks siblings by normalized
+	// token with no namespace scoping.
+	// Same hostname the ladder's host lookup derives, from the same prefix.
+	fromSessions, err := support.SelectLinkedContactIDsForHostSessionTitleCandidates(ctx, prefix+"host", namespace)
+	if err != nil {
+		return nil, fmt.Errorf("select contacts linked from host-session title candidates: %w", err)
+	}
 
-	seen := make(map[uuid.UUID]bool, len(byName)+len(owned))
-	union := make([]uuid.UUID, 0, len(byName)+len(owned))
-	for _, ids := range [][]uuid.UUID{byName, owned} {
+	seen := make(map[uuid.UUID]bool, len(byName)+len(owned)+len(linked)+len(fromSessions))
+	union := make([]uuid.UUID, 0, len(byName)+len(owned)+len(linked)+len(fromSessions))
+	for _, ids := range [][]uuid.UUID{byName, owned, linked, fromSessions} {
 		for _, id := range ids {
 			if seen[id] {
 				continue
@@ -378,7 +422,15 @@ func namespaceEventIDs(
 // ROOT events for the entity kinds the vocabulary can currently declare. It
 // grows with the vocabulary: every declarable class owes a namespace-recoverable
 // cleanup step in the PR that makes it declarable.
-var declaredRootEventSources = []string{repository.InteractionSourceEmail}
+//
+// The two ingest sources are here because an external_contact.upserted replay
+// publishes a ROOT event that carries no CRM contact id, so the contact-scoped
+// query alone cannot see it and the event would leak.
+var declaredRootEventSources = []string{
+	repository.InteractionSourceEmail,
+	SourceICloudContacts,
+	SourceAnarlogHumans,
+}
 
 // runLadder executes the FK-ordered deletes in ONE transaction and returns
 // per-class counts.
@@ -454,6 +506,13 @@ func runLadder(
 	if err != nil {
 		return NamespaceCleanup{Status: StatusError, Err: fmt.Sprintf("select venue nodes: %v", err)}
 	}
+	// The namespace's OWNED import candidates. Read here, with every other
+	// derivation, because a read issued after a failed statement would return 25P02
+	// instead of an answer.
+	ownedCandidateIDs, err := support.SelectNamespaceEntityIDs(ctx, namespace, repository.EntityKindExternalContact)
+	if err != nil {
+		return NamespaceCleanup{Status: StatusError, Err: fmt.Sprintf("select owned import candidates: %v", err)}
+	}
 
 	step("event_consumer_claims", func() (int64, error) {
 		return support.DeleteEventConsumerClaimsByEventIds(ctx, eventIDs)
@@ -485,8 +544,40 @@ func runLadder(
 	step("external_identities", func() (int64, error) {
 		return support.DeleteExternalIdentitiesBySourceIDPrefix(ctx, prefix)
 	})
+	// Fourth sweep: the identities a POST-IMPORT HOOK derived from this
+	// namespace's own candidates. Importing or linking a telegram candidate makes
+	// the hook write an identity keyed by (source='telegram', source_id = the
+	// candidate's bare decimal peer id) with the handle as its identifier — and
+	// the synthetic handle normalizes to 'synth_<ns>_<n>' with underscores, so
+	// NEITHER the identifier sweep nor the source_id sweep above reaches it. It
+	// has to go, twice over: the contact delete below would orphan it via ON
+	// DELETE SET NULL, and while it survived it would occupy this namespace's
+	// telegram peer band and force a later run to re-salt. Runs BEFORE the
+	// owned-candidate external_contact delete, which removes the rows it reads.
+	step("external_identities", func() (int64, error) {
+		return support.DeleteIdentitiesForOwnedCandidates(ctx, ownedCandidateIDs)
+	})
+	// Two sweeps under one label, the shape external_identities already uses: the
+	// ns-prefixed source_ids, then the namespace's ownership records — which are
+	// the ONLY thing that reaches a telegram peer id or an anarlog_title digest,
+	// neither of which carries a prefix to match on.
 	step("external_contacts", func() (int64, error) {
 		return support.DeleteExternalContactsBySourceIDPrefix(ctx, prefix)
+	})
+	step("external_contacts", func() (int64, error) {
+		return support.DeleteExternalContactsByIds(ctx, ownedCandidateIDs)
+	})
+	// Third sweep under the same label, and the recovery for the ONE window the two
+	// above cannot cover. The telegram writer commits its candidate in its own
+	// transaction and the ownership record is a separate statement afterwards, so a
+	// crash in between leaves a row with a bare decimal peer-id source_id: nothing
+	// for the prefix sweep, no record for the id sweep. The peer BAND is the key
+	// that window cannot lose — derived from the namespace hash alone, so cleanup
+	// rebuilds it statelessly, and it is the same derivation replay.BandsFree calls
+	// occupancy, which is what would otherwise force every later run of this
+	// namespace to re-salt around the stranded row.
+	step("external_contacts", func() (int64, error) {
+		return support.DeleteTelegramCandidatesInPeerBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
 	})
 	step("contact_tasks", func() (int64, error) {
 		return support.DeleteContactTasksByContactIds(ctx, contactIDs)
@@ -536,6 +627,16 @@ func runLadder(
 		}
 	}
 	if hostExists {
+		// The anarlog_title candidates the PRODUCT derived from those notes.
+		// Resolving an orphan session upserts one per unmatched title token, with
+		// the writer's SHA-256 source_id and the bare token as its display_name —
+		// nothing namespace-derived, no ownership record, and the harness never saw
+		// the id. metadata.session_uuid is the only route back, so this runs before
+		// the notes that carry it are deleted. It rides the external_contacts label
+		// because that is the table it empties.
+		step("external_contacts", func() (int64, error) {
+			return support.DeleteTitleCandidatesForHostSessions(ctx, hostID)
+		})
 		// Meeting notes hang off the host by a SET NULL fk, so they go first.
 		step("meeting_notes", func() (int64, error) {
 			return 0, support.DeleteMeetingNotesByHostID(ctx, hostID)

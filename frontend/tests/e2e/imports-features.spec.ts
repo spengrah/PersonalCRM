@@ -1,5 +1,11 @@
 import { test, expect } from './fixtures'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import type { APIRequestContext } from '@playwright/test'
+import {
+  createTestAPI,
+  TestAPI,
+  declaredWorldNamePrefix,
+  type SeedBehaviorResult,
+} from './helpers/test-api'
 import {
   expectModalCandidate,
   findCandidateByName,
@@ -13,19 +19,32 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 }
 
+/**
+ * The '@handle' a declared telegram candidate actually carries, read back from
+ * the candidate endpoint. The generator owns the handle, so a test that rebuilt
+ * it from the namespace would be asserting against a string it invented.
+ */
+async function telegramHandleOf(request: APIRequestContext, candidateId: string): Promise<string> {
+  const res = await request.get(`${API_BASE_URL}/api/v1/imports/${candidateId}`, {
+    headers: API_HEADERS,
+  })
+  expect(res.ok()).toBe(true)
+  const handle: string = (await res.json())?.data?.metadata?.username
+  expect(handle, 'the declared telegram candidate must carry a handle').toBeTruthy()
+  return handle
+}
+
 test.describe('Imports Features @area:imports', () => {
   test.describe('Pagination', () => {
     let testApi: TestAPI
+    let seeded: SeedBehaviorResult
 
     test.beforeEach(async ({ request }, testInfo) => {
+      // IMP-026's queue is a pageful-and-one of candidates plus an
+      // ingest-pipeline one that settles a River cascade.
+      test.setTimeout(60_000)
       testApi = createTestAPI(request, testInfo)
-
-      // Seed enough candidates to force pagination (page size is 20)
-      const candidates = Array.from({ length: 21 }, (_, index) => ({
-        display_name: `Pagination Candidate ${index + 1}`,
-        emails: [`pagination-${index + 1}@example.com`],
-      }))
-      await testApi.seedExternalContacts(candidates)
+      seeded = await testApi.seedBehavior('IMP-026')
     })
 
     test.afterEach(async () => {
@@ -33,7 +52,24 @@ test.describe('Imports Features @area:imports', () => {
     })
 
     // spec: IMP-026.people-tab-default-holds
-    test('paginates the candidate list', async ({ page }) => {
+    test('paginates the candidate list', async ({ page, request }) => {
+      // Positive, namespace-scoped anchor FIRST. The page-2 assertion below is
+      // one-sided and unscoped, so on its own another worker's rows satisfy it
+      // even if this fixture produced nothing at all. The expected id set comes
+      // from the manifest (the declaration numbers its queue handles p01..pNN),
+      // so nothing here restates a count.
+      const declaredQueueIDs = Object.entries(seeded.entities)
+        .filter(([handle]) => /^p\d\d$/.test(handle))
+        .map(([, entity]) => entity.id)
+      expect(declaredQueueIDs.length).toBeGreaterThan(20)
+      const queueRes = await request.get(`${API_BASE_URL}/api/v1/imports/candidates?limit=10000`, {
+        headers: API_HEADERS,
+      })
+      expect(queueRes.ok()).toBe(true)
+      const queued: Array<{ id: string }> = (await queueRes.json())?.data ?? []
+      const queuedIDs = new Set(queued.map(c => c.id))
+      expect(declaredQueueIDs.filter(id => !queuedIDs.has(id))).toEqual([])
+
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
 
@@ -43,7 +79,8 @@ test.describe('Imports Features @area:imports', () => {
       await expect(nextButton).toBeVisible()
 
       // Clicking Next refetches the suggestions feed with the page-2 param
-      // and the second page is non-empty (21 seeded > one page of 20).
+      // and the second page is non-empty (the declared queue alone exceeds
+      // one page of 20).
       const page2Response = page.waitForResponse(
         res =>
           res.request().method() === 'GET' &&
@@ -62,8 +99,8 @@ test.describe('Imports Features @area:imports', () => {
   })
 
   test.describe('Suggested Matches', () => {
-    // These tests verify the suggested-match affordance with deterministic
-    // seeded data.
+    // These tests verify the suggested-match affordance against IMP-029's
+    // declared confidence ladder.
 
     let testApi: TestAPI
 
@@ -77,22 +114,18 @@ test.describe('Imports Features @area:imports', () => {
 
     // spec: IMP-029.without-suggestion-link-action
     test('should show "Link (select)" when no suggested match', async ({ page }) => {
-      // Seed an external contact with a unique name that won't match any CRM contact
-      await testApi.seedExternalContacts([
-        {
-          display_name: 'Unique Nomatch Person',
-          emails: ['unique-nomatch@example.com'],
-        },
-      ])
+      // IMP-029's unmatched address-book candidate: its generated name and email
+      // are unrelated to every contact in the world, so nothing reaches the
+      // suggestion confidence threshold.
+      const seeded = await testApi.seedBehavior('IMP-029')
+      const displayName = seeded.entities['unmatched-gc'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Find our seeded candidate (may need to paginate)
-      const displayName = `${testApi.prefix}-Unique Nomatch Person`
       await findCandidateByName(page, displayName)
 
-      // The seeded candidate should show "Link (select)" since there's no matching CRM contact
+      // The candidate shows "Link (select)" since no CRM contact matches it.
       const candidateCard = candidateCardByName(page, displayName)
       await expect(candidateCard.getByRole('button', { name: 'Link (select)' })).toBeVisible()
     })
@@ -101,30 +134,14 @@ test.describe('Imports Features @area:imports', () => {
     test('should show suggested match with confidence percentage when present', async ({
       page,
     }) => {
-      // First seed a CRM contact
-      await testApi.seedOverdueContacts([
-        {
-          full_name: 'Matching Contact Person',
-          email: 'matching-contact@example.com',
-          cadence: 'monthly',
-          days_overdue: 1,
-        },
-      ])
-
-      // Then seed an external contact with the SAME name and email
-      // This will trigger the fuzzy matching algorithm to find a suggested match
-      await testApi.seedExternalContacts([
-        {
-          display_name: 'Matching Contact Person',
-          emails: ['matching-contact@example.com'],
-        },
-      ])
+      // IMP-029's high-confidence pair: the candidate shares the contact's name
+      // AND its primary email, which is what the fuzzy matcher scores highest.
+      const seeded = await testApi.seedBehavior('IMP-029')
+      const displayName = seeded.entities['matching'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Find our seeded candidate (may need to paginate)
-      const displayName = `${testApi.prefix}-Matching Contact Person`
       await findCandidateByName(page, displayName)
 
       // The link action names the suggested contact with its confidence
@@ -138,28 +155,14 @@ test.describe('Imports Features @area:imports', () => {
 
     // spec: IMP-028.suggested-match-when-present
     test('should pre-select suggested contact in link modal', async ({ page }) => {
-      // Seed matching CRM contact and external contact
-      await testApi.seedOverdueContacts([
-        {
-          full_name: 'Preselect Test Contact',
-          email: 'preselect-test@example.com',
-          cadence: 'monthly',
-          days_overdue: 1,
-        },
-      ])
-
-      await testApi.seedExternalContacts([
-        {
-          display_name: 'Preselect Test Contact',
-          emails: ['preselect-test@example.com'],
-        },
-      ])
+      // Rides IMP-029's high-confidence pair (IMP-028's own declaration is the
+      // two-row pager queue, which carries no suggested match at all).
+      const seeded = await testApi.seedBehavior('IMP-029')
+      const displayName = seeded.entities['matching'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('networkidle')
 
-      // Find our seeded candidate (may need to paginate)
-      const displayName = `${testApi.prefix}-Preselect Test Contact`
       await findCandidateByName(page, displayName)
 
       // Click the Link button (which should show "Link to [Name] (XX%)")
@@ -193,27 +196,20 @@ test.describe('Imports Features @area:imports', () => {
     })
 
     // spec: IMP-036.username-appears-chip-deep
-    test('shows @username chip on Telegram candidate card', async ({ page }) => {
-      // Use a prefix-scoped handle so parallel test runs don't collide on the
-      // link selector and so we can scope assertions to our card.
-      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
-      const telegramPath = handle.replace(/^@/, '')
-
-      await testApi.seedExternalContacts([
-        {
-          source: 'telegram',
-          display_name: 'Dale Dobeck',
-          metadata: { username: handle },
-        },
-      ])
+    test('shows @username chip on Telegram candidate card', async ({ page, request }) => {
+      const seeded = await testApi.seedBehavior('IMP-036')
+      const displayName = seeded.entities['named'].name
+      const handle = await telegramHandleOf(request, seeded.entities['named'].id)
+      // The chip's href is built the same way the component builds it, so the
+      // assertion cannot pass on a differently-escaped path.
+      const telegramPath = encodeURIComponent(handle.replace(/^@/, ''))
 
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
 
-      // Filter to Telegram so only our seeded card is visible even on a busy DB.
+      // Filter to Telegram so only telegram cards are visible even on a busy DB.
       await page.getByRole('button', { name: 'Telegram', exact: true }).click()
 
-      const displayName = `${testApi.prefix}-Dale Dobeck`
       await findCandidateByName(page, displayName)
 
       // Heading shows the display_name; chip shows the handle and links to t.me
@@ -224,16 +220,15 @@ test.describe('Imports Features @area:imports', () => {
     })
 
     // spec: IMP-036.no-name-fields-username-used
-    test('falls back to @username when no name is set on Telegram candidate', async ({ page }) => {
-      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
-
-      await testApi.seedExternalContacts([
-        {
-          source: 'telegram',
-          // No display_name, no first/last
-          metadata: { username: handle },
-        },
-      ])
+    test('falls back to @username when no name is set on Telegram candidate', async ({
+      page,
+      request,
+    }) => {
+      // The handle-only peer: the discovery pass learned a handle but no name
+      // fields, so the manifest reports an empty stored display name.
+      const seeded = await testApi.seedBehavior('IMP-036')
+      expect(seeded.entities['handle-only'].name).toBe('')
+      const handle = await telegramHandleOf(request, seeded.entities['handle-only'].id)
 
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
@@ -243,7 +238,7 @@ test.describe('Imports Features @area:imports', () => {
       // @username becomes the primary heading
       await expect(page.getByRole('heading', { name: handle })).toBeVisible()
       // Chip is suppressed when the handle is already the heading. Scoping
-      // by the unique prefix-based handle avoids clashing with other seeded
+      // by the namespace-unique handle avoids clashing with other seeded
       // rows on a shared DB.
       const handleLinks = page.getByRole('link', { name: handle })
       await expect(handleLinks).toHaveCount(0)
@@ -257,14 +252,8 @@ test.describe('Imports Features @area:imports', () => {
       page,
       request,
     }) => {
-      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
-
-      await testApi.seedExternalContacts([
-        {
-          source: 'telegram',
-          metadata: { username: handle },
-        },
-      ])
+      const seeded = await testApi.seedBehavior('IMP-012')
+      const handle = await telegramHandleOf(request, seeded.entities['handle-only'].id)
 
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
@@ -318,23 +307,12 @@ test.describe('Imports Features @area:imports', () => {
     })
 
     // spec: IMP-027.methods-selectable-one-primary
-    test('shows @username method in Link to Existing modal', async ({ page }) => {
-      const handle = `@dale_${testApi.prefix.replace(/-/g, '_')}`
-
-      // Seed a CRM contact to link to
-      await testApi.seedContacts([
-        {
-          full_name: 'Link Target For Telegram',
-        },
-      ])
-
-      // Seed a Telegram candidate with no name fields
-      await testApi.seedExternalContacts([
-        {
-          source: 'telegram',
-          metadata: { username: handle },
-        },
-      ])
+    test('shows @username method in Link to Existing modal', async ({ page, request }) => {
+      // Rides IMP-027's resolver fixture: it carries both a handle-only telegram
+      // peer and cadence-bearing contacts to link one to.
+      const seeded = await testApi.seedBehavior('IMP-027')
+      const handle = await telegramHandleOf(request, seeded.entities['tg-handle'].id)
+      const targetName = seeded.entities['cadenced'].name
 
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
@@ -350,7 +328,8 @@ test.describe('Imports Features @area:imports', () => {
       // Select the CRM contact
       const dialog = page.getByRole('dialog', { name: 'Resolve import candidate' })
       await dialog.getByText('Search for a contact...').click()
-      await page.getByText(`${testApi.prefix}-Link Target For Telegram`).click()
+      await dialog.getByPlaceholder('Search for a contact...').fill(declaredWorldNamePrefix(seeded))
+      await page.getByText(targetName, { exact: true }).last().click()
 
       // Link mode groups the handle under the to-add bucket ("Will be
       // added") rather than "No contact methods available".
