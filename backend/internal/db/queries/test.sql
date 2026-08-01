@@ -597,6 +597,39 @@ WHERE EXISTS (
     AND ec.source_id = ei.source_id
 );
 
+-- name: SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates :many
+-- Cleanup id-set: the CRM contacts the product created by resolving an
+-- anarlog_title candidate that was itself DERIVED from one of this namespace's
+-- meeting notes. A FOURTH contact-recovery route, and the composition partner of
+-- the delete below: that delete removes the only rows carrying crm_contact_id for
+-- these contacts, so the link has to be harvested before it runs. The contact
+-- takes the writer's title-cased token as its name ('Session'), which carries no
+-- namespace token at all, and the harness never saw it, so neither the name
+-- prefix nor an ownership record reaches it.
+--
+-- The NOT EXISTS is load-bearing, not defensive. The resolve marks siblings by
+-- NORMALIZED TOKEN with no namespace or session scoping
+-- (MarkAnarlogTitleSiblingsImportedByToken / ...MatchedByToken), and a
+-- title-derived token routinely IS namespace-agnostic, so one resolve can stamp
+-- its contact id onto several namespaces' rows. Harvesting blindly would let this
+-- namespace delete a contact a LIVE neighbouring world owns. A contact another
+-- namespace recorded ownership of is that world's to delete; anything else is
+-- product-derived and belongs to whichever world reclaims it first.
+SELECT DISTINCT ec.crm_contact_id FROM external_contact ec
+WHERE ec.source = 'anarlog_title'
+  AND ec.crm_contact_id IS NOT NULL
+  AND ec.metadata->>'session_uuid' IN (
+    SELECT mn.anarlog_session_id::text FROM meeting_note mn
+    JOIN mac_host mh ON mh.id = mn.mac_host_id
+    WHERE mh.hostname = @hostname
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM synthetic_namespace_entity sne
+    WHERE sne.entity_kind = 'contact'
+      AND sne.entity_id = ec.crm_contact_id
+      AND sne.namespace <> @namespace
+  );
+
 -- name: SyntheticDeleteTitleCandidatesForHostSessions :execrows
 -- Cleanup: the anarlog_title candidates the PRODUCT derives from a namespace's own
 -- meeting notes. Resolving an orphan session ("Log as impromptu") upserts one weak

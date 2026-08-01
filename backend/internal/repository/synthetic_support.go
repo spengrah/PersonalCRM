@@ -338,6 +338,28 @@ func (r *SyntheticSupportRepository) DeleteMeetingNotesByHostID(ctx context.Cont
 	return r.queries.TestHardDeleteMeetingNotesByHostID(ctx, uuidToPgUUID(hostID))
 }
 
+// SelectLinkedContactIDsForHostSessionTitleCandidates returns the CRM contacts
+// the product created by resolving an anarlog_title candidate derived from one of
+// this namespace's meeting notes. It is the composition partner of
+// DeleteTitleCandidatesForHostSessions: that delete removes the only rows linking
+// back to these contacts, so this must be read first. Contacts another namespace
+// recorded ownership of are excluded — the resolve marks siblings by normalized
+// token DB-wide, so a shared token can point our rows at a live neighbour's
+// contact.
+func (r *SyntheticSupportRepository) SelectLinkedContactIDsForHostSessionTitleCandidates(
+	ctx context.Context,
+	hostname, namespace string,
+) ([]uuid.UUID, error) {
+	rows, err := r.queries.SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates(
+		ctx,
+		db.SyntheticSelectLinkedContactIdsForHostSessionTitleCandidatesParams{Hostname: hostname, Namespace: namespace},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
 // DeleteTitleCandidatesForHostSessions removes the anarlog_title candidates the
 // product derived from this namespace's meeting notes when a user resolved one.
 // Their SHA-256 source_id and bare-token display_name carry nothing

@@ -2248,6 +2248,24 @@ type Querier interface {
 	// contacts, so no ownership record exists either. crm_contact_id is the FK the
 	// product itself writes, which is what makes them findable at all.
 	SyntheticSelectLinkedContactIdsByExternalContactIds(ctx context.Context, externalContactIds []pgtype.UUID) ([]pgtype.UUID, error)
+	// Cleanup id-set: the CRM contacts the product created by resolving an
+	// anarlog_title candidate that was itself DERIVED from one of this namespace's
+	// meeting notes. A FOURTH contact-recovery route, and the composition partner of
+	// the delete below: that delete removes the only rows carrying crm_contact_id for
+	// these contacts, so the link has to be harvested before it runs. The contact
+	// takes the writer's title-cased token as its name ('Session'), which carries no
+	// namespace token at all, and the harness never saw it, so neither the name
+	// prefix nor an ownership record reaches it.
+	//
+	// The NOT EXISTS is load-bearing, not defensive. The resolve marks siblings by
+	// NORMALIZED TOKEN with no namespace or session scoping
+	// (MarkAnarlogTitleSiblingsImportedByToken / ...MatchedByToken), and a
+	// title-derived token routinely IS namespace-agnostic, so one resolve can stamp
+	// its contact id onto several namespaces' rows. Harvesting blindly would let this
+	// namespace delete a contact a LIVE neighbouring world owns. A contact another
+	// namespace recorded ownership of is that world's to delete; anything else is
+	// product-derived and belongs to whichever world reclaims it first.
+	SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates(ctx context.Context, arg SyntheticSelectLinkedContactIdsForHostSessionTitleCandidatesParams) ([]pgtype.UUID, error)
 	// Cleanup descendant guard: hostnames of any namespace nested UNDER this one
 	// ('synth-<ns>-%-host'). A namespace whose prefix sweep would cross into a live
 	// descendant refuses to clean rather than deleting across it. Note

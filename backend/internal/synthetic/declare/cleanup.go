@@ -317,10 +317,24 @@ func namespaceContactIDs(
 	if err != nil {
 		return nil, fmt.Errorf("select contacts linked from owned import candidates: %w", err)
 	}
+	// FOURTH route, and it exists because the third one cannot see these rows.
+	// An anarlog_title candidate the PRODUCT derived from one of this namespace's
+	// meeting notes carries no ownership record, so the sweep above never reads its
+	// crm_contact_id — while the ladder's session-uuid delete removes that row, the
+	// only thing linking the contact back. The contact's name is the writer's
+	// title-cased token, which carries no namespace token, so nothing else reaches
+	// it either. Harvest before the delete; the query itself refuses contacts
+	// another namespace owns, because the resolve marks siblings by normalized
+	// token with no namespace scoping.
+	// Same hostname the ladder's host lookup derives, from the same prefix.
+	fromSessions, err := support.SelectLinkedContactIDsForHostSessionTitleCandidates(ctx, prefix+"host", namespace)
+	if err != nil {
+		return nil, fmt.Errorf("select contacts linked from host-session title candidates: %w", err)
+	}
 
-	seen := make(map[uuid.UUID]bool, len(byName)+len(owned)+len(linked))
-	union := make([]uuid.UUID, 0, len(byName)+len(owned)+len(linked))
-	for _, ids := range [][]uuid.UUID{byName, owned, linked} {
+	seen := make(map[uuid.UUID]bool, len(byName)+len(owned)+len(linked)+len(fromSessions))
+	union := make([]uuid.UUID, 0, len(byName)+len(owned)+len(linked)+len(fromSessions))
+	for _, ids := range [][]uuid.UUID{byName, owned, linked, fromSessions} {
 		for _, id := range ids {
 			if seen[id] {
 				continue
