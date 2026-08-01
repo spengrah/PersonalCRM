@@ -16,6 +16,7 @@ package replay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -577,18 +578,29 @@ func (h *Harness) SeedTitleCandidate(ctx context.Context, spec factory.AnarlogTi
 	if err := writer.UpsertTitleCandidateTx(ctx, tx, sessionID, spec.NormalizedToken, spec.DisplayToken); err != nil {
 		return uuid.Nil, "", fmt.Errorf("seed title candidate: %w", err)
 	}
+	// Read back and track INSIDE the transaction, before the commit. This row is
+	// the one row the toolkit creates that NOTHING can find by a namespace-derived
+	// token — its source_id is a SHA-256 digest — so it is reachable only through
+	// the id ledger and the ownership record, both of which are derived from this
+	// read. A read issued after the commit could fail on a row that already
+	// exists, and the id would be lost forever; inside the transaction the same
+	// failure rolls the creation back, so there is no ordering in which the row
+	// outlives its own recovery key.
+	ec, err := h.externalRepo.GetBySourceTx(ctx, tx, anarlogTitleSource,
+		anarlog.ComputeAnarlogTitleSourceIDForTest(spec.NormalizedToken, sessionID), nil)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return uuid.Nil, "", fmt.Errorf("seed title candidate: the writer reported success but no row exists for token %q — the digest recipe here disagrees with the writer's", spec.NormalizedToken)
+		}
+		return uuid.Nil, "", fmt.Errorf("seed title candidate: read back: %w", err)
+	}
+	// Tracked before the commit, so the ledger cannot end up behind the database.
+	// An id tracked for a rolled-back row is a no-op delete; the reverse is a
+	// permanent leak.
+	h.track(func(c *created) { c.addExternalContact(ec.ID) })
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, "", fmt.Errorf("seed title candidate: commit: %w", err)
 	}
-
-	ec, err := h.externalRepo.GetBySource(ctx, anarlogTitleSource, anarlog.ComputeAnarlogTitleSourceIDForTest(spec.NormalizedToken, sessionID), nil)
-	if err != nil {
-		return uuid.Nil, "", fmt.Errorf("seed title candidate: read back: %w", err)
-	}
-	if ec == nil {
-		return uuid.Nil, "", fmt.Errorf("seed title candidate: the writer reported success but no row exists for token %q", spec.NormalizedToken)
-	}
-	h.track(func(c *created) { c.addExternalContact(ec.ID) })
 	return ec.ID, derefOrEmpty(ec.DisplayName), nil
 }
 

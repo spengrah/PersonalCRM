@@ -230,6 +230,20 @@ func (r *SyntheticSupportRepository) DeleteExternalIdentitiesBySourceIDPrefix(ct
 	return r.queries.SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
+// DeleteIdentitiesForOwnedCandidates removes the external_identity rows a
+// post-import hook derived from a namespace's own import candidates, matched on
+// the (source, source_id) pair the hook copies off the candidate. It is the
+// stateless counterpart of DeleteTelegramExternalIdentitiesByPeerIds, for the
+// cross-request cleanup that has no tracked peer-id list — and the only route to
+// a telegram peer identity, whose decimal source_id and underscore-normalized
+// handle both escape the ns-prefix sweeps.
+func (r *SyntheticSupportRepository) DeleteIdentitiesForOwnedCandidates(ctx context.Context, ids []uuid.UUID) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	return r.queries.SyntheticDeleteIdentitiesForOwnedCandidates(ctx, pgUUIDs(ids))
+}
+
 // DeleteExternalContactsBySourceIDPrefix removes external_contact rows whose
 // source_id is ns-prefixed (cleanup step 9). Reuses the existing query.
 func (r *SyntheticSupportRepository) DeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) (int64, error) {
@@ -322,6 +336,15 @@ func (r *SyntheticSupportRepository) DeleteContactsByIds(ctx context.Context, co
 // the existing meeting-note test-cleanup query.
 func (r *SyntheticSupportRepository) DeleteMeetingNotesByHostID(ctx context.Context, hostID uuid.UUID) error {
 	return r.queries.TestHardDeleteMeetingNotesByHostID(ctx, uuidToPgUUID(hostID))
+}
+
+// DeleteTitleCandidatesForHostSessions removes the anarlog_title candidates the
+// product derived from this namespace's meeting notes when a user resolved one.
+// Their SHA-256 source_id and bare-token display_name carry nothing
+// namespace-derived, so the session uuid is the only route to them — which means
+// this MUST run before the meeting notes it reads are deleted.
+func (r *SyntheticSupportRepository) DeleteTitleCandidatesForHostSessions(ctx context.Context, hostID uuid.UUID) (int64, error) {
+	return r.queries.SyntheticDeleteTitleCandidatesForHostSessions(ctx, uuidToPgUUID(hostID))
 }
 
 // DeleteMacHostByID removes the seeded revoked synthetic mac_host by id

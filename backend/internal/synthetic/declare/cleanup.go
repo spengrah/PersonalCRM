@@ -524,6 +524,19 @@ func runLadder(
 	step("external_identities", func() (int64, error) {
 		return support.DeleteExternalIdentitiesBySourceIDPrefix(ctx, prefix)
 	})
+	// Fourth sweep: the identities a POST-IMPORT HOOK derived from this
+	// namespace's own candidates. Importing or linking a telegram candidate makes
+	// the hook write an identity keyed by (source='telegram', source_id = the
+	// candidate's bare decimal peer id) with the handle as its identifier — and
+	// the synthetic handle normalizes to 'synth_<ns>_<n>' with underscores, so
+	// NEITHER the identifier sweep nor the source_id sweep above reaches it. It
+	// has to go, twice over: the contact delete below would orphan it via ON
+	// DELETE SET NULL, and while it survived it would occupy this namespace's
+	// telegram peer band and force a later run to re-salt. Runs BEFORE the
+	// owned-candidate external_contact delete, which removes the rows it reads.
+	step("external_identities", func() (int64, error) {
+		return support.DeleteIdentitiesForOwnedCandidates(ctx, ownedCandidateIDs)
+	})
 	// Two sweeps under one label, the shape external_identities already uses: the
 	// ns-prefixed source_ids, then the namespace's ownership records — which are
 	// the ONLY thing that reaches a telegram peer id or an anarlog_title digest,
@@ -582,6 +595,16 @@ func runLadder(
 		}
 	}
 	if hostExists {
+		// The anarlog_title candidates the PRODUCT derived from those notes.
+		// Resolving an orphan session upserts one per unmatched title token, with
+		// the writer's SHA-256 source_id and the bare token as its display_name —
+		// nothing namespace-derived, no ownership record, and the harness never saw
+		// the id. metadata.session_uuid is the only route back, so this runs before
+		// the notes that carry it are deleted. It rides the external_contacts label
+		// because that is the table it empties.
+		step("external_contacts", func() (int64, error) {
+			return support.DeleteTitleCandidatesForHostSessions(ctx, hostID)
+		})
 		// Meeting notes hang off the host by a SET NULL fk, so they go first.
 		step("meeting_notes", func() (int64, error) {
 			return 0, support.DeleteMeetingNotesByHostID(ctx, hostID)

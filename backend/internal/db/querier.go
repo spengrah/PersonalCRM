@@ -2095,6 +2095,21 @@ type Querier interface {
 	// Cleanup step 8 (backstop): catches any ns-prefixed source_id rows the
 	// identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.
 	SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error)
+	// Cleanup: the STATELESS variant of the delete above, for the cross-request path
+	// that has no tracked peer-id list. Importing or linking a telegram candidate
+	// makes the post-import hook write an external_identity keyed by
+	// (source='telegram', source_id = the candidate's own bare peer id), so the
+	// namespace's ownership records reach it through the candidate rows themselves.
+	// Neither ns-prefix identity sweep can: the source_id is a decimal peer id and
+	// the synthetic handle normalizes to 'synth_<ns>_<n>' (underscores). Leaving it
+	// would both orphan the row on a contact delete (ON DELETE SET NULL) and occupy
+	// this namespace's telegram peer band, forcing a later run to re-salt.
+	//
+	// Matched on the (source, source_id) PAIR rather than source_id alone, so it
+	// reaches any identity a post-import hook keys to the candidate it came from and
+	// nothing else. MUST run before the owned-candidate external_contact delete,
+	// which removes the rows this reads.
+	SyntheticDeleteIdentitiesForOwnedCandidates(ctx context.Context, externalContactIds []pgtype.UUID) (int64, error)
 	// Cleanup ladder: interactions by contact (hard delete — the ledger's by-id
 	// variant is unavailable cross-request). Soft-deleted rows included.
 	SyntheticDeleteInteractionsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
@@ -2151,6 +2166,19 @@ type Querier interface {
 	// tracked peer ids before the contact delete (external_identity survives contact
 	// delete via ON DELETE SET NULL and would otherwise pollute future matching).
 	SyntheticDeleteTelegramExternalIdentitiesByPeerIds(ctx context.Context, peerIds []string) (int64, error)
+	// Cleanup: the anarlog_title candidates the PRODUCT derives from a namespace's own
+	// meeting notes. Resolving an orphan session ("Log as impromptu") upserts one weak
+	// candidate per unmatched title token, keyed by (session_uuid, token) with the
+	// writer's SHA-256 source_id and a display_name that is the bare token — so the
+	// row carries NO namespace-derived string at all, the harness never saw its id,
+	// and no ownership record exists. metadata.session_uuid is the only link back, and
+	// it points at a meeting_note this namespace's host owns.
+	//
+	// Left behind, the row is permanent: nothing can ever find it again, and the
+	// discovery surface groups anarlog_title rows by normalized token DB-WIDE, so it
+	// keeps inflating that token's group for every later run. Runs BEFORE the
+	// meeting_note delete, which removes the rows this reads.
+	SyntheticDeleteTitleCandidatesForHostSessions(ctx context.Context, macHostID pgtype.UUID) (int64, error)
 	// Cleanup ladder: drops the namespace's own ORPHANED River jobs.
 	//
 	// A harness client fetches only its own private queue, so a job left in that

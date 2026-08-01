@@ -574,6 +574,49 @@ WHERE source = 'telegram' AND source_id = ANY(@peer_ids::text[]);
 DELETE FROM external_identity
 WHERE source = 'telegram' AND source_id = ANY(@peer_ids::text[]);
 
+-- name: SyntheticDeleteIdentitiesForOwnedCandidates :execrows
+-- Cleanup: the STATELESS variant of the delete above, for the cross-request path
+-- that has no tracked peer-id list. Importing or linking a telegram candidate
+-- makes the post-import hook write an external_identity keyed by
+-- (source='telegram', source_id = the candidate's own bare peer id), so the
+-- namespace's ownership records reach it through the candidate rows themselves.
+-- Neither ns-prefix identity sweep can: the source_id is a decimal peer id and
+-- the synthetic handle normalizes to 'synth_<ns>_<n>' (underscores). Leaving it
+-- would both orphan the row on a contact delete (ON DELETE SET NULL) and occupy
+-- this namespace's telegram peer band, forcing a later run to re-salt.
+--
+-- Matched on the (source, source_id) PAIR rather than source_id alone, so it
+-- reaches any identity a post-import hook keys to the candidate it came from and
+-- nothing else. MUST run before the owned-candidate external_contact delete,
+-- which removes the rows this reads.
+DELETE FROM external_identity ei
+WHERE EXISTS (
+  SELECT 1 FROM external_contact ec
+  WHERE ec.id = ANY(@external_contact_ids::uuid[])
+    AND ec.source = ei.source
+    AND ec.source_id = ei.source_id
+);
+
+-- name: SyntheticDeleteTitleCandidatesForHostSessions :execrows
+-- Cleanup: the anarlog_title candidates the PRODUCT derives from a namespace's own
+-- meeting notes. Resolving an orphan session ("Log as impromptu") upserts one weak
+-- candidate per unmatched title token, keyed by (session_uuid, token) with the
+-- writer's SHA-256 source_id and a display_name that is the bare token — so the
+-- row carries NO namespace-derived string at all, the harness never saw its id,
+-- and no ownership record exists. metadata.session_uuid is the only link back, and
+-- it points at a meeting_note this namespace's host owns.
+--
+-- Left behind, the row is permanent: nothing can ever find it again, and the
+-- discovery surface groups anarlog_title rows by normalized token DB-WIDE, so it
+-- keeps inflating that token's group for every later run. Runs BEFORE the
+-- meeting_note delete, which removes the rows this reads.
+DELETE FROM external_contact
+WHERE source = 'anarlog_title'
+  AND metadata->>'session_uuid' IN (
+    SELECT mn.anarlog_session_id::text FROM meeting_note mn
+    WHERE mn.mac_host_id = @mac_host_id
+  );
+
 -- name: SyntheticCountNodesByLabelPrefix :one
 -- Graph identity test support: count nodes whose canonical_label is ns-prefixed,
 -- so a test can scope assertions to its own namespace's nodes on the shared test
