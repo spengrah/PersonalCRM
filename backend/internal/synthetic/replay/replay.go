@@ -608,6 +608,16 @@ func (h *Harness) SeedTitleCandidate(ctx context.Context, spec factory.AnarlogTi
 	// An id tracked for a rolled-back row is a no-op delete; the reverse is a
 	// permanent leak.
 	h.track(func(c *created) { c.addExternalContact(ec.ID) })
+	// The DURABLE recovery key, written INSIDE this transaction rather than by the
+	// caller afterwards. The in-memory ledger above dies with the request, and this
+	// row's SHA-256 source_id carries no namespace-derived string, so the ownership
+	// record is the only thing a later cleanup can find it by. Committed separately
+	// it would be a window: the row lands, the process dies, and nothing can ever
+	// reach the row again. In here the two are one write — either both or neither.
+	if err := repository.NewSyntheticSupportRepository(h.database.Queries.WithTx(tx)).
+		RecordNamespaceEntity(ctx, h.namespace, repository.EntityKindExternalContact, ec.ID); err != nil {
+		return uuid.Nil, "", fmt.Errorf("seed title candidate: record namespace ownership: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return uuid.Nil, "", fmt.Errorf("seed title candidate: commit: %w", err)
 	}

@@ -253,11 +253,18 @@ func (r *SyntheticSupportRepository) DeleteExternalContactsBySourceIDPrefix(ctx 
 // SelectLinkedContactIDsByExternalContactIDs returns the CRM contacts the product
 // linked to a namespace's own import candidates — the third way cleanup recovers a
 // contact, beside the name prefix and the ownership record.
-func (r *SyntheticSupportRepository) SelectLinkedContactIDsByExternalContactIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+//
+// The namespace is what makes the route safe to hard-delete behind: the query
+// refuses bare 'matched' links, contacts another namespace owns, and contacts
+// another namespace's own candidate links to. See the query for the full argument.
+func (r *SyntheticSupportRepository) SelectLinkedContactIDsByExternalContactIDs(ctx context.Context, ids []uuid.UUID, namespace string) ([]uuid.UUID, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	rows, err := r.queries.SyntheticSelectLinkedContactIdsByExternalContactIds(ctx, pgUUIDs(ids))
+	rows, err := r.queries.SyntheticSelectLinkedContactIdsByExternalContactIds(ctx, db.SyntheticSelectLinkedContactIdsByExternalContactIdsParams{
+		ExternalContactIds: pgUUIDs(ids),
+		Namespace:          namespace,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -271,6 +278,18 @@ func (r *SyntheticSupportRepository) DeleteExternalContactsByIds(ctx context.Con
 		return 0, nil
 	}
 	return r.queries.SyntheticDeleteExternalContactsByIds(ctx, pgUUIDs(ids))
+}
+
+// DeleteTelegramCandidatesInPeerBand removes telegram import candidates whose bare
+// decimal peer-id source_id falls in a namespace's reserved band. It is the
+// recovery for a row whose ownership record never landed — the telegram writer
+// commits separately from that record — and the band is derivable from the
+// namespace alone, so cleanup reconstructs it statelessly.
+func (r *SyntheticSupportRepository) DeleteTelegramCandidatesInPeerBand(ctx context.Context, bandStart, bandEnd int64) (int64, error) {
+	return r.queries.SyntheticDeleteTelegramCandidatesInPeerBand(ctx, db.SyntheticDeleteTelegramCandidatesInPeerBandParams{
+		BandStart: bandStart,
+		BandEnd:   bandEnd,
+	})
 }
 
 // DeleteContactTasksByContactIds removes contact_task rows by contact (cleanup

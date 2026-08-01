@@ -1963,6 +1963,45 @@ func (q *Queries) SyntheticDeleteRiverQueue(ctx context.Context, name string) (i
 	return result.RowsAffected(), nil
 }
 
+const SyntheticDeleteTelegramCandidatesInPeerBand = `-- name: SyntheticDeleteTelegramCandidatesInPeerBand :execrows
+DELETE FROM external_contact
+WHERE source = 'telegram'
+  AND (CASE WHEN source_id ~ '^[0-9]{1,18}$' THEN source_id::bigint END)
+        >= $1::bigint
+  AND (CASE WHEN source_id ~ '^[0-9]{1,18}$' THEN source_id::bigint END)
+        < $2::bigint
+`
+
+type SyntheticDeleteTelegramCandidatesInPeerBandParams struct {
+	BandStart int64 `json:"band_start"`
+	BandEnd   int64 `json:"band_end"`
+}
+
+// Cleanup step 9 (band recovery): telegram candidates in this namespace's own
+// reserved peer band, whether or not an ownership record survives for them.
+//
+// The telegram writer commits its row in its own transaction and the ownership
+// record is written afterwards, in a second statement. A crash in that window
+// leaves a row whose source_id is a bare decimal peer id — no namespace-derived
+// string for the prefix sweep, no ownership record for the id sweep — and the
+// occupancy check counts it, so the band it sits in is poisoned for every later
+// run of this namespace. The band is the recovery key that window cannot lose:
+// it is derived from the namespace hash alone (factory.Generator.PeerBandStart),
+// so cleanup reconstructs it statelessly from the namespace token, and the same
+// derivation is what BandsFree calls occupancy. No deleted_at filter — a
+// tombstoned row occupies the source key just as well.
+//
+// The cast is wrapped in a CASE for the reason the occupancy counter documents:
+// PostgreSQL may reorder a bare `source_id ~ '...' AND source_id::bigint >= ...`
+// and run the cast on one of the text telegram source_ids other tests create.
+func (q *Queries) SyntheticDeleteTelegramCandidatesInPeerBand(ctx context.Context, arg SyntheticDeleteTelegramCandidatesInPeerBandParams) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeleteTelegramCandidatesInPeerBand, arg.BandStart, arg.BandEnd)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const SyntheticDeleteTelegramChatConfigsByChatIds = `-- name: SyntheticDeleteTelegramChatConfigsByChatIds :execrows
 DELETE FROM telegram_chat_config WHERE telegram_chat_id = ANY($1::bigint[])
 `
@@ -2274,9 +2313,30 @@ func (q *Queries) SyntheticSelectContactIdsByFullNamePrefix(ctx context.Context,
 }
 
 const SyntheticSelectLinkedContactIdsByExternalContactIds = `-- name: SyntheticSelectLinkedContactIdsByExternalContactIds :many
-SELECT DISTINCT crm_contact_id FROM external_contact
-WHERE id = ANY($1::uuid[]) AND crm_contact_id IS NOT NULL
+SELECT DISTINCT ec.crm_contact_id FROM external_contact ec
+WHERE ec.id = ANY($1::uuid[])
+  AND ec.crm_contact_id IS NOT NULL
+  AND ec.match_status IS DISTINCT FROM 'matched'
+  AND NOT EXISTS (
+    SELECT 1 FROM synthetic_namespace_entity sne
+    WHERE sne.entity_kind = 'contact'
+      AND sne.entity_id = ec.crm_contact_id
+      AND sne.namespace <> $2
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM external_contact neighbour
+    JOIN synthetic_namespace_entity sne_cand
+      ON sne_cand.entity_kind = 'external_contact'
+     AND sne_cand.entity_id = neighbour.id
+    WHERE neighbour.crm_contact_id = ec.crm_contact_id
+      AND sne_cand.namespace <> $2
+  )
 `
+
+type SyntheticSelectLinkedContactIdsByExternalContactIdsParams struct {
+	ExternalContactIds []pgtype.UUID `json:"external_contact_ids"`
+	Namespace          string        `json:"namespace"`
+}
 
 // Cleanup id-set: the CRM contacts the product linked to this namespace's own
 // import candidates. It is a third recovery route for contacts, unioned with the
@@ -2289,8 +2349,35 @@ WHERE id = ANY($1::uuid[]) AND crm_contact_id IS NOT NULL
 // matches the lower-case 'synth-<ns>-' prefix. The harness never saw those
 // contacts, so no ownership record exists either. crm_contact_id is the FK the
 // product itself writes, which is what makes them findable at all.
-func (q *Queries) SyntheticSelectLinkedContactIdsByExternalContactIds(ctx context.Context, externalContactIds []pgtype.UUID) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, SyntheticSelectLinkedContactIdsByExternalContactIds, externalContactIds)
+//
+// The harvested contact is HARD-DELETED, so the three exclusions are the route's
+// whole safety argument. Each answers a different part of "is this contact ours to
+// destroy?", exactly rather than heuristically.
+//
+//	match_status: a 'matched' link is a BARE link to a contact that already
+//	existed — every writer of that status resolves an existing contact through a
+//	matcher (telegram peer matcher, calendar rematch, gcontacts sync match,
+//	ingest's email/phone auto-match) and none of them creates a row. 'imported' is
+//	NOT the complement, because the link endpoint stamps it on any CURATED link
+//	too (method selections, conflict resolutions, a cadence, a name override), so
+//	it cannot stand in for "created from this candidate". The exact direction is
+//	the other one: 'matched' never accompanies a creation.
+//
+//	contact ownership: a contact ANOTHER namespace recorded ownership of is that
+//	world's seeded row and that world's to delete. Same predicate as the
+//	host-session route below, for the same reason.
+//
+//	candidate ownership: a contact another namespace's OWN candidate links to is
+//	that world's import-CREATED contact — this route's own class, seen from the
+//	other side. The product created it, so no contact ownership record exists and
+//	the exclusion above cannot see it; the neighbour's candidate IS
+//	ownership-recorded and carries the crm_contact_id, so this one can.
+//
+// Cross-namespace stamping is not hypothetical: the anarlog_title resolve marks
+// siblings by normalized token DB-WIDE, so one world's resolve can write its own
+// contact id onto a candidate THIS namespace owns.
+func (q *Queries) SyntheticSelectLinkedContactIdsByExternalContactIds(ctx context.Context, arg SyntheticSelectLinkedContactIdsByExternalContactIdsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, SyntheticSelectLinkedContactIdsByExternalContactIds, arg.ExternalContactIds, arg.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -2313,6 +2400,7 @@ const SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates = `-- name: S
 SELECT DISTINCT ec.crm_contact_id FROM external_contact ec
 WHERE ec.source = 'anarlog_title'
   AND ec.crm_contact_id IS NOT NULL
+  AND ec.match_status IS DISTINCT FROM 'matched'
   AND ec.metadata->>'session_uuid' IN (
     SELECT mn.anarlog_session_id::text FROM meeting_note mn
     JOIN mac_host mh ON mh.id = mn.mac_host_id
@@ -2348,6 +2436,17 @@ type SyntheticSelectLinkedContactIdsForHostSessionTitleCandidatesParams struct {
 // namespace delete a contact a LIVE neighbouring world owns. A contact another
 // namespace recorded ownership of is that world's to delete; anything else is
 // product-derived and belongs to whichever world reclaims it first.
+//
+// The match_status exclusion is the same predicate the owned-candidate route
+// above carries, for the same reason and against the same stamping mechanism:
+// MarkAnarlogTitleSiblingsMatchedByToken is the LINK arm of that resolve, so a
+// 'matched' row here points at a contact that already existed and was merely
+// linked — never one this route's delete created. The candidate-ownership
+// exclusion the other route carries is deliberately NOT repeated: the rows this
+// one reads are product-derived and carry no ownership record, and for a
+// NEIGHBOUR's owned candidate to reach the same contact its declared token would
+// have to collide with a meeting-note title token, which the namespace-hashed
+// declared token makes unreachable.
 func (q *Queries) SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates(ctx context.Context, arg SyntheticSelectLinkedContactIdsForHostSessionTitleCandidatesParams) ([]pgtype.UUID, error) {
 	rows, err := q.db.Query(ctx, SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates, arg.Hostname, arg.Namespace)
 	if err != nil {

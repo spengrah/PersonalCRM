@@ -632,6 +632,16 @@ func runEntity(
 // using the real writer buys. The ownership record is keyed by the row id, which
 // nothing in the application rewrites, and its id-set is unioned with the prefix
 // sweep rather than replacing it.
+//
+// WHERE that record is written is not uniform, because for one source it cannot
+// be. anarlog_title's digest source_id leaves the ownership record as the row's
+// ONLY recovery key, so writing it here — after the writer's own transaction
+// committed — would open a window in which a crash strands the row forever; that
+// path writes it inside the writer's transaction instead. telegram has the same
+// separate commit but keeps a second, band-derived recovery key that no window can
+// lose, so it is recorded here and reclaimed by the cleanup ladder's band sweep.
+// The remaining sources carry a namespace-prefixed source_id the prefix sweep
+// finds on its own.
 func runExternalCandidate(
 	ctx context.Context,
 	h *replay.Harness,
@@ -643,6 +653,10 @@ func runExternalCandidate(
 		id   uuid.UUID
 		name string
 		err  error
+		// recordedInWriterTx: the seed path already wrote the ownership record
+		// inside its own transaction, so recording it again here would be a second,
+		// separately-committed statement for a row that no longer needs one.
+		recordedInWriterTx bool
 	)
 	switch p.source {
 	case SourceICloudContacts, SourceAnarlogHumans:
@@ -651,14 +665,17 @@ func runExternalCandidate(
 		id, name, err = seedTelegramCandidate(ctx, h, p)
 	case SourceAnarlogTitle:
 		id, name, err = seedTitleCandidate(ctx, h, p)
+		recordedInWriterTx = true
 	default:
 		id, name, err = seedUpsertCandidate(ctx, h, p, st)
 	}
 	if err != nil {
 		return Seeded{}, err
 	}
-	if err := support.RecordNamespaceEntity(ctx, h.Namespace(), repository.EntityKindExternalContact, id); err != nil {
-		return Seeded{}, fmt.Errorf("record namespace ownership: %w", err)
+	if !recordedInWriterTx {
+		if err := support.RecordNamespaceEntity(ctx, h.Namespace(), repository.EntityKindExternalContact, id); err != nil {
+			return Seeded{}, fmt.Errorf("record namespace ownership: %w", err)
+		}
 	}
 	return Seeded{Kind: "external_contact", ID: id.String(), Name: name}, nil
 }
@@ -769,7 +786,9 @@ func seedTelegramCandidate(
 }
 
 // seedTitleCandidate is the anarlog_title discovery path. The manifest reports the
-// display token AS STORED, because the writer title-cases it.
+// display token AS STORED, because the writer title-cases it. The primitive records
+// this namespace's ownership inside its own transaction — the caller must not
+// record it again.
 func seedTitleCandidate(
 	ctx context.Context,
 	h *replay.Harness,

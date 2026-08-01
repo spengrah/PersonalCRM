@@ -306,14 +306,20 @@ func namespaceContactIDs(
 	if err != nil {
 		return nil, fmt.Errorf("select owned import candidates: %w", err)
 	}
-	// INVARIANT this route rests on: a namespace's candidates link only to contacts
-	// created INSIDE that namespace. Every resolution path a declared world drives
-	// either creates the contact (import) or picks one out of the same world's own
-	// manifest (link), and the generator makes each world's names and emails
-	// disjoint, so nothing can select a neighbour's contact by accident. A future
-	// fixture that deliberately links across namespaces breaks it and makes this
-	// sweep DESTRUCTIVE — scope it to namespace-owned contacts at that point.
-	linked, err := support.SelectLinkedContactIDsByExternalContactIDs(ctx, ownedCandidates)
+	// The ladder HARD-DELETES what this route returns, so the same-world assumption
+	// it once rested on is ENFORCED IN THE PREDICATE rather than assumed from the
+	// fixtures — three exclusions, argued in full at the query.
+	//
+	// ACCEPTED RESIDUAL, recorded so a later reader does not read it as an
+	// oversight: a contact in NO namespace's records, created by neither this world
+	// nor any other world's candidate, linked to one of our candidates WITH curation
+	// (so the link reads 'imported', not 'matched'), is still harvested. Reaching it
+	// takes a fixture that links outside its own manifest and curates while doing so.
+	// A temporal cutoff would close it and was rejected: contact created_at comes
+	// from accelerated.GetCurrentTime while every namespace instant is DB now(), so
+	// the two clocks disagree under CRM_ENV=accelerated and the skew fails toward
+	// silent permanent leaks rather than loud over-deletion.
+	linked, err := support.SelectLinkedContactIDsByExternalContactIDs(ctx, ownedCandidates, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("select contacts linked from owned import candidates: %w", err)
 	}
@@ -560,6 +566,18 @@ func runLadder(
 	})
 	step("external_contacts", func() (int64, error) {
 		return support.DeleteExternalContactsByIds(ctx, ownedCandidateIDs)
+	})
+	// Third sweep under the same label, and the recovery for the ONE window the two
+	// above cannot cover. The telegram writer commits its candidate in its own
+	// transaction and the ownership record is a separate statement afterwards, so a
+	// crash in between leaves a row with a bare decimal peer-id source_id: nothing
+	// for the prefix sweep, no record for the id sweep. The peer BAND is the key
+	// that window cannot lose — derived from the namespace hash alone, so cleanup
+	// rebuilds it statelessly, and it is the same derivation replay.BandsFree calls
+	// occupancy, which is what would otherwise force every later run of this
+	// namespace to re-salt around the stranded row.
+	step("external_contacts", func() (int64, error) {
+		return support.DeleteTelegramCandidatesInPeerBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
 	})
 	step("contact_tasks", func() (int64, error) {
 		return support.DeleteContactTasksByContactIds(ctx, contactIDs)

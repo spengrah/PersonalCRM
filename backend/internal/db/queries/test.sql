@@ -310,8 +310,51 @@ DELETE FROM external_identity WHERE source_id LIKE @source_id_prefix || '%';
 -- matches the lower-case 'synth-<ns>-' prefix. The harness never saw those
 -- contacts, so no ownership record exists either. crm_contact_id is the FK the
 -- product itself writes, which is what makes them findable at all.
-SELECT DISTINCT crm_contact_id FROM external_contact
-WHERE id = ANY(@external_contact_ids::uuid[]) AND crm_contact_id IS NOT NULL;
+--
+-- The harvested contact is HARD-DELETED, so the three exclusions are the route's
+-- whole safety argument. Each answers a different part of "is this contact ours to
+-- destroy?", exactly rather than heuristically.
+--
+--   match_status: a 'matched' link is a BARE link to a contact that already
+--   existed — every writer of that status resolves an existing contact through a
+--   matcher (telegram peer matcher, calendar rematch, gcontacts sync match,
+--   ingest's email/phone auto-match) and none of them creates a row. 'imported' is
+--   NOT the complement, because the link endpoint stamps it on any CURATED link
+--   too (method selections, conflict resolutions, a cadence, a name override), so
+--   it cannot stand in for "created from this candidate". The exact direction is
+--   the other one: 'matched' never accompanies a creation.
+--
+--   contact ownership: a contact ANOTHER namespace recorded ownership of is that
+--   world's seeded row and that world's to delete. Same predicate as the
+--   host-session route below, for the same reason.
+--
+--   candidate ownership: a contact another namespace's OWN candidate links to is
+--   that world's import-CREATED contact — this route's own class, seen from the
+--   other side. The product created it, so no contact ownership record exists and
+--   the exclusion above cannot see it; the neighbour's candidate IS
+--   ownership-recorded and carries the crm_contact_id, so this one can.
+--
+-- Cross-namespace stamping is not hypothetical: the anarlog_title resolve marks
+-- siblings by normalized token DB-WIDE, so one world's resolve can write its own
+-- contact id onto a candidate THIS namespace owns.
+SELECT DISTINCT ec.crm_contact_id FROM external_contact ec
+WHERE ec.id = ANY(@external_contact_ids::uuid[])
+  AND ec.crm_contact_id IS NOT NULL
+  AND ec.match_status IS DISTINCT FROM 'matched'
+  AND NOT EXISTS (
+    SELECT 1 FROM synthetic_namespace_entity sne
+    WHERE sne.entity_kind = 'contact'
+      AND sne.entity_id = ec.crm_contact_id
+      AND sne.namespace <> @namespace
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM external_contact neighbour
+    JOIN synthetic_namespace_entity sne_cand
+      ON sne_cand.entity_kind = 'external_contact'
+     AND sne_cand.entity_id = neighbour.id
+    WHERE neighbour.crm_contact_id = ec.crm_contact_id
+      AND sne_cand.namespace <> @namespace
+  );
 
 -- name: SyntheticDeleteExternalContactsByIds :execrows
 -- Cleanup step 9 (ownership): import candidates by the namespace's OWNERSHIP
@@ -322,6 +365,31 @@ WHERE id = ANY(@external_contact_ids::uuid[]) AND crm_contact_id IS NOT NULL;
 -- nothing to match for them and this is the only delete that reaches those rows.
 -- A hard DELETE, like every other cleanup step.
 DELETE FROM external_contact WHERE id = ANY(@external_contact_ids::uuid[]);
+
+-- name: SyntheticDeleteTelegramCandidatesInPeerBand :execrows
+-- Cleanup step 9 (band recovery): telegram candidates in this namespace's own
+-- reserved peer band, whether or not an ownership record survives for them.
+--
+-- The telegram writer commits its row in its own transaction and the ownership
+-- record is written afterwards, in a second statement. A crash in that window
+-- leaves a row whose source_id is a bare decimal peer id — no namespace-derived
+-- string for the prefix sweep, no ownership record for the id sweep — and the
+-- occupancy check counts it, so the band it sits in is poisoned for every later
+-- run of this namespace. The band is the recovery key that window cannot lose:
+-- it is derived from the namespace hash alone (factory.Generator.PeerBandStart),
+-- so cleanup reconstructs it statelessly from the namespace token, and the same
+-- derivation is what BandsFree calls occupancy. No deleted_at filter — a
+-- tombstoned row occupies the source key just as well.
+--
+-- The cast is wrapped in a CASE for the reason the occupancy counter documents:
+-- PostgreSQL may reorder a bare `source_id ~ '...' AND source_id::bigint >= ...`
+-- and run the cast on one of the text telegram source_ids other tests create.
+DELETE FROM external_contact
+WHERE source = 'telegram'
+  AND (CASE WHEN source_id ~ '^[0-9]{1,18}$' THEN source_id::bigint END)
+        >= @band_start::bigint
+  AND (CASE WHEN source_id ~ '^[0-9]{1,18}$' THEN source_id::bigint END)
+        < @band_end::bigint;
 
 -- name: SyntheticDeleteContactTasksByContactIds :execrows
 -- Cleanup step 10: contact_task has no deleted_at; hard delete by contact.
@@ -639,9 +707,21 @@ WHERE EXISTS (
 -- namespace delete a contact a LIVE neighbouring world owns. A contact another
 -- namespace recorded ownership of is that world's to delete; anything else is
 -- product-derived and belongs to whichever world reclaims it first.
+--
+-- The match_status exclusion is the same predicate the owned-candidate route
+-- above carries, for the same reason and against the same stamping mechanism:
+-- MarkAnarlogTitleSiblingsMatchedByToken is the LINK arm of that resolve, so a
+-- 'matched' row here points at a contact that already existed and was merely
+-- linked — never one this route's delete created. The candidate-ownership
+-- exclusion the other route carries is deliberately NOT repeated: the rows this
+-- one reads are product-derived and carry no ownership record, and for a
+-- NEIGHBOUR's owned candidate to reach the same contact its declared token would
+-- have to collide with a meeting-note title token, which the namespace-hashed
+-- declared token makes unreachable.
 SELECT DISTINCT ec.crm_contact_id FROM external_contact ec
 WHERE ec.source = 'anarlog_title'
   AND ec.crm_contact_id IS NOT NULL
+  AND ec.match_status IS DISTINCT FROM 'matched'
   AND ec.metadata->>'session_uuid' IN (
     SELECT mn.anarlog_session_id::text FROM meeting_note mn
     JOIN mac_host mh ON mh.id = mn.mac_host_id
