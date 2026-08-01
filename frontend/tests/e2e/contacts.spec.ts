@@ -75,15 +75,11 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // Wait for notes to render before checking overflow detection
     await expect(page.getByText('Met at the AI conference')).toBeVisible({ timeout: 5000 })
 
-    // The expand control exists only while the page's CLIENT-SIDE overflow
-    // measurement is true (scrollHeight > clientHeight, measured once on mount
-    // and again from a ResizeObserver). On a CPU-quota-capped box that
-    // measurement can land well after the note text renders, so this assertion —
-    // the only one that depends on it — gets the same 15s budget the heading
-    // above does, and is scoped to the Notes ROW so it cannot resolve against
-    // some other section's control.
+    // The expand control exists only while the page's client-side overflow
+    // measurement is true. Scoped to the Notes ROW so it cannot resolve against
+    // another section's control, and so a failure names this row.
     const showMoreButton = notesRow(page).getByRole('button', { name: 'Show more' })
-    await expect(showMoreButton).toBeVisible({ timeout: 15000 })
+    await expect(showMoreButton).toBeVisible({ timeout: 5000 })
 
     // Click "Show more" to expand
     await showMoreButton.click()

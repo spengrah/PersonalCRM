@@ -131,7 +131,11 @@ export default function ContactDetailPage() {
     type: 'success' | 'error'
     text: string
   } | null>(null)
-  const notesRef = useRef<HTMLDivElement>(null)
+  // A callback ref, not useRef: the notes element mounts LATER than the note
+  // data arrives whenever the note query resolves before the contact query,
+  // and a plain ref gives the overflow effect below no dependency that changes
+  // when it finally appears. See that effect.
+  const [notesEl, setNotesEl] = useState<HTMLDivElement | null>(null)
 
   // Extract list context from URL params (or use defaults)
   const listContext = useMemo(() => parseListContext(searchParams), [searchParams])
@@ -286,19 +290,27 @@ export default function ContactDetailPage() {
   // re-measures whenever the container's box changes — the initial
   // mount measurement can read scrollHeight=0 before fonts/styles
   // settle, leaving notesOverflowing false until the deps change.
+  //
+  // The observed ELEMENT is a dependency, which is load-bearing rather than
+  // tidy. The note and the contact are two independent queries, and the Notes
+  // row is inside the block this component renders only once the CONTACT has
+  // loaded. When the note resolves first, an effect keyed on the note body alone
+  // runs while there is no element to measure, bails out, and never re-runs —
+  // because the body it is keyed on does not change again. The expand control
+  // then stays hidden over content that plainly overflows. Keying on the node
+  // makes its mount the trigger.
   useEffect(() => {
-    const el = notesRef.current
-    if (!el || notesExpanded) return
+    if (!notesEl || notesExpanded) return
 
     const measure = () => {
-      setNotesOverflowing(el.scrollHeight > el.clientHeight)
+      setNotesOverflowing(notesEl.scrollHeight > notesEl.clientHeight)
     }
     measure()
 
     const observer = new ResizeObserver(measure)
-    observer.observe(el)
+    observer.observe(notesEl)
     return () => observer.disconnect()
-  }, [contactNote?.body, notesExpanded])
+  }, [notesEl, contactNote?.body, notesExpanded])
   const deleteContactMutation = useDeleteContact()
 
   // Three sequential requests, never Promise.all: on failure at step n, stop
@@ -718,7 +730,7 @@ export default function ContactDetailPage() {
                   <dt className="text-sm font-medium text-gray-500">Notes</dt>
                   <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
                     <div
-                      ref={notesRef}
+                      ref={setNotesEl}
                       className={`whitespace-pre-wrap ${!notesExpanded ? 'line-clamp-4' : ''}`}
                     >
                       {contactNote.body}
