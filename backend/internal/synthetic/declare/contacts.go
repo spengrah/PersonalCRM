@@ -8,10 +8,9 @@ import (
 // Contacts-domain resolutions (spec/contacts.yaml).
 //
 // Every ui-surface CON behavior is resolved here or waived in waivers.go; the
-// completeness test enforces that there is no fourth state. Four remain waived
+// completeness test enforces that there is no fourth state. Two remain waived
 // and say why there: CON-039 and CON-046 are proposed behaviors with no citing
-// test, CON-054 needs a name composition that can carry a resolution marker
-// unambiguously, and CON-056 needs a method-kind the factory cannot build yet.
+// test.
 func init() {
 	RegisterNone("CON-055", "the new-contact form CREATES the contact under test; there is no pre-existing data to provision")
 
@@ -48,10 +47,14 @@ func init() {
 		Entities: []Entity{Contact("target")},
 	})
 
-	// One contact to delete.
+	// One contact to delete. Its name carries the DESCENDER edge token so the
+	// visual guard that rides this fixture — the heading's line-height, which
+	// clips y/g/j/p/q under leading-7 — is asserted against a name that actually
+	// has descenders in it. None of the delete behavior's own then-items reads the
+	// name beyond the manifest.
 	Register(Declaration{
 		Behavior: "CON-042",
-		Entities: []Entity{Contact("target")},
+		Entities: []Entity{Contact("target", NameEdge(NameEdgeDescender))},
 	})
 
 	// A merge pair conflicting on EVERY field the spec names — cadence, location
@@ -166,6 +169,51 @@ func init() {
 		Entities: []Entity{
 			Contact("target", Methods(MethodEmail)),
 			Contact("two-methods", Methods(MethodEmail, MethodPhone)),
+		},
+	})
+
+	// The cadence-filter fixture: one contact per filter outcome (weekly,
+	// monthly, none) sharing a surname, plus a fourth that shares neither the
+	// surname nor a cadence so the TEXT search's filtering is falsifiable
+	// independently of the cadence filter.
+	//
+	// The names are PINNED rather than drawn for two reasons. The citing test's
+	// second search phase narrows on the shared surname, which has to be a
+	// standalone lexeme — glued into the hyphenated namespace prefix it would
+	// depend on how full-text search splits compound words. And no pinned name
+	// may CONTAIN another (see ExplicitName): the four rendered pairs below are
+	// mutually non-nesting, and each is ~24 characters, leaving the stored
+	// 'synth-<ns>-<given> <surname>' far inside the contact API's 255-character
+	// full_name cap even at the widest namespace.
+	//
+	// The shared surname is spelled out at each site rather than hoisted into a
+	// constant: the containment invariant has no automated check, so the only way
+	// to audit it is to read the pinned literals, and a constant hides three of
+	// them from that reading.
+	Register(Declaration{
+		Behavior: "CON-054",
+		Entities: []Entity{
+			Contact("weekly", Cadence("weekly"), ExplicitName("Weeklyfilter", "Cadfilter")),
+			Contact("monthly", Cadence("monthly"), ExplicitName("Monthlyfilter", "Cadfilter")),
+			Contact("none", ExplicitName("Nofilter", "Cadfilter")),
+			Contact("unrelated", ExplicitName("Zebrafilter", "Unrelated")),
+		},
+	})
+
+	// One contact carrying three method kinds with the primary on a NON-default
+	// one. Email is the factory's default primary whenever a contact has one, so
+	// the "exactly one primary, and it is the one that was chosen" claim needs the
+	// mark moved off it. The telegram value is the discriminating row for the
+	// display normalization: the factory stores a bare handle (the handler strips a
+	// leading '@' before the service ever sees it), so the '@' in the rendered
+	// string can only come from the frontend.
+	Register(Declaration{
+		Behavior: "CON-056",
+		Entities: []Entity{
+			Contact("methods",
+				Methods(MethodEmail, MethodTelegram, MethodGChat),
+				PrimaryMethod(MethodTelegram),
+			),
 		},
 	})
 
