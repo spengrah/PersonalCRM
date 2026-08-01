@@ -651,10 +651,11 @@ const telegramDiscoveryMessageCount = 5
 // it carries no ns-prefixed string and is recovered by the namespace ownership
 // record.
 //
-// The token is ns-prefixed so two namespaces cannot land in one grouped row: the
-// Imports discovery surface groups by token_normalized DB-wide, with no namespace
-// scoping. NormalizedToken is the lower-cased form of DisplayToken, which is the
-// invariant the grouped-row test ids depend on.
+// The token must be namespace-unique, because the Imports discovery surface
+// groups by token_normalized DB-wide with no namespace scoping — two namespaces
+// sharing a token would land in one grouped row and each would read the other's
+// evidence in its count. NormalizedToken is the lower-cased form of DisplayToken,
+// which is the invariant the grouped-row test ids depend on.
 type AnarlogTitleCandidateSpec struct {
 	NormalizedToken string
 	DisplayToken    string
@@ -663,12 +664,46 @@ type AnarlogTitleCandidateSpec struct {
 // AnarlogTitleCandidate builds the token pair for one anarlog_title row. Callers
 // sharing a `group` share a token, which is what makes their rows ONE grouped
 // candidate whose evidence count is the number of members.
+//
+// The token is LETTERS ONLY and uppercase-first, because every production token
+// reaching UpsertTitleCandidateTx comes out of anarlog.ExtractNameTokens, whose
+// keep-rule admits only 2..30 alphabetic characters starting uppercase. The
+// obvious ns-prefixed form ("synth-<ns>-<group>") is a string no discovery pass
+// could ever emit — hyphens, digits and a lower-case first letter are all
+// excluded — so seeding it would exercise grouping against a token shape
+// production never sees. The replay harness re-runs the real extractor over this
+// value before writing, so a future group or namespace that leaves the grammar
+// fails at seed time rather than silently.
+//
+// Namespace uniqueness therefore has to survive an alphabetic-only alphabet, and
+// the namespace token itself cannot: it is up to 60 characters of [a-z0-9-],
+// which no injective letter encoding fits inside 30. The namespace hash is
+// encoded instead, in 14 base-26 letters — the full 64 bits, so the collision
+// profile is far stronger than the ~800-bucket phone area code and the peer
+// bucket this toolkit's isolation already rests on.
 func (g *Generator) AnarlogTitleCandidate(group string) AnarlogTitleCandidateSpec {
-	token := g.Prefix() + group
+	// Already in the writer's asciiTitleCase form (upper first, rest lower), so
+	// the value seeded here and the value stored on the row are the same string.
+	token := "Synth" + hashLetters(seedHash(g.namespace)) + strings.ToLower(group)
 	return AnarlogTitleCandidateSpec{
 		NormalizedToken: strings.ToLower(token),
 		DisplayToken:    token,
 	}
+}
+
+// nsTokenLetters is how many base-26 letters carry the namespace hash: 26^14 >
+// 2^64, so the full hash fits with no truncation.
+const nsTokenLetters = 14
+
+// hashLetters renders a hash as fixed-width lower-case base-26, the only
+// alphabet the anarlog token grammar admits.
+func hashLetters(h uint64) string {
+	out := make([]byte, nsTokenLetters)
+	for i := nsTokenLetters - 1; i >= 0; i-- {
+		out[i] = byte('a' + h%26)
+		h /= 26
+	}
+	return string(out)
 }
 
 // --- Todoist (fake Client SyncItem) ----------------------------------------

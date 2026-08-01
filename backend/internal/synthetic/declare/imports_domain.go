@@ -193,11 +193,13 @@ func init() {
 // of the candidate queue is non-empty and the pager's controls render.
 const importsPaginationFixtureSize = 21
 
-// importsTitleTokenGroup is the token the two anarlog_title rows share. The
-// lowering prefixes it with the namespace, which is load-bearing rather than
-// cosmetic: the discovery surface groups by normalized token DB-WIDE, so two
-// namespaces sharing a bare token would land in one grouped row and each would see
-// the other's evidence in its count.
+// importsTitleTokenGroup is the group the two anarlog_title rows share, which is
+// what makes them ONE grouped row. It is not the stored token: the lowering
+// combines it with a letters-only encoding of the namespace, because the
+// discovery surface groups by normalized token DB-WIDE and two namespaces sharing
+// a bare token would land in one grouped row, each reading the other's evidence
+// in its count. Keep it alphabetic — the stored token has to stay inside the
+// anarlog extractor's grammar, and the seed refuses it otherwise.
 const importsTitleTokenGroup = "lena"
 
 // correspondenceEvidenceMessages is the aggregated message count the evidence

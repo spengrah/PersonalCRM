@@ -690,7 +690,10 @@
       "@area:contact-navigation",
       "@area:contact-merge",
       "@area:birthdays",
-      "@area:imports"
+      "@area:imports",
+      "@area:settings",
+      "@area:tasks",
+      "@area:meetings"
     ]
   },
   {
@@ -702,7 +705,7 @@
     "tags": []
   },
   {
-    "_comment": "Test-only provisioning surface. It has no product behavior of its own, but every seeded spec depends on it, so a change here selects every area that provisions through it. Add the next domain's areas here as the arc migrates it.",
+    "_comment": "Test-only provisioning surface. It has no product behavior of its own, so a change here selects every area that PROVISIONS through it — including settings-mac, which posts to /test/seed/mac-hosts and /test/seed/external-contacts directly rather than through the testApi helpers. Scope is provisioning, not cleanup: every spec using testApi also calls /test/cleanup here, and mapping that would select the whole suite (the same reason the wider synthetic/ tree below stays untagged). Add the next domain's areas here as the arc migrates it.",
     "pattern": "^backend/internal/api/handlers/test(_declared|_routes)?\\.go$",
     "tags": [
       "@area:dashboard",
@@ -711,7 +714,10 @@
       "@area:contact-navigation",
       "@area:contact-merge",
       "@area:birthdays",
-      "@area:imports"
+      "@area:imports",
+      "@area:settings",
+      "@area:tasks",
+      "@area:meetings"
     ]
   },
   {
@@ -720,7 +726,7 @@
     "tags": []
   },
   {
-    "_comment": "The bespoke seed service behind the /test/seed/* handlers — same rationale and same area list as those handlers: every area that still provisions through a bespoke endpoint depends on it.",
+    "_comment": "The bespoke seed service behind the /test/seed/* handlers — same rationale and same area list as those handlers: every area that still provisions through a bespoke endpoint depends on it. settings is in the list because settings-mac reaches SeedMacHost and SeedExternalContacts by direct route call, which is also why those two survive this PR.",
     "pattern": "^backend/internal/service/test_seed_service\\.go$",
     "tags": [
       "@area:dashboard",
@@ -729,7 +735,10 @@
       "@area:contact-navigation",
       "@area:contact-merge",
       "@area:birthdays",
-      "@area:imports"
+      "@area:imports",
+      "@area:settings",
+      "@area:tasks",
+      "@area:meetings"
     ]
   },
   {
@@ -742,7 +751,10 @@
       "@area:contact-navigation",
       "@area:contact-merge",
       "@area:birthdays",
-      "@area:imports"
+      "@area:imports",
+      "@area:settings",
+      "@area:tasks",
+      "@area:meetings"
     ]
   },
   {

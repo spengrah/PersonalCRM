@@ -567,6 +567,16 @@ func (h *Harness) SeedTelegramDiscoveryCandidate(ctx context.Context, spec facto
 // title-cases it, so re-deriving that casing in a caller would be a second copy of
 // production logic that could silently disagree with it.
 func (h *Harness) SeedTitleCandidate(ctx context.Context, spec factory.AnarlogTitleCandidateSpec) (uuid.UUID, string, error) {
+	// Every production token reaching this writer came out of ExtractNameTokens,
+	// so the writer's INPUT has a grammar just as much as its output has a shape.
+	// Re-running the real extractor is what holds the seeded token to it: a value
+	// the extractor would not emit — or would split, or would drop as a stopword —
+	// is a row no discovery pass could have produced.
+	if tokens := anarlog.ExtractNameTokens(spec.DisplayToken); len(tokens) != 1 || tokens[0] != spec.DisplayToken {
+		return uuid.Nil, "", fmt.Errorf(
+			"seed title candidate: token %q is not a value the production extractor can emit (ExtractNameTokens returns %v); anarlog_title rows only ever originate from that extractor, so this row would exercise grouping against a shape production never writes",
+			spec.DisplayToken, tokens)
+	}
 	sessionID := uuid.New()
 	tx, err := h.database.Pool.Begin(ctx)
 	if err != nil {
