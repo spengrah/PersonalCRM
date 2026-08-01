@@ -334,9 +334,14 @@ func MutualMeeting(a Amount) ContactProp {
 // (lifecycle, state) pair, so the state is genuinely reachable by seeding even
 // though the seed harness runs the follow-up consumer off.
 //
-// A follow-up loop is opened BY an outbound, so it requires a Cadence and one of
-// Outreach / MutualMeeting: hung on a contact with neither, it renders as awaiting
-// a reply to nothing, which production cannot reach.
+// A follow-up loop is opened BY an outbound and by nothing else, so it requires a
+// Cadence and Outreach: hung on a contact with no outbound it renders as awaiting a
+// reply to nothing, which production cannot reach.
+//
+// It is mutually exclusive with every prop that replays an inbound or a mutual
+// interaction (MutualMeeting, OverdueBy, History), because a reply COMPLETES a live
+// follow-up. A fixture pairing them would compose a live loop beside the reply that
+// closes it — a state no ordering of production writes produces.
 func AwaitingReply() ContactProp {
 	return func(p *contactPlan) { p.awaitingReply = true }
 }
@@ -558,6 +563,9 @@ func (p *contactPlan) validate() error {
 		if !p.hasEmail() {
 			return fmt.Errorf("contact %q: OverdueBy lowers to a replayed inbound EMAIL, so the contact must carry an email method", p.name)
 		}
+		if p.mutualMeeting != nil {
+			return fmt.Errorf("contact %q: OverdueBy and MutualMeeting are mutually exclusive — a mutual interaction moves last_contacted AND recomputes contact_by forward, and the meeting is dated nearer the anchor than OverdueBy's backdated history, so the contact would come out NOT overdue while still declaring that it is", p.name)
+		}
 	}
 	if p.outreach != nil || p.mutualMeeting != nil {
 		if !p.hasEmail() {
@@ -568,8 +576,28 @@ func (p *contactPlan) validate() error {
 		if p.cadence == "" {
 			return fmt.Errorf("contact %q: AwaitingReply requires Cadence — a follow-up loop only opens for a contact that has one", p.name)
 		}
-		if p.outreach == nil && p.mutualMeeting == nil {
-			return fmt.Errorf("contact %q: AwaitingReply requires Outreach or MutualMeeting — a follow-up is opened BY an outbound, so one on a contact with no outbound renders as awaiting a reply to nothing", p.name)
+		if p.outreach == nil {
+			return fmt.Errorf("contact %q: AwaitingReply requires Outreach — a follow-up loop is opened by an OUTBOUND and by nothing else (the follow-up manager routes outbound to its create branch and inbound/mutual to its complete branch), so a contact with no outbound has nothing that could have opened the loop it declares", p.name)
+		}
+		// The COUPLING, not just the presence of an outbound. A live follow-up
+		// means no reply has arrived since the outbound that opened it: an inbound
+		// or mutual interaction COMPLETES the loop rather than coexisting with it,
+		// and the lowering replays every such interaction before it creates the
+		// follow-up, so a fixture combining the two composes a state the
+		// application would already have closed.
+		for _, coupling := range []struct {
+			prop     string
+			declared bool
+			records  string
+		}{
+			{"MutualMeeting", p.mutualMeeting != nil, "a MUTUAL calendar interaction"},
+			{"OverdueBy", p.overdueBy != nil, "an INBOUND email"},
+			{"History", p.history != nil, "INBOUND emails"},
+		} {
+			if coupling.declared {
+				return fmt.Errorf("contact %q: AwaitingReply and %s are mutually exclusive — %s replays %s, and a reply COMPLETES a live follow-up rather than leaving it pending, so the composed state is a live loop beside the very reply that would have closed it (declare the outbound alone for the awaiting-reply fixture; a contact that HAS replied is not awaiting one)",
+					p.name, coupling.prop, coupling.prop, coupling.records)
+			}
 		}
 	}
 	if p.history != nil {
