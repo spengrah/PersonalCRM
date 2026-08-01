@@ -1,5 +1,10 @@
 import { test, expect } from './fixtures'
-import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
+import {
+  createTestAPI,
+  declaredWorldNamePrefix,
+  TestAPI,
+  type SeedBehaviorResult,
+} from './helpers/test-api'
 
 // People-tab name candidates: grouped anarlog_title tokens lifted from session
 // titles. Each (token, session) pair is one external_contact row; the Imports
@@ -110,7 +115,8 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
   // spec: IMP-031.item-leaves-queue-counts-update
   test('links the token group to an existing contact', async ({ page }) => {
     // The link target is IMP-026's own declared contact, so it lives in the same
-    // namespace as the token group and the selector's substring filter reaches it.
+    // namespace as the token group and the selector's substring filter reaches it
+    // — once that filter is actually applied, which the selection below does.
     const targetName = seeded.entities['link-target'].name
 
     await page.goto('/imports')
@@ -124,10 +130,21 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     const dialog = page.getByRole('dialog', { name: /Create contact from name candidate/ })
     await expect(dialog.getByText(/No contact methods/)).toBeVisible()
 
-    // Toggle to link mode and pick the declared contact.
+    // Toggle to link mode and pick the declared contact. TYPE THE WORLD'S NAME
+    // PREFIX FIRST: ContactSelector renders `contacts.slice(0, 10)` after a
+    // substring filter that an empty term matches everything with
+    // (contact-selector.tsx:53-67), and its list is an unscoped
+    // useContacts({ limit: 500 }) (NameCandidateModal.tsx:60) — so on the shared
+    // parallel database the ten rendered options are whatever ten names sort
+    // first across every worker, and this world's target need not be among them.
+    // Filtering to `synth-<namespace>-` leaves only this world's contacts, the
+    // same pattern every sibling link flow uses.
     await dialog.getByRole('button', { name: 'Link to existing' }).click()
     await dialog.getByText('Search contacts...').click()
-    await page.getByText(targetName).first().click()
+    await dialog.getByPlaceholder('Search contacts...').fill(declaredWorldNamePrefix(seeded))
+    const targetOption = dialog.getByText(targetName, { exact: true }).last()
+    await expect(targetOption).toBeVisible({ timeout: 5000 })
+    await targetOption.click()
 
     const resolved = myResolve(page)
     await dialog.getByRole('button', { name: 'Link contact', exact: true }).click()
