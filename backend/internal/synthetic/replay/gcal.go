@@ -3,7 +3,6 @@ package replay
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"personal-crm/backend/internal/google"
@@ -28,11 +27,19 @@ type GCalResult struct {
 // harness's events. The provider's updateLastContactedForPastEvents calls
 // ListPastEventsNeedingUpdate to enumerate every past confirmed calendar_event
 // DB-wide and publishes calendar.attended for each; on the shared test DB this
-// races with other tests' calendar_events. This wrapper filters that enumeration
+// races with other tests' calendar_events. This wrapper scopes that enumeration
 // to events whose gcal_event_id carries the harness's synthetic prefix, so a
 // replay in one namespace can never read, mark, or publish for another
 // namespace's (or a real) event. All other methods pass through unchanged.
 // Test-only — no production provider change.
+//
+// The scope is applied in SQL, not to the production query's result. That is a
+// correctness requirement rather than an optimization: the production query's
+// LIMIT binds BEFORE any Go-side filter could run, so a shared database holding a
+// page's worth of older unprocessed rows from another namespace — which a crashed
+// sibling worker strands exactly — would fill every page with foreign rows and
+// hand this wrapper an empty local set on every retry. The replay would then
+// starve and fail on the settle timeout, blaming the wrong thing entirely.
 type namespaceScopedCalendarRepo struct {
 	real   *repository.CalendarEventRepository
 	prefix string
@@ -43,17 +50,7 @@ func (r *namespaceScopedCalendarRepo) Upsert(ctx context.Context, req repository
 }
 
 func (r *namespaceScopedCalendarRepo) ListPastEventsNeedingUpdate(ctx context.Context, before time.Time, limit int32) ([]repository.CalendarEvent, error) {
-	all, err := r.real.ListPastEventsNeedingUpdate(ctx, before, limit)
-	if err != nil {
-		return nil, err
-	}
-	scoped := make([]repository.CalendarEvent, 0, len(all))
-	for _, e := range all {
-		if strings.HasPrefix(e.GcalEventID, r.prefix) {
-			scoped = append(scoped, e)
-		}
-	}
-	return scoped, nil
+	return r.real.ListPastEventsNeedingUpdateByPrefixForTest(ctx, before, r.prefix, limit)
 }
 
 func (r *namespaceScopedCalendarRepo) MarkLastContactedUpdated(ctx context.Context, id uuid.UUID) error {

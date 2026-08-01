@@ -349,22 +349,17 @@ func checkNamespaceFree(ctx context.Context, support *repository.SyntheticSuppor
 	if len(contactIDs) > 0 {
 		return fmt.Errorf("%w: %q already holds %d contact rows", ErrNamespaceOccupied, namespace, len(contactIDs))
 	}
+	// Occupancy asks the SAME predicate cleanup's salt expansion asks, so a
+	// namespace this refuses is exactly a namespace cleanup can find — and the
+	// reverse. A seed admitted here whose world cleanup could not then discover is
+	// the state that strands rows permanently. It covers the LIVE paired host as
+	// well as the revoked marker: the two are separate rows under separate names,
+	// and the best-effort teardown can leave either without the other.
 	for _, token := range append([]string{namespace}, saltVariants(namespace)...) {
-		hostname := factory.SyntheticSourcePrefix + token + "-host"
-		if _, exists, err := support.SelectMacHostIDByHostname(ctx, hostname); err != nil {
+		if exists, err := namespaceIsDiscoverable(ctx, support, token); err != nil {
 			return fmt.Errorf("declare: occupancy check (host) for %q: %w", token, err)
 		} else if exists {
 			return fmt.Errorf("%w: %q already holds a synthetic host row", ErrNamespaceOccupied, token)
-		}
-		// The LIVE paired host is a separate row under a separate name, and the
-		// failure-path teardown is best-effort per step — so the marker can be gone
-		// while it survives. Left unprobed, this namespace would look free and its
-		// next seed would fail mid-run on the singleton index instead of being
-		// refused up front with a name to clean.
-		if _, exists, err := support.SelectMacHostIDByHostname(ctx, PairedMacHostname(token)); err != nil {
-			return fmt.Errorf("declare: occupancy check (paired host) for %q: %w", token, err)
-		} else if exists {
-			return fmt.Errorf("%w: %q already holds a live paired host row", ErrNamespaceOccupied, token)
 		}
 	}
 

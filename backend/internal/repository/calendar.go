@@ -332,6 +332,38 @@ func (r *CalendarEventRepository) ListPastEventsNeedingUpdate(ctx context.Contex
 	return events, nil
 }
 
+// ListPastEventsNeedingUpdateByPrefixForTest is ListPastEventsNeedingUpdate
+// scoped to one synthetic namespace's gcal_event_id prefix. TEST ONLY — the
+// synthetic replay harness wraps the calendar provider with it so the provider's
+// DB-wide past-event enumeration can never read, mark or publish for another
+// namespace's events on the shared test database.
+//
+// The scoping is in SQL rather than applied to the production query's result
+// because the LIMIT binds first: with a page's worth of older unprocessed foreign
+// rows present, a Go-side filter returns an empty local set on every retry and the
+// replay starves instead of settling. Exported for the same reason
+// MacHostRepository.SeedHostForTest is — the caller is an external package.
+func (r *CalendarEventRepository) ListPastEventsNeedingUpdateByPrefixForTest(
+	ctx context.Context,
+	before time.Time,
+	prefix string,
+	limit int32,
+) ([]CalendarEvent, error) {
+	dbEvents, err := r.queries.SyntheticListPastEventsNeedingUpdateByPrefix(ctx, db.SyntheticListPastEventsNeedingUpdateByPrefixParams{
+		Before:            pgtype.Timestamptz{Time: before, Valid: true},
+		GcalEventIDPrefix: pgtype.Text{String: prefix, Valid: true},
+		RowLimit:          limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	events := make([]CalendarEvent, len(dbEvents))
+	for i, dbEvent := range dbEvents {
+		events[i] = convertDbCalendarEvent(dbEvent)
+	}
+	return events, nil
+}
+
 // MarkLastContactedUpdated marks an event as having updated last_contacted for its contacts
 func (r *CalendarEventRepository) MarkLastContactedUpdated(ctx context.Context, id uuid.UUID) error {
 	return r.queries.MarkLastContactedUpdated(ctx, uuidToPgUUID(id))

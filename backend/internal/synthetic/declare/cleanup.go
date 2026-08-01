@@ -165,18 +165,18 @@ func expandNamespace(ctx context.Context, support *repository.SyntheticSupportRe
 		return []string{namespace}, nil
 	}
 
-	hasMarker := func(token string) (bool, error) {
-		_, exists, err := support.SelectMacHostIDByHostname(ctx, factory.SyntheticSourcePrefix+token+"-host")
+	discoverable := func(token string) (bool, error) {
+		found, err := namespaceIsDiscoverable(ctx, support, token)
 		if err != nil {
 			return false, fmt.Errorf("declare: expand namespace %q: %w", namespace, err)
 		}
-		return exists, nil
+		return found, nil
 	}
 
 	var variants []string
 	for i := 1; i <= maxSaltAttempt; i++ {
 		candidate := fmt.Sprintf("%s-s%d", namespace, i)
-		exists, err := hasMarker(candidate)
+		exists, err := discoverable(candidate)
 		if err != nil {
 			return nil, err
 		}
@@ -185,7 +185,7 @@ func expandNamespace(ctx context.Context, support *repository.SyntheticSupportRe
 		}
 	}
 
-	self, err := hasMarker(namespace)
+	self, err := discoverable(namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +193,34 @@ func expandNamespace(ctx context.Context, support *repository.SyntheticSupportRe
 		return append([]string{namespace}, variants...), nil
 	}
 	return variants, nil
+}
+
+// namespaceIsDiscoverable reports whether a token names a world that still has
+// rows worth sweeping. It is the ONE predicate both the seed side's occupancy
+// check and the cleanup side's salt expansion ask, so the two can never disagree
+// about whether a namespace exists.
+//
+// TWO markers, not one, and the second is not redundant. The revoked marker host
+// is written first and deleted last, which makes it the primary key to a
+// namespace — but the failure-path teardown is best-effort PER STEP, so a run
+// whose paired-host delete failed while its marker delete succeeded leaves a LIVE
+// paired host under a token nothing can discover. That host holds the
+// database-wide singleton slot against every later world that pairs one, and a
+// live host outliving the heartbeat threshold opens a staleness breach. Making
+// the paired host a discovery key of its own is what lets a later cleanup of the
+// REQUESTED token still find and sweep the salted variant it was stranded under.
+func namespaceIsDiscoverable(
+	ctx context.Context,
+	support *repository.SyntheticSupportRepository,
+	token string,
+) (bool, error) {
+	if _, exists, err := support.SelectMacHostIDByHostname(ctx, factory.SyntheticSourcePrefix+token+"-host"); err != nil {
+		return false, err
+	} else if exists {
+		return true, nil
+	}
+	_, exists, err := support.SelectMacHostIDByHostname(ctx, PairedMacHostname(token))
+	return exists, err
 }
 
 // cleanNamespace runs the guards and the ladder for ONE effective namespace.

@@ -917,6 +917,28 @@ JOIN calendar_event ce ON ce.gcal_event_id = g.gcal_event_id
 WHERE c.contact_id = ANY(ce.matched_contact_ids)
   AND ce.last_contacted_updated = true;
 
+-- name: SyntheticListPastEventsNeedingUpdateByPrefix :many
+-- The namespace-scoped form of ListPastEventsNeedingUpdate, for the GCal replay
+-- adapters' provider wrapper. Scoping in SQL rather than filtering the production
+-- query's result in Go is not a refinement — it is the difference between working
+-- and starving. The LIMIT applies BEFORE any Go-side filter, so a shared test
+-- database holding a page's worth of older unprocessed rows from another
+-- namespace (a crashed sibling worker strands exactly that) would fill every page
+-- with foreign rows and hand the wrapper an empty local set on every retry, until
+-- the settle times out blaming the wrong thing.
+--
+-- Otherwise identical to the production predicate, deliberately: the two must
+-- select the same rows for the same reasons, so the replay exercises the real
+-- publish loop rather than a lookalike.
+SELECT * FROM calendar_event
+WHERE last_contacted_updated = FALSE
+  AND status = 'confirmed'
+  AND end_time < @before
+  AND array_length(matched_contact_ids, 1) > 0
+  AND gcal_event_id LIKE @gcal_event_id_prefix || '%'
+ORDER BY end_time ASC
+LIMIT @row_limit;
+
 -- name: SyntheticCountLinkedCalendarEventsByGcalIds :one
 -- gcal UPCOMING: how many of these (gcal_event_id, contact_id) PAIRS have a
 -- calendar_event row carrying the contact in matched_contact_ids. Deliberately

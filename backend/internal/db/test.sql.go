@@ -2308,6 +2308,76 @@ func (q *Queries) SyntheticListEventIdsForContacts(ctx context.Context, contactI
 	return items, nil
 }
 
+const SyntheticListPastEventsNeedingUpdateByPrefix = `-- name: SyntheticListPastEventsNeedingUpdateByPrefix :many
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
+WHERE last_contacted_updated = FALSE
+  AND status = 'confirmed'
+  AND end_time < $1
+  AND array_length(matched_contact_ids, 1) > 0
+  AND gcal_event_id LIKE $2 || '%'
+ORDER BY end_time ASC
+LIMIT $3
+`
+
+type SyntheticListPastEventsNeedingUpdateByPrefixParams struct {
+	Before            pgtype.Timestamptz `json:"before"`
+	GcalEventIDPrefix pgtype.Text        `json:"gcal_event_id_prefix"`
+	RowLimit          int32              `json:"row_limit"`
+}
+
+// The namespace-scoped form of ListPastEventsNeedingUpdate, for the GCal replay
+// adapters' provider wrapper. Scoping in SQL rather than filtering the production
+// query's result in Go is not a refinement — it is the difference between working
+// and starving. The LIMIT applies BEFORE any Go-side filter, so a shared test
+// database holding a page's worth of older unprocessed rows from another
+// namespace (a crashed sibling worker strands exactly that) would fill every page
+// with foreign rows and hand the wrapper an empty local set on every retry, until
+// the settle times out blaming the wrong thing.
+//
+// Otherwise identical to the production predicate, deliberately: the two must
+// select the same rows for the same reasons, so the replay exercises the real
+// publish loop rather than a lookalike.
+func (q *Queries) SyntheticListPastEventsNeedingUpdateByPrefix(ctx context.Context, arg SyntheticListPastEventsNeedingUpdateByPrefixParams) ([]*CalendarEvent, error) {
+	rows, err := q.db.Query(ctx, SyntheticListPastEventsNeedingUpdateByPrefix, arg.Before, arg.GcalEventIDPrefix, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*CalendarEvent{}
+	for rows.Next() {
+		var i CalendarEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.GcalEventID,
+			&i.GcalCalendarID,
+			&i.GoogleAccountID,
+			&i.Title,
+			&i.Description,
+			&i.Location,
+			&i.StartTime,
+			&i.EndTime,
+			&i.AllDay,
+			&i.Status,
+			&i.UserResponse,
+			&i.OrganizerEmail,
+			&i.Attendees,
+			&i.MatchedContactIds,
+			&i.SyncedAt,
+			&i.LastContactedUpdated,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HtmlLink,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const SyntheticRecordNamespaceEntity = `-- name: SyntheticRecordNamespaceEntity :exec
 INSERT INTO synthetic_namespace_entity (namespace, entity_kind, entity_id)
 VALUES ($1, $2, $3::uuid)

@@ -335,9 +335,11 @@ func (h *Harness) cleanup(ctx context.Context) error {
 	// expiry, never the row id, and only a hash is stored — so a host deleted
 	// first strands the row permanently. The production janitor cannot reclaim it
 	// either: it sweeps only tokens that were never consumed.
+	tokensSwept := true
 	step("mac_host_pairing_token", func() error {
 		for _, id := range c.pairedMacHostIDs {
 			if _, err := h.support.DeletePairingTokensByConsumedHostID(ctx, id); err != nil {
+				tokensSwept = false
 				return err
 			}
 		}
@@ -349,19 +351,43 @@ func (h *Harness) cleanup(ctx context.Context) error {
 	// every later world that pairs one. Runs after the external_contact steps: the
 	// external_contact.host_id FK is ON DELETE SET NULL, so a host deleted first
 	// would orphan its ingest candidates from every host-scoped route.
-	step("mac_host_paired", func() error {
-		for _, id := range c.pairedMacHostIDs {
-			if _, err := h.support.DeleteMacHostByID(ctx, id); err != nil {
-				return err
+	//
+	// GATED on the token step, because this ladder CONTINUES past a failed step.
+	// consumed_host_id is ON DELETE SET NULL and is the consumed token's only
+	// recovery key, so deleting the host after the token delete failed converts a
+	// retriable leftover into a permanently unreachable row — the janitor sweeps
+	// only UNCONSUMED tokens. Leaving the host standing keeps both rows recoverable
+	// (and the world discoverable, see the marker step below); the run already
+	// reports the failure through firstErr.
+	pairedHostsSwept := true
+	if tokensSwept {
+		step("mac_host_paired", func() error {
+			for _, id := range c.pairedMacHostIDs {
+				if _, err := h.support.DeleteMacHostByID(ctx, id); err != nil {
+					pairedHostsSwept = false
+					return err
+				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
+	} else {
+		pairedHostsSwept = len(c.pairedMacHostIDs) == 0
+	}
 	// 14. mac_host (the seeded revoked synthetic host by id).
-	step("mac_host", func() error {
-		_, err := h.support.DeleteMacHostByID(ctx, h.macHostID)
-		return err
-	})
+	//
+	// GATED for the same reason, one level out: the marker is what makes a
+	// namespace DISCOVERABLE to a later cleanup. Deleting it while a live paired
+	// host survives would strand that host under a token nothing can look up —
+	// holding the database-wide singleton slot against every later world that
+	// pairs one. Retaining the marker keeps the whole namespace recoverable, which
+	// is the same invariant the cross-request ladder gets for free from its single
+	// transaction.
+	if pairedHostsSwept {
+		step("mac_host", func() error {
+			_, err := h.support.DeleteMacHostByID(ctx, h.macHostID)
+			return err
+		})
+	}
 	// 14a. namespace ownership records. Only the DECLARED seed path writes them
 	// (keyed by this namespace), but this teardown is the failure path that same
 	// path drives — and it reports whether the namespace came out CLEAN, so

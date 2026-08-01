@@ -2276,6 +2276,19 @@ type Querier interface {
 	// (interaction.recorded uses interaction.ID as source_id, calendar.attended
 	// uses an internal ref, etc.) generically via payload->>'contact_id'.
 	SyntheticListEventIdsForContacts(ctx context.Context, contactIds []string) ([]pgtype.UUID, error)
+	// The namespace-scoped form of ListPastEventsNeedingUpdate, for the GCal replay
+	// adapters' provider wrapper. Scoping in SQL rather than filtering the production
+	// query's result in Go is not a refinement — it is the difference between working
+	// and starving. The LIMIT applies BEFORE any Go-side filter, so a shared test
+	// database holding a page's worth of older unprocessed rows from another
+	// namespace (a crashed sibling worker strands exactly that) would fill every page
+	// with foreign rows and hand the wrapper an empty local set on every retry, until
+	// the settle times out blaming the wrong thing.
+	//
+	// Otherwise identical to the production predicate, deliberately: the two must
+	// select the same rows for the same reasons, so the replay exercises the real
+	// publish loop rather than a lookalike.
+	SyntheticListPastEventsNeedingUpdateByPrefix(ctx context.Context, arg SyntheticListPastEventsNeedingUpdateByPrefixParams) ([]*CalendarEvent, error)
 	// Namespace ownership, written at seed time. The declared-seed endpoint seeds
 	// in one request and cleans up in another, and every other id set is recovered
 	// from a generator-derived token carried by the row — which for contacts means

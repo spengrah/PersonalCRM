@@ -1405,6 +1405,17 @@ func validateEntityOrder(entities []Entity) error {
 					return fmt.Errorf("external candidate %q: SameEmailAs(%q) needs a contact that carries an email method", e.handle(), ref)
 				}
 			}
+			// A MATCHED calendar event matches on the attendee's ADDRESS, not on the
+			// contact handle: the factory puts the contact's email on the attendee
+			// list, and a contact carrying none makes it substitute an unknown
+			// address instead. The lowering still asks for a matched settle, so the
+			// event lands unmatched and the gate can never clear — a 30-second
+			// timeout blaming the settle for a declaration that was wrong all along.
+			if p, ok := e.(*calendarEventPlan); ok && !p.unmatched && p.contact == ref {
+				if contact, isContact := target.(*contactPlan); !isContact || !contact.hasEmail() {
+					return fmt.Errorf("calendar event %q: contact %q carries no email method, so the attendee list cannot address it and the event would never match — give the contact an email, or declare an UnmatchedCalendarEvent", e.handle(), ref)
+				}
+			}
 		}
 		if _, dup := seen[e.handle()]; dup {
 			return fmt.Errorf("duplicate entity handle %q", e.handle())
