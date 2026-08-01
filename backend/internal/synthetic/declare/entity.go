@@ -32,20 +32,27 @@ const (
 	MethodEmail    = "email"
 	MethodPhone    = "phone"
 	MethodTelegram = "telegram"
+	// MethodGChat is a Google Chat address. Chat addresses ARE emails, so the
+	// generated value is email-shaped: the contact API validates a gchat value
+	// with the email rule, and identity normalization delegates gchat to the
+	// email normalizer.
+	MethodGChat = "gchat"
 )
 
 var methodKinds = map[string]bool{
 	MethodEmail:    true,
 	MethodPhone:    true,
 	MethodTelegram: true,
+	MethodGChat:    true,
 }
 
 // Name edges a Contact may declare. They name the RENDERING hazard, not the
 // glyphs, and lower onto the factory's own edge tokens.
 const (
-	NameEdgeLong  = string(factory.NameEdgeLong)
-	NameEdgeRTL   = string(factory.NameEdgeRTL)
-	NameEdgeEmoji = string(factory.NameEdgeEmoji)
+	NameEdgeDescender = string(factory.NameEdgeDescender)
+	NameEdgeLong      = string(factory.NameEdgeLong)
+	NameEdgeRTL       = string(factory.NameEdgeRTL)
+	NameEdgeEmoji     = string(factory.NameEdgeEmoji)
 )
 
 // Candidate sources a declaration may name. Stated LOCALLY, like the cadence
@@ -194,6 +201,10 @@ type contactPlan struct {
 	createdAgo      *Amount
 	methods         []string
 	noMethods       bool
+	primaryMethod   string
+	outreach        *Amount
+	mutualMeeting   *Amount
+	awaitingReply   bool
 	history         *int
 	nameEdge        string
 	explicitNameSet bool
@@ -271,6 +282,63 @@ func Methods(kinds ...string) ContactProp {
 // NoMethods declares a contact carrying no contact_method at all.
 func NoMethods() ContactProp {
 	return func(p *contactPlan) { p.noMethods = true }
+}
+
+// PrimaryMethod marks one of the declared method kinds as the contact's primary.
+//
+// Without it the first method built is primary, which is the email whenever the
+// contact carries one — so a fixture whose claim is that a NON-default method
+// carries the primary mark has no other way to state itself. The kind must appear
+// in this contact's own Methods set, and the resulting row set carries exactly one
+// primary, which is what the contact API's own validator enforces.
+func PrimaryMethod(kind string) ContactProp {
+	return func(p *contactPlan) { p.primaryMethod = kind }
+}
+
+// Outreach declares an OUTBOUND email sent the stated amount before the run
+// anchor. An outbound touches neither last_contacted nor last_interaction_at, so
+// this is the fixture for "I reached out and have heard nothing back":
+// last_outreach_at is set and last_response_at stays null.
+//
+// It lowers to a REPLAYED outbound Gmail message — the sync's own interaction
+// write — so it requires an addressable email. Unlike OverdueBy it does not
+// backdate creation: no forward-only due date has to be dragged backwards here,
+// and the outbound-only fixture the standard world already seeds does not either.
+func Outreach(a Amount) ContactProp {
+	return func(p *contactPlan) {
+		amount := a
+		p.outreach = &amount
+	}
+}
+
+// MutualMeeting declares a past calendar meeting the stated amount before the run
+// anchor. The calendar sync records an attended event as MUTUAL, and mutual bumps
+// last_contacted, last_outreach_at AND last_response_at together, so this is the
+// fixture for "we spoke, in both directions".
+//
+// It lowers to a REPLAYED GCal event, which addresses the contact by its email
+// address, so it likewise requires an addressable email.
+func MutualMeeting(a Amount) ContactProp {
+	return func(p *contactPlan) {
+		amount := a
+		p.mutualMeeting = &amount
+	}
+}
+
+// AwaitingReply declares a LIVE follow-up loop on the contact — the state
+// has_pending_followup reports and the "awaiting reply" indicator renders.
+//
+// It lowers to the harness's follow-up primitive, whose row is key-for-key the
+// shape FollowUpManager writes in production, in the `managed` state a promoted
+// remote create settles on. has_pending_followup is computed LIVE from that row's
+// (lifecycle, state) pair, so the state is genuinely reachable by seeding even
+// though the seed harness runs the follow-up consumer off.
+//
+// A follow-up loop is opened BY an outbound, so it requires a Cadence and one of
+// Outreach / MutualMeeting: hung on a contact with neither, it renders as awaiting
+// a reply to nothing, which production cannot reach.
+func AwaitingReply() ContactProp {
+	return func(p *contactPlan) { p.awaitingReply = true }
 }
 
 // History declares n inbound emails spread deterministically across the recent
@@ -369,13 +437,16 @@ func Location(s string) ContactProp {
 // It skips the factory's display-name dedupe (an exact literal is the point), so
 // no two entities may declare the same pair — nor may one pinned name CONTAIN
 // another, since the selectors that resolve these fixtures match on substring.
-// Registration checks the duplicate case within one entity list; the composed
-// world — where every declaration and edge runs against ONE namespace — is
-// checked across lists by a unit test. An accumulate-and-compare inside Register
-// could see the cross-list pairs too (each pair is examined when its later member
-// registers); a test is preferred because Register PANICS and this package is
-// linked into crm-api, so a cross-list collision would abort the API at startup
-// instead of failing a named test.
+//
+// Registration checks the DUPLICATE case within one entity list. The containment
+// case, and the duplicate case ACROSS lists — the composed world runs every
+// declaration and edge against ONE namespace — are a stated invariant with no
+// automated check. That is a deliberate choice, not an oversight: an
+// accumulate-and-compare inside Register would see the cross-list pairs (each is
+// examined when its later member registers), but Register PANICS and this package
+// is linked into crm-api, so a collision would abort the API at startup rather
+// than fail a named test. Adding a pinned name means checking it against the
+// registered set by hand.
 //
 // It is mutually exclusive with SameNameAs and NameEdge: a twin copies another
 // contact's rendered name, and an edge splices a token into the pair, so either
@@ -445,7 +516,25 @@ func (p *contactPlan) validate() error {
 		}
 		seen[m] = true
 	}
-	for label, amount := range map[string]*Amount{"OverdueBy": p.overdueBy, "CreatedAgo": p.createdAgo} {
+	if p.primaryMethod != "" {
+		if p.noMethods {
+			return fmt.Errorf("contact %q: PrimaryMethod and NoMethods are mutually exclusive", p.name)
+		}
+		if !methodKinds[p.primaryMethod] {
+			return fmt.Errorf("contact %q: unknown primary method kind %q (valid: %s)",
+				p.name, p.primaryMethod, strings.Join(sortedMethodKinds(), ", "))
+		}
+		if !seen[p.primaryMethod] {
+			return fmt.Errorf("contact %q: PrimaryMethod(%q) names a kind the declared Methods set does not carry — the primary has to be one of the contact's own methods",
+				p.name, p.primaryMethod)
+		}
+	}
+	for label, amount := range map[string]*Amount{
+		"OverdueBy":     p.overdueBy,
+		"CreatedAgo":    p.createdAgo,
+		"Outreach":      p.outreach,
+		"MutualMeeting": p.mutualMeeting,
+	} {
 		if amount == nil {
 			continue
 		}
@@ -468,6 +557,19 @@ func (p *contactPlan) validate() error {
 		}
 		if !p.hasEmail() {
 			return fmt.Errorf("contact %q: OverdueBy lowers to a replayed inbound EMAIL, so the contact must carry an email method", p.name)
+		}
+	}
+	if p.outreach != nil || p.mutualMeeting != nil {
+		if !p.hasEmail() {
+			return fmt.Errorf("contact %q: Outreach and MutualMeeting lower to a replayed EMAIL-addressed source payload, so the contact must carry an email method", p.name)
+		}
+	}
+	if p.awaitingReply {
+		if p.cadence == "" {
+			return fmt.Errorf("contact %q: AwaitingReply requires Cadence — a follow-up loop only opens for a contact that has one", p.name)
+		}
+		if p.outreach == nil && p.mutualMeeting == nil {
+			return fmt.Errorf("contact %q: AwaitingReply requires Outreach or MutualMeeting — a follow-up is opened BY an outbound, so one on a contact with no outbound renders as awaiting a reply to nothing", p.name)
 		}
 	}
 	if p.history != nil {

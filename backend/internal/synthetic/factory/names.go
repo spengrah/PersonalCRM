@@ -71,6 +71,18 @@ func (g *Generator) emailFor(given, surname string, n int) string {
 	return fmt.Sprintf("%s%s-%d@synthetic.example", g.Prefix(), slug(given, surname), n)
 }
 
+// gchatFor builds a namespace-prefixed Google Chat address. Chat addresses ARE
+// emails (the contact API validates a gchat value with the email rule, and
+// identity.Normalize delegates gchat to the email normalizer), so this shares
+// emailFor's shape on the same reserved .example TLD. The 'gchat-' segment keeps
+// the local part DISTINCT from emailFor's: the two normalize identically, so an
+// equal pair would be one identity carried by two methods on the same contact.
+// Shape: <ns>-gchat-<slug>-<n>@synthetic.example — well inside the 255-character
+// cap the contact API applies to a method value.
+func (g *Generator) gchatFor(given, surname string, n int) string {
+	return fmt.Sprintf("%sgchat-%s-%d@synthetic.example", g.Prefix(), slug(given, surname), n)
+}
+
 // telegramHandle builds a namespace-prefixed handle: synth_<ns>_<n>.
 func (g *Generator) telegramHandle(n int) string {
 	return fmt.Sprintf("synth_%s_%d", sanitizeHandle(g.namespace), n)
