@@ -52,7 +52,18 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 }
 
-/** The candidate's stored methods, read back because the generator owns them. */
+/**
+ * The candidate's stored methods, read back because the generator owns them.
+ *
+ * The DETAIL route sends the raw external_contact, whose emails/phones are
+ * `{value, type, primary}` objects — unlike the LIST route, whose
+ * ImportCandidateResponse flattens both to bare strings. Reading the wrong one
+ * would yield undefined per entry while the ARRAY LENGTHS stayed right, so the
+ * callers' length assertions would still pass and the undefined would flow into
+ * locators. Each extracted value is therefore asserted to be a non-empty string
+ * here, where the shape is known, rather than at the locator that would merely
+ * time out.
+ */
 async function candidateMethods(
   request: APIRequestContext,
   candidateId: string
@@ -62,10 +73,16 @@ async function candidateMethods(
   })
   expect(res.ok()).toBe(true)
   const data = (await res.json())?.data
-  return {
-    emails: (data?.emails ?? []).map((e: { value: string }) => e.value),
-    phones: (data?.phones ?? []).map((p: { value: string }) => p.value),
-  }
+  const values = (raw: unknown, field: 'emails' | 'phones'): string[] =>
+    (Array.isArray(raw) ? raw : []).map((entry, i) => {
+      const value = (entry as { value?: unknown })?.value
+      expect(
+        typeof value === 'string' && value.length > 0,
+        `candidate ${field}[${i}] must be a non-empty string on the detail route; got ${JSON.stringify(entry)}`
+      ).toBe(true)
+      return value as string
+    })
+  return { emails: values(data?.emails, 'emails'), phones: values(data?.phones, 'phones') }
 }
 
 test.describe('Imports Modal @area:imports', () => {
