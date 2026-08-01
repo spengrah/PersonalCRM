@@ -122,6 +122,23 @@ var multiMethodSources = map[string]bool{
 	SourceGContacts: true,
 }
 
+// rematchClaimedSources are the sources whose stored EMAIL a rematch handler keys
+// on, so an UNMATCHED row of that source can never hold an email a contact owns.
+// The calendar handler looks its rows up by source_id == the email just added to a
+// contact and marks them matched, explicitly so they leave the import queue
+// (google/calendar_rematch.go). That closes both write orders: a sync MATCHES such
+// an attendee instead of storing it, and a contact created after the row was stored
+// makes the handler claim it. Coupling a candidate's email to a contact is
+// therefore unproducible here, however the email got there.
+//
+// The address book is deliberately absent: no registered rematch handler reads
+// gcontacts rows, and its own matcher runs only during a sync of that record, so a
+// stored row whose email a later-created contact shares stays unmatched — the state
+// the resolver's already-present-method bucket exists to serve.
+var rematchClaimedSources = map[string]bool{
+	SourceCalendarAttendee: true,
+}
+
 // --- prop plumbing ----------------------------------------------------------
 //
 // SameNameAs is valid on BOTH a Contact and an ExternalCandidate (a collision
@@ -671,6 +688,14 @@ func (p *externalCandidatePlan) validate() error {
 	if (p.emails > 0 || p.phones > 0 || p.sameEmailAs != "") && !methodBearingSources[p.source] {
 		return fmt.Errorf("external candidate %q: a declared method set needs source %s — gmail_correspondence keys its source_id on its single address, and the ingest and discovery writers do not take one",
 			p.name, strings.Join(sortedKeys(methodBearingSources), ", "))
+	}
+	// The coupling, not just the COUNT. SameEmailAs sets no count at all, so it
+	// slips past the shape check below while putting a contact's own address on the
+	// row — which for a rematch-claimed source is the one email value that cannot
+	// coexist with an unmatched status.
+	if p.sameEmailAs != "" && rematchClaimedSources[p.source] {
+		return fmt.Errorf("external candidate %q: source %q cannot hold an email a contact owns — its rematch handler claims such a row the moment the contact gains that address, and a sync matches the attendee rather than storing it, so an unmatched row with SameEmailAs(%q) is unreachable in either write order (a generated single email is fine; %s is the source that keeps an unmatched row on a shared address)",
+			p.name, p.source, p.sameEmailAs, strings.Join(sortedKeys(multiMethodSources), ", "))
 	}
 	// The per-source method SHAPE, not just whether methods are declarable at all.
 	// The calendar provider writes exactly one email and no phone on every write, so

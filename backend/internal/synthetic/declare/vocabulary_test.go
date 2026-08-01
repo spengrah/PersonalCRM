@@ -216,6 +216,13 @@ func TestCandidateProps_AreRefusedOnSourcesThatCannotStoreThem(t *testing.T) {
 		"a phone on a source that never stores one": {
 			ExternalCandidate("c", Source(SourceCalendarAttendee), Phones(1)),
 		},
+		// The COUPLING, not the count: SameEmailAs sets no count, so it has to be
+		// refused on its own terms. A calendar row holding a contact's address is
+		// claimed by the calendar rematch handler, so it cannot stay unmatched.
+		"a contact's own email on a rematch-claimed source": {
+			Contact("a", Methods(MethodEmail)),
+			ExternalCandidate("c", Source(SourceCalendarAttendee), SameEmailAs("a")),
+		},
 	}
 	for name, entities := range cases {
 		t.Run(name, func(t *testing.T) { assert.Error(t, validateEntityOrder(entities)) })
@@ -227,8 +234,10 @@ func TestCandidateProps_AreRefusedOnSourcesThatCannotStoreThem(t *testing.T) {
 		// record, so a multi-method candidate belongs to it.
 		ExternalCandidate("book", Source(SourceGContacts),
 			SameNameAs("a"), SameEmailAs("a"), Emails(2), Phones(1)),
-		// A Calendar candidate stays within its writer's single-email shape.
-		ExternalCandidate("cal", Source(SourceCalendarAttendee), SameNameAs("a"), SameEmailAs("a")),
+		// A Calendar candidate stays within its writer's single-email shape, and
+		// keeps its GENERATED address: a name collision alone scores under the
+		// calendar matcher's threshold, so the sync stores such a row.
+		ExternalCandidate("cal", Source(SourceCalendarAttendee), SameNameAs("a")),
 		ExternalCandidate("tg", Source(SourceTelegram), NoIdentity(), TelegramHandle()),
 		ExternalCandidate("corr", Source(SourceCorrespondence), CorrespondenceEvidence(4, "a")),
 	}))
