@@ -98,12 +98,28 @@ var directUpsertSources = map[string]bool{
 	SourceCalendarAttendee: true,
 }
 
-// methodBearingSources are the direct-upsert sources whose method set is
-// declarable. gmail_correspondence is excluded: its single email IS its source_id,
-// so a second address would not be a row the discoverer can produce.
+// methodBearingSources are the direct-upsert sources whose row carries a
+// declarable EMAIL. gmail_correspondence is excluded: its single email IS its
+// source_id, so choosing it independently would not be a row the discoverer can
+// produce.
 var methodBearingSources = map[string]bool{
 	SourceGContacts:        true,
 	SourceCalendarAttendee: true,
+}
+
+// multiMethodSources are the sources whose production writer emits MORE than one
+// email, or any phone at all. Only the address-book provider does: it maps every
+// address and number off the Person record (google/contacts.go
+// convertPersonToRequest).
+//
+// gcal_attendee is deliberately absent even though it is method-bearing. The
+// calendar provider stores exactly ONE email — the attendee's, which is also the
+// row's source_id — and never writes a phone (google/calendar.go
+// storeUnmatchedAttendee). No ordering of writes produces a Calendar candidate with
+// a second address or a number, so declaring one would be a row the sync path
+// cannot reach.
+var multiMethodSources = map[string]bool{
+	SourceGContacts: true,
 }
 
 // --- prop plumbing ----------------------------------------------------------
@@ -655,6 +671,19 @@ func (p *externalCandidatePlan) validate() error {
 	if (p.emails > 0 || p.phones > 0 || p.sameEmailAs != "") && !methodBearingSources[p.source] {
 		return fmt.Errorf("external candidate %q: a declared method set needs source %s — gmail_correspondence keys its source_id on its single address, and the ingest and discovery writers do not take one",
 			p.name, strings.Join(sortedKeys(methodBearingSources), ", "))
+	}
+	// The per-source method SHAPE, not just whether methods are declarable at all.
+	// The calendar provider writes exactly one email and no phone on every write, so
+	// a wider Calendar candidate is unproducible in any order.
+	if !multiMethodSources[p.source] {
+		if p.emails > 1 {
+			return fmt.Errorf("external candidate %q: source %q stores exactly ONE email (its source_id), so Emails(%d) is a row its writer cannot produce — %s is the source whose provider emits every address off the record",
+				p.name, p.source, p.emails, strings.Join(sortedKeys(multiMethodSources), ", "))
+		}
+		if p.phones > 0 {
+			return fmt.Errorf("external candidate %q: source %q never stores a phone, so Phones(%d) is a row its writer cannot produce — %s is the source whose provider emits phone numbers",
+				p.name, p.source, p.phones, strings.Join(sortedKeys(multiMethodSources), ", "))
+		}
 	}
 	if p.telegramHandle && p.source != SourceTelegram {
 		return fmt.Errorf("external candidate %q: TelegramHandle requires Source(%q)", p.name, SourceTelegram)

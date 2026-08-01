@@ -306,6 +306,13 @@ func namespaceContactIDs(
 	if err != nil {
 		return nil, fmt.Errorf("select owned import candidates: %w", err)
 	}
+	// INVARIANT this route rests on: a namespace's candidates link only to contacts
+	// created INSIDE that namespace. Every resolution path a declared world drives
+	// either creates the contact (import) or picks one out of the same world's own
+	// manifest (link), and the generator makes each world's names and emails
+	// disjoint, so nothing can select a neighbour's contact by accident. A future
+	// fixture that deliberately links across namespaces breaks it and makes this
+	// sweep DESTRUCTIVE — scope it to namespace-owned contacts at that point.
 	linked, err := support.SelectLinkedContactIDsByExternalContactIDs(ctx, ownedCandidates)
 	if err != nil {
 		return nil, fmt.Errorf("select contacts linked from owned import candidates: %w", err)

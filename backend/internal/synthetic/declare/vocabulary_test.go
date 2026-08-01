@@ -207,6 +207,15 @@ func TestCandidateProps_AreRefusedOnSourcesThatCannotStoreThem(t *testing.T) {
 			ExternalCandidate("c", Source(SourceGContacts), SameEmailAs("a")),
 			Contact("a"),
 		},
+		// The per-source method SHAPE. The calendar provider writes exactly one
+		// email — the attendee's, which is also the source_id — and never a phone,
+		// so a wider Calendar candidate is unproducible in any write order.
+		"a second email on a source that stores exactly one": {
+			ExternalCandidate("c", Source(SourceCalendarAttendee), Emails(2)),
+		},
+		"a phone on a source that never stores one": {
+			ExternalCandidate("c", Source(SourceCalendarAttendee), Phones(1)),
+		},
 	}
 	for name, entities := range cases {
 		t.Run(name, func(t *testing.T) { assert.Error(t, validateEntityOrder(entities)) })
@@ -214,8 +223,12 @@ func TestCandidateProps_AreRefusedOnSourcesThatCannotStoreThem(t *testing.T) {
 
 	assert.NoError(t, validateEntityOrder([]Entity{
 		Contact("a", Methods(MethodEmail)),
-		ExternalCandidate("c", Source(SourceCalendarAttendee),
+		// The address-book provider maps every address and number off the Person
+		// record, so a multi-method candidate belongs to it.
+		ExternalCandidate("book", Source(SourceGContacts),
 			SameNameAs("a"), SameEmailAs("a"), Emails(2), Phones(1)),
+		// A Calendar candidate stays within its writer's single-email shape.
+		ExternalCandidate("cal", Source(SourceCalendarAttendee), SameNameAs("a"), SameEmailAs("a")),
 		ExternalCandidate("tg", Source(SourceTelegram), NoIdentity(), TelegramHandle()),
 		ExternalCandidate("corr", Source(SourceCorrespondence), CorrespondenceEvidence(4, "a")),
 	}))

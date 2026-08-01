@@ -79,7 +79,11 @@ func init() {
 			Contact("cadenced2", Cadence("monthly")),
 			ExternalCandidate("link-b", Source(SourceGContacts)),
 			Contact("buckets", Methods(MethodEmail)),
-			ExternalCandidate("buckets-cand", Source(SourceCalendarAttendee),
+			// gcontacts, not gcal_attendee, for two independent reasons: the calendar
+			// provider stores exactly one email and never a phone, and an unmatched
+			// Calendar row sharing a contact's email cannot survive the calendar
+			// rematch handler. See IMP-029 for the producibility argument.
+			ExternalCandidate("buckets-cand", Source(SourceGContacts),
 				SameNameAs("buckets"), SameEmailAs("buckets"), Emails(2), Phones(1)),
 		},
 	})
@@ -100,13 +104,23 @@ func init() {
 	// name-collide (name only) is declared BEFORE matching (name AND email) on
 	// purpose: entity order is seed order, and the render-order assertion is only
 	// meaningful if the lower-confidence row was inserted first.
+	//
+	// Both ranked rows are gcontacts rather than gcal_attendee. An unmatched
+	// CALENDAR candidate whose email a contact holds cannot exist: the sync matches
+	// such an attendee instead of storing it, and the calendar rematch handler
+	// flips any stored row to matched the moment a contact gains that email,
+	// specifically so it leaves the candidate list. The address-book provider has
+	// no such rematch handler and matches only by email or phone IDENTITY during a
+	// sync of that record, so a stored row whose email a later-created contact
+	// happens to share stays unmatched — which is the state the resolver's
+	// already-present-method bucket exists to serve.
 	Register(Declaration{
 		Behavior: "IMP-029",
 		Entities: []Entity{
 			Contact("name-only"),
-			ExternalCandidate("name-collide", Source(SourceCalendarAttendee), SameNameAs("name-only")),
+			ExternalCandidate("name-collide", Source(SourceGContacts), SameNameAs("name-only")),
 			Contact("matched", Methods(MethodEmail)),
-			ExternalCandidate("matching", Source(SourceCalendarAttendee),
+			ExternalCandidate("matching", Source(SourceGContacts),
 				SameNameAs("matched"), SameEmailAs("matched")),
 			ExternalCandidate("unmatched-gc", Source(SourceGContacts)),
 			ExternalCandidate("unmatched-corr", Source(SourceCorrespondence)),

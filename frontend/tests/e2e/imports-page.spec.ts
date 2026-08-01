@@ -27,9 +27,12 @@ test.describe('Imports Page @area:imports', () => {
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    // Scope the list to the Calendar source to keep the page small, then
-    // find both of our rows.
-    await page.getByRole('button', { name: 'Calendar', exact: true }).click()
+    // Scope the list to the ranked pair's own source to keep the page small,
+    // then find both of our rows. Google Contacts rather than Calendar: an
+    // unmatched Calendar candidate cannot hold a contact's email (the sync
+    // matches it, and the calendar rematch handler flips any stored row), so the
+    // high-confidence half of this ladder is only producible on the address book.
+    await page.getByRole('button', { name: 'Google Contacts', exact: true }).click()
     await findCandidateByName(page, highName)
     await expect(page.getByRole('heading', { name: medName })).toBeVisible({ timeout: 10000 })
 
