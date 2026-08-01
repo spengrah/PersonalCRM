@@ -382,8 +382,11 @@ test.describe('Imports Modal @area:imports', () => {
       const createdContactId: string = importBody?.data?.contact?.id
       expect(createdContactId).toBeTruthy()
 
-      // The candidate leaves the list (it was imported).
-      await expect(page.getByText(displayName)).not.toBeVisible({ timeout: 15000 })
+      // The candidate leaves the list (it was imported). Matched EXACTLY: names
+      // are "…Import Candidate <seq>", so a page-wide substring match on a
+      // single-digit seq would also resolve a double-digit sibling and report
+      // this candidate as still present.
+      await expect(page.getByText(displayName, { exact: true })).not.toBeVisible({ timeout: 15000 })
 
       // API-read: the contact was created with the edited name.
       const contactRes = await request.get(`${API_BASE_URL}/api/v1/contacts/${createdContactId}`, {

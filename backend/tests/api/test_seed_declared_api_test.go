@@ -39,9 +39,11 @@ func declaredAPINS(t *testing.T) string {
 }
 
 // newDeclaredSeedRouter builds a router carrying the production test-route
-// surface, including the BESPOKE seed service — the dual-shape cleanup test
-// needs the legacy prefix branch to be genuinely wired, not stubbed.
-func newDeclaredSeedRouter(t *testing.T) (*gin.Engine, *db.Database, context.Context) {
+// surface. It also returns the real contact service, because the dual-shape
+// cleanup test needs a PREFIX-shaped contact and the prefix branch is now the
+// only bespoke thing left: there is no seed endpoint to create one with, so it is
+// created through the same production writer the product uses.
+func newDeclaredSeedRouter(t *testing.T) (*gin.Engine, *db.Database, context.Context, *service.ContactService) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
@@ -59,20 +61,13 @@ func newDeclaredSeedRouter(t *testing.T) (*gin.Engine, *db.Database, context.Con
 		cadenceUpdater, assertSvc, cache, nil,
 	)
 
-	seedSvc := service.NewTestSeedService(
-		database,
-		repository.NewExternalContactRepository(database.Queries),
-		contactService,
-		repository.NewCalendarEventRepository(database.Queries),
-		repository.NewMacHostRepository(database.Queries),
-		repository.NewMeetingNoteRepository(database.Queries),
-	)
+	seedSvc := service.NewTestSeedService(database, repository.NewMeetingNoteRepository(database.Queries))
 	handler := handlers.NewTestHandler(seedSvc, service.NewTestLockService(accelerated.GetCurrentTime), database)
 
 	router := gin.New()
 	v1 := router.Group("/api/v1")
 	handlers.RegisterTestRoutes(v1, handler)
-	return router, database, ctx
+	return router, database, ctx, contactService
 }
 
 func postDeclared(t *testing.T, router *gin.Engine, path string, body any) *httptest.ResponseRecorder {
@@ -124,7 +119,7 @@ func cleanupNamespaces(t *testing.T, router *gin.Engine, namespaces []string, se
 // its selectors off these values, so a manifest that did not match the stored
 // rows would produce tests that look green while asserting nothing.
 func TestSeedDeclaredEndpoint_CreatesManifest(t *testing.T) {
-	router, database, ctx := newDeclaredSeedRouter(t)
+	router, database, ctx, _ := newDeclaredSeedRouter(t)
 	namespace := declaredAPINS(t)
 
 	w := postDeclared(t, router, "/api/v1/test/seed/declared", map[string]any{
@@ -154,7 +149,7 @@ func TestSeedDeclaredEndpoint_CreatesManifest(t *testing.T) {
 // caller never asked for. A client asserting against its own request string
 // would silently target the wrong world.
 func TestSeedDeclaredEndpoint_EffectiveNamespace(t *testing.T) {
-	router, database, ctx := newDeclaredSeedRouter(t)
+	router, database, ctx, _ := newDeclaredSeedRouter(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
 	namespace := declaredAPINS(t)
@@ -190,7 +185,7 @@ func TestSeedDeclaredEndpoint_EffectiveNamespace(t *testing.T) {
 // to it: a bound tighter than the package's rejects the seed, a looser one lets
 // the over-long effective token through to the cleanup call below.
 func TestSeedDeclaredEndpoint_MaxLengthNamespaceResalts(t *testing.T) {
-	router, database, ctx := newDeclaredSeedRouter(t)
+	router, database, ctx, _ := newDeclaredSeedRouter(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
 	namespace := longestAcceptedNamespace(t, declaredAPINS(t))
@@ -230,7 +225,7 @@ func longestAcceptedNamespace(t *testing.T, base string) string {
 }
 
 func TestSeedDeclaredEndpoint_Conflict409(t *testing.T) {
-	router, _, _ := newDeclaredSeedRouter(t)
+	router, _, _, _ := newDeclaredSeedRouter(t)
 	namespace := declaredAPINS(t)
 
 	first := postDeclared(t, router, "/api/v1/test/seed/declared", map[string]any{
@@ -310,7 +305,7 @@ func inRequestedFamily(effective, requested string) bool {
 }
 
 func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
-	router, database, ctx := newDeclaredSeedRouter(t)
+	router, database, ctx, _ := newDeclaredSeedRouter(t)
 	namespace := declaredAPINS(t)
 
 	restore := declare.SetFailpointForTest(declare.FailpointAfterFirstEntity)
@@ -392,14 +387,15 @@ func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
 }
 
 func TestCleanupEndpoint_DualShape(t *testing.T) {
-	router, _, _ := newDeclaredSeedRouter(t)
+	router, _, ctx, contactService := newDeclaredSeedRouter(t)
 
 	t.Run("legacy prefix shape is unchanged", func(t *testing.T) {
-		seeded := postDeclared(t, router, "/api/v1/test/seed/contacts", map[string]any{
-			"prefix":   "legacyshape",
-			"contacts": []map[string]any{{"full_name": "legacyshape-Someone"}},
-		})
-		require.Equal(t, http.StatusCreated, seeded.Code, "body: %s", seeded.Body.String())
+		// The prefix sweep keys on the contact's NAME, so the row is created through
+		// the production contact writer — the same way a test that owns prefix-shaped
+		// rows creates them now that no bespoke seed endpoint exists.
+		name := "legacyshape-Someone"
+		_, _, err := contactService.CreateContact(ctx, repository.CreateContactRequest{FullName: name}, nil)
+		require.NoError(t, err)
 
 		w := postDeclared(t, router, "/api/v1/test/cleanup", map[string]any{"prefix": "legacyshape"})
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -433,19 +429,12 @@ func TestCleanupEndpoint_DualShape(t *testing.T) {
 	// cleanup succeeded while the host's meeting notes were never touched. A
 	// combination whose work cannot be done must be refused, not half-honoured.
 	t.Run("rejects host_id alongside namespaces", func(t *testing.T) {
-		host := postDeclared(t, router, "/api/v1/test/seed/mac-hosts", map[string]any{
-			"hostname": "declared-shape-host-" + declaredAPINS(t),
-		})
-		require.Equal(t, http.StatusOK, host.Code, "body: %s", host.Body.String())
-		var hostEnvelope struct {
-			Data handlers.SeedMacHostResponse `json:"data"`
-		}
-		require.NoError(t, json.Unmarshal(host.Body.Bytes(), &hostEnvelope))
-		require.NotEmpty(t, hostEnvelope.Data.HostID)
-
+		// A pure VALIDATION refusal: the combination is rejected before anything is
+		// read, so the host_id only has to be a well-formed uuid. Using a fresh one
+		// removes a dependency on a seeded row rather than weakening the assertion.
 		w := postDeclared(t, router, "/api/v1/test/cleanup", map[string]any{
 			"namespaces": []string{declaredAPINS(t)},
-			"host_id":    hostEnvelope.Data.HostID,
+			"host_id":    uuid.NewString(),
 		})
 		require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 		assert.Contains(t, w.Body.String(), "host_id")
@@ -470,7 +459,7 @@ func TestCleanupEndpoint_DualShape(t *testing.T) {
 // (seed, namespace), so cleaning with a different seed would derive the wrong
 // numeric-band tokens and leave rows behind.
 func TestCleanupEndpoint_CustomSeed(t *testing.T) {
-	router, database, ctx := newDeclaredSeedRouter(t)
+	router, database, ctx, _ := newDeclaredSeedRouter(t)
 	const customSeed = uint64(987654321)
 	namespace := declaredAPINS(t)
 

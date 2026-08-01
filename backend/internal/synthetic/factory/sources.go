@@ -225,6 +225,43 @@ type GCalEventSpec struct {
 	Event       *calendarapi.Event
 	GcalEventID string
 	Intent      MatchIntent
+	// PeerEmail is the non-self attendee's address — the value that decides whether
+	// the event matches a contact, and for MatchUnknown the exact email the
+	// provider stores on the import candidate it mints. Surfaced on the spec so a
+	// caller can report it without re-reading the wire payload.
+	PeerEmail string
+}
+
+// GCalEventShape describes a calendar payload beyond the default past meeting.
+// It is a struct rather than another MessageOption set because none of these
+// knobs mean anything to any other source, and a shared option type would let a
+// caller hand one to GmailMessage where it would silently do nothing.
+//
+// Every field lowers onto a value the REAL provider derives from the inbound
+// event, so a shape can only describe rows a sync could have produced. The
+// bounds on the offsets (the provider's own fetch window) belong to the caller
+// that accepts them from a declaration, not here.
+type GCalEventShape struct {
+	// StartOffset places the event's START relative to the generator anchor:
+	// negative for a meeting that has happened, positive for one still to come.
+	StartOffset time.Duration
+	// Duration is how long the meeting runs. Zero means the default one hour.
+	Duration time.Duration
+	// Title is the event summary. nil takes the factory's own generated title; a
+	// non-nil EMPTY string is an UNTITLED event, which the provider stores as the
+	// empty title (never NULL) and the UI renders with its fallback label.
+	Title *string
+	// Location is the meeting's place. Empty omits it — the provider maps an empty
+	// location to NULL, so the API response has no location key at all.
+	Location string
+	// HTMLLink is the event's source link, omitted the same way when empty.
+	HTMLLink string
+	// SoleAttendee makes the stored attendee list hold exactly the peer, which is
+	// the ONLY shape that yields attendee_count == 1. The provider stores every
+	// attendee INCLUDING self, so the default self+peer event always stores two;
+	// a one-attendee meeting is one the account ORGANIZES without being on the
+	// attendee list, from which the provider synthesizes the accepted response.
+	SoleAttendee bool
 }
 
 // GCalEvent builds a past meeting the account attended together with the target
@@ -233,6 +270,15 @@ type GCalEventSpec struct {
 // + external_contact candidate).
 func (g *Generator) GCalEvent(target ContactSpec, intent MatchIntent, opts ...MessageOption) GCalEventSpec {
 	mo := applyMessageOptions(opts)
+	// Past meeting: started 2h ago, ended 1h ago (anchor-relative); mo.age shifts
+	// the whole meeting further back for the temporal spread.
+	return g.GCalEventWithShape(target, intent, GCalEventShape{StartOffset: -2*time.Hour - mo.age})
+}
+
+// GCalEventWithShape is GCalEvent with the payload shape stated explicitly. It
+// draws the same generator values in the same order as GCalEvent, so the two are
+// interchangeable from the determinism side.
+func (g *Generator) GCalEventWithShape(target ContactSpec, intent MatchIntent, shape GCalEventShape) GCalEventSpec {
 	account := g.accountEmail()
 	seq := g.bumpSourceSeq()
 	gcalEventID := fmt.Sprintf("%sgcal-%d", g.Prefix(), seq)
@@ -241,23 +287,45 @@ func (g *Generator) GCalEvent(target ContactSpec, intent MatchIntent, opts ...Me
 	if intent == MatchUnknown || attendeeEmail == "" {
 		attendeeEmail = g.unknownEmail()
 	}
-	// Past meeting: started 2h ago, ended 1h ago (anchor-relative); mo.age shifts
-	// the whole meeting further back for the temporal spread.
-	start := g.at(-2*time.Hour - mo.age)
-	end := g.at(-1*time.Hour - mo.age)
-
-	ev := &calendarapi.Event{
-		Id:      gcalEventID,
-		Summary: "synthetic meeting " + fmt.Sprint(seq),
-		Status:  "confirmed",
-		Start:   &calendarapi.EventDateTime{DateTime: start.Format(time.RFC3339)},
-		End:     &calendarapi.EventDateTime{DateTime: end.Format(time.RFC3339)},
-		Attendees: []*calendarapi.EventAttendee{
-			{Email: account, Self: true, ResponseStatus: "accepted"},
-			{Email: attendeeEmail, ResponseStatus: "accepted", DisplayName: "Synthetic Attendee"},
-		},
+	duration := shape.Duration
+	if duration <= 0 {
+		duration = time.Hour
 	}
-	return GCalEventSpec{AccountID: account, Event: ev, GcalEventID: gcalEventID, Intent: intent}
+	start := g.at(shape.StartOffset)
+	end := start.Add(duration)
+
+	summary := "synthetic meeting " + fmt.Sprint(seq)
+	if shape.Title != nil {
+		summary = *shape.Title
+	}
+
+	peer := &calendarapi.EventAttendee{
+		Email: attendeeEmail, ResponseStatus: "accepted", DisplayName: "Synthetic Attendee",
+	}
+	ev := &calendarapi.Event{
+		Id:       gcalEventID,
+		Summary:  summary,
+		Status:   "confirmed",
+		Location: shape.Location,
+		HtmlLink: shape.HTMLLink,
+		Start:    &calendarapi.EventDateTime{DateTime: start.Format(time.RFC3339)},
+		End:      &calendarapi.EventDateTime{DateTime: end.Format(time.RFC3339)},
+	}
+	if shape.SoleAttendee {
+		// Organizer-not-attendee: getUserResponse falls through to the organizer
+		// and synthesizes "accepted", and buildAttendeeList skips appending an
+		// organizer that is self — so the stored list is the peer alone.
+		ev.Attendees = []*calendarapi.EventAttendee{peer}
+		ev.Organizer = &calendarapi.EventOrganizer{Email: account, Self: true}
+	} else {
+		ev.Attendees = []*calendarapi.EventAttendee{
+			{Email: account, Self: true, ResponseStatus: "accepted"},
+			peer,
+		}
+	}
+	return GCalEventSpec{
+		AccountID: account, Event: ev, GcalEventID: gcalEventID, Intent: intent, PeerEmail: attendeeEmail,
+	}
 }
 
 // --- Telegram (private chats only in Element 1) ----------------------------
@@ -470,6 +538,12 @@ type MacContactSpec struct {
 	Envelope *events.Envelope
 	EntityID string
 	Intent   MatchIntent
+	// HostID is the host the payload declares itself to come from, and therefore
+	// also the host the replay adapter must authenticate as: IngestBatch rejects
+	// any payload whose host_id differs from the caller's. It is carried here
+	// rather than passed to the adapter separately so the two values are one
+	// value and cannot disagree.
+	HostID uuid.UUID
 }
 
 // MacContact builds an icloud_contacts external_contact.upserted envelope whose
@@ -518,6 +592,7 @@ func (g *Generator) MacContactForSource(target ContactSpec, intent MatchIntent, 
 		},
 		EntityID: entityID,
 		Intent:   intent,
+		HostID:   hostID,
 	}, nil
 }
 

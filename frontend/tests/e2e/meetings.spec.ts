@@ -1,7 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
 import { fulfillJson } from './helpers/fulfill-json'
-import type { CalendarEvent } from '../../src/types/calendar'
 
 // API configuration for E2E tests
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
@@ -55,23 +54,44 @@ function expectedTimeRange(startIso: string, endIso: string): string {
   return `${fmt.format(new Date(startIso))} - ${fmt.format(new Date(endIso))}`
 }
 
+// The declared world owns every name and id, so a handle is how a test names a
+// row. Reading through these keeps a title or a uuid from being restated here.
+const handleId = (seeded: SeedBehaviorResult, handle: string): string => {
+  const entity = seeded.entities[handle]
+  expect(entity, `declared handle ${handle} should be in the manifest`).toBeTruthy()
+  return entity.id
+}
+const handleName = (seeded: SeedBehaviorResult, handle: string): string =>
+  seeded.entities[handle].name
+
+// The events the API returns for a contact, which is the same data the cards
+// render — so every expected string below is derived from it rather than rebuilt.
+interface ContactEvent {
+  id: string
+  title: string
+  start_time: string
+  end_time: string
+  location?: string
+  html_link?: string
+  attendee_count: number
+}
+
+async function fetchContactEvents(
+  request: import('@playwright/test').APIRequestContext,
+  contactId: string
+): Promise<ContactEvent[]> {
+  const response = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}/events`, {
+    headers: API_HEADERS,
+  })
+  expect(response.ok()).toBe(true)
+  return (await response.json()).data as ContactEvent[]
+}
+
 test.describe('Meetings Component @area:meetings', () => {
   let testApi: TestAPI
-  let contactId: string
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
-
-    // Create a contact first
-    const contactResponse = await request.post(`${API_BASE_URL}/api/v1/contacts`, {
-      headers: API_HEADERS,
-      data: {
-        full_name: `${testApi.prefix}-Meeting Test Contact`,
-      },
-    })
-    expect(contactResponse.ok()).toBe(true)
-    const contactData = await contactResponse.json()
-    contactId = contactData.data.id
   })
 
   test.afterEach(async () => {
@@ -79,15 +99,12 @@ test.describe('Meetings Component @area:meetings', () => {
   })
 
   test('should display meetings section with upcoming and past events', async ({ page }) => {
-    // Seed calendar events for the contact
-    await testApi.seedCalendarEvents(contactId, [
-      { title: 'Upcoming Meeting 1', is_past: false, days_ahead: 3 },
-      { title: 'Upcoming Meeting 2', is_past: false, days_ahead: 10 },
-      { title: 'Past Meeting 1', is_past: true, days_ago: 5 },
-      { title: 'Past Meeting 2', is_past: true, days_ago: 14 },
-    ])
+    // CAL-025's declared world: two upcoming meetings, three past ones, and one
+    // straddling now — six in all, three of which classify as upcoming (the
+    // straddling meeting has not ended).
+    const seeded = await testApi.seedBehavior('CAL-025')
+    const contactId = handleId(seeded, 'attendee')
 
-    // Navigate to contact page
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
 
@@ -98,83 +115,80 @@ test.describe('Meetings Component @area:meetings', () => {
 
     // Verify filter tabs exist with live counts derived from the seeded data
     // spec: CAL-025.three-filters-all-upcoming
-    await expect(region.getByRole('button', { name: /All \(4\)/i })).toBeVisible()
-    await expect(region.getByRole('button', { name: /Upcoming \(2\)/i })).toBeVisible()
-    await expect(region.getByRole('button', { name: /Past \(2\)/i })).toBeVisible()
+    await expect(region.getByRole('button', { name: /All \(6\)/i })).toBeVisible()
+    await expect(region.getByRole('button', { name: /Upcoming \(3\)/i })).toBeVisible()
+    await expect(region.getByRole('button', { name: /Past \(3\)/i })).toBeVisible()
 
     // By default (Upcoming tab pressed), only upcoming events should be visible
     // spec: CAL-025.upcoming-default-view
-    await expect(region.getByRole('button', { name: /Upcoming \(2\)/i })).toHaveAttribute(
+    await expect(region.getByRole('button', { name: /Upcoming \(3\)/i })).toHaveAttribute(
       'aria-pressed',
       'true'
     )
-    await expect(region.getByText(`${testApi.prefix}-Upcoming Meeting 1`)).toBeVisible()
-    await expect(region.getByText(`${testApi.prefix}-Upcoming Meeting 2`)).toBeVisible()
-    await expect(region.getByText(`${testApi.prefix}-Past Meeting 1`)).not.toBeVisible()
-    await expect(region.getByText(`${testApi.prefix}-Past Meeting 2`)).not.toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'upcoming-near'))).toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'upcoming-far'))).toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'in-progress'))).toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'past-recent'))).not.toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'past-oldest'))).not.toBeVisible()
 
     // Click All filter to see all events (no CAL-025 then-item states the
     // combined view; this block just exercises the third filter's activation)
-    await region.getByRole('button', { name: /All \(4\)/i }).click()
-    await expect(region.getByRole('button', { name: /All \(4\)/i })).toHaveAttribute(
+    await region.getByRole('button', { name: /All \(6\)/i }).click()
+    await expect(region.getByRole('button', { name: /All \(6\)/i })).toHaveAttribute(
       'aria-pressed',
       'true'
     )
-    await expect(region.getByRole('button', { name: /Upcoming \(2\)/i })).toHaveAttribute(
+    await expect(region.getByRole('button', { name: /Upcoming \(3\)/i })).toHaveAttribute(
       'aria-pressed',
       'false'
     )
-    await expect(region.getByText(`${testApi.prefix}-Upcoming Meeting 1`)).toBeVisible()
-    await expect(region.getByText(`${testApi.prefix}-Upcoming Meeting 2`)).toBeVisible()
-    await expect(region.getByText(`${testApi.prefix}-Past Meeting 1`)).toBeVisible()
-    await expect(region.getByText(`${testApi.prefix}-Past Meeting 2`)).toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'upcoming-near'))).toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'past-recent'))).toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'past-oldest'))).toBeVisible()
   })
 
   test('should filter between upcoming and past events', async ({ page }) => {
-    // Seed calendar events
-    await testApi.seedCalendarEvents(contactId, [
-      { title: 'Upcoming Event', is_past: false, days_ahead: 5 },
-      { title: 'Past Event', is_past: true, days_ago: 5 },
-    ])
+    const seeded = await testApi.seedBehavior('CAL-025')
+    const contactId = handleId(seeded, 'attendee')
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
     const region = meetingsRegion(page)
 
-    // Click Upcoming filter: shows only the upcoming event
+    // Click Upcoming filter: shows only the upcoming events
     // spec: CAL-025.three-filters-all-upcoming
-    await region.getByRole('button', { name: /Upcoming \(1\)/i }).click()
-    await expect(region.getByRole('button', { name: /Upcoming \(1\)/i })).toHaveAttribute(
+    await region.getByRole('button', { name: /Upcoming \(3\)/i }).click()
+    await expect(region.getByRole('button', { name: /Upcoming \(3\)/i })).toHaveAttribute(
       'aria-pressed',
       'true'
     )
-    await expect(region.getByText(`${testApi.prefix}-Upcoming Event`)).toBeVisible()
-    await expect(region.getByText(`${testApi.prefix}-Past Event`)).not.toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'upcoming-near'))).toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'past-middle'))).not.toBeVisible()
 
-    // Click Past filter: only the past-seeded event shows (the end-time
+    // Click Past filter: only the past-seeded events show (the end-time
     // classification boundary itself is proven by the in-progress test below)
     // spec: CAL-025.three-filters-all-upcoming
-    await region.getByRole('button', { name: /Past \(1\)/i }).click()
-    await expect(region.getByRole('button', { name: /Past \(1\)/i })).toHaveAttribute(
+    await region.getByRole('button', { name: /Past \(3\)/i }).click()
+    await expect(region.getByRole('button', { name: /Past \(3\)/i })).toHaveAttribute(
       'aria-pressed',
       'true'
     )
-    await expect(region.getByText(`${testApi.prefix}-Past Event`)).toBeVisible()
-    await expect(region.getByText(`${testApi.prefix}-Upcoming Event`)).not.toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'past-middle'))).toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'upcoming-near'))).not.toBeVisible()
 
     // The past meeting's card carries the past marker (scoped to that card)
     // spec: CAL-026.past-meeting-carries-past
     await expect(
-      meetingCard(page, `${testApi.prefix}-Past Event`).getByText('Past', { exact: true })
+      meetingCard(page, handleName(seeded, 'past-middle')).getByText('Past', { exact: true })
     ).toBeVisible()
   })
 
   test('should order past meetings most-recent-first', async ({ page }) => {
-    await testApi.seedCalendarEvents(contactId, [
-      { title: 'Past Oldest', is_past: true, days_ago: 10 },
-      { title: 'Past Recent', is_past: true, days_ago: 1 },
-      { title: 'Past Middle', is_past: true, days_ago: 5 },
-    ])
+    // The three past meetings are DECLARED oldest, most-recent, middle (10, 1, 5
+    // days ago) and render most-recent-first, so this proves the sort rather than
+    // echoing the order they were created in.
+    const seeded = await testApi.seedBehavior('CAL-025')
+    const contactId = handleId(seeded, 'attendee')
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -182,107 +196,88 @@ test.describe('Meetings Component @area:meetings', () => {
 
     await region.getByRole('button', { name: /Past \(3\)/i }).click()
 
-    // Cards render most-recent-first (days_ago 1, then 5, then 10) — a
-    // different order than they were seeded in (10, 1, 5), so this proves
-    // the sort rather than echoing insertion order
     // spec: CAL-025.past-meetings-ordered-most
     const cards = meetingCards(page)
     await expect(cards).toHaveCount(3)
-    await expect(cards.nth(0)).toContainText(`${testApi.prefix}-Past Recent`)
-    await expect(cards.nth(1)).toContainText(`${testApi.prefix}-Past Middle`)
-    await expect(cards.nth(2)).toContainText(`${testApi.prefix}-Past Oldest`)
+    await expect(cards.nth(0)).toContainText(handleName(seeded, 'past-recent'))
+    await expect(cards.nth(1)).toContainText(handleName(seeded, 'past-middle'))
+    await expect(cards.nth(2)).toContainText(handleName(seeded, 'past-oldest'))
   })
 
   test('should classify a meeting as past only once its end time has passed', async ({ page }) => {
-    // Freeze the app's accelerated clock and mock two events around it: one
-    // IN PROGRESS (started before now, ends after now) and one fully ended.
-    // Only the ended one may classify as past — an in-progress meeting has a
-    // past START time, so this distinguishes end-time classification from
-    // start-time classification against the app's (frozen) accelerated now.
-    const frozenNow = new Date('2026-06-01T12:00:00.000Z')
-    const hour = 60 * 60 * 1000
-    const inProgress: CalendarEvent = {
-      id: 'e2e-in-progress-event',
-      title: 'In Progress Meeting',
-      start_time: new Date(frozenNow.getTime() - 1 * hour).toISOString(),
-      end_time: new Date(frozenNow.getTime() + 1 * hour).toISOString(),
-      status: 'confirmed',
-      attendee_count: 0,
-    }
-    const ended: CalendarEvent = {
-      id: 'e2e-ended-event',
-      title: 'Ended Meeting',
-      start_time: new Date(frozenNow.getTime() - 3 * hour).toISOString(),
-      end_time: new Date(frozenNow.getTime() - 2 * hour).toISOString(),
-      status: 'confirmed',
-      attendee_count: 0,
-    }
+    // The declared world holds one meeting IN PROGRESS (started before the run
+    // anchor, ending after it) alongside three that have fully ended. Only the
+    // ended ones may classify as past — an in-progress meeting has a past START
+    // time, so this distinguishes end-time classification from start-time
+    // classification.
+    //
+    // The clock is frozen to the anchor the SEED returned, which is the instant
+    // the fixture's offsets are relative to. Freezing is irreducible here and it
+    // is the only thing mocked: the events themselves are real rows written by the
+    // real sync provider, and an unfrozen clock would walk past the straddling
+    // meeting's end time mid-test.
+    const seeded = await testApi.seedBehavior('CAL-025')
+    const contactId = handleId(seeded, 'attendee')
 
-    await mockFrozenSystemTime(page, frozenNow.toISOString())
-    await page.route(`**/api/v1/contacts/${contactId}/events**`, route =>
-      fulfillJson(route, { success: true, data: [inProgress, ended] })
-    )
+    await mockFrozenSystemTime(page, seeded.anchor)
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
     const region = meetingsRegion(page)
 
-    // The live counts split 1/1: the in-progress meeting stays upcoming, the
-    // ended one is past — end time vs the frozen accelerated now decides
+    // The live counts split 3/3 against the frozen accelerated now: the
+    // in-progress meeting stays upcoming, the three ended ones are past
     // spec: CAL-025.meeting-classified-past-once
-    await expect(region.getByRole('button', { name: /Upcoming \(1\)/i })).toBeVisible()
-    await expect(region.getByRole('button', { name: /Past \(1\)/i })).toBeVisible()
+    await expect(region.getByRole('button', { name: /Upcoming \(3\)/i })).toBeVisible()
+    await expect(region.getByRole('button', { name: /Past \(3\)/i })).toBeVisible()
 
     // Default (Upcoming) view carries the in-progress meeting, unmarked
-    await expect(region.getByText('In Progress Meeting')).toBeVisible()
-    await expect(region.getByText('Ended Meeting')).not.toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'in-progress'))).toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'past-recent'))).not.toBeVisible()
     await expect(
-      meetingCard(page, 'In Progress Meeting').getByText('Past', { exact: true })
+      meetingCard(page, handleName(seeded, 'in-progress')).getByText('Past', { exact: true })
     ).not.toBeVisible()
 
-    // Past view carries only the ended meeting
-    await region.getByRole('button', { name: /Past \(1\)/i }).click()
-    await expect(region.getByText('Ended Meeting')).toBeVisible()
-    await expect(region.getByText('In Progress Meeting')).not.toBeVisible()
+    // Past view carries only the ended meetings
+    await region.getByRole('button', { name: /Past \(3\)/i }).click()
+    await expect(region.getByText(handleName(seeded, 'past-recent'))).toBeVisible()
+    await expect(region.getByText(handleName(seeded, 'in-progress'))).not.toBeVisible()
   })
 
   test('should summarize time, place, and size on the meeting card', async ({ page, request }) => {
-    await testApi.seedCalendarEvents(contactId, [
-      {
-        title: 'Detailed Meeting',
-        is_past: false,
-        days_ahead: 3,
-        location: `${testApi.prefix}-Conference Room B`,
-        attendee_emails: [`${testApi.prefix}-a@example.com`, `${testApi.prefix}-b@example.com`],
-      },
-      { title: 'Bare Meeting', is_past: false, days_ahead: 4 },
-    ])
+    // CAL-026's world: a meeting with a location and the default two attendees, a
+    // bare one the account organizes without attending (the only shape that stores
+    // a single attendee), and an untitled one.
+    const seeded = await testApi.seedBehavior('CAL-026')
+    const contactId = handleId(seeded, 'attendee')
+    const detailedTitle = handleName(seeded, 'detailed')
+    const bareTitle = handleName(seeded, 'bare')
 
-    // Read the seeded events back from the API so the expected date/time
-    // strings are derived from the same data the card renders.
-    const eventsResponse = await request.get(
-      `${API_BASE_URL}/api/v1/contacts/${contactId}/events`,
-      { headers: API_HEADERS }
-    )
-    expect(eventsResponse.ok()).toBe(true)
-    const events = (await eventsResponse.json()).data as Array<{
-      title: string
-      start_time: string
-      end_time: string
-    }>
-    const detailed = events.find(e => e.title === `${testApi.prefix}-Detailed Meeting`)
+    // Read the seeded events back from the API so the expected date/time and
+    // location strings are derived from the same data the card renders.
+    const events = await fetchContactEvents(request, contactId)
+    const detailed = events.find(e => e.title === detailedTitle)
+    const bare = events.find(e => e.title === bareTitle)
     expect(detailed).toBeTruthy()
+    expect(bare).toBeTruthy()
+    expect(detailed!.location, 'the detailed meeting carries a location').toBeTruthy()
+    // The provider maps an empty location to NULL, so the response omits the key
+    // entirely — that absence is the state the card's negative assertion reads.
+    expect(bare!.location, 'the bare meeting carries no location').toBeUndefined()
+    expect(detailed!.attendee_count).toBe(2)
+    expect(bare!.attendee_count).toBe(1)
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
 
-    const detailedCard = meetingCard(page, `${testApi.prefix}-Detailed Meeting`)
-    const bareCard = meetingCard(page, `${testApi.prefix}-Bare Meeting`)
+    const detailedCard = meetingCard(page, detailedTitle)
+    const bareCard = meetingCard(page, bareTitle)
     await expect(detailedCard).toBeVisible()
     await expect(bareCard).toBeVisible()
 
     // Title, date, and start-to-end time range, computed from the API data
     // spec: CAL-026.shows-title-fallback-label
+    await expect(detailedCard).toContainText(detailedTitle)
     await expect(detailedCard).toContainText(expectedDateTime(detailed!.start_time))
     await expect(detailedCard).toContainText(
       expectedTimeRange(detailed!.start_time, detailed!.end_time)
@@ -290,8 +285,8 @@ test.describe('Meetings Component @area:meetings', () => {
 
     // Location shows only on the meeting that has one
     // spec: CAL-026.shows-location-when-meeting
-    await expect(detailedCard.getByText(`${testApi.prefix}-Conference Room B`)).toBeVisible()
-    await expect(bareCard.getByText(`${testApi.prefix}-Conference Room B`)).not.toBeVisible()
+    await expect(detailedCard.getByText(detailed!.location!)).toBeVisible()
+    await expect(bareCard.getByText(detailed!.location!)).not.toBeVisible()
 
     // Attendee count shows only when the meeting has more than one attendee
     // spec: CAL-026.shows-attendee-count-only
@@ -299,31 +294,12 @@ test.describe('Meetings Component @area:meetings', () => {
     await expect(bareCard.getByText(/attendees/)).not.toBeVisible()
   })
 
-  test('should fall back to a label for untitled meetings', async ({ page, request }) => {
-    // The seed endpoint validates title as non-empty (min=1), so the untitled
-    // branch is driven with a route-mocked events response (the sanctioned
-    // technique for states real seeding cannot express).
-    const timeResponse = await request.get(`${API_BASE_URL}/api/v1/system/time`, {
-      headers: API_HEADERS,
-    })
-    expect(timeResponse.ok()).toBe(true)
-    const now = new Date(
-      ((await timeResponse.json()).data as { current_time: string }).current_time
-    )
-    const start = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
-    const end = new Date(start.getTime() + 60 * 60 * 1000)
-
-    const untitledEvent: CalendarEvent = {
-      id: 'e2e-untitled-event',
-      title: '',
-      start_time: start.toISOString(),
-      end_time: end.toISOString(),
-      status: 'confirmed',
-      attendee_count: 0,
-    }
-    await page.route(`**/api/v1/contacts/${contactId}/events**`, route =>
-      fulfillJson(route, { success: true, data: [untitledEvent] })
-    )
+  test('should fall back to a label for untitled meetings', async ({ page }) => {
+    // The untitled meeting is a real row: the provider stores an empty summary as
+    // the empty STRING (never NULL), which is exactly the state the card's
+    // fallback label serves.
+    const seeded = await testApi.seedBehavior('CAL-026')
+    const contactId = handleId(seeded, 'attendee')
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -335,17 +311,18 @@ test.describe('Meetings Component @area:meetings', () => {
     ).toBeVisible()
   })
 
-  test('should display html_link as clickable external link', async ({ page }) => {
-    // Seed one event with html_link and one without
-    await testApi.seedCalendarEvents(contactId, [
-      {
-        title: 'Meeting With Link',
-        is_past: false,
-        days_ahead: 3,
-        html_link: 'https://calendar.google.com/calendar/event?eid=test123',
-      },
-      { title: 'Meeting Without Link', is_past: false, days_ahead: 4 },
-    ])
+  test('should display html_link as clickable external link', async ({ page, request }) => {
+    const seeded = await testApi.seedBehavior('CAL-027')
+    const contactId = handleId(seeded, 'attendee')
+    const linkedTitle = handleName(seeded, 'linked')
+    const plainTitle = handleName(seeded, 'plain')
+
+    // The href is read back from the API, never restated here.
+    const events = await fetchContactEvents(request, contactId)
+    const linked = events.find(e => e.title === linkedTitle)
+    const plain = events.find(e => e.title === plainTitle)
+    expect(linked?.html_link, 'the linked meeting carries a source link').toBeTruthy()
+    expect(plain?.html_link, 'the plain meeting carries none').toBeUndefined()
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -353,67 +330,63 @@ test.describe('Meetings Component @area:meetings', () => {
 
     // The linked meeting's title is a link opening in a new tab
     // spec: CAL-027.title-becomes-link-opens
-    const meetingLink = region.getByRole('link', {
-      name: new RegExp(`${testApi.prefix}-Meeting With Link`),
-    })
+    const meetingLink = region.getByRole('link', { name: new RegExp(linkedTitle) })
     await expect(meetingLink).toBeVisible()
     await expect(meetingLink).toHaveAttribute('target', '_blank')
-    await expect(meetingLink).toHaveAttribute(
-      'href',
-      'https://calendar.google.com/calendar/event?eid=test123'
-    )
+    await expect(meetingLink).toHaveAttribute('href', linked!.html_link!)
 
     // The meeting without a link renders its title as plain text, not a link
     // spec: CAL-027.meeting-without-link-renders
-    await expect(region.getByText(`${testApi.prefix}-Meeting Without Link`)).toBeVisible()
-    await expect(
-      region.getByRole('link', { name: new RegExp(`${testApi.prefix}-Meeting Without Link`) })
-    ).toHaveCount(0)
+    await expect(region.getByText(plainTitle)).toBeVisible()
+    await expect(region.getByRole('link', { name: new RegExp(plainTitle) })).toHaveCount(0)
   })
 
   test('should not show meetings section when no events exist or they fail to load', async ({
     page,
   }) => {
-    // Don't seed any events - just navigate to the contact
-    await page.goto(`/contacts/${contactId}`)
-    await page.waitForLoadState('domcontentloaded')
+    // CAL-024's world holds TWO contacts: one with a meeting and one with none.
+    // The one with a meeting is the positive control — without it, an assertion
+    // that no Meetings section rendered would pass just as happily against a page
+    // that never renders the section at all.
+    const seeded = await testApi.seedBehavior('CAL-024')
+    const withEventId = handleId(seeded, 'with-event')
+    const bareId = handleId(seeded, 'bare')
 
-    // Meetings section should not be visible with no events
+    // Positive control: the contact that HAS an event shows the section
+    // spec: CAL-024.meetings-section-shown-with-events
+    await page.goto(`/contacts/${withEventId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: /Meetings/i })).toBeVisible()
+
+    // Meetings section is not visible for the contact with no events
     // spec: CAL-024.nothing-shown-without-events
-    await expect(
-      page.getByRole('heading', { name: `${testApi.prefix}-Meeting Test Contact` })
-    ).toBeVisible()
+    await page.goto(`/contacts/${bareId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: handleName(seeded, 'bare') })).toBeVisible()
     await expect(page.getByRole('heading', { name: /Meetings/i })).not.toBeVisible()
 
-    // Even with events seeded, a failing events fetch renders nothing
+    // And a failing events fetch renders nothing even for the contact that HAS an
+    // event — the same absence, reached by a different route
     // spec: CAL-024.nothing-shown-without-events
-    await testApi.seedCalendarEvents(contactId, [
-      { title: 'Hidden Meeting', is_past: false, days_ahead: 3 },
-    ])
-    await page.route(`**/api/v1/contacts/${contactId}/events**`, route =>
+    await page.route(`**/api/v1/contacts/${withEventId}/events**`, route =>
       fulfillJson(
         route,
         { success: false, error: { code: 'NOT_FOUND', message: 'not found' } },
         404
       )
     )
-    await page.reload()
+    await page.goto(`/contacts/${withEventId}`)
     await page.waitForLoadState('domcontentloaded')
     await expect(
-      page.getByRole('heading', { name: `${testApi.prefix}-Meeting Test Contact` })
+      page.getByRole('heading', { name: handleName(seeded, 'with-event') })
     ).toBeVisible()
     await expect(page.getByRole('heading', { name: /Meetings/i })).not.toBeVisible()
   })
 
   test('should reveal a long meeting list progressively', async ({ page }) => {
-    // Seed more than 10 events (the default display limit)
-    const events = Array.from({ length: 15 }, (_, i) => ({
-      title: `Event ${i + 1}`,
-      is_past: false,
-      days_ahead: i + 1,
-    }))
-
-    await testApi.seedCalendarEvents(contactId, events)
+    // 15 meetings — five past the initial ten-card page.
+    const seeded = await testApi.seedBehavior('CAL-028')
+    const contactId = handleId(seeded, 'attendee')
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')

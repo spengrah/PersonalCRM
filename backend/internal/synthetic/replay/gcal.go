@@ -3,7 +3,6 @@ package replay
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"personal-crm/backend/internal/google"
@@ -28,11 +27,19 @@ type GCalResult struct {
 // harness's events. The provider's updateLastContactedForPastEvents calls
 // ListPastEventsNeedingUpdate to enumerate every past confirmed calendar_event
 // DB-wide and publishes calendar.attended for each; on the shared test DB this
-// races with other tests' calendar_events. This wrapper filters that enumeration
+// races with other tests' calendar_events. This wrapper scopes that enumeration
 // to events whose gcal_event_id carries the harness's synthetic prefix, so a
 // replay in one namespace can never read, mark, or publish for another
 // namespace's (or a real) event. All other methods pass through unchanged.
 // Test-only — no production provider change.
+//
+// The scope is applied in SQL, not to the production query's result. That is a
+// correctness requirement rather than an optimization: the production query's
+// LIMIT binds BEFORE any Go-side filter could run, so a shared database holding a
+// page's worth of older unprocessed rows from another namespace — which a crashed
+// sibling worker strands exactly — would fill every page with foreign rows and
+// hand this wrapper an empty local set on every retry. The replay would then
+// starve and fail on the settle timeout, blaming the wrong thing entirely.
 type namespaceScopedCalendarRepo struct {
 	real   *repository.CalendarEventRepository
 	prefix string
@@ -43,17 +50,7 @@ func (r *namespaceScopedCalendarRepo) Upsert(ctx context.Context, req repository
 }
 
 func (r *namespaceScopedCalendarRepo) ListPastEventsNeedingUpdate(ctx context.Context, before time.Time, limit int32) ([]repository.CalendarEvent, error) {
-	all, err := r.real.ListPastEventsNeedingUpdate(ctx, before, limit)
-	if err != nil {
-		return nil, err
-	}
-	scoped := make([]repository.CalendarEvent, 0, len(all))
-	for _, e := range all {
-		if strings.HasPrefix(e.GcalEventID, r.prefix) {
-			scoped = append(scoped, e)
-		}
-	}
-	return scoped, nil
+	return r.real.ListPastEventsNeedingUpdateByPrefixForTest(ctx, before, r.prefix, limit)
 }
 
 func (r *namespaceScopedCalendarRepo) MarkLastContactedUpdated(ctx context.Context, id uuid.UUID) error {
@@ -265,6 +262,108 @@ func (h *Harness) ReplayGCalBatch(ctx context.Context, items []GCalBatchItem, op
 		}
 	}
 	return res, nil
+}
+
+// ReplayGCalUpcoming drives N FUTURE calendar payloads through the
+// CalendarSyncProvider and settles once.
+//
+// It is a separate adapter from ReplayGCalBatch because the two have different
+// terminal states, not merely different data. A future matched event is stored
+// and readable but publishes NOTHING: updateLastContactedForPastEvents is the
+// sole calendar.attended publisher and its read requires end_time < now, so a
+// future event creates no event row, no interaction and no venue node — and
+// never acquires last_contacted_updated, which is exactly what the past-event
+// gate demands. Driving future items on that gate would time out and report a
+// drain failure over a world that is in fact complete.
+//
+// For the same reason ONE Sync carries any number of items: the per-Sync page
+// budget belongs to the past-event publish loop, which future events never enter.
+// There is no drain loop here.
+//
+// Mixing past and future items in ONE call is not supported; drive them in
+// separate calls. That is safe because no reconciliation step deletes stored
+// events a later fetch omits — the provider only processes what it lists. Order
+// matters in one direction: Upsert writes last_contacted_updated = false on
+// EVERY upsert, so a later Sync that re-lists an already-projected past event
+// would reset its flag. Drive the past items first and do not re-list them.
+func (h *Harness) ReplayGCalUpcoming(ctx context.Context, items []GCalBatchItem) (BatchResult, error) {
+	const source = "gcal-upcoming"
+
+	entries, err := gcalBatchEntries(items)
+	if err != nil {
+		return BatchResult{}, err
+	}
+	if err := validateBatchStructure(source, entries); err != nil {
+		return BatchResult{}, err
+	}
+	accountID, err := gcalBatchAccount(items)
+	if err != nil {
+		return BatchResult{}, err
+	}
+	if err := h.validateBatchOwnership(ctx, source, entries); err != nil {
+		return BatchResult{}, err
+	}
+
+	contactIDs := distinctContactIDs(entries)
+	res := BatchResult{Payloads: len(items), Contacts: len(contactIDs)}
+
+	provider := google.NewCalendarSyncProvider(
+		nil, // oauthService unused with the injected fetcher
+		repository.NewCalendarEventRepository(h.database.Queries),
+		h.contactRepo,
+		h.identityService,
+		h.externalRepo,
+		h.bus,
+		h.database.Pool,
+	)
+	allEvents := make([]*calendarapi.Event, 0, len(items))
+	for _, it := range items {
+		allEvents = append(allEvents, it.Spec.Event)
+	}
+	provider.SetFetcherFactoryForTest(google.NewFakeCalendarFetcherFactoryForTest(google.FakeCalendarFetcherFuncs{
+		ListEvents: func(_ context.Context, _ string, opts google.CalendarListOpts) ([]*calendarapi.Event, string, string, error) {
+			if opts.PageToken != "" {
+				return nil, "", "synth-sync-token", nil
+			}
+			return allEvents, "", "synth-sync-token", nil
+		},
+	}))
+	// Confine the provider's DB-wide past-event enumeration to THIS harness's
+	// events, exactly as the other two adapters do. These payloads are future, so
+	// the enumeration finds none of them — but the provider runs it regardless,
+	// and an unscoped run would read a concurrent namespace's rows.
+	provider.SetCalendarRepoForTest(&namespaceScopedCalendarRepo{
+		real:   repository.NewCalendarEventRepository(h.database.Queries),
+		prefix: h.gen.Prefix(),
+	})
+
+	state := &repository.SyncState{Source: repository.InteractionSourceGCal, AccountID: &accountID}
+	if _, err := provider.Sync(ctx, state, nil); err != nil {
+		return res, fmt.Errorf("gcal upcoming sync: %w", err)
+	}
+	res.SyncCalls++
+
+	gcalIDs, pairContactIDs := gcalBatchGateKeys(items)
+	if err := h.Settle(ctx, h.gcalUpcomingSettled(gcalIDs, pairContactIDs), ""); err != nil {
+		return res, h.drainPartial(ctx, source, "", contactIDs, err)
+	}
+	res.SettleCalls++
+	// No interaction or venue tracking: a future event publishes nothing, so
+	// there is no interaction to track and no venue node to reclaim. The
+	// calendar_event rows are recovered by their namespace-prefixed
+	// gcal_event_id, and the attendee identities by the identifier prefix.
+	return res, nil
+}
+
+// gcalUpcomingSettled is the upcoming Gate A: every one of these (event, contact)
+// pairs has a calendar_event carrying the contact in matched_contact_ids. No
+// processed flag — see ReplayGCalUpcoming.
+func (h *Harness) gcalUpcomingSettled(gcalEventIDs []string, contactIDs []uuid.UUID) gateA {
+	want := int64(len(gcalEventIDs))
+	return func(ctx context.Context) (bool, error) {
+		n, err := h.support.CountLinkedCalendarEventsByGcalIDs(ctx, gcalEventIDs, contactIDs)
+		return n >= want, err
+	}
 }
 
 // gcalBatchSettled is the batch Gate A: every one of these (event, contact)

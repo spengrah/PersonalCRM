@@ -1,35 +1,17 @@
 import { test, expect } from './fixtures'
 import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
-import { acquireGlobalLock } from './helpers/global-lock'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
 const API_HEADERS = { 'X-API-Key': API_KEY }
 
-// Cross-file mutex: settings-mac.spec.ts resets and reseeds the mac_host
-// singleton. This file no longer seeds a PAIRED host of its own — its orphans
-// hang off the declared namespace's REVOKED synthetic host, which is invisible
-// to GET /api/v1/host and therefore to that file's reset — so the two files may
-// well be disjoint now. Removing the lock is a concurrency-model change rather
-// than a provisioning swap, and it is the mac-host migration (which holds BOTH
-// files) that can prove disjointness from both sides; until then the lock stays.
-// The lock is held for the WHOLE file (beforeAll → afterAll): per-test cycling
-// lets this worker instantly re-acquire between its serial tests, starving the
-// other file's waiter. afterAll has its own timeout slot, and if the worker dies
-// without running it the renew heartbeat stops and the lease lapses at the
-// arbiter, freeing the lock.
-let releaseMacHostLock: (() => Promise<void>) | null = null
-
-test.beforeAll(async () => {
-  // The contending file may hold the lock for its entire serial run.
-  test.setTimeout(360_000)
-  releaseMacHostLock = await acquireGlobalLock('mac-host')
-})
-
-test.afterAll(async () => {
-  await releaseMacHostLock?.()
-  releaseMacHostLock = null
-})
+// This file holds NO mac-host lock. Disjointness from settings-mac.spec.ts is now
+// provable from both sides: this file's orphans hang off its declared namespace's
+// REVOKED synthetic host (invisible to GET /api/v1/host, deleted by its own
+// namespace's cleanup, and outside the singleton index because it is revoked), and
+// it performs no mac_host read or request at all; while settings-mac no longer
+// resets hosts — each of its worlds pairs one under a namespace-derived hostname
+// and deletes exactly that row.
 
 // Interactions tab: the conflict/orphan queue. IMP-038 declares two orphan
 // (orphan_needs_review) sessions — enough to drive the amber badge, the orphan

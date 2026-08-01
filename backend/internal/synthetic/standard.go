@@ -38,10 +38,12 @@ const followUpScenarioCadence = "monthly"
 // under the aggregation reply-bridge window (replyBridgeHours=48h), so the inbound
 // reply promotes the outbound interaction in place to mutual.
 const (
-	// riderGCalAge dates the awaiting-reply rider's GCal event at the anchor
-	// itself, so the mutual interaction it records is the contact's newest and
-	// drives last_contacted.
-	riderGCalAge time.Duration = 0
+	// riderFollowUpOutboundAge dates the awaiting-reply rider's OUTBOUND at the
+	// anchor itself, so it is the newest thing on the contact and the loop it opens
+	// is plainly current. An outbound moves last_outreach_at and touches neither
+	// last_contacted nor last_interaction_at, which is the honest shape for a
+	// contact still waiting on a first reply.
+	riderFollowUpOutboundAge time.Duration = 0
 	// messageOutboundAge dates the OUTBOUND-only rider's single message a few
 	// days back — recent enough to be plainly current, not so recent it collides
 	// with the ~2h/1h source default windows.
@@ -201,13 +203,18 @@ func accountCompletedRider(kind riderKind, res *ProfileResult) {
 // seedPendingFollowUpFixture builds the "awaiting reply" fixture COHERENTLY BY
 // CONSTRUCTION, and the causal chain is the whole point.
 //
-// A follow-up loop is opened BY an outbound — it is the app waiting on a reply
-// to something you actually sent. Hanging one on an arbitrary cadence-bearing
-// contact with no outbound renders as "awaiting reply" with nothing to be
-// awaiting a reply to, a state production cannot reach; the agentic judge caught
-// exactly that and (correctly) failed the page for it. So: a contact WITH a
-// cadence, a GCal event — whose interaction records as MUTUAL, and mutual bumps
-// last_outreach_at — and only then the live follow-up.
+// A follow-up loop is opened BY an outbound — it is the app waiting on a reply to
+// something you actually sent. Hanging one on an arbitrary cadence-bearing contact
+// with no outbound renders as "awaiting reply" with nothing to be awaiting a reply
+// to, a state production cannot reach.
+//
+// The outbound has to be an OUTBOUND, not a meeting. A matched calendar event
+// records as MUTUAL, and a mutual IS a reply: it COMPLETES a live follow-up loop
+// and can never open one — which is why the declared vocabulary rejects
+// AwaitingReply beside MutualMeeting outright. A fixture composing the two states
+// the same rules forbid is not coherent-by-construction, however it reads. So: a
+// contact WITH a cadence, one OUTBOUND email, and only then the live follow-up —
+// the same shape as the outreach fixture below, plus the loop.
 //
 // The cadence timestamps are deliberately not written here: they are sole-writer
 // property of the cadence engine, applied asynchronously by its River worker,
@@ -219,8 +226,9 @@ func seedPendingFollowUpFixture(ctx context.Context, h *Harness, gen *factory.Ge
 	if err != nil {
 		return riderSeedResult{}, fmt.Errorf("seed awaiting-reply contact: %w", err)
 	}
-	if _, err := h.ReplayGCal(ctx, contact.ID, gen.GCalEvent(spec, factory.MatchSeeded, factory.WithMessageAge(riderGCalAge))); err != nil {
-		return riderSeedResult{contact: contact}, fmt.Errorf("replay gcal for awaiting-reply contact: %w", err)
+	message := gen.GmailMessage(spec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(riderFollowUpOutboundAge))
+	if _, err := h.ReplayGmail(ctx, contact.ID, message); err != nil {
+		return riderSeedResult{contact: contact}, fmt.Errorf("replay outbound for awaiting-reply contact: %w", err)
 	}
 	if _, err := h.SeedPendingFollowUp(ctx, contact.ID, contact.FullName); err != nil {
 		return riderSeedResult{contact: contact, payloads: 1}, fmt.Errorf("seed pending follow-up: %w", err)

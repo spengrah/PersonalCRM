@@ -1,14 +1,20 @@
-import { test, expect, type APIRequestContext } from '@playwright/test'
+import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
 import { acquireGlobalLock } from './helpers/global-lock'
+import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
 
-// Cross-file mutex: imports-interactions.spec.ts also resets/reseeds the
-// mac_host singleton, and nothing else stops the two files landing in
-// different workers and nuking each other's host mid-test. The lock is
-// held for the WHOLE file (beforeAll → afterAll): per-test cycling lets
-// this worker instantly re-acquire between its serial tests, starving the
-// other file's waiter. afterAll has its own timeout slot, and if the
-// worker dies without running it the renew heartbeat stops and the lease
-// lapses at the arbiter, freeing the lock.
+// Cross-file mutex on the mac_host SINGLETON. The resource is a database-wide
+// partial unique index that permits one non-revoked host, not a spec convention:
+// a declared world pairs a LIVE host through the real pairing service, so a
+// second world attempting it while this one holds the slot fails its SEED
+// outright rather than waiting. Only this file pairs one today, and the lock
+// still has to stay — with it, a future second declaring spec queues; without it,
+// that spec's seed errors.
+//
+// It is held for the WHOLE file (beforeAll → afterAll): per-test cycling lets
+// this worker instantly re-acquire between its serial tests, starving another
+// file's waiter. afterAll has its own timeout slot, and if the worker dies
+// without running it the renew heartbeat stops and the lease lapses at the
+// arbiter, freeing the lock.
 let releaseMacHostLock: (() => Promise<void>) | null = null
 
 test.beforeAll(async () => {
@@ -23,58 +29,76 @@ test.afterAll(async () => {
 })
 
 // API_KEY is injected by the make target via NEXT_PUBLIC_API_KEY.
-// We re-use it here for the test-only seed endpoints under
-// /api/v1/test/seed/* which expect the global API key.
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || ''
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 
-async function seedMacHost(
-  request: APIRequestContext,
-  body: Record<string, unknown>
-): Promise<string> {
-  const resp = await request.post(`${API_URL}/api/v1/test/seed/mac-hosts`, {
-    headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
-    data: body,
-  })
-  if (!resp.ok()) {
-    throw new Error(`seed mac host failed: ${resp.status()} ${await resp.text()}`)
-  }
-  const json = (await resp.json()) as { data: { host_id: string } }
-  return json.data.host_id
+interface AdminHost {
+  id: string
+  hostname: string
+  source_health: Record<string, { pushed_cursor?: string | number; backfill_complete?: boolean }>
 }
 
-async function deleteAllMacHosts(request: APIRequestContext): Promise<void> {
-  // Best-effort cleanup before/after each paired-host test so the
-  // singleton index is empty for the next test. The admin DELETE
-  // cascades push-cursor rows.
-  const resp = await request.get(`${API_URL}/api/v1/host`, {
+// The admin list is where a test learns what the daemon reported, so a cursor or
+// a flag is read from the API rather than restated as a literal here.
+async function fetchHost(request: APIRequestContext, hostname: string): Promise<AdminHost> {
+  const response = await request.get(`${API_URL}/api/v1/host`, {
     headers: { 'X-API-Key': API_KEY },
   })
-  if (!resp.ok()) return
-  const json = (await resp.json()) as { data: Array<{ id: string }> }
-  for (const host of json.data ?? []) {
-    await request.delete(`${API_URL}/api/v1/host/${host.id}`, {
-      headers: { 'X-API-Key': API_KEY },
-    })
-  }
+  expect(response.ok()).toBe(true)
+  const hosts = ((await response.json()) as { data: AdminHost[] }).data ?? []
+  const host = hosts.find(h => h.hostname === hostname)
+  expect(host, `the declared host ${hostname} should be in the live host list`).toBeTruthy()
+  return host!
+}
+
+// Every host row read is filtered to THIS world's hostname first. The row list is
+// global, so `.first()` would be a coin flip against a parallel worker's host.
+const hostRow = (page: Page, hostname: string) =>
+  page.getByTestId('mac-host-row').filter({ hasText: hostname })
+
+// The source-health table renders one real <tr> per source, so a per-source cell
+// is addressed through its row. With two sources on one host an unscoped
+// cursor-cell locator is strict-mode ambiguous.
+const sourceRow = (page: Page, hostname: string, label: string) =>
+  hostRow(page, hostname).getByTestId('source-health').getByRole('row').filter({ hasText: label })
+
+const declaredHostname = (seeded: SeedBehaviorResult): string => seeded.entities['host'].name
+const declaredHostId = (seeded: SeedBehaviorResult): string => seeded.entities['host'].id
+
+async function waitForHostList(page: Page): Promise<void> {
+  const listPromise = page.waitForResponse(
+    resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
+    { timeout: 15_000 }
+  )
+  await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
+  await listPromise
 }
 
 test.describe('Settings — Mac Daemon @area:settings', () => {
-  // Run the Mac Daemon settings tests serially within this file: the
-  // mac_host table has a partial unique index that allows only one
-  // non-revoked host at a time. Parallel workers would race on
-  // seed/delete and the empty-state / paired-state tests would
-  // interfere with each other.
+  // Run the Mac Daemon settings tests serially within this file: a declared world
+  // pairs a LIVE host, and the mac_host partial unique index permits only one at
+  // a time. Each test's afterEach cleanup deletes its host, which is what frees
+  // the slot for the next one.
   test.describe.configure({ mode: 'serial' })
-  // Headroom for slow singleton cleanup on a loaded machine.
+  // Headroom for the declared seed (which pairs a host through the real service)
+  // plus its cleanup.
   test.setTimeout(60_000)
+
+  let testApi: TestAPI
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
 
   test('renders empty-state when no Mac hosts are paired', async ({ page }) => {
     // The zero-host rendering branch, driven by mocking the list endpoint:
-    // the shared mac_host singleton table is seeded/reset by parallel
-    // workers (imports-interactions.spec.ts), so asserting real-API global
-    // emptiness is racy and would mean deleting hosts other tests own. The
-    // real-API list facet (MAC-018.list-returns-live-hosts) is covered by the seeded-host and
+    // asserting real-API global emptiness is racy on a shared database and would
+    // mean deleting hosts other tests own. The real-API list facet
+    // (MAC-018.list-returns-live-hosts) is covered by the declared-host and
     // uninstall tests below; this test is uncited (the mock replaces the
     // endpoint the behavior describes).
     await page.route('**/api/v1/host', route =>
@@ -95,18 +119,12 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
 
   // spec: MAC-018.admin-can-mint-fresh
   test('opens pairing modal with a token when Pair new Mac is clicked', async ({ page }) => {
-    // No host seeding or reset needed: the pairing modal works regardless
-    // of how many hosts are listed (parallel workers may own one).
-    // Wait for the initial GET /host response BEFORE clicking — this
-    // proves React Query has mounted on the page and hydration is
-    // complete, otherwise the click handler can fire against an
-    // unhydrated tree and silently drop the event.
-    const initialListPromise = page.waitForResponse(
-      resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
-      { timeout: 15_000 }
-    )
-    await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
-    await initialListPromise
+    // No host needed: the pairing affordance renders unconditionally in the page
+    // header, whatever the list holds (a parallel worker may own one).
+    // Waiting for the initial GET /host response BEFORE clicking proves React
+    // Query has mounted and hydration is complete, otherwise the click handler can
+    // fire against an unhydrated tree and silently drop the event.
+    await waitForHostList(page)
 
     const pairButton = page.getByRole('button', { name: 'Pair new Mac' })
     await expect(pairButton).toBeVisible()
@@ -138,56 +156,41 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     page,
     request,
   }) => {
-    await deleteAllMacHosts(request)
-    const hostId = await seedMacHost(request, {
-      hostname: 'e2e-paired-host',
-      daemon_version: '0.1.2',
-      protocol_version: 1,
-      permissions: { fda: true, contacts: false },
-      // Sync-staleness watchdog coupling: this last_pushed_at is month-stale, so adding
-      // `enabled: true` here would open a push_stale breach and surface the
-      // staleness banner mid-run. Keep `enabled` absent (or last_pushed_at fresh).
-      source_health: {
-        messages: { last_pushed_at: '2026-05-01T00:00:00Z', pushed_cursor: 'abc-123' },
-      },
-    })
+    // The declared world pairs a live host through the real pairing services and
+    // heartbeats the daemon-supplied permissions and source health onto it, so
+    // everything asserted below is a value the daemon protocol can actually carry.
+    const seeded = await testApi.seedBehavior('MAC-018')
+    const hostname = declaredHostname(seeded)
+    const hostId = declaredHostId(seeded)
 
-    // Sanity check via the admin API that the host is really there
-    // before navigating — if this fails the front-end test will never
-    // pass and the failure mode is more obvious.
-    const verify = await request.get(`${API_URL}/api/v1/host`, {
-      headers: { 'X-API-Key': API_KEY },
-    })
-    const verifyBody = (await verify.json()) as { data: Array<{ hostname: string }> }
-    expect(verifyBody.data.some(h => h.hostname === 'e2e-paired-host')).toBe(true)
+    // The cursor the host reported, read from the admin API rather than restated.
+    const host = await fetchHost(request, hostname)
+    expect(host.id).toBe(hostId)
+    const messagesCursor = String(host.source_health['messages'].pushed_cursor)
+    expect(messagesCursor).toBeTruthy()
 
-    // Wait for the page's own list query to resolve so we know the
-    // render below is reacting to a non-empty response.
-    const listPromise = page.waitForResponse(
-      resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
-      { timeout: 15_000 }
-    )
-    await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
-    await listPromise
+    await waitForHostList(page)
 
-    const row = page.getByTestId('mac-host-row').first()
+    const row = hostRow(page, hostname)
     await expect(row).toBeVisible({ timeout: 10_000 })
-    await expect(row.getByText('e2e-paired-host')).toBeVisible()
+    await expect(row.getByText(hostname)).toBeVisible()
     await expect(row.getByText(hostId, { exact: false })).toBeVisible()
 
-    // Permissions badges
+    // Permissions badges — the declared host reports one granted and one denied,
+    // so both states are observable on the same row.
     const permissions = row.getByTestId('permissions-badges')
     await expect(permissions).toBeVisible()
     await expect(permissions.getByText(/Full Disk Access: granted/)).toBeVisible()
     await expect(permissions.getByText(/Contacts: denied/)).toBeVisible()
 
-    // Source-health table
-    const sourceHealth = row.getByTestId('source-health')
-    await expect(sourceHealth).toBeVisible()
-    await expect(sourceHealth.getByText('messages')).toBeVisible()
-    await expect(sourceHealth.getByText('abc-123')).toBeVisible()
-
-    await deleteAllMacHosts(request)
+    // Source-health table: the messages row is labelled and renders its cursor
+    // verbatim. The label is matched EXACTLY on its own cell — the cursor value
+    // ends in "-cursor-messages", and getByText is a case-insensitive SUBSTRING
+    // match, so an unqualified 'Messages' resolves to both cells.
+    const messagesRow = sourceRow(page, hostname, 'Messages')
+    await expect(row.getByTestId('source-health')).toBeVisible()
+    await expect(messagesRow.getByRole('cell', { name: 'Messages', exact: true })).toBeVisible()
+    await expect(messagesRow.getByTestId('cursor-cell')).toHaveText(messagesCursor)
   })
 
   // spec: MAC-046.backfill-complete-shows-count
@@ -195,66 +198,35 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     page,
     request,
   }) => {
-    await deleteAllMacHosts(request)
-    const hostId = await seedMacHost(request, {
-      hostname: 'e2e-icloud-host',
-      daemon_version: '0.1.2',
-      protocol_version: 2,
-      // Sync-staleness watchdog coupling: this last_pushed_at is month-stale, so adding
-      // `enabled: true` here would open a push_stale breach and surface the
-      // staleness banner mid-run. Keep `enabled` absent (or last_pushed_at fresh).
-      source_health: {
-        icloud_contacts: {
-          last_pushed_at: '2026-05-01T00:00:00Z',
-          backfill_complete: true,
-        },
-      },
-    })
+    // The declared world pairs a host reporting a COMPLETED iCloud backfill and
+    // pushes three iCloud contacts through the real ingest pipeline onto that same
+    // host — the per-host count route reads host_id, so the candidates have to be
+    // owned by the host whose row renders.
+    const seeded = await testApi.seedBehavior('MAC-046')
+    const hostname = declaredHostname(seeded)
+    const hostId = declaredHostId(seeded)
 
-    // Seed external_contact rows for the host so the count is non-zero.
-    const seedPrefix = `e2e-icloud-${Date.now()}`
-    const seedResp = await request.post(`${API_URL}/api/v1/test/seed/external-contacts`, {
-      headers: { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' },
-      data: {
-        prefix: seedPrefix,
-        host_id: hostId,
-        contacts: [
-          { display_name: 'iCloud A', source: 'icloud_contacts', emails: ['a@example.com'] },
-          { display_name: 'iCloud B', source: 'icloud_contacts', emails: ['b@example.com'] },
-          { display_name: 'iCloud C', source: 'icloud_contacts', emails: ['c@example.com'] },
-        ],
-      },
-    })
-    expect(seedResp.ok()).toBe(true)
+    const host = await fetchHost(request, hostname)
+    expect(host.source_health['icloud_contacts'].backfill_complete).toBe(true)
 
-    const listPromise = page.waitForResponse(
-      resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
-      { timeout: 15_000 }
-    )
     const countsPromise = page.waitForResponse(
       resp =>
         resp.url().includes('/api/v1/host/' + hostId + '/source-counts') &&
         resp.request().method() === 'GET',
       { timeout: 15_000 }
     )
-    await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
-    await listPromise
+    await waitForHostList(page)
     await countsPromise
 
-    const row = page.getByTestId('mac-host-row').first()
+    const row = hostRow(page, hostname)
     await expect(row).toBeVisible({ timeout: 10_000 })
-    const sourceHealth = row.getByTestId('source-health')
-    await expect(sourceHealth).toBeVisible()
 
-    // The Cursor cell substitutes the live contact count (3 seeded rows)
-    // for the misleading change-token / dash. The checkmark glyph is
-    // presentation — assert the count and the cell's state instead.
-    const cursorCell = sourceHealth.getByTestId('cursor-cell')
+    // The Cursor cell substitutes the live contact count (3 declared candidates)
+    // for the misleading change-token. The checkmark glyph is presentation —
+    // assert the count and the cell's state instead.
+    const cursorCell = sourceRow(page, hostname, 'iCloud Contacts').getByTestId('cursor-cell')
     await expect(cursorCell).toHaveText(/3 contacts/)
     await expect(cursorCell).toHaveAttribute('data-state', 'count')
-
-    // Cleanup.
-    await deleteAllMacHosts(request)
   })
 
   // spec: MAC-046.backfill-in-progress-placeholder
@@ -262,43 +234,35 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     page,
     request,
   }) => {
-    await deleteAllMacHosts(request)
-    await seedMacHost(request, {
-      hostname: 'e2e-icloud-host-incomplete',
-      daemon_version: '0.1.2',
-      protocol_version: 2,
-      // Sync-staleness watchdog coupling: this last_pushed_at is month-stale, so adding
-      // `enabled: true` here would open a push_stale breach and surface the
-      // staleness banner mid-run. Keep `enabled` absent (or last_pushed_at fresh).
-      source_health: {
-        icloud_contacts: {
-          last_pushed_at: '2026-05-01T00:00:00Z',
-          backfill_complete: false,
-          // A pushed change-token is the NORMAL mid-backfill state — the
-          // cell must show the placeholder, never this opaque token.
-          pushed_cursor: 'e2e-change-token-xyz',
-        },
-      },
-    })
+    // This rides MAC-018's world rather than MAC-046's. The two MAC-046 keys are
+    // mutually exclusive states of ONE flag on a SINGLETON host, so no single
+    // fixture can hold both — and a freshly paired host reporting an iCloud source
+    // mid-backfill is the honest shape for this half, which is exactly what
+    // MAC-018's host carries. The citation stays on MAC-046: riding another
+    // behavior's fixture never moves a citation.
+    const seeded = await testApi.seedBehavior('MAC-018')
+    const hostname = declaredHostname(seeded)
 
-    const listPromise = page.waitForResponse(
-      resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
-      { timeout: 15_000 }
-    )
-    await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
-    await listPromise
+    const host = await fetchHost(request, hostname)
+    const entry = host.source_health['icloud_contacts']
+    expect(entry.backfill_complete).toBe(false)
+    // A pushed change-token IS the normal mid-backfill state — the cell must show
+    // the placeholder, never this opaque value.
+    const opaqueToken = String(entry.pushed_cursor)
+    expect(opaqueToken).toBeTruthy()
 
-    const row = page.getByTestId('mac-host-row').first()
-    const sourceHealth = row.getByTestId('source-health')
+    await waitForHostList(page)
+
+    const sourceHealth = hostRow(page, hostname).getByTestId('source-health')
     await expect(sourceHealth).toBeVisible({ timeout: 10_000 })
 
-    // While backfill is in progress, the cell stays in its no-count state:
-    // no numeric substitution, and the raw change-token is never shown.
-    await expect(sourceHealth.getByTestId('cursor-cell')).toHaveAttribute('data-state', 'pending')
+    // While backfill is in progress, the cell stays in its no-count state: no
+    // numeric substitution, and the raw change-token is never shown.
+    await expect(
+      sourceRow(page, hostname, 'iCloud Contacts').getByTestId('cursor-cell')
+    ).toHaveAttribute('data-state', 'pending')
     await expect(sourceHealth.getByText(/\d+ contacts/)).toHaveCount(0)
-    await expect(sourceHealth.getByText('e2e-change-token-xyz')).toHaveCount(0)
-
-    await deleteAllMacHosts(request)
+    await expect(sourceHealth.getByText(opaqueToken)).toHaveCount(0)
   })
 
   // spec: MAC-018.admin-can-mint-fresh
@@ -307,25 +271,21 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     request,
     context,
   }) => {
-    await deleteAllMacHosts(request)
-    await seedMacHost(request, { hostname: 'rotate-test-host', protocol_version: 1 })
+    const seeded = await testApi.seedBehavior('MAC-018')
+    const hostname = declaredHostname(seeded)
+    await fetchHost(request, hostname)
 
     // Grant clipboard permissions so navigator.clipboard.readText
     // works for the Copy assertion below.
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
 
-    const listPromise = page.waitForResponse(
-      resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
-      { timeout: 15_000 }
-    )
-    await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
-    await listPromise
+    await waitForHostList(page)
 
-    const row = page.getByTestId('mac-host-row').first()
-    await expect(row.getByText('rotate-test-host')).toBeVisible({ timeout: 10_000 })
+    const row = hostRow(page, hostname)
+    await expect(row.getByText(hostname)).toBeVisible({ timeout: 10_000 })
 
     const rotateButton = row.getByRole('button', {
-      name: /Rotate pair-key for rotate-test-host/i,
+      name: new RegExp(`Rotate pair-key for ${hostname}`, 'i'),
     })
     await expect(rotateButton).toBeVisible()
 
@@ -338,7 +298,9 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     const resp = await tokenResponsePromise
     expect(resp.status()).toBe(200)
 
-    const dialog = page.getByRole('dialog', { name: /Rotate pair-key for rotate-test-host/i })
+    const dialog = page.getByRole('dialog', {
+      name: new RegExp(`Rotate pair-key for ${hostname}`, 'i'),
+    })
     await expect(dialog).toBeVisible({ timeout: 5_000 })
 
     // The displayed command is the full templated re-pair invocation —
@@ -357,30 +319,26 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
 
     await dialog.getByRole('button', { name: 'Close' }).click()
     await expect(dialog).not.toBeVisible()
-
-    await deleteAllMacHosts(request)
   })
 
   // spec: MAC-018.admin-can-mint-fresh, MAC-018.list-returns-live-hosts
   test('uninstall flow removes a paired host', async ({ page, request }) => {
-    await deleteAllMacHosts(request)
-    await seedMacHost(request, { hostname: 'e2e-uninstall-me', protocol_version: 1 })
+    const seeded = await testApi.seedBehavior('MAC-018')
+    const hostname = declaredHostname(seeded)
+    const hostId = declaredHostId(seeded)
+    await fetchHost(request, hostname)
 
-    const listPromise = page.waitForResponse(
-      resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
-      { timeout: 15_000 }
-    )
-    await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
-    await listPromise
-    const row = page.getByTestId('mac-host-row').first()
-    await expect(row.getByText('e2e-uninstall-me')).toBeVisible({ timeout: 10_000 })
+    await waitForHostList(page)
+    const row = hostRow(page, hostname)
+    await expect(row.getByText(hostname)).toBeVisible({ timeout: 10_000 })
 
     // Click the row's Uninstall button (aria-label scoped to hostname).
-    await row.getByRole('button', { name: /Uninstall e2e-uninstall-me/i }).click()
+    await row.getByRole('button', { name: new RegExp(`Uninstall ${hostname}`, 'i') }).click()
     const confirmDialog = page.getByRole('dialog', { name: 'Uninstall Mac host' })
     await expect(confirmDialog).toBeVisible()
+    // The id is pinned so a parallel worker's DELETE cannot satisfy this wait.
     const deleteResponsePromise = page.waitForResponse(
-      resp => resp.url().includes('/api/v1/host/') && resp.request().method() === 'DELETE',
+      resp => resp.url().includes(`/api/v1/host/${hostId}`) && resp.request().method() === 'DELETE',
       { timeout: 10_000 }
     )
     await confirmDialog.getByRole('button', { name: 'Uninstall', exact: true }).click()
@@ -388,10 +346,8 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     expect(deleteResp.status()).toBe(200)
 
     // The removal is reflected in the live list: this test's host row is
-    // gone (scoped to the seeded hostname — a parallel worker may own an
+    // gone (scoped to the declared hostname — a parallel worker may own an
     // unrelated host at this moment).
-    await expect(
-      page.getByTestId('mac-host-row').filter({ hasText: 'e2e-uninstall-me' })
-    ).toHaveCount(0, { timeout: 10_000 })
+    await expect(hostRow(page, hostname)).toHaveCount(0, { timeout: 10_000 })
   })
 })

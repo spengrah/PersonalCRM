@@ -21,11 +21,16 @@ type MacContactResult struct {
 }
 
 // ReplayMacContacts feeds a synthetic external_contact.upserted envelope through
-// IngestService.IngestBatch (revoked synthetic host id, hostLiveness=nil). For
-// MatchSeeded the email matches the seeded contact → external_contact linked
-// (match_status='matched'). For MatchUnknown → external_contact.match_status=
-// 'unmatched' (the Imports queue). Settles synchronously inside the tx (no River
-// cascade for the basic case).
+// IngestService.IngestBatch (hostLiveness=nil). For MatchSeeded the email matches
+// the seeded contact → external_contact linked (match_status='matched'). For
+// MatchUnknown → external_contact.match_status='unmatched' (the Imports queue).
+// Settles synchronously inside the tx (no River cascade for the basic case).
+//
+// The host is the one the SPEC declares (factory.MacContactSpec.HostID) — usually
+// the harness's revoked marker, but a declared world with a LIVE paired host
+// builds its payloads against that host instead, because the stored row's
+// host_id is what the per-host source-count route reads and Upsert never
+// reassigns an existing owner.
 func (h *Harness) ReplayMacContacts(ctx context.Context, contactID uuid.UUID, spec factory.MacContactSpec) (MacContactResult, error) {
 	// raw external_contact.upserted root events carry no CRM contact id; track
 	// the synthetic source so cleanup captures the root event.
@@ -41,7 +46,8 @@ func (h *Harness) ReplayMacContacts(ctx context.Context, contactID uuid.UUID, sp
 	}
 	spec.Envelope.SourceID = spec.EntityID + "@" + hash
 
-	accepted, _, rejections, _, err := h.ingestService.IngestBatch(ctx, []*events.Envelope{spec.Envelope}, []int{0}, &h.macHostID)
+	hostID := spec.HostID
+	accepted, _, rejections, _, err := h.ingestService.IngestBatch(ctx, []*events.Envelope{spec.Envelope}, []int{0}, &hostID)
 	if err != nil {
 		return MacContactResult{}, fmt.Errorf("ingest mac contact: %w", err)
 	}

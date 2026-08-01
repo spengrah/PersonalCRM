@@ -95,7 +95,10 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     })
     await page.goto('/dashboard')
     await overdueSettled
-    await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
+    // Matched EXACTLY: the declared names are generator-drawn, and two contacts
+    // in one namespace that draw the same pair render "<name>" and "<name> N",
+    // so a substring match on the shorter one also resolves the sibling's card.
+    await expect(page.getByRole('heading', { name: contactName, exact: true })).toBeVisible()
 
     // Go to contact detail and log a mutual interaction via the modal.
     // The header button is "Log Interaction" (not "Mark as Contacted")
@@ -164,8 +167,13 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     })
     await page.goto('/dashboard')
     await overdueSettled
-    await expect(page.getByRole('heading', { name: sentinelName })).toBeVisible()
-    await expect(page.getByRole('heading', { name: contactName })).not.toBeVisible()
+    // Both matched EXACTLY. The absence assertion is the one that MUST be: the
+    // sentinel's card is deliberately still on screen, so if the two contacts
+    // drew the same name the sentinel renders "<contactName> N" and a substring
+    // match reports the target as still present — failing for a reason that has
+    // nothing to do with the claim under test.
+    await expect(page.getByRole('heading', { name: sentinelName, exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: contactName, exact: true })).not.toBeVisible()
 
     // 2. Contacts List: today's date appears in the target row's SPECIFIC
     // "Last response" column (a mutual interaction sets last_response_at),
@@ -176,7 +184,11 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     // first page.
     await page.goto(`/contacts?search=${encodeURIComponent(declaredWorldSearch(seeded))}`)
     const table = page.getByRole('table')
-    const contactRow = table.getByRole('row').filter({ hasText: contactName })
+    // hasText is a SUBSTRING match, so on a drawn-name collision it selects the
+    // sibling's row as well and every assertion below resolves against two rows.
+    const contactRow = table
+      .getByRole('row')
+      .filter({ has: page.getByText(contactName, { exact: true }) })
     await expect(contactRow).toBeVisible()
     // innerText is RENDERED text — the header row is CSS-uppercased, so the
     // match must be case-insensitive.
@@ -243,8 +255,11 @@ test.describe('Overdue Contact Updates - Multiple Contacts @area:overdue', () =>
 
     // Both contacts should be visible (DOM precondition: the dashboard rendered
     // the seeded cards).
-    await expect(page.getByRole('heading', { name: firstName })).toBeVisible()
-    await expect(page.getByRole('heading', { name: secondName })).toBeVisible()
+    // Matched EXACTLY: CAD-023 declares a THIRD contact after these two, so
+    // either of them can be the earlier half of a drawn-name collision and
+    // resolve its suffixed sibling's card too.
+    await expect(page.getByRole('heading', { name: firstName, exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: secondName, exact: true })).toBeVisible()
 
     // CAD-023.list-bounded-1000-truncation (the 1000-entry bound + most-overdue-retained truncation)
     // is waived in spec/cadence-followup.yaml: not E2E-seedable.

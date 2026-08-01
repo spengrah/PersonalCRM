@@ -394,6 +394,15 @@ func (r *SyntheticSupportRepository) DeleteMacHostByID(ctx context.Context, id u
 	return r.queries.SyntheticDeleteMacHostById(ctx, uuidToPgUUID(id))
 }
 
+// DeletePairingTokensByConsumedHostID removes the consumed pairing token(s) a
+// declared world's paired host was created from. It MUST run before the host
+// delete: consumed_host_id is ON DELETE SET NULL and is the only recovery key
+// the token row has, so a host deleted first strands it permanently. The
+// production janitor sweeps only UNCONSUMED expired tokens and cannot stand in.
+func (r *SyntheticSupportRepository) DeletePairingTokensByConsumedHostID(ctx context.Context, hostID uuid.UUID) (int64, error) {
+	return r.queries.SyntheticDeletePairingTokensByConsumedHostId(ctx, uuidToPgUUID(hostID))
+}
+
 // CountContactsByIds counts surviving contact rows for the given ids (cleanup
 // assertion). Returns 0 on an empty set.
 func (r *SyntheticSupportRepository) CountContactsByIds(ctx context.Context, contactIDs []uuid.UUID) (int64, error) {
@@ -599,6 +608,27 @@ func (r *SyntheticSupportRepository) CountMatchedCalendarEventsByGcalIDs(ctx con
 		pg = append(pg, uuidToPgUUID(id))
 	}
 	return r.queries.SyntheticCountMatchedCalendarEventsByGcalIds(ctx, db.SyntheticCountMatchedCalendarEventsByGcalIdsParams{
+		GcalEventIds: gcalEventIDs,
+		ContactIds:   pg,
+	})
+}
+
+// CountLinkedCalendarEventsByGcalIDs counts how many of the given (gcal event
+// id, contact id) PAIRS have a calendar_event carrying the contact in
+// matched_contact_ids — the UPCOMING GCal Gate A. It omits the
+// last_contacted_updated term its past-event sibling carries because a future
+// event never acquires that flag (the projection reads only end_time < now), so
+// the stored linked row is the whole terminal state. The arrays are parallel and
+// must be the same length.
+func (r *SyntheticSupportRepository) CountLinkedCalendarEventsByGcalIDs(ctx context.Context, gcalEventIDs []string, contactIDs []uuid.UUID) (int64, error) {
+	if len(gcalEventIDs) != len(contactIDs) {
+		return 0, fmt.Errorf("count linked calendar events: %d event ids but %d contact ids", len(gcalEventIDs), len(contactIDs))
+	}
+	pg := make([]pgtype.UUID, 0, len(contactIDs))
+	for _, id := range contactIDs {
+		pg = append(pg, uuidToPgUUID(id))
+	}
+	return r.queries.SyntheticCountLinkedCalendarEventsByGcalIds(ctx, db.SyntheticCountLinkedCalendarEventsByGcalIdsParams{
 		GcalEventIds: gcalEventIDs,
 		ContactIds:   pg,
 	})
