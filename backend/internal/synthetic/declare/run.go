@@ -457,7 +457,7 @@ func buildHarness(
 				fmt.Errorf("declare: claim numeric bands for re-salted namespace %q: %w", effective, err))
 		}
 
-		free, err := bandsFree(ctx, support, effectiveGen)
+		free, err := replay.BandsFree(ctx, support, effectiveGen)
 		if err != nil {
 			_ = locks.unlockAll(effectiveKeys)
 			return nil, nil, teardownError(teardown, effective,
@@ -499,34 +499,6 @@ func bandKeys(gen *factory.Generator) []int64 {
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
 	return keys
-}
-
-// bandsFree repeats the toolkit's own pre-insert band occupancy reads. It is
-// the revalidation step of the swap, so it must ask exactly what the toolkit
-// asks — any narrower predicate would let a collision through.
-func bandsFree(ctx context.Context, support *repository.SyntheticSupportRepository, gen *factory.Generator) (bool, error) {
-	peers, err := support.CountTelegramMessagesInPeerBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
-	if err != nil {
-		return false, fmt.Errorf("peer band: %w", err)
-	}
-	chatConfigs, err := support.CountTelegramChatConfigInChatIdBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
-	if err != nil {
-		return false, fmt.Errorf("chat-config band: %w", err)
-	}
-	barePeers, err := support.CountTelegramBarePeerRowsInBand(ctx, gen.PeerBandStart(), gen.PeerBandEnd())
-	if err != nil {
-		return false, fmt.Errorf("bare-peer band: %w", err)
-	}
-	phonePrefix := gen.SyntheticPhonePrefix()
-	methodPhones, err := support.CountContactMethodsByValueNormalizedPrefix(ctx, phonePrefix)
-	if err != nil {
-		return false, fmt.Errorf("phone band (contact_method): %w", err)
-	}
-	identityPhones, err := support.CountExternalIdentitiesByIdentifierPrefix(ctx, phonePrefix)
-	if err != nil {
-		return false, fmt.Errorf("phone band (external_identity): %w", err)
-	}
-	return peers == 0 && chatConfigs == 0 && barePeers == 0 && methodPhones == 0 && identityPhones == 0, nil
 }
 
 // runState carries what a running entity list already produced: the generated
