@@ -90,7 +90,7 @@ func TestRiderAccounting_PartialHelperFailuresStayTruthful(t *testing.T) {
 			rider: riderSeedResult{contact: contact}, wantWorldEntity: 1,
 		},
 		{
-			name: "pending after gcal", kind: riderPendingFollowUp,
+			name: "pending after outbound", kind: riderPendingFollowUp,
 			rider:       riderSeedResult{contact: contact, payloads: 1},
 			wantSettled: 1, wantWorldEntity: 1,
 		},
