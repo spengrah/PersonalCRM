@@ -605,6 +605,11 @@ type TelegramDiscoveryCandidateSpec struct {
 	// row it writes has already passed its discovery threshold, so this is a
 	// small plausible count above the default minimum; nothing renders it.
 	MessageCount int64
+	// LastMessageAt is when the conversation was last seen. The matcher records it
+	// for every candidate whose last message has a timestamp — which any peer past
+	// the discovery threshold has — so a candidate without it is a row the matcher
+	// does not write. Anchor-relative, like every other generated instant.
+	LastMessageAt time.Time
 }
 
 // TelegramDiscoveryCandidate builds a fully-identified telegram discovery
@@ -617,14 +622,20 @@ func (g *Generator) TelegramDiscoveryCandidate() TelegramDiscoveryCandidateSpec 
 	first := ns + "Telegram"
 	last := fmt.Sprintf("Peer%d", seq)
 	return TelegramDiscoveryCandidateSpec{
-		PeerUserID:   g.nextPeerUserID(),
-		DisplayName:  first + " " + last,
-		FirstName:    first,
-		LastName:     last,
-		Username:     fmt.Sprintf("@%stg%d", sanitizeHandle(ns), seq),
-		MessageCount: telegramDiscoveryMessageCount,
+		PeerUserID:    g.nextPeerUserID(),
+		DisplayName:   first + " " + last,
+		FirstName:     first,
+		LastName:      last,
+		Username:      fmt.Sprintf("@%stg%d", sanitizeHandle(ns), seq),
+		MessageCount:  telegramDiscoveryMessageCount,
+		LastMessageAt: g.at(-telegramDiscoveryLastMessageAge),
 	}
 }
+
+// telegramDiscoveryLastMessageAge is how long before the anchor the seeded
+// conversation was last seen. Recent, because a peer only reaches the discovery
+// threshold through an active conversation.
+const telegramDiscoveryLastMessageAge = 2 * time.Hour
 
 // telegramDiscoveryMessageCount is the conversation volume a seeded discovery
 // candidate reports. The matcher only writes a candidate once the peer is past

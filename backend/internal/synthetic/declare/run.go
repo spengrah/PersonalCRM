@@ -731,11 +731,11 @@ func seedUpsertCandidate(
 		}
 		evidence = &replay.CorrespondenceEvidence{
 			MessageCount: p.messageCount,
-			// The id is deliberately EMPTY: the discoverer degrades to id-only
-			// evidence when its name lookup fails and writes the id as a JSON
-			// string, so a fixture that supplied the real uuid would be seeding the
-			// one shape the badge does not have to render.
-			CoOccurringContactID: "",
+			// The REAL contact uuid. The discoverer writes the id first and
+			// unconditionally whenever it emits this object; only the name is
+			// conditional. An empty id is not a degraded production shape, it is no
+			// production shape at all.
+			CoOccurringContactID: co.ID,
 			CoOccurringName:      co.Name,
 		}
 	}

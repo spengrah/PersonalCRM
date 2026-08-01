@@ -219,7 +219,6 @@ test.describe.configure({ mode: 'serial' })
 | Method | Purpose |
 |--------|---------|
 | `seedBehavior()` | Seed the fixture DECLARED for a spec behavior and return its manifest (the path new tests use) |
-| `seedExternalContacts()` | Create import candidates |
 | `seedOverdueContacts()` | Create contacts with backdated last_contacted |
 | `seedCalendarEvents()` | Create calendar events for a contact |
 | `seedContacts()` | Create contacts directly |

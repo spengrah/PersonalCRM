@@ -420,11 +420,12 @@ func (h *Harness) SeedEntity(ctx context.Context, spec factory.EntitySpec) (uuid
 // candidate carries: how many messages the discoverer aggregated, and the known
 // contact it most often co-appeared with.
 //
-// CoOccurringContactID is deliberately a STRING and deliberately allowed to be
-// empty. The production discoverer degrades to id-only evidence when the contact
-// name lookup fails and writes the id as a JSON string, so the empty-id shape is
-// one the card must render; passing the contact's real uuid here instead would
-// seed a state the seed cannot distinguish from the degraded one.
+// CoOccurringContactID must be a REAL contact uuid. The production builder emits
+// the co_occurring_contact object only when it found a co-occurrence, and its
+// first act is to write that contact's uuid — the NAME is the optional half,
+// dropped when the lookup fails (google/gmail_correspondence.go buildEvidence). So
+// an empty id is a shape the discoverer never writes, and seeding one would leave
+// every reader of that id exercised against a value it cannot receive.
 type CorrespondenceEvidence struct {
 	MessageCount         int
 	CoOccurringContactID string
@@ -488,12 +489,17 @@ func (h *Harness) SeedExternalContactCandidate(
 		req.Metadata = metadata
 	case google.CalendarAttendeeSource:
 		// The calendar provider dedupes attendees on the NORMALIZED email, and
-		// attaches the meeting context the card's "From: <title>" badge reads.
+		// attaches the meeting context the card's "From: <title>" badge reads. All
+		// FOUR keys, because the provider writes all four unconditionally — and
+		// meeting_link is the one the card branches on to decide whether that badge
+		// is a link or plain text, so omitting it would leave the link branch
+		// unreachable from any declared fixture.
 		req.SourceID = matching.NormalizeEmail(spec.Emails[0])
 		req.AccountID = &spec.AccountID
 		req.Metadata = map[string]any{
 			"meeting_title": spec.DisplayName + " sync",
 			"meeting_date":  now.Format(time.RFC3339),
+			"meeting_link":  "https://www.google.com/calendar/event?eid=" + spec.EntityID,
 			"discovered_at": now.Format(time.RFC3339),
 		}
 	default:
@@ -525,6 +531,12 @@ func (h *Harness) SeedTelegramDiscoveryCandidate(ctx context.Context, spec facto
 		"message_count":  spec.MessageCount,
 		"outbound_count": 0,
 		"inbound_count":  spec.MessageCount,
+	}
+	if !spec.LastMessageAt.IsZero() {
+		// The matcher's own layout, which is NOT RFC3339 — it has no offset and a
+		// literal Z. A fixture that reformatted this would store a string the
+		// matcher never writes.
+		metadata["last_message_at"] = spec.LastMessageAt.UTC().Format("2006-01-02T15:04:05Z")
 	}
 	if spec.Username != "" {
 		metadata["username"] = spec.Username
