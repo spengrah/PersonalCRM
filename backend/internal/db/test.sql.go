@@ -977,6 +977,38 @@ func (q *Queries) SyntheticCountEventConsumerClaimsByEventIds(ctx context.Contex
 	return count, err
 }
 
+const SyntheticCountExternalContactPhonesInBand = `-- name: SyntheticCountExternalContactPhonesInBand :one
+SELECT COUNT(*) FROM external_contact ec
+WHERE ec.deleted_at IS NULL
+  AND EXISTS (
+    SELECT 1 FROM jsonb_array_elements(ec.phones) AS p
+    WHERE regexp_replace(p->>'value', '\D', '', 'g')
+          LIKE regexp_replace($1::text, '\D', '', 'g') || '%'
+  )
+`
+
+// Harness setup collision detection: count live external_contact rows holding a
+// phone in this namespace's reserved area-code band. A declared import candidate
+// stores its phones ONLY in this JSON array — it is not a CRM contact, so no
+// contact_method row exists, and the direct-upsert sources write no identity
+// either — so neither the contact_method nor the external_identity phone check
+// can see it. Without this a later namespace hashing to the same area code would
+// find the band free, mint the SAME number for a real contact_method, and the
+// import matcher (service/import_matching.go buildMethodMaps + countMethodOverlap)
+// would score that foreign contact as a method overlap for this namespace's
+// candidate. Same reason the bare-peer check exists beside the telegram_message
+// one: an external_contact-borne identifier the primary check cannot reach.
+//
+// Both sides are reduced to DIGITS before comparing: the prefix is the
+// normalized form (+1<area>55501) while the JSON stores the provider-shaped
+// value (+1-<area>-555-01NN), so a literal LIKE would never match.
+func (q *Queries) SyntheticCountExternalContactPhonesInBand(ctx context.Context, phonePrefix string) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountExternalContactPhonesInBand, phonePrefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountExternalIdentitiesByIdentifierPrefix = `-- name: SyntheticCountExternalIdentitiesByIdentifierPrefix :one
 SELECT COUNT(*) FROM external_identity
 WHERE identifier LIKE $1 || '%'

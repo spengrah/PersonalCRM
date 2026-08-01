@@ -1890,6 +1890,22 @@ type Querier interface {
 	// that no later cleanup can even name (the event ids are derived FROM the events).
 	// The ids must therefore be captured before the sweep and asserted against after.
 	SyntheticCountEventConsumerClaimsByEventIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
+	// Harness setup collision detection: count live external_contact rows holding a
+	// phone in this namespace's reserved area-code band. A declared import candidate
+	// stores its phones ONLY in this JSON array — it is not a CRM contact, so no
+	// contact_method row exists, and the direct-upsert sources write no identity
+	// either — so neither the contact_method nor the external_identity phone check
+	// can see it. Without this a later namespace hashing to the same area code would
+	// find the band free, mint the SAME number for a real contact_method, and the
+	// import matcher (service/import_matching.go buildMethodMaps + countMethodOverlap)
+	// would score that foreign contact as a method overlap for this namespace's
+	// candidate. Same reason the bare-peer check exists beside the telegram_message
+	// one: an external_contact-borne identifier the primary check cannot reach.
+	//
+	// Both sides are reduced to DIGITS before comparing: the prefix is the
+	// normalized form (+1<area>55501) while the JSON stores the provider-shaped
+	// value (+1-<area>-555-01NN), so a literal LIKE would never match.
+	SyntheticCountExternalContactPhonesInBand(ctx context.Context, phonePrefix string) (int64, error)
 	// Harness setup collision detection (D5): count external_identity rows whose
 	// normalized identifier shares the namespace's phone-digit prefix. Non-zero means
 	// another namespace already occupies this phone sub-block, so NewHarness re-salts.

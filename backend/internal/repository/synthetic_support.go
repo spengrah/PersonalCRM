@@ -402,6 +402,15 @@ func (r *SyntheticSupportRepository) CountExternalIdentitiesByIdentifierPrefix(c
 	return r.queries.SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
+// CountExternalContactPhonesInBand counts live external_contact rows holding a
+// phone in the given namespace's area-code band. Used by NewHarness for setup-
+// time phone-band collision detection: a declared import candidate keeps its
+// phones only in that JSON array, where neither the contact_method nor the
+// external_identity phone check can see them.
+func (r *SyntheticSupportRepository) CountExternalContactPhonesInBand(ctx context.Context, phonePrefix string) (int64, error) {
+	return r.queries.SyntheticCountExternalContactPhonesInBand(ctx, phonePrefix)
+}
+
 // CountTelegramChatConfigInChatIdBand counts telegram_chat_config rows whose
 // telegram_chat_id is in [bandStart, bandEnd). Used by NewHarness for setup-time
 // group chat-id collision detection (group chat ids are drawn from the same

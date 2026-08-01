@@ -433,7 +433,18 @@ func resolveNamespace(ctx context.Context, support *repository.SyntheticSupportR
 		if err != nil {
 			return nil, "", fmt.Errorf("phone-band collision check (external_identity): %w", err)
 		}
-		if peerOccupied == 0 && chatConfigOccupied == 0 && barePeerOccupied == 0 && methodPhones == 0 && identityPhones == 0 {
+		// A declared import candidate is not a contact and its direct-upsert
+		// writer creates no identity, so its phones live ONLY in the
+		// external_contact JSON — invisible to both checks above. The import
+		// matcher still scores them against contact_method rows DB-wide, so a
+		// later namespace that reused this area code would suggest a foreign
+		// contact for this namespace's candidate.
+		candidatePhones, err := support.CountExternalContactPhonesInBand(ctx, phonePrefix)
+		if err != nil {
+			return nil, "", fmt.Errorf("phone-band collision check (external_contact phones): %w", err)
+		}
+		if peerOccupied == 0 && chatConfigOccupied == 0 && barePeerOccupied == 0 &&
+			methodPhones == 0 && identityPhones == 0 && candidatePhones == 0 {
 			return gen, candidate, nil
 		}
 		// Collision in either band: re-salt and retry.
