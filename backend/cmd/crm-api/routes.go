@@ -217,13 +217,8 @@ func registerRoutes(deps routeDeps) {
 
 		// Test routes (gated by CRM_ENV=testing or CRM_ENV=test)
 		if cfg.Runtime.CRMEnvironment == "testing" || cfg.Runtime.CRMEnvironment == "test" {
-			// Initialize external contact repo if not already done (for non-sync environments)
-			testExternalRepo := deps.ExternalContactRepo
-			if testExternalRepo == nil {
-				testExternalRepo = repository.NewExternalContactRepository(database.Queries)
-			}
-
-			// Initialize calendar repo for test seeding
+			// Calendar repo for the test-env calendar handler below, so a test
+			// environment without OAuth can still READ events the declared seed wrote.
 			testCalendarRepo := repository.NewCalendarEventRepository(database.Queries)
 
 			// Initialize calendar handler if not already done (allows reading seeded events in tests)
@@ -235,7 +230,7 @@ func registerRoutes(deps routeDeps) {
 				logger.Info().Msg("calendar handler initialized for testing (no OAuth)")
 			}
 
-			testSeedService := service.NewTestSeedService(database, testExternalRepo, deps.ContactService, testCalendarRepo, deps.MacHostRepo, deps.MeetingNoteRepoForIngest)
+			testSeedService := service.NewTestSeedService(database, deps.MeetingNoteRepoForIngest)
 			testLockService := service.NewTestLockService(accelerated.GetCurrentTime)
 			// The database is passed for the DECLARED seeding path only, which
 			// drives internal/synthetic/declare from the handler with no service
