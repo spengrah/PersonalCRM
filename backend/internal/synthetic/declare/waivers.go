@@ -13,66 +13,53 @@ var Waivers = map[string]string{
 	"DSH-006": "proposed — the failed mark-contacted path is not implemented and has no citing test",
 	"DSH-009": "proposed — the stale-flow refresh leak is documented, not implemented",
 
-	// spec/cadence-followup.yaml — 7 behaviors.
-	"CAD-023": "not yet migrated — cadence-followup (arc #759 PR5)",
-	"CAD-027": "not yet migrated — cadence-followup (arc #759 PR5)",
-	"CAD-028": "not yet migrated — cadence-followup (arc #759 PR5)",
-	"CAD-029": "not yet migrated — cadence-followup (arc #759 PR5)",
-	"CAD-030": "not yet migrated — cadence-followup (arc #759 PR5)",
-	"CAD-031": "not yet migrated — cadence-followup (arc #759 PR5)",
-	"CAD-033": "not yet migrated — cadence-followup (arc #759 PR5)",
+	// spec/cadence-followup.yaml — 1 behavior; CAD-023/026/028/029/030/031/033
+	// are resolved in cadence_domain.go and dashboard.go.
+	"CAD-027": "its citing tests replace the whole overdue list with a route mock (the three sort orders are pairwise distinct only over a hand-built fixture), so they provision nothing — a reason-string conversion for the arc #759 waiver-truth pass",
 
 	// spec/calendar.yaml — 8 behaviors.
-	"CAL-019": "not yet migrated — calendar (arc #759 PR5)",
-	"CAL-024": "not yet migrated — calendar (arc #759 PR5)",
-	"CAL-025": "not yet migrated — calendar (arc #759 PR5)",
-	"CAL-026": "not yet migrated — calendar (arc #759 PR5)",
-	"CAL-027": "not yet migrated — calendar (arc #759 PR5)",
-	"CAL-028": "not yet migrated — calendar (arc #759 PR5)",
-	"CAL-029": "not yet migrated — calendar (arc #759 PR5)",
-	"CAL-030": "not yet migrated — calendar (arc #759 PR5)",
+	"CAL-019": "not yet migrated — calendar (arc #759 calendar+mac PR)",
+	"CAL-024": "not yet migrated — calendar (arc #759 calendar+mac PR)",
+	"CAL-025": "not yet migrated — calendar (arc #759 calendar+mac PR)",
+	"CAL-026": "not yet migrated — calendar (arc #759 calendar+mac PR)",
+	"CAL-027": "not yet migrated — calendar (arc #759 calendar+mac PR)",
+	"CAL-028": "not yet migrated — calendar (arc #759 calendar+mac PR)",
+	"CAL-029": "not yet migrated — calendar (arc #759 calendar+mac PR)",
+	"CAL-030": "not yet migrated — calendar (arc #759 calendar+mac PR)",
 
-	// spec/contacts.yaml — 4 behaviors; the other 17 are resolved in contacts.go.
+	// spec/contacts.yaml — 2 behaviors; the other 19 are resolved in contacts.go.
 	"CON-039": "proposed — exact tie-break determinism (CON-026) is not implemented and has no citing test",
 	"CON-046": "proposed — a failed mark-contacted is console-only and a failed delete is swallowed, so there is no surface to assert and no citing test",
-	"CON-054": "the citing test resolves three of its four fixtures by a marker token shared across their DRAWN names, and the factory's display-name dedupe keys on the marker-INCLUSIVE string: a marked contact that draws an unmarked one's given+surname pair gets no disambiguator, so one rendered name nests inside the other and a substring locator resolves both rows. Declaring it needs the shared name composition changed, which a spec migration is the wrong place to do",
-	"CON-056": "the citing test needs a gchat method AND a non-default (telegram) primary; factory.Contact() has no generic method-kind builder and always makes email primary when one is present, so this needs a factory extension",
 
 	// spec/imports-matching.yaml — every ui-surface IMP behavior is resolved in
 	// imports_domain.go; nothing is owed here.
 
-	// spec/knowledge.yaml — 2 behaviors.
-	"KNW-034": "not yet migrated — knowledge (arc #759 PR6)",
-	"KNW-035": "not yet migrated — knowledge (arc #759 PR6)",
+	// spec/knowledge.yaml — 1 behavior; KNW-034 is resolved in knowledge_domain.go.
+	"KNW-035": "its citing test rides CON-045's declared birthday fixture, so this is a reason-string conversion — arc #759 waiver-truth pass",
 
 	// spec/mac-host.yaml — 2 behaviors.
-	"MAC-018": "not yet migrated — mac-host (arc #759 PR6)",
-	"MAC-046": "not yet migrated — mac-host (arc #759 PR6)",
-
-	// spec/notes-meetings.yaml — 2 behaviors.
-	"NTS-007": "not yet migrated — notes-meetings (arc #759 PR6)",
-	"NTS-008": "not yet migrated — notes-meetings (arc #759 PR6)",
+	"MAC-018": "not yet migrated — mac-host (arc #759 calendar+mac PR)",
+	"MAC-046": "not yet migrated — mac-host (arc #759 calendar+mac PR)",
 
 	// spec/settings.yaml — 11 behaviors.
-	"SET-019": "not yet migrated — settings (arc #759 PR4)",
-	"SET-020": "not yet migrated — settings (arc #759 PR4)",
-	"SET-021": "not yet migrated — settings (arc #759 PR4)",
-	"SET-022": "not yet migrated — settings (arc #759 PR4)",
-	"SET-023": "not yet migrated — settings (arc #759 PR4)",
-	"SET-024": "not yet migrated — settings (arc #759 PR4)",
-	"SET-025": "not yet migrated — settings (arc #759 PR4)",
-	"SET-026": "not yet migrated — settings (arc #759 PR4)",
-	"SET-027": "not yet migrated — settings (arc #759 PR4)",
-	"SET-028": "not yet migrated — settings (arc #759 PR4)",
-	"SET-035": "not yet migrated — settings (arc #759 PR4)",
+	"SET-019": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"SET-020": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"SET-021": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"SET-022": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"SET-023": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"SET-024": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"SET-025": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"SET-026": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"SET-027": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"SET-028": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"SET-035": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
 
 	// spec/telegram.yaml — 4 behaviors.
-	"TGM-038": "not yet migrated — telegram (arc #759 PR6)",
-	"TGM-039": "not yet migrated — telegram (arc #759 PR6)",
-	"TGM-040": "not yet migrated — telegram (arc #759 PR6)",
-	"TGM-041": "not yet migrated — telegram (arc #759 PR6)",
+	"TGM-038": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"TGM-039": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"TGM-040": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
+	"TGM-041": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
 
-	// spec/todoist.yaml — 2 behaviors.
-	"TDS-034": "not yet migrated — todoist (arc #759 PR6)",
-	"TDS-035": "not yet migrated — todoist (arc #759 PR6)",
+	// spec/todoist.yaml — 1 behavior; TDS-035 is resolved in cadence_domain.go.
+	"TDS-034": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",
 }

@@ -78,55 +78,6 @@ func TestSeedExternalContactInput_Validation(t *testing.T) {
 	}
 }
 
-func TestSeedOverdueContactInput_Validation(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   SeedOverdueContactInput
-		isValid bool
-	}{
-		{
-			name: "valid input",
-			input: SeedOverdueContactInput{
-				FullName:    "Test Contact",
-				Cadence:     "weekly",
-				DaysOverdue: 3,
-			},
-			isValid: true,
-		},
-		{
-			name: "valid with email",
-			input: SeedOverdueContactInput{
-				FullName:    "Test Contact",
-				Cadence:     "monthly",
-				DaysOverdue: 5,
-				Email:       "test@example.com",
-			},
-			isValid: true,
-		},
-		{
-			name: "empty full name",
-			input: SeedOverdueContactInput{
-				FullName:    "",
-				Cadence:     "weekly",
-				DaysOverdue: 1,
-			},
-			isValid: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.isValid {
-				assert.NotEmpty(t, tt.input.FullName)
-				assert.NotEmpty(t, tt.input.Cadence)
-				assert.Greater(t, tt.input.DaysOverdue, 0)
-			} else {
-				assert.Empty(t, tt.input.FullName)
-			}
-		})
-	}
-}
-
 func TestCleanupRequest_Validation(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -1,5 +1,10 @@
 import { test, expect, APIRequestContext } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import {
+  createTestAPI,
+  declaredWorldSearch,
+  TestAPI,
+  type SeedBehaviorResult,
+} from './helpers/test-api'
 import { getTodayUTCShort } from './helpers/date-utils'
 import { waitForOverdueListSettled } from './helpers/dashboard'
 
@@ -12,8 +17,13 @@ import { waitForOverdueListSettled } from './helpers/dashboard'
  * variant (CON-053), the cross-view consistency leg (CAD-028.change-consistent-across-dashboard), and the
  * overdue endpoint's reporting contract (CAD-023).
  *
- * Note: In testing mode (CRM_ENV=testing), weekly cadence = 2 minutes.
- * Contacts become overdue 2 minutes after last_contacted.
+ * Note: the declared overdue amount is a FLOOR ("overdue by at least N days"),
+ * not the number the cards render. A declared contact reaches the state through
+ * a replayed inbound email, which carries a fixed pre-anchor safety lag on top
+ * of the requested age; under CRM_ENV=testing, where a "day" is ~17 seconds,
+ * that lag dominates and the rendered day count is far larger than N. Nothing
+ * here asserts an exact day count. Relative ORDER is safe, because the lag is
+ * the same constant for every contact.
  */
 
 // API configuration for E2E tests
@@ -35,22 +45,24 @@ async function isContactOverdue(request: APIRequestContext, contactId: string): 
 
 test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => {
   let testApi: TestAPI
+  let seeded: SeedBehaviorResult
   let contactId: string
+  let contactName: string
+  let sentinelId: string
+  let sentinelName: string
 
+  // Both tests in this describe need an overdue contact plus a sentinel that
+  // STAYS overdue, which is exactly CAD-028's declared fixture. The first test
+  // cites CON-053 and rides it: CON-053's own declaration is a cadence-less
+  // plain contact, and this variant is about a SEEDED-OVERDUE subject.
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
 
-    // Seed an overdue contact for testing
-    const result = await testApi.seedOverdueContacts([
-      {
-        full_name: 'Overdue Test Contact',
-        cadence: 'weekly',
-        days_overdue: 5, // 5 days overdue
-        email: 'overdue-test@example.com',
-      },
-    ])
-
-    contactId = result.ids[0]
+    seeded = await testApi.seedBehavior('CAD-028')
+    contactId = seeded.entities['target'].id
+    contactName = seeded.entities['target'].name
+    sentinelId = seeded.entities['sentinel'].id
+    sentinelName = seeded.entities['sentinel'].name
   })
 
   test.afterEach(async () => {
@@ -67,11 +79,22 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     // unique to this entry point: the logged interaction clears the
     // contact's overdue state.
     // spec: CON-053.direction-chosen-outbound-inbound, CON-053.interaction-posted-chosen-direction
-    const contactName = `${testApi.prefix}-Overdue Test Contact`
 
-    // Seeded-data precondition: the contact renders as overdue on the
-    // dashboard before the action.
+    // Seeded-data precondition, asserted POSITIVELY at the endpoint the outcome
+    // assertion reads: isContactOverdue answers false for an id that is not in
+    // the overdue list for ANY reason, including never having been seeded, so
+    // without this the closing assertion would pass over a missing fixture.
+    expect(await isContactOverdue(request, contactId)).toBe(true)
+
+    // The contact renders as overdue on the dashboard before the action. The
+    // sentinel (which stays overdue) is the data-derived settle signal: the
+    // "Action Required" header renders even while loading, so the target's own
+    // card is the only proof the list rendered FROM DATA.
+    const overdueSettled = waitForOverdueListSettled(page, {
+      presentIds: [contactId, sentinelId],
+    })
     await page.goto('/dashboard')
+    await overdueSettled
     await expect(page.getByRole('heading', { name: contactName })).toBeVisible()
 
     // Go to contact detail and log a mutual interaction via the modal.
@@ -109,21 +132,15 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     request,
   }) => {
     // spec: CAD-028.change-consistent-across-dashboard, CAD-029.last-response-time-shown
-    const contactName = `${testApi.prefix}-Overdue Test Contact`
+    // The declaration's SENTINEL stays overdue: its rendered card is the
+    // data-derived settle signal on the dashboard ("Action Required" renders
+    // even while loading, so the heading alone cannot prove the list rendered
+    // FROM DATA).
 
-    // A SENTINEL that stays overdue: its rendered card is the data-derived
-    // settle signal on the dashboard ("Action Required" renders even while
-    // loading, so the heading alone cannot prove the list rendered FROM
-    // DATA).
-    const { ids: sentinelIds } = await testApi.seedOverdueContacts([
-      {
-        full_name: 'Consistency Sentinel',
-        cadence: 'weekly',
-        days_overdue: 4,
-      },
-    ])
-    const sentinelId = sentinelIds[0]
-    const sentinelName = `${testApi.prefix}-Consistency Sentinel`
+    // Positive precondition at the endpoint the closing assertion reads —
+    // isContactOverdue answers false for a nonexistent id too, so the target
+    // has to be shown present BEFORE the action clears it.
+    expect(await isContactOverdue(request, contactId)).toBe(true)
 
     // Log a mutual interaction via the API (replaces the deleted PATCH
     // /last-contacted endpoint). All "Mark as Contacted" surfaces
@@ -154,10 +171,10 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     // "Last response" column (a mutual interaction sets last_response_at),
     // not just anywhere in the row. The column index is derived from the
     // table header rather than hardcoded, so a column reorder cannot
-    // silently point this at the wrong cell. Filter the list by the test
-    // prefix so another worker's contacts cannot push the target off the
-    // 20-row first page.
-    await page.goto(`/contacts?search=${encodeURIComponent(testApi.prefix)}`)
+    // silently point this at the wrong cell. Filter the list to THIS declared
+    // world so another worker's contacts cannot push the target off the 20-row
+    // first page.
+    await page.goto(`/contacts?search=${encodeURIComponent(declaredWorldSearch(seeded))}`)
     const table = page.getByRole('table')
     const contactRow = table.getByRole('row').filter({ hasText: contactName })
     await expect(contactRow).toBeVisible()
@@ -190,26 +207,23 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
 test.describe('Overdue Contact Updates - Multiple Contacts @area:overdue', () => {
   let testApi: TestAPI
   let firstId: string
+  let firstName: string
   let secondId: string
+  let secondName: string
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
 
-    // Seed multiple overdue contacts
-    const { ids } = await testApi.seedOverdueContacts([
-      {
-        full_name: 'First Overdue',
-        cadence: 'weekly',
-        days_overdue: 3,
-      },
-      {
-        full_name: 'Second Overdue',
-        cadence: 'monthly',
-        days_overdue: 10,
-      },
-    ])
-    firstId = ids[0]
-    secondId = ids[1]
+    // CAD-023's declared pair: 3 days overdue on a weekly cadence beside 10 days
+    // on a monthly one. The gap is wider than the fixed source-history lag both
+    // of them carry, so the endpoint's most-overdue-first ordering holds even
+    // under the compressed cadence table, where the rendered day count is much
+    // larger than the declared amount.
+    const seeded = await testApi.seedBehavior('CAD-023')
+    firstId = seeded.entities['first'].id
+    firstName = seeded.entities['first'].name
+    secondId = seeded.entities['second'].id
+    secondName = seeded.entities['second'].name
   })
 
   test.afterEach(async () => {
@@ -217,17 +231,20 @@ test.describe('Overdue Contact Updates - Multiple Contacts @area:overdue', () =>
   })
 
   test('should show multiple overdue contacts on dashboard', async ({ page, request }) => {
+    // Content-predicate wait registered BEFORE the goto: the dashboard renders
+    // its "Action Required" header even while loading, so a bare visibility
+    // check on the cards can race the pre-data frame.
+    const overdueSettled = waitForOverdueListSettled(page, {
+      presentIds: [firstId, secondId],
+    })
     await page.goto('/dashboard')
     await page.waitForLoadState('domcontentloaded')
+    await overdueSettled
 
     // Both contacts should be visible (DOM precondition: the dashboard rendered
     // the seeded cards).
-    await expect(
-      page.getByRole('heading', { name: `${testApi.prefix}-First Overdue` })
-    ).toBeVisible()
-    await expect(
-      page.getByRole('heading', { name: `${testApi.prefix}-Second Overdue` })
-    ).toBeVisible()
+    await expect(page.getByRole('heading', { name: firstName })).toBeVisible()
+    await expect(page.getByRole('heading', { name: secondName })).toBeVisible()
 
     // CAD-023.list-bounded-1000-truncation (the 1000-entry bound + most-overdue-retained truncation)
     // is waived in spec/cadence-followup.yaml: not E2E-seedable.

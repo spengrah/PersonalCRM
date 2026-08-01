@@ -1084,57 +1084,6 @@ definitions:
           type: string
         type: array
     type: object
-  handlers.SeedOverdueContactInput:
-    properties:
-      cadence:
-        enum:
-        - weekly
-        - biweekly
-        - monthly
-        - quarterly
-        - biannual
-        - annual
-        type: string
-      days_overdue:
-        maximum: 365
-        minimum: 1
-        type: integer
-      email:
-        type: string
-      full_name:
-        maxLength: 255
-        minLength: 1
-        type: string
-    required:
-    - cadence
-    - days_overdue
-    - full_name
-    type: object
-  handlers.SeedOverdueContactsRequest:
-    properties:
-      contacts:
-        items:
-          $ref: '#/definitions/handlers.SeedOverdueContactInput'
-        maxItems: 100
-        minItems: 1
-        type: array
-      prefix:
-        maxLength: 50
-        minLength: 1
-        type: string
-    required:
-    - contacts
-    - prefix
-    type: object
-  handlers.SeedOverdueContactsResponse:
-    properties:
-      created:
-        type: integer
-      ids:
-        items:
-          type: string
-        type: array
-    type: object
   handlers.SeededEntityResponse:
     properties:
       id:
@@ -4234,51 +4183,6 @@ paths:
                   $ref: '#/definitions/api.APIError'
               type: object
       summary: Seed external contacts for testing
-      tags:
-      - test
-  /test/seed/overdue-contacts:
-    post:
-      consumes:
-      - application/json
-      description: Create contacts with backdated last_contacted for e2e testing
-      parameters:
-      - description: Seed request
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/handlers.SeedOverdueContactsRequest'
-      produces:
-      - application/json
-      responses:
-        "201":
-          description: Created
-          schema:
-            allOf:
-            - $ref: '#/definitions/api.APIResponse'
-            - properties:
-                data:
-                  $ref: '#/definitions/handlers.SeedOverdueContactsResponse'
-              type: object
-        "400":
-          description: Bad Request
-          schema:
-            allOf:
-            - $ref: '#/definitions/api.APIResponse'
-            - properties:
-                error:
-                  $ref: '#/definitions/api.APIError'
-              type: object
-        "500":
-          description: Internal Server Error
-          schema:
-            allOf:
-            - $ref: '#/definitions/api.APIResponse'
-            - properties:
-                error:
-                  $ref: '#/definitions/api.APIError'
-              type: object
-      summary: Seed overdue contacts for testing
       tags:
       - test
   /test/trigger-error:

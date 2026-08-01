@@ -960,7 +960,12 @@ func runContact(
 			opts = append(opts, factory.WithPhone())
 		case MethodTelegram:
 			opts = append(opts, factory.WithTelegram())
+		case MethodGChat:
+			opts = append(opts, factory.WithGChat())
 		}
+	}
+	if p.primaryMethod != "" {
+		opts = append(opts, factory.WithPrimaryMethod(p.primaryMethod))
 	}
 	if p.nameEdge != "" {
 		opts = append(opts, factory.WithNameEdge(factory.NameEdge(p.nameEdge)))
@@ -1011,6 +1016,26 @@ func runContact(
 		}
 	}
 
+	// An OUTBOUND email: the sync derives an outbound interaction, which moves
+	// last_outreach_at and leaves last_contacted null.
+	if p.outreach != nil {
+		message := gen.GmailMessage(spec, factory.MatchSeeded,
+			factory.WithOutbound(), factory.WithMessageAge(p.outreach.resolve(p.cadence)))
+		if _, err := h.ReplayGmail(ctx, contact.ID, message); err != nil {
+			return Seeded{}, fmt.Errorf("replay declared outreach: %w", err)
+		}
+	}
+
+	// A past calendar meeting: the sync records an attended event as MUTUAL, which
+	// moves last_contacted, last_outreach_at and last_response_at together.
+	if p.mutualMeeting != nil {
+		event := gen.GCalEvent(spec, factory.MatchSeeded,
+			factory.WithMessageAge(p.mutualMeeting.resolve(p.cadence)))
+		if _, err := h.ReplayGCal(ctx, contact.ID, event); err != nil {
+			return Seeded{}, fmt.Errorf("replay declared meeting: %w", err)
+		}
+	}
+
 	// History drives its messages through the BATCH adapter, which settles once
 	// per dependency generation instead of once per message. n single replays
 	// would be n full settles, which is the difference between a usable long
@@ -1025,6 +1050,16 @@ func runContact(
 		}
 		if _, err := h.ReplayGmailBatch(ctx, items); err != nil {
 			return Seeded{}, fmt.Errorf("replay declared history: %w", err)
+		}
+	}
+
+	// The follow-up loop runs LAST, after whichever outbound established it. Its
+	// primitive's caller contract is a contact with a cadence AND an outbound —
+	// declaring the outbound on the same entity is what satisfies that by
+	// construction rather than by hope.
+	if p.awaitingReply {
+		if _, err := h.SeedPendingFollowUp(ctx, contact.ID, contact.FullName); err != nil {
+			return Seeded{}, fmt.Errorf("seed declared follow-up: %w", err)
 		}
 	}
 

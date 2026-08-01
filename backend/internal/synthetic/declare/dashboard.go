@@ -12,7 +12,7 @@ func init() {
 	RegisterNone("DSH-002", "static navigation surface — navigation.spec.ts asserts it with no seeded data")
 	RegisterNone("DSH-003", "the header add-contact CTA is observable in every dashboard state; its populated-state test rides DSH-005's fixture and its caught-up state is a route-mocked global-emptiness case")
 	RegisterNone("DSH-004", "loading and error states are route-injected by the test, not reachable by seeding data")
-	RegisterNone("DSH-007", "absence claim — the assertion is that no search surface exists, which needs no seeded data")
+	RegisterNone("DSH-007", "two then-items, neither needing a fixture of its own: the no-global-search-surface item is an absence claim asserted with no seeded data, and the contact-text-search-provided item is asserted by the contact list's own cadence-filter test, which rides CON-054's fixture")
 
 	// The overdue list refreshing in place after an interaction is recorded:
 	// a mark-contacted target plus a sentinel that STAYS overdue, so the

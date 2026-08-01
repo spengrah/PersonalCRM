@@ -8,15 +8,9 @@ const notesRow = (page: Page) =>
 
 test.describe('Contact notepad @area:contacts', () => {
   let testApi: TestAPI
-  let contactId: string
-  let fullName: string
 
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
-
-    const { ids } = await testApi.seedContacts([{ full_name: 'Notepad Contact' }])
-    contactId = ids[0]
-    fullName = `${testApi.prefix}-Notepad Contact`
   })
 
   test.afterEach(async () => {
@@ -26,6 +20,13 @@ test.describe('Contact notepad @area:contacts', () => {
   test('shows the notepad only with content, preserving line breaks and clamping overflow', async ({
     page,
   }) => {
+    // The declared fixture is a contact with NO note: this test's first
+    // assertion is that the Notes row is absent, and its short-then-long note
+    // writes below ARE the claim under test, so they stay in the test body.
+    const seeded = await testApi.seedBehavior('NTS-007')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
+
     // With no note seeded, the detail page renders no Notes row at all
     // spec: NTS-007.notepad-appears-only-with-content
     await page.goto(`/contacts/${contactId}`)
@@ -76,6 +77,10 @@ test.describe('Contact notepad @area:contacts', () => {
   })
 
   test('saves the notepad as its own operation alongside the contact update', async ({ page }) => {
+    const seeded = await testApi.seedBehavior('NTS-008')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
+
     await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
@@ -134,6 +139,10 @@ test.describe('Contact notepad @area:contacts', () => {
   })
 
   test('clearing the notepad removes the note', async ({ page }) => {
+    const seeded = await testApi.seedBehavior('NTS-008')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
+
     const disposable = `${testApi.prefix} disposable note body`
     await testApi.seedContactNote(contactId, disposable)
 

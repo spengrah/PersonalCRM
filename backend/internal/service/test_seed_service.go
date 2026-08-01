@@ -151,60 +151,6 @@ func (s *TestSeedService) SeedExternalContacts(ctx context.Context, inputs []See
 	return ids, nil
 }
 
-// --- /test/seed/overdue-contacts -------------------------------------------
-
-// SeedOverdueContactInput is one overdue contact. FullName is prefix-prepended;
-// Cadence is the validated cadence string.
-type SeedOverdueContactInput struct {
-	FullName    string
-	Cadence     string
-	DaysOverdue int
-	Email       string
-}
-
-// SeedOverdueContacts creates contacts with backdated last_contacted
-// (now - cadence_duration - days_overdue, env-scaled — preserved verbatim).
-func (s *TestSeedService) SeedOverdueContacts(ctx context.Context, inputs []SeedOverdueContactInput) ([]string, error) {
-	now := accelerated.GetCurrentTime()
-	ids := make([]string, 0, len(inputs))
-
-	for _, input := range inputs {
-		cadenceType, err := cadence.ParseCadence(input.Cadence)
-		if err != nil {
-			return nil, fmt.Errorf("seed overdue contact %q: parse cadence: %w", input.FullName, err)
-		}
-
-		cadenceDuration := cadence.GetCadenceDuration(cadenceType)
-		weeklyDuration := cadence.GetCadenceDuration(cadence.CadenceWeekly)
-		scaledDayDuration := weeklyDuration / 7
-		daysOverdueDuration := time.Duration(input.DaysOverdue) * scaledDayDuration
-		lastContacted := now.Add(-cadenceDuration).Add(-daysOverdueDuration)
-
-		var methods []ContactMethodInput
-		if input.Email != "" {
-			methods = append(methods, ContactMethodInput{
-				Type:      "email",
-				Value:     input.Email,
-				IsPrimary: true,
-			})
-		}
-
-		cadenceStr := input.Cadence
-		createReq := repository.CreateContactRequest{
-			FullName:      input.FullName,
-			Cadence:       &cadenceStr,
-			LastContacted: &lastContacted,
-		}
-
-		contact, _, err := s.contactSvc.CreateContact(ctx, createReq, methods)
-		if err != nil {
-			return nil, fmt.Errorf("seed overdue contact %q: %w", input.FullName, err)
-		}
-		ids = append(ids, contact.ID.String())
-	}
-	return ids, nil
-}
-
 // --- /test/seed/calendar-events --------------------------------------------
 
 // SeedCalendarEventInput is one calendar event. Title/GcalEventID/GoogleAccountID

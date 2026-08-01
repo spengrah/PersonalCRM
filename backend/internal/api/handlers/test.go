@@ -21,7 +21,7 @@ import (
 //
 // Two provisioning paths live here during the migration to declared seeding:
 //
-//   - BESPOKE (the seven /test/seed/* endpoints and the prefix shape of
+//   - BESPOKE (the four remaining /test/seed/* endpoints and the prefix shape of
 //     /test/cleanup): thin handlers that parse + validate, map to a
 //     service.TestSeedService input, and encode the result. All row
 //     construction lives in the service (handler → service → repository → DB).
@@ -288,74 +288,6 @@ func (h *TestHandler) SeedContacts(c *gin.Context) {
 	}
 
 	api.SendSuccess(c, http.StatusCreated, SeedContactsResponse{
-		Created: len(ids),
-		IDs:     ids,
-	}, nil)
-}
-
-// SeedOverdueContactInput represents input for creating an overdue contact
-type SeedOverdueContactInput struct {
-	FullName    string `json:"full_name" validate:"required,min=1,max=255"`
-	Cadence     string `json:"cadence" validate:"required,oneof=weekly biweekly monthly quarterly biannual annual"`
-	DaysOverdue int    `json:"days_overdue" validate:"required,min=1,max=365"`
-	Email       string `json:"email,omitempty" validate:"omitempty,email"`
-}
-
-// SeedOverdueContactsRequest represents the request to seed overdue contacts
-type SeedOverdueContactsRequest struct {
-	Prefix   string                    `json:"prefix" validate:"required,min=1,max=50"`
-	Contacts []SeedOverdueContactInput `json:"contacts" validate:"required,min=1,max=100,dive"`
-}
-
-// SeedOverdueContactsResponse represents the response from seeding overdue contacts
-type SeedOverdueContactsResponse struct {
-	Created int      `json:"created"`
-	IDs     []string `json:"ids"`
-}
-
-// SeedOverdueContacts creates contacts with backdated last_contacted timestamps
-// @Summary Seed overdue contacts for testing
-// @Description Create contacts with backdated last_contacted for e2e testing
-// @Tags test
-// @Accept json
-// @Produce json
-// @Param body body SeedOverdueContactsRequest true "Seed request"
-// @Success 201 {object} api.APIResponse{data=SeedOverdueContactsResponse}
-// @Failure 400 {object} api.APIResponse{error=api.APIError}
-// @Failure 500 {object} api.APIResponse{error=api.APIError}
-// @Router /test/seed/overdue-contacts [post]
-func (h *TestHandler) SeedOverdueContacts(c *gin.Context) {
-	ctx := c.Request.Context()
-
-	var req SeedOverdueContactsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid request body", err.Error())
-		return
-	}
-
-	if err := h.validator.Struct(req); err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Validation failed", err.Error())
-		return
-	}
-
-	inputs := make([]service.SeedOverdueContactInput, 0, len(req.Contacts))
-	for _, input := range req.Contacts {
-		inputs = append(inputs, service.SeedOverdueContactInput{
-			// Prepend prefix to full_name for cleanup.
-			FullName:    req.Prefix + "-" + input.FullName,
-			Cadence:     input.Cadence,
-			DaysOverdue: input.DaysOverdue,
-			Email:       input.Email,
-		})
-	}
-
-	ids, err := h.seedSvc.SeedOverdueContacts(ctx, inputs)
-	if err != nil {
-		api.RespondInternal(c, err)
-		return
-	}
-
-	api.SendSuccess(c, http.StatusCreated, SeedOverdueContactsResponse{
 		Created: len(ids),
 		IDs:     ids,
 	}, nil)

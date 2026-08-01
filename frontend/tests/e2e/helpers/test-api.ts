@@ -47,23 +47,6 @@ export interface SeedContactsResponse {
   ids: string[]
 }
 
-export interface SeedOverdueContactInput {
-  full_name: string
-  cadence: 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'biannual' | 'annual'
-  days_overdue: number
-  email?: string
-}
-
-export interface SeedOverdueContactsRequest {
-  prefix: string
-  contacts: SeedOverdueContactInput[]
-}
-
-export interface SeedOverdueContactsResponse {
-  created: number
-  ids: string[]
-}
-
 export interface SeedCalendarEventInput {
   title: string
   location?: string
@@ -253,30 +236,6 @@ export class TestAPI {
 
     const data = await response.json()
     return data.data as SeedContactsResponse
-  }
-
-  /**
-   * Seeds contacts with backdated last_contacted timestamps so they appear as overdue.
-   * Useful for testing dashboard and overdue contact lists.
-   */
-  async seedOverdueContacts(
-    contacts: SeedOverdueContactInput[]
-  ): Promise<SeedOverdueContactsResponse> {
-    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/seed/overdue-contacts`, {
-      headers: API_HEADERS,
-      data: {
-        prefix: this.prefix,
-        contacts,
-      } satisfies SeedOverdueContactsRequest,
-    })
-
-    if (!response.ok()) {
-      const body = await response.text()
-      throw new Error(`Failed to seed overdue contacts: ${response.status()} ${body}`)
-    }
-
-    const data = await response.json()
-    return data.data as SeedOverdueContactsResponse
   }
 
   /**

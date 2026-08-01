@@ -14,16 +14,20 @@ const API_HEADERS = {
 const detailRow = (page: Page, label: string) =>
   page.locator('dl > div').filter({ has: page.getByText(label, { exact: true }) })
 
-async function createContact(
+// The knowledge values the declared fixture stores are not derivable from the
+// manifest: a declared location is namespace-PREFIXED (the auto-created place
+// node's label has to carry the prefix for teardown to find it) and a declared
+// birthday resolves an undisclosed leap-safe birth year. Both are read back from
+// the detail API and the RENDERED string is asserted against what was stored.
+async function readKnowledge(
   request: APIRequestContext,
-  data: { full_name: string; location?: string; birthday?: string }
-): Promise<string> {
-  const response = await request.post(`${API_BASE_URL}/api/v1/contacts`, {
+  contactId: string
+): Promise<{ location?: string; birthday?: string }> {
+  const response = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
     headers: API_HEADERS,
-    data,
   })
   expect(response.ok()).toBe(true)
-  return ((await response.json()).data as { id: string }).id
+  return (await response.json()).data as { location?: string; birthday?: string }
 }
 
 test.describe('Contact knowledge rows @area:contacts', () => {
@@ -48,70 +52,62 @@ test.describe('Contact knowledge rows @area:contacts', () => {
     // before the app even renders — triple it.
     test.slow()
 
-    const location = `${testApi.prefix}-Lisbon`
-    const locatedId = await createContact(request, {
-      full_name: `${testApi.prefix}-Located Contact`,
-      location,
-    })
-    const unlocatedId = await createContact(request, {
-      full_name: `${testApi.prefix}-Unlocated Contact`,
-    })
+    const seeded = await testApi.seedBehavior('KNW-034')
+    const located = seeded.entities['located']
+    const unlocated = seeded.entities['unlocated']
+    const { location } = await readKnowledge(request, located.id)
+    expect(location).toBeTruthy()
 
     // Known location: a labeled row carrying the seeded value
     // (30s: this can be the suite's first page load, paying next dev's
     // on-demand route compilation on top of the data fetch)
     // spec: KNW-034.known-location-appears-labeled
-    await page.goto(`/contacts/${locatedId}`)
-    await expect(
-      page.getByRole('heading', { name: `${testApi.prefix}-Located Contact` })
-    ).toBeVisible({ timeout: 30000 })
+    await page.goto(`/contacts/${located.id}`)
+    await expect(page.getByRole('heading', { name: located.name })).toBeVisible({ timeout: 30000 })
     await expect(detailRow(page, 'Location')).toBeVisible()
-    await expect(detailRow(page, 'Location')).toContainText(location)
+    await expect(detailRow(page, 'Location')).toContainText(location as string)
 
     // Unknown location: no row renders at all
     // spec: KNW-034.known-location-appears-labeled
-    await page.goto(`/contacts/${unlocatedId}`)
-    await expect(
-      page.getByRole('heading', { name: `${testApi.prefix}-Unlocated Contact` })
-    ).toBeVisible({ timeout: 15000 })
+    await page.goto(`/contacts/${unlocated.id}`)
+    await expect(page.getByRole('heading', { name: unlocated.name })).toBeVisible({
+      timeout: 15000,
+    })
     await expect(detailRow(page, 'Location')).toHaveCount(0)
   })
 
   test('shows a birthday row only when the birthday is known', async ({ page, request }) => {
-    const birthday = '1990-04-12'
+    const seeded = await testApi.seedBehavior('KNW-034')
+    const withBirthday = seeded.entities['birthday']
+    const plain = seeded.entities['plain']
+
+    // The declaration pins the month and day (April 12) but resolves the YEAR
+    // itself, so the stored date is read back rather than restated.
+    const { birthday } = await readKnowledge(request, withBirthday.id)
+    expect(birthday).toBeTruthy()
     // Mirror the component's rendering exactly: parseDateOnly builds a LOCAL
     // date from the Y-M-D parts (no timezone conversion), and formatBirthday
     // formats it with year/month/day options in the (pinned en-US) locale.
-    const [year, month, day] = birthday.split('-').map(Number)
+    const [year, month, day] = (birthday as string).split('T')[0].split('-').map(Number)
     const expectedBirthday = new Date(year, month - 1, day).toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
     })
 
-    const birthdayId = await createContact(request, {
-      full_name: `${testApi.prefix}-Birthday Contact`,
-      birthday,
-    })
-    const plainId = await createContact(request, {
-      full_name: `${testApi.prefix}-No Birthday Contact`,
-    })
-
     // Known birthday: a labeled row with the human-readable date
     // spec: KNW-034.known-birthday-appears-labeled
-    await page.goto(`/contacts/${birthdayId}`)
-    await expect(
-      page.getByRole('heading', { name: `${testApi.prefix}-Birthday Contact` })
-    ).toBeVisible({ timeout: 15000 })
+    await page.goto(`/contacts/${withBirthday.id}`)
+    await expect(page.getByRole('heading', { name: withBirthday.name })).toBeVisible({
+      timeout: 15000,
+    })
     await expect(detailRow(page, 'Birthday')).toBeVisible()
     await expect(detailRow(page, 'Birthday')).toContainText(expectedBirthday)
 
     // Unknown birthday: no row renders
     // spec: KNW-034.known-birthday-appears-labeled
-    await page.goto(`/contacts/${plainId}`)
-    await expect(
-      page.getByRole('heading', { name: `${testApi.prefix}-No Birthday Contact` })
-    ).toBeVisible({ timeout: 15000 })
+    await page.goto(`/contacts/${plain.id}`)
+    await expect(page.getByRole('heading', { name: plain.name })).toBeVisible({ timeout: 15000 })
     await expect(detailRow(page, 'Birthday')).toHaveCount(0)
   })
 })

@@ -13,7 +13,7 @@ import (
 // it onto service.ContactMethodInput (the factory does not import service to
 // keep the cycle-free leaf invariant).
 type MethodSpec struct {
-	Type      string // email | phone | telegram
+	Type      string // email | phone | telegram | gchat
 	Value     string
 	IsPrimary bool
 }
@@ -50,7 +50,9 @@ type contactConfig struct {
 	withEmail            bool
 	withPhone            bool
 	withTelegram         bool
+	withGChat            bool
 	noMethods            bool
+	primaryMethod        string
 	cadence              *string
 	createdAge           *time.Duration
 	recentCreationWindow *time.Duration
@@ -73,6 +75,25 @@ func WithPhone() ContactOption { return func(c *contactConfig) { c.withPhone = t
 
 // WithTelegram adds a telegram contact_method (handle).
 func WithTelegram() ContactOption { return func(c *contactConfig) { c.withTelegram = true } }
+
+// WithGChat adds a Google Chat contact_method. A chat address IS an email — the
+// contact API validates a gchat value with the email rule and identity.Normalize
+// delegates gchat to the email normalizer — so the generated value is
+// email-shaped, with a local part distinct from WithEmail's so the two do not
+// normalize to one identity.
+func WithGChat() ContactOption { return func(c *contactConfig) { c.withGChat = true } }
+
+// WithPrimaryMethod makes the named method kind this contact's single primary.
+//
+// Without it the FIRST method built is primary, which is the email whenever the
+// contact carries one — so a fixture whose claim is that a non-default method is
+// marked primary cannot be expressed any other way. The kind must be one the
+// contact actually carries; naming an absent one PANICS, because a silently
+// unhonoured primary would leave the fixture asserting the default it was
+// written to move away from.
+func WithPrimaryMethod(kind string) ContactOption {
+	return func(c *contactConfig) { c.primaryMethod = kind }
+}
 
 // WithNoMethods builds a contact carrying NO contact_method (the zero-method
 // adversarial shape — the Imports/rematch surfaces + the empty-methods UI state).
@@ -347,7 +368,7 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 	}
 	// Default to an email method when no method option was supplied — unless the
 	// caller explicitly asked for a no-methods contact.
-	if !cfg.noMethods && !cfg.withEmail && !cfg.withPhone && !cfg.withTelegram {
+	if !cfg.noMethods && !cfg.withEmail && !cfg.withPhone && !cfg.withTelegram && !cfg.withGChat {
 		cfg.withEmail = true
 	}
 
@@ -427,6 +448,12 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 		spec.TelegramHandle = handle
 		spec.Methods = append(spec.Methods, MethodSpec{Type: "telegram", Value: handle, IsPrimary: len(spec.Methods) == 0})
 	}
+	if cfg.withGChat {
+		spec.Methods = append(spec.Methods, MethodSpec{Type: "gchat", Value: g.gchatFor(given, sur, n), IsPrimary: len(spec.Methods) == 0})
+	}
+	if cfg.primaryMethod != "" && !promotePrimary(spec.Methods, cfg.primaryMethod) {
+		panic(fmt.Sprintf("synthetic: WithPrimaryMethod(%q) names a method kind contact %q does not carry", cfg.primaryMethod, spec.FullName))
+	}
 
 	// Backdated cohorts stamp created_at from ONE past instant, mirroring the create
 	// handler — which leaves last_contacted unset (CON-001). Only a replayed
@@ -443,6 +470,27 @@ func (g *Generator) Contact(opts ...ContactOption) ContactSpec {
 	}
 
 	return spec
+}
+
+// promotePrimary makes kind the SINGLE primary method and reports whether the
+// contact carries that kind at all. Exactly one primary is what the contact API's
+// own validator enforces, so clearing the others is part of honouring the choice
+// rather than a convenience.
+func promotePrimary(methods []MethodSpec, kind string) bool {
+	found := false
+	for i := range methods {
+		if methods[i].Type == kind {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	for i := range methods {
+		methods[i].IsPrimary = methods[i].Type == kind
+	}
+	return true
 }
 
 // NoteSpec is a synthetic note description.
