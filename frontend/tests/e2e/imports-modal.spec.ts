@@ -562,27 +562,71 @@ test.describe('Imports Modal @area:imports', () => {
       // opt-in "Show unresolved" toggle, and every unresolved peer displays as
       // "Unknown".
       //
-      // There is NO namespace-unique marker to bind the card by: the telegram
-      // discovery writer stores only names, a handle and metadata, so an
-      // unresolved peer carrying any of them would stop being unresolved. The
-      // card is therefore bound by its unresolved badge, and the import POST
-      // below is pinned to OUR external id — so binding the wrong card makes the
-      // response wait time out and importPosts stay 0 rather than pass quietly.
+      // An unresolved peer has NO namespace-unique field, by construction rather
+      // than by omission: the telegram discovery writer stores only names, a
+      // handle and metadata, and any of those would stop the peer BEING
+      // unresolved. Nine other tests seed IMP-027 concurrently under
+      // fullyParallel, so every one of them puts an identically nameless
+      // "Unknown" card in the shared queue and picking one by text is a coin
+      // flip.
+      //
+      // So the QUEUE is scoped instead of the card: the suggestions list the page
+      // renders is filtered to this test's own candidate. That narrows what is
+      // shown to a row this test really seeded — it fabricates nothing — and it
+      // is what makes the card locator unambiguous. The import POST below stays
+      // pinned to OUR external id, so a mis-binding still fails loudly rather
+      // than quietly resolving a sibling worker's fixture.
       const seeded = await testApi.seedBehavior('IMP-027')
       const externalId = seeded.entities['unresolved-tg'].id
+
+      type SuggestionItem = { kind: string; candidate?: { id: string } }
+      const filteredResponses: number[] = []
+      await page.route('**/api/v1/imports/suggestions*', async route => {
+        if (route.request().method() !== 'GET') {
+          return route.fallback()
+        }
+        const response = await route.fetch()
+        const json = (await response.json()) as { data?: SuggestionItem[] }
+        const items = json?.data ?? []
+        json.data = items.filter(it => it.kind !== 'contact' || it.candidate?.id === externalId)
+        filteredResponses.push(json.data.length)
+        // Upstream headers are forwarded so the cross-origin CORS headers
+        // survive, but content-length/encoding are dropped: they describe the
+        // ORIGINAL body, and re-serializing a shorter list changes its length.
+        const headers = { ...response.headers() }
+        delete headers['content-length']
+        delete headers['content-encoding']
+        await route.fulfill({
+          status: response.status(),
+          headers,
+          contentType: 'application/json',
+          body: JSON.stringify(json),
+        })
+      })
 
       await page.goto('/imports')
       await page.waitForLoadState('domcontentloaded')
       await page.getByRole('button', { name: 'Telegram', exact: true }).click()
 
-      // Opt in to unresolved peers, then open the unresolved card.
+      // Opt in to unresolved peers. The hidden-peer count that gates the toggle
+      // rides the response META, which the filter leaves untouched.
       const unresolvedToggle = page.getByRole('switch')
       await expect(unresolvedToggle).toBeVisible({ timeout: 10000 })
       await unresolvedToggle.click()
-      const ourCard = page
-        .locator('div.border', { has: page.getByText('Unresolved Telegram peer') })
-        .last()
-      await expect(ourCard).toBeVisible({ timeout: 10000 })
+
+      // Exactly one unresolved card is now on the page, and it is ours. A
+      // page.route that silently failed to match would leave every sibling's card
+      // in the list and make the locator a coin flip again, so the interception is
+      // asserted rather than assumed.
+      const ourCard = page.locator('div.border', {
+        has: page.getByText('Unresolved Telegram peer'),
+      })
+      await expect(ourCard).toHaveCount(1, { timeout: 10000 })
+      expect(
+        filteredResponses.length,
+        'the suggestions-list interception must have fired'
+      ).toBeGreaterThan(0)
+      await expect(ourCard).toBeVisible()
       await ourCard.getByRole('button', { name: /Import/i }).click()
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
       // The modal opens on the clicked card's peer (keyed by id); every

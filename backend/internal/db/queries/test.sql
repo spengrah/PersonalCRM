@@ -298,6 +298,21 @@ DELETE FROM external_identity WHERE identifier LIKE @identifier_prefix || '%';
 -- identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.
 DELETE FROM external_identity WHERE source_id LIKE @source_id_prefix || '%';
 
+-- name: SyntheticSelectLinkedContactIdsByExternalContactIds :many
+-- Cleanup id-set: the CRM contacts the product linked to this namespace's own
+-- import candidates. It is a third recovery route for contacts, unioned with the
+-- name prefix and the ownership records rather than replacing either.
+--
+-- It exists because resolving a candidate CREATES a contact whose name the
+-- product derives from the candidate, not from the namespace: an anarlog_title
+-- import takes the writer's title-cased token ('Synth-<ns>-…') and a handle-only
+-- telegram import takes the '@handle' — and LIKE is case-sensitive, so neither
+-- matches the lower-case 'synth-<ns>-' prefix. The harness never saw those
+-- contacts, so no ownership record exists either. crm_contact_id is the FK the
+-- product itself writes, which is what makes them findable at all.
+SELECT DISTINCT crm_contact_id FROM external_contact
+WHERE id = ANY(@external_contact_ids::uuid[]) AND crm_contact_id IS NOT NULL;
+
 -- name: SyntheticDeleteExternalContactsByIds :execrows
 -- Cleanup step 9 (ownership): import candidates by the namespace's OWNERSHIP
 -- record, unioned with the source_id-prefix delete above rather than replacing

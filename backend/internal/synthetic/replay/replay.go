@@ -213,6 +213,14 @@ type created struct {
 	// subject_node_id → node FK is NO ACTION, so cleanup MUST delete these rows by
 	// the tracked node ids BEFORE the node deletes.
 	signalNodeIDs []uuid.UUID
+	// externalContactIDs are the import-candidate rows the Seed* primitives wrote.
+	// Two of the sources they cover have a production source_id that carries no
+	// namespace-prefixed string at all — a decimal telegram peer id, a SHA-256
+	// (token ‖ session) digest — so the ns-prefix delete cannot see them, and the
+	// telegram-peer delete only reaches peers a MESSAGE replay tracked. Without
+	// this ledger a failed run's teardown would drop the namespace's ownership
+	// records, leave those rows standing, and still report the namespace clean.
+	externalContactIDs []uuid.UUID
 	// directSources is the set of sources the adapters published root events
 	// under, so Cleanup can capture no-contact root events that the
 	// contact-scoped read misses.
@@ -231,6 +239,9 @@ func (c *created) addTelegramPeer(id int64)      { c.telegramPeerIDs = append(c.
 func (c *created) addTelegramChat(id int64)      { c.telegramChatIDs = append(c.telegramChatIDs, id) }
 func (c *created) addContactTask(id uuid.UUID)   { c.contactTaskIDs = append(c.contactTaskIDs, id) }
 func (c *created) addDirectSource(source string) { c.directSources[source] = struct{}{} }
+func (c *created) addExternalContact(id uuid.UUID) {
+	c.externalContactIDs = append(c.externalContactIDs, id)
+}
 
 // Harness holds the live bus + river client + repos + engines + anchor +
 // namespace + the seeded revoked Mac host. It is the single place the bus/river
@@ -497,6 +508,7 @@ func (h *Harness) SeedExternalContactCandidate(
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("seed external contact candidate (%s): %w", spec.Source, err)
 	}
+	h.track(func(c *created) { c.addExternalContact(ec.ID) })
 	return ec.ID, nil
 }
 
@@ -529,6 +541,7 @@ func (h *Harness) SeedTelegramDiscoveryCandidate(ctx context.Context, spec facto
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("seed telegram discovery candidate: %w", err)
 	}
+	h.track(func(c *created) { c.addExternalContact(ec.ID) })
 	return ec.ID, derefOrEmpty(ec.DisplayName), nil
 }
 
@@ -563,6 +576,7 @@ func (h *Harness) SeedTitleCandidate(ctx context.Context, spec factory.AnarlogTi
 	if ec == nil {
 		return uuid.Nil, "", fmt.Errorf("seed title candidate: the writer reported success but no row exists for token %q", spec.NormalizedToken)
 	}
+	h.track(func(c *created) { c.addExternalContact(ec.ID) })
 	return ec.ID, derefOrEmpty(ec.DisplayName), nil
 }
 
@@ -594,6 +608,9 @@ func (h *Harness) SeedMethodSuggestion(
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("seed method suggestion: upsert external: %w", err)
 	}
+	// Tracked BEFORE the two writes below: they can fail with the row already
+	// created, and the failure-path teardown has to be able to find it.
+	h.track(func(c *created) { c.addExternalContact(external.ID) })
 	if _, err := h.externalRepo.UpdateMatch(ctx, external.ID, &contactID, repository.MatchStatusImported); err != nil {
 		return uuid.Nil, "", fmt.Errorf("seed method suggestion: link external: %w", err)
 	}

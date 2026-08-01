@@ -236,6 +236,20 @@ func (r *SyntheticSupportRepository) DeleteExternalContactsBySourceIDPrefix(ctx 
 	return r.queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
 }
 
+// SelectLinkedContactIDsByExternalContactIDs returns the CRM contacts the product
+// linked to a namespace's own import candidates — the third way cleanup recovers a
+// contact, beside the name prefix and the ownership record.
+func (r *SyntheticSupportRepository) SelectLinkedContactIDsByExternalContactIDs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := r.queries.SyntheticSelectLinkedContactIdsByExternalContactIds(ctx, pgUUIDs(ids))
+	if err != nil {
+		return nil, err
+	}
+	return pgUUIDsToUUIDs(rows), nil
+}
+
 // DeleteExternalContactsByIds removes external_contact rows by the namespace's
 // ownership records (cleanup step 9, unioned with the source_id-prefix sweep).
 func (r *SyntheticSupportRepository) DeleteExternalContactsByIds(ctx context.Context, ids []uuid.UUID) (int64, error) {

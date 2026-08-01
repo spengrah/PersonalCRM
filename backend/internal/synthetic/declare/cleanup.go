@@ -269,8 +269,8 @@ func cleanNamespace(
 	return runLadder(ctx, database, gen, namespace, contactIDs, eventIDs)
 }
 
-// namespaceContactIDs is the UNION of the two ways a namespace's contacts can be
-// recovered, and it needs both.
+// namespaceContactIDs is the UNION of the three ways a namespace's contacts can be
+// recovered, and it needs all three.
 //
 // The name prefix reaches rows seeded before ownership was recorded, and rows
 // whose ownership record was lost. The ownership record reaches rows whose
@@ -280,6 +280,15 @@ func cleanNamespace(
 // by id is what keeps the contact, its methods, interactions, tasks, notes and
 // person node reachable; without it cleanup would skip all of them, delete the
 // namespace's discovery marker, and report "cleaned" over live rows.
+//
+// The third route reaches contacts the HARNESS NEVER SAW: resolving an import
+// candidate makes the product create a contact, and it derives that contact's name
+// from the candidate rather than from the namespace — an anarlog_title import
+// takes the discovery writer's title-cased token ('Synth-<ns>-…'), a handle-only
+// telegram import takes the '@handle'. LIKE is case-sensitive and neither shape
+// carries the lower-case prefix, and no ownership record exists because the
+// harness did not create the row. The candidate's own crm_contact_id is the only
+// link back, so cleanup follows it from the candidates the namespace owns.
 func namespaceContactIDs(
 	ctx context.Context,
 	support *repository.SyntheticSupportRepository,
@@ -293,10 +302,18 @@ func namespaceContactIDs(
 	if err != nil {
 		return nil, fmt.Errorf("select owned contacts: %w", err)
 	}
+	ownedCandidates, err := support.SelectNamespaceEntityIDs(ctx, namespace, repository.EntityKindExternalContact)
+	if err != nil {
+		return nil, fmt.Errorf("select owned import candidates: %w", err)
+	}
+	linked, err := support.SelectLinkedContactIDsByExternalContactIDs(ctx, ownedCandidates)
+	if err != nil {
+		return nil, fmt.Errorf("select contacts linked from owned import candidates: %w", err)
+	}
 
-	seen := make(map[uuid.UUID]bool, len(byName)+len(owned))
-	union := make([]uuid.UUID, 0, len(byName)+len(owned))
-	for _, ids := range [][]uuid.UUID{byName, owned} {
+	seen := make(map[uuid.UUID]bool, len(byName)+len(owned)+len(linked))
+	union := make([]uuid.UUID, 0, len(byName)+len(owned)+len(linked))
+	for _, ids := range [][]uuid.UUID{byName, owned, linked} {
 		for _, id := range ids {
 			if seen[id] {
 				continue
