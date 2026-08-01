@@ -510,7 +510,10 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     // numeric (zero overdue renders caught-up prose instead). Header and
     // card count are read in ONE DOM pass so a concurrent re-render cannot
     // straddle the two reads.
-    await expect(page.getByRole('heading', { name: sentinelName })).toBeVisible()
+    // Matched EXACTLY, like every other name assertion in this file: a
+    // drawn-name collision inside the world renders "<name>" and "<name> N",
+    // and a substring match would resolve both cards.
+    await expect(page.getByRole('heading', { name: sentinelName, exact: true })).toBeVisible()
     await expect
       .poll(() =>
         page.evaluate(() => {

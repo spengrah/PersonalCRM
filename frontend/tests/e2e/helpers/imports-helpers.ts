@@ -45,8 +45,13 @@ export async function selectContactIfNeeded(
  * wrong candidate.
  */
 export async function expectModalCandidate(page: Page, displayName: string): Promise<void> {
+  // EXACT, because this assertion's whole job is to prove the modal opened on the
+  // RIGHT candidate. Generated candidate names are "…Import Candidate <seq>", so
+  // a substring match lets an open on "Import Candidate 10" silently satisfy an
+  // assertion for "Import Candidate 1" — a false PASS, which is the one failure
+  // mode a guard like this must not have.
   await expect(
-    resolverDialog(page).getByRole('heading', { level: 3, name: displayName })
+    resolverDialog(page).getByRole('heading', { level: 3, name: displayName, exact: true })
   ).toBeVisible({ timeout: 5000 })
 }
 
