@@ -425,6 +425,18 @@ DELETE FROM contact WHERE id = ANY(@contact_ids::uuid[]);
 -- Cleanup step 14: the seeded revoked synthetic mac_host by id.
 DELETE FROM mac_host WHERE id = @id;
 
+-- name: SyntheticDeletePairingTokensByConsumedHostId :execrows
+-- Cleanup ladder: the CONSUMED pairing token a declared world's paired host was
+-- created from. Keyed on consumed_host_id because that is the only recovery key
+-- available: CreatePairingToken returns the plaintext and the expiry, never the
+-- row id, and the plaintext is stored only as a hash. It must therefore run
+-- BEFORE the host delete — consumed_host_id is ON DELETE SET NULL, so deleting
+-- the host first destroys the key and the row becomes unreachable forever.
+-- The production janitor cannot stand in: it deletes only UNCONSUMED expired
+-- tokens. Deliberately by id rather than the whole-table DeleteAllPairingTokens,
+-- which would destroy a concurrent world's token.
+DELETE FROM mac_host_pairing_token WHERE consumed_host_id = @consumed_host_id;
+
 -- name: SyntheticCountContactsByIds :one
 -- Cleanup assertion — count surviving contact rows for the given ids.
 SELECT COUNT(*) FROM contact WHERE id = ANY(@contact_ids::uuid[]);
@@ -904,6 +916,23 @@ JOIN unnest(@contact_ids::uuid[]) WITH ORDINALITY AS c(contact_id, ord)
 JOIN calendar_event ce ON ce.gcal_event_id = g.gcal_event_id
 WHERE c.contact_id = ANY(ce.matched_contact_ids)
   AND ce.last_contacted_updated = true;
+
+-- name: SyntheticCountLinkedCalendarEventsByGcalIds :one
+-- gcal UPCOMING: how many of these (gcal_event_id, contact_id) PAIRS have a
+-- calendar_event row carrying the contact in matched_contact_ids. Deliberately
+-- WITHOUT the last_contacted_updated term its past-event sibling carries: that
+-- flag is set only by the provider's past-event projection, whose read requires
+-- end_time < now, so a future event can never acquire it and a predicate
+-- demanding it could never settle. A future matched event publishes nothing at
+-- all — no attended event, no interaction, no venue — so its stored, linked row
+-- IS the whole terminal state. The arrays are parallel: element i of each names
+-- one payload.
+SELECT COUNT(DISTINCT (ce.gcal_event_id, c.contact_id))
+FROM unnest(@gcal_event_ids::text[]) WITH ORDINALITY AS g(gcal_event_id, ord)
+JOIN unnest(@contact_ids::uuid[]) WITH ORDINALITY AS c(contact_id, ord)
+  ON g.ord = c.ord
+JOIN calendar_event ce ON ce.gcal_event_id = g.gcal_event_id
+WHERE c.contact_id = ANY(ce.matched_contact_ids);
 
 -- name: TestInsertContactAtID :exec
 -- Latent-person promotion test support: insert a contact row AT a caller-supplied

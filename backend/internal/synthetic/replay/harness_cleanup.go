@@ -329,6 +329,34 @@ func (h *Harness) cleanup(ctx context.Context) error {
 	step("meeting_note", func() error {
 		return h.support.DeleteMeetingNotesByHostID(ctx, h.macHostID)
 	})
+	// 13c. the CONSUMED pairing token each LIVE paired host was created from,
+	// BEFORE the host delete. consumed_host_id is ON DELETE SET NULL and is the
+	// token's only recovery key — CreatePairingToken returns the plaintext and the
+	// expiry, never the row id, and only a hash is stored — so a host deleted
+	// first strands the row permanently. The production janitor cannot reclaim it
+	// either: it sweeps only tokens that were never consumed.
+	step("mac_host_pairing_token", func() error {
+		for _, id := range c.pairedMacHostIDs {
+			if _, err := h.support.DeletePairingTokensByConsumedHostID(ctx, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	// 13d. the LIVE paired hosts SeedPairedMacHost created. They are NOT reachable
+	// by the marker delete below (which is keyed on this harness's single revoked
+	// host id), and a survivor holds the database-wide singleton slot against
+	// every later world that pairs one. Runs after the external_contact steps: the
+	// external_contact.host_id FK is ON DELETE SET NULL, so a host deleted first
+	// would orphan its ingest candidates from every host-scoped route.
+	step("mac_host_paired", func() error {
+		for _, id := range c.pairedMacHostIDs {
+			if _, err := h.support.DeleteMacHostByID(ctx, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	// 14. mac_host (the seeded revoked synthetic host by id).
 	step("mac_host", func() error {
 		_, err := h.support.DeleteMacHostByID(ctx, h.macHostID)

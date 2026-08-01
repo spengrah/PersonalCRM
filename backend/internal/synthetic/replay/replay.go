@@ -16,6 +16,7 @@ package replay
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -222,6 +223,14 @@ type created struct {
 	// this ledger a failed run's teardown would drop the namespace's ownership
 	// records, leave those rows standing, and still report the namespace clean.
 	externalContactIDs []uuid.UUID
+	// pairedMacHostIDs are LIVE (non-revoked) mac_host rows SeedPairedMacHost
+	// created through the real pairing services, alongside the harness's own
+	// revoked marker host. They are tracked because nothing else reaches them: the
+	// marker's delete is keyed on the harness's single macHostID, and a live host
+	// left behind occupies the database-wide singleton index — so the next world
+	// that pairs one fails, and the staleness watchdog opens a heartbeat breach
+	// that lights a banner other specs assert is quiet.
+	pairedMacHostIDs []uuid.UUID
 	// directSources is the set of sources the adapters published root events
 	// under, so Cleanup can capture no-contact root events that the
 	// contact-scoped read misses.
@@ -242,6 +251,9 @@ func (c *created) addContactTask(id uuid.UUID)   { c.contactTaskIDs = append(c.c
 func (c *created) addDirectSource(source string) { c.directSources[source] = struct{}{} }
 func (c *created) addExternalContact(id uuid.UUID) {
 	c.externalContactIDs = append(c.externalContactIDs, id)
+}
+func (c *created) addPairedMacHost(id uuid.UUID) {
+	c.pairedMacHostIDs = append(c.pairedMacHostIDs, id)
 }
 
 // Harness holds the live bus + river client + repos + engines + anchor +
@@ -320,6 +332,15 @@ func (h *Harness) ExternalContactRepo() *repository.ExternalContactRepository {
 	return h.externalRepo
 }
 func (h *Harness) TelegramRepo() *repository.TelegramMessageRepository { return h.telegramRepo }
+
+// CalendarEventRepo builds a calendar-event repository over the harness's
+// database. The GCal adapters construct their own for the provider they wire, so
+// this exists for the callers that need to READ a replayed event back — a
+// declared world reports the stored row's uuid, which is the id the contact
+// events API returns and the only handle a citing test can use.
+func (h *Harness) CalendarEventRepo() *repository.CalendarEventRepository {
+	return repository.NewCalendarEventRepository(h.database.Queries)
+}
 func (h *Harness) MessagesRepo() *repository.MessagesMessageRepository { return h.messagesRepo }
 func (h *Harness) VenueRepo() *repository.VenueRepository              { return h.venueRepo }
 
@@ -851,6 +872,163 @@ func (h *Harness) SeedOrphanMeetingNote(ctx context.Context, title, summary stri
 		return uuid.Nil, fmt.Errorf("seed orphan meeting note: commit: %w", err)
 	}
 	return sessionID, nil
+}
+
+// pairedHostBcryptCost is the cost SeedPairedMacHost mints the host api-key hash
+// at. The declared fixture never authenticates as the host — ingest is driven
+// through IngestService directly with the host id — so the hash's cost changes no
+// observable, and the production default (~50ms) would be paid per seeded world
+// for nothing. Matches the cost the mac-host integration tests already use.
+const pairedHostBcryptCost = 4
+
+// SeedPairedMacHost creates the ONE LIVE (non-revoked) mac_host a world may hold,
+// through the REAL pairing path: CreatePairingToken → PairWithToken (one tx:
+// token FOR UPDATE, mint api-key, insert host, mark consumed) → UpdateHeartbeat
+// for the daemon-supplied permissions and source health.
+//
+// It has to be the real path rather than a direct insert. The harness's own
+// marker host is REVOKED, which is what lets it dodge the database-wide
+// idx_mac_host_singleton — and a revoked host is invisible to ListActiveHosts, so
+// the settings surface cannot see it at all. Un-revoking it is not an option: the
+// revoke column is written in exactly one direction by exactly one production
+// caller, and UpdateMacHostHeartbeat refuses a revoked row outright, so the
+// inverse would be a brand-new test-only mutation of a column production only
+// ever moves one way.
+//
+// Consequences the caller inherits, each bounded rather than discovered:
+//   - the world now holds TWO mac_host rows (the revoked marker, the live paired
+//     one). The live id is tracked so BOTH cleanup paths delete it.
+//   - it takes the singleton slot, so a second paired world seeded before this
+//     one is cleaned fails on the 23505 the service maps to ErrHostAlreadyPaired.
+//   - a LIVE host is visible to the staleness watchdog. PairWithToken and the
+//     heartbeat stamp last_heartbeat_at at NOW, so the heartbeat threshold is not
+//     reached inside a test — but a world that outlived it would open a breach on
+//     a GLOBAL banner, which is the second reason both cleanup paths must delete
+//     it. Source health must carry a fresh last_pushed_at for the same reason.
+//   - the CONSUMED pairing token row cannot be reclaimed by the production
+//     janitor (it sweeps unconsumed tokens only) and its only recovery key is
+//     consumed_host_id, which the host delete NULLs — so both cleanup paths
+//     delete the token BEFORE the host.
+//
+// It is IDEMPOTENT on the hostname, and that is a requirement rather than a
+// convenience: several declarations are composed into ONE namespace to build the
+// standard world, so more than one of them can name a paired host — and since the
+// product permits exactly one live host, naming a host twice in one world can only
+// mean the SAME host. The second call heartbeats onto the existing row instead of
+// pairing again (which would fail on the singleton index), MERGING its source-health
+// entries over what is already reported so the composed world keeps the union of
+// every declaration's sources rather than only the last one's.
+func (h *Harness) SeedPairedMacHost(
+	ctx context.Context,
+	hostname, daemonVersion string,
+	protocolVersion int32,
+	permissions, sourceHealth json.RawMessage,
+) (uuid.UUID, error) {
+	hostRepo := repository.NewMacHostRepository(h.database.Queries)
+
+	existingID, exists, err := h.support.SelectMacHostIDByHostname(ctx, hostname)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("seed paired mac host %q: look up existing: %w", hostname, err)
+	}
+	if exists {
+		// Tracked here too, not only on the pairing branch. The ledger delete is
+		// by id and therefore idempotent, so tracking a row this harness already
+		// tracked costs nothing — and the alternative invariant ("the earlier call
+		// on this same harness tracked it") is one a future caller can break
+		// silently, in the one area where a missed row means permanent residue.
+		h.track(func(c *created) { c.addPairedMacHost(existingID) })
+		merged, err := h.mergedSourceHealth(ctx, hostRepo, existingID, sourceHealth)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("seed paired mac host %q: %w", hostname, err)
+		}
+		if err := h.heartbeatPairedHost(ctx, hostRepo, existingID, hostname, daemonVersion, protocolVersion, permissions, merged); err != nil {
+			return uuid.Nil, err
+		}
+		return existingID, nil
+	}
+
+	tokenRepo := repository.NewMacHostPairingTokenRepository(h.database.Queries)
+	macService := service.NewMacHostService(
+		hostRepo, tokenRepo,
+		nil, // syncRepo — only RevokeHost/CommitCursor need it
+		nil, nil, nil,
+		h.database.Pool, pairedHostBcryptCost,
+	)
+
+	token, _, err := macService.CreatePairingToken(ctx)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("seed paired mac host: create pairing token: %w", err)
+	}
+	paired, err := macService.PairWithToken(ctx, token, hostname, daemonVersion, protocolVersion)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("seed paired mac host %q: pair: %w", hostname, err)
+	}
+	// Tracked BEFORE the heartbeat: the row exists and holds the singleton slot
+	// from the pair commit onward, so a heartbeat failure must not lose it.
+	h.track(func(c *created) { c.addPairedMacHost(paired.HostID) })
+
+	if err := h.heartbeatPairedHost(ctx, hostRepo, paired.HostID, hostname, daemonVersion, protocolVersion, permissions, sourceHealth); err != nil {
+		return uuid.Nil, err
+	}
+	return paired.HostID, nil
+}
+
+// heartbeatPairedHost reports the daemon-supplied fields onto a paired host, the
+// same call the real daemon's heartbeat makes.
+func (h *Harness) heartbeatPairedHost(
+	ctx context.Context,
+	hostRepo *repository.MacHostRepository,
+	hostID uuid.UUID,
+	hostname, daemonVersion string,
+	protocolVersion int32,
+	permissions, sourceHealth json.RawMessage,
+) error {
+	if _, err := hostRepo.UpdateHeartbeat(ctx, hostID, repository.HeartbeatPayload{
+		DaemonVersion:   daemonVersion,
+		ProtocolVersion: protocolVersion,
+		Permissions:     permissions,
+		SourceHealth:    sourceHealth,
+	}); err != nil {
+		return fmt.Errorf("seed paired mac host %q: heartbeat: %w", hostname, err)
+	}
+	return nil
+}
+
+// mergedSourceHealth is the incoming source-health blob laid OVER whatever the
+// host already reports, per source key. The heartbeat replaces the whole column,
+// so a composed world's second host-bearing declaration would otherwise erase the
+// first one's sources; a daemon reporting an accumulating set is also the faithful
+// shape. Per-key last-writer-wins, which is what a real heartbeat does.
+func (h *Harness) mergedSourceHealth(
+	ctx context.Context,
+	hostRepo *repository.MacHostRepository,
+	hostID uuid.UUID,
+	incoming json.RawMessage,
+) (json.RawMessage, error) {
+	host, err := hostRepo.GetHost(ctx, hostID)
+	if err != nil {
+		return nil, fmt.Errorf("read existing source health: %w", err)
+	}
+	merged := map[string]json.RawMessage{}
+	if len(host.SourceHealth) > 0 {
+		if err := json.Unmarshal(host.SourceHealth, &merged); err != nil {
+			return nil, fmt.Errorf("decode existing source health: %w", err)
+		}
+	}
+	if len(incoming) > 0 {
+		next := map[string]json.RawMessage{}
+		if err := json.Unmarshal(incoming, &next); err != nil {
+			return nil, fmt.Errorf("decode incoming source health: %w", err)
+		}
+		for source, entry := range next {
+			merged[source] = entry
+		}
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return nil, fmt.Errorf("encode merged source health: %w", err)
+	}
+	return out, nil
 }
 
 // --- Settle ----------------------------------------------------------------

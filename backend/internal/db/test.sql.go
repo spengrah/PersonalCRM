@@ -1025,6 +1025,36 @@ func (q *Queries) SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx context
 	return count, err
 }
 
+const SyntheticCountLinkedCalendarEventsByGcalIds = `-- name: SyntheticCountLinkedCalendarEventsByGcalIds :one
+SELECT COUNT(DISTINCT (ce.gcal_event_id, c.contact_id))
+FROM unnest($1::text[]) WITH ORDINALITY AS g(gcal_event_id, ord)
+JOIN unnest($2::uuid[]) WITH ORDINALITY AS c(contact_id, ord)
+  ON g.ord = c.ord
+JOIN calendar_event ce ON ce.gcal_event_id = g.gcal_event_id
+WHERE c.contact_id = ANY(ce.matched_contact_ids)
+`
+
+type SyntheticCountLinkedCalendarEventsByGcalIdsParams struct {
+	GcalEventIds []string      `json:"gcal_event_ids"`
+	ContactIds   []pgtype.UUID `json:"contact_ids"`
+}
+
+// gcal UPCOMING: how many of these (gcal_event_id, contact_id) PAIRS have a
+// calendar_event row carrying the contact in matched_contact_ids. Deliberately
+// WITHOUT the last_contacted_updated term its past-event sibling carries: that
+// flag is set only by the provider's past-event projection, whose read requires
+// end_time < now, so a future event can never acquire it and a predicate
+// demanding it could never settle. A future matched event publishes nothing at
+// all — no attended event, no interaction, no venue — so its stored, linked row
+// IS the whole terminal state. The arrays are parallel: element i of each names
+// one payload.
+func (q *Queries) SyntheticCountLinkedCalendarEventsByGcalIds(ctx context.Context, arg SyntheticCountLinkedCalendarEventsByGcalIdsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, SyntheticCountLinkedCalendarEventsByGcalIds, arg.GcalEventIds, arg.ContactIds)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const SyntheticCountLinkedCommsMessageByExternalId = `-- name: SyntheticCountLinkedCommsMessageByExternalId :one
 
 SELECT COUNT(*) FROM comms_message
@@ -1910,6 +1940,27 @@ DELETE FROM note WHERE contact_id = ANY($1::uuid[])
 // Cleanup step 12: note by contact.
 func (q *Queries) SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteNotesByContactIds, contactIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SyntheticDeletePairingTokensByConsumedHostId = `-- name: SyntheticDeletePairingTokensByConsumedHostId :execrows
+DELETE FROM mac_host_pairing_token WHERE consumed_host_id = $1
+`
+
+// Cleanup ladder: the CONSUMED pairing token a declared world's paired host was
+// created from. Keyed on consumed_host_id because that is the only recovery key
+// available: CreatePairingToken returns the plaintext and the expiry, never the
+// row id, and the plaintext is stored only as a hash. It must therefore run
+// BEFORE the host delete — consumed_host_id is ON DELETE SET NULL, so deleting
+// the host first destroys the key and the row becomes unreachable forever.
+// The production janitor cannot stand in: it deletes only UNCONSUMED expired
+// tokens. Deliberately by id rather than the whole-table DeleteAllPairingTokens,
+// which would destroy a concurrent world's token.
+func (q *Queries) SyntheticDeletePairingTokensByConsumedHostId(ctx context.Context, consumedHostID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, SyntheticDeletePairingTokensByConsumedHostId, consumedHostID)
 	if err != nil {
 		return 0, err
 	}
