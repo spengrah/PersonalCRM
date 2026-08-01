@@ -628,6 +628,14 @@ test.describe('Imports Modal @area:imports', () => {
       ).toBeGreaterThan(0)
       await expect(ourCard).toBeVisible()
       await ourCard.getByRole('button', { name: /Import/i }).click()
+
+      // The interception has done its whole job once the card is open: everything
+      // below is modal-scoped and pinned to OUR external id, and the modal's queue
+      // comes from /candidates rather than /suggestions. Retiring the route here
+      // closes the window where a late invalidation-triggered suggestions refetch
+      // is still inside the handler when the test ends and the page closes —
+      // route.fetch then throws and fails a test whose assertions all passed.
+      await page.unrouteAll({ behavior: 'ignoreErrors' })
       await expect(page.getByRole('button', { name: 'Import as New', exact: true })).toBeVisible()
       // The modal opens on the clicked card's peer (keyed by id); every
       // unresolved peer displays as "Unknown", so the import POST below is
