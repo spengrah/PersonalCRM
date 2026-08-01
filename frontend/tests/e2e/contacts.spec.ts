@@ -96,6 +96,78 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   })
 
   // spec: NTS-007.long-content-clamped-expand
+  test('shows the expand control when the note request finishes before the contact', async ({
+    page,
+  }) => {
+    // A REGRESSION test for a real ordering bug, not a duplicate of the test
+    // above. The Notes row renders only inside the block the detail page shows
+    // once the CONTACT has loaded, so when the note request finishes first the
+    // overflow measurement has no element yet. An implementation that keys that
+    // measurement on the note body alone never re-measures once the row appears,
+    // and the expand control stays hidden over content that plainly overflows.
+    //
+    // The natural ordering is whichever request happens to win, so the test above
+    // covers this only by luck. Here the ordering is FORCED: the contact-detail
+    // response is held at the network layer until the note response has come back.
+    const longNote = [
+      'First paragraph with enough background to push the body past the clamp.',
+      'Second paragraph adding more detail so the rendered height clearly exceeds four lines.',
+      'Third paragraph continuing with still more detail about shared projects.',
+      'Fourth paragraph covering preferences, interests and recent conversations.',
+    ].join('\n\n')
+
+    // How long the contact response is held after the note response lands.
+    const contactHoldAfterNoteMs = 750
+
+    const seeded = await testApi.seedBehavior('NTS-007')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
+    await testApi.seedContactNote(contactId, longNote)
+
+    let releaseContact = () => {}
+    const contactGate = new Promise<void>(resolve => {
+      releaseContact = resolve
+    })
+    let noteCompleted = false
+
+    // Held: the contact detail. Its glob has no trailing wildcard, so it cannot
+    // also match the /notes or /tasks paths.
+    //
+    // The extra pause after the gate opens is load-bearing. Releasing the contact
+    // the instant the note lands puts both responses in ONE React commit, and the
+    // Notes row then exists on the very first render that has the note — which is
+    // the ordering the buggy implementation also survives. The pause guarantees at
+    // least one committed render with the note present and the contact still
+    // loading, which is the state under test.
+    await page.route(`**/api/v1/contacts/${contactId}`, async route => {
+      if (route.request().method() !== 'GET') return route.continue()
+      await contactGate
+      await new Promise(resolve => setTimeout(resolve, contactHoldAfterNoteMs))
+      return route.continue()
+    })
+    // The releaser: fetch the real note response, mark it done, then let the
+    // contact through. Registered second so it cannot be shadowed.
+    await page.route(`**/api/v1/contacts/${contactId}/notes`, async route => {
+      if (route.request().method() !== 'GET') return route.continue()
+      const response = await route.fetch()
+      noteCompleted = true
+      releaseContact()
+      return route.fulfill({ response })
+    })
+
+    await page.goto(`/contacts/${contactId}`)
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(notesRow(page)).toContainText('First paragraph')
+
+    // The ordering actually held — otherwise this test would be asserting the
+    // same thing the previous one does, under a different name.
+    expect(noteCompleted).toBe(true)
+
+    // The claim: the expand control is present even though the note won the race.
+    await expect(notesRow(page).getByRole('button', { name: 'Show more' })).toBeVisible()
+  })
+
+  // spec: NTS-007.long-content-clamped-expand
   test('should not show expand button for short notes', async ({ page }) => {
     const shortNotes = 'Brief note about this contact.'
 
