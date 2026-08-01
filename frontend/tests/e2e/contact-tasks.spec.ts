@@ -6,12 +6,31 @@ import { createTestAPI, TestAPI } from './helpers/test-api'
 // button's accessible name is "Add" (exact); only the modal's submit button
 // is labeled "Add Task".
 //
-// Task ROWS, however, need backend task state that a provider-less E2E
-// environment cannot create (manual creation and follow-ups require a live
-// Todoist provider, and the /tasks routes are OAuth-gated). The row-rendering
-// behaviors below are therefore proved as frontend-render/interaction tests
-// over full-envelope route mocks — the same observable signals the retired
-// verifiers graded.
+// Task ROWS, however, need backend task state a provider-less E2E environment
+// cannot create — but the reason is narrower than "the /tasks routes are
+// OAuth-gated", which is false. GET /contacts/:id/tasks needs no Todoist
+// settings at all: the two tests below that install NO mock drive it for real
+// against a contact with no tasks. Creation is what is provider-bound —
+// ContactTaskService.CreateManualTask calls the Todoist Quick Add API before it
+// writes anything local, so with no connected account the POST answers 400. The
+// CRM-link DELETE is a purely local row delete, but the row it would remove is
+// itself route-injected here, so there is nothing real to delete.
+//
+// The row-rendering behaviors below are therefore proved as
+// frontend-render/interaction tests over full-envelope route mocks — the same
+// observable signals the retired verifiers graded. That mocked surface is why
+// CAD-030 / CAD-031 / CAD-033 / TDS-035 are registered as no-fixture behaviors
+// rather than as declarations: a declaration would provision only the container
+// contact, and could be wrong about the task shape without any assertion here
+// failing. Each test seeds CON-041's one-contact fixture for the detail page it
+// renders on.
+//
+// Converting the GET lists to real seeded rows would be a coverage change rather
+// than a provisioning swap, and needs CAD-030's completed/ordering spread
+// designed on its own terms. Whoever does it should know the toolkit's existing
+// task-spread primitive writes metadata content as "Task: [Name](link)" while
+// the production writer emits "[Name](link): <text>", and the UI strips only the
+// latter.
 
 interface MockTask {
   id: string
@@ -52,7 +71,7 @@ interface TaskLists {
 // [...followUpTasks, ...activeManualTasks]. The mock must branch on BOTH
 // state AND lifecycle: returning one list to two combos would duplicate rows
 // and make the follow-up-first ordering non-discriminating. The glob also
-// matches the OAuth-gated POST (create), so dispatch on METHOD first; a
+// matches the provider-bound POST (create), so dispatch on METHOD first; a
 // non-GET falls through unless the test supplies a write handler.
 async function mockTaskLists(
   page: Page,
@@ -100,17 +119,19 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
   test.describe('Tasks Section', () => {
     test('shows tasks section on contact detail page', async ({ page }) => {
       // spec: CAD-030.no-tasks-empty-state
-      const { ids } = await testApi.seedContacts([{ full_name: 'Task Test Contact' }])
+      const seeded = await testApi.seedBehavior('CON-041')
+      const contactId = seeded.entities['target'].id
+      const fullName = seeded.entities['target'].name
 
-      // Mock SUCCESSFUL empty lists for all three task queries: without the
-      // mock the OAuth-gated routes 404 and the section would render the
-      // empty state from the error default — a pass on API failure, not a
-      // proof of the no-tasks state.
-      await mockTaskLists(page, ids[0], () => ({ followup: [], manual: [], completed: [] }))
+      // Mock SUCCESSFUL empty lists for all three task queries. The real GET
+      // answers 200 with an empty list here, so this mock is belt-and-braces
+      // rather than load-bearing — it pins the empty state to a SUCCESS
+      // envelope, so the assertion cannot pass off the error default instead.
+      await mockTaskLists(page, contactId, () => ({ followup: [], manual: [], completed: [] }))
 
-      await page.goto(`/contacts/${ids[0]}`)
+      await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
-      await expect(page.getByRole('heading', { name: 'Task Test Contact' })).toBeVisible({
+      await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
         timeout: 15000,
       })
 
@@ -128,8 +149,9 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       page,
     }) => {
       // spec: CAD-030.managed-tasks-appear-first
-      const { ids } = await testApi.seedContacts([{ full_name: 'Task Order Contact' }])
-      const contactId = ids[0]
+      const seeded = await testApi.seedBehavior('CON-041')
+      const contactId = seeded.entities['target'].id
+      const fullName = seeded.entities['target'].name
       const followUp = makeTask(contactId, {
         id: 'task-followup-1',
         content: 'Mock follow-up task',
@@ -162,8 +184,9 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
     test('derives each task badge from its kind and lifecycle', async ({ page }) => {
       // spec: CAD-030.each-task-carries-badge
-      const { ids } = await testApi.seedContacts([{ full_name: 'Task Badge Contact' }])
-      const contactId = ids[0]
+      const seeded = await testApi.seedBehavior('CON-041')
+      const contactId = seeded.entities['target'].id
+      const fullName = seeded.entities['target'].name
       // Distinct kind/lifecycle pairs across the followup_loop + manual
       // queries (getBadgeLabel: reach_out+followup_loop → Follow-up;
       // send → Send; reminder → Reminder; reach_out+manual → Reach out).
@@ -218,8 +241,9 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       page,
     }) => {
       // spec: TDS-035.crm-link-markers-stripped
-      const { ids } = await testApi.seedContacts([{ full_name: 'Task Content Contact' }])
-      const contactId = ids[0]
+      const seeded = await testApi.seedBehavior('CON-041')
+      const contactId = seeded.entities['target'].id
+      const fullName = seeded.entities['target'].name
       // The three cleanTaskContent shapes a projected task can carry: a
       // leading "[Name](url): task" marker (manual/action tasks), an inline
       // "[Name](url)" link (reach-out tasks), and empty content.
@@ -257,8 +281,9 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
     test('collapses completed tasks behind a toggle with a count', async ({ page }) => {
       // spec: CAD-030.completed-tasks-collapsed-behind
-      const { ids } = await testApi.seedContacts([{ full_name: 'Task History Contact' }])
-      const contactId = ids[0]
+      const seeded = await testApi.seedBehavior('CON-041')
+      const contactId = seeded.entities['target'].id
+      const fullName = seeded.entities['target'].name
       await mockTaskLists(page, contactId, () => ({
         followup: [],
         manual: [],
@@ -288,19 +313,21 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
   test.describe('Add Task Modal', () => {
     test('opens add task modal and closes it with Escape', async ({ page }) => {
       // spec: CAD-031.kind-chosen-reach-out
-      const { ids } = await testApi.seedContacts([{ full_name: 'Modal Test Contact' }])
+      const seeded = await testApi.seedBehavior('CON-041')
+      const contactId = seeded.entities['target'].id
+      const fullName = seeded.entities['target'].name
 
-      await page.goto(`/contacts/${ids[0]}`)
+      await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
-      await expect(page.getByRole('heading', { name: 'Modal Test Contact' })).toBeVisible({
+      await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
         timeout: 15000,
       })
 
       await page.getByRole('button', { name: 'Add', exact: true }).click()
 
-      // Modal should appear with its heading and task text input
-      // (seeded contact names carry a worker-namespace prefix, so match loosely)
-      const modalHeading = page.getByRole('heading', { name: /Add Task for .*Modal Test Contact/ })
+      // Modal should appear with its heading and task text input. The heading
+      // names the contact, and the manifest carries its rendered name exactly.
+      const modalHeading = page.getByRole('heading', { name: `Add Task for ${fullName}` })
       await expect(modalHeading).toBeVisible()
       await expect(page.getByPlaceholder(/Follow up/)).toBeVisible()
 
@@ -342,11 +369,13 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
     test('disables submit while task text is empty', async ({ page }) => {
       // spec: CAD-031.task-text-required-notes
-      const { ids } = await testApi.seedContacts([{ full_name: 'Validation Test Contact' }])
+      const seeded = await testApi.seedBehavior('CON-041')
+      const contactId = seeded.entities['target'].id
+      const fullName = seeded.entities['target'].name
 
-      await page.goto(`/contacts/${ids[0]}`)
+      await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
-      await expect(page.getByRole('heading', { name: 'Validation Test Contact' })).toBeVisible({
+      await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
         timeout: 15000,
       })
 
@@ -369,13 +398,14 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
     test('created task appears in the live tasks list', async ({ page }) => {
       // spec: CAD-031.created-task-appears-contact
-      // Real creation needs a Todoist provider AND the POST route is
-      // OAuth-gated (the real endpoint 404s in this env, so an unmocked
-      // waitForResponse would observe that 404). Mock the write loop:
+      // Real creation is provider-bound: CreateManualTask calls the Todoist
+      // Quick Add API before it writes anything local, so with no connected
+      // account the real POST answers 400. Mock the write loop:
       // POST → 201 created-task envelope, and the invalidation-driven
       // manual-list refetch then includes the created task.
-      const { ids } = await testApi.seedContacts([{ full_name: 'Task Create Contact' }])
-      const contactId = ids[0]
+      const seeded = await testApi.seedBehavior('CON-041')
+      const contactId = seeded.entities['target'].id
+      const fullName = seeded.entities['target'].name
       const created = makeTask(contactId, {
         id: 'task-created-1',
         content: 'Say hello to Task Create',
@@ -397,7 +427,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
       await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
-      await expect(page.getByRole('heading', { name: 'Task Create Contact' })).toBeVisible({
+      await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
         timeout: 15000,
       })
 
@@ -431,15 +461,17 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
   // it, and no in-CRM complete/dismiss control exists. Real persistence — the
   // link row actually deleted from PostgreSQL and zero outbound calls to the
   // remote provider (CAD-039) — is owned by the backend integration test
-  // TestDeleteTaskLink_IssuesNoOutboundTodoistCall; the /tasks routes are
-  // OAuth-gated, so a provider-less E2E env mocks the read + DELETE here.
+  // TestDeleteTaskLink_IssuesNoOutboundTodoistCall. The READ is mocked here
+  // because a provider-less env cannot create the linked row it returns, and the
+  // DELETE is mocked because the row it would remove is that mocked one.
   test.describe('Linked Task Row (mocked)', () => {
     const UNLINK_TITLE = 'Remove from CRM (keeps in Todoist)'
 
     test('offers unlink with confirmation and fires only the CRM-link DELETE', async ({ page }) => {
       // spec: CAD-033.unlink-behind-confirmation
-      const { ids } = await testApi.seedContacts([{ full_name: 'Unlink Accept Contact' }])
-      const contactId = ids[0]
+      const seeded = await testApi.seedBehavior('CON-041')
+      const contactId = seeded.entities['target'].id
+      const fullName = seeded.entities['target'].name
       const linked = makeTask(contactId, { id: 'task-linked-1', content: 'Mock linked task' })
       let unlinked = false
       await mockTaskLists(page, contactId, () => ({
@@ -447,9 +479,10 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
         manual: unlinked ? [] : [linked],
         completed: [],
       }))
-      // The DELETE route is OAuth-gated like the POST (the real endpoint
-      // 404s in this env and would falsely read as an outcome), so mock the
-      // CRM-link-only DELETE → 204 and ASSERT that status below.
+      // The DELETE is a purely local row delete and is NOT provider-bound, but
+      // the row it would remove is the route-injected one above, so the real
+      // endpoint would answer 404 and that would falsely read as an outcome.
+      // Mock the CRM-link-only DELETE → 204 and ASSERT that status below.
       await page.route(`**/api/v1/contacts/${contactId}/tasks/*`, async route => {
         if (route.request().method() === 'DELETE') {
           unlinked = true
@@ -495,8 +528,9 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
     test('dismissing the unlink confirmation leaves the task linked', async ({ page }) => {
       // spec: CAD-033.unlink-behind-confirmation
-      const { ids } = await testApi.seedContacts([{ full_name: 'Unlink Dismiss Contact' }])
-      const contactId = ids[0]
+      const seeded = await testApi.seedBehavior('CON-041')
+      const contactId = seeded.entities['target'].id
+      const fullName = seeded.entities['target'].name
       const linked = makeTask(contactId, { id: 'task-linked-2', content: 'Mock linked task' })
       await mockTaskLists(page, contactId, () => ({
         followup: [],
@@ -537,8 +571,9 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       // task app. The remote-survival guarantee (unlinking does not touch the
       // remote task) is CAD-039, proven deterministically by the backend
       // integration test TestDeleteTaskLink_IssuesNoOutboundTodoistCall.
-      const { ids } = await testApi.seedContacts([{ full_name: 'No Complete Contact' }])
-      const contactId = ids[0]
+      const seeded = await testApi.seedBehavior('CON-041')
+      const contactId = seeded.entities['target'].id
+      const fullName = seeded.entities['target'].name
       const linked = makeTask(contactId, { id: 'task-linked-3', content: 'Mock linked task' })
       await mockTaskLists(page, contactId, () => ({
         followup: [],

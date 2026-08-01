@@ -1,5 +1,11 @@
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page } from '@playwright/test'
 import { createTestAPI, declaredWorldSearch, TestAPI } from './helpers/test-api'
+
+// The Notes row in the contact-detail definition list, scoped so a
+// presence/absence assertion on its expand control cannot collide with another
+// section's. Same locator notepad.spec.ts uses.
+const notesRow = (page: Page) =>
+  page.locator('dl > div').filter({ has: page.getByText('Notes', { exact: true }) })
 
 // API configuration for direct backend assertions in E2E tests.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
@@ -27,15 +33,12 @@ test.describe('Contacts - TestAPI Seeded @area:contacts', () => {
   test('should use leading-normal on contact name to prevent descender clipping', async ({
     page,
   }) => {
-    // Names with descenders (g, y, p, q, j) should not be clipped
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Gregory Yancy',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Gregory Yancy`
+    // Rides CON-042's fixture, whose contact declares the DESCENDER name edge —
+    // so the name under the heading actually carries g/y/p/q rather than
+    // whatever the name generator happened to draw.
+    const seeded = await testApi.seedBehavior('CON-042')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -58,17 +61,13 @@ Key interests: Machine learning infrastructure, personal knowledge management, p
 
 Follow-up: Share the pgvector article, introduce to Sarah from the embeddings team.`
 
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Long Notes Contact',
-      },
-    ])
-
-    const contactId = ids[0]
-    // Seed notes separately via notes API
+    const seeded = await testApi.seedBehavior('NTS-007')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
+    // The note body is the claim under test, so it is written here rather than
+    // hoisted into the fixture — the declared contact deliberately starts with
+    // no note at all.
     await testApi.seedContactNote(contactId, longNotes)
-
-    const fullName = `${testApi.prefix}-Long Notes Contact`
 
     await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
@@ -76,15 +75,21 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // Wait for notes to render before checking overflow detection
     await expect(page.getByText('Met at the AI conference')).toBeVisible({ timeout: 5000 })
 
-    // Verify "Show more" button is visible (indicates notes overflow the 4-line clamp)
-    const showMoreButton = page.getByRole('button', { name: 'Show more' })
-    await expect(showMoreButton).toBeVisible({ timeout: 5000 })
+    // The expand control exists only while the page's CLIENT-SIDE overflow
+    // measurement is true (scrollHeight > clientHeight, measured once on mount
+    // and again from a ResizeObserver). On a CPU-quota-capped box that
+    // measurement can land well after the note text renders, so this assertion —
+    // the only one that depends on it — gets the same 15s budget the heading
+    // above does, and is scoped to the Notes ROW so it cannot resolve against
+    // some other section's control.
+    const showMoreButton = notesRow(page).getByRole('button', { name: 'Show more' })
+    await expect(showMoreButton).toBeVisible({ timeout: 15000 })
 
     // Click "Show more" to expand
     await showMoreButton.click()
 
     // Verify button changed to "Show less"
-    const showLessButton = page.getByRole('button', { name: 'Show less' })
+    const showLessButton = notesRow(page).getByRole('button', { name: 'Show less' })
     await expect(showLessButton).toBeVisible()
 
     // Click "Show less" to collapse
@@ -98,17 +103,10 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   test('should not show expand button for short notes', async ({ page }) => {
     const shortNotes = 'Brief note about this contact.'
 
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Short Notes Contact',
-      },
-    ])
-
-    const contactId = ids[0]
-    // Seed notes separately via notes API
+    const seeded = await testApi.seedBehavior('NTS-007')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
     await testApi.seedContactNote(contactId, shortNotes)
-
-    const fullName = `${testApi.prefix}-Short Notes Contact`
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
@@ -118,7 +116,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await expect(page.getByText(shortNotes)).toBeVisible()
 
     // Verify "Show more" button is NOT visible (notes are short)
-    await expect(page.getByRole('button', { name: 'Show more' })).not.toBeVisible()
+    await expect(notesRow(page).getByRole('button', { name: 'Show more' })).not.toBeVisible()
   })
 
   // spec: CON-053.optional-backdated-date, CON-053.interaction-posted-chosen-direction
@@ -171,33 +169,32 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
   // data or aria surface; the menuitem-visibility proof on the LAST row is the
   // deliberate, budgeted exception (CON visual-guard 2/2).
   test('should show context menu without clipping for bottom rows', async ({ page }) => {
-    // Create enough contacts to have rows near the bottom of the viewport
-    const names = Array.from({ length: 8 }, (_, i) => ({
-      full_name: `Context Menu Test ${i}`,
-      cadence: 'monthly' as const,
-    }))
-    await testApi.seedContacts(names)
+    // Rides CON-065's fixture: 21 cadence-bearing contacts under zero-padded
+    // PINNED names, so under an explicit name-ascending sort the identity of the
+    // last row on page 1 is known before the data is seeded — a strictly
+    // stronger anchor than counting whatever the list happened to return.
+    const seeded = await testApi.seedBehavior('CON-065')
+    const lastRowName = seeded.entities['p20'].name
 
-    await page.goto('/contacts')
+    // Scope to this world by search AND pin the sort: without an explicit sort
+    // the search falls back to relevance order, and the last row of page 1 is
+    // then not knowable in advance.
+    await page.goto(
+      `/contacts?search=${encodeURIComponent(declaredWorldSearch(seeded))}&sort=name&order=asc`
+    )
     await page.waitForLoadState('domcontentloaded')
 
-    // Scope to this test's own rows via search — the unscoped table can
-    // otherwise hold other workers' rows too, and first()/last() would
-    // resolve against the wrong contact.
-    const searchInput = page.getByPlaceholder('Search contacts...')
-    await searchInput.fill(`${testApi.prefix}-Context Menu Test`)
-    await searchInput.press('Enter')
-
-    // Wait for the FILTERED set before touching first()/last(): the
-    // unfiltered render satisfies a bare visibility check immediately, so
-    // last() could still grab a foreign row that vanishes when the search
-    // response lands. All 8 seeded rows visible == the filter is applied.
+    // Wait for the FILTERED page before touching last(): the unfiltered render
+    // satisfies a bare visibility check immediately, so last() could still grab
+    // a foreign row that vanishes when the search response lands. The known
+    // page-1 tail row plus a full 20-row page == the filter and sort applied.
     const rows = page.locator('tbody tr')
-    await expect(
-      page.locator('tr', { has: page.getByText(`${testApi.prefix}-Context Menu Test 7`) })
-    ).toBeVisible({ timeout: 15000 })
-    await expect(rows).toHaveCount(8)
+    await expect(page.locator('tr', { has: page.getByText(lastRowName) })).toBeVisible({
+      timeout: 15000,
+    })
+    await expect(rows).toHaveCount(20)
     const lastRow = rows.last()
+    await expect(lastRow).toContainText(lastRowName)
     const actionButton = lastRow.getByRole('button', { name: 'Contact actions' })
     await actionButton.click()
 
@@ -526,67 +523,64 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     // `search=` list request that FILTERS the results (the matching fixtures
     // render, a seeded non-matching one does not) — not merely that an input
     // exists.
-    // Seed contacts with and without cadence, plus a NON-MATCHING contact the
-    // search must filter out.
-    await testApi.seedContacts([
-      { full_name: 'FilterCadence WithWeekly', cadence: 'weekly' },
-      { full_name: 'FilterCadence WithMonthly', cadence: 'monthly' },
-      { full_name: 'FilterCadence NoCadence' },
-      { full_name: 'Unrelated Zebra' },
-    ])
+    // The declared fixture is three contacts sharing a surname — weekly, monthly
+    // and cadence-less — plus a fourth that shares neither the surname nor a
+    // cadence, which is the row the TEXT search has to remove.
+    const seeded = await testApi.seedBehavior('CON-054')
+    const weekly = seeded.entities['weekly'].name
+    const monthly = seeded.entities['monthly'].name
+    const noCadence = seeded.entities['none'].name
+    const unrelated = seeded.entities['unrelated'].name
 
     await page.goto('/contacts')
     await page.waitForLoadState('domcontentloaded')
 
-    // Two-phase search. Phase 1 searches the bare worker prefix (matches ALL
-    // four seeded fixtures) and establishes the non-matching contact IS
-    // reachable via search on this page — without this, its later absence
-    // could vacuously pass (e.g. an ignored filter leaving it on page 2 of
-    // the shared DB). Phase 2 narrows to the FilterCadence term and asserts
-    // the non-matching row disappears: only an applied text filter can
-    // remove a row that phase 1 proved present. Each response listener is
-    // registered BEFORE .fill() (a param-carrying request can fire before a
-    // listener added after the fill) and requires the EXACT search term.
+    // Two-phase search. Phase 1 searches the whole declared world (matches ALL
+    // four fixtures) and establishes the non-matching contact IS reachable via
+    // search on this page — without this, its later absence could vacuously
+    // pass (e.g. an ignored filter leaving it on page 2 of the shared DB).
+    // Phase 2 appends the SURNAME the three cadence fixtures share, and asserts
+    // the fourth row disappears: only an applied text filter can remove a row
+    // that phase 1 proved present. The literal below mirrors the surname pinned
+    // in CON-054's declaration; it has to be a standalone word, because the
+    // list search is full-text and ANDs its terms.
+    const worldTerm = declaredWorldSearch(seeded)
+    const searchTerm = `${worldTerm} Cadfilter`
     const searchInput = page.getByPlaceholder('Search contacts...')
-    const prefixResponse = page.waitForResponse(
-      resp =>
-        resp.request().method() === 'GET' &&
-        resp.url().includes('/api/v1/contacts') &&
-        new URL(resp.url()).searchParams.get('search') === testApi.prefix &&
-        !new URL(resp.url()).searchParams.has('ids_only')
-    )
-    await searchInput.fill(testApi.prefix)
-    await searchInput.press('Enter')
-    await prefixResponse
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
-      timeout: 10000,
-    })
-    await expect(page.getByText(`${testApi.prefix}-Unrelated Zebra`)).toBeVisible()
+    const listResponseFor = (term: string) =>
+      page.waitForResponse(
+        resp =>
+          resp.request().method() === 'GET' &&
+          resp.url().includes('/api/v1/contacts') &&
+          new URL(resp.url()).searchParams.get('search') === term &&
+          !new URL(resp.url()).searchParams.has('ids_only')
+      )
 
-    const searchTerm = `${testApi.prefix}-FilterCadence`
-    const searchResponse = page.waitForResponse(
-      resp =>
-        resp.request().method() === 'GET' &&
-        resp.url().includes('/api/v1/contacts') &&
-        new URL(resp.url()).searchParams.get('search') === searchTerm &&
-        !new URL(resp.url()).searchParams.has('ids_only')
-    )
+    // Each response listener is registered BEFORE .fill() (a param-carrying
+    // request can fire before a listener added after the fill) and requires the
+    // EXACT search term.
+    const worldResponse = listResponseFor(worldTerm)
+    await searchInput.fill(worldTerm)
+    await searchInput.press('Enter')
+    await worldResponse
+    await expect(page.getByText(weekly, { exact: true })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(unrelated, { exact: true })).toBeVisible()
+
+    const searchResponse = listResponseFor(searchTerm)
     await searchInput.fill(searchTerm)
     await searchInput.press('Enter')
     await searchResponse
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByText(weekly, { exact: true })).toBeVisible({ timeout: 10000 })
     // The search FILTERS: the non-matching contact phase 1 proved present is
     // now absent.
-    await expect(page.getByText(`${testApi.prefix}-Unrelated Zebra`)).not.toBeVisible()
+    await expect(page.getByText(unrelated, { exact: true })).not.toBeVisible()
 
     // Verify all 3 contacts visible with "All contacts" (default)
     const filterSelect = page.getByLabel('Filter by cadence')
     await expect(filterSelect).toHaveValue('')
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
+    await expect(page.getByText(weekly, { exact: true })).toBeVisible()
+    await expect(page.getByText(monthly, { exact: true })).toBeVisible()
+    await expect(page.getByText(noCadence, { exact: true })).toBeVisible()
 
     // Select "Has cadence" - should show only contacts with cadence
     const hasCadenceResponse = page.waitForResponse(
@@ -595,9 +589,9 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     await filterSelect.selectOption('has_cadence')
     await hasCadenceResponse
 
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).not.toBeVisible()
+    await expect(page.getByText(weekly, { exact: true })).toBeVisible()
+    await expect(page.getByText(monthly, { exact: true })).toBeVisible()
+    await expect(page.getByText(noCadence, { exact: true })).not.toBeVisible()
 
     // Select "No cadence" - should show only contacts without cadence
     const noCadenceResponse = page.waitForResponse(
@@ -606,17 +600,17 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     await filterSelect.selectOption('no_cadence')
     await noCadenceResponse
 
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).not.toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithMonthly`)).not.toBeVisible()
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
+    await expect(page.getByText(weekly, { exact: true })).not.toBeVisible()
+    await expect(page.getByText(monthly, { exact: true })).not.toBeVisible()
+    await expect(page.getByText(noCadence, { exact: true })).toBeVisible()
 
     // Reset to "All contacts" - should show all again
     await filterSelect.selectOption('')
 
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence WithWeekly`)).toBeVisible({
+    await expect(page.getByText(weekly, { exact: true })).toBeVisible({
       timeout: 10000,
     })
-    await expect(page.getByText(`${testApi.prefix}-FilterCadence NoCadence`)).toBeVisible()
+    await expect(page.getByText(noCadence, { exact: true })).toBeVisible()
   })
 })
 
@@ -678,14 +672,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
       'Met at a conference in 2024. Works in AI/ML. Very interested in personal CRM tools.'
     const updatedNotes = 'Updated notes: Follow up about collaboration opportunity.'
 
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Notes Test Contact',
-      },
-    ])
-
-    const contactId = ids[0]
-    const fullName = `${testApi.prefix}-Notes Test Contact`
+    const seeded = await testApi.seedBehavior('NTS-008')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
 
     await testApi.seedContactNote(contactId, notes)
 
@@ -711,30 +700,44 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
   })
 
   // spec: CON-056.methods-displayed-normalized, CON-056.primary-method-marked-only, CON-056.no-link-surface-plain-text
-  test('should display contact with methods and the primary marked', async ({ page }) => {
+  test('should display contact with methods and the primary marked', async ({ page, request }) => {
     // A slim display proof: seeded methods render with normalized values and
     // exactly one Primary mark. The normalization RULES themselves (per-type
     // handle/phone canonicalization) are CON-012, backend-owned and covered by
     // internal/identity/normalize_test.go — one spot check here proves the
     // display path, not the rules.
-    const fullName = `${testApi.prefix}-Playwright Contact`
-    const personalEmail = `personal-${testApi.prefix}@example.com`
-    const telegramHandle = `@@telegram-${testApi.prefix}`
-    const normalizedTelegram = telegramHandle.replace(/^@@/, '@')
-    const gchatEmail = `gchat-${testApi.prefix}@example.com`
+    //
+    // The declared fixture carries email + telegram + gchat with the primary on
+    // TELEGRAM, which is the discriminating shape: email is the default primary
+    // whenever a contact has one. The stored values are generator-derived, so
+    // they are read back off the detail API rather than restated here.
+    const seeded = await testApi.seedBehavior('CON-056')
+    const contactId = seeded.entities['methods'].id
+    const fullName = seeded.entities['methods'].name
 
-    const { ids } = await testApi.seedContacts([
-      {
-        full_name: 'Playwright Contact',
-        methods: [
-          { type: 'email', value: personalEmail },
-          { type: 'telegram', value: telegramHandle, is_primary: true },
-          { type: 'gchat', value: gchatEmail },
-        ],
-      },
-    ])
+    const detail = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+      headers: API_HEADERS,
+    })
+    expect(detail.ok()).toBe(true)
+    const methods = ((await detail.json()).data.methods ?? []) as Array<{
+      type: string
+      value: string
+    }>
+    const valueOf = (type: string) => {
+      const method = methods.find(m => m.type === type)
+      expect(method, `seeded contact should carry a ${type} method`).toBeTruthy()
+      return method!.value
+    }
+    const personalEmail = valueOf('email')
+    const gchatEmail = valueOf('gchat')
+    // The handler strips a leading '@' from a handle before the service sees it,
+    // so the STORED telegram value is bare and the '@' in the rendered string can
+    // only have come from the frontend's display normalization.
+    const storedTelegram = valueOf('telegram')
+    expect(storedTelegram.startsWith('@')).toBe(false)
+    const normalizedTelegram = `@${storedTelegram}`
 
-    await page.goto(`/contacts/${ids[0]}`)
+    await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
 
     // Seeded methods display, the handle in its normalized form.

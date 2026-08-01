@@ -1,13 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
-
 test.describe('Contact Direction Signals @area:contacts', () => {
   let testApi: TestAPI
 
@@ -19,25 +12,20 @@ test.describe('Contact Direction Signals @area:contacts', () => {
     await testApi.cleanup()
   })
 
-  test('shows direction signal timestamps after mutual interaction', async ({ page, request }) => {
+  test('shows direction signal timestamps after mutual interaction', async ({ page }) => {
     // spec: CAD-029.last-outreach-time-shown, CAD-029.last-response-time-shown
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Direction Signal Test', cadence: 'monthly' },
-    ])
-    const contactId = ids[0]
-
-    // Record a mutual interaction via API
-    const pastDate = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString()
-    await request.post(`${API_BASE_URL}/api/v1/contacts/${contactId}/interactions`, {
-      headers: API_HEADERS,
-      data: { occurred_at: pastDate, direction: 'mutual' },
-    })
+    // The declared fixture's mutual contact carries a past calendar meeting; the
+    // calendar sync records an attended event as MUTUAL, and mutual is the one
+    // direction that bumps last_outreach_at AND last_response_at together.
+    const seeded = await testApi.seedBehavior('CAD-029')
+    const contactId = seeded.entities['mutual'].id
+    const fullName = seeded.entities['mutual'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
 
     // Wait for contact data to load
-    await expect(page.getByRole('heading', { name: 'Direction Signal Test' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
       timeout: 15000,
     })
 
@@ -49,28 +37,19 @@ test.describe('Contact Direction Signals @area:contacts', () => {
     await expect(page.getByText(/Last response: \S+/)).toBeVisible()
   })
 
-  test('shows outreach but not response after outbound-only interaction', async ({
-    page,
-    request,
-  }) => {
+  test('shows outreach but not response after outbound-only interaction', async ({ page }) => {
     // spec: CAD-029.last-outreach-time-shown, CAD-029.last-response-time-shown
-    // Create a fresh contact with no prior interactions
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Outbound Only Test', cadence: 'monthly' },
-    ])
-    const contactId = ids[0]
-
-    // Record an outbound interaction
-    const pastDate = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
-    await request.post(`${API_BASE_URL}/api/v1/contacts/${contactId}/interactions`, {
-      headers: API_HEADERS,
-      data: { occurred_at: pastDate, direction: 'outbound' },
-    })
+    // The outbound-only contact carries a replayed OUTBOUND email and nothing
+    // else: an outbound bumps last_outreach_at and touches neither
+    // last_contacted nor last_response_at.
+    const seeded = await testApi.seedBehavior('CAD-029')
+    const contactId = seeded.entities['outbound-only'].id
+    const fullName = seeded.entities['outbound-only'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByRole('heading', { name: 'Outbound Only Test' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
       timeout: 15000,
     })
 
@@ -82,58 +61,40 @@ test.describe('Contact Direction Signals @area:contacts', () => {
     await expect(page.getByText('Last response:')).not.toBeVisible()
   })
 
-  test('shows awaiting-reply indicator while a follow-up pends', async ({ page, request }) => {
+  test('shows awaiting-reply indicator while a follow-up pends', async ({ page }) => {
     // spec: CAD-029.awaiting-reply-indicator-shown
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'Awaiting Reply Test', cadence: 'monthly' },
-    ])
-    const contactId = ids[0]
-
-    // A real outbound interaction populates last_outreach_at so the
-    // recent-activity block renders from real data.
-    const pastDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-    await request.post(`${API_BASE_URL}/api/v1/contacts/${contactId}/interactions`, {
-      headers: API_HEADERS,
-      data: { occurred_at: pastDate, direction: 'outbound' },
-    })
-
-    // has_pending_followup is provider-driven (the follow-up loop needs a
-    // Todoist provider), so it is unreachable by real seeding here.
-    // FETCH-AND-PATCH: fetch the real detail response and flip ONLY
-    // has_pending_followup — the rest of the detail stays real. Route
-    // installed BEFORE goto.
-    await page.route(`**/api/v1/contacts/${contactId}`, async route => {
-      const response = await route.fetch()
-      const json = await response.json()
-      json.data.has_pending_followup = true
-      await route.fulfill({ response, json })
-    })
+    // has_pending_followup is computed LIVE from the contact's follow-up-loop
+    // task row (its lifecycle + state), so the state IS reachable by seeding:
+    // the declared fixture's awaiting contact carries a real outbound and a real
+    // live follow-up hung on it, in that order, because a follow-up loop is
+    // opened BY an outbound.
+    const seeded = await testApi.seedBehavior('CAD-029')
+    const contactId = seeded.entities['awaiting'].id
+    const fullName = seeded.entities['awaiting'].name
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: 'Awaiting Reply Test' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
       timeout: 15000,
     })
 
-    // The awaiting-reply indicator renders while the follow-up pends. Target
-    // the indicator by its title attribute — the seeded contact name contains
-    // "Awaiting Reply", so a substring getByText would also match the name
-    // heading/definition (strict-mode violation).
+    // The awaiting-reply indicator renders while the follow-up pends, targeted
+    // by its title attribute because that attribute is its only text content.
     await expect(page.getByTitle('Awaiting reply')).toBeVisible()
     await expect(page.getByText(/Last outreach: \S+/)).toBeVisible()
   })
 
   test('shows explicit no-recent-activity state with no direction signals', async ({ page }) => {
     // spec: CAD-029.explicit-no-recent-activity
-    // A freshly seeded contact has no interactions and no pending follow-up,
-    // which guarantees the no-recent-activity branch (no vacuous fallback).
-    const { ids } = await testApi.seedContacts([
-      { full_name: 'No Activity Test', cadence: 'monthly' },
-    ])
+    // The quiet contact has a cadence, no interactions and no follow-up, which
+    // guarantees the no-recent-activity branch (no vacuous fallback).
+    const seeded = await testApi.seedBehavior('CAD-029')
+    const contactId = seeded.entities['quiet'].id
+    const fullName = seeded.entities['quiet'].name
 
-    await page.goto(`/contacts/${ids[0]}`)
+    await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: 'No Activity Test' })).toBeVisible({
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
       timeout: 15000,
     })
 
