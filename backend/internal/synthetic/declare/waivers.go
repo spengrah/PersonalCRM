@@ -17,15 +17,10 @@ var Waivers = map[string]string{
 	// are resolved in cadence_domain.go and dashboard.go.
 	"CAD-027": "its citing tests replace the whole overdue list with a route mock (the three sort orders are pairwise distinct only over a hand-built fixture), so they provision nothing — a reason-string conversion for the arc #759 waiver-truth pass",
 
-	// spec/calendar.yaml — 8 behaviors.
-	"CAL-019": "not yet migrated — calendar (arc #759 calendar+mac PR)",
-	"CAL-024": "not yet migrated — calendar (arc #759 calendar+mac PR)",
-	"CAL-025": "not yet migrated — calendar (arc #759 calendar+mac PR)",
-	"CAL-026": "not yet migrated — calendar (arc #759 calendar+mac PR)",
-	"CAL-027": "not yet migrated — calendar (arc #759 calendar+mac PR)",
-	"CAL-028": "not yet migrated — calendar (arc #759 calendar+mac PR)",
-	"CAL-029": "not yet migrated — calendar (arc #759 calendar+mac PR)",
-	"CAL-030": "not yet migrated — calendar (arc #759 calendar+mac PR)",
+	// spec/calendar.yaml — 2 behaviors; CAL-019/024/025/026/027/028 are resolved in
+	// calendar_domain.go.
+	"CAL-029": "its citing test replaces the calendar sync-status endpoints with route mocks, so it provisions nothing — a reason-string conversion for the arc #759 waiver-truth pass",
+	"CAL-030": "its citing test replaces the staleness endpoints with route mocks, so it provisions nothing — a reason-string conversion for the arc #759 waiver-truth pass",
 
 	// spec/contacts.yaml — 2 behaviors; the other 19 are resolved in contacts.go.
 	"CON-039": "proposed — exact tie-break determinism (CON-026) is not implemented and has no citing test",
@@ -37,9 +32,8 @@ var Waivers = map[string]string{
 	// spec/knowledge.yaml — 1 behavior; KNW-034 is resolved in knowledge_domain.go.
 	"KNW-035": "its citing test rides CON-045's declared birthday fixture, so this is a reason-string conversion — arc #759 waiver-truth pass",
 
-	// spec/mac-host.yaml — 2 behaviors.
-	"MAC-018": "not yet migrated — mac-host (arc #759 calendar+mac PR)",
-	"MAC-046": "not yet migrated — mac-host (arc #759 calendar+mac PR)",
+	// spec/mac-host.yaml — every ui-surface MAC behavior is resolved in
+	// mac_host_domain.go; nothing is owed here.
 
 	// spec/settings.yaml — 11 behaviors.
 	"SET-019": "its citing test provisions nothing at all (route-mocked), so this is a reason-string conversion — arc #759 waiver-truth pass",

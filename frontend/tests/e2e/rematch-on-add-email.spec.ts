@@ -32,26 +32,17 @@ test.describe('Rematch on add email @area:contacts', () => {
     // flag not reset) are waived in spec/calendar.yaml: both are backend
     // projection plumbing owned by rematch_integration_test.go.
     // spec: CAL-019.contact-appended-each-matching
-    const attendeeEmail = `rematch-${Date.now()}@example.com`
-
-    // Seed a contact with no email so the rematch handler has something to link to.
-    const { ids } = await testApi.seedContacts([{ full_name: 'Rematch Target' }])
-    const contactId = ids[0]
-
-    // Seed an unmatched past calendar event with the attendee email. The
-    // `unmatched` flag keeps contact_id OUT of matched_contact_ids so the
-    // event stays unlinked (absent from GET /contacts/:id/events) until rematch
-    // links it.
-    const { ids: eventIds } = await testApi.seedCalendarEvents(contactId, [
-      {
-        title: 'Rematch Meeting',
-        is_past: true,
-        days_ago: 3,
-        attendee_emails: [attendeeEmail],
-        unmatched: true,
-      },
-    ])
-    const seededEventId = eventIds[0]
+    //
+    // The declared world holds a method-less contact plus a past meeting the real
+    // calendar sync stored with an UNMATCHED attendee: the contact is absent from
+    // matched_contact_ids, so the event is absent from GET /contacts/:id/events
+    // until rematch links it. The manifest reports the attendee's address as the
+    // event's name — the generator owns it, and it is the value this flow types
+    // into the edit form.
+    const seeded = await testApi.seedBehavior('CAL-019')
+    const contactId = seeded.entities['target'].id
+    const seededEventId = seeded.entities['stored'].id
+    const attendeeEmail = seeded.entities['stored'].name
 
     // Navigate straight into the edit view via the existing ?action=edit query
     // param (same path the list-page "Edit" context menu uses).

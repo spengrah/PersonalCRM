@@ -21,56 +21,6 @@ export function getTestPrefix(testInfo: TestInfo): string {
 // Types
 // ============================================================================
 
-export interface SeedContactMethodInput {
-  type: 'email' | 'phone' | 'telegram' | 'discord' | 'twitter' | 'signal' | 'gchat' | 'whatsapp'
-  value: string
-  is_primary?: boolean
-}
-
-export interface SeedContactInput {
-  full_name: string
-  location?: string
-  // Note: notes are no longer stored on the contact table.
-  // If tests need to seed notes, call seedContactNote() separately after seeding contacts.
-  cadence?: 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'biannual' | 'annual'
-  methods?: SeedContactMethodInput[]
-  last_contacted_days_ago?: number
-}
-
-export interface SeedContactsRequest {
-  prefix: string
-  contacts: SeedContactInput[]
-}
-
-export interface SeedContactsResponse {
-  created: number
-  ids: string[]
-}
-
-export interface SeedCalendarEventInput {
-  title: string
-  location?: string
-  html_link?: string
-  is_past?: boolean
-  days_ago?: number
-  days_ahead?: number
-  attendee_emails?: string[]
-  // Seed the event with attendees but no matched_contact_ids — the caller
-  // intends to drive the rematch flow from the UI.
-  unmatched?: boolean
-}
-
-export interface SeedCalendarEventsRequest {
-  prefix: string
-  contact_id: string
-  events: SeedCalendarEventInput[]
-}
-
-export interface SeedCalendarEventsResponse {
-  created: number
-  ids: string[]
-}
-
 export interface CleanupRequest {
   prefix: string
 }
@@ -213,55 +163,6 @@ export class TestAPI {
    */
   get prefix(): string {
     return this._prefix
-  }
-
-  /**
-   * Seeds contacts in the database with full field support.
-   * Supports location, notes, cadence, methods, and backdated last_contacted.
-   * Contact names are automatically prefixed for cleanup.
-   */
-  async seedContacts(contacts: SeedContactInput[]): Promise<SeedContactsResponse> {
-    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/seed/contacts`, {
-      headers: API_HEADERS,
-      data: {
-        prefix: this.prefix,
-        contacts,
-      } satisfies SeedContactsRequest,
-    })
-
-    if (!response.ok()) {
-      const body = await response.text()
-      throw new Error(`Failed to seed contacts: ${response.status()} ${body}`)
-    }
-
-    const data = await response.json()
-    return data.data as SeedContactsResponse
-  }
-
-  /**
-   * Seeds calendar events linked to a contact.
-   * Useful for testing the Meetings component on contact pages.
-   */
-  async seedCalendarEvents(
-    contactId: string,
-    events: SeedCalendarEventInput[]
-  ): Promise<SeedCalendarEventsResponse> {
-    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/seed/calendar-events`, {
-      headers: API_HEADERS,
-      data: {
-        prefix: this.prefix,
-        contact_id: contactId,
-        events,
-      } satisfies SeedCalendarEventsRequest,
-    })
-
-    if (!response.ok()) {
-      const body = await response.text()
-      throw new Error(`Failed to seed calendar events: ${response.status()} ${body}`)
-    }
-
-    const data = await response.json()
-    return data.data as SeedCalendarEventsResponse
   }
 
   /**

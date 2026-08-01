@@ -218,9 +218,8 @@ test.describe.configure({ mode: 'serial' })
 
 | Method | Purpose |
 |--------|---------|
-| `seedBehavior()` | Seed the fixture DECLARED for a spec behavior and return its manifest (the path new tests use) |
-| `seedCalendarEvents()` | Create calendar events for a contact |
-| `seedContacts()` | Create contacts directly |
+| `seedBehavior()` | Seed the fixture DECLARED for a spec behavior and return its manifest — the only provisioning path; there is no bespoke seed endpoint left |
+| `seedContactNote()` | Write a contact's notepad note through the product's own notes API |
 | `cleanup()` | Remove all data with this test's prefix, plus every declared namespace it seeded |
 
 ### Parallel E2E Testing Gotchas
