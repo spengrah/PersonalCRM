@@ -391,9 +391,8 @@ test-e2e-local: e2e-db
 	if [ -f "$(REPO_ROOT)/frontend/.env.local" ]; then mv "$(REPO_ROOT)/frontend/.env.local" "$(REPO_ROOT)/frontend/.env.local.bak"; fi; \
 	echo "NEXT_PUBLIC_API_KEY=$$API_KEY" > "$(REPO_ROOT)/frontend/.env.local"; \
 	echo "NEXT_PUBLIC_API_URL=http://localhost:$(E2E_BACKEND_PORT)" >> "$(REPO_ROOT)/frontend/.env.local"; \
-	GREP_ARGS=""; \
-	if [ -n "$$PLAYWRIGHT_GREP" ]; then GREP_ARGS="--grep $$PLAYWRIGHT_GREP"; fi; \
-	cd "$(REPO_ROOT)/frontend" && DATABASE_URL="$$DATABASE_URL" API_KEY=$$API_KEY NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:$(E2E_BACKEND_PORT) E2E_FRONTEND_PORT="$(E2E_FRONTEND_PORT)" E2E_BACKEND_PORT="$(E2E_BACKEND_PORT)" ./node_modules/.bin/playwright test --project=chromium $$GREP_ARGS; \
+	if [ -n "$$PLAYWRIGHT_GREP" ]; then set -- --grep "$$PLAYWRIGHT_GREP"; else set --; fi; \
+	cd "$(REPO_ROOT)/frontend" && DATABASE_URL="$$DATABASE_URL" API_KEY=$$API_KEY NEXT_PUBLIC_API_KEY=$$API_KEY NEXT_PUBLIC_API_URL=http://localhost:$(E2E_BACKEND_PORT) E2E_FRONTEND_PORT="$(E2E_FRONTEND_PORT)" E2E_BACKEND_PORT="$(E2E_BACKEND_PORT)" ./node_modules/.bin/playwright test --project=chromium "$$@"; \
 	EXIT_CODE=$$?; \
 	rm -f "$(REPO_ROOT)/frontend/.env.local"; \
 	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
