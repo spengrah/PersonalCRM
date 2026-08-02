@@ -26,7 +26,7 @@ interface Harness {
 }
 
 interface HarnessOptions {
-  /** Makes the legacy prefix-shape cleanup fail, as a transient 500 would. */
+  /** Makes the prefix-shape cleanup fail, as a transient 500 would. */
   prefixCleanup?: 'ok' | 'fails'
 }
 
@@ -62,7 +62,7 @@ function harness(steps: CleanupStep[], harnessOptions: HarnessOptions = {}): Har
       if (url.endsWith('/api/v1/test/cleanup')) {
         const namespaces = options.data.namespaces as string[] | undefined
         if (!namespaces) {
-          // The legacy prefix shape cleanup() issues first.
+          // The prefix shape cleanup() issues first.
           if (harnessOptions.prefixCleanup === 'fails') {
             return jsonResponse(500, {
               success: false,
@@ -71,7 +71,7 @@ function harness(steps: CleanupStep[], harnessOptions: HarnessOptions = {}): Har
           }
           return jsonResponse(200, {
             success: true,
-            data: { deleted_contacts: 0, deleted_external_contacts: 0, deleted_calendar_events: 0 },
+            data: { deleted_contacts: 0 },
           })
         }
         cleanupCalls.push(namespaces)
@@ -228,7 +228,7 @@ describe('declared namespace cleanup', () => {
 
   /**
    * The two sweeps delete disjoint rows by unrelated mechanisms, so a failure of
-   * the legacy prefix one says nothing about the declared worlds. Returning
+   * the prefix one says nothing about the declared worlds. Returning
    * early on it would leave every declared world alive in the shared E2E
    * database, turning one test's transient 500 into an isolation failure for
    * everything that runs afterwards.

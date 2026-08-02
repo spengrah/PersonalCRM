@@ -69,17 +69,6 @@ func (q *Queries) CountActiveRiverJobsByStateBySourceForTest(ctx context.Context
 	return items, nil
 }
 
-const CountContactsByNamePrefix = `-- name: CountContactsByNamePrefix :one
-SELECT COUNT(*) FROM contact WHERE full_name LIKE $1 || '%'
-`
-
-func (q *Queries) CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error) {
-	row := q.db.QueryRow(ctx, CountContactsByNamePrefix, dollar_1)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const CountExternalContactsByDisplayNamePrefix = `-- name: CountExternalContactsByDisplayNamePrefix :one
 SELECT COUNT(*) FROM external_contact
 WHERE display_name LIKE $1 || '%'
@@ -156,21 +145,6 @@ SELECT COUNT(*) FROM river_job WHERE kind = $1
 // pollution is bounded by DeleteRiverJobsByKindAny in test cleanup.
 func (q *Queries) CountRiverJobsByKind(ctx context.Context, kind string) (int64, error) {
 	row := q.db.QueryRow(ctx, CountRiverJobsByKind, kind)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
-const CountRiverJobsByKindUnfinalized = `-- name: CountRiverJobsByKindUnfinalized :one
-SELECT COUNT(*) FROM river_job WHERE kind = $1 AND finalized_at IS NULL
-`
-
-// Test assertion — count unfinalized River jobs of the given kind.
-// Used to verify ingest enqueues the expected number of aggregator
-// jobs. River's own admin SQL is OK to query at the test boundary;
-// production code never reads river_job directly.
-func (q *Queries) CountRiverJobsByKindUnfinalized(ctx context.Context, kind string) (int64, error) {
-	row := q.db.QueryRow(ctx, CountRiverJobsByKindUnfinalized, kind)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -272,18 +246,6 @@ DELETE FROM calendar_event WHERE gcal_event_id LIKE $1 || '%'
 
 func (q *Queries) DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error) {
 	result, err := q.db.Exec(ctx, DeleteCalendarEventsByGcalEventIdPrefix, dollar_1)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const DeleteCalendarEventsByTitlePrefix = `-- name: DeleteCalendarEventsByTitlePrefix :execrows
-DELETE FROM calendar_event WHERE title LIKE $1 || '%'
-`
-
-func (q *Queries) DeleteCalendarEventsByTitlePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error) {
-	result, err := q.db.Exec(ctx, DeleteCalendarEventsByTitlePrefix, dollar_1)
 	if err != nil {
 		return 0, err
 	}

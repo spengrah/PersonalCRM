@@ -114,12 +114,6 @@ definitions:
     type: object
   handlers.CleanupRequest:
     properties:
-      host_id:
-        description: |-
-          HostID, when set, also hard-deletes every meeting_note owned by that
-          mac_host (seeded session UUIDs are random, so there is no prefix to
-          match on — cleanup is by host instead). Prefix shape only.
-        type: string
       namespaces:
         description: |-
           Namespaces are the REQUESTED namespace tokens the client seeded under.
@@ -141,11 +135,7 @@ definitions:
     type: object
   handlers.CleanupResponseData:
     properties:
-      deleted_calendar_events:
-        type: integer
       deleted_contacts:
-        type: integer
-      deleted_external_contacts:
         type: integer
       expansions:
         additionalProperties:
@@ -3734,13 +3724,12 @@ paths:
     post:
       consumes:
       - application/json
-      description: 'Delete test data. Supply EXACTLY ONE of `prefix` (bespoke shape
-        — returns the CleanupResponse fields: contacts, external contacts and calendar
-        events deleted by prefix) or `namespaces` (declared shape — returns the CleanupNamespacesResponse
-        fields: per-requested-token expansions plus a per-effective-namespace outcome).
-        `host_id` belongs to the prefix shape and is rejected alongside `namespaces`.
-        The documented 200 schema is the union of the two; a given response carries
-        one group, never both.'
+      description: 'Delete test data. Supply EXACTLY ONE of `prefix` (product-created-row
+        shape — returns the CleanupResponse field: contacts deleted by name prefix)
+        or `namespaces` (declared shape — returns the CleanupNamespacesResponse fields:
+        per-requested-token expansions plus a per-effective-namespace outcome). The
+        documented 200 schema is the union of the two; a given response carries one
+        group, never both.'
       parameters:
       - description: Cleanup request
         in: body

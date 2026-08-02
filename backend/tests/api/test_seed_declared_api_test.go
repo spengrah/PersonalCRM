@@ -61,7 +61,7 @@ func newDeclaredSeedRouter(t *testing.T) (*gin.Engine, *db.Database, context.Con
 		cadenceUpdater, assertSvc, cache, nil,
 	)
 
-	seedSvc := service.NewTestSeedService(database, repository.NewMeetingNoteRepository(database.Queries))
+	seedSvc := service.NewTestSeedService(database)
 	handler := handlers.NewTestHandler(seedSvc, service.NewTestLockService(accelerated.GetCurrentTime), database)
 
 	router := gin.New()
@@ -389,15 +389,15 @@ func TestSeedDeclaredEndpoint_FailureCarriesRecoveryMetadata(t *testing.T) {
 func TestCleanupEndpoint_DualShape(t *testing.T) {
 	router, _, ctx, contactService := newDeclaredSeedRouter(t)
 
-	t.Run("legacy prefix shape is unchanged", func(t *testing.T) {
+	t.Run("prefix shape sweeps product-created contacts", func(t *testing.T) {
 		// The prefix sweep keys on the contact's NAME, so the row is created through
 		// the production contact writer — the same way a test that owns prefix-shaped
-		// rows creates them now that no bespoke seed endpoint exists.
-		name := "legacyshape-Someone"
+		// rows creates them.
+		name := "prefixshape-Someone"
 		_, _, err := contactService.CreateContact(ctx, repository.CreateContactRequest{FullName: name}, nil)
 		require.NoError(t, err)
 
-		w := postDeclared(t, router, "/api/v1/test/cleanup", map[string]any{"prefix": "legacyshape"})
+		w := postDeclared(t, router, "/api/v1/test/cleanup", map[string]any{"prefix": "prefixshape"})
 		require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 		var envelope struct {
 			Success bool                     `json:"success"`
@@ -421,23 +421,6 @@ func TestCleanupEndpoint_DualShape(t *testing.T) {
 		require.Equal(t, declare.StatusCleaned, outcome.Status)
 		assert.GreaterOrEqual(t, outcome.Deleted["contacts"], int64(2))
 		assert.Equal(t, []string{namespace}, res.Expansions[namespace])
-	})
-
-	// host_id belongs to the prefix shape. The declared branch has no host to
-	// scope meeting-note deletion to, so a request carrying both used to validate
-	// cleanly, take the declared branch, and answer 200 — telling the caller its
-	// cleanup succeeded while the host's meeting notes were never touched. A
-	// combination whose work cannot be done must be refused, not half-honoured.
-	t.Run("rejects host_id alongside namespaces", func(t *testing.T) {
-		// A pure VALIDATION refusal: the combination is rejected before anything is
-		// read, so the host_id only has to be a well-formed uuid. Using a fresh one
-		// removes a dependency on a seeded row rather than weakening the assertion.
-		w := postDeclared(t, router, "/api/v1/test/cleanup", map[string]any{
-			"namespaces": []string{declaredAPINS(t)},
-			"host_id":    uuid.NewString(),
-		})
-		require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-		assert.Contains(t, w.Body.String(), "host_id")
 	})
 
 	t.Run("rejects an ambiguous or empty request", func(t *testing.T) {

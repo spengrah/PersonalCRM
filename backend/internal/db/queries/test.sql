@@ -19,16 +19,10 @@ DELETE FROM external_contact WHERE source_id LIKE $1 || '%';
 -- crm_contact_id/match_status preservation rules.
 DELETE FROM external_contact WHERE source = @source;
 
--- name: CountContactsByNamePrefix :one
-SELECT COUNT(*) FROM contact WHERE full_name LIKE $1 || '%';
-
 -- name: CountExternalContactsByDisplayNamePrefix :one
 SELECT COUNT(*) FROM external_contact
 WHERE display_name LIKE $1 || '%'
   AND deleted_at IS NULL;
-
--- name: DeleteCalendarEventsByTitlePrefix :execrows
-DELETE FROM calendar_event WHERE title LIKE $1 || '%';
 
 -- name: DeleteCalendarEventsByGcalEventIdPrefix :execrows
 DELETE FROM calendar_event WHERE gcal_event_id LIKE $1 || '%';
@@ -123,13 +117,6 @@ DELETE FROM river_job WHERE kind = ANY(@kinds::text[]);
 -- Test assertion — count rows with the given guid (typically 0 or 1
 -- under the partial unique index). Used by duplicate-detection tests.
 SELECT COUNT(*) FROM messages_message WHERE guid = @guid;
-
--- name: CountRiverJobsByKindUnfinalized :one
--- Test assertion — count unfinalized River jobs of the given kind.
--- Used to verify ingest enqueues the expected number of aggregator
--- jobs. River's own admin SQL is OK to query at the test boundary;
--- production code never reads river_job directly.
-SELECT COUNT(*) FROM river_job WHERE kind = @kind AND finalized_at IS NULL;
 
 -- name: CountRiverJobsByKind :one
 -- Test assertion — count ALL River jobs of the given kind (including

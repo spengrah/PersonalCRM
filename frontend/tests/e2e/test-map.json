@@ -726,7 +726,7 @@
     "tags": []
   },
   {
-    "_comment": "The service behind the PREFIX shape of /test/cleanup — the only bespoke thing left here. Same rationale and same area list as the test handlers above: every spec using testApi calls that cleanup, so the selection stays wide rather than under-selecting a shared path.",
+    "_comment": "The service behind the PREFIX shape of /test/cleanup — the product-created-row sweep. Same rationale and same area list as the test handlers above: every spec using testApi calls that cleanup, so the selection stays wide rather than under-selecting a shared path.",
     "pattern": "^backend/internal/service/test_seed_service\\.go$",
     "tags": [
       "@area:dashboard",

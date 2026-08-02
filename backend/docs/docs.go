@@ -4301,7 +4301,7 @@ const docTemplate = `{
         },
         "/test/cleanup": {
             "post": {
-                "description": "Delete test data. Supply EXACTLY ONE of ` + "`" + `prefix` + "`" + ` (bespoke shape — returns the CleanupResponse fields: contacts, external contacts and calendar events deleted by prefix) or ` + "`" + `namespaces` + "`" + ` (declared shape — returns the CleanupNamespacesResponse fields: per-requested-token expansions plus a per-effective-namespace outcome). ` + "`" + `host_id` + "`" + ` belongs to the prefix shape and is rejected alongside ` + "`" + `namespaces` + "`" + `. The documented 200 schema is the union of the two; a given response carries one group, never both.",
+                "description": "Delete test data. Supply EXACTLY ONE of ` + "`" + `prefix` + "`" + ` (product-created-row shape — returns the CleanupResponse field: contacts deleted by name prefix) or ` + "`" + `namespaces` + "`" + ` (declared shape — returns the CleanupNamespacesResponse fields: per-requested-token expansions plus a per-effective-namespace outcome). The documented 200 schema is the union of the two; a given response carries one group, never both.",
                 "consumes": [
                     "application/json"
                 ],
@@ -5012,10 +5012,6 @@ const docTemplate = `{
         "handlers.CleanupRequest": {
             "type": "object",
             "properties": {
-                "host_id": {
-                    "description": "HostID, when set, also hard-deletes every meeting_note owned by that\nmac_host (seeded session UUIDs are random, so there is no prefix to\nmatch on — cleanup is by host instead). Prefix shape only.",
-                    "type": "string"
-                },
                 "namespaces": {
                     "description": "Namespaces are the REQUESTED namespace tokens the client seeded under.\nThe server expands each to the effective (possibly re-salted) worlds, so\na client that never saw a seed response can still clean up.",
                     "type": "array",
@@ -5038,13 +5034,7 @@ const docTemplate = `{
         "handlers.CleanupResponseData": {
             "type": "object",
             "properties": {
-                "deleted_calendar_events": {
-                    "type": "integer"
-                },
                 "deleted_contacts": {
-                    "type": "integer"
-                },
-                "deleted_external_contacts": {
                     "type": "integer"
                 },
                 "expansions": {
