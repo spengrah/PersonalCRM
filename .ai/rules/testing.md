@@ -64,7 +64,7 @@ See [Layered Architecture](../guides/architecture.md#why-layered) for how these 
 - **Namespace isolation** is automatic: give each sub-test a unique namespace via `synthetic.NewHarnessForNamespace` so shared-test-DB reuse can't collide (supersedes the manual randomized-suffix pattern).
 - **Heavy replay tests are slow** (River-draining): call `testsupport.RequireLongTests(t)` and name them with the `TestSynthetic` prefix so they route onto the slow suite (see Slow-test routing in `.ai/patterns/synthetic-seed-toolkit.md`).
 
-- **E2E specs that need a seeded world** post `POST /api/v1/test/seed/declared` with a `behavior_id`, and the fixture shape is DECLARED in `backend/internal/synthetic/declare/<domain>.go` beside its spec behavior. The bespoke `/api/v1/test/seed/*` endpoints and their `TestAPI` helper methods still exist and are still the path for the not-yet-migrated specs; they are deleted once their last consumer migrates.
+- **E2E specs that need a seeded world** post `POST /api/v1/test/seed/declared` with a `behavior_id`, and the fixture shape is DECLARED in `backend/internal/synthetic/declare/<domain>.go` beside its spec behavior. This is the only provisioning path — no bespoke `/api/v1/test/seed/*` endpoint exists. A spec that creates rows through the PRODUCT (a contact POST, a note PUT) builds their identifying strings from `testApi.prefix` so `cleanup()` can find them.
 
 See [`.ai/patterns/synthetic-seed-toolkit.md`](../patterns/synthetic-seed-toolkit.md) for the factory/replay/declare how-to.
 
@@ -220,7 +220,7 @@ test.describe.configure({ mode: 'serial' })
 |--------|---------|
 | `seedBehavior()` | Seed the fixture DECLARED for a spec behavior and return its manifest — the only provisioning path; there is no bespoke seed endpoint left |
 | `seedContactNote()` | Write a contact's notepad note through the product's own notes API |
-| `cleanup()` | Remove all data with this test's prefix, plus every declared namespace it seeded |
+| `cleanup()` | Two independent sweeps, both always run: hard-delete the contacts this test created through the PRODUCT (matched on this test's name prefix), and remove every declared namespace it seeded |
 
 ### Parallel E2E Testing Gotchas
 
