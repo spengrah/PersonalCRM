@@ -230,7 +230,7 @@ func registerRoutes(deps routeDeps) {
 				logger.Info().Msg("calendar handler initialized for testing (no OAuth)")
 			}
 
-			testSeedService := service.NewTestSeedService(database, deps.MeetingNoteRepoForIngest)
+			testSeedService := service.NewTestSeedService(database)
 			testLockService := service.NewTestLockService(accelerated.GetCurrentTime)
 			// The database is passed for the DECLARED seeding path only, which
 			// drives internal/synthetic/declare from the handler with no service

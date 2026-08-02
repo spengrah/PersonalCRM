@@ -8,15 +8,6 @@ const API_HEADERS = {
   'Content-Type': 'application/json',
 }
 
-/**
- * Generates a worker-safe prefix for test data isolation.
- * Format: w{workerIndex}-{timestamp}
- * This ensures parallel test workers don't interfere with each other.
- */
-export function getTestPrefix(testInfo: TestInfo): string {
-  return `w${testInfo.workerIndex}-${Date.now()}`
-}
-
 // ============================================================================
 // Types
 // ============================================================================
@@ -96,13 +87,6 @@ export interface CleanupNamespacesResponse {
 
 export interface CleanupResponse {
   deleted_contacts: number
-  deleted_external_contacts: number
-  deleted_calendar_events: number
-}
-
-export interface TriggerErrorRequest {
-  error_type: '500' | 'panic'
-  message?: string
 }
 
 // ============================================================================
@@ -225,9 +209,9 @@ export class TestAPI {
   }
 
   /**
-   * Cleans up all test data created with this test's prefix, plus every
-   * declared namespace this test seeded.
-   * Call this in afterEach or afterAll to ensure test isolation.
+   * Cleans up the contacts this test created through the PRODUCT (they carry
+   * this test's prefix in their name), plus every declared namespace this test
+   * seeded. Call this in afterEach or afterAll to ensure test isolation.
    *
    * The two sweeps are INDEPENDENT and both always run. They delete disjoint
    * rows by unrelated mechanisms, so a failure of one says nothing about the
@@ -368,24 +352,6 @@ export class TestAPI {
     this._cleanupBudgetGranted = true
     if (this.testInfo.timeout > 0) {
       this.testInfo.setTimeout(this.testInfo.timeout + DECLARED_CLEANUP_POLL_BUDGET_MS)
-    }
-  }
-
-  /**
-   * Triggers a server error for testing error boundary handling.
-   */
-  async triggerError(errorType: '500' | 'panic' = '500', message?: string): Promise<void> {
-    const response = await this.request.post(`${API_BASE_URL}/api/v1/test/trigger-error`, {
-      headers: API_HEADERS,
-      data: {
-        error_type: errorType,
-        message,
-      } satisfies TriggerErrorRequest,
-    })
-
-    // This endpoint intentionally returns an error
-    if (response.status() !== 500) {
-      throw new Error(`Expected 500 error but got ${response.status()}`)
     }
   }
 }

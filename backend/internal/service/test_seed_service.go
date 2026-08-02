@@ -7,56 +7,44 @@ import (
 
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
-
-	"github.com/google/uuid"
 )
 
-// TestSeedService is the home for the PREFIX shape of /test/cleanup. Every
-// bespoke /test/seed/* body is gone: provisioning is declared, and the declared
-// path drives internal/synthetic/declare from the handler under its own
-// documented layering exception.
+// TestSeedService is the home for the PREFIX shape of /test/cleanup — the sweep
+// for rows the PRODUCT itself creates during a test. Provisioning is declared,
+// and the declared path drives internal/synthetic/declare from the handler under
+// its own documented layering exception.
 //
-// The prefix sweep still has work to do, so it is not a vestige: a test's own
-// rows — contacts it created through the product's own API, notes it wrote —
-// carry its prefix and belong to no declared namespace, and the prefix-delete tx +
-// its queries live in the repository so the handler never calls db.New(tx)
-// queries directly.
+// The prefix sweep is not a vestige of that migration: a contact a test creates
+// through the product's own contact form carries the test's prefix in its name
+// and belongs to no declared namespace, so a name-keyed sweep is the only route
+// that recovers it — and, unlike the product's soft delete, it hard-deletes and
+// cascades. The delete tx + its queries live in the repository so the handler
+// never calls db.New(tx) queries directly.
 //
 // It does NOT import the synthetic package: service must not, or it would close a
 // service→synthetic→replay→service cycle.
 type TestSeedService struct {
-	database        *db.Database
-	meetingNoteRepo *repository.MeetingNoteRepository
+	database *db.Database
 }
 
 // NewTestSeedService constructs the test-seed service.
-func NewTestSeedService(
-	database *db.Database,
-	meetingNoteRepo *repository.MeetingNoteRepository,
-) *TestSeedService {
-	return &TestSeedService{
-		database:        database,
-		meetingNoteRepo: meetingNoteRepo,
-	}
+func NewTestSeedService(database *db.Database) *TestSeedService {
+	return &TestSeedService{database: database}
 }
 
 // --- /test/cleanup ---------------------------------------------------------
 
-// CleanupResult reports the per-table prefix-delete counts (preserving the HTTP
-// response shape).
+// CleanupResult reports the prefix-delete count (preserving the HTTP response
+// shape).
 type CleanupResult struct {
-	DeletedContacts         int64
-	DeletedExternalContacts int64
-	DeletedCalendarEvents   int64
+	DeletedContacts int64
 }
 
-// Cleanup deletes prefix-keyed test data (contacts, external contacts, calendar
-// events) atomically, plus host-scoped meeting notes. The prefix-delete tx +
-// queries now live in the repository (SyntheticSupportRepository.CleanupByPrefix)
-// — the handler no longer calls db.New(tx) queries directly (the layer fix). The
-// LIKE-wildcard escaping stays at the service boundary, exactly where the handler
-// did it before.
-func (s *TestSeedService) Cleanup(ctx context.Context, prefix string, hostID *uuid.UUID) (CleanupResult, error) {
+// Cleanup hard-deletes the contacts whose name carries the test's prefix. The
+// delete tx + queries live in the repository (SyntheticSupportRepository.
+// CleanupByPrefix) so the handler never calls db.New(tx) queries directly. The
+// LIKE-wildcard escaping stays at the service boundary.
+func (s *TestSeedService) Cleanup(ctx context.Context, prefix string) (CleanupResult, error) {
 	var res CleanupResult
 
 	tx, err := s.database.Pool.Begin(ctx)
@@ -77,23 +65,12 @@ func (s *TestSeedService) Cleanup(ctx context.Context, prefix string, hostID *uu
 	}
 
 	res.DeletedContacts = deleted.DeletedContacts
-	res.DeletedExternalContacts = deleted.DeletedExternalContacts
-	res.DeletedCalendarEvents = deleted.DeletedCalendarEvents
-
-	// Meeting notes are seeded with random session UUIDs scoped to a host, so
-	// cleanup is by host id rather than by prefix.
-	if hostID != nil {
-		if err := s.meetingNoteRepo.TestHardDeleteByHostID(ctx, *hostID); err != nil {
-			return res, fmt.Errorf("cleanup: delete meeting notes: %w", err)
-		}
-	}
 
 	return res, nil
 }
 
 // escapeSQLLikeWildcards escapes SQL LIKE pattern wildcards (% and _) so a
 // caller-supplied prefix is matched literally (prevents LIKE-wildcard injection).
-// Moved verbatim from the /cleanup handler as part of the layer fix.
 func escapeSQLLikeWildcards(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `%`, `\%`)

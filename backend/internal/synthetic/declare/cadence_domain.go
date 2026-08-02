@@ -8,17 +8,21 @@ package declare
 // The file is named cadence_domain.go for the same reason imports_domain.go is:
 // a same-stem *_test.go pair would read as this file's test.
 //
-// The four no-fixture registrations are the honest disposition of a
-// MOCKED-SURFACE spec. Every task row contact-tasks.spec.ts asserts over is
-// injected by page.route, so a declaration there would provision the container
-// contact and could be wrong about the task shape without any assertion failing
-// — a resolution that claims coverage it does not have. The tests seed
-// CON-041's one-contact fixture for the page they render on.
+// The no-fixture registrations are the honest disposition of MOCKED SURFACES,
+// but they do not all mock the same one. CAD-030/031/033 and TDS-035 are cited
+// by contact-tasks.spec.ts: every task row it asserts over is injected by
+// page.route, so a declaration would provision the container contact and could
+// be wrong about the task shape without any assertion failing — a resolution
+// claiming coverage it does not have. Those tests do seed CON-041's
+// one-contact fixture for the page they render on. CAD-027 is different: it is
+// cited by dashboard.spec.ts, seeds nothing at all, and mocks the overdue list
+// instead. Each reason below states its own mechanism.
 func init() {
 	RegisterNone("CAD-030", "the empty-state item is the real state of any bare contact, and its test rides CON-041's fixture; the ordering, badge and completed-collapse items are asserted over route-injected task lists, because a live follow-up/manual/completed spread needs a Todoist provider the E2E environment does not have")
 	RegisterNone("CAD-031", "the kind-picker and text-validation items are asserted on a bare contact detail page riding CON-041's fixture, with no task mock at all; the created-task item is a route-injected POST plus refetch, because ContactTaskService.CreateManualTask calls the Todoist Quick Add API before it writes anything local")
 	RegisterNone("CAD-033", "unlink and the absent complete/dismiss controls are asserted over a route-injected linked row; the CRM-link DELETE is intercepted too, so no seeded task ever participates")
 	RegisterNone("TDS-035", "marker stripping and the Todoist deep link are pure rendering over route-injected task content")
+	RegisterNone("CAD-027", "the three citing tests sit in a describe whose helper fulfils /contacts/overdue with a hand-built four-card envelope; the sort is client-side over that envelope and the block references no testApi at all")
 
 	// Two overdue contacts whose relative urgency is known at declaration time,
 	// so the endpoint's ordering claim is asserted against a named pair rather

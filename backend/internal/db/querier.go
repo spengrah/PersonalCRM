@@ -211,7 +211,6 @@ type Querier interface {
 	CountContactTasksByProvider(ctx context.Context, arg CountContactTasksByProviderParams) (int64, error)
 	// Count variant of ListContacts; same WHERE shape as ListContacts.
 	CountContacts(ctx context.Context, arg CountContactsParams) (int64, error)
-	CountContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	// /health component queries over river_job.
 	//
 	// These are the production-grade reads behind the river + sync /health
@@ -293,11 +292,6 @@ type Querier interface {
 	// assertion; counting by kind alone is timing-resilient. Cross-test
 	// pollution is bounded by DeleteRiverJobsByKindAny in test cleanup.
 	CountRiverJobsByKind(ctx context.Context, kind string) (int64, error)
-	// Test assertion — count unfinalized River jobs of the given kind.
-	// Used to verify ingest enqueues the expected number of aggregator
-	// jobs. River's own admin SQL is OK to query at the test boundary;
-	// production code never reads river_job directly.
-	CountRiverJobsByKindUnfinalized(ctx context.Context, kind string) (int64, error)
 	// Test-only count of sync_provider_account river_job rows whose args JSON
 	// source = @source. Used by sync-service tests to assert enqueue/dedup
 	// behavior without inlining raw SQL (core.md rule 2).
@@ -414,7 +408,6 @@ type Querier interface {
 	// deleted_at column — removal is a hard DELETE (cf. DeleteEventsByAccount).
 	DeleteCalendarEventByGcalID(ctx context.Context, arg DeleteCalendarEventByGcalIDParams) error
 	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
-	DeleteCalendarEventsByTitlePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
 	// Contact-scoped single-row delete. Used both for removals and for the first
 	// phase of the delete-and-reinsert applied to key-changing rows.
 	DeleteContactMethodByContact(ctx context.Context, arg DeleteContactMethodByContactParams) error

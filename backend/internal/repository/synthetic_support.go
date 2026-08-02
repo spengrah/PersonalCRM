@@ -739,21 +739,18 @@ func (r *SyntheticSupportRepository) CountNonFinalRiverJobs(ctx context.Context)
 	return r.queries.CountNonFinalRiverJobs(ctx)
 }
 
-// PrefixCleanupResult reports the per-table delete counts from CleanupByPrefix so
-// the /cleanup HTTP response preserves its existing shape.
+// PrefixCleanupResult reports the delete count from CleanupByPrefix so the
+// /cleanup HTTP response preserves its existing shape.
 type PrefixCleanupResult struct {
-	DeletedContacts         int64
-	DeletedExternalContacts int64
-	DeletedCalendarEvents   int64
+	DeletedContacts int64
 }
 
-// CleanupByPrefix runs the /test/cleanup prefix deletes (contacts by name,
-// external_contact by display_name + source_id, calendar_event by title +
-// gcal_event_id). It is the repository home for what the /cleanup handler used
-// to inline via db.New(tx) — fixing the handler→queries layer violation. The
-// caller (TestSeedService) constructs this repository over a tx-scoped querier
-// so the deletes commit atomically; the LIKE-escaped prefix is supplied by the
-// caller (escaping stays at the service boundary, mirroring the old handler).
+// CleanupByPrefix hard-deletes the contacts whose name carries the test's
+// prefix — the rows a test created through the product's own contact form,
+// which belong to no declared namespace and so are recoverable only by name.
+// The caller (TestSeedService) constructs this repository over a tx-scoped
+// querier so the delete commits atomically; the LIKE-escaped prefix is supplied
+// by the caller (escaping stays at the service boundary).
 func (r *SyntheticSupportRepository) CleanupByPrefix(ctx context.Context, escapedPrefix string) (PrefixCleanupResult, error) {
 	var res PrefixCleanupResult
 	prefix := pgtype.Text{String: escapedPrefix, Valid: true}
@@ -763,26 +760,6 @@ func (r *SyntheticSupportRepository) CleanupByPrefix(ctx context.Context, escape
 		return res, err
 	}
 	res.DeletedContacts = deletedContacts
-
-	deletedExternal, err := r.queries.DeleteExternalContactsByDisplayNamePrefix(ctx, prefix)
-	if err != nil {
-		return res, err
-	}
-	deletedBySourceID, err := r.queries.DeleteExternalContactsBySourceIDPrefix(ctx, prefix)
-	if err != nil {
-		return res, err
-	}
-	res.DeletedExternalContacts = deletedExternal + deletedBySourceID
-
-	deletedCalEvents, err := r.queries.DeleteCalendarEventsByTitlePrefix(ctx, prefix)
-	if err != nil {
-		return res, err
-	}
-	deletedByGcalID, err := r.queries.DeleteCalendarEventsByGcalEventIdPrefix(ctx, prefix)
-	if err != nil {
-		return res, err
-	}
-	res.DeletedCalendarEvents = deletedCalEvents + deletedByGcalID
 
 	return res, nil
 }
