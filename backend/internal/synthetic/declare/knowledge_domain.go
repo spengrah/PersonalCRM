@@ -3,11 +3,9 @@ package declare
 import "time"
 
 // Knowledge-domain resolutions (spec/knowledge.yaml).
-//
-// KNW-035 stays waived: its citing test rides CON-045's declared birthday
-// fixture, so it is a no-fixture resolution rather than a declaration, and the
-// waiver-truth pass that converts the remaining reason strings owns that edit.
 func init() {
+	RegisterNone("KNW-035", "both then-items are cited inside the test that calls seedBehavior('CON-045'), so they read that declared birthday fixture and need none of their own")
+
 	// One contact per knowledge row the detail page can render, each beside a
 	// contact that lacks it — the only shape in which "shown only when known" is
 	// falsifiable. Location stores a namespace-PREFIXED label (the auto-created

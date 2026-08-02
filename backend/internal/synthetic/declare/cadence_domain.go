@@ -8,7 +8,7 @@ package declare
 // The file is named cadence_domain.go for the same reason imports_domain.go is:
 // a same-stem *_test.go pair would read as this file's test.
 //
-// The four no-fixture registrations are the honest disposition of a
+// The five no-fixture registrations are the honest disposition of a
 // MOCKED-SURFACE spec. Every task row contact-tasks.spec.ts asserts over is
 // injected by page.route, so a declaration there would provision the container
 // contact and could be wrong about the task shape without any assertion failing
@@ -19,6 +19,7 @@ func init() {
 	RegisterNone("CAD-031", "the kind-picker and text-validation items are asserted on a bare contact detail page riding CON-041's fixture, with no task mock at all; the created-task item is a route-injected POST plus refetch, because ContactTaskService.CreateManualTask calls the Todoist Quick Add API before it writes anything local")
 	RegisterNone("CAD-033", "unlink and the absent complete/dismiss controls are asserted over a route-injected linked row; the CRM-link DELETE is intercepted too, so no seeded task ever participates")
 	RegisterNone("TDS-035", "marker stripping and the Todoist deep link are pure rendering over route-injected task content")
+	RegisterNone("CAD-027", "the three citing tests sit in a describe whose helper fulfils /contacts/overdue with a hand-built four-card envelope; the sort is client-side over that envelope and the block references no testApi at all")
 
 	// Two overdue contacts whose relative urgency is known at declaration time,
 	// so the endpoint's ordering claim is asserted against a named pair rather

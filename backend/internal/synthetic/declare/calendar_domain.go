@@ -11,10 +11,13 @@ import "fmt"
 // location, or a title the provider has no path to — states the product cannot
 // reach and therefore states no assertion over them means anything.
 //
-// The two behaviors NOT resolved here are CAL-029 and CAL-030, whose citing tests
-// replace the endpoints under test with route mocks and provision nothing at all.
-// They keep their waivers rather than gaining declarations no test would read.
+// CAL-029 and CAL-030 are resolved as no-fixture rather than declared: their
+// citing tests replace the endpoints under test with route mocks, so a
+// declaration there would provision rows no assertion would ever read.
 func init() {
+	RegisterNone("CAL-029", "both citing tests fulfil /auth/google/accounts, /sync/status and /sync/gcal/trigger with page.route; settings-calendar.spec.ts imports only fulfill-json and issues no product write")
+	RegisterNone("CAL-030", "both citing tests fulfil /sync/staleness alongside /auth/google/accounts and /sync/status with page.route; the banner is read straight off those payloads")
+
 	// A contact with NO email at all, plus a stored meeting whose only attendee is
 	// an address nobody owns. Adding that address to the contact is what the
 	// rematch flow does, and the event joining the contact's meetings is its
