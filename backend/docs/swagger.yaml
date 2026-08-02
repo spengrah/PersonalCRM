@@ -966,18 +966,6 @@ definitions:
       project_id:
         type: string
     type: object
-  handlers.TriggerErrorRequest:
-    properties:
-      error_type:
-        enum:
-        - "500"
-        - panic
-        type: string
-      message:
-        type: string
-    required:
-    - error_type
-    type: object
   handlers.UpdateContactRequest:
     type: object
   identity.IdentifierType:
@@ -3825,33 +3813,6 @@ paths:
                   $ref: '#/definitions/api.APIError'
               type: object
       summary: Seed a spec behavior's declared fixture
-      tags:
-      - test
-  /test/trigger-error:
-    post:
-      consumes:
-      - application/json
-      description: Trigger a server error for error boundary testing
-      parameters:
-      - description: Error request
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/handlers.TriggerErrorRequest'
-      produces:
-      - application/json
-      responses:
-        "500":
-          description: Internal Server Error
-          schema:
-            allOf:
-            - $ref: '#/definitions/api.APIResponse'
-            - properties:
-                error:
-                  $ref: '#/definitions/api.APIError'
-              type: object
-      summary: Trigger error for testing
       tags:
       - test
   /todoist/labels:

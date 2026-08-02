@@ -4482,52 +4482,6 @@
                 }
             }
         },
-        "/test/trigger-error": {
-            "post": {
-                "description": "Trigger a server error for error boundary testing",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "test"
-                ],
-                "summary": "Trigger error for testing",
-                "parameters": [
-                    {
-                        "description": "Error request",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.TriggerErrorRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "allOf": [
-                                {
-                                    "$ref": "#/definitions/api.APIResponse"
-                                },
-                                {
-                                    "type": "object",
-                                    "properties": {
-                                        "error": {
-                                            "$ref": "#/definitions/api.APIError"
-                                        }
-                                    }
-                                }
-                            ]
-                        }
-                    }
-                }
-            }
-        },
         "/todoist/labels": {
             "get": {
                 "description": "Get all labels from the connected Todoist account",
@@ -6185,24 +6139,6 @@
                     "type": "string"
                 },
                 "project_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "handlers.TriggerErrorRequest": {
-            "type": "object",
-            "required": [
-                "error_type"
-            ],
-            "properties": {
-                "error_type": {
-                    "type": "string",
-                    "enum": [
-                        "500",
-                        "panic"
-                    ]
-                },
-                "message": {
                     "type": "string"
                 }
             }

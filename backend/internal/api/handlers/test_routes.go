@@ -7,7 +7,6 @@ import "github.com/gin-gonic/gin"
 //
 //   - POST /api/v1/test/seed/declared   (declared seeding — see test_declared.go)
 //   - POST /api/v1/test/cleanup         (dual-shape: prefix | namespaces)
-//   - POST /api/v1/test/trigger-error
 //   - POST /api/v1/test/lock
 //   - POST /api/v1/test/lock/:lease/renew
 //   - DELETE /api/v1/test/lock/:lease
@@ -20,7 +19,6 @@ func RegisterTestRoutes(v1 *gin.RouterGroup, handler *TestHandler) {
 		// documented layering exception, see the TestHandler doc comment.
 		testRoutes.POST("/seed/declared", handler.SeedDeclared)
 		testRoutes.POST("/cleanup", handler.Cleanup)
-		testRoutes.POST("/trigger-error", handler.TriggerError)
 		testRoutes.POST("/lock", handler.AcquireLock)
 		testRoutes.POST("/lock/:lease/renew", handler.RenewLock)
 		testRoutes.DELETE("/lock/:lease", handler.ReleaseLock)

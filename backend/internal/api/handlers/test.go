@@ -136,38 +136,3 @@ func (h *TestHandler) Cleanup(c *gin.Context) {
 		DeletedContacts: res.DeletedContacts,
 	}, nil)
 }
-
-// TriggerErrorRequest represents the request to trigger an error
-type TriggerErrorRequest struct {
-	ErrorType string `json:"error_type" validate:"required,oneof=500 panic"`
-	Message   string `json:"message,omitempty"`
-}
-
-// TriggerError triggers an error for error boundary testing
-// @Summary Trigger error for testing
-// @Description Trigger a server error for error boundary testing
-// @Tags test
-// @Accept json
-// @Produce json
-// @Param body body TriggerErrorRequest true "Error request"
-// @Failure 500 {object} api.APIResponse{error=api.APIError}
-// @Router /test/trigger-error [post]
-func (h *TestHandler) TriggerError(c *gin.Context) {
-	var req TriggerErrorRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		api.SendError(c, http.StatusBadRequest, api.ErrCodeValidation, "Invalid request body", err.Error())
-		return
-	}
-
-	message := req.Message
-	if message == "" {
-		message = "Test error triggered"
-	}
-
-	switch req.ErrorType {
-	case "panic":
-		panic(message)
-	default:
-		api.SendError(c, http.StatusInternalServerError, api.ErrCodeInternal, "Test error triggered", message)
-	}
-}
