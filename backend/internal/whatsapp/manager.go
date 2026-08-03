@@ -370,8 +370,8 @@ func (m *Manager) Stop() {
 
 	if pairing != nil {
 		pairing.cancel()
-		if pairing.sess != nil {
-			pairing.sess.client.Disconnect()
+		if sess := pairing.session(); sess != nil {
+			sess.client.Disconnect()
 		}
 	}
 	if sess != nil {
@@ -683,9 +683,9 @@ func (m *Manager) onPairSuccess(ctx context.Context, e *events.PairSuccess) {
 		// The client that completed the pairing becomes the live session: it
 		// already carries the event handler and the manual-history flags, and
 		// whatsmeow reconnects it as the linked device.
-		if m.pairing.sess != nil {
-			m.pairing.sess.paired = true
-			m.sess = m.pairing.sess
+		if sess := m.pairing.session(); sess != nil {
+			sess.paired = true
+			m.sess = sess
 		}
 		m.pairing = nil
 	}

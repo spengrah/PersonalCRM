@@ -24,12 +24,33 @@ type pairingState struct {
 	method    string
 	expiresAt time.Time
 
+	// mu guards every mutable field below. The pairing is published into
+	// Manager.pairing before its session and cancel func are attached, so a
+	// concurrent Stop() or CancelPairing() can observe it mid-construction.
 	mu       sync.Mutex
 	qrCode   *string
 	pairCode *string
-
 	cancelFn context.CancelFunc
 	sess     *session
+}
+
+func (p *pairingState) attach(sess *session, cancel context.CancelFunc) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sess = sess
+	p.cancelFn = cancel
+}
+
+func (p *pairingState) session() *session {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.sess
+}
+
+func (p *pairingState) setPairCode(code string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pairCode = &code
 }
 
 func (p *pairingState) snapshot() Pairing {
@@ -54,8 +75,11 @@ func (p *pairingState) setQRCode(code string) {
 }
 
 func (p *pairingState) cancel() {
-	if p.cancelFn != nil {
-		p.cancelFn()
+	p.mu.Lock()
+	cancel := p.cancelFn
+	p.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -107,14 +131,13 @@ func (m *Manager) StartPairing(ctx context.Context, req PairRequest) error {
 		m.abandonPairing(ctx, nil)
 		return err
 	}
-	pairing.sess = sess
 
 	// The pairing outlives the HTTP request that started it — the user has
 	// minutes to scan — so its context is detached from the caller's. The
 	// bounded wait for the first code still honours the caller's context, so a
 	// client that hangs up does not hold the request goroutine.
 	pairCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	pairing.cancelFn = cancel
+	pairing.attach(sess, cancel)
 
 	if req.Method == PairMethodQR {
 		err = m.startQRPairing(ctx, pairCtx, pairing)
@@ -133,11 +156,12 @@ func (m *Manager) StartPairing(ctx context.Context, req PairRequest) error {
 // goroutine that keeps the stored code current until a terminal item arrives.
 // The caller's request goroutine blocks only for the first code.
 func (m *Manager) startQRPairing(reqCtx, pairCtx context.Context, pairing *pairingState) error {
-	qrChan, err := pairing.sess.client.GetQRChannel(pairCtx)
+	sess := pairing.session()
+	qrChan, err := sess.client.GetQRChannel(pairCtx)
 	if err != nil {
 		return err
 	}
-	if err := pairing.sess.client.Connect(); err != nil {
+	if err := sess.client.Connect(); err != nil {
 		return err
 	}
 
@@ -201,16 +225,15 @@ func (m *Manager) runQRChannel(ctx context.Context, pairing *pairingState, qrCha
 // synchronous and returns the code directly, so no wait contract is needed;
 // completion still arrives as PairSuccess on the already-attached handler.
 func (m *Manager) startPhonePairing(ctx context.Context, pairing *pairingState, phone string) error {
-	if err := pairing.sess.client.Connect(); err != nil {
+	sess := pairing.session()
+	if err := sess.client.Connect(); err != nil {
 		return err
 	}
-	code, err := pairing.sess.client.PairPhone(ctx, phone, false, whatsmeow.PairClientChrome, pairClientDisplayName)
+	code, err := sess.client.PairPhone(ctx, phone, false, whatsmeow.PairClientChrome, pairClientDisplayName)
 	if err != nil {
 		return err
 	}
-	pairing.mu.Lock()
-	pairing.pairCode = &code
-	pairing.mu.Unlock()
+	pairing.setPairCode(code)
 	return nil
 }
 
@@ -232,10 +255,10 @@ func (m *Manager) abandonPairing(ctx context.Context, pairing *pairingState) {
 		return
 	}
 	pairing.cancel()
-	if pairing.sess != nil {
-		pairing.sess.client.Disconnect()
-		if pairing.sess.deleteDevice != nil {
-			if err := pairing.sess.deleteDevice(ctx); err != nil {
+	if sess := pairing.session(); sess != nil {
+		sess.client.Disconnect()
+		if sess.deleteDevice != nil {
+			if err := sess.deleteDevice(ctx); err != nil {
 				logger.Warn().Err(err).Msg("whatsapp: failed to delete abandoned pairing device")
 			}
 		}
