@@ -14,6 +14,8 @@ import (
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 
+	"slices"
+
 	"github.com/google/uuid"
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/proto/waCompanionReg"
@@ -114,7 +116,11 @@ type backfillReader interface {
 // paths use. Production is always the real client; tests substitute a fake so
 // no unit test dials WhatsApp.
 type sessionClient interface {
-	Connect() error
+	// ConnectContext, never Connect: the library implements Connect as
+	// ConnectContext(cli.BackgroundEventCtx), so a black-holed dial would
+	// outlive both the effect deadline and Stop — and would then block a clean
+	// shutdown behind the client's own socket lock.
+	ConnectContext(ctx context.Context) error
 	Disconnect()
 	IsConnected() bool
 	IsLoggedIn() bool
@@ -1042,6 +1048,10 @@ func (m *Manager) onPairSuccess(st *actorState, from *session, e *events.PairSuc
 		st.status.LinkSelectorPersisted = &ok
 	}
 
+	// The slot is free and the linked JID is known, so a cleanup deferred while
+	// this attempt was live can now be guarded properly and run.
+	m.flushStaleDeletes(st)
+
 	if superseded != nil {
 		// A failed selector write makes this delete MORE important, not less:
 		// two rows with a stale-or-absent selector is the one state the resolver
@@ -1098,9 +1108,24 @@ func (m *Manager) onPairError(st *actorState, from *session, e *events.PairError
 // row survives, a PairSuccess or PairError naming its JID was dispatched. That
 // makes this complete rather than best-effort.
 //
-// Two guards, because a targeted delete is a loaded weapon: never the linked
-// JID, and never the installed session's device. A stale event whose JID is the
-// live device is a re-pair report on the installed session, not an orphan.
+// THREE guards, because a targeted delete is a loaded weapon:
+//
+//  1. never the recorded linked account;
+//  2. never the installed session's device;
+//  3. never while ANY pairing attempt is in flight.
+//
+// The third is the one the first two cannot cover. A live attempt's device JID
+// is not knowable to us until its own PairSuccess arrives — the library saves
+// the row from its own goroutine and only then announces it — so while an
+// attempt is in the slot there is no way to prove a stale event's JID is not the
+// row that attempt just created. Skipping loses nothing: the same guarantee that
+// schedules this cleanup ("if a pairing-written row survives, a PairSuccess or
+// PairError naming its JID was dispatched") means the abandoned attempt's own
+// row is cleaned up by its own event once the slot is free, or adopted.
+//
+// This is the same philosophy as the unlink/pairing mutual exclusion: remove the
+// interleaving rather than fence a hazard whose evidence lives in the library's
+// goroutine rather than in our state.
 func (m *Manager) deleteStalePairDevice(st *actorState, jid types.JID) {
 	if jid.IsEmpty() {
 		return
@@ -1111,6 +1136,17 @@ func (m *Manager) deleteStalePairDevice(st *actorState, jid types.JID) {
 	}
 	if st.sess != nil && st.sess.jid != nil && st.sess.jid.ToNonAD() == jid.ToNonAD() {
 		logger.Debug().Str("jid", jid.String()).Msg("whatsapp: not deleting the installed session's device on a stale pair event")
+		return
+	}
+	if st.pairing != nil {
+		// DEFERRED, not dropped. Re-guarded and launched by the turn that frees
+		// the slot, which is also the first turn that can know the live
+		// attempt's own JID.
+		if !slices.ContainsFunc(st.pendingStaleDeletes, func(p types.JID) bool { return p.ToNonAD() == jid.ToNonAD() }) {
+			st.pendingStaleDeletes = append(st.pendingStaleDeletes, jid)
+		}
+		logger.Warn().Str("jid", jid.String()).
+			Msg("whatsapp: deferring an abandoned pairing's device delete while another attempt is in flight")
 		return
 	}
 
@@ -1129,6 +1165,20 @@ func (m *Manager) deleteStalePairDevice(st *actorState, jid types.JID) {
 		},
 		func(error) {},
 	)
+}
+
+// flushStaleDeletes retries every deferred targeted cleanup. It is called by the
+// turns that free the pairing slot, so the guards are re-evaluated against the
+// state that turn produced — including a JID it has just adopted.
+func (m *Manager) flushStaleDeletes(st *actorState) {
+	if len(st.pendingStaleDeletes) == 0 || st.pairing != nil {
+		return
+	}
+	pending := st.pendingStaleDeletes
+	st.pendingStaleDeletes = nil
+	for _, jid := range pending {
+		m.deleteStalePairDevice(st, jid)
+	}
 }
 
 // onTerminal records a permanent disconnect: the reason is persisted BEFORE the

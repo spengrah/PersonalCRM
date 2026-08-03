@@ -437,6 +437,11 @@ type fakeClient struct {
 	// call re-enter the manager's dispatcher.
 	disconnectHook func()
 
+	// blackHoleDial makes ConnectContext hang until its context is cancelled,
+	// with nothing else to release it — the shape a dial to a black-holed
+	// socket actually has.
+	blackHoleDial bool
+
 	connected bool
 	loggedIn  bool
 
@@ -470,18 +475,30 @@ func (c *fakeClient) callLog() []string {
 	return append([]string(nil), c.calls...)
 }
 
-func (c *fakeClient) Connect() error {
+// ConnectContext honours its context, exactly as the real client's does. A fake
+// with a plain Connect() could not tell a dial bounded by the effect deadline
+// from one that runs on the library's own background context — which is the
+// whole of the regression this seam exists to catch.
+func (c *fakeClient) ConnectContext(ctx context.Context) error {
 	c.record("connect")
 
 	c.mu.Lock()
 	entered, block, err := c.connectEntered, c.connectBlock, c.connectErr
+	if c.blackHoleDial && block == nil {
+		block = make(chan struct{}) // never closed: only ctx can end this dial
+	}
 	c.connectEntered = nil
 	c.mu.Unlock()
 	if entered != nil {
 		close(entered)
 	}
 	if block != nil {
-		<-block
+		select {
+		case <-block:
+		case <-ctx.Done():
+			c.record("connect_cancelled")
+			return ctx.Err()
+		}
 	}
 	if err != nil {
 		return err
@@ -851,15 +868,30 @@ func installedSession(t *testing.T, m *Manager) *session {
 // assumed to have already happened when the operation returned.
 func eventually(t *testing.T, msg string, cond func() bool) {
 	t.Helper()
-	//nolint:forbidigo // Wall-clock: effects run off the loop, so this polls real elapsed time.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) { //nolint:forbidigo // Wall-clock, as above.
+	deadline := accelerated.GetCurrentTime().Add(3 * time.Second)
+	for accelerated.GetCurrentTime().Before(deadline) {
 		if cond() {
 			return
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
 	require.FailNow(t, "condition never held: "+msg)
+}
+
+// consistently asserts that cond holds for the WHOLE window.
+//
+// Effects run off the loop, so a negative assertion taken the instant a turn
+// settles proves nothing: the wrong thing may simply not have happened yet.
+// Anything asserting that something must NOT happen has to give it the chance.
+func consistently(t *testing.T, msg string, window time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := accelerated.GetCurrentTime().Add(window)
+	for accelerated.GetCurrentTime().Before(deadline) {
+		if !cond() {
+			require.FailNow(t, "condition stopped holding: "+msg)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 // parkLoop blocks the actor inside a turn and returns the release function. It

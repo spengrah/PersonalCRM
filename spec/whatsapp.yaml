@@ -28,7 +28,7 @@ behaviors:
       - with no stored device the integration stays idle and reports that it is not paired, rather than opening a connection
       - a connection is attempted only when the stored state can be read back; a status row the integration cannot read is treated as a reason not to connect, never as an absent one
       - a first connection that fails for a transient reason keeps retrying in the background and is reported as still connecting, rather than being left down until the backend is restarted
-    provenance: [Manager.Start, LoadOrCreateDevice, Manager.ensureSyncState, InitialAutoReconnect]
+    provenance: [Manager.Start, resolveLinkedDevice, Manager.ensureSyncState, InitialAutoReconnect]
 
   - id: WHA-003
     title: The linked session survives a backend restart without re-pairing

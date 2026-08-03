@@ -18,8 +18,10 @@ package whatsapp
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 
@@ -140,6 +142,12 @@ type actorState struct {
 	unlinkInFlight bool
 	startInFlight  bool
 
+	// pendingStaleDeletes holds device JIDs whose targeted cleanup was deferred
+	// because an attempt was in flight when the proving event arrived. They are
+	// re-guarded and launched by the turn that frees the pairing slot, so a
+	// deferral is a delay rather than a lost cleanup.
+	pendingStaleDeletes []types.JID
+
 	// launchClosed is set ONLY by shutdownState, on the loop, as its last act
 	// before the loop exits. It is what lets Stop wait on m.effects without
 	// racing an Add it cannot exclude.
@@ -228,21 +236,40 @@ func (m *Manager) releaseOp(st *actorState, rel opFlags) {
 	}
 }
 
-// discardOrphans drops any session an aborted batch built. A session that
-// reaches a continuation whose fence failed was never installed anywhere, so
-// discarding it is always correct — and doing it HERE, in the loop, is what
-// makes it impossible for an operation to forget.
+// discardOrphans drops every session an aborted batch built OR connected.
 //
-// A PAIRED session is disconnected but never deleted: its device row is the
-// live link, and the only batch that carries one is the build-to-unlink branch.
+// Effects that leave a client live report their session, so this covers the
+// build-to-unlink path too: whatsmeow does not disconnect on a failed logout, so
+// a continuation that aborts on the fence would otherwise strand a connected
+// client nobody owns. Doing it HERE, in the loop, is what makes it impossible
+// for an operation to forget.
+//
+// A session the manager currently OWNS is never discarded — a fence can fail
+// for reasons that leave the batch's session installed or in the pairing slot,
+// and disconnecting it would tear down a live account. A PAIRED session is
+// disconnected but never deleted: its device row is the link itself.
 func (m *Manager) discardOrphans(st *actorState, res effectResult) {
+	owned := func(s *session) bool {
+		if st.sess == s {
+			return true
+		}
+		return st.pairing != nil && st.pairing.sess == s
+	}
+
+	var seen []*session
 	for _, step := range res.steps {
-		if step.sess == nil {
+		s := step.sess
+		if s == nil || owned(s) {
 			continue
 		}
-		fx := []effect{disconnectEffect{sess: step.sess}}
-		if !step.sess.paired {
-			fx = append(fx, deleteDeviceEffect{sess: step.sess})
+		if slices.Contains(seen, s) {
+			continue
+		}
+		seen = append(seen, s)
+
+		fx := []effect{disconnectEffect{sess: s}}
+		if !s.paired {
+			fx = append(fx, deleteDeviceEffect{sess: s})
 		}
 		m.launch(st, fx, launchDetached, fence{}, opFlags{}, nil, nil)
 	}
@@ -388,9 +415,9 @@ func unionHandles(early, final teardownHandle) teardownHandle {
 }
 
 // cachedBackfill is the last good backfill read. Status() serves it, marked
-// stale, when a fresh read times out.
+// stale, when a fresh read times out. It carries no timestamp: nothing reads
+// one, and a field nobody reads is a field that cannot be right.
 type cachedBackfill struct {
-	At  time.Time
 	Val BackfillStatus
 }
 
@@ -454,12 +481,10 @@ func (m *Manager) loop(st *actorState) {
 			m.shutdownState(st)
 			return
 		case msg := <-m.inbox:
-			//nolint:forbidigo // Wall-clock: the budget bounds real turn latency, not domain time.
-			started := time.Now()
+			started := accelerated.GetCurrentTime()
 			m.dispatch(st, msg)
 			m.publish(st)
-			//nolint:forbidigo // Wall-clock, as above.
-			if elapsed := time.Since(started); elapsed > maxTurnBudget {
+			if elapsed := accelerated.GetCurrentTime().Sub(started); elapsed > maxTurnBudget {
 				logger.Error().
 					Str("message", fmt.Sprintf("%T", msg)).
 					Dur("elapsed", elapsed).
@@ -789,11 +814,15 @@ func (e buildSessionEffect) run(ctx context.Context) stepResult {
 
 type connectEffect struct{ sess *session }
 
-func (e connectEffect) run(context.Context) stepResult {
+// run dials under the BATCH context, so a black-holed dial is bounded by
+// effectDeadline and cancelled by Stop. It reports the session it connected, so
+// a continuation that aborts on the fence hands a live socket to teardown rather
+// than orphaning it (see discardOrphans).
+func (e connectEffect) run(ctx context.Context) stepResult {
 	if e.sess == nil {
 		return stepResult{err: fmt.Errorf("whatsapp: no session to connect")}
 	}
-	return stepResult{err: e.sess.client.Connect()}
+	return stepResult{sess: e.sess, err: e.sess.client.ConnectContext(ctx)}
 }
 
 type disconnectEffect struct{ sess *session }
@@ -807,11 +836,14 @@ func (e disconnectEffect) run(context.Context) stepResult {
 
 type logoutEffect struct{ sess *session }
 
+// run reports its session for the same reason connectEffect does: whatsmeow
+// deliberately does NOT disconnect on a failed logout, so a fence-failed
+// continuation would otherwise leave a connected client nobody owns.
 func (e logoutEffect) run(ctx context.Context) stepResult {
 	if e.sess == nil {
 		return stepResult{err: fmt.Errorf("whatsapp: no session to log out")}
 	}
-	return stepResult{err: e.sess.client.Logout(ctx)}
+	return stepResult{sess: e.sess, err: e.sess.client.Logout(ctx)}
 }
 
 type openQRChannelEffect struct {
@@ -1154,8 +1186,7 @@ func (m *Manager) backfillStatus(ctx context.Context) BackfillStatus {
 		}
 	}
 	out.ObservedFloorAt = floor
-	//nolint:forbidigo // Wall-clock: this stamps when a cached read was taken, not a domain instant.
-	m.backfill.Store(&cachedBackfill{At: time.Now(), Val: out})
+	m.backfill.Store(&cachedBackfill{Val: out})
 	return out
 }
 

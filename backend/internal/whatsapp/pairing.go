@@ -383,6 +383,9 @@ func (m *Manager) abandonPairingTurn(st *actorState, p *pairingState, cause erro
 		}
 	}
 	m.retireAttempt(st, p, cause)
+	// The slot may have just become free, which is when a deferred targeted
+	// cleanup can finally be guarded against real state.
+	m.flushStaleDeletes(st)
 }
 
 // retireAttempt cancels an attempt and tears its client down. Calling a

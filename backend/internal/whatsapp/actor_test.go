@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mau.fi/whatsmeow/types"
@@ -250,7 +252,7 @@ func TestTurnBudgetHoldsForTheWorstTurn(t *testing.T) {
 	t.Cleanup(func() { close(wedged) })
 	syncStore.setErr(func(f *fakeSyncStore) { f.terminalBlock = wedged })
 
-	started := time.Now() //nolint:forbidigo // Wall-clock: the budget is real elapsed time.
+	started := accelerated.GetCurrentTime()
 	require.True(t, m.handleEventFor(nil, &events.LoggedOut{}))
 
 	done := make(chan struct{})
@@ -261,7 +263,7 @@ func TestTurnBudgetHoldsForTheWorstTurn(t *testing.T) {
 	case <-time.After(maxTurnBudget + 2*time.Second):
 		t.Fatalf("the worst turn exceeded its budget of %s", maxTurnBudget)
 	}
-	assert.Less(t, time.Since(started), maxTurnBudget+2*time.Second)
+	assert.Less(t, accelerated.GetCurrentTime().Sub(started), maxTurnBudget+2*time.Second)
 }
 
 // TestStatusSnapshotIsDeepCopied: a shallow copy would publish pointers into
@@ -320,9 +322,9 @@ func TestStatus_ReturnsCachedBackfillWhenTheRepositoryIsWedged(t *testing.T) {
 	reader.block = block
 	reader.mu.Unlock()
 
-	started := time.Now() //nolint:forbidigo // Wall-clock: the read bound is real elapsed time.
+	started := accelerated.GetCurrentTime()
 	wedged := m.Status().Backfill
-	assert.Less(t, time.Since(started), backfillReadTimeout+2*time.Second,
+	assert.Less(t, accelerated.GetCurrentTime().Sub(started), backfillReadTimeout+2*time.Second,
 		"the read is bounded, so the endpoint answers rather than hanging")
 	assert.True(t, wedged.Stale, "a value that could not be refreshed says so")
 	assert.Equal(t, 7, wedged.Pending, "the last good counts are served, never a fabricated zero")
@@ -612,10 +614,10 @@ func TestFullMailbox_ConnectedIsDroppedWithAnError(t *testing.T) {
 	release := parkLoop(t, m)
 	fillMailbox(m)
 
-	started := time.Now() //nolint:forbidigo // Wall-clock: the enqueue bound is real elapsed time.
+	started := accelerated.GetCurrentTime()
 	assert.True(t, m.handleEventFor(sess, &events.Connected{}),
 		"the handler always reports success: there is no stanza to withhold")
-	assert.Less(t, time.Since(started), 2*time.Second,
+	assert.Less(t, accelerated.GetCurrentTime().Sub(started), 2*time.Second,
 		"the drop happens at the deadline rather than blocking the node handler")
 
 	release()
@@ -657,6 +659,10 @@ func TestAbandonedPairing_LateSaveIsDeletedOnTheStalePairSuccess(t *testing.T) {
 	tests := []struct {
 		name    string
 		abandon func(t *testing.T, m *Manager, sess *session)
+		// deferred marks the case where the abandonment leaves ANOTHER attempt
+		// in the slot, so the targeted delete has to wait for that attempt to
+		// end before its guards can mean anything.
+		deferred bool
 	}{
 		{
 			name:    "cancel",
@@ -668,6 +674,7 @@ func TestAbandonedPairing_LateSaveIsDeletedOnTheStalePairSuccess(t *testing.T) {
 				expirePairing(m)
 				require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
 			},
+			deferred: true,
 		},
 		{
 			name: "terminal event on its own client",
@@ -693,6 +700,14 @@ func TestAbandonedPairing_LateSaveIsDeletedOnTheStalePairSuccess(t *testing.T) {
 			devices.add(lateJID)
 
 			require.True(t, dispatchEvent(t, m, sess, &events.PairSuccess{ID: lateJID}))
+
+			if tt.deferred {
+				m.settle()
+				require.Equal(t, []types.JID{lateJID}, devices.remaining(),
+					"while another attempt is in flight the delete waits: its JID is not yet knowable")
+				// Ending that attempt is what lets the deferred cleanup run.
+				m.CancelPairing()
+			}
 
 			eventually(t, "the late-saved device is deleted by JID", func() bool {
 				return len(devices.remaining()) == 0
@@ -740,8 +755,10 @@ func TestStalePairEvent_NeverDeletesTheLinkedDevice(t *testing.T) {
 		require.True(t, dispatchEvent(t, m, orphan, &events.PairSuccess{ID: linked}))
 		m.settle()
 
-		assert.Equal(t, []types.JID{linked}, devices.remaining(),
-			"a stale event naming the LIVE device is a re-pair report, not an orphan")
+		consistently(t, "a stale event naming the LIVE device is a re-pair report, not an orphan",
+			300*time.Millisecond, func() bool {
+				return len(devices.deletedJIDs()) == 0 && len(devices.remaining()) == 1
+			})
 	})
 
 	t.Run("jid equals the installed session's device", func(t *testing.T) {
@@ -754,8 +771,10 @@ func TestStalePairEvent_NeverDeletesTheLinkedDevice(t *testing.T) {
 		require.True(t, dispatchEvent(t, m, orphan, &events.PairError{ID: testDeviceJID, Error: errors.New("boom")}))
 		m.settle()
 
-		assert.Equal(t, []types.JID{testDeviceJID}, devices.remaining(),
-			"deleting the installed session's device would unlink a working account")
+		consistently(t, "deleting the installed session's device would unlink a working account",
+			300*time.Millisecond, func() bool {
+				return len(devices.deletedJIDs()) == 0 && len(devices.remaining()) == 1
+			})
 	})
 }
 
@@ -1165,4 +1184,168 @@ func TestSetHistoryDrainReady_DoesNotConnectByItself(t *testing.T) {
 	assert.True(t, ready, "the readiness set is complete")
 	assert.Empty(t, cli.callLog(), "and nothing connected: Start is the sole activation point")
 	assert.Equal(t, StateNotReady, m.Status().State)
+}
+
+// --- the dial is bounded by our context, not by the library's ----------------
+
+// TestConnect_HonoursTheEffectDeadline is the P0 guard.
+//
+// whatsmeow implements Connect() as ConnectContext(cli.BackgroundEventCtx), so a
+// dial made through it is bounded by the LIBRARY's lifetime and by nothing of
+// ours. Against a black-holed socket that means Start never returns and the
+// effect deadline is decorative. The fake blocks until its context is cancelled
+// and by no other means, so a regression to the context-free call hangs here
+// rather than passing quietly.
+func TestConnect_HonoursTheEffectDeadline(t *testing.T) {
+	cli := newFakeClient()
+	cli.blackHoleDial = true
+
+	m := newDeadlineManager(t, 100*time.Millisecond)
+	useClient(m, cli, true)
+
+	done := make(chan struct{})
+	go func() { defer close(done); _ = m.Start(context.Background()) }()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start never returned: the dial is not bounded by the effect deadline")
+	}
+
+	assert.Contains(t, cli.callLog(), "connect_cancelled",
+		"the dial must observe OUR cancellation, not the library's background context")
+	assert.Equal(t, StateError, m.Status().State)
+}
+
+// TestStop_UnblocksABlackHoledDial is the shutdown half of the same finding: a
+// dial nothing can cancel would keep Stop waiting on the clean tier, and would
+// then block Disconnect() behind the client's own socket lock.
+func TestStop_UnblocksABlackHoledDial(t *testing.T) {
+	cli := newFakeClient()
+	cli.blackHoleDial = true
+	entered := make(chan struct{})
+	cli.connectEntered = entered
+
+	m := newDeadlineManager(t, time.Minute) // far longer than the test may take
+	useClient(m, cli, true)
+
+	started := make(chan struct{})
+	go func() { defer close(started); _ = m.Start(context.Background()) }()
+	<-entered
+
+	stopped := make(chan struct{})
+	go func() { m.Stop(); close(stopped) }()
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not return: the in-flight dial ignored the effect context")
+	}
+	<-started
+	assert.Contains(t, cli.callLog(), "connect_cancelled")
+}
+
+// TestStalePairEvent_NeverDeletesWhileAPairingIsInFlight is the third guard.
+//
+// A live attempt's device JID is unknowable to us until its own PairSuccess
+// arrives — the library saves the row from its own goroutine and only then
+// announces it. So a delayed event from a CANCELLED attempt naming the same
+// account must not be allowed to delete the row a NEW attempt just created:
+// neither the linked-account guard nor the installed-session guard sees it,
+// because the new attempt has adopted nothing yet.
+func TestStalePairEvent_NeverDeletesWhileAPairingIsInFlight(t *testing.T) {
+	for _, name := range []string{"PairSuccess", "PairError"} {
+		t.Run(name, func(t *testing.T) {
+			jid := types.NewJID("15551234567", types.DefaultUserServer)
+
+			cli := newFakeClient()
+			m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
+			require.NoError(t, m.Start(context.Background()))
+
+			// An attempt is started and abandoned; its pair event is delayed.
+			require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+			abandoned := pairingSession(t, m)
+			require.NotNil(t, abandoned)
+			m.CancelPairing()
+
+			// A NEW attempt is started for the same account, and the library
+			// saves its row before announcing it.
+			require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+			require.NotNil(t, m.Status().Pairing)
+			devices.add(jid)
+
+			var evt any = &events.PairSuccess{ID: jid}
+			if name == "PairError" {
+				evt = &events.PairError{ID: jid, Error: errors.New("boom")}
+			}
+			require.True(t, dispatchEvent(t, m, abandoned, evt))
+			m.settle()
+
+			consistently(t, "the row belongs to the attempt in flight; a delayed event from a dead one may not remove it",
+				300*time.Millisecond, func() bool {
+					return len(devices.deletedJIDs()) == 0 && len(devices.remaining()) == 1
+				})
+			assert.NotNil(t, m.Status().Pairing, "and the live attempt is untouched")
+
+			// The deferral is a delay, not a lost cleanup: ending the live
+			// attempt frees the slot and the guarded delete finally runs.
+			m.CancelPairing()
+			eventually(t, "the deferred cleanup runs once the slot is free", func() bool {
+				return len(devices.remaining()) == 0
+			})
+		})
+	}
+}
+
+// TestDisconnect_AbortedUnlinkDoesNotOrphanTheClientItBuilt closes the
+// build-to-unlink half of the orphan rule.
+//
+// whatsmeow deliberately does NOT disconnect on a failed logout, so an unlink
+// that built and connected a client and then aborted on the fence would leave a
+// live socket owned by nobody: the manager never installed it, and the aborting
+// operation is structurally forbidden from touching state. The effects that
+// leave a client live therefore report their session, and the loop hands it to
+// teardown.
+func TestDisconnect_AbortedUnlinkDoesNotOrphanTheClientItBuilt(t *testing.T) {
+	installed := newFakeClient()
+	m, _, _, _ := newTestManager(t, installed, true)
+	require.NoError(t, m.Start(context.Background()))
+	// The installed socket is down, so the unlink builds a client of its own —
+	// which is the path that can strand one.
+	installed.setConnected(false)
+
+	built := newFakeClient()
+	built.logoutErr = logoutRemoteFailure()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	built.logoutEntered = entered
+	built.logoutBlock = release
+	m.setSessionFactory(func(context.Context, sessionRequest) (*session, error) {
+		jid := testDeviceJID
+		return fakeSessionFor(built, true, &jid), nil
+	})
+
+	unlinkErr := make(chan error, 1)
+	go func() {
+		_, err := m.Disconnect(context.Background(), false)
+		unlinkErr <- err
+	}()
+	<-entered
+	require.True(t, built.IsConnected(), "the unlink client really is connected at this point")
+
+	// A Start installs a session while the unlink is parked in its remote call.
+	replacement := newFakeClient()
+	m.setSessionFactory(func(context.Context, sessionRequest) (*session, error) {
+		jid := testDeviceJID
+		return fakeSessionFor(replacement, true, &jid), nil
+	})
+	require.NoError(t, m.Start(context.Background()))
+
+	close(release)
+	assert.ErrorIs(t, <-unlinkErr, ErrOperationSuperseded)
+
+	eventually(t, "the client the aborted unlink built is disconnected, not orphaned", func() bool {
+		return !built.IsConnected()
+	})
+	assert.NotSame(t, built, installedSession(t, m).client, "it was never installed")
 }
