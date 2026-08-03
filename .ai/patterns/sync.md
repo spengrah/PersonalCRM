@@ -119,8 +119,12 @@ Three sources call the engine today: `telegram`, `messages`, and `gchat`.
 
 **`comms_message` is the default staging store for a new chat-like source.** It
 is the shared cross-source content table (`backend/migrations/058_comms_message.up.sql`),
-already carrying Gmail and Google Chat, and every read path over it is
-source-scoped. Do NOT mint a per-source staging table.
+already carrying Gmail and Google Chat. Every aggregation read path over it is
+source-scoped — the `*ForSource` queries take the source as a parameter, so two
+sources sharing the table never see each other's rows. (Source-neutral reads do
+exist and are deliberate: `GetCommsMessageByID` and `ListCommsMessagesByContact`
+serve by-id and per-contact timeline reads across all sources.) Do NOT mint a
+per-source staging table.
 
 `telegram_message` and `messages_message` are the legacy shape, retained for the
 two sources that predate `comms_message`. They are not the template.
