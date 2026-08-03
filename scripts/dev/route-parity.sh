@@ -211,9 +211,16 @@ check_sentinels() {
       assert_absent  "gmail-registered log"     "$log"    "Gmail sync provider + rematch handler + correspondence discovery registered"
       ;;
     7)
-      # The shape boots today and registers no WhatsApp routes yet; the
-      # external-sync sentinels are what prove the shape is really the
-      # WhatsApp-enabled variant of shape 3 rather than a silent base boot.
+      # The WhatsApp route sentinel is what makes this shape DISCRIMINATE. The
+      # external-sync sentinels below come from ENABLE_EXTERNAL_SYNC, which
+      # shape 3 already sets, so on their own they would fire identically for a
+      # boot that silently ignored ENABLE_WHATSAPP_SYNC — an unfailable shape.
+      # /api/v1/whatsapp/ is registered only when the WhatsApp handler was
+      # actually built, so its absence is a real failure.
+      assert_present "whatsapp auth routes"     "$routes" "/api/v1/whatsapp/auth"
+      assert_present "whatsapp status route"    "$routes" "/api/v1/whatsapp/auth/status"
+      # These two prove the shape is the WhatsApp-enabled variant of shape 3
+      # rather than a base boot that happened to register WhatsApp.
       assert_present "google OAuth callback"    "$routes" "/api/v1/auth/google/callback"
       assert_present "todoist settings routes"  "$routes" "/api/v1/todoist/settings"
       ;;

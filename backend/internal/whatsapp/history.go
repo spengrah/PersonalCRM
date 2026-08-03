@@ -7,6 +7,7 @@ import (
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 )
@@ -64,14 +65,25 @@ func (f *clientHistoryFetcher) DownloadHistorySync(ctx context.Context, notifica
 		return nil, fmt.Errorf("whatsapp: download history sync: %w", err)
 	}
 
-	if err := f.verifyLIDMappings(ctx, chunk); err != nil {
+	if f.cli.Store == nil {
+		return nil, fmt.Errorf("%w: no device store", ErrLIDMappingsIncomplete)
+	}
+	if err := VerifyHistoryLIDMappings(ctx, f.cli.Store.LIDs, chunk); err != nil {
 		return nil, err
 	}
 	return chunk, nil
 }
 
-func (f *clientHistoryFetcher) verifyLIDMappings(ctx context.Context, chunk *waHistorySync.HistorySync) error {
-	if f.cli.Store == nil || f.cli.Store.LIDs == nil {
+// VerifyHistoryLIDMappings checks that every PN-LID mapping a history chunk
+// carried actually reads back out of the LID store, as an equality on the
+// normalized pair.
+//
+// It is exported because it is the boundary the whole LID-attribution guarantee
+// rests on: whatsmeow logs and swallows a failure to persist these mappings
+// while still reporting the download as a success, so nothing downstream may
+// assume the mappings landed.
+func VerifyHistoryLIDMappings(ctx context.Context, lids store.LIDStore, chunk *waHistorySync.HistorySync) error {
+	if lids == nil {
 		return fmt.Errorf("%w: no LID store", ErrLIDMappingsIncomplete)
 	}
 
@@ -91,7 +103,7 @@ func (f *clientHistoryFetcher) verifyLIDMappings(ctx context.Context, chunk *waH
 			return fmt.Errorf("%w: unparseable LID %q: %w", ErrLIDMappingsIncomplete, mapping.GetLidJID(), err)
 		}
 
-		stored, err := f.cli.Store.LIDs.GetPNForLID(ctx, lid)
+		stored, err := lids.GetPNForLID(ctx, lid)
 		if err != nil {
 			return fmt.Errorf("%w: reading back %s: %w", ErrLIDMappingsIncomplete, lid, err)
 		}

@@ -12,6 +12,19 @@
 | iCloud Contacts | `icloud_contacts` | `push` | `backend/internal/icloudcontacts/provider.go` |
 | Phone & FaceTime | `phone_calls` | `push` | `backend/internal/phonecalls/provider.go` |
 
+### Manager-driven sources (NOT in the provider registry)
+
+Telegram and WhatsApp are **not** sync providers. Each is a long-lived
+in-process client owned by a manager (`backend/internal/telegram`,
+`backend/internal/whatsapp`), constructed in its own `wire_<source>.go` under
+its feature flag, with no `providerRegistry.Register()` call and no scheduler
+tick. Each keeps an `external_sync_state` row purely as a status carrier
+(`Enabled: false`), so the settings page and the sync-staleness watchdog can see
+the connection without the scheduler ever polling it. `managerDrivenSources` in
+`backend/internal/service/staleness.go` is the set that gets `sync_error`
+evaluated regardless of `ENABLE_EXTERNAL_SYNC` and is excluded from
+`sync_stale` — neither source has a periodic sync to fall behind on.
+
 The poll-strategy providers register via `providerRegistry.Register()` in
 the external-sync wire files (`backend/cmd/crm-api/wire_google.go` for
 gcontacts/gcal/gmail/gchat, `wire_todoist.go` for todoist), orchestrated by

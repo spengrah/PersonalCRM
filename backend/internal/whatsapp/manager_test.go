@@ -58,7 +58,7 @@ func TestApplyDeviceProps_DisablesInlineInitialPayload(t *testing.T) {
 // and deletes our one-shot history behind our back; with AddEventHandler
 // instead of the WithSuccessStatus variant, a false return is swallowed.
 func TestNewClient_SetsManualHistoryFlags(t *testing.T) {
-	m := NewManager(nil, newWALogger("whatsapp-test"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
+	m := NewManager(nil, NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
 	cli := m.newClient(&store.Device{})
 	require.NotNil(t, cli)
 
@@ -73,7 +73,7 @@ func TestNewClient_SetsManualHistoryFlags(t *testing.T) {
 // TestManager_SynchronousAckEnabled is one line and it is the whole durability
 // premise for live messages.
 func TestManager_SynchronousAckEnabled(t *testing.T) {
-	m := NewManager(nil, newWALogger("whatsapp-test"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
+	m := NewManager(nil, NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
 	assert.True(t, m.newClient(&store.Device{}).SynchronousAck)
 }
 
@@ -118,7 +118,7 @@ func TestStart_RefusesWhenNotReady(t *testing.T) {
 		{
 			name: "missing history recorder",
 			build: func() *Manager {
-				m := NewManager(nil, newWALogger("t"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
+				m := NewManager(nil, NewWALogger("t"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
 				m.SetIngestor(&fakeIngestor{})
 				m.SetHistoryDrainReady()
 				m.newSession = func(context.Context, bool) (*session, error) {
@@ -130,7 +130,7 @@ func TestStart_RefusesWhenNotReady(t *testing.T) {
 		{
 			name: "drain not ready",
 			build: func() *Manager {
-				m := NewManager(nil, newWALogger("t"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
+				m := NewManager(nil, NewWALogger("t"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
 				m.SetIngestor(&fakeIngestor{})
 				m.SetHistoryRecorder(&fakeRecorder{})
 				m.newSession = func(context.Context, bool) (*session, error) {
@@ -174,7 +174,7 @@ func TestDefaultIngestor_RefusesAndWithholdsAck(t *testing.T) {
 	err := refusingIngestor{}.IngestMessage(context.Background(), IngestedMessage{})
 	assert.ErrorIs(t, err, ErrIngestNotWired)
 
-	m := NewManager(nil, newWALogger("t"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
+	m := NewManager(nil, NewWALogger("t"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
 	m.SetHistoryRecorder(&fakeRecorder{})
 	assert.False(t, m.handleEvent(newMessageEvent("msg-1")),
 		"the default ingestor must withhold the ack, not swallow the message")
@@ -439,7 +439,7 @@ func TestHandleEvent_HistoryNotificationRecordFailureWithholdsAck(t *testing.T) 
 }
 
 func TestHandleEvent_HistoryNotificationWithoutRecorderWithholdsAck(t *testing.T) {
-	m := NewManager(nil, newWALogger("t"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
+	m := NewManager(nil, NewWALogger("t"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
 	assert.False(t, m.handleEvent(newHistoryNotificationEvent("proto-1", nil)),
 		"a missing recorder must never ack a one-shot history chunk away")
 }

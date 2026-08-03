@@ -243,6 +243,16 @@ func evaluateHeartbeatBreaches(now time.Time, cfg config.StalenessConfig, hosts 
 // row are excluded from sync_stale (they never write last_successful_sync_at);
 // telegram IS evaluated for sync_error (its manager runs independent of the
 // external-sync flag).
+
+// managerDrivenSources are the sources whose connection is owned by a
+// long-lived in-process manager rather than by the polling scheduler. Their
+// rows carry a connection status the user needs to see even when external sync
+// is off, and they never have a "last successful sync" to go stale against.
+var managerDrivenSources = map[string]struct{}{
+	"telegram": {},
+	"whatsapp": {},
+}
+
 func evaluateSyncStateBreaches(
 	now time.Time,
 	cfg config.StalenessConfig,
@@ -254,22 +264,22 @@ func evaluateSyncStateBreaches(
 		if !st.Enabled {
 			continue
 		}
-		isTelegram := st.Source == "telegram"
+		_, isManagerDriven := managerDrivenSources[st.Source]
 		isPush := st.Strategy == repository.SyncStrategyPush
 
-		// sync_stale: enabled, non-push, non-telegram pull rows, gated on the
-		// external-sync feature flag.
-		if cfg.PullThreshold != 0 && !isPush && !isTelegram && externalSyncEnabled {
+		// sync_stale: enabled, non-push, non-manager-driven pull rows, gated on
+		// the external-sync feature flag.
+		if cfg.PullThreshold != 0 && !isPush && !isManagerDriven && externalSyncEnabled {
 			if c, ok := evalSyncStale(now, cfg, st); ok {
 				out = append(out, c)
 			}
 		}
 
 		// sync_error: enabled rows in 'error' status. Pull rows are gated on
-		// the feature flag; the telegram row is always evaluated. Push rows
+		// the feature flag; a manager-driven row is always evaluated. Push rows
 		// never reach status='error' (they have no Sync run) so they are
 		// excluded structurally by the status check below.
-		if cfg.ErrorMinCount != 0 && (externalSyncEnabled || isTelegram) {
+		if cfg.ErrorMinCount != 0 && (externalSyncEnabled || isManagerDriven) {
 			if c, ok := evalSyncError(now, cfg, st); ok {
 				out = append(out, c)
 			}

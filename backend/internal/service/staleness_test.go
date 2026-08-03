@@ -628,3 +628,76 @@ func TestHumanizeAge(t *testing.T) {
 		}
 	}
 }
+
+// TestStaleness_WhatsAppErrorEvaluatedAsManagerDriven pins the generalization of
+// the manager-driven carve-out. WhatsApp's connection is owned by a long-lived
+// in-process manager, so a disconnected session has to reach the watchdog even
+// when external sync is off — that is what makes "degrades to a visible
+// disconnected status" true through the watchdog and not only through the
+// settings page.
+func TestStaleness_WhatsAppErrorEvaluatedAsManagerDriven(t *testing.T) {
+	cfg := stalenessTestConfig()
+	st := makeSyncState("whatsapp", func(s *repository.SyncState) {
+		s.Strategy = repository.SyncStrategyPush
+		s.Status = repository.SyncStatusError
+		s.ErrorCount = 3
+		s.LastSuccessfulSyncAt = nil
+		s.CreatedAt = fixedNow.Add(-30 * 24 * time.Hour)
+	})
+	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{st}, nil), "whatsapp", repository.BreachTypeSyncError) == nil {
+		t.Fatal("whatsapp error row must breach on count regardless of the external-sync flag")
+	}
+}
+
+// TestStaleness_WhatsAppExcludedFromSyncStale: WhatsApp never writes a
+// last_successful_sync_at, so evaluating it for staleness would be a permanent
+// false positive — the same reason Telegram is excluded.
+func TestStaleness_WhatsAppExcludedFromSyncStale(t *testing.T) {
+	cfg := stalenessTestConfig()
+	st := makeSyncState("whatsapp", func(s *repository.SyncState) {
+		s.Strategy = repository.SyncStrategyFetchAll
+		s.LastSuccessfulSyncAt = nil
+		s.CreatedAt = fixedNow.Add(-365 * 24 * time.Hour)
+	})
+	got := evaluateBreaches(fixedNow, cfg, true, []repository.SyncState{st}, nil)
+	if findCandidate(got, "whatsapp", repository.BreachTypeSyncStale) != nil {
+		t.Fatal("whatsapp must be excluded from sync_stale")
+	}
+}
+
+// TestStaleness_TelegramBehaviorUnchanged pins that widening the carve-out from
+// a boolean to a set left Telegram bit-identical: excluded from sync_stale,
+// always evaluated for sync_error.
+func TestStaleness_TelegramBehaviorUnchanged(t *testing.T) {
+	cfg := stalenessTestConfig()
+
+	stale := makeSyncState("telegram", func(s *repository.SyncState) {
+		s.Strategy = repository.SyncStrategyFetchAll
+		s.LastSuccessfulSyncAt = nil
+		s.CreatedAt = fixedNow.Add(-365 * 24 * time.Hour)
+	})
+	if findCandidate(evaluateBreaches(fixedNow, cfg, true, []repository.SyncState{stale}, nil), "telegram", repository.BreachTypeSyncStale) != nil {
+		t.Fatal("telegram must still be excluded from sync_stale")
+	}
+
+	errored := makeSyncState("telegram", func(s *repository.SyncState) {
+		s.Strategy = repository.SyncStrategyFetchAll
+		s.Status = repository.SyncStatusError
+		s.ErrorCount = 3
+		s.LastSuccessfulSyncAt = nil
+		s.CreatedAt = fixedNow.Add(-30 * 24 * time.Hour)
+	})
+	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{errored}, nil), "telegram", repository.BreachTypeSyncError) == nil {
+		t.Fatal("telegram error row must still breach with the external-sync flag off")
+	}
+
+	// The negative control: an ordinary pull source is still gated on the flag.
+	other := makeSyncState("gcal", func(s *repository.SyncState) {
+		s.Status = repository.SyncStatusError
+		s.ErrorCount = 3
+		s.LastSuccessfulSyncAt = ptrTime(fixedNow.Add(-100 * time.Hour))
+	})
+	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{other}, nil), "gcal", repository.BreachTypeSyncError) != nil {
+		t.Fatal("a non-manager-driven source must stay gated on the external-sync flag")
+	}
+}

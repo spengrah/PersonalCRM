@@ -16,10 +16,10 @@ type waLogger struct {
 	module string
 }
 
-// newWALogger returns the whatsmeow logger for a top-level module. Every line
+// NewWALogger returns the whatsmeow logger for a top-level module. Every line
 // it emits is prefixed "whatsapp:" so WhatsApp traffic is greppable in a log
 // stream shared with the rest of the backend.
-func newWALogger(module string) waLog.Logger {
+func NewWALogger(module string) waLog.Logger {
 	return &waLogger{module: module}
 }
 

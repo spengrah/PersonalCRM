@@ -254,6 +254,21 @@ func run() int {
 		defer telegramManager.Stop()
 	}
 
+	// WhatsApp integration. Config validation already refuses a WhatsApp-on /
+	// external-sync-off configuration, so no second gate is needed here. A zero
+	// whatsappStack reproduces the nil manager/handler when disabled.
+	var whatsappStk whatsappStack
+	if cfg.Features.EnableWhatsAppSync {
+		whatsappStk = buildWhatsApp(ctx, cfg, database)
+	}
+	whatsappManager := whatsappStk.Manager
+	whatsappHandler := whatsappStk.Handler
+	// Same rationale as Telegram's: the Stop defer lives here so it fires on
+	// run() return, not when the wire function returns.
+	if whatsappManager != nil {
+		defer whatsappManager.Stop()
+	}
+
 	// Wire Telegram post-import hook (if both Telegram and imports are enabled)
 	if telegramManager != nil && importHandler != nil {
 		importHandler.SetPostImportHook(telegramManager)
@@ -340,6 +355,7 @@ func run() int {
 		GoogleOAuthService:       googleOAuthService,
 		TodoistHandler:           todoistHandler,
 		TelegramHandler:          telegramHandler,
+		WhatsAppHandler:          whatsappHandler,
 		SyncHandler:              syncHandler,
 		IdentityHandler:          identityHandler,
 		ContactTaskHandler:       contactTaskHandler,

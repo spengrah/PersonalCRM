@@ -625,6 +625,18 @@
     "tags": ["@area:settings", "@area:contacts"]
   },
   {
+    "pattern": "^backend/internal/api/handlers/whatsapp\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/whatsapp_routes\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/whatsapp_dto\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
     "pattern": "^backend/internal/service/(email|gchat)_reconcile\\.go$",
     "tags": ["@area:settings", "@area:contacts"]
   },

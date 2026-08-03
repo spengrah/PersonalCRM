@@ -27,7 +27,7 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 // plan names: whatsmeow accepts only its own tiny logger interface, and a
 // mismatch is a build failure rather than a runtime one.
 func TestWALogger_SatisfiesWhatsmeowInterface(t *testing.T) {
-	l := newWALogger("whatsapp")
+	l := NewWALogger("whatsapp")
 	require.NotNil(t, l)
 	require.Implements(t, (*waLog.Logger)(nil), l)
 }
@@ -35,7 +35,7 @@ func TestWALogger_SatisfiesWhatsmeowInterface(t *testing.T) {
 func TestWALogger_SubCarriesBothPrefixes(t *testing.T) {
 	buf := captureLogs(t)
 
-	root := newWALogger("whatsapp")
+	root := NewWALogger("whatsapp")
 	sub := root.Sub("Client")
 	require.NotNil(t, sub)
 
@@ -50,7 +50,7 @@ func TestWALogger_SubCarriesBothPrefixes(t *testing.T) {
 func TestWALogger_SubNestsRatherThanReplaces(t *testing.T) {
 	buf := captureLogs(t)
 
-	newWALogger("whatsapp").Sub("Client").Sub("Recv").Warnf("stanza dropped")
+	NewWALogger("whatsapp").Sub("Client").Sub("Recv").Warnf("stanza dropped")
 
 	out := buf.String()
 	assert.Contains(t, out, "Client.Recv",
@@ -71,7 +71,7 @@ func TestWALogger_LevelsMapToZerologLevels(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := captureLogs(t)
-			tt.emit(newWALogger("whatsapp"))
+			tt.emit(NewWALogger("whatsapp"))
 			assert.Contains(t, buf.String(), tt.wantLevel,
 				"whatsmeow debug must land on zerolog debug so LOG_LEVEL=warn silences it in production")
 		})

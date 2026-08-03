@@ -4789,6 +4789,321 @@
                     }
                 }
             }
+        },
+        "/whatsapp/auth": {
+            "delete": {
+                "description": "Unlink the WhatsApp device. Local credentials are kept when the remote unlink fails, so the user can retry; ?force=true clears them locally without contacting WhatsApp and returns a warning that the device must be unlinked from the phone.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "whatsapp"
+                ],
+                "summary": "Disconnect WhatsApp",
+                "parameters": [
+                    {
+                        "type": "boolean",
+                        "description": "Clear local credentials without contacting WhatsApp",
+                        "name": "force",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.WhatsAppDisconnectResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/whatsapp/auth/cancel": {
+            "post": {
+                "description": "Abort an in-flight WhatsApp pairing attempt. Idempotent.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "whatsapp"
+                ],
+                "summary": "Cancel WhatsApp pairing",
+                "responses": {
+                    "204": {
+                        "description": "Pairing cancelled"
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/whatsapp/auth/start": {
+            "post": {
+                "description": "Begin linking a WhatsApp account by QR code or phone pairing code. The first code is returned in the status body; poll GET /whatsapp/auth/status for refreshed codes.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "whatsapp"
+                ],
+                "summary": "Start WhatsApp pairing",
+                "parameters": [
+                    {
+                        "description": "Pairing request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.WhatsAppPairRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Accepted",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.WhatsAppStatusResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "504": {
+                        "description": "Gateway Timeout",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/whatsapp/auth/status": {
+            "get": {
+                "description": "Report the WhatsApp connection state, the linked account when paired, any in-flight pairing code, and the history-backfill counts. Absent (404) when the feature is disabled.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "whatsapp"
+                ],
+                "summary": "Get WhatsApp status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.WhatsAppStatusResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -6145,6 +6460,128 @@
         },
         "handlers.UpdateContactRequest": {
             "type": "object"
+        },
+        "handlers.WhatsAppBackfillResponse": {
+            "type": "object",
+            "properties": {
+                "dropped_inline_chunks": {
+                    "description": "DroppedInlineChunks counts bootstrap chunks the server delivered with\nhistory embedded inline against our explicit non-inline request. Those\nare dropped un-projected rather than persisted, so a non-zero count is a\nvisible, accepted gap in backfill.",
+                    "type": "integer"
+                },
+                "failed": {
+                    "type": "integer"
+                },
+                "observed_floor_at": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "pending": {
+                    "type": "integer"
+                },
+                "processing": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.WhatsAppDisconnectResponse": {
+            "type": "object",
+            "properties": {
+                "already_unlinked": {
+                    "description": "AlreadyUnlinked is true when the device was confirmed gone server-side\nbefore the call, so no remote unlink was attempted.",
+                    "type": "boolean"
+                },
+                "forced": {
+                    "description": "Forced is true when local credentials were cleared without server\nconfirmation.",
+                    "type": "boolean"
+                },
+                "remote_unlinked": {
+                    "description": "RemoteUnlinked is true when this call logged the device out server-side.",
+                    "type": "boolean"
+                },
+                "warning": {
+                    "description": "Warning is set when the user must finish the unlink from their phone.",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.WhatsAppPairRequest": {
+            "type": "object",
+            "required": [
+                "method"
+            ],
+            "properties": {
+                "method": {
+                    "description": "Method is \"qr\" or \"phone\".",
+                    "type": "string",
+                    "enum": [
+                        "qr",
+                        "phone"
+                    ]
+                },
+                "phone": {
+                    "description": "Phone is required when Method is \"phone\", in E.164 form (+15551234567).",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.WhatsAppPairingResponse": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "method": {
+                    "type": "string"
+                },
+                "pair_code": {
+                    "description": "PairCode is the 8-character code the user types on their phone.",
+                    "type": "string"
+                },
+                "qr_code": {
+                    "description": "QRCode is the raw whatsmeow code string; the client renders the image.",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.WhatsAppStatusResponse": {
+            "type": "object",
+            "properties": {
+                "backfill": {
+                    "$ref": "#/definitions/handlers.WhatsAppBackfillResponse"
+                },
+                "banned_until": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "configured": {
+                    "type": "boolean"
+                },
+                "connected_at": {
+                    "type": "string",
+                    "format": "date-time"
+                },
+                "jid": {
+                    "type": "string"
+                },
+                "pairing": {
+                    "$ref": "#/definitions/handlers.WhatsAppPairingResponse"
+                },
+                "phone_number": {
+                    "type": "string"
+                },
+                "push_name": {
+                    "type": "string"
+                },
+                "reason": {
+                    "description": "Reason carries the machine-readable detail for not_ready, disconnected,\ndisconnect_failed and error.",
+                    "type": "string"
+                },
+                "state": {
+                    "description": "State is one of not_ready, not_paired, pairing, connecting, connected,\nreconnecting, disconnected, disconnect_failed, error.",
+                    "type": "string"
+                }
+            }
         },
         "identity.IdentifierType": {
             "type": "string",

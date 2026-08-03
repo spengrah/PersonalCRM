@@ -1,0 +1,198 @@
+package handlers
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"time"
+
+	"personal-crm/backend/internal/api"
+	wapkg "personal-crm/backend/internal/whatsapp"
+
+	"github.com/gin-gonic/gin"
+)
+
+// WhatsAppManager is the seam the handler depends on, so the endpoint contract
+// can be tested without a whatsmeow client. The production implementation is
+// *whatsapp.Manager.
+type WhatsAppManager interface {
+	Status() wapkg.Status
+	StartPairing(ctx context.Context, req wapkg.PairRequest) error
+	CancelPairing()
+	Disconnect(ctx context.Context, force bool) (*wapkg.DisconnectResult, error)
+}
+
+// WhatsAppHandler serves the WhatsApp pairing and status surface.
+type WhatsAppHandler struct {
+	manager WhatsAppManager
+}
+
+// NewWhatsAppHandler creates a new WhatsApp handler.
+func NewWhatsAppHandler(manager WhatsAppManager) *WhatsAppHandler {
+	return &WhatsAppHandler{manager: manager}
+}
+
+// StartPairing begins linking a WhatsApp account
+// @Summary Start WhatsApp pairing
+// @Description Begin linking a WhatsApp account by QR code or phone pairing code. The first code is returned in the status body; poll GET /whatsapp/auth/status for refreshed codes.
+// @Tags whatsapp
+// @Accept json
+// @Produce json
+// @Param request body WhatsAppPairRequest true "Pairing request"
+// @Success 202 {object} api.APIResponse{data=WhatsAppStatusResponse}
+// @Failure 400 {object} api.APIResponse{error=api.APIError}
+// @Failure 409 {object} api.APIResponse{error=api.APIError}
+// @Failure 500 {object} api.APIResponse{error=api.APIError}
+// @Failure 503 {object} api.APIResponse{error=api.APIError}
+// @Failure 504 {object} api.APIResponse{error=api.APIError}
+// @Router /whatsapp/auth/start [post]
+func (h *WhatsAppHandler) StartPairing(c *gin.Context) {
+	if h.manager == nil {
+		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		return
+	}
+
+	var req WhatsAppPairRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendValidationError(c, "Invalid pairing request", err.Error())
+		return
+	}
+	if req.Method == "phone" && !phoneRegex.MatchString(req.Phone) {
+		api.SendValidationError(c, "Invalid phone number", "phone must be E.164, e.g. +15551234567")
+		return
+	}
+
+	err := h.manager.StartPairing(c.Request.Context(), wapkg.PairRequest{Method: req.Method, Phone: req.Phone})
+	switch {
+	case err == nil:
+		api.SendSuccess(c, http.StatusAccepted, whatsAppStatusResponse(h.manager.Status()), nil)
+	case errors.Is(err, wapkg.ErrIngestNotWired):
+		// The state every deployment is in until the ingest and history-drain
+		// pieces land: pairing is refused rather than linking an account whose
+		// messages would be acknowledged and discarded.
+		api.SendError(c, http.StatusConflict, "CONFLICT", "WhatsApp is not ready to link an account yet", wapkg.ReasonIngestNotWired)
+	case errors.Is(err, wapkg.ErrAlreadyConnected):
+		api.SendConflict(c, "Already connected — disconnect first")
+	case errors.Is(err, wapkg.ErrPairingInProgress):
+		api.SendConflict(c, "Pairing already in progress")
+	case errors.Is(err, wapkg.ErrInvalidPhone):
+		api.SendValidationError(c, "Invalid phone number", "phone must be E.164, e.g. +15551234567")
+	case errors.Is(err, wapkg.ErrUnknownPairMethod):
+		api.SendValidationError(c, "Invalid pairing method", "method must be 'qr' or 'phone'")
+	case errors.Is(err, wapkg.ErrQRCodeTimeout):
+		api.SendError(c, http.StatusGatewayTimeout, "GATEWAY_TIMEOUT", "No QR code arrived in time", "qr_code_timeout")
+	default:
+		api.RespondInternal(c, err)
+	}
+}
+
+// CancelPairing aborts an in-flight pairing
+// @Summary Cancel WhatsApp pairing
+// @Description Abort an in-flight WhatsApp pairing attempt. Idempotent.
+// @Tags whatsapp
+// @Produce json
+// @Success 204 "Pairing cancelled"
+// @Failure 503 {object} api.APIResponse{error=api.APIError}
+// @Router /whatsapp/auth/cancel [post]
+func (h *WhatsAppHandler) CancelPairing(c *gin.Context) {
+	if h.manager == nil {
+		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		return
+	}
+	h.manager.CancelPairing()
+	c.Status(http.StatusNoContent)
+}
+
+// Disconnect unlinks the WhatsApp device
+// @Summary Disconnect WhatsApp
+// @Description Unlink the WhatsApp device. Local credentials are kept when the remote unlink fails, so the user can retry; ?force=true clears them locally without contacting WhatsApp and returns a warning that the device must be unlinked from the phone.
+// @Tags whatsapp
+// @Produce json
+// @Param force query boolean false "Clear local credentials without contacting WhatsApp"
+// @Success 200 {object} api.APIResponse{data=WhatsAppDisconnectResponse}
+// @Failure 409 {object} api.APIResponse{error=api.APIError}
+// @Failure 502 {object} api.APIResponse{error=api.APIError}
+// @Failure 503 {object} api.APIResponse{error=api.APIError}
+// @Router /whatsapp/auth [delete]
+func (h *WhatsAppHandler) Disconnect(c *gin.Context) {
+	if h.manager == nil {
+		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		return
+	}
+
+	force := c.Query("force") == "true"
+	result, err := h.manager.Disconnect(c.Request.Context(), force)
+	switch {
+	case err == nil:
+		api.SendSuccess(c, http.StatusOK, WhatsAppDisconnectResponse{
+			RemoteUnlinked:  result.RemoteUnlinked,
+			AlreadyUnlinked: result.AlreadyUnlinked,
+			Forced:          result.Forced,
+			Warning:         result.Warning,
+		}, nil)
+	case errors.Is(err, wapkg.ErrNotPaired):
+		api.SendConflict(c, "No WhatsApp device is linked")
+	case errors.Is(err, wapkg.ErrRemoteUnlinkFailed):
+		// The device is deliberately KEPT: a failed unlink is not evidence the
+		// remote device is gone, and discarding credentials here would orphan
+		// a live device on the user's phone.
+		api.SendError(c, http.StatusBadGateway, "BAD_GATEWAY",
+			"WhatsApp did not confirm the unlink; the device was kept so you can retry", err.Error())
+	default:
+		api.RespondInternal(c, err)
+	}
+}
+
+// GetStatus returns the WhatsApp connection status
+// @Summary Get WhatsApp status
+// @Description Report the WhatsApp connection state, the linked account when paired, any in-flight pairing code, and the history-backfill counts. Absent (404) when the feature is disabled.
+// @Tags whatsapp
+// @Produce json
+// @Success 200 {object} api.APIResponse{data=WhatsAppStatusResponse}
+// @Failure 503 {object} api.APIResponse{error=api.APIError}
+// @Router /whatsapp/auth/status [get]
+func (h *WhatsAppHandler) GetStatus(c *gin.Context) {
+	if h.manager == nil {
+		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		return
+	}
+	api.SendSuccess(c, http.StatusOK, whatsAppStatusResponse(h.manager.Status()), nil)
+}
+
+// whatsAppStatusResponse maps the manager's status onto the wire shape.
+func whatsAppStatusResponse(status wapkg.Status) WhatsAppStatusResponse {
+	out := WhatsAppStatusResponse{
+		Configured:  status.Configured,
+		State:       status.State,
+		Reason:      status.Reason,
+		JID:         status.JID,
+		PhoneNumber: status.PhoneNumber,
+		PushName:    status.PushName,
+		ConnectedAt: formatTimePtr(status.ConnectedAt),
+		BannedUntil: formatTimePtr(status.BannedUntil),
+		Backfill: WhatsAppBackfillResponse{
+			Pending:             status.Backfill.Pending,
+			Processing:          status.Backfill.Processing,
+			Failed:              status.Backfill.Failed,
+			DroppedInlineChunks: status.Backfill.DroppedInlineChunks,
+			ObservedFloorAt:     formatTimePtr(status.Backfill.ObservedFloorAt),
+		},
+	}
+	if status.Pairing != nil {
+		out.Pairing = &WhatsAppPairingResponse{
+			Method:    status.Pairing.Method,
+			QRCode:    status.Pairing.QRCode,
+			PairCode:  status.Pairing.PairCode,
+			ExpiresAt: status.Pairing.ExpiresAt.UTC().Format(time.RFC3339),
+		}
+	}
+	return out
+}
+
+func formatTimePtr(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := t.UTC().Format(time.RFC3339)
+	return &s
+}

@@ -303,7 +303,7 @@ func newTestManager(t interface{ Cleanup(func()) }, cli *fakeClient, paired bool
 	ingestor := &fakeIngestor{}
 	recorder := &fakeRecorder{}
 
-	m := NewManager(nil, newWALogger("whatsapp-test"), &config.WhatsAppConfig{}, syncStore, &fakeBackfillReader{})
+	m := NewManager(nil, NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, syncStore, &fakeBackfillReader{})
 	m.SetIngestor(ingestor)
 	m.SetHistoryRecorder(recorder)
 	m.SetHistoryDrainReady()
@@ -323,7 +323,7 @@ func newTestManager(t interface{ Cleanup(func()) }, cli *fakeClient, paired bool
 // is actually in: recorder wired, ingestor still the refusing default, drainer
 // not registered.
 func newNotReadyManager() *Manager {
-	m := NewManager(nil, newWALogger("whatsapp-test"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
+	m := NewManager(nil, NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
 	m.SetHistoryRecorder(&fakeRecorder{})
 	m.newSession = func(context.Context, bool) (*session, error) {
 		return nil, errors.New("newSession must not be reached while not ready")

@@ -52,6 +52,7 @@ type routeDeps struct {
 	GoogleOAuthService      *google.OAuthService
 	TodoistHandler          *handlers.TodoistHandler
 	TelegramHandler         *handlers.TelegramHandler
+	WhatsAppHandler         *handlers.WhatsAppHandler
 	SyncHandler             *handlers.SyncHandler
 	IdentityHandler         *handlers.IdentityHandler
 	ContactTaskHandler      *handlers.ContactTaskHandler
@@ -185,6 +186,13 @@ func registerRoutes(deps routeDeps) {
 		// Telegram routes (feature-flagged)
 		if deps.TelegramHandler != nil {
 			handlers.RegisterTelegramRoutes(v1, deps.TelegramHandler)
+		}
+
+		// WhatsApp routes (feature-flagged). When the flag is off the handler
+		// is nil, the routes are absent, and gin's own 404 is what the settings
+		// page reads as "configuration required".
+		if deps.WhatsAppHandler != nil {
+			handlers.RegisterWhatsAppRoutes(v1, deps.WhatsAppHandler)
 		}
 
 		// External sync routes (feature-flagged)
