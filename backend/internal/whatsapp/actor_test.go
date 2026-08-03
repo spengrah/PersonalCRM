@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -130,8 +131,12 @@ func TestOnlyTheActorStartsGoroutines(t *testing.T) {
 	}
 
 	// The ways to start a goroutine without writing `go `. A scan that misses
-	// them reads as passing while the invariant is gone.
-	for _, banned := range []string{"errgroup", ".Go(", "sync.WaitGroup.Go"} {
+	// them reads as passing while the invariant is gone — and a census that
+	// cannot see a goroutine is not a census. time.AfterFunc is the one that
+	// bit: its callback runs on a goroutine no `go` statement mentions and no
+	// WaitGroup counts. The dial watchdog is a launched effect for exactly that
+	// reason.
+	for _, banned := range []string{"errgroup", ".Go(", "sync.WaitGroup.Go", "time.AfterFunc"} {
 		assert.Equal(t, 0, countOccurrences(sources, banned),
 			"%s is a way to start a goroutine that the `go ` scan would not see", banned)
 	}
@@ -948,7 +953,7 @@ func TestStop_FinalTurnMayStillLaunchEffects(t *testing.T) {
 		m.runOp(func(st *actorState, reply chan opResult) {
 			close(entered)
 			<-gate // Stop closes `stopping` while this turn is executing
-			m.launch(st, []effect{disconnectEffect{sess: st.sess}}, launchDetached, fence{}, opFlags{}, nil, nil)
+			m.launch(st, []effect{releaseSessionEffect{release: sessionRelease{sess: st.sess}}}, launchDetached, fence{}, opFlags{}, nil, nil)
 			close(effectRan)
 			reply <- opResult{}
 		})
@@ -984,7 +989,7 @@ func TestLaunch_IsClosedAfterShutdownState(t *testing.T) {
 
 	aborted := make(chan error, 1)
 	st := &actorState{launchClosed: true}
-	ok := m.launch(st, []effect{disconnectEffect{}}, launchDetached, fence{}, opFlags{},
+	ok := m.launch(st, []effect{releaseSessionEffect{}}, launchDetached, fence{}, opFlags{},
 		func(*actorState, effectResult) bool { return false },
 		func(err error) { aborted <- err })
 
@@ -1508,4 +1513,358 @@ func TestStop_FlushesDeferredCleanupRatherThanAbandoningIt(t *testing.T) {
 	assert.Equal(t, StateNotPaired, next.Status().State,
 		"an abandoned attempt's device must not become the linked account by default")
 	assert.NotContains(t, nextClient.callLog(), "connect")
+}
+
+// TestStop_BoundsTheFinalFlushAgainstAStalledDatabase: the last turn's flush
+// runs under its OWN budget rather than the effect context Stop has already
+// cancelled — and a budget it is, not a background context. A shutdown that
+// waits forever on a wedged database is a process that does not shut down.
+func TestStop_BoundsTheFinalFlushAgainstAStalledDatabase(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
+	require.NoError(t, m.Start(context.Background()))
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	abandoned := pairingSession(t, m)
+	m.CancelPairing()
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+
+	jid := types.NewJID("15559991111", types.DefaultUserServer)
+	devices.add(jid)
+	require.True(t, dispatchEvent(t, m, abandoned, &events.PairSuccess{ID: jid}))
+	require.Equal(t, []types.JID{jid}, devices.remaining(), "deferred behind the live attempt")
+
+	devices.setErr(func(d *fakeDevices) { d.delStall = true })
+
+	stopped := make(chan struct{})
+	go func() { m.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(actorDBTimeout + 2*time.Second):
+		t.Fatalf("Stop did not return within one database budget of a stalled final flush")
+	}
+}
+
+// TestTurnBudgetHoldsForAStalledFlush is the second worst-turn case.
+//
+// A deferred-cleanup list is unbounded, so a per-item budget would make the turn
+// unbounded with it: four stalled deletes at the database timeout each already
+// exceed the whole turn budget. The pass therefore shares ONE budget, and items
+// it did not reach stay pending for the next flush trigger rather than being
+// lost.
+func TestTurnBudgetHoldsForAStalledFlush(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
+	require.NoError(t, m.Start(context.Background()))
+
+	// An abandoned attempt, then a live one, so every stale event defers.
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	abandoned := pairingSession(t, m)
+	m.CancelPairing()
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+
+	const pending = 8
+	for i := 0; i < pending; i++ {
+		jid := types.NewJID(fmt.Sprintf("1555000%04d", i), types.DefaultUserServer)
+		devices.add(jid)
+		require.True(t, dispatchEvent(t, m, abandoned, &events.PairSuccess{ID: jid}))
+	}
+	require.Len(t, devices.remaining(), pending, "all deferred, none deleted")
+
+	devices.setErr(func(d *fakeDevices) { d.delStall = true })
+
+	// Freeing the slot runs the flush inside one turn.
+	started := accelerated.GetCurrentTime()
+	done := make(chan struct{})
+	go func() { m.CancelPairing(); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(maxTurnBudget + 2*time.Second):
+		t.Fatalf("a stalled flush of %d items exceeded the turn budget of %s: the pass is bounded per item, not as a batch", pending, maxTurnBudget)
+	}
+	assert.Less(t, accelerated.GetCurrentTime().Sub(started), maxTurnBudget+2*time.Second)
+
+	// Nothing was lost: what the budget did not reach is still pending.
+	assert.Len(t, devices.remaining(), pending, "a stalled delete deletes nothing")
+	assert.NotEmpty(t, m.inspect().PendingStaleDeletes,
+		"items the budget did not reach carry to the next flush rather than being dropped")
+}
+
+// TestDisconnect_FailedLogoutStillReleasesTheClient is the class-level guarantee
+// applied to the path that had forgotten it.
+//
+// whatsmeow leaves a failed logout CONNECTED. The failure branch used to publish
+// disconnect_failed and stop, so a retry or a Start could build a second client
+// for the same device while the first was still live. Release is no longer that
+// branch's job: the session's release is handed to the operation, and the loop
+// performs it however the operation ends.
+func TestDisconnect_FailedLogoutStillReleasesTheClient(t *testing.T) {
+	cli := newFakeClient()
+	cli.logoutErr = logoutRemoteFailure()
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
+	require.True(t, cli.IsConnected())
+
+	_, err := m.Disconnect(context.Background(), false)
+	require.ErrorIs(t, err, ErrRemoteUnlinkFailed)
+	assert.Equal(t, StateDisconnectFailed, m.Status().State)
+
+	eventually(t, "a failed logout still releases the client the library left connected", func() bool {
+		return !cli.IsConnected() && cli.connCtxErr() != nil && !cli.pumpRunning()
+	})
+}
+
+// TestCancelPairing_ReleasesTheAttemptsConnectionContext: an abandoned attempt's
+// context is a child of the manager's, so leaving it alive until Stop would
+// accumulate one per attempt and keep the library's auto-reconnect eligible on a
+// client nobody owns.
+func TestCancelPairing_ReleasesTheAttemptsConnectionContext(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.True(t, cli.pumpRunning(), "the attempt's socket is up")
+
+	m.CancelPairing()
+
+	eventually(t, "abandoning an attempt ends its connection context", func() bool {
+		return cli.connCtxErr() != nil && !cli.pumpRunning()
+	})
+}
+
+// TestRetire_IsTheOnlyWayASessionDies is the class-level scan.
+//
+// Every death path goes through retirement, and retirement is the only thing
+// that schedules a release — so the package must contain exactly one call to
+// the client's Disconnect, inside the single release helper. A new death path
+// that closed a client by hand would be a second one.
+func TestRetire_IsTheOnlyWayASessionDies(t *testing.T) {
+	sources := packageSources(t)
+	assert.Equal(t, 1, countOccurrences(sources, ".client.Disconnect()"),
+		"exactly one place closes a client: releaseSession")
+	// Two cancels, and the second is a NAMED exception rather than a second
+	// death path: the dial watchdog aborts a dial that never returned. Counting
+	// it stops the exception quietly becoming a way to kill a session by hand.
+	assert.Equal(t, 2, countOccurrences(sources, "cancelConn()"),
+		"releaseSession, plus the dial watchdog — and nothing else")
+	assert.Equal(t, 1, strings.Count(sources["actor.go"], "func (e dialWatchdogEffect) run"),
+		"the watchdog is the exception, and it lives in the actor where the census can see it")
+
+	// A dial and its watchdog are emitted together; a connect without one would
+	// be an unbounded dial, and a watchdog without one would never settle.
+	assert.Equal(t, countOccurrences(sources, "connectEffect{sess:"),
+		countOccurrences(sources, "m.launchDial("),
+		"every connect is launched with its watchdog")
+
+	// An attempt dies in exactly one place, so cancelling its context, marking
+	// it, and releasing its client cannot drift apart.
+	assert.Equal(t, 1, countOccurrences(sources, "func (st *actorState) endAttempt("))
+	assert.Equal(t, 1, countOccurrences(sources, "p.cancel()"),
+		"the attempt context is cancelled only inside endAttempt")
+}
+
+// TestStart_SessionReplacedMidDialIsStillReleased: release belongs to the act
+// that ENDS a session's ownership, not to the operation that was using it.
+//
+// A Start installs its session and then dials. A pairing adopted while that dial
+// is parked replaces the slot, so the connect's continuation aborts on the fence
+// and never runs a failure branch of its own. The replaced session is released
+// anyway, because the adoption retired it — otherwise a live socket and its
+// auto-reconnect context would survive the account that owned them.
+func TestStart_SessionReplacedMidDialIsStillReleased(t *testing.T) {
+	startClient := newFakeClient()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	startClient.connectEntered = entered
+	startClient.connectBlock = release
+
+	m, _, _, _ := newTestManager(t, startClient, true)
+
+	startDone := make(chan struct{})
+	go func() { defer close(startDone); _ = m.Start(context.Background()) }()
+	<-entered
+	startSess := installedSession(t, m)
+	require.NotNil(t, startSess)
+
+	// A pairing completes while the dial is parked, replacing the slot.
+	pairClient := newFakeClient()
+	useClient(m, pairClient, false)
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.True(t, dispatchEvent(t, m, pairingSession(t, m), &events.PairSuccess{
+		ID: types.NewJID("15556667777", types.DefaultUserServer),
+	}))
+	require.NotSame(t, startSess, installedSession(t, m))
+
+	close(release)
+	<-startDone
+
+	eventually(t, "the replaced session is released even though its own operation aborted on the fence", func() bool {
+		return startClient.connCtxErr() != nil && !startClient.pumpRunning()
+	})
+}
+
+// TestFinalHandleCarriesWholeReleases closes the one gap the queue-then-drain
+// design opens.
+//
+// The loop's last turn retires whatever it still owns, but the launch gate is
+// already shut, so those releases cannot become effects. They leave through the
+// published handle instead — and they must leave WHOLE. A bare session is not a
+// teardown: it has lost the device row an abandoned attempt must not leave
+// behind, and the drain that has to unwind before its client is closed.
+func TestFinalHandleCarriesWholeReleases(t *testing.T) {
+	cli := newFakeClient()
+	sess := fakeSessionFor(cli, false, nil)
+
+	st := &actorState{}
+	p := &pairingState{sess: sess, drainDone: make(chan struct{}), drainStarted: true}
+	st.pairing = p
+
+	// Exactly what shutdownState does: end the attempt, then free the slot.
+	st.endAttempt(p, false)
+	st.pairing = nil
+
+	h := st.teardownHandleOf()
+	require.Len(t, h.releases, 1, "a release the last turn queued must reach the handle Stop reads")
+	assert.Same(t, sess, h.releases[0].sess)
+	assert.True(t, h.releases[0].deleteDevice,
+		"an abandoned attempt's device row travels with its release, or shutdown leaves it behind")
+	assert.True(t, h.releases[0].drainStarted,
+		"and so does the drain that must unwind before the client is closed")
+	assert.Same(t, sess, h.releases[0].sess)
+}
+
+// TestFinalHandleCarriesAReleaseAnOperationStillHolds is the half a cancelled
+// operation exposes: Stop cancels the batch, so the continuation never runs and
+// the operation never reaches releaseOp. The release is in the STATE rather than
+// in the operation's flags precisely so that path cannot lose it.
+func TestFinalHandleCarriesAReleaseAnOperationStillHolds(t *testing.T) {
+	cli := newFakeClient()
+	sess := fakeSessionFor(cli, true, nil)
+
+	st := &actorState{sess: sess}
+	rel := opFlags{unlink: true}
+	st.retireFor(&rel, sess)
+
+	require.Nil(t, st.sess, "ownership ends immediately")
+	h := st.teardownHandleOf()
+	require.Len(t, h.releases, 1,
+		"a held release is still the loop's obligation, so the handle names it")
+	assert.Same(t, sess, h.releases[0].sess)
+	assert.True(t, h.releases[0].held)
+}
+
+// TestStop_ReleasesASessionAnUnlinkWasStillHolding is the end of the path the
+// effect-goroutine test only started.
+//
+// An unlink parks in Logout, Stop cancels the batch, and the continuation
+// therefore never runs — so nothing ever calls releaseOp. The client must still
+// be closed and its connection context ended: whatsmeow leaves a failed or
+// cancelled logout CONNECTED, and the session is in no slot for a handle to find
+// it by. The RELEASE is what the handle carries.
+func TestStop_ReleasesASessionAnUnlinkWasStillHolding(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
+	require.True(t, cli.IsConnected())
+
+	entered := make(chan struct{})
+	never := make(chan struct{})
+	t.Cleanup(func() { close(never) })
+	cli.mu.Lock()
+	cli.logoutEntered = entered
+	cli.logoutBlock = never
+	cli.mu.Unlock()
+
+	unlinkDone := make(chan struct{})
+	go func() { defer close(unlinkDone); _, _ = m.Disconnect(context.Background(), false) }()
+	<-entered
+
+	m.Stop()
+	<-unlinkDone
+
+	assert.False(t, cli.IsConnected(),
+		"a session an operation was holding when Stop cancelled it is still released")
+	assert.Error(t, cli.connCtxErr(),
+		"and its connection context ends with it, or auto-reconnect outlives the manager")
+	eventually(t, "the socket's read pump ends with the context", func() bool { return !cli.pumpRunning() })
+}
+
+// TestStop_DeletesTheDeviceOfAnAttemptItAbandoned: shutdown ends the in-flight
+// attempt, and an attempt's half-written device row is part of ending it. A
+// teardown that reached Stop as a bare session would disconnect the client and
+// leave the row — which the next boot can resume as if the user had chosen it.
+func TestStop_DeletesTheDeviceOfAnAttemptItAbandoned(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _, _ := newTestManagerWithDevices(t, cli, false)
+	require.NoError(t, m.Start(context.Background()))
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.True(t, cli.pumpRunning(), "the attempt's socket is up")
+
+	m.Stop()
+
+	assert.Contains(t, cli.callLog(), "delete_device",
+		"the abandoned attempt's own device row is removed by the release, not left for the next boot")
+	assert.Less(t, indexOf(cli.callLog(), "disconnect"), indexOf(cli.callLog(), "delete_device"),
+		"and the client is closed before its row goes")
+	assert.Error(t, cli.connCtxErr())
+}
+
+// TestFlush_RotatesPastAStalledJIDAndRetriesItself is the liveness half of the
+// bounded flush: bounding a pass says when it STOPS, not that the work happens.
+//
+// One stalled JID at the head of the queue used to consume every pass's whole
+// budget and be put straight back at the head, so nothing behind it was ever
+// reached — and nothing retried the pass at all until an unrelated pairing
+// transition happened to occur. Here the stalled JID goes to the BACK, the loop
+// schedules its own next pass, and the reachable JID is deleted with no external
+// event of any kind. The retry is bounded: once the queue has been rotated all
+// the way round with nothing settling, the loop stops asking.
+func TestFlush_RotatesPastAStalledJIDAndRetriesItself(t *testing.T) {
+	stalled := types.NewJID("15550001111", types.DefaultUserServer)
+	reachable := types.NewJID("15550002222", types.DefaultUserServer)
+
+	cli := newFakeClient()
+	m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
+	require.NoError(t, m.Start(context.Background()))
+
+	// An abandoned attempt, then a live one, so both stale events defer.
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	abandoned := pairingSession(t, m)
+	m.CancelPairing()
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+
+	for _, jid := range []types.JID{stalled, reachable} {
+		devices.add(jid)
+		require.True(t, dispatchEvent(t, m, abandoned, &events.PairSuccess{ID: jid}))
+	}
+	require.Equal(t, []types.JID{stalled, reachable}, devices.remaining(), "both deferred")
+
+	devices.setErr(func(d *fakeDevices) { d.delStallJID = &stalled })
+
+	// ONE trigger, and then nothing: freeing the slot starts the first pass, and
+	// every pass after it is the loop's own doing.
+	m.CancelPairing()
+
+	eventually(t, "a JID behind a stalled one is reached, without any further external event", func() bool {
+		return len(devices.remaining()) == 1 && devices.remaining()[0] == stalled
+	})
+	assert.Equal(t, []types.JID{stalled}, m.inspect().PendingStaleDeletes,
+		"the stalled JID is kept, not dropped")
+
+	// And the retry STOPS. A database that never answers must not turn the actor
+	// into a spinner, so the bound is absolute rather than "it looked quiet for
+	// a moment": one stalled pass costs a whole database budget, so a window of
+	// several budgets would show several more attempts if nothing stopped them.
+	//
+	// The correct run makes three: the first pass stalls, the second deletes the
+	// reachable JID, the third stalls on the JID that came round again — and the
+	// pass after that is never scheduled, because every pending JID has now had
+	// one to itself.
+	const maxAttempts = 4
+	consistently(t, "the self-scheduled retries stop once every pending JID has had a pass",
+		3*actorDBTimeout, func() bool { return devices.deleteAttempts() <= maxAttempts })
 }

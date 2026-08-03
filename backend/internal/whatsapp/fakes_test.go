@@ -282,6 +282,14 @@ type fakeDevices struct {
 	listBlock   chan struct{}
 	delEntered  chan struct{}
 	delBlock    chan struct{}
+	// delStall makes every delete hang until its context expires — the shape a
+	// stalled database has, and the only way to see whether a flush pass is
+	// bounded as a batch or per item. delStallJID stalls exactly ONE row, which
+	// is what distinguishes a queue that rotates past a stuck head from one that
+	// re-presents it forever.
+	delStall    bool
+	delStallJID *types.JID
+	attempts    int
 
 	listed  int
 	deleted []types.JID
@@ -325,11 +333,19 @@ func (f *fakeDevices) deleteAll(ctx context.Context, jids []types.JID) error {
 	return nil
 }
 
-func (f *fakeDevices) deleteOne(_ context.Context, jid types.JID) error {
+func (f *fakeDevices) deleteOne(ctx context.Context, jid types.JID) error {
 	f.mu.Lock()
-	entered, block := f.delEntered, f.delBlock
+	entered, block, stall := f.delEntered, f.delBlock, f.delStall
+	if f.delStallJID != nil && f.delStallJID.ToNonAD() == jid.ToNonAD() {
+		stall = true
+	}
+	f.attempts++
 	f.delEntered = nil
 	f.mu.Unlock()
+	if stall {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if entered != nil {
 		close(entered)
 	}
@@ -377,6 +393,14 @@ func (f *fakeDevices) setErr(apply func(*fakeDevices)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	apply(f)
+}
+
+// deleteAttempts counts every call, stalled or not, which is how a bounded
+// retry loop is told from an unbounded one.
+func (f *fakeDevices) deleteAttempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempts
 }
 
 func (f *fakeDevices) enumerations() int {
@@ -755,6 +779,7 @@ func fakeSessionFor(cli *fakeClient, paired bool, jid *types.JID) *session {
 		jid:        jid,
 		connCtx:    connCtx,
 		cancelConn: cancelConn,
+		dialDone:   make(chan struct{}),
 		deleteDevice: func(context.Context) error {
 			cli.record("delete_device")
 			cli.mu.Lock()

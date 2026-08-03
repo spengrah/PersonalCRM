@@ -245,6 +245,7 @@ behaviors:
       - a clear that could not reach the stored credentials at all is reported as a failure, not as a completed unlink
       - the failure a forced clear reports says the device may still be linked and must be removed from the phone, because forcing contacted the source not at all
       - clearing local credentials removes every set of credentials the clear found when it started, not only the one in use, so a device left behind by a failed replacement cannot be resumed afterwards; credentials created after the clear began are left alone and the clear reports that it was superseded
+      - an unlink that failed still ends the client it used, so a retry or a restart cannot leave two clients contending for one device
     provenance: [Manager.Disconnect, Manager.contPurgeFenced, Manager.contDisconnect, serverConfirmedUnlinked, WhatsAppHandler.Disconnect]
 
   # --- Enablement ---

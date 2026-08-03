@@ -271,10 +271,11 @@ func (m *Manager) contPairingSessionBuilt(st *actorState, res effectResult, p *p
 	// GetQRChannel BEFORE Connect: the library requires that order. A cancel
 	// arriving anywhere inside this batch cancels p.ctx immediately, so the
 	// library's QR handler unwinds without waiting for Connect to return.
+	m.launchDial(st, sess)
 	m.launch(st,
 		[]effect{
 			openQRChannelEffect{sess: sess, pairCtx: p.ctx},
-			connectEffect{sess: sess, dialDeadline: m.timeouts.effect},
+			connectEffect{sess: sess},
 		},
 		launchOneShot,
 		fence{sess: st.sess, pairing: p},
@@ -385,30 +386,19 @@ func (m *Manager) abandonPairingTurn(st *actorState, p *pairingState, cause erro
 	m.retireAttempt(st, p, cause)
 	// The slot may have just become free, which is when a deferred targeted
 	// cleanup can finally be guarded against real state.
-	m.flushStaleDeletes(st)
+	flushCtx, cancelFlush := turnCtx(context.Background())
+	m.flushStaleDeletes(flushCtx, st)
+	cancelFlush()
 }
 
-// retireAttempt cancels an attempt and tears its client down. Calling a
-// context.CancelFunc inside a turn is the one sanctioned non-state call: it
-// closes channels and returns, performs no I/O, and cannot block.
+// retireAttempt tells the attempt's caller why it ended, then ends it. The
+// ending itself is endAttempt's — one act, wherever an attempt dies from.
 func (m *Manager) retireAttempt(st *actorState, p *pairingState, cause error) {
 	if p == nil || p.cancelled {
 		return
 	}
-	p.cancelled = true
-	if p.cancel != nil {
-		p.cancel()
-	}
 	sendPairOutcome(p, cause)
-	m.launch(st,
-		[]effect{teardownPairingEffect{
-			sess:         p.sess,
-			drainDone:    p.drainDone,
-			drainStarted: p.drainStarted,
-			drainWait:    m.timeouts.drainDrain,
-		}},
-		launchDetached, fence{}, opFlags{}, nil, nil,
-	)
+	st.endAttempt(p, false)
 }
 
 // CancelPairing aborts an in-flight pairing. It is idempotent.
@@ -470,13 +460,14 @@ func (m *Manager) opDisconnect(force bool) func(*actorState, chan opResult) {
 		// that merely looks down is very likely mid-retry; retiring and
 		// disconnecting it before building a second client is what stops two
 		// clients racing on the same device.
-		sess := st.sess
-		if sess != nil {
-			sess.retired = true
-			st.sess = nil
-		}
 		st.unlinkInFlight = true
 		rel := opFlags{unlink: true}
+		// Ownership ends now; the RELEASE is handed to the operation, because a
+		// remote logout still needs the socket. The loop releases it when the
+		// operation ends, on every path including abort — which is what stops a
+		// failed logout leaving a connected client nobody owns.
+		sess := st.sess
+		st.retireFor(&rel, sess)
 		abort := func(err error) { reply <- opResult{err: err} }
 
 		switch {
@@ -506,8 +497,13 @@ func (m *Manager) opDisconnect(force bool) func(*actorState, chan opResult) {
 			// No live client and no logged_out proof. Build one solely to log
 			// out: Start declines to RESUME INGESTING on a terminal device, which
 			// is a different question from a user explicitly asking to unlink one.
+			// The old client is released FIRST, in the same batch, so it is
+			// stopped before a second client for the same device is even built
+			// — whatsmeow auto-reconnects a remote disconnect, and two clients
+			// on one device race the unlink against a reconnect. The
+			// operation's own release at the end is then an idempotent repeat.
 			m.launch(st, []effect{
-				disconnectEffect{sess: sess},
+				releaseSessionEffect{release: sessionRelease{sess: sess}, drainWait: m.timeouts.drainDrain},
 				buildSessionEffect{build: st.newSession, req: sessionRequest{linked: st.linkedJID}},
 			}, launchOneShot, fence{}, rel,
 				func(st *actorState, res effectResult) bool {
@@ -544,8 +540,18 @@ func (m *Manager) contUnlinkSessionBuilt(st *actorState, res effectResult, rel o
 		reply <- opResult{err: ErrNotPaired}
 		return false
 	}
+	// The built client is live from here, so its release is recorded now and
+	// held by this operation: however this ends — including a Stop that cancels
+	// it outright — the release is in the state, and the loop or Stop performs
+	// it. Copied rather than appended in place, because the flags this
+	// operation was launched with are still held by the continuation that
+	// produced this turn.
+	rel.holds = append([]*session(nil), rel.holds...)
+	st.retireFor(&rel, built)
+
+	m.launchDial(st, built)
 	m.launch(st, []effect{
-		connectEffect{sess: built, dialDeadline: m.timeouts.effect},
+		connectEffect{sess: built},
 		logoutEffect{sess: built},
 	}, launchOneShot, fence{}, rel,
 		func(st *actorState, res effectResult) bool {
@@ -563,7 +569,8 @@ func (m *Manager) contUnlinkLoggedOut(st *actorState, res effectResult, built *s
 	}
 	if !logoutFailedAfterRemoteUnlink(err) {
 		// A failed connect is not evidence of anything, so the device is KEPT.
-		m.launch(st, []effect{disconnectEffect{sess: built}}, launchDetached, fence{}, opFlags{}, nil, nil)
+		// The client itself is released by the operation ending; whatsmeow
+		// leaves a failed logout CONNECTED, so nothing here may skip that.
 		m.recordDisconnectFailure(st, err, reply)
 		return false
 	}
@@ -576,7 +583,7 @@ func (m *Manager) contUnlinkLoggedOut(st *actorState, res effectResult, built *s
 // Aborting on the fence after it destroys nothing.
 func (m *Manager) launchPurge(st *actorState, sess *session, rel opFlags, reply chan opResult, result *DisconnectResult, failReason string) {
 	m.launch(st, []effect{
-		disconnectEffect{sess: sess},
+		releaseSessionEffect{release: sessionRelease{sess: sess}, drainWait: m.timeouts.drainDrain},
 		listDevicesEffect{list: st.devices.list},
 	}, launchOneShot, fence{}, rel,
 		func(st *actorState, res effectResult) bool {
@@ -647,10 +654,7 @@ func (m *Manager) contDisconnect(st *actorState, res effectResult, frozen []type
 
 // applyLocalClear is the whole successful-unlink transition, in one turn.
 func (m *Manager) applyLocalClear(st *actorState) {
-	if st.sess != nil {
-		st.sess.retired = true
-		st.sess = nil
-	}
+	st.retire(st.sess, false)
 	st.linkedJID = nil
 	st.status.State = StateNotPaired
 	st.status.Reason = ""

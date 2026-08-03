@@ -274,6 +274,14 @@ func TestStart_ConnectFailureDoesNotAbortBoot(t *testing.T) {
 	require.NoError(t, m.Start(context.Background()), "a WhatsApp failure must never abort boot")
 	assert.Equal(t, StateError, m.Status().State)
 	assert.Contains(t, syncStore.callLog(), "status:error")
+
+	// Losing the slot is not the same as being released. A failed dial can
+	// leave a half-open socket, and the connection context it dialled under is
+	// the library's auto-reconnect parent, so the session dies the same way
+	// every other one does — through the release that ends both.
+	eventually(t, "a session dropped by a failed dial is released, not merely unslotted", func() bool {
+		return indexOf(cli.callLog(), "disconnect") >= 0
+	})
 }
 
 // TestStart_RefusesAnAmbiguousDeviceStore: two or more stored devices and no
@@ -1068,6 +1076,11 @@ func TestOnPairSuccess_RetiresAndDeletesTheReplacedSession(t *testing.T) {
 	assert.Contains(t, oldClient.callLog(), "disconnect")
 	assert.NotContains(t, newClient.callLog(), "delete_device",
 		"the device that was just linked is the one that stays")
+	eventually(t, "the replaced session's connection context ends with it: it is auto-reconnect's parent, and a device row is being deleted out from under it", func() bool {
+		return oldClient.connCtxErr() != nil
+	})
+	assert.Less(t, indexOf(oldClient.callLog(), "disconnect"), indexOf(oldClient.callLog(), "delete_device"),
+		"the client is stopped before its row is removed, or a live client can write the row back")
 
 	// The replaced session's queued events are inert from here.
 	assert.True(t, dispatchEvent(t, m, oldSess, &events.LoggedOut{}))

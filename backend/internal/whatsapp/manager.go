@@ -159,6 +159,11 @@ type session struct {
 	// teardown cancels it.
 	connCtx    context.Context
 	cancelConn context.CancelFunc
+	// dialDone is closed by the dial when it settles, and dialSettled is how the
+	// dial and its watchdog agree on which of them decided the outcome. Both are
+	// created with the client and touched only by that pair.
+	dialDone    chan struct{}
+	dialSettled atomic.Bool
 	// jid is the device's own JID, when it has one. It is what the stale-pair
 	// cleanup guards compare against, so a targeted delete can never remove the
 	// live device.
@@ -345,6 +350,7 @@ func (m *Manager) newClient(device *store.Device, sess *session) *whatsmeow.Clie
 	// library ties the socket's lifetime to it. Every production session is
 	// built through this constructor, so there is one place to get it right.
 	sess.connCtx, sess.cancelConn = context.WithCancel(m.effectCtx)
+	sess.dialDone = make(chan struct{})
 
 	cli := whatsmeow.NewClient(device, m.log)
 
@@ -537,8 +543,9 @@ func (m *Manager) contStartResolved(st *actorState, res effectResult, terminalRe
 	st.status.State = StateConnecting
 	st.status.Reason = ""
 
+	m.launchDial(st, sess)
 	m.launch(st,
-		[]effect{connectEffect{sess: sess, dialDeadline: m.timeouts.effect}},
+		[]effect{connectEffect{sess: sess}},
 		launchOneShot,
 		fence{sess: sess, pairing: st.pairing},
 		opFlags{start: true},
@@ -550,10 +557,11 @@ func (m *Manager) contStartResolved(st *actorState, res effectResult, terminalRe
 
 func (m *Manager) contStartConnected(st *actorState, res effectResult, reply chan opResult) bool {
 	if err := res.firstErr(); err != nil {
-		if st.sess != nil {
-			st.sess.retired = true
-			st.sess = nil
-		}
+		// A failed dial is a session death like any other: the client may still
+		// hold a half-open socket and its connection context is auto-reconnect's
+		// parent, so it goes through the one retirement act rather than merely
+		// losing its slot.
+		st.retire(st.sess, false)
 		m.failStart(st, err)
 		reply <- opResult{}
 		return false
@@ -908,14 +916,10 @@ func (m *Manager) handleControlEvent(st *actorState, from *session, evt any) {
 	}
 }
 
-// tearDownOrphan disconnects a client the manager no longer owns. It is an
-// effect, never an inline call: Client.Disconnect takes the library's socket
-// lock and a turn may make no socket call.
+// tearDownOrphan ends a client the manager no longer owns, through the same
+// retirement act as every other death path.
 func (m *Manager) tearDownOrphan(st *actorState, sess *session) {
-	if sess == nil {
-		return
-	}
-	m.launch(st, []effect{disconnectEffect{sess: sess}}, launchDetached, fence{}, opFlags{}, nil, nil)
+	st.retire(sess, false)
 }
 
 func (m *Manager) onConnected(st *actorState, from *session) {
@@ -1003,10 +1007,9 @@ func (m *Manager) onPairSuccess(st *actorState, from *session, e *events.PairSuc
 	scope, pairing := st.scopeOf(from)
 	switch scope {
 	case scopePairing:
-		pairing.cancelled = true
-		if pairing.cancel != nil {
-			pairing.cancel()
-		}
+		// The attempt ends here, but its client does NOT: it becomes the live
+		// session, so the one act that ends an attempt is told to keep it.
+		st.endAttempt(pairing, true)
 		// The client that completed the pairing becomes the live session: it
 		// already carries the event handler and the manual-history flags, and
 		// whatsmeow reconnects it as the linked device.
@@ -1015,7 +1018,6 @@ func (m *Manager) onPairSuccess(st *actorState, from *session, e *events.PairSuc
 			adopted.jid = &e.ID
 			if st.sess != nil && st.sess != adopted {
 				superseded = st.sess
-				superseded.retired = true
 			}
 			st.sess = adopted
 		}
@@ -1064,17 +1066,31 @@ func (m *Manager) onPairSuccess(st *actorState, from *session, e *events.PairSuc
 
 	// The slot is free and the linked JID is known, so a cleanup deferred while
 	// this attempt was live can now be guarded properly and run.
-	m.flushStaleDeletes(st)
+	flushCtx, cancelFlush := turnCtx(context.Background())
+	m.flushStaleDeletes(flushCtx, st)
+	cancelFlush()
 
 	if superseded != nil {
 		// A failed selector write makes this delete MORE important, not less:
 		// two rows with a stale-or-absent selector is the one state the resolver
 		// refuses, while one row with a stale-or-absent selector heals.
+		//
+		// The replaced session's ownership ends here; its RELEASE is handed to
+		// this operation, because the delete must land on a device whose client
+		// is already stopped — a live client can write its row back. The loop
+		// releases it however the operation ends, so the fence-failed path
+		// cannot strand it, and the batch's own release makes the ordering
+		// explicit rather than incidental.
+		rel := opFlags{}
+		st.retireFor(&rel, superseded)
 		m.launch(st,
-			[]effect{disconnectEffect{sess: superseded}, deleteDeviceEffect{sess: superseded}},
+			[]effect{
+				releaseSessionEffect{release: sessionRelease{sess: superseded}, drainWait: m.timeouts.drainDrain},
+				deleteDeviceEffect{sess: superseded},
+			},
 			launchOneShot,
 			fence{sess: st.sess, pairing: st.pairing},
-			opFlags{},
+			rel,
 			func(st *actorState, res effectResult) bool {
 				if err := res.firstErr(); err != nil {
 					st.status.ReplacedDeviceRetained = true
@@ -1141,64 +1157,154 @@ func (m *Manager) onPairError(st *actorState, from *session, e *events.PairError
 // interleaving rather than fence a hazard whose evidence lives in the library's
 // goroutine rather than in our state.
 func (m *Manager) deleteStalePairDevice(st *actorState, jid types.JID) {
-	if jid.IsEmpty() {
+	if !m.guardStaleDelete(st, jid) {
 		return
+	}
+	ctx, cancel := turnCtx(context.Background())
+	defer cancel()
+	if !m.deleteDeviceNow(ctx, st, jid) {
+		st.pendingStaleDeletes = append(st.pendingStaleDeletes, jid)
+	}
+}
+
+// guardStaleDelete applies the three guards and reports whether the delete may
+// proceed NOW. A JID it defers is recorded as pending, never dropped.
+func (m *Manager) guardStaleDelete(st *actorState, jid types.JID) bool {
+	if jid.IsEmpty() {
+		return false
 	}
 	if st.linkedJID != nil && st.linkedJID.ToNonAD() == jid.ToNonAD() {
 		logger.Debug().Str("jid", jid.String()).Msg("whatsapp: not deleting the linked device on a stale pair event")
-		return
+		return false
 	}
 	if st.sess != nil && st.sess.jid != nil && st.sess.jid.ToNonAD() == jid.ToNonAD() {
 		logger.Debug().Str("jid", jid.String()).Msg("whatsapp: not deleting the installed session's device on a stale pair event")
-		return
+		return false
 	}
 	if st.pairing != nil {
-		// DEFERRED, not dropped. Re-guarded and launched by the turn that frees
-		// the slot, which is also the first turn that can know the live
-		// attempt's own JID.
+		// DEFERRED, not dropped. Re-guarded by the turn that frees the slot,
+		// which is also the first turn that can know the live attempt's own JID.
 		if !slices.ContainsFunc(st.pendingStaleDeletes, func(p types.JID) bool { return p.ToNonAD() == jid.ToNonAD() }) {
 			st.pendingStaleDeletes = append(st.pendingStaleDeletes, jid)
 		}
 		logger.Warn().Str("jid", jid.String()).
 			Msg("whatsapp: deferring an abandoned pairing's device delete while another attempt is in flight")
-		return
+		return false
 	}
+	return true
+}
 
-	// The delete runs IN THE TURN, not as an effect. It is a bounded database
-	// write — the container issues one ExecContext under the context we give it
-	// — exactly like the terminal write the design already sanctions in-turn.
-	// Doing it here is what makes the guards and the destruction one indivisible
-	// step: an asynchronous delete could be launched against state that a later
-	// turn has already changed, and no fence placed after it can un-delete a
-	// row.
+// deleteDeviceNow performs the delete IN THE TURN, under the caller's budget.
+//
+// It is a bounded database write — the container issues one ExecContext under
+// the context it is given — exactly like the terminal write the design already
+// sanctions in-turn. Doing it here is what makes the guards and the destruction
+// one indivisible step: an asynchronous delete could be launched against state a
+// later turn has already changed, and no fence placed after it can un-delete a
+// row.
+//
+// It reports whether the JID is settled. A budget that ran out is NOT settled:
+// the caller carries it to the next flush rather than losing it.
+func (m *Manager) deleteDeviceNow(ctx context.Context, st *actorState, jid types.JID) bool {
 	if st.devices.deleteJID == nil {
-		return
+		return true
 	}
-	ctx, cancel := turnCtx(context.Background())
-	defer cancel()
-
 	var err error
 	for attempt := 0; attempt < deviceDeleteAttempts; attempt++ {
-		if err = st.devices.deleteJID(ctx, jid); err == nil {
-			return
+		if ctx.Err() != nil {
+			return false
 		}
+		if err = st.devices.deleteJID(ctx, jid); err == nil {
+			return true
+		}
+	}
+	if ctx.Err() != nil {
+		return false
 	}
 	st.status.ReplacedDeviceRetained = true
 	logger.Error().Err(err).Str("jid", jid.String()).
 		Msg("whatsapp: could not delete an abandoned pairing's device; the store holds a stale session")
+	return true
 }
 
 // flushStaleDeletes retries every deferred targeted cleanup. It is called by the
 // turns that free the pairing slot, so the guards are re-evaluated against the
 // state that turn produced — including a JID it has just adopted.
-func (m *Manager) flushStaleDeletes(st *actorState) {
+//
+// The whole PASS shares ONE budget, not one per item. A per-item budget makes an
+// unbounded pending list an unbounded turn — four stalled JIDs would already
+// exceed the turn budget on their own. Items the budget did not reach stay
+// pending and are carried to the next flush trigger, so bounding the pass costs
+// nothing but time.
+func (m *Manager) flushStaleDeletes(ctx context.Context, st *actorState) {
 	if len(st.pendingStaleDeletes) == 0 || st.pairing != nil {
 		return
 	}
 	pending := st.pendingStaleDeletes
 	st.pendingStaleDeletes = nil
-	for _, jid := range pending {
-		m.deleteStalePairDevice(st, jid)
+
+	for i, jid := range pending {
+		if ctx.Err() != nil {
+			// Never attempted, so their order is still meaningful: they keep it.
+			st.pendingStaleDeletes = append(st.pendingStaleDeletes, pending[i:]...)
+			logger.Warn().Int("remaining", len(pending)-i).
+				Msg("whatsapp: stale-device cleanup ran out of budget; the rest carry to the next flush")
+			return
+		}
+		if !m.guardStaleDelete(st, jid) {
+			st.flushStalls = 0
+			continue
+		}
+		if !m.deleteDeviceNow(ctx, st, jid) {
+			// ROTATED, not reinserted. A stalled head kept at the head is a head
+			// forever: it consumes every pass's whole budget and no JID behind it
+			// is ever reached. Sending it to the BACK costs it nothing but its
+			// turn, and makes the pass that follows reach past it.
+			st.pendingStaleDeletes = append(st.pendingStaleDeletes, pending[i+1:]...)
+			st.pendingStaleDeletes = append(st.pendingStaleDeletes, jid)
+			st.flushStalls++
+			logger.Warn().Str("jid", jid.String()).Int("pending", len(st.pendingStaleDeletes)).
+				Msg("whatsapp: a stale-device delete outlasted the pass budget; it goes to the back of the queue")
+			return
+		}
+		st.flushStalls = 0
+	}
+}
+
+// scheduleFlush asks the loop for another flush pass. It runs at the end of
+// EVERY turn, like publish and the release drain, so no flush trigger has to
+// remember it.
+//
+// Without it, a pass that could not finish would wait for an unrelated pairing
+// transition that may never come — bounding a turn is not the same as making the
+// work happen. The nudge is the ONE message the actor sends itself, and it is
+// bounded twice over: at most one is outstanding, and it stops once the queue
+// has been rotated all the way round without a single JID settling, so a
+// permanently unreachable database cannot turn the loop into a spinner. Any
+// later settlement resets that, and any other flush trigger starts it again.
+//
+// Stopping is a decision, not an oversight: there is no timer in this package to
+// back off with, and the consequence of a cleanup that never runs is durable and
+// already surfaced where it can be acted on — the surviving rows make the next
+// boot report a degraded store rather than resume one of them.
+func (m *Manager) scheduleFlush(st *actorState) {
+	switch {
+	case st.flushNudged, st.launchClosed, st.pairing != nil:
+		return
+	case len(st.pendingStaleDeletes) == 0:
+		st.flushStalls = 0
+		return
+	case st.flushStalls >= len(st.pendingStaleDeletes):
+		// Every pending JID has now had a pass to itself and stalled in it.
+		return
+	}
+	select {
+	case m.inbox <- &flushNudgeMsg{}:
+		st.flushNudged = true
+	default:
+		// A full mailbox is not a reason to block the loop on itself. The next
+		// turn schedules one, and every ordinary flush trigger still applies.
+		logger.Warn().Msg("whatsapp: could not schedule a stale-device cleanup retry; the mailbox is full")
 	}
 }
 
@@ -1228,10 +1334,7 @@ func (m *Manager) onTerminal(st *actorState, from *session, reason string, banne
 	// a reconnect attempt may still deliver, which would otherwise clear the
 	// very terminal record written below.
 	sess := st.sess
-	if sess != nil {
-		sess.retired = true
-		st.sess = nil
-	}
+	st.retire(sess, false)
 
 	persistErr := m.markTerminal(st, reason, bannedUntil)
 
@@ -1247,11 +1350,6 @@ func (m *Manager) onTerminal(st *actorState, from *session, reason string, banne
 		// writes no metadata.
 		m.updateSyncStatus(st, repository.SyncStatusError, reason+" (reason not durably recorded)")
 	}
-
-	// The session is dead either way — the server ended it — so it is always
-	// torn down. Auto-reconnect must be cancelled even when we could not record
-	// why, or the client keeps retrying a session the server has ended.
-	m.tearDownOrphan(st, sess)
 
 	if persistErr != nil {
 		logger.Error().Err(persistErr).Str("reason", reason).

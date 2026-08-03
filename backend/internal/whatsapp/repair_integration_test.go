@@ -494,6 +494,7 @@ func TestStop_LeavesAnOrphanThatTheNextBootReports(t *testing.T) {
 // refusal being loud.
 func attachConnCtx(s *session) *session {
 	s.connCtx, s.cancelConn = context.WithCancel(context.Background())
+	s.dialDone = make(chan struct{})
 	return s
 }
 
