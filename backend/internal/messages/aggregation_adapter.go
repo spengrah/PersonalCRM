@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/messaging/aggregation"
+	"personal-crm/backend/internal/messaging/commsadapter"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -43,31 +43,22 @@ func NewAggregationEngine(
 ) *aggregation.Engine {
 	adapter := messagesAdapter{}
 	store := &messagesMessageStoreAdapter{repo: messageRepo}
-	finder := &interactionFinderAdapter{repo: interactionRepo}
 
-	// Untyped-nil propagation — see telegram/aggregation.go for the
-	// rationale (typed-nil concrete pointer would silently bypass
-	// engine guards on publisher == nil).
-	var pub aggregation.EventPublisher
-	if eventBus != nil {
-		pub = eventBus
-	}
-	var lookup aggregation.EventLookup
-	if eventBus != nil {
-		lookup = &busEventLookup{bus: eventBus}
-	}
-
+	// Untyped-nil propagation for a nil bus is handled by
+	// commsadapter.Publisher / commsadapter.EventLookup — a typed-nil
+	// concrete pointer would silently bypass the engine's
+	// publisher == nil guard.
 	return aggregation.NewEngine(
 		adapter,
 		store,
-		finder,
+		commsadapter.NewInteractionFinder(interactionRepo),
 		promoter,
 		extender,
-		pub,
+		commsadapter.Publisher(eventBus),
 		burstWindowHours,
 		replyBridgeHours,
 		pool,
-		lookup,
+		commsadapter.EventLookup(eventBus),
 		enqueuer,
 	)
 }
@@ -219,48 +210,4 @@ func mapMessagesMessage(m repository.MessagesMessage) aggregation.Message {
 		out.ReplyTargetID = &s
 	}
 	return out
-}
-
-// busEventLookup adapts *events.Bus to aggregation.EventLookup. Same
-// shape as the telegram adapter's busEventLookup.
-type busEventLookup struct{ bus *events.Bus }
-
-func (l *busEventLookup) FindEventBySourceRef(ctx context.Context, source, sourceID string) (uuid.UUID, bool, error) {
-	env, err := l.bus.FindEventBySource(ctx, source, sourceID)
-	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			return uuid.Nil, false, nil
-		}
-		return uuid.Nil, false, err
-	}
-	return env.ID, true, nil
-}
-
-// interactionFinderAdapter wraps *repository.InteractionRepository and
-// exposes the source-neutral aggregation.InteractionFinder surface.
-// Same shape as the telegram adapter's interactionFinderAdapter.
-type interactionFinderAdapter struct {
-	repo *repository.InteractionRepository
-}
-
-func (a *interactionFinderAdapter) FindRecentBySourceAndDirection(
-	ctx context.Context,
-	contactID uuid.UUID,
-	source, direction, sourceRefPrefix string,
-	windowStart, windowEnd time.Time,
-) (*repository.Interaction, error) {
-	return a.repo.FindRecentInteractionBySourceAndDirection(ctx, contactID, source, direction, sourceRefPrefix, windowStart, windowEnd)
-}
-
-func (a *interactionFinderAdapter) FindRecentOutboundBySource(
-	ctx context.Context,
-	contactID uuid.UUID,
-	source, sourceRefPrefix string,
-	windowStart, windowEnd time.Time,
-) (*repository.Interaction, error) {
-	return a.repo.FindRecentOutboundInteractionBySource(ctx, contactID, source, sourceRefPrefix, windowStart, windowEnd)
-}
-
-func (a *interactionFinderAdapter) GetInteraction(ctx context.Context, id uuid.UUID) (*repository.Interaction, error) {
-	return a.repo.GetInteraction(ctx, id)
 }

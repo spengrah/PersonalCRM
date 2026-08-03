@@ -93,8 +93,8 @@ func TestMapTelegramMessage(t *testing.T) {
 }
 
 // Compile-time guard: telegramMessageStoreAdapter satisfies
-// aggregation.MessageStore and interactionFinderAdapter satisfies
-// aggregation.InteractionFinder. The test references the interface
-// types so go vet flags mismatches at build time.
+// aggregation.MessageStore. The test references the interface type so
+// go vet flags mismatches at build time. The InteractionFinder side is
+// no longer telegram's own — commsadapter.NewInteractionFinder returns
+// the interface, so its conformance is a compile error in that package.
 var _ aggregation.MessageStore = (*telegramMessageStoreAdapter)(nil)
-var _ aggregation.InteractionFinder = (*interactionFinderAdapter)(nil)
