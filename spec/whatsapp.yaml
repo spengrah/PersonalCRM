@@ -27,7 +27,8 @@ behaviors:
       - a stored linked device is resumed without any user action
       - with no stored device the integration stays idle and reports that it is not paired, rather than opening a connection
       - a connection is attempted only when the stored state can be read back; a status row the integration cannot read is treated as a reason not to connect, never as an absent one
-    provenance: [Manager.Start, LoadOrCreateDevice, Manager.ensureSyncState]
+      - a first connection that fails for a transient reason keeps retrying in the background and is reported as still connecting, rather than being left down until the backend is restarted
+    provenance: [Manager.Start, LoadOrCreateDevice, Manager.ensureSyncState, InitialAutoReconnect]
 
   - id: WHA-003
     title: The linked session survives a backend restart without re-pairing
@@ -38,7 +39,8 @@ behaviors:
     when: the backend is restarted
     then:
       - the linked device is found again and the session resumes without the user scanning a code
-    provenance: [whatsmeow device store on the shared database, TestWhatsAppDeviceStore_PairedDeviceSurvivesNewManager]
+      - re-linking replaces the stored device rather than adding to it, so a restart always resumes the account most recently linked
+    provenance: [whatsmeow device store on the shared database, TestWhatsAppDeviceStore_PairedDeviceSurvivesNewManager, TestWhatsAppRePair_LeavesExactlyOneStoredDevice]
 
   - id: WHA-004
     title: A permanent disconnect is recorded, surfaced, and not retried
@@ -77,11 +79,13 @@ behaviors:
     when: a connection event arrives from one of them
     then:
       - only events from the connection the integration currently owns change the reported state, the durable record, or which device is linked
+      - deciding whose event it is and acting on that decision are one indivisible step, so a connection linked while an older connection's event is still being handled cannot inherit that event's outcome
+      - a connection that has been replaced or has already ended permanently is retired, and stays ignored for good — including for events it had already queued
       - an event from an abandoned connection is ignored and that connection is closed, rather than being applied to the live one or left holding a socket
       - a failed pairing attempt ends that attempt only, and never records a permanent-disconnect decision against the linked device
       - a linked device that ends permanently ends only itself, and does not cancel a pairing the user is in the middle of
       - a completed pairing is adopted but reported as still connecting until the source confirms the connection, because linking is followed by a reconnection
-    provenance: [Manager.scopeOf, Manager.onTerminal, Manager.onConnected, Manager.onPairSuccess]
+    provenance: [Manager.scopeOfLocked, session.retired, Manager.onTerminal, Manager.onConnected, Manager.onPairSuccess]
     notes: >-
       The source dispatches most connection events asynchronously, so an event queued by a
       connection that has since been abandoned can arrive at any later moment — including after
@@ -226,7 +230,10 @@ behaviors:
       - a failure to connect is never treated as proof that the device was already unlinked
       - a device the server has already reported as unlinked is cleared without a further remote call
       - a forced local-only clear is available and states that the device must be unlinked from the phone
-    provenance: [Manager.Disconnect]
+      - an unlink that succeeded remotely but could not clear the local credentials is reported as such, and the remedy offered is completing the local clear rather than retrying an unlink that already worked
+      - any path that clears local credentials without a remote call reports a failure to delete them, instead of reporting the integration as unlinked while the device is still stored
+      - a forced clear that failed is never later read as proof that the device was unlinked, because forcing makes no remote call and so learns nothing about it
+    provenance: [Manager.Disconnect, Manager.clearLocalDevice, serverConfirmedUnlinked]
 
   # --- Enablement ---
 

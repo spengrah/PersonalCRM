@@ -39,6 +39,13 @@ type fakeSyncStore struct {
 	terminalErr error
 	getErr      error
 	createErr   error
+
+	// terminalEntered is closed on the first terminal write and terminalBlock,
+	// when non-nil, holds the writer inside it. Together they let a test stop a
+	// lifecycle event mid-flight and drive a second one against it, which is the
+	// only way to exercise the interleaving the ownership rule exists for.
+	terminalEntered chan struct{}
+	terminalBlock   chan struct{}
 }
 
 func newFakeSyncStore() *fakeSyncStore {
@@ -93,6 +100,16 @@ func (f *fakeSyncStore) UpdateSyncStateStatus(_ context.Context, id uuid.UUID, s
 // operation on one row deliberately: a fake that applied the status and the
 // metadata separately could not tell an atomic implementation from a split one.
 func (f *fakeSyncStore) MarkSyncStateTerminal(_ context.Context, id uuid.UUID, reason string, metadata map[string]any) (*repository.SyncState, error) {
+	// Before the fake's own lock, so a blocked write does not also block the
+	// test's reads of what has been recorded so far.
+	if f.terminalEntered != nil {
+		close(f.terminalEntered)
+		f.terminalEntered = nil
+	}
+	if f.terminalBlock != nil {
+		<-f.terminalBlock
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("terminal")
@@ -221,10 +238,11 @@ type fakeClient struct {
 
 	calls []string
 
-	connectErr error
-	logoutErr  error
-	qrErr      error
-	pairErr    error
+	connectErr      error
+	logoutErr       error
+	qrErr           error
+	pairErr         error
+	deleteDeviceErr error
 
 	connected bool
 	loggedIn  bool
@@ -417,7 +435,9 @@ func newTestManager(t interface{ Cleanup(func()) }, cli *fakeClient, paired bool
 		}
 		return &session{client: cli, paired: paired, deleteDevice: func(context.Context) error {
 			cli.record("delete_device")
-			return nil
+			cli.mu.Lock()
+			defer cli.mu.Unlock()
+			return cli.deleteDeviceErr
 		}}, nil
 	}
 	return m, syncStore, ingestor, recorder

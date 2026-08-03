@@ -46,6 +46,18 @@ const (
 	ReasonTemporaryBan   = "temporary_ban"
 	// ReasonIngestNotWired is the readiness-gate reason; it is not terminal.
 	ReasonIngestNotWired = "ingest_not_wired"
+	// ReasonLocalCleanupFailed reports that the remote device is gone — either
+	// WhatsApp unlinked it or our unlink succeeded — but the LOCAL credentials
+	// could not be deleted. It is not terminal and it is not a failed unlink:
+	// the remedy is retrying the local clear, never retrying the unlink, which
+	// against an already-unlinked device cannot succeed.
+	ReasonLocalCleanupFailed = "local_cleanup_failed"
+	// ReasonForcedCleanupFailed reports that a FORCED local-only clear failed.
+	// It is deliberately distinct from ReasonLocalCleanupFailed: force makes no
+	// remote call, so it produces no evidence about the remote device, and a
+	// later unlink must still try the remote half rather than assuming it is
+	// already done.
+	ReasonForcedCleanupFailed = "forced_cleanup_failed"
 )
 
 // Pairing methods accepted by StartPairing.
@@ -97,6 +109,13 @@ var (
 	// (or the connect made solely to log out) failed. Local credentials are
 	// KEPT — a failed connect is not evidence that the device is unlinked.
 	ErrRemoteUnlinkFailed = errors.New("whatsapp: remote unlink failed")
+
+	// ErrLocalCleanupFailed is returned when the remote side needed no further
+	// action — already unlinked, just unlinked, or a forced local-only clear —
+	// but the stored device could not be deleted. Distinct from
+	// ErrRemoteUnlinkFailed because the user action differs: retry the clear,
+	// not the unlink.
+	ErrLocalCleanupFailed = errors.New("whatsapp: local credentials could not be cleared")
 
 	// ErrLIDMappingsIncomplete is returned by the history fetcher when a
 	// downloaded chunk's PN-LID mappings did not read back out of the client

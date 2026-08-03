@@ -199,10 +199,13 @@ func TestAPI_WhatsAppPhoneStartRequiresE164(t *testing.T) {
 
 func TestAPI_WhatsAppStartRejectsUnknownMethod(t *testing.T) {
 	// spec: WHA-006.phone-start-requires-e164
-	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{})
+	manager := &fakeWhatsAppManager{}
+	router := setupWhatsAppRouter(t, manager)
 	rec := doWhatsAppRequest(t, router, http.MethodPost, "/api/v1/whatsapp/auth/start",
 		map[string]string{"method": "carrier-pigeon"})
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Equal(t, 0, manager.startCalls,
+		"an unrecognised method never reaches the integration — the other half of the same promise as the malformed number")
 }
 
 func TestAPI_WhatsAppStartWhenConnectedConflicts(t *testing.T) {

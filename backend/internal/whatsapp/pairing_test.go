@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -658,4 +659,146 @@ func TestClearLocalDevice_ResetsTerminalReasonPersisted(t *testing.T) {
 	require.Equal(t, StateNotPaired, status.State)
 	assert.Nil(t, status.TerminalReasonPersisted,
 		"a status with no terminal decision must not report one either way")
+}
+
+// --- unlink outcomes, per half ----------------------------------------------
+
+// logoutRemoteFailure and logoutLocalDeleteFailure are the two error shapes the
+// library actually produces. Logout sends the unlink, then disconnects, then
+// deletes the local store, wrapping each failure with its own prefix
+// (client.go:715) — so the SECOND shape means the device is already gone
+// server-side and only local cleanup is outstanding.
+func logoutRemoteFailure() error {
+	return fmt.Errorf("error sending logout request: %w", errors.New("websocket disconnected before response"))
+}
+
+func logoutLocalDeleteFailure() error {
+	return fmt.Errorf("error deleting data from store: %w", errors.New("connection refused"))
+}
+
+// TestDisconnect_RemoteFailureKeepsTheDevice pins the conservative half against
+// the library's real error text, not an invented one.
+func TestDisconnect_RemoteFailureKeepsTheDevice(t *testing.T) {
+	cli := newFakeClient()
+	cli.logoutErr = logoutRemoteFailure()
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	result, err := m.Disconnect(context.Background(), false)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, ErrRemoteUnlinkFailed)
+	assert.NotContains(t, cli.callLog(), "delete_device", "the device is KEPT so the user can retry the unlink")
+	assert.Equal(t, StateDisconnectFailed, m.Status().State)
+}
+
+// TestDisconnect_LocalDeleteFailureAfterRemoteSuccessIsNotAFailedUnlink is the
+// half the old code got backwards.
+//
+// The library returns this error AFTER the remote unlink has already succeeded.
+// Reporting it as "the unlink failed, retry" sends the user at the half that
+// worked — and a retried unlink against an already-unlinked device cannot
+// succeed. The right response is to finish the LOCAL clear.
+func TestDisconnect_LocalDeleteFailureAfterRemoteSuccessIsNotAFailedUnlink(t *testing.T) {
+	cli := newFakeClient()
+	cli.logoutErr = logoutLocalDeleteFailure()
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	result, err := m.Disconnect(context.Background(), false)
+	require.NoError(t, err, "the remote device is gone; this is not a failed unlink")
+	require.NotNil(t, result)
+	assert.True(t, result.RemoteUnlinked)
+	assert.Contains(t, cli.callLog(), "delete_device", "the local clear is completed rather than reported as an unlink failure")
+	assert.Equal(t, StateNotPaired, m.Status().State)
+}
+
+// TestDisconnect_LocalCleanupFailureIsSurfaced: the device row could not be
+// deleted, so the credentials are still there. Publishing not_paired would tell
+// the user the integration is clean while the next boot resumes the very device
+// they asked to remove.
+func TestDisconnect_LocalCleanupFailureIsSurfaced(t *testing.T) {
+	cli := newFakeClient()
+	cli.logoutErr = logoutLocalDeleteFailure()
+	cli.deleteDeviceErr = errors.New("database is down")
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	result, err := m.Disconnect(context.Background(), false)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, ErrLocalCleanupFailed)
+	assert.NotErrorIs(t, err, ErrRemoteUnlinkFailed, "the unlink itself succeeded")
+
+	status := m.Status()
+	assert.Equal(t, StateDisconnectFailed, status.State)
+	assert.Equal(t, ReasonLocalCleanupFailed, status.Reason)
+	assert.NotEqual(t, StateNotPaired, status.State, "a device that is still stored is not 'not paired'")
+
+	// A retry makes no further remote call: the device is already unlinked, and
+	// an unlink against an unlinked device cannot succeed.
+	cli.mu.Lock()
+	cli.deleteDeviceErr = nil
+	cli.calls = nil
+	cli.mu.Unlock()
+
+	result, err = m.Disconnect(context.Background(), false)
+	require.NoError(t, err)
+	assert.True(t, result.AlreadyUnlinked)
+	assert.NotContains(t, cli.callLog(), "logout", "the remote half is settled; only the local clear was outstanding")
+	assert.Contains(t, cli.callLog(), "delete_device")
+	assert.Equal(t, StateNotPaired, m.Status().State)
+}
+
+// TestDisconnect_ForceReportsAFailedLocalClear: force skips the remote call, but
+// it cannot skip reality — if the stored device survives, saying it was cleared
+// is a lie.
+func TestDisconnect_ForceReportsAFailedLocalClear(t *testing.T) {
+	cli := newFakeClient()
+	cli.deleteDeviceErr = errors.New("database is down")
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+
+	result, err := m.Disconnect(context.Background(), true)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, ErrLocalCleanupFailed)
+	assert.Equal(t, StateDisconnectFailed, m.Status().State)
+	assert.Equal(t, ReasonForcedCleanupFailed, m.Status().Reason,
+		"force made no remote call, so it learned nothing about the remote device")
+
+	// And that distinction has to hold: a later ordinary unlink must still try
+	// the remote half, rather than reading the failed force as proof the device
+	// was already unlinked.
+	cli.mu.Lock()
+	cli.deleteDeviceErr = nil
+	cli.calls = nil
+	cli.connected = true
+	cli.mu.Unlock()
+
+	result, err = m.Disconnect(context.Background(), false)
+	require.NoError(t, err)
+	assert.True(t, result.RemoteUnlinked)
+	assert.Contains(t, cli.callLog(), "logout",
+		"a failed forced clear is not evidence of anything; the unlink still has to happen")
+}
+
+// TestDisconnect_AlreadyUnlinkedReportsAFailedLocalClear: the same for the
+// server-confirmed path, which also clears without a remote call.
+func TestDisconnect_AlreadyUnlinkedReportsAFailedLocalClear(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+	require.True(t, m.handleEvent(&events.LoggedOut{}))
+
+	cli.mu.Lock()
+	cli.deleteDeviceErr = errors.New("database is down")
+	cli.mu.Unlock()
+
+	result, err := m.Disconnect(context.Background(), false)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, ErrLocalCleanupFailed)
+	assert.NotContains(t, cli.callLog(), "logout")
+	assert.Equal(t, ReasonLocalCleanupFailed, m.Status().Reason)
 }

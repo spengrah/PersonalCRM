@@ -68,6 +68,16 @@ func TestNewClient_SetsManualHistoryFlags(t *testing.T) {
 		"the library's automatic download+delete loop must never start")
 	assert.True(t, cli.DisableManualHistorySyncReceipt,
 		"the history receipt must not be sent behind our back")
+
+	// EnableAutoReconnect covers a socket that dropped after connecting and
+	// defaults to true; the INITIAL dial is retried only under
+	// InitialAutoReconnect, which defaults to FALSE. Without it a boot during a
+	// network blip leaves a healthy linked device down until someone restarts
+	// the process.
+	assert.True(t, cli.InitialAutoReconnect,
+		"a failed first connection must be retried, not left down until the next restart")
+	assert.True(t, cli.EnableAutoReconnect,
+		"the initial retry is gated on both flags, so the default must not be turned off")
 }
 
 // TestManager_SynchronousAckEnabled is one line and it is the whole durability
@@ -1027,4 +1037,172 @@ func TestStart_FailsClosedWhenSyncStateCannotBeCreated(t *testing.T) {
 	assert.NotContains(t, cli.callLog(), "connect",
 		"without a status row there is nowhere to record a terminal decision, so connecting is unsafe")
 	assert.Contains(t, syncStore.callLog(), "create", "the create path was actually taken")
+}
+
+// --- ownership is atomic ----------------------------------------------------
+
+// TestOnTerminal_DoesNotSpeakForASessionAdoptedMidEvent is the interleaving the
+// attribution fence alone did not close.
+//
+// Attributing an event and then acting on it in two steps leaves a gap. In that
+// gap a PairSuccess can install a NEW session, and the old session's terminal
+// handler — which by then re-reads current state — persists its reason against
+// the new device, publishes the new session as disconnected, and disconnects its
+// client. The already-abandoned-client tests cannot see this: session A is the
+// installed session at the moment its event is attributed, and only stops being
+// so while the event is in flight.
+//
+// The terminal write blocks, so the PairSuccess lands mid-event. With the
+// decision held under one critical section the pairing simply waits its turn;
+// the bounded wait below is what tells the two apart without deadlocking on the
+// version that serializes correctly.
+func TestOnTerminal_DoesNotSpeakForASessionAdoptedMidEvent(t *testing.T) {
+	installed := newFakeClient()
+	m, syncStore, _, _ := newTestManager(t, installed, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	m.mu.RLock()
+	sessA := m.sess
+	m.mu.RUnlock()
+	require.NotNil(t, sessA)
+
+	pairingClient := newFakeClient()
+	m.newSession = func(context.Context, bool) (*session, error) {
+		return &session{client: pairingClient, deleteDevice: func(context.Context) error {
+			pairingClient.record("delete_device")
+			return nil
+		}}, nil
+	}
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	sessB := m.pairing.session()
+	require.NotNil(t, sessB)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	syncStore.terminalEntered = entered
+	syncStore.terminalBlock = release
+
+	terminalDone := make(chan struct{})
+	go func() {
+		defer close(terminalDone)
+		m.handleEventFor(sessA, &events.LoggedOut{})
+	}()
+	<-entered
+
+	jid := types.NewJID("15551234567", types.DefaultUserServer)
+	pairDone := make(chan struct{})
+	go func() {
+		defer close(pairDone)
+		m.handleEventFor(sessB, &events.PairSuccess{ID: jid})
+	}()
+
+	select {
+	case <-pairDone:
+		// The adoption completed while the terminal event was still in flight —
+		// the gap this test exists to close.
+	case <-time.After(200 * time.Millisecond):
+		// The adoption is waiting for the terminal event to finish deciding.
+	}
+	close(release)
+	<-terminalDone
+	<-pairDone
+
+	m.mu.RLock()
+	installedNow := m.sess
+	retired := sessA.retired
+	m.mu.RUnlock()
+
+	assert.Same(t, sessB, installedNow, "the newly paired session must stay installed")
+	assert.Equal(t, StateConnecting, m.Status().State,
+		"a dead session must not publish the session that replaced it as disconnected")
+	assert.NotContains(t, pairingClient.callLog(), "disconnect",
+		"the newly paired client must not be torn down by the old session's event")
+	assert.True(t, retired, "the terminally handled session is retired")
+
+	// And retirement is permanent: a Connected still queued on A cannot revive
+	// it or clear the record A itself wrote.
+	assert.True(t, m.handleEventFor(sessA, &events.Connected{}))
+	assert.Equal(t, StateConnecting, m.Status().State)
+}
+
+// TestOnConnected_FromRetiredSessionIsIgnored is the tail case on its own: the
+// session is still what m.sess points at, but it has been terminally handled, so
+// its queued Connected must not clear the terminal record it just wrote.
+func TestOnConnected_FromRetiredSessionIsIgnored(t *testing.T) {
+	cli := newFakeClient()
+	m, syncStore, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	m.mu.RLock()
+	sess := m.sess
+	m.mu.RUnlock()
+	require.NotNil(t, sess)
+
+	require.True(t, m.handleEventFor(sess, &events.LoggedOut{}))
+	require.Equal(t, ReasonLoggedOut, syncStore.terminalReason())
+
+	// whatsmeow's reconnect can still deliver a Connected for the socket that
+	// was coming up as the logout landed.
+	assert.True(t, m.handleEventFor(sess, &events.Connected{}))
+
+	assert.Equal(t, StateDisconnected, m.Status().State,
+		"a retired session cannot report itself connected again")
+	assert.Equal(t, ReasonLoggedOut, syncStore.terminalReason(),
+		"and cannot clear the terminal record that stops the next boot reconnecting")
+}
+
+// TestOnPairSuccess_RetiresAndDeletesTheReplacedSession is the re-pair path.
+//
+// Re-pairing is permitted while the old session is down, and it pairs over a
+// FRESH device. The library's GetFirstDevice returns the first row of an
+// unordered scan and documents that it is for single-session use only, so a
+// leftover row is a device the next boot may resume instead of the new one.
+func TestOnPairSuccess_RetiresAndDeletesTheReplacedSession(t *testing.T) {
+	oldClient := newFakeClient()
+	m, _, _, _ := newTestManager(t, oldClient, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+	require.True(t, m.handleEvent(&events.Disconnected{}))
+	oldClient.mu.Lock()
+	oldClient.connected = false
+	oldClient.mu.Unlock()
+
+	m.mu.RLock()
+	oldSess := m.sess
+	m.mu.RUnlock()
+	require.NotNil(t, oldSess)
+
+	newClient := newFakeClient()
+	m.newSession = func(context.Context, bool) (*session, error) {
+		return &session{client: newClient, deleteDevice: func(context.Context) error {
+			newClient.record("delete_device")
+			return nil
+		}}, nil
+	}
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	pairingSess := m.pairing.session()
+	require.NotNil(t, pairingSess)
+
+	require.True(t, m.handleEventFor(pairingSess, &events.PairSuccess{
+		ID: types.NewJID("15559998888", types.DefaultUserServer),
+	}))
+
+	m.mu.RLock()
+	installed := m.sess
+	retired := oldSess.retired
+	m.mu.RUnlock()
+
+	assert.Same(t, pairingSess, installed)
+	assert.True(t, retired, "the replaced session is retired")
+	assert.Contains(t, oldClient.callLog(), "delete_device",
+		"the replaced device must be removed, or the next boot can resume it instead")
+	assert.Contains(t, oldClient.callLog(), "disconnect")
+	assert.NotContains(t, newClient.callLog(), "delete_device",
+		"the device that was just linked is the one that stays")
+
+	// The replaced session's queued events are inert from here.
+	assert.True(t, m.handleEventFor(oldSess, &events.LoggedOut{}))
+	assert.Equal(t, StateConnecting, m.Status().State)
 }

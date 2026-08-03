@@ -122,6 +122,14 @@ type session struct {
 	// paired reports whether the device carried an ID when the session was
 	// built.
 	paired bool
+	// retired records that this session has been superseded (a newer pairing
+	// was adopted, the local device was cleared) or terminally handled. It is
+	// written and read ONLY under Manager.mu, and it is what makes attribution
+	// permanent: a retired session is stale forever, whatever m.sess points at
+	// by the time one of its queued events is delivered. Without it, a Connected
+	// left in the dispatcher queue by a session that was just logged out could
+	// still clear the terminal record that same session had only just written.
+	retired bool
 }
 
 // Manager owns the whatsmeow client lifecycle, the pairing state machine, and
@@ -259,6 +267,15 @@ func (m *Manager) newClient(device *store.Device, sess *session) *whatsmeow.Clie
 	cli.ManualHistorySyncDownload = true
 	cli.DisableManualHistorySyncReceipt = true
 
+	// Retry a failed FIRST connection. EnableAutoReconnect (default true) only
+	// covers a socket that dropped after connecting; the initial dial is retried
+	// only when this is set, and it defaults to false. Without it a boot during
+	// a network blip leaves the client down until the process restarts, even
+	// though the device is linked and healthy. With it, a retryable initial
+	// failure returns nil, dispatches Disconnected, and reconnects in the
+	// background, so only the non-retryable class reaches Start's error branch.
+	cli.InitialAutoReconnect = true
+
 	// WithSuccessStatus, not AddEventHandler: the plain variant wraps a void
 	// handler and hard-codes a true return, so our false could never reach the
 	// dispatcher and the withheld-ack contract would silently not exist.
@@ -387,6 +404,11 @@ func (m *Manager) Stop() {
 	sess := m.sess
 	pairing := m.pairing
 	m.pairing = nil
+	// Retire on the way down: an event already queued by either client must not
+	// mutate the manager while the process is tearing down.
+	if sess != nil {
+		sess.retired = true
+	}
 	m.mu.Unlock()
 
 	if pairing != nil {
@@ -544,8 +566,15 @@ func (m *Manager) currentSyncStateID() *uuid.UUID {
 
 // updateSyncStatus writes the connection status onto external_sync_state so the
 // staleness watchdog and the settings staleness banner see WhatsApp for free.
+//
+// It resolves the row id itself, so it must NOT be called from inside the
+// manager's critical section; the lifecycle handlers use updateSyncStatusWith
+// with the id they captured under the lock.
 func (m *Manager) updateSyncStatus(ctx context.Context, status repository.SyncStatus, errMsg string) {
-	id := m.currentSyncStateID()
+	m.updateSyncStatusWith(ctx, m.currentSyncStateID(), status, errMsg)
+}
+
+func (m *Manager) updateSyncStatusWith(ctx context.Context, id *uuid.UUID, status repository.SyncStatus, errMsg string) {
 	if id == nil || m.syncRepo == nil {
 		return
 	}
@@ -570,8 +599,10 @@ func (m *Manager) updateSyncStatus(ctx context.Context, status repository.SyncSt
 // is a breach that never opens at all. Splitting them was exactly that lost
 // breach — a failure between the two writes produced a durably terminal row the
 // watchdog would ignore forever.
-func (m *Manager) markTerminal(ctx context.Context, reason string, bannedUntil *time.Time) error {
-	id := m.currentSyncStateID()
+//
+// It is called from inside the manager's critical section, so it takes the row
+// id the caller already captured rather than resolving it under a second lock.
+func (m *Manager) markTerminal(ctx context.Context, id *uuid.UUID, reason string, bannedUntil *time.Time) error {
 	if id == nil || m.syncRepo == nil {
 		return errors.New("whatsapp: no sync state row to record the terminal reason on")
 	}
@@ -592,9 +623,13 @@ func (m *Manager) markTerminal(ctx context.Context, reason string, bannedUntil *
 }
 
 // clearTerminalReason removes a stale terminal decision once a connection
-// actually succeeds.
+// actually succeeds. Like updateSyncStatus it resolves the row id itself, so
+// the lifecycle handlers use clearTerminalReasonWith instead.
 func (m *Manager) clearTerminalReason(ctx context.Context) {
-	id := m.currentSyncStateID()
+	m.clearTerminalReasonWith(ctx, m.currentSyncStateID())
+}
+
+func (m *Manager) clearTerminalReasonWith(ctx context.Context, id *uuid.UUID) {
 	if id == nil || m.syncRepo == nil {
 		return
 	}
@@ -627,29 +662,34 @@ const (
 	scopeStale
 )
 
-// scopeOf attributes an event to its emitter, and returns the in-flight pairing
-// so a caller that needs to act on it does not have to re-read it under a second
-// lock acquisition.
-func (m *Manager) scopeOf(from *session) (eventScope, *pairingState) {
-	m.mu.RLock()
-	sess, pairing := m.sess, m.pairing
-	m.mu.RUnlock()
-
+// scopeOfLocked attributes an event to its emitter. The caller MUST already hold
+// m.mu for writing, and must keep holding it through the decision and the state
+// transition that follow — attribution released early is a check-then-act gap,
+// and the gap is exactly where an old session's terminal decision could land on
+// a session adopted in the meantime.
+//
+// It also returns the in-flight pairing, so a caller that has to act on it does
+// not re-read manager state after the lock is gone.
+func (m *Manager) scopeOfLocked(from *session) (eventScope, *pairingState) {
 	switch {
+	case from != nil && from.retired:
+		// Superseded or already terminally handled. Retirement is permanent, so
+		// this stays stale no matter what m.sess points at now.
+		return scopeStale, m.pairing
 	case from == nil:
 		// Unattributed. Production always binds a session (newClient closes over
 		// one), so this is the test-only entry point; attribute it to whatever
 		// the manager currently owns.
-		if sess == nil && pairing != nil {
-			return scopePairing, pairing
+		if m.sess == nil && m.pairing != nil {
+			return scopePairing, m.pairing
 		}
-		return scopeInstalled, pairing
-	case sess != nil && from == sess:
-		return scopeInstalled, pairing
-	case pairing != nil && pairing.owns(from):
-		return scopePairing, pairing
+		return scopeInstalled, m.pairing
+	case m.sess != nil && from == m.sess:
+		return scopeInstalled, m.pairing
+	case m.pairing != nil && m.pairing.owns(from):
+		return scopePairing, m.pairing
 	default:
-		return scopeStale, pairing
+		return scopeStale, m.pairing
 	}
 }
 
@@ -718,13 +758,15 @@ func (m *Manager) handleEventFor(sess *session, evt any) bool {
 }
 
 func (m *Manager) onConnected(ctx context.Context, from *session) {
-	var jid, pushName *string
+	m.mu.Lock()
 
-	switch scope, _ := m.scopeOf(from); scope {
+	switch scope, _ := m.scopeOfLocked(from); scope {
 	case scopeStale:
 		// A client the manager no longer owns — an abandoned pairing whose
-		// socket came up anyway — must not publish a connection state, and must
-		// not be left holding one either.
+		// socket came up anyway, or a session already retired by a terminal
+		// event — must not publish a connection state, and must not be left
+		// holding one either.
+		m.mu.Unlock()
 		logger.Debug().Msg("whatsapp: ignoring Connected from an abandoned client")
 		if from != nil {
 			from.client.Disconnect()
@@ -736,15 +778,13 @@ func (m *Manager) onConnected(ctx context.Context, from *session) {
 		// account is live while the user is still holding an unscanned QR code;
 		// PairSuccess is what completes the link, and the reconnect that follows
 		// it is what makes the session live.
+		m.mu.Unlock()
 		logger.Debug().Msg("whatsapp: socket connected for pairing")
 		return
 	}
 
-	m.mu.RLock()
-	sess := m.sess
-	m.mu.RUnlock()
-
-	if sess != nil && sess.wa != nil && sess.wa.Store != nil {
+	var jid, pushName *string
+	if sess := m.sess; sess != nil && sess.wa != nil && sess.wa.Store != nil {
 		if sess.wa.Store.ID != nil {
 			s := sess.wa.Store.ID.String()
 			jid = &s
@@ -756,26 +796,29 @@ func (m *Manager) onConnected(ctx context.Context, from *session) {
 	}
 
 	now := accelerated.GetCurrentTime()
-	m.setStatus(func(s *Status) {
-		s.State = StateConnected
-		s.Reason = ""
-		s.BannedUntil = nil
-		s.TerminalReasonPersisted = nil
-		s.ConnectedAt = &now
-		if jid != nil {
-			s.JID = jid
-			if parsed, err := types.ParseJID(*jid); err == nil && parsed.Server == types.DefaultUserServer {
-				user := parsed.User
-				s.PhoneNumber = &user
-			}
+	m.status.State = StateConnected
+	m.status.Reason = ""
+	m.status.BannedUntil = nil
+	m.status.TerminalReasonPersisted = nil
+	m.status.ConnectedAt = &now
+	if jid != nil {
+		m.status.JID = jid
+		if parsed, err := types.ParseJID(*jid); err == nil && parsed.Server == types.DefaultUserServer {
+			user := parsed.User
+			m.status.PhoneNumber = &user
 		}
-		if pushName != nil {
-			s.PushName = pushName
-		}
-	})
+	}
+	if pushName != nil {
+		m.status.PushName = pushName
+	}
 
-	m.clearTerminalReason(ctx)
-	m.updateSyncStatus(ctx, repository.SyncStatusIdle, "")
+	// Inside the same critical section as the attribution: a terminal decision
+	// taken by another session must not be cleared by a connection this session
+	// only appeared to own for a moment.
+	m.clearTerminalReasonWith(ctx, m.syncStateID)
+	m.updateSyncStatusWith(ctx, m.syncStateID, repository.SyncStatusIdle, "")
+	m.mu.Unlock()
+
 	logger.Info().Msg("whatsapp: connected")
 }
 
@@ -786,7 +829,10 @@ func (m *Manager) onConnected(ctx context.Context, from *session) {
 // A drop on the pairing socket, or on a client the manager abandoned, says
 // nothing about the installed session and must not be published as if it did.
 func (m *Manager) onDisconnected(from *session) {
-	switch scope, _ := m.scopeOf(from); scope {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	switch scope, _ := m.scopeOfLocked(from); scope {
 	case scopeStale:
 		logger.Debug().Msg("whatsapp: ignoring Disconnected from an abandoned client")
 		return
@@ -795,11 +841,13 @@ func (m *Manager) onDisconnected(from *session) {
 		return
 	}
 
-	m.setStatus(func(s *Status) {
-		if s.State == StateConnected {
-			s.State = StateReconnecting
-		}
-	})
+	// Only a live connection is downgraded. A drop reported while the state is
+	// already connecting belongs to the library's own initial-connect retry
+	// (InitialAutoReconnect dispatches Disconnected and then reconnects in the
+	// background), and connecting already describes that.
+	if m.status.State == StateConnected {
+		m.status.State = StateReconnecting
+	}
 }
 
 // onPairSuccess adopts a completed pairing.
@@ -818,20 +866,32 @@ func (m *Manager) onPairSuccess(ctx context.Context, from *session, e *events.Pa
 	jid := e.ID.String()
 
 	m.mu.Lock()
-	pairing := m.pairing
-	switch {
-	case pairing != nil && pairing.owns(from):
+	// superseded is the session this pairing replaces. Re-pairing is permitted
+	// while the old session is down, and it pairs over a FRESH device, so the
+	// old one has to be retired AND its device row removed: the library's
+	// GetFirstDevice returns the first row of an unordered scan and documents
+	// that it is only for single-session use, so a leftover row can be the one
+	// the next boot resumes.
+	var superseded *session
+	scope, pairing := m.scopeOfLocked(from)
+	switch scope {
+	case scopePairing:
 		pairing.cancel()
 		// The client that completed the pairing becomes the live session: it
 		// already carries the event handler and the manual-history flags, and
 		// whatsmeow reconnects it as the linked device.
 		if adopted := pairing.session(); adopted != nil {
 			adopted.paired = true
+			if m.sess != nil && m.sess != adopted {
+				superseded = m.sess
+				superseded.retired = true
+			}
 			m.sess = adopted
 		}
 		m.pairing = nil
-	case from != nil && from == m.sess:
-		// A re-pair reported on the already-installed session.
+	case scopeInstalled:
+		// A re-pair reported on the already-installed session: same device, so
+		// there is nothing to retire.
 	default:
 		m.mu.Unlock()
 		logger.Warn().Msg("whatsapp: ignoring PairSuccess from an abandoned pairing client")
@@ -853,14 +913,26 @@ func (m *Manager) onPairSuccess(ctx context.Context, from *session, e *events.Pa
 		name := e.BusinessName
 		m.status.PushName = &name
 	}
-	m.mu.Unlock()
-
 	// The terminal decision that was on file belonged to the device this pairing
 	// replaces, so it is cleared here rather than waiting for the connection:
 	// leaving it would make the next boot refuse to resume a device that has
-	// never been logged out. The sync status stays as it was — only a real
-	// connection clears the error.
-	m.clearTerminalReason(ctx)
+	// never been logged out. Inside the critical section, so a terminal event
+	// racing this adoption cannot land its reason afterwards. The sync status
+	// stays as it was — only a real connection clears the error.
+	m.clearTerminalReasonWith(ctx, m.syncStateID)
+	m.mu.Unlock()
+
+	// Retire the replaced session outside the lock: both calls block (socket
+	// teardown, a DELETE) and neither may run with the manager's mutex held.
+	if superseded != nil {
+		superseded.client.Disconnect()
+		if superseded.deleteDevice != nil {
+			if err := superseded.deleteDevice(ctx); err != nil {
+				logger.Error().Err(err).
+					Msg("whatsapp: failed to delete the replaced device; the store must hold exactly one, or a restart may resume the wrong one")
+			}
+		}
+	}
 	logger.Info().Msg("whatsapp: device paired, awaiting connection")
 }
 
@@ -874,8 +946,12 @@ func (m *Manager) onPairSuccess(ctx context.Context, from *session, e *events.Pa
 // dead client's verdict on a live one — and, in the pairing case, cancel a
 // pairing attempt that a different client owns.
 func (m *Manager) onTerminal(ctx context.Context, from *session, reason string, bannedUntil *time.Time) {
-	switch scope, pairing := m.scopeOf(from); scope {
+	m.mu.Lock()
+
+	scope, pairing := m.scopeOfLocked(from)
+	switch scope {
 	case scopeStale:
+		m.mu.Unlock()
 		logger.Warn().Str("reason", reason).
 			Msg("whatsapp: ignoring terminal event from an abandoned client")
 		if from != nil {
@@ -886,15 +962,27 @@ func (m *Manager) onTerminal(ctx context.Context, from *session, reason string, 
 		// The attempt is over, and its client is torn down with it. The
 		// installed session's durable "do not reconnect" decision is not this
 		// client's to write: it is a different device.
+		m.mu.Unlock()
 		logger.Warn().Str("reason", reason).Msg("whatsapp: pairing attempt ended")
 		m.abandonPairing(ctx, pairing)
 		return
 	}
 
-	persistErr := m.markTerminal(ctx, reason, bannedUntil)
-
-	m.mu.Lock()
+	// Retire before anything else: this session is over, and no event it has
+	// already queued may mutate the manager again — including the Connected that
+	// a reconnect attempt may still deliver, which would otherwise clear the very
+	// terminal record written below.
 	sess := m.sess
+	if sess != nil {
+		sess.retired = true
+	}
+
+	// The durable write happens INSIDE the critical section. Released here, a
+	// PairSuccess could adopt a new session in the gap, and this dead session's
+	// reason would land on the new device's row — making the next boot refuse to
+	// resume a device that was never logged out.
+	persistErr := m.markTerminal(ctx, m.syncStateID, reason, bannedUntil)
+
 	m.status.State = StateDisconnected
 	m.status.Reason = reason
 	m.status.BannedUntil = bannedUntil
@@ -904,6 +992,13 @@ func (m *Manager) onTerminal(ctx context.Context, from *session, reason string, 
 	// decision that will not survive a restart as if it had been taken.
 	persisted := persistErr == nil
 	m.status.TerminalReasonPersisted = &persisted
+	if persistErr != nil {
+		// Best effort, and safe: a status-only write cannot produce the row that
+		// was the problem (terminal metadata on a non-error row), because it
+		// writes no metadata. It buys the staleness banner an error state even
+		// though the immediate-breach rule will not fire without the reason.
+		m.updateSyncStatusWith(ctx, m.syncStateID, repository.SyncStatusError, reason+" (reason not durably recorded)")
+	}
 	m.mu.Unlock()
 
 	// The session is dead either way — the server ended it — so it is always
@@ -916,11 +1011,6 @@ func (m *Manager) onTerminal(ctx context.Context, from *session, reason string, 
 	if persistErr != nil {
 		logger.Error().Err(persistErr).Str("reason", reason).
 			Msg("whatsapp: could not durably record the permanent disconnect; a restart may reconnect this device")
-		// Best effort, and safe: a status-only write cannot produce the row that
-		// was the problem (terminal metadata on a non-error row), because it
-		// writes no metadata. It buys the staleness banner an error state even
-		// though the immediate-breach rule will not fire without the reason.
-		m.updateSyncStatus(ctx, repository.SyncStatusError, reason+" (reason not durably recorded)")
 		return
 	}
 	logger.Warn().Str("reason", reason).Msg("whatsapp: permanent disconnect, not reconnecting")

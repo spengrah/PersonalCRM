@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -388,30 +389,49 @@ func (m *Manager) Disconnect(ctx context.Context, force bool) (*DisconnectResult
 	m.mu.RUnlock()
 
 	// Force is the only path that clears local state without server
-	// confirmation, and it says so in its result.
+	// confirmation, and it says so in its result. It can still FAIL: if the
+	// device row cannot be deleted, the credentials are still there, and
+	// reporting a clean not_paired would be a lie.
 	if force {
-		m.clearLocalDevice(ctx, sess)
+		if err := m.clearLocalDevice(ctx, sess, ReasonForcedCleanupFailed); err != nil {
+			return nil, err
+		}
 		return &DisconnectResult{
 			Forced:  true,
 			Warning: "Local credentials were cleared without contacting WhatsApp. Unlink this device from your phone's Linked Devices screen to complete the disconnect.",
 		}, nil
 	}
 
-	// The one server-confirmed "already unlinked" signal: whatsmeow raises
-	// LoggedOut specifically for a stream error or connect failure that means
-	// unpaired. Nothing else qualifies.
-	if state == StateDisconnected && reason == ReasonLoggedOut {
-		m.clearLocalDevice(ctx, sess)
+	// Positive evidence that the remote device is already gone: WhatsApp said so
+	// (LoggedOut), or a previous unlink completed remotely and only the local
+	// clear failed. Both skip the remote call; neither is a guess.
+	if serverConfirmedUnlinked(state, reason) {
+		if err := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed); err != nil {
+			return nil, err
+		}
 		return &DisconnectResult{AlreadyUnlinked: true}, nil
 	}
 
 	// A live client can log out directly.
 	if sess != nil && sess.client.IsConnected() {
 		if err := sess.client.Logout(ctx); err != nil {
-			m.recordDisconnectFailure(ctx, err)
-			return nil, errors.Join(ErrRemoteUnlinkFailed, err)
+			if !logoutFailedAfterRemoteUnlink(err) {
+				m.recordDisconnectFailure(ctx, err)
+				return nil, errors.Join(ErrRemoteUnlinkFailed, err)
+			}
+			// The device IS unlinked server-side; only the library's own local
+			// delete failed. Telling the user to retry the unlink would be
+			// wrong twice over — the unlink worked, and retrying it against an
+			// already-unlinked device cannot succeed. Retry the LOCAL clear.
+			if clearErr := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed); clearErr != nil {
+				return nil, clearErr
+			}
+			logger.Warn().Err(err).Msg("whatsapp: remote unlink succeeded but the library's local delete failed; cleared locally on retry")
+			return &DisconnectResult{RemoteUnlinked: true}, nil
 		}
-		m.clearLocalDevice(ctx, sess)
+		if err := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed); err != nil {
+			return nil, err
+		}
 		return &DisconnectResult{RemoteUnlinked: true}, nil
 	}
 
@@ -448,12 +468,49 @@ func (m *Manager) Disconnect(ctx context.Context, force bool) (*DisconnectResult
 		return nil, errors.Join(ErrRemoteUnlinkFailed, err)
 	}
 	if err := sess.client.Logout(ctx); err != nil {
-		sess.client.Disconnect()
-		m.recordDisconnectFailure(ctx, err)
-		return nil, errors.Join(ErrRemoteUnlinkFailed, err)
+		if !logoutFailedAfterRemoteUnlink(err) {
+			sess.client.Disconnect()
+			m.recordDisconnectFailure(ctx, err)
+			return nil, errors.Join(ErrRemoteUnlinkFailed, err)
+		}
+		if clearErr := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed); clearErr != nil {
+			return nil, clearErr
+		}
+		logger.Warn().Err(err).Msg("whatsapp: remote unlink succeeded but the library's local delete failed; cleared locally on retry")
+		return &DisconnectResult{RemoteUnlinked: true}, nil
 	}
-	m.clearLocalDevice(ctx, sess)
+	if err := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed); err != nil {
+		return nil, err
+	}
 	return &DisconnectResult{RemoteUnlinked: true}, nil
+}
+
+// logoutStoreDeleteMarker is how the library reports that the REMOTE unlink
+// already succeeded and only its own local store delete failed.
+//
+// Logout sends the unlink IQ, then disconnects, then deletes the local store,
+// and wraps the two failures differently (client.go:715): a failed IQ becomes
+// "error sending logout request: …" and a failed delete becomes "error deleting
+// data from store: …". The second is the only shape that means the device is
+// gone server-side, and the library exposes no sentinel for it.
+const logoutStoreDeleteMarker = "error deleting data from store"
+
+// logoutFailedAfterRemoteUnlink reports whether a Logout error arrived AFTER the
+// remote unlink had already succeeded. Anything unrecognised is treated as a
+// failed remote unlink, which is the conservative answer: it keeps the device.
+func logoutFailedAfterRemoteUnlink(err error) bool {
+	return err != nil && strings.Contains(err.Error(), logoutStoreDeleteMarker)
+}
+
+// serverConfirmedUnlinked reports whether the manager already holds positive
+// evidence that the remote device is gone, so a further remote call would be
+// pointless (and, against an unlinked device, would fail).
+//
+// A FORCED clear that failed does not qualify: it made no remote call, so it
+// learned nothing about the remote device, and a later unlink must still try.
+func serverConfirmedUnlinked(state, reason string) bool {
+	return (state == StateDisconnected && reason == ReasonLoggedOut) ||
+		(state == StateDisconnectFailed && reason == ReasonLocalCleanupFailed)
 }
 
 // recordDisconnectFailure keeps the device and reports the failure so the user
@@ -468,25 +525,53 @@ func (m *Manager) recordDisconnectFailure(ctx context.Context, err error) {
 }
 
 // clearLocalDevice tears down the session and removes the stored device.
-func (m *Manager) clearLocalDevice(ctx context.Context, sess *session) {
+//
+// A failed delete is REPORTED, not logged and forgotten: the credentials are
+// still on disk, so publishing not_paired would tell the user the integration
+// is clean while the next boot would resume the very device they asked to
+// remove.
+// failReason is the machine-readable reason published if the delete fails. It
+// is the caller's to supply because it encodes what evidence the caller had:
+// only a caller that actually confirmed the remote unlink may leave behind a
+// state that a later disconnect reads as "already unlinked".
+func (m *Manager) clearLocalDevice(ctx context.Context, sess *session, failReason string) error {
 	if sess == nil {
 		if built, err := m.newSession(ctx, false); err == nil {
 			sess = built
 		}
 	}
+	var deleteErr error
 	if sess != nil {
 		sess.client.Disconnect()
 		if sess.deleteDevice != nil {
-			if err := sess.deleteDevice(ctx); err != nil {
-				logger.Warn().Err(err).Msg("whatsapp: failed to delete local device")
-			}
+			deleteErr = sess.deleteDevice(ctx)
 		}
+	}
+
+	if deleteErr != nil {
+		m.mu.Lock()
+		if sess != nil {
+			sess.retired = true
+		}
+		m.status.State = StateDisconnectFailed
+		m.status.Reason = failReason
+		m.mu.Unlock()
+
+		m.updateSyncStatus(ctx, repository.SyncStatusError, deleteErr.Error())
+		logger.Error().Err(deleteErr).Msg("whatsapp: local credentials could not be cleared; the device is still stored")
+		return errors.Join(ErrLocalCleanupFailed, deleteErr)
 	}
 
 	m.mu.Lock()
 	if m.pairing != nil {
 		m.pairing.cancel()
 		m.pairing = nil
+	}
+	if sess != nil {
+		sess.retired = true
+	}
+	if m.sess != nil {
+		m.sess.retired = true
 	}
 	m.sess = nil
 	m.status.State = StateNotPaired
@@ -504,4 +589,5 @@ func (m *Manager) clearLocalDevice(ctx context.Context, sess *session) {
 
 	m.clearTerminalReason(ctx)
 	m.updateSyncStatus(ctx, repository.SyncStatusDisabled, "")
+	return nil
 }
