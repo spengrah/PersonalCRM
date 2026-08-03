@@ -77,9 +77,18 @@ var (
 	// ErrUnknownPairMethod is returned for a method other than qr or phone.
 	ErrUnknownPairMethod = errors.New("whatsapp: unknown pairing method")
 
-	// ErrQRCodeTimeout is returned when no QR code arrives inside
-	// qrFirstCodeTimeout. The pairing is torn down before it is returned.
+	// ErrQRCodeTimeout is returned when the pairing websocket produces no QR
+	// item inside qrFirstCodeTimeout. It applies to BOTH methods: the library
+	// generates QR codes for phone-code pairing too, and the first one is its
+	// documented signal that the connection is fully established. The pairing is
+	// torn down before this is returned.
 	ErrQRCodeTimeout = errors.New("whatsapp: no QR code arrived in time")
+
+	// ErrPairingCancelled is returned when an attempt was cancelled while its
+	// client was still being built. The half-built client is discarded rather
+	// than connected — an orphaned connected client would be unreachable by
+	// Stop() and could still complete a pairing nothing recorded.
+	ErrPairingCancelled = errors.New("whatsapp: pairing was cancelled")
 
 	// ErrNotPaired is returned by Disconnect when there is nothing to unlink.
 	ErrNotPaired = errors.New("whatsapp: no linked device")
@@ -108,13 +117,23 @@ type Status struct {
 	State string `json:"state"`
 	// Reason carries the machine-readable detail for not_ready, disconnected,
 	// disconnect_failed and error.
-	Reason      string     `json:"reason,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	// Missing names the human-readable dependency the readiness gate is waiting
+	// on, when State is not_ready. Reason stays the stable machine-readable
+	// code; this is what tells the operator WHICH piece is absent, which is the
+	// whole point of reporting not_ready rather than a bare error.
+	Missing     string     `json:"missing,omitempty"`
 	JID         *string    `json:"jid,omitempty"`
 	PhoneNumber *string    `json:"phone_number,omitempty"`
 	PushName    *string    `json:"push_name,omitempty"`
 	ConnectedAt *time.Time `json:"connected_at,omitempty"`
 	BannedUntil *time.Time `json:"banned_until,omitempty"`
 	Pairing     *Pairing   `json:"pairing,omitempty"`
+	// TerminalReasonPersisted reports whether a terminal disconnect was durably
+	// recorded. False alongside State=disconnected means the "do not reconnect"
+	// decision exists only in memory and will not survive a restart — the one
+	// case where the integration knows its own guarantee is weakened.
+	TerminalReasonPersisted bool `json:"terminal_reason_persisted,omitempty"`
 	// Backfill reports the history drain. PR3 records notifications; the
 	// counts stay zero until a chunk arrives.
 	Backfill BackfillStatus `json:"backfill"`

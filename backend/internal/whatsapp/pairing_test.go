@@ -79,14 +79,13 @@ func TestStartPairing_UsesBrowserShapedDisplayName(t *testing.T) {
 func TestStartPairing_QRReturnsFirstCodeWithinTimeout(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
-	cli.qrChan <- whatsmeow.QRChannelItem{Event: whatsmeow.QRChannelEventCode, Code: "QR-CODE-1", Timeout: time.Minute}
 
 	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
 
 	status := m.Status()
 	require.NotNil(t, status.Pairing)
 	require.NotNil(t, status.Pairing.QRCode)
-	assert.Equal(t, "QR-CODE-1", *status.Pairing.QRCode)
+	assert.Equal(t, defaultFakeQRCode, *status.Pairing.QRCode)
 	assert.Nil(t, status.Pairing.PairCode)
 }
 
@@ -95,7 +94,6 @@ func TestStartPairing_QRReturnsFirstCodeWithinTimeout(t *testing.T) {
 func TestStartPairing_QRChannelOpenedBeforeConnect(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
-	cli.qrChan <- whatsmeow.QRChannelItem{Event: whatsmeow.QRChannelEventCode, Code: "QR-CODE-1"}
 
 	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
 
@@ -111,9 +109,10 @@ func TestStartPairing_QRChannelOpenedBeforeConnect(t *testing.T) {
 // contract promises a code in the response, so the wait has to end somewhere.
 func TestStartPairing_QRTimesOutWithoutCode(t *testing.T) {
 	cli := newFakeClient()
+	cli.qrSilent = true
 	m, _, _, _ := newTestManager(t, cli, false)
-	// Nothing is pushed onto the QR channel; cancel the request context so the
-	// bounded wait resolves without burning qrFirstCodeTimeout in the suite.
+	// No QR item is emitted; cancel the request context so the bounded wait
+	// resolves without burning qrFirstCodeTimeout in the suite.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -353,7 +352,6 @@ func TestStartPairing_ExpiredPairingIsTakenOverNotConflicted(t *testing.T) {
 func TestRunQRChannel_ClosedChannelReleasesThePairingSlot(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
-	cli.qrChan <- whatsmeow.QRChannelItem{Event: whatsmeow.QRChannelEventCode, Code: "QR-CODE-1"}
 
 	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
 	require.NotNil(t, m.Status().Pairing)
@@ -363,4 +361,186 @@ func TestRunQRChannel_ClosedChannelReleasesThePairingSlot(t *testing.T) {
 	require.Eventually(t, func() bool { return m.Status().Pairing == nil }, 2*time.Second, 10*time.Millisecond,
 		"a closed QR channel must release the pairing slot")
 	assert.Equal(t, StateNotPaired, m.Status().State)
+}
+
+// TestRunQRChannel_RefreshesTheStoredCode: the library emits a fresh code every
+// Timeout until they run out, so the stored code must keep up or the settings
+// page shows a code that no longer scans.
+func TestRunQRChannel_RefreshesTheStoredCode(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NotNil(t, m.Status().Pairing)
+	require.Equal(t, defaultFakeQRCode, *m.Status().Pairing.QRCode)
+
+	cli.qrChan <- whatsmeow.QRChannelItem{Event: whatsmeow.QRChannelEventCode, Code: "QR-CODE-2"}
+
+	require.Eventually(t, func() bool {
+		p := m.Status().Pairing
+		return p != nil && p.QRCode != nil && *p.QRCode == "QR-CODE-2"
+	}, 2*time.Second, 10*time.Millisecond, "the stored code must follow the channel")
+}
+
+// TestStartPairing_PhoneWaitsForConnectionBeforeRequestingCode pins the ordering
+// the library documents: PairPhone must not be called until the pairing socket
+// has produced its first QR item, or it races the handshake. The fake records
+// call order, so a regression to "PairPhone straight after Connect" shows up
+// here rather than as an intermittent production failure.
+func TestStartPairing_PhoneWaitsForConnectionBeforeRequestingCode(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+
+	calls := cli.callLog()
+	qrAt := indexOf(calls, "qr_channel")
+	connectAt := indexOf(calls, "connect")
+	pairAt := indexOf(calls, "pair_phone:"+pairClientDisplayName)
+	require.GreaterOrEqual(t, qrAt, 0)
+	require.GreaterOrEqual(t, connectAt, 0)
+	require.GreaterOrEqual(t, pairAt, 0)
+	assert.Less(t, qrAt, connectAt, "the QR channel is opened before Connect on both methods")
+	assert.Less(t, connectAt, pairAt, "PairPhone comes after Connect")
+}
+
+// TestStartPairing_PhoneTimesOutWhenConnectionNeverEstablishes: with no QR item
+// the connection is not established, so PairPhone must not be called at all.
+func TestStartPairing_PhoneTimesOutWhenConnectionNeverEstablishes(t *testing.T) {
+	cli := newFakeClient()
+	cli.qrSilent = true
+	m, _, _, _ := newTestManager(t, cli, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := m.StartPairing(ctx, PairRequest{Method: PairMethodPhone, Phone: "+15551234567"})
+	assert.ErrorIs(t, err, ErrQRCodeTimeout)
+	assert.NotContains(t, cli.callLog(), "pair_phone:"+pairClientDisplayName,
+		"a pairing code must never be requested on a connection that is not established")
+}
+
+// TestStartPairing_PhoneDoesNotReportAQRCode: a phone attempt receives QR codes
+// from the library too, but they are not the user's affordance, so reporting one
+// would show two competing codes on the settings page.
+func TestStartPairing_PhoneDoesNotReportAQRCode(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+
+	status := m.Status()
+	require.NotNil(t, status.Pairing)
+	assert.Nil(t, status.Pairing.QRCode)
+	require.NotNil(t, status.Pairing.PairCode)
+}
+
+// TestStartPairing_CancelDuringSessionBuildDiscardsTheClient is the deterministic
+// proof for the cancel-window race.
+//
+// The attempt is published into Manager.pairing BEFORE its client exists, so a
+// cancel landing in that window used to clear the slot and let the original
+// goroutine attach and connect an orphaned client — one Stop() could not reach
+// and that could still complete a pairing the manager never recorded. The
+// session factory blocks here so the cancel lands squarely inside that window.
+func TestStartPairing_CancelDuringSessionBuildDiscardsTheClient(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+
+	building := make(chan struct{})
+	release := make(chan struct{})
+	inner := m.newSession
+	m.newSession = func(ctx context.Context, fresh bool) (*session, error) {
+		close(building)
+		<-release
+		return inner(ctx, fresh)
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}) }()
+
+	<-building
+	m.CancelPairing()
+	close(release)
+
+	assert.ErrorIs(t, <-errCh, ErrPairingCancelled)
+	assert.NotContains(t, cli.callLog(), "connect",
+		"a cancelled attempt must never connect the client it was still building")
+	assert.Contains(t, cli.callLog(), "delete_device",
+		"the discarded device is removed rather than orphaned")
+	assert.Nil(t, m.Status().Pairing)
+	assert.Equal(t, StateNotPaired, m.Status().State)
+}
+
+// TestStop_DuringSessionBuildDiscardsTheClient is the same window seen through
+// Stop() — a process shutdown must not leave a client connecting behind it.
+func TestStop_DuringSessionBuildDiscardsTheClient(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+
+	building := make(chan struct{})
+	release := make(chan struct{})
+	inner := m.newSession
+	m.newSession = func(ctx context.Context, fresh bool) (*session, error) {
+		close(building)
+		<-release
+		return inner(ctx, fresh)
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}) }()
+
+	<-building
+	m.Stop()
+	close(release)
+
+	assert.ErrorIs(t, <-errCh, ErrPairingCancelled)
+	assert.NotContains(t, cli.callLog(), "connect",
+		"Stop must win over an attach that has not happened yet")
+}
+
+// TestDisconnect_StopsTheOldClientBeforeBuildingTheUnlinkClient is the
+// deterministic proof for the double-client defect.
+//
+// whatsmeow starts auto-reconnect on a remote disconnect, and only Disconnect()
+// marks the drop expected. So after a Disconnected event the installed client is
+// very likely mid-retry; building a second client for the unlink without
+// stopping it first puts two clients on one device and races the unlink against
+// a reconnect.
+func TestDisconnect_StopsTheOldClientBeforeBuildingTheUnlinkClient(t *testing.T) {
+	old := newFakeClient()
+	unlink := newFakeClient()
+
+	m, _, _, _ := newTestManager(t, old, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	// The socket drops; whatsmeow is now auto-reconnecting behind the scenes.
+	require.True(t, m.handleEvent(&events.Disconnected{}))
+	old.mu.Lock()
+	old.connected = false
+	old.mu.Unlock()
+	require.Equal(t, StateReconnecting, m.Status().State)
+
+	// The next session built is the unlink client.
+	m.newSession = func(context.Context, bool) (*session, error) {
+		return &session{client: unlink, paired: true, deleteDevice: func(context.Context) error {
+			unlink.record("delete_device")
+			return nil
+		}}, nil
+	}
+
+	result, err := m.Disconnect(context.Background(), false)
+	require.NoError(t, err)
+	assert.True(t, result.RemoteUnlinked)
+
+	oldCalls := old.callLog()
+	assert.Contains(t, oldCalls, "disconnect",
+		"the auto-reconnecting client must be stopped before a second one is built")
+
+	// Ordering: the old client is stopped before the unlink client connects.
+	assert.Less(t, indexOf(oldCalls, "disconnect"), len(oldCalls),
+		"disconnect is recorded on the old client")
+	assert.Contains(t, unlink.callLog(), "connect")
+	assert.Contains(t, unlink.callLog(), "logout")
 }

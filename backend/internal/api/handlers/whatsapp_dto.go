@@ -42,14 +42,22 @@ type WhatsAppStatusResponse struct {
 	State string `json:"state"`
 	// Reason carries the machine-readable detail for not_ready, disconnected,
 	// disconnect_failed and error.
-	Reason      string                   `json:"reason,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	// Missing names the dependency the integration is waiting on when State is
+	// not_ready, so the settings surface can say what is absent rather than
+	// only that something is.
+	Missing     string                   `json:"missing,omitempty"`
 	JID         *string                  `json:"jid,omitempty"`
 	PhoneNumber *string                  `json:"phone_number,omitempty"`
 	PushName    *string                  `json:"push_name,omitempty"`
 	ConnectedAt *string                  `json:"connected_at,omitempty" swaggertype:"string" format:"date-time"`
 	BannedUntil *string                  `json:"banned_until,omitempty" swaggertype:"string" format:"date-time"`
 	Pairing     *WhatsAppPairingResponse `json:"pairing,omitempty"`
-	Backfill    WhatsAppBackfillResponse `json:"backfill"`
+	// TerminalReasonPersisted is false alongside a disconnected state when the
+	// permanent-disconnect reason could not be durably recorded, so the
+	// decision will not survive a restart.
+	TerminalReasonPersisted bool                     `json:"terminal_reason_persisted,omitempty"`
+	Backfill                WhatsAppBackfillResponse `json:"backfill"`
 }
 
 // WhatsAppDisconnectResponse reports how an unlink resolved. Disconnect returns

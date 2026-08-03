@@ -637,7 +637,12 @@ func TestHumanizeAge(t *testing.T) {
 // settings page.
 func TestStaleness_WhatsAppErrorEvaluatedAsManagerDriven(t *testing.T) {
 	cfg := stalenessTestConfig()
+	// Enabled=false is the PRODUCTION shape: a manager-driven row must stay
+	// disabled or ListDueSyncStates would hand it to the scheduler, which has
+	// no provider for it. Using an enabled row here would test a row that never
+	// exists.
 	st := makeSyncState("whatsapp", func(s *repository.SyncState) {
+		s.Enabled = false
 		s.Strategy = repository.SyncStrategyPush
 		s.Status = repository.SyncStatusError
 		s.ErrorCount = 3
@@ -680,7 +685,9 @@ func TestStaleness_TelegramBehaviorUnchanged(t *testing.T) {
 		t.Fatal("telegram must still be excluded from sync_stale")
 	}
 
+	// Enabled=false matches TelegramManager's own CreateSyncState call.
 	errored := makeSyncState("telegram", func(s *repository.SyncState) {
+		s.Enabled = false
 		s.Strategy = repository.SyncStrategyFetchAll
 		s.Status = repository.SyncStatusError
 		s.ErrorCount = 3
@@ -699,5 +706,41 @@ func TestStaleness_TelegramBehaviorUnchanged(t *testing.T) {
 	})
 	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{other}, nil), "gcal", repository.BreachTypeSyncError) != nil {
 		t.Fatal("a non-manager-driven source must stay gated on the external-sync flag")
+	}
+}
+
+// TestStaleness_DisabledNonManagerRowStillSkipped is the negative control for
+// the manager-driven exception to the enabled filter: an ordinary disabled row
+// must still be skipped entirely, so the exception cannot widen into "evaluate
+// everything".
+func TestStaleness_DisabledNonManagerRowStillSkipped(t *testing.T) {
+	cfg := stalenessTestConfig()
+	st := makeSyncState("gcal", func(s *repository.SyncState) {
+		s.Enabled = false
+		s.Status = repository.SyncStatusError
+		s.ErrorCount = 3
+		s.LastSuccessfulSyncAt = ptrTime(fixedNow.Add(-100 * time.Hour))
+	})
+	if got := evaluateBreaches(fixedNow, cfg, true, []repository.SyncState{st}, nil); len(got) != 0 {
+		t.Fatalf("a disabled non-manager row must be skipped, got %d", len(got))
+	}
+}
+
+// TestStaleness_ManagerDrivenHealthyRowRaisesNothing bounds the blast radius of
+// evaluating disabled manager rows: only an error status breaches, so a healthy
+// disconnected-but-idle integration is silent.
+func TestStaleness_ManagerDrivenHealthyRowRaisesNothing(t *testing.T) {
+	cfg := stalenessTestConfig()
+	for _, source := range []string{"telegram", "whatsapp"} {
+		st := makeSyncState(source, func(s *repository.SyncState) {
+			s.Enabled = false
+			s.Strategy = repository.SyncStrategyPush
+			s.Status = repository.SyncStatusIdle
+			s.LastSuccessfulSyncAt = nil
+			s.CreatedAt = fixedNow.Add(-365 * 24 * time.Hour)
+		})
+		if got := evaluateBreaches(fixedNow, cfg, true, []repository.SyncState{st}, nil); len(got) != 0 {
+			t.Fatalf("%s: a healthy manager row must raise nothing, got %d", source, len(got))
+		}
 	}
 }

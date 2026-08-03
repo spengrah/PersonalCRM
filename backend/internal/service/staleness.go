@@ -245,9 +245,16 @@ func evaluateHeartbeatBreaches(now time.Time, cfg config.StalenessConfig, hosts 
 // external-sync flag).
 
 // managerDrivenSources are the sources whose connection is owned by a
-// long-lived in-process manager rather than by the polling scheduler. Their
-// rows carry a connection status the user needs to see even when external sync
-// is off, and they never have a "last successful sync" to go stale against.
+// long-lived in-process manager rather than by the polling scheduler.
+//
+// Their rows carry a connection status the user needs to see even when external
+// sync is off, and they never have a "last successful sync" to go stale
+// against. They are also stored with enabled = FALSE on purpose: ListDueSyncStates
+// selects `enabled = TRUE`, so an enabled row would be handed to the scheduler,
+// which has no provider registered for these sources. That is why the
+// enabled-row filter below has to make an exception for them — without it the
+// status row is written, and read by the settings page, but never evaluated for
+// sync_error by the watchdog.
 var managerDrivenSources = map[string]struct{}{
 	"telegram": {},
 	"whatsapp": {},
@@ -261,10 +268,13 @@ func evaluateSyncStateBreaches(
 ) []breachCandidate {
 	var out []breachCandidate
 	for _, st := range states {
-		if !st.Enabled {
+		_, isManagerDriven := managerDrivenSources[st.Source]
+		// A manager-driven row is enabled = FALSE by construction (see
+		// managerDrivenSources), so skipping disabled rows would make its
+		// sync_error evaluation unreachable.
+		if !st.Enabled && !isManagerDriven {
 			continue
 		}
-		_, isManagerDriven := managerDrivenSources[st.Source]
 		isPush := st.Strategy == repository.SyncStrategyPush
 
 		// sync_stale: enabled, non-push, non-manager-driven pull rows, gated on

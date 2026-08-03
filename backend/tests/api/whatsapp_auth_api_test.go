@@ -29,6 +29,7 @@ type fakeWhatsAppManager struct {
 	mu sync.Mutex
 
 	status       wapkg.Status
+	missing      string
 	startErr     error
 	disconnect   *wapkg.DisconnectResult
 	disconnErr   error
@@ -42,6 +43,15 @@ func (f *fakeWhatsAppManager) Status() wapkg.Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.status
+}
+
+func (f *fakeWhatsAppManager) Ready() (bool, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.missing == "" {
+		return true, ""
+	}
+	return false, f.missing
 }
 
 func (f *fakeWhatsAppManager) StartPairing(_ context.Context, req wapkg.PairRequest) error {
@@ -123,7 +133,6 @@ func decodeWhatsAppError(t *testing.T, rec *httptest.ResponseRecorder) struct {
 // --- WHA-006: pairing endpoints ---------------------------------------------
 
 func TestAPI_WhatsAppQRStartReturnsCode(t *testing.T) {
-	// spec: WHA-006.qr-start-returns-code
 	expires := time.Date(2026, 5, 1, 12, 5, 0, 0, time.UTC)
 	code := "QR-CODE-1"
 	manager := &fakeWhatsAppManager{status: wapkg.Status{
@@ -144,7 +153,6 @@ func TestAPI_WhatsAppQRStartReturnsCode(t *testing.T) {
 }
 
 func TestAPI_WhatsAppQRStartTimesOutWithoutCode(t *testing.T) {
-	// spec: WHA-006.qr-start-times-out-without-code
 	manager := &fakeWhatsAppManager{startErr: wapkg.ErrQRCodeTimeout}
 	router := setupWhatsAppRouter(t, manager)
 
@@ -156,14 +164,20 @@ func TestAPI_WhatsAppQRStartTimesOutWithoutCode(t *testing.T) {
 
 func TestAPI_WhatsAppStartRefusedUntilIngestWired(t *testing.T) {
 	// spec: WHA-006.start-refused-until-ingest-wired
-	manager := &fakeWhatsAppManager{startErr: wapkg.ErrIngestNotWired}
+	manager := &fakeWhatsAppManager{
+		startErr: wapkg.ErrIngestNotWired,
+		missing:  "history drain worker is not registered",
+	}
 	router := setupWhatsAppRouter(t, manager)
 
 	rec := doWhatsAppRequest(t, router, http.MethodPost, "/api/v1/whatsapp/auth/start", handlers.WhatsAppPairRequest{Method: "qr"})
 
 	require.Equal(t, http.StatusConflict, rec.Code)
-	assert.Equal(t, wapkg.ReasonIngestNotWired, decodeWhatsAppError(t, rec).Details,
-		"the refusal names the missing piece so the settings page can explain it")
+	apiErr := decodeWhatsAppError(t, rec)
+	assert.Equal(t, wapkg.ReasonIngestNotWired, apiErr.Details,
+		"details stays the stable machine code the settings page branches on")
+	assert.Contains(t, apiErr.Message, "history drain worker is not registered",
+		"the message names the dependency, which is the actionable half")
 }
 
 func TestAPI_WhatsAppPhoneStartRequiresE164(t *testing.T) {
@@ -192,14 +206,12 @@ func TestAPI_WhatsAppStartRejectsUnknownMethod(t *testing.T) {
 }
 
 func TestAPI_WhatsAppStartWhenConnectedConflicts(t *testing.T) {
-	// spec: WHA-006.start-when-connected-conflicts
 	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{startErr: wapkg.ErrAlreadyConnected})
 	rec := doWhatsAppRequest(t, router, http.MethodPost, "/api/v1/whatsapp/auth/start", handlers.WhatsAppPairRequest{Method: "qr"})
 	assert.Equal(t, http.StatusConflict, rec.Code)
 }
 
 func TestAPI_WhatsAppStartWhenPairingConflicts(t *testing.T) {
-	// spec: WHA-006.start-when-pairing-conflicts
 	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{startErr: wapkg.ErrPairingInProgress})
 	rec := doWhatsAppRequest(t, router, http.MethodPost, "/api/v1/whatsapp/auth/start", handlers.WhatsAppPairRequest{Method: "qr"})
 	assert.Equal(t, http.StatusConflict, rec.Code)
@@ -225,7 +237,6 @@ func TestAPI_WhatsAppDisconnectWhenNotPairedConflicts(t *testing.T) {
 }
 
 func TestAPI_WhatsAppDisconnectReportsFailureWhenRemoteLogoutFails(t *testing.T) {
-	// spec: WHA-006.disconnect-reports-failure-when-remote-logout-fails
 	manager := &fakeWhatsAppManager{
 		disconnErr: errors.Join(wapkg.ErrRemoteUnlinkFailed, errors.New("server rejected logout")),
 		status: wapkg.Status{
@@ -316,7 +327,6 @@ func TestAPI_WhatsAppStatusReportsNotReadyReason(t *testing.T) {
 }
 
 func TestAPI_WhatsAppStatusReportsAccountIdentity(t *testing.T) {
-	// spec: WHA-007.status-reports-account-identity
 	jid := "15551234567@s.whatsapp.net"
 	phone := "15551234567"
 	pushName := "Test Account"
@@ -346,7 +356,6 @@ func TestAPI_WhatsAppStatusReportsAccountIdentity(t *testing.T) {
 }
 
 func TestAPI_WhatsAppStatusCarriesLivePairingCode(t *testing.T) {
-	// spec: WHA-007.status-carries-live-pairing-code
 	pairCode := "ABCD1234"
 	expires := time.Date(2026, 5, 1, 12, 5, 0, 0, time.UTC)
 	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{status: wapkg.Status{
@@ -367,23 +376,32 @@ func TestAPI_WhatsAppStatusCarriesLivePairingCode(t *testing.T) {
 		"the expiry has to reach the client, or a stale code looks live")
 }
 
-func TestAPI_WhatsAppStatusAbsentWhenFeatureDisabled(t *testing.T) {
-	// spec: WHA-007.status-absent-when-feature-disabled
-	// With the feature off no handler is built, so the routes are never
-	// registered and gin's own 404 answers — which is exactly what the
-	// settings page reads as "configuration required".
-	router := gin.New()
-	v1 := router.Group("/api/v1")
-	_ = v1
+// TestAPI_WhatsAppEndpointsUnavailableWithoutAManager covers the handler's own
+// nil-manager guard.
+//
+// The "feature disabled means 404" claim is NOT asserted here: with the feature
+// off the handler is never constructed and the routes never registered, so the
+// only honest place to prove it is the composition root. That lives in
+// cmd/crm-api/whatsapp_route_gating_test.go, which enumerates the real route
+// tree for both config shapes. A test that built an empty router here would pass
+// even if run() always registered the routes.
+func TestAPI_WhatsAppEndpointsUnavailableWithoutAManager(t *testing.T) {
+	router := setupWhatsAppRouter(t, nil)
 
-	for _, path := range []string{
-		"/api/v1/whatsapp/auth/status",
-		"/api/v1/whatsapp/auth/start",
-		"/api/v1/whatsapp/auth/cancel",
-		"/api/v1/whatsapp/auth",
-	} {
-		rec := doWhatsAppRequest(t, router, http.MethodGet, path, nil)
-		assert.Equal(t, http.StatusNotFound, rec.Code, "%s must not exist when WhatsApp is disabled", path)
+	cases := []struct {
+		method string
+		path   string
+		body   any
+	}{
+		{http.MethodGet, "/api/v1/whatsapp/auth/status", nil},
+		{http.MethodPost, "/api/v1/whatsapp/auth/start", handlers.WhatsAppPairRequest{Method: "qr"}},
+		{http.MethodPost, "/api/v1/whatsapp/auth/cancel", nil},
+		{http.MethodDelete, "/api/v1/whatsapp/auth", nil},
+	}
+	for _, tc := range cases {
+		rec := doWhatsAppRequest(t, router, tc.method, tc.path, tc.body)
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code,
+			"%s %s must report the integration unavailable rather than panicking", tc.method, tc.path)
 	}
 }
 
@@ -413,4 +431,23 @@ func TestAPI_WhatsAppStatusReportsBackfillCounts(t *testing.T) {
 		"a dropped bootstrap chunk is an accepted gap, but it has to be visible")
 	require.NotNil(t, backfill.ObservedFloorAt)
 	assert.Equal(t, floor.Format(time.RFC3339), *backfill.ObservedFloorAt)
+}
+
+func TestAPI_WhatsAppStatusNamesTheMissingDependency(t *testing.T) {
+	// spec: WHA-007.status-reports-not-ready-reason
+	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{status: wapkg.Status{
+		Configured: true,
+		State:      wapkg.StateNotReady,
+		Reason:     wapkg.ReasonIngestNotWired,
+		Missing:    "message ingestor is not wired",
+	}})
+
+	rec := doWhatsAppRequest(t, router, http.MethodGet, "/api/v1/whatsapp/auth/status", nil)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	status := decodeWhatsAppStatus(t, rec)
+	assert.Equal(t, wapkg.StateNotReady, status.State)
+	assert.Equal(t, wapkg.ReasonIngestNotWired, status.Reason)
+	assert.Equal(t, "message ingestor is not wired", status.Missing,
+		"not_ready without naming the missing piece tells the operator nothing actionable")
 }

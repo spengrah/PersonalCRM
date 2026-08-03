@@ -203,6 +203,11 @@ check_sentinels() {
       assert_present "google auth-url route"    "$routes" "/api/v1/auth/google"
       assert_present "todoist settings routes"  "$routes" "/api/v1/todoist/settings"
       assert_present "gmail-registered log"     "$log"    "Gmail sync provider + rematch handler + correspondence discovery registered"
+      # Shape 3 is shape 7 minus ENABLE_WHATSAPP_SYNC, so it is the paired
+      # ABSENCE half of shape 7's presence sentinel. Without it, a build that
+      # registered the WhatsApp routes unconditionally would still pass both
+      # shapes.
+      assert_absent  "whatsapp routes"          "$routes" "/api/v1/whatsapp/"
       ;;
     4) assert_present "telegram routes"         "$routes" "/api/v1/telegram/" ;;
     5) assert_present "ingest events route"     "$routes" "/api/v1/ingest/events" ;;

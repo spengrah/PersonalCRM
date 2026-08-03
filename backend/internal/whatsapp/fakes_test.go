@@ -29,6 +29,11 @@ type fakeSyncStore struct {
 	statuses []repository.SyncStatus
 	errors   []string
 	calls    []string
+
+	// metadataErr and getErr make the persistence layer fail, which is the only
+	// way to reach the paths where a durable write did not happen.
+	metadataErr error
+	getErr      error
 }
 
 func newFakeSyncStore() *fakeSyncStore {
@@ -43,6 +48,9 @@ func (f *fakeSyncStore) GetSyncStateBySource(_ context.Context, source string, _
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("get")
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	if !f.exists {
 		return nil, db.ErrNotFound
 	}
@@ -76,6 +84,9 @@ func (f *fakeSyncStore) UpdateSyncStateMetadata(_ context.Context, id uuid.UUID,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("metadata")
+	if f.metadataErr != nil {
+		return nil, f.metadataErr
+	}
 	f.metadata = metadata
 	return &repository.SyncState{ID: id, Metadata: metadata}, nil
 }
@@ -85,6 +96,14 @@ func (f *fakeSyncStore) terminalReason() string {
 	defer f.mu.Unlock()
 	reason, _ := f.metadata[metadataTerminalReason].(string)
 	return reason
+}
+
+// resetCalls clears the recorded call log so a test can count only the calls a
+// specific event produced.
+func (f *fakeSyncStore) resetCalls() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = nil
 }
 
 func (f *fakeSyncStore) callLog() []string {
@@ -145,9 +164,15 @@ type fakeClient struct {
 	connected bool
 	loggedIn  bool
 
-	qrChan   chan whatsmeow.QRChannelItem
+	qrChan chan whatsmeow.QRChannelItem
+	// qrSilent suppresses the default emitted code, so a test can drive the
+	// bounded-wait timeout.
+	qrSilent bool
 	pairCode string
 }
+
+// defaultFakeQRCode is what GetQRChannel emits unless the test suppresses it.
+const defaultFakeQRCode = "QR-CODE-1"
 
 func newFakeClient() *fakeClient {
 	return &fakeClient{qrChan: make(chan whatsmeow.QRChannelItem, 4), pairCode: "ABCD1234"}
@@ -200,10 +225,20 @@ func (c *fakeClient) Logout(context.Context) error {
 	return c.logoutErr
 }
 
+// GetQRChannel emits one code by default. The real library always generates QR
+// codes — even for phone-code pairing, where the first item is its documented
+// signal that the connection is established — so a fake that emitted none would
+// make every pairing time out. Set qrSilent to exercise that timeout.
 func (c *fakeClient) GetQRChannel(context.Context) (<-chan whatsmeow.QRChannelItem, error) {
 	c.record("qr_channel")
 	if c.qrErr != nil {
 		return nil, c.qrErr
+	}
+	if !c.qrSilent {
+		select {
+		case c.qrChan <- whatsmeow.QRChannelItem{Event: whatsmeow.QRChannelEventCode, Code: defaultFakeQRCode, Timeout: time.Minute}:
+		default:
+		}
 	}
 	return c.qrChan, nil
 }

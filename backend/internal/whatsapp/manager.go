@@ -43,6 +43,11 @@ const (
 	// Devices screen.
 	deviceOSName = "Personal CRM"
 
+	// terminalPersistAttempts bounds the retry on the terminal-reason write.
+	// The write is what stops the next boot reconnecting, so one transient blip
+	// should not lose it — but a durable outage must not block the teardown.
+	terminalPersistAttempts = 2
+
 	// metadataTerminalReason and metadataBannedUntil persist the
 	// permanent-disconnect decision so a restart does not undo it.
 	metadataTerminalReason = "terminal_reason"
@@ -296,13 +301,20 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.setStatus(func(s *Status) {
 			s.State = StateNotReady
 			s.Reason = ReasonIngestNotWired
+			s.Missing = missing
 		})
 		logger.Info().Str("missing", missing).Msg("whatsapp: not ready, not connecting")
 		return nil
 	}
 
-	// 2. Ensure the sync-state row exists and read back what it persisted.
-	terminalReason, bannedUntil := m.ensureSyncState(ctx)
+	// 2. Ensure the sync-state row exists and read back what it persisted. This
+	//    read is a precondition for connecting, not a best effort: see
+	//    ensureSyncState.
+	terminalReason, bannedUntil, err := m.ensureSyncState(ctx)
+	if err != nil {
+		m.failStart(ctx, err)
+		return nil
+	}
 
 	// 3. Load the device. No device means nothing to resume.
 	sess, err := m.newSession(ctx, false)
@@ -369,9 +381,13 @@ func (m *Manager) Stop() {
 	m.mu.Unlock()
 
 	if pairing != nil {
+		// markCancelled, not just cancel: an attempt whose client is still being
+		// built has nothing to disconnect yet, and only the marker stops it
+		// attaching and connecting after Stop returns.
+		pairingSess := pairing.markCancelled()
 		pairing.cancel()
-		if sess := pairing.session(); sess != nil {
-			sess.client.Disconnect()
+		if pairingSess != nil {
+			pairingSess.client.Disconnect()
 		}
 	}
 	if sess != nil {
@@ -465,12 +481,13 @@ func (m *Manager) setStatus(mutate func(*Status)) {
 // ensureSyncState resolves (creating if absent) the external_sync_state row and
 // returns the persisted terminal reason and ban expiry, so Start can honour a
 // decision taken before the last restart.
-func (m *Manager) ensureSyncState(ctx context.Context) (terminalReason string, bannedUntil *time.Time) {
+func (m *Manager) ensureSyncState(ctx context.Context) (terminalReason string, bannedUntil *time.Time, err error) {
 	if m.syncRepo == nil {
-		return "", nil
+		return "", nil, nil
 	}
 
-	state, err := m.syncRepo.GetSyncStateBySource(ctx, syncSource, nil)
+	var state *repository.SyncState
+	state, err = m.syncRepo.GetSyncStateBySource(ctx, syncSource, nil)
 	switch {
 	case err == nil:
 	case errors.Is(err, db.ErrNotFound):
@@ -484,12 +501,14 @@ func (m *Manager) ensureSyncState(ctx context.Context) (terminalReason string, b
 			Strategy: repository.SyncStrategyPush,
 		})
 		if err != nil {
-			logger.Warn().Err(err).Msg("whatsapp: failed to create sync state")
-			return "", nil
+			return "", nil, fmt.Errorf("create whatsapp sync state: %w", err)
 		}
 	default:
-		logger.Warn().Err(err).Msg("whatsapp: failed to load sync state")
-		return "", nil
+		// Fail closed. The persisted terminal reason lives on this row, so a row
+		// we cannot read is a row whose "do not reconnect" decision we cannot
+		// see — connecting anyway would reconnect exactly the dead or banned
+		// device the decision exists to hold back.
+		return "", nil, fmt.Errorf("load whatsapp sync state: %w", err)
 	}
 
 	m.mu.Lock()
@@ -505,7 +524,7 @@ func (m *Manager) ensureSyncState(ctx context.Context) (terminalReason string, b
 			bannedUntil = &t
 		}
 	}
-	return terminalReason, bannedUntil
+	return terminalReason, bannedUntil, nil
 }
 
 func (m *Manager) currentSyncStateID() *uuid.UUID {
@@ -533,19 +552,29 @@ func (m *Manager) updateSyncStatus(ctx context.Context, status repository.SyncSt
 // persistTerminalReason durably records a permanent disconnect. It must happen
 // BEFORE the client is torn down, so a crash mid-teardown still leaves the
 // decision recorded and the next boot does not reconnect into the same wall.
-func (m *Manager) persistTerminalReason(ctx context.Context, reason string, bannedUntil *time.Time) {
+// persistTerminalReason writes the permanent-disconnect decision. Its error is
+// load-bearing: the restart gate reads this metadata and nothing else, so a
+// silent write failure would let the next boot reconnect a stream-replaced,
+// outdated or banned device.
+func (m *Manager) persistTerminalReason(ctx context.Context, reason string, bannedUntil *time.Time) error {
 	id := m.currentSyncStateID()
 	if id == nil || m.syncRepo == nil {
-		return
+		return errors.New("whatsapp: no sync state row to record the terminal reason on")
 	}
 	metadata := map[string]any{metadataTerminalReason: reason}
 	if bannedUntil != nil {
 		metadata[metadataBannedUntil] = bannedUntil.UTC().Format(time.RFC3339)
 	}
-	if _, err := m.syncRepo.UpdateSyncStateMetadata(ctx, *id, metadata); err != nil {
-		logger.Error().Err(err).Str("reason", reason).
-			Msg("whatsapp: failed to persist terminal disconnect reason; a restart may retry a dead session")
+
+	// One retry: the common failure here is a transient blip, and the cost of
+	// not persisting is a reconnect into a dead or banned session.
+	var err error
+	for attempt := 0; attempt < terminalPersistAttempts; attempt++ {
+		if _, err = m.syncRepo.UpdateSyncStateMetadata(ctx, *id, metadata); err == nil {
+			return nil
+		}
 	}
+	return fmt.Errorf("persist terminal reason %q: %w", reason, err)
 }
 
 // clearTerminalReason removes a stale terminal decision once a connection
@@ -712,7 +741,7 @@ func (m *Manager) onPairSuccess(ctx context.Context, e *events.PairSuccess) {
 // client is torn down, nothing is retried, and Start() will honour the decision
 // after a restart.
 func (m *Manager) onTerminal(ctx context.Context, reason string, bannedUntil *time.Time) {
-	m.persistTerminalReason(ctx, reason, bannedUntil)
+	persistErr := m.persistTerminalReason(ctx, reason, bannedUntil)
 
 	m.mu.Lock()
 	sess := m.sess
@@ -724,10 +753,24 @@ func (m *Manager) onTerminal(ctx context.Context, reason string, bannedUntil *ti
 	m.status.Reason = reason
 	m.status.BannedUntil = bannedUntil
 	m.status.ConnectedAt = nil
+	// A durable record is the only thing that stops the NEXT boot reconnecting.
+	// When the write failed, say so in the status rather than presenting a
+	// decision that will not survive a restart as if it had been taken.
+	m.status.TerminalReasonPersisted = persistErr == nil
 	m.mu.Unlock()
 
+	// The session is dead either way — the server ended it — so it is always
+	// torn down. Auto-reconnect must be cancelled even when we could not record
+	// why, or the client keeps retrying a session the server has ended.
 	if sess != nil {
 		sess.client.Disconnect()
+	}
+
+	if persistErr != nil {
+		logger.Error().Err(persistErr).Str("reason", reason).
+			Msg("whatsapp: could not durably record the permanent disconnect; a restart may reconnect this device")
+		m.updateSyncStatus(ctx, repository.SyncStatusError, reason+" (reason not durably recorded)")
+		return
 	}
 	m.updateSyncStatus(ctx, repository.SyncStatusError, reason)
 	logger.Warn().Str("reason", reason).Msg("whatsapp: permanent disconnect, not reconnecting")

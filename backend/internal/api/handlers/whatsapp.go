@@ -17,6 +17,9 @@ import (
 // *whatsapp.Manager.
 type WhatsAppManager interface {
 	Status() wapkg.Status
+	// Ready reports whether an account can be linked, and names the missing
+	// dependency when it cannot.
+	Ready() (bool, string)
 	StartPairing(ctx context.Context, req wapkg.PairRequest) error
 	CancelPairing()
 	Disconnect(ctx context.Context, force bool) (*wapkg.DisconnectResult, error)
@@ -27,7 +30,10 @@ type WhatsAppHandler struct {
 	manager WhatsAppManager
 }
 
-// NewWhatsAppHandler creates a new WhatsApp handler.
+// NewWhatsAppHandler creates a new WhatsApp handler. A nil manager is a
+// supported construction: every endpoint reports the integration unavailable
+// rather than panicking. (In production the routes are simply not registered
+// when the feature is off — see registerRoutes — so this is defence in depth.)
 func NewWhatsAppHandler(manager WhatsAppManager) *WhatsAppHandler {
 	return &WhatsAppHandler{manager: manager}
 }
@@ -69,8 +75,12 @@ func (h *WhatsAppHandler) StartPairing(c *gin.Context) {
 	case errors.Is(err, wapkg.ErrIngestNotWired):
 		// The state every deployment is in until the ingest and history-drain
 		// pieces land: pairing is refused rather than linking an account whose
-		// messages would be acknowledged and discarded.
-		api.SendError(c, http.StatusConflict, "CONFLICT", "WhatsApp is not ready to link an account yet", wapkg.ReasonIngestNotWired)
+		// messages would be acknowledged and discarded. The details field stays
+		// the stable machine code the settings surface branches on; the message
+		// names the dependency, which is the actionable half.
+		_, missing := h.manager.Ready()
+		api.SendError(c, http.StatusConflict, "CONFLICT",
+			"WhatsApp is not ready to link an account yet: "+missing, wapkg.ReasonIngestNotWired)
 	case errors.Is(err, wapkg.ErrAlreadyConnected):
 		api.SendConflict(c, "Already connected — disconnect first")
 	case errors.Is(err, wapkg.ErrPairingInProgress):
@@ -165,11 +175,14 @@ func whatsAppStatusResponse(status wapkg.Status) WhatsAppStatusResponse {
 		Configured:  status.Configured,
 		State:       status.State,
 		Reason:      status.Reason,
+		Missing:     status.Missing,
 		JID:         status.JID,
 		PhoneNumber: status.PhoneNumber,
 		PushName:    status.PushName,
 		ConnectedAt: formatTimePtr(status.ConnectedAt),
 		BannedUntil: formatTimePtr(status.BannedUntil),
+
+		TerminalReasonPersisted: status.TerminalReasonPersisted,
 		Backfill: WhatsAppBackfillResponse{
 			Pending:             status.Backfill.Pending,
 			Processing:          status.Backfill.Processing,

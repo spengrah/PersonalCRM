@@ -21,12 +21,13 @@ behaviors:
     type: business-logic
     status: current
     surface: none
-    given: the WhatsApp integration is enabled
+    given: the WhatsApp integration is enabled and ready to ingest (WHA-013)
     when: the backend starts
     then:
       - a stored linked device is resumed without any user action
       - with no stored device the integration stays idle and reports that it is not paired, rather than opening a connection
-    provenance: [Manager.Start, LoadOrCreateDevice]
+      - a connection is attempted only when the stored state can be read back; a status row the integration cannot read is treated as a reason not to connect, never as an absent one
+    provenance: [Manager.Start, LoadOrCreateDevice, Manager.ensureSyncState]
 
   - id: WHA-003
     title: The linked session survives a backend restart without re-pairing
@@ -47,10 +48,11 @@ behaviors:
     given: a linked WhatsApp session
     when: it ends permanently — unlinked from the phone, session replaced by another client, client too old, or temporarily banned
     then:
-      - the reason is recorded durably before the connection is torn down
+      - the reason is recorded durably before the connection is torn down, and the write is retried rather than abandoned on a single failure
       - the integration reports a disconnected status carrying that reason
+      - when the reason could not be recorded durably, the status says so, because the decision will then not survive a restart
       - reconnect attempts stop, and no other sync source is affected
-    provenance: [Manager.onTerminal, external_sync_state metadata]
+    provenance: [Manager.onTerminal, Manager.persistTerminalReason, external_sync_state metadata]
 
   - id: WHA-005
     title: Transient disconnects reconnect by themselves; terminal ones stay terminal across restarts
@@ -75,27 +77,44 @@ behaviors:
     given: requests to the WhatsApp pairing endpoints
     when: they are handled
     then:
-      - key: qr-start-returns-code
-        text: starting a QR pairing is accepted (202) and the response carries the first scannable code
-      - key: qr-start-times-out-without-code
-        text: a QR pairing that produces no code within the bounded wait is a gateway timeout (504) naming the timeout
       - key: start-refused-until-ingest-wired
-        text: starting a pairing before the parts that store incoming messages and history are in place is a conflict (409) naming the missing piece
+        text: starting a pairing before the parts that store incoming messages and history are in place is a conflict (409) whose body names both a stable machine-readable code and the missing dependency
       - key: phone-start-requires-e164
-        text: a phone pairing with a number that is not E.164, or an unrecognised pairing method, is a validation error (400)
-      - key: start-when-connected-conflicts
-        text: starting a pairing while an account is already linked is a conflict (409)
-      - key: start-when-pairing-conflicts
-        text: starting a second pairing while one is in flight is a conflict (409)
+        text: a phone pairing with a number that is not E.164, or an unrecognised pairing method, is a validation error (400) that never reaches the integration
       - key: cancel-is-idempotent
         text: cancelling a pairing always succeeds with no content (204), whether or not one was in flight
       - key: disconnect-when-not-paired-conflicts
         text: disconnecting with no linked device is a conflict (409), and a successful disconnect returns 200 with a body reporting how the unlink resolved
-      - key: disconnect-reports-failure-when-remote-logout-fails
-        text: a disconnect whose remote unlink fails is a bad gateway (502), the local credentials are kept, and the status reports that the unlink failed so the user can retry
       - key: force-disconnect-clears-local-state-with-warning
         text: a forced disconnect returns 200 with a body warning that the device must still be unlinked from the phone
     provenance: [WhatsAppHandler.StartPairing, WhatsAppHandler.CancelPairing, WhatsAppHandler.Disconnect]
+    notes: Scoped to the outcomes the shipped wiring can actually produce. Everything that requires a linkable account is WHA-015, which is proposed until the integration is wired end to end.
+
+  - id: WHA-015
+    title: Pairing outcomes that become reachable once an account can be linked
+    type: api
+    status: proposed
+    surface: api
+    given: requests to the WhatsApp pairing endpoints, once the integration is wired end to end
+    when: they are handled
+    then:
+      - key: qr-start-returns-code
+        text: starting a QR pairing is accepted (202) and the response carries the first scannable code
+      - key: qr-start-times-out-without-code
+        text: a pairing whose websocket produces no code within the bounded wait is a gateway timeout (504) naming the timeout, and no pairing code is requested on a connection that never established
+      - key: start-when-connected-conflicts
+        text: starting a pairing while an account is already linked is a conflict (409)
+      - key: start-when-pairing-conflicts
+        text: starting a second pairing while one is in flight is a conflict (409)
+      - key: disconnect-reports-failure-when-remote-logout-fails
+        text: a disconnect whose remote unlink fails is a bad gateway (502), the local credentials are kept, and the status reports that the unlink failed so the user can retry
+    provenance: [WhatsAppHandler.StartPairing, WhatsAppHandler.Disconnect, Manager.StartPairing]
+    notes: >-
+      Every outcome here needs a pairing that is allowed to proceed, and the readiness gate (WHA-013)
+      refuses every one of them today. The handler mapping and the manager state machine that produce
+      them are implemented and covered by tests, but a passing test does not make the behavior
+      observable in the product, so these stay proposed. The PR that registers the history drainer —
+      the last readiness dependency — flips this behavior to current and lands the citing tests.
 
   - id: WHA-007
     title: The WhatsApp status endpoint reports connection, identity, pairing and backfill
@@ -109,15 +128,27 @@ behaviors:
         text: status returns 200 with the current connection state
       - key: status-reports-not-ready-reason
         text: when the integration is not ready to link an account, the state says so and names the missing piece
-      - key: status-reports-account-identity
-        text: when an account is linked, the status carries its identity — account id, phone number, display name, and when it connected
-      - key: status-carries-live-pairing-code
-        text: during a pairing the status carries the live code and its expiry, so a client can poll for a refreshed code
       - key: status-reports-backfill-counts
         text: the status carries the history-backfill counts, including how many chunks were dropped un-projected and how far back the delivered history actually reached
       - key: status-absent-when-feature-disabled
         text: with the feature disabled the WhatsApp endpoints do not exist (404), which is how the settings surface recognises an unconfigured integration
     provenance: [WhatsAppHandler.GetStatus, RegisterWhatsAppRoutes]
+    notes: Scoped to what the shipped wiring can report. The fields that require a linked account or an in-flight pairing are WHA-016, proposed until one is possible.
+
+  - id: WHA-016
+    title: Status fields that become reachable once an account can be linked
+    type: api
+    status: proposed
+    surface: api
+    given: a request for WhatsApp status, once the integration is wired end to end
+    when: it is handled
+    then:
+      - key: status-reports-account-identity
+        text: when an account is linked, the status carries its identity — account id, phone number, display name, and when it connected
+      - key: status-carries-live-pairing-code
+        text: during a pairing the status carries the live code and its expiry, so a client can poll for a refreshed code, and a phone-code pairing reports only the code the user types
+    provenance: [WhatsAppHandler.GetStatus, Manager.Status]
+    notes: Both require a state the readiness gate (WHA-013) makes unreachable — a linked account, or a pairing allowed to proceed. Flipped to current by the PR that registers the history drainer, alongside WHA-015.
 
   # --- History capture ---
 
@@ -212,5 +243,6 @@ behaviors:
     when: sync staleness is evaluated
     then:
       - the error is evaluated even when external sync is disabled, because the connection is owned by a long-lived manager rather than by the polling scheduler
+      - the error is evaluated even though the status row is not scheduler-enabled, since a manager-driven row is deliberately kept out of the polling scheduler's work queue
       - WhatsApp is not evaluated for sync staleness, because it has no periodic sync to fall behind on
     provenance: [managerDrivenSources, evaluateSyncStateBreaches]

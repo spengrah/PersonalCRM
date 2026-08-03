@@ -108,6 +108,18 @@ func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 	// buildExternalSyncIfEnabled (wire_sync.go), never re-implemented here.
 	syncStk := buildExternalSyncIfEnabled(ctx, cfg, database, core, contactService, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
 
+	// WhatsApp IS driven here, unlike Telegram: its Start() cannot open a
+	// connection (the readiness gate refuses without an ingestor and a drainer),
+	// so running the real gate is both safe and the only way to prove the route
+	// tree reflects ENABLE_WHATSAPP_SYNC rather than a hand-built handler.
+	var whatsappStk whatsappStack
+	if cfg.Features.EnableWhatsAppSync {
+		whatsappStk = buildWhatsApp(ctx, cfg, database)
+		if whatsappStk.Manager != nil {
+			t.Cleanup(whatsappStk.Manager.Stop)
+		}
+	}
+
 	// Telegram is intentionally SKIPPED (Start must not run); a nil
 	// telegramManager is exactly a telegram-disabled boot for aggregation.
 	agg := buildAggregationEngines(database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, nil, syncStk.GChatProvider, syncStk.GChatSyncStates)
@@ -146,6 +158,7 @@ func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 		GoogleOAuthService:       syncStk.GoogleOAuthService,
 		TodoistHandler:           syncStk.TodoistHandler,
 		TelegramHandler:          nil,
+		WhatsAppHandler:          whatsappStk.Handler,
 		SyncHandler:              syncStk.SyncHandler,
 		IdentityHandler:          syncStk.IdentityHandler,
 		ContactTaskHandler:       syncStk.ContactTaskHandler,

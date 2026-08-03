@@ -1050,6 +1050,12 @@ definitions:
         type: string
       jid:
         type: string
+      missing:
+        description: |-
+          Missing names the dependency the integration is waiting on when State is
+          not_ready, so the settings surface can say what is absent rather than
+          only that something is.
+        type: string
       pairing:
         $ref: '#/definitions/handlers.WhatsAppPairingResponse'
       phone_number:
@@ -1066,6 +1072,12 @@ definitions:
           State is one of not_ready, not_paired, pairing, connecting, connected,
           reconnecting, disconnected, disconnect_failed, error.
         type: string
+      terminal_reason_persisted:
+        description: |-
+          TerminalReasonPersisted is false alongside a disconnected state when the
+          permanent-disconnect reason could not be durably recorded, so the
+          decision will not survive a restart.
+        type: boolean
     type: object
   identity.IdentifierType:
     enum:

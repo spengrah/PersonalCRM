@@ -6566,6 +6566,10 @@ const docTemplate = `{
                 "jid": {
                     "type": "string"
                 },
+                "missing": {
+                    "description": "Missing names the dependency the integration is waiting on when State is\nnot_ready, so the settings surface can say what is absent rather than\nonly that something is.",
+                    "type": "string"
+                },
                 "pairing": {
                     "$ref": "#/definitions/handlers.WhatsAppPairingResponse"
                 },
@@ -6582,6 +6586,10 @@ const docTemplate = `{
                 "state": {
                     "description": "State is one of not_ready, not_paired, pairing, connecting, connected,\nreconnecting, disconnected, disconnect_failed, error.",
                     "type": "string"
+                },
+                "terminal_reason_persisted": {
+                    "description": "TerminalReasonPersisted is false alongside a disconnected state when the\npermanent-disconnect reason could not be durably recorded, so the\ndecision will not survive a restart.",
+                    "type": "boolean"
                 }
             }
         },

@@ -607,3 +607,131 @@ func newHistoryNotificationEvent(protocolMsgID string, inlinePayload []byte) *ev
 		},
 	}
 }
+
+// TestHandleEvent_TerminalReasonWriteFailureIsSurfaced covers the path a fake
+// that cannot fail could never reach.
+//
+// The restart gate reads the persisted reason and nothing else, so treating a
+// failed write as success would let the next boot reconnect a stream-replaced,
+// outdated or banned device. The write is retried, the failure is reported
+// through the status, and the dead session is still torn down.
+func TestHandleEvent_TerminalReasonWriteFailureIsSurfaced(t *testing.T) {
+	cli := newFakeClient()
+	m, syncStore, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	syncStore.resetCalls()
+	syncStore.mu.Lock()
+	syncStore.metadataErr = errors.New("database is down")
+	syncStore.mu.Unlock()
+
+	assert.True(t, m.handleEvent(&events.LoggedOut{}))
+
+	status := m.Status()
+	assert.Equal(t, StateDisconnected, status.State)
+	assert.Equal(t, ReasonLoggedOut, status.Reason)
+	assert.False(t, status.TerminalReasonPersisted,
+		"the status must admit the decision will not survive a restart")
+
+	assert.Empty(t, syncStore.terminalReason(), "nothing was durably recorded")
+	assert.Contains(t, cli.callLog(), "disconnect",
+		"the session is dead either way, so auto-reconnect is still cancelled")
+
+	// The write is retried rather than abandoned on the first blip.
+	metadataCalls := 0
+	for _, c := range syncStore.callLog() {
+		if c == "metadata" {
+			metadataCalls++
+		}
+	}
+	assert.Equal(t, terminalPersistAttempts, metadataCalls)
+}
+
+// TestHandleEvent_TerminalReasonPersistedOnHappyPath is the positive control.
+func TestHandleEvent_TerminalReasonPersistedOnHappyPath(t *testing.T) {
+	m, _, _, _ := newTestManager(t, newFakeClient(), true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	require.True(t, m.handleEvent(&events.LoggedOut{}))
+	assert.True(t, m.Status().TerminalReasonPersisted)
+}
+
+// TestStart_FailsClosedWhenSyncStateUnreadable: the persisted terminal reason is
+// the only thing holding a dead or banned device back, so a row we cannot read
+// must not be treated as a row with nothing in it.
+func TestStart_FailsClosedWhenSyncStateUnreadable(t *testing.T) {
+	cli := newFakeClient()
+	m, syncStore, _, _ := newTestManager(t, cli, true)
+	syncStore.mu.Lock()
+	syncStore.getErr = errors.New("database is down")
+	syncStore.mu.Unlock()
+
+	require.NoError(t, m.Start(context.Background()), "a WhatsApp failure never aborts boot")
+
+	assert.Equal(t, StateError, m.Status().State)
+	assert.NotContains(t, cli.callLog(), "connect",
+		"an unreadable terminal decision must not be read as an absent one")
+}
+
+// TestStatus_NamesTheMissingDependency: reporting not_ready without saying what
+// is missing tells the operator nothing they can act on.
+func TestStatus_NamesTheMissingDependency(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func() *Manager
+		want  string
+	}{
+		{
+			name: "missing ingestor",
+			build: func() *Manager {
+				m := newNotReadyManager()
+				m.SetHistoryDrainReady()
+				return m
+			},
+			want: "message ingestor",
+		},
+		{
+			name: "missing recorder",
+			build: func() *Manager {
+				m := NewManager(nil, NewWALogger("t"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
+				m.SetIngestor(&fakeIngestor{})
+				m.SetHistoryDrainReady()
+				return m
+			},
+			want: "history notification recorder",
+		},
+		{
+			name: "missing drainer",
+			build: func() *Manager {
+				m := NewManager(nil, NewWALogger("t"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
+				m.SetIngestor(&fakeIngestor{})
+				m.SetHistoryRecorder(&fakeRecorder{})
+				return m
+			},
+			want: "history drain worker",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.build()
+			m.newSession = func(context.Context, bool) (*session, error) {
+				return nil, errors.New("must not be reached")
+			}
+
+			require.NoError(t, m.Start(context.Background()))
+			status := m.Status()
+			assert.Equal(t, StateNotReady, status.State)
+			assert.Equal(t, ReasonIngestNotWired, status.Reason, "the machine-readable code stays stable")
+			assert.Contains(t, status.Missing, tt.want, "the status must name the dependency")
+
+			// A refused pairing records the same detail, so the settings page
+			// sees it whether or not Start ran first.
+			m.setStatus(func(s *Status) { s.Missing = "" })
+			assert.ErrorIs(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}), ErrIngestNotWired)
+			assert.Contains(t, m.Status().Missing, tt.want)
+		})
+	}
+}
