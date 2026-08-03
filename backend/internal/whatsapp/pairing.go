@@ -384,11 +384,6 @@ func (m *Manager) abandonPairingTurn(st *actorState, p *pairingState, cause erro
 		}
 	}
 	m.retireAttempt(st, p, cause)
-	// The slot may have just become free, which is when a deferred targeted
-	// cleanup can finally be guarded against real state.
-	flushCtx, cancelFlush := turnCtx(context.Background())
-	m.flushStaleDeletes(flushCtx, st)
-	cancelFlush()
 }
 
 // retireAttempt tells the attempt's caller why it ended, then ends it. The

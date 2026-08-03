@@ -43,6 +43,7 @@ behaviors:
       - if the replaced device cannot be removed, the removal is retried, the leftover is reported as a degraded state rather than passed off as a clean replacement, and the restart still resumes the account that was actually linked
       - when more than one set of stored credentials survives and none of them is the account the integration recorded as linked, it refuses to resume any of them and reports the ambiguity, rather than resuming an arbitrary one
       - a single surviving set of credentials is always resumed, even when the record of which account was linked is missing or stale, and that record is repaired at the same time
+      - credentials left behind by a pairing or unlink that a restart interrupted are the next startup's to reckon with rather than the shutdown's, because shutdown ends connections only — what it leaves is reported by the same degraded-store rules above instead of being chased down by a dying process
     provenance: [whatsmeow device store on the shared database, resolveLinkedDevice, TestWhatsAppDeviceStore_PairedDeviceSurvivesNewManager, TestWhatsAppRePair_LeavesExactlyOneStoredDevice, TestWhatsAppRePair_RetainedDeviceStillResumesTheLinkedOne, TestResolveLinkedDevice_RefusesToGuess]
 
   - id: WHA-004

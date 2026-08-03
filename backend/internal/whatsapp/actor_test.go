@@ -3,7 +3,6 @@ package whatsapp
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"regexp"
 	"strings"
@@ -566,7 +565,8 @@ func TestFullMailbox_PairSuccessIsEventuallyAdopted(t *testing.T) {
 }
 
 // TestFullMailbox_PairErrorIsEventuallyHandled: PairError is the only signal
-// that a pairing-written device row survived a FAILED pairing, so its
+// that the attempt the user is watching has FAILED. Dropping it would leave the
+// settings page showing a pairing that is never coming back, so its
 // losslessness is not optional.
 func TestFullMailbox_PairErrorIsEventuallyHandled(t *testing.T) {
 	cli := newFakeClient()
@@ -596,9 +596,9 @@ func TestFullMailbox_PairErrorIsEventuallyHandled(t *testing.T) {
 	release()
 	assert.True(t, <-delivered)
 	eventually(t, "the attempt is abandoned", func() bool { return m.Status().Pairing == nil })
-	eventually(t, "the row the library saved for the failed attempt is deleted by JID", func() bool {
-		return len(devices.remaining()) == 0
-	})
+	assert.Equal(t, StateNotPaired, m.Status().State, "and the user is told, rather than left watching a dead attempt")
+	assert.Equal(t, []types.JID{lateJID}, devices.remaining(),
+		"the row the library saved is left for the next boot; shutdown-time cleanup is not this event's job")
 }
 
 // TestFullMailbox_ConnectedIsDroppedWithAnError is the ONE sanctioned drop.
@@ -652,136 +652,6 @@ func TestHandleEvent_PairErrorIsNotADefaultBranchEvent(t *testing.T) {
 }
 
 // --- an abandoned pairing's late-saved device -------------------------------
-
-// TestAbandonedPairing_LateSaveIsDeletedOnTheStalePairSuccess covers the
-// ordinary case mutual exclusion does not: an attempt abandoned BEFORE its
-// library-side Store.Save completed. The teardown delete has already no-opped
-// (the library refuses to delete a device with no JID), so the backstop is the
-// event that PROVES the row exists.
-func TestAbandonedPairing_LateSaveIsDeletedOnTheStalePairSuccess(t *testing.T) {
-	lateJID := types.NewJID("15559990000", types.DefaultUserServer)
-
-	tests := []struct {
-		name    string
-		abandon func(t *testing.T, m *Manager, sess *session)
-		// deferred marks the case where the abandonment leaves ANOTHER attempt
-		// in the slot, so the targeted delete has to wait for that attempt to
-		// end before its guards can mean anything.
-		deferred bool
-	}{
-		{
-			name:    "cancel",
-			abandon: func(_ *testing.T, m *Manager, _ *session) { m.CancelPairing() },
-		},
-		{
-			name: "ttl expiry taken over",
-			abandon: func(t *testing.T, m *Manager, _ *session) {
-				expirePairing(m)
-				require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-			},
-			deferred: true,
-		},
-		{
-			name: "terminal event on its own client",
-			abandon: func(t *testing.T, m *Manager, sess *session) {
-				require.True(t, dispatchEvent(t, m, sess, &events.LoggedOut{}))
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cli := newFakeClient()
-			m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
-			require.NoError(t, m.Start(context.Background()))
-			require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-			sess := pairingSession(t, m)
-			require.NotNil(t, sess)
-
-			tt.abandon(t, m, sess)
-
-			// The library's own goroutine completes Store.Save after our
-			// teardown has already run.
-			devices.add(lateJID)
-
-			require.True(t, dispatchEvent(t, m, sess, &events.PairSuccess{ID: lateJID}))
-
-			if tt.deferred {
-				m.settle()
-				require.Equal(t, []types.JID{lateJID}, devices.remaining(),
-					"while another attempt is in flight the delete waits: its JID is not yet knowable")
-				// Ending that attempt is what lets the deferred cleanup run.
-				m.CancelPairing()
-			}
-
-			eventually(t, "the late-saved device is deleted by JID", func() bool {
-				return len(devices.remaining()) == 0
-			})
-		})
-	}
-}
-
-// TestAbandonedPairing_LateSaveIsDeletedOnAStalePairError is the other half: the
-// path taken when the library's own post-save cleanup failed.
-func TestAbandonedPairing_LateSaveIsDeletedOnAStalePairError(t *testing.T) {
-	lateJID := types.NewJID("15559990000", types.DefaultUserServer)
-
-	cli := newFakeClient()
-	m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-	sess := pairingSession(t, m)
-	require.NotNil(t, sess)
-
-	m.CancelPairing()
-	devices.add(lateJID)
-
-	require.True(t, dispatchEvent(t, m, sess, &events.PairError{ID: lateJID, Error: errors.New("boom")}))
-
-	eventually(t, "the late-saved device is deleted by JID", func() bool {
-		return len(devices.remaining()) == 0
-	})
-}
-
-// TestStalePairEvent_NeverDeletesTheLinkedDevice: a targeted delete is a loaded
-// weapon. Without these guards the fix would be more dangerous than the bug.
-func TestStalePairEvent_NeverDeletesTheLinkedDevice(t *testing.T) {
-	t.Run("jid equals the recorded linked device", func(t *testing.T) {
-		cli := newFakeClient()
-		m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
-		require.NoError(t, m.Start(context.Background()))
-		require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-		linked := types.NewJID("15551110000", types.DefaultUserServer)
-		sess := pairingSession(t, m)
-		require.True(t, dispatchEvent(t, m, sess, &events.PairSuccess{ID: linked}))
-		devices.add(linked)
-
-		orphan := &session{client: newFakeClient(), retired: true}
-		require.True(t, dispatchEvent(t, m, orphan, &events.PairSuccess{ID: linked}))
-		m.settle()
-
-		consistently(t, "a stale event naming the LIVE device is a re-pair report, not an orphan",
-			300*time.Millisecond, func() bool {
-				return len(devices.deletedJIDs()) == 0 && len(devices.remaining()) == 1
-			})
-	})
-
-	t.Run("jid equals the installed session's device", func(t *testing.T) {
-		cli := newFakeClient()
-		m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-		require.NoError(t, m.Start(context.Background()))
-		require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
-
-		orphan := &session{client: newFakeClient(), retired: true}
-		require.True(t, dispatchEvent(t, m, orphan, &events.PairError{ID: testDeviceJID, Error: errors.New("boom")}))
-		m.settle()
-
-		consistently(t, "deleting the installed session's device would unlink a working account",
-			300*time.Millisecond, func() bool {
-				return len(devices.deletedJIDs()) == 0 && len(devices.remaining()) == 1
-			})
-	})
-}
 
 // --- shutdown ----------------------------------------------------------------
 
@@ -1307,15 +1177,16 @@ func TestStop_UnblocksABlackHoledDial(t *testing.T) {
 	assert.Contains(t, cli.callLog(), "connect_cancelled")
 }
 
-// TestStalePairEvent_NeverDeletesWhileAPairingIsInFlight is the third guard.
+// TestStalePairEvent_NeverTouchesTheDeviceStore: a pair event from an attempt
+// the manager has already abandoned reports a row the library wrote, and the
+// manager does not act on it.
 //
-// A live attempt's device JID is unknowable to us until its own PairSuccess
-// arrives — the library saves the row from its own goroutine and only then
-// announces it. So a delayed event from a CANCELLED attempt naming the same
-// account must not be allowed to delete the row a NEW attempt just created:
-// neither the linked-account guard nor the installed-session guard sees it,
-// because the new attempt has adopted nothing yet.
-func TestStalePairEvent_NeverDeletesWhileAPairingIsInFlight(t *testing.T) {
+// It CANNOT be acted on safely from here. The live attempt's own JID is unknown
+// until its own PairSuccess arrives — the library saves the row from its own
+// goroutine and only then announces it — so a delayed event naming a JID is not
+// evidence about which row is whose. The row is left for the next boot, which is
+// the one place that can see the store as it actually is.
+func TestStalePairEvent_NeverTouchesTheDeviceStore(t *testing.T) {
 	for _, name := range []string{"PairSuccess", "PairError"} {
 		t.Run(name, func(t *testing.T) {
 			jid := types.NewJID("15551234567", types.DefaultUserServer)
@@ -1349,12 +1220,13 @@ func TestStalePairEvent_NeverDeletesWhileAPairingIsInFlight(t *testing.T) {
 				})
 			assert.NotNil(t, m.Status().Pairing, "and the live attempt is untouched")
 
-			// The deferral is a delay, not a lost cleanup: ending the live
-			// attempt frees the slot and the guarded delete finally runs.
+			// Ending the live attempt changes nothing about the store either:
+			// there is no deferred cleanup to run, by design.
 			m.CancelPairing()
-			eventually(t, "the deferred cleanup runs once the slot is free", func() bool {
-				return len(devices.remaining()) == 0
-			})
+			m.settle()
+			assert.Equal(t, []types.JID{jid}, devices.remaining(),
+				"the row survives for the next boot rather than being chased down in process")
+			assert.Empty(t, devices.deletedJIDs())
 		})
 	}
 }
@@ -1412,183 +1284,41 @@ func TestDisconnect_AbortedUnlinkDoesNotOrphanTheClientItBuilt(t *testing.T) {
 	assert.NotSame(t, built, installedSession(t, m).client, "it was never installed")
 }
 
-// TestStaleDelete_RunsInsideItsTurn is the structural proof that replaced the
-// re-guard.
+// TestStop_LeavesAnInterruptedPairingsRowForTheNextBoot states shutdown's
+// contract, which is deliberately narrow.
 //
-// A targeted delete launched as an effect can only be guarded BEFORE it runs, so
-// a pairing claiming the slot in between could have its freshly saved row
-// destroyed — and no fence placed after a delete can un-delete a row. Running
-// the delete in the turn makes the guards and the destruction one indivisible
-// step. Parking the database call therefore parks the whole loop, which is
-// exactly what an asynchronous implementation would not do.
-func TestStaleDelete_RunsInsideItsTurn(t *testing.T) {
+// Stop ends sockets and contexts. It does NOT reach into the device store: a row
+// the library wrote for an attempt that a restart interrupted is left exactly
+// where it is, for the next boot's resolver to find. That is the uniform rule
+// for every interrupted path — there is no in-process cleanup to lose, so there
+// is nothing to lose it. The next boot is the only place that can see the store
+// as it actually is, and it reports a degraded one rather than guessing (see the
+// resolver's tests, and TestStop_LeavesAnOrphanThatTheNextBootReports).
+func TestStop_LeavesAnInterruptedPairingsRowForTheNextBoot(t *testing.T) {
 	jid := types.NewJID("15559990000", types.DefaultUserServer)
 
 	cli := newFakeClient()
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
-
-	// An abandoned attempt whose row is saved late, with another attempt in the
-	// slot, so its cleanup is deferred.
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-	abandoned := pairingSession(t, m)
-	m.CancelPairing()
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-	devices.add(jid)
-	require.True(t, dispatchEvent(t, m, abandoned, &events.PairSuccess{ID: jid}))
-
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	devices.setErr(func(d *fakeDevices) { d.delEntered, d.delBlock = entered, release })
-
-	// Freeing the slot flushes the deferral.
-	go m.CancelPairing()
-	<-entered
-
-	settled := make(chan struct{})
-	go func() { m.settle(); close(settled) }()
-	select {
-	case <-settled:
-		t.Fatal("the loop accepted another message while the delete was running: the delete is not in-turn, so a new attempt could save the very row it is about to destroy")
-	case <-time.After(150 * time.Millisecond):
-	}
-
-	close(release)
-	select {
-	case <-settled:
-	case <-time.After(3 * time.Second):
-		t.Fatal("the loop never resumed")
-	}
-	assert.Empty(t, devices.remaining(), "and the deferred cleanup did run")
-}
-
-// TestStop_FlushesDeferredCleanupRatherThanAbandoningIt is the shutdown half.
-//
-// A deferral lives only in actor memory, so a shutdown that cancelled the
-// pairing without flushing would drop it. On an installation that was never
-// paired that is the resurrection case with nothing to mask it: the abandoned
-// attempt's row is then the ONLY row and carries no selector, so the resolver's
-// single-row heal would adopt it on the next boot as if the user had chosen it.
-func TestStop_FlushesDeferredCleanupRatherThanAbandoningIt(t *testing.T) {
-	jid := types.NewJID("15559990000", types.DefaultUserServer)
-
-	cli := newFakeClient()
-	m, syncStore, _, _, devices := newTestManagerWithDevices(t, cli, false)
 	require.NoError(t, m.Start(context.Background()))
 	require.Equal(t, StateNotPaired, m.Status().State, "a store that has never been paired")
 
 	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-	abandoned := pairingSession(t, m)
-	m.CancelPairing()
+	require.True(t, cli.pumpRunning(), "the attempt's socket is up")
 
-	// A second attempt occupies the slot, so the cleanup for the first is
-	// deferred rather than run.
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	// The library saves the row from its own goroutine, mid-attempt.
 	devices.add(jid)
-	require.True(t, dispatchEvent(t, m, abandoned, &events.PairSuccess{ID: jid}))
-	require.Equal(t, []types.JID{jid}, devices.remaining(), "deferred, as designed")
 
 	m.Stop()
 
-	assert.Empty(t, devices.remaining(),
-		"shutdown frees the slot, so it is the last turn that can run the deferred cleanup — and it must")
+	assert.Equal(t, []types.JID{jid}, devices.remaining(),
+		"shutdown does no database work: the row is the next boot's to find")
+	assert.Empty(t, devices.deletedJIDs())
 
-	// The next boot over the same store finds nothing to resurrect.
-	next := newManagerForTest(t, syncStore, &fakeBackfillReader{})
-	next.SetIngestor(&fakeIngestor{})
-	next.SetHistoryRecorder(&fakeRecorder{})
-	next.SetHistoryDrainReady()
-	next.setDeviceOps(devices.ops())
-	nextClient := newFakeClient()
-	next.setSessionFactory(func(_ context.Context, req sessionRequest) (*session, error) {
-		jids := devices.remaining()
-		if len(jids) == 1 && req.linked == nil {
-			// What the real resolver does with a lone row and no selector.
-			return fakeSessionFor(nextClient, true, &jids[0]), nil
-		}
-		return fakeSessionFor(nextClient, false, nil), nil
-	})
-	require.NoError(t, next.Start(context.Background()))
-
-	assert.Equal(t, StateNotPaired, next.Status().State,
-		"an abandoned attempt's device must not become the linked account by default")
-	assert.NotContains(t, nextClient.callLog(), "connect")
-}
-
-// TestStop_BoundsTheFinalFlushAgainstAStalledDatabase: the last turn's flush
-// runs under its OWN budget rather than the effect context Stop has already
-// cancelled — and a budget it is, not a background context. A shutdown that
-// waits forever on a wedged database is a process that does not shut down.
-func TestStop_BoundsTheFinalFlushAgainstAStalledDatabase(t *testing.T) {
-	cli := newFakeClient()
-	m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
-
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-	abandoned := pairingSession(t, m)
-	m.CancelPairing()
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-
-	jid := types.NewJID("15559991111", types.DefaultUserServer)
-	devices.add(jid)
-	require.True(t, dispatchEvent(t, m, abandoned, &events.PairSuccess{ID: jid}))
-	require.Equal(t, []types.JID{jid}, devices.remaining(), "deferred behind the live attempt")
-
-	devices.setErr(func(d *fakeDevices) { d.delStall = true })
-
-	stopped := make(chan struct{})
-	go func() { m.Stop(); close(stopped) }()
-	select {
-	case <-stopped:
-	case <-time.After(actorDBTimeout + 2*time.Second):
-		t.Fatalf("Stop did not return within one database budget of a stalled final flush")
-	}
-}
-
-// TestTurnBudgetHoldsForAStalledFlush is the second worst-turn case.
-//
-// A deferred-cleanup list is unbounded, so a per-item budget would make the turn
-// unbounded with it: four stalled deletes at the database timeout each already
-// exceed the whole turn budget. The pass therefore shares ONE budget, and items
-// it did not reach stay pending for the next flush trigger rather than being
-// lost.
-func TestTurnBudgetHoldsForAStalledFlush(t *testing.T) {
-	cli := newFakeClient()
-	m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
-
-	// An abandoned attempt, then a live one, so every stale event defers.
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-	abandoned := pairingSession(t, m)
-	m.CancelPairing()
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-
-	const pending = 8
-	for i := 0; i < pending; i++ {
-		jid := types.NewJID(fmt.Sprintf("1555000%04d", i), types.DefaultUserServer)
-		devices.add(jid)
-		require.True(t, dispatchEvent(t, m, abandoned, &events.PairSuccess{ID: jid}))
-	}
-	require.Len(t, devices.remaining(), pending, "all deferred, none deleted")
-
-	devices.setErr(func(d *fakeDevices) { d.delStall = true })
-
-	// Freeing the slot runs the flush inside one turn.
-	started := accelerated.GetCurrentTime()
-	done := make(chan struct{})
-	go func() { m.CancelPairing(); close(done) }()
-
-	select {
-	case <-done:
-	case <-time.After(maxTurnBudget + 2*time.Second):
-		t.Fatalf("a stalled flush of %d items exceeded the turn budget of %s: the pass is bounded per item, not as a batch", pending, maxTurnBudget)
-	}
-	assert.Less(t, accelerated.GetCurrentTime().Sub(started), maxTurnBudget+2*time.Second)
-
-	// Nothing was lost: what the budget did not reach is still pending.
-	assert.Len(t, devices.remaining(), pending, "a stalled delete deletes nothing")
-	assert.NotEmpty(t, m.inspect().PendingStaleDeletes,
-		"items the budget did not reach carry to the next flush rather than being dropped")
+	// What Stop DOES guarantee: the socket is closed and the context that is its
+	// parent, and the library's auto-reconnect's, is ended.
+	assert.False(t, cli.IsConnected())
+	assert.Error(t, cli.connCtxErr())
+	eventually(t, "the socket's read pump ends with the context", func() bool { return !cli.pumpRunning() })
 }
 
 // TestDisconnect_FailedLogoutStillReleasesTheClient is the class-level guarantee
@@ -1703,168 +1433,4 @@ func TestStart_SessionReplacedMidDialIsStillReleased(t *testing.T) {
 	eventually(t, "the replaced session is released even though its own operation aborted on the fence", func() bool {
 		return startClient.connCtxErr() != nil && !startClient.pumpRunning()
 	})
-}
-
-// TestFinalHandleCarriesWholeReleases closes the one gap the queue-then-drain
-// design opens.
-//
-// The loop's last turn retires whatever it still owns, but the launch gate is
-// already shut, so those releases cannot become effects. They leave through the
-// published handle instead — and they must leave WHOLE. A bare session is not a
-// teardown: it has lost the device row an abandoned attempt must not leave
-// behind, and the drain that has to unwind before its client is closed.
-func TestFinalHandleCarriesWholeReleases(t *testing.T) {
-	cli := newFakeClient()
-	sess := fakeSessionFor(cli, false, nil)
-
-	st := &actorState{}
-	p := &pairingState{sess: sess, drainDone: make(chan struct{}), drainStarted: true}
-	st.pairing = p
-
-	// Exactly what shutdownState does: end the attempt, then free the slot.
-	st.endAttempt(p, false)
-	st.pairing = nil
-
-	h := st.teardownHandleOf()
-	require.Len(t, h.releases, 1, "a release the last turn queued must reach the handle Stop reads")
-	assert.Same(t, sess, h.releases[0].sess)
-	assert.True(t, h.releases[0].deleteDevice,
-		"an abandoned attempt's device row travels with its release, or shutdown leaves it behind")
-	assert.True(t, h.releases[0].drainStarted,
-		"and so does the drain that must unwind before the client is closed")
-	assert.Same(t, sess, h.releases[0].sess)
-}
-
-// TestFinalHandleCarriesAReleaseAnOperationStillHolds is the half a cancelled
-// operation exposes: Stop cancels the batch, so the continuation never runs and
-// the operation never reaches releaseOp. The release is in the STATE rather than
-// in the operation's flags precisely so that path cannot lose it.
-func TestFinalHandleCarriesAReleaseAnOperationStillHolds(t *testing.T) {
-	cli := newFakeClient()
-	sess := fakeSessionFor(cli, true, nil)
-
-	st := &actorState{sess: sess}
-	rel := opFlags{unlink: true}
-	st.retireFor(&rel, sess)
-
-	require.Nil(t, st.sess, "ownership ends immediately")
-	h := st.teardownHandleOf()
-	require.Len(t, h.releases, 1,
-		"a held release is still the loop's obligation, so the handle names it")
-	assert.Same(t, sess, h.releases[0].sess)
-	assert.True(t, h.releases[0].held)
-}
-
-// TestStop_ReleasesASessionAnUnlinkWasStillHolding is the end of the path the
-// effect-goroutine test only started.
-//
-// An unlink parks in Logout, Stop cancels the batch, and the continuation
-// therefore never runs — so nothing ever calls releaseOp. The client must still
-// be closed and its connection context ended: whatsmeow leaves a failed or
-// cancelled logout CONNECTED, and the session is in no slot for a handle to find
-// it by. The RELEASE is what the handle carries.
-func TestStop_ReleasesASessionAnUnlinkWasStillHolding(t *testing.T) {
-	cli := newFakeClient()
-	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
-	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
-	require.True(t, cli.IsConnected())
-
-	entered := make(chan struct{})
-	never := make(chan struct{})
-	t.Cleanup(func() { close(never) })
-	cli.mu.Lock()
-	cli.logoutEntered = entered
-	cli.logoutBlock = never
-	cli.mu.Unlock()
-
-	unlinkDone := make(chan struct{})
-	go func() { defer close(unlinkDone); _, _ = m.Disconnect(context.Background(), false) }()
-	<-entered
-
-	m.Stop()
-	<-unlinkDone
-
-	assert.False(t, cli.IsConnected(),
-		"a session an operation was holding when Stop cancelled it is still released")
-	assert.Error(t, cli.connCtxErr(),
-		"and its connection context ends with it, or auto-reconnect outlives the manager")
-	eventually(t, "the socket's read pump ends with the context", func() bool { return !cli.pumpRunning() })
-}
-
-// TestStop_DeletesTheDeviceOfAnAttemptItAbandoned: shutdown ends the in-flight
-// attempt, and an attempt's half-written device row is part of ending it. A
-// teardown that reached Stop as a bare session would disconnect the client and
-// leave the row — which the next boot can resume as if the user had chosen it.
-func TestStop_DeletesTheDeviceOfAnAttemptItAbandoned(t *testing.T) {
-	cli := newFakeClient()
-	m, _, _, _, _ := newTestManagerWithDevices(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
-
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-	require.True(t, cli.pumpRunning(), "the attempt's socket is up")
-
-	m.Stop()
-
-	assert.Contains(t, cli.callLog(), "delete_device",
-		"the abandoned attempt's own device row is removed by the release, not left for the next boot")
-	assert.Less(t, indexOf(cli.callLog(), "disconnect"), indexOf(cli.callLog(), "delete_device"),
-		"and the client is closed before its row goes")
-	assert.Error(t, cli.connCtxErr())
-}
-
-// TestFlush_RotatesPastAStalledJIDAndRetriesItself is the liveness half of the
-// bounded flush: bounding a pass says when it STOPS, not that the work happens.
-//
-// One stalled JID at the head of the queue used to consume every pass's whole
-// budget and be put straight back at the head, so nothing behind it was ever
-// reached — and nothing retried the pass at all until an unrelated pairing
-// transition happened to occur. Here the stalled JID goes to the BACK, the loop
-// schedules its own next pass, and the reachable JID is deleted with no external
-// event of any kind. The retry is bounded: once the queue has been rotated all
-// the way round with nothing settling, the loop stops asking.
-func TestFlush_RotatesPastAStalledJIDAndRetriesItself(t *testing.T) {
-	stalled := types.NewJID("15550001111", types.DefaultUserServer)
-	reachable := types.NewJID("15550002222", types.DefaultUserServer)
-
-	cli := newFakeClient()
-	m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
-
-	// An abandoned attempt, then a live one, so both stale events defer.
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-	abandoned := pairingSession(t, m)
-	m.CancelPairing()
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
-
-	for _, jid := range []types.JID{stalled, reachable} {
-		devices.add(jid)
-		require.True(t, dispatchEvent(t, m, abandoned, &events.PairSuccess{ID: jid}))
-	}
-	require.Equal(t, []types.JID{stalled, reachable}, devices.remaining(), "both deferred")
-
-	devices.setErr(func(d *fakeDevices) { d.delStallJID = &stalled })
-
-	// ONE trigger, and then nothing: freeing the slot starts the first pass, and
-	// every pass after it is the loop's own doing.
-	m.CancelPairing()
-
-	eventually(t, "a JID behind a stalled one is reached, without any further external event", func() bool {
-		return len(devices.remaining()) == 1 && devices.remaining()[0] == stalled
-	})
-	assert.Equal(t, []types.JID{stalled}, m.inspect().PendingStaleDeletes,
-		"the stalled JID is kept, not dropped")
-
-	// And the retry STOPS. A database that never answers must not turn the actor
-	// into a spinner, so the bound is absolute rather than "it looked quiet for
-	// a moment": one stalled pass costs a whole database budget, so a window of
-	// several budgets would show several more attempts if nothing stopped them.
-	//
-	// The correct run makes three: the first pass stalls, the second deletes the
-	// reachable JID, the third stalls on the JID that came round again — and the
-	// pass after that is never scheduled, because every pending JID has now had
-	// one to itself.
-	const maxAttempts = 4
-	consistently(t, "the self-scheduled retries stop once every pending JID has had a pass",
-		3*actorDBTimeout, func() bool { return devices.deleteAttempts() <= maxAttempts })
 }

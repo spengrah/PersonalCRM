@@ -14,8 +14,6 @@ import (
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 
-	"slices"
-
 	"github.com/google/uuid"
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/proto/waCompanionReg"
@@ -1030,7 +1028,6 @@ func (m *Manager) onPairSuccess(st *actorState, from *session, e *events.PairSuc
 	default:
 		logger.Warn().Msg("whatsapp: ignoring PairSuccess from an abandoned pairing client")
 		m.tearDownOrphan(st, from)
-		m.deleteStalePairDevice(st, e.ID)
 		return
 	}
 
@@ -1063,12 +1060,6 @@ func (m *Manager) onPairSuccess(st *actorState, from *session, e *events.PairSuc
 		// a row would destroy what the user just did.
 		st.status.LinkSelectorPersisted = &ok
 	}
-
-	// The slot is free and the linked JID is known, so a cleanup deferred while
-	// this attempt was live can now be guarded properly and run.
-	flushCtx, cancelFlush := turnCtx(context.Background())
-	m.flushStaleDeletes(flushCtx, st)
-	cancelFlush()
 
 	if superseded != nil {
 		// A failed selector write makes this delete MORE important, not less:
@@ -1108,203 +1099,21 @@ func (m *Manager) onPairSuccess(st *actorState, from *session, e *events.PairSuc
 // onPairError handles the event the library dispatches when a pair-success
 // arrived but finishing the pairing locally failed.
 //
-// It is a CONTROL event, not a default-branch log line: it is the only signal
-// that a pairing-written device row survived a FAILED pairing, and the targeted
-// cleanup it gates would otherwise never be scheduled.
+// It is a CONTROL event, not a default-branch log line: it is what tells the
+// user, in the moment, that the attempt they are watching has failed. The device
+// row the library may have written is NOT chased down from here — see the
+// package doc: a row left by an interrupted pairing is the next boot's to find.
 func (m *Manager) onPairError(st *actorState, from *session, e *events.PairError) {
 	scope, pairing := st.scopeOf(from)
 	switch scope {
 	case scopePairing:
 		logger.Warn().Err(e.Error).Msg("whatsapp: pairing failed")
 		m.abandonPairingTurn(st, pairing, errors.Join(ErrPairingCancelled, e.Error))
-		m.deleteStalePairDevice(st, e.ID)
 	case scopeStale:
 		logger.Warn().Err(e.Error).Msg("whatsapp: PairError from an abandoned pairing client")
 		m.tearDownOrphan(st, from)
-		m.deleteStalePairDevice(st, e.ID)
 	default:
-		// A stray pair report on the installed session. Deleting its device
-		// would unlink a working account, so this is handled as stale MINUS the
-		// delete.
 		logger.Warn().Err(e.Error).Msg("whatsapp: PairError reported on the installed session")
-	}
-}
-
-// deleteStalePairDevice removes, by JID, a device row the library saved for an
-// attempt the manager has already abandoned.
-//
-// The library guarantees the pairing: every failure path after Store.Save
-// succeeds deletes the store and dispatches PairError, so IF a pairing-written
-// row survives, a PairSuccess or PairError naming its JID was dispatched. That
-// makes this complete rather than best-effort.
-//
-// THREE guards, because a targeted delete is a loaded weapon:
-//
-//  1. never the recorded linked account;
-//  2. never the installed session's device;
-//  3. never while ANY pairing attempt is in flight.
-//
-// The third is the one the first two cannot cover. A live attempt's device JID
-// is not knowable to us until its own PairSuccess arrives — the library saves
-// the row from its own goroutine and only then announces it — so while an
-// attempt is in the slot there is no way to prove a stale event's JID is not the
-// row that attempt just created. Skipping loses nothing: the same guarantee that
-// schedules this cleanup ("if a pairing-written row survives, a PairSuccess or
-// PairError naming its JID was dispatched") means the abandoned attempt's own
-// row is cleaned up by its own event once the slot is free, or adopted.
-//
-// This is the same philosophy as the unlink/pairing mutual exclusion: remove the
-// interleaving rather than fence a hazard whose evidence lives in the library's
-// goroutine rather than in our state.
-func (m *Manager) deleteStalePairDevice(st *actorState, jid types.JID) {
-	if !m.guardStaleDelete(st, jid) {
-		return
-	}
-	ctx, cancel := turnCtx(context.Background())
-	defer cancel()
-	if !m.deleteDeviceNow(ctx, st, jid) {
-		st.pendingStaleDeletes = append(st.pendingStaleDeletes, jid)
-	}
-}
-
-// guardStaleDelete applies the three guards and reports whether the delete may
-// proceed NOW. A JID it defers is recorded as pending, never dropped.
-func (m *Manager) guardStaleDelete(st *actorState, jid types.JID) bool {
-	if jid.IsEmpty() {
-		return false
-	}
-	if st.linkedJID != nil && st.linkedJID.ToNonAD() == jid.ToNonAD() {
-		logger.Debug().Str("jid", jid.String()).Msg("whatsapp: not deleting the linked device on a stale pair event")
-		return false
-	}
-	if st.sess != nil && st.sess.jid != nil && st.sess.jid.ToNonAD() == jid.ToNonAD() {
-		logger.Debug().Str("jid", jid.String()).Msg("whatsapp: not deleting the installed session's device on a stale pair event")
-		return false
-	}
-	if st.pairing != nil {
-		// DEFERRED, not dropped. Re-guarded by the turn that frees the slot,
-		// which is also the first turn that can know the live attempt's own JID.
-		if !slices.ContainsFunc(st.pendingStaleDeletes, func(p types.JID) bool { return p.ToNonAD() == jid.ToNonAD() }) {
-			st.pendingStaleDeletes = append(st.pendingStaleDeletes, jid)
-		}
-		logger.Warn().Str("jid", jid.String()).
-			Msg("whatsapp: deferring an abandoned pairing's device delete while another attempt is in flight")
-		return false
-	}
-	return true
-}
-
-// deleteDeviceNow performs the delete IN THE TURN, under the caller's budget.
-//
-// It is a bounded database write — the container issues one ExecContext under
-// the context it is given — exactly like the terminal write the design already
-// sanctions in-turn. Doing it here is what makes the guards and the destruction
-// one indivisible step: an asynchronous delete could be launched against state a
-// later turn has already changed, and no fence placed after it can un-delete a
-// row.
-//
-// It reports whether the JID is settled. A budget that ran out is NOT settled:
-// the caller carries it to the next flush rather than losing it.
-func (m *Manager) deleteDeviceNow(ctx context.Context, st *actorState, jid types.JID) bool {
-	if st.devices.deleteJID == nil {
-		return true
-	}
-	var err error
-	for attempt := 0; attempt < deviceDeleteAttempts; attempt++ {
-		if ctx.Err() != nil {
-			return false
-		}
-		if err = st.devices.deleteJID(ctx, jid); err == nil {
-			return true
-		}
-	}
-	if ctx.Err() != nil {
-		return false
-	}
-	st.status.ReplacedDeviceRetained = true
-	logger.Error().Err(err).Str("jid", jid.String()).
-		Msg("whatsapp: could not delete an abandoned pairing's device; the store holds a stale session")
-	return true
-}
-
-// flushStaleDeletes retries every deferred targeted cleanup. It is called by the
-// turns that free the pairing slot, so the guards are re-evaluated against the
-// state that turn produced — including a JID it has just adopted.
-//
-// The whole PASS shares ONE budget, not one per item. A per-item budget makes an
-// unbounded pending list an unbounded turn — four stalled JIDs would already
-// exceed the turn budget on their own. Items the budget did not reach stay
-// pending and are carried to the next flush trigger, so bounding the pass costs
-// nothing but time.
-func (m *Manager) flushStaleDeletes(ctx context.Context, st *actorState) {
-	if len(st.pendingStaleDeletes) == 0 || st.pairing != nil {
-		return
-	}
-	pending := st.pendingStaleDeletes
-	st.pendingStaleDeletes = nil
-
-	for i, jid := range pending {
-		if ctx.Err() != nil {
-			// Never attempted, so their order is still meaningful: they keep it.
-			st.pendingStaleDeletes = append(st.pendingStaleDeletes, pending[i:]...)
-			logger.Warn().Int("remaining", len(pending)-i).
-				Msg("whatsapp: stale-device cleanup ran out of budget; the rest carry to the next flush")
-			return
-		}
-		if !m.guardStaleDelete(st, jid) {
-			st.flushStalls = 0
-			continue
-		}
-		if !m.deleteDeviceNow(ctx, st, jid) {
-			// ROTATED, not reinserted. A stalled head kept at the head is a head
-			// forever: it consumes every pass's whole budget and no JID behind it
-			// is ever reached. Sending it to the BACK costs it nothing but its
-			// turn, and makes the pass that follows reach past it.
-			st.pendingStaleDeletes = append(st.pendingStaleDeletes, pending[i+1:]...)
-			st.pendingStaleDeletes = append(st.pendingStaleDeletes, jid)
-			st.flushStalls++
-			logger.Warn().Str("jid", jid.String()).Int("pending", len(st.pendingStaleDeletes)).
-				Msg("whatsapp: a stale-device delete outlasted the pass budget; it goes to the back of the queue")
-			return
-		}
-		st.flushStalls = 0
-	}
-}
-
-// scheduleFlush asks the loop for another flush pass. It runs at the end of
-// EVERY turn, like publish and the release drain, so no flush trigger has to
-// remember it.
-//
-// Without it, a pass that could not finish would wait for an unrelated pairing
-// transition that may never come — bounding a turn is not the same as making the
-// work happen. The nudge is the ONE message the actor sends itself, and it is
-// bounded twice over: at most one is outstanding, and it stops once the queue
-// has been rotated all the way round without a single JID settling, so a
-// permanently unreachable database cannot turn the loop into a spinner. Any
-// later settlement resets that, and any other flush trigger starts it again.
-//
-// Stopping is a decision, not an oversight: there is no timer in this package to
-// back off with, and the consequence of a cleanup that never runs is durable and
-// already surfaced where it can be acted on — the surviving rows make the next
-// boot report a degraded store rather than resume one of them.
-func (m *Manager) scheduleFlush(st *actorState) {
-	switch {
-	case st.flushNudged, st.launchClosed, st.pairing != nil:
-		return
-	case len(st.pendingStaleDeletes) == 0:
-		st.flushStalls = 0
-		return
-	case st.flushStalls >= len(st.pendingStaleDeletes):
-		// Every pending JID has now had a pass to itself and stalled in it.
-		return
-	}
-	select {
-	case m.inbox <- &flushNudgeMsg{}:
-		st.flushNudged = true
-	default:
-		// A full mailbox is not a reason to block the loop on itself. The next
-		// turn schedules one, and every ordinary flush trigger still applies.
-		logger.Warn().Msg("whatsapp: could not schedule a stale-device cleanup retry; the mailbox is full")
 	}
 }
 
