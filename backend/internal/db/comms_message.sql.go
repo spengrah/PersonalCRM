@@ -797,7 +797,7 @@ type MarkCommsMessagesProcessedParams struct {
 //     no-op for email rows. There is NO session-scope predicate here (unlike
 //     messages_message): the @session_ref arg is part of the shared
 //     StagingProcessor signature but intentionally unused in the email path.
-//   - chat non-tx engine path (commsMessageStoreAdapter.MarkProcessed, used by
+//   - chat non-tx engine path (commsadapter.StoreAdapter.MarkProcessed, used by
 //     the engine's extend/promote/bridge paths): those paths do not claim rows
 //     or publish events, so the claim-clear keeps any leftover claim from a
 //     prior pass from re-blocking the row. Mirrors MarkMessagesMessagesProcessed.
