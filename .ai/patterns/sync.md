@@ -106,35 +106,76 @@ bodies OUTSIDE `IngestBatch` legitimately name kinds and are out of scope.
 
 ## Shared Message Aggregation (`messaging/aggregation`)
 
-Per-source message staging tables (`telegram_message` today; `messages_message`,
-`whatsapp_message` in later PRs) feed a single source-parametric burst/session
-aggregator at `backend/internal/messaging/aggregation`. The shared engine
-implements the burst → session → interaction pipeline (groupIntoBursts,
-resolveSessions, time-based + explicit reply bridging, same-direction
-coalescing) and depends only on interfaces — `SourceAdapter`, `MessageStore`,
-`InteractionFinder`, `InteractionPromoter`, `InteractionExtender`,
-`EventPublisher`.
+Staged message rows feed a single source-parametric burst/session aggregator at
+`backend/internal/messaging/aggregation`. The shared engine implements the
+burst → session → interaction pipeline (groupIntoBursts, resolveSessions,
+time-based + explicit reply bridging, same-direction coalescing) and depends
+only on interfaces — `SourceAdapter`, `MessageStore`, `InteractionFinder`,
+`InteractionPromoter`, `InteractionExtender`, `EventPublisher`.
 
-Each source provides a thin adapter in its package that:
+Three sources call the engine today: `telegram`, `messages`, and `gchat`.
 
-1. Implements `SourceAdapter` (returns the `interaction.source` constant,
-   formats `source_ref`/`peer_ref` strings, builds description labels).
-2. Implements `MessageStore` by wrapping its per-source staging repository
-   and mapping rows into the source-neutral `aggregation.Message` struct.
-   The staging-row → Message mapping MUST carry `InteractionID` through so
-   cross-batch explicit reply bridging works.
-3. Constructs `aggregation.Engine` via `aggregation.NewEngine(...)`. The
-   `EventPublisher` argument MUST be the untyped-nil interface when no
-   bus is configured — typed-nil concrete pointers (`(*events.Bus)(nil)`)
-   bypass the engine's `publisher == nil` guard.
+### Where new chat-like sources stage content
 
-Telegram's `*telegram.AggregationEngine` is currently the only caller; it is
-a thin shim around the shared engine, preserving its exported signature so
-manager/handlers/rematch wiring and integration tests compile unchanged.
+**`comms_message` is the default staging store for a new chat-like source.** It
+is the shared cross-source content table (`backend/migrations/058_comms_message.up.sql`),
+already carrying Gmail and Google Chat. Every aggregation read path over it is
+source-scoped — the `*ForSource` queries take the source as a parameter, so two
+sources sharing the table never see each other's rows. (Source-neutral reads do
+exist and are deliberate: `GetCommsMessageByID` and `ListCommsMessagesByContact`
+serve by-id and per-contact timeline reads across all sources.) Do NOT mint a
+per-source staging table.
+
+`telegram_message` and `messages_message` are the legacy shape, retained for the
+two sources that predate `comms_message`. They are not the template.
+
+### The new-source recipe
+
+1. **`SourceAdapter`** — call `commsadapter.NewAdapter(source, label)`
+   (`backend/internal/messaging/commsadapter`). It derives `SourceRef`,
+   `SourceRefPrefix` (LIKE-escaped) and `PeerRef` from the one source string,
+   which is what keeps the ref prefix equal to `SourceName()`. That equality is
+   REQUIRED: `consumer.CommsAggregatorReenqueuer` recovers the chat id by
+   stripping `source + ":"` from the event `PeerRef`, so a source with a
+   different prefix silently loses post-record re-aggregation. (Telegram's
+   prefix is `tg:` while its source is `telegram`, which is exactly why it keeps
+   its own hand-written adapter rather than using this one.)
+2. **Engine** — call `commsadapter.NewEngine(adapter, burst, replyBridge, ...)`.
+   It supplies the `MessageStore` over `comms_message`
+   (`commsadapter.NewStore`), the `InteractionFinder`
+   (`commsadapter.NewInteractionFinder`), and the bus wrappers. Declare the
+   burst/reply-bridge windows as constants beside the source's own constructor,
+   not as wiring literals — the synthetic seed sizes its input to them.
+3. **Source constant + CHECK** — add a `repository.InteractionSource*` constant
+   and widen the `interaction_source_check` CHECK in a migration.
+   `TestInteractionSourceCheck_AgreesWithDescriptorAndConstants` fails until
+   both move together.
+4. **Wiring** — a source-keyed entry at each site that fans out by source:
+   the staging-processor registry and venue-container-reader registry
+   (`backend/cmd/crm-api/wire_core.go`), the engine construction and
+   aggregator-reenqueuer registry (`wire_aggregation.go`), the chat-lister
+   registry, `ChatAwareAggregator` worker map and sweeper-lister map
+   (`wire_scheduler.go`), and `consumer.messageInteractionSources`
+   (`backend/internal/consumer/interaction_recorder.go`). A missing staging
+   registry entry shows up as the recorder's zero-rows rollback; a missing
+   lister/reenqueuer entry leaves rows unprocessed. One integration test that
+   stages a row and asserts an interaction appears discriminates all of them.
+
+A source that genuinely cannot use `comms_message` writes its own
+`SourceAdapter` and `MessageStore` in its own package, mapping its staging rows
+into `aggregation.Message`. Two contracts bind it either way:
+
+- The staging-row → `Message` mapping MUST carry `InteractionID` through, or
+  cross-batch explicit reply bridging silently fails.
+- The `EventPublisher` argument MUST be the untyped-nil interface when no bus is
+  configured — a typed-nil concrete pointer (`(*events.Bus)(nil)`) bypasses the
+  engine's `publisher == nil` guard. `commsadapter.Publisher` and
+  `commsadapter.EventLookup` perform that conversion, so a constructor that goes
+  through them cannot get it wrong; a hand-rolled one must do it explicitly.
 
 The `MessageStore` ordering contract requires adapters to emit rows ordered
 by `SentAt ASC`; the engine sorts defensively, but adapters should keep the
-`ORDER BY sent_at` idiom that the Telegram sqlc queries already use.
+`ORDER BY sent_at` idiom the sqlc queries already use.
 
 ---
 

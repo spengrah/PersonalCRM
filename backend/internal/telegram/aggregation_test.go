@@ -12,15 +12,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestNewAggregationEngine_AcceptsNilEventBus is a defensive shim-level
-// smoke test that confirms the explicit "if bus != nil { pub = bus }"
-// nil-iface conversion is wired correctly. Without it, passing a nil
-// *events.Bus would defeat the engine's publisher==nil guard.
+// TestNewAggregationEngine_AcceptsNilEventBus is a shim-level smoke test:
+// constructing with a nil *events.Bus must not panic. It asserts
+// construction ONLY — it does not inspect the interface value, so it
+// cannot detect a typed-nil publisher on its own.
 //
-// The behavioural contract (createInteractionForSession returns the
-// publisher-required error when publisher is the nil interface value)
-// is locked in by TestEngine_FakeSource_NilPublisher_Errors in the
-// shared package.
+// The nil-iface conversion itself now lives in commsadapter.Publisher /
+// commsadapter.EventLookup, and the assertions that a typed-nil
+// regression fails are TestPublisher_NilBusReturnsNilInterface and
+// TestEventLookup_NilBusReturnsNilInterface in that package. The
+// behavioural contract downstream (createInteractionForSession returns
+// the publisher-required error when publisher is the nil interface
+// value) is locked in by TestEngine_FakeSource_NilPublisher_Errors in
+// the shared aggregation package.
 func TestNewAggregationEngine_AcceptsNilEventBus(t *testing.T) {
 	// Pure construction: no method invoked, so nil concrete repos are
 	// safe. The shim simply wraps them in adapter structs.
@@ -93,8 +97,8 @@ func TestMapTelegramMessage(t *testing.T) {
 }
 
 // Compile-time guard: telegramMessageStoreAdapter satisfies
-// aggregation.MessageStore and interactionFinderAdapter satisfies
-// aggregation.InteractionFinder. The test references the interface
-// types so go vet flags mismatches at build time.
+// aggregation.MessageStore. The test references the interface type so
+// go vet flags mismatches at build time. The InteractionFinder side is
+// no longer telegram's own — commsadapter.NewInteractionFinder returns
+// the interface, so its conformance is a compile error in that package.
 var _ aggregation.MessageStore = (*telegramMessageStoreAdapter)(nil)
-var _ aggregation.InteractionFinder = (*interactionFinderAdapter)(nil)

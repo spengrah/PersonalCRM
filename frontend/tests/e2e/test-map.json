@@ -633,6 +633,10 @@
     "tags": ["@area:imports", "@area:contacts"]
   },
   {
+    "pattern": "^backend/internal/messaging/commsadapter/",
+    "tags": ["@area:imports", "@area:contacts"]
+  },
+  {
     "pattern": "^backend/internal/scheduler/messaging_aggregate.*\\.go$",
     "tags": ["@area:imports", "@area:contacts"]
   },

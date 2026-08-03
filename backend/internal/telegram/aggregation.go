@@ -10,6 +10,7 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/messaging/aggregation"
+	"personal-crm/backend/internal/messaging/commsadapter"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -46,11 +47,11 @@ type AggregationEngine struct {
 // error — equivalent to the off/shadow modes documented in
 // EventBusConfig (spec §3.9).
 //
-// CRITICAL: nil *events.Bus / nil aggregation.TxBeginner /
-// nil aggregation.ConsumerJobEnqueuer must be converted to the
-// untyped-nil interface value explicitly. Assigning a typed-nil
-// pointer to an interface variable produces a non-nil interface, which
-// would silently bypass the engine's nil-guards.
+// CRITICAL: a nil *events.Bus must reach the engine as the untyped-nil
+// interface value. Assigning a typed-nil pointer to an interface
+// variable produces a non-nil interface, which would silently bypass
+// the engine's nil-guards. commsadapter.Publisher / commsadapter.EventLookup
+// perform that conversion, so this constructor must not re-implement it.
 //
 // pool is the TxBeginner for the engine's atomic claim+publish step.
 // Pass nil to fall back to the legacy non-tx publish path (test mode).
@@ -70,32 +71,18 @@ func NewAggregationEngine(
 ) *AggregationEngine {
 	adapter := telegramAdapter{}
 	store := &telegramMessageStoreAdapter{repo: messageRepo}
-	finder := &interactionFinderAdapter{repo: interactionRepo}
-
-	var pub aggregation.EventPublisher
-	if eventBus != nil {
-		pub = eventBus
-	}
-
-	// EventLookup is satisfied by *events.Bus.FindEventBySource via the
-	// busEventLookup adapter — declared as a typed nil so the engine
-	// guard correctly sees nil when eventBus is nil.
-	var lookup aggregation.EventLookup
-	if eventBus != nil {
-		lookup = &busEventLookup{bus: eventBus}
-	}
 
 	eng := aggregation.NewEngine(
 		adapter,
 		store,
-		finder,
+		commsadapter.NewInteractionFinder(interactionRepo),
 		promoter,
 		extender,
-		pub,
+		commsadapter.Publisher(eventBus),
 		burstWindowHours,
 		replyBridgeHours,
 		pool,
-		lookup,
+		commsadapter.EventLookup(eventBus),
 		enqueuer,
 	)
 	return &AggregationEngine{engine: eng}
@@ -256,55 +243,4 @@ func mapTelegramMessage(m repository.TelegramMessage) aggregation.Message {
 		out.ReplyTargetID = &s
 	}
 	return out
-}
-
-// busEventLookup adapts *events.Bus to the aggregation.EventLookup
-// interface. (uuid.Nil, false, nil) on db.ErrNotFound; (id, true, nil)
-// on hit; non-nil error on infrastructure failure.
-//
-// Lives in the telegram package (not the shared aggregation package)
-// because the aggregation package must not import `db` or
-// `repository`. The same pattern repeats for any future per-source
-// shim (messages, whatsapp).
-type busEventLookup struct{ bus *events.Bus }
-
-func (l *busEventLookup) FindEventBySourceRef(ctx context.Context, source, sourceID string) (uuid.UUID, bool, error) {
-	env, err := l.bus.FindEventBySource(ctx, source, sourceID)
-	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			return uuid.Nil, false, nil
-		}
-		return uuid.Nil, false, err
-	}
-	return env.ID, true, nil
-}
-
-// interactionFinderAdapter wraps *repository.InteractionRepository and
-// exposes the source-neutral aggregation.InteractionFinder surface.
-// Lives in the telegram package (not the repository package) so the
-// repository type stays free of aggregation-package imports.
-type interactionFinderAdapter struct {
-	repo *repository.InteractionRepository
-}
-
-func (a *interactionFinderAdapter) FindRecentBySourceAndDirection(
-	ctx context.Context,
-	contactID uuid.UUID,
-	source, direction, sourceRefPrefix string,
-	windowStart, windowEnd time.Time,
-) (*repository.Interaction, error) {
-	return a.repo.FindRecentInteractionBySourceAndDirection(ctx, contactID, source, direction, sourceRefPrefix, windowStart, windowEnd)
-}
-
-func (a *interactionFinderAdapter) FindRecentOutboundBySource(
-	ctx context.Context,
-	contactID uuid.UUID,
-	source, sourceRefPrefix string,
-	windowStart, windowEnd time.Time,
-) (*repository.Interaction, error) {
-	return a.repo.FindRecentOutboundInteractionBySource(ctx, contactID, source, sourceRefPrefix, windowStart, windowEnd)
-}
-
-func (a *interactionFinderAdapter) GetInteraction(ctx context.Context, id uuid.UUID) (*repository.Interaction, error) {
-	return a.repo.GetInteraction(ctx, id)
 }
