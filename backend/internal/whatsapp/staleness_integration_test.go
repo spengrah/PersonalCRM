@@ -78,10 +78,13 @@ func TestWhatsAppManager_TerminalDisconnectOpensAStalenessBreach(t *testing.T) {
 	m.SetHistoryRecorder(NewHistoryRecorder(waRepo))
 	m.SetHistoryDrainReady()
 	require.NoError(t, m.Start(ctx))
-	t.Cleanup(m.Stop)
+	registerManagerCleanup(t, m)
 
-	// The production terminal path: one error write, then it stops.
+	// The production terminal path: one error write, then it stops. settle is the
+	// barrier — a control event is enqueued and the handler returns at once, so
+	// the assertions that follow need the turn to have completed.
 	require.True(t, m.handleEvent(&events.LoggedOut{}))
+	m.settle()
 
 	state, err := syncRepo.GetSyncStateBySource(ctx, repository.InteractionSourceWhatsApp, nil)
 	require.NoError(t, err)

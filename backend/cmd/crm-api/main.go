@@ -259,7 +259,11 @@ func run() int {
 	// whatsappStack reproduces the nil manager/handler when disabled.
 	var whatsappStk whatsappStack
 	if cfg.Features.EnableWhatsAppSync {
-		whatsappStk = buildWhatsApp(ctx, cfg, database)
+		// The prerequisite set the readiness gate reads. It is deliberately
+		// partial: the ingestor and the drain worker are not built yet, so the
+		// manager reports not_ready and never connects. Filling the remaining
+		// fields is what turns WhatsApp on.
+		whatsappStk = buildWhatsApp(ctx, cfg, database, whatsappPrereqs{})
 	}
 	whatsappManager := whatsappStk.Manager
 	whatsappHandler := whatsappStk.Handler

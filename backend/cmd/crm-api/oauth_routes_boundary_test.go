@@ -114,7 +114,7 @@ func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 	// tree reflects ENABLE_WHATSAPP_SYNC rather than a hand-built handler.
 	var whatsappStk whatsappStack
 	if cfg.Features.EnableWhatsAppSync {
-		whatsappStk = buildWhatsApp(ctx, cfg, database)
+		whatsappStk = buildWhatsApp(ctx, cfg, database, whatsappPrereqs{})
 		if whatsappStk.Manager != nil {
 			t.Cleanup(whatsappStk.Manager.Stop)
 		}

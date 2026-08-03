@@ -6482,6 +6482,10 @@ const docTemplate = `{
                 },
                 "processing": {
                     "type": "integer"
+                },
+                "stale": {
+                    "description": "Stale reports that these counts could not be refreshed and are the last\ngood values (or zeros, when there has never been a good read). The status\nendpoint answers during an outage rather than hanging on it, so it says so\ninstead of presenting a fabricated zero as fresh.",
+                    "type": "boolean"
                 }
             }
         },
@@ -6565,6 +6569,10 @@ const docTemplate = `{
                 },
                 "jid": {
                     "type": "string"
+                },
+                "link_selector_persisted": {
+                    "description": "LinkSelectorPersisted is present only once an account has been linked.\nFalse then means the record of WHICH device is linked could not be\nwritten, so a restart may not resolve it deterministically. The link\nitself is real and is deliberately not torn down.",
+                    "type": "boolean"
                 },
                 "missing": {
                     "description": "Missing names the dependency the integration is waiting on when State is\nnot_ready, so the settings surface can say what is absent rather than\nonly that something is.",

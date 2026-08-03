@@ -17,9 +17,14 @@ import (
 // the chunk without claiming it. The manager is the only production
 // implementation; the drainer never holds a *whatsmeow.Client.
 func (m *Manager) HistoryFetcher() HistoryFetcher {
-	m.mu.RLock()
-	sess := m.sess
-	m.mu.RUnlock()
+	// The published snapshot, not a query message: a status-adjacent read must
+	// never wait on a turn. The live IsConnected check stays at call time — a
+	// read-only library call touching no manager state — so the "nil when not
+	// connected" contract is behaviourally identical.
+	var sess *session
+	if s := m.snap.Load(); s != nil {
+		sess = s.sess
+	}
 
 	if sess == nil || sess.wa == nil || !sess.client.IsConnected() {
 		return nil

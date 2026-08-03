@@ -19,14 +19,43 @@ type whatsappStack struct {
 	Handler *handlers.WhatsAppHandler
 }
 
-// buildWhatsApp constructs the WhatsApp device store, manager and handler, and
-// starts the manager. It does NOT register the Stop defer — the caller (run())
-// owns that, so it fires on run() return rather than when this function
-// returns.
+// whatsappPrereqs is the readiness gate expressed as a struct the caller must
+// fill in.
+//
+// Start is the SOLE activation point, and the wiring calls it exactly once,
+// textually after the setter block — so a later change that adds a prerequisite
+// cannot forget to activate the integration: it fills a field in a struct it
+// must already touch. A readiness transition never auto-connects; making a
+// setter trigger the connect would spread activation across three call sites and
+// give Start's carefully-ordered gate a second, undisciplined entrance.
+type whatsappPrereqs struct {
+	// Ingestor stores incoming messages. Nil until the ingest work lands.
+	Ingestor wapkg.MessageIngestor
+	// Recorder captures history-sync notifications durably. There is no default:
+	// a no-op here is silent, unrecoverable history loss.
+	Recorder wapkg.HistoryNotificationRecorder
+	// DrainReady reports that the history drain worker is registered.
+	DrainReady bool
+}
+
+// whatsappManagerSeam is the slice of *wapkg.Manager the activation sequence
+// drives. It exists so the ORDER — every setter, then Start, once — is
+// observable rather than merely intended.
+type whatsappManagerSeam interface {
+	SetIngestor(wapkg.MessageIngestor)
+	SetHistoryRecorder(wapkg.HistoryNotificationRecorder)
+	SetHistoryDrainReady()
+	Start(context.Context) error
+}
+
+// buildWhatsApp constructs the WhatsApp device store, manager and handler,
+// installs whichever prerequisites are present, and starts the manager. It does
+// NOT register the Stop defer — the caller (run()) owns that, so it fires on
+// run() return rather than when this function returns.
 //
 // Nothing here is fatal to the process: a WhatsApp failure leaves the rest of
 // the CRM running, exactly as a Telegram failure does.
-func buildWhatsApp(ctx context.Context, cfg *config.Config, database *db.Database) whatsappStack {
+func buildWhatsApp(ctx context.Context, cfg *config.Config, database *db.Database, prereqs whatsappPrereqs) whatsappStack {
 	waLog := wapkg.NewWALogger("whatsapp")
 
 	container, err := wapkg.NewDeviceContainer(ctx, database.Pool, waLog)
@@ -40,14 +69,11 @@ func buildWhatsApp(ctx context.Context, cfg *config.Config, database *db.Databas
 
 	manager := wapkg.NewManager(container, waLog, &cfg.WhatsApp, syncRepo, whatsappRepo)
 
-	// The recorder is installed BEFORE Start, because Start refuses to connect
-	// without it. A wiring omission therefore fails loudly at boot ("not
-	// ready") rather than silently discarding one-shot history.
-	manager.SetHistoryRecorder(wapkg.NewHistoryRecorder(whatsappRepo))
-
-	if err := manager.Start(ctx); err != nil {
-		logger.Warn().Err(err).Msg("whatsapp: failed to start")
+	if prereqs.Recorder == nil {
+		prereqs.Recorder = wapkg.NewHistoryRecorder(whatsappRepo)
 	}
+	activateWhatsApp(ctx, manager, prereqs)
+
 	// NOTE: manager.Stop() is deferred by the caller (run()) as a nil-guarded
 	// defer — a defer here would fire when THIS function returns, stopping the
 	// client at boot.
@@ -57,5 +83,23 @@ func buildWhatsApp(ctx context.Context, cfg *config.Config, database *db.Databas
 	return whatsappStack{
 		Manager: manager,
 		Handler: handlers.NewWhatsAppHandler(manager),
+	}
+}
+
+// activateWhatsApp installs every prerequisite that is present and THEN calls
+// Start, exactly once. It is the only Start call site in the binary.
+func activateWhatsApp(ctx context.Context, manager whatsappManagerSeam, prereqs whatsappPrereqs) {
+	if prereqs.Ingestor != nil {
+		manager.SetIngestor(prereqs.Ingestor)
+	}
+	if prereqs.Recorder != nil {
+		manager.SetHistoryRecorder(prereqs.Recorder)
+	}
+	if prereqs.DrainReady {
+		manager.SetHistoryDrainReady()
+	}
+
+	if err := manager.Start(ctx); err != nil {
+		logger.Warn().Err(err).Msg("whatsapp: failed to start")
 	}
 }

@@ -52,6 +52,12 @@ const (
 	// the remedy is retrying the local clear, never retrying the unlink, which
 	// against an already-unlinked device cannot succeed.
 	ReasonLocalCleanupFailed = "local_cleanup_failed"
+	// ReasonDeviceStoreAmbiguous reports that the device store holds two or more
+	// sets of credentials and none of them is the account the integration
+	// recorded as linked. Nothing is resumed; the remedy is a forced disconnect,
+	// which purges the enumerated set and returns the store to a resolvable
+	// state.
+	ReasonDeviceStoreAmbiguous = "device_store_ambiguous"
 	// ReasonForcedCleanupFailed reports that a FORCED local-only clear failed.
 	// It is deliberately distinct from ReasonLocalCleanupFailed: force makes no
 	// remote call, so it produces no evidence about the remote device, and a
@@ -123,6 +129,23 @@ var (
 	// decision to state that is no longer the state it decided about.
 	ErrOperationSuperseded = errors.New("whatsapp: the session changed while the operation was in flight")
 
+	// ErrUnlinkInProgress is returned when a second unlink is requested while one
+	// is in flight, and when a pairing is requested during one. Two overlapping
+	// unlinks were always incoherent — two remote logouts, two publications, one
+	// device — and link/unlink interleaving is what let a purge delete a device
+	// the library had just saved.
+	ErrUnlinkInProgress = errors.New("whatsapp: an unlink is already in progress")
+
+	// ErrDeviceStoreAmbiguous is returned when the device store holds two or
+	// more devices and none of them is the one the linked-account selector
+	// names. Nothing is resumed: there is no code path that returns an arbitrary
+	// row from a multi-row store.
+	ErrDeviceStoreAmbiguous = errors.New("whatsapp: the device store is ambiguous")
+
+	// ErrManagerStopped is returned to a caller whose operation could not be
+	// completed because the manager is shutting down.
+	ErrManagerStopped = errors.New("whatsapp: the manager is stopping")
+
 	// ErrLIDMappingsIncomplete is returned by the history fetcher when a
 	// downloaded chunk's PN-LID mappings did not read back out of the client
 	// store. The drainer treats it as TRANSIENT: whatsmeow logs and swallows
@@ -167,9 +190,67 @@ type Status struct {
 	// The linked device is still resolved deterministically (by JID), but the
 	// stale row is real and is surfaced rather than logged and forgotten.
 	ReplacedDeviceRetained bool `json:"replaced_device_retained,omitempty"`
+	// LinkSelectorPersisted reports whether the record of WHICH device is linked
+	// survived the adoption that created it. It is a pointer for the same reason
+	// TerminalReasonPersisted is: nil means no adoption has happened, while a
+	// non-nil false means one did and the record of which device did not survive.
+	// The pairing is deliberately NOT torn down in that case — the device is
+	// genuinely linked remotely.
+	LinkSelectorPersisted *bool `json:"link_selector_persisted,omitempty"`
 	// Backfill reports the history drain. PR3 records notifications; the
 	// counts stay zero until a chunk arrives.
 	Backfill BackfillStatus `json:"backfill"`
+}
+
+// clone deep-copies every pointer target.
+//
+// A shallow copy would publish pointers into loop-owned memory, so a caller
+// mutating *status.JID would corrupt the published snapshot and race the loop.
+// It is applied in BOTH directions — publish clones before storing and Status
+// clones what it read — because either alone leaves a mutable path: publish-only
+// lets two concurrent readers share targets, read-only lets the loop keep
+// aliases into what it published.
+func (s Status) clone() Status {
+	out := s
+	out.JID = cloneStringPtr(s.JID)
+	out.PhoneNumber = cloneStringPtr(s.PhoneNumber)
+	out.PushName = cloneStringPtr(s.PushName)
+	out.ConnectedAt = cloneTimePtr(s.ConnectedAt)
+	out.BannedUntil = cloneTimePtr(s.BannedUntil)
+	out.TerminalReasonPersisted = cloneBoolPtr(s.TerminalReasonPersisted)
+	out.LinkSelectorPersisted = cloneBoolPtr(s.LinkSelectorPersisted)
+	out.Backfill.ObservedFloorAt = cloneTimePtr(s.Backfill.ObservedFloorAt)
+	if s.Pairing != nil {
+		p := *s.Pairing
+		p.QRCode = cloneStringPtr(s.Pairing.QRCode)
+		p.PairCode = cloneStringPtr(s.Pairing.PairCode)
+		out.Pairing = &p
+	}
+	return out
+}
+
+func cloneStringPtr(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	return &out
+}
+
+func cloneTimePtr(v *time.Time) *time.Time {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	return &out
+}
+
+func cloneBoolPtr(v *bool) *bool {
+	if v == nil {
+		return nil
+	}
+	out := *v
+	return &out
 }
 
 // BackfillStatus is read from WhatsAppRepository.
@@ -184,6 +265,12 @@ type BackfillStatus struct {
 	// accepted gap in backfill.
 	DroppedInlineChunks int        `json:"dropped_inline_chunks"`
 	ObservedFloorAt     *time.Time `json:"observed_floor_at,omitempty"`
+	// Stale reports that these counts could not be refreshed — the read timed
+	// out or failed — so they are the last good values (or zeros, when there has
+	// never been a good read). The status endpoint is what an operator hits
+	// DURING an outage, so it degrades the answer rather than hanging, and says
+	// so rather than presenting a fabricated zero as fresh.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // Pairing is the in-flight pairing attempt. There is no session token: only one

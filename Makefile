@@ -467,6 +467,14 @@ test: test-unit test-integration test-frontend
 test-unit:
 	@echo "Running backend unit tests..."
 	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... ./internal/synthetic ./internal/synthetic/factory/... ./internal/synthetic/replay/... ./internal/synthetic/declare/... ./internal/spec/... ./cmd/spec-lint/... ./cmd/spec-coverage/... ./cmd/spec-drift/... $(GOTEST_VERBOSE) -short
+	@echo "Running whatsapp actor tests under the race detector..."
+	@# The race detector is the real enforcement for "manager state never escapes
+	@# the loop": with all state loop-owned, any escape is a genuine data race
+	@# under tests that already dispatch events and drive operations from several
+	@# goroutines. The untagged run compiles only the in-package unit tests (the
+	@# DB-backed files carry //go:build integration_testdb), so it needs no
+	@# database and stays fast.
+	@cd backend && go test -race ./internal/whatsapp/... $(GOTEST_VERBOSE) -short
 
 # Provisions the per-worktree Postgres instance BEFORE the integration recipes
 # expand $(TEST_DATABASE_URL) (gh #433). As a prerequisite it runs to

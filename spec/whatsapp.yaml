@@ -41,7 +41,9 @@ behaviors:
       - the linked device is found again and the session resumes without the user scanning a code
       - re-linking replaces the stored device rather than adding to it, so a restart always resumes the account most recently linked
       - if the replaced device cannot be removed, the removal is retried, the leftover is reported as a degraded state rather than passed off as a clean replacement, and the restart still resumes the account that was actually linked
-    provenance: [whatsmeow device store on the shared database, TestWhatsAppDeviceStore_PairedDeviceSurvivesNewManager, TestWhatsAppRePair_LeavesExactlyOneStoredDevice, TestWhatsAppRePair_RetainedDeviceStillResumesTheLinkedOne]
+      - when more than one set of stored credentials survives and none of them is the account the integration recorded as linked, it refuses to resume any of them and reports the ambiguity, rather than resuming an arbitrary one
+      - a single surviving set of credentials is always resumed, even when the record of which account was linked is missing or stale, and that record is repaired at the same time
+    provenance: [whatsmeow device store on the shared database, resolveLinkedDevice, TestWhatsAppDeviceStore_PairedDeviceSurvivesNewManager, TestWhatsAppRePair_LeavesExactlyOneStoredDevice, TestWhatsAppRePair_RetainedDeviceStillResumesTheLinkedOne, TestResolveLinkedDevice_RefusesToGuess]
 
   - id: WHA-004
     title: A permanent disconnect is recorded, surfaced, and not retried
@@ -80,7 +82,7 @@ behaviors:
     when: a connection event arrives from one of them
     then:
       - only events from the connection the integration currently owns change the reported state, the durable record, or which device is linked
-      - deciding whose event it is and acting on that decision are one indivisible step, so a connection linked while an older connection's event is still being handled cannot inherit that event's outcome
+      - deciding whose event it is and acting on that decision are one indivisible step, because all connection state is owned by a single sequencer and an event or operation is handled to completion before the next is started
       - a connection that has been replaced or has already ended permanently is retired, and stays ignored for good — including for events it had already queued
       - an event from an abandoned connection is ignored and that connection is closed, rather than being applied to the live one or left holding a socket
       - a failed pairing attempt ends that attempt only, and never records a permanent-disconnect decision against the linked device
@@ -88,7 +90,7 @@ behaviors:
       - a completed pairing is adopted but reported as still connecting until the source confirms the connection, because linking is followed by a reconnection
       - adopting a newly linked account drops the ban and the permanent-disconnect record that belonged to the account it replaced, rather than reporting them against the new one
       - the same rule governs user-initiated operations and not only events — an unlink whose session is replaced while it is in flight abandons its own outcome and reports a conflict, rather than applying it to the session that replaced it
-    provenance: [Manager.scopeOfLocked, session.retired, Manager.gen ownership generation, Manager.onTerminal, Manager.onConnected, Manager.onPairSuccess, Manager.Disconnect]
+    provenance: [Manager actor loop, actorState, session retirement, fence, Manager.onTerminal, Manager.onConnected, Manager.onPairSuccess, Manager.Disconnect]
     notes: >-
       The source dispatches most connection events asynchronously, so an event queued by a
       connection that has since been abandoned can arrive at any later moment — including after
@@ -135,7 +137,11 @@ behaviors:
         text: starting a second pairing while one is in flight is a conflict (409)
       - key: disconnect-reports-failure-when-remote-logout-fails
         text: a disconnect whose remote unlink fails is a bad gateway (502), the local credentials are kept, and the status reports that the unlink failed so the user can retry
-    provenance: [WhatsAppHandler.StartPairing, WhatsAppHandler.Disconnect, Manager.StartPairing]
+      - key: disconnect-while-unlink-in-flight-conflicts
+        text: a second unlink requested while one is in flight is a conflict (409) rather than a second remote unlink of the same device
+      - key: link-and-unlink-are-mutually-exclusive
+        text: unlinking while a pairing is in flight, and starting a pairing while an unlink is in flight, are both conflicts (409) naming the operation to finish or cancel first — the two operations are never interleaved
+    provenance: [WhatsAppHandler.StartPairing, WhatsAppHandler.Disconnect, Manager.StartPairing, Manager.opDisconnect]
     notes: >-
       Every outcome here needs a pairing that is allowed to proceed, and the readiness gate (WHA-013)
       refuses every one of them today. The handler mapping and the manager state machine that produce
@@ -238,7 +244,8 @@ behaviors:
       - a forced clear that failed is never later read as proof that the device was unlinked, because forcing makes no remote call and so learns nothing about it
       - a clear that could not reach the stored credentials at all is reported as a failure, not as a completed unlink
       - the failure a forced clear reports says the device may still be linked and must be removed from the phone, because forcing contacted the source not at all
-    provenance: [Manager.Disconnect, Manager.clearLocalDevice, serverConfirmedUnlinked, WhatsAppHandler.Disconnect]
+      - clearing local credentials removes every set of credentials the clear found when it started, not only the one in use, so a device left behind by a failed replacement cannot be resumed afterwards; credentials created after the clear began are left alone and the clear reports that it was superseded
+    provenance: [Manager.Disconnect, Manager.contPurgeFenced, Manager.contDisconnect, serverConfirmedUnlinked, WhatsAppHandler.Disconnect]
 
   # --- Enablement ---
 

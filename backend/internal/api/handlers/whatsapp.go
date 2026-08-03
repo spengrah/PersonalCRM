@@ -85,6 +85,11 @@ func (h *WhatsAppHandler) StartPairing(c *gin.Context) {
 		api.SendConflict(c, "Already connected — disconnect first")
 	case errors.Is(err, wapkg.ErrPairingInProgress):
 		api.SendConflict(c, "Pairing already in progress")
+	case errors.Is(err, wapkg.ErrUnlinkInProgress):
+		// Linking and unlinking are mutually exclusive: "unlink the device while
+		// linking a device" has no coherent meaning, and permitting it was what
+		// let a purge delete credentials the library had just written.
+		api.SendConflict(c, "An unlink is in progress; wait for it to finish before linking an account")
 	case errors.Is(err, wapkg.ErrInvalidPhone):
 		api.SendValidationError(c, "Invalid phone number", "phone must be E.164, e.g. +15551234567")
 	case errors.Is(err, wapkg.ErrUnknownPairMethod):
@@ -142,6 +147,10 @@ func (h *WhatsAppHandler) Disconnect(c *gin.Context) {
 		}, nil)
 	case errors.Is(err, wapkg.ErrNotPaired):
 		api.SendConflict(c, "No WhatsApp device is linked")
+	case errors.Is(err, wapkg.ErrUnlinkInProgress):
+		api.SendConflict(c, "An unlink is already in progress; check the status and retry")
+	case errors.Is(err, wapkg.ErrPairingInProgress):
+		api.SendConflict(c, "Finish or cancel the pairing before unlinking")
 	case errors.Is(err, wapkg.ErrLocalCleanupFailed) && force:
 		// A forced clear makes NO remote call, so it produced no evidence about
 		// the remote device. Telling the user it was unlinked remotely would be
@@ -200,12 +209,14 @@ func whatsAppStatusResponse(status wapkg.Status) WhatsAppStatusResponse {
 
 		TerminalReasonPersisted: status.TerminalReasonPersisted,
 		ReplacedDeviceRetained:  status.ReplacedDeviceRetained,
+		LinkSelectorPersisted:   status.LinkSelectorPersisted,
 		Backfill: WhatsAppBackfillResponse{
 			Pending:             status.Backfill.Pending,
 			Processing:          status.Backfill.Processing,
 			Failed:              status.Backfill.Failed,
 			DroppedInlineChunks: status.Backfill.DroppedInlineChunks,
 			ObservedFloorAt:     formatTimePtr(status.Backfill.ObservedFloorAt),
+			Stale:               status.Backfill.Stale,
 		},
 	}
 	if status.Pairing != nil {

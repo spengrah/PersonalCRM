@@ -32,6 +32,11 @@ type WhatsAppBackfillResponse struct {
 	// visible, accepted gap in backfill.
 	DroppedInlineChunks int     `json:"dropped_inline_chunks"`
 	ObservedFloorAt     *string `json:"observed_floor_at,omitempty" swaggertype:"string" format:"date-time"`
+	// Stale reports that these counts could not be refreshed and are the last
+	// good values (or zeros, when there has never been a good read). The status
+	// endpoint answers during an outage rather than hanging on it, so it says so
+	// instead of presenting a fabricated zero as fresh.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // WhatsAppStatusResponse mirrors whatsapp.Status on the wire.
@@ -64,8 +69,13 @@ type WhatsAppStatusResponse struct {
 	// delete the device it replaced, so a stale session is still stored. The
 	// linked account is still resolved deterministically; the flag exists so the
 	// condition is visible rather than silent.
-	ReplacedDeviceRetained bool                     `json:"replaced_device_retained,omitempty"`
-	Backfill               WhatsAppBackfillResponse `json:"backfill"`
+	ReplacedDeviceRetained bool `json:"replaced_device_retained,omitempty"`
+	// LinkSelectorPersisted is present only once an account has been linked.
+	// False then means the record of WHICH device is linked could not be
+	// written, so a restart may not resolve it deterministically. The link
+	// itself is real and is deliberately not torn down.
+	LinkSelectorPersisted *bool                    `json:"link_selector_persisted,omitempty"`
+	Backfill              WhatsAppBackfillResponse `json:"backfill"`
 }
 
 // WhatsAppDisconnectResponse reports how an unlink resolved. Disconnect returns

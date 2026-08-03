@@ -94,10 +94,12 @@ func TestWhatsAppDeviceContainer_UpgradeIsIdempotent(t *testing.T) {
 
 	// A successful read against a fresh database is only possible if the
 	// whatsmeow_* tables actually exist, which is what proves the upgrade ran.
-	device, paired, err := wapkg.LoadOrCreateDevice(env.ctx, second)
+	// The lookup is BY JID: there is deliberately no "give me whichever device
+	// you find" loader, because that is how first-row roulette gets called.
+	device, paired, err := wapkg.LoadDeviceByJID(env.ctx, second, types.NewJID("15550000000", types.DefaultUserServer))
 	require.NoError(t, err)
 	assert.False(t, paired, "a fresh database has no linked device")
-	assert.Nil(t, device.ID)
+	assert.Nil(t, device)
 }
 
 func TestWhatsAppDeviceContainer_RejectsNilPool(t *testing.T) {
@@ -124,7 +126,7 @@ func TestWhatsAppDeviceStore_PairedDeviceSurvivesNewManager(t *testing.T) {
 	second, err := wapkg.NewDeviceContainer(env.ctx, env.database.Pool, env.log)
 	require.NoError(t, err)
 
-	loaded, paired, err := wapkg.LoadOrCreateDevice(env.ctx, second)
+	loaded, paired, err := wapkg.LoadDeviceByJID(env.ctx, second, jid)
 	require.NoError(t, err)
 	require.True(t, paired, "the linked session must survive a restart without re-pairing")
 	require.NotNil(t, loaded.ID)
