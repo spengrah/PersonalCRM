@@ -19,7 +19,7 @@
 #
 #   <tree-a>, <tree-b>  repo working-tree roots (each containing backend/).
 #                       Typically a develop checkout and this branch.
-#   [shape ...]         one or more of 1..6; default: all six.
+#   [shape ...]         one or more of 1..7; default: all seven.
 #
 # Env (all optional; sensible defaults for the shared local test DB):
 #   DATABASE_URL   Postgres URL (default: shared :5432 personal_crm_test)
@@ -42,16 +42,16 @@ TREE_A="$(cd "$1" && pwd)"; shift
 TREE_B="$(cd "$1" && pwd)"; shift
 SHAPES=("$@")
 if [[ ${#SHAPES[@]} -eq 0 ]]; then
-  SHAPES=(1 2 3 4 5 6)
+  SHAPES=(1 2 3 4 5 6 7)
 fi
-# Validate every requested shape against the literal set 1..6 up front.
+# Validate every requested shape against the literal set 1..7 up front.
 # shape_env's `return 1` on an unknown shape is swallowed by the
 # `< <(shape_env ...)` process substitution in boot_tree, so an unknown
 # shape would otherwise boot the BASE env and false-PASS. Reject here.
 for shape in "${SHAPES[@]}"; do
   case "$shape" in
-    1|2|3|4|5|6) ;;
-    *) echo "error: unknown shape '$shape' (valid: 1..6)" >&2; exit 2 ;;
+    1|2|3|4|5|6|7) ;;
+    *) echo "error: unknown shape '$shape' (valid: 1..7)" >&2; exit 2 ;;
   esac
 done
 
@@ -99,6 +99,18 @@ shape_env() {
       echo "TODOIST_CLIENT_SECRET=dummy-todoist-secret"
       echo "TOKEN_ENCRYPTION_KEY=$TOKEN_KEY"
       echo "EVENT_BUS_INTERACTION_MODE=off"
+      ;;
+    7)
+      # WhatsApp rides on top of the external-sync stack: ENABLE_WHATSAPP_SYNC
+      # without ENABLE_EXTERNAL_SYNC fails config validation outright, so this
+      # shape is shape 3 plus the WhatsApp flag rather than a flag on its own.
+      echo "ENABLE_EXTERNAL_SYNC=true"
+      echo "GOOGLE_CLIENT_ID=dummy-google-id"
+      echo "GOOGLE_CLIENT_SECRET=dummy-google-secret"
+      echo "TODOIST_CLIENT_ID=dummy-todoist-id"
+      echo "TODOIST_CLIENT_SECRET=dummy-todoist-secret"
+      echo "TOKEN_ENCRYPTION_KEY=$TOKEN_KEY"
+      echo "ENABLE_WHATSAPP_SYNC=true"
       ;;
     *) echo "unknown shape: $shape" >&2; return 1 ;;
   esac
@@ -197,6 +209,13 @@ check_sentinels() {
     6)
       assert_present "gmail-off-mode warn log"  "$log"    "Gmail provider NOT registered: event-bus interaction mode=off (pubBus nil)"
       assert_absent  "gmail-registered log"     "$log"    "Gmail sync provider + rematch handler + correspondence discovery registered"
+      ;;
+    7)
+      # The shape boots today and registers no WhatsApp routes yet; the
+      # external-sync sentinels are what prove the shape is really the
+      # WhatsApp-enabled variant of shape 3 rather than a silent base boot.
+      assert_present "google OAuth callback"    "$routes" "/api/v1/auth/google/callback"
+      assert_present "todoist settings routes"  "$routes" "/api/v1/todoist/settings"
       ;;
   esac
   return $SENTINEL_FAIL

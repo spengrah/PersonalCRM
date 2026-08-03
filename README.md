@@ -59,6 +59,7 @@ Create your `.env` file from the appropriate template (`.env.example` for develo
 - `ENABLE_VECTOR_SEARCH`: Enable vector search (default: false)
 - `ENABLE_TELEGRAM_SYNC`: Enable Telegram sync (default: false)
 - `ENABLE_CALENDAR_SYNC`: Enable calendar sync (default: false)
+- `ENABLE_WHATSAPP_SYNC`: Enable WhatsApp linked-device sync (default: false). Requires `ENABLE_EXTERNAL_SYNC=true`; startup fails if only one is set. Tuning knobs: `WHATSAPP_BURST_WINDOW_HOURS` (2), `WHATSAPP_REPLY_BRIDGE_HOURS` (48), `WHATSAPP_DISCOVERY_MIN_MESSAGES` (3), `WHATSAPP_GROUP_MAX_MEMBERS` (10)
 
 ### Worker Queue (River)
 - `RIVER_WORKER_CONCURRENCY`: Maximum concurrent job workers (default: 10). `DB_MAX_CONNS` must exceed this by at least 3 (river internals + HTTP headroom).

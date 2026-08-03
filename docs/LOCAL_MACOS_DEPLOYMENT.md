@@ -192,6 +192,8 @@ LOG_LEVEL=info
 ENABLE_VECTOR_SEARCH=false
 ENABLE_TELEGRAM_SYNC=false
 ENABLE_CALENDAR_SYNC=false
+# WhatsApp requires ENABLE_EXTERNAL_SYNC=true; startup refuses the pair otherwise
+ENABLE_WHATSAPP_SYNC=false
 
 # CRM Environment
 CRM_ENV=production
@@ -1003,6 +1005,9 @@ After stable deployment, consider enabling:
    # TELEGRAM_API_ID=your-api-id-here
    # TELEGRAM_API_HASH=your-api-hash-here
    # ENABLE_TELEGRAM_SYNC=true
+   # WhatsApp needs no credentials — pair from the settings page:
+   # ENABLE_WHATSAPP_SYNC=true
+   # ENABLE_EXTERNAL_SYNC=true
 
    # Restart backend
    make stop && make start-local
