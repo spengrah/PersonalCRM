@@ -144,8 +144,8 @@ func deleteDevices(ctx context.Context, c *sqlstore.Container, jids []types.JID)
 }
 
 // deleteDeviceByJID removes one stored device. A device that is already gone is
-// not an error: the operation is idempotent by design, because the JID-targeted
-// cleanup and the staged purge deliberately overlap.
+// not an error: a purge enumerates before it deletes, so a row that vanished in
+// between is a row already in the state the caller wanted.
 func deleteDeviceByJID(ctx context.Context, c *sqlstore.Container, jid types.JID) error {
 	if c == nil {
 		return nil

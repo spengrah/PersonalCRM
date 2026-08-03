@@ -108,13 +108,14 @@ type sessionRequest struct {
 // Manager.newContainerSession.
 type sessionFactory func(ctx context.Context, req sessionRequest) (*session, error)
 
-// deviceOps is the device-store seam the staged purge and the JID-targeted
-// cleanup use. It goes through the CONTAINER, so it needs no client and no
-// device row of its own.
+// deviceOps is the device-store seam the STAGED PURGE uses — enumerate, then
+// delete exactly what was enumerated. It goes through the CONTAINER, so it needs
+// no client and no device row of its own. There is deliberately no delete-one-by
+// -JID entry point: an unlink destroys the set it enumerated, and nothing else
+// in the package removes a row it did not enumerate first.
 type deviceOps struct {
 	list      func(ctx context.Context) ([]types.JID, error)
 	deleteAll func(ctx context.Context, jids []types.JID) error
-	deleteJID func(ctx context.Context, jid types.JID) error
 }
 
 // actorState is every mutable field the manager has. It is created by the loop,

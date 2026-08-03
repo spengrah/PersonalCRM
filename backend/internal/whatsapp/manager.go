@@ -162,9 +162,9 @@ type session struct {
 	// created with the client and touched only by that pair.
 	dialDone    chan struct{}
 	dialSettled atomic.Bool
-	// jid is the device's own JID, when it has one. It is what the stale-pair
-	// cleanup guards compare against, so a targeted delete can never remove the
-	// live device.
+	// jid is the device's own JID, when it has one. It is what identifies the
+	// account in the published status and what the adoption path records as the
+	// linked device.
 	jid *types.JID
 	// extraRows records that the resolver found the selected device alongside
 	// others. A selector hit over a multi-row store is a degraded store, not a
@@ -260,7 +260,6 @@ func (m *Manager) containerDeviceOps() deviceOps {
 	return deviceOps{
 		list:      func(ctx context.Context) ([]types.JID, error) { return listDevices(ctx, m.container) },
 		deleteAll: func(ctx context.Context, jids []types.JID) error { return deleteDevices(ctx, m.container, jids) },
-		deleteJID: func(ctx context.Context, jid types.JID) error { return deleteDeviceByJID(ctx, m.container, jid) },
 	}
 }
 

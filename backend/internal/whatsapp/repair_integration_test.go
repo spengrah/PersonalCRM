@@ -513,3 +513,77 @@ func saveTestLinkedDevice(t *testing.T, ctx context.Context, container *sqlstore
 	require.NoError(t, device.Save(ctx))
 	return device
 }
+
+// TestInterruptedPairing_ResumesOnTheNextBootAndForceClearsAway walks the path
+// the shutdown contract now leaves to the next boot, end to end and over a real
+// device store.
+//
+// Shutdown ends connections and nothing else, so an attempt the user started and
+// a restart interrupted can leave its credentials behind. This is what the user
+// then sees: the next boot finds ONE row and resumes it — repairing the record
+// of which account is linked while it does — and if that device does not work,
+// the documented remedy clears it without asking the server anything.
+func TestInterruptedPairing_ResumesOnTheNextBootAndForceClearsAway(t *testing.T) {
+	t.Parallel()
+	f := newDeviceStoreFixture(t)
+
+	orphan := types.NewJID("15557770000", types.DefaultUserServer)
+	orphan.Device = 3
+
+	// 1. A pairing in flight, interrupted by shutdown.
+	first := f.manager(t)
+	pairingClient := newFakeClient()
+	first.setSessionFactory(func(context.Context, sessionRequest) (*session, error) {
+		return attachConnCtx(&session{client: pairingClient}), nil
+	})
+	require.NoError(t, first.Start(f.ctx))
+	require.NoError(t, first.StartPairing(f.ctx, PairRequest{Method: PairMethodQR}))
+
+	// The library writes the device from its own goroutine as the scan lands.
+	saveTestLinkedDevice(t, f.ctx, f.container, orphan, "Interrupted")
+
+	first.Stop()
+
+	require.Equal(t, []types.JID{orphan}, f.storedJIDs(t),
+		"shutdown does no database work: the row it could not know about is left for the next boot")
+
+	// 2. The next boot. One row, no selector — the resolver resumes it and
+	//    repairs the record of which account is linked at the same time.
+	resumed := newFakeClient()
+	resumed.connectErr = errors.New("dial tcp: no route to host")
+
+	next := f.manager(t)
+	next.setSessionFactory(func(ctx context.Context, req sessionRequest) (*session, error) {
+		_, res, err := resolveLinkedDevice(ctx, f.container, req.linked)
+		if err != nil {
+			return nil, err
+		}
+		return attachConnCtx(&session{
+			client: resumed, paired: res.paired, jid: res.jid,
+			extraRows: res.extraRows, healSelector: res.healSelector,
+		}), nil
+	})
+	require.NoError(t, next.Start(f.ctx), "a WhatsApp failure never aborts boot")
+
+	state, err := f.syncRepo.GetSyncStateBySource(f.ctx, repository.InteractionSourceWhatsApp, nil)
+	require.NoError(t, err)
+	assert.Equal(t, orphan.String(), state.Metadata[metadataLinkedJID],
+		"the single surviving row is adopted as the linked account, and the record of it is repaired")
+
+	status := next.Status()
+	assert.Equal(t, StateError, status.State, "and the dial that fails is reported, not hidden")
+	require.NotNil(t, status.LinkSelectorPersisted)
+	assert.True(t, *status.LinkSelectorPersisted)
+
+	// 3. The remedy. A forced disconnect contacts WhatsApp not at all, so it
+	//    works on a device that cannot be reached — and it says as much.
+	res, err := next.Disconnect(f.ctx, true)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.True(t, res.Forced)
+	assert.Equal(t, forcedClearWarning, res.Warning,
+		"forcing learns nothing about the remote device, so the user is told to finish the job from the phone")
+
+	assert.Empty(t, f.storedJIDs(t), "the credentials the interrupted pairing left are gone")
+	assert.Equal(t, StateNotPaired, next.Status().State)
+}

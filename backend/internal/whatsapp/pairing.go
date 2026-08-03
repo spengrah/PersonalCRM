@@ -535,12 +535,12 @@ func (m *Manager) contUnlinkSessionBuilt(st *actorState, res effectResult, rel o
 		reply <- opResult{err: ErrNotPaired}
 		return false
 	}
-	// The built client is live from here, so its release is recorded now and
-	// held by this operation: however this ends — including a Stop that cancels
-	// it outright — the release is in the state, and the loop or Stop performs
-	// it. Copied rather than appended in place, because the flags this
-	// operation was launched with are still held by the continuation that
-	// produced this turn.
+	// The built client is live from here, so its release joins the operation's:
+	// however the operation ends, including abort on the fence, the loop closes
+	// it. A Stop that cancels the operation outright closes it too, by ending
+	// the effect context this connection descends from. Copied rather than
+	// appended in place, because the flags this operation was launched with are
+	// still held by the continuation that produced this turn.
 	rel.holds = append([]*session(nil), rel.holds...)
 	st.retireFor(&rel, built)
 

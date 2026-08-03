@@ -292,7 +292,7 @@ func newFakeDevices(jids ...types.JID) *fakeDevices {
 }
 
 func (f *fakeDevices) ops() deviceOps {
-	return deviceOps{list: f.list, deleteAll: f.deleteAll, deleteJID: f.deleteOne}
+	return deviceOps{list: f.list, deleteAll: f.deleteAll}
 }
 
 func (f *fakeDevices) list(context.Context) ([]types.JID, error) {
