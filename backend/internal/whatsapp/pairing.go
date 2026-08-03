@@ -274,7 +274,7 @@ func (m *Manager) contPairingSessionBuilt(st *actorState, res effectResult, p *p
 	m.launch(st,
 		[]effect{
 			openQRChannelEffect{sess: sess, pairCtx: p.ctx},
-			connectEffect{sess: sess},
+			connectEffect{sess: sess, dialDeadline: m.timeouts.effect},
 		},
 		launchOneShot,
 		fence{sess: st.sess, pairing: p},
@@ -545,7 +545,7 @@ func (m *Manager) contUnlinkSessionBuilt(st *actorState, res effectResult, rel o
 		return false
 	}
 	m.launch(st, []effect{
-		connectEffect{sess: built},
+		connectEffect{sess: built, dialDeadline: m.timeouts.effect},
 		logoutEffect{sess: built},
 	}, launchOneShot, fence{}, rel,
 		func(st *actorState, res effectResult) bool {

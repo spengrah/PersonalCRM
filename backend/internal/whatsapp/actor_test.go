@@ -1217,6 +1217,63 @@ func TestConnect_HonoursTheEffectDeadline(t *testing.T) {
 	assert.Equal(t, StateError, m.Status().State)
 }
 
+// TestConnect_ConnectionOutlivesTheBatchThatDialedIt is the other half of the
+// same contract, and the half a blocked-dial fake cannot see.
+//
+// whatsmeow retains the context handed to ConnectContext as the socket's parent
+// and gives it to auto-reconnect. Dialling under the batch context would
+// therefore succeed and then close the connection the instant execEffects
+// returned — a live-looking manager with a dead socket and no reconnect. The
+// fake retains the context and runs a read pump under it, so that regression is
+// observable rather than argued.
+func TestConnect_ConnectionOutlivesTheBatchThatDialedIt(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, true)
+
+	require.NoError(t, m.Start(context.Background()))
+	require.Equal(t, StateConnecting, m.Status().State)
+
+	// Start returned, so the batch that dialled has completed and its context
+	// has been cancelled. The connection must not care.
+	consistently(t, "the connection outlives the batch that dialled it", 300*time.Millisecond, func() bool {
+		return cli.connCtxErr() == nil && cli.pumpRunning()
+	})
+}
+
+// TestStop_CancelsTheConnectionContext: the connection context descends from
+// the manager's effect context, so shutdown reaches every live socket — which
+// is what stops auto-reconnect from outliving the process's intent.
+func TestStop_CancelsTheConnectionContext(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, cli.pumpRunning())
+
+	m.Stop()
+
+	eventually(t, "the connection context dies with the manager", func() bool {
+		return cli.connCtxErr() != nil && !cli.pumpRunning()
+	})
+}
+
+// TestDisconnect_TearingDownASessionEndsItsConnectionContext: a session the
+// manager has finished with must not leave auto-reconnect running under a
+// context nobody cancels.
+func TestDisconnect_TearingDownASessionEndsItsConnectionContext(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, cli.pumpRunning())
+
+	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
+	_, err := m.Disconnect(context.Background(), false)
+	require.NoError(t, err)
+
+	eventually(t, "tearing the session down ends its connection context", func() bool {
+		return cli.connCtxErr() != nil && !cli.pumpRunning()
+	})
+}
+
 // TestStop_UnblocksABlackHoledDial is the shutdown half of the same finding: a
 // dial nothing can cancel would keep Stop waiting on the clean tier, and would
 // then block Disconnect() behind the client's own socket lock.
@@ -1348,4 +1405,107 @@ func TestDisconnect_AbortedUnlinkDoesNotOrphanTheClientItBuilt(t *testing.T) {
 		return !built.IsConnected()
 	})
 	assert.NotSame(t, built, installedSession(t, m).client, "it was never installed")
+}
+
+// TestStaleDelete_RunsInsideItsTurn is the structural proof that replaced the
+// re-guard.
+//
+// A targeted delete launched as an effect can only be guarded BEFORE it runs, so
+// a pairing claiming the slot in between could have its freshly saved row
+// destroyed — and no fence placed after a delete can un-delete a row. Running
+// the delete in the turn makes the guards and the destruction one indivisible
+// step. Parking the database call therefore parks the whole loop, which is
+// exactly what an asynchronous implementation would not do.
+func TestStaleDelete_RunsInsideItsTurn(t *testing.T) {
+	jid := types.NewJID("15559990000", types.DefaultUserServer)
+
+	cli := newFakeClient()
+	m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
+	require.NoError(t, m.Start(context.Background()))
+
+	// An abandoned attempt whose row is saved late, with another attempt in the
+	// slot, so its cleanup is deferred.
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	abandoned := pairingSession(t, m)
+	m.CancelPairing()
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	devices.add(jid)
+	require.True(t, dispatchEvent(t, m, abandoned, &events.PairSuccess{ID: jid}))
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	devices.setErr(func(d *fakeDevices) { d.delEntered, d.delBlock = entered, release })
+
+	// Freeing the slot flushes the deferral.
+	go m.CancelPairing()
+	<-entered
+
+	settled := make(chan struct{})
+	go func() { m.settle(); close(settled) }()
+	select {
+	case <-settled:
+		t.Fatal("the loop accepted another message while the delete was running: the delete is not in-turn, so a new attempt could save the very row it is about to destroy")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-settled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the loop never resumed")
+	}
+	assert.Empty(t, devices.remaining(), "and the deferred cleanup did run")
+}
+
+// TestStop_FlushesDeferredCleanupRatherThanAbandoningIt is the shutdown half.
+//
+// A deferral lives only in actor memory, so a shutdown that cancelled the
+// pairing without flushing would drop it. On an installation that was never
+// paired that is the resurrection case with nothing to mask it: the abandoned
+// attempt's row is then the ONLY row and carries no selector, so the resolver's
+// single-row heal would adopt it on the next boot as if the user had chosen it.
+func TestStop_FlushesDeferredCleanupRatherThanAbandoningIt(t *testing.T) {
+	jid := types.NewJID("15559990000", types.DefaultUserServer)
+
+	cli := newFakeClient()
+	m, syncStore, _, _, devices := newTestManagerWithDevices(t, cli, false)
+	require.NoError(t, m.Start(context.Background()))
+	require.Equal(t, StateNotPaired, m.Status().State, "a store that has never been paired")
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	abandoned := pairingSession(t, m)
+	m.CancelPairing()
+
+	// A second attempt occupies the slot, so the cleanup for the first is
+	// deferred rather than run.
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	devices.add(jid)
+	require.True(t, dispatchEvent(t, m, abandoned, &events.PairSuccess{ID: jid}))
+	require.Equal(t, []types.JID{jid}, devices.remaining(), "deferred, as designed")
+
+	m.Stop()
+
+	assert.Empty(t, devices.remaining(),
+		"shutdown frees the slot, so it is the last turn that can run the deferred cleanup — and it must")
+
+	// The next boot over the same store finds nothing to resurrect.
+	next := newManagerForTest(t, syncStore, &fakeBackfillReader{})
+	next.SetIngestor(&fakeIngestor{})
+	next.SetHistoryRecorder(&fakeRecorder{})
+	next.SetHistoryDrainReady()
+	next.setDeviceOps(devices.ops())
+	nextClient := newFakeClient()
+	next.setSessionFactory(func(_ context.Context, req sessionRequest) (*session, error) {
+		jids := devices.remaining()
+		if len(jids) == 1 && req.linked == nil {
+			// What the real resolver does with a lone row and no selector.
+			return fakeSessionFor(nextClient, true, &jids[0]), nil
+		}
+		return fakeSessionFor(nextClient, false, nil), nil
+	})
+	require.NoError(t, next.Start(context.Background()))
+
+	assert.Equal(t, StateNotPaired, next.Status().State,
+		"an abandoned attempt's device must not become the linked account by default")
+	assert.NotContains(t, nextClient.callLog(), "connect")
 }

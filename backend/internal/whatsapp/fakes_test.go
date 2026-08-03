@@ -442,6 +442,13 @@ type fakeClient struct {
 	// socket actually has.
 	blackHoleDial bool
 
+	// connCtx is the context the dial was handed, RETAINED exactly as the real
+	// client retains it: whatsmeow stores it as the socket's parent and gives it
+	// to auto-reconnect, so a fake that dropped it could not tell a connection
+	// that outlives its dial from one closed the instant the batch finished.
+	connCtx  context.Context
+	pumpDone chan struct{}
+
 	connected bool
 	loggedIn  bool
 
@@ -506,8 +513,47 @@ func (c *fakeClient) ConnectContext(ctx context.Context) error {
 
 	c.mu.Lock()
 	c.connected = true
+	c.connCtx = ctx
+	pump := make(chan struct{})
+	c.pumpDone = pump
 	c.mu.Unlock()
+
+	// The read pump the real socket starts, and which lives under the context
+	// the dial was given. It is what makes "the connection survived its batch"
+	// an observable fact rather than an assertion about a pointer.
+	go func() {
+		<-ctx.Done()
+		close(pump)
+	}()
 	return nil
+}
+
+// connCtxErr reports the state of the retained connection context: nil while
+// the connection is live.
+func (c *fakeClient) connCtxErr() error {
+	c.mu.Lock()
+	ctx := c.connCtx
+	c.mu.Unlock()
+	if ctx == nil {
+		return errors.New("never connected")
+	}
+	return ctx.Err()
+}
+
+// pumpRunning reports whether the socket's read pump is still alive.
+func (c *fakeClient) pumpRunning() bool {
+	c.mu.Lock()
+	pump := c.pumpDone
+	c.mu.Unlock()
+	if pump == nil {
+		return false
+	}
+	select {
+	case <-pump:
+		return false
+	default:
+		return true
+	}
 }
 
 func (c *fakeClient) Disconnect() {
@@ -700,10 +746,15 @@ type testCleanup interface{ Cleanup(func()) }
 
 // fakeSessionFor builds the session a test's factory hands out.
 func fakeSessionFor(cli *fakeClient, paired bool, jid *types.JID) *session {
+	// Mirrors newClient: a session carries the context that governs its
+	// connection's lifetime from the moment it exists.
+	connCtx, cancelConn := context.WithCancel(context.Background())
 	return &session{
-		client: cli,
-		paired: paired,
-		jid:    jid,
+		client:     cli,
+		paired:     paired,
+		jid:        jid,
+		connCtx:    connCtx,
+		cancelConn: cancelConn,
 		deleteDevice: func(context.Context) error {
 			cli.record("delete_device")
 			cli.mu.Lock()

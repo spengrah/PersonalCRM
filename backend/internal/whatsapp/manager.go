@@ -150,6 +150,15 @@ type session struct {
 	// paired reports whether the device carried an ID when the session was
 	// built.
 	paired bool
+	// connCtx governs the CONNECTION's lifetime, not the dial's. whatsmeow
+	// retains the context handed to ConnectContext as the socket's parent
+	// (framesocket.Connect stores it and the read pump reads under it) and
+	// passes it to auto-reconnect, so a short-lived context would close a
+	// connection the instant the batch that dialled it finished. It descends
+	// from Manager.effectCtx, so Stop reaches every live socket, and session
+	// teardown cancels it.
+	connCtx    context.Context
+	cancelConn context.CancelFunc
 	// jid is the device's own JID, when it has one. It is what the stale-pair
 	// cleanup guards compare against, so a targeted delete can never remove the
 	// live device.
@@ -332,6 +341,11 @@ func (m *Manager) setDeviceOps(ops deviceOps) {
 // anything connects, so there is no code path that produces a connected client
 // without them.
 func (m *Manager) newClient(device *store.Device, sess *session) *whatsmeow.Client {
+	// The connection context is created HERE, with the client, because the
+	// library ties the socket's lifetime to it. Every production session is
+	// built through this constructor, so there is one place to get it right.
+	sess.connCtx, sess.cancelConn = context.WithCancel(m.effectCtx)
+
 	cli := whatsmeow.NewClient(device, m.log)
 
 	// Acks fire only after our handlers return, so a crash between receipt and
@@ -524,7 +538,7 @@ func (m *Manager) contStartResolved(st *actorState, res effectResult, terminalRe
 	st.status.Reason = ""
 
 	m.launch(st,
-		[]effect{connectEffect{sess: sess}},
+		[]effect{connectEffect{sess: sess, dialDeadline: m.timeouts.effect}},
 		launchOneShot,
 		fence{sess: sess, pairing: st.pairing},
 		opFlags{start: true},
@@ -1150,21 +1164,28 @@ func (m *Manager) deleteStalePairDevice(st *actorState, jid types.JID) {
 		return
 	}
 
-	m.launch(st,
-		[]effect{deleteDeviceByJIDEffect{del: st.devices.deleteJID, jid: jid}},
-		launchOneShot,
-		fence{sess: st.sess, pairing: st.pairing},
-		opFlags{},
-		func(st *actorState, res effectResult) bool {
-			if err := res.firstErr(); err != nil {
-				st.status.ReplacedDeviceRetained = true
-				logger.Error().Err(err).Str("jid", jid.String()).
-					Msg("whatsapp: could not delete an abandoned pairing's device; the store holds a stale session")
-			}
-			return false
-		},
-		func(error) {},
-	)
+	// The delete runs IN THE TURN, not as an effect. It is a bounded database
+	// write — the container issues one ExecContext under the context we give it
+	// — exactly like the terminal write the design already sanctions in-turn.
+	// Doing it here is what makes the guards and the destruction one indivisible
+	// step: an asynchronous delete could be launched against state that a later
+	// turn has already changed, and no fence placed after it can un-delete a
+	// row.
+	if st.devices.deleteJID == nil {
+		return
+	}
+	ctx, cancel := turnCtx(context.Background())
+	defer cancel()
+
+	var err error
+	for attempt := 0; attempt < deviceDeleteAttempts; attempt++ {
+		if err = st.devices.deleteJID(ctx, jid); err == nil {
+			return
+		}
+	}
+	st.status.ReplacedDeviceRetained = true
+	logger.Error().Err(err).Str("jid", jid.String()).
+		Msg("whatsapp: could not delete an abandoned pairing's device; the store holds a stale session")
 }
 
 // flushStaleDeletes retries every deferred targeted cleanup. It is called by the

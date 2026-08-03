@@ -103,12 +103,12 @@ func TestWhatsAppRePair_LeavesExactlyOneStoredDevice(t *testing.T) {
 	m.setSessionFactory(func(ctx context.Context, req sessionRequest) (*session, error) {
 		if !req.fresh {
 			jid := oldJID
-			return &session{client: oldClient, paired: true, jid: &jid, deleteDevice: oldDevice.Delete}, nil
+			return attachConnCtx(&session{client: oldClient, paired: true, jid: &jid, deleteDevice: oldDevice.Delete}), nil
 		}
 		// What the library does on a successful pairing: the fresh device is
 		// written to the store. That is what makes the leftover row possible.
 		freshDevice := saveTestLinkedDevice(t, f.ctx, f.container, newJID, "New Device")
-		return &session{client: newClient, deleteDevice: freshDevice.Delete}, nil
+		return attachConnCtx(&session{client: newClient, deleteDevice: freshDevice.Delete}), nil
 	})
 
 	require.NoError(t, m.Start(f.ctx))
@@ -161,12 +161,12 @@ func TestWhatsAppRePair_RetainedDeviceStillResumesTheLinkedOne(t *testing.T) {
 		if !req.fresh {
 			// The delete of the replaced device fails, every attempt.
 			jid := oldJID
-			return &session{client: oldClient, paired: true, jid: &jid, deleteDevice: func(context.Context) error {
+			return attachConnCtx(&session{client: oldClient, paired: true, jid: &jid, deleteDevice: func(context.Context) error {
 				return errors.New("device store is unreachable")
-			}}, nil
+			}}), nil
 		}
 		freshDevice := saveTestLinkedDevice(t, f.ctx, f.container, newJID, "New Device")
-		return &session{client: newClient, deleteDevice: freshDevice.Delete}, nil
+		return attachConnCtx(&session{client: newClient, deleteDevice: freshDevice.Delete}), nil
 	})
 
 	require.NoError(t, m.Start(f.ctx))
@@ -194,7 +194,7 @@ func TestWhatsAppRePair_RetainedDeviceStillResumesTheLinkedOne(t *testing.T) {
 		if res.jid != nil {
 			resolved <- *res.jid
 		}
-		return &session{client: resumedClient, paired: res.paired, jid: res.jid, extraRows: res.extraRows}, nil
+		return attachConnCtx(&session{client: resumedClient, paired: res.paired, jid: res.jid, extraRows: res.extraRows}), nil
 	})
 	require.NoError(t, restarted.Start(f.ctx))
 
@@ -343,7 +343,7 @@ func TestClearLocalDevice_PurgesTheEnumeratedSetOverARealStore(t *testing.T) {
 	cli := newFakeClient()
 	m.setSessionFactory(func(ctx context.Context, req sessionRequest) (*session, error) {
 		jid := jidB
-		return &session{client: cli, paired: true, jid: &jid}, nil
+		return attachConnCtx(&session{client: cli, paired: true, jid: &jid}), nil
 	})
 
 	result, err := m.Disconnect(f.ctx, true)
@@ -386,11 +386,11 @@ func TestDisconnect_RefusedAfterTheLibrarySavedTheNewDeviceButBeforePairSuccess(
 			m.setSessionFactory(func(ctx context.Context, req sessionRequest) (*session, error) {
 				if !req.fresh {
 					jid := jidA
-					return &session{client: oldClient, paired: true, jid: &jid, healSelector: true, deleteDevice: deviceA.Delete}, nil
+					return attachConnCtx(&session{client: oldClient, paired: true, jid: &jid, healSelector: true, deleteDevice: deviceA.Delete}), nil
 				}
 				// The library's Store.Save, exactly where handlePair does it.
 				fresh := saveTestLinkedDevice(t, f.ctx, f.container, jidB, "Just Linked")
-				return &session{client: newClient, deleteDevice: fresh.Delete}, nil
+				return attachConnCtx(&session{client: newClient, deleteDevice: fresh.Delete}), nil
 			})
 
 			require.NoError(t, m.Start(f.ctx))
@@ -446,13 +446,13 @@ func TestStop_LeavesAnOrphanThatTheNextBootReports(t *testing.T) {
 	cli := newFakeClient()
 	m.setSessionFactory(func(ctx context.Context, req sessionRequest) (*session, error) {
 		if req.fresh {
-			return &session{client: newFakeClient()}, nil
+			return attachConnCtx(&session{client: newFakeClient()}), nil
 		}
 		_, res, err := resolveLinkedDevice(ctx, f.container, req.linked)
 		if err != nil {
 			return nil, err
 		}
-		return &session{client: cli, paired: res.paired, jid: res.jid, extraRows: res.extraRows, healSelector: res.healSelector}, nil
+		return attachConnCtx(&session{client: cli, paired: res.paired, jid: res.jid, extraRows: res.extraRows, healSelector: res.healSelector}), nil
 	})
 	require.NoError(t, m.Start(f.ctx))
 	require.Equal(t, StateConnecting, m.Status().State)
@@ -477,7 +477,7 @@ func TestStop_LeavesAnOrphanThatTheNextBootReports(t *testing.T) {
 		if res.jid != nil {
 			resolved <- *res.jid
 		}
-		return &session{client: resumed, paired: res.paired, jid: res.jid, extraRows: res.extraRows}, nil
+		return attachConnCtx(&session{client: resumed, paired: res.paired, jid: res.jid, extraRows: res.extraRows}), nil
 	})
 	require.NoError(t, restarted.Start(f.ctx))
 
@@ -486,6 +486,15 @@ func TestStop_LeavesAnOrphanThatTheNextBootReports(t *testing.T) {
 		"the selected device is resumed: the abandoned attempt is not what the user wants resumed")
 	assert.True(t, restarted.Status().ReplacedDeviceRetained,
 		"the orphan is surfaced, with a forced disconnect as the documented remedy")
+}
+
+// attachConnCtx mirrors newClient: a session carries the context that governs
+// its connection's lifetime from the moment it exists. Hand-built fixtures have
+// to do it too, or connectEffect refuses them — which is the point of that
+// refusal being loud.
+func attachConnCtx(s *session) *session {
+	s.connCtx, s.cancelConn = context.WithCancel(context.Background())
+	return s
 }
 
 func saveTestLinkedDevice(t *testing.T, ctx context.Context, container *sqlstore.Container, jid types.JID, pushName string) *store.Device {

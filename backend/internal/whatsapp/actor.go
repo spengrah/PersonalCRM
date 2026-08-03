@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -546,7 +547,16 @@ func (m *Manager) shutdownState(st *actorState) {
 		if p.cancel != nil {
 			p.cancel()
 		}
+		// The slot is being freed, so a cleanup deferred behind this attempt can
+		// finally be guarded — and this is the last turn there will ever be.
+		st.pairing = nil
 	}
+	// Bounded: one database write per pending JID, under the same timeout every
+	// other in-turn write uses. Abandoning them here would leave a device row
+	// nothing else in the system knows to remove, and on a store that holds only
+	// that row the next boot would resume it as if the user had chosen it.
+	m.flushStaleDeletes(st)
+
 	st.launchClosed = true
 	m.publish(st)
 }
@@ -812,24 +822,66 @@ func (e buildSessionEffect) run(ctx context.Context) stepResult {
 	return stepResult{sess: sess, err: err}
 }
 
-type connectEffect struct{ sess *session }
+type connectEffect struct {
+	sess *session
+	// dialDeadline bounds only the DIAL. The connection itself must outlive the
+	// batch, so it cannot be the thing the deadline governs.
+	dialDeadline time.Duration
+}
 
-// run dials under the BATCH context, so a black-holed dial is bounded by
-// effectDeadline and cancelled by Stop. It reports the session it connected, so
-// a continuation that aborts on the fence hands a live socket to teardown rather
-// than orphaning it (see discardOrphans).
-func (e connectEffect) run(ctx context.Context) stepResult {
+// run dials under the SESSION's connection context, and bounds only the dial
+// with a watchdog.
+//
+// The batch context is deliberately not used: whatsmeow retains the context
+// handed to ConnectContext as the socket's parent and hands it to
+// auto-reconnect, so dialling under a context that execEffects cancels on the
+// way out would close a successful connection the moment the batch finished and
+// make auto-reconnect exit as cancelled. What still has to be bounded is the
+// dial, and only the dial — hence the watchdog: it cancels the connection iff
+// ConnectContext has not returned in time. Exactly one of the two settles the
+// outcome, so a dial that completes as the timer fires cannot be reported as a
+// success over a connection the watchdog has just killed.
+//
+// It reports the session it connected, so a continuation that aborts on the
+// fence hands a live socket to teardown rather than orphaning it.
+func (e connectEffect) run(context.Context) stepResult {
 	if e.sess == nil {
 		return stepResult{err: fmt.Errorf("whatsapp: no session to connect")}
 	}
-	return stepResult{sess: e.sess, err: e.sess.client.ConnectContext(ctx)}
+	if e.sess.connCtx == nil || e.sess.cancelConn == nil {
+		return stepResult{sess: e.sess, err: fmt.Errorf("whatsapp: session has no connection context")}
+	}
+
+	var settled atomic.Bool
+	// time.AfterFunc's timer goroutine is the library's, not ours, and its
+	// callback touches no manager state — only this effect's own session handle.
+	watchdog := time.AfterFunc(e.dialDeadline, func() {
+		if settled.CompareAndSwap(false, true) {
+			e.sess.cancelConn()
+		}
+	})
+	err := e.sess.client.ConnectContext(e.sess.connCtx)
+	if !settled.CompareAndSwap(false, true) {
+		// The watchdog won: the connection context is already cancelled, so a
+		// nil error here would install a session whose socket is dead.
+		err = fmt.Errorf("whatsapp: dial did not complete within %s: %w", e.dialDeadline, context.DeadlineExceeded)
+	}
+	watchdog.Stop()
+
+	return stepResult{sess: e.sess, err: err}
 }
 
 type disconnectEffect struct{ sess *session }
 
+// run tears the session down, which includes ending its connection context —
+// the socket's parent and auto-reconnect's — so nothing keeps retrying a session
+// the manager has finished with.
 func (e disconnectEffect) run(context.Context) stepResult {
 	if e.sess != nil {
 		e.sess.client.Disconnect()
+		if e.sess.cancelConn != nil {
+			e.sess.cancelConn()
+		}
 	}
 	return stepResult{}
 }
@@ -924,27 +976,6 @@ func (e deleteDevicesEffect) run(ctx context.Context) stepResult {
 		return stepResult{}
 	}
 	return stepResult{err: e.del(ctx, e.jids)}
-}
-
-// deleteDeviceByJIDEffect removes exactly one device, on the event that proves
-// it was written. It is the backstop for an abandoned pairing whose library-side
-// save landed after our teardown had already no-opped.
-type deleteDeviceByJIDEffect struct {
-	del func(ctx context.Context, jid types.JID) error
-	jid types.JID
-}
-
-func (e deleteDeviceByJIDEffect) run(ctx context.Context) stepResult {
-	if e.del == nil {
-		return stepResult{}
-	}
-	var err error
-	for attempt := 0; attempt < deviceDeleteAttempts; attempt++ {
-		if err = e.del(ctx, e.jid); err == nil {
-			return stepResult{}
-		}
-	}
-	return stepResult{err: fmt.Errorf("delete device %s: %w", e.jid, err)}
 }
 
 // teardownPairingEffect ends an attempt's client. It waits for the QR drain to
@@ -1076,8 +1107,16 @@ func (m *Manager) Stop() {
 			drainTimer.Stop()
 		}
 
-		// 7. Disconnect, never log out.
+		// 7. Disconnect, never log out — and end each session's connection
+		//    context, which is the socket's parent and auto-reconnect's. In
+		//    production these already descend from m.effectCtx (cancelled in
+		//    step 3), so this is the explicit half of the same guarantee: it
+		//    reaches a session whatever its context descends from, and it is
+		//    what unblocks a dial still in flight.
 		for _, s := range h.sessions() {
+			if s.cancelConn != nil {
+				s.cancelConn()
+			}
 			s.client.Disconnect()
 		}
 
