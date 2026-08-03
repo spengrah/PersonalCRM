@@ -6588,7 +6588,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "terminal_reason_persisted": {
-                    "description": "TerminalReasonPersisted is false alongside a disconnected state when the\npermanent-disconnect reason could not be durably recorded, so the\ndecision will not survive a restart.",
+                    "description": "TerminalReasonPersisted is present only once a terminal disconnect has\nbeen taken. False then means the reason could NOT be durably recorded, so\nthe decision will not survive a restart — which is precisely when a client\nneeds to see it. Hence a pointer: a plain bool with omitempty would drop\nthe field in exactly that case, and could not distinguish it from \"no\nterminal decision has been taken\".",
                     "type": "boolean"
                 }
             }

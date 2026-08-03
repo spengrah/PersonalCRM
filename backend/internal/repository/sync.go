@@ -17,6 +17,27 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+// SyncStateMetadataTerminalReason is the external_sync_state.metadata key a
+// manager-driven source writes when its connection ends permanently — unlinked
+// from the phone, session replaced, client too old, temporarily banned.
+//
+// It lives here rather than in the owning integration because two packages read
+// it: the integration that writes it, and the staleness watchdog, which treats
+// a row carrying one as an immediate breach. A terminal reason is not a
+// transient error streak — the connection will not come back without user
+// action, and the integration deliberately stops writing errors once it is set.
+const SyncStateMetadataTerminalReason = "terminal_reason"
+
+// SyncStateTerminalReason reads the terminal reason off a sync state's metadata.
+// The bool reports whether one is present and non-empty.
+func SyncStateTerminalReason(st SyncState) (string, bool) {
+	reason, ok := st.Metadata[SyncStateMetadataTerminalReason].(string)
+	if !ok || reason == "" {
+		return "", false
+	}
+	return reason, true
+}
+
 // SyncStatus represents the status of a sync source. The legacy
 // 'syncing' status value is no longer written by any Go code path —
 // river_job state (available / running / completed / retryable) is the

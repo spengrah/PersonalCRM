@@ -53,10 +53,13 @@ type WhatsAppStatusResponse struct {
 	ConnectedAt *string                  `json:"connected_at,omitempty" swaggertype:"string" format:"date-time"`
 	BannedUntil *string                  `json:"banned_until,omitempty" swaggertype:"string" format:"date-time"`
 	Pairing     *WhatsAppPairingResponse `json:"pairing,omitempty"`
-	// TerminalReasonPersisted is false alongside a disconnected state when the
-	// permanent-disconnect reason could not be durably recorded, so the
-	// decision will not survive a restart.
-	TerminalReasonPersisted bool                     `json:"terminal_reason_persisted,omitempty"`
+	// TerminalReasonPersisted is present only once a terminal disconnect has
+	// been taken. False then means the reason could NOT be durably recorded, so
+	// the decision will not survive a restart — which is precisely when a client
+	// needs to see it. Hence a pointer: a plain bool with omitempty would drop
+	// the field in exactly that case, and could not distinguish it from "no
+	// terminal decision has been taken".
+	TerminalReasonPersisted *bool                    `json:"terminal_reason_persisted,omitempty"`
 	Backfill                WhatsAppBackfillResponse `json:"backfill"`
 }
 

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -635,22 +636,87 @@ func TestHumanizeAge(t *testing.T) {
 // when external sync is off — that is what makes "degrades to a visible
 // disconnected status" true through the watchdog and not only through the
 // settings page.
-func TestStaleness_WhatsAppErrorEvaluatedAsManagerDriven(t *testing.T) {
-	cfg := stalenessTestConfig()
-	// Enabled=false is the PRODUCTION shape: a manager-driven row must stay
-	// disabled or ListDueSyncStates would hand it to the scheduler, which has
-	// no provider for it. Using an enabled row here would test a row that never
-	// exists.
-	st := makeSyncState("whatsapp", func(s *repository.SyncState) {
+// whatsAppTerminalRow is the row shape the WhatsApp terminal path ACTUALLY
+// produces, and it is deliberately hostile to the ordinary error predicate:
+//
+//   - Enabled=false, because a manager-driven row must stay out of the polling
+//     scheduler's queue (ListDueSyncStates selects enabled = TRUE);
+//   - ErrorCount=1, because the terminal path writes the error exactly ONCE and
+//     then stops — it disconnects, and the restart gate prevents retries, so the
+//     count can never reach the default minimum of 3;
+//   - a fresh created_at, because the row is written the moment the connection
+//     ends, so the duration term is not satisfied either.
+//
+// Only the terminal-reason rule can open a breach on this row. Building it from
+// the same metadata key the manager writes is what keeps the test honest.
+func whatsAppTerminalRow(reason string) repository.SyncState {
+	return makeSyncState("whatsapp", func(s *repository.SyncState) {
 		s.Enabled = false
 		s.Strategy = repository.SyncStrategyPush
 		s.Status = repository.SyncStatusError
-		s.ErrorCount = 3
+		s.ErrorCount = 1
 		s.LastSuccessfulSyncAt = nil
-		s.CreatedAt = fixedNow.Add(-30 * 24 * time.Hour)
+		s.CreatedAt = fixedNow.Add(-1 * time.Minute)
+		s.Metadata = map[string]any{repository.SyncStateMetadataTerminalReason: reason}
 	})
-	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{st}, nil), "whatsapp", repository.BreachTypeSyncError) == nil {
-		t.Fatal("whatsapp error row must breach on count regardless of the external-sync flag")
+}
+
+func TestStaleness_WhatsAppErrorEvaluatedAsManagerDriven(t *testing.T) {
+	cfg := stalenessTestConfig()
+	for _, reason := range []string{"logged_out", "stream_replaced", "client_outdated", "temporary_ban"} {
+		st := whatsAppTerminalRow(reason)
+		got := findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{st}, nil), "whatsapp", repository.BreachTypeSyncError)
+		if got == nil {
+			t.Fatalf("%s: a terminal whatsapp row must breach regardless of the external-sync flag", reason)
+		}
+		if !strings.Contains(got.details, reason) {
+			t.Fatalf("%s: the breach must name the reason, got %q", reason, got.details)
+		}
+	}
+}
+
+// TestStaleness_WhatsAppTerminalRowBreachesBelowTheErrorCountFloor is the
+// discriminating half: the row the production path produces sits at one error,
+// well under the three-error minimum, and would never breach on the ordinary
+// predicate no matter how long it sat there.
+func TestStaleness_WhatsAppTerminalRowBreachesBelowTheErrorCountFloor(t *testing.T) {
+	cfg := stalenessTestConfig()
+
+	terminal := whatsAppTerminalRow("logged_out")
+	if int(terminal.ErrorCount) >= cfg.ErrorMinCount {
+		t.Fatalf("fixture is not exercising the sub-threshold case: count=%d min=%d", terminal.ErrorCount, cfg.ErrorMinCount)
+	}
+	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{terminal}, nil), "whatsapp", repository.BreachTypeSyncError) == nil {
+		t.Fatal("a terminal reason must breach immediately, not wait for an error streak that never comes")
+	}
+
+	// Negative control: the SAME row without a terminal reason stays silent, so
+	// the rule is the reason and not merely "manager-driven rows always breach".
+	noReason := whatsAppTerminalRow("logged_out")
+	noReason.Metadata = nil
+	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{noReason}, nil), "whatsapp", repository.BreachTypeSyncError) != nil {
+		t.Fatal("without a terminal reason a single error must still be below the floor")
+	}
+
+	// And an empty reason is not a reason.
+	empty := whatsAppTerminalRow("")
+	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{empty}, nil), "whatsapp", repository.BreachTypeSyncError) != nil {
+		t.Fatal("an empty terminal reason must not open a breach")
+	}
+}
+
+// TestStaleness_TerminalReasonOnANonManagerRowIsIgnored bounds the rule: only
+// manager-driven sources get the immediate breach.
+func TestStaleness_TerminalReasonOnANonManagerRowIsIgnored(t *testing.T) {
+	cfg := stalenessTestConfig()
+	st := makeSyncState("gcal", func(s *repository.SyncState) {
+		s.Status = repository.SyncStatusError
+		s.ErrorCount = 1
+		s.LastSuccessfulSyncAt = ptrTime(fixedNow.Add(-1 * time.Minute))
+		s.Metadata = map[string]any{repository.SyncStateMetadataTerminalReason: "logged_out"}
+	})
+	if findCandidate(evaluateBreaches(fixedNow, cfg, true, []repository.SyncState{st}, nil), "gcal", repository.BreachTypeSyncError) != nil {
+		t.Fatal("an ordinary pull source must still obey the count and duration terms")
 	}
 }
 

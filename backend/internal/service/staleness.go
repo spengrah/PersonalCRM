@@ -290,7 +290,7 @@ func evaluateSyncStateBreaches(
 		// never reach status='error' (they have no Sync run) so they are
 		// excluded structurally by the status check below.
 		if cfg.ErrorMinCount != 0 && (externalSyncEnabled || isManagerDriven) {
-			if c, ok := evalSyncError(now, cfg, st); ok {
+			if c, ok := evalSyncError(now, cfg, st, isManagerDriven); ok {
 				out = append(out, c)
 			}
 		}
@@ -326,10 +326,42 @@ func evalSyncStale(now time.Time, cfg config.StalenessConfig, st repository.Sync
 // (ErrorThreshold == 0 OR the stale anchor is older than ErrorThreshold). The
 // duration term supplies the persistence floor that error_count alone cannot
 // (count increments on every retry, seconds apart).
-func evalSyncError(now time.Time, cfg config.StalenessConfig, st repository.SyncState) (breachCandidate, bool) {
+func evalSyncError(now time.Time, cfg config.StalenessConfig, st repository.SyncState, isManagerDriven bool) (breachCandidate, bool) {
 	if st.Status != repository.SyncStatusError {
 		return breachCandidate{}, false
 	}
+
+	// A manager-driven source that recorded a TERMINAL reason breaches
+	// immediately, bypassing both the count and the duration terms.
+	//
+	// Those two terms exist to distinguish a persistent failure from a retry
+	// blip, and they assume the source keeps retrying — each attempt bumps
+	// error_count and ages the anchor. A terminal reason is the opposite
+	// situation: the connection is over until the user acts, so the integration
+	// writes the error exactly once and then stops by design. Waiting for three
+	// consecutive errors would mean the row sat at one forever and the breach
+	// never opened at all.
+	//
+	// This stays the same sync_error breach type, so it surfaces where every
+	// other sync problem does rather than introducing a new alert class.
+	if isManagerDriven {
+		if reason, ok := repository.SyncStateTerminalReason(st); ok {
+			ref := staleReference(st)
+			details := "connection ended: " + reason
+			if st.ErrorMessage != nil && *st.ErrorMessage != "" {
+				details += " (" + truncate(*st.ErrorMessage, maxBreachDetailLen) + ")"
+			}
+			return breachCandidate{
+				source:           st.Source,
+				accountID:        accountIDOf(st),
+				breachType:       repository.BreachTypeSyncError,
+				staleSince:       ref.UTC(),
+				thresholdSeconds: int64(cfg.ErrorThreshold.Seconds()),
+				details:          details,
+			}, true
+		}
+	}
+
 	if int(st.ErrorCount) < cfg.ErrorMinCount {
 		return breachCandidate{}, false
 	}

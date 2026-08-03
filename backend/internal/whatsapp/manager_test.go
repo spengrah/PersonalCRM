@@ -59,7 +59,7 @@ func TestApplyDeviceProps_DisablesInlineInitialPayload(t *testing.T) {
 // instead of the WithSuccessStatus variant, a false return is swallowed.
 func TestNewClient_SetsManualHistoryFlags(t *testing.T) {
 	m := NewManager(nil, NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
-	cli := m.newClient(&store.Device{})
+	cli := m.newClient(&store.Device{}, &session{})
 	require.NotNil(t, cli)
 
 	assert.True(t, cli.SynchronousAck,
@@ -74,7 +74,7 @@ func TestNewClient_SetsManualHistoryFlags(t *testing.T) {
 // premise for live messages.
 func TestManager_SynchronousAckEnabled(t *testing.T) {
 	m := NewManager(nil, NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, newFakeSyncStore(), &fakeBackfillReader{})
-	assert.True(t, m.newClient(&store.Device{}).SynchronousAck)
+	assert.True(t, m.newClient(&store.Device{}, &session{}).SynchronousAck)
 }
 
 // TestNewClient_HandlerFailureReachesDispatcher is the discriminating proof of
@@ -86,7 +86,7 @@ func TestManager_SynchronousAckEnabled(t *testing.T) {
 // handleEvent directly could not tell the two apart.
 func TestNewClient_HandlerFailureReachesDispatcher(t *testing.T) {
 	m, _, ingestor, _ := newTestManager(t, newFakeClient(), true)
-	cli := m.newClient(&store.Device{})
+	cli := m.newClient(&store.Device{}, &session{})
 	require.NotNil(t, cli)
 
 	//nolint:staticcheck // DangerousInternals is the only way to observe the dispatcher's verdict.
@@ -292,10 +292,17 @@ func TestHandleEvent_DisconnectedSetsReconnecting(t *testing.T) {
 }
 
 func TestHandleEvent_PairSuccessClearsPairingAndConnects(t *testing.T) {
-	m, _, _, _ := newTestManager(t, newFakeClient(), false)
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
 	jid := types.NewJID("15551234567", types.DefaultUserServer)
 
-	assert.True(t, m.handleEvent(&events.PairSuccess{ID: jid}))
+	// Drive a real pairing first: PairSuccess is only adopted from the session
+	// that is actually pairing.
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	pairingSess := m.pairing.session()
+	require.NotNil(t, pairingSess)
+
+	assert.True(t, m.handleEventFor(pairingSess, &events.PairSuccess{ID: jid}))
 
 	status := m.Status()
 	assert.Equal(t, StateConnected, status.State)
@@ -546,12 +553,14 @@ func TestStatus_ReportsNotReadyReason(t *testing.T) {
 // --- outbound-call guard ---------------------------------------------------
 
 func TestSelfJID(t *testing.T) {
-	m, _, _, _ := newTestManager(t, newFakeClient(), true)
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
 	_, ok := m.SelfJID()
 	assert.False(t, ok)
 
 	jid := types.NewJID("15551234567", types.DefaultUserServer)
-	require.True(t, m.handleEvent(&events.PairSuccess{ID: jid}))
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.True(t, m.handleEventFor(m.pairing.session(), &events.PairSuccess{ID: jid}))
 
 	got, ok := m.SelfJID()
 	require.True(t, ok)
@@ -631,7 +640,9 @@ func TestHandleEvent_TerminalReasonWriteFailureIsSurfaced(t *testing.T) {
 	status := m.Status()
 	assert.Equal(t, StateDisconnected, status.State)
 	assert.Equal(t, ReasonLoggedOut, status.Reason)
-	assert.False(t, status.TerminalReasonPersisted,
+	require.NotNil(t, status.TerminalReasonPersisted,
+		"the field must be PRESENT — omitting it hides exactly the case a client must act on")
+	assert.False(t, *status.TerminalReasonPersisted,
 		"the status must admit the decision will not survive a restart")
 
 	assert.Empty(t, syncStore.terminalReason(), "nothing was durably recorded")
@@ -655,7 +666,9 @@ func TestHandleEvent_TerminalReasonPersistedOnHappyPath(t *testing.T) {
 	require.True(t, m.handleEvent(&events.Connected{}))
 
 	require.True(t, m.handleEvent(&events.LoggedOut{}))
-	assert.True(t, m.Status().TerminalReasonPersisted)
+	persisted := m.Status().TerminalReasonPersisted
+	require.NotNil(t, persisted)
+	assert.True(t, *persisted)
 }
 
 // TestStart_FailsClosedWhenSyncStateUnreadable: the persisted terminal reason is
@@ -734,4 +747,23 @@ func TestStatus_NamesTheMissingDependency(t *testing.T) {
 			assert.Contains(t, m.Status().Missing, tt.want)
 		})
 	}
+}
+
+// TestStart_FailsClosedWhenSyncStateCannotBeCreated is the sibling of the read
+// failure: the row is where the terminal decision lives, so a boot that could
+// not create it has no place to record one and must not connect either.
+func TestStart_FailsClosedWhenSyncStateCannotBeCreated(t *testing.T) {
+	cli := newFakeClient()
+	m, syncStore, _, _ := newTestManager(t, cli, true)
+	syncStore.mu.Lock()
+	syncStore.exists = false // force the create path
+	syncStore.createErr = errors.New("database is down")
+	syncStore.mu.Unlock()
+
+	require.NoError(t, m.Start(context.Background()), "a WhatsApp failure never aborts boot")
+
+	assert.Equal(t, StateError, m.Status().State)
+	assert.NotContains(t, cli.callLog(), "connect",
+		"without a status row there is nowhere to record a terminal decision, so connecting is unsafe")
+	assert.Contains(t, syncStore.callLog(), "create", "the create path was actually taken")
 }

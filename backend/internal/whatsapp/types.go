@@ -130,10 +130,12 @@ type Status struct {
 	BannedUntil *time.Time `json:"banned_until,omitempty"`
 	Pairing     *Pairing   `json:"pairing,omitempty"`
 	// TerminalReasonPersisted reports whether a terminal disconnect was durably
-	// recorded. False alongside State=disconnected means the "do not reconnect"
-	// decision exists only in memory and will not survive a restart — the one
-	// case where the integration knows its own guarantee is weakened.
-	TerminalReasonPersisted bool `json:"terminal_reason_persisted,omitempty"`
+	// recorded. It is a POINTER because the field is only meaningful alongside a
+	// terminal state: nil means "no terminal decision has been taken", while a
+	// non-nil false means the decision was taken and could NOT be recorded, so
+	// it will not survive a restart. A plain bool could not tell those apart —
+	// and with omitempty it would vanish in exactly the case a client has to see.
+	TerminalReasonPersisted *bool `json:"terminal_reason_persisted,omitempty"`
 	// Backfill reports the history drain. PR3 records notifications; the
 	// counts stay zero until a chunk arrives.
 	Backfill BackfillStatus `json:"backfill"`

@@ -30,10 +30,11 @@ type fakeSyncStore struct {
 	errors   []string
 	calls    []string
 
-	// metadataErr and getErr make the persistence layer fail, which is the only
-	// way to reach the paths where a durable write did not happen.
+	// metadataErr, getErr and createErr make the persistence layer fail, which
+	// is the only way to reach the paths where a durable write did not happen.
 	metadataErr error
 	getErr      error
+	createErr   error
 }
 
 func newFakeSyncStore() *fakeSyncStore {
@@ -65,6 +66,9 @@ func (f *fakeSyncStore) CreateSyncState(_ context.Context, req repository.Create
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("create")
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
 	f.exists = true
 	return &repository.SyncState{ID: f.id, Source: req.Source, Enabled: req.Enabled}, nil
 }
@@ -94,7 +98,7 @@ func (f *fakeSyncStore) UpdateSyncStateMetadata(_ context.Context, id uuid.UUID,
 func (f *fakeSyncStore) terminalReason() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	reason, _ := f.metadata[metadataTerminalReason].(string)
+	reason, _ := f.metadata[repository.SyncStateMetadataTerminalReason].(string)
 	return reason
 }
 
@@ -118,7 +122,7 @@ func (f *fakeSyncStore) seedTerminal(reason string, bannedUntil *time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.exists = true
-	f.metadata = map[string]any{metadataTerminalReason: reason}
+	f.metadata = map[string]any{repository.SyncStateMetadataTerminalReason: reason}
 	if bannedUntil != nil {
 		f.metadata[metadataBannedUntil] = bannedUntil.UTC().Format(time.RFC3339)
 	}
@@ -151,8 +155,32 @@ func (f *fakeBackfillReader) ObservedFloor(context.Context) (*time.Time, error) 
 // fakeClient stands in for *whatsmeow.Client so no unit test dials WhatsApp.
 // It records the order of the lifecycle calls, which is what the
 // handler-before-connect and keep-the-device-on-failure contracts turn on.
+// sharedLog is an ordered call log two or more fake clients can append to, so a
+// test can assert ordering ACROSS clients. Per-client logs can only show that
+// each call happened, not which happened first.
+type sharedLog struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (l *sharedLog) record(entry string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls = append(l.calls, entry)
+}
+
+func (l *sharedLog) entries() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.calls...)
+}
+
 type fakeClient struct {
 	mu sync.Mutex
+
+	// name labels this client's entries in shared, when set.
+	name   string
+	shared *sharedLog
 
 	calls []string
 
@@ -180,8 +208,12 @@ func newFakeClient() *fakeClient {
 
 func (c *fakeClient) record(call string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.calls = append(c.calls, call)
+	shared, name := c.shared, c.name
+	c.mu.Unlock()
+	if shared != nil {
+		shared.record(name + ":" + call)
+	}
 }
 
 func (c *fakeClient) callLog() []string {

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 )
 
@@ -507,9 +508,17 @@ func TestStop_DuringSessionBuildDiscardsTheClient(t *testing.T) {
 // very likely mid-retry; building a second client for the unlink without
 // stopping it first puts two clients on one device and races the unlink against
 // a reconnect.
+//
+// Both clients append to ONE ordered log, and the unlink client's CONSTRUCTION
+// is recorded on it too. Separate per-client logs could only show that each call
+// happened — moving the teardown to after the unlink client was built and
+// connected would still satisfy them.
 func TestDisconnect_StopsTheOldClientBeforeBuildingTheUnlinkClient(t *testing.T) {
+	shared := &sharedLog{}
 	old := newFakeClient()
+	old.name, old.shared = "old", shared
 	unlink := newFakeClient()
+	unlink.name, unlink.shared = "unlink", shared
 
 	m, _, _, _ := newTestManager(t, old, true)
 	require.NoError(t, m.Start(context.Background()))
@@ -522,8 +531,8 @@ func TestDisconnect_StopsTheOldClientBeforeBuildingTheUnlinkClient(t *testing.T)
 	old.mu.Unlock()
 	require.Equal(t, StateReconnecting, m.Status().State)
 
-	// The next session built is the unlink client.
 	m.newSession = func(context.Context, bool) (*session, error) {
+		shared.record("unlink:built")
 		return &session{client: unlink, paired: true, deleteDevice: func(context.Context) error {
 			unlink.record("delete_device")
 			return nil
@@ -534,13 +543,119 @@ func TestDisconnect_StopsTheOldClientBeforeBuildingTheUnlinkClient(t *testing.T)
 	require.NoError(t, err)
 	assert.True(t, result.RemoteUnlinked)
 
-	oldCalls := old.callLog()
-	assert.Contains(t, oldCalls, "disconnect",
-		"the auto-reconnecting client must be stopped before a second one is built")
+	calls := shared.entries()
+	oldDisconnect := indexOf(calls, "old:disconnect")
+	unlinkBuilt := indexOf(calls, "unlink:built")
+	unlinkConnect := indexOf(calls, "unlink:connect")
+	unlinkLogout := indexOf(calls, "unlink:logout")
 
-	// Ordering: the old client is stopped before the unlink client connects.
-	assert.Less(t, indexOf(oldCalls, "disconnect"), len(oldCalls),
-		"disconnect is recorded on the old client")
-	assert.Contains(t, unlink.callLog(), "connect")
-	assert.Contains(t, unlink.callLog(), "logout")
+	require.GreaterOrEqual(t, oldDisconnect, 0, "the auto-reconnecting client must be stopped")
+	require.GreaterOrEqual(t, unlinkBuilt, 0)
+	require.GreaterOrEqual(t, unlinkConnect, 0)
+	require.GreaterOrEqual(t, unlinkLogout, 0)
+
+	assert.Less(t, oldDisconnect, unlinkBuilt,
+		"the old client must be stopped BEFORE the unlink client is even built")
+	assert.Less(t, unlinkBuilt, unlinkConnect)
+	assert.Less(t, unlinkConnect, unlinkLogout)
+}
+
+// TestOnPairSuccess_FromCancelledPairingIsIgnored is the attached-session race:
+// the scan completes after the user pressed cancel.
+//
+// By then the attempt is marked and its device deleted, so publishing
+// "connected" would report a live account backed by credentials that no longer
+// exist. The earlier fence only covered the window BEFORE the client was
+// attached; this covers the window after.
+func TestOnPairSuccess_FromCancelledPairingIsIgnored(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	pairingSess := m.pairing.session()
+	require.NotNil(t, pairingSess)
+
+	m.CancelPairing()
+	require.Nil(t, m.Status().Pairing)
+	require.Contains(t, cli.callLog(), "delete_device")
+
+	// The scan lands anyway.
+	jid := types.NewJID("15551234567", types.DefaultUserServer)
+	assert.True(t, m.handleEventFor(pairingSess, &events.PairSuccess{ID: jid}))
+
+	status := m.Status()
+	assert.Equal(t, StateNotPaired, status.State,
+		"a cancelled pairing must never publish connected")
+	assert.Nil(t, status.JID)
+	assert.Nil(t, m.HistoryFetcher(), "no session may be adopted")
+
+	disconnects := 0
+	for _, c := range cli.callLog() {
+		if c == "disconnect" {
+			disconnects++
+		}
+	}
+	assert.GreaterOrEqual(t, disconnects, 2,
+		"the abandoned client is torn down again rather than left holding a socket")
+}
+
+// TestOnPairSuccess_FromSupersededPairingIsIgnored: an earlier attempt whose TTL
+// expired was taken over by a newer one. Adopting the stale client would discard
+// the pairing the user is actually looking at.
+func TestOnPairSuccess_FromSupersededPairingIsIgnored(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	stale := m.pairing.session()
+	require.NotNil(t, stale)
+
+	m.mu.Lock()
+	m.pairing.expiresAt = accelerated.GetCurrentTime().Add(-time.Second)
+	m.mu.Unlock()
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	current := m.pairing.session()
+	require.NotNil(t, current)
+	require.NotSame(t, stale, current)
+
+	jid := types.NewJID("15551234567", types.DefaultUserServer)
+	assert.True(t, m.handleEventFor(stale, &events.PairSuccess{ID: jid}))
+
+	assert.Equal(t, StatePairing, m.Status().State,
+		"the superseded attempt must not complete on behalf of the live one")
+	assert.NotNil(t, m.Status().Pairing)
+}
+
+// TestOnConnected_FromAbandonedClientIsIgnored: the same identity rule on the
+// connection event.
+func TestOnConnected_FromAbandonedClientIsIgnored(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	orphan := m.pairing.session()
+	m.CancelPairing()
+
+	assert.True(t, m.handleEventFor(orphan, &events.Connected{}))
+	assert.Equal(t, StateNotPaired, m.Status().State)
+}
+
+// TestClearLocalDevice_ResetsTerminalReasonPersisted: the field is meaningful
+// only alongside a terminal state, so a not_paired status must not still carry
+// a stale "the decision was recorded" from a device that no longer exists.
+func TestClearLocalDevice_ResetsTerminalReasonPersisted(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+	require.True(t, m.handleEvent(&events.LoggedOut{}))
+	require.NotNil(t, m.Status().TerminalReasonPersisted)
+
+	_, err := m.Disconnect(context.Background(), false)
+	require.NoError(t, err)
+
+	status := m.Status()
+	require.Equal(t, StateNotPaired, status.State)
+	assert.Nil(t, status.TerminalReasonPersisted,
+		"a status with no terminal decision must not report one either way")
 }

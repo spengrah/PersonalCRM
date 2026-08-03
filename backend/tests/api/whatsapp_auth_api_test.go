@@ -451,3 +451,74 @@ func TestAPI_WhatsAppStatusNamesTheMissingDependency(t *testing.T) {
 	assert.Equal(t, "message ingestor is not wired", status.Missing,
 		"not_ready without naming the missing piece tells the operator nothing actionable")
 }
+
+// TestAPI_WhatsAppStatusSerializesTerminalReasonPersisted pins the WIRE shape,
+// not just the struct.
+//
+// The field matters most when it is FALSE — that is the case telling a client a
+// restart can reconnect a device the server has already ended. A plain bool with
+// omitempty would drop it from the JSON in exactly that case, so this asserts on
+// the raw body rather than on a decoded struct that cannot tell "absent" from
+// "false".
+func TestAPI_WhatsAppStatusSerializesTerminalReasonPersisted(t *testing.T) {
+	// spec: WHA-004
+	falseVal := false
+	trueVal := true
+
+	tests := []struct {
+		name      string
+		status    wapkg.Status
+		wantInRaw string
+		wantValue *bool
+	}{
+		{
+			name: "terminal reason could not be recorded",
+			status: wapkg.Status{
+				Configured:              true,
+				State:                   wapkg.StateDisconnected,
+				Reason:                  wapkg.ReasonLoggedOut,
+				TerminalReasonPersisted: &falseVal,
+			},
+			wantInRaw: `"terminal_reason_persisted":false`,
+			wantValue: &falseVal,
+		},
+		{
+			name: "terminal reason recorded",
+			status: wapkg.Status{
+				Configured:              true,
+				State:                   wapkg.StateDisconnected,
+				Reason:                  wapkg.ReasonLoggedOut,
+				TerminalReasonPersisted: &trueVal,
+			},
+			wantInRaw: `"terminal_reason_persisted":true`,
+			wantValue: &trueVal,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := setupWhatsAppRouter(t, &fakeWhatsAppManager{status: tt.status})
+			rec := doWhatsAppRequest(t, router, http.MethodGet, "/api/v1/whatsapp/auth/status", nil)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Contains(t, rec.Body.String(), tt.wantInRaw,
+				"the field must be present on the wire, not omitted")
+
+			status := decodeWhatsAppStatus(t, rec)
+			require.NotNil(t, status.TerminalReasonPersisted)
+			assert.Equal(t, *tt.wantValue, *status.TerminalReasonPersisted)
+		})
+	}
+
+	t.Run("absent when no terminal decision has been taken", func(t *testing.T) {
+		router := setupWhatsAppRouter(t, &fakeWhatsAppManager{status: wapkg.Status{
+			Configured: true,
+			State:      wapkg.StateNotPaired,
+		}})
+		rec := doWhatsAppRequest(t, router, http.MethodGet, "/api/v1/whatsapp/auth/status", nil)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.NotContains(t, rec.Body.String(), "terminal_reason_persisted",
+			"a status with no terminal decision must not claim one either way")
+	})
+}

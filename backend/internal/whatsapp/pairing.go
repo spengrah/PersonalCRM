@@ -54,6 +54,19 @@ func (p *pairingState) attach(sess *session, cancel context.CancelFunc) bool {
 	return true
 }
 
+// owns reports whether the given session is this attempt's live client. A nil
+// session means the caller did not identify one (tests only); a cancelled
+// attempt owns nothing, which is what stops a scan that completed after the
+// user pressed cancel from being adopted.
+func (p *pairingState) owns(sess *session) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cancelled {
+		return false
+	}
+	return sess == nil || p.sess == sess
+}
+
 // markCancelled closes the attempt to any further attachment and reports the
 // session that still needs tearing down, if one was attached.
 func (p *pairingState) markCancelled() *session {
@@ -483,6 +496,10 @@ func (m *Manager) clearLocalDevice(ctx context.Context, sess *session) {
 	m.status.PushName = nil
 	m.status.ConnectedAt = nil
 	m.status.BannedUntil = nil
+	// The field is only meaningful alongside a terminal state; leaving it set
+	// would report a stale "the decision was/was not recorded" on a not_paired
+	// status that has no decision at all.
+	m.status.TerminalReasonPersisted = nil
 	m.mu.Unlock()
 
 	m.clearTerminalReason(ctx)

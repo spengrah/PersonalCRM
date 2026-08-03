@@ -48,10 +48,9 @@ const (
 	// should not lose it — but a durable outage must not block the teardown.
 	terminalPersistAttempts = 2
 
-	// metadataTerminalReason and metadataBannedUntil persist the
-	// permanent-disconnect decision so a restart does not undo it.
-	metadataTerminalReason = "terminal_reason"
-	metadataBannedUntil    = "banned_until"
+	// metadataBannedUntil persists a ban expiry alongside the terminal reason,
+	// so a restart can tell an active ban from an expired one.
+	metadataBannedUntil = "banned_until"
 )
 
 // syncSource is the external_sync_state source string. It is also the
@@ -241,7 +240,7 @@ func (m *Manager) readyLocked() (bool, string) {
 // the pairing paths. Everything that makes the session safe is set here, before
 // anything connects, so there is no code path that produces a connected client
 // without them.
-func (m *Manager) newClient(device *store.Device) *whatsmeow.Client {
+func (m *Manager) newClient(device *store.Device, sess *session) *whatsmeow.Client {
 	cli := whatsmeow.NewClient(device, m.log)
 
 	// Acks fire only after our handlers return, so a crash between receipt and
@@ -258,7 +257,14 @@ func (m *Manager) newClient(device *store.Device) *whatsmeow.Client {
 	// WithSuccessStatus, not AddEventHandler: the plain variant wraps a void
 	// handler and hard-codes a true return, so our false could never reach the
 	// dispatcher and the withheld-ack contract would silently not exist.
-	cli.AddEventHandlerWithSuccessStatus(m.handleEvent)
+	//
+	// The handler closes over the session that owns this client, so events can
+	// be attributed to their emitter. Without that, a client the manager has
+	// already abandoned — a cancelled pairing whose scan completed anyway —
+	// could still publish "connected" for a device that was just deleted.
+	cli.AddEventHandlerWithSuccessStatus(func(evt any) bool {
+		return m.handleEventFor(sess, evt)
+	})
 
 	return cli
 }
@@ -282,13 +288,11 @@ func (m *Manager) newContainerSession(ctx context.Context, fresh bool) (*session
 		}
 	}
 
-	cli := m.newClient(device)
-	return &session{
-		client:       cli,
-		wa:           cli,
-		deleteDevice: device.Delete,
-		paired:       paired,
-	}, nil
+	sess := &session{deleteDevice: device.Delete, paired: paired}
+	cli := m.newClient(device, sess)
+	sess.client = cli
+	sess.wa = cli
+	return sess, nil
 }
 
 // Start brings the WhatsApp stack up. It never returns a fatal error for a
@@ -516,7 +520,7 @@ func (m *Manager) ensureSyncState(ctx context.Context) (terminalReason string, b
 	m.syncStateID = &id
 	m.mu.Unlock()
 
-	if reason, ok := state.Metadata[metadataTerminalReason].(string); ok {
+	if reason, ok := state.Metadata[repository.SyncStateMetadataTerminalReason].(string); ok {
 		terminalReason = reason
 	}
 	if raw, ok := state.Metadata[metadataBannedUntil].(string); ok {
@@ -561,7 +565,7 @@ func (m *Manager) persistTerminalReason(ctx context.Context, reason string, bann
 	if id == nil || m.syncRepo == nil {
 		return errors.New("whatsapp: no sync state row to record the terminal reason on")
 	}
-	metadata := map[string]any{metadataTerminalReason: reason}
+	metadata := map[string]any{repository.SyncStateMetadataTerminalReason: reason}
 	if bannedUntil != nil {
 		metadata[metadataBannedUntil] = bannedUntil.UTC().Format(time.RFC3339)
 	}
@@ -594,11 +598,18 @@ func (m *Manager) clearTerminalReason(ctx context.Context) {
 // and — under SynchronousAck — withholds the stanza ack, making WhatsApp
 // redeliver rather than us losing the message.
 func (m *Manager) handleEvent(evt any) bool {
+	return m.handleEventFor(nil, evt)
+}
+
+// handleEventFor is the session-attributed handler. `sess` is the session whose
+// client emitted the event; nil means the caller did not identify one, which in
+// production cannot happen (every client is built with a bound handler).
+func (m *Manager) handleEventFor(sess *session, evt any) bool {
 	ctx := context.Background()
 
 	switch e := evt.(type) {
 	case *events.Connected:
-		m.onConnected(ctx)
+		m.onConnected(ctx, sess)
 		return true
 
 	case *events.Disconnected:
@@ -612,7 +623,7 @@ func (m *Manager) handleEvent(evt any) bool {
 		return true
 
 	case *events.PairSuccess:
-		m.onPairSuccess(ctx, e)
+		m.onPairSuccess(ctx, sess, e)
 		return true
 
 	case *events.LoggedOut:
@@ -652,14 +663,21 @@ func (m *Manager) handleEvent(evt any) bool {
 	}
 }
 
-func (m *Manager) onConnected(ctx context.Context) {
+func (m *Manager) onConnected(ctx context.Context, from *session) {
 	var jid, pushName *string
 	m.mu.RLock()
 	sess := m.sess
-	pairingInFlight := m.pairing != nil
+	pairing := m.pairing
 	m.mu.RUnlock()
 
-	if pairingInFlight {
+	// A client the manager no longer owns — an abandoned pairing whose socket
+	// came up anyway — must not publish a connection state.
+	if from != nil && from != sess && (pairing == nil || !pairing.owns(from)) {
+		logger.Debug().Msg("whatsapp: ignoring Connected from an abandoned client")
+		return
+	}
+
+	if pairing != nil {
 		// A pairing client connects to the pairing websocket before the device
 		// is linked. Reporting "connected" here would tell the settings page
 		// the account is live while the user is still holding an unscanned QR
@@ -684,6 +702,7 @@ func (m *Manager) onConnected(ctx context.Context) {
 		s.State = StateConnected
 		s.Reason = ""
 		s.BannedUntil = nil
+		s.TerminalReasonPersisted = nil
 		s.ConnectedAt = &now
 		if jid != nil {
 			s.JID = jid
@@ -702,21 +721,40 @@ func (m *Manager) onConnected(ctx context.Context) {
 	logger.Info().Msg("whatsapp: connected")
 }
 
-func (m *Manager) onPairSuccess(ctx context.Context, e *events.PairSuccess) {
+// onPairSuccess adopts a completed pairing.
+//
+// The emitting session is checked, not assumed. A scan can complete after the
+// user pressed cancel (or after Stop), by which point the attempt is marked and
+// its device deleted — publishing "connected" for that client would report a
+// live account backed by credentials that no longer exist. It could equally
+// belong to a superseded earlier attempt, in which case adopting it would
+// discard the newer one.
+func (m *Manager) onPairSuccess(ctx context.Context, from *session, e *events.PairSuccess) {
 	jid := e.ID.String()
 	now := accelerated.GetCurrentTime()
 
 	m.mu.Lock()
-	if m.pairing != nil {
-		m.pairing.cancel()
+	pairing := m.pairing
+	switch {
+	case pairing != nil && pairing.owns(from):
+		pairing.cancel()
 		// The client that completed the pairing becomes the live session: it
 		// already carries the event handler and the manual-history flags, and
 		// whatsmeow reconnects it as the linked device.
-		if sess := m.pairing.session(); sess != nil {
-			sess.paired = true
-			m.sess = sess
+		if adopted := pairing.session(); adopted != nil {
+			adopted.paired = true
+			m.sess = adopted
 		}
 		m.pairing = nil
+	case from != nil && from == m.sess:
+		// A re-pair reported on the already-installed session.
+	default:
+		m.mu.Unlock()
+		logger.Warn().Msg("whatsapp: ignoring PairSuccess from an abandoned pairing client")
+		if from != nil {
+			from.client.Disconnect()
+		}
+		return
 	}
 	m.status.State = StateConnected
 	m.status.Reason = ""
@@ -756,7 +794,8 @@ func (m *Manager) onTerminal(ctx context.Context, reason string, bannedUntil *ti
 	// A durable record is the only thing that stops the NEXT boot reconnecting.
 	// When the write failed, say so in the status rather than presenting a
 	// decision that will not survive a restart as if it had been taken.
-	m.status.TerminalReasonPersisted = persistErr == nil
+	persisted := persistErr == nil
+	m.status.TerminalReasonPersisted = &persisted
 	m.mu.Unlock()
 
 	// The session is dead either way — the server ended it — so it is always
