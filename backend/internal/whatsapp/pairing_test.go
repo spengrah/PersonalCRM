@@ -320,3 +320,47 @@ func TestHistoryFetcher_NilWhenNotConnected(t *testing.T) {
 	assert.Nil(t, m.HistoryFetcher(),
 		"a fake session carries no *whatsmeow.Client, so there is nothing to fetch through")
 }
+
+// TestStartPairing_ExpiredPairingIsTakenOverNotConflicted: an expired attempt
+// must not wedge the single pairing slot. Its codes are dead, so refusing a
+// fresh attempt would leave the settings page stuck on a conflict until someone
+// thought to press cancel.
+func TestStartPairing_ExpiredPairingIsTakenOverNotConflicted(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+
+	// Backdate the in-flight attempt past its TTL.
+	m.mu.Lock()
+	m.pairing.expiresAt = accelerated.GetCurrentTime().Add(-time.Second)
+	m.mu.Unlock()
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}),
+		"an expired attempt is taken over, not treated as a conflict")
+
+	status := m.Status()
+	require.NotNil(t, status.Pairing)
+	assert.True(t, status.Pairing.ExpiresAt.After(accelerated.GetCurrentTime()),
+		"the surviving attempt is the fresh one, with a live TTL")
+	assert.Contains(t, cli.callLog(), "delete_device",
+		"the taken-over attempt's half-written device is removed")
+}
+
+// TestRunQRChannel_ClosedChannelReleasesThePairingSlot: whatsmeow closes the QR
+// channel when the codes run out. Leaving the slot claimed there would block
+// every later pairing attempt.
+func TestRunQRChannel_ClosedChannelReleasesThePairingSlot(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+	cli.qrChan <- whatsmeow.QRChannelItem{Event: whatsmeow.QRChannelEventCode, Code: "QR-CODE-1"}
+
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NotNil(t, m.Status().Pairing)
+
+	close(cli.qrChan)
+
+	require.Eventually(t, func() bool { return m.Status().Pairing == nil }, 2*time.Second, 10*time.Millisecond,
+		"a closed QR channel must release the pairing slot")
+	assert.Equal(t, StateNotPaired, m.Status().State)
+}

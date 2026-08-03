@@ -47,6 +47,14 @@ func (p *pairingState) session() *session {
 	return p.sess
 }
 
+// expired reports whether the pairing's TTL has elapsed. An expired pairing
+// must not block a new one: its QR codes have run out and its pair code is no
+// longer accepted, so refusing a fresh attempt would wedge the settings page
+// until someone thought to press cancel.
+func (p *pairingState) expired(now time.Time) bool {
+	return !now.Before(p.expiresAt)
+}
+
 func (p *pairingState) setPairCode(code string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -104,10 +112,18 @@ func (m *Manager) StartPairing(ctx context.Context, req PairRequest) error {
 		return ErrUnknownPairMethod
 	}
 
+	now := accelerated.GetCurrentTime()
+
 	m.mu.Lock()
+	// An expired attempt is taken over rather than treated as a conflict.
+	var stale *pairingState
 	if m.pairing != nil {
-		m.mu.Unlock()
-		return ErrPairingInProgress
+		if !m.pairing.expired(now) {
+			m.mu.Unlock()
+			return ErrPairingInProgress
+		}
+		stale = m.pairing
+		m.pairing = nil
 	}
 	if m.sess != nil && m.sess.client.IsConnected() && m.sess.client.IsLoggedIn() {
 		m.mu.Unlock()
@@ -117,12 +133,18 @@ func (m *Manager) StartPairing(ctx context.Context, req PairRequest) error {
 	// the race rather than building a second client.
 	pairing := &pairingState{
 		method:    req.Method,
-		expiresAt: accelerated.GetCurrentTime().Add(authTTL),
+		expiresAt: now.Add(authTTL),
 	}
 	m.pairing = pairing
 	m.status.State = StatePairing
 	m.status.Reason = ""
 	m.mu.Unlock()
+
+	// Tear the taken-over attempt down outside the lock, now that the slot
+	// belongs to the new one.
+	if stale != nil {
+		m.teardownPairing(ctx, stale)
+	}
 
 	// A fresh unpaired device: pairing over the stored one would corrupt an
 	// existing link.
@@ -195,6 +217,10 @@ func (m *Manager) runQRChannel(ctx context.Context, pairing *pairingState, qrCha
 			return
 		case item, open := <-qrChan:
 			if !open {
+				// The library closes the channel once the codes run out.
+				// Abandoning here is what stops an exhausted attempt from
+				// occupying the single pairing slot.
+				m.abandonPairing(context.WithoutCancel(ctx), pairing)
 				return
 			}
 			switch item.Event {
@@ -254,6 +280,13 @@ func (m *Manager) abandonPairing(ctx context.Context, pairing *pairingState) {
 	if pairing == nil {
 		return
 	}
+	m.teardownPairing(ctx, pairing)
+}
+
+// teardownPairing cancels a pairing's goroutine, drops its client, and removes
+// the partially written device — mirroring how Telegram removes the session row
+// written during key exchange.
+func (m *Manager) teardownPairing(ctx context.Context, pairing *pairingState) {
 	pairing.cancel()
 	if sess := pairing.session(); sess != nil {
 		sess.client.Disconnect()
