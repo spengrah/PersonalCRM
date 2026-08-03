@@ -103,12 +103,37 @@ func TestPackageHasNoMutex(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, 2, countOccurrences(sources, "sync.Once"),
-		"exactly two: the process-wide device props and Manager.stopOnce")
-	assert.Equal(t, 1, countOccurrences(sources, "sync.WaitGroup"),
-		"exactly one: Manager.effects, the effect-goroutine census")
-	assert.Equal(t, 2, countOccurrences(sources, "atomic.Pointer"),
-		"exactly two: the published snapshot and the backfill cache")
+	// Declared allowances, by SET and by count. A count alone cannot see a
+	// primitive nobody thought to count, so the scan also collects every
+	// sync./atomic. identifier in the package and fails on one that is not
+	// listed here — which is how the NEXT primitive gets noticed.
+	allowed := map[string]int{
+		"sync.Once":      2, // the process-wide device props, and Manager.stopOnce
+		"sync.WaitGroup": 1, // Manager.effects, the effect-goroutine census
+		"atomic.Pointer": 2, // the published snapshot, and the backfill cache
+		// dialSettled: the dial and its watchdog race to decide one outcome.
+		// They share no state beyond this flag and the channel it guards, and
+		// the CAS is the decision itself, so there is nothing for a lock to make
+		// atomic that this does not.
+		"atomic.Bool": 1,
+	}
+	found := map[string]int{}
+	primitive := regexp.MustCompile(`\b(?:sync|atomic)\.[A-Z][A-Za-z0-9]*`)
+	for _, src := range sources {
+		for _, id := range primitive.FindAllString(src, -1) {
+			found[id]++
+		}
+	}
+	for id, n := range found {
+		want, ok := allowed[id]
+		assert.True(t, ok, "%s is a synchronisation primitive nobody declared; every one of them needs a reason", id)
+		if ok {
+			assert.Equal(t, want, n, "%s: the count moved, so the reason above may no longer be the whole story", id)
+		}
+	}
+	for id, want := range allowed {
+		assert.Equal(t, want, found[id], "%s is declared but not present as expected", id)
+	}
 }
 
 var goStatementRe = regexp.MustCompile(`(^|[\s;{}(])go\s+[A-Za-z_(]`)
@@ -139,6 +164,28 @@ func TestOnlyTheActorStartsGoroutines(t *testing.T) {
 		assert.Equal(t, 0, countOccurrences(sources, banned),
 			"%s is a way to start a goroutine that the `go ` scan would not see", banned)
 	}
+}
+
+// TestHistoryDownloadIsBoundToItsVerification is a source scan because the seam
+// cannot be driven behaviourally: DownloadHistorySync's verification reads
+// f.cli.Store.LIDs off a real *whatsmeow.Client, which the package constructs
+// itself and offers no way to substitute. A test could only prove the
+// verification function works in isolation — which VerifyHistoryLIDMappings'
+// own tests already do — not that the download still CALLS it.
+//
+// So the binding is asserted where it lives: a download body that stopped
+// verifying would report LID-only peers as permanently unmatched, silently.
+func TestHistoryDownloadIsBoundToItsVerification(t *testing.T) {
+	src, ok := packageSources(t)["history.go"]
+	require.True(t, ok)
+
+	start := strings.Index(src, "func (f *clientHistoryFetcher) DownloadHistorySync(")
+	require.GreaterOrEqual(t, start, 0, "the download seam moved; this scan has to move with it")
+	end := strings.Index(src[start:], "\nfunc ")
+	require.Greater(t, end, 0)
+
+	assert.Contains(t, src[start:start+end], "VerifyHistoryLIDMappings(",
+		"the history download must verify the LID mappings it just stored, in its own body")
 }
 
 // TestSnapshotIsPublishedFromOnePlace guards against a second publication path,
@@ -264,10 +311,11 @@ func TestTurnBudgetHoldsForTheWorstTurn(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(maxTurnBudget + 2*time.Second):
+	case <-time.After(maxTurnBudget):
 		t.Fatalf("the worst turn exceeded its budget of %s", maxTurnBudget)
 	}
-	assert.Less(t, accelerated.GetCurrentTime().Sub(started), maxTurnBudget+2*time.Second)
+	assert.Less(t, accelerated.GetCurrentTime().Sub(started), maxTurnBudget,
+		"the budget is the claim; measuring it with slack measures something else")
 }
 
 // TestStatusSnapshotIsDeepCopied: a shallow copy would publish pointers into
@@ -489,10 +537,6 @@ func TestFullMailbox_TerminalEventsAreEventuallyPersisted(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			syncStore := newFakeSyncStore()
 			m := newManagerForTest(t, syncStore, &fakeBackfillReader{})
-			// Short enough that a bounded-drop policy would FIRE while the loop
-			// is still parked. With the lossless policy the enqueue simply waits
-			// it out — which is the whole difference this test has to see.
-			tuneTimeouts(m, func(tm *managerTimeouts) { tm.ctrlEnqueue = 50 * time.Millisecond })
 			cli := newFakeClient()
 			m.SetIngestor(&fakeIngestor{})
 			m.SetHistoryRecorder(&fakeRecorder{})
@@ -510,9 +554,8 @@ func TestFullMailbox_TerminalEventsAreEventuallyPersisted(t *testing.T) {
 			go func() { delivered <- m.handleEventFor(sess, tt.event) }()
 
 			// The handler is blocked on the full mailbox, which is exactly the
-			// point: it must not give up. The wait is deliberately several times
-			// the enqueue deadline — a policy that dropped this event would have
-			// returned by now.
+			// point: it must not give up. A policy that dropped this event would
+			// have returned long before this wait is out.
 			select {
 			case <-delivered:
 				t.Fatal("the event was dropped rather than waiting for room: a terminal event may be the last thing that client ever emits")
@@ -601,16 +644,16 @@ func TestFullMailbox_PairErrorIsEventuallyHandled(t *testing.T) {
 		"the row the library saved is left for the next boot; shutdown-time cleanup is not this event's job")
 }
 
-// TestFullMailbox_ConnectedIsDroppedWithAnError is the ONE sanctioned drop.
+// TestFullMailbox_ConnectedIsLosslessLikeTheRest closes the last exception.
 //
-// Connected is the only control event dispatched synchronously from a node
-// handler, and the only one whose loss is recoverable: it carries no durable
-// decision and whatsmeow re-emits it on every reconnect. Blocking a node handler
-// past the library's ordering horizon would cost message ordering for the whole
-// session.
-func TestFullMailbox_ConnectedIsDroppedWithAnError(t *testing.T) {
+// Connected used to be dropped on a full mailbox, on the grounds that it came
+// from a node handler where blocking costs the session its message ordering. It
+// does not: whatsmeow dispatches it from a goroutine it spawns after the
+// post-connect IQ, so waiting there blocks nothing but that goroutine — while
+// dropping it leaves the status reading "connecting" for a session that is up,
+// with nothing scheduled to correct it.
+func TestFullMailbox_ConnectedIsLosslessLikeTheRest(t *testing.T) {
 	m := newDeadlineManager(t, effectDeadline)
-	tuneTimeouts(m, func(tm *managerTimeouts) { tm.ctrlEnqueue = 50 * time.Millisecond })
 	cli := newFakeClient()
 	useClient(m, cli, true)
 	require.NoError(t, m.Start(context.Background()))
@@ -619,16 +662,20 @@ func TestFullMailbox_ConnectedIsDroppedWithAnError(t *testing.T) {
 	release := parkLoop(t, m)
 	fillMailbox(m)
 
-	started := accelerated.GetCurrentTime()
-	assert.True(t, m.handleEventFor(sess, &events.Connected{}),
-		"the handler always reports success: there is no stanza to withhold")
-	assert.Less(t, accelerated.GetCurrentTime().Sub(started), 2*time.Second,
-		"the drop happens at the deadline rather than blocking the node handler")
+	delivered := make(chan bool, 1)
+	go func() { delivered <- m.handleEventFor(sess, &events.Connected{}) }()
+
+	select {
+	case <-delivered:
+		t.Fatal("Connected was dropped rather than waiting for room, leaving the status stuck on connecting")
+	case <-time.After(500 * time.Millisecond):
+	}
 
 	release()
-	m.settle()
-	assert.NotEqual(t, StateConnected, m.Status().State,
-		"the dropped event left the status where it was — bounded and self-correcting")
+	assert.True(t, <-delivered)
+	eventually(t, "the connection the event reports is the one the status ends up showing", func() bool {
+		return m.Status().State == StateConnected
+	})
 }
 
 // TestHandleEvent_PairErrorIsNotADefaultBranchEvent is the direct guard on the
@@ -1432,5 +1479,96 @@ func TestStart_SessionReplacedMidDialIsStillReleased(t *testing.T) {
 
 	eventually(t, "the replaced session is released even though its own operation aborted on the fence", func() bool {
 		return startClient.connCtxErr() != nil && !startClient.pumpRunning()
+	})
+}
+
+// TestDisconnect_LibraryEchoDoesNotKillTheUnlinkInFlight is the P0 case, in both
+// of its shapes.
+//
+// An unlink retires the session it is about to use — its events must not change
+// state — but retirement also means "close this client". Those two cannot both
+// apply to a session an operation is still using, because the library's own echo
+// arrives from exactly that session: whatsmeow dispatches Connected after the
+// dial the unlink just made, and LoggedOut in reply to the Logout it is in the
+// middle of. Tearing down on either one closes the socket the Logout is waiting
+// on, and an unlink that would have succeeded reports a bad gateway.
+func TestDisconnect_LibraryEchoDoesNotKillTheUnlinkInFlight(t *testing.T) {
+	t.Run("live client, LoggedOut echoes our own logout", func(t *testing.T) {
+		cli := newFakeClient()
+		m, _, _, _ := newTestManager(t, cli, true)
+		require.NoError(t, m.Start(context.Background()))
+		require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
+		sess := installedSession(t, m)
+		require.NotNil(t, sess)
+
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		cli.mu.Lock()
+		cli.logoutEntered, cli.logoutBlock = entered, release
+		cli.mu.Unlock()
+
+		done := make(chan opResult, 1)
+		go func() {
+			res, err := m.Disconnect(context.Background(), false)
+			done <- opResult{val: res, err: err}
+		}()
+		<-entered
+
+		// The server ends the session because WE asked it to. The event arrives
+		// from a session the unlink has already retired.
+		require.True(t, m.handleEventFor(sess, &events.LoggedOut{}))
+		m.settle()
+
+		consistently(t, "the client the unlink is still using must not be torn down by the echo of its own logout",
+			200*time.Millisecond, func() bool { return cli.IsConnected() && cli.connCtxErr() == nil })
+
+		close(release)
+		out := <-done
+		require.NoError(t, out.err)
+		assert.Equal(t, StateNotPaired, m.Status().State, "and the unlink completes")
+	})
+
+	t.Run("build-to-unlink, Connected follows our own dial", func(t *testing.T) {
+		installed := newFakeClient()
+		built := newFakeClient()
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		built.mu.Lock()
+		built.logoutEntered, built.logoutBlock = entered, release
+		built.mu.Unlock()
+
+		m, _, _, _ := newTestManager(t, installed, true)
+		require.NoError(t, m.Start(context.Background()))
+		// Down, so the unlink has to BUILD a client to log out with.
+		installed.setConnected(false)
+
+		var builtSess *session
+		m.setSessionFactory(func(context.Context, sessionRequest) (*session, error) {
+			jid := testDeviceJID
+			builtSess = fakeSessionFor(built, true, &jid)
+			return builtSess, nil
+		})
+
+		done := make(chan opResult, 1)
+		go func() {
+			res, err := m.Disconnect(context.Background(), false)
+			done <- opResult{val: res, err: err}
+		}()
+		<-entered
+		require.NotNil(t, builtSess)
+
+		// whatsmeow dispatches this from a goroutine it spawns once the dial
+		// this very operation made comes up.
+		require.True(t, m.handleEventFor(builtSess, &events.Connected{}))
+		m.settle()
+
+		consistently(t, "the client the unlink built and is logging out with must survive its own Connected",
+			200*time.Millisecond, func() bool { return built.IsConnected() && built.connCtxErr() == nil })
+
+		close(release)
+		out := <-done
+		require.NoError(t, out.err)
+		assert.Equal(t, StateNotPaired, m.Status().State,
+			"an unlink that reached the server must not be reported as a failure")
 	})
 }

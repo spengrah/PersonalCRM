@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -681,12 +682,18 @@ func (m *Manager) markTerminal(st *actorState, reason string, bannedUntil *time.
 		metadata[metadataBannedUntil] = bannedUntil.UTC().Format(time.RFC3339)
 	}
 
-	ctx, cancel := turnCtx(context.Background())
-	defer cancel()
-
+	// A FRESH budget per attempt. Sharing one across the retries makes the
+	// second attempt run under a context the first has already spent, so a
+	// database slow enough to need a retry is exactly the one that never gets a
+	// real one.
 	var err error
 	for attempt := 0; attempt < terminalPersistAttempts; attempt++ {
-		if _, err = m.syncRepo.MarkSyncStateTerminal(ctx, *st.syncStateID, reason, metadata); err == nil {
+		if err = func() error {
+			ctx, cancel := turnCtx(context.Background())
+			defer cancel()
+			_, e := m.syncRepo.MarkSyncStateTerminal(ctx, *st.syncStateID, reason, metadata)
+			return e
+		}(); err == nil {
 			return nil
 		}
 	}
@@ -718,12 +725,15 @@ func (m *Manager) writeSelectorMetadata(st *actorState) (attempted, ok bool) {
 	if st.syncStateID == nil || m.syncRepo == nil {
 		return false, false
 	}
-	ctx, cancel := turnCtx(context.Background())
-	defer cancel()
-
+	// A fresh budget per attempt, for the same reason as markTerminal.
 	var err error
 	for attempt := 0; attempt < terminalPersistAttempts; attempt++ {
-		if _, err = m.syncRepo.UpdateSyncStateMetadata(ctx, *st.syncStateID, st.metadataBase()); err == nil {
+		if err = func() error {
+			ctx, cancel := turnCtx(context.Background())
+			defer cancel()
+			_, e := m.syncRepo.UpdateSyncStateMetadata(ctx, *st.syncStateID, st.metadataBase())
+			return e
+		}(); err == nil {
 			return true, true
 		}
 	}
@@ -816,7 +826,7 @@ func (m *Manager) handleEventFor(sess *session, evt any) bool {
 		// A dropped terminal event may be the last thing that client ever emits,
 		// and its loss is the durable record that stops the next boot
 		// reconnecting a dead or banned session. Permanently.
-		m.enqueueControl(sess, evt, true)
+		m.enqueueControl(sess, evt)
 		return true
 
 	case *events.PairSuccess, *events.PairError:
@@ -824,20 +834,21 @@ func (m *Manager) handleEventFor(sess *session, evt any) bool {
 		// exactly one of them. Dropping either loses the adoption of a device the
 		// user just linked, or the only notification that a pairing-written row
 		// needs deleting.
-		m.enqueueControl(sess, evt, true)
+		m.enqueueControl(sess, evt)
 		return true
 
 	case *events.Disconnected:
-		m.enqueueControl(sess, evt, true)
+		m.enqueueControl(sess, evt)
 		return true
 
 	case *events.Connected:
-		// The ONLY event dispatched synchronously from a node handler, and the
-		// only one whose loss is genuinely recoverable: it carries no durable
-		// decision, and whatsmeow re-emits lifecycle events on every reconnect.
-		// Blocking a node handler past 300 s would cost message ordering for the
-		// whole session.
-		m.enqueueControl(sess, evt, false)
+		// Lossless like the other seven. The rationale for dropping it was that
+		// it came from a node handler, where blocking would cost the session its
+		// message ordering — the library actually dispatches it from a goroutine
+		// it spawns after the post-connect IQ (connectionevents.go), so blocking
+		// there costs nothing but that goroutine. Dropping it, by contrast,
+		// leaves the status stuck on "connecting" for a session that is up.
+		m.enqueueControl(sess, evt)
 		return true
 
 	// --- data plane --------------------------------------------------------
@@ -861,30 +872,18 @@ func (m *Manager) handleEventFor(sess *session, evt any) bool {
 	}
 }
 
-// enqueueControl submits a lifecycle event. ctrlEventMsg carries no reply
-// channel, so a future control event cannot decide to withhold an ack by
-// accident: it would have to move to the data plane or acquire its own
-// synchronous path.
-func (m *Manager) enqueueControl(from *session, evt any, lossless bool) {
-	msg := &ctrlEventMsg{from: from, evt: evt}
-	if lossless {
-		select {
-		case m.inbox <- msg:
-		case <-m.stopping:
-		}
-		return
-	}
-
-	timer := time.NewTimer(m.timeouts.ctrlEnqueue)
-	defer timer.Stop()
+// enqueueControl submits a lifecycle event. EVERY control event is lossless:
+// none of them is dispatched from a node handler, so the only thing a full
+// mailbox blocks is the library goroutine that raised the event, and the only
+// thing that unblocks the caller other than the loop is shutdown.
+//
+// ctrlEventMsg carries no reply channel, so a future control event cannot decide
+// to withhold an ack by accident: it would have to move to the data plane or
+// acquire its own synchronous path.
+func (m *Manager) enqueueControl(from *session, evt any) {
 	select {
-	case m.inbox <- msg:
+	case m.inbox <- &ctrlEventMsg{from: from, evt: evt}:
 	case <-m.stopping:
-	case <-timer.C:
-		logger.Error().
-			Str("event", fmt.Sprintf("%T", evt)).
-			Int("queue_depth", len(m.inbox)).
-			Msg("whatsapp: dropped a control event after the enqueue deadline")
 	}
 }
 
@@ -977,6 +976,10 @@ func (m *Manager) onConnected(st *actorState, from *session) {
 func (m *Manager) onDisconnected(st *actorState, from *session) {
 	switch scope, _ := st.scopeOf(from); scope {
 	case scopeStale:
+		// Logged and dropped, NOT torn down — unlike the other stale arms. A
+		// Disconnected is the one stale event that says the socket is already
+		// closing itself, so there is nothing left to close; and a session an
+		// operation still holds gets exactly one release, from that operation.
 		logger.Debug().Msg("whatsapp: ignoring Disconnected from an abandoned client")
 		return
 	case scopePairing:
@@ -1175,6 +1178,28 @@ func (m *Manager) onTerminal(st *actorState, from *session, reason string, banne
 // event, so a SetIngestor landing mid-event cannot make one event use two
 // ingestors. It is deliberately session-agnostic: attribution exists to stop a
 // dead client publishing state, and a real message is a real message.
+// chunkOrderInt32 narrows the library's uint32 chunk order to the column's
+// int32. A value that cannot fit is not a chunk order — it is a corrupt or
+// hostile payload — so it is clamped and reported rather than wrapped into a
+// negative that would sort before every real chunk.
+func chunkOrderInt32(order uint32) int32 {
+	if order > math.MaxInt32 {
+		logger.Warn().Uint32("chunk_order", order).
+			Msg("whatsapp: history chunk order exceeds the column's range; clamping")
+		return math.MaxInt32
+	}
+	return int32(order)
+}
+
+// handleMessage projects a live message onto the source-agnostic shape and hands
+// it to the ingestor.
+//
+// The projection is DELIBERATELY partial. Only MessageID, ChatJID, IsOutgoing
+// and SentAt are filled; Text, SenderJID, PushName, IsGroup and the reply and
+// media fields are left at their zero values because the parser that fills them
+// is the next PR's. A consumer that reads them today reads an empty string, not
+// an absent message — so nothing downstream may branch on them until that parser
+// lands.
 func (m *Manager) handleMessage(ctx context.Context, e *events.Message) bool {
 	var ingestor MessageIngestor
 	if s := m.snap.Load(); s != nil {
@@ -1256,7 +1281,7 @@ func (m *Manager) handleHistoryNotification(ctx context.Context, e *events.Messa
 		e.Info.ID,
 		payload,
 		stripped.GetSyncType().String(),
-		int32(stripped.GetChunkOrder()),
+		chunkOrderInt32(stripped.GetChunkOrder()),
 		oldest,
 		disposition,
 	); err != nil {

@@ -260,6 +260,19 @@ var managerDrivenSources = map[string]struct{}{
 	"whatsapp": {},
 }
 
+// evaluatedWhenDisabled is deliberately NARROWER than managerDrivenSources.
+//
+// Telegram's row is stored disabled too, which has always made its sync_error
+// carve-out unreachable — the enabled filter skips the row before the carve-out
+// is ever consulted. That is the behaviour on develop, and waking it up would
+// make existing telegram error rows breach for the first time. Bringing a
+// dormant alert to life for an integration that is already in service is a
+// decision of its own, not a side effect of adding a new integration, so this
+// set holds only the source that needs it now.
+var evaluatedWhenDisabled = map[string]struct{}{
+	"whatsapp": {},
+}
+
 func evaluateSyncStateBreaches(
 	now time.Time,
 	cfg config.StalenessConfig,
@@ -269,10 +282,12 @@ func evaluateSyncStateBreaches(
 	var out []breachCandidate
 	for _, st := range states {
 		_, isManagerDriven := managerDrivenSources[st.Source]
+		_, evenWhenDisabled := evaluatedWhenDisabled[st.Source]
 		// A manager-driven row is enabled = FALSE by construction (see
 		// managerDrivenSources), so skipping disabled rows would make its
-		// sync_error evaluation unreachable.
-		if !st.Enabled && !isManagerDriven {
+		// sync_error evaluation unreachable — for the sources listed as needing
+		// that, and no others.
+		if !st.Enabled && !evenWhenDisabled {
 			continue
 		}
 		isPush := st.Strategy == repository.SyncStrategyPush

@@ -1005,6 +1005,7 @@ func TestDisconnect_ServerConfirmedLoggedOutPublishesNotPaired(t *testing.T) {
 // DATABASE state the library writes from its own goroutine — no amount of
 // fencing can see that write, so the two operations simply never overlap.
 func TestDisconnect_RefusesWhileAPairingExists(t *testing.T) {
+	// spec: WHA-015.link-and-unlink-are-mutually-exclusive
 	for _, force := range []bool{false, true} {
 		name := "unlink"
 		if force {
@@ -1028,6 +1029,7 @@ func TestDisconnect_RefusesWhileAPairingExists(t *testing.T) {
 
 // TestStartPairing_RefusesWhileAnUnlinkIsInFlight is the other half.
 func TestStartPairing_RefusesWhileAnUnlinkIsInFlight(t *testing.T) {
+	// spec: WHA-015.link-and-unlink-are-mutually-exclusive
 	cli := newFakeClient()
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -1055,6 +1057,7 @@ func TestStartPairing_RefusesWhileAnUnlinkIsInFlight(t *testing.T) {
 // TestDisconnect_RefusesASecondUnlink: two overlapping unlinks were always
 // incoherent — two remote logouts, two publications, one device.
 func TestDisconnect_RefusesASecondUnlink(t *testing.T) {
+	// spec: WHA-015.disconnect-while-unlink-in-flight-conflicts
 	cli := newFakeClient()
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -1399,4 +1402,98 @@ func newDeadlineManager(t *testing.T, deadline time.Duration) *Manager {
 	m.SetHistoryRecorder(&fakeRecorder{})
 	m.SetHistoryDrainReady()
 	return m
+}
+
+// TestQRItems_NonTerminalItemsDoNotEndTheAttempt covers the four QR items the
+// library emits WITHOUT closing the channel.
+//
+// "err-scanned-without-multidevice" reads like a failure and is not one: the
+// emitter goroutine is still counting down the remaining codes, so the next item
+// is another scannable code and the user finishes by turning multi-device on.
+// The passkey items are non-terminal too, but there is no surface here for that
+// handoff, so they end the attempt with a reason rather than leaving the user
+// waiting for a prompt that never comes.
+func TestQRItems_NonTerminalItemsDoNotEndTheAttempt(t *testing.T) {
+	t.Run("scanned without multidevice keeps the attempt alive", func(t *testing.T) {
+		cli := newFakeClient()
+		m, _, _, _ := newTestManager(t, cli, false)
+		require.NoError(t, m.Start(context.Background()))
+		require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+
+		cli.qrChan <- whatsmeow.QRChannelScannedWithoutMultidevice
+		eventually(t, "the user is told what to change, because a silent retry looks like a scan that did nothing",
+			func() bool { return m.Status().Reason == ReasonScannedWithoutMultidevice })
+
+		status := m.Status()
+		require.NotNil(t, status.Pairing, "the attempt is still live: the codes have not run out")
+		assert.Equal(t, StatePairing, status.State)
+
+		// The next code arrives on the same attempt and is published.
+		cli.qrChan <- whatsmeow.QRChannelItem{Event: whatsmeow.QRChannelEventCode, Code: "QR-CODE-AFTER-RESCAN"}
+		eventually(t, "the attempt keeps serving codes to scan", func() bool {
+			p := m.Status().Pairing
+			return p != nil && p.QRCode != nil && *p.QRCode == "QR-CODE-AFTER-RESCAN"
+		})
+	})
+
+	for _, event := range []string{whatsmeow.QRChannelEventPasskeyRequest, whatsmeow.QRChannelEventPasskeyResponse} {
+		t.Run("passkey item "+event+" ends the attempt with a reason", func(t *testing.T) {
+			cli := newFakeClient()
+			m, _, _, _ := newTestManager(t, cli, false)
+			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+
+			cli.qrChan <- whatsmeow.QRChannelItem{Event: event}
+			eventually(t, "the attempt ends rather than running out of codes in silence", func() bool {
+				return m.Status().Pairing == nil
+			})
+			assert.Equal(t, ReasonPasskeyPairingUnsupported, m.Status().Reason)
+		})
+	}
+}
+
+// TestCancelledPairing_RestoresWhatItDisplaced: a re-pair started over a durable
+// "logged out" decision and then cancelled must put that decision back. Reporting
+// "not paired" instead reads as a clean slate and hides the very reason the user
+// was re-pairing.
+func TestCancelledPairing_RestoresWhatItDisplaced(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
+	require.True(t, dispatchEvent(t, m, nil, &events.LoggedOut{}))
+	require.Equal(t, StateDisconnected, m.Status().State)
+	require.Equal(t, ReasonLoggedOut, m.Status().Reason)
+
+	pairClient := newFakeClient()
+	useClient(m, pairClient, false)
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.Equal(t, StatePairing, m.Status().State)
+
+	m.CancelPairing()
+
+	status := m.Status()
+	assert.Equal(t, StateDisconnected, status.State,
+		"the terminal decision the attempt displaced is still the truth about this device")
+	assert.Equal(t, ReasonLoggedOut, status.Reason)
+}
+
+// TestLogoutFailedAfterRemoteUnlink_MatchesOnlyTheLibrarysOwnWrapper: this
+// predicate decides whether to destroy local credentials, so what it matches
+// has to be ours.
+//
+// whatsmeow returns "error deleting data from store: %w" from Logout itself,
+// AFTER the remote unlink succeeded — so the marker is always the front of the
+// message. A substring match would also accept an error whose text came from the
+// server, which is text an attacker-influenced payload can reach.
+func TestLogoutFailedAfterRemoteUnlink_MatchesOnlyTheLibrarysOwnWrapper(t *testing.T) {
+	assert.True(t, logoutFailedAfterRemoteUnlink(logoutLocalDeleteFailure()),
+		"the library's own wrapper is the whole point of the predicate")
+
+	assert.False(t, logoutFailedAfterRemoteUnlink(nil))
+	assert.False(t, logoutFailedAfterRemoteUnlink(logoutRemoteFailure()),
+		"a failed remote unlink proves nothing about the device and must keep the credentials")
+	assert.False(t, logoutFailedAfterRemoteUnlink(
+		fmt.Errorf("error sending logout request: %w", errors.New("server said: error deleting data from store"))),
+		"a server-supplied message that merely CONTAINS the marker must not be read as a successful unlink")
 }

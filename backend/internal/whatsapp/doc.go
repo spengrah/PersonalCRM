@@ -5,7 +5,7 @@
 //
 // The integration is read-only by design. The only whatsmeow calls it may make
 // are NewClient, Connect, Disconnect, Logout, GetQRChannel, PairPhone,
-// AddEventHandlerWithSuccessStatus, GetGroupInfo, reads off client.Store, and
+// AddEventHandlerWithSuccessStatus, reads off client.Store, and
 // the three history-owned calls DownloadHistorySync, SendProtocolMessageReceipt
 // and DeleteMedia. Anything else — sending a message, marking a chat read,
 // signalling presence, requesting history, downloading media bytes — is a scope

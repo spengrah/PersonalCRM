@@ -121,9 +121,9 @@ behaviors:
     notes: Scoped to the outcomes the shipped wiring can actually produce. Everything that requires a linkable account is WHA-015, which is proposed until the integration is wired end to end.
 
   - id: WHA-015
-    title: Pairing outcomes that become reachable once an account can be linked
+    title: Pairing outcomes once an account can be linked
     type: api
-    status: proposed
+    status: current
     surface: api
     given: requests to the WhatsApp pairing endpoints, once the integration is wired end to end
     when: they are handled
@@ -144,11 +144,10 @@ behaviors:
         text: unlinking while a pairing is in flight, and starting a pairing while an unlink is in flight, are both conflicts (409) naming the operation to finish or cancel first — the two operations are never interleaved
     provenance: [WhatsAppHandler.StartPairing, WhatsAppHandler.Disconnect, Manager.StartPairing, Manager.opDisconnect]
     notes: >-
-      Every outcome here needs a pairing that is allowed to proceed, and the readiness gate (WHA-013)
-      refuses every one of them today. The handler mapping and the manager state machine that produce
-      them are implemented and covered by tests, but a passing test does not make the behavior
-      observable in the product, so these stay proposed. The PR that registers the history drainer —
-      the last readiness dependency — flips this behavior to current and lands the citing tests.
+      Every outcome here needs a pairing the readiness gate lets proceed, which the citing tests wire
+      explicitly. The gate is what a deployment without the history drainer hits first (WHA-013), so
+      what the PR registering the drainer changes is which of these a user can reach, not whether the
+      contract holds.
 
   - id: WHA-007
     title: The WhatsApp status endpoint reports connection, identity, pairing and backfill
@@ -166,13 +165,15 @@ behaviors:
         text: the status carries the history-backfill counts, including how many chunks were dropped un-projected and how far back the delivered history actually reached
       - key: status-absent-when-feature-disabled
         text: with the feature disabled the WhatsApp endpoints do not exist (404), which is how the settings surface recognises an unconfigured integration
+      - key: status-always-carries-terminal-reason-persisted
+        text: the status body always carries whether the permanent-disconnect reason was durably recorded, including when it was NOT — a client that cannot tell "absent" from "false" cannot tell a restart-safe decision from one that will be lost
     provenance: [WhatsAppHandler.GetStatus, RegisterWhatsAppRoutes]
     notes: Scoped to what the shipped wiring can report. The fields that require a linked account or an in-flight pairing are WHA-016, proposed until one is possible.
 
   - id: WHA-016
-    title: Status fields that become reachable once an account can be linked
+    title: Status fields that require a linked account or a live pairing
     type: api
-    status: proposed
+    status: current
     surface: api
     given: a request for WhatsApp status, once the integration is wired end to end
     when: it is handled
@@ -182,7 +183,7 @@ behaviors:
       - key: status-carries-live-pairing-code
         text: during a pairing the status carries the live code and its expiry, so a client can poll for a refreshed code, and a phone-code pairing reports only the code the user types
     provenance: [WhatsAppHandler.GetStatus, Manager.Status]
-    notes: Both require a state the readiness gate (WHA-013) makes unreachable — a linked account, or a pairing allowed to proceed. Flipped to current by the PR that registers the history drainer, alongside WHA-015.
+    notes: Both require a linked account or a live pairing, which the citing tests set up explicitly. Which of them a user can reach in a given deployment is governed by the readiness gate (WHA-013).
 
   # --- History capture ---
 

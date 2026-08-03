@@ -17,8 +17,10 @@ package whatsapp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -27,6 +29,7 @@ import (
 
 	"github.com/google/uuid"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 )
 
@@ -37,10 +40,11 @@ const (
 	actorDBTimeout = 2 * time.Second
 
 	// maxTurnBudget is the arithmetic worst case for one turn, plus a second of
-	// slack: a terminal turn makes terminalPersistAttempts writes plus at most
-	// one status-only fallback, each bounded by actorDBTimeout. It is measured
-	// and logged, not assumed.
-	maxTurnBudget = 3*actorDBTimeout + time.Second
+	// slack. A terminal turn makes terminalPersistAttempts writes — each now
+	// under its OWN actorDBTimeout, so they add rather than share — plus at most
+	// one status-only fallback under another. It is measured and logged, not
+	// assumed.
+	maxTurnBudget = (terminalPersistAttempts+1)*actorDBTimeout + time.Second
 
 	// inboxCapacity bounds the mailbox. The producers are the eight
 	// control-event kinds, a handful of API operations, one continuation per
@@ -49,17 +53,17 @@ const (
 	// never enters the queue at all, so this is generous rather than tuned.
 	inboxCapacity = 64
 
-	// ctrlEnqueueDeadline bounds the ONE control event whose loss is
-	// recoverable. See enqueueControl.
-	ctrlEnqueueDeadline = 30 * time.Second
-
 	// effectDeadline bounds a one-shot effect batch, so a Logout or Connect
 	// against a black-holed socket cannot outlive it.
 	effectDeadline = 30 * time.Second
 
-	// drainDrainTimeout bounds the wait for a QR drain goroutine to unwind
-	// before its client is disconnected. The library removes its own QR handler
-	// from a goroutine, so the client must still exist when that runs.
+	// drainDrainTimeout bounds the wait for OUR QR drain goroutine to unwind
+	// before its client is disconnected. The drain is the one long-lived effect
+	// and it submits messages naming its attempt, so letting it finish first is
+	// what keeps the effect census accurate and stops a qrMsg arriving for a
+	// client that is already closed. (The library removes its own QR handler on
+	// a goroutine it spawns; that one is not ours to order, and needs no
+	// ordering — RemoveEventHandler is safe on a disconnected client.)
 	drainDrainTimeout = 5 * time.Second
 
 	// stopLoopDeadline is how long Stop waits for the loop to exit before
@@ -77,18 +81,16 @@ const (
 // so a test can drive an expiry without sleeping for the production bound;
 // production always uses defaultTimeouts and never changes them afterwards.
 type managerTimeouts struct {
-	effect      time.Duration
-	stopLoop    time.Duration
-	drainDrain  time.Duration
-	ctrlEnqueue time.Duration
+	effect     time.Duration
+	stopLoop   time.Duration
+	drainDrain time.Duration
 }
 
 func defaultTimeouts() managerTimeouts {
 	return managerTimeouts{
-		effect:      effectDeadline,
-		stopLoop:    stopLoopDeadline,
-		drainDrain:  drainDrainTimeout,
-		ctrlEnqueue: ctrlEnqueueDeadline,
+		effect:     effectDeadline,
+		stopLoop:   stopLoopDeadline,
+		drainDrain: drainDrainTimeout,
 	}
 }
 
@@ -148,6 +150,19 @@ type actorState struct {
 	// session, so a death path added later cannot forget to.
 	pendingRelease []sessionRelease
 
+	// held is every session an in-flight operation still NEEDS. A held session
+	// is retired — it owns no slot and its events are stale — but it is not
+	// RELEASED, because the operation is still using its socket.
+	//
+	// This is what stops the library's own echo from killing the operation that
+	// provoked it: whatsmeow dispatches Connected after the dial an unlink just
+	// made, and LoggedOut in reply to the Logout it is in the middle of. Both
+	// arrive from a retired session, so both take a stale arm, and a stale arm
+	// tears the client down. Without this list that teardown lands on the socket
+	// the Logout is still waiting on, and an unlink that would have succeeded
+	// reports a bad gateway instead.
+	held []sessionRelease
+
 	// launchClosed is set ONLY by shutdownState, on the loop, as its last act
 	// before the loop exits. It is what lets Stop wait on m.effects without
 	// racing an Add it cannot exclude.
@@ -157,8 +172,8 @@ type actorState struct {
 // sessionRelease is a queued teardown: the socket closed, the connection
 // context ended, and — for an abandoned pairing — its half-written device row
 // removed. It carries the drain handle rather than looking one up, because the
-// library removes its own QR handler from a goroutine and that must run against
-// a client that still exists.
+// teardown has to wait for OUR drain goroutine to unwind before it closes the
+// client the drain is reading for.
 type sessionRelease struct {
 	sess         *session
 	drainDone    <-chan struct{}
@@ -179,7 +194,34 @@ func (st *actorState) retire(sess *session, deleteDevice bool) {
 		return
 	}
 	st.endOwnership(sess)
+	for i := range st.held {
+		if st.held[i].sess != sess {
+			continue
+		}
+		// An operation still needs this client. Ownership has ended — its events
+		// are stale from here — but the RELEASE belongs to the operation, which
+		// performs it exactly once when it ends. Releasing here would close the
+		// socket out from under a call in flight. The obligation is ACCUMULATED
+		// rather than dropped, so a retirement that also wanted the device row
+		// gone still gets it when the operation lets go.
+		st.held[i].deleteDevice = st.held[i].deleteDevice || deleteDevice
+		return
+	}
 	st.pendingRelease = append(st.pendingRelease, sessionRelease{sess: sess, deleteDevice: deleteDevice})
+}
+
+// takeHold ends an operation's claim and returns the release it accumulated,
+// which is the one and only release for that session.
+func (st *actorState) takeHold(sess *session) (sessionRelease, bool) {
+	for i := range st.held {
+		if st.held[i].sess != sess {
+			continue
+		}
+		rel := st.held[i]
+		st.held = slices.Delete(st.held, i, i+1)
+		return rel, true
+	}
+	return sessionRelease{}, false
 }
 
 // endOwnership is the half both forms of retirement share: the session is no
@@ -205,6 +247,7 @@ func (st *actorState) retireFor(rel *opFlags, sess *session) {
 		return
 	}
 	st.endOwnership(sess)
+	st.held = append(st.held, sessionRelease{sess: sess})
 	rel.holds = append(rel.holds, sess)
 }
 
@@ -324,7 +367,14 @@ func (m *Manager) releaseOp(st *actorState, rel opFlags) {
 		m.abandonPairingTurn(st, rel.pairing, ErrPairingCancelled)
 	}
 	for _, sess := range rel.holds {
-		st.retire(sess, false)
+		// Whatever the operation accumulated while it held the session — a
+		// device row a retirement asked for along the way — is performed now,
+		// once.
+		held, ok := st.takeHold(sess)
+		if !ok {
+			continue
+		}
+		st.retire(sess, held.deleteDevice)
 	}
 }
 
@@ -689,6 +739,15 @@ func (m *Manager) submit(msg actorMsg) bool {
 // makes "the call returned" and "its outcome is visible" the same instant,
 // without asking any turn body to remember to publish before replying.
 func (m *Manager) runOp(run func(*actorState, chan opResult)) opResult {
+	return m.runOpCtx(context.Background(), run)
+}
+
+// runOpCtx is runOp for a caller that may give up. The context bounds the WAIT
+// only: the operation is already in the actor's queue and runs to completion
+// whatever the caller does, because an unlink or a pairing that reached the
+// server cannot be recalled by a cancelled HTTP request. Giving up returns the
+// caller's goroutine; it does not undo anything.
+func (m *Manager) runOpCtx(ctx context.Context, run func(*actorState, chan opResult)) opResult {
 	reply := make(chan opResult, 1)
 	if !m.submit(&opMsg{run: run, reply: reply}) {
 		return opResult{err: ErrManagerStopped}
@@ -697,6 +756,8 @@ func (m *Manager) runOp(run func(*actorState, chan opResult)) opResult {
 	case res := <-reply:
 		m.settle()
 		return res
+	case <-ctx.Done():
+		return opResult{err: ctx.Err()}
 	case <-m.stopping:
 		return opResult{err: ErrManagerStopped}
 	}
@@ -1006,26 +1067,23 @@ func (m *Manager) launchDial(st *actorState, sess *session) {
 // an abandoned attempt's half-written device row" is one act with one
 // implementation rather than a sequence each caller repeats.
 //
-// It waits for the QR drain FIRST — bounded, and skipped when no drain was ever
-// launched — so the library's own handler-removal goroutine runs against a
-// client that still exists.
+// It waits for OUR QR drain to unwind FIRST — bounded, and skipped when no drain
+// was ever launched — so no qrMsg is submitted for a client this is about to
+// close, and the drain goroutine is accounted for before the effect returns.
 type releaseSessionEffect struct {
 	release   sessionRelease
 	drainWait time.Duration
 }
 
 func (e releaseSessionEffect) run(ctx context.Context) stepResult {
-	// The drain unwinds first, then the client closes: the library removes its
-	// own QR handler from a goroutine, so the client must still exist when that
-	// runs.
+	// Our drain unwinds first, then the client closes.
 	awaitDrain(e.release.drainStarted, e.release.drainDone, e.drainWait)
 	releaseSession(ctx, e.release.sess, e.release.deleteDevice)
 	return stepResult{}
 }
 
-// awaitDrain waits, bounded, for a QR drain goroutine to unwind — and not at all
-// when none was ever launched. The library removes its own QR handler from a
-// goroutine, so the client must still exist when that runs.
+// awaitDrain waits, bounded, for OUR QR drain goroutine to unwind — and not at
+// all when none was ever launched.
 func awaitDrain(started bool, done <-chan struct{}, wait time.Duration) {
 	if !started || done == nil {
 		return
@@ -1045,12 +1103,15 @@ func releaseSession(ctx context.Context, sess *session, deleteDevice bool) {
 	if sess == nil {
 		return
 	}
-	sess.client.Disconnect()
-	// The connection context is the socket's parent and auto-reconnect's, so
-	// ending it is part of closing the session, not a separate courtesy.
+	// The connection context goes FIRST. Disconnect is not a local close: it
+	// round-trips a websocket close handshake, and against a socket the server
+	// has stopped answering it waits out its own timeout. Ending the context
+	// first is what makes that wait unnecessary, and it is the half that
+	// actually stops the library's auto-reconnect.
 	if sess.cancelConn != nil {
 		sess.cancelConn()
 	}
+	sess.client.Disconnect()
 	if deleteDevice && sess.deleteDevice != nil {
 		if err := sess.deleteDevice(ctx); err != nil {
 			logger.Warn().Err(err).Msg("whatsapp: failed to delete an abandoned pairing device")
@@ -1108,11 +1169,21 @@ func (e deleteDeviceEffect) run(ctx context.Context) stepResult {
 	if e.sess == nil || e.sess.deleteDevice == nil {
 		return stepResult{}
 	}
-	// Retried on the same discipline as the terminal write: one transient blip
-	// must not leave the store holding two sessions.
+	// Retried on the same discipline as the terminal write, with a FRESH budget
+	// per attempt: a retry under a context the previous attempt already spent is
+	// not a retry.
 	var err error
 	for attempt := 0; attempt < deviceDeleteAttempts; attempt++ {
-		if err = e.sess.deleteDevice(ctx); err == nil {
+		if err = func() error {
+			attemptCtx, cancel := turnCtx(ctx)
+			defer cancel()
+			return e.sess.deleteDevice(attemptCtx)
+		}(); err == nil {
+			return stepResult{}
+		}
+		if errors.Is(err, sqlstore.ErrDeviceIDMustBeSet) {
+			// The row is already gone — an ordinary outcome on a cancelled
+			// pairing, not a failure worth a warning.
 			return stepResult{}
 		}
 	}
@@ -1356,10 +1427,5 @@ func (m *Manager) backfillStatus(ctx context.Context) BackfillStatus {
 
 // splitCountKey splits the repository's "<state>/<disposition>" count key.
 func splitCountKey(key string) (state, disposition string, ok bool) {
-	for i := 0; i < len(key); i++ {
-		if key[i] == '/' {
-			return key[:i], key[i+1:], true
-		}
-	}
-	return "", "", false
+	return strings.Cut(key, "/")
 }

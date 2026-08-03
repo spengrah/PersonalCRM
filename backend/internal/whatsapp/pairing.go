@@ -49,6 +49,14 @@ type pairingState struct {
 	// documented signal that the connection is fully established.
 	first bool
 
+	// prevState/prevReason are what the status said before this attempt claimed
+	// the slot. An attempt that ends without pairing has to put that back: a
+	// re-pair started over a durable "logged out" decision must not overwrite it
+	// with "not paired", which reads as a clean slate and hides the reason the
+	// user was re-pairing.
+	prevState  string
+	prevReason string
+
 	ctx       context.Context
 	cancel    context.CancelFunc
 	drainDone chan struct{}
@@ -60,6 +68,16 @@ type pairingState struct {
 	// ready carries the first-code outcome to the caller. Buffered (capacity 1)
 	// and sent non-blockingly, so a caller that gave up cannot wedge a turn.
 	ready chan pairOutcome
+}
+
+// displaced is the status an ended attempt puts back. A not_ready recorded
+// before the manager started is not a fact about the link — the attempt reached
+// the slot by PASSING the readiness gate — so it is the one value not restored.
+func (p *pairingState) displaced() (state, reason string) {
+	if p.prevState == "" || p.prevState == StateNotReady {
+		return StateNotPaired, ""
+	}
+	return p.prevState, p.prevReason
 }
 
 // pairOutcome is the first-code result StartPairing's caller waits for.
@@ -233,6 +251,15 @@ func (m *Manager) opStartPairing(ctx context.Context, req PairRequest) func(*act
 		// context is detached from the caller's.
 		p.ctx, p.cancel = context.WithCancel(context.WithoutCancel(ctx))
 
+		// Captured BEFORE the attempt overwrites it, and only when this attempt
+		// is the one displacing a real status — a second attempt taking over
+		// from a first must inherit what the first displaced, not "pairing".
+		if st.status.State == StatePairing && stale != nil {
+			p.prevState, p.prevReason = stale.prevState, stale.prevReason
+		} else {
+			p.prevState, p.prevReason = st.status.State, st.status.Reason
+		}
+
 		st.pairing = p
 		st.status.State = StatePairing
 		st.status.Reason = ""
@@ -344,8 +371,33 @@ func (m *Manager) onQRItem(st *actorState, p *pairingState, item whatsmeow.QRCha
 		// handler is what clears the pairing state, so there is no window in
 		// which a pairing completes unobserved.
 
+	case whatsmeow.QRChannelScannedWithoutMultidevice.Event:
+		// NOT a failure, whatever its "err-" prefix suggests. The library emits
+		// this and keeps going: the QR emitter is a separate goroutine that is
+		// still counting down the remaining codes, so the very next item is
+		// another scannable code. Ending the attempt here would throw away a
+		// pairing the user can finish by flipping one setting on their phone.
+		st.status.Reason = ReasonScannedWithoutMultidevice
+		logger.Warn().Msg("whatsapp: the code was scanned with multi-device mode off; enable it and scan the next code")
+
+	case whatsmeow.QRChannelEventPasskeyRequest, whatsmeow.QRChannelEventPasskeyResponse:
+		// The account wants to finish pairing through a passkey handoff. The
+		// library only emits these when the user has to confirm — it answers the
+		// automatic case itself — and there is no surface here for that
+		// exchange, so the attempt ends with a reason instead of running out of
+		// codes while the user waits for a prompt that never comes.
+		logger.Warn().Str("event", item.Event).Msg("whatsapp: pairing requires a passkey confirmation, which is not supported")
+		m.abandonPairingTurn(st, p, ErrPasskeyPairingUnsupported)
+		// After the attempt ends, so the restore does not wipe it: why the
+		// pairing the user was watching stopped is the one thing they need.
+		st.status.Reason = ReasonPasskeyPairingUnsupported
+
 	default:
-		logger.Warn().Str("event", item.Event).Msg("whatsapp: QR pairing ended")
+		// Everything that is left ends the attempt: timeout, an outdated client,
+		// an unexpected connection state, and the error item the library emits
+		// for a pairing failure.
+		logger.Warn().Str("event", item.Event).Err(item.Error).
+			Msg("whatsapp: the pairing attempt ended")
 		m.abandonPairingTurn(st, p, ErrPairingCancelled)
 	}
 }
@@ -379,8 +431,9 @@ func (m *Manager) abandonPairingTurn(st *actorState, p *pairingState, cause erro
 	if st.pairing == p {
 		st.pairing = nil
 		if st.status.State == StatePairing {
-			st.status.State = StateNotPaired
-			st.status.Reason = ""
+			// Back to whatever the attempt displaced, not to a hardcoded blank
+			// slate.
+			st.status.State, st.status.Reason = p.displaced()
 		}
 	}
 	m.retireAttempt(st, p, cause)
@@ -419,8 +472,12 @@ func (m *Manager) CancelPairing() {
 // It is a fenced state machine: every publication AND every destructive step
 // sits behind a fence check applied by the loop, so no failure path can publish
 // over a session it never decided about.
+// The context bounds the WAIT, not the unlink. An unlink that has reached the
+// server cannot be recalled, so a caller that gives up gets its goroutine back
+// and the operation still runs to completion and publishes — the same shape as
+// StartPairing, whose attempt also outlives the request that began it.
 func (m *Manager) Disconnect(ctx context.Context, force bool) (*DisconnectResult, error) {
-	res := m.runOp(m.opDisconnect(force))
+	res := m.runOpCtx(ctx, m.opDisconnect(force))
 	if res.err != nil {
 		return nil, res.err
 	}
@@ -532,6 +589,9 @@ func (m *Manager) contUnlinkSessionBuilt(st *actorState, res effectResult, rel o
 	}
 	built := res.step(1).sess
 	if built == nil || !built.paired {
+		// Retirement is the only way a session dies, on this path too: the
+		// client was built, so something has to close it.
+		st.retire(built, false)
 		reply <- opResult{err: ErrNotPaired}
 		return false
 	}
@@ -719,7 +779,12 @@ const logoutStoreDeleteMarker = "error deleting data from store"
 // remote unlink had already succeeded. Anything unrecognised is treated as a
 // failed remote unlink, which is the conservative answer: it keeps the device.
 func logoutFailedAfterRemoteUnlink(err error) bool {
-	return err != nil && strings.Contains(err.Error(), logoutStoreDeleteMarker)
+	// PREFIX, not substring. The marker is the wrapper whatsmeow puts on the
+	// LOCAL store delete it performs after the remote logout succeeded, so it is
+	// always the front of the message. A substring match would also accept a
+	// server-supplied error that happened to contain the phrase, and this
+	// predicate decides whether to destroy local credentials.
+	return err != nil && strings.HasPrefix(err.Error(), logoutStoreDeleteMarker)
 }
 
 // serverConfirmedUnlinked reports whether the manager already holds positive

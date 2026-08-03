@@ -64,6 +64,17 @@ const (
 	// later unlink must still try the remote half rather than assuming it is
 	// already done.
 	ReasonForcedCleanupFailed = "forced_cleanup_failed"
+	// ReasonScannedWithoutMultidevice reports that the code WAS scanned but the
+	// phone has multi-device mode off. It is not terminal and not a failure: the
+	// library keeps emitting codes, so the remedy is to turn multi-device on and
+	// scan the next one. Surfaced because a silent retry looks identical to a
+	// scan that did nothing.
+	ReasonScannedWithoutMultidevice = "scanned_without_multidevice"
+	// ReasonPasskeyPairingUnsupported reports that the account asked to complete
+	// pairing with a passkey handoff. The integration has no surface for that
+	// exchange, so the attempt is ended with a reason the user can act on rather
+	// than left to run out of codes.
+	ReasonPasskeyPairingUnsupported = "passkey_pairing_unsupported"
 )
 
 // Pairing methods accepted by StartPairing.
@@ -107,6 +118,10 @@ var (
 	// than connected — an orphaned connected client would be unreachable by
 	// Stop() and could still complete a pairing nothing recorded.
 	ErrPairingCancelled = errors.New("whatsapp: pairing was cancelled")
+
+	// ErrPasskeyPairingUnsupported ends an attempt the account wants to finish
+	// with a passkey handoff, which this integration has no surface for.
+	ErrPasskeyPairingUnsupported = errors.New("whatsapp: this account requires passkey pairing, which is not supported")
 
 	// ErrNotPaired is returned by Disconnect when there is nothing to unlink.
 	ErrNotPaired = errors.New("whatsapp: no linked device")

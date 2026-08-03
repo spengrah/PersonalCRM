@@ -763,8 +763,15 @@ func TestStaleness_WhatsAppExcludedFromSyncStale(t *testing.T) {
 }
 
 // TestStaleness_TelegramBehaviorUnchanged pins that widening the carve-out from
-// a boolean to a set left Telegram bit-identical: excluded from sync_stale,
-// always evaluated for sync_error.
+// a boolean to a set left Telegram BIT-IDENTICAL, including the part of it that
+// is dormant.
+//
+// Telegram's row is written disabled, so the enabled filter skips it before the
+// sync_error carve-out is ever consulted — the carve-out has never fired for
+// telegram in production. Waking it up here would make existing telegram error
+// rows breach for the first time, which is a behaviour change for an
+// integration already in service. An ENABLED telegram row still behaves exactly
+// as it always has.
 func TestStaleness_TelegramBehaviorUnchanged(t *testing.T) {
 	cfg := stalenessTestConfig()
 
@@ -777,8 +784,11 @@ func TestStaleness_TelegramBehaviorUnchanged(t *testing.T) {
 		t.Fatal("telegram must still be excluded from sync_stale")
 	}
 
-	// Enabled=false matches TelegramManager's own CreateSyncState call.
-	errored := makeSyncState("telegram", func(s *repository.SyncState) {
+	// Enabled=false matches TelegramManager's own CreateSyncState call. On
+	// develop the enabled filter skips this row, so it does NOT breach — and
+	// that has to stay true, or adding WhatsApp would light up alerts on
+	// telegram installations that never had them.
+	disabled := makeSyncState("telegram", func(s *repository.SyncState) {
 		s.Enabled = false
 		s.Strategy = repository.SyncStrategyFetchAll
 		s.Status = repository.SyncStatusError
@@ -786,8 +796,34 @@ func TestStaleness_TelegramBehaviorUnchanged(t *testing.T) {
 		s.LastSuccessfulSyncAt = nil
 		s.CreatedAt = fixedNow.Add(-30 * 24 * time.Hour)
 	})
-	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{errored}, nil), "telegram", repository.BreachTypeSyncError) == nil {
-		t.Fatal("telegram error row must still breach with the external-sync flag off")
+	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{disabled}, nil), "telegram", repository.BreachTypeSyncError) != nil {
+		t.Fatal("a disabled telegram row must stay skipped, exactly as it is on develop")
+	}
+
+	// The half that IS live: an enabled telegram error row is still evaluated
+	// with the external-sync flag off, which is the carve-out's actual effect.
+	enabled := makeSyncState("telegram", func(s *repository.SyncState) {
+		s.Strategy = repository.SyncStrategyFetchAll
+		s.Status = repository.SyncStatusError
+		s.ErrorCount = 3
+		s.LastSuccessfulSyncAt = nil
+		s.CreatedAt = fixedNow.Add(-30 * 24 * time.Hour)
+	})
+	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{enabled}, nil), "telegram", repository.BreachTypeSyncError) == nil {
+		t.Fatal("an enabled telegram error row must still breach with the external-sync flag off")
+	}
+
+	// And the source that DOES need the exemption gets it.
+	wa := makeSyncState("whatsapp", func(s *repository.SyncState) {
+		s.Enabled = false
+		s.Strategy = repository.SyncStrategyFetchAll
+		s.Status = repository.SyncStatusError
+		s.ErrorCount = 3
+		s.LastSuccessfulSyncAt = nil
+		s.CreatedAt = fixedNow.Add(-30 * 24 * time.Hour)
+	})
+	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{wa}, nil), "whatsapp", repository.BreachTypeSyncError) == nil {
+		t.Fatal("whatsapp's row is disabled by construction, so skipping it would make its errors invisible")
 	}
 
 	// The negative control: an ordinary pull source is still gated on the flag.

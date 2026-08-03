@@ -133,6 +133,7 @@ func decodeWhatsAppError(t *testing.T, rec *httptest.ResponseRecorder) struct {
 // --- WHA-006: pairing endpoints ---------------------------------------------
 
 func TestAPI_WhatsAppQRStartReturnsCode(t *testing.T) {
+	// spec: WHA-015.qr-start-returns-code
 	expires := time.Date(2026, 5, 1, 12, 5, 0, 0, time.UTC)
 	code := "QR-CODE-1"
 	manager := &fakeWhatsAppManager{status: wapkg.Status{
@@ -153,6 +154,7 @@ func TestAPI_WhatsAppQRStartReturnsCode(t *testing.T) {
 }
 
 func TestAPI_WhatsAppQRStartTimesOutWithoutCode(t *testing.T) {
+	// spec: WHA-015.qr-start-times-out-without-code
 	manager := &fakeWhatsAppManager{startErr: wapkg.ErrQRCodeTimeout}
 	router := setupWhatsAppRouter(t, manager)
 
@@ -209,12 +211,14 @@ func TestAPI_WhatsAppStartRejectsUnknownMethod(t *testing.T) {
 }
 
 func TestAPI_WhatsAppStartWhenConnectedConflicts(t *testing.T) {
+	// spec: WHA-015.start-when-connected-conflicts
 	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{startErr: wapkg.ErrAlreadyConnected})
 	rec := doWhatsAppRequest(t, router, http.MethodPost, "/api/v1/whatsapp/auth/start", handlers.WhatsAppPairRequest{Method: "qr"})
 	assert.Equal(t, http.StatusConflict, rec.Code)
 }
 
 func TestAPI_WhatsAppStartWhenPairingConflicts(t *testing.T) {
+	// spec: WHA-015.start-when-pairing-conflicts
 	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{startErr: wapkg.ErrPairingInProgress})
 	rec := doWhatsAppRequest(t, router, http.MethodPost, "/api/v1/whatsapp/auth/start", handlers.WhatsAppPairRequest{Method: "qr"})
 	assert.Equal(t, http.StatusConflict, rec.Code)
@@ -240,6 +244,7 @@ func TestAPI_WhatsAppDisconnectWhenNotPairedConflicts(t *testing.T) {
 }
 
 func TestAPI_WhatsAppDisconnectReportsFailureWhenRemoteLogoutFails(t *testing.T) {
+	// spec: WHA-015.disconnect-reports-failure-when-remote-logout-fails
 	manager := &fakeWhatsAppManager{
 		disconnErr: errors.Join(wapkg.ErrRemoteUnlinkFailed, errors.New("server rejected logout")),
 		status: wapkg.Status{
@@ -373,6 +378,7 @@ func TestAPI_WhatsAppStatusReportsNotReadyReason(t *testing.T) {
 }
 
 func TestAPI_WhatsAppStatusReportsAccountIdentity(t *testing.T) {
+	// spec: WHA-016.status-reports-account-identity
 	jid := "15551234567@s.whatsapp.net"
 	phone := "15551234567"
 	pushName := "Test Account"
@@ -402,6 +408,7 @@ func TestAPI_WhatsAppStatusReportsAccountIdentity(t *testing.T) {
 }
 
 func TestAPI_WhatsAppStatusCarriesLivePairingCode(t *testing.T) {
+	// spec: WHA-016.status-carries-live-pairing-code
 	pairCode := "ABCD1234"
 	expires := time.Date(2026, 5, 1, 12, 5, 0, 0, time.UTC)
 	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{status: wapkg.Status{
@@ -507,7 +514,7 @@ func TestAPI_WhatsAppStatusNamesTheMissingDependency(t *testing.T) {
 // the raw body rather than on a decoded struct that cannot tell "absent" from
 // "false".
 func TestAPI_WhatsAppStatusSerializesTerminalReasonPersisted(t *testing.T) {
-	// spec: WHA-004
+	// spec: WHA-007.status-always-carries-terminal-reason-persisted
 	falseVal := false
 	trueVal := true
 
