@@ -49,10 +49,11 @@ behaviors:
     when: it ends permanently — unlinked from the phone, session replaced by another client, client too old, or temporarily banned
     then:
       - the reason is recorded durably before the connection is torn down, and the write is retried rather than abandoned on a single failure
+      - the recorded reason and the error state the staleness watchdog reads are written as one operation, so a permanent disconnect can never end up recorded but invisible to the watchdog
       - the integration reports a disconnected status carrying that reason
       - when the reason could not be recorded durably, the status says so, because the decision will then not survive a restart
       - reconnect attempts stop, and no other sync source is affected
-    provenance: [Manager.onTerminal, Manager.persistTerminalReason, external_sync_state metadata]
+    provenance: [Manager.onTerminal, Manager.markTerminal, MarkSyncStateTerminal, external_sync_state metadata]
 
   - id: WHA-005
     title: Transient disconnects reconnect by themselves; terminal ones stay terminal across restarts
@@ -66,6 +67,25 @@ behaviors:
       - a permanently ended session is not reconnected, including after a restart, because the terminal decision is read back from storage rather than held only in memory
       - an expired temporary ban is no longer treated as terminal
     provenance: [Manager.Start terminal gate, TestStart_DoesNotReconnectAfterPersistedTerminalReason]
+
+  - id: WHA-017
+    title: Connection events only ever speak for the connection that emitted them
+    type: business-logic
+    status: current
+    surface: none
+    given: the integration has held more than one connection over its lifetime — a cancelled pairing, an attempt superseded by a newer one, or a session that was replaced
+    when: a connection event arrives from one of them
+    then:
+      - only events from the connection the integration currently owns change the reported state, the durable record, or which device is linked
+      - an event from an abandoned connection is ignored and that connection is closed, rather than being applied to the live one or left holding a socket
+      - a failed pairing attempt ends that attempt only, and never records a permanent-disconnect decision against the linked device
+      - a linked device that ends permanently ends only itself, and does not cancel a pairing the user is in the middle of
+      - a completed pairing is adopted but reported as still connecting until the source confirms the connection, because linking is followed by a reconnection
+    provenance: [Manager.scopeOf, Manager.onTerminal, Manager.onConnected, Manager.onPairSuccess]
+    notes: >-
+      The source dispatches most connection events asynchronously, so an event queued by a
+      connection that has since been abandoned can arrive at any later moment — including after
+      its credentials were deleted and a different connection installed.
 
   # --- Pairing and status API ---
 

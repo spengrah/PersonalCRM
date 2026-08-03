@@ -25,20 +25,24 @@ type fakeSyncStore struct {
 	id       uuid.UUID
 	exists   bool
 	metadata map[string]any
+	// status is the row's persisted status, so a test can ask what the DATABASE
+	// would hold rather than only what the manager published. That is what makes
+	// "the row can never end durably terminal-but-idle" assertable.
+	status repository.SyncStatus
 
 	statuses []repository.SyncStatus
 	errors   []string
 	calls    []string
 
-	// metadataErr, getErr and createErr make the persistence layer fail, which
-	// is the only way to reach the paths where a durable write did not happen.
-	metadataErr error
+	// These make the persistence layer fail, which is the only way to reach the
+	// paths where a durable write did not happen.
+	terminalErr error
 	getErr      error
 	createErr   error
 }
 
 func newFakeSyncStore() *fakeSyncStore {
-	return &fakeSyncStore{id: uuid.New(), metadata: map[string]any{}}
+	return &fakeSyncStore{id: uuid.New(), metadata: map[string]any{}, status: repository.SyncStatusIdle}
 }
 
 func (f *fakeSyncStore) record(call string) {
@@ -77,6 +81,7 @@ func (f *fakeSyncStore) UpdateSyncStateStatus(_ context.Context, id uuid.UUID, s
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("status:" + string(status))
+	f.status = status
 	f.statuses = append(f.statuses, status)
 	if errorMessage != nil {
 		f.errors = append(f.errors, *errorMessage)
@@ -84,13 +89,44 @@ func (f *fakeSyncStore) UpdateSyncStateStatus(_ context.Context, id uuid.UUID, s
 	return &repository.SyncState{ID: id}, nil
 }
 
+// MarkSyncStateTerminal is the atomic terminal write. The fake models it as one
+// operation on one row deliberately: a fake that applied the status and the
+// metadata separately could not tell an atomic implementation from a split one.
+func (f *fakeSyncStore) MarkSyncStateTerminal(_ context.Context, id uuid.UUID, reason string, metadata map[string]any) (*repository.SyncState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("terminal")
+	if f.terminalErr != nil {
+		return nil, f.terminalErr
+	}
+	f.status = repository.SyncStatusError
+	f.statuses = append(f.statuses, repository.SyncStatusError)
+	f.errors = append(f.errors, reason)
+	f.metadata = metadata
+	return &repository.SyncState{ID: id, Status: f.status, Metadata: metadata}, nil
+}
+
+// terminalButIdle reports the row shape the staleness watchdog can never see: a
+// durably recorded terminal reason on a row that is not in error. It is the
+// exact state a split write could leave behind.
+func (f *fakeSyncStore) terminalButIdle() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	reason, ok := f.metadata[repository.SyncStateMetadataTerminalReason].(string)
+	return ok && reason != "" && f.status != repository.SyncStatusError
+}
+
+// persistedStatus reports the row's status as the database would hold it.
+func (f *fakeSyncStore) persistedStatus() repository.SyncStatus {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.status
+}
+
 func (f *fakeSyncStore) UpdateSyncStateMetadata(_ context.Context, id uuid.UUID, metadata map[string]any) (*repository.SyncState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("metadata")
-	if f.metadataErr != nil {
-		return nil, f.metadataErr
-	}
 	f.metadata = metadata
 	return &repository.SyncState{ID: id, Metadata: metadata}, nil
 }
@@ -122,6 +158,7 @@ func (f *fakeSyncStore) seedTerminal(reason string, bannedUntil *time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.exists = true
+	f.status = repository.SyncStatusError
 	f.metadata = map[string]any{repository.SyncStateMetadataTerminalReason: reason}
 	if bannedUntil != nil {
 		f.metadata[metadataBannedUntil] = bannedUntil.UTC().Format(time.RFC3339)

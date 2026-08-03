@@ -291,13 +291,26 @@ func TestHandleEvent_DisconnectedSetsReconnecting(t *testing.T) {
 		"whatsmeow retries transient failures on its own; no user action is required")
 }
 
-func TestHandleEvent_PairSuccessClearsPairingAndConnects(t *testing.T) {
+// TestHandleEvent_PairSuccessAdoptsButAwaitsTheConnection pins the library's own
+// rule: "this is generally followed by a websocket reconnection, so you should
+// wait for the Connected" (types/events/events.go:44).
+//
+// Reporting connected at PairSuccess would tell the settings page the account is
+// live during a window in which the socket is being torn down and rebuilt, and
+// would clear the sync error for a connection that has not happened. The session
+// IS adopted here — that part is what makes the follow-up Connected attributable
+// — but the state stays connecting until the source confirms it.
+func TestHandleEvent_PairSuccessAdoptsButAwaitsTheConnection(t *testing.T) {
 	cli := newFakeClient()
-	m, _, _, _ := newTestManager(t, cli, false)
+	m, syncStore, _, _ := newTestManager(t, cli, false)
 	jid := types.NewJID("15551234567", types.DefaultUserServer)
 
-	// Drive a real pairing first: PairSuccess is only adopted from the session
-	// that is actually pairing.
+	// Start first so the sync-state row exists: without it the status writes are
+	// no-ops and "the sync error is not cleared yet" would pass vacuously.
+	require.NoError(t, m.Start(context.Background()))
+
+	// Drive a real pairing: PairSuccess is only adopted from the session that is
+	// actually pairing.
 	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
 	pairingSess := m.pairing.session()
 	require.NotNil(t, pairingSess)
@@ -305,12 +318,26 @@ func TestHandleEvent_PairSuccessClearsPairingAndConnects(t *testing.T) {
 	assert.True(t, m.handleEventFor(pairingSess, &events.PairSuccess{ID: jid}))
 
 	status := m.Status()
-	assert.Equal(t, StateConnected, status.State)
-	assert.Nil(t, status.Pairing)
+	assert.Equal(t, StateConnecting, status.State,
+		"PairSuccess is not a live connection; the library reconnects after it")
+	assert.Nil(t, status.Pairing, "the pairing slot is released either way")
+	assert.Nil(t, status.ConnectedAt, "nothing has connected yet")
 	require.NotNil(t, status.JID)
 	assert.Equal(t, jid.String(), *status.JID)
 	require.NotNil(t, status.PhoneNumber)
 	assert.Equal(t, "15551234567", *status.PhoneNumber)
+	assert.NotContains(t, syncStore.callLog(), "status:idle",
+		"the sync error is cleared by a real connection, not by a completed handshake")
+
+	// The adopted session is the one that then reports Connected, and only that
+	// publishes the live state.
+	require.Same(t, pairingSess, m.sess, "the pairing client becomes the installed session")
+	assert.True(t, m.handleEventFor(pairingSess, &events.Connected{}))
+
+	status = m.Status()
+	assert.Equal(t, StateConnected, status.State)
+	assert.NotNil(t, status.ConnectedAt)
+	assert.Contains(t, syncStore.callLog(), "status:idle")
 }
 
 // TestHandleEvent_LoggedOutIsTerminalWithReason covers the whole
@@ -350,13 +377,13 @@ func TestHandleEvent_LoggedOutIsTerminalWithReason(t *testing.T) {
 				assert.WithinDuration(t, accelerated.GetCurrentTime().Add(24*time.Hour), *status.BannedUntil, time.Minute)
 			}
 
-			// Ordering: metadata written before the teardown disconnect.
+			// The decision is written before the teardown disconnect, and the
+			// reason and the error status land together.
 			calls := syncStore.callLog()
-			metadataAt := indexOf(calls, "metadata")
-			require.GreaterOrEqual(t, metadataAt, 0, "the terminal reason must be persisted")
-			clientCalls := cli.callLog()
-			assert.Contains(t, clientCalls, "disconnect", "the client is torn down")
-			assert.Contains(t, syncStore.callLog(), "status:error")
+			require.GreaterOrEqual(t, indexOf(calls, "terminal"), 0, "the terminal reason must be persisted")
+			assert.Equal(t, repository.SyncStatusError, syncStore.persistedStatus())
+			assert.False(t, syncStore.terminalButIdle())
+			assert.Contains(t, cli.callLog(), "disconnect", "the client is torn down")
 		})
 	}
 }
@@ -578,6 +605,16 @@ func indexOf(haystack []string, needle string) int {
 	return -1
 }
 
+func countCalls(haystack []string, needle string) int {
+	n := 0
+	for _, s := range haystack {
+		if s == needle {
+			n++
+		}
+	}
+	return n
+}
+
 func newMessageEvent(id string) *events.Message {
 	body := "hello"
 	return &events.Message{
@@ -632,7 +669,7 @@ func TestHandleEvent_TerminalReasonWriteFailureIsSurfaced(t *testing.T) {
 
 	syncStore.resetCalls()
 	syncStore.mu.Lock()
-	syncStore.metadataErr = errors.New("database is down")
+	syncStore.terminalErr = errors.New("database is down")
 	syncStore.mu.Unlock()
 
 	assert.True(t, m.handleEvent(&events.LoggedOut{}))
@@ -650,13 +687,237 @@ func TestHandleEvent_TerminalReasonWriteFailureIsSurfaced(t *testing.T) {
 		"the session is dead either way, so auto-reconnect is still cancelled")
 
 	// The write is retried rather than abandoned on the first blip.
-	metadataCalls := 0
-	for _, c := range syncStore.callLog() {
-		if c == "metadata" {
-			metadataCalls++
-		}
+	assert.Equal(t, terminalPersistAttempts, countCalls(syncStore.callLog(), "terminal"))
+}
+
+// TestHandleEvent_TerminalDecisionIsOneDurableWrite closes the lost-breach gap.
+//
+// The reason and the error status are separately load-bearing: the restart gate
+// reads only the reason, and the watchdog's immediate-breach rule fires only on
+// a row that is BOTH in error and carries one. Written separately, a failure
+// between them leaves a row that is durably terminal and permanently invisible —
+// the breach never opens, and nothing retries, because the terminal path writes
+// exactly once by design.
+func TestHandleEvent_TerminalDecisionIsOneDurableWrite(t *testing.T) {
+	t.Run("both land together", func(t *testing.T) {
+		m, syncStore, _, _ := newTestManager(t, newFakeClient(), true)
+		require.NoError(t, m.Start(context.Background()))
+		require.True(t, m.handleEvent(&events.Connected{}))
+		syncStore.resetCalls()
+
+		require.True(t, m.handleEvent(&events.LoggedOut{}))
+
+		assert.Equal(t, 1, countCalls(syncStore.callLog(), "terminal"),
+			"one operation carries both halves of the decision")
+		assert.Equal(t, 0, countCalls(syncStore.callLog(), "metadata"),
+			"a metadata-only write is the shape that can strand a terminal reason on an idle row")
+		assert.Equal(t, ReasonLoggedOut, syncStore.terminalReason())
+		assert.Equal(t, repository.SyncStatusError, syncStore.persistedStatus())
+		assert.False(t, syncStore.terminalButIdle(),
+			"the watchdog only breaches on error+reason, so this row must never exist")
+	})
+
+	t.Run("failure injection leaves nothing partial", func(t *testing.T) {
+		m, syncStore, _, _ := newTestManager(t, newFakeClient(), true)
+		require.NoError(t, m.Start(context.Background()))
+		require.True(t, m.handleEvent(&events.Connected{}))
+
+		syncStore.mu.Lock()
+		syncStore.terminalErr = errors.New("database is down")
+		syncStore.mu.Unlock()
+
+		require.True(t, m.handleEvent(&events.LoggedOut{}))
+
+		assert.False(t, syncStore.terminalButIdle(),
+			"a failed decision writes neither half, so it can never end terminal-but-idle")
+		assert.Empty(t, syncStore.terminalReason())
+		persisted := m.Status().TerminalReasonPersisted
+		require.NotNil(t, persisted)
+		assert.False(t, *persisted, "the status admits the decision is not durable")
+	})
+}
+
+// --- session-scoped lifecycle events ---------------------------------------
+
+// TestHandleEvent_TerminalFromAbandonedClientIsIgnored is the stale-terminal
+// regression guard.
+//
+// whatsmeow dispatches terminal events asynchronously (`go cli.dispatchEvent`
+// in handleConnectFailure), so a LoggedOut queued by a pairing client that was
+// cancelled minutes ago can land while a completely different session is
+// installed. Applying it would persist a dead client's verdict against the live
+// one, publish the live session as disconnected, and make the next boot refuse
+// to resume a device that was never logged out.
+func TestHandleEvent_TerminalFromAbandonedClientIsIgnored(t *testing.T) {
+	terminals := []struct {
+		name  string
+		event any
+	}{
+		{"logged out", &events.LoggedOut{}},
+		{"stream replaced", &events.StreamReplaced{}},
+		{"client outdated", &events.ClientOutdated{}},
+		{"temporary ban", &events.TemporaryBan{Expire: time.Hour}},
 	}
-	assert.Equal(t, terminalPersistAttempts, metadataCalls)
+
+	for _, tt := range terminals {
+		t.Run(tt.name, func(t *testing.T) {
+			cli := newFakeClient()
+			m, syncStore, _, _ := newTestManager(t, cli, true)
+			require.NoError(t, m.Start(context.Background()))
+			require.True(t, m.handleEvent(&events.Connected{}))
+			require.Equal(t, StateConnected, m.Status().State)
+
+			// A client from an attempt the manager abandoned long ago.
+			orphan := &session{client: newFakeClient()}
+			syncStore.resetCalls()
+
+			assert.True(t, m.handleEventFor(orphan, tt.event))
+
+			assert.Equal(t, StateConnected, m.Status().State,
+				"a dead client may not publish the live session as disconnected")
+			assert.Empty(t, syncStore.terminalReason(),
+				"a dead client's verdict must never become the durable decision")
+			assert.Equal(t, 0, countCalls(syncStore.callLog(), "terminal"))
+			assert.NotContains(t, cli.callLog(), "disconnect",
+				"the installed session must not be torn down by someone else's event")
+			assert.Contains(t, orphan.client.(*fakeClient).callLog(), "disconnect",
+				"the orphan is torn down rather than left holding a socket")
+		})
+	}
+}
+
+// TestHandleEvent_TerminalFromPairingClientDoesNotSpeakForTheSession: a pairing
+// attempt that dies is a different device from the installed session. Recording
+// its reason would make the next boot refuse to resume a healthy link.
+func TestHandleEvent_TerminalFromPairingClientDoesNotSpeakForTheSession(t *testing.T) {
+	installed := newFakeClient()
+	m, syncStore, _, _ := newTestManager(t, installed, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	pairingClient := newFakeClient()
+	m.newSession = func(context.Context, bool) (*session, error) {
+		return &session{client: pairingClient, deleteDevice: func(context.Context) error {
+			pairingClient.record("delete_device")
+			return nil
+		}}, nil
+	}
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	pairingSess := m.pairing.session()
+	require.NotNil(t, pairingSess)
+	syncStore.resetCalls()
+
+	assert.True(t, m.handleEventFor(pairingSess, &events.LoggedOut{}))
+
+	assert.Nil(t, m.Status().Pairing, "the dead attempt releases its slot")
+	assert.Contains(t, pairingClient.callLog(), "delete_device",
+		"the attempt's half-written device is removed")
+	assert.Empty(t, syncStore.terminalReason(),
+		"the installed session's restart gate is not the pairing client's to write")
+	assert.Equal(t, 0, countCalls(syncStore.callLog(), "terminal"))
+	assert.NotContains(t, installed.callLog(), "disconnect")
+}
+
+// TestHandleEvent_TerminalOnTheSessionLeavesAnInFlightPairingAlone is the
+// converse: the installed session ending is not a reason to destroy a pairing
+// the user is in the middle of, which is a different client over a different
+// device.
+func TestHandleEvent_TerminalOnTheSessionLeavesAnInFlightPairingAlone(t *testing.T) {
+	installed := newFakeClient()
+	m, _, _, _ := newTestManager(t, installed, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+	require.True(t, m.handleEvent(&events.Disconnected{}))
+
+	pairingClient := newFakeClient()
+	m.newSession = func(context.Context, bool) (*session, error) {
+		return &session{client: pairingClient, deleteDevice: func(context.Context) error {
+			pairingClient.record("delete_device")
+			return nil
+		}}, nil
+	}
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NotNil(t, m.Status().Pairing)
+
+	m.mu.RLock()
+	installedSess := m.sess
+	m.mu.RUnlock()
+	require.NotNil(t, installedSess)
+
+	assert.True(t, m.handleEventFor(installedSess, &events.LoggedOut{}))
+
+	assert.NotNil(t, m.Status().Pairing, "the user's in-flight pairing survives")
+	assert.NotContains(t, pairingClient.callLog(), "delete_device")
+	assert.Contains(t, installed.callLog(), "disconnect")
+}
+
+// TestHandleEvent_DisconnectedFromAbandonedClientIsIgnored: a socket dropping on
+// a client nobody owns says nothing about the installed session.
+func TestHandleEvent_DisconnectedFromAbandonedClientIsIgnored(t *testing.T) {
+	m, _, _, _ := newTestManager(t, newFakeClient(), true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	orphan := &session{client: newFakeClient()}
+	assert.True(t, m.handleEventFor(orphan, &events.Disconnected{}))
+	assert.Equal(t, StateConnected, m.Status().State,
+		"the live session is still connected; someone else's socket dropped")
+}
+
+// TestHandleEvent_DisconnectedFromPairingClientIsIgnored: the pairing websocket
+// dropping is the pairing's business, not the installed session's state.
+func TestHandleEvent_DisconnectedFromPairingClientIsIgnored(t *testing.T) {
+	installed := newFakeClient()
+	m, _, _, _ := newTestManager(t, installed, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	pairingClient := newFakeClient()
+	m.newSession = func(context.Context, bool) (*session, error) {
+		return &session{client: pairingClient, deleteDevice: func(context.Context) error { return nil }}, nil
+	}
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	pairingSess := m.pairing.session()
+	require.NotNil(t, pairingSess)
+
+	// StartPairing publishes "pairing" over the connection state while the
+	// installed session is still live underneath it. One status field cannot show
+	// both, so the connection state is restored here — otherwise the assertion
+	// would pass on any implementation, since onDisconnected only ever downgrades
+	// a CONNECTED state and "pairing" is not one.
+	m.setStatus(func(s *Status) { s.State = StateConnected })
+
+	assert.True(t, m.handleEventFor(pairingSess, &events.Disconnected{}))
+	assert.Equal(t, StateConnected, m.Status().State,
+		"the pairing socket dropping is not the installed session's state to lose")
+}
+
+// TestNewClient_HandlerIsBoundToItsOwnSession is the discriminating proof of the
+// registration itself, through a REAL client.
+//
+// The other identity tests call handleEventFor directly, so replacing newClient's
+// closure with the unattributed m.handleEvent would leave every one of them
+// green while production silently lost all attribution. Dispatching through the
+// real client's own dispatcher is the only way to exercise the binding.
+func TestNewClient_HandlerIsBoundToItsOwnSession(t *testing.T) {
+	m, syncStore, _, _ := newTestManager(t, newFakeClient(), true)
+	require.NoError(t, m.Start(context.Background()))
+	require.Equal(t, StateConnecting, m.Status().State)
+	syncStore.resetCalls()
+
+	// A real client for a session the manager does not own.
+	orphan := &session{}
+	cli := m.newClient(&store.Device{}, orphan)
+	require.NotNil(t, cli)
+	orphan.client = cli
+	orphan.wa = cli
+
+	//nolint:staticcheck // DangerousInternals is the only way to reach the real dispatcher.
+	cli.DangerousInternals().DispatchEvent(&events.Connected{})
+
+	assert.Equal(t, StateConnecting, m.Status().State,
+		"an orphan client's Connected must not publish the manager as connected")
+	assert.NotContains(t, syncStore.callLog(), "status:idle")
 }
 
 // TestHandleEvent_TerminalReasonPersistedOnHappyPath is the positive control.

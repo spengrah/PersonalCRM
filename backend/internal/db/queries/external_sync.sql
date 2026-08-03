@@ -140,6 +140,24 @@ SET metadata = $2,
 WHERE id = $1
 RETURNING *;
 
+-- name: MarkSyncStateTerminal :one
+-- Records a manager-driven source's permanent-disconnect decision: the durable
+-- terminal metadata AND the error status, in one statement.
+--
+-- They cannot be two writes. The staleness watchdog opens an immediate breach
+-- only for a row that is BOTH status='error' and carries a terminal reason, so
+-- a metadata write that landed while the status write failed would leave a row
+-- that is durably terminal and permanently invisible.
+UPDATE external_sync_state
+SET status = 'error',
+    error_message = $2,
+    error_count = error_count + 1,
+    metadata = $3,
+    last_sync_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+
 -- name: DeleteSyncState :exec
 DELETE FROM external_sync_state
 WHERE id = $1;

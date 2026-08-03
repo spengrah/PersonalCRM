@@ -705,6 +705,32 @@ func TestStaleness_WhatsAppTerminalRowBreachesBelowTheErrorCountFloor(t *testing
 	}
 }
 
+// TestStaleness_TerminalReasonOnAnIdleRowNeverBreaches is why the WhatsApp
+// terminal decision has to be a single write.
+//
+// The immediate-breach rule needs BOTH halves: a terminal reason and status
+// 'error'. A reason recorded on a row that is still idle is invisible forever —
+// the reason rule does not apply, and the ordinary count and duration terms
+// never fire either, because the terminal path writes once and then stops by
+// design. Splitting the reason and the status into two writes made that row
+// reachable whenever the second one failed.
+func TestStaleness_TerminalReasonOnAnIdleRowNeverBreaches(t *testing.T) {
+	cfg := stalenessTestConfig()
+
+	stranded := whatsAppTerminalRow("logged_out")
+	stranded.Status = repository.SyncStatusIdle
+	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{stranded}, nil), "whatsapp", repository.BreachTypeSyncError) != nil {
+		t.Fatal("fixture is wrong: an idle row is not supposed to breach at all")
+	}
+
+	// The same row in error — the only difference — breaches immediately. That
+	// difference is the entire cost of a half-written terminal decision.
+	inError := whatsAppTerminalRow("logged_out")
+	if findCandidate(evaluateBreaches(fixedNow, cfg, false, []repository.SyncState{inError}, nil), "whatsapp", repository.BreachTypeSyncError) == nil {
+		t.Fatal("the same row in error must breach, or this test proves nothing about the missing half")
+	}
+}
+
 // TestStaleness_TerminalReasonOnANonManagerRowIsIgnored bounds the rule: only
 // manager-driven sources get the immediate breach.
 func TestStaleness_TerminalReasonOnANonManagerRowIsIgnored(t *testing.T) {

@@ -511,6 +511,40 @@ func (r *SyncRepository) UpdateSyncStateMetadata(ctx context.Context, id uuid.UU
 	return &state, nil
 }
 
+// MarkSyncStateTerminal records a manager-driven source's permanent-disconnect
+// decision — the durable terminal metadata and the error status the staleness
+// watchdog reads — as a single write.
+//
+// It is deliberately not expressible as UpdateSyncStateStatus followed by
+// UpdateSyncStateMetadata: the watchdog opens an immediate breach only for a row
+// that is both in error and carries a terminal reason, so a failure between two
+// writes would leave a row that is durably terminal and permanently invisible.
+func (r *SyncRepository) MarkSyncStateTerminal(ctx context.Context, id uuid.UUID, reason string, metadata map[string]any) (*SyncState, error) {
+	var metadataBytes []byte
+	if metadata != nil {
+		var err error
+		metadataBytes, err = json.Marshal(metadata)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	dbState, err := r.queries.MarkSyncStateTerminal(ctx, db.MarkSyncStateTerminalParams{
+		ID:           uuidToPgUUID(id),
+		ErrorMessage: stringToPgText(&reason),
+		Metadata:     metadataBytes,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+
+	state := convertDbSyncState(dbState)
+	return &state, nil
+}
+
 // CreateSyncLog creates a new sync log entry
 func (r *SyncRepository) CreateSyncLog(ctx context.Context, state *SyncState) (*SyncLog, error) {
 	// Convert metadata to JSON
