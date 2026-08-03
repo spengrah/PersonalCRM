@@ -6583,6 +6583,10 @@ const docTemplate = `{
                     "description": "Reason carries the machine-readable detail for not_ready, disconnected,\ndisconnect_failed and error.",
                     "type": "string"
                 },
+                "replaced_device_retained": {
+                    "description": "ReplacedDeviceRetained reports a degraded device store: a re-link could not\ndelete the device it replaced, so a stale session is still stored. The\nlinked account is still resolved deterministically; the flag exists so the\ncondition is visible rather than silent.",
+                    "type": "boolean"
+                },
                 "state": {
                     "description": "State is one of not_ready, not_paired, pairing, connecting, connected,\nreconnecting, disconnected, disconnect_failed, error.",
                     "type": "string"

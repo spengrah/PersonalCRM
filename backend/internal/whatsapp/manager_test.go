@@ -1206,3 +1206,69 @@ func TestOnPairSuccess_RetiresAndDeletesTheReplacedSession(t *testing.T) {
 	assert.True(t, m.handleEventFor(oldSess, &events.LoggedOut{}))
 	assert.Equal(t, StateConnecting, m.Status().State)
 }
+
+// TestOnPairSuccess_RetainedReplacedDeviceIsRetriedAndSurfaced covers the case
+// where the replacement cannot be completed.
+//
+// Adopting the new session while silently leaving the old device stored is the
+// worst of both: the store holds two sessions, the library's first-device lookup
+// assumes one, and nothing says so. The delete is retried, and a delete that
+// still fails is reported on the status.
+func TestOnPairSuccess_RetainedReplacedDeviceIsRetriedAndSurfaced(t *testing.T) {
+	oldClient := newFakeClient()
+	oldClient.deleteDeviceErr = errors.New("database is down")
+	m, _, _, _ := newTestManager(t, oldClient, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	newClient := newFakeClient()
+	m.newSession = func(context.Context, bool) (*session, error) {
+		return &session{client: newClient, deleteDevice: func(context.Context) error { return nil }}, nil
+	}
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	pairingSess := m.pairing.session()
+	require.NotNil(t, pairingSess)
+
+	require.True(t, m.handleEventFor(pairingSess, &events.PairSuccess{
+		ID: types.NewJID("15554443333", types.DefaultUserServer),
+	}))
+
+	assert.Equal(t, deviceDeleteAttempts, countCalls(oldClient.callLog(), "delete_device"),
+		"one transient blip must not be enough to leave the store holding two sessions")
+	assert.True(t, m.Status().ReplacedDeviceRetained,
+		"a stale stored session is reported, not logged and forgotten")
+}
+
+// TestOnPairSuccess_ClearsTheReplacedDevicesTerminalFields: both fields describe
+// a decision taken about the device this pairing replaces. Carried over, the
+// status would report a ban — or a "the terminal decision was recorded" verdict
+// — about an account that is no longer the linked one.
+func TestOnPairSuccess_ClearsTheReplacedDevicesTerminalFields(t *testing.T) {
+	oldClient := newFakeClient()
+	m, _, _, _ := newTestManager(t, oldClient, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+	require.True(t, m.handleEvent(&events.TemporaryBan{Expire: 24 * time.Hour}))
+
+	before := m.Status()
+	require.NotNil(t, before.BannedUntil, "the fixture must actually set both fields")
+	require.NotNil(t, before.TerminalReasonPersisted)
+
+	newClient := newFakeClient()
+	m.newSession = func(context.Context, bool) (*session, error) {
+		return &session{client: newClient, deleteDevice: func(context.Context) error { return nil }}, nil
+	}
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	pairingSess := m.pairing.session()
+	require.NotNil(t, pairingSess)
+	require.True(t, m.handleEventFor(pairingSess, &events.PairSuccess{
+		ID: types.NewJID("15551112222", types.DefaultUserServer),
+	}))
+
+	status := m.Status()
+	assert.Equal(t, StateConnecting, status.State)
+	assert.Nil(t, status.BannedUntil,
+		"the ban belonged to the replaced account, not to the one just linked")
+	assert.Nil(t, status.TerminalReasonPersisted,
+		"no terminal decision has been taken about the new device")
+}

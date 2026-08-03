@@ -280,6 +280,49 @@ func TestAPI_WhatsAppForceDisconnectClearsLocalStateWithWarning(t *testing.T) {
 	assert.True(t, manager.lastForceArg, "?force=true must reach the manager")
 }
 
+// TestAPI_WhatsAppLocalCleanupFailureGuidanceDependsOnForce: the two flavours of
+// a failed local clear call for OPPOSITE advice, and the endpoint is the only
+// place that knows which was asked for.
+//
+// After a confirmed unlink the device really is gone remotely and only the local
+// clear is outstanding. A FORCED clear contacts WhatsApp not at all, so it has
+// no evidence whatsoever — telling that user the device was unlinked remotely
+// would be a fabrication, and could leave a live device linked on their phone.
+func TestAPI_WhatsAppLocalCleanupFailureGuidanceDependsOnForce(t *testing.T) {
+	cleanupErr := errors.Join(wapkg.ErrLocalCleanupFailed, errors.New("database is down"))
+
+	t.Run("after a confirmed remote unlink", func(t *testing.T) {
+		router := setupWhatsAppRouter(t, &fakeWhatsAppManager{disconnErr: cleanupErr})
+		rec := doWhatsAppRequest(t, router, http.MethodDelete, "/api/v1/whatsapp/auth", nil)
+
+		require.Equal(t, http.StatusBadGateway, rec.Code)
+		message := decodeWhatsAppError(t, rec).Message
+		assert.Contains(t, message, "unlinked remotely")
+		assert.NotContains(t, message, "may still be linked")
+	})
+
+	t.Run("forced, with no remote evidence at all", func(t *testing.T) {
+		router := setupWhatsAppRouter(t, &fakeWhatsAppManager{disconnErr: cleanupErr})
+		rec := doWhatsAppRequest(t, router, http.MethodDelete, "/api/v1/whatsapp/auth?force=true", nil)
+
+		require.Equal(t, http.StatusBadGateway, rec.Code)
+		message := decodeWhatsAppError(t, rec).Message
+		assert.Contains(t, message, "may still be linked",
+			"forcing contacts WhatsApp not at all, so it cannot report the device as unlinked")
+		assert.Contains(t, message, "Linked Devices",
+			"and the user has to be told where to finish the job")
+	})
+}
+
+// TestAPI_WhatsAppDisconnectSupersededIsAConflict: an unlink whose session was
+// replaced while it ran deliberately does not publish its outcome, and the
+// caller is told to look at the status rather than being handed a stale one.
+func TestAPI_WhatsAppDisconnectSupersededIsAConflict(t *testing.T) {
+	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{disconnErr: wapkg.ErrOperationSuperseded})
+	rec := doWhatsAppRequest(t, router, http.MethodDelete, "/api/v1/whatsapp/auth", nil)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+}
+
 func TestAPI_WhatsAppDisconnectSucceedsWithBody(t *testing.T) {
 	// spec: WHA-006.disconnect-when-not-paired-conflicts
 	manager := &fakeWhatsAppManager{disconnect: &wapkg.DisconnectResult{RemoteUnlinked: true}}

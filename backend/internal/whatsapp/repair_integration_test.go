@@ -13,6 +13,7 @@ package whatsapp
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -106,6 +107,98 @@ func TestWhatsAppRePair_LeavesExactlyOneStoredDevice(t *testing.T) {
 	require.True(t, paired)
 	require.NotNil(t, loaded.ID)
 	assert.Equal(t, newJID.String(), loaded.ID.String())
+}
+
+// TestWhatsAppRePair_RetainedDeviceStillResumesTheLinkedOne is the failure path
+// of the same invariant.
+//
+// When the replaced device cannot be deleted the store really does hold two
+// rows, and GetFirstDevice would then be a coin toss. The linked JID is
+// persisted at adoption, so the restart resolves the device that was actually
+// linked no matter which row comes back first — and the retained stale row is
+// reported rather than hidden.
+func TestWhatsAppRePair_RetainedDeviceStillResumesTheLinkedOne(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	cloneURL, drop := testdb.NewEphemeralClone(t)
+	t.Cleanup(drop)
+
+	cfg := config.TestConfig()
+	cfg.Database.URL = cloneURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	t.Cleanup(database.Close)
+
+	log := NewWALogger("whatsapp-test")
+	container, err := NewDeviceContainer(ctx, database.Pool, log)
+	require.NoError(t, err)
+
+	oldJID := types.NewJID("15551110000", types.DefaultUserServer)
+	oldJID.Device = 1
+	saveTestLinkedDevice(t, ctx, container, oldJID, "Retained Device")
+
+	syncRepo := repository.NewSyncRepository(database.Queries)
+	waRepo := repository.NewWhatsAppRepository(database.Queries)
+
+	m := NewManager(container, log, &cfg.WhatsApp, syncRepo, waRepo)
+	m.SetIngestor(stalenessTestIngestor{})
+	m.SetHistoryRecorder(NewHistoryRecorder(waRepo))
+	m.SetHistoryDrainReady()
+
+	oldClient := newFakeClient()
+	newClient := newFakeClient()
+	newJID := types.NewJID("15552220000", types.DefaultUserServer)
+	newJID.Device = 2
+
+	m.newSession = func(ctx context.Context, fresh bool) (*session, error) {
+		if !fresh {
+			// The delete of the replaced device fails, every attempt.
+			return &session{client: oldClient, paired: true, deleteDevice: func(context.Context) error {
+				return errors.New("device store is unreachable")
+			}}, nil
+		}
+		freshDevice := saveTestLinkedDevice(t, ctx, container, newJID, "New Device")
+		return &session{client: newClient, deleteDevice: freshDevice.Delete}, nil
+	}
+
+	require.NoError(t, m.Start(ctx))
+	t.Cleanup(m.Stop)
+
+	oldClient.mu.Lock()
+	oldClient.connected = false
+	oldClient.mu.Unlock()
+	require.NoError(t, m.StartPairing(ctx, PairRequest{Method: PairMethodQR}))
+	pairingSess := m.pairing.session()
+	require.NotNil(t, pairingSess)
+	require.True(t, m.handleEventFor(pairingSess, &events.PairSuccess{ID: newJID}))
+
+	devices, err := container.GetAllDevices(ctx)
+	require.NoError(t, err)
+	require.Len(t, devices, 2, "the delete failed, so the stale row is genuinely still there")
+	assert.True(t, m.Status().ReplacedDeviceRetained,
+		"a store holding two sessions is a degraded state the user can see")
+
+	// The restart path, through a SECOND manager over the same database — the
+	// only thing that decides which account resumes.
+	restarted := NewManager(container, log, &cfg.WhatsApp, syncRepo, waRepo)
+	restarted.SetIngestor(stalenessTestIngestor{})
+	restarted.SetHistoryRecorder(NewHistoryRecorder(waRepo))
+	restarted.SetHistoryDrainReady()
+
+	terminalReason, _, err := restarted.ensureSyncState(ctx)
+	require.NoError(t, err)
+	require.Empty(t, terminalReason)
+
+	resumed, err := restarted.newContainerSession(ctx, false)
+	require.NoError(t, err)
+	require.True(t, resumed.paired)
+	require.NotNil(t, resumed.wa.Store.ID)
+	assert.Equal(t, newJID.String(), resumed.wa.Store.ID.String(),
+		"the device that resumes is the one that was linked, not whichever row the unordered scan returned first")
 }
 
 func saveTestLinkedDevice(t *testing.T, ctx context.Context, container *sqlstore.Container, jid types.JID, pushName string) *store.Device {

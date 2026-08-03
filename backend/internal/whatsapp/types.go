@@ -117,6 +117,12 @@ var (
 	// not the unlink.
 	ErrLocalCleanupFailed = errors.New("whatsapp: local credentials could not be cleared")
 
+	// ErrOperationSuperseded is returned when a multi-step operation (an unlink,
+	// a pairing) found that the session or pairing it decided about was replaced
+	// while it was in flight. The operation aborts rather than applying its
+	// decision to state that is no longer the state it decided about.
+	ErrOperationSuperseded = errors.New("whatsapp: the session changed while the operation was in flight")
+
 	// ErrLIDMappingsIncomplete is returned by the history fetcher when a
 	// downloaded chunk's PN-LID mappings did not read back out of the client
 	// store. The drainer treats it as TRANSIENT: whatsmeow logs and swallows
@@ -155,6 +161,12 @@ type Status struct {
 	// it will not survive a restart. A plain bool could not tell those apart —
 	// and with omitempty it would vanish in exactly the case a client has to see.
 	TerminalReasonPersisted *bool `json:"terminal_reason_persisted,omitempty"`
+	// ReplacedDeviceRetained reports a degraded device store: a re-pair adopted
+	// a new device but could not delete the one it replaced, so the store holds
+	// more than the single session the library's first-device lookup assumes.
+	// The linked device is still resolved deterministically (by JID), but the
+	// stale row is real and is surfaced rather than logged and forgotten.
+	ReplacedDeviceRetained bool `json:"replaced_device_retained,omitempty"`
 	// Backfill reports the history drain. PR3 records notifications; the
 	// counts stay zero until a chunk arrives.
 	Backfill BackfillStatus `json:"backfill"`

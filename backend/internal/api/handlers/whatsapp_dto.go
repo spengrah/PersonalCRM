@@ -59,8 +59,13 @@ type WhatsAppStatusResponse struct {
 	// needs to see it. Hence a pointer: a plain bool with omitempty would drop
 	// the field in exactly that case, and could not distinguish it from "no
 	// terminal decision has been taken".
-	TerminalReasonPersisted *bool                    `json:"terminal_reason_persisted,omitempty"`
-	Backfill                WhatsAppBackfillResponse `json:"backfill"`
+	TerminalReasonPersisted *bool `json:"terminal_reason_persisted,omitempty"`
+	// ReplacedDeviceRetained reports a degraded device store: a re-link could not
+	// delete the device it replaced, so a stale session is still stored. The
+	// linked account is still resolved deterministically; the flag exists so the
+	// condition is visible rather than silent.
+	ReplacedDeviceRetained bool                     `json:"replaced_device_retained,omitempty"`
+	Backfill               WhatsAppBackfillResponse `json:"backfill"`
 }
 
 // WhatsAppDisconnectResponse reports how an unlink resolved. Disconnect returns

@@ -1067,6 +1067,13 @@ definitions:
           Reason carries the machine-readable detail for not_ready, disconnected,
           disconnect_failed and error.
         type: string
+      replaced_device_retained:
+        description: |-
+          ReplacedDeviceRetained reports a degraded device store: a re-link could not
+          delete the device it replaced, so a stale session is still stored. The
+          linked account is still resolved deterministically; the flag exists so the
+          condition is visible rather than silent.
+        type: boolean
       state:
         description: |-
           State is one of not_ready, not_paired, pairing, connecting, connected,

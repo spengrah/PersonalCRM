@@ -40,7 +40,8 @@ behaviors:
     then:
       - the linked device is found again and the session resumes without the user scanning a code
       - re-linking replaces the stored device rather than adding to it, so a restart always resumes the account most recently linked
-    provenance: [whatsmeow device store on the shared database, TestWhatsAppDeviceStore_PairedDeviceSurvivesNewManager, TestWhatsAppRePair_LeavesExactlyOneStoredDevice]
+      - if the replaced device cannot be removed, the removal is retried, the leftover is reported as a degraded state rather than passed off as a clean replacement, and the restart still resumes the account that was actually linked
+    provenance: [whatsmeow device store on the shared database, TestWhatsAppDeviceStore_PairedDeviceSurvivesNewManager, TestWhatsAppRePair_LeavesExactlyOneStoredDevice, TestWhatsAppRePair_RetainedDeviceStillResumesTheLinkedOne]
 
   - id: WHA-004
     title: A permanent disconnect is recorded, surfaced, and not retried
@@ -85,7 +86,9 @@ behaviors:
       - a failed pairing attempt ends that attempt only, and never records a permanent-disconnect decision against the linked device
       - a linked device that ends permanently ends only itself, and does not cancel a pairing the user is in the middle of
       - a completed pairing is adopted but reported as still connecting until the source confirms the connection, because linking is followed by a reconnection
-    provenance: [Manager.scopeOfLocked, session.retired, Manager.onTerminal, Manager.onConnected, Manager.onPairSuccess]
+      - adopting a newly linked account drops the ban and the permanent-disconnect record that belonged to the account it replaced, rather than reporting them against the new one
+      - the same rule governs user-initiated operations and not only events — an unlink whose session is replaced while it is in flight abandons its own outcome and reports a conflict, rather than applying it to the session that replaced it
+    provenance: [Manager.scopeOfLocked, session.retired, Manager.gen ownership generation, Manager.onTerminal, Manager.onConnected, Manager.onPairSuccess, Manager.Disconnect]
     notes: >-
       The source dispatches most connection events asynchronously, so an event queued by a
       connection that has since been abandoned can arrive at any later moment — including after
@@ -233,7 +236,9 @@ behaviors:
       - an unlink that succeeded remotely but could not clear the local credentials is reported as such, and the remedy offered is completing the local clear rather than retrying an unlink that already worked
       - any path that clears local credentials without a remote call reports a failure to delete them, instead of reporting the integration as unlinked while the device is still stored
       - a forced clear that failed is never later read as proof that the device was unlinked, because forcing makes no remote call and so learns nothing about it
-    provenance: [Manager.Disconnect, Manager.clearLocalDevice, serverConfirmedUnlinked]
+      - a clear that could not reach the stored credentials at all is reported as a failure, not as a completed unlink
+      - the failure a forced clear reports says the device may still be linked and must be removed from the phone, because forcing contacted the source not at all
+    provenance: [Manager.Disconnect, Manager.clearLocalDevice, serverConfirmedUnlinked, WhatsAppHandler.Disconnect]
 
   # --- Enablement ---
 

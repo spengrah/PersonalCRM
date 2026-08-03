@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -177,6 +178,7 @@ func (m *Manager) StartPairing(ctx context.Context, req PairRequest) error {
 		expiresAt: now.Add(authTTL),
 	}
 	m.pairing = pairing
+	m.bumpGenLocked()
 	m.status.State = StatePairing
 	m.status.Reason = ""
 	m.mu.Unlock()
@@ -191,7 +193,9 @@ func (m *Manager) StartPairing(ctx context.Context, req PairRequest) error {
 	// existing link.
 	sess, err := m.newSession(ctx, true)
 	if err != nil {
-		m.abandonPairing(ctx, nil)
+		// By identity, never "whatever is in the slot": between claiming it and
+		// failing here, another attempt may have taken it over.
+		m.abandonPairing(ctx, pairing)
 		return err
 	}
 
@@ -330,18 +334,24 @@ func (m *Manager) runQRChannel(ctx context.Context, pairing *pairingState, qrCha
 // written during key exchange.
 func (m *Manager) abandonPairing(ctx context.Context, pairing *pairingState) {
 	m.mu.Lock()
-	if pairing == nil || m.pairing == pairing {
+	// Only the attempt that still HOLDS the slot may release it or reset the
+	// published state. A later attempt has already claimed both, and clearing
+	// them on its behalf would abandon a pairing the user is looking at.
+	if pairing != nil && m.pairing == pairing {
 		m.pairing = nil
-	}
-	if m.status.State == StatePairing {
-		m.status.State = StateNotPaired
-		m.status.Reason = ""
+		m.bumpGenLocked()
+		if m.status.State == StatePairing {
+			m.status.State = StateNotPaired
+			m.status.Reason = ""
+		}
 	}
 	m.mu.Unlock()
 
 	if pairing == nil {
 		return
 	}
+	// The attempt is torn down whether or not it still held the slot: its client
+	// and its half-written device are its own.
 	m.teardownPairing(ctx, pairing)
 }
 
@@ -382,10 +392,16 @@ func (m *Manager) CancelPairing() {
 // any failure as "already unlinked" would orphan a live device on the user's
 // phone with no local record of it.
 func (m *Manager) Disconnect(ctx context.Context, force bool) (*DisconnectResult, error) {
+	// The whole operation decides on this snapshot. gen is captured with it, and
+	// re-validated under the lock before every later mutation: an unlink can take
+	// seconds (a connect, a remote IQ), and in that time a pairing can be started
+	// and adopted. Applying this decision to that session would cancel a pairing
+	// the user just completed and orphan its client.
 	m.mu.RLock()
 	sess := m.sess
 	reason := m.status.Reason
 	state := m.status.State
+	gen := m.gen
 	m.mu.RUnlock()
 
 	// Force is the only path that clears local state without server
@@ -393,7 +409,7 @@ func (m *Manager) Disconnect(ctx context.Context, force bool) (*DisconnectResult
 	// device row cannot be deleted, the credentials are still there, and
 	// reporting a clean not_paired would be a lie.
 	if force {
-		if err := m.clearLocalDevice(ctx, sess, ReasonForcedCleanupFailed); err != nil {
+		if err := m.clearLocalDevice(ctx, sess, ReasonForcedCleanupFailed, gen); err != nil {
 			return nil, err
 		}
 		return &DisconnectResult{
@@ -406,7 +422,7 @@ func (m *Manager) Disconnect(ctx context.Context, force bool) (*DisconnectResult
 	// (LoggedOut), or a previous unlink completed remotely and only the local
 	// clear failed. Both skip the remote call; neither is a guess.
 	if serverConfirmedUnlinked(state, reason) {
-		if err := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed); err != nil {
+		if err := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed, gen); err != nil {
 			return nil, err
 		}
 		return &DisconnectResult{AlreadyUnlinked: true}, nil
@@ -423,13 +439,13 @@ func (m *Manager) Disconnect(ctx context.Context, force bool) (*DisconnectResult
 			// delete failed. Telling the user to retry the unlink would be
 			// wrong twice over — the unlink worked, and retrying it against an
 			// already-unlinked device cannot succeed. Retry the LOCAL clear.
-			if clearErr := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed); clearErr != nil {
+			if clearErr := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed, gen); clearErr != nil {
 				return nil, clearErr
 			}
 			logger.Warn().Err(err).Msg("whatsapp: remote unlink succeeded but the library's local delete failed; cleared locally on retry")
 			return &DisconnectResult{RemoteUnlinked: true}, nil
 		}
-		if err := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed); err != nil {
+		if err := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed, gen); err != nil {
 			return nil, err
 		}
 		return &DisconnectResult{RemoteUnlinked: true}, nil
@@ -447,12 +463,19 @@ func (m *Manager) Disconnect(ctx context.Context, force bool) (*DisconnectResult
 	// — the unlink would race a reconnect, and whichever won would leave the
 	// other holding a stale socket.
 	if sess != nil {
-		sess.client.Disconnect()
 		m.mu.Lock()
+		if m.gen != gen {
+			m.mu.Unlock()
+			return nil, ErrOperationSuperseded
+		}
 		if m.sess == sess {
+			sess.retired = true
 			m.sess = nil
+			m.bumpGenLocked()
+			gen = m.gen
 		}
 		m.mu.Unlock()
+		sess.client.Disconnect()
 	}
 
 	sess, err := m.newSession(ctx, false)
@@ -473,13 +496,13 @@ func (m *Manager) Disconnect(ctx context.Context, force bool) (*DisconnectResult
 			m.recordDisconnectFailure(ctx, err)
 			return nil, errors.Join(ErrRemoteUnlinkFailed, err)
 		}
-		if clearErr := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed); clearErr != nil {
+		if clearErr := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed, gen); clearErr != nil {
 			return nil, clearErr
 		}
 		logger.Warn().Err(err).Msg("whatsapp: remote unlink succeeded but the library's local delete failed; cleared locally on retry")
 		return &DisconnectResult{RemoteUnlinked: true}, nil
 	}
-	if err := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed); err != nil {
+	if err := m.clearLocalDevice(ctx, sess, ReasonLocalCleanupFailed, gen); err != nil {
 		return nil, err
 	}
 	return &DisconnectResult{RemoteUnlinked: true}, nil
@@ -534,46 +557,52 @@ func (m *Manager) recordDisconnectFailure(ctx context.Context, err error) {
 // is the caller's to supply because it encodes what evidence the caller had:
 // only a caller that actually confirmed the remote unlink may leave behind a
 // state that a later disconnect reads as "already unlinked".
-func (m *Manager) clearLocalDevice(ctx context.Context, sess *session, failReason string) error {
+func (m *Manager) clearLocalDevice(ctx context.Context, sess *session, failReason string, gen uint64) error {
+	// A store we cannot even open is a cleanup that did NOT happen. This is
+	// reachable on the ordinary path: after a restart into a persisted logged_out
+	// state, Start deliberately installs no session, so both the forced and the
+	// server-confirmed clear arrive here with nothing to delete through.
+	emptyStore := false
 	if sess == nil {
-		if built, err := m.newSession(ctx, false); err == nil {
-			sess = built
+		built, err := m.newSession(ctx, false)
+		if err != nil {
+			return m.failLocalCleanup(ctx, nil, failReason, fmt.Errorf("open device store: %w", err))
 		}
-	}
-	var deleteErr error
-	if sess != nil {
-		sess.client.Disconnect()
-		if sess.deleteDevice != nil {
-			deleteErr = sess.deleteDevice(ctx)
-		}
+		// A freshly built session over an EMPTY store carries no device row.
+		// Deleting it would fail with the library's "device JID must be known",
+		// which is not a cleanup failure — there is nothing to clean.
+		sess, emptyStore = built, !built.paired
 	}
 
-	if deleteErr != nil {
-		m.mu.Lock()
-		if sess != nil {
-			sess.retired = true
+	sess.client.Disconnect()
+	if !emptyStore && sess.deleteDevice != nil {
+		if err := sess.deleteDevice(ctx); err != nil {
+			return m.failLocalCleanup(ctx, sess, failReason, err)
 		}
-		m.status.State = StateDisconnectFailed
-		m.status.Reason = failReason
-		m.mu.Unlock()
-
-		m.updateSyncStatus(ctx, repository.SyncStatusError, deleteErr.Error())
-		logger.Error().Err(deleteErr).Msg("whatsapp: local credentials could not be cleared; the device is still stored")
-		return errors.Join(ErrLocalCleanupFailed, deleteErr)
 	}
 
 	m.mu.Lock()
+	// The device is gone either way, but the STATE transition below speaks for
+	// the session this operation decided about. If a pairing was adopted while
+	// the delete was in flight, clearing here would retire the new session and
+	// drop the pairing slot on behalf of an operation that never saw either.
+	if m.gen != gen {
+		m.mu.Unlock()
+		logger.Warn().Msg("whatsapp: the session changed while the unlink was in flight; not publishing its outcome")
+		return ErrOperationSuperseded
+	}
 	if m.pairing != nil {
 		m.pairing.cancel()
 		m.pairing = nil
 	}
-	if sess != nil {
-		sess.retired = true
-	}
+	sess.retired = true
 	if m.sess != nil {
 		m.sess.retired = true
 	}
 	m.sess = nil
+	m.linkedJID = nil
+	m.status.ReplacedDeviceRetained = false
+	m.bumpGenLocked()
 	m.status.State = StateNotPaired
 	m.status.Reason = ""
 	m.status.JID = nil
@@ -590,4 +619,23 @@ func (m *Manager) clearLocalDevice(ctx context.Context, sess *session, failReaso
 	m.clearTerminalReason(ctx)
 	m.updateSyncStatus(ctx, repository.SyncStatusDisabled, "")
 	return nil
+}
+
+// failLocalCleanup publishes a cleanup that did not happen. The credentials are
+// still stored, so the status must not say not_paired, and the caller gets a
+// distinct error: the remedy is completing the local clear, not retrying an
+// unlink.
+func (m *Manager) failLocalCleanup(ctx context.Context, sess *session, failReason string, cause error) error {
+	m.mu.Lock()
+	if sess != nil {
+		sess.retired = true
+		m.bumpGenLocked()
+	}
+	m.status.State = StateDisconnectFailed
+	m.status.Reason = failReason
+	m.mu.Unlock()
+
+	m.updateSyncStatus(ctx, repository.SyncStatusError, cause.Error())
+	logger.Error().Err(cause).Msg("whatsapp: local credentials could not be cleared; the device is still stored")
+	return errors.Join(ErrLocalCleanupFailed, cause)
 }

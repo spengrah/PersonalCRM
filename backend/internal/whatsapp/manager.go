@@ -51,6 +51,18 @@ const (
 	// metadataBannedUntil persists a ban expiry alongside the terminal reason,
 	// so a restart can tell an active ban from an expired one.
 	metadataBannedUntil = "banned_until"
+
+	// metadataLinkedJID persists which device the last successful pairing
+	// adopted. The whatsmeow store is supposed to hold exactly one device, but a
+	// replaced device whose delete failed leaves two, and the library's
+	// first-device lookup reads an unordered scan — so the restart path resolves
+	// by this JID instead of taking whichever row comes back first.
+	metadataLinkedJID = "linked_jid"
+
+	// deviceDeleteAttempts bounds the retry on removing a replaced device. Same
+	// discipline as the terminal write, and for the same reason: one transient
+	// blip must not leave the store holding two sessions.
+	deviceDeleteAttempts = 2
 )
 
 // syncSource is the external_sync_state source string. It is also the
@@ -150,6 +162,17 @@ type Manager struct {
 	status      Status
 	pairing     *pairingState
 	syncStateID *uuid.UUID
+	// linkedJID is the device the last successful pairing adopted, mirrored from
+	// external_sync_state.metadata. It is what makes the restart path
+	// deterministic when the store ended up holding more than one device.
+	linkedJID *types.JID
+	// gen is the ownership generation. It is bumped under mu by EVERY change to
+	// who the manager owns — a session installed, adopted, retired or cleared, a
+	// pairing slot claimed or released. A multi-step operation (an unlink, a
+	// pairing) captures it when it decides and re-validates it under the lock
+	// before each later mutation, so a slow operation can never apply its
+	// decision to state that has moved on since.
+	gen uint64
 
 	ingestor          MessageIngestor
 	historyRecorder   HistoryNotificationRecorder
@@ -303,10 +326,25 @@ func (m *Manager) newContainerSession(ctx context.Context, fresh bool) (*session
 	if fresh {
 		device = m.container.NewDevice()
 	} else {
+		m.mu.RLock()
+		linked := m.linkedJID
+		m.mu.RUnlock()
+
 		var err error
-		device, paired, err = LoadOrCreateDevice(ctx, m.container)
-		if err != nil {
-			return nil, err
+		if linked != nil {
+			// Deterministic resolution. GetFirstDevice reads an unordered scan,
+			// so with a stale row left behind by a failed replacement it is a
+			// coin toss which session resumes.
+			device, paired, err = LoadDeviceByJID(ctx, m.container, *linked)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if device == nil {
+			device, paired, err = LoadOrCreateDevice(ctx, m.container)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -375,6 +413,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	// 5. Connect.
 	m.mu.Lock()
 	m.sess = sess
+	m.bumpGenLocked()
 	m.status.State = StateConnecting
 	m.status.Reason = ""
 	m.mu.Unlock()
@@ -409,6 +448,7 @@ func (m *Manager) Stop() {
 	if sess != nil {
 		sess.retired = true
 	}
+	m.bumpGenLocked()
 	m.mu.Unlock()
 
 	if pairing != nil {
@@ -502,6 +542,19 @@ func splitCountKey(key string) (state, disposition string, ok bool) {
 	return "", "", false
 }
 
+// bumpGenLocked records an ownership change. The caller must hold mu for
+// writing, and must bump in the SAME critical section as the change itself —
+// a bump that trails its mutation is a fence with a hole in it.
+//
+// Operations read the generation as part of the snapshot they decide on (see
+// Disconnect) and re-validate it under the lock before each later mutation.
+// Single-critical-section operations need neither: StartPairing claims the
+// pairing slot and publishes its state in one acquisition, and releases it by
+// pointer identity, which is the same fence expressed structurally.
+func (m *Manager) bumpGenLocked() {
+	m.gen++
+}
+
 // setStatus mutates the status under the write lock.
 func (m *Manager) setStatus(mutate func(*Status)) {
 	m.mu.Lock()
@@ -547,6 +600,13 @@ func (m *Manager) ensureSyncState(ctx context.Context) (terminalReason string, b
 	m.syncStateID = &id
 	m.mu.Unlock()
 
+	if raw, ok := state.Metadata[metadataLinkedJID].(string); ok && raw != "" {
+		if parsed, parseErr := types.ParseJID(raw); parseErr == nil {
+			m.mu.Lock()
+			m.linkedJID = &parsed
+			m.mu.Unlock()
+		}
+	}
 	if reason, ok := state.Metadata[repository.SyncStateMetadataTerminalReason].(string); ok {
 		terminalReason = reason
 	}
@@ -606,7 +666,8 @@ func (m *Manager) markTerminal(ctx context.Context, id *uuid.UUID, reason string
 	if id == nil || m.syncRepo == nil {
 		return errors.New("whatsapp: no sync state row to record the terminal reason on")
 	}
-	metadata := map[string]any{repository.SyncStateMetadataTerminalReason: reason}
+	metadata := m.metadataBaseLocked()
+	metadata[repository.SyncStateMetadataTerminalReason] = reason
 	if bannedUntil != nil {
 		metadata[metadataBannedUntil] = bannedUntil.UTC().Format(time.RFC3339)
 	}
@@ -629,11 +690,23 @@ func (m *Manager) clearTerminalReason(ctx context.Context) {
 	m.clearTerminalReasonWith(ctx, m.currentSyncStateID())
 }
 
+// metadataBaseLocked seeds a metadata write with the keys that must survive it.
+// Every write replaces the whole document, so the linked JID has to be carried
+// forward explicitly or a terminal write would erase the only thing that makes
+// the restart path deterministic. The caller holds mu.
+func (m *Manager) metadataBaseLocked() map[string]any {
+	base := map[string]any{}
+	if m.linkedJID != nil {
+		base[metadataLinkedJID] = m.linkedJID.String()
+	}
+	return base
+}
+
 func (m *Manager) clearTerminalReasonWith(ctx context.Context, id *uuid.UUID) {
 	if id == nil || m.syncRepo == nil {
 		return
 	}
-	if _, err := m.syncRepo.UpdateSyncStateMetadata(ctx, *id, map[string]any{}); err != nil {
+	if _, err := m.syncRepo.UpdateSyncStateMetadata(ctx, *id, m.metadataBaseLocked()); err != nil {
 		logger.Warn().Err(err).Msg("whatsapp: failed to clear terminal disconnect reason")
 	}
 }
@@ -889,6 +962,7 @@ func (m *Manager) onPairSuccess(ctx context.Context, from *session, e *events.Pa
 			m.sess = adopted
 		}
 		m.pairing = nil
+		m.bumpGenLocked()
 	case scopeInstalled:
 		// A re-pair reported on the already-installed session: same device, so
 		// there is nothing to retire.
@@ -905,6 +979,11 @@ func (m *Manager) onPairSuccess(ctx context.Context, from *session, e *events.Pa
 	m.status.JID = &jid
 	// ConnectedAt is stamped by onConnected: nothing is connected yet.
 	m.status.ConnectedAt = nil
+	// Both of these described the device this pairing replaces. Left behind,
+	// the status would report a ban, or a "the terminal decision was recorded"
+	// verdict, about an account that is no longer the linked one.
+	m.status.TerminalReasonPersisted = nil
+	m.status.BannedUntil = nil
 	if e.ID.Server == types.DefaultUserServer {
 		user := e.ID.User
 		m.status.PhoneNumber = &user
@@ -913,12 +992,14 @@ func (m *Manager) onPairSuccess(ctx context.Context, from *session, e *events.Pa
 		name := e.BusinessName
 		m.status.PushName = &name
 	}
-	// The terminal decision that was on file belonged to the device this pairing
-	// replaces, so it is cleared here rather than waiting for the connection:
-	// leaving it would make the next boot refuse to resume a device that has
-	// never been logged out. Inside the critical section, so a terminal event
-	// racing this adoption cannot land its reason afterwards. The sync status
-	// stays as it was — only a real connection clears the error.
+	// Record WHICH device is now linked, and drop the terminal decision that
+	// belonged to the one it replaces — a decision that would otherwise make the
+	// next boot refuse to resume a device that was never logged out. Both are one
+	// metadata write, inside the critical section, so a terminal event racing
+	// this adoption cannot land its reason afterwards. The sync status stays as
+	// it was: only a real connection clears the error.
+	adoptedJID := e.ID
+	m.linkedJID = &adoptedJID
 	m.clearTerminalReasonWith(ctx, m.syncStateID)
 	m.mu.Unlock()
 
@@ -926,14 +1007,34 @@ func (m *Manager) onPairSuccess(ctx context.Context, from *session, e *events.Pa
 	// teardown, a DELETE) and neither may run with the manager's mutex held.
 	if superseded != nil {
 		superseded.client.Disconnect()
-		if superseded.deleteDevice != nil {
-			if err := superseded.deleteDevice(ctx); err != nil {
-				logger.Error().Err(err).
-					Msg("whatsapp: failed to delete the replaced device; the store must hold exactly one, or a restart may resume the wrong one")
-			}
+		if err := deleteDeviceWithRetry(ctx, superseded); err != nil {
+			// The store now holds two devices, which is one more than the
+			// library's first-device lookup assumes. Resolution stays
+			// deterministic — the linked JID was just persisted, and the restart
+			// path reads by JID — but a stale session is still stored, so it is
+			// reported rather than logged and forgotten.
+			m.setStatus(func(st *Status) { st.ReplacedDeviceRetained = true })
+			logger.Error().Err(err).
+				Msg("whatsapp: could not delete the replaced device; the device store now holds a stale session")
 		}
 	}
 	logger.Info().Msg("whatsapp: device paired, awaiting connection")
+}
+
+// deleteDeviceWithRetry removes a session's device row, retrying a transient
+// failure on the same discipline as the terminal write: one blip must not leave
+// the store holding two sessions.
+func deleteDeviceWithRetry(ctx context.Context, sess *session) error {
+	if sess == nil || sess.deleteDevice == nil {
+		return nil
+	}
+	var err error
+	for attempt := 0; attempt < deviceDeleteAttempts; attempt++ {
+		if err = sess.deleteDevice(ctx); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("delete replaced device: %w", err)
 }
 
 // onTerminal records a permanent disconnect: the reason is persisted BEFORE the
@@ -975,6 +1076,7 @@ func (m *Manager) onTerminal(ctx context.Context, from *session, reason string, 
 	sess := m.sess
 	if sess != nil {
 		sess.retired = true
+		m.bumpGenLocked()
 	}
 
 	// The durable write happens INSIDE the critical section. Released here, a

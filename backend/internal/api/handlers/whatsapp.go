@@ -142,12 +142,22 @@ func (h *WhatsAppHandler) Disconnect(c *gin.Context) {
 		}, nil)
 	case errors.Is(err, wapkg.ErrNotPaired):
 		api.SendConflict(c, "No WhatsApp device is linked")
+	case errors.Is(err, wapkg.ErrLocalCleanupFailed) && force:
+		// A forced clear makes NO remote call, so it produced no evidence about
+		// the remote device. Telling the user it was unlinked remotely would be
+		// an outright fabrication: it may well still be linked.
+		api.SendError(c, http.StatusBadGateway, "BAD_GATEWAY",
+			"The stored WhatsApp credentials could not be cleared, and forcing contacts WhatsApp not at all — the device may still be linked. Retry, and remove it from your phone's Linked Devices screen", err.Error())
 	case errors.Is(err, wapkg.ErrLocalCleanupFailed):
 		// The remote side is settled — the device is unlinked, or no remote call
 		// was wanted — and only the LOCAL delete failed. Saying "retry the
 		// unlink" would send the user at the half that already worked.
 		api.SendError(c, http.StatusBadGateway, "BAD_GATEWAY",
 			"The WhatsApp device is unlinked remotely, but the stored credentials could not be cleared; retry to clear them locally", err.Error())
+	case errors.Is(err, wapkg.ErrOperationSuperseded):
+		// The session this unlink decided about was replaced while it ran, so its
+		// outcome was deliberately not published.
+		api.SendConflict(c, "The WhatsApp session changed while the unlink was in progress; check the status and retry")
 	case errors.Is(err, wapkg.ErrRemoteUnlinkFailed):
 		// The device is deliberately KEPT: a failed unlink is not evidence the
 		// remote device is gone, and discarding credentials here would orphan
@@ -189,6 +199,7 @@ func whatsAppStatusResponse(status wapkg.Status) WhatsAppStatusResponse {
 		BannedUntil: formatTimePtr(status.BannedUntil),
 
 		TerminalReasonPersisted: status.TerminalReasonPersisted,
+		ReplacedDeviceRetained:  status.ReplacedDeviceRetained,
 		Backfill: WhatsAppBackfillResponse{
 			Pending:             status.Backfill.Pending,
 			Processing:          status.Backfill.Processing,

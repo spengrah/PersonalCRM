@@ -244,6 +244,12 @@ type fakeClient struct {
 	pairErr         error
 	deleteDeviceErr error
 
+	// logoutEntered is closed on the first Logout and logoutBlock, when non-nil,
+	// holds the caller inside it. They let a test stop a multi-step API
+	// operation mid-flight and drive a competing one against it.
+	logoutEntered chan struct{}
+	logoutBlock   chan struct{}
+
 	connected bool
 	loggedIn  bool
 
@@ -309,6 +315,20 @@ func (c *fakeClient) IsLoggedIn() bool {
 
 func (c *fakeClient) Logout(context.Context) error {
 	c.record("logout")
+
+	c.mu.Lock()
+	entered, block := c.logoutEntered, c.logoutBlock
+	c.logoutEntered = nil
+	c.mu.Unlock()
+	if entered != nil {
+		close(entered)
+	}
+	if block != nil {
+		<-block
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.logoutErr
 }
 

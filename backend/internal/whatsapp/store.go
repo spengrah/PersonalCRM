@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
@@ -50,4 +51,29 @@ func LoadOrCreateDevice(ctx context.Context, c *sqlstore.Container) (*store.Devi
 		return nil, false, fmt.Errorf("whatsapp load device: %w", err)
 	}
 	return device, device != nil && device.ID != nil, nil
+}
+
+// LoadDeviceByJID resolves one specific stored device.
+//
+// It exists because GetFirstDevice returns the first row of an UNORDERED scan
+// and the library documents it as being for stores that hold a single session.
+// A re-pair whose delete of the replaced device failed leaves two rows, and
+// first-row roulette would then resume an arbitrary one. Once the linked JID is
+// known, resolution is by JID and the outcome is deterministic no matter how
+// many rows survived.
+//
+// The bool reports whether that device was found; a miss is not an error (the
+// caller falls back to the ordinary load).
+func LoadDeviceByJID(ctx context.Context, c *sqlstore.Container, jid types.JID) (*store.Device, bool, error) {
+	if c == nil {
+		return nil, false, fmt.Errorf("whatsapp device store: nil container")
+	}
+	device, err := c.GetDevice(ctx, jid)
+	if err != nil {
+		return nil, false, fmt.Errorf("whatsapp load device %s: %w", jid, err)
+	}
+	if device == nil || device.ID == nil {
+		return nil, false, nil
+	}
+	return device, true, nil
 }

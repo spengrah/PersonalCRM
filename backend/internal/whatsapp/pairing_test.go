@@ -802,3 +802,122 @@ func TestDisconnect_AlreadyUnlinkedReportsAFailedLocalClear(t *testing.T) {
 	assert.NotContains(t, cli.callLog(), "logout")
 	assert.Equal(t, ReasonLocalCleanupFailed, m.Status().Reason)
 }
+
+// --- API operations obey the same ownership fence ---------------------------
+
+// TestDisconnect_AbortsWhenAPairingIsAdoptedMidUnlink applies the ownership rule
+// to an API operation rather than an event.
+//
+// An unlink is multi-step and slow — it disconnects the installed session,
+// builds a client, connects, and sends a remote request. A pairing started and
+// completed in that window installs a NEW session, and the unlink's final step
+// used to clear the pairing slot, retire whatever session it found, and set it
+// nil — abandoning a pairing the user had just completed and leaving its client
+// connected with nothing owning it.
+//
+// The unlink now carries the generation it decided on and aborts instead.
+func TestDisconnect_AbortsWhenAPairingIsAdoptedMidUnlink(t *testing.T) {
+	oldClient := newFakeClient()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	oldClient.logoutEntered = entered
+	oldClient.logoutBlock = release
+
+	m, _, _, _ := newTestManager(t, oldClient, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, m.handleEvent(&events.Connected{}))
+
+	unlinkErr := make(chan error, 1)
+	go func() {
+		_, err := m.Disconnect(context.Background(), false)
+		unlinkErr <- err
+	}()
+	<-entered
+
+	// While the unlink is parked inside the remote call, the user re-pairs.
+	newClient := newFakeClient()
+	m.newSession = func(context.Context, bool) (*session, error) {
+		return &session{client: newClient, deleteDevice: func(context.Context) error {
+			newClient.record("delete_device")
+			return nil
+		}}, nil
+	}
+	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	pairingSess := m.pairing.session()
+	require.NotNil(t, pairingSess)
+	require.True(t, m.handleEventFor(pairingSess, &events.PairSuccess{
+		ID: types.NewJID("15557778888", types.DefaultUserServer),
+	}))
+
+	close(release)
+	assert.ErrorIs(t, <-unlinkErr, ErrOperationSuperseded,
+		"an unlink whose session was replaced must abort, not apply its decision to the replacement")
+
+	m.mu.RLock()
+	installed := m.sess
+	m.mu.RUnlock()
+
+	assert.Same(t, pairingSess, installed, "the newly paired session stays installed")
+	assert.Equal(t, StateConnecting, m.Status().State,
+		"the unlink must not publish the new session as unpaired")
+	assert.NotContains(t, newClient.callLog(), "disconnect",
+		"the new client must not be left orphaned — disconnected by nobody, owned by nobody")
+	assert.NotContains(t, newClient.callLog(), "delete_device",
+		"and its device must survive the unlink of the one it replaced")
+}
+
+// TestDisconnect_AfterRestartIntoLoggedOutSurfacesAnUnreachableStore is the
+// no-session case.
+//
+// After a restart into a persisted logged_out state, Start deliberately installs
+// no session, so both the forced and the server-confirmed clear reach
+// clearLocalDevice with nothing to delete through and have to build one. When
+// that build fails the credentials are still stored, and answering 200/not_paired
+// would report a device as gone while the next boot resumes it.
+func TestDisconnect_AfterRestartIntoLoggedOutSurfacesAnUnreachableStore(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		name := "server confirmed"
+		if force {
+			name = "forced"
+		}
+		t.Run(name, func(t *testing.T) {
+			cli := newFakeClient()
+			m, syncStore, _, _ := newTestManager(t, cli, true)
+			syncStore.seedTerminal(ReasonLoggedOut, nil)
+
+			require.NoError(t, m.Start(context.Background()))
+			require.Equal(t, StateDisconnected, m.Status().State)
+			m.mu.RLock()
+			installed := m.sess
+			m.mu.RUnlock()
+			require.Nil(t, installed, "the terminal gate deliberately installs no session")
+
+			m.newSession = func(context.Context, bool) (*session, error) {
+				return nil, errors.New("device store unreachable")
+			}
+
+			result, err := m.Disconnect(context.Background(), force)
+			assert.Nil(t, result)
+			assert.ErrorIs(t, err, ErrLocalCleanupFailed,
+				"a store we cannot open is a cleanup that did not happen")
+			assert.Equal(t, StateDisconnectFailed, m.Status().State,
+				"the credentials are still stored, so the status must not say not_paired")
+		})
+	}
+}
+
+// TestDisconnect_WithNothingStoredClearsCleanly is the negative control for the
+// case above: an EMPTY store is not a failed cleanup. The library refuses to
+// delete a device with no JID, and treating that refusal as a failure would make
+// every clear on an unlinked integration report an error.
+func TestDisconnect_WithNothingStoredClearsCleanly(t *testing.T) {
+	cli := newFakeClient()
+	m, _, _, _ := newTestManager(t, cli, false)
+	require.NoError(t, m.Start(context.Background()))
+	require.Equal(t, StateNotPaired, m.Status().State)
+
+	result, err := m.Disconnect(context.Background(), true)
+	require.NoError(t, err)
+	assert.True(t, result.Forced)
+	assert.Equal(t, StateNotPaired, m.Status().State)
+}
