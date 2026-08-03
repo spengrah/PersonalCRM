@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -190,10 +191,31 @@ func (r *WhatsAppRepository) SaveCheckpoint(ctx context.Context, id uuid.UUID, t
 	return rows > 0, nil
 }
 
-// AdvancePhase moves the durable resume point one legal edge forward. It is
-// token-fenced AND predecessor-fenced: false means either the lease moved on or
-// the row was not at `from`, and in both cases nothing changed.
+// legalPhaseEdges is the phase machine, in full. The DB CHECK constrains the
+// VALUES a phase may take; only this map constrains the TRANSITIONS. Without it
+// the predecessor fence alone would happily accept a caller that names its own
+// jump (from='projected', to='deleted'), skipping the protocol receipt — after
+// which WhatsApp redelivers the chunk forever.
+var legalPhaseEdges = map[string]string{
+	HistoryPhaseRecorded:   HistoryPhaseDownloaded,
+	HistoryPhaseDownloaded: HistoryPhaseProjected,
+	HistoryPhaseProjected:  HistoryPhaseAcked,
+	HistoryPhaseAcked:      HistoryPhaseDeleted,
+}
+
+// ErrIllegalPhaseEdge is returned by AdvancePhase for a (from, to) pair that is
+// not one of the four steps of the history protocol.
+var ErrIllegalPhaseEdge = errors.New("whatsapp: illegal history phase edge")
+
+// AdvancePhase moves the durable resume point one legal edge forward. Three
+// things must hold or nothing changes: the edge is one of the protocol's own
+// steps (else ErrIllegalPhaseEdge), the caller still holds the claim token, and
+// the row is actually at `from`. A false return means the lease moved on or the
+// predecessor no longer holds.
 func (r *WhatsAppRepository) AdvancePhase(ctx context.Context, id, token uuid.UUID, from, to string) (bool, error) {
+	if next, ok := legalPhaseEdges[from]; !ok || next != to {
+		return false, fmt.Errorf("%w: %s -> %s", ErrIllegalPhaseEdge, from, to)
+	}
 	rows, err := r.queries.AdvanceWhatsAppHistoryPhase(ctx, db.AdvanceWhatsAppHistoryPhaseParams{
 		ID:         uuidToPgUUID(id),
 		ClaimToken: uuidToPgUUID(token),

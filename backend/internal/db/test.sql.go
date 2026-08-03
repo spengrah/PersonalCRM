@@ -576,7 +576,9 @@ TRUNCATE TABLE
     telegram_message,
     telegram_session,
     telegram_update_state,
-    venue
+    venue,
+    whatsapp_chat_config,
+    whatsapp_history_notification
 RESTART IDENTITY CASCADE
 `
 

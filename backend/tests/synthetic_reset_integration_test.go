@@ -62,6 +62,8 @@ var wipedTables = []string{
 	"telegram_session",
 	"telegram_update_state",
 	"venue",
+	"whatsapp_chat_config",
+	"whatsapp_history_notification",
 }
 
 // catalogExclusions are the migration-seeded REFERENCE/CATALOG tables that are

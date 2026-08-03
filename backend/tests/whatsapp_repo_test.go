@@ -222,9 +222,11 @@ func TestWhatsAppRepo_StaleTokenCannotClobberSuccessor(t *testing.T) {
 	assert.Nil(t, row.LastError)
 }
 
-// TestWhatsAppRepo_AdvancePhaseRejectsIllegalJump pins the predecessor fence:
-// the phase only ever moves one legal edge at a time, so a mistaken or future
-// caller cannot skip the download or the receipt.
+// TestWhatsAppRepo_AdvancePhaseRejectsIllegalJump pins BOTH halves of the phase
+// machine: an edge that is not one of the protocol's own steps is refused
+// outright (the DB CHECK constrains phase VALUES, not TRANSITIONS), and a legal
+// edge whose predecessor no longer holds is a silent no-op. Together they are
+// what stops a caller skipping the download or the receipt.
 func TestWhatsAppRepo_AdvancePhaseRejectsIllegalJump(t *testing.T) {
 	t.Parallel()
 	env := setupWhatsAppRepoTest(t)
@@ -232,23 +234,33 @@ func TestWhatsAppRepo_AdvancePhaseRejectsIllegalJump(t *testing.T) {
 	claimed := env.claim(t)
 	token := *claimed.ClaimToken
 
-	// recorded -> projected skips the download entirely.
-	ok, err := env.wa.AdvancePhase(env.ctx, id, token, repository.HistoryPhaseRecorded, repository.HistoryPhaseProjected)
-	require.NoError(t, err)
-	assert.True(t, ok, "the predicate names the row's actual phase, so this edge does apply")
+	// Jumps that skip a step are refused, whichever step they skip.
+	for _, jump := range []struct{ from, to string }{
+		{repository.HistoryPhaseRecorded, repository.HistoryPhaseProjected},  // skips the download
+		{repository.HistoryPhaseProjected, repository.HistoryPhaseDeleted},   // skips the receipt
+		{repository.HistoryPhaseDownloaded, repository.HistoryPhaseRecorded}, // backwards
+		{repository.HistoryPhaseDeleted, repository.HistoryPhaseDeleted},     // terminal has no successor
+	} {
+		ok, err := env.wa.AdvancePhase(env.ctx, id, token, jump.from, jump.to)
+		require.ErrorIsf(t, err, repository.ErrIllegalPhaseEdge, "%s -> %s", jump.from, jump.to)
+		assert.False(t, ok)
+	}
+	assert.Equal(t, repository.HistoryPhaseRecorded, env.get(t, id).Phase, "no illegal jump moved the row")
 
-	// The fence is on the FROM phase: replaying an edge the row already left
-	// changes nothing.
-	ok, err = env.wa.AdvancePhase(env.ctx, id, token, repository.HistoryPhaseRecorded, repository.HistoryPhaseDownloaded)
+	// A legal edge whose predecessor does not hold changes nothing — quietly,
+	// because that is the ordinary lost-race shape, not a programming error.
+	ok, err := env.wa.AdvancePhase(env.ctx, id, token,
+		repository.HistoryPhaseDownloaded, repository.HistoryPhaseProjected)
 	require.NoError(t, err)
 	assert.False(t, ok, "an edge whose predecessor no longer holds must be a no-op")
-	assert.Equal(t, repository.HistoryPhaseProjected, env.get(t, id).Phase)
+	assert.Equal(t, repository.HistoryPhaseRecorded, env.get(t, id).Phase)
 
-	// And a legal edge from the current phase still works.
-	ok, err = env.wa.AdvancePhase(env.ctx, id, token, repository.HistoryPhaseProjected, repository.HistoryPhaseAcked)
+	// The one edge that is legal from the row's actual phase applies.
+	ok, err = env.wa.AdvancePhase(env.ctx, id, token,
+		repository.HistoryPhaseRecorded, repository.HistoryPhaseDownloaded)
 	require.NoError(t, err)
 	assert.True(t, ok)
-	assert.Equal(t, repository.HistoryPhaseAcked, env.get(t, id).Phase)
+	assert.Equal(t, repository.HistoryPhaseDownloaded, env.get(t, id).Phase)
 }
 
 // TestWhatsAppRepo_ClaimResumesAtStoredPhase is what makes the five-step
