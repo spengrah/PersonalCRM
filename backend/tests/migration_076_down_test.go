@@ -116,7 +116,7 @@ func TestMigration076Down_RefusalGuards(t *testing.T) {
 		_, err := env.comms.UpsertChatMessage(env.ctx, repository.UpsertChatMessageParams{
 			Source:     repository.InteractionSourceWhatsApp,
 			ExternalID: "guard-null-contact",
-			ThreadID:   &peer,
+			ThreadID:   peer,
 			Body:       &body,
 			PeerHandle: &peer,
 			Direction:  repository.InteractionDirectionInbound,
@@ -129,33 +129,85 @@ func TestMigration076Down_RefusalGuards(t *testing.T) {
 		assert.Contains(t, err.Error(), "cannot restore comms_message.matched_contact_id NOT NULL")
 	})
 
-	t.Run("RefusesWithOutstandingHistoryNotification", func(t *testing.T) {
-		env := newMigration076Env(t)
-		_, err := env.wa.RecordNotification(env.ctx, "guard-pending", []byte("pointer"),
-			"FULL", 0, nil, repository.HistoryDispositionProject)
-		require.NoError(t, err)
+	// Every state the guard names, not just one: with only `pending` seeded,
+	// deleting `processing` or `failed` from the down migration's IN list would
+	// leave all six subtests green while a live lease or an operator-requeueable
+	// chunk lost its only surviving media pointer.
+	for _, tc := range []struct {
+		state string
+		seed  func(t *testing.T, env *migration076Env)
+	}{
+		{
+			state: repository.HistoryNotificationStatePending,
+			seed: func(t *testing.T, env *migration076Env) {
+				_, err := env.wa.RecordNotification(env.ctx, "guard-pending", []byte("pointer"),
+					"FULL", 0, nil, repository.HistoryDispositionProject)
+				require.NoError(t, err)
+			},
+		},
+		{
+			state: repository.HistoryNotificationStateProcessing,
+			seed: func(t *testing.T, env *migration076Env) {
+				_, err := env.wa.RecordNotification(env.ctx, "guard-processing", []byte("pointer"),
+					"FULL", 0, nil, repository.HistoryDispositionProject)
+				require.NoError(t, err)
+				claimed, err := env.wa.ClaimNextNotification(env.ctx)
+				require.NoError(t, err)
+				require.Equal(t, repository.HistoryNotificationStateProcessing, claimed.State)
+			},
+		},
+		{
+			state: repository.HistoryNotificationStateFailed,
+			seed: func(t *testing.T, env *migration076Env) {
+				id, err := env.wa.RecordNotification(env.ctx, "guard-failed", []byte("pointer"),
+					"FULL", 0, nil, repository.HistoryDispositionProject)
+				require.NoError(t, err)
+				claimed, err := env.wa.ClaimNextNotification(env.ctx)
+				require.NoError(t, err)
+				require.NotNil(t, claimed.ClaimToken)
+				ok, err := env.wa.MarkNotificationFailed(env.ctx, id, *claimed.ClaimToken, "media gone")
+				require.NoError(t, err)
+				require.True(t, ok)
+			},
+		},
+	} {
+		t.Run("RefusesWithHistoryNotification_"+tc.state, func(t *testing.T) {
+			env := newMigration076Env(t)
+			tc.seed(t, env)
 
-		err = env.migrator.Steps(-1)
-		require.Error(t, err, "an outstanding chunk's media is still undeleted on WhatsApp's servers")
-		assert.Contains(t, err.Error(), "cannot drop whatsapp_history_notification")
-	})
+			err := env.migrator.Steps(-1)
+			require.Errorf(t, err, "a %s chunk still points at undeleted media on WhatsApp's servers", tc.state)
+			assert.Contains(t, err.Error(), "cannot drop whatsapp_history_notification")
+		})
+	}
 
-	t.Run("RefusesWithFailedHistoryNotification", func(t *testing.T) {
+	// A chunk that genuinely finished holds nothing the revert could destroy,
+	// so it must NOT refuse — otherwise the guard would be an unconditional
+	// "any row blocks", which is a different (and wrong) rule.
+	t.Run("AllowsCompletedHistoryNotification", func(t *testing.T) {
 		env := newMigration076Env(t)
-		id, err := env.wa.RecordNotification(env.ctx, "guard-failed", []byte("pointer"),
+		id, err := env.wa.RecordNotification(env.ctx, "guard-done", []byte("pointer"),
 			"FULL", 0, nil, repository.HistoryDispositionProject)
 		require.NoError(t, err)
 		claimed, err := env.wa.ClaimNextNotification(env.ctx)
 		require.NoError(t, err)
-		require.Equal(t, id, claimed.ID)
 		require.NotNil(t, claimed.ClaimToken)
-		ok, err := env.wa.MarkNotificationFailed(env.ctx, id, *claimed.ClaimToken, "media gone")
+		for _, edge := range [][2]string{
+			{repository.HistoryPhaseRecorded, repository.HistoryPhaseDownloaded},
+			{repository.HistoryPhaseDownloaded, repository.HistoryPhaseProjected},
+			{repository.HistoryPhaseProjected, repository.HistoryPhaseAcked},
+			{repository.HistoryPhaseAcked, repository.HistoryPhaseDeleted},
+		} {
+			ok, err := env.wa.AdvancePhase(env.ctx, id, *claimed.ClaimToken, edge[0], edge[1])
+			require.NoError(t, err)
+			require.True(t, ok)
+		}
+		ok, err := env.wa.MarkNotificationDone(env.ctx, id, *claimed.ClaimToken)
 		require.NoError(t, err)
 		require.True(t, ok)
 
-		err = env.migrator.Steps(-1)
-		require.Error(t, err, "a failed chunk is operator-requeueable, so its pointer must not be dropped")
-		assert.Contains(t, err.Error(), "cannot drop whatsapp_history_notification")
+		require.NoError(t, env.migrator.Steps(-1),
+			"a done chunk holds no outstanding media, so it must not block the revert")
 	})
 
 	t.Run("RefusesWithChatConfigRows", func(t *testing.T) {

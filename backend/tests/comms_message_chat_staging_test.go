@@ -117,16 +117,18 @@ func withPushName(name string) stageOpt {
 func withSource(source string) stageOpt {
 	return func(p *repository.UpsertChatMessageParams) { p.Source = source }
 }
+func withThreadID(id string) stageOpt {
+	return func(p *repository.UpsertChatMessageParams) { p.ThreadID = id }
+}
 
 // stage upserts one chat message with sensible whatsapp defaults.
 func (e *chatStagingEnv) stage(t *testing.T, externalID, peerHandle string, opts ...stageOpt) (*repository.CommsMessage, error) {
 	t.Helper()
-	thread := peerHandle
 	body := "chat body"
 	params := repository.UpsertChatMessageParams{
 		Source:     repository.InteractionSourceWhatsApp,
 		ExternalID: externalID,
-		ThreadID:   &thread,
+		ThreadID:   peerHandle,
 		Body:       &body,
 		PeerHandle: &peerHandle,
 		Direction:  repository.InteractionDirectionInbound,
@@ -225,6 +227,25 @@ func TestCommsMessage_NullContactRejectedForNonWhatsAppSource(t *testing.T) {
 				"the rejection must come from the source-scoped CHECK, not some other constraint")
 		})
 	}
+}
+
+// TestUpsertChatMessage_RequiresThreadID pins the staging boundary's refusal of
+// a chat row with no chat scope. thread_id is nullable on the shared table for
+// email's sake, but a chat row without it is staged, attachable, and then
+// permanently unaggregatable: the chat lister drops blank thread_ids and the
+// store adapter would hand the engine the chat id "". Refusing at the boundary
+// is what stops DB nullability leaking into the source's contract.
+func TestUpsertChatMessage_RequiresThreadID(t *testing.T) {
+	t.Parallel()
+	env := setupChatStagingTest(t)
+	peer := env.peer("nothread")
+
+	_, err := env.stage(t, env.extID(1), peer, withThreadID(""))
+	require.ErrorIs(t, err, repository.ErrChatMessageMissingThread)
+
+	counts, err := env.comms.ListUnmatchedPeerCounts(env.ctx, repository.InteractionSourceWhatsApp, &peer, 1)
+	require.NoError(t, err)
+	assert.Empty(t, counts, "the refused row must not have been written")
 }
 
 // TestAttachUnmatchedByPeer_ByNormalizedPhone covers the ordinary link: every
@@ -344,6 +365,52 @@ func TestAttachUnmatchedByPeer_ReconcilesDuplicateUnmatchedRow(t *testing.T) {
 	rows, err := env.comms.ListByContact(env.ctx, contact.ID)
 	require.NoError(t, err)
 	assert.Len(t, rows, 2, "the contact holds one row per distinct message")
+}
+
+// TestAttachUnmatchedByPeer_RetriesOnRacedMatchedInsert is the READ COMMITTED
+// hazard the merge repoint already defends against, on this path: a concurrent
+// ingest commits a matched row for the same (source, external_id) AFTER the
+// reconcile statement took its snapshot and BEFORE the attach runs, so the
+// attach collides on idx_comms_message_dedup and aborts the transaction. The
+// barrier makes that interleaving deterministic; the retry's reconcile sees the
+// raced row and tombstones it, so the caller sees a normal success rather than
+// a 23505 it would have to know how to recover from.
+func TestAttachUnmatchedByPeer_RetriesOnRacedMatchedInsert(t *testing.T) {
+	t.Parallel()
+	env := setupChatStagingTest(t)
+	contact := env.newContact(t, "Attach Race")
+	peer := env.peer("race")
+
+	// No matched row yet, so the FIRST attempt's reconcile finds nothing to
+	// tombstone — which is what makes the collision possible at all.
+	env.mustStage(t, env.extID(1), peer)
+	env.mustStage(t, env.extID(2), peer)
+
+	var barrierRuns int
+	env.comms.SetAttachFailpointForTest(func() error {
+		barrierRuns++
+		// Commits on a second pool connection, exactly between the two
+		// statements of the first attempt.
+		env.mustStage(t, env.extID(1), peer, withContact(contact.ID))
+		return nil
+	})
+	t.Cleanup(func() { env.comms.SetAttachFailpointForTest(nil) })
+
+	attached, deduped, err := env.comms.AttachUnmatchedByPeer(env.ctx,
+		repository.InteractionSourceWhatsApp, nil, &peer, contact.ID)
+	require.NoError(t, err, "the retry must absorb the raced dedup collision")
+	assert.Equal(t, 1, barrierRuns, "the barrier must fire on the first attempt only")
+	assert.Equal(t, int64(1), attached, "only the non-colliding row attaches")
+	assert.Equal(t, int64(1), deduped, "the retry's reconcile tombstones the raced duplicate")
+
+	// End state is the same as if there had been no race: one live row per
+	// distinct message, all attached, nothing stranded unmatched.
+	rows, err := env.comms.ListByContact(env.ctx, contact.ID)
+	require.NoError(t, err)
+	assert.Len(t, rows, 2)
+	counts, err := env.comms.ListUnmatchedPeerCounts(env.ctx, repository.InteractionSourceWhatsApp, &peer, 1)
+	require.NoError(t, err)
+	assert.Empty(t, counts, "no unmatched row may survive the retried attach")
 }
 
 // TestAttachUnmatchedByPeer_IsAtomic proves the reconcile and the attach commit

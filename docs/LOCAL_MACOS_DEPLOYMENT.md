@@ -192,7 +192,7 @@ LOG_LEVEL=info
 ENABLE_VECTOR_SEARCH=false
 ENABLE_TELEGRAM_SYNC=false
 ENABLE_CALENDAR_SYNC=false
-# WhatsApp requires ENABLE_EXTERNAL_SYNC=true; startup refuses the pair otherwise
+# WhatsApp requires ENABLE_EXTERNAL_SYNC=true; startup fails if this is on and that is off
 ENABLE_WHATSAPP_SYNC=false
 
 # CRM Environment

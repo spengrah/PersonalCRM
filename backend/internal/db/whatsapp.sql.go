@@ -209,7 +209,10 @@ SET state = 'done',
     claimed_at = NULL,
     claim_token = NULL,
     last_error = NULL
-WHERE id = $1 AND claim_token = $2
+WHERE id = $1
+  AND claim_token = $2
+  AND state = 'processing'
+  AND phase = 'deleted'
 `
 
 type MarkWhatsAppHistoryNotificationDoneParams struct {
@@ -217,7 +220,13 @@ type MarkWhatsAppHistoryNotificationDoneParams struct {
 	ClaimToken pgtype.UUID `json:"claim_token"`
 }
 
-// Terminal success. Clears the lease so the row can never be reclaimed.
+// Terminal success. Clears the lease so the row can never be reclaimed — which
+// is exactly why it is fenced on the END of the phase machine as well as on the
+// token: 'done' is unreachable by any later claim, so completing a chunk that
+// never reached phase='deleted' would silently abandon its download,
+// projection, receipt and server-side media with no way to notice or retry.
+// A row can only be here from 'processing', but the state predicate is explicit
+// so the invariant does not depend on claim_token's lifecycle to hold.
 func (q *Queries) MarkWhatsAppHistoryNotificationDone(ctx context.Context, arg MarkWhatsAppHistoryNotificationDoneParams) (int64, error) {
 	result, err := q.db.Exec(ctx, MarkWhatsAppHistoryNotificationDone, arg.ID, arg.ClaimToken)
 	if err != nil {

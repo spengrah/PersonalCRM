@@ -77,6 +77,24 @@ func (e *waEnv) claim(t *testing.T) *repository.HistoryNotification {
 	return n
 }
 
+// walkToDeleted runs the chunk through every phase of the history protocol, so
+// a test that only cares about what happens AFTER completion does not have to
+// spell the four edges out. MarkNotificationDone is fenced on the terminal
+// phase, so this is the only legal route to 'done'.
+func (e *waEnv) walkToDeleted(t *testing.T, id, token uuid.UUID) {
+	t.Helper()
+	for _, edge := range [][2]string{
+		{repository.HistoryPhaseRecorded, repository.HistoryPhaseDownloaded},
+		{repository.HistoryPhaseDownloaded, repository.HistoryPhaseProjected},
+		{repository.HistoryPhaseProjected, repository.HistoryPhaseAcked},
+		{repository.HistoryPhaseAcked, repository.HistoryPhaseDeleted},
+	} {
+		ok, err := e.wa.AdvancePhase(e.ctx, id, token, edge[0], edge[1])
+		require.NoErrorf(t, err, "%s -> %s", edge[0], edge[1])
+		require.Truef(t, ok, "%s -> %s must apply", edge[0], edge[1])
+	}
+}
+
 // get re-reads one notification through the list surface.
 func (e *waEnv) get(t *testing.T, id uuid.UUID) repository.HistoryNotification {
 	t.Helper()
@@ -150,6 +168,7 @@ func TestWhatsAppRepo_ClaimSkipsDoneAndPicksExpiredProcessing(t *testing.T) {
 
 	done := env.claim(t)
 	require.Equal(t, doneID, done.ID)
+	env.walkToDeleted(t, done.ID, *done.ClaimToken)
 	ok, err := env.wa.MarkNotificationDone(env.ctx, done.ID, *done.ClaimToken)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -203,11 +222,6 @@ func TestWhatsAppRepo_StaleTokenCannotClobberSuccessor(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, ok)
 	})
-	t.Run("MarkDone", func(t *testing.T) {
-		ok, err := env.wa.MarkNotificationDone(env.ctx, id, *stale.ClaimToken)
-		require.NoError(t, err)
-		assert.False(t, ok)
-	})
 	t.Run("MarkFailed", func(t *testing.T) {
 		ok, err := env.wa.MarkNotificationFailed(env.ctx, id, *stale.ClaimToken, "stale worker")
 		require.NoError(t, err)
@@ -220,6 +234,85 @@ func TestWhatsAppRepo_StaleTokenCannotClobberSuccessor(t *testing.T) {
 	assert.Equal(t, repository.HistoryPhaseDownloaded, row.Phase)
 	assert.JSONEq(t, `{"conversation_index":7}`, string(row.Checkpoint))
 	assert.Nil(t, row.LastError)
+
+	// MarkDone last, and only once the successor has finished the protocol, so
+	// the stale token is the ONLY reason it can fail — otherwise the terminal-
+	// phase fence would mask the token fence and the assertion would prove
+	// nothing about fencing at all.
+	t.Run("MarkDone", func(t *testing.T) {
+		ok, err := env.wa.AdvancePhase(env.ctx, id, *fresh.ClaimToken,
+			repository.HistoryPhaseDownloaded, repository.HistoryPhaseProjected)
+		require.NoError(t, err)
+		require.True(t, ok)
+		ok, err = env.wa.AdvancePhase(env.ctx, id, *fresh.ClaimToken,
+			repository.HistoryPhaseProjected, repository.HistoryPhaseAcked)
+		require.NoError(t, err)
+		require.True(t, ok)
+		ok, err = env.wa.AdvancePhase(env.ctx, id, *fresh.ClaimToken,
+			repository.HistoryPhaseAcked, repository.HistoryPhaseDeleted)
+		require.NoError(t, err)
+		require.True(t, ok)
+
+		ok, err = env.wa.MarkNotificationDone(env.ctx, id, *stale.ClaimToken)
+		require.NoError(t, err)
+		assert.False(t, ok, "the phase machine is complete, so only the token can be refusing this")
+		assert.Equal(t, repository.HistoryNotificationStateProcessing, env.get(t, id).State)
+
+		// The successor completes it.
+		ok, err = env.wa.MarkNotificationDone(env.ctx, id, *fresh.ClaimToken)
+		require.NoError(t, err)
+		assert.True(t, ok)
+	})
+}
+
+// TestWhatsAppRepo_MarkDoneRequiresCompletedPhaseMachine is the other half of
+// the completion fence. 'done' is unreachable by any later claim, so a chunk
+// marked done before it reached 'deleted' has silently abandoned its download,
+// projection, receipt and server-side media with nothing left to notice it.
+// Completion is therefore gated on the END of the phase machine, not merely on
+// holding the lease.
+func TestWhatsAppRepo_MarkDoneRequiresCompletedPhaseMachine(t *testing.T) {
+	t.Parallel()
+	env := setupWhatsAppRepoTest(t)
+	id := env.record(t, "proto-incomplete-"+env.ns, 1)
+	claimed := env.claim(t)
+	token := *claimed.ClaimToken
+
+	for _, phase := range []string{
+		repository.HistoryPhaseRecorded,
+		repository.HistoryPhaseDownloaded,
+		repository.HistoryPhaseProjected,
+		repository.HistoryPhaseAcked,
+	} {
+		require.Equal(t, phase, env.get(t, id).Phase)
+		ok, err := env.wa.MarkNotificationDone(env.ctx, id, token)
+		require.NoError(t, err)
+		assert.Falsef(t, ok, "a chunk at phase %q has not finished the protocol", phase)
+		require.Equal(t, repository.HistoryNotificationStateProcessing, env.get(t, id).State,
+			"and it stays claimable rather than becoming an unreachable 'done'")
+
+		if phase == repository.HistoryPhaseAcked {
+			break
+		}
+		next := map[string]string{
+			repository.HistoryPhaseRecorded:   repository.HistoryPhaseDownloaded,
+			repository.HistoryPhaseDownloaded: repository.HistoryPhaseProjected,
+			repository.HistoryPhaseProjected:  repository.HistoryPhaseAcked,
+		}[phase]
+		ok, err = env.wa.AdvancePhase(env.ctx, id, token, phase, next)
+		require.NoError(t, err)
+		require.True(t, ok)
+	}
+
+	ok, err := env.wa.AdvancePhase(env.ctx, id, token,
+		repository.HistoryPhaseAcked, repository.HistoryPhaseDeleted)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	ok, err = env.wa.MarkNotificationDone(env.ctx, id, token)
+	require.NoError(t, err)
+	assert.True(t, ok, "the completed protocol closes the chunk")
+	assert.Equal(t, repository.HistoryNotificationStateDone, env.get(t, id).State)
 }
 
 // TestWhatsAppRepo_AdvancePhaseRejectsIllegalJump pins BOTH halves of the phase
@@ -397,7 +490,7 @@ func TestWhatsAppRepo_ObservedFloorIsOldestStagedSentAt(t *testing.T) {
 		_, err := env.comms.UpsertChatMessage(env.ctx, repository.UpsertChatMessageParams{
 			Source:     repository.InteractionSourceWhatsApp,
 			ExternalID: "floor-" + env.ns + "-" + string(rune('a'+i)),
-			ThreadID:   &peer,
+			ThreadID:   peer,
 			Body:       &body,
 			PeerHandle: &peer,
 			Direction:  repository.InteractionDirectionInbound,

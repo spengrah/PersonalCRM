@@ -780,12 +780,13 @@ func (r *SyntheticSupportRepository) ListPublicTables(ctx context.Context) ([]st
 	return r.queries.TestListPublicTables(ctx)
 }
 
-// ListCommsIndexDefs returns Postgres's deterministic index definition for every
-// index on comms_message, keyed by index name. Backs the migration-073
-// index-definition test (exact key-column + partial-predicate assertions).
+// ListIndexDefsForTable returns Postgres's deterministic index definition for
+// every index on one table, keyed by index name. Backs the index-definition
+// tests (exact key-column + partial-predicate assertions) for indexes whose
+// partial predicate is the contract rather than an optimization.
 // Index-definition test only.
-func (r *SyntheticSupportRepository) ListCommsIndexDefs(ctx context.Context) (map[string]string, error) {
-	rows, err := r.queries.TestListIndexDefsForComms(ctx)
+func (r *SyntheticSupportRepository) ListIndexDefsForTable(ctx context.Context, table string) (map[string]string, error) {
+	rows, err := r.queries.TestListIndexDefsForTable(ctx, table)
 	if err != nil {
 		return nil, err
 	}

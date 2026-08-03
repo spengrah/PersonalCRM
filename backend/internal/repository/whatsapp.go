@@ -228,7 +228,11 @@ func (r *WhatsAppRepository) AdvancePhase(ctx context.Context, id, token uuid.UU
 	return rows > 0, nil
 }
 
-// MarkNotificationDone closes a chunk successfully. Token-fenced.
+// MarkNotificationDone closes a chunk successfully. Token-fenced AND fenced on
+// the terminal phase: a chunk that has not reached 'deleted' has not finished
+// the protocol, and 'done' is unreachable by any later claim, so completing one
+// early would abandon it silently. false means the lease moved on or the chunk
+// is not at the end of the phase machine; in both cases nothing changed.
 func (r *WhatsAppRepository) MarkNotificationDone(ctx context.Context, id uuid.UUID, token uuid.UUID) (bool, error) {
 	rows, err := r.queries.MarkWhatsAppHistoryNotificationDone(ctx, db.MarkWhatsAppHistoryNotificationDoneParams{
 		ID:         uuidToPgUUID(id),

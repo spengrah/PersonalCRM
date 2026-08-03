@@ -1617,7 +1617,13 @@ type Querier interface {
 	//     rows were already linked to res.Interaction.ID on the original
 	//     attempt; processed_at IS NOT NULL now filters them out.
 	MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) (int64, error)
-	// Terminal success. Clears the lease so the row can never be reclaimed.
+	// Terminal success. Clears the lease so the row can never be reclaimed — which
+	// is exactly why it is fenced on the END of the phase machine as well as on the
+	// token: 'done' is unreachable by any later claim, so completing a chunk that
+	// never reached phase='deleted' would silently abandon its download,
+	// projection, receipt and server-side media with no way to notice or retry.
+	// A row can only be here from 'processing', but the state predicate is explicit
+	// so the invariant does not depend on claim_token's lifecycle to hold.
 	MarkWhatsAppHistoryNotificationDone(ctx context.Context, arg MarkWhatsAppHistoryNotificationDoneParams) (int64, error)
 	// Terminal failure, reserved for errors no retry can fix at a phase where no
 	// content was stored. Recoverable only by the explicit operator requeue below.
@@ -2677,11 +2683,13 @@ type Querier interface {
 	// would otherwise fetch and finalize it within milliseconds, and the assertion
 	// that depends on it staying unfinalized would pass or fail on a race.
 	TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID string) (int64, error)
-	// Index-definition test only: enumerate every index on comms_message with
+	// Index-definition test only: enumerate every index on one table with
 	// Postgres's own deterministic indexdef reconstruction, so a test can assert the
-	// exact key columns + partial predicate of the eligible/stale-claim indexes
-	// (migration 073). Read-only catalog access, mirroring TestListPublicTables.
-	TestListIndexDefsForComms(ctx context.Context) ([]*TestListIndexDefsForCommsRow, error)
+	// exact key columns + partial predicate of an index whose PREDICATE is the
+	// contract (comms_message's eligible/stale-claim indexes from 073/076; the
+	// whatsapp history claim index from 076). Read-only catalog access, mirroring
+	// TestListPublicTables.
+	TestListIndexDefsForTable(ctx context.Context, tableName string) ([]*TestListIndexDefsForTableRow, error)
 	// Reset integration test only: enumerate every base table in the public schema
 	// so the catalog guard can assert each is in the wiped list, is schema_migrations,
 	// or matches the river_% allowlist. Read-only catalog access.

@@ -3118,30 +3118,32 @@ func (q *Queries) TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, 
 	return id, err
 }
 
-const TestListIndexDefsForComms = `-- name: TestListIndexDefsForComms :many
+const TestListIndexDefsForTable = `-- name: TestListIndexDefsForTable :many
 SELECT indexname::text, indexdef::text FROM pg_indexes
-WHERE schemaname = 'public' AND tablename = 'comms_message'
+WHERE schemaname = 'public' AND tablename = $1
 ORDER BY indexname
 `
 
-type TestListIndexDefsForCommsRow struct {
+type TestListIndexDefsForTableRow struct {
 	Indexname string `json:"indexname"`
 	Indexdef  string `json:"indexdef"`
 }
 
-// Index-definition test only: enumerate every index on comms_message with
+// Index-definition test only: enumerate every index on one table with
 // Postgres's own deterministic indexdef reconstruction, so a test can assert the
-// exact key columns + partial predicate of the eligible/stale-claim indexes
-// (migration 073). Read-only catalog access, mirroring TestListPublicTables.
-func (q *Queries) TestListIndexDefsForComms(ctx context.Context) ([]*TestListIndexDefsForCommsRow, error) {
-	rows, err := q.db.Query(ctx, TestListIndexDefsForComms)
+// exact key columns + partial predicate of an index whose PREDICATE is the
+// contract (comms_message's eligible/stale-claim indexes from 073/076; the
+// whatsapp history claim index from 076). Read-only catalog access, mirroring
+// TestListPublicTables.
+func (q *Queries) TestListIndexDefsForTable(ctx context.Context, tableName string) ([]*TestListIndexDefsForTableRow, error) {
+	rows, err := q.db.Query(ctx, TestListIndexDefsForTable, tableName)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []*TestListIndexDefsForCommsRow{}
+	items := []*TestListIndexDefsForTableRow{}
 	for rows.Next() {
-		var i TestListIndexDefsForCommsRow
+		var i TestListIndexDefsForTableRow
 		if err := rows.Scan(&i.Indexname, &i.Indexdef); err != nil {
 			return nil, err
 		}

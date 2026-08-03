@@ -75,7 +75,7 @@ func TestCommsMessageEligibleIndexes_Definitions(t *testing.T) {
 	database, ctx := graphTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
-	defs, err := support.ListCommsIndexDefs(ctx)
+	defs, err := support.ListIndexDefsForTable(ctx, "comms_message")
 	require.NoError(t, err)
 
 	cases := []struct {
@@ -123,4 +123,39 @@ func indexNames(defs map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// TestWhatsAppHistoryClaimIndex_Definition pins the partial index behind
+// ClaimNextNotification. Its predicate is a CONTRACT, not an optimization: the
+// claim orders by (chunk_order, received_at) over the claimable slice, so a
+// narrowed predicate (say, dropping 'processing') would leave every expired
+// lease unreclaimable while every functional test stayed green — the drainer
+// would simply never see the abandoned chunk. Same reasoning, and the same
+// catalog read, as the comms_message eligible indexes above.
+func TestWhatsAppHistoryClaimIndex_Definition(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	database, ctx := graphTestDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	defs, err := support.ListIndexDefsForTable(ctx, "whatsapp_history_notification")
+	require.NoError(t, err)
+
+	const name = "idx_whatsapp_history_notification_claim"
+	def, ok := defs[name]
+	require.Truef(t, ok, "index %s not found; have %v", name, indexNames(defs))
+
+	assert.Equal(t, []string{"state", "chunk_order", "received_at"}, usingKeyColumns(t, def),
+		"key columns (order-sensitive) — the claim seeks the claimable slice then orders within it")
+
+	// Postgres renders the IN list as `state = ANY (ARRAY[...])`, which the
+	// conjunct splitter returns as a single clause. Assert it exactly, so
+	// dropping either claimable state fails.
+	assert.Equal(t,
+		[]string{"state = any array['pending'::text, 'processing'::text]"},
+		predicateConjuncts(t, def),
+		"partial predicate must cover EXACTLY the two claimable states")
 }

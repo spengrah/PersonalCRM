@@ -102,10 +102,17 @@ type GChatIdentity struct {
 // from exactly one linked device, so there is no per-account provenance to
 // merge. MatchedContactID nil means the peer is not (yet) a contact; the DB
 // CHECK restricts that to source='whatsapp'.
+//
+// ThreadID is a plain string, NOT a pointer: it is the chat scope every
+// downstream reader keys on. The column is nullable because email predates chat
+// sources, but a chat row with no thread is unaggregatable — the chat lister
+// filters NULL/blank thread_ids out and the store adapter would hand the engine
+// the chat id "" — so the staging boundary refuses one rather than passing DB
+// nullability through.
 type UpsertChatMessageParams struct {
 	Source           string
 	ExternalID       string
-	ThreadID         *string
+	ThreadID         string
 	Body             *string
 	Snippet          *string
 	PeerHandle       *string
@@ -139,10 +146,12 @@ type CommsMessageRepository struct {
 	// is unset. Same convention as ContactRepository.SetPool.
 	pool *pgxpool.Pool
 	// attachFailpointForTest, when non-nil, is invoked between the
-	// soft-delete and attach statements of AttachUnmatchedByPeer; a non-nil
-	// return aborts the transaction. Test-only hook (same convention as
-	// repointBarrierForTest below) that makes the atomicity of the pair
-	// observable. Nil in production.
+	// soft-delete and attach statements of AttachUnmatchedByPeer's FIRST
+	// attempt only. A non-nil return aborts that transaction. Test-only hook
+	// (same convention as repointBarrierForTest below): returning an error
+	// makes the atomicity of the pair observable, and committing a colliding
+	// row from a second connection makes the READ COMMITTED dedup race — and
+	// its retry — deterministic. Nil in production.
 	attachFailpointForTest func() error
 	// repointBarrierForTest, when non-nil, is invoked between the dedup and
 	// repoint statements of RepointContactForMergeTx's FIRST savepoint attempt
@@ -164,6 +173,12 @@ func NewCommsMessageRepository(queries db.Querier) *CommsMessageRepository {
 // merge repoint can collide with when a concurrent ingest commits a target-
 // contact row between the dedup and repoint statements.
 const commsMessageDedupIndex = "idx_comms_message_dedup"
+
+// ErrChatMessageMissingThread is returned by UpsertChatMessage when the chat
+// scope is empty. The column is nullable for email's sake, but a chat row with
+// no thread is staged and then never aggregated, so the staging boundary
+// refuses it instead of writing an unreachable row.
+var ErrChatMessageMissingThread = errors.New("upsert chat message: thread_id (chat scope) is required")
 
 // SetRepointBarrierForTest installs the test-only barrier hook. Must only be
 // called before the repository is used concurrently; no synchronization.
@@ -904,13 +919,21 @@ func (p *CommsSessionStagingProcessor) MarkProcessedTx(ctx context.Context, tx p
 // link-time history backfill idempotent against each other. A nil
 // MatchedContactID stages the row unmatched; the DB CHECK
 // comms_message_contact_source_check rejects that for any source but whatsapp.
+//
+// An empty ThreadID is refused rather than stored: the chat scope is what the
+// aggregation path keys on, and a blank one produces a row that is staged,
+// attachable, and permanently unaggregatable.
 func (r *CommsMessageRepository) UpsertChatMessage(ctx context.Context, params UpsertChatMessageParams) (*CommsMessage, error) {
+	if params.ThreadID == "" {
+		return nil, ErrChatMessageMissingThread
+	}
+	threadID := pgtype.Text{String: params.ThreadID, Valid: true}
 	sourceMetadata := jsonbOrEmpty(params.SourceMetadata)
 	if params.MatchedContactID == nil {
 		dbMsg, err := r.queries.UpsertChatCommsMessageUnmatched(ctx, db.UpsertChatCommsMessageUnmatchedParams{
 			Source:         params.Source,
 			ExternalID:     params.ExternalID,
-			ThreadID:       stringToPgText(params.ThreadID),
+			ThreadID:       threadID,
 			Body:           stringToPgText(params.Body),
 			Snippet:        stringToPgText(params.Snippet),
 			PeerHandle:     stringToPgText(params.PeerHandle),
@@ -929,7 +952,7 @@ func (r *CommsMessageRepository) UpsertChatMessage(ctx context.Context, params U
 	dbMsg, err := r.queries.UpsertChatCommsMessageMatched(ctx, db.UpsertChatCommsMessageMatchedParams{
 		Source:           params.Source,
 		ExternalID:       params.ExternalID,
-		ThreadID:         stringToPgText(params.ThreadID),
+		ThreadID:         threadID,
 		Body:             stringToPgText(params.Body),
 		Snippet:          stringToPgText(params.Snippet),
 		PeerHandle:       stringToPgText(params.PeerHandle),
@@ -952,10 +975,20 @@ func (r *CommsMessageRepository) UpsertChatMessage(ctx context.Context, params U
 //
 //  1. soft-delete the unmatched rows whose (source, external_id) is ALREADY
 //     staged against contactID — attaching them would violate
-//     idx_comms_message_dedup and abort the caller's transaction, and skipping
-//     them would strand a permanent unmatched duplicate. The chat upsert is
+//     idx_comms_message_dedup and abort the transaction, and skipping them
+//     would strand a permanent unmatched duplicate. The chat upsert is
 //     content-immutable, so the surviving matched row carries identical content.
 //  2. attach everything that remains.
+//
+// The pair runs with ONE retry scoped to a 23505 on idx_comms_message_dedup, the
+// same READ COMMITTED hazard RepointContactForMergeTx defends against: a
+// concurrent ingest can commit a matched row for the same (source, external_id)
+// between the two statements, making the attach collide even though the
+// soft-delete's snapshot saw nothing to tombstone. The retry's soft-delete takes
+// a fresh snapshot that sees the raced row and tombstones it first. This method
+// owns its transaction (unlike the merge repoint, which runs inside the
+// caller's), so the retry re-runs the whole transaction rather than a savepoint.
+// A second collision under sustained concurrent inserts propagates.
 //
 // Returns (attached, softDeletedDuplicates). Both selectors nil is a no-op
 // (0, 0, nil) rather than a query — matching on nothing would be a full-source
@@ -967,6 +1000,28 @@ func (r *CommsMessageRepository) AttachUnmatchedByPeer(ctx context.Context, sour
 	if r.pool == nil {
 		return 0, 0, errors.New("attach unmatched comms messages: repository has no pool (call SetPool)")
 	}
+
+	attached, deduped, err := r.attachUnmatchedOnce(ctx, source, peerNormalized, peerHandle, contactID, true)
+	if err == nil {
+		return attached, deduped, nil
+	}
+	if !isCommsDedupUniqueViolation(err) {
+		return 0, 0, err
+	}
+	// Raced insert committed between the two statements; the transaction rolled
+	// back whole, so nothing partial is visible. Retry once against a fresh
+	// snapshot.
+	attached, deduped, retryErr := r.attachUnmatchedOnce(ctx, source, peerNormalized, peerHandle, contactID, false)
+	if retryErr != nil {
+		return 0, 0, fmt.Errorf("attach unmatched retry after dedup collision: %w", retryErr)
+	}
+	return attached, deduped, nil
+}
+
+// attachUnmatchedOnce runs the reconcile+attach pair in one transaction.
+// withBarrier gates the test-only failpoint to the FIRST attempt so a barrier
+// that commits a racing row does not fire again on the retry.
+func (r *CommsMessageRepository) attachUnmatchedOnce(ctx context.Context, source string, peerNormalized, peerHandle *string, contactID uuid.UUID, withBarrier bool) (int64, int64, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return 0, 0, fmt.Errorf("begin attach tx: %w", err)
@@ -983,7 +1038,7 @@ func (r *CommsMessageRepository) AttachUnmatchedByPeer(ctx context.Context, sour
 	if err != nil {
 		return 0, 0, fmt.Errorf("soft-delete duplicate unmatched comms messages: %w", err)
 	}
-	if r.attachFailpointForTest != nil {
+	if withBarrier && r.attachFailpointForTest != nil {
 		if err := r.attachFailpointForTest(); err != nil {
 			return 0, 0, fmt.Errorf("attach failpoint: %w", err)
 		}
