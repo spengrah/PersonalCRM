@@ -126,12 +126,14 @@ func indexNames(defs map[string]string) []string {
 }
 
 // TestWhatsAppHistoryClaimIndex_Definition pins the partial index behind
-// ClaimNextNotification. Its predicate is a CONTRACT, not an optimization: the
-// claim orders by (chunk_order, received_at) over the claimable slice, so a
-// narrowed predicate (say, dropping 'processing') would leave every expired
-// lease unreclaimable while every functional test stayed green — the drainer
-// would simply never see the abandoned chunk. Same reasoning, and the same
-// catalog read, as the comms_message eligible indexes above.
+// ClaimNextNotification. An index is only an access path — the claim's own
+// WHERE clause still finds pending and expired-lease rows with no index at all,
+// so a narrowed predicate (say, dropping 'processing') costs the SEEK, not the
+// work: the reclaim scan degrades to a heap filter over every notification ever
+// recorded, and no functional test can see the difference because the rows are
+// still returned. That is precisely why the predicate is asserted here rather
+// than left to the behavioral tests. Same reasoning, and the same catalog read,
+// as the comms_message eligible indexes above.
 func TestWhatsAppHistoryClaimIndex_Definition(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

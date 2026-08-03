@@ -20,7 +20,7 @@ CREATE FUNCTION pg_get_constraintdef(constraint_oid oid) RETURNS text AS $$
 $$ LANGUAGE sql;
 
 -- pg_indexes is a system catalog VIEW (over pg_class/pg_index) that sqlc
--- v1.30.0 does not model; the read-only catalog query TestListIndexDefsForComms
+-- v1.30.0 does not model; the read-only catalog query TestListIndexDefsForTable
 -- (internal/db/queries/test.sql) fails to compile without this stub. We declare
 -- only the columns that query touches. As above, the live catalog is the source
 -- of truth at runtime; this file is never applied by golang-migrate.
