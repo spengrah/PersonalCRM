@@ -500,3 +500,157 @@ WHERE source = @source
   AND deleted_at IS NULL
 ORDER BY sent_at DESC, id
 LIMIT 1;
+
+-- =====================================================================
+-- Chat-source staging writes that allow an UNRESOLVED peer (076).
+-- comms_message.matched_contact_id is nullable for source='whatsapp' only
+-- (comms_message_contact_source_check). These five queries are the whole
+-- surface: two upserts split by the nil-ness of the contact, the
+-- reconcile+attach pair the retroactive link runs in one transaction, and
+-- the discovery aggregate.
+-- =====================================================================
+
+-- name: UpsertChatCommsMessageMatched :one
+-- Chat-source staging write for a message whose peer IS a known contact.
+-- Content is IMMUTABLE on conflict (first writer wins), which makes the live
+-- ingest path and the link-time history backfill idempotent against each
+-- other. No provenance jsonb merge: chat sources observe from exactly one
+-- linked device, so UpsertCommsMessage's observed_accounts/account_gmail_ids
+-- machinery has nothing to merge.
+-- Conflict target is idx_comms_message_dedup (058).
+INSERT INTO comms_message (
+    source, external_id, thread_id, body, snippet,
+    peer_handle, peer_normalized, direction, sent_at, account_id,
+    source_metadata, matched_contact_id
+) VALUES (
+    @source, @external_id, @thread_id, @body, @snippet,
+    @peer_handle, @peer_normalized, @direction, @sent_at, @account_id,
+    @source_metadata, @matched_contact_id
+)
+ON CONFLICT (source, external_id, matched_contact_id) WHERE deleted_at IS NULL
+-- No-op touch so RETURNING yields the stored row; a bare DO NOTHING returns no
+-- rows, which the repository would report as a spurious not-found.
+DO UPDATE SET source = comms_message.source
+WHERE comms_message.deleted_at IS NULL
+RETURNING *;
+
+-- name: UpsertChatCommsMessageUnmatched :one
+-- Same, for a message whose peer is not (yet) a contact. matched_contact_id is
+-- written NULL; the row is invisible to every eligible/aggregation query until
+-- AttachUnmatchedCommsMessagesByPeer fills it in. A non-whatsapp source hits
+-- comms_message_contact_source_check here, which is the point.
+-- Conflict target is idx_comms_message_dedup_unmatched (076).
+INSERT INTO comms_message (
+    source, external_id, thread_id, body, snippet,
+    peer_handle, peer_normalized, direction, sent_at, account_id,
+    source_metadata
+) VALUES (
+    @source, @external_id, @thread_id, @body, @snippet,
+    @peer_handle, @peer_normalized, @direction, @sent_at, @account_id,
+    @source_metadata
+)
+ON CONFLICT (source, external_id) WHERE matched_contact_id IS NULL AND deleted_at IS NULL
+DO UPDATE SET source = comms_message.source
+WHERE comms_message.deleted_at IS NULL
+RETURNING *;
+
+-- name: SoftDeleteDuplicateUnmatchedCommsMessages :execrows
+-- Reconciliation half of the retroactive attach. An unmatched row whose
+-- (source, external_id) is ALREADY staged against @contact_id is a duplicate of
+-- that matched row — the chat upsert is content-immutable, so the two carry the
+-- same content — and attaching it would violate idx_comms_message_dedup and
+-- abort the caller's tx. Soft-delete it instead of stranding it unmatched
+-- forever (the realistic sequence: a LID-only peer staged unmatched, then the
+-- same message re-staged matched once the phone resolved). Runs BEFORE
+-- AttachUnmatchedCommsMessagesByPeer, in the same transaction.
+UPDATE comms_message
+SET deleted_at = NOW()
+WHERE comms_message.source = @source
+  AND comms_message.matched_contact_id IS NULL
+  AND comms_message.deleted_at IS NULL
+  AND (
+        (sqlc.narg(peer_handle)::text IS NOT NULL AND comms_message.peer_handle = sqlc.narg(peer_handle)::text)
+     OR (sqlc.narg(peer_normalized)::text IS NOT NULL AND comms_message.peer_normalized = sqlc.narg(peer_normalized)::text)
+  )
+  AND EXISTS (
+        SELECT 1 FROM comms_message t
+        WHERE t.source = comms_message.source
+          AND t.external_id = comms_message.external_id
+          AND t.matched_contact_id = @contact_id
+          AND t.deleted_at IS NULL
+  );
+
+-- name: AttachUnmatchedCommsMessagesByPeer :execrows
+-- Retroactive attach: binds a source's remaining unmatched rows for one peer to
+-- a contact. Matches on peer_handle (always present) OR peer_normalized
+-- (present only when the peer's phone was resolvable) so a LID-only peer
+-- imported by hand still picks up its history. The colliding rows were already
+-- removed by SoftDeleteDuplicateUnmatchedCommsMessages, so no NOT EXISTS guard
+-- is needed here — but the pair MUST run in one transaction, which is why the
+-- repository exposes a single AttachUnmatchedByPeer method rather than two.
+UPDATE comms_message
+SET matched_contact_id = @contact_id
+WHERE source = @source
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL
+  AND (
+        (sqlc.narg(peer_handle)::text IS NOT NULL AND peer_handle = sqlc.narg(peer_handle)::text)
+     OR (sqlc.narg(peer_normalized)::text IS NOT NULL AND peer_normalized = sqlc.narg(peer_normalized)::text)
+  );
+
+-- name: ListUnmatchedCommsPeerCounts :many
+-- Discovery counts over unmatched rows for one source, grouped by peer.
+-- One query serves both the batch sweep and the single-peer live check
+-- (@peer_handle NULL = all peers) — a separate single-peer twin would trip
+-- scripts/ci/sqlc-select-list-guard.sh. Backed by
+-- idx_comms_message_unmatched_peer (076).
+-- The explicit casts on the aggregate columns are load-bearing: sqlc types an
+-- uncast aggregate as `interface{}`. A cast makes it concrete but also
+-- non-nullable, so the two genuinely-optional columns (a LID-only peer has no
+-- phone; a message may carry no push name) COALESCE to the empty string and the
+-- repository maps '' back to nil — neither value is ever legitimately empty.
+-- last_message_at needs no COALESCE: sent_at is NOT NULL and every returned
+-- group has at least one row.
+SELECT peer_handle,
+       COALESCE(MAX(peer_normalized), '')::text       AS peer_normalized,
+       COUNT(*)                                       AS total_count,
+       COUNT(*) FILTER (WHERE direction = 'inbound')  AS inbound_count,
+       COUNT(*) FILTER (WHERE direction = 'outbound') AS outbound_count,
+       MAX(sent_at)::timestamptz                      AS last_message_at,
+       -- Newest KNOWN push name for the peer, without a correlated subquery.
+       -- The FILTER skips rows that carry no push_name, so a newer anonymous
+       -- row does not hide a name an older row already reported.
+       COALESCE(
+           (array_agg(source_metadata->>'push_name' ORDER BY sent_at DESC)
+                FILTER (WHERE source_metadata->>'push_name' IS NOT NULL))[1],
+           ''
+       )::text                                        AS last_push_name
+FROM comms_message
+WHERE source = @source
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL
+  AND peer_handle IS NOT NULL
+  AND (sqlc.narg(peer_handle)::text IS NULL OR peer_handle = sqlc.narg(peer_handle)::text)
+GROUP BY peer_handle
+HAVING COUNT(*) >= @min_messages::bigint
+ORDER BY total_count DESC, peer_handle ASC;
+
+-- name: GetOldestCommsMessageSentAtForSource :one
+-- Oldest staged sent_at for one source, over live rows (matched or not). Backs
+-- the WhatsApp status endpoint's observed backfill floor — the empirical answer
+-- to "how deep did the one-shot history actually reach". Returns NULL when the
+-- source has staged nothing yet.
+SELECT MIN(sent_at)::timestamptz AS oldest_sent_at
+FROM comms_message
+WHERE source = @source
+  AND deleted_at IS NULL;
+
+-- name: HardDeleteCommsMessagesBySourceAndExternalIDPrefix :exec
+-- Test-only cleanup helper for rows that have NO contact to scope by (the
+-- unmatched chat-staging rows). Hard delete, because the chat upsert does not
+-- clear deleted_at on conflict, so a soft-deleted row would resurrect across
+-- shared-DB runs — and because 076's down migration refuses to revert while any
+-- NULL-contact row exists. Production code MUST NOT call this.
+DELETE FROM comms_message
+WHERE source = @source
+  AND external_id LIKE @external_id_prefix;

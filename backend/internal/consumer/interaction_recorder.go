@@ -568,11 +568,12 @@ func extractMessageIDs(env *events.Envelope) ([]uuid.UUID, error) {
 // constraint on interaction.source is the durable contract, but this catches a
 // bad publisher before the DB write attempts. Each chat/messaging source whose
 // aggregation engine publishes KindMessageReceived/KindMessageSent must appear
-// here (telegram, messages, gchat).
+// here (telegram, messages, gchat, whatsapp).
 var messageInteractionSources = map[string]struct{}{
 	repository.InteractionSourceTelegram: {},
 	repository.InteractionSourceMessages: {},
 	repository.InteractionSourceGChat:    {},
+	repository.InteractionSourceWhatsApp: {},
 }
 
 // makeMessageRequest builds the RecordInteractionRequest for message.*
@@ -582,7 +583,7 @@ var messageInteractionSources = map[string]struct{}{
 // message event's source name flows end-to-end).
 func makeMessageRequest(source string, contactID *uuid.UUID, externalMessageID string, messageAt time.Time, description *string, direction string) (repository.RecordInteractionRequest, error) {
 	if _, ok := messageInteractionSources[source]; !ok {
-		return repository.RecordInteractionRequest{}, fmt.Errorf("unsupported message source %q (allowed: telegram, messages, gchat)", source)
+		return repository.RecordInteractionRequest{}, fmt.Errorf("unsupported message source %q (allowed: telegram, messages, gchat, whatsapp)", source)
 	}
 	var cid uuid.UUID
 	if contactID != nil {

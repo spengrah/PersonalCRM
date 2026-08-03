@@ -174,6 +174,8 @@ sequenceDiagram
 | `calendar_event_attendee` | Event attendees | → calendar_event, contact |
 | **Tasks** | | |
 | `contact_task` | Todoist tasks linked to contacts | → contact |
+| **Messaging** | | |
+| `comms_message` | Shared cross-source message-content store (email, gchat, and the chat sources that migrate onto it). One row = one message × one qualifying contact. `matched_contact_id` is **nullable**: NULL means the message was staged before its peer was resolved to a contact (WhatsApp only — `comms_message_contact_source_check` restricts NULL to `source='whatsapp'`), and the row is attached later by import/rematch. Every eligible/aggregation query excludes NULL rows, so an unattached row never reaches the recorder | → contact (nullable), → interaction (optional) |
 | **Event Bus** | | |
 | `event` | Append-only raw event log feeding the worker queue (spec §3.1) | (append-only; no FKs) |
 | **Graph (SP1)** | | |

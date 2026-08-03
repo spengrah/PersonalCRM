@@ -68,11 +68,10 @@ func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
 	assert.Equal(t, repository.InteractionSourceMessages, interaction.Source)
 }
 
-// TestInteraction_SourceCheckRejectsWhatsapp confirms the scope
-// boundary: 'whatsapp' is NOT in the CHECK list. Acts as a regression
-// guard against accidentally widening the CHECK beyond the currently
-// supported source set.
-func TestInteraction_SourceCheckRejectsWhatsapp(t *testing.T) {
+// TestInteraction_SourceCheckAcceptsWhatsapp locks in the migration-076 CHECK
+// extension: an interaction with source="whatsapp" inserts successfully. It
+// replaces the rejection test 076 deliberately invalidated.
+func TestInteraction_SourceCheckAcceptsWhatsapp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -93,20 +92,71 @@ func TestInteraction_SourceCheckRejectsWhatsapp(t *testing.T) {
 
 	suffix := syntheticNS(t)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Test Whatsapp Reject " + suffix,
+		FullName: "Test WhatsApp Source CHECK " + suffix,
 	})
 	require.NoError(t, err)
-	defer func() { _ = contactRepo.SoftDeleteContact(ctx, contact.ID) }()
+	// Hard-delete the whatsapp-source rows before closing the DB handle: 076's
+	// down migration refuses to narrow the interaction_source_check while any
+	// row uses source='whatsapp' (the same data-loss guard 049 carries), so a
+	// leftover interaction would later trip the migration round-trip tests on
+	// the shared CI DB. Soft-delete is not enough — the guard counts rows
+	// regardless of deleted_at.
+	defer func() {
+		_ = interactionRepo.HardDeleteInteractionsBySourceRefPrefix(ctx, repository.InteractionSourceWhatsApp, "whatsapp-test-"+suffix+"%")
+		_ = contactRepo.SoftDeleteContact(ctx, contact.ID)
+	}()
 
-	ref := "wa-" + suffix
-	_, err = interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+	ref := "whatsapp-test-" + suffix
+	interaction, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
 		ContactID:  contact.ID,
-		Source:     "whatsapp",
+		Source:     repository.InteractionSourceWhatsApp,
 		SourceRef:  &ref,
 		OccurredAt: accelerated.GetCurrentTime().Truncate(time.Microsecond),
 		Direction:  repository.InteractionDirectionInbound,
 	})
-	require.Error(t, err, "whatsapp source must be rejected by interaction_source_check")
+	require.NoError(t, err)
+	assert.Equal(t, repository.InteractionSourceWhatsApp, interaction.Source)
+}
+
+// TestInteraction_SourceCheckRejectsUnknownSource confirms the scope boundary
+// still exists after 076 widened the CHECK: 'signal' is NOT in the list. Acts
+// as the regression guard against accidentally widening the CHECK beyond the
+// supported source set.
+func TestInteraction_SourceCheckRejectsUnknownSource(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+	t.Parallel()
+	ctx := context.Background()
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	database, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	defer database.Close()
+
+	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contactRepo := repository.NewContactRepository(database.Queries)
+
+	suffix := syntheticNS(t)
+	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+		FullName: "Test Unknown Source Reject " + suffix,
+	})
+	require.NoError(t, err)
+	defer func() { _ = contactRepo.SoftDeleteContact(ctx, contact.ID) }()
+
+	ref := "signal-" + suffix
+	_, err = interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+		ContactID:  contact.ID,
+		Source:     "signal",
+		SourceRef:  &ref,
+		OccurredAt: accelerated.GetCurrentTime().Truncate(time.Microsecond),
+		Direction:  repository.InteractionDirectionInbound,
+	})
+	require.Error(t, err, "an unlisted source must be rejected by interaction_source_check")
 	assert.True(t, strings.Contains(err.Error(), "interaction_source_check") ||
 		strings.Contains(err.Error(), "check constraint"),
 		"error should mention check constraint, got: %v", err)

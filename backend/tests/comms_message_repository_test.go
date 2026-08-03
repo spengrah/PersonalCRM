@@ -158,7 +158,8 @@ func TestCommsMessageRepository_UpsertAndGet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, repository.InteractionSourceEmail, msg.Source)
 	assert.Equal(t, externalID, msg.ExternalID)
-	assert.Equal(t, contact.ID, msg.MatchedContactID)
+	require.NotNil(t, msg.MatchedContactID)
+	assert.Equal(t, contact.ID, *msg.MatchedContactID)
 	require.NotNil(t, msg.Body)
 	assert.Equal(t, "body content", *msg.Body)
 	require.NotNil(t, msg.Subject)
@@ -390,8 +391,10 @@ func TestCommsMessageRepository_PerParticipantRowsDistinct(t *testing.T) {
 	require.NoError(t, err)
 	gotB, err := repo.GetMessage(ctx, repository.InteractionSourceEmail, externalID, contactB.ID)
 	require.NoError(t, err)
-	assert.Equal(t, contactA.ID, gotA.MatchedContactID)
-	assert.Equal(t, contactB.ID, gotB.MatchedContactID)
+	require.NotNil(t, gotA.MatchedContactID)
+	require.NotNil(t, gotB.MatchedContactID)
+	assert.Equal(t, contactA.ID, *gotA.MatchedContactID)
+	assert.Equal(t, contactB.ID, *gotB.MatchedContactID)
 }
 
 func TestCommsMessageRepository_MarkProcessedTx(t *testing.T) {

@@ -328,7 +328,8 @@ func TestMergeContacts_RepointsIdentityAndAttribution(t *testing.T) {
 
 	cm, err := h.commsRepo.GetMessage(ctx, "email", "merge-attr-email-1", a.ID)
 	require.NoError(t, err)
-	assert.Equal(t, a.ID, cm.MatchedContactID, "comms_message repointed to A")
+	require.NotNil(t, cm.MatchedContactID)
+	assert.Equal(t, a.ID, *cm.MatchedContactID, "comms_message repointed to A")
 }
 
 // TestMergeContacts_CommsMessageDedupCollision covers the email-fanout shape:
@@ -377,12 +378,14 @@ func TestMergeContacts_CommsMessageDedupCollision(t *testing.T) {
 	// A's fanout row is untouched and is the ONLY live row for that message.
 	fanout, err := h.commsRepo.GetMessage(ctx, "email", "fanout-1", a.ID)
 	require.NoError(t, err)
-	assert.Equal(t, a.ID, fanout.MatchedContactID)
+	require.NotNil(t, fanout.MatchedContactID)
+	assert.Equal(t, a.ID, *fanout.MatchedContactID)
 
 	// B's non-colliding row followed the survivor.
 	solo, err := h.commsRepo.GetMessage(ctx, "email", "solo-1", a.ID)
 	require.NoError(t, err)
-	assert.Equal(t, a.ID, solo.MatchedContactID)
+	require.NotNil(t, solo.MatchedContactID)
+	assert.Equal(t, a.ID, *solo.MatchedContactID)
 
 	// No live rows remain attributed to B (the colliding copy was
 	// soft-deleted, then repointed as a tombstone).
@@ -464,7 +467,8 @@ func TestCommsRepointForMerge_RacedInsertRetries(t *testing.T) {
 	// row survives as the single live copy.
 	live, err := h.commsRepo.GetMessage(ctx, "email", "race-1", a.ID)
 	require.NoError(t, err)
-	assert.Equal(t, a.ID, live.MatchedContactID)
+	require.NotNil(t, live.MatchedContactID)
+	assert.Equal(t, a.ID, *live.MatchedContactID)
 	remaining, err := h.commsRepo.ListByContact(ctx, b.ID)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "no live comms rows may remain on B after the retried repoint")

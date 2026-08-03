@@ -109,6 +109,45 @@ func (q *Queries) ApplyCommsMessageEditByExternalID(ctx context.Context, arg App
 	return result.RowsAffected(), nil
 }
 
+const AttachUnmatchedCommsMessagesByPeer = `-- name: AttachUnmatchedCommsMessagesByPeer :execrows
+UPDATE comms_message
+SET matched_contact_id = $1
+WHERE source = $2
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL
+  AND (
+        ($3::text IS NOT NULL AND peer_handle = $3::text)
+     OR ($4::text IS NOT NULL AND peer_normalized = $4::text)
+  )
+`
+
+type AttachUnmatchedCommsMessagesByPeerParams struct {
+	ContactID      pgtype.UUID `json:"contact_id"`
+	Source         string      `json:"source"`
+	PeerHandle     pgtype.Text `json:"peer_handle"`
+	PeerNormalized pgtype.Text `json:"peer_normalized"`
+}
+
+// Retroactive attach: binds a source's remaining unmatched rows for one peer to
+// a contact. Matches on peer_handle (always present) OR peer_normalized
+// (present only when the peer's phone was resolvable) so a LID-only peer
+// imported by hand still picks up its history. The colliding rows were already
+// removed by SoftDeleteDuplicateUnmatchedCommsMessages, so no NOT EXISTS guard
+// is needed here — but the pair MUST run in one transaction, which is why the
+// repository exposes a single AttachUnmatchedByPeer method rather than two.
+func (q *Queries) AttachUnmatchedCommsMessagesByPeer(ctx context.Context, arg AttachUnmatchedCommsMessagesByPeerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, AttachUnmatchedCommsMessagesByPeer,
+		arg.ContactID,
+		arg.Source,
+		arg.PeerHandle,
+		arg.PeerNormalized,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const BackdateCommsMessageClaim = `-- name: BackdateCommsMessageClaim :exec
 UPDATE comms_message
 SET claimed_at = NOW() - INTERVAL '10 minutes'
@@ -453,6 +492,24 @@ func (q *Queries) GetCommsMessageLatestByExternalID(ctx context.Context, arg Get
 	return &i, err
 }
 
+const GetOldestCommsMessageSentAtForSource = `-- name: GetOldestCommsMessageSentAtForSource :one
+SELECT MIN(sent_at)::timestamptz AS oldest_sent_at
+FROM comms_message
+WHERE source = $1
+  AND deleted_at IS NULL
+`
+
+// Oldest staged sent_at for one source, over live rows (matched or not). Backs
+// the WhatsApp status endpoint's observed backfill floor — the empirical answer
+// to "how deep did the one-shot history actually reach". Returns NULL when the
+// source has staged nothing yet.
+func (q *Queries) GetOldestCommsMessageSentAtForSource(ctx context.Context, source string) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, GetOldestCommsMessageSentAtForSource, source)
+	var oldest_sent_at pgtype.Timestamptz
+	err := row.Scan(&oldest_sent_at)
+	return oldest_sent_at, err
+}
+
 const HardDeleteCommsMessagesByContact = `-- name: HardDeleteCommsMessagesByContact :exec
 DELETE FROM comms_message
 WHERE matched_contact_id = $1
@@ -464,6 +521,27 @@ WHERE matched_contact_id = $1
 // call this.
 func (q *Queries) HardDeleteCommsMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, HardDeleteCommsMessagesByContact, matchedContactID)
+	return err
+}
+
+const HardDeleteCommsMessagesBySourceAndExternalIDPrefix = `-- name: HardDeleteCommsMessagesBySourceAndExternalIDPrefix :exec
+DELETE FROM comms_message
+WHERE source = $1
+  AND external_id LIKE $2
+`
+
+type HardDeleteCommsMessagesBySourceAndExternalIDPrefixParams struct {
+	Source           string `json:"source"`
+	ExternalIDPrefix string `json:"external_id_prefix"`
+}
+
+// Test-only cleanup helper for rows that have NO contact to scope by (the
+// unmatched chat-staging rows). Hard delete, because the chat upsert does not
+// clear deleted_at on conflict, so a soft-deleted row would resurrect across
+// shared-DB runs — and because 076's down migration refuses to revert while any
+// NULL-contact row exists. Production code MUST NOT call this.
+func (q *Queries) HardDeleteCommsMessagesBySourceAndExternalIDPrefix(ctx context.Context, arg HardDeleteCommsMessagesBySourceAndExternalIDPrefixParams) error {
+	_, err := q.db.Exec(ctx, HardDeleteCommsMessagesBySourceAndExternalIDPrefix, arg.Source, arg.ExternalIDPrefix)
 	return err
 }
 
@@ -561,6 +639,88 @@ func (q *Queries) ListCommsMessagesMissingParticipantNames(ctx context.Context, 
 	for rows.Next() {
 		var i ListCommsMessagesMissingParticipantNamesRow
 		if err := rows.Scan(&i.ID, &i.AccountID, &i.SourceMetadata); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListUnmatchedCommsPeerCounts = `-- name: ListUnmatchedCommsPeerCounts :many
+SELECT peer_handle,
+       COALESCE(MAX(peer_normalized), '')::text       AS peer_normalized,
+       COUNT(*)                                       AS total_count,
+       COUNT(*) FILTER (WHERE direction = 'inbound')  AS inbound_count,
+       COUNT(*) FILTER (WHERE direction = 'outbound') AS outbound_count,
+       MAX(sent_at)::timestamptz                      AS last_message_at,
+       -- Newest KNOWN push name for the peer, without a correlated subquery.
+       -- The FILTER skips rows that carry no push_name, so a newer anonymous
+       -- row does not hide a name an older row already reported.
+       COALESCE(
+           (array_agg(source_metadata->>'push_name' ORDER BY sent_at DESC)
+                FILTER (WHERE source_metadata->>'push_name' IS NOT NULL))[1],
+           ''
+       )::text                                        AS last_push_name
+FROM comms_message
+WHERE source = $1
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL
+  AND peer_handle IS NOT NULL
+  AND ($2::text IS NULL OR peer_handle = $2::text)
+GROUP BY peer_handle
+HAVING COUNT(*) >= $3::bigint
+ORDER BY total_count DESC, peer_handle ASC
+`
+
+type ListUnmatchedCommsPeerCountsParams struct {
+	Source      string      `json:"source"`
+	PeerHandle  pgtype.Text `json:"peer_handle"`
+	MinMessages int64       `json:"min_messages"`
+}
+
+type ListUnmatchedCommsPeerCountsRow struct {
+	PeerHandle     pgtype.Text        `json:"peer_handle"`
+	PeerNormalized string             `json:"peer_normalized"`
+	TotalCount     int64              `json:"total_count"`
+	InboundCount   int64              `json:"inbound_count"`
+	OutboundCount  int64              `json:"outbound_count"`
+	LastMessageAt  pgtype.Timestamptz `json:"last_message_at"`
+	LastPushName   string             `json:"last_push_name"`
+}
+
+// Discovery counts over unmatched rows for one source, grouped by peer.
+// One query serves both the batch sweep and the single-peer live check
+// (@peer_handle NULL = all peers) — a separate single-peer twin would trip
+// scripts/ci/sqlc-select-list-guard.sh. Backed by
+// idx_comms_message_unmatched_peer (076).
+// The explicit casts on the aggregate columns are load-bearing: sqlc types an
+// uncast aggregate as `interface{}`. A cast makes it concrete but also
+// non-nullable, so the two genuinely-optional columns (a LID-only peer has no
+// phone; a message may carry no push name) COALESCE to the empty string and the
+// repository maps ” back to nil — neither value is ever legitimately empty.
+// last_message_at needs no COALESCE: sent_at is NOT NULL and every returned
+// group has at least one row.
+func (q *Queries) ListUnmatchedCommsPeerCounts(ctx context.Context, arg ListUnmatchedCommsPeerCountsParams) ([]*ListUnmatchedCommsPeerCountsRow, error) {
+	rows, err := q.db.Query(ctx, ListUnmatchedCommsPeerCounts, arg.Source, arg.PeerHandle, arg.MinMessages)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListUnmatchedCommsPeerCountsRow{}
+	for rows.Next() {
+		var i ListUnmatchedCommsPeerCountsRow
+		if err := rows.Scan(
+			&i.PeerHandle,
+			&i.PeerNormalized,
+			&i.TotalCount,
+			&i.InboundCount,
+			&i.OutboundCount,
+			&i.LastMessageAt,
+			&i.LastPushName,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, &i)
@@ -950,6 +1110,53 @@ func (q *Queries) SoftDeleteDuplicateCommsMessagesForMerge(ctx context.Context, 
 	return err
 }
 
+const SoftDeleteDuplicateUnmatchedCommsMessages = `-- name: SoftDeleteDuplicateUnmatchedCommsMessages :execrows
+UPDATE comms_message
+SET deleted_at = NOW()
+WHERE comms_message.source = $1
+  AND comms_message.matched_contact_id IS NULL
+  AND comms_message.deleted_at IS NULL
+  AND (
+        ($2::text IS NOT NULL AND comms_message.peer_handle = $2::text)
+     OR ($3::text IS NOT NULL AND comms_message.peer_normalized = $3::text)
+  )
+  AND EXISTS (
+        SELECT 1 FROM comms_message t
+        WHERE t.source = comms_message.source
+          AND t.external_id = comms_message.external_id
+          AND t.matched_contact_id = $4
+          AND t.deleted_at IS NULL
+  )
+`
+
+type SoftDeleteDuplicateUnmatchedCommsMessagesParams struct {
+	Source         string      `json:"source"`
+	PeerHandle     pgtype.Text `json:"peer_handle"`
+	PeerNormalized pgtype.Text `json:"peer_normalized"`
+	ContactID      pgtype.UUID `json:"contact_id"`
+}
+
+// Reconciliation half of the retroactive attach. An unmatched row whose
+// (source, external_id) is ALREADY staged against @contact_id is a duplicate of
+// that matched row — the chat upsert is content-immutable, so the two carry the
+// same content — and attaching it would violate idx_comms_message_dedup and
+// abort the caller's tx. Soft-delete it instead of stranding it unmatched
+// forever (the realistic sequence: a LID-only peer staged unmatched, then the
+// same message re-staged matched once the phone resolved). Runs BEFORE
+// AttachUnmatchedCommsMessagesByPeer, in the same transaction.
+func (q *Queries) SoftDeleteDuplicateUnmatchedCommsMessages(ctx context.Context, arg SoftDeleteDuplicateUnmatchedCommsMessagesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, SoftDeleteDuplicateUnmatchedCommsMessages,
+		arg.Source,
+		arg.PeerHandle,
+		arg.PeerNormalized,
+		arg.ContactID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const TestInsertCommsMessageLinked = `-- name: TestInsertCommsMessageLinked :one
 INSERT INTO comms_message (
     source, external_id, thread_id, direction, sent_at, matched_contact_id, interaction_id
@@ -981,6 +1188,171 @@ func (q *Queries) TestInsertCommsMessageLinked(ctx context.Context, arg TestInse
 		arg.SentAt,
 		arg.MatchedContactID,
 		arg.InteractionID,
+	)
+	var i CommsMessage
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.ExternalID,
+		&i.ThreadID,
+		&i.Subject,
+		&i.Body,
+		&i.Snippet,
+		&i.PeerHandle,
+		&i.PeerNormalized,
+		&i.Direction,
+		&i.SentAt,
+		&i.AccountID,
+		&i.SourceMetadata,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
+		&i.ProcessedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
+const UpsertChatCommsMessageMatched = `-- name: UpsertChatCommsMessageMatched :one
+
+INSERT INTO comms_message (
+    source, external_id, thread_id, body, snippet,
+    peer_handle, peer_normalized, direction, sent_at, account_id,
+    source_metadata, matched_contact_id
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9, $10,
+    $11, $12
+)
+ON CONFLICT (source, external_id, matched_contact_id) WHERE deleted_at IS NULL
+DO UPDATE SET source = comms_message.source
+WHERE comms_message.deleted_at IS NULL
+RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at
+`
+
+type UpsertChatCommsMessageMatchedParams struct {
+	Source           string             `json:"source"`
+	ExternalID       string             `json:"external_id"`
+	ThreadID         pgtype.Text        `json:"thread_id"`
+	Body             pgtype.Text        `json:"body"`
+	Snippet          pgtype.Text        `json:"snippet"`
+	PeerHandle       pgtype.Text        `json:"peer_handle"`
+	PeerNormalized   pgtype.Text        `json:"peer_normalized"`
+	Direction        string             `json:"direction"`
+	SentAt           pgtype.Timestamptz `json:"sent_at"`
+	AccountID        pgtype.Text        `json:"account_id"`
+	SourceMetadata   []byte             `json:"source_metadata"`
+	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
+}
+
+// =====================================================================
+// Chat-source staging writes that allow an UNRESOLVED peer (076).
+// comms_message.matched_contact_id is nullable for source='whatsapp' only
+// (comms_message_contact_source_check). These five queries are the whole
+// surface: two upserts split by the nil-ness of the contact, the
+// reconcile+attach pair the retroactive link runs in one transaction, and
+// the discovery aggregate.
+// =====================================================================
+// Chat-source staging write for a message whose peer IS a known contact.
+// Content is IMMUTABLE on conflict (first writer wins), which makes the live
+// ingest path and the link-time history backfill idempotent against each
+// other. No provenance jsonb merge: chat sources observe from exactly one
+// linked device, so UpsertCommsMessage's observed_accounts/account_gmail_ids
+// machinery has nothing to merge.
+// Conflict target is idx_comms_message_dedup (058).
+// No-op touch so RETURNING yields the stored row; a bare DO NOTHING returns no
+// rows, which the repository would report as a spurious not-found.
+func (q *Queries) UpsertChatCommsMessageMatched(ctx context.Context, arg UpsertChatCommsMessageMatchedParams) (*CommsMessage, error) {
+	row := q.db.QueryRow(ctx, UpsertChatCommsMessageMatched,
+		arg.Source,
+		arg.ExternalID,
+		arg.ThreadID,
+		arg.Body,
+		arg.Snippet,
+		arg.PeerHandle,
+		arg.PeerNormalized,
+		arg.Direction,
+		arg.SentAt,
+		arg.AccountID,
+		arg.SourceMetadata,
+		arg.MatchedContactID,
+	)
+	var i CommsMessage
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.ExternalID,
+		&i.ThreadID,
+		&i.Subject,
+		&i.Body,
+		&i.Snippet,
+		&i.PeerHandle,
+		&i.PeerNormalized,
+		&i.Direction,
+		&i.SentAt,
+		&i.AccountID,
+		&i.SourceMetadata,
+		&i.MatchedContactID,
+		&i.InteractionID,
+		&i.ClaimedAt,
+		&i.ClaimedSessionRef,
+		&i.ProcessedAt,
+		&i.DeletedAt,
+		&i.CreatedAt,
+	)
+	return &i, err
+}
+
+const UpsertChatCommsMessageUnmatched = `-- name: UpsertChatCommsMessageUnmatched :one
+INSERT INTO comms_message (
+    source, external_id, thread_id, body, snippet,
+    peer_handle, peer_normalized, direction, sent_at, account_id,
+    source_metadata
+) VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9, $10,
+    $11
+)
+ON CONFLICT (source, external_id) WHERE matched_contact_id IS NULL AND deleted_at IS NULL
+DO UPDATE SET source = comms_message.source
+WHERE comms_message.deleted_at IS NULL
+RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at
+`
+
+type UpsertChatCommsMessageUnmatchedParams struct {
+	Source         string             `json:"source"`
+	ExternalID     string             `json:"external_id"`
+	ThreadID       pgtype.Text        `json:"thread_id"`
+	Body           pgtype.Text        `json:"body"`
+	Snippet        pgtype.Text        `json:"snippet"`
+	PeerHandle     pgtype.Text        `json:"peer_handle"`
+	PeerNormalized pgtype.Text        `json:"peer_normalized"`
+	Direction      string             `json:"direction"`
+	SentAt         pgtype.Timestamptz `json:"sent_at"`
+	AccountID      pgtype.Text        `json:"account_id"`
+	SourceMetadata []byte             `json:"source_metadata"`
+}
+
+// Same, for a message whose peer is not (yet) a contact. matched_contact_id is
+// written NULL; the row is invisible to every eligible/aggregation query until
+// AttachUnmatchedCommsMessagesByPeer fills it in. A non-whatsapp source hits
+// comms_message_contact_source_check here, which is the point.
+// Conflict target is idx_comms_message_dedup_unmatched (076).
+func (q *Queries) UpsertChatCommsMessageUnmatched(ctx context.Context, arg UpsertChatCommsMessageUnmatchedParams) (*CommsMessage, error) {
+	row := q.db.QueryRow(ctx, UpsertChatCommsMessageUnmatched,
+		arg.Source,
+		arg.ExternalID,
+		arg.ThreadID,
+		arg.Body,
+		arg.Snippet,
+		arg.PeerHandle,
+		arg.PeerNormalized,
+		arg.Direction,
+		arg.SentAt,
+		arg.AccountID,
+		arg.SourceMetadata,
 	)
 	var i CommsMessage
 	err := row.Scan(
