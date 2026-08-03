@@ -537,6 +537,9 @@ ENABLE_VECTOR_SEARCH=false
 # TELEGRAM_API_ID=your-api-id
 # TELEGRAM_API_HASH=your-api-hash
 ENABLE_TELEGRAM_SYNC=false
+
+# Optional: WhatsApp sync (no credentials; requires ENABLE_EXTERNAL_SYNC=true)
+ENABLE_WHATSAPP_SYNC=false
 ```
 
 ---

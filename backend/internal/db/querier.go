@@ -42,6 +42,11 @@ type Querier interface {
 	// commit/rollback.
 	AcquireVenueContainerLock(ctx context.Context, lockKey string) error
 	AddContactTag(ctx context.Context, arg AddContactTagParams) error
+	// Token-fenced AND predecessor-fenced. The phase = @from predicate is what
+	// stops a mistaken or future caller skipping the download or the receipt: only
+	// the five legal edges (recorded -> downloaded -> projected -> acked ->
+	// deleted) ever change a row.
+	AdvanceWhatsAppHistoryPhase(ctx context.Context, arg AdvanceWhatsAppHistoryPhaseParams) (int64, error)
 	// Atomically appends a contact to an event's matched_contact_ids iff it isn't
 	// already present. Does NOT reset last_contacted_updated — the rematch handler
 	// records interactions directly for past events (see rematch plan Design
@@ -77,6 +82,14 @@ type Querier interface {
 	// value), then keep the first 3 elements (newest-first). A NULL current body is
 	// not pushed (nothing to preserve).
 	ApplyCommsMessageEditByExternalID(ctx context.Context, arg ApplyCommsMessageEditByExternalIDParams) (int64, error)
+	// Retroactive attach: binds a source's remaining unmatched rows for one peer to
+	// a contact. Matches on peer_handle (always present) OR peer_normalized
+	// (present only when the peer's phone was resolvable) so a LID-only peer
+	// imported by hand still picks up its history. The colliding rows were already
+	// removed by SoftDeleteDuplicateUnmatchedCommsMessages, so no NOT EXISTS guard
+	// is needed here — but the pair MUST run in one transaction, which is why the
+	// repository exposes a single AttachUnmatchedByPeer method rather than two.
+	AttachUnmatchedCommsMessagesByPeer(ctx context.Context, arg AttachUnmatchedCommsMessagesByPeerParams) (int64, error)
 	// Test-only helper: ages the claim past the 5-minute TTL so a fresh
 	// aggregate pass can re-claim a stale claim. Mirror of
 	// BackdateMessagesMessageClaim. Production code MUST NOT call this.
@@ -89,6 +102,10 @@ type Querier interface {
 	// uses NOW(), so the test must rewrite the DB clock for those rows).
 	// Production code MUST NOT call this.
 	BackdateTelegramMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error
+	// Test-only helper: ages a claim past the 15-minute lease so a fresh claim can
+	// reclaim it, simulating a worker that died mid-chunk. Mirror of
+	// BackdateCommsMessageClaim. Production code MUST NOT call this.
+	BackdateWhatsAppHistoryClaim(ctx context.Context, id pgtype.UUID) error
 	// Additively merge the four display-name keys onto an EXISTING row's stored
 	// source_metadata, preserving every existing content key (from/to/cc/bcc/
 	// subject/html/attachments/labels) and the provenance keys (observed_accounts/
@@ -117,6 +134,10 @@ type Querier interface {
 	// ClaimTelegramMessages. Returns the IDs actually claimed so the engine
 	// can detect partial claims.
 	ClaimMessagesMessages(ctx context.Context, arg ClaimMessagesMessagesParams) ([]pgtype.UUID, error)
+	// Takes the next pending chunk, or reclaims one whose 15-minute lease expired,
+	// and stamps a FRESH claim_token that every later transition must present. The
+	// FOR UPDATE SKIP LOCKED subselect is the same shape comms_message's claim uses.
+	ClaimNextWhatsAppHistoryNotification(ctx context.Context) (*WhatsappHistoryNotification, error)
 	// Race-safe conditional claim: only writes claim columns on rows still
 	// eligible per the same filter the unprocessed-list queries use. Returns
 	// the row IDs actually claimed (RETURNING id) so the caller can detect
@@ -327,6 +348,8 @@ type Querier interface {
 	// Counts messages about to be linked for a given peer. Read BEFORE
 	// OnPeerLinked so the matched-count reporting observes the pre-link state.
 	CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
+	// Backs Status().Backfill, including the dropped-inline chunk count.
+	CountWhatsAppHistoryNotificationsByStateAndDisposition(ctx context.Context) ([]*CountWhatsAppHistoryNotificationsByStateAndDispositionRow, error)
 	// location/birthday/how_met are NOT written here: they are derived cache
 	// columns whose sole writer is the knowledge-cache consumer, which fills
 	// them from the current-accepted lives_in/birthday/how_met assertions
@@ -883,6 +906,11 @@ type Querier interface {
 	GetOAuthCredentialByID(ctx context.Context, id pgtype.UUID) (*OauthCredential, error)
 	// Get non-sensitive credential info for display
 	GetOAuthCredentialStatus(ctx context.Context, id pgtype.UUID) (*GetOAuthCredentialStatusRow, error)
+	// Oldest staged sent_at for one source, over live rows (matched or not). Backs
+	// the WhatsApp status endpoint's observed backfill floor — the empirical answer
+	// to "how deep did the one-shot history actually reach". Returns NULL when the
+	// source has staged nothing yet.
+	GetOldestCommsMessageSentAtForSource(ctx context.Context, source string) (pgtype.Timestamptz, error)
 	// Locks the row so the consume path serializes against concurrent
 	// consume attempts for the same token.
 	GetPairingTokenByHashForUpdate(ctx context.Context, tokenHash string) (*MacHostPairingToken, error)
@@ -949,11 +977,21 @@ type Querier interface {
 	// already covers the live-row case.
 	GetTombstonedMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
 	GetVenue(ctx context.Context, nodeID pgtype.UUID) (*Venue, error)
+	// =====================================================================
+	// Per-chat group gate
+	// =====================================================================
+	GetWhatsAppChatConfig(ctx context.Context, chatJid string) (*WhatsappChatConfig, error)
 	// Test-only cleanup helper (scoped by matched_contact_id). Hard delete because
 	// the upsert does not clear deleted_at on conflict, so soft-deleted rows would
 	// resurrect across shared-DB test runs (gotcha table). Production code MUST NOT
 	// call this.
 	HardDeleteCommsMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) error
+	// Test-only cleanup helper for rows that have NO contact to scope by (the
+	// unmatched chat-staging rows). Hard delete, because the chat upsert does not
+	// clear deleted_at on conflict, so a soft-deleted row would resurrect across
+	// shared-DB runs — and because 076's down migration refuses to revert while any
+	// NULL-contact row exists. Production code MUST NOT call this.
+	HardDeleteCommsMessagesBySourceAndExternalIDPrefix(ctx context.Context, arg HardDeleteCommsMessagesBySourceAndExternalIDPrefixParams) error
 	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	// Test-only: hard-deletes event rows whose (source, source_id) match the
 	// given source and a LIKE-prefix on source_id. Used by integration tests
@@ -1373,6 +1411,19 @@ type Querier interface {
 	ListTelegramChatConfigs(ctx context.Context) ([]*TelegramChatConfig, error)
 	ListTelegramChatConfigsForBackfill(ctx context.Context) ([]*TelegramChatConfig, error)
 	ListTelegramMessagesByChatUnprocessed(ctx context.Context, telegramChatID int64) ([]*TelegramMessage, error)
+	// Discovery counts over unmatched rows for one source, grouped by peer.
+	// One query serves both the batch sweep and the single-peer live check
+	// (@peer_handle NULL = all peers) — a separate single-peer twin would trip
+	// scripts/ci/sqlc-select-list-guard.sh. Backed by
+	// idx_comms_message_unmatched_peer (076).
+	// The explicit casts on the aggregate columns are load-bearing: sqlc types an
+	// uncast aggregate as `interface{}`. A cast makes it concrete but also
+	// non-nullable, so the two genuinely-optional columns (a LID-only peer has no
+	// phone; a message may carry no push name) COALESCE to the empty string and the
+	// repository maps '' back to nil — neither value is ever legitimately empty.
+	// last_message_at needs no COALESCE: sent_at is NOT NULL and every returned
+	// group has at least one row.
+	ListUnmatchedCommsPeerCounts(ctx context.Context, arg ListUnmatchedCommsPeerCountsParams) ([]*ListUnmatchedCommsPeerCountsRow, error)
 	// Per-source query; anarlog_title rows are intentionally NOT exposed
 	// here — they live behind a dedicated grouped-by-token UI surface.
 	// The `source != 'anarlog_title'` clause is defense-in-depth: if a
@@ -1430,6 +1481,8 @@ type Querier interface {
 	ListUpcomingEventsForContact(ctx context.Context, arg ListUpcomingEventsForContactParams) ([]*CalendarEvent, error)
 	// List upcoming events that have matched CRM contacts
 	ListUpcomingEventsWithContacts(ctx context.Context, arg ListUpcomingEventsWithContactsParams) ([]*CalendarEvent, error)
+	// Status surface + crm-admin listing, in claim order.
+	ListWhatsAppHistoryNotifications(ctx context.Context, states []string) ([]*WhatsappHistoryNotification, error)
 	// Acquires a FOR UPDATE lock on the contact row before the date recompute
 	// reads the interaction aggregate. Run as a SEPARATE statement (in the
 	// caller's tx) BEFORE ComputeContactDatesAfterDelete: once this lock is held
@@ -1564,6 +1617,17 @@ type Querier interface {
 	//     rows were already linked to res.Interaction.ID on the original
 	//     attempt; processed_at IS NOT NULL now filters them out.
 	MarkTelegramMessagesProcessedForSession(ctx context.Context, arg MarkTelegramMessagesProcessedForSessionParams) (int64, error)
+	// Terminal success. Clears the lease so the row can never be reclaimed — which
+	// is exactly why it is fenced on the END of the phase machine as well as on the
+	// token: 'done' is unreachable by any later claim, so completing a chunk that
+	// never reached phase='deleted' would silently abandon its download,
+	// projection, receipt and server-side media with no way to notice or retry.
+	// A row can only be here from 'processing', but the state predicate is explicit
+	// so the invariant does not depend on claim_token's lifecycle to hold.
+	MarkWhatsAppHistoryNotificationDone(ctx context.Context, arg MarkWhatsAppHistoryNotificationDoneParams) (int64, error)
+	// Terminal failure, reserved for errors no retry can fix at a phase where no
+	// content was stored. Recoverable only by the explicit operator requeue below.
+	MarkWhatsAppHistoryNotificationFailed(ctx context.Context, arg MarkWhatsAppHistoryNotificationFailedParams) (int64, error)
 	// TEST-ONLY. Calls the live normalize_contact_method_value function so the
 	// C6 parity test can compare the Go mirror against the actual SQL that the
 	// unique index is enforced over. Raw SQL is banned in Go including tests
@@ -1595,6 +1659,28 @@ type Querier interface {
 	// SetContactMethodPrimary, which matches by method id alone and is used by
 	// enrichment — changing it would move enrichment behavior.
 	PromoteContactMethodPrimaryByContact(ctx context.Context, arg PromoteContactMethodPrimaryByContactParams) error
+	// WhatsApp-owned state that is NOT message content: the durable one-shot
+	// history-sync notification inbox (a media POINTER per chunk, never a body) and
+	// the persistent per-chat group gate. Message content stages into
+	// comms_message through the existing CommsMessageRepository and
+	// queries/comms_message.sql; nothing here stores a message.
+	// =====================================================================
+	// History-sync notification inbox
+	//
+	// Every transition after a claim is fenced by claim_token, so a worker whose
+	// lease expired mid-work cannot clobber its successor's checkpoint or terminal
+	// state. AdvancePhase is additionally fenced on the predecessor phase, so no
+	// caller can skip the download or the receipt.
+	// =====================================================================
+	// Records an outstanding chunk. Idempotent under WhatsApp's redelivery of an
+	// already-recorded protocol message: the UNIQUE on protocol_msg_id turns the
+	// second delivery into a no-op that still returns the original row's id.
+	// The starting phase is DERIVED from the disposition rather than passed in, so
+	// the "a dropped chunk has nothing to download and nothing to project" rule has
+	// exactly one enforcement point: 'dropped_inline' enters at 'projected', a
+	// media-backed chunk at 'recorded'.
+	// @notification MUST already have InitialHistBootstrapInlinePayload nil'd.
+	RecordWhatsAppHistoryNotification(ctx context.Context, arg RecordWhatsAppHistoryNotificationParams) (pgtype.UUID, error)
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement
@@ -1646,6 +1732,11 @@ type Querier interface {
 	// Uniqueness is on (telegram_chat_id, telegram_message_id) — collision-free.
 	// NOTE: telegram_message has no updated_at column (032); do not set one.
 	RepointTelegramMessageContact(ctx context.Context, arg RepointTelegramMessageContactParams) error
+	// Operator path (crm-admin whatsapp requeue-history). Accepts any failed row;
+	// for a dropped_inline row the retry can only re-send the receipt, since its
+	// phase is already 'projected' and it has no media. Not token-fenced: a failed
+	// row holds no lease.
+	RequeueFailedWhatsAppHistoryNotification(ctx context.Context, id pgtype.UUID) (int64, error)
 	ResetSyncStateBackfillCursor(ctx context.Context, arg ResetSyncStateBackfillCursorParams) (*ExternalSyncState, error)
 	// ============================================================================
 	// crm-admin --reset-and-seed support: a HARD wipe of every live data table
@@ -1708,6 +1799,9 @@ type Querier interface {
 	// by the rotate-key endpoint. Filters revoked hosts so a revoked host
 	// cannot be silently re-activated by a rotation.
 	RotateMacHostAPIKey(ctx context.Context, arg RotateMacHostAPIKeyParams) (*MacHost, error)
+	// Token-fenced. Zero rows means the lease moved on and the caller must abandon
+	// the chunk without writing further state.
+	SaveWhatsAppHistoryCheckpoint(ctx context.Context, arg SaveWhatsAppHistoryCheckpointParams) (int64, error)
 	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
 	// Seeds an external_sync_state row at caller-supplied next_sync_at.
 	// Used by scheduler-exclusion tests to plant a push-strategy row whose
@@ -1810,6 +1904,15 @@ type Querier interface {
 	// tombstone semantics; the surviving target row carries the same upstream
 	// message. MUST run strictly BEFORE RepointCommsMessageContact.
 	SoftDeleteDuplicateCommsMessagesForMerge(ctx context.Context, arg SoftDeleteDuplicateCommsMessagesForMergeParams) error
+	// Reconciliation half of the retroactive attach. An unmatched row whose
+	// (source, external_id) is ALREADY staged against @contact_id is a duplicate of
+	// that matched row — the chat upsert is content-immutable, so the two carry the
+	// same content — and attaching it would violate idx_comms_message_dedup and
+	// abort the caller's tx. Soft-delete it instead of stranding it unmatched
+	// forever (the realistic sequence: a LID-only peer staged unmatched, then the
+	// same message re-staged matched once the phone resolved). Runs BEFORE
+	// AttachUnmatchedCommsMessagesByPeer, in the same transaction.
+	SoftDeleteDuplicateUnmatchedCommsMessages(ctx context.Context, arg SoftDeleteDuplicateUnmatchedCommsMessagesParams) (int64, error)
 	// Tombstones a live row. Defensive WHERE deleted_at IS NULL keeps the
 	// statement idempotent against a concurrent delete. crm_contact_id,
 	// match_status, and duplicate_of_id are preserved per the external_contact
@@ -2580,11 +2683,13 @@ type Querier interface {
 	// would otherwise fetch and finalize it within milliseconds, and the assertion
 	// that depends on it staying unfinalized would pass or fail on a race.
 	TestInsertUnfinalizedRecorderJobForEvent(ctx context.Context, eventID string) (int64, error)
-	// Index-definition test only: enumerate every index on comms_message with
+	// Index-definition test only: enumerate every index on one table with
 	// Postgres's own deterministic indexdef reconstruction, so a test can assert the
-	// exact key columns + partial predicate of the eligible/stale-claim indexes
-	// (migration 073). Read-only catalog access, mirroring TestListPublicTables.
-	TestListIndexDefsForComms(ctx context.Context) ([]*TestListIndexDefsForCommsRow, error)
+	// exact key columns + partial predicate of an index whose PREDICATE is the
+	// contract (comms_message's eligible/stale-claim indexes from 073/076; the
+	// whatsapp history claim index from 076). Read-only catalog access, mirroring
+	// TestListPublicTables.
+	TestListIndexDefsForTable(ctx context.Context, tableName string) ([]*TestListIndexDefsForTableRow, error)
 	// Reset integration test only: enumerate every base table in the public schema
 	// so the catalog guard can assert each is in the wiped list, is schema_migrations,
 	// or matches the river_% allowlist. Read-only catalog access.
@@ -2786,6 +2891,30 @@ type Querier interface {
 	// so newly matched contacts can be processed. Otherwise we preserve the processed state
 	// to avoid duplicates.
 	UpsertCalendarEvent(ctx context.Context, arg UpsertCalendarEventParams) (*CalendarEvent, error)
+	// =====================================================================
+	// Chat-source staging writes that allow an UNRESOLVED peer (076).
+	// comms_message.matched_contact_id is nullable for source='whatsapp' only
+	// (comms_message_contact_source_check). These five queries are the whole
+	// surface: two upserts split by the nil-ness of the contact, the
+	// reconcile+attach pair the retroactive link runs in one transaction, and
+	// the discovery aggregate.
+	// =====================================================================
+	// Chat-source staging write for a message whose peer IS a known contact.
+	// Content is IMMUTABLE on conflict (first writer wins), which makes the live
+	// ingest path and the link-time history backfill idempotent against each
+	// other. No provenance jsonb merge: chat sources observe from exactly one
+	// linked device, so UpsertCommsMessage's observed_accounts/account_gmail_ids
+	// machinery has nothing to merge.
+	// Conflict target is idx_comms_message_dedup (058).
+	// No-op touch so RETURNING yields the stored row; a bare DO NOTHING returns no
+	// rows, which the repository would report as a spurious not-found.
+	UpsertChatCommsMessageMatched(ctx context.Context, arg UpsertChatCommsMessageMatchedParams) (*CommsMessage, error)
+	// Same, for a message whose peer is not (yet) a contact. matched_contact_id is
+	// written NULL; the row is invisible to every eligible/aggregation query until
+	// AttachUnmatchedCommsMessagesByPeer fills it in. A non-whatsapp source hits
+	// comms_message_contact_source_check here, which is the point.
+	// Conflict target is idx_comms_message_dedup_unmatched (076).
+	UpsertChatCommsMessageUnmatched(ctx context.Context, arg UpsertChatCommsMessageUnmatchedParams) (*CommsMessage, error)
 	// Insert-or-merge by the partial unique (source, external_id, matched_contact_id)
 	// WHERE deleted_at IS NULL. Content fields are IMMUTABLE on conflict (first
 	// writer wins). Provenance is merged by SET-UNION on BOTH the insert and the
@@ -2916,6 +3045,11 @@ type Querier interface {
 	// re-run for the same container is a no-op that refreshes the title and returns
 	// the existing row.
 	UpsertVenue(ctx context.Context, arg UpsertVenueParams) (*Venue, error)
+	// Mirrors UpsertTelegramChatConfig's preserve semantics: a re-observation
+	// refreshes the title and member count it actually resolved (COALESCE keeps the
+	// stored value when the new one is NULL) and NEVER overwrites the user's
+	// status override.
+	UpsertWhatsAppChatConfig(ctx context.Context, arg UpsertWhatsAppChatConfigParams) (*WhatsappChatConfig, error)
 	// The same-value re-affirmation branch: extend valid_to / lower valid_from to
 	// cover new corroborating evidence, and recompute proposition_key from the new
 	// (widened) valid_from bucket so the key keeps representing the row's interval.

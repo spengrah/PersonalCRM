@@ -23,6 +23,7 @@ const (
 	InteractionSourcePhoneCalls      = "phone_calls"
 	InteractionSourceEmail           = "email"
 	InteractionSourceGChat           = "gchat"
+	InteractionSourceWhatsApp        = "whatsapp"
 )
 
 // Interaction direction constants

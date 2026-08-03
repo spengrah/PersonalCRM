@@ -19,7 +19,7 @@ import (
 // extension: an interaction with source="gchat" inserts successfully. The
 // migration lifts interaction_source_check from the 8-value email set to also
 // include 'gchat'. The upper-boundary regression (a non-listed source is
-// rejected) is already guarded by TestInteraction_SourceCheckRejectsWhatsapp.
+// rejected) is already guarded by TestInteraction_SourceCheckRejectsUnknownSource.
 func TestInteraction_SourceCheckAcceptsGchat(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

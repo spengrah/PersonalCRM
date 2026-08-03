@@ -58,7 +58,7 @@ func (s *stubCommsLocator) GetMessageTx(_ context.Context, _ pgx.Tx, source, ext
 	}
 	row := s.getResult
 	if row == nil {
-		row = &repository.CommsMessage{ID: uuid.New(), Source: source, ExternalID: externalID, MatchedContactID: contactID}
+		row = &repository.CommsMessage{ID: uuid.New(), Source: source, ExternalID: externalID, MatchedContactID: &contactID}
 	}
 	s.returnedRow = row
 	return row, nil

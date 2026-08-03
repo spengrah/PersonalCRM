@@ -127,16 +127,17 @@ type CommsMessage struct {
 	Source     string      `json:"source"`
 	ExternalID string      `json:"external_id"`
 	// email: Gmail threadId; gchat/telegram/messages: space/chat scope resource name
-	ThreadID          pgtype.Text        `json:"thread_id"`
-	Subject           pgtype.Text        `json:"subject"`
-	Body              pgtype.Text        `json:"body"`
-	Snippet           pgtype.Text        `json:"snippet"`
-	PeerHandle        pgtype.Text        `json:"peer_handle"`
-	PeerNormalized    pgtype.Text        `json:"peer_normalized"`
-	Direction         string             `json:"direction"`
-	SentAt            pgtype.Timestamptz `json:"sent_at"`
-	AccountID         pgtype.Text        `json:"account_id"`
-	SourceMetadata    []byte             `json:"source_metadata"`
+	ThreadID       pgtype.Text        `json:"thread_id"`
+	Subject        pgtype.Text        `json:"subject"`
+	Body           pgtype.Text        `json:"body"`
+	Snippet        pgtype.Text        `json:"snippet"`
+	PeerHandle     pgtype.Text        `json:"peer_handle"`
+	PeerNormalized pgtype.Text        `json:"peer_normalized"`
+	Direction      string             `json:"direction"`
+	SentAt         pgtype.Timestamptz `json:"sent_at"`
+	AccountID      pgtype.Text        `json:"account_id"`
+	SourceMetadata []byte             `json:"source_metadata"`
+	// Contact this row is attributed to. NULL means the message was staged before identity resolution; only source='whatsapp' may write NULL (comms_message_contact_source_check), and the row is attached later by import/rematch. Every eligible/aggregation query excludes NULL rows.
 	MatchedContactID  pgtype.UUID        `json:"matched_contact_id"`
 	InteractionID     pgtype.UUID        `json:"interaction_id"`
 	ClaimedAt         pgtype.Timestamptz `json:"claimed_at"`
@@ -654,4 +655,38 @@ type Venue struct {
 	Source            string      `json:"source"`
 	SourceContainerID string      `json:"source_container_id"`
 	Title             pgtype.Text `json:"title"`
+}
+
+type WhatsappChatConfig struct {
+	ID        pgtype.UUID `json:"id"`
+	ChatJid   string      `json:"chat_jid"`
+	ChatTitle pgtype.Text `json:"chat_title"`
+	ChatType  string      `json:"chat_type"`
+	// Group participant count. NULL means UNRESOLVED, and the gate treats unresolved as NOT tracked (fails closed) — the deliberate divergence from telegram_chat_config, whose gate tracks by default on an unknown size.
+	MemberCount  pgtype.Int4        `json:"member_count"`
+	Status       string             `json:"status"`
+	LastLookupAt pgtype.Timestamptz `json:"last_lookup_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WhatsappHistoryNotification struct {
+	ID            pgtype.UUID `json:"id"`
+	ProtocolMsgID string      `json:"protocol_msg_id"`
+	// Marshalled waE2E.HistorySyncNotification with InitialHistBootstrapInlinePayload nil'd: a media pointer (key, direct path, file-enc-SHA256, enc handle). NEVER message content.
+	Notification []byte `json:"notification"`
+	SyncType     string `json:"sync_type"`
+	ChunkOrder   int32  `json:"chunk_order"`
+	State        string `json:"state"`
+	// project: a media-backed chunk to download and project. dropped_inline: the server inlined the bootstrap payload against our request; the payload was discarded un-projected and the row is created at phase=projected so only its receipt and completion remain.
+	Disposition string             `json:"disposition"`
+	Phase       string             `json:"phase"`
+	OldestMsgTs pgtype.Timestamptz `json:"oldest_msg_ts"`
+	Attempts    int32              `json:"attempts"`
+	ClaimToken  pgtype.UUID        `json:"claim_token"`
+	LastError   pgtype.Text        `json:"last_error"`
+	Checkpoint  []byte             `json:"checkpoint"`
+	ClaimedAt   pgtype.Timestamptz `json:"claimed_at"`
+	ReceivedAt  pgtype.Timestamptz `json:"received_at"`
+	ProcessedAt pgtype.Timestamptz `json:"processed_at"`
 }

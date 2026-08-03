@@ -930,7 +930,7 @@ func TestHandleEvent_RecordedEventSourceIDIsInteractionID(t *testing.T) {
 }
 
 // TestMakeMessageRequest_SourceAllowlist pins the message.* create-path source
-// allowlist: telegram, messages, and gchat are accepted (each has an
+// allowlist: telegram, messages, gchat, and whatsapp are accepted (each has an
 // aggregation engine that publishes KindMessageReceived/KindMessageSent), while
 // an arbitrary source is rejected before the DB write attempts.
 func TestMakeMessageRequest_SourceAllowlist(t *testing.T) {
@@ -941,6 +941,7 @@ func TestMakeMessageRequest_SourceAllowlist(t *testing.T) {
 		repository.InteractionSourceTelegram,
 		repository.InteractionSourceMessages,
 		repository.InteractionSourceGChat,
+		repository.InteractionSourceWhatsApp,
 	} {
 		t.Run("accepts "+src, func(t *testing.T) {
 			req, err := makeMessageRequest(src, &cid, "ext-1", at, nil, repository.InteractionDirectionInbound)
@@ -953,7 +954,7 @@ func TestMakeMessageRequest_SourceAllowlist(t *testing.T) {
 	}
 
 	t.Run("rejects unknown source", func(t *testing.T) {
-		_, err := makeMessageRequest("whatsapp", &cid, "ext-1", at, nil, repository.InteractionDirectionInbound)
+		_, err := makeMessageRequest("signal", &cid, "ext-1", at, nil, repository.InteractionDirectionInbound)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "unsupported message source")
 	})

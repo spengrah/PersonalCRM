@@ -25,6 +25,7 @@ type Config struct {
 	Watchdog  WatchdogConfig
 	Staleness StalenessConfig
 	Telegram  TelegramConfig
+	WhatsApp  WhatsAppConfig
 	River     RiverConfig
 	EventBus  EventBusConfig
 	Health    HealthConfig
@@ -68,6 +69,7 @@ type FeatureFlags struct {
 	EnableTelegramSync   bool // Default: false
 	EnableCalendarSync   bool // Default: false
 	EnableExternalSync   bool // Default: false
+	EnableWhatsAppSync   bool // Default: false (requires EnableExternalSync — see Validate)
 	EnableEventBusIngest bool // Default: false (gates POST /api/v1/ingest/events — spec §3.9)
 }
 
@@ -158,6 +160,26 @@ type TelegramConfig struct {
 	BackfillSince        string // Default: "2026-01-01" (YYYY-MM-DD)
 	DiscoveryMinMessages int    // Default: 3
 	GroupMaxMembers      int    // Default: 10
+}
+
+// WhatsAppConfig holds WhatsApp integration tuning parameters. Mirrors
+// TelegramConfig; there is no credentials block because linked-device pairing
+// is the only secret and it lives in whatsmeow's own device store.
+//
+// The backfill floor and the history-request window are deliberately NOT here:
+// both are one-way (a smaller window is unrecoverable without re-pairing, and a
+// floor other than the CRM-wide horizon stages data nothing else carries), so
+// they are package constants in backend/internal/whatsapp.
+//
+// Every field is range-validated when ENABLE_WHATSAPP_SYNC is true:
+// getEnvAsInt falls back to the default on a MALFORMED value, so the range
+// check is what catches a value that parsed but is nonsense (e.g.
+// WHATSAPP_GROUP_MAX_MEMBERS=0, which would silently disable all group ingest).
+type WhatsAppConfig struct {
+	BurstWindowHours     int // WHATSAPP_BURST_WINDOW_HOURS, default 2, valid 1..24
+	ReplyBridgeHours     int // WHATSAPP_REPLY_BRIDGE_HOURS, default 48, valid 1..168
+	DiscoveryMinMessages int // WHATSAPP_DISCOVERY_MIN_MESSAGES, default 3, valid 1..100
+	GroupMaxMembers      int // WHATSAPP_GROUP_MAX_MEMBERS, default 10, valid 2..100
 }
 
 // RiverConfig holds River worker-queue settings. See .ai/spec/event-bus-foundation.md §3.9.
@@ -348,6 +370,13 @@ const (
 	DefaultHealthSyncWatchdogMaxAge = 30 * time.Minute
 	DefaultHealthDiskPath           = "/"
 	DefaultHealthDiskMinFreePercent = 10
+	// WhatsApp tuning defaults. Deliberately identical to the Telegram ones —
+	// the two sources aggregate through the same engine, so a divergent burst
+	// window or reply bridge would be an unexplained behavioral difference.
+	DefaultWhatsAppBurstWindowHours     = 2
+	DefaultWhatsAppReplyBridgeHours     = 48
+	DefaultWhatsAppDiscoveryMinMessages = 3
+	DefaultWhatsAppGroupMaxMembers      = 10
 )
 
 // builtinStalenessSourceOverrides returns a fresh copy of the per-source
@@ -443,6 +472,7 @@ func Load() (*Config, error) {
 			EnableTelegramSync:   getEnvAsBool("ENABLE_TELEGRAM_SYNC", false),
 			EnableCalendarSync:   getEnvAsBool("ENABLE_CALENDAR_SYNC", false),
 			EnableExternalSync:   getEnvAsBool("ENABLE_EXTERNAL_SYNC", false),
+			EnableWhatsAppSync:   getEnvAsBool("ENABLE_WHATSAPP_SYNC", false),
 			EnableEventBusIngest: getEnvAsBool("EVENT_BUS_INGEST_ENABLED", false),
 		},
 		Runtime: RuntimeConfig{
@@ -500,6 +530,12 @@ func Load() (*Config, error) {
 			BackfillSince:        getEnv("TELEGRAM_BACKFILL_SINCE", "2026-01-01"),
 			DiscoveryMinMessages: getEnvAsInt("TELEGRAM_DISCOVERY_MIN_MESSAGES", 3),
 			GroupMaxMembers:      getEnvAsInt("TELEGRAM_GROUP_MAX_MEMBERS", 10),
+		},
+		WhatsApp: WhatsAppConfig{
+			BurstWindowHours:     getEnvAsInt("WHATSAPP_BURST_WINDOW_HOURS", DefaultWhatsAppBurstWindowHours),
+			ReplyBridgeHours:     getEnvAsInt("WHATSAPP_REPLY_BRIDGE_HOURS", DefaultWhatsAppReplyBridgeHours),
+			DiscoveryMinMessages: getEnvAsInt("WHATSAPP_DISCOVERY_MIN_MESSAGES", DefaultWhatsAppDiscoveryMinMessages),
+			GroupMaxMembers:      getEnvAsInt("WHATSAPP_GROUP_MAX_MEMBERS", DefaultWhatsAppGroupMaxMembers),
 		},
 		River: RiverConfig{
 			WorkerConcurrency:      getEnvAsInt("RIVER_WORKER_CONCURRENCY", DefaultRiverWorkerConcurrency),
@@ -607,6 +643,42 @@ func (c *Config) Validate() error {
 				Field:   "TELEGRAM_API_HASH",
 				Message: "Telegram API hash is required when ENABLE_TELEGRAM_SYNC is true",
 			})
+		}
+	}
+
+	// WhatsApp validation. ENABLE_EXTERNAL_SYNC is a PREREQUISITE, not a
+	// caveat: the ImportHandler is constructed only inside the external-sync
+	// branch and the import routes register only under that flag, so a
+	// WhatsApp enabled without it would boot with none of the discovery,
+	// import-candidate or contact-method-enrichment behavior the feature is
+	// specified to provide. Refusing to start is the compliant behavior.
+	if c.Features.EnableWhatsAppSync {
+		if !c.Features.EnableExternalSync {
+			errors = append(errors, ValidationError{
+				Field:   "ENABLE_EXTERNAL_SYNC",
+				Message: "required when ENABLE_WHATSAPP_SYNC is true (WhatsApp discovery, import candidates, and contact-method enrichment are served by the external-sync stack)",
+			})
+		}
+		// Ranges. getEnvAsInt silently falls back to the default on a
+		// malformed value, so these catch the value that parsed but is
+		// nonsense — GROUP_MAX_MEMBERS=0 would otherwise disable all group
+		// ingest in silence.
+		for _, k := range []struct {
+			field    string
+			value    int
+			min, max int
+		}{
+			{"WHATSAPP_BURST_WINDOW_HOURS", c.WhatsApp.BurstWindowHours, 1, 24},
+			{"WHATSAPP_REPLY_BRIDGE_HOURS", c.WhatsApp.ReplyBridgeHours, 1, 168},
+			{"WHATSAPP_DISCOVERY_MIN_MESSAGES", c.WhatsApp.DiscoveryMinMessages, 1, 100},
+			{"WHATSAPP_GROUP_MAX_MEMBERS", c.WhatsApp.GroupMaxMembers, 2, 100},
+		} {
+			if k.value < k.min || k.value > k.max {
+				errors = append(errors, ValidationError{
+					Field:   k.field,
+					Message: fmt.Sprintf("must be between %d and %d, got %d", k.min, k.max, k.value),
+				})
+			}
 		}
 	}
 
@@ -939,6 +1011,7 @@ func TestConfig() *Config {
 			EnableTelegramSync:   false,
 			EnableCalendarSync:   false,
 			EnableExternalSync:   false,
+			EnableWhatsAppSync:   false,
 			EnableEventBusIngest: false,
 		},
 		Runtime: RuntimeConfig{
@@ -989,6 +1062,12 @@ func TestConfig() *Config {
 			BackfillSince:        "2026-01-01",
 			DiscoveryMinMessages: 3,
 			GroupMaxMembers:      10,
+		},
+		WhatsApp: WhatsAppConfig{
+			BurstWindowHours:     DefaultWhatsAppBurstWindowHours,
+			ReplyBridgeHours:     DefaultWhatsAppReplyBridgeHours,
+			DiscoveryMinMessages: DefaultWhatsAppDiscoveryMinMessages,
+			GroupMaxMembers:      DefaultWhatsAppGroupMaxMembers,
 		},
 		River: RiverConfig{
 			// Lowered alongside Database.MaxConns above so Validate()'s

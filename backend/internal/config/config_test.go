@@ -1502,3 +1502,171 @@ func TestIsProductionCRMEnv(t *testing.T) {
 		})
 	}
 }
+
+// TestConfig_WhatsAppDefaults pins the shipped defaults for the four WhatsApp
+// tuning knobs and the feature flag. The flag defaults OFF: nothing WhatsApp is
+// constructed, registered or routed until an operator opts in.
+func TestConfig_WhatsAppDefaults(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+	if cfg.Features.EnableWhatsAppSync {
+		t.Error("EnableWhatsAppSync must default to false")
+	}
+	if cfg.WhatsApp.BurstWindowHours != DefaultWhatsAppBurstWindowHours {
+		t.Errorf("BurstWindowHours = %d, want %d", cfg.WhatsApp.BurstWindowHours, DefaultWhatsAppBurstWindowHours)
+	}
+	if cfg.WhatsApp.ReplyBridgeHours != DefaultWhatsAppReplyBridgeHours {
+		t.Errorf("ReplyBridgeHours = %d, want %d", cfg.WhatsApp.ReplyBridgeHours, DefaultWhatsAppReplyBridgeHours)
+	}
+	if cfg.WhatsApp.DiscoveryMinMessages != DefaultWhatsAppDiscoveryMinMessages {
+		t.Errorf("DiscoveryMinMessages = %d, want %d", cfg.WhatsApp.DiscoveryMinMessages, DefaultWhatsAppDiscoveryMinMessages)
+	}
+	if cfg.WhatsApp.GroupMaxMembers != DefaultWhatsAppGroupMaxMembers {
+		t.Errorf("GroupMaxMembers = %d, want %d", cfg.WhatsApp.GroupMaxMembers, DefaultWhatsAppGroupMaxMembers)
+	}
+	// TestConfig() must agree with Load()'s defaults, or DB-backed tests run
+	// against a different WhatsApp shape than production.
+	tc := TestConfig()
+	if tc.WhatsApp != cfg.WhatsApp || tc.Features.EnableWhatsAppSync {
+		t.Errorf("TestConfig() WhatsApp shape %+v (flag %v) diverges from Load() defaults %+v",
+			tc.WhatsApp, tc.Features.EnableWhatsAppSync, cfg.WhatsApp)
+	}
+}
+
+// TestConfig_WhatsAppRequiresExternalSync pins the prerequisite in BOTH
+// directions: the inconsistent pair refuses to boot naming ENABLE_EXTERNAL_SYNC,
+// while WhatsApp-off and both-on load cleanly. Without the negative direction
+// the guard could be unconditional and look identical.
+func TestConfig_WhatsAppRequiresExternalSync(t *testing.T) {
+	t.Run("whatsapp on without external sync fails", func(t *testing.T) {
+		WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+		WithEnv(t, "NODE_ENV", "development")
+		WithEnv(t, "ENABLE_WHATSAPP_SYNC", "true")
+		WithEnv(t, "ENABLE_EXTERNAL_SYNC", "false")
+
+		_, err := Load()
+		if err == nil {
+			t.Fatal("expected ENABLE_WHATSAPP_SYNC without ENABLE_EXTERNAL_SYNC to fail validation")
+		}
+		verr, ok := err.(ValidationErrors)
+		if !ok {
+			t.Fatalf("expected ValidationErrors, got %T: %v", err, err)
+		}
+		found := false
+		for _, e := range verr {
+			if e.Field == "ENABLE_EXTERNAL_SYNC" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected a ValidationError naming ENABLE_EXTERNAL_SYNC, got %v", verr)
+		}
+	})
+
+	t.Run("whatsapp off is fine without external sync", func(t *testing.T) {
+		WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+		WithEnv(t, "NODE_ENV", "development")
+		WithEnv(t, "ENABLE_WHATSAPP_SYNC", "false")
+		WithEnv(t, "ENABLE_EXTERNAL_SYNC", "false")
+
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() failed with WhatsApp off: %v", err)
+		}
+	})
+
+	t.Run("both on loads", func(t *testing.T) {
+		WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+		WithEnv(t, "NODE_ENV", "development")
+		WithEnv(t, "ENABLE_WHATSAPP_SYNC", "true")
+		WithEnv(t, "ENABLE_EXTERNAL_SYNC", "true")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() failed with both flags on: %v", err)
+		}
+		if !cfg.Features.EnableWhatsAppSync {
+			t.Error("EnableWhatsAppSync should be true")
+		}
+	})
+}
+
+// TestConfig_WhatsAppValidationRejectsOutOfRange walks every knob's bounds.
+// getEnvAsInt falls back to the default on a malformed value, so only a
+// well-formed but out-of-range value reaches Validate — which is exactly the
+// case that would otherwise silently misconfigure ingest.
+func TestConfig_WhatsAppValidationRejectsOutOfRange(t *testing.T) {
+	cases := []struct {
+		env   string
+		value string
+		field string
+		valid bool
+	}{
+		{"WHATSAPP_BURST_WINDOW_HOURS", "0", "WHATSAPP_BURST_WINDOW_HOURS", false},
+		{"WHATSAPP_BURST_WINDOW_HOURS", "25", "WHATSAPP_BURST_WINDOW_HOURS", false},
+		{"WHATSAPP_BURST_WINDOW_HOURS", "24", "WHATSAPP_BURST_WINDOW_HOURS", true},
+		{"WHATSAPP_REPLY_BRIDGE_HOURS", "0", "WHATSAPP_REPLY_BRIDGE_HOURS", false},
+		{"WHATSAPP_REPLY_BRIDGE_HOURS", "169", "WHATSAPP_REPLY_BRIDGE_HOURS", false},
+		{"WHATSAPP_REPLY_BRIDGE_HOURS", "168", "WHATSAPP_REPLY_BRIDGE_HOURS", true},
+		{"WHATSAPP_DISCOVERY_MIN_MESSAGES", "0", "WHATSAPP_DISCOVERY_MIN_MESSAGES", false},
+		{"WHATSAPP_DISCOVERY_MIN_MESSAGES", "101", "WHATSAPP_DISCOVERY_MIN_MESSAGES", false},
+		{"WHATSAPP_DISCOVERY_MIN_MESSAGES", "1", "WHATSAPP_DISCOVERY_MIN_MESSAGES", true},
+		// 1 is the case that matters: a legal integer that would disable all
+		// group ingest by making every group "too large".
+		{"WHATSAPP_GROUP_MAX_MEMBERS", "0", "WHATSAPP_GROUP_MAX_MEMBERS", false},
+		{"WHATSAPP_GROUP_MAX_MEMBERS", "1", "WHATSAPP_GROUP_MAX_MEMBERS", false},
+		{"WHATSAPP_GROUP_MAX_MEMBERS", "101", "WHATSAPP_GROUP_MAX_MEMBERS", false},
+		{"WHATSAPP_GROUP_MAX_MEMBERS", "2", "WHATSAPP_GROUP_MAX_MEMBERS", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.env+"="+tc.value, func(t *testing.T) {
+			WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+			WithEnv(t, "NODE_ENV", "development")
+			WithEnv(t, "ENABLE_WHATSAPP_SYNC", "true")
+			WithEnv(t, "ENABLE_EXTERNAL_SYNC", "true")
+			WithEnv(t, tc.env, tc.value)
+
+			_, err := Load()
+			if tc.valid {
+				if err != nil {
+					t.Fatalf("expected %s=%s to be accepted, got %v", tc.env, tc.value, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected %s=%s to be rejected", tc.env, tc.value)
+			}
+			verr, ok := err.(ValidationErrors)
+			if !ok {
+				t.Fatalf("expected ValidationErrors, got %T: %v", err, err)
+			}
+			found := false
+			for _, e := range verr {
+				if e.Field == tc.field {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected a ValidationError naming %s, got %v", tc.field, verr)
+			}
+		})
+	}
+}
+
+// TestConfig_WhatsAppRangesUnenforcedWhenDisabled proves the range checks are
+// scoped to the enabled feature: an absurd knob on a WhatsApp-off deployment is
+// inert configuration, not a boot failure.
+func TestConfig_WhatsAppRangesUnenforcedWhenDisabled(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "ENABLE_WHATSAPP_SYNC", "false")
+	WithEnv(t, "WHATSAPP_GROUP_MAX_MEMBERS", "0")
+
+	if _, err := Load(); err != nil {
+		t.Fatalf("out-of-range knob must not fail validation while WhatsApp is off: %v", err)
+	}
+}

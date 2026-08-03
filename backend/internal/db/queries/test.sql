@@ -1031,7 +1031,9 @@ TRUNCATE TABLE
     telegram_message,
     telegram_session,
     telegram_update_state,
-    venue
+    venue,
+    whatsapp_chat_config,
+    whatsapp_history_notification
 RESTART IDENTITY CASCADE;
 
 -- name: DeleteProvisionalPredicates :exec
@@ -1071,13 +1073,15 @@ SELECT table_name::text FROM information_schema.tables
 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
 ORDER BY table_name;
 
--- name: TestListIndexDefsForComms :many
--- Index-definition test only: enumerate every index on comms_message with
+-- name: TestListIndexDefsForTable :many
+-- Index-definition test only: enumerate every index on one table with
 -- Postgres's own deterministic indexdef reconstruction, so a test can assert the
--- exact key columns + partial predicate of the eligible/stale-claim indexes
--- (migration 073). Read-only catalog access, mirroring TestListPublicTables.
+-- exact key columns + partial predicate of an index whose PREDICATE is the
+-- contract (comms_message's eligible/stale-claim indexes from 073/076; the
+-- whatsapp history claim index from 076). Read-only catalog access, mirroring
+-- TestListPublicTables.
 SELECT indexname::text, indexdef::text FROM pg_indexes
-WHERE schemaname = 'public' AND tablename = 'comms_message'
+WHERE schemaname = 'public' AND tablename = @table_name
 ORDER BY indexname;
 
 -- name: TestInsertNonFinalRiverJob :exec

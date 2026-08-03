@@ -613,6 +613,18 @@
     "tags": ["@area:imports", "@area:contacts"]
   },
   {
+    "pattern": "^backend/internal/db/queries/whatsapp\\.sql$",
+    "tags": ["@area:imports", "@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/repository/whatsapp\\.go$",
+    "tags": ["@area:imports", "@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/whatsapp/",
+    "tags": ["@area:settings", "@area:contacts"]
+  },
+  {
     "pattern": "^backend/internal/service/(email|gchat)_reconcile\\.go$",
     "tags": ["@area:settings", "@area:contacts"]
   },

@@ -47,8 +47,11 @@ func usingKeyColumns(t *testing.T, def string) []string {
 // so we lowercase, strip ALL parens (the predicate is a flat conjunction with no
 // grouping that changes meaning), collapse whitespace, then split on " and ".
 // The caller compares the result as a set, which rejects any extra or missing
-// conjunct (e.g. a stray "source = 'gchat'" or the redundant
-// "matched_contact_id IS NOT NULL" that the migration deliberately omits).
+// conjunct (e.g. a stray "source = 'gchat'", or a MISSING
+// "matched_contact_id IS NOT NULL" — 073 omitted that conjunct because the
+// column was NOT NULL, and 076 added it back when the column became nullable,
+// so an unmatched WhatsApp row drops out of the eligible indexes instead of
+// sitting in them permanently).
 func predicateConjuncts(t *testing.T, def string) []string {
 	t.Helper()
 	parts := strings.SplitN(def, " WHERE ", 2)
@@ -72,7 +75,7 @@ func TestCommsMessageEligibleIndexes_Definitions(t *testing.T) {
 	database, ctx := graphTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
-	defs, err := support.ListCommsIndexDefs(ctx)
+	defs, err := support.ListIndexDefsForTable(ctx, "comms_message")
 	require.NoError(t, err)
 
 	cases := []struct {
@@ -83,12 +86,12 @@ func TestCommsMessageEligibleIndexes_Definitions(t *testing.T) {
 		{
 			name: "idx_comms_message_unprocessed_eligible",
 			cols: []string{"source", "matched_contact_id", "sent_at"},
-			pred: []string{"processed_at is null", "claimed_at is null", "deleted_at is null"},
+			pred: []string{"processed_at is null", "claimed_at is null", "deleted_at is null", "matched_contact_id is not null"},
 		},
 		{
 			name: "idx_comms_message_stale_claim",
 			cols: []string{"source", "matched_contact_id", "claimed_at"},
-			pred: []string{"processed_at is null", "claimed_at is not null", "deleted_at is null"},
+			pred: []string{"processed_at is null", "claimed_at is not null", "deleted_at is null", "matched_contact_id is not null"},
 		},
 	}
 
@@ -103,9 +106,9 @@ func TestCommsMessageEligibleIndexes_Definitions(t *testing.T) {
 			assert.Equal(t, tc.cols, usingKeyColumns(t, def), "key columns (order-sensitive)")
 
 			// Partial predicate: exact set of conjuncts — any extra (e.g. a
-			// source restriction or the omitted matched_contact_id IS NOT NULL),
-			// missing, or altered conjunct fails. ElementsMatch is exact set
-			// membership, not substring.
+			// source restriction), missing (e.g. 076's
+			// matched_contact_id IS NOT NULL), or altered conjunct fails.
+			// ElementsMatch is exact set membership, not substring.
 			assert.ElementsMatch(t, tc.pred, predicateConjuncts(t, def), "partial predicate conjuncts (exact set)")
 		})
 	}
@@ -120,4 +123,41 @@ func indexNames(defs map[string]string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// TestWhatsAppHistoryClaimIndex_Definition pins the partial index behind
+// ClaimNextNotification. An index is only an access path — the claim's own
+// WHERE clause still finds pending and expired-lease rows with no index at all,
+// so a narrowed predicate (say, dropping 'processing') costs the SEEK, not the
+// work: the reclaim scan degrades to a heap filter over every notification ever
+// recorded, and no functional test can see the difference because the rows are
+// still returned. That is precisely why the predicate is asserted here rather
+// than left to the behavioral tests. Same reasoning, and the same catalog read,
+// as the comms_message eligible indexes above.
+func TestWhatsAppHistoryClaimIndex_Definition(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	database, ctx := graphTestDB(t)
+	support := repository.NewSyntheticSupportRepository(database.Queries)
+
+	defs, err := support.ListIndexDefsForTable(ctx, "whatsapp_history_notification")
+	require.NoError(t, err)
+
+	const name = "idx_whatsapp_history_notification_claim"
+	def, ok := defs[name]
+	require.Truef(t, ok, "index %s not found; have %v", name, indexNames(defs))
+
+	assert.Equal(t, []string{"state", "chunk_order", "received_at"}, usingKeyColumns(t, def),
+		"key columns (order-sensitive) — the claim seeks the claimable slice then orders within it")
+
+	// Postgres renders the IN list as `state = ANY (ARRAY[...])`, which the
+	// conjunct splitter returns as a single clause. Assert it exactly, so
+	// dropping either claimable state fails.
+	assert.Equal(t,
+		[]string{"state = any array['pending'::text, 'processing'::text]"},
+		predicateConjuncts(t, def),
+		"partial predicate must cover EXACTLY the two claimable states")
 }
