@@ -27,8 +27,10 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/testdb"
 
 	"github.com/google/uuid"
@@ -51,6 +53,8 @@ type whatsappWiringFixture struct {
 	firstC    string // external_id of the first (oldest) row in chat C
 	firstD    string
 	rowE      uuid.UUID
+	chatG     string // group JID, for the venue-kind discriminator
+	rowG      uuid.UUID
 	idPrefix  string
 	refPrefix string
 }
@@ -73,6 +77,7 @@ func seedWhatsAppWiringFixture(t *testing.T, ctx context.Context, chain wireChai
 		chatC:     "1204555" + run[:4] + "1@s.whatsapp.net",
 		chatD:     "1204555" + run[:4] + "2@s.whatsapp.net",
 		chatE:     "1204555" + run[:4] + "3@s.whatsapp.net",
+		chatG:     "1204555" + run[:4] + "4-1690000000@g.us",
 		idPrefix:  "wa-wiring-" + run + "-",
 		refPrefix: repository.InteractionSourceWhatsApp + ":1204555" + run[:4],
 	}
@@ -121,6 +126,9 @@ func seedWhatsAppWiringFixture(t *testing.T, ctx context.Context, chain wireChai
 	stage(fx.chatD, "d1", now.Add(-20*time.Minute))
 	// Chat E: one row left UNCLAIMED for assertions 2 and 3.
 	fx.rowE = stage(fx.chatE, "e1", now.Add(-10*time.Minute)).ID
+	// Chat G: a GROUP-threaded row, also unclaimed, so assertion 3 can prove the
+	// reader DISCRIMINATES dm from group_chat rather than merely resolving.
+	fx.rowG = stage(fx.chatG, "g1", now.Add(-5*time.Minute)).ID
 
 	return fx
 }
@@ -202,11 +210,31 @@ func TestWhatsAppWiring_ProductionRegistriesDispatchWhatsApp(t *testing.T) {
 	// --- Site 2: the venue-container-reader registry ------------------------
 	// An unregistered source returns (nil, nil) — the recorder then writes a
 	// NULL venue_id and nothing complains.
-	venueID, err := chain.messaging.VenueResolver.ResolveMessageVenueTx(
+	//
+	// Resolving BOTH a direct-chat row and a group row, and asserting the kinds
+	// DIFFER, is what makes this more than "a venue came back": the reader this
+	// PR adds is a copy of GChat's, whose kind is hard-coded to group_chat —
+	// right for Chat spaces, wrong for WhatsApp. A single-row assertion stays
+	// green under that defect.
+	dmVenueID, err := chain.messaging.VenueResolver.ResolveMessageVenueTx(
 		ctx, tx, repository.InteractionSourceWhatsApp, []uuid.UUID{fx.rowE},
 	)
 	require.NoError(t, err)
-	require.NotNil(t, venueID, "site 2: no venue container reader registered for whatsapp")
+	require.NotNil(t, dmVenueID, "site 2: no venue container reader registered for whatsapp")
+
+	groupVenueID, err := chain.messaging.VenueResolver.ResolveMessageVenueTx(
+		ctx, tx, repository.InteractionSourceWhatsApp, []uuid.UUID{fx.rowG},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, groupVenueID)
+
+	venueRepoTx := repository.NewVenueRepository(db.New(tx))
+	dmVenue, err := venueRepoTx.GetVenue(ctx, *dmVenueID)
+	require.NoError(t, err)
+	groupVenue, err := venueRepoTx.GetVenue(ctx, *groupVenueID)
+	require.NoError(t, err)
+	assert.Equal(t, repository.VenueKindDM, dmVenue.Kind, "site 2: a one-to-one chat JID must resolve to a dm venue")
+	assert.Equal(t, repository.VenueKindGroupChat, groupVenue.Kind, "site 2: an @g.us chat JID must resolve to a group_chat venue")
 
 	require.NoError(t, tx.Rollback(ctx))
 
@@ -258,5 +286,81 @@ func envelopeWithPeerRef(t *testing.T, peerRef string) *events.Envelope {
 		Kind:       events.KindMessageReceived,
 		Payload:    payload,
 		ObservedAt: accelerated.GetCurrentTime(),
+	}
+}
+
+// TestWhatsAppWiring_RematchHandlersFollowTheFeatureFlag pins D5.3, the ONE
+// piece of this PR's wiring that is not inert when WhatsApp is off.
+//
+// The engine and the seven registries are deliberately unconditional (rows
+// staged under an earlier enabled boot must still aggregate after a restart
+// with the flag off), and every query they run is source='whatsapp'-scoped, so
+// they cost nothing. The rematch handlers are different: registering the
+// 'phone' handler unconditionally would make a bare phone method
+// rematch-eligible on a deployment with BOTH Telegram and WhatsApp disabled,
+// minting a rematch job where none exists today.
+//
+// Nothing else observes this. The golden lists pin worker/periodic/provider
+// names, not rematch registrations, so hoisting the two Register calls out of
+// the `if` would be caught by no test without this one.
+func TestWhatsAppWiring_RematchHandlersFollowTheFeatureFlag(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	// A phone method is the discriminating input: 'whatsapp' has no other
+	// handler, but 'phone' is shared with Telegram, so an unconditional
+	// registration changes eligibility on a deployment that has neither.
+	phone := []service.Method{{Type: string(repository.ContactMethodPhone), Value: "+12045550101"}}
+	whatsapp := []service.Method{{Type: string(repository.ContactMethodWhatsApp), Value: "+12045550101"}}
+
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		want    int
+	}{
+		{name: "off", enabled: false, want: 0},
+		{name: "on", enabled: true, want: 1},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cloneURL, drop := testdb.NewEphemeralClone(t)
+			t.Cleanup(drop)
+
+			cfg := config.TestConfig()
+			cfg.Database.URL = cloneURL
+			cfg.Database.MigrationsPath = migrationsPathForTest()
+			cfg.Features.EnableWhatsAppSync = tc.enabled
+
+			chain := buildWireChainForGolden(t, cfg)
+
+			assert.Len(t, chain.graph.RematchService.EligibleMethods(phone), tc.want,
+				"a phone method must be rematch-eligible only while WhatsApp sync is enabled (Telegram is off in this chain)")
+			assert.Len(t, chain.graph.RematchService.EligibleMethods(whatsapp), tc.want,
+				"a whatsapp method must be rematch-eligible only while WhatsApp sync is enabled")
+
+			if !tc.enabled {
+				return
+			}
+
+			// With the handlers registered, DISPATCH one. This is the only
+			// assertion in the suite that exercises a registered rematch handler
+			// end-to-end, and it is what makes run()'s
+			// CommsMessageRepo.SetPool(database.Pool) observable:
+			// AttachUnmatchedByPeer owns its own transaction and returns
+			// "repository has no pool (call SetPool)" without it, so a chain that
+			// silently drifted from run()'s wiring fails here rather than in
+			// production. No rows match the number, so the handler attaches
+			// nothing and reports zero.
+			contact, err := chain.core.Contact.CreateContact(context.Background(), repository.CreateContactRequest{
+				FullName: "WhatsApp Flag Gate " + uuid.NewString()[:8],
+			})
+			require.NoError(t, err)
+			require.NoError(t,
+				chain.graph.RematchService.Run(context.Background(), uuid.New(), contact.ID, phone),
+				"the registered whatsapp phone handler must run against a pooled comms repository")
+		})
 	}
 }

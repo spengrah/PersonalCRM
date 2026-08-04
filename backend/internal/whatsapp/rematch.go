@@ -68,12 +68,11 @@ func (b *phoneRematchBase) rematchByPhone(ctx context.Context, contactID uuid.UU
 		return 0, nil
 	}
 
-	// The phone number is deliberately absent: an identifier is the part of a
-	// third party's data that is legible on sight, and the counts are what
-	// triage actually needs. The contact id attributes the attach, matching
-	// Telegram's rematch logging.
+	// Neither the phone number nor the contact id is logged. RematchService.Run
+	// — the loop that dispatches this handler — deliberately refuses to log the
+	// contact id, and a handler invoked from inside that loop should not
+	// reintroduce what its caller withholds. The counts are the triage signal.
 	logger.Info().
-		Str("contact_id", contactID.String()).
 		Int64("attached", attached).
 		Int64("deduped", deduped).
 		Msg("whatsapp rematch: attached staged messages")

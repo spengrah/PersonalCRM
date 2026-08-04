@@ -18,7 +18,7 @@ const whatsappLabel = "WhatsApp"
 // bytes the test pins are the bytes production writes. Unexported: every
 // cross-package consumer reaches the formats through NewAggregationEngine.
 func whatsappSourceAdapter() commsadapter.Adapter {
-	return commsadapter.NewAdapter(repository.InteractionSourceWhatsApp, whatsappLabel)
+	return commsadapter.NewAdapter(syncSource, whatsappLabel)
 }
 
 // NewAggregationEngine constructs the shared aggregator engine configured for

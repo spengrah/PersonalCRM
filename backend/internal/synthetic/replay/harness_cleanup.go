@@ -98,7 +98,7 @@ func (h *Harness) DrainGateB(ctx context.Context) error {
 // waitTeardownGateB bounded-waits until Gate B clears for EVERY aggregate source
 // (messages + gchat + whatsapp). Returns false on timeout. A source missing here
 // is invisible to teardown, so cleanup could start deleting under a live
-// aggregate job. Returns false on timeout. The budget is REAL wall-clock
+// aggregate job. The budget is REAL wall-clock
 // (see defaultSettleTimeout) so it does not collapse under TIME_ACCELERATION.
 func (h *Harness) waitTeardownGateB(ctx context.Context) bool {
 	open, cancel := realTimeBudget(teardownGateBBoundedWait)

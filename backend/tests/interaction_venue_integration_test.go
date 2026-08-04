@@ -776,7 +776,12 @@ func whatsappVenueKindFor(t *testing.T, ctx context.Context, database *db.Databa
 //
 // spec: WHA-043.direct-chat-is-a-dm
 func TestWhatsAppVenue_DirectJIDIsDM(t *testing.T) {
-	testsupport.RequireLongTests(t)
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
 	database, ctx := newSyntheticDB(t)
 	t.Parallel()
 
@@ -791,7 +796,12 @@ func TestWhatsAppVenue_DirectJIDIsDM(t *testing.T) {
 //
 // spec: WHA-043.group-chat-is-a-group-chat
 func TestWhatsAppVenue_GroupJIDIsGroupChat(t *testing.T) {
-	testsupport.RequireLongTests(t)
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
 	database, ctx := newSyntheticDB(t)
 	t.Parallel()
 

@@ -289,7 +289,10 @@ func TestWhatsAppAggregation_ReplyBridgePromotesToMutual(t *testing.T) {
 
 	e.seedWhatsAppRow(t, &contact.ID, chatJID, "wa-br-out1-"+suffix, repository.InteractionDirectionOutbound, base)
 	e.seedWhatsAppRow(t, &contact.ID, chatJID, "wa-br-out2-"+suffix, repository.InteractionDirectionOutbound, base.Add(5*time.Minute))
-	// Inbound one hour later — inside the 48h bridge, outside the 2h burst.
+	// Inbound 55 minutes after the last outbound. The DIRECTION CHANGE is what
+	// starts a new burst (groupIntoBursts splits on direction regardless of
+	// gap); the gap being inside the 48h reply-bridge window is what merges the
+	// two back into one mutual interaction.
 	e.seedWhatsAppRow(t, &contact.ID, chatJID, "wa-br-in1-"+suffix, repository.InteractionDirectionInbound, base.Add(time.Hour))
 
 	require.NoError(t, e.engine.AggregateForContact(e.ctx, contact.ID, chatJID))

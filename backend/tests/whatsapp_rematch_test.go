@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -97,11 +98,35 @@ func TestWhatsAppRematch_OnWhatsAppMethodAdded(t *testing.T) {
 	assert.Equal(t, repository.InteractionSourceWhatsApp, interactions[0].Source)
 }
 
+// countingRematchHandler wraps a real RematchHandler and records how many times
+// Run dispatched to it. It exists because RematchService.Run returns only an
+// error: without observing the wrapped handler directly, a Run that stopped
+// after the first productive handler — or a registration that silently dropped
+// one — would look identical to a healthy fan-out.
+type countingRematchHandler struct {
+	inner  service.RematchHandler
+	calls  int
+	counts []int
+	errs   []error
+}
+
+func (c *countingRematchHandler) IdentifierType() string { return c.inner.IdentifierType() }
+
+func (c *countingRematchHandler) Rematch(ctx context.Context, contactID uuid.UUID, value string) (int, error) {
+	c.calls++
+	n, err := c.inner.Rematch(ctx, contactID, value)
+	c.counts = append(c.counts, n)
+	c.errs = append(c.errs, err)
+	return n, err
+}
+
 // TestWhatsAppRematch_TelegramPhoneHandlerUnaffected is R5.4's guard. Adding a
 // WhatsApp handler for the 'phone' type means TWO handlers now run for a phone
 // method; RematchService fans out to every one and FAILS FAST on the first
 // error, so a WhatsApp attach failure would stop Telegram's handler running in
-// the same pass. This asserts both run and neither errors.
+// the same pass. Both handlers are therefore wrapped and each is asserted to
+// have been dispatched exactly once and to have reported its own count without
+// erroring — the fan-out itself is the claim, not just the absence of an error.
 func TestWhatsAppRematch_TelegramPhoneHandlerUnaffected(t *testing.T) {
 	t.Parallel()
 	e := setupWhatsAppEngineTest(t)
@@ -122,16 +147,27 @@ func TestWhatsAppRematch_TelegramPhoneHandlerUnaffected(t *testing.T) {
 		2, 48, telegramRepo, e.interactionRepo, nil, nil, nil, e.database.Pool, nil,
 	)
 
+	telegramHandler := &countingRematchHandler{inner: tgpkg.NewPhoneRematchHandler(telegramRepo, telegramMatcher, telegramEngine)}
+	whatsappHandler := &countingRematchHandler{inner: wapkg.NewPhoneRematchHandler(e.commsRepo, e.engine)}
+
 	svc := service.NewRematchService()
 	// Registration order mirrors the composition root: telegram (main.go builds
 	// it first) then whatsapp.
-	svc.Register(tgpkg.NewPhoneRematchHandler(telegramRepo, telegramMatcher, telegramEngine))
-	svc.Register(wapkg.NewPhoneRematchHandler(e.commsRepo, e.engine))
+	svc.Register(telegramHandler)
+	svc.Register(whatsappHandler)
 
 	require.Len(t, svc.EligibleMethods([]service.Method{{Type: "phone", Value: e164}}), 1)
 
 	err := svc.Run(e.ctx, uuid.New(), contact.ID, []service.Method{{Type: "phone", Value: e164}})
 	require.NoError(t, err, "neither phone handler may error when both are registered")
+
+	// BOTH handlers ran, each reporting its own count over its own source's rows.
+	require.Equal(t, 1, telegramHandler.calls, "the telegram phone handler must still be dispatched")
+	require.Equal(t, 1, whatsappHandler.calls, "the whatsapp phone handler must be dispatched")
+	assert.Equal(t, []int{0}, telegramHandler.counts, "telegram owns no rows for this peer, so it reports zero")
+	assert.Equal(t, []error{nil}, telegramHandler.errs, "telegram's handler must not error when whatsapp co-registers")
+	assert.Equal(t, []int{2}, whatsappHandler.counts, "whatsapp attaches both of its staged rows")
+	assert.Equal(t, []error{nil}, whatsappHandler.errs)
 
 	// The WhatsApp handler did its own work: the staged rows became an interaction.
 	interactions := waitForInteractionCountExact(t, e.ctx, e.interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout)

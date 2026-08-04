@@ -198,6 +198,7 @@ type wireChain struct {
 	sync      syncStack
 	database  *db.Database
 	core      coreRepos
+	graph     graphCore
 	messaging messagingFoundation
 	agg       aggregationStack
 	wiring    messagingWorkerWiring
@@ -242,6 +243,11 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 	ingest := buildIngestRepos(database.Queries)
 	graph := buildGraphCore(database, eventBus)
 	messaging := buildMessagingFoundation(database.Queries, ingest.MessagesMessage, ingest.CalendarEvent)
+	// Part of run()'s order (main.go): AttachUnmatchedByPeer owns its own
+	// transaction and requires a pool, so the WhatsApp rematch handlers this
+	// chain registers would fail at runtime without it. Registers no worker,
+	// periodic or provider, so the golden lists are unaffected.
+	messaging.CommsMessageRepo.SetPool(database.Pool)
 	consumers := buildDomainConsumers(cfg, database, core, graph, eventBus, riverClient)
 	contactService := buildContactService(cfg, database, core, graph, consumers, eventBus, riverClient)
 	interactionRecorder := buildInteractionRecorder(contactService, messaging, ingest, consumers, eventBus)
@@ -276,6 +282,7 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 		sync:      syncStk,
 		database:  database,
 		core:      core,
+		graph:     graph,
 		messaging: messaging,
 		agg:       agg,
 		wiring:    wiring,
