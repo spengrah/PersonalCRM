@@ -359,6 +359,8 @@ handlers.RegisterNewTableRoutes(v1, handlers.NewTableRouteDeps{
 | | `/whatsapp/auth/cancel` | POST | WhatsAppHandler | Cancel an in-flight pairing (204, idempotent) |
 | | `/whatsapp/auth` | DELETE | WhatsAppHandler | Unlink the device. 200 with a body; 502 when the remote unlink fails and local credentials were KEPT; `?force=true` clears locally with a manual-unlink warning |
 | | `/whatsapp/auth/status` | GET | WhatsAppHandler | Connection state, linked identity, live pairing code, backfill counts. Absent (404) when the feature is off |
+| | `/whatsapp/chats` | GET | WhatsAppHandler | Every observed group chat with its stored tracking override and the decision the ingest gate would take for it |
+| | `/whatsapp/chats/{chat_jid}` | PATCH | WhatsAppHandler | Set one chat's override (`auto`\|`tracked`\|`ignored`). 404 for a chat never observed — an override never mints a row. No backfill is triggered: WhatsApp history is one-shot |
 | **System** | `/system/time` | GET | SystemHandler | Current time |
 | | `/export` | POST | SystemHandler | Export data |
 | | `/import` | POST | SystemHandler | Import data |

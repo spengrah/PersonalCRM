@@ -116,3 +116,24 @@ type WhatsAppDisconnectResponse struct {
 	// Warning is set when the user must finish the unlink from their phone.
 	Warning string `json:"warning,omitempty"`
 }
+
+// WhatsAppChatResponse is one discovered chat and the tracking decision the
+// ingest gate would take for it.
+type WhatsAppChatResponse struct {
+	ChatJID   string  `json:"chat_jid"`
+	ChatTitle *string `json:"chat_title,omitempty"`
+	ChatType  string  `json:"chat_type"`
+	// MemberCount is absent when WhatsApp never reported a size. The gate fails
+	// CLOSED on that, so such a chat is not tracked unless it is overridden.
+	MemberCount *int32 `json:"member_count,omitempty"`
+	// Status is the user's override: auto, tracked, or ignored.
+	Status string `json:"status"`
+	// EffectiveTracked is what the gate would decide right now, override and
+	// member count together — the same predicate the live ingest path uses.
+	EffectiveTracked bool `json:"effective_tracked"`
+}
+
+// WhatsAppChatStatusRequest sets one chat's tracking override.
+type WhatsAppChatStatusRequest struct {
+	Status string `json:"status" binding:"required,oneof=auto tracked ignored"`
+}

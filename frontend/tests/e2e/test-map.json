@@ -622,11 +622,27 @@
   },
   {
     "pattern": "^backend/internal/db/queries/whatsapp\\.sql$",
-    "tags": ["@area:imports", "@area:contacts"]
+    "tags": ["@area:imports", "@area:contacts", "@area:settings"]
   },
   {
     "pattern": "^backend/internal/repository/whatsapp\\.go$",
-    "tags": ["@area:imports", "@area:contacts"]
+    "tags": ["@area:imports", "@area:contacts", "@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/components/settings/whatsapp-section\\.tsx$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/hooks/use-whatsapp\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/src/lib/whatsapp-api\\.ts$",
+    "tags": ["@area:settings"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/whatsapp-settings\\.spec\\.ts$",
+    "tags": ["@area:settings"]
   },
   {
     "pattern": "^backend/internal/whatsapp/",

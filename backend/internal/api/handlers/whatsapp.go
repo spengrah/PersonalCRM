@@ -25,17 +25,30 @@ type WhatsAppManager interface {
 	Disconnect(ctx context.Context, force bool) (*wapkg.DisconnectResult, error)
 }
 
-// WhatsAppHandler serves the WhatsApp pairing and status surface.
-type WhatsAppHandler struct {
-	manager WhatsAppManager
+// WhatsAppChatSettings is the chat-gate slice the handler serves. It is a
+// SEPARATE seam from WhatsAppManager because chat-gate rows are ordinary DB
+// state the actor does not own — routing them through the actor would put plain
+// CRUD on a message queue built for session fencing.
+type WhatsAppChatSettings interface {
+	ListChats(ctx context.Context) ([]wapkg.ChatWithTracking, error)
+	SetChatStatus(ctx context.Context, chatJID, status string) (*wapkg.ChatWithTracking, error)
 }
 
-// NewWhatsAppHandler creates a new WhatsApp handler. A nil manager is a
-// supported construction: every endpoint reports the integration unavailable
-// rather than panicking. (In production the routes are simply not registered
-// when the feature is off — see registerRoutes — so this is defence in depth.)
-func NewWhatsAppHandler(manager WhatsAppManager) *WhatsAppHandler {
-	return &WhatsAppHandler{manager: manager}
+// WhatsAppHandler serves the WhatsApp pairing, status and group-tracking
+// surface.
+type WhatsAppHandler struct {
+	manager WhatsAppManager
+	chats   WhatsAppChatSettings
+}
+
+// NewWhatsAppHandler creates a new WhatsApp handler. A nil manager or a nil
+// chat seam is a supported construction: the affected endpoints report the
+// integration unavailable rather than panicking. (In production the routes are
+// simply not registered when the feature is off — see registerRoutes — so this
+// is defence in depth, and the nil-chats shape is what a boot whose device
+// store failed to open actually serves.)
+func NewWhatsAppHandler(manager WhatsAppManager, chats WhatsAppChatSettings) *WhatsAppHandler {
+	return &WhatsAppHandler{manager: manager, chats: chats}
 }
 
 // StartPairing begins linking a WhatsApp account
@@ -208,6 +221,88 @@ func (h *WhatsAppHandler) GetStatus(c *gin.Context) {
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, whatsAppStatusResponse(h.manager.Status()), nil)
+}
+
+// ListChats lists the discovered WhatsApp group chats
+// @Summary List WhatsApp chats
+// @Description List every group chat the ingest gate has observed, with its stored tracking override and the decision the gate would take for it right now. Only group chats are ever recorded; a one-to-one chat never appears.
+// @Tags whatsapp
+// @Produce json
+// @Success 200 {object} api.APIResponse{data=[]WhatsAppChatResponse}
+// @Failure 500 {object} api.APIResponse{error=api.APIError}
+// @Failure 503 {object} api.APIResponse{error=api.APIError}
+// @Router /whatsapp/chats [get]
+func (h *WhatsAppHandler) ListChats(c *gin.Context) {
+	if h.chats == nil {
+		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		return
+	}
+
+	chats, err := h.chats.ListChats(c.Request.Context())
+	if err != nil {
+		api.RespondInternal(c, err)
+		return
+	}
+
+	// make, not var: an empty list must serialise as [] rather than null, or
+	// the client's length check reads a missing list as a broken one.
+	out := make([]WhatsAppChatResponse, 0, len(chats))
+	for _, chat := range chats {
+		out = append(out, whatsAppChatToResponse(chat))
+	}
+	api.SendSuccess(c, http.StatusOK, out, nil)
+}
+
+// UpdateChatStatus records the user's per-chat tracking override
+// @Summary Update WhatsApp chat tracking
+// @Description Set one chat's tracking override to auto, tracked or ignored. The chat must already have been observed — an override is a decision about a discovered chat, never a way to create one — so an unknown chat is a 404. Flipping a chat to tracked does NOT backfill it: WhatsApp history is delivered once, at link time, and messages the gate declined were never stored.
+// @Tags whatsapp
+// @Accept json
+// @Produce json
+// @Param chat_jid path string true "Chat JID"
+// @Param request body WhatsAppChatStatusRequest true "Tracking override"
+// @Success 200 {object} api.APIResponse{data=WhatsAppChatResponse}
+// @Failure 400 {object} api.APIResponse{error=api.APIError}
+// @Failure 404 {object} api.APIResponse{error=api.APIError}
+// @Failure 500 {object} api.APIResponse{error=api.APIError}
+// @Failure 503 {object} api.APIResponse{error=api.APIError}
+// @Router /whatsapp/chats/{chat_jid} [patch]
+func (h *WhatsAppHandler) UpdateChatStatus(c *gin.Context) {
+	if h.chats == nil {
+		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		return
+	}
+
+	chatJID := c.Param("chat_jid")
+	if chatJID == "" {
+		api.SendValidationError(c, "Invalid chat", "chat_jid is required")
+		return
+	}
+
+	var req WhatsAppChatStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.SendValidationError(c, "Invalid chat status", err.Error())
+		return
+	}
+
+	updated, err := h.chats.SetChatStatus(c.Request.Context(), chatJID, req.Status)
+	if err != nil {
+		api.RespondError(c, err, "Chat")
+		return
+	}
+	api.SendSuccess(c, http.StatusOK, whatsAppChatToResponse(*updated), nil)
+}
+
+// whatsAppChatToResponse maps one chat-with-decision onto the wire shape.
+func whatsAppChatToResponse(chat wapkg.ChatWithTracking) WhatsAppChatResponse {
+	return WhatsAppChatResponse{
+		ChatJID:          chat.ChatJID,
+		ChatTitle:        chat.ChatTitle,
+		ChatType:         chat.ChatType,
+		MemberCount:      chat.MemberCount,
+		Status:           chat.Status,
+		EffectiveTracked: chat.EffectiveTracked,
+	}
 }
 
 // whatsAppStatusResponse maps the manager's status onto the wire shape.

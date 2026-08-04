@@ -994,6 +994,39 @@ definitions:
           instead of presenting a fabricated zero as fresh.
         type: boolean
     type: object
+  handlers.WhatsAppChatResponse:
+    properties:
+      chat_jid:
+        type: string
+      chat_title:
+        type: string
+      chat_type:
+        type: string
+      effective_tracked:
+        description: |-
+          EffectiveTracked is what the gate would decide right now, override and
+          member count together — the same predicate the live ingest path uses.
+        type: boolean
+      member_count:
+        description: |-
+          MemberCount is absent when WhatsApp never reported a size. The gate fails
+          CLOSED on that, so such a chat is not tracked unless it is overridden.
+        type: integer
+      status:
+        description: 'Status is the user''s override: auto, tracked, or ignored.'
+        type: string
+    type: object
+  handlers.WhatsAppChatStatusRequest:
+    properties:
+      status:
+        enum:
+        - auto
+        - tracked
+        - ignored
+        type: string
+    required:
+    - status
+    type: object
   handlers.WhatsAppDisconnectResponse:
     properties:
       already_unlinked:
@@ -4321,6 +4354,118 @@ paths:
                   $ref: '#/definitions/api.APIError'
               type: object
       summary: Get WhatsApp status
+      tags:
+      - whatsapp
+  /whatsapp/chats:
+    get:
+      description: List every group chat the ingest gate has observed, with its stored
+        tracking override and the decision the gate would take for it right now. Only
+        group chats are ever recorded; a one-to-one chat never appears.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  items:
+                    $ref: '#/definitions/handlers.WhatsAppChatResponse'
+                  type: array
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: List WhatsApp chats
+      tags:
+      - whatsapp
+  /whatsapp/chats/{chat_jid}:
+    patch:
+      consumes:
+      - application/json
+      description: 'Set one chat''s tracking override to auto, tracked or ignored.
+        The chat must already have been observed — an override is a decision about
+        a discovered chat, never a way to create one — so an unknown chat is a 404.
+        Flipping a chat to tracked does NOT backfill it: WhatsApp history is delivered
+        once, at link time, and messages the gate declined were never stored.'
+      parameters:
+      - description: Chat JID
+        in: path
+        name: chat_jid
+        required: true
+        type: string
+      - description: Tracking override
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.WhatsAppChatStatusRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.WhatsAppChatResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "503":
+          description: Service Unavailable
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Update WhatsApp chat tracking
       tags:
       - whatsapp
 schemes:

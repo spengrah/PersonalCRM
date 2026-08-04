@@ -481,11 +481,12 @@ behaviors:
       Failing closed is a STORAGE rule, not an acknowledgement rule — the two are deliberately separate,
       because acknowledging a message that could not be assessed would discard it irrecoverably, while an
       unbounded retry of a permanently unanswerable question would degrade message handling indefinitely.
-      Two limits of the current implementation, recorded rather than hidden: the explicit track/ignore
-      choice is honoured wherever it is stored, but no surface can write one yet, so today the branch is
-      reachable only by seeding the stored state directly; and a size once established is never
-      re-resolved, so a group that later grows past the limit keeps being tracked. Both are settled by the
-      settings surface that owns the per-chat override.
+      The explicit track/ignore choice is written by the settings surface (WHA-076), which is the only
+      writer of that column — every automatic re-observation preserves it. One limit of the current
+      implementation, recorded rather than hidden: a size once established is never re-resolved, so a group
+      that later grows past the limit keeps being tracked. That is remedied rather than settled — the user
+      turns the grown group off from the settings surface — because no automatic re-resolution exists, and
+      adding one would put a network round trip back on the message path.
 
   - id: WHA-024
     title: A frequent unknown peer becomes a labelled import candidate
@@ -632,3 +633,172 @@ behaviors:
         text: an interaction from a group chat is placed in a group-chat venue
     provenance: [WhatsAppVenueContainerReader, VenueResolverRegistry, TestWhatsAppVenue_DirectJIDIsDM, TestWhatsAppVenue_GroupJIDIsGroupChat]
     notes: Unlike Google Chat, whose spaces are always group containers, WhatsApp carries both kinds, so the kind is derived per chat rather than fixed for the source.
+
+  # --- Settings surface (UI) ---
+
+  - id: WHA-070
+    title: Linking offers both pairing methods and shows the live code
+    type: ux
+    status: current
+    surface: ui
+    given: the settings page with a WhatsApp integration that has no account linked
+    when: the user links an account
+    then:
+      - key: link-offers-qr-and-phone
+        text: linking offers both a scannable code and a phone pairing code, rather than only one
+      - key: qr-pairing-shows-scannable-code
+        text: a QR pairing renders the code the backend reported as a scannable image, and a refreshed code replaces the displayed one
+      - key: phone-pairing-shows-typed-code
+        text: a phone pairing sends the number the user entered and shows the code to type on the phone
+      - key: pairing-can-be-cancelled
+        text: an in-flight pairing can be cancelled, and the section returns to offering a fresh link rather than to the middle of the abandoned attempt
+    provenance: [whatsapp-section.tsx pairing branches, use-whatsapp.ts pairing mutations]
+    notes: The browser half of WHA-015 and WHA-016 (the pairing endpoints). The code refresh is what the poll exists for — WhatsApp expires codes — so the rendered code following the polled status is the mechanism under test; no test can scan a code with a real phone.
+
+  - id: WHA-071
+    title: Before the integration can link, it says what it is waiting on
+    type: ux
+    status: current
+    surface: ui
+    given: the settings page with a WhatsApp integration whose readiness gate is unsatisfied
+    when: the section renders
+    then:
+      - key: not-ready-names-the-missing-piece
+        text: the section names the dependency the integration is waiting on, rather than only reporting that something is missing
+      - key: not-ready-offers-no-link-affordance
+        text: no link affordance is offered at all, because the backend would refuse it
+    provenance: [whatsapp-section.tsx not_ready branch, WhatsAppStatusResponse.missing]
+    notes: The browser half of WHA-013, the readiness gate. The affordance is absent rather than disabled — a disabled control invites the user to guess what unlocks it.
+
+  - id: WHA-072
+    title: The linked section reports the account and its history import
+    type: ux
+    status: current
+    surface: ui
+    given: the settings page with a linked WhatsApp account
+    when: the section renders
+    then:
+      - key: account-identity-shown
+        text: the linked account is identified by its display name, phone number, device address and when it connected
+      - key: history-import-progress-shown
+        text: an in-flight one-shot history import reports how many chunks remain, and a chunk that could not be imported is reported rather than hidden
+      - key: history-floor-shown-once-known
+        text: once the depth the history reached is known, it is shown
+      - key: unresolved-peers-count-shown
+        text: the number of observed peers whose identity could not be recovered is shown, since those messages cannot be attributed automatically
+      - key: unrefreshed-counts-are-marked-stale
+        text: counts that could not be refreshed are marked as possibly out of date rather than presented as fresh
+    provenance: [whatsapp-section.tsx connected branch, use-whatsapp.ts useWhatsAppStatus]
+    notes: The browser half of WHA-007 (the status contract) and WHA-016. Marking stale counts matters because the status endpoint answers during an outage rather than hanging on it, so a zero it could not verify must not read as a verified zero.
+
+  - id: WHA-073
+    title: An accepted gap in the one-shot history is visible, not silent
+    type: ux
+    status: current
+    surface: ui
+    given: the settings page with a linked WhatsApp account
+    when: part of the one-shot history arrived in a form the integration could not import
+    then:
+      - key: dropped-history-warned-when-present
+        text: the section warns how many chunks of history were dropped
+      - key: dropped-history-named-unrecoverable-without-relink
+        text: the warning states that those messages cannot be recovered without unlinking and pairing again
+      - key: dropped-history-warning-absent-when-none
+        text: no such warning appears when nothing was dropped
+    provenance: [whatsapp-section.tsx dropped-history warning, WhatsAppBackfillResponse.dropped_inline_chunks]
+    notes: The browser half of WHA-066. The gap is accepted by design — those chunks carry history inline against an explicit non-inline request and are dropped un-projected — so the surface states it rather than presenting an incomplete import as complete.
+
+  - id: WHA-074
+    title: Unlinking is confirmed, and a failed unlink offers retry and a forced clear
+    type: ux
+    status: current
+    surface: ui
+    given: the settings page with a linked WhatsApp account
+    when: the user unlinks it
+    then:
+      - key: disconnect-offered-and-confirmed
+        text: unlinking is offered, asks for confirmation, and the section reports the account as no longer linked once it succeeds
+      - key: failed-unlink-keeps-credentials-and-offers-retry
+        text: an unlink WhatsApp did not confirm reports that the stored credentials were deliberately kept, and offers a retry
+      - key: forced-clear-warns-device-must-be-unlinked-from-phone
+        text: a forced local-only clear warns that WhatsApp was not contacted, so the device must also be removed from the phone's linked-devices screen
+    provenance: [whatsapp-section.tsx disconnect + disconnect_failed branches, use-whatsapp.ts useDisconnectWhatsApp]
+    notes: The browser half of WHA-011. Keeping the credentials on a failed unlink is deliberate — a failed unlink is not evidence the remote device is gone — and the surface says so rather than presenting the failure as an ordinary error.
+
+  - id: WHA-075
+    title: A device store that could not record its own state is surfaced with its remedy
+    type: ux
+    status: current
+    surface: ui
+    given: the settings page with a linked WhatsApp account whose device store is degraded
+    when: the section renders
+    then:
+      - key: degraded-store-surfaced
+        text: the section reports the degraded condition, naming which symptoms apply — a device that could not be replaced, an unrecorded terminal reason, or an unwritten record of which device is linked
+      - key: remedy-is-force-disconnect-and-relink
+        text: the report names forcing a disconnect and linking again as the remedy
+    provenance: [whatsapp-section.tsx degraded device store advisory, WhatsAppStatusResponse.replaced_device_retained, WhatsAppStatusResponse.terminal_reason_persisted, WhatsAppStatusResponse.link_selector_persisted]
+    notes: Three symptoms of one condition sharing one remedy, so one advisory rather than three banners. Two of the three flags are deliberately tri-state on the wire, because "no decision has been taken" and "a decision was taken and could not be recorded" are different things and only the second is worth surfacing.
+
+  - id: WHA-076
+    title: Discovered groups are listed with their tracking decision, and the decision can be overridden
+    type: ux
+    status: current
+    surface: ui
+    given: the settings page with a linked WhatsApp account
+    when: the group chat list renders
+    then:
+      - key: groups-listed-with-size-and-decision
+        text: each discovered group is listed with its size and the tracking decision currently in force, and a group whose size was never established says so rather than showing a number
+      - key: group-without-a-title-is-identified-by-its-address
+        text: a group with no title is identified by its address, so two unnamed groups stay distinguishable
+      - key: tracking-choice-persists
+        text: choosing to track or ignore a group records that choice, and the next read reflects it
+      - key: untracked-history-is-not-recoverable
+        text: the list states that messages received while a group was untracked were never stored and cannot be recovered
+      - key: empty-state-before-any-group
+        text: before any group has been discovered the list shows an empty state rather than nothing
+    provenance: [whatsapp-section.tsx WhatsAppChatList, use-whatsapp.ts useWhatsAppChats, ChatSettingsService]
+    notes: >-
+      The browser half of WHA-023 — this is the surface that finally writes the per-chat override, and it
+      is also the remedy for a group that grew past the size limit, since a size once established is never
+      re-resolved. Turning a group on triggers no retroactive backfill: WhatsApp history is delivered once,
+      at link time, so the copy says so rather than implying a recovery the source cannot perform.
+
+  - id: WHA-077
+    title: A connection the integration gave up on is reported with its reason
+    type: ux
+    status: current
+    surface: ui
+    given: the settings page with a WhatsApp integration that is not connected
+    when: the section renders
+    then:
+      - key: disconnected-shows-the-reason
+        text: a terminated connection reports why it ended, in words rather than as a machine code
+      - key: temporary-ban-shows-when-it-lifts
+        text: a temporary restriction also reports when it lifts, which is its only actionable half
+      - key: startup-failure-shows-its-reason
+        text: a stack that could not be brought up at all reports its reason too, rather than rendering as an empty section
+      - key: terminal-disconnect-offers-a-fresh-link
+        text: a connection that ended terminally offers linking again, and taking that offer reaches the same choice of pairing methods a first-time link does
+    provenance: [whatsapp-section.tsx disconnected + error branches, whatsapp terminal reason constants]
+    notes: The browser half of WHA-004 and WHA-005 (the terminal-disconnect contract). An unmapped future reason falls back to the raw value, so a newer backend still shows something true rather than nothing.
+
+  - id: WHA-078
+    title: The group tracking endpoints list observed chats and record an override
+    type: api
+    status: current
+    surface: api
+    given: the WhatsApp group tracking endpoints
+    when: a chat list is read or an override is written
+    then:
+      - key: list-returns-observed-chats-with-effective-decision
+        text: the list returns every observed chat with its stored override and the decision the ingest gate would take for it, computed by the same predicate the live path uses
+      - key: override-persists-and-is-echoed-back
+        text: writing an override echoes the updated chat back with the decision recomputed from the new value, so no second read is needed
+      - key: override-rejects-an-unknown-status
+        text: an override that is not one of the accepted values is rejected before it reaches the store
+      - key: override-of-an-unobserved-chat-is-not-found
+        text: an override for a chat the integration has never observed is not found, and no row is created for it
+    provenance: [WhatsAppHandler.ListChats, WhatsAppHandler.UpdateChatStatus, ChatSettingsService, ListWhatsAppChatConfigs, UpdateWhatsAppChatConfigStatus]
+    notes: The override is the only writer of the per-chat status column — every automatic re-observation preserves it — so this is the write path WHA-023 records as the one a surface finally provides. Turning a chat on deliberately triggers no backfill, unlike the Telegram analogue, because WhatsApp history is one-shot.

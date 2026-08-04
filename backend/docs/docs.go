@@ -5124,6 +5124,202 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/whatsapp/chats": {
+            "get": {
+                "description": "List every group chat the ingest gate has observed, with its stored tracking override and the decision the gate would take for it right now. Only group chats are ever recorded; a one-to-one chat never appears.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "whatsapp"
+                ],
+                "summary": "List WhatsApp chats",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/definitions/handlers.WhatsAppChatResponse"
+                                            }
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "/whatsapp/chats/{chat_jid}": {
+            "patch": {
+                "description": "Set one chat's tracking override to auto, tracked or ignored. The chat must already have been observed — an override is a decision about a discovered chat, never a way to create one — so an unknown chat is a 404. Flipping a chat to tracked does NOT backfill it: WhatsApp history is delivered once, at link time, and messages the gate declined were never stored.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "whatsapp"
+                ],
+                "summary": "Update WhatsApp chat tracking",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Chat JID",
+                        "name": "chat_jid",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Tracking override",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.WhatsAppChatStatusRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.WhatsAppChatResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -6504,6 +6700,48 @@ const docTemplate = `{
                 "stale": {
                     "description": "Stale reports that these counts could not be refreshed and are the last\ngood values (or zeros, when there has never been a good read). The status\nendpoint answers during an outage rather than hanging on it, so it says so\ninstead of presenting a fabricated zero as fresh.",
                     "type": "boolean"
+                }
+            }
+        },
+        "handlers.WhatsAppChatResponse": {
+            "type": "object",
+            "properties": {
+                "chat_jid": {
+                    "type": "string"
+                },
+                "chat_title": {
+                    "type": "string"
+                },
+                "chat_type": {
+                    "type": "string"
+                },
+                "effective_tracked": {
+                    "description": "EffectiveTracked is what the gate would decide right now, override and\nmember count together — the same predicate the live ingest path uses.",
+                    "type": "boolean"
+                },
+                "member_count": {
+                    "description": "MemberCount is absent when WhatsApp never reported a size. The gate fails\nCLOSED on that, so such a chat is not tracked unless it is overridden.",
+                    "type": "integer"
+                },
+                "status": {
+                    "description": "Status is the user's override: auto, tracked, or ignored.",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.WhatsAppChatStatusRequest": {
+            "type": "object",
+            "required": [
+                "status"
+            ],
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "auto",
+                        "tracked",
+                        "ignored"
+                    ]
                 }
             }
         },

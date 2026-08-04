@@ -53,6 +53,8 @@ var whatsAppRouteSetExpected = []string{
 	"POST /api/v1/whatsapp/auth/cancel",
 	"DELETE /api/v1/whatsapp/auth",
 	"GET /api/v1/whatsapp/auth/status",
+	"GET /api/v1/whatsapp/chats",
+	"PATCH /api/v1/whatsapp/chats/:chat_jid",
 }
 
 func TestWhatsAppRouteWiring_FeatureGating(t *testing.T) {

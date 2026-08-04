@@ -78,6 +78,12 @@ export const telegramKeys = {
   chats: () => [...telegramKeys.all, 'chats'] as const,
 }
 
+export const whatsappKeys = {
+  all: ['whatsapp'] as const,
+  status: () => [...whatsappKeys.all, 'status'] as const,
+  chats: () => [...whatsappKeys.all, 'chats'] as const,
+}
+
 // Calendar event query keys
 export const calendarKeys = {
   all: ['calendar-events'] as const,

@@ -572,3 +572,114 @@ func TestWhatsAppRepo_ChatConfig(t *testing.T) {
 		assert.ErrorIs(t, err, db.ErrNotFound)
 	})
 }
+
+// TestWhatsAppRepo_ChatConfigSettingsSurface covers the two methods the settings
+// surface reads and writes. Each sub-test runs on its own ephemeral clone
+// because ListChatConfigs is deliberately database-global — there is one chat
+// list, and namespacing it would be namespacing away the thing under test.
+func TestWhatsAppRepo_ChatConfigSettingsSurface(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ListChatConfigsIsTitleOrderedWithJIDTiebreak", func(t *testing.T) {
+		t.Parallel()
+		env := setupWhatsAppRepoTest(t)
+
+		shared := "Shared Title"
+		zebra := "Zebra Club"
+		seed := []repository.WhatsAppChatConfig{
+			{ChatJID: "b-tie@g.us", ChatTitle: &shared, ChatType: "group"},
+			{ChatJID: "a-tie@g.us", ChatTitle: &shared, ChatType: "group"},
+			{ChatJID: "zzz-untitled@g.us", ChatType: "group"},
+			{ChatJID: "z-zebra@g.us", ChatTitle: &zebra, ChatType: "group"},
+		}
+		for _, cfg := range seed {
+			_, err := env.wa.UpsertChatConfig(env.ctx, cfg)
+			require.NoError(t, err)
+		}
+
+		// Two reads, because an arbitrary order can look sorted once by luck.
+		for range 2 {
+			got, err := env.wa.ListChatConfigs(env.ctx)
+			require.NoError(t, err)
+			jids := make([]string, 0, len(got))
+			for _, cfg := range got {
+				jids = append(jids, cfg.ChatJID)
+			}
+			assert.Equal(t,
+				[]string{"a-tie@g.us", "b-tie@g.us", "z-zebra@g.us", "zzz-untitled@g.us"},
+				jids,
+				"title ascending, JID breaking the tie, and a NULL title sorting last")
+		}
+	})
+
+	t.Run("SetChatStatusUpdatesOnlyTheStatus", func(t *testing.T) {
+		t.Parallel()
+		env := setupWhatsAppRepoTest(t)
+
+		jid := "override-me@g.us"
+		title := "Book Club"
+		count := int32(4)
+		lookup := accelerated.GetCurrentTime()
+		created, err := env.wa.UpsertChatConfig(env.ctx, repository.WhatsAppChatConfig{
+			ChatJID: jid, ChatTitle: &title, ChatType: "group",
+			MemberCount: &count, LastLookupAt: &lookup,
+		})
+		require.NoError(t, err)
+		require.Equal(t, "auto", created.Status)
+
+		updated, err := env.wa.SetChatStatus(env.ctx, jid, "ignored")
+		require.NoError(t, err)
+		assert.Equal(t, "ignored", updated.Status)
+		require.NotNil(t, updated.ChatTitle)
+		assert.Equal(t, title, *updated.ChatTitle, "the override must not disturb the resolved title")
+		require.NotNil(t, updated.MemberCount)
+		assert.Equal(t, count, *updated.MemberCount)
+		require.NotNil(t, updated.LastLookupAt)
+		assert.WithinDuration(t, lookup, *updated.LastLookupAt, time.Second)
+	})
+
+	t.Run("SetChatStatusOnUnknownChatReturnsNotFound", func(t *testing.T) {
+		t.Parallel()
+		env := setupWhatsAppRepoTest(t)
+
+		_, err := env.wa.SetChatStatus(env.ctx, "never-observed@g.us", "tracked")
+		assert.ErrorIs(t, err, db.ErrNotFound)
+
+		// And no row was minted: the override is a decision ABOUT an observed
+		// chat, never a way to create one.
+		all, err := env.wa.ListChatConfigs(env.ctx)
+		require.NoError(t, err)
+		assert.Empty(t, all)
+	})
+
+	// TestWhatsAppRepo_..._UpsertAfterOverridePreservesTheOverride is the
+	// regression that only becomes reachable now that a surface can write the
+	// column: the gate's re-observation must not reset the user's choice.
+	t.Run("UpsertAfterOverridePreservesTheOverride", func(t *testing.T) {
+		t.Parallel()
+		env := setupWhatsAppRepoTest(t)
+
+		jid := "grown-group@g.us"
+		title := "Grown Group"
+		small := int32(4)
+		_, err := env.wa.UpsertChatConfig(env.ctx, repository.WhatsAppChatConfig{
+			ChatJID: jid, ChatTitle: &title, ChatType: "group", MemberCount: &small,
+		})
+		require.NoError(t, err)
+
+		overridden, err := env.wa.SetChatStatus(env.ctx, jid, "ignored")
+		require.NoError(t, err)
+		require.Equal(t, "ignored", overridden.Status)
+
+		// The gate re-observes and passes its default status.
+		grown := int32(80)
+		reobserved, err := env.wa.UpsertChatConfig(env.ctx, repository.WhatsAppChatConfig{
+			ChatJID: jid, ChatType: "group", MemberCount: &grown, Status: "auto",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "ignored", reobserved.Status,
+			"an automatic re-observation must never reset the user's override")
+		require.NotNil(t, reobserved.MemberCount)
+		assert.Equal(t, grown, *reobserved.MemberCount)
+	})
+}

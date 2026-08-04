@@ -20,6 +20,7 @@ Reusable React/TypeScript patterns for consistency across the frontend codebase.
 | `useAcceleratedTime` | Time acceleration | `use-accelerated-time.ts` |
 | `useKeyboardNavigation` | Keyboard nav | `use-keyboard-navigation.ts` |
 | `useContactTasks`, `useCreateActionTask`, `useDeleteTaskLink` | Contact tasks | `use-contact-tasks.ts` |
+| `useWhatsAppStatus`, `useStartWhatsAppPairing`, `useWhatsAppChats`, `useUpdateWhatsAppChatStatus` | WhatsApp pairing + group tracking | `use-whatsapp.ts` |
 
 All hooks are in `frontend/src/hooks/`.
 

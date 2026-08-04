@@ -82,11 +82,16 @@ func newWhatsAppStack(ctx context.Context, cfg *config.Config, database *db.Data
 
 	manager := wapkg.NewManager(container, waLog, &cfg.WhatsApp, syncRepo, whatsappRepo)
 
+	// The chat-settings service is deliberately NOT part of the manager: it
+	// reads and writes ordinary gate rows, which the actor neither owns nor
+	// serialises.
+	chatSettings := wapkg.NewChatSettingsService(whatsappRepo, cfg.WhatsApp.GroupMaxMembers)
+
 	logger.Info().Msg("WhatsApp integration initialized")
 
 	return whatsappStack{
 		Manager:  manager,
-		Handler:  handlers.NewWhatsAppHandler(manager),
+		Handler:  handlers.NewWhatsAppHandler(manager, chatSettings),
 		Recorder: wapkg.NewHistoryRecorder(whatsappRepo),
 	}
 }
