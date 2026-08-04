@@ -654,3 +654,25 @@ WHERE source = @source
 DELETE FROM comms_message
 WHERE source = @source
   AND external_id LIKE @external_id_prefix;
+
+-- name: SoftDeleteUnmatchedChatMessageTwin :execrows
+-- Tombstones the unmatched staging row for a message that has just been staged
+-- WITH a contact. The matched and unmatched chat upserts have DISJOINT conflict
+-- targets, so both rows can exist for one message; the matched row is the
+-- survivor. O(1) on idx_comms_message_dedup_unmatched.
+UPDATE comms_message
+SET deleted_at = NOW()
+WHERE source = @source
+  AND external_id = @external_id
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL;
+
+-- name: CountLiveMatchedChatMessage :one
+-- Reports whether the message is ALREADY staged against a contact, so the
+-- unmatched insert path can decline rather than mint the duplicate pair with
+-- nothing to tombstone it. O(1) on idx_comms_message_dedup.
+SELECT COUNT(*) FROM comms_message
+WHERE source = @source
+  AND external_id = @external_id
+  AND matched_contact_id IS NOT NULL
+  AND deleted_at IS NULL;

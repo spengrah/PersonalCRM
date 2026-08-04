@@ -34,12 +34,12 @@ type updateMatchCall struct {
 }
 
 type mockExternalContactUpserter struct {
-	upsertCalls      []repository.UpsertTelegramDiscoveryCandidateRequest
+	upsertCalls      []repository.UpsertDiscoveryCandidateRequest
 	getResult        *repository.ExternalContact
 	updateMatchCalls []updateMatchCall
 }
 
-func (m *mockExternalContactUpserter) UpsertTelegramDiscoveryCandidate(_ context.Context, req repository.UpsertTelegramDiscoveryCandidateRequest) (*repository.ExternalContact, error) {
+func (m *mockExternalContactUpserter) UpsertDiscoveryCandidate(_ context.Context, req repository.UpsertDiscoveryCandidateRequest) (*repository.ExternalContact, error) {
 	m.upsertCalls = append(m.upsertCalls, req)
 	return &repository.ExternalContact{ID: uuid.New(), Source: "telegram", SourceID: req.SourceID}, nil
 }
@@ -331,7 +331,7 @@ func TestUpdateDiscoveryCandidatesForPeer_AtThreshold(t *testing.T) {
 // TestUpdateDiscoveryCandidatesForPeer_NilNames_StillSendsUpsert documents the
 // Go-layer contract after the null-overwrite fix: the live path keeps passing
 // whatever names it has (including all-nil). The SQL COALESCE in the dedicated
-// UpsertTelegramDiscoveryCandidate query is what actually preserves stored
+// UpsertDiscoveryCandidate query is what actually preserves stored
 // values. The metadata map must not carry a "username" key when peerUsername
 // is nil — otherwise the JSONB merge would overwrite an earlier non-null handle
 // with a bogus null-ish entry.

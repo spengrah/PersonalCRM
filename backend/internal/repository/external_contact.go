@@ -155,10 +155,11 @@ type KnownExternalContactID struct {
 	LastContentHash *string `json:"last_content_hash"`
 }
 
-// UpsertTelegramDiscoveryCandidateRequest carries the Telegram-specific fields
-// used by the peer matcher. Nil name fields are preserved (never overwrite a
+// UpsertDiscoveryCandidateRequest carries the fields a chat source's peer
+// matcher discovers. Nil name fields are preserved (never overwrite a
 // previously-captured name). Metadata is merged with existing stored metadata.
-type UpsertTelegramDiscoveryCandidateRequest struct {
+type UpsertDiscoveryCandidateRequest struct {
+	Source      string         `json:"source"`
 	SourceID    string         `json:"source_id"`
 	DisplayName *string        `json:"display_name,omitempty"`
 	FirstName   *string        `json:"first_name,omitempty"`
@@ -537,15 +538,18 @@ func buildUpsertExternalContactParams(req UpsertExternalContactRequest) db.Upser
 	return params
 }
 
-// UpsertTelegramDiscoveryCandidate inserts or updates a Telegram discovery
-// candidate via the dedicated SQL query. Unlike the shared Upsert, nil name
-// fields are preserved (never overwrite a stored value) and metadata is merged
-// with the existing stored map instead of replacing it. Unrelated columns
-// (emails, phones, addresses, organization, job_title, birthday, photo_url,
-// etag, account_id) are not touched on update.
-func (r *ExternalContactRepository) UpsertTelegramDiscoveryCandidate(
+// UpsertDiscoveryCandidate inserts or updates a discovery candidate via the
+// dedicated SQL query. Unlike the shared Upsert, nil name fields are preserved
+// (never overwrite a stored value) and metadata is merged with the existing
+// stored map instead of replacing it. Unrelated columns (emails, phones,
+// addresses, organization, job_title, birthday, photo_url, etag, account_id)
+// are not touched on update, and match_status is never overwritten.
+//
+// It is source-parameterized rather than twinned per source, so the preserve
+// semantics cannot drift between the sources that share them.
+func (r *ExternalContactRepository) UpsertDiscoveryCandidate(
 	ctx context.Context,
-	req UpsertTelegramDiscoveryCandidateRequest,
+	req UpsertDiscoveryCandidateRequest,
 ) (*ExternalContact, error) {
 	metadata := req.Metadata
 	if metadata == nil {
@@ -556,7 +560,8 @@ func (r *ExternalContactRepository) UpsertTelegramDiscoveryCandidate(
 		return nil, fmt.Errorf("marshal metadata: %w", err)
 	}
 
-	params := db.UpsertTelegramDiscoveryCandidateParams{
+	params := db.UpsertDiscoveryCandidateParams{
+		Source:      req.Source,
 		SourceID:    req.SourceID,
 		DisplayName: stringToPgText(req.DisplayName),
 		FirstName:   stringToPgText(req.FirstName),
@@ -564,9 +569,9 @@ func (r *ExternalContactRepository) UpsertTelegramDiscoveryCandidate(
 		Metadata:    metadataBytes,
 		SyncedAt:    timeToPgTimestamptz(req.SyncedAt),
 	}
-	dbContact, err := r.queries.UpsertTelegramDiscoveryCandidate(ctx, params)
+	dbContact, err := r.queries.UpsertDiscoveryCandidate(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("upsert telegram discovery candidate: %w", err)
+		return nil, fmt.Errorf("upsert discovery candidate: %w", err)
 	}
 	return convertDbExternalContact(dbContact)
 }

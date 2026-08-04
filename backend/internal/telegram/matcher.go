@@ -23,7 +23,7 @@ type identityMatcher interface {
 
 // externalContactUpserter defines the interface for upserting/updating external contacts.
 type externalContactUpserter interface {
-	UpsertTelegramDiscoveryCandidate(ctx context.Context, req repository.UpsertTelegramDiscoveryCandidateRequest) (*repository.ExternalContact, error)
+	UpsertDiscoveryCandidate(ctx context.Context, req repository.UpsertDiscoveryCandidateRequest) (*repository.ExternalContact, error)
 	GetBySource(ctx context.Context, source, sourceID string, accountID *string) (*repository.ExternalContact, error)
 	UpdateMatch(ctx context.Context, id uuid.UUID, crmContactID *uuid.UUID, status repository.MatchStatus) (*repository.ExternalContact, error)
 }
@@ -229,7 +229,8 @@ func (m *PeerMatcher) UpdateDiscoveryCandidates(ctx context.Context) error {
 			metadata["username"] = "@" + *username
 		}
 
-		_, err := m.externalContactRepo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+		_, err := m.externalContactRepo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+			Source:      "telegram",
 			SourceID:    sourceID,
 			DisplayName: displayName,
 			FirstName:   firstName,
@@ -285,7 +286,8 @@ func (m *PeerMatcher) UpdateDiscoveryCandidatesForPeer(ctx context.Context, peer
 	}
 
 	now := accelerated.GetCurrentTime()
-	if _, err := m.externalContactRepo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	if _, err := m.externalContactRepo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:      "telegram",
 		SourceID:    sourceID,
 		DisplayName: displayName,
 		FirstName:   firstName,

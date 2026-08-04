@@ -68,6 +68,28 @@ const (
 	// discipline as the terminal write, and for the same reason: one transient
 	// blip must not leave the store holding two sessions.
 	deviceDeleteAttempts = 2
+
+	// ingestTimeout bounds the WHOLE ingest of one message — the gate, the
+	// match and the staging write. It dominates the two inner bounds below, and
+	// is chosen to keep the worst case under the library's 30s handler warning.
+	// An expiry withholds the ack, so it is a redelivery rather than a loss.
+	ingestTimeout = 20 * time.Second
+
+	// groupInfoTimeout bounds the group metadata lookup. The library's group
+	// call is a network IQ with no cache, so it needs an explicit bound: the
+	// event dispatcher hands the handler an unbounded context.
+	groupInfoTimeout = 5 * time.Second
+
+	// altJIDTimeout bounds the device store's LID-to-phone lookup.
+	altJIDTimeout = 3 * time.Second
+
+	// maxUnresolvedLIDPeers caps the observed-peer set. The set is
+	// copy-on-write, so each newly seen peer costs O(n) on the library's
+	// serialized handler goroutine; the cap keeps that bounded. It is far above
+	// any plausible personal address book, so in practice the count is exact
+	// and the cap only exists so a pathological stream cannot degrade message
+	// handling.
+	maxUnresolvedLIDPeers = 5000
 )
 
 // syncSource is the external_sync_state source string. It is also the
@@ -209,6 +231,16 @@ type Manager struct {
 	backfill atomic.Pointer[cachedBackfill]
 	stopOnce sync.Once
 
+	// unresolvedLIDs is the set of peers seen this process whose phone number
+	// could not be recovered from their LID. It is written from the library's
+	// dispatching goroutine and read from the status endpoint's, so it cannot
+	// live in actorState — and it is a COPY-ON-WRITE map behind an atomic
+	// pointer rather than a sync.Map, because this package's design admits no
+	// shared MUTABLE state: every published map is immutable, and a new peer
+	// installs a replacement by CAS. The copy costs O(n) on the first sight of
+	// a peer only; every later message from that peer takes the read path.
+	unresolvedLIDs atomic.Pointer[map[string]struct{}]
+
 	// timeouts is fixed at construction. See managerTimeouts.
 	timeouts managerTimeouts
 }
@@ -291,7 +323,15 @@ func applyDeviceProps() {
 
 // SetIngestor installs the real message ingestor. Until it is called the
 // default REFUSES, which withholds the ack rather than dropping the message.
+//
+// The group-info seam is bound HERE, before the operation is queued, so an
+// ingestor cannot be installed without its source and the bind never runs on
+// the loop goroutine. Since every setter runs before the single Start, the seam
+// is bound before any client can connect.
 func (m *Manager) SetIngestor(i MessageIngestor) {
+	if b, ok := i.(GroupInfoBinder); ok {
+		b.BindGroupInfoSource(m.GroupInfoFetcher)
+	}
 	m.runOp(func(st *actorState, reply chan opResult) {
 		st.ingestor = i
 		reply <- opResult{}
@@ -856,7 +896,7 @@ func (m *Manager) handleEventFor(sess *session, evt any) bool {
 		if notif := e.RawMessage.GetProtocolMessage().GetHistorySyncNotification(); notif != nil {
 			return m.handleHistoryNotification(ctx, e, notif)
 		}
-		return m.handleMessage(ctx, e)
+		return m.handleMessage(ctx, sess, e)
 
 	case *events.HistorySync:
 		// Unreachable while manual mode holds: the automatic loop that
@@ -1172,25 +1212,43 @@ func (m *Manager) onTerminal(st *actorState, from *session, reason string, banne
 
 // --- data plane ------------------------------------------------------------
 
-// handleMessage forwards an ordinary message to the ingestor.
+// handleMessage parses an ordinary message and forwards it to the ingestor.
 //
 // It reads the published snapshot ONCE at entry and uses that seam for the whole
 // event, so a SetIngestor landing mid-event cannot make one event use two
-// ingestors. It is deliberately session-agnostic: attribution exists to stop a
-// dead client publishing state, and a real message is a real message.
+// ingestors. It takes the EMITTING session because the parser needs that
+// client's own JIDs (to reject a self-chat) and its device store (to recover a
+// peer's phone number from a LID). That is not a retreat from the data plane's
+// session-agnosticism, which is about state PUBLICATION: a retired session must
+// not publish status, but a real message is still a real message, and the
+// client that just delivered it is the right authority on its own store.
 //
-// The projection onto IngestedMessage is DELIBERATELY partial: it fills
-// MessageID, ChatJID, IsOutgoing and SentAt, and nothing else. Every remaining field is left at its
-// zero value, because the parser that fills them is the next PR's —
+// The projection fills every field the live path can know EXCEPT ChatTitle and
+// MemberCount, which stay nil pointers: each would cost a group-metadata round
+// trip per message, and the group's title and size live in whatsapp_chat_config
+// instead. Those two pointers are the remaining trap — a consumer that reads one
+// does not get an empty value, it dereferences nil.
 //
-//	strings, empty:   ChatType, MessageType
-//	pointers, NIL:    ChatTitle, Body, ReplyTargetID, PeerJID, PeerPhoneE164,
-//	                  PushName, MemberCount
+// The named return plus recover is what stops a panic on this path becoming an
+// ACK. The library's dispatcher recovers a panicking handler and returns its own
+// named result at its zero value, which reads as "handled successfully" — so the
+// message would be acknowledged and lost. A withheld ack is a redelivery, which
+// is recoverable; an ack is not.
 //
-// The pointers are the trap: a consumer that reads one today does not get an
-// empty value, it dereferences nil. Nothing downstream may read any field
-// outside the four above until that parser lands.
-func (m *Manager) handleMessage(ctx context.Context, e *events.Message) bool {
+// The return is named `handled` rather than `ok` deliberately: the body binds
+// `eligible` from the parser, and a same-named short declaration in any future
+// nested block would shadow the named return and silently defeat the guard.
+func (m *Manager) handleMessage(ctx context.Context, sess *session, e *events.Message) (handled bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error().
+				Interface("panic", r).
+				Str("message_id", e.Info.ID).
+				Msg("whatsapp: ingest panicked; withholding ack so WhatsApp redelivers")
+			handled = false
+		}
+	}()
+
 	var ingestor MessageIngestor
 	if s := m.snap.Load(); s != nil {
 		ingestor = s.ingestor
@@ -1201,18 +1259,126 @@ func (m *Manager) handleMessage(ctx context.Context, e *events.Message) bool {
 		return false
 	}
 
-	msg := IngestedMessage{
-		MessageID:  e.Info.ID,
-		ChatJID:    e.Info.Chat.ToNonAD().String(),
-		IsOutgoing: e.Info.IsFromMe,
-		SentAt:     e.Info.Timestamp,
+	own, resolver := m.ownIdentityFor(sess)
+	if !own.ok() {
+		// Without an own JID the parser can neither reject a self-chat nor
+		// decide a DM's direction safely. Dropping with a true ack would be an
+		// irreversible loss, because WhatsApp does not redeliver an acked
+		// message. Unreachable in a logged-in session.
+		logger.Error().Str("message_id", e.Info.ID).
+			Msg("whatsapp: own identity unknown; withholding ack")
+		return false
 	}
-	if err := ingestor.IngestMessage(ctx, msg); err != nil {
+
+	msg, unresolvedLID, eligible := parseMessage(ctx, e, own, resolver, altJIDTimeout)
+	if unresolvedLID != "" {
+		m.noteUnresolvedLID(unresolvedLID)
+	}
+	if !eligible {
+		// Handled, just to no effect: an ineligible chat is not a failure, and
+		// withholding here would redeliver forever.
+		logger.Debug().Str("message_id", e.Info.ID).
+			Msg("whatsapp: message is not an ingestible person-to-person turn; acking without storing")
+		return true
+	}
+
+	ingestCtx, cancel := context.WithTimeout(ctx, ingestTimeout)
+	defer cancel()
+
+	if err := ingestor.IngestMessage(ingestCtx, msg); err != nil {
 		logger.Error().Err(err).Str("message_id", e.Info.ID).
 			Msg("whatsapp: message ingest failed; withholding ack so WhatsApp redelivers")
 		return false
 	}
 	return true
+}
+
+// ownIdentityFor resolves the emitting session's own JIDs, plus the device
+// store the peer ladder reads for its LID mapping.
+//
+// The fallback is SelfJID — a snapshot read — and never Status(), which runs two
+// database queries through backfillStatus and must not be on a per-message path.
+//
+// COUPLING, because it is not local: the identity returned here decides the
+// account JID stamped on every message, and the group gate refuses to consult a
+// client reporting a DIFFERENT account. The session branch is safe by
+// construction — it hands both forms to canonicalAccountJID, exactly as
+// clientGroupInfoFetcher.AccountJID does, so the two cannot disagree. The
+// fallback branch has only ONE published JID to work with, so if it ever ran for
+// an account published in its internal-id form while the live client reported
+// the phone-number form, every group message would look like a foreign account:
+// permanently undecided, permanently redelivered. That is a livelock, not a
+// dropped message, and it is unreachable today because production always builds
+// its sessions through newClient, which always sets sess.wa. Anything that makes
+// the fallback reachable must publish both forms, or drop the account
+// comparison for messages resolved through it.
+func (m *Manager) ownIdentityFor(sess *session) (ownIdentity, peerAltResolver) {
+	if sess != nil && sess.wa != nil && sess.wa.Store != nil {
+		device := sess.wa.Store
+		return ownIdentity{PN: device.GetJID(), LID: device.GetLID()}, device
+	}
+	if jid, ok := m.SelfJID(); ok {
+		if jid.Server == types.HiddenUserServer {
+			return ownIdentity{LID: jid}, nil
+		}
+		return ownIdentity{PN: jid}, nil
+	}
+	return ownIdentity{}, nil
+}
+
+// noteUnresolvedLID records a peer whose phone number could not be recovered.
+//
+// It counts DISTINCT peers OBSERVED, for the life of this process — not peers
+// whose messages were stored. It fires for every eligible message, which
+// includes messages the group gate then declines to store, so the count is a
+// measure of how much of the user's conversation graph the integration cannot
+// automatically attribute, not a count of unattributed rows. A per-message
+// counter would instead report message volume under a field named for peers.
+//
+// The CAS loop is what makes the copy-on-write set correct under the concurrent
+// dispatch the library permits — a lost update would under-report the gap.
+//
+// The set is CAPPED. Copy-on-write is O(n) per newly seen peer, which is O(n²)
+// over the life of a process, and it runs on the library's serialized handler
+// goroutine; the cap bounds that at a size far above any plausible personal
+// address book, after which the reported count saturates rather than growing.
+func (m *Manager) noteUnresolvedLID(jid string) {
+	for {
+		current := m.unresolvedLIDs.Load()
+		size := lenOfSet(current)
+		if current != nil {
+			if _, seen := (*current)[jid]; seen {
+				return
+			}
+		}
+		if size >= maxUnresolvedLIDPeers {
+			return
+		}
+		next := make(map[string]struct{}, size+1)
+		if current != nil {
+			for k := range *current {
+				next[k] = struct{}{}
+			}
+		}
+		next[jid] = struct{}{}
+		if m.unresolvedLIDs.CompareAndSwap(current, &next) {
+			return
+		}
+	}
+}
+
+// ingestStatus reads the LID set on the CALLER's goroutine. It is not manager
+// state in the actor sense — an immutable map behind an atomic pointer, not a
+// loop-owned field — so the status endpoint never waits on a turn for it.
+func (m *Manager) ingestStatus() IngestStatus {
+	return IngestStatus{UnresolvedLIDPeers: lenOfSet(m.unresolvedLIDs.Load())}
+}
+
+func lenOfSet(set *map[string]struct{}) int {
+	if set == nil {
+		return 0
+	}
+	return len(*set)
 }
 
 // handleHistoryNotification does exactly one thing: strip any inline payload,

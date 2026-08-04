@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -92,6 +93,7 @@ func TestManager_SynchronousAckEnabled(t *testing.T) {
 // here and the ack would be sent for a message we failed to store.
 func TestNewClient_HandlerFailureReachesDispatcher(t *testing.T) {
 	m, _, ingestor, _ := newTestManager(t, newFakeClient(), true)
+	seedSelfJID(m, testOwnPN)
 	cli := m.newClient(&store.Device{}, &session{})
 	require.NotNil(t, cli)
 
@@ -183,6 +185,11 @@ func TestDefaultIngestor_RefusesAndWithholdsAck(t *testing.T) {
 
 	m := newManagerForTest(t, newFakeSyncStore(), &fakeBackfillReader{})
 	m.SetHistoryRecorder(&fakeRecorder{})
+	// The own identity is seeded so the REFUSING INGESTOR is what withholds
+	// here: without it the handler would withhold one step earlier, for an
+	// unknown own identity, and this test would pass without exercising the
+	// default at all.
+	seedSelfJID(m, testOwnPN)
 	assert.False(t, m.handleEvent(newMessageEvent("msg-1")),
 		"the default ingestor must withhold the ack, not swallow the message")
 }
@@ -416,16 +423,153 @@ func TestHandleEvent_LoggedOutIsTerminalWithReason(t *testing.T) {
 
 func TestHandleEvent_MessageForwardsToIngestor(t *testing.T) {
 	m, _, ingestor, _ := newTestManager(t, newFakeClient(), true)
+	seedSelfJID(m, testOwnPN)
 
 	assert.True(t, m.handleEvent(newMessageEvent("msg-42")))
 	require.Equal(t, 1, ingestor.count())
 	assert.Equal(t, "msg-42", ingestor.first().MessageID)
 }
 
+// TestHandleEvent_MessageForwardsParsedFieldsToIngestor is the end-to-end check
+// that the handler hands the ingestor a REAL projection rather than the
+// four-field stub it used to.
+func TestHandleEvent_MessageForwardsParsedFieldsToIngestor(t *testing.T) {
+	m, _, ingestor, _ := newTestManager(t, newFakeClient(), true)
+	seedSelfJID(m, testOwnPN)
+
+	require.True(t, m.handleEvent(newMessageEvent("msg-42")))
+	require.Equal(t, 1, ingestor.count())
+
+	got := ingestor.first()
+	assert.Equal(t, ChatTypePrivate, got.ChatType)
+	assert.Equal(t, MessageTypeText, got.MessageType)
+	require.NotNil(t, got.Body)
+	assert.Equal(t, "hello", *got.Body)
+	require.NotNil(t, got.PeerJID)
+	assert.Equal(t, testPeerPN.String(), *got.PeerJID)
+	require.NotNil(t, got.PeerPhoneE164)
+	assert.Equal(t, "+15559876543", *got.PeerPhoneE164)
+	require.NotNil(t, got.PushName)
+	assert.Equal(t, "Peer", *got.PushName)
+	require.NotNil(t, got.AccountJID)
+	assert.Equal(t, testOwnPN.String(), *got.AccountJID)
+}
+
+// TestHandleEvent_UnknownOwnIdentityWithholdsAck: without an own JID the parser
+// can neither reject a self-chat nor decide a DM's direction, and WhatsApp does
+// not redeliver an acked message — so a drop here would be irreversible.
+func TestHandleEvent_UnknownOwnIdentityWithholdsAck(t *testing.T) {
+	m, _, ingestor, _ := newTestManager(t, newFakeClient(), true)
+	// Deliberately no seedSelfJID.
+
+	assert.False(t, m.handleEvent(newMessageEvent("msg-1")))
+	assert.Zero(t, ingestor.count(), "nothing may be staged against an unknown account")
+}
+
+// TestHandleEvent_IneligibleChatAcksWithoutIngesting: ineligible is not failure.
+func TestHandleEvent_IneligibleChatAcksWithoutIngesting(t *testing.T) {
+	for _, chat := range []types.JID{
+		types.StatusBroadcastJID,
+		types.NewJID("123", types.NewsletterServer),
+		testOwnPN, // the self-chat
+	} {
+		t.Run(chat.String(), func(t *testing.T) {
+			m, _, ingestor, _ := newTestManager(t, newFakeClient(), true)
+			seedSelfJID(m, testOwnPN)
+
+			evt := newMessageEvent("msg-1")
+			evt.Info.Chat = chat
+
+			assert.True(t, m.handleEvent(evt), "withholding here would redeliver forever")
+			assert.Zero(t, ingestor.count())
+		})
+	}
+}
+
+// TestHandleEvent_PanicWithholdsAck is the guard for the library's own
+// dispatcher behaviour: it recovers a panicking handler and returns its named
+// result at the zero value, which reads as "handled successfully" — so without
+// this recover a panic would ACK and lose the message.
+func TestHandleEvent_PanicWithholdsAck(t *testing.T) {
+	m, _, _, _ := newTestManager(t, newFakeClient(), true)
+	seedSelfJID(m, testOwnPN)
+	m.SetIngestor(panickingIngestor{})
+
+	assert.False(t, m.handleEvent(newMessageEvent("msg-boom")),
+		"a panic on the ingest path must withhold the ack, not silently acknowledge")
+}
+
+// TestSetIngestor_BindsGroupInfoSource pins the ordering the group gate depends
+// on: the seam is bound by SetIngestor, which runs before the single Start, so
+// there is no window in which a connected client has an ingestor with no
+// source.
+func TestSetIngestor_BindsGroupInfoSource(t *testing.T) {
+	m := newManagerForTest(t, newFakeSyncStore(), &fakeBackfillReader{})
+	binder := &recordingBinder{}
+
+	m.SetIngestor(binder)
+	require.NotNil(t, binder.src, "an ingestor cannot be installed without its group-info source")
+	assert.Nil(t, binder.src(), "and the bound source reports nil while nothing is connected")
+}
+
+func TestStatus_ReportsUnresolvedLIDCount(t *testing.T) {
+	m, _, _, _ := newTestManager(t, newFakeClient(), true)
+	seedSelfJID(m, testOwnPN)
+
+	assert.Zero(t, m.Status().Ingest.UnresolvedLIDPeers, "the count is meaningful as zero")
+
+	for _, peer := range []string{"88800000002@lid", "88800000003@lid", "88800000002@lid"} {
+		evt := newMessageEvent("msg-" + peer)
+		evt.Info.Chat = mustParseTestJID(t, peer)
+		require.True(t, m.handleEvent(evt))
+	}
+
+	assert.Equal(t, 2, m.Status().Ingest.UnresolvedLIDPeers,
+		"DISTINCT peers: a per-message counter would report volume under a field named for peers")
+}
+
+// TestPeerResolution_UnresolvedLIDIncrementsCounter is the manager-side half of
+// the counter: the parser reports the peer, the manager records it once.
+func TestPeerResolution_UnresolvedLIDIncrementsCounter(t *testing.T) {
+	m, _, _, _ := newTestManager(t, newFakeClient(), true)
+	seedSelfJID(m, testOwnPN)
+
+	m.noteUnresolvedLID("88800000002@lid")
+	m.noteUnresolvedLID("88800000002@lid")
+	assert.Equal(t, 1, m.ingestStatus().UnresolvedLIDPeers)
+
+	m.noteUnresolvedLID("88800000003@lid")
+	assert.Equal(t, 2, m.ingestStatus().UnresolvedLIDPeers)
+}
+
+func mustParseTestJID(t *testing.T, s string) types.JID {
+	t.Helper()
+	jid, err := types.ParseJID(s)
+	require.NoError(t, err)
+	return jid
+}
+
+// panickingIngestor is the deliberate defect the panic guard exists for.
+type panickingIngestor struct{}
+
+func (panickingIngestor) IngestMessage(context.Context, IngestedMessage) error {
+	panic("ingest exploded")
+}
+
+// recordingBinder is a MessageIngestor that also implements GroupInfoBinder, so
+// the bind can be observed.
+type recordingBinder struct {
+	src func() GroupInfoFetcher
+}
+
+func (b *recordingBinder) IngestMessage(context.Context, IngestedMessage) error { return nil }
+func (b *recordingBinder) BindGroupInfoSource(src func() GroupInfoFetcher)      { b.src = src }
+
 // TestHandleEvent_MessageIngestErrorWithholdsAck is what makes an unprocessable
 // message a redelivery rather than a silent drop.
 func TestHandleEvent_MessageIngestErrorWithholdsAck(t *testing.T) {
 	m, _, ingestor, _ := newTestManager(t, newFakeClient(), true)
+	seedSelfJID(m, testOwnPN)
 	ingestor.setErr(errors.New("database down"))
 
 	assert.False(t, m.handleEvent(newMessageEvent("msg-1")))
@@ -637,6 +781,9 @@ func countCalls(haystack []string, needle string) int {
 	return n
 }
 
+// newMessageEvent builds an inbound direct message. Message and RawMessage
+// carry the same content: the parser reads the UNWRAPPED Message, while the
+// history-notification branch upstream reads RawMessage.
 func newMessageEvent(id string) *events.Message {
 	body := "hello"
 	return &events.Message{
@@ -646,7 +793,9 @@ func newMessageEvent(id string) *events.Message {
 				Chat: types.NewJID("15559876543", types.DefaultUserServer),
 			},
 			Timestamp: time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
+			PushName:  "Peer",
 		},
+		Message:    &waE2E.Message{Conversation: proto.String(body)},
 		RawMessage: &waE2E.Message{Conversation: proto.String(body)},
 	}
 }
@@ -1201,4 +1350,18 @@ func TestOnPairSuccess_SelectorWriteFailureStillDeletesTheReplacedDevice(t *test
 	eventually(t, "the replaced device is still deleted, which moves the store to the self-healing state", func() bool {
 		return indexOf(oldClient.callLog(), "delete_device") >= 0
 	})
+}
+
+// TestNoteUnresolvedLID_SaturatesAtTheCap pins the bound on the copy-on-write
+// set: it is O(n) per newly seen peer on the library's serialized handler
+// goroutine, so it cannot be allowed to grow without limit.
+func TestNoteUnresolvedLID_SaturatesAtTheCap(t *testing.T) {
+	m := newManagerForTest(t, newFakeSyncStore(), &fakeBackfillReader{})
+
+	for i := range maxUnresolvedLIDPeers + 25 {
+		m.noteUnresolvedLID(fmt.Sprintf("%d@lid", i))
+	}
+
+	assert.Equal(t, maxUnresolvedLIDPeers, m.ingestStatus().UnresolvedLIDPeers,
+		"the count saturates rather than growing without bound")
 }

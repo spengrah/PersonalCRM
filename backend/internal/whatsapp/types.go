@@ -215,6 +215,8 @@ type Status struct {
 	// Backfill reports the history drain. PR3 records notifications; the
 	// counts stay zero until a chunk arrives.
 	Backfill BackfillStatus `json:"backfill"`
+	// Ingest reports what the live message path observed.
+	Ingest IngestStatus `json:"ingest"`
 }
 
 // clone deep-copies every pointer target.
@@ -225,6 +227,9 @@ type Status struct {
 // clones what it read — because either alone leaves a mutable path: publish-only
 // lets two concurrent readers share targets, read-only lets the loop keep
 // aliases into what it published.
+//
+// IngestStatus holds no pointers, so the exhaustiveness claim above stays true
+// without a line for it.
 func (s Status) clone() Status {
 	out := s
 	out.JID = cloneStringPtr(s.JID)
@@ -288,6 +293,23 @@ type BackfillStatus struct {
 	Stale bool `json:"stale,omitempty"`
 }
 
+// IngestStatus is what the live message path observed since this process
+// started. It is deliberately NOT persisted: it reports the current process's
+// view, so a restart resets it to zero.
+type IngestStatus struct {
+	// UnresolvedLIDPeers counts DISTINCT peers OBSERVED whose phone number
+	// could not be recovered from their LID. Such a peer cannot be matched to a
+	// contact automatically, so any message of theirs that IS stored is stored
+	// without one and can reach a contact only through the import queue.
+	//
+	// It counts peers observed, NOT peers whose messages were stored: a sender
+	// in a group the size gate declines to track is counted too. The number is
+	// therefore how much of the conversation graph the integration cannot
+	// attribute on its own — not a count of unattributed rows, and not a
+	// message volume. It saturates at maxUnresolvedLIDPeers.
+	UnresolvedLIDPeers int `json:"unresolved_lid_peers"`
+}
+
 // Pairing is the in-flight pairing attempt. There is no session token: only one
 // pairing runs at a time and its state is read back through the status
 // endpoint.
@@ -338,6 +360,44 @@ type IngestedMessage struct {
 	PeerPhoneE164 *string // nil when unresolvable
 	PushName      *string
 	MemberCount   *int // groups only
+	// AccountJID is the EMITTING session's own JID, in non-AD form. It is
+	// carried per event rather than read from the published snapshot: during a
+	// re-pair a snapshot read would stamp a retired session's in-flight message
+	// with the new account's JID, and the non-AD form is what stops the device
+	// number a re-link reassigns from fragmenting account_id.
+	AccountJID *string
+}
+
+// ChatGroupInfo is a group's metadata, projected off whatsmeow's types.
+type ChatGroupInfo struct {
+	Title       string
+	MemberCount int
+}
+
+// GroupInfoFetcher is the seam the group gate uses to reach the live client for
+// the one metadata call this integration makes. It is defined on the manager so
+// the gate never holds a *whatsmeow.Client.
+type GroupInfoFetcher interface {
+	GroupInfo(ctx context.Context, chatJID string) (*ChatGroupInfo, error)
+	// AccountJID reports which linked account this fetcher's client belongs to,
+	// in the same non-AD form IngestedMessage.AccountJID carries, or "" when it
+	// cannot be determined.
+	//
+	// It exists because the fetcher is resolved from the PUBLISHED session while
+	// a message is parsed against its EMITTING one. During an overlapping
+	// re-pair those differ, and asking the new account about a group only the
+	// old account was in answers "not in that group" — which the gate treats as
+	// a permanent decision and would therefore acknowledge and drop the message
+	// for good. Comparing the two identities turns that into a withheld ack.
+	AccountJID() string
+}
+
+// GroupInfoBinder is implemented by an ingestor that needs to reach the live
+// client for group metadata. SetIngestor binds it, so an ingestor cannot be
+// installed without its source — there is no window in which one is installed
+// and the other is not.
+type GroupInfoBinder interface {
+	BindGroupInfoSource(src func() GroupInfoFetcher)
 }
 
 // MessageIngestor is the projected-message path: live messages now, and the

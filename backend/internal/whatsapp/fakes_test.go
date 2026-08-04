@@ -809,6 +809,18 @@ func newTestManagerFull(t testCleanup, cli *fakeClient, paired bool, waRepo back
 	return m, syncStore, ingestor, recorder, devices
 }
 
+// seedSelfJID publishes a linked-account JID so the message path can resolve an
+// own identity. Production reads it off the emitting session's device store and
+// falls back to this published value; a unit test has no real store, so it
+// exercises the fallback. It is an operation, so the publish is the loop's.
+func seedSelfJID(m *Manager, jid types.JID) {
+	m.runOp(func(st *actorState, reply chan opResult) {
+		s := jid.String()
+		st.status.JID = &s
+		reply <- opResult{}
+	})
+}
+
 // blockingSessionFactory builds a factory that blocks until the batch context
 // expires. It is how an effectDeadline expiry is driven without sleeping for the
 // production bound.

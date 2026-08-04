@@ -62,7 +62,7 @@ func setupDiscoveryUpsertTest(t *testing.T) (
 	return repo, database, prefix, cleanup
 }
 
-func TestUpsertTelegramDiscoveryCandidate_InsertsNewRow(t *testing.T) {
+func TestUpsertDiscoveryCandidate_InsertsNewRow(t *testing.T) {
 	t.Parallel()
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
@@ -70,7 +70,8 @@ func TestUpsertTelegramDiscoveryCandidate_InsertsNewRow(t *testing.T) {
 	ctx := context.Background()
 	now := accelerated.GetCurrentTime()
 
-	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	got, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:      "telegram",
 		SourceID:    prefix + "insert",
 		DisplayName: strPtr("Dale Dobeck"),
 		FirstName:   strPtr("Dale"),
@@ -95,7 +96,82 @@ func TestUpsertTelegramDiscoveryCandidate_InsertsNewRow(t *testing.T) {
 	assert.Equal(t, repository.MatchStatusUnmatched, got.MatchStatus)
 }
 
-func TestUpsertTelegramDiscoveryCandidate_PreservesFirstNameWhenNil(t *testing.T) {
+// TestUpsertDiscoveryCandidate_TelegramSemanticsUnchanged is the regression
+// guard for source-parameterizing what used to be a Telegram-only query: the
+// four semantics a divergence would silently break, asserted on one row.
+func TestUpsertDiscoveryCandidate_TelegramSemanticsUnchanged(t *testing.T) {
+	t.Parallel()
+	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := accelerated.GetCurrentTime()
+	sourceID := prefix + "semantics"
+
+	seeded, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source: "telegram", SourceID: sourceID,
+		DisplayName: strPtr("Dale Dobeck"), FirstName: strPtr("Dale"), LastName: strPtr("Dobeck"),
+		Metadata: map[string]any{"username": "@daledobeck", "message_count": 5},
+		SyncedAt: &now,
+	})
+	require.NoError(t, err)
+	require.Equal(t, repository.MatchStatusUnmatched, seeded.MatchStatus)
+
+	// A nil name preserves; a non-nil name overwrites; metadata merges with the
+	// incoming value winning per key; match_status is untouched.
+	got, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source: "telegram", SourceID: sourceID,
+		FirstName: nil, LastName: strPtr("Renamed"),
+		Metadata: map[string]any{"message_count": 9},
+		SyncedAt: &now,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, got.FirstName)
+	assert.Equal(t, "Dale", *got.FirstName, "a nil name never clears a captured one")
+	require.NotNil(t, got.LastName)
+	assert.Equal(t, "Renamed", *got.LastName, "a non-nil name does overwrite")
+	assert.Equal(t, "@daledobeck", got.Metadata["username"], "keys the new map omits are retained")
+	assert.EqualValues(t, 9, got.Metadata["message_count"], "and the incoming value wins per key")
+	assert.Equal(t, repository.MatchStatusUnmatched, got.MatchStatus, "match_status is never touched")
+}
+
+// TestUpsertDiscoveryCandidate_WhatsAppRowUsesSameSemantics proves the source
+// really is a parameter and not a decoration: the identical sequence on a
+// whatsapp row behaves identically.
+func TestUpsertDiscoveryCandidate_WhatsAppRowUsesSameSemantics(t *testing.T) {
+	t.Parallel()
+	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := accelerated.GetCurrentTime()
+	sourceID := prefix + "wa@lid"
+
+	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source: "whatsapp", SourceID: sourceID,
+		DisplayName: strPtr("WhatsApp 8880001"),
+		Metadata:    map[string]any{"peer_jid": sourceID, "message_count": 3},
+		SyncedAt:    &now,
+	})
+	require.NoError(t, err)
+
+	got, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source: "whatsapp", SourceID: sourceID,
+		DisplayName: strPtr("Their Name"),
+		Metadata:    map[string]any{"message_count": 7, "phone_e164": "+15559876543"},
+		SyncedAt:    &now,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "whatsapp", got.Source)
+	require.NotNil(t, got.DisplayName)
+	assert.Equal(t, "Their Name", *got.DisplayName, "a later push name upgrades the JID label")
+	assert.Equal(t, sourceID, got.Metadata["peer_jid"], "earlier keys survive the merge")
+	assert.EqualValues(t, 7, got.Metadata["message_count"])
+	assert.Equal(t, "+15559876543", got.Metadata["phone_e164"])
+	assert.Equal(t, repository.MatchStatusUnmatched, got.MatchStatus)
+}
+
+func TestUpsertDiscoveryCandidate_PreservesFirstNameWhenNil(t *testing.T) {
 	t.Parallel()
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
@@ -104,7 +180,8 @@ func TestUpsertTelegramDiscoveryCandidate_PreservesFirstNameWhenNil(t *testing.T
 	now := accelerated.GetCurrentTime()
 
 	// Seed with names populated.
-	_, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:    "telegram",
 		SourceID:  prefix + "preserve",
 		FirstName: strPtr("Dale"),
 		LastName:  strPtr("Dobeck"),
@@ -113,7 +190,8 @@ func TestUpsertTelegramDiscoveryCandidate_PreservesFirstNameWhenNil(t *testing.T
 	require.NoError(t, err)
 
 	// Re-upsert with nil names — should preserve existing.
-	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	got, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:   "telegram",
 		SourceID: prefix + "preserve",
 		SyncedAt: &now,
 	})
@@ -124,7 +202,7 @@ func TestUpsertTelegramDiscoveryCandidate_PreservesFirstNameWhenNil(t *testing.T
 	assert.Equal(t, "Dobeck", *got.LastName)
 }
 
-func TestUpsertTelegramDiscoveryCandidate_OverwritesFirstNameWhenNewValueProvided(t *testing.T) {
+func TestUpsertDiscoveryCandidate_OverwritesFirstNameWhenNewValueProvided(t *testing.T) {
 	t.Parallel()
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
@@ -132,14 +210,16 @@ func TestUpsertTelegramDiscoveryCandidate_OverwritesFirstNameWhenNewValueProvide
 	ctx := context.Background()
 	now := accelerated.GetCurrentTime()
 
-	_, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:    "telegram",
 		SourceID:  prefix + "overwrite",
 		FirstName: strPtr("Dale"),
 		SyncedAt:  &now,
 	})
 	require.NoError(t, err)
 
-	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	got, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:    "telegram",
 		SourceID:  prefix + "overwrite",
 		FirstName: strPtr("Daniel"),
 		SyncedAt:  &now,
@@ -149,7 +229,7 @@ func TestUpsertTelegramDiscoveryCandidate_OverwritesFirstNameWhenNewValueProvide
 	assert.Equal(t, "Daniel", *got.FirstName)
 }
 
-func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_PreservesExistingKey(t *testing.T) {
+func TestUpsertDiscoveryCandidate_MergesMetadata_PreservesExistingKey(t *testing.T) {
 	t.Parallel()
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
@@ -158,7 +238,8 @@ func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_PreservesExistingKey(t 
 	now := accelerated.GetCurrentTime()
 
 	// Seed with a username key.
-	_, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:   "telegram",
 		SourceID: prefix + "merge-keep",
 		Metadata: map[string]any{"username": "@dale", "message_count": 5},
 		SyncedAt: &now,
@@ -166,7 +247,8 @@ func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_PreservesExistingKey(t 
 	require.NoError(t, err)
 
 	// Re-upsert with only message_count — username must be retained.
-	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	got, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:   "telegram",
 		SourceID: prefix + "merge-keep",
 		Metadata: map[string]any{"message_count": 10},
 		SyncedAt: &now,
@@ -176,7 +258,7 @@ func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_PreservesExistingKey(t 
 	assert.EqualValues(t, 10, got.Metadata["message_count"], "incoming message_count should win for the duplicate key")
 }
 
-func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_IncomingWinsForDuplicate(t *testing.T) {
+func TestUpsertDiscoveryCandidate_MergesMetadata_IncomingWinsForDuplicate(t *testing.T) {
 	t.Parallel()
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
@@ -184,14 +266,16 @@ func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_IncomingWinsForDuplicat
 	ctx := context.Background()
 	now := accelerated.GetCurrentTime()
 
-	_, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:   "telegram",
 		SourceID: prefix + "merge-new",
 		Metadata: map[string]any{"username": "@old"},
 		SyncedAt: &now,
 	})
 	require.NoError(t, err)
 
-	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	got, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:   "telegram",
 		SourceID: prefix + "merge-new",
 		Metadata: map[string]any{"username": "@new"},
 		SyncedAt: &now,
@@ -200,7 +284,7 @@ func TestUpsertTelegramDiscoveryCandidate_MergesMetadata_IncomingWinsForDuplicat
 	assert.Equal(t, "@new", got.Metadata["username"])
 }
 
-func TestUpsertTelegramDiscoveryCandidate_SyncedAtAlwaysUpdates(t *testing.T) {
+func TestUpsertDiscoveryCandidate_SyncedAtAlwaysUpdates(t *testing.T) {
 	t.Parallel()
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
@@ -208,14 +292,16 @@ func TestUpsertTelegramDiscoveryCandidate_SyncedAtAlwaysUpdates(t *testing.T) {
 	ctx := context.Background()
 
 	start := accelerated.GetCurrentTime()
-	_, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:   "telegram",
 		SourceID: prefix + "syncedat",
 		SyncedAt: &start,
 	})
 	require.NoError(t, err)
 
 	later := start.Add(1 * time.Hour)
-	got, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	got, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:   "telegram",
 		SourceID: prefix + "syncedat",
 		SyncedAt: &later,
 	})
@@ -224,10 +310,10 @@ func TestUpsertTelegramDiscoveryCandidate_SyncedAtAlwaysUpdates(t *testing.T) {
 	assert.WithinDuration(t, later, *got.SyncedAt, time.Second)
 }
 
-// TestUpsertTelegramDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert
+// TestUpsertDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert
 // proves the dedicated DO UPDATE SET only touches the 6 columns it manages —
 // anything seeded via the shared Upsert (emails, phones, etc.) is untouched.
-func TestUpsertTelegramDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert(t *testing.T) {
+func TestUpsertDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert(t *testing.T) {
 	t.Parallel()
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
@@ -245,7 +331,8 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert(t 
 	require.NoError(t, err)
 
 	// Call the dedicated upsert with only names.
-	_, err = repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	_, err = repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:    "telegram",
 		SourceID:  prefix + "emails",
 		FirstName: strPtr("Dale"),
 		Metadata:  map[string]any{"username": "@dale"},
@@ -260,7 +347,7 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert(t 
 	assert.Equal(t, "a@x", got.Emails[0].Value, "existing email should survive the Telegram-specific upsert")
 }
 
-func TestUpsertTelegramDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) {
+func TestUpsertDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) {
 	t.Parallel()
 	repo, database, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
@@ -275,7 +362,8 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) 
 	crmContact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
 	defer contactCleanup()
 
-	row, err := repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	row, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:   "telegram",
 		SourceID: prefix + "match",
 		SyncedAt: &now,
 	})
@@ -284,7 +372,8 @@ func TestUpsertTelegramDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) 
 	_, err = repo.UpdateMatch(ctx, row.ID, &crmContact.ID, repository.MatchStatusMatched)
 	require.NoError(t, err)
 
-	_, err = repo.UpsertTelegramDiscoveryCandidate(ctx, repository.UpsertTelegramDiscoveryCandidateRequest{
+	_, err = repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
+		Source:    "telegram",
 		SourceID:  prefix + "match",
 		FirstName: strPtr("Dale"),
 		SyncedAt:  &now,

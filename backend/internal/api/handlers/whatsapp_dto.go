@@ -39,6 +39,28 @@ type WhatsAppBackfillResponse struct {
 	Stale bool `json:"stale,omitempty"`
 }
 
+// WhatsAppIngestResponse reports what the live message path observed. The
+// counts are a PROCESS-LIFETIME observation, not a persisted total: a restart
+// resets them to zero.
+type WhatsAppIngestResponse struct {
+	// UnresolvedLIDPeers counts distinct peers OBSERVED whose phone number the
+	// integration could not recover from their WhatsApp-internal id. Such a
+	// peer cannot be matched to a contact automatically, so any message of
+	// theirs that is stored is stored without one and can reach a contact only
+	// through the import queue.
+	//
+	// It counts peers observed, not peers whose messages were stored — a sender
+	// in a group the size gate declines to track is counted too — so it is a
+	// measure of how much of the conversation graph cannot be attributed
+	// automatically, not a count of unattributed records or of messages.
+	//
+	// The count SATURATES at an internal cap (5000) rather than growing without
+	// bound, so a value at the cap means "at least this many" rather than
+	// exactly this many. The cap is far above any plausible personal address
+	// book, so in practice the number is exact.
+	UnresolvedLIDPeers int `json:"unresolved_lid_peers"`
+}
+
 // WhatsAppStatusResponse mirrors whatsapp.Status on the wire.
 type WhatsAppStatusResponse struct {
 	Configured bool `json:"configured"`
@@ -76,6 +98,7 @@ type WhatsAppStatusResponse struct {
 	// itself is real and is deliberately not torn down.
 	LinkSelectorPersisted *bool                    `json:"link_selector_persisted,omitempty"`
 	Backfill              WhatsAppBackfillResponse `json:"backfill"`
+	Ingest                WhatsAppIngestResponse   `json:"ingest"`
 }
 
 // WhatsAppDisconnectResponse reports how an unlink resolved. Disconnect returns

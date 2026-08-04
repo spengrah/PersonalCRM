@@ -122,6 +122,70 @@ func TestBuildMethodsFromExternal_AllCombined_StableOrder(t *testing.T) {
 	}, got)
 }
 
+func TestBuildMethodsFromExternal_WhatsAppEmitsWhatsAppMethod(t *testing.T) {
+	ext := &repository.ExternalContact{
+		Source:   "whatsapp",
+		Metadata: map[string]any{"phone_e164": "+15559876543"},
+	}
+	assert.Equal(t, []ContactMethodInput{
+		{Type: "whatsapp", Value: "+15559876543"},
+	}, BuildMethodsFromExternal(ext))
+}
+
+// TestBuildMethodsFromExternal_WhatsAppWithoutPhoneEmitsNothing: a LID-only peer
+// has no phone, and the arc rejected minting a lid identifier — so an imported
+// LID-only peer gains no WhatsApp method. Silent rather than wrong; emitting the
+// raw JID would put an unusable string in a user-facing field.
+func TestBuildMethodsFromExternal_WhatsAppWithoutPhoneEmitsNothing(t *testing.T) {
+	ext := &repository.ExternalContact{
+		Source:   "whatsapp",
+		Metadata: map[string]any{"peer_jid": "88800000002@lid"},
+	}
+	assert.Empty(t, BuildMethodsFromExternal(ext))
+}
+
+func TestBuildMethodsFromExternal_WhatsAppMetadataNonStringIgnored(t *testing.T) {
+	ext := &repository.ExternalContact{
+		Source:   "whatsapp",
+		Metadata: map[string]any{"phone_e164": 15559876543},
+	}
+	assert.Empty(t, BuildMethodsFromExternal(ext))
+}
+
+func TestBuildMethodsFromExternal_WhatsAppEmptyPhoneEmitsNothing(t *testing.T) {
+	ext := &repository.ExternalContact{
+		Source:   "whatsapp",
+		Metadata: map[string]any{"phone_e164": ""},
+	}
+	assert.Empty(t, BuildMethodsFromExternal(ext))
+}
+
+// TestBuildMethodsFromExternal_TelegramUnchangedByWhatsAppArm guards the arm
+// that was already there against the one just added.
+func TestBuildMethodsFromExternal_TelegramUnchangedByWhatsAppArm(t *testing.T) {
+	ext := &repository.ExternalContact{
+		Source:   "telegram",
+		Metadata: map[string]any{"username": "@handle", "phone_e164": "+15559876543"},
+	}
+	assert.Equal(t, []ContactMethodInput{
+		{Type: "telegram", Value: "handle"},
+	}, BuildMethodsFromExternal(ext), "a telegram row must not grow a whatsapp method")
+}
+
+func TestBuildMethodsFromExternal_WhatsAppOrderIsEmailsThenPhonesThenHandle(t *testing.T) {
+	ext := &repository.ExternalContact{
+		Source:   "whatsapp",
+		Emails:   []repository.EmailEntry{{Value: "a@example.com"}},
+		Phones:   []repository.PhoneEntry{{Value: "+15551234"}},
+		Metadata: map[string]any{"phone_e164": "+15559876543"},
+	}
+	assert.Equal(t, []ContactMethodInput{
+		{Type: "email", Value: "a@example.com"},
+		{Type: "phone", Value: "+15551234"},
+		{Type: "whatsapp", Value: "+15559876543"},
+	}, BuildMethodsFromExternal(ext))
+}
+
 func TestIsUniqueViolation(t *testing.T) {
 	tests := []struct {
 		name string

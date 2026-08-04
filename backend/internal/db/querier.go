@@ -270,6 +270,10 @@ type Querier interface {
 	// end-to-end test to verify Stage 3 created the row the staging
 	// table's interaction_id points to.
 	CountInteractionsByIDContactAndSource(ctx context.Context, arg CountInteractionsByIDContactAndSourceParams) (int64, error)
+	// Reports whether the message is ALREADY staged against a contact, so the
+	// unmatched insert path can decline rather than mint the duplicate pair with
+	// nothing to tombstone it. O(1) on idx_comms_message_dedup.
+	CountLiveMatchedChatMessage(ctx context.Context, arg CountLiveMatchedChatMessageParams) (int64, error)
 	// Count calendar events involving a contact (for merge preview)
 	CountMergeCalendarEvents(ctx context.Context, dollar_1 pgtype.UUID) (int64, error)
 	// Count contact methods for a contact (for merge preview)
@@ -1935,6 +1939,11 @@ type Querier interface {
 	SoftDeleteNode(ctx context.Context, id pgtype.UUID) error
 	SoftDeleteTelegramChannelMessages(ctx context.Context, arg SoftDeleteTelegramChannelMessagesParams) error
 	SoftDeleteTelegramMessages(ctx context.Context, messageIds []int32) error
+	// Tombstones the unmatched staging row for a message that has just been staged
+	// WITH a contact. The matched and unmatched chat upserts have DISJOINT conflict
+	// targets, so both rows can exist for one message; the matched row is the
+	// survivor. O(1) on idx_comms_message_dedup_unmatched.
+	SoftDeleteUnmatchedChatMessageTwin(ctx context.Context, arg SoftDeleteUnmatchedChatMessageTwinParams) (int64, error)
 	// Test setup — drop ALL river_job rows, but ONLY when connected to a
 	// per-package clone DB (current_database() matching the clone-name prefix).
 	// The rescue-on-crash test calls this to clear foreign-kind leftovers (e.g.
@@ -2945,6 +2954,12 @@ type Querier interface {
 	UpsertContactNoteByCategory(ctx context.Context, arg UpsertContactNoteByCategoryParams) (*Note, error)
 	// Upsert a contact task by external_task_id (Todoist task IDs are globally unique)
 	UpsertContactTask(ctx context.Context, arg UpsertContactTaskParams) (*ContactTask, error)
+	// Source-parameterized discovery upsert that preserves populated peer fields
+	// when a later message arrives with null entity data. Never clears a
+	// name/handle that was previously captured. Metadata is merged (|| operator) so
+	// keys from earlier writes (e.g. username) are retained when the new map omits
+	// them.
+	UpsertDiscoveryCandidate(ctx context.Context, arg UpsertDiscoveryCandidateParams) (*ExternalContact, error)
 	// Embedding storage queries (graph foundation, derived storage).
 	//
 	// The embedding table is a disposable projection: a vector(1536) keyed by a
@@ -3038,11 +3053,6 @@ type Querier interface {
 	UpsertTelegramChannelAccessHash(ctx context.Context, arg UpsertTelegramChannelAccessHashParams) (*TelegramChannelState, error)
 	UpsertTelegramChannelState(ctx context.Context, arg UpsertTelegramChannelStateParams) (*TelegramChannelState, error)
 	UpsertTelegramChatConfig(ctx context.Context, arg UpsertTelegramChatConfigParams) (*TelegramChatConfig, error)
-	// Telegram-specific upsert that preserves populated peer fields when a later
-	// message arrives with null entity data. Never clears a name/handle that was
-	// previously captured. Metadata is merged (|| operator) so keys from earlier
-	// writes (e.g. username) are retained when the new map omits them.
-	UpsertTelegramDiscoveryCandidate(ctx context.Context, arg UpsertTelegramDiscoveryCandidateParams) (*ExternalContact, error)
 	UpsertTelegramMessage(ctx context.Context, arg UpsertTelegramMessageParams) (*TelegramMessage, error)
 	UpsertTelegramSession(ctx context.Context, arg UpsertTelegramSessionParams) (*TelegramSession, error)
 	// Used by gotd/td session.Storage — only updates encrypted session data,

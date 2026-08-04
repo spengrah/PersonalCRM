@@ -167,6 +167,8 @@ behaviors:
         text: with the feature disabled the WhatsApp endpoints do not exist (404), which is how the settings surface recognises an unconfigured integration
       - key: status-always-carries-terminal-reason-persisted
         text: the status body always carries whether the permanent-disconnect reason was durably recorded, including when it was NOT — a client that cannot tell "absent" from "false" cannot tell a restart-safe decision from one that will be lost
+      - key: status-reports-unresolved-lid-peers
+        text: the status carries how many peers the integration has seen but could not resolve to a phone number — counted up to a cap, above which it reports "at least this many" — since a message from such a peer cannot be matched to a contact automatically and can reach one only through the import queue
     provenance: [WhatsAppHandler.GetStatus, RegisterWhatsAppRoutes]
     notes: Scoped to what the status reports without a linked account. The fields that need one, or a live pairing, are WHA-016.
 
@@ -288,3 +290,145 @@ behaviors:
       - the error is evaluated even though the status row is not scheduler-enabled, since a manager-driven row is deliberately kept out of the polling scheduler's work queue
       - WhatsApp is not evaluated for sync staleness, because it has no periodic sync to fall behind on
     provenance: [managerDrivenSources, evaluateSyncStateBreaches]
+
+  # --- Message ingest ---
+
+  - id: WHA-020
+    title: Only person-to-person chats are ingested
+    type: business-logic
+    status: current
+    surface: none
+    given: an incoming WhatsApp message
+    when: the integration decides whether it belongs in the CRM
+    then:
+      - direct conversations and group conversations are ingested
+      - status updates, broadcast lists, channels and automated senders are not ingested, and a chat on a kind of address the integration does not recognise is refused rather than guessed at
+      - a note to self is not ingested, in whichever of the account's own forms it is addressed
+      - the same person reached through a different device domain is treated as the same person, not as an unrecognised address to discard
+      - a chat that is not ingested is treated as handled rather than as a failure, so it is not delivered again forever
+    provenance: [classifyChat, normalizeServer, parseMessage]
+    notes: The account's own identity is required before any of this can be decided; without it the message is left undelivered rather than guessed at, since an acknowledged message is never sent again.
+
+  - id: WHA-021
+    title: Each WhatsApp message is stored once, attributed to its counterpart
+    type: data
+    status: current
+    surface: none
+    given: a WhatsApp message the integration will ingest
+    when: it is stored
+    then:
+      - a direct message is attributed to the other party, whether the user sent it or received it
+      - a message in a group is attributed to whoever sent it, and one the user sent to a group is stored with no counterpart because it has none
+      - the same message delivered twice results in one stored message, not two, and its content is not rewritten by the second delivery
+      - a message that was first stored without a contact and later recognised as a known contact ends up as a single stored message bound to that contact
+      - the reverse case — a message already bound to a contact, redelivered while the contact could not be recognised — also ends up as a single stored message still bound to that contact
+      - the sender's display name is recorded only for messages the user received, never for messages the user sent, so the user's own name can never end up labelling somebody else
+      - each stored message records which linked account observed it, in a form that survives re-linking the same account
+    provenance: [Ingestor.IngestMessage, parseMessage, SoftDeleteUnmatchedTwin, HasMatchedChatMessage]
+
+  - id: WHA-022
+    title: A peer's phone number is recovered where WhatsApp exposes it, and its absence degrades rather than fails
+    type: business-logic
+    status: current
+    surface: none
+    given: a WhatsApp message from a peer
+    when: the integration tries to identify who the peer is
+    then:
+      - the peer's phone number is taken from the message when it carries one, and otherwise recovered from what the linked device already knows about that peer
+      - a peer whose phone number cannot be recovered is still stored, without a contact, rather than the message being dropped
+      - recovering the number is time-bounded, so a slow or unavailable lookup degrades to an unidentified peer instead of stalling incoming messages
+      - an address that is not a phone number is never treated as one
+    provenance: [resolvePeerPhone, phoneCandidate, PeerMatcher.MatchPeer]
+
+  - id: WHA-023
+    title: Group tracking is decided by a persisted size gate that fails closed, and an undecided group is retried rather than skipped
+    type: business-logic
+    status: current
+    surface: none
+    given: a message in a WhatsApp group
+    when: the integration decides whether to store it
+    then:
+      - a group at or below the configured size limit is tracked, and a larger one is not
+      - a group whose size cannot be established is not tracked, rather than being assumed small
+      - when the size could not be established because the answer could not be obtained right now, the message is also not treated as handled, so it is delivered again and the size can be established on the next attempt
+      - when the size could not be established because the answer will never come — the user is not in the group, or the group does not exist, or it reports no size at all — the message IS treated as handled, so one unanswerable group cannot be delivered forever
+      - a size once established survives a restart, so the same question is not asked again for every message
+      - a group the user has explicitly chosen to track or ignore honours that choice without establishing its size at all
+    provenance: [ChatGate.ShouldTrack, EffectiveTracked, whatsapp_chat_config]
+    notes: >-
+      Failing closed is a STORAGE rule, not an acknowledgement rule — the two are deliberately separate,
+      because acknowledging a message that could not be assessed would discard it irrecoverably, while an
+      unbounded retry of a permanently unanswerable question would degrade message handling indefinitely.
+      Two limits of the current implementation, recorded rather than hidden: the explicit track/ignore
+      choice is honoured wherever it is stored, but no surface can write one yet, so today the branch is
+      reachable only by seeding the stored state directly; and a size once established is never
+      re-resolved, so a group that later grows past the limit keeps being tracked. Both are settled by the
+      settings surface that owns the per-chat override.
+
+  - id: WHA-024
+    title: A frequent unknown peer becomes a labelled import candidate
+    type: business-logic
+    status: current
+    surface: none
+    given: a WhatsApp peer with no matching contact
+    when: they have exchanged enough messages to cross the discovery threshold
+    then:
+      - the peer surfaces as an import candidate, keyed by the same identifier their stored messages carry
+      - the candidate always carries a label the user can act on — the peer's display name, else their phone number, else a recognisable placeholder — so a candidate is never presented as an unreadable identifier
+      - a display name learnt later replaces an earlier placeholder, and a blank one never erases a name already captured
+      - the candidate carries how many messages were exchanged and when the last one was, so the user can judge whether the peer is worth adding
+      - a peer already bound to a contact does not surface as a candidate
+    provenance: [PeerMatcher.UpdateDiscoveryCandidates, UpsertDiscoveryCandidate]
+
+  - id: WHA-025
+    title: Linking a peer retroactively attaches their stored messages
+    type: business-logic
+    status: current
+    surface: none
+    given: WhatsApp messages stored without a contact
+    when: the user imports or links that peer to a contact
+    then:
+      - every stored message for that peer is bound to the contact
+      - a peer stored before their phone number was known is still found, by either the identifier the messages carry or the recovered number
+      - a message already stored against the contact is reconciled rather than duplicated
+      - a failure to attach is reported rather than silently swallowed, because attaching is the visible effect of linking
+    provenance: [PeerMatcher.OnPeerLinked, AttachUnmatchedByPeer]
+
+  - id: WHA-026
+    title: An imported peer with a known phone number gains a WhatsApp contact method
+    type: business-logic
+    status: current
+    surface: none
+    given: a WhatsApp import candidate
+    when: it is imported or linked to a contact
+    then:
+      - a candidate whose phone number is known gains a WhatsApp contact method carrying that number
+      - a candidate whose phone number was never recovered gains no WhatsApp method, rather than one holding an internal identifier the user cannot use
+    provenance: [BuildMethodsFromExternal, EnrichmentService.SyncMethodsFromExternal]
+
+  - id: WHA-027
+    title: Media messages are recorded by type without downloading their content
+    type: data
+    status: current
+    surface: none
+    given: an incoming WhatsApp message carrying media
+    when: it is stored
+    then:
+      - the message is recorded with the kind of media it carried — photo, video, voice or audio, document, sticker — derived from the message itself, with no media content ever downloaded
+      - any caption is kept as the message's text, and a message with no text is stored without one rather than with an invented placeholder
+      - a reply records which message it replied to
+      - message edits, deletions, reactions and poll votes are not stored as conversation, because they are not turns in one; creating a poll is
+    provenance: [classifyMessage, buildSourceMetadata]
+
+  - id: WHA-028
+    title: Post-import back-fill is routed by the source that produced the candidate
+    type: business-logic
+    status: current
+    surface: none
+    given: import candidates from more than one messaging source
+    when: one of them is imported or linked
+    then:
+      - the back-fill that binds stored messages runs for the source that produced the candidate, and only that one
+      - a candidate from a source with no back-fill is imported normally, without error
+      - a back-fill failure does not fail the import, which has already succeeded
+    provenance: [ImportHandler.RegisterPostImportHook, triggerPostImportHook, telegram.PostImportHook, whatsapp.PostImportHook]

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { getSourceDisplay } from '../source-display'
-import { Users, Calendar, Send, Cloud, HelpCircle } from 'lucide-react'
+import { Users, Calendar, Send, Cloud, MessageCircle, HelpCircle } from 'lucide-react'
 
 describe('getSourceDisplay', () => {
   it('returns friendly name and icon for gcontacts', () => {
@@ -25,6 +25,14 @@ describe('getSourceDisplay', () => {
     const result = getSourceDisplay('telegram')
     expect(result.label).toBe('Telegram')
     expect(result.icon).toBe(Send)
+  })
+
+  // WhatsApp import candidates carry this badge in the imports queue; without
+  // the map entry the badge would fall through to the raw source string.
+  it('returns friendly name and icon for whatsapp', () => {
+    const result = getSourceDisplay('whatsapp')
+    expect(result.label).toBe('WhatsApp')
+    expect(result.icon).toBe(MessageCircle)
   })
 
   it('returns raw source name for unknown sources', () => {

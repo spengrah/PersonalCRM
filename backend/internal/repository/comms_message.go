@@ -1098,6 +1098,35 @@ func (r *CommsMessageRepository) ListUnmatchedPeerCounts(ctx context.Context, so
 	return out, nil
 }
 
+// SoftDeleteUnmatchedTwin tombstones the unmatched staging row for a message
+// that has just been staged WITH a contact, and returns how many rows it
+// touched (zero in the overwhelmingly common case).
+//
+// The two chat upserts have disjoint conflict targets, so a matched and an
+// unmatched row for ONE message can coexist. This is the matched-row-wins half
+// of the reconciliation that keeps a flip from stranding a permanent duplicate.
+func (r *CommsMessageRepository) SoftDeleteUnmatchedTwin(ctx context.Context, source, externalID string) (int64, error) {
+	return r.queries.SoftDeleteUnmatchedChatMessageTwin(ctx, db.SoftDeleteUnmatchedChatMessageTwinParams{
+		Source:     source,
+		ExternalID: externalID,
+	})
+}
+
+// HasMatchedChatMessage reports whether the message is already staged against a
+// contact. It is the reverse-direction guard: an unmatched insert for a message
+// that already has a matched row would mint the duplicate pair with nothing to
+// tombstone it.
+func (r *CommsMessageRepository) HasMatchedChatMessage(ctx context.Context, source, externalID string) (bool, error) {
+	count, err := r.queries.CountLiveMatchedChatMessage(ctx, db.CountLiveMatchedChatMessageParams{
+		Source:     source,
+		ExternalID: externalID,
+	})
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // HardDeleteBySourceAndExternalIDPrefix is a test-only helper that hard-deletes
 // staging rows by (source, external_id LIKE prefix). It exists for the chat
 // staging tests, whose UNMATCHED rows have no contact for

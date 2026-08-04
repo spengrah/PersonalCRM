@@ -145,3 +145,58 @@ func countCalls(haystack []string, needle string) int {
 	}
 	return n
 }
+
+// TestWhatsAppWiring_IngestorIsWiredAndDrainerIsNot is the D18 guard: this PR
+// genuinely satisfies the ingest prerequisite, and the feature is STILL off.
+//
+// It drives the real activation sequence with the real ingestor shape, so it
+// discriminates between "the ingestor is wired" and "the manager will connect".
+func TestWhatsAppWiring_IngestorIsWiredAndDrainerIsNot(t *testing.T) {
+	m := wapkg.NewManager(nil, wapkg.NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, nil, nil)
+	t.Cleanup(m.Stop)
+
+	ingestor := wapkg.NewIngestor(nil, wapkg.NewChatGate(nil, 10), nil)
+	activateWhatsApp(context.Background(), m, whatsappPrereqs{
+		Ingestor: ingestor,
+		Recorder: stubRecorder{},
+		// DrainReady deliberately false: the drain worker is the next PR's.
+	})
+
+	ready, missing := m.Ready()
+	assert.False(t, ready, "the feature must still be off")
+	assert.Contains(t, missing, "history drain worker",
+		"the ingest prerequisite is genuinely satisfied, so the NEXT missing piece must be the drainer")
+	assert.NotContains(t, missing, "message ingestor")
+
+	status := m.Status()
+	assert.Equal(t, wapkg.StateNotReady, status.State)
+	assert.Equal(t, wapkg.ReasonIngestNotWired, status.Reason)
+}
+
+// TestWhatsAppWiring_ActivationBindsTheGroupInfoSource asserts exactly what it
+// can see: that driving the real activation sequence leaves the ingestor's
+// group-info seam BOUND rather than nil. It does NOT assert the bind happened
+// before Start — the real manager gives a fake ingestor no way to observe
+// Start — and the name says so. The ordering half is
+// TestBuildWhatsApp_StartIsCalledAfterEverySetter, which pins SetIngestor ahead
+// of Start on the same sequence, plus TestSetIngestor_BindsGroupInfoSource in
+// the whatsapp package, which pins that SetIngestor is where the bind happens.
+func TestWhatsAppWiring_ActivationBindsTheGroupInfoSource(t *testing.T) {
+	m := wapkg.NewManager(nil, wapkg.NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, nil, nil)
+	t.Cleanup(m.Stop)
+
+	binder := &bindOrderIngestor{}
+	activateWhatsApp(context.Background(), m, whatsappPrereqs{
+		Ingestor:   binder,
+		Recorder:   stubRecorder{},
+		DrainReady: true,
+	})
+
+	assert.True(t, binder.bound, "the group-info source must be bound, not left nil")
+}
+
+// bindOrderIngestor records whether the group-info seam was bound.
+type bindOrderIngestor struct{ bound bool }
+
+func (b *bindOrderIngestor) IngestMessage(context.Context, wapkg.IngestedMessage) error { return nil }
+func (b *bindOrderIngestor) BindGroupInfoSource(func() wapkg.GroupInfoFetcher)          { b.bound = true }

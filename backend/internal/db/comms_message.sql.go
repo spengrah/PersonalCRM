@@ -285,6 +285,29 @@ func (q *Queries) ClearStaleCommsClaim(ctx context.Context, arg ClearStaleCommsC
 	return err
 }
 
+const CountLiveMatchedChatMessage = `-- name: CountLiveMatchedChatMessage :one
+SELECT COUNT(*) FROM comms_message
+WHERE source = $1
+  AND external_id = $2
+  AND matched_contact_id IS NOT NULL
+  AND deleted_at IS NULL
+`
+
+type CountLiveMatchedChatMessageParams struct {
+	Source     string `json:"source"`
+	ExternalID string `json:"external_id"`
+}
+
+// Reports whether the message is ALREADY staged against a contact, so the
+// unmatched insert path can decline rather than mint the duplicate pair with
+// nothing to tombstone it. O(1) on idx_comms_message_dedup.
+func (q *Queries) CountLiveMatchedChatMessage(ctx context.Context, arg CountLiveMatchedChatMessageParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountLiveMatchedChatMessage, arg.Source, arg.ExternalID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const GetCommsMessage = `-- name: GetCommsMessage :one
 SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
 WHERE source = $1
@@ -1151,6 +1174,32 @@ func (q *Queries) SoftDeleteDuplicateUnmatchedCommsMessages(ctx context.Context,
 		arg.PeerNormalized,
 		arg.ContactID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const SoftDeleteUnmatchedChatMessageTwin = `-- name: SoftDeleteUnmatchedChatMessageTwin :execrows
+UPDATE comms_message
+SET deleted_at = NOW()
+WHERE source = $1
+  AND external_id = $2
+  AND matched_contact_id IS NULL
+  AND deleted_at IS NULL
+`
+
+type SoftDeleteUnmatchedChatMessageTwinParams struct {
+	Source     string `json:"source"`
+	ExternalID string `json:"external_id"`
+}
+
+// Tombstones the unmatched staging row for a message that has just been staged
+// WITH a contact. The matched and unmatched chat upserts have DISJOINT conflict
+// targets, so both rows can exist for one message; the matched row is the
+// survivor. O(1) on idx_comms_message_dedup_unmatched.
+func (q *Queries) SoftDeleteUnmatchedChatMessageTwin(ctx context.Context, arg SoftDeleteUnmatchedChatMessageTwinParams) (int64, error) {
+	result, err := q.db.Exec(ctx, SoftDeleteUnmatchedChatMessageTwin, arg.Source, arg.ExternalID)
 	if err != nil {
 		return 0, err
 	}
