@@ -68,8 +68,10 @@ func (b *phoneRematchBase) rematchByPhone(ctx context.Context, contactID uuid.UU
 		return 0, nil
 	}
 
-	// The phone number is third-party PII and is deliberately absent; the
-	// contact id + counts attribute the attach without logging it.
+	// The phone number is deliberately absent: an identifier is the part of a
+	// third party's data that is legible on sight, and the counts are what
+	// triage actually needs. The contact id attributes the attach, matching
+	// Telegram's rematch logging.
 	logger.Info().
 		Str("contact_id", contactID.String()).
 		Int64("attached", attached).

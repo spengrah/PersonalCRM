@@ -85,9 +85,11 @@ func seedWhatsAppWiringFixture(t *testing.T, ctx context.Context, chain wireChai
 
 	t.Cleanup(func() {
 		cleanupCtx := context.Background()
-		_ = chain.messaging.CommsMessageRepo.HardDeleteBySourceAndExternalIDPrefix(cleanupCtx, repository.InteractionSourceWhatsApp, fx.idPrefix)
-		_ = chain.core.Interaction.HardDeleteInteractionsBySourceRefPrefix(cleanupCtx, repository.InteractionSourceWhatsApp, fx.refPrefix)
-		_ = chain.eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(cleanupCtx, repository.InteractionSourceWhatsApp, fx.refPrefix)
+		// These three take LIKE patterns, so the trailing % is what makes them
+		// prefix deletes rather than exact-match no-ops.
+		_ = chain.messaging.CommsMessageRepo.HardDeleteBySourceAndExternalIDPrefix(cleanupCtx, repository.InteractionSourceWhatsApp, fx.idPrefix+"%")
+		_ = chain.core.Interaction.HardDeleteInteractionsBySourceRefPrefix(cleanupCtx, repository.InteractionSourceWhatsApp, fx.refPrefix+"%")
+		_ = chain.eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(cleanupCtx, repository.InteractionSourceWhatsApp, fx.refPrefix+"%")
 		_ = chain.core.Contact.HardDeleteContact(cleanupCtx, contact.ID)
 	})
 

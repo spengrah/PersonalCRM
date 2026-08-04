@@ -745,7 +745,8 @@ func whatsappVenueKindFor(t *testing.T, ctx context.Context, database *db.Databa
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = commsRepo.HardDeleteBySourceAndExternalIDPrefix(context.Background(), repository.InteractionSourceWhatsApp, externalID)
+		// LIKE pattern: the trailing % is what makes this a prefix delete.
+		_ = commsRepo.HardDeleteBySourceAndExternalIDPrefix(context.Background(), repository.InteractionSourceWhatsApp, externalID+"%")
 	})
 
 	venueRepo := repository.NewVenueRepository(database.Queries)
