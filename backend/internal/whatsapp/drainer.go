@@ -323,9 +323,15 @@ func (d *HistoryDrainer) classifyDownloadFailure(ctx context.Context, n *reposit
 // and there is no history left to protect. Retrying instead would burn the
 // attempt budget and then record a COMPLETE chunk as permanently failed — a lie
 // in Status().Backfill.Failed whose operator remedy, a requeue, re-sends a
-// receipt for a chunk that was already acknowledged. The cost of this choice is
-// bounded to one of our own payloads left on WhatsApp's media server, which
-// WhatsApp expires on its own.
+// receipt for a chunk that was already acknowledged.
+//
+// The trade is NOT limited to the unclassifiable case, and the whole of it is
+// accepted: a genuinely TRANSIENT failure here — a connection reset at the
+// instant of the delete — is also treated as satisfied and is never retried, so
+// that blob stays on WhatsApp's media server until WhatsApp expires it and the
+// WARN is its only trace. Deleting our own payload is a courtesy rather than a
+// correctness requirement, and a retry that can turn a finished chunk into a
+// failed one costs more than the leftover blob it would occasionally reclaim.
 func (d *HistoryDrainer) deleteMedia(ctx context.Context, fetcher HistoryFetcher, n *repository.HistoryNotification) {
 	if n.Disposition == repository.HistoryDispositionDroppedInline {
 		logger.Debug().Str("chunk_id", n.ID.String()).

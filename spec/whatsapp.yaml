@@ -302,7 +302,7 @@ behaviors:
     when: the backfill drain runs
     then:
       - key: order-is-project-ack-delete
-        text: the chunk's messages are stored before WhatsApp is told the chunk was handled, and the payload on WhatsApp's servers is removed only after that, so the integration never acknowledges a chunk it has not tried to store
+        text: the chunk's messages are stored before WhatsApp is told the chunk was handled, and the payload on WhatsApp's servers is removed only after that, so a chunk whose payload the integration actually holds is never acknowledged before it has tried to store it (a chunk dropped for arriving inline is acknowledged without projection, WHA-066)
       - key: whole-backlog-drains
         text: one drain run works through every chunk waiting for it rather than one per tick, so a link-time backfill completes in minutes rather than over an hour
       - key: fresh-chunk-completes-in-one-pass
