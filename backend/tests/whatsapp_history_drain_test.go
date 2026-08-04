@@ -690,6 +690,8 @@ func TestHistoryDrainer_OversizedGroupHistoryIsNotStored(t *testing.T) {
 // backfill is in flight and clear when it completes, and the observed floor is
 // the oldest message actually staged — the empirical answer to how deep the
 // one-shot history reached.
+//
+// spec: WHA-007.status-reports-backfill-counts
 func TestStatus_ReportsBackfillProgressAndObservedFloor(t *testing.T) {
 	t.Parallel()
 	env := setupHistoryDrainTest(t)

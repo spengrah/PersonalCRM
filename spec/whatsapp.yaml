@@ -291,6 +291,126 @@ behaviors:
       - WhatsApp is not evaluated for sync staleness, because it has no periodic sync to fall behind on
     provenance: [managerDrivenSources, evaluateSyncStateBreaches]
 
+  # --- History backfill ---
+
+  - id: WHA-060
+    title: A recorded history chunk is downloaded, projected, acknowledged and its payload deleted, in that order
+    type: business-logic
+    status: current
+    surface: none
+    given: a WhatsApp history chunk recorded in the durable inbox
+    when: the backfill drain runs
+    then:
+      - key: order-is-project-ack-delete
+        text: the chunk's messages are stored before WhatsApp is told the chunk was handled, and the payload on WhatsApp's servers is removed only after that, so no acknowledgement is ever sent for history that was not stored
+      - key: whole-backlog-drains
+        text: one drain run works through every chunk waiting for it rather than one per tick, so a link-time backfill completes in minutes rather than over an hour
+      - key: fresh-chunk-completes-in-one-pass
+        text: a chunk that has just been recorded runs the whole sequence in a single pass, rather than advancing one step per pass and leaving the rest waiting behind a lease
+      - key: chunk-with-no-conversations-completes
+        text: a chunk that carries no conversations at all -- several kinds do -- still completes its acknowledgement and cleanup, and storing nothing from it is the correct outcome rather than a failure
+    provenance: [HistoryDrainer.Drain, HistoryDrainWorker, TestHistoryDrainer_DeletesMediaOnlyAfterAck, TestHistoryDrainer_StagesAChunkEndToEnd]
+
+  - id: WHA-061
+    title: History older than the CRM's horizon is discarded rather than stored
+    type: data
+    status: current
+    surface: none
+    given: a history chunk carrying messages from before the CRM's history horizon
+    when: it is projected
+    then:
+      - key: pre-horizon-messages-are-not-stored
+        text: no message older than the horizon is stored, and its text never reaches the message store at all -- it is discarded before it is even read, rather than stored and later filtered
+      - key: post-horizon-messages-are-kept
+        text: newer messages in the same conversation are stored normally, so a conversation that straddles the horizon is truncated rather than dropped
+    provenance: [HistoryDrainer.project, BackfillFloorTime, TestHistoryDrainer_ClampDropsPreHorizonMessages, TestHistoryDrainer_PreClampContentAbsentFromCommsMessage]
+
+  - id: WHA-062
+    title: A backfill interrupted mid-chunk resumes where it stopped and stores nothing twice
+    type: business-logic
+    status: current
+    surface: none
+    given: a backfill interrupted partway through a chunk -- a restart, a timeout, or a lease that expired
+    when: the drain runs again
+    then:
+      - key: resumes-after-the-last-completed-conversation
+        text: it resumes after the last conversation it finished rather than starting the chunk over, and re-storing a message it already stored changes nothing
+      - key: resume-point-is-verified-not-trusted
+        text: the resume point is checked against the re-read chunk before it is used, and a chunk that no longer matches is re-read from the beginning rather than silently skipping conversations
+      - key: a-superseded-worker-writes-nothing
+        text: once another run has taken the chunk over, the superseded one can no longer record progress, complete it, or fail it, so it cannot undo what its successor did
+      - key: no-step-is-repeated-after-completion
+        text: a run that resumes past a step does not repeat it -- no second download, no second acknowledgement, no second deletion
+    provenance: [HistoryDrainer.project, resumePoint, TestHistoryDrainer_ResumesAfterLostLease, TestHistoryDrainer_StaleWorkerCannotClobberSuccessor]
+
+  - id: WHA-063
+    title: A chunk that cannot be projected is surfaced and re-drainable by hand, never silently lost
+    type: business-logic
+    status: current
+    surface: none
+    given: a history chunk that repeatedly fails to drain
+    when: the failure is permanent, or the chunk has been retried too many times
+    then:
+      - key: permanent-failures-become-visible
+        text: the chunk is recorded as failed with the reason, so it shows up in the backfill counts and in the operator listing rather than retrying invisibly forever
+      - key: retries-are-bounded
+        text: a chunk that keeps failing for a temporary reason is eventually given up on rather than re-downloading its whole payload on a fixed cycle for the life of the deployment
+      - key: operator-can-requeue
+        text: an operator can list the failed chunks and put one back in the queue by hand, and the listing never prints the stored payload or the projection bookkeeping
+      - key: a-requeue-does-not-erase-the-attempt-history
+        text: requeueing does not reset how many times the chunk has been tried, because that count is what tells an operator whether to keep trying
+    provenance: [HistoryDrainer.terminalFailure, runListWhatsAppHistory, runRequeueWhatsAppHistory, TestHistoryDrainer_TransientFailuresAreCappedAndBecomeRequeueable, TestCrmAdmin_ListWhatsAppHistoryNeverPrintsThePayload]
+
+  - id: WHA-064
+    title: Group tracking is decided for a whole chunk before any of it is stored
+    type: business-logic
+    status: current
+    surface: none
+    given: a history chunk containing group conversations
+    when: it is projected
+    then:
+      - key: gates-are-decided-before-the-first-message-is-stored
+        text: every group in the chunk is decided before the first message from any of it is stored, so a chunk is never left half-stored because a decision could not be reached partway through
+      - key: an-undecidable-group-stores-nothing-from-the-chunk
+        text: when a group's size cannot be determined right now, nothing from the whole chunk is stored and the chunk is retried later, rather than storing the part that was decidable
+      - key: a-left-group-can-be-sized-from-the-chunk-itself
+        text: a group the account is no longer in can be sized from the participant list the history itself carried, which is the only way its conversation can be backfilled at all
+      - key: a-live-group-is-never-sized-from-history
+        text: a group the account is still in is sized only by asking WhatsApp; a historical participant count is never adopted for it, because that number would then decide every future live message from that group
+    provenance: [HistoryDrainer.resolveChunkGates, ChatGate.ShouldTrackHistoryChat, TestChatGate_SizeUnknownGroupIsNotTrackedEvenWithAChunkSnapshot, TestHistoryDrainer_GroupChunkIsGatedBeforeAnythingIsStored]
+
+  - id: WHA-065
+    title: Backfilled and live messages converge on the same stored result
+    type: business-logic
+    status: current
+    surface: none
+    given: the same conversation reaching the CRM both live and through the history backfill
+    when: both have been stored
+    then:
+      - key: one-row-per-message
+        text: a message that arrives by both routes is stored once, with the same sender, direction, account and text, because backfill goes through the same storing path live messages do
+      - key: one-thread-per-chat
+        text: a one-to-one chat that history records under an internal identifier is stored under the same conversation the live messages use, so one conversation does not appear as two
+      - key: records-of-events-are-not-conversation
+        text: the envelopes WhatsApp uses for things that happened rather than things that were said -- a deleted message, an undecryptable one, a missed call, a change to a group's membership or to a security code -- are not stored, so they cannot fabricate contact history
+    provenance: [Ingestor.IngestMessage, HistoryDrainer.project, TestHistoryDrainer_MatchesLivePathEndState, TestHistoryDrainer_StubAndSystemEntriesAreNeverStaged, TestHistoryDrainer_LIDDMIsKeyedOnThePhoneNumberThread]
+
+  - id: WHA-066
+    title: A chunk dropped for arriving inline still completes its acknowledgement without being projected
+    type: business-logic
+    status: current
+    surface: none
+    given: a bootstrap chunk WhatsApp delivered with its history embedded, against the integration's explicit request not to
+    when: the backfill drain reaches it
+    then:
+      - key: dropped-chunk-is-never-stored
+        text: nothing from it is stored, because its content was discarded when it arrived rather than kept and filtered later
+      - key: dropped-chunk-still-acknowledges
+        text: it is still acknowledged, so WhatsApp stops redelivering it, and nothing is downloaded or deleted for a payload the integration never held
+      - key: dropped-chunk-requeue-retries-only-the-receipt
+        text: requeueing such a chunk can only retry the acknowledgement; it can never project content that was never kept
+    provenance: [HistoryDrainer.drainOne, handleHistoryNotification, TestHistoryDrainer_DroppedInlineChunkIsNeverProjected, TestHistoryDrainer_DroppedInlineRequeueRetriesOnlyTheReceipt]
+
   # --- Message ingest ---
 
   - id: WHA-020
@@ -418,7 +538,8 @@ behaviors:
       - any caption is kept as the message's text, and a message with no text is stored without one rather than with an invented placeholder
       - a reply records which message it replied to
       - message edits, deletions, reactions and poll votes are not stored as conversation, because they are not turns in one; creating a poll is
-    provenance: [classifyMessage, buildSourceMetadata]
+      - records of things that happened rather than things that were said — a deleted message, an undecryptable one, a missed call, a change to a group's membership or to a security code — are not stored as conversation either, on the live path or in backfilled history
+    provenance: [classifyMessage, buildSourceMetadata, HistoryDrainer.project]
 
   - id: WHA-028
     title: Post-import back-fill is routed by the source that produced the candidate

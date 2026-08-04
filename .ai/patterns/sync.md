@@ -25,6 +25,16 @@ the connection without the scheduler ever polling it. `managerDrivenSources` in
 evaluated regardless of `ENABLE_EXTERNAL_SYNC` and is excluded from
 `sync_stale` — neither source has a periodic sync to fall behind on.
 
+**Their backfills are shaped differently, and a new comms source should pick
+deliberately.** Telegram backfills per chat behind a cursor it controls, so it
+can re-request history at any time. WhatsApp's history is ONE-SHOT: the window
+is baked into the pairing registration and the payload arrives unsolicited as
+chunks, so it is captured into a durable notification inbox
+(`whatsapp_history_notification`) at delivery and drained later by a River
+periodic (`whatsapp_history_drain`) with a phase machine and a claim-token
+fence. Pick the inbox shape when the payload cannot be re-requested; pick a
+per-chat cursor when it can.
+
 The poll-strategy providers register via `providerRegistry.Register()` in
 the external-sync wire files (`backend/cmd/crm-api/wire_google.go` for
 gcontacts/gcal/gmail/gchat, `wire_todoist.go` for todoist), orchestrated by
