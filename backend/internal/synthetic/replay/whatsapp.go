@@ -17,6 +17,22 @@ import (
 // has no adapter registry.
 type whatsappDeps struct {
 	ingestor *whatsapp.Ingestor
+	// discoveryMinMessages is the threshold the ingestor's OWN PeerMatcher was
+	// built with (the same value, not a second reading of the config), so a
+	// caller sizing an unmatched-peer fixture can ask for the count that
+	// actually mints a candidate rather than restating the default.
+	discoveryMinMessages int
+}
+
+// WhatsAppDiscoveryMinMessages is how many unmatched messages one peer needs
+// before the ingest path mints an import candidate for it. Exposed for the same
+// reason GroupMaxMembers is: a fixture that wants the discovered state must size
+// itself against the real threshold, never a magic number.
+func (h *Harness) WhatsAppDiscoveryMinMessages() int {
+	if h.whatsapp == nil {
+		return 0
+	}
+	return h.whatsapp.discoveryMinMessages
 }
 
 // WhatsAppResult is the settled outcome of a WhatsApp replay.

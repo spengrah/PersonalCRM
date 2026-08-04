@@ -62,7 +62,7 @@ func TestPinnedTourFixturesCarryTheirMarkers(t *testing.T) {
 
 	plans := buildPinnedTourFixtures(newFixtureTestGenerator())
 
-	// The three fixtures whose causal chain needs its own recipe are declared in
+	// The four fixtures whose causal chain needs its own recipe are declared in
 	// PinnedFixtureMarkers but are not built here, so the built set is the
 	// complement — stated as a set difference rather than a hardcoded count so
 	// adding a fixture to either side cannot silently pass.
@@ -70,6 +70,7 @@ func TestPinnedTourFixturesCarryTheirMarkers(t *testing.T) {
 		FixtureMarkerOutreach: true,
 		FixtureMarkerResponse: true,
 		FixtureMarkerPending:  true,
+		FixtureMarkerWhatsApp: true,
 	}
 	want := make([]string, 0, len(PinnedFixtureMarkers))
 	for _, marker := range PinnedFixtureMarkers {
