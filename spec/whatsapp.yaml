@@ -168,7 +168,7 @@ behaviors:
       - key: status-always-carries-terminal-reason-persisted
         text: the status body always carries whether the permanent-disconnect reason was durably recorded, including when it was NOT — a client that cannot tell "absent" from "false" cannot tell a restart-safe decision from one that will be lost
       - key: status-reports-unresolved-lid-peers
-        text: the status carries how many peers the integration could not resolve to a phone number, since their messages can reach a contact only through the import queue
+        text: the status carries how many peers the integration has seen but could not resolve to a phone number, since a message from such a peer cannot be matched to a contact automatically and can reach one only through the import queue
     provenance: [WhatsAppHandler.GetStatus, RegisterWhatsAppRoutes]
     notes: Scoped to what the status reports without a linked account. The fields that need one, or a live pairing, are WHA-016.
 
@@ -359,6 +359,11 @@ behaviors:
       Failing closed is a STORAGE rule, not an acknowledgement rule — the two are deliberately separate,
       because acknowledging a message that could not be assessed would discard it irrecoverably, while an
       unbounded retry of a permanently unanswerable question would degrade message handling indefinitely.
+      Two limits of the current implementation, recorded rather than hidden: the explicit track/ignore
+      choice is honoured wherever it is stored, but no surface can write one yet, so today the branch is
+      reachable only by seeding the stored state directly; and a size once established is never
+      re-resolved, so a group that later grows past the limit keeps being tracked. Both are settled by the
+      settings surface that owns the per-chat override.
 
   - id: WHA-024
     title: A frequent unknown peer becomes a labelled import candidate

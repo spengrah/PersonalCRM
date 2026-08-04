@@ -99,8 +99,7 @@ func (m *PeerMatcher) MatchPeer(ctx context.Context, peerJID string, phoneE164, 
 		return nil, nil
 	}
 
-	m.markExternalContactMatched(ctx, peerJID, *result.ContactID)
-	m.ensureMethodsOnMatch(ctx, *result.ContactID, peerJID, phoneE164)
+	m.reconcileOnMatch(ctx, *result.ContactID, peerJID, phoneE164)
 	logger.Info().
 		Str("contact_id", result.ContactID.String()).
 		Str("match_type", string(result.MatchType)).
@@ -216,22 +215,42 @@ func discoveryDisplayName(row repository.UnmatchedPeerCount) string {
 	return "WhatsApp " + user
 }
 
-// ensureMethodsOnMatch syncs contact methods onto the matched contact. Errors
-// are logged at warn and never fail the match.
-func (m *PeerMatcher) ensureMethodsOnMatch(ctx context.Context, contactID uuid.UUID, peerJID string, phoneE164 *string) {
-	if m.enricher == nil {
-		return
-	}
-
+// reconcileOnMatch marks the peer's import candidate matched and syncs the
+// contact methods it implies. Errors are logged at warn and never fail the
+// match.
+//
+// This runs on the message-handling path, so it does exactly ONE candidate read
+// and then FIRST-MATCH-GATES the rest: a candidate already recorded as matched
+// or imported has been through both steps on an earlier message, so the steady
+// state for a known peer is one indexed read and nothing else. Reading twice —
+// once to mark and once to enrich — and re-running the method sync on every
+// message is what this shape exists to avoid.
+func (m *PeerMatcher) reconcileOnMatch(ctx context.Context, contactID uuid.UUID, peerJID string, phoneE164 *string) {
 	external, err := m.externalContactRepo.GetBySource(ctx, syncSource, peerJID, nil)
 	if err != nil {
 		// Transient repository error — bail out rather than synthesize, which
 		// would risk dropping persisted values and emitting a NULL
 		// external_contact_id audit row when a real one exists.
-		logger.Warn().Err(err).Msg("whatsapp: get external_contact for method sync failed")
+		logger.Warn().Err(err).Msg("whatsapp: get external_contact for match reconcile failed")
+		return
+	}
+
+	if external != nil {
+		if external.MatchStatus == repository.MatchStatusMatched || external.MatchStatus == repository.MatchStatusImported {
+			// Already reconciled by an earlier message from this peer.
+			return
+		}
+		if _, err := m.externalContactRepo.UpdateMatch(ctx, external.ID, &contactID, repository.MatchStatusMatched); err != nil {
+			logger.Warn().Err(err).Msg("whatsapp: failed to mark external contact as matched")
+		}
+	}
+
+	if m.enricher == nil {
 		return
 	}
 	if external == nil {
+		// No candidate row: the peer matched before ever crossing the discovery
+		// threshold. Synthesize the minimum the method builder reads.
 		external = &repository.ExternalContact{
 			Source:   syncSource,
 			SourceID: peerJID,
@@ -249,20 +268,5 @@ func (m *PeerMatcher) ensureMethodsOnMatch(ctx context.Context, contactID uuid.U
 		logger.Warn().Err(err).
 			Str("contact_id", contactID.String()).
 			Msg("whatsapp: sync methods from external failed")
-	}
-}
-
-// markExternalContactMatched updates any existing candidate for this peer to
-// "matched".
-func (m *PeerMatcher) markExternalContactMatched(ctx context.Context, peerJID string, contactID uuid.UUID) {
-	existing, err := m.externalContactRepo.GetBySource(ctx, syncSource, peerJID, nil)
-	if err != nil || existing == nil {
-		return // no existing candidate, nothing to update
-	}
-	if existing.MatchStatus == repository.MatchStatusMatched || existing.MatchStatus == repository.MatchStatusImported {
-		return
-	}
-	if _, err := m.externalContactRepo.UpdateMatch(ctx, existing.ID, &contactID, repository.MatchStatusMatched); err != nil {
-		logger.Warn().Err(err).Msg("whatsapp: failed to mark external contact as matched")
 	}
 }

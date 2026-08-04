@@ -46,9 +46,10 @@ func (f *fakeChatConfigStore) UpsertChatConfig(_ context.Context, cfg repository
 }
 
 type fakeGroupInfoFetcher struct {
-	info  *ChatGroupInfo
-	err   error
-	calls int
+	info    *ChatGroupInfo
+	err     error
+	calls   int
+	account string
 }
 
 func (f *fakeGroupInfoFetcher) GroupInfo(_ context.Context, _ string) (*ChatGroupInfo, error) {
@@ -56,16 +57,26 @@ func (f *fakeGroupInfoFetcher) GroupInfo(_ context.Context, _ string) (*ChatGrou
 	return f.info, f.err
 }
 
+func (f *fakeGroupInfoFetcher) AccountJID() string { return f.account }
+
+// testLookupTimeout keeps the bounded-lookup test off the production 5s bound.
+const testLookupTimeout = 50 * time.Millisecond
+
 func gateWith(store *fakeChatConfigStore, fetcher GroupInfoFetcher, maxMembers int) *ChatGate {
 	g := NewChatGate(store, maxMembers)
 	g.BindGroupInfoSource(func() GroupInfoFetcher { return fetcher })
+	g.lookupTimeout = testLookupTimeout
 	return g
 }
 
 func int32p(v int32) *int32 { return &v }
 func intp(v int) *int       { return &v }
 
-const testGroupChatJID = "120363000000000001@g.us"
+const (
+	testGroupChatJID = "120363000000000001@g.us"
+	// testAccountJID is the account the fixtures' messages were observed by.
+	testAccountJID = "15550000001@s.whatsapp.net"
+)
 
 // --- EffectiveTracked -------------------------------------------------------
 
@@ -110,7 +121,7 @@ func TestEffectiveTracked_ZeroMemberCountIsUnresolved(t *testing.T) {
 func TestGroupGate_PrivateChatSkipsTheGateEntirely(t *testing.T) {
 	store := &fakeChatConfigStore{}
 	fetcher := &fakeGroupInfoFetcher{}
-	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), "x@s.whatsapp.net", ChatTypePrivate)
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), "x@s.whatsapp.net", ChatTypePrivate, testAccountJID)
 
 	require.NoError(t, err)
 	assert.True(t, tracked)
@@ -122,7 +133,7 @@ func TestGroupGate_ResolvesAndPersistsANewGroup(t *testing.T) {
 	store := &fakeChatConfigStore{}
 	fetcher := &fakeGroupInfoFetcher{info: &ChatGroupInfo{Title: "Book Club", MemberCount: 4}}
 
-	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	require.NoError(t, err)
 	assert.True(t, tracked)
 
@@ -142,7 +153,7 @@ func TestGroupGate_UnknownMemberCountIsUndecided(t *testing.T) {
 	store := &fakeChatConfigStore{}
 	fetcher := &fakeGroupInfoFetcher{err: context.DeadlineExceeded}
 
-	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	assert.False(t, tracked, "fail closed on storage")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrChatGateUndecided, "a timeout is a transient failure, not a decision")
@@ -152,7 +163,7 @@ func TestGroupGate_LookupFailureWritesNoConfig(t *testing.T) {
 	store := &fakeChatConfigStore{}
 	fetcher := &fakeGroupInfoFetcher{err: errors.New("transport down")}
 
-	_, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	_, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	require.ErrorIs(t, err, ErrChatGateUndecided)
 	assert.Empty(t, store.upserts, "nothing may record a false resolution")
 }
@@ -162,13 +173,13 @@ func TestGroupGate_RetriesLookupOnNextMessage(t *testing.T) {
 	fetcher := &fakeGroupInfoFetcher{err: errors.New("transport down")}
 	gate := gateWith(store, fetcher, 10)
 
-	_, err := gate.ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	_, err := gate.ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	require.ErrorIs(t, err, ErrChatGateUndecided)
 
 	// Because the failure wrote nothing, the next message re-enters the lookup.
 	fetcher.err = nil
 	fetcher.info = &ChatGroupInfo{Title: "Book Club", MemberCount: 4}
-	tracked, err := gate.ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gate.ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	require.NoError(t, err)
 	assert.True(t, tracked)
 	assert.Equal(t, 2, fetcher.calls)
@@ -179,13 +190,13 @@ func TestGroupGate_NilFetcherIsUndecided(t *testing.T) {
 	gate := NewChatGate(store, 10)
 	gate.BindGroupInfoSource(func() GroupInfoFetcher { return nil })
 
-	tracked, err := gate.ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gate.ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	assert.False(t, tracked)
 	assert.ErrorIs(t, err, ErrChatGateUndecided, "no connected client is transient, not a decision")
 }
 
 func TestGroupGate_UnboundSourceIsUndecided(t *testing.T) {
-	tracked, err := NewChatGate(&fakeChatConfigStore{}, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := NewChatGate(&fakeChatConfigStore{}, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	assert.False(t, tracked)
 	assert.ErrorIs(t, err, ErrChatGateUndecided)
 }
@@ -194,7 +205,7 @@ func TestGroupGate_ConfigReadErrorIsUndecided(t *testing.T) {
 	store := &fakeChatConfigStore{getErr: errors.New("database down")}
 	fetcher := &fakeGroupInfoFetcher{info: &ChatGroupInfo{MemberCount: 4}}
 
-	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	assert.False(t, tracked)
 	require.ErrorIs(t, err, ErrChatGateUndecided,
 		"a database blip must withhold the ack, exactly as the same blip on the staging write does")
@@ -205,7 +216,7 @@ func TestGroupGate_UpsertErrorIsUndecided(t *testing.T) {
 	store := &fakeChatConfigStore{upsertErr: errors.New("database down")}
 	fetcher := &fakeGroupInfoFetcher{info: &ChatGroupInfo{MemberCount: 4}}
 
-	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	assert.False(t, tracked)
 	assert.ErrorIs(t, err, ErrChatGateUndecided,
 		"without the write the count would be re-fetched on every message")
@@ -217,7 +228,7 @@ func TestGroupGate_UserIgnoredOverrideSurvivesLookup(t *testing.T) {
 	}}
 	fetcher := &fakeGroupInfoFetcher{info: &ChatGroupInfo{MemberCount: 3}}
 
-	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	require.NoError(t, err)
 	assert.False(t, tracked, "a small group the user ignored stays ignored")
 }
@@ -235,7 +246,7 @@ func TestGroupGate_ExplicitStatusSkipsLookup(t *testing.T) {
 			}}
 			fetcher := &fakeGroupInfoFetcher{info: &ChatGroupInfo{MemberCount: 4}}
 
-			tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+			tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 			require.NoError(t, err)
 			assert.Equal(t, status == ChatStatusTracked, tracked)
 			assert.Zero(t, fetcher.calls, "an override needs no member count")
@@ -252,7 +263,7 @@ func TestGroupGate_UnchangedRowIsNotRewritten(t *testing.T) {
 	}}
 	fetcher := &fakeGroupInfoFetcher{}
 
-	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	require.NoError(t, err)
 	assert.True(t, tracked)
 	assert.Zero(t, fetcher.calls, "a resolved count needs no lookup")
@@ -268,7 +279,7 @@ func TestGroupGate_NotInGroupIsDecidedNotUndecided(t *testing.T) {
 	fetcher := &fakeGroupInfoFetcher{err: errors.New("wrapped: " + ErrGroupUnavailable.Error())}
 	fetcher.err = errors.Join(ErrGroupUnavailable, errors.New("status 403"))
 
-	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	require.NoError(t, err, "we are not in the group; that answer does not change on redelivery")
 	assert.False(t, tracked)
 	assert.Empty(t, store.upserts)
@@ -278,7 +289,7 @@ func TestGroupGate_GroupNotFoundIsDecidedNotUndecided(t *testing.T) {
 	store := &fakeChatConfigStore{}
 	fetcher := &fakeGroupInfoFetcher{err: errors.Join(ErrGroupUnavailable, errors.New("status 404"))}
 
-	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	require.NoError(t, err)
 	assert.False(t, tracked)
 }
@@ -287,7 +298,7 @@ func TestGroupGate_UnknownSizeIsDecidedNotUndecided(t *testing.T) {
 	store := &fakeChatConfigStore{}
 	fetcher := &fakeGroupInfoFetcher{err: ErrGroupSizeUnknown}
 
-	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	require.NoError(t, err, "the server answered; retrying re-asks a question already answered")
 	assert.False(t, tracked)
 }
@@ -296,7 +307,7 @@ func TestGroupGate_LargeGroupIsDecidedNotTracked(t *testing.T) {
 	store := &fakeChatConfigStore{}
 	fetcher := &fakeGroupInfoFetcher{info: &ChatGroupInfo{Title: "Big", MemberCount: 42}}
 
-	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 	require.NoError(t, err, "a resolved count above the threshold is a real decision")
 	assert.False(t, tracked)
 	require.Len(t, store.upserts, 1, "the resolution is persisted so the next message needs no lookup")
@@ -353,22 +364,25 @@ func TestGroupGate_LookupIsTimeBounded(t *testing.T) {
 	t.Cleanup(func() { close(blocked) })
 	gate := NewChatGate(store, 10)
 	gate.BindGroupInfoSource(func() GroupInfoFetcher { return blockingGroupInfoFetcher{blocked} })
+	gate.lookupTimeout = testLookupTimeout
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := gate.ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup)
+		_, err := gate.ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
 		done <- err
 	}()
 
 	select {
 	case err := <-done:
 		assert.ErrorIs(t, err, ErrChatGateUndecided)
-	case <-time.After(groupInfoTimeout + 5*time.Second):
+	case <-time.After(testLookupTimeout + 5*time.Second):
 		t.Fatal("the group lookup was not bounded; it would block whatsmeow's handler goroutine")
 	}
 }
 
 type blockingGroupInfoFetcher struct{ block chan struct{} }
+
+func (b blockingGroupInfoFetcher) AccountJID() string { return "" }
 
 func (b blockingGroupInfoFetcher) GroupInfo(ctx context.Context, _ string) (*ChatGroupInfo, error) {
 	select {
@@ -376,5 +390,59 @@ func (b blockingGroupInfoFetcher) GroupInfo(ctx context.Context, _ string) (*Cha
 		return nil, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+}
+
+// TestGroupGate_DifferentAccountIsUndecided is the re-pair guard. The group
+// fetcher is resolved from the PUBLISHED session while the message was parsed
+// against its EMITTING one; mid-re-pair those are different accounts, and asking
+// the new account about a group only the old one was in answers "not in that
+// group" — a PERMANENT answer this gate would otherwise consume and acknowledge,
+// losing the message for good.
+func TestGroupGate_DifferentAccountIsUndecided(t *testing.T) {
+	store := &fakeChatConfigStore{}
+	fetcher := &fakeGroupInfoFetcher{
+		account: "15559999999@s.whatsapp.net",
+		err:     errors.Join(ErrGroupUnavailable, errors.New("status 403")),
+	}
+
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
+	assert.False(t, tracked, "fail closed on storage")
+	require.ErrorIs(t, err, ErrChatGateUndecided,
+		"a wrong-account answer is transient by construction — the re-pair settles — so it must not be consumed")
+	assert.Zero(t, fetcher.calls, "and the wrong client is never asked at all")
+	assert.Empty(t, store.upserts)
+}
+
+func TestGroupGate_SameAccountProceeds(t *testing.T) {
+	store := &fakeChatConfigStore{}
+	fetcher := &fakeGroupInfoFetcher{
+		account: testAccountJID,
+		info:    &ChatGroupInfo{Title: "Book Club", MemberCount: 4},
+	}
+
+	tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, testAccountJID)
+	require.NoError(t, err)
+	assert.True(t, tracked)
+	assert.Equal(t, 1, fetcher.calls)
+}
+
+// TestGroupGate_UnknownAccountSkipsTheComparison keeps a caller that cannot know
+// its own account (a fetcher with no store, a projection built by hand) working
+// exactly as before rather than permanently undecided.
+func TestGroupGate_UnknownAccountSkipsTheComparison(t *testing.T) {
+	for _, tc := range []struct{ name, msgAccount, liveAccount string }{
+		{"message account unknown", "", "15559999999@s.whatsapp.net"},
+		{"client account unknown", testAccountJID, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeChatConfigStore{}
+			fetcher := &fakeGroupInfoFetcher{account: tc.liveAccount, info: &ChatGroupInfo{MemberCount: 4}}
+
+			tracked, err := gateWith(store, fetcher, 10).ShouldTrack(context.Background(), testGroupChatJID, ChatTypeGroup, tc.msgAccount)
+			require.NoError(t, err)
+			assert.True(t, tracked)
+			assert.Equal(t, 1, fetcher.calls)
+		})
 	}
 }

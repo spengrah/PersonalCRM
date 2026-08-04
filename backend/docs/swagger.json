@@ -6530,7 +6530,7 @@
             "type": "object",
             "properties": {
                 "unresolved_lid_peers": {
-                    "description": "UnresolvedLIDPeers counts distinct peers whose phone number the\nintegration could not recover from their WhatsApp-internal id. Their\nmessages are stored without a contact and can reach one only through the\nimport queue, so this is the visible size of that gap — not a message\nvolume.",
+                    "description": "UnresolvedLIDPeers counts distinct peers OBSERVED whose phone number the\nintegration could not recover from their WhatsApp-internal id. Such a\npeer cannot be matched to a contact automatically, so any message of\ntheirs that is stored is stored without one and can reach a contact only\nthrough the import queue.\n\nIt counts peers observed, not peers whose messages were stored — a sender\nin a group the size gate declines to track is counted too — so it is a\nmeasure of how much of the conversation graph cannot be attributed\nautomatically, not a count of unattributed records or of messages.",
                     "type": "integer"
                 }
             }

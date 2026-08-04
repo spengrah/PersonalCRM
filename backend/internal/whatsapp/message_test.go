@@ -28,6 +28,11 @@ var (
 
 func testOwn() ownIdentity { return ownIdentity{PN: testOwnPN, LID: testOwnLID} }
 
+// testAltTimeout keeps the bounded-lookup tests off the production 3s bound —
+// the point of those tests is that a bound EXISTS, not how long it is, and
+// spending the real one in wall clock buys nothing.
+const testAltTimeout = 50 * time.Millisecond
+
 // fakeAltResolver stands in for the device store's LID mapping.
 type fakeAltResolver struct {
 	result types.JID
@@ -252,7 +257,7 @@ func TestClassifyMessage_ReadsUnwrappedMessageNotRaw(t *testing.T) {
 		RawMessage: &waE2E.Message{EphemeralMessage: &waE2E.FutureProofMessage{Message: inner}},
 	}
 
-	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 	require.True(t, eligible)
 	assert.Equal(t, MessageTypeText, msg.MessageType)
 	require.NotNil(t, msg.Body)
@@ -263,7 +268,7 @@ func TestClassifyMessage_ReadsUnwrappedMessageNotRaw(t *testing.T) {
 
 func TestPeerResolution_PhoneServerJID(t *testing.T) {
 	evt := textEvent("m1", types.MessageSource{Chat: testPeerPN}, "hi")
-	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 
 	require.True(t, eligible)
 	assert.Empty(t, unresolved)
@@ -277,7 +282,7 @@ func TestPeerResolution_SenderAltCarriesPhone(t *testing.T) {
 		Sender:    testPeerLID,
 		SenderAlt: testPeerPN,
 	}, "hi")
-	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 
 	require.True(t, eligible)
 	assert.Empty(t, unresolved)
@@ -293,7 +298,7 @@ func TestPeerResolution_RecipientAltOnOutboundDM(t *testing.T) {
 		IsFromMe:     true,
 		RecipientAlt: testPeerPN,
 	}, "hi")
-	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 
 	require.True(t, eligible)
 	require.NotNil(t, msg.PeerPhoneE164)
@@ -305,7 +310,7 @@ func TestPeerResolution_GetAltJIDFallback(t *testing.T) {
 	resolver := &fakeAltResolver{result: testPeerPN}
 	evt := textEvent("m1", types.MessageSource{Chat: testPeerLID}, "hi")
 
-	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), resolver)
+	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), resolver, testAltTimeout)
 	require.True(t, eligible)
 	assert.Empty(t, unresolved)
 	assert.Equal(t, 1, resolver.calls)
@@ -326,12 +331,12 @@ func TestPeerResolution_GetAltJIDIsTimeBounded(t *testing.T) {
 	var unresolved string
 	go func() {
 		defer close(done)
-		_, unresolved, _ = parseMessage(context.Background(), evt, testOwn(), resolver)
+		_, unresolved, _ = parseMessage(context.Background(), evt, testOwn(), resolver, testAltTimeout)
 	}()
 
 	select {
 	case <-done:
-	case <-time.After(altJIDTimeout + 5*time.Second):
+	case <-time.After(testAltTimeout + 5*time.Second):
 		t.Fatal("the LID lookup was not bounded; it would block whatsmeow's handler goroutine")
 	}
 	assert.NotEmpty(t, unresolved, "a timed-out lookup degrades to unresolved, it does not fail the message")
@@ -341,7 +346,7 @@ func TestPeerResolution_UnresolvableLIDStagesUnmatched(t *testing.T) {
 	resolver := &fakeAltResolver{err: errors.New("store down")}
 	evt := textEvent("m1", types.MessageSource{Chat: testPeerLID}, "hi")
 
-	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), resolver)
+	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), resolver, testAltTimeout)
 	require.True(t, eligible, "an unresolvable peer is still a real message")
 	assert.Nil(t, msg.PeerPhoneE164)
 	require.NotNil(t, msg.PeerJID)
@@ -355,7 +360,7 @@ func TestPeerResolution_NonPhoneUserRejected(t *testing.T) {
 	weird := types.NewJID("not-a-number", types.DefaultUserServer)
 	evt := textEvent("m1", types.MessageSource{Chat: weird}, "hi")
 
-	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 	require.True(t, eligible)
 	assert.Nil(t, msg.PeerPhoneE164)
 	assert.Equal(t, weird.String(), unresolved)
@@ -365,7 +370,7 @@ func TestPeerResolution_HostedPeerNormalizedToDefaultServer(t *testing.T) {
 	hosted := types.NewJID("15559876543", types.HostedServer)
 	evt := textEvent("m1", types.MessageSource{Chat: hosted}, "hi")
 
-	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 	require.True(t, eligible)
 	require.NotNil(t, msg.PeerJID)
 	assert.Equal(t, testPeerPN.String(), *msg.PeerJID,
@@ -378,7 +383,7 @@ func TestPeerResolution_HostedPeerNormalizedToDefaultServer(t *testing.T) {
 
 func TestParseMessage_DirectInboundPeerIsChat(t *testing.T) {
 	evt := textEvent("m1", types.MessageSource{Chat: testPeerPN}, "hi")
-	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 
 	require.True(t, eligible)
 	assert.Equal(t, ChatTypePrivate, msg.ChatType)
@@ -390,7 +395,7 @@ func TestParseMessage_DirectInboundPeerIsChat(t *testing.T) {
 
 func TestParseMessage_DirectOutboundPeerIsChat(t *testing.T) {
 	evt := textEvent("m1", types.MessageSource{Chat: testPeerPN, IsFromMe: true}, "hi")
-	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 
 	require.True(t, eligible)
 	assert.True(t, msg.IsOutgoing)
@@ -404,7 +409,7 @@ func TestParseMessage_GroupInboundPeerIsSender(t *testing.T) {
 		Chat:   testGroupJID,
 		Sender: testPeerPN,
 	}, "hi")
-	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 
 	require.True(t, eligible)
 	assert.Equal(t, ChatTypeGroup, msg.ChatType)
@@ -419,7 +424,7 @@ func TestParseMessage_GroupOutboundHasNilPeer(t *testing.T) {
 		Sender:   testOwnPN,
 		IsFromMe: true,
 	}, "hi")
-	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 
 	require.True(t, eligible, "an outbound group message is still stored")
 	assert.Nil(t, msg.PeerJID, "there is no single counterpart in a group I sent to")
@@ -435,7 +440,7 @@ func TestParseMessage_OutboundDMCarriesNoPushName(t *testing.T) {
 	evt := textEvent("m1", types.MessageSource{Chat: testPeerPN, IsFromMe: true}, "hi")
 	evt.Info.PushName = "My Own Name"
 
-	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 	require.True(t, eligible)
 	assert.Nil(t, msg.PushName, "one outbound DM must not relabel an unknown peer as the user")
 }
@@ -444,7 +449,7 @@ func TestParseMessage_InboundDMCarriesPushName(t *testing.T) {
 	evt := textEvent("m1", types.MessageSource{Chat: testPeerPN}, "hi")
 	evt.Info.PushName = "Their Name"
 
-	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 	require.True(t, eligible)
 	require.NotNil(t, msg.PushName)
 	assert.Equal(t, "Their Name", *msg.PushName)
@@ -459,7 +464,7 @@ func TestParseMessage_AccountJIDComesFromTheEmittingSession(t *testing.T) {
 	adOwn.Device = 7
 	evt := textEvent("m1", types.MessageSource{Chat: testPeerPN}, "hi")
 
-	msg, _, eligible := parseMessage(context.Background(), evt, ownIdentity{PN: adOwn}, nil)
+	msg, _, eligible := parseMessage(context.Background(), evt, ownIdentity{PN: adOwn}, nil, testAltTimeout)
 	require.True(t, eligible)
 	require.NotNil(t, msg.AccountJID)
 	assert.Equal(t, testOwnPN.ToNonAD().String(), *msg.AccountJID)
@@ -467,7 +472,7 @@ func TestParseMessage_AccountJIDComesFromTheEmittingSession(t *testing.T) {
 
 	// A different session yields a different account id — nothing global is read.
 	other := types.NewJID("15550000009", types.DefaultUserServer)
-	msg2, _, _ := parseMessage(context.Background(), evt, ownIdentity{PN: other}, nil)
+	msg2, _, _ := parseMessage(context.Background(), evt, ownIdentity{PN: other}, nil, testAltTimeout)
 	require.NotNil(t, msg2.AccountJID)
 	assert.Equal(t, other.String(), *msg2.AccountJID)
 }
@@ -493,7 +498,7 @@ func TestParseMessage_FillsEveryLiveKnowableField(t *testing.T) {
 		}},
 	}
 
-	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), nil)
+	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
 	require.True(t, eligible)
 	assert.Empty(t, unresolved)
 

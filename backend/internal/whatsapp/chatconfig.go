@@ -68,12 +68,17 @@ type ChatGate struct {
 	repo            whatsAppChatConfigStore
 	groupInfoSource func() GroupInfoFetcher
 	groupMaxMembers int
+	// lookupTimeout bounds the group metadata call. It is a field rather than
+	// the package constant read directly so tests can shrink it without a
+	// mutable global — two tests otherwise spend the full production bound in
+	// real wall-clock time proving the bound exists.
+	lookupTimeout time.Duration
 }
 
 // NewChatGate builds the gate. The group-info source is bound later, by
 // Manager.SetIngestor, because the ingestor is constructed before the manager.
 func NewChatGate(repo whatsAppChatConfigStore, groupMaxMembers int) *ChatGate {
-	return &ChatGate{repo: repo, groupMaxMembers: groupMaxMembers}
+	return &ChatGate{repo: repo, groupMaxMembers: groupMaxMembers, lookupTimeout: groupInfoTimeout}
 }
 
 // BindGroupInfoSource installs the late-bound accessor for the live client.
@@ -84,11 +89,17 @@ func (g *ChatGate) BindGroupInfoSource(src func() GroupInfoFetcher) {
 // ShouldTrack resolves and persists the chat's config, then decides whether its
 // messages are stored.
 //
+// accountJID is the linked account the MESSAGE was observed by, in the non-AD
+// form the parser stamps. It is compared against the account the connected
+// client belongs to, because the two can differ mid-re-pair; an empty value
+// skips the comparison, which is what a caller that cannot know its account
+// gets.
+//
 // A non-nil error wrapping ErrChatGateUndecided means the caller must NOT
 // acknowledge. "Do not track" and "fail closed" are STORAGE rules, not ack
 // rules: they say an unresolved group's messages must not be stored, never that
 // they must be acknowledged as handled.
-func (g *ChatGate) ShouldTrack(ctx context.Context, chatJID, chatType string) (bool, error) {
+func (g *ChatGate) ShouldTrack(ctx context.Context, chatJID, chatType, accountJID string) (bool, error) {
 	// The gate is the group-SIZE gate. A private chat has already passed the
 	// person-to-person allowlist upstream.
 	if chatType != ChatTypeGroup {
@@ -124,7 +135,7 @@ func (g *ChatGate) ShouldTrack(ctx context.Context, chatJID, chatType string) (b
 	// unresolved, and a successful one is always something new to persist.
 	looked := false
 	if cfg == nil || count == nil {
-		info, err := g.lookupGroup(ctx, chatJID)
+		info, err := g.lookupGroup(ctx, chatJID, accountJID)
 		if err != nil {
 			return false, err
 		}
@@ -146,6 +157,14 @@ func (g *ChatGate) ShouldTrack(ctx context.Context, chatJID, chatType string) (b
 	// Re-writing an unchanged row on every group message is a pointless write
 	// on the message-handling path, so only a fresh resolution is persisted —
 	// which is also the only way a row can be absent by this point.
+	//
+	// LastLookupAt is written for OBSERVABILITY only: nothing reads it, and
+	// nothing re-resolves on a TTL, so once a size is recorded it is frozen
+	// until the row's member_count is cleared. A group that grows past the
+	// threshold therefore keeps being tracked. That is a deliberate limit of
+	// this PR, not an oversight — a TTL re-resolve would put a network round
+	// trip back on the message path, and the settings surface that will let a
+	// user override the decision is where a re-resolve belongs.
 	if looked {
 		if _, err := g.repo.UpsertChatConfig(ctx, repository.WhatsAppChatConfig{
 			ChatJID:      chatJID,
@@ -172,7 +191,7 @@ func (g *ChatGate) ShouldTrack(ctx context.Context, chatJID, chatType string) (b
 //
 // (nil, nil) means DECIDED-not-tracked: the server answered, and its answer
 // does not change on redelivery. A non-nil error is undecided.
-func (g *ChatGate) lookupGroup(ctx context.Context, chatJID string) (*ChatGroupInfo, error) {
+func (g *ChatGate) lookupGroup(ctx context.Context, chatJID, accountJID string) (*ChatGroupInfo, error) {
 	if g.groupInfoSource == nil {
 		return nil, fmt.Errorf("%w: no group info source", ErrChatGateUndecided)
 	}
@@ -181,7 +200,19 @@ func (g *ChatGate) lookupGroup(ctx context.Context, chatJID string) (*ChatGroupI
 		return nil, fmt.Errorf("%w: no connected client", ErrChatGateUndecided)
 	}
 
-	lookupCtx, cancel := context.WithTimeout(ctx, groupInfoTimeout)
+	// The fetcher comes from the PUBLISHED session; the message came from its
+	// EMITTING one. Mid-re-pair those are different accounts, and asking the new
+	// account about a group only the old one was in returns "not in that group"
+	// — a PERMANENT answer, which this gate would consume and acknowledge,
+	// losing the message for good. A mismatch is transient by construction (the
+	// re-pair settles), so it is undecided, and no lookup is made at all.
+	if accountJID != "" {
+		if live := fetcher.AccountJID(); live != "" && live != accountJID {
+			return nil, fmt.Errorf("%w: the connected client is a different account than the one that observed this message", ErrChatGateUndecided)
+		}
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, g.lookupTimeout)
 	defer cancel()
 
 	info, err := fetcher.GroupInfo(lookupCtx, chatJID)

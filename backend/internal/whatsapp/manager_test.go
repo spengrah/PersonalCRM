@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1349,4 +1350,18 @@ func TestOnPairSuccess_SelectorWriteFailureStillDeletesTheReplacedDevice(t *test
 	eventually(t, "the replaced device is still deleted, which moves the store to the self-healing state", func() bool {
 		return indexOf(oldClient.callLog(), "delete_device") >= 0
 	})
+}
+
+// TestNoteUnresolvedLID_SaturatesAtTheCap pins the bound on the copy-on-write
+// set: it is O(n) per newly seen peer on the library's serialized handler
+// goroutine, so it cannot be allowed to grow without limit.
+func TestNoteUnresolvedLID_SaturatesAtTheCap(t *testing.T) {
+	m := newManagerForTest(t, newFakeSyncStore(), &fakeBackfillReader{})
+
+	for i := range maxUnresolvedLIDPeers + 25 {
+		m.noteUnresolvedLID(fmt.Sprintf("%d@lid", i))
+	}
+
+	assert.Equal(t, maxUnresolvedLIDPeers, m.ingestStatus().UnresolvedLIDPeers,
+		"the count saturates rather than growing without bound")
 }

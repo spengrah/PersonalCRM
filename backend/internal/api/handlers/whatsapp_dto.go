@@ -43,11 +43,16 @@ type WhatsAppBackfillResponse struct {
 // counts are a PROCESS-LIFETIME observation, not a persisted total: a restart
 // resets them to zero.
 type WhatsAppIngestResponse struct {
-	// UnresolvedLIDPeers counts distinct peers whose phone number the
-	// integration could not recover from their WhatsApp-internal id. Their
-	// messages are stored without a contact and can reach one only through the
-	// import queue, so this is the visible size of that gap — not a message
-	// volume.
+	// UnresolvedLIDPeers counts distinct peers OBSERVED whose phone number the
+	// integration could not recover from their WhatsApp-internal id. Such a
+	// peer cannot be matched to a contact automatically, so any message of
+	// theirs that is stored is stored without one and can reach a contact only
+	// through the import queue.
+	//
+	// It counts peers observed, not peers whose messages were stored — a sender
+	// in a group the size gate declines to track is counted too — so it is a
+	// measure of how much of the conversation graph cannot be attributed
+	// automatically, not a count of unattributed records or of messages.
 	UnresolvedLIDPeers int `json:"unresolved_lid_peers"`
 }
 

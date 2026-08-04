@@ -369,3 +369,58 @@ func TestDiscovery_UpsertErrorIsNonFatal(t *testing.T) {
 	require.NoError(t, m.UpdateDiscoveryCandidates(context.Background(), nil),
 		"discovery is best-effort; it must not withhold an ack for a message already staged")
 }
+
+// TestMatchPeer_ReconcileIsFirstMatchGated is the per-message cost guard: this
+// runs inline on the library's serialized handler goroutine, so a known peer's
+// steady state must be ONE candidate read and nothing else — not a read to mark,
+// a second read to enrich, and a method-sync transaction on every message.
+func TestMatchPeer_ReconcileIsFirstMatchGated(t *testing.T) {
+	want := uuid.New()
+	ids := &fakeIdentityMatcher{contactID: &want}
+	ext := &countingExternalContactUpserter{fakeExternalContactUpserter: fakeExternalContactUpserter{
+		getResult: &repository.ExternalContact{
+			ID: uuid.New(), Source: "whatsapp", SourceID: "15559876543@s.whatsapp.net",
+			MatchStatus: repository.MatchStatusMatched, Metadata: map[string]any{},
+		},
+	}}
+	enricher := &fakeEnricher{}
+	m := NewPeerMatcher(ids, &fakeCommsPeerStore{}, ext, enricher, 3)
+
+	_, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, ext.getCalls, "one candidate read, not two")
+	assert.Zero(t, ext.updateCalls, "an already-matched candidate needs no re-marking")
+	assert.Zero(t, enricher.calls, "and no method-sync transaction per message")
+}
+
+func TestMatchPeer_ReconcileRunsOnceForANewCandidate(t *testing.T) {
+	want := uuid.New()
+	ext := &countingExternalContactUpserter{fakeExternalContactUpserter: fakeExternalContactUpserter{
+		getResult: &repository.ExternalContact{
+			ID: uuid.New(), Source: "whatsapp", SourceID: "15559876543@s.whatsapp.net",
+			MatchStatus: repository.MatchStatusUnmatched, Metadata: map[string]any{},
+		},
+	}}
+	enricher := &fakeEnricher{}
+	m := NewPeerMatcher(&fakeIdentityMatcher{contactID: &want}, &fakeCommsPeerStore{}, ext, enricher, 3)
+
+	_, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, ext.getCalls)
+	assert.Equal(t, 1, ext.updateCalls, "an unmatched candidate is marked matched")
+	assert.Equal(t, 1, enricher.calls, "and enriched, once")
+}
+
+// countingExternalContactUpserter counts the candidate reads, which is the cost
+// the fold exists to halve.
+type countingExternalContactUpserter struct {
+	fakeExternalContactUpserter
+	getCalls int
+}
+
+func (c *countingExternalContactUpserter) GetBySource(ctx context.Context, source, sourceID string, accountID *string) (*repository.ExternalContact, error) {
+	c.getCalls++
+	return c.fakeExternalContactUpserter.GetBySource(ctx, source, sourceID, accountID)
+}

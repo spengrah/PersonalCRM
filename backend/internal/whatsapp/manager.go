@@ -82,6 +82,14 @@ const (
 
 	// altJIDTimeout bounds the device store's LID-to-phone lookup.
 	altJIDTimeout = 3 * time.Second
+
+	// maxUnresolvedLIDPeers caps the observed-peer set. The set is
+	// copy-on-write, so each newly seen peer costs O(n) on the library's
+	// serialized handler goroutine; the cap keeps that bounded. It is far above
+	// any plausible personal address book, so in practice the count is exact
+	// and the cap only exists so a pathological stream cannot degrade message
+	// handling.
+	maxUnresolvedLIDPeers = 5000
 )
 
 // syncSource is the external_sync_state source string. It is also the
@@ -1262,7 +1270,7 @@ func (m *Manager) handleMessage(ctx context.Context, sess *session, e *events.Me
 		return false
 	}
 
-	msg, unresolvedLID, eligible := parseMessage(ctx, e, own, resolver)
+	msg, unresolvedLID, eligible := parseMessage(ctx, e, own, resolver, altJIDTimeout)
 	if unresolvedLID != "" {
 		m.noteUnresolvedLID(unresolvedLID)
 	}
@@ -1305,20 +1313,34 @@ func (m *Manager) ownIdentityFor(sess *session) (ownIdentity, peerAltResolver) {
 }
 
 // noteUnresolvedLID records a peer whose phone number could not be recovered.
-// DISTINCT peers, for the life of this process: a per-message counter would
-// report message volume under a field named for peers.
+//
+// It counts DISTINCT peers OBSERVED, for the life of this process — not peers
+// whose messages were stored. It fires for every eligible message, which
+// includes messages the group gate then declines to store, so the count is a
+// measure of how much of the user's conversation graph the integration cannot
+// automatically attribute, not a count of unattributed rows. A per-message
+// counter would instead report message volume under a field named for peers.
 //
 // The CAS loop is what makes the copy-on-write set correct under the concurrent
 // dispatch the library permits — a lost update would under-report the gap.
+//
+// The set is CAPPED. Copy-on-write is O(n) per newly seen peer, which is O(n²)
+// over the life of a process, and it runs on the library's serialized handler
+// goroutine; the cap bounds that at a size far above any plausible personal
+// address book, after which the reported count saturates rather than growing.
 func (m *Manager) noteUnresolvedLID(jid string) {
 	for {
 		current := m.unresolvedLIDs.Load()
+		size := lenOfSet(current)
 		if current != nil {
 			if _, seen := (*current)[jid]; seen {
 				return
 			}
 		}
-		next := make(map[string]struct{}, lenOfSet(current)+1)
+		if size >= maxUnresolvedLIDPeers {
+			return
+		}
+		next := make(map[string]struct{}, size+1)
 		if current != nil {
 			for k := range *current {
 				next[k] = struct{}{}

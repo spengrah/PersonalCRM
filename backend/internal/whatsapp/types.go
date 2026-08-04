@@ -297,10 +297,16 @@ type BackfillStatus struct {
 // started. It is deliberately NOT persisted: it reports the current process's
 // view, so a restart resets it to zero.
 type IngestStatus struct {
-	// UnresolvedLIDPeers counts DISTINCT peers whose phone number could not be
-	// recovered from their LID. Their messages stage without a contact and can
-	// reach one only through the import queue, so the count is the visible size
-	// of that gap — not a message volume.
+	// UnresolvedLIDPeers counts DISTINCT peers OBSERVED whose phone number
+	// could not be recovered from their LID. Such a peer cannot be matched to a
+	// contact automatically, so any message of theirs that IS stored is stored
+	// without one and can reach a contact only through the import queue.
+	//
+	// It counts peers observed, NOT peers whose messages were stored: a sender
+	// in a group the size gate declines to track is counted too. The number is
+	// therefore how much of the conversation graph the integration cannot
+	// attribute on its own — not a count of unattributed rows, and not a
+	// message volume. It saturates at maxUnresolvedLIDPeers.
 	UnresolvedLIDPeers int `json:"unresolved_lid_peers"`
 }
 
@@ -373,6 +379,17 @@ type ChatGroupInfo struct {
 // the gate never holds a *whatsmeow.Client.
 type GroupInfoFetcher interface {
 	GroupInfo(ctx context.Context, chatJID string) (*ChatGroupInfo, error)
+	// AccountJID reports which linked account this fetcher's client belongs to,
+	// in the same non-AD form IngestedMessage.AccountJID carries, or "" when it
+	// cannot be determined.
+	//
+	// It exists because the fetcher is resolved from the PUBLISHED session while
+	// a message is parsed against its EMITTING one. During an overlapping
+	// re-pair those differ, and asking the new account about a group only the
+	// old account was in answers "not in that group" — which the gate treats as
+	// a permanent decision and would therefore acknowledge and drop the message
+	// for good. Comparing the two identities turns that into a withheld ack.
+	AccountJID() string
 }
 
 // GroupInfoBinder is implemented by an ingestor that needs to reach the live

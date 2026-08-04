@@ -49,6 +49,22 @@ type clientGroupInfoFetcher struct {
 
 var _ GroupInfoFetcher = (*clientGroupInfoFetcher)(nil)
 
+// AccountJID reports the linked account this client belongs to, in the same
+// non-AD form the parser stamps onto each message.
+func (f *clientGroupInfoFetcher) AccountJID() string {
+	if f.cli == nil || f.cli.Store == nil {
+		return ""
+	}
+	jid := f.cli.Store.GetJID()
+	if jid.IsEmpty() {
+		jid = f.cli.Store.GetLID()
+	}
+	if jid.IsEmpty() {
+		return ""
+	}
+	return normalizeServer(jid).ToNonAD().String()
+}
+
 // GroupInfo resolves a group's title and member count.
 //
 // The library's GetGroupInfo never reads its cache — it sends a group IQ every

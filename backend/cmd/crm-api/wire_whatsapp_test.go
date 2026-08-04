@@ -173,11 +173,15 @@ func TestWhatsAppWiring_IngestorIsWiredAndDrainerIsNot(t *testing.T) {
 	assert.Equal(t, wapkg.ReasonIngestNotWired, status.Reason)
 }
 
-// TestWhatsAppWiring_GroupInfoSourceBoundBeforeStart pins the ordering the group
-// gate depends on: the seam is bound by SetIngestor, which the activation
-// sequence runs before the single Start, so no connected client can reach an
-// ingestor whose group-info source is still nil.
-func TestWhatsAppWiring_GroupInfoSourceBoundBeforeStart(t *testing.T) {
+// TestWhatsAppWiring_ActivationBindsTheGroupInfoSource asserts exactly what it
+// can see: that driving the real activation sequence leaves the ingestor's
+// group-info seam BOUND rather than nil. It does NOT assert the bind happened
+// before Start — the real manager gives a fake ingestor no way to observe
+// Start — and the name says so. The ordering half is
+// TestBuildWhatsApp_StartIsCalledAfterEverySetter, which pins SetIngestor ahead
+// of Start on the same sequence, plus TestSetIngestor_BindsGroupInfoSource in
+// the whatsapp package, which pins that SetIngestor is where the bind happens.
+func TestWhatsAppWiring_ActivationBindsTheGroupInfoSource(t *testing.T) {
 	m := wapkg.NewManager(nil, wapkg.NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, nil, nil)
 	t.Cleanup(m.Stop)
 

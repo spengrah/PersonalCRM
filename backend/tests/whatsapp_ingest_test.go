@@ -26,15 +26,21 @@ import (
 // stubGroupInfo is the group-metadata seam. Production reaches a live client;
 // no test may.
 type stubGroupInfo struct {
-	info  *whatsapp.ChatGroupInfo
-	err   error
-	calls int
+	info    *whatsapp.ChatGroupInfo
+	err     error
+	calls   int
+	account string
 }
 
 func (s *stubGroupInfo) GroupInfo(context.Context, string) (*whatsapp.ChatGroupInfo, error) {
 	s.calls++
 	return s.info, s.err
 }
+
+// AccountJID reports which linked account this fetcher's client belongs to. The
+// harness always answers with the account its projected messages carry, so the
+// gate's re-pair guard never fires on an unrelated test.
+func (s *stubGroupInfo) AccountJID() string { return s.account }
 
 // injectedFailure wraps the real repository so ONE call can be made to fail
 // without faking the rest of the write path.
@@ -123,6 +129,7 @@ func setupIngestTest(t *testing.T) *ingestEnv {
 		group:       &stubGroupInfo{info: &whatsapp.ChatGroupInfo{Title: "Book Club", MemberCount: 3}},
 		ns:          syntheticNS(t),
 	}
+	env.group.account = env.accountJID()
 	env.comms.SetPool(database.Pool)
 
 	fixtures := repository.NewTestJSONBFixturesRepository(database.Queries)
@@ -157,6 +164,9 @@ func (e *ingestEnv) lidJID(name string) string { return e.ns + name + "@lid" }
 
 func (e *ingestEnv) groupJID() string { return e.ns + "group@g.us" }
 
+// accountJID is the linked account every projected message in this test carries.
+func (e *ingestEnv) accountJID() string { return e.ns + "own@s.whatsapp.net" }
+
 // uniquePhone mints an E.164 no other test shares, so identity matching cannot
 // collide with another test's contact across the shared package DB.
 func (e *ingestEnv) uniquePhone(t *testing.T) string {
@@ -190,7 +200,7 @@ func strPtr2(s string) *string { return &s }
 
 // msg builds a projected message with inbound private-DM defaults.
 func (e *ingestEnv) msg(externalID, peerJID string, opts ...func(*whatsapp.IngestedMessage)) whatsapp.IngestedMessage {
-	account := e.ns + "own@s.whatsapp.net"
+	account := e.accountJID()
 	m := whatsapp.IngestedMessage{
 		MessageID:   externalID,
 		ChatJID:     peerJID,
@@ -404,7 +414,7 @@ func TestIngest_SourceMetadataCarriesReplyTarget(t *testing.T) {
 	assert.Equal(t, whatsapp.ChatTypePrivate, meta["chat_type"])
 	assert.Nil(t, row.Snippet, "the snippet stays nil: nothing on this route reads it")
 	require.NotNil(t, row.AccountID)
-	assert.Equal(t, env.ns+"own@s.whatsapp.net", *row.AccountID)
+	assert.Equal(t, env.accountJID(), *row.AccountID)
 }
 
 func TestIngest_RedeliveryIsIdempotent(t *testing.T) {
@@ -651,10 +661,46 @@ func TestGroupGate_PersistsAcrossRestart(t *testing.T) {
 	// FAIL if it were reached at all.
 	restarted := whatsapp.NewChatGate(env.waRepo, 10)
 	restarted.BindGroupInfoSource(func() whatsapp.GroupInfoFetcher {
-		return &stubGroupInfo{err: errors.New("must not be reached after a restart")}
+		return &stubGroupInfo{account: env.accountJID(), err: errors.New("must not be reached after a restart")}
 	})
 
-	tracked, err := restarted.ShouldTrack(env.ctx, env.groupJID(), whatsapp.ChatTypeGroup)
+	tracked, err := restarted.ShouldTrack(env.ctx, env.groupJID(), whatsapp.ChatTypeGroup, env.accountJID())
 	require.NoError(t, err, "the persisted count answers without a lookup")
 	assert.True(t, tracked)
+}
+
+// TestIngest_MissingMessageIDIsRefused is the symmetric twin of the staging
+// layer's missing-thread refusal. The live parser always supplies an id, but the
+// history drainer builds IngestedMessage by hand, and a row with no id is
+// staged and then permanently unreachable — dedup, the twin reconciliation and
+// the reply bridge all key on it.
+func TestIngest_MissingMessageIDIsRefused(t *testing.T) {
+	t.Parallel()
+	env := setupIngestTest(t)
+	msg := env.msg(env.extID(1), env.peerJID("noid"))
+	msg.MessageID = ""
+
+	err := env.ingestor.IngestMessage(env.ctx, msg)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, whatsapp.ErrIngestMissingMessageID)
+	assert.Zero(t, env.liveUnmatched(t, env.peerJID("noid")), "and nothing is staged")
+}
+
+// TestIngest_GroupMessageFromAnotherAccountWithholdsAck is the re-pair guard at
+// the ingest boundary: the connected client belongs to a different account than
+// the one that observed the message, so its "not in that group" answer is not
+// this account's answer and must not be consumed.
+func TestIngest_GroupMessageFromAnotherAccountWithholdsAck(t *testing.T) {
+	t.Parallel()
+	env := setupIngestTest(t)
+	env.group.account = "15559999999@s.whatsapp.net"
+	env.group.info = nil
+	env.group.err = errors.New("status 403")
+
+	err := env.ingestor.IngestMessage(env.ctx,
+		env.msg(env.extID(1), env.peerJID("member"), withGroupChat(env.groupJID())))
+	require.Error(t, err, "acking a wrong-account answer would drop the message for good")
+	assert.ErrorIs(t, err, whatsapp.ErrChatGateUndecided)
+	assert.Zero(t, env.group.calls, "and the wrong client is never asked")
+	env.noStoredRow(t, env.extID(1))
 }

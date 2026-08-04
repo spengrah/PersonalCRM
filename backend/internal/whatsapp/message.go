@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"regexp"
+	"time"
 
 	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/logger"
@@ -253,7 +254,10 @@ type peerAltResolver interface {
 // ChatTitle and MemberCount are deliberately left nil — both would cost a
 // GetGroupInfo round trip per message, and the group's title and size live in
 // whatsapp_chat_config, written by the gate.
-func parseMessage(ctx context.Context, evt *events.Message, own ownIdentity, resolver peerAltResolver) (IngestedMessage, string, bool) {
+// altTimeout bounds the device-store lookup. It is a parameter rather than the
+// package constant read directly so tests can shrink it without a mutable
+// global that a parallel test could race.
+func parseMessage(ctx context.Context, evt *events.Message, own ownIdentity, resolver peerAltResolver, altTimeout time.Duration) (IngestedMessage, string, bool) {
 	chat := normalizeServer(evt.Info.Chat).ToNonAD()
 	chatType, ok := classifyChat(chat, own)
 	if !ok {
@@ -302,7 +306,7 @@ func parseMessage(ctx context.Context, evt *events.Message, own ownIdentity, res
 	peerStr := peer.String()
 	msg.PeerJID = &peerStr
 
-	if e164, resolved := resolvePeerPhone(ctx, peer, altJID, resolver); resolved {
+	if e164, resolved := resolvePeerPhone(ctx, peer, altJID, resolver, altTimeout); resolved {
 		msg.PeerPhoneE164 = &e164
 		return msg, "", true
 	}
@@ -330,7 +334,7 @@ func resolvePeer(evt *events.Message, chat types.JID, chatType string) (peer typ
 // rung is cheaper and more certain than the next, and rung 4 (no phone) is a
 // real outcome rather than a failure — a LID-only peer stages unmatched and is
 // reachable through the import queue.
-func resolvePeerPhone(ctx context.Context, peer, altJID types.JID, resolver peerAltResolver) (string, bool) {
+func resolvePeerPhone(ctx context.Context, peer, altJID types.JID, resolver peerAltResolver, altTimeout time.Duration) (string, bool) {
 	// 1. The peer is already addressed by phone number.
 	if candidate, ok := phoneCandidate(peer); ok {
 		return candidate, true
@@ -342,7 +346,7 @@ func resolvePeerPhone(ctx context.Context, peer, altJID types.JID, resolver peer
 	// 3. The device store may already know the mapping. The explicit bound
 	//    matters because the dispatcher hands in an unbounded context.
 	if resolver != nil && peer.Server == types.HiddenUserServer {
-		altCtx, cancel := context.WithTimeout(ctx, altJIDTimeout)
+		altCtx, cancel := context.WithTimeout(ctx, altTimeout)
 		resolved, err := resolver.GetAltJID(altCtx, peer)
 		cancel()
 		if err != nil {
