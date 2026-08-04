@@ -99,6 +99,18 @@ func TestSyntheticReplay_SeededSenderSettled(t *testing.T) {
 		requireInteractionSource(t, ctx, h, contact.ID, "gchat")
 	})
 
+	t.Run("whatsapp", func(t *testing.T) {
+		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		gen := h.Generator()
+		spec := gen.Contact(factory.WithPhone())
+		contact, err := h.SeedContact(ctx, spec)
+		require.NoError(t, err)
+		res, err := h.ReplayWhatsApp(ctx, contact.ID, gen.WhatsAppMessage(spec, factory.MatchSeeded))
+		require.NoError(t, err)
+		require.True(t, res.Matched)
+		requireInteractionSource(t, ctx, h, contact.ID, "whatsapp")
+	})
+
 	t.Run("imessage", func(t *testing.T) {
 		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
 		gen := h.Generator()
@@ -322,6 +334,32 @@ func TestSyntheticReplay_UnknownSenderPending(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, res.Matched)
 	})
+
+	// WhatsApp belongs HERE, not in the match-only test: gmail/gchat write no
+	// row for an unknown sender, while matched_contact_id IS NULL is legal for
+	// whatsapp and the row IS written — it simply never aggregates.
+	t.Run("whatsapp_stranded", func(t *testing.T) {
+		h := synthetic.NewHarnessForNamespace(t, ctx, database, syntheticNS(t), factory.DefaultSeed)
+		gen := h.Generator()
+		target := gen.Contact(factory.WithPhone())
+		contact, err := h.SeedContact(ctx, target)
+		require.NoError(t, err)
+
+		spec := gen.WhatsAppMessage(gen.Contact(factory.WithPhone()), factory.MatchUnknown)
+		res, err := h.ReplayWhatsApp(ctx, uuid.Nil, spec)
+		require.NoError(t, err)
+		require.False(t, res.Matched)
+
+		exists, err := h.CommsRowExists(ctx, "whatsapp", spec.ExternalID)
+		require.NoError(t, err)
+		require.True(t, exists, "an unknown WhatsApp peer's message IS stored, just unattached")
+
+		rows, err := h.InteractionRepo().ListContactInteractions(ctx, contact.ID, 100, 0)
+		require.NoError(t, err)
+		for _, r := range rows {
+			require.NotEqual(t, "whatsapp", r.Source, "an unattached whatsapp row must not produce an interaction")
+		}
+	})
 }
 
 func TestSyntheticReplay_UnknownSenderMatchOnly(t *testing.T) {
@@ -375,6 +413,21 @@ func TestSyntheticReplay_IdempotentReReplay(t *testing.T) {
 	rows, err := h.CommsRepo().ListByContact(ctx, contact.ID)
 	require.NoError(t, err)
 	require.Len(t, rows, 1, "re-replay of the same payload must not add a duplicate comms_message row")
+
+	// WhatsApp shares the same comms_message store and the same (source,
+	// external_id) dedup, driven through its own ingest seam.
+	waSpec := gen.Contact(factory.WithPhone())
+	waContact, err := h.SeedContact(ctx, waSpec)
+	require.NoError(t, err)
+	waMsg := gen.WhatsAppMessage(waSpec, factory.MatchSeeded)
+	_, err = h.ReplayWhatsApp(ctx, waContact.ID, waMsg)
+	require.NoError(t, err)
+	_, err = h.ReplayWhatsApp(ctx, waContact.ID, waMsg)
+	require.NoError(t, err)
+
+	waRows, err := h.CommsRepo().ListByContact(ctx, waContact.ID)
+	require.NoError(t, err)
+	require.Len(t, waRows, 1, "re-replay of the same whatsapp payload must not add a duplicate row")
 }
 
 // requireInteractionSource asserts the contact has at least one interaction with

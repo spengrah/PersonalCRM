@@ -95,22 +95,26 @@ func (h *Harness) DrainGateB(ctx context.Context) error {
 	return fmt.Errorf("synthetic: Gate B did not clear within %s for namespace %q", teardownGateBBoundedWait, h.namespace)
 }
 
-// waitTeardownGateB bounded-waits until Gate B clears for BOTH aggregate sources
-// (messages + gchat). Returns false on timeout. The budget is REAL wall-clock
+// waitTeardownGateB bounded-waits until Gate B clears for EVERY aggregate source
+// (messages + gchat + whatsapp). Returns false on timeout. A source missing here
+// is invisible to teardown, so cleanup could start deleting under a live
+// aggregate job. Returns false on timeout. The budget is REAL wall-clock
 // (see defaultSettleTimeout) so it does not collapse under TIME_ACCELERATION.
 func (h *Harness) waitTeardownGateB(ctx context.Context) bool {
 	open, cancel := realTimeBudget(teardownGateBBoundedWait)
 	defer cancel()
 	for open() {
 		if h.gateBClear(ctx, repository.InteractionSourceMessages) &&
-			h.gateBClear(ctx, repository.InteractionSourceGChat) {
+			h.gateBClear(ctx, repository.InteractionSourceGChat) &&
+			h.gateBClear(ctx, repository.InteractionSourceWhatsApp) {
 			return true
 		}
 		time.Sleep(teardownPollInterval)
 	}
 	// Final check (covers the boundary).
 	return h.gateBClear(ctx, repository.InteractionSourceMessages) &&
-		h.gateBClear(ctx, repository.InteractionSourceGChat)
+		h.gateBClear(ctx, repository.InteractionSourceGChat) &&
+		h.gateBClear(ctx, repository.InteractionSourceWhatsApp)
 }
 
 // cleanup runs the D5a ID-tracked, FK-ordered teardown by tracked id (or

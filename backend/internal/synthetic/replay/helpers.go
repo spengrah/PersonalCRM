@@ -38,6 +38,15 @@ func (h *Harness) gchatSettled(externalID string) gateA {
 	}
 }
 
+// whatsappSettled returns a Gate A predicate: the
+// comms_message(whatsapp, externalID) row is linked to an interaction.
+func (h *Harness) whatsappSettled(externalID string) gateA {
+	return func(ctx context.Context) (bool, error) {
+		n, err := h.support.CountLinkedCommsMessageByExternalID(ctx, "whatsapp", externalID)
+		return n > 0, err
+	}
+}
+
 // imessageSettled returns a Gate A predicate: the messages_message(guid) row is
 // linked to an interaction.
 func (h *Harness) imessageSettled(guid string) gateA {
