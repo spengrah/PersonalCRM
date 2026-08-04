@@ -59,6 +59,14 @@ func (i *Ingestor) PeerMatcher() *PeerMatcher {
 	return i.matcher
 }
 
+// ChatGate exposes the gate for the history drainer's per-chunk pre-pass, for
+// the same reason PeerMatcher is exposed: the drainer needs THIS instance, not
+// an equivalent one, because Manager.SetIngestor binds the group-info source on
+// this instance and only this one.
+func (i *Ingestor) ChatGate() *ChatGate {
+	return i.gate
+}
+
 // IngestMessage stages one projected message.
 //
 // Only the staging write's failure is returned — a returned error withholds the

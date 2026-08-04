@@ -2,11 +2,13 @@ package whatsapp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
@@ -29,12 +31,19 @@ func (m *Manager) HistoryFetcher() HistoryFetcher {
 	if sess == nil || sess.wa == nil || !sess.client.IsConnected() {
 		return nil
 	}
-	return &clientHistoryFetcher{cli: sess.wa}
+	return &clientHistoryFetcher{cli: sess.wa, sess: sess, mgr: m}
 }
 
-// clientHistoryFetcher wraps the three history-owned whatsmeow calls.
+// clientHistoryFetcher wraps the history-owned whatsmeow calls.
+//
+// It carries three references rather than one client because projection needs
+// all three: cli for the library calls, sess because ownIdentityFor resolves
+// the EMITTING session's identity from it, and mgr so the unresolved-LID
+// counter keeps exactly ONE owner across the live and history paths.
 type clientHistoryFetcher struct {
-	cli *whatsmeow.Client
+	cli  *whatsmeow.Client
+	sess *session
+	mgr  *Manager
 }
 
 var _ HistoryFetcher = (*clientHistoryFetcher)(nil)
@@ -42,9 +51,55 @@ var _ HistoryFetcher = (*clientHistoryFetcher)(nil)
 func unmarshalNotification(notification []byte) (*waE2E.HistorySyncNotification, error) {
 	var notif waE2E.HistorySyncNotification
 	if err := proto.Unmarshal(notification, &notif); err != nil {
-		return nil, fmt.Errorf("whatsapp: unmarshal history notification: %w", err)
+		return nil, fmt.Errorf("%w: unmarshal: %v", ErrHistoryNotificationMalformed, err)
 	}
 	return &notif, nil
+}
+
+// AccountJID reports the linked account this client belongs to.
+//
+// It goes through canonicalAccountJID — the SAME derivation the parser uses to
+// stamp each message and the group-info seam uses to report its account — so
+// the gate's account comparison cannot fail merely because the two sides
+// preferred different forms of one identity.
+func (f *clientHistoryFetcher) AccountJID() string {
+	if f.cli == nil || f.cli.Store == nil {
+		return ""
+	}
+	return canonicalAccountJID(f.cli.Store.GetJID(), f.cli.Store.GetLID())
+}
+
+// ProjectHistoryMessage projects one history message through the live parser.
+//
+// ParseWebMessage is a pure local decode: JID parsing, field copies, an
+// in-memory own-ID read and a proto walk. It performs no I/O and mutates no
+// store, which is why the read-only fence admits it.
+//
+// The error/eligibility split matches the seam contract: a decode failure is
+// this ONE message's problem and the caller skips it, while eligible=false is
+// an ordinary drop the parser already decided (ineligible chat, non-turn).
+func (f *clientHistoryFetcher) ProjectHistoryMessage(ctx context.Context, chatJID string, webMsg *waWeb.WebMessageInfo) (IngestedMessage, bool, error) {
+	jid, err := types.ParseJID(chatJID)
+	if err != nil {
+		return IngestedMessage{}, false, fmt.Errorf("whatsapp: parse history chat JID %q: %w", chatJID, err)
+	}
+	evt, err := f.cli.ParseWebMessage(jid, webMsg)
+	if err != nil {
+		return IngestedMessage{}, false, fmt.Errorf("whatsapp: parse history message: %w", err)
+	}
+
+	own, resolver := f.mgr.ownIdentityFor(f.sess)
+	if !own.ok() {
+		// Not a per-message failure: without an own JID no message in this
+		// chunk can be attributed, so the caller's retry is the right response.
+		return IngestedMessage{}, false, errors.New("whatsapp: own identity unknown; cannot project history")
+	}
+
+	msg, unresolvedLID, eligible := parseMessage(ctx, evt, own, resolver, altJIDTimeout)
+	if unresolvedLID != "" {
+		f.mgr.noteUnresolvedLID(unresolvedLID)
+	}
+	return msg, eligible, nil
 }
 
 // DownloadHistorySync downloads the chunk and then verifies that every PN-LID

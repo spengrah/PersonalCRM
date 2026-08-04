@@ -79,6 +79,10 @@ func TestOutboundGuard_MatchesTheCallItIsMeantTo(t *testing.T) {
 		"cli.SendProtocolMessageReceipt(ctx, id, types.ReceiptTypeHistorySync)",
 		"cli.DeleteMedia(ctx, whatsmeow.MediaHistory, path, hash, handle)",
 		"cli.AddEventHandlerWithSuccessStatus(m.handleEvent)",
+		// The history projection's decode. It is documented here rather than
+		// gated: it is a pure local decode with no I/O, and no mutation of THIS
+		// PR could make any of the regexes above match it.
+		"cli.ParseWebMessage(jid, webMsg)",
 	}
 	for _, pattern := range forbiddenCallSites {
 		re := regexp.MustCompile(pattern)

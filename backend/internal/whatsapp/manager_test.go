@@ -12,7 +12,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -1364,4 +1367,122 @@ func TestNoteUnresolvedLID_SaturatesAtTheCap(t *testing.T) {
 
 	assert.Equal(t, maxUnresolvedLIDPeers, m.ingestStatus().UnresolvedLIDPeers,
 		"the count saturates rather than growing without bound")
+}
+
+// --- the history projection seam -------------------------------------------
+
+// fakeLIDStore is the device store's LID<->PN map, narrowed to what the peer
+// ladder's third rung reads.
+type fakeLIDStore struct{ pnForLID map[string]types.JID }
+
+func (f *fakeLIDStore) PutManyLIDMappings(context.Context, []store.LIDMapping) error { return nil }
+func (f *fakeLIDStore) PutLIDMapping(context.Context, types.JID, types.JID) error    { return nil }
+func (f *fakeLIDStore) GetPNForLID(_ context.Context, lid types.JID) (types.JID, error) {
+	return f.pnForLID[lid.ToNonAD().String()], nil
+}
+func (f *fakeLIDStore) GetLIDForPN(context.Context, types.JID) (types.JID, error) {
+	return types.EmptyJID, nil
+}
+func (f *fakeLIDStore) GetManyLIDsForPNs(context.Context, []types.JID) (map[types.JID]types.JID, error) {
+	return nil, nil
+}
+
+// newProjectionSeam builds the real clientHistoryFetcher over an offline
+// client. ParseWebMessage is a pure decode — JID parsing, field copies, an
+// in-memory own-ID read and a proto walk — so no connection is required, which
+// is what makes this seam testable at all.
+func newProjectionSeam(t *testing.T, lids store.LIDStore) (*Manager, *clientHistoryFetcher) {
+	t.Helper()
+	m := newManagerForTest(t, newFakeSyncStore(), &fakeBackfillReader{})
+
+	pn := types.NewJID("15550000001", types.DefaultUserServer)
+	pn.Device = 7 // the device number a re-link reassigns; it must not leak out
+	device := &store.Device{ID: &pn, LID: types.NewJID("77700000001", types.HiddenUserServer), LIDs: lids}
+	cli := whatsmeow.NewClient(device, nil)
+
+	return m, &clientHistoryFetcher{cli: cli, sess: &session{wa: cli}, mgr: m}
+}
+
+// TestManagerHistoryFetcher_ProjectsThroughTheLiveParser: a history message and
+// a live event carrying the same content must produce the same IngestedMessage,
+// or backfill and live ingest diverge in attribution.
+func TestManagerHistoryFetcher_ProjectsThroughTheLiveParser(t *testing.T) {
+	m, fetcher := newProjectionSeam(t, &fakeLIDStore{})
+	chatJID := "15559990001@s.whatsapp.net"
+
+	web := &waWeb.WebMessageInfo{
+		Key:              &waCommon.MessageKey{ID: proto.String("hist-1")},
+		MessageTimestamp: proto.Uint64(uint64(BackfillFloorTime().Add(72 * time.Hour).Unix())),
+		PushName:         proto.String("Ada"),
+		Message:          &waE2E.Message{Conversation: proto.String("from history")},
+	}
+
+	got, eligible, err := fetcher.ProjectHistoryMessage(context.Background(), chatJID, web)
+	require.NoError(t, err)
+	require.True(t, eligible)
+
+	// The same content as a LIVE event, through the same parser.
+	own, resolver := m.ownIdentityFor(fetcher.sess)
+	live, _, liveEligible := parseMessage(context.Background(), &events.Message{
+		Info: types.MessageInfo{
+			MessageSource: types.MessageSource{Chat: types.NewJID("15559990001", types.DefaultUserServer)},
+			ID:            "hist-1",
+			PushName:      "Ada",
+			Timestamp:     got.SentAt,
+		},
+		Message: &waE2E.Message{Conversation: proto.String("from history")},
+	}, own, resolver, altJIDTimeout)
+	require.True(t, liveEligible)
+
+	assert.Equal(t, live, got, "one parser, so backfill and live ingest cannot diverge")
+	require.NotNil(t, got.AccountJID)
+	assert.Equal(t, "15550000001@s.whatsapp.net", *got.AccountJID,
+		"the account stamp is the shared non-AD canonical form, not the device-numbered one")
+}
+
+// TestManagerHistoryFetcher_AccountJIDMatchesTheGroupInfoFetcher: the gate
+// compares the account a message was observed by against the account the
+// connected client reports. If the two seams derived that string differently,
+// every group message would look like a foreign account and the gate would
+// withhold its ack forever.
+func TestManagerHistoryFetcher_AccountJIDMatchesTheGroupInfoFetcher(t *testing.T) {
+	_, fetcher := newProjectionSeam(t, &fakeLIDStore{})
+	groupSeam := &clientGroupInfoFetcher{cli: fetcher.cli}
+
+	assert.Equal(t, groupSeam.AccountJID(), fetcher.AccountJID())
+	assert.Equal(t, "15550000001@s.whatsapp.net", fetcher.AccountJID())
+}
+
+// TestManagerHistoryFetcher_ProjectionCountsUnresolvedLIDPeers: the history
+// path feeds the SAME counter the live path does, so the reported gap is one
+// number over both paths rather than two half-counts.
+func TestManagerHistoryFetcher_ProjectionCountsUnresolvedLIDPeers(t *testing.T) {
+	m, fetcher := newProjectionSeam(t, &fakeLIDStore{})
+	lidChat := "88800000042@lid"
+
+	web := &waWeb.WebMessageInfo{
+		Key:              &waCommon.MessageKey{ID: proto.String("hist-lid-1")},
+		MessageTimestamp: proto.Uint64(uint64(BackfillFloorTime().Add(72 * time.Hour).Unix())),
+		Message:          &waE2E.Message{Conversation: proto.String("from a LID-only peer")},
+	}
+
+	msg, eligible, err := fetcher.ProjectHistoryMessage(context.Background(), lidChat, web)
+	require.NoError(t, err)
+	require.True(t, eligible)
+	assert.Nil(t, msg.PeerPhoneE164, "the peer's number could not be recovered")
+	assert.Equal(t, 1, m.ingestStatus().UnresolvedLIDPeers,
+		"one owner of the counter across the live and history paths")
+}
+
+// TestManagerHistoryFetcher_UnparseableChatJIDIsThatMessagesError: a bad chat
+// id is one message's problem, never the chunk's.
+func TestManagerHistoryFetcher_UnparseableChatJIDIsThatMessagesError(t *testing.T) {
+	_, fetcher := newProjectionSeam(t, &fakeLIDStore{})
+
+	_, eligible, err := fetcher.ProjectHistoryMessage(context.Background(), "not a jid", &waWeb.WebMessageInfo{
+		Key: &waCommon.MessageKey{ID: proto.String("x")},
+	})
+
+	require.Error(t, err)
+	assert.False(t, eligible)
 }

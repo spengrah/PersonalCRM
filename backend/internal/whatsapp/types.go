@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 )
 
 // Connection states reported by Status().State.
@@ -160,6 +161,11 @@ var (
 	// ErrManagerStopped is returned to a caller whose operation could not be
 	// completed because the manager is shutting down.
 	ErrManagerStopped = errors.New("whatsapp: the manager is stopping")
+
+	// ErrHistoryNotificationMalformed is returned when a stored history media
+	// pointer cannot be unmarshalled. The drainer treats it as PERMANENT: the
+	// stored bytes are what they are, and no retry re-decodes them differently.
+	ErrHistoryNotificationMalformed = errors.New("whatsapp: history notification is malformed")
 
 	// ErrLIDMappingsIncomplete is returned by the history fetcher when a
 	// downloaded chunk's PN-LID mappings did not read back out of the client
@@ -435,6 +441,30 @@ type HistoryFetcher interface {
 	// media server. It acts on our blob, never on a conversation partner's
 	// state.
 	DeleteHistoryMedia(ctx context.Context, notification []byte) error
+
+	// AccountJID reports the linked account this fetcher's client belongs to,
+	// in the same non-AD form IngestedMessage.AccountJID carries, or "" when it
+	// cannot be determined.
+	//
+	// Same contract, same derivation and same reason as
+	// GroupInfoFetcher.AccountJID: the group gate must be able to refuse to ask
+	// the wrong account about a group, and the drainer is the caller that hands
+	// it the account to compare against.
+	AccountJID() string
+
+	// ProjectHistoryMessage projects ONE history message onto IngestedMessage
+	// through the SAME parser the live path uses, so backfill and live ingest
+	// cannot diverge in attribution, eligibility, direction or account stamp.
+	//
+	// It lives behind this seam rather than in the drainer because projection
+	// needs three things only the client has: the account's own JIDs, the
+	// device store's LID-to-phone map, and the library's own WebMessageInfo
+	// decode. The drainer holds no *whatsmeow.Client, so it cannot have them.
+	//
+	// eligible=false means DROP with no error — an ineligible chat or a
+	// non-conversational turn. A non-nil error is a decode failure for that ONE
+	// message and is never a chunk failure.
+	ProjectHistoryMessage(ctx context.Context, chatJID string, webMsg *waWeb.WebMessageInfo) (msg IngestedMessage, eligible bool, err error)
 }
 
 // refusingIngestor is the default MessageIngestor. It refuses rather than
