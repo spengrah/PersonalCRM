@@ -134,44 +134,106 @@ func (f *clientHistoryFetcher) DownloadHistorySync(ctx context.Context, notifica
 	return chunk, nil
 }
 
+// expectedStoredLIDMappings reduces a chunk's PN-LID mappings to the set the
+// library will actually have persisted, mirroring PutManyLIDMappings.
+//
+// The raw chunk contents are the WRONG expectation, because the library declines
+// to store some of what a chunk carries and says nothing about it at a level
+// this process can see:
+//
+//   - It SKIPS a pair whose phone number or LID does not parse, and IGNORES one
+//     whose LID is not on the hidden-user server or whose phone number is not on
+//     the default user server (the legacy server is rewritten first, here as
+//     there).
+//   - The store holds one LID per phone number and one phone number per LID —
+//     whatsmeow_lid_map is UNIQUE on both columns — and each write DELETEs the
+//     rows that collide with it. So when one chunk carries two LIDs for the same
+//     phone number, the later write EVICTS the earlier one, and only the last
+//     pair survives.
+//
+// Demanding the raw list read back therefore fails PERMANENTLY on a chunk the
+// library handled correctly: the verification stalls a one-shot bootstrap that
+// no retry can change, because every retry re-downloads the same chunk and
+// reproduces the same end state.
+//
+// Reducing first keeps the guarantee that matters — every mapping still expected
+// must read back as an exact pair, so a stale row can never mis-attribute a peer
+// — over the set that is actually capable of existing. Chunk order is preserved
+// so a failure names the same mapping on every run.
+func expectedStoredLIDMappings(chunk *waHistorySync.HistorySync) []store.LIDMapping {
+	raw := chunk.GetPhoneNumberToLidMappings()
+	accepted := make([]store.LIDMapping, 0, len(raw))
+	for _, mapping := range raw {
+		pn, err := types.ParseJID(mapping.GetPnJID())
+		if err != nil {
+			continue
+		}
+		if pn.Server == types.LegacyUserServer {
+			pn.Server = types.DefaultUserServer
+		}
+		lid, err := types.ParseJID(mapping.GetLidJID())
+		if err != nil {
+			continue
+		}
+		if lid.Server != types.HiddenUserServer || pn.Server != types.DefaultUserServer {
+			continue
+		}
+		accepted = append(accepted, store.LIDMapping{LID: lid.ToNonAD(), PN: pn.ToNonAD()})
+	}
+
+	// Replay the writes in order to land on the same final state the store does,
+	// evicting on both unique columns exactly as its delete-then-upsert pair.
+	lidToPN := make(map[types.JID]types.JID, len(accepted))
+	pnToLID := make(map[types.JID]types.JID, len(accepted))
+	for _, m := range accepted {
+		if prevLID, ok := pnToLID[m.PN]; ok && prevLID != m.LID {
+			delete(lidToPN, prevLID)
+		}
+		if prevPN, ok := lidToPN[m.LID]; ok && prevPN != m.PN {
+			delete(pnToLID, prevPN)
+		}
+		lidToPN[m.LID] = m.PN
+		pnToLID[m.PN] = m.LID
+	}
+
+	survivors := make([]store.LIDMapping, 0, len(lidToPN))
+	seen := make(map[types.JID]struct{}, len(lidToPN))
+	for _, m := range accepted {
+		if _, done := seen[m.LID]; done {
+			continue
+		}
+		if finalPN, ok := lidToPN[m.LID]; ok && finalPN == m.PN {
+			seen[m.LID] = struct{}{}
+			survivors = append(survivors, m)
+		}
+	}
+	return survivors
+}
+
 // VerifyHistoryLIDMappings checks that every PN-LID mapping a history chunk
-// carried actually reads back out of the LID store, as an equality on the
-// normalized pair.
+// carried AND the library would have kept actually reads back out of the LID
+// store, as an equality on the normalized pair.
 //
 // It is exported because it is the boundary the whole LID-attribution guarantee
 // rests on: whatsmeow logs and swallows a failure to persist these mappings
 // while still reporting the download as a success, so nothing downstream may
-// assume the mappings landed.
+// assume the mappings landed. See expectedStoredLIDMappings for why the
+// expectation is the reduced set rather than the chunk's raw list.
 func VerifyHistoryLIDMappings(ctx context.Context, lids store.LIDStore, chunk *waHistorySync.HistorySync) error {
 	if lids == nil {
 		return fmt.Errorf("%w: no LID store", ErrLIDMappingsIncomplete)
 	}
 
-	for _, mapping := range chunk.GetPhoneNumberToLidMappings() {
-		expectedPN, err := types.ParseJID(mapping.GetPnJID())
+	for _, expected := range expectedStoredLIDMappings(chunk) {
+		stored, err := lids.GetPNForLID(ctx, expected.LID)
 		if err != nil {
-			return fmt.Errorf("%w: unparseable phone JID %q: %w", ErrLIDMappingsIncomplete, mapping.GetPnJID(), err)
-		}
-		// The library applies the same rewrite before storing, so the
-		// comparison must apply it too or every legacy-server pair would
-		// mismatch.
-		if expectedPN.Server == types.LegacyUserServer {
-			expectedPN.Server = types.DefaultUserServer
-		}
-		lid, err := types.ParseJID(mapping.GetLidJID())
-		if err != nil {
-			return fmt.Errorf("%w: unparseable LID %q: %w", ErrLIDMappingsIncomplete, mapping.GetLidJID(), err)
-		}
-
-		stored, err := lids.GetPNForLID(ctx, lid)
-		if err != nil {
-			return fmt.Errorf("%w: reading back %s: %w", ErrLIDMappingsIncomplete, lid, err)
+			return fmt.Errorf("%w: reading back %s: %w", ErrLIDMappingsIncomplete, expected.LID, err)
 		}
 		if stored.IsEmpty() {
-			return fmt.Errorf("%w: no stored phone number for %s", ErrLIDMappingsIncomplete, lid)
+			return fmt.Errorf("%w: no stored phone number for %s", ErrLIDMappingsIncomplete, expected.LID)
 		}
-		if stored.ToNonAD() != expectedPN.ToNonAD() {
-			return fmt.Errorf("%w: %s maps to %s, expected %s", ErrLIDMappingsIncomplete, lid, stored.ToNonAD(), expectedPN.ToNonAD())
+		if stored.ToNonAD() != expected.PN {
+			return fmt.Errorf("%w: %s maps to %s, expected %s", ErrLIDMappingsIncomplete, expected.LID, stored.ToNonAD(), expected.PN)
 		}
 	}
 	return nil

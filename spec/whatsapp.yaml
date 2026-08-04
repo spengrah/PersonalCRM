@@ -413,6 +413,22 @@ behaviors:
         text: requeueing such a chunk can only retry the acknowledgement; it can never project content that was never kept
     provenance: [HistoryDrainer.drainOne, handleHistoryNotification, TestHistoryDrainer_DroppedInlineChunkIsNeverProjected, TestHistoryDrainer_DroppedInlineRequeueRetriesOnlyTheReceipt]
 
+  - id: WHA-067
+    title: A chunk is projected only once the peer identities it carried are known to be stored
+    type: business-logic
+    status: current
+    surface: none
+    given: a history chunk carrying mappings between peers' internal identifiers and their phone numbers
+    when: it has been downloaded, before any of it is projected
+    then:
+      - key: mappings-are-read-back-not-assumed
+        text: the mappings are read back out of the device store and checked as an exact pair before anything from the chunk is stored, because the library reports the download as a success even when it failed to persist them, and projecting on that assumption would attribute every otherwise-resolvable peer as permanently unmatched
+      - key: only-storable-mappings-are-expected-back
+        text: only the mappings the library actually keeps are expected back — it discards ones it treats as malformed, and the store holds one identifier per phone number, so where a chunk carries two identifiers for the same number only the later one survives — because demanding the rest back would stall a one-shot backfill forever on a chunk that was handled correctly, with no retry able to change the outcome
+      - key: a-surviving-mapping-that-disagrees-still-fails
+        text: a mapping that did survive but points at a different phone number than the chunk claimed still fails the check, because a stale pair would silently mis-attribute every message from that peer
+    provenance: [VerifyHistoryLIDMappings, expectedStoredLIDMappings, clientHistoryFetcher.DownloadHistorySync, TestWhatsAppLIDStore_VerificationExpectsOnlyWhatTheLibraryKeeps, TestWhatsAppLIDStore_VerificationMatchesOnNormalizedPair]
+
   # --- Message ingest ---
 
   - id: WHA-020

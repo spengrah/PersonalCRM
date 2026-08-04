@@ -320,6 +320,100 @@ func TestWhatsAppLIDStore_VerificationMatchesOnNormalizedPair(t *testing.T) {
 	})
 }
 
+// TestWhatsAppLIDStore_VerificationExpectsOnlyWhatTheLibraryKeeps covers the two
+// ways a mapping a chunk carried legitimately does not end up in the store.
+//
+// Each case drives the REAL PutManyLIDMappings — the same entry point whatsmeow
+// calls while downloading a history chunk — and asserts the resulting store
+// state BEFORE asserting the verification verdict. That ordering is the point:
+// the first assertion pins the library behaviour the verification models, so if
+// a future whatsmeow changes it, this fails on the premise instead of quietly
+// leaving the verification modelling a store that no longer behaves that way.
+//
+// Verified against a chunk whose raw list was demanded in full, a one-shot
+// bootstrap stalls until its attempt budget burns and is then failed terminally,
+// with nothing a retry can change.
+func TestWhatsAppLIDStore_VerificationExpectsOnlyWhatTheLibraryKeeps(t *testing.T) {
+	t.Parallel()
+	env := setupWhatsAppStoreTest(t)
+
+	container, err := wapkg.NewDeviceContainer(env.ctx, env.database.Pool, env.log)
+	require.NoError(t, err)
+
+	device := saveLinkedDevice(t, env, container, types.NewJID("15550000001", types.DefaultUserServer), "LID Reduction Test")
+	require.NotNil(t, device.LIDs)
+
+	chunk := func(mappings ...*waHistorySync.PhoneNumberToLIDMapping) *waHistorySync.HistorySync {
+		return &waHistorySync.HistorySync{
+			SyncType:                 waHistorySync.HistorySync_INITIAL_BOOTSTRAP.Enum(),
+			PhoneNumberToLidMappings: mappings,
+		}
+	}
+	mapping := func(pn, lid types.JID) *waHistorySync.PhoneNumberToLIDMapping {
+		return &waHistorySync.PhoneNumberToLIDMapping{
+			PnJID:  proto.String(pn.String()),
+			LidJID: proto.String(lid.String()),
+		}
+	}
+
+	t.Run("later LID for one phone number evicts the earlier", func(t *testing.T) {
+		sharedPN := types.NewJID("15553333333", types.DefaultUserServer)
+		staleLID := types.NewJID("333333333333333", types.HiddenUserServer)
+		currentLID := types.NewJID("444444444444444", types.HiddenUserServer)
+
+		carried := chunk(mapping(sharedPN, staleLID), mapping(sharedPN, currentLID))
+		require.NoError(t, device.LIDs.PutManyLIDMappings(env.ctx, []store.LIDMapping{
+			{LID: staleLID, PN: sharedPN},
+			{LID: currentLID, PN: sharedPN},
+		}), "the library's own storage call for a chunk's mappings")
+
+		// The premise: one LID per phone number is a UNIQUE constraint, so the
+		// store CANNOT hold both and the earlier write is gone.
+		stale, err := device.LIDs.GetPNForLID(env.ctx, staleLID)
+		require.NoError(t, err)
+		require.True(t, stale.IsEmpty(), "the earlier LID must have been evicted for this case to be the one under test")
+		current, err := device.LIDs.GetPNForLID(env.ctx, currentLID)
+		require.NoError(t, err)
+		require.Equal(t, sharedPN.ToNonAD(), current.ToNonAD())
+
+		assert.NoError(t, wapkg.VerifyHistoryLIDMappings(env.ctx, device.LIDs, carried),
+			"the evicted pair is not storable, so demanding it back stalls the chunk forever")
+	})
+
+	t.Run("entry the library ignores is not expected back", func(t *testing.T) {
+		pn := types.NewJID("15554444444", types.DefaultUserServer)
+		// Not on the hidden-user server, so PutManyLIDMappings drops it.
+		notALID := types.NewJID("555555555555555", types.DefaultUserServer)
+
+		carried := chunk(mapping(pn, notALID))
+		require.NoError(t, device.LIDs.PutManyLIDMappings(env.ctx, []store.LIDMapping{{LID: notALID, PN: pn}}),
+			"the library reports success while silently ignoring the entry")
+
+		// Probed from the phone-number side because the store REFUSES a
+		// GetPNForLID for a non-LID JID outright — which is the other way this
+		// entry used to stall a chunk: the read-back errored rather than
+		// returning empty, and no retry could change that either.
+		stored, err := device.LIDs.GetLIDForPN(env.ctx, pn)
+		require.NoError(t, err)
+		require.True(t, stored.IsEmpty(), "the library must have ignored this entry for this case to be the one under test")
+
+		assert.NoError(t, wapkg.VerifyHistoryLIDMappings(env.ctx, device.LIDs, carried),
+			"an entry the library declines to store can never read back")
+	})
+
+	t.Run("a surviving pair is still verified exactly", func(t *testing.T) {
+		pn := types.NewJID("15555555555", types.DefaultUserServer)
+		lid := types.NewJID("666666666666666", types.HiddenUserServer)
+		wrongPN := types.NewJID("15556666666", types.DefaultUserServer)
+
+		require.NoError(t, device.LIDs.PutLIDMapping(env.ctx, lid, wrongPN))
+
+		err := wapkg.VerifyHistoryLIDMappings(env.ctx, device.LIDs, chunk(mapping(pn, lid)))
+		assert.ErrorIs(t, err, wapkg.ErrLIDMappingsIncomplete,
+			"reducing the expectation must not weaken the mis-attribution guard for pairs that DO survive")
+	})
+}
+
 // countingIngestor is a real-enough MessageIngestor to satisfy the readiness
 // gate. It records nothing this test asserts on; its only job is to not be the
 // refusing default.
