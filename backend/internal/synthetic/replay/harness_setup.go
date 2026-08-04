@@ -307,12 +307,16 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	// reproducing buildWhatsAppIngestor, plus its aggregation engine. The
 	// adapter drives the ingestor; the worker drives the engine.
 	whatsappRepo := repository.NewWhatsAppRepository(database.Queries)
+	// One reading of the threshold feeds BOTH the matcher and the accessor a
+	// fixture sizes itself by, so the two can never disagree about how many
+	// unmatched messages mint a candidate.
+	whatsappDiscoveryMinMsgs := cfg.WhatsApp.DiscoveryMinMessages
 	whatsappIngestor := whatsapp.NewIngestor(
 		commsRepo,
 		whatsapp.NewChatGate(whatsappRepo, cfg.WhatsApp.GroupMaxMembers),
 		// enricher nil: EnrichmentService is not constructed in this package and
 		// PeerMatcher tolerates a nil one.
-		whatsapp.NewPeerMatcher(identityService, commsRepo, externalRepo, nil, cfg.WhatsApp.DiscoveryMinMessages),
+		whatsapp.NewPeerMatcher(identityService, commsRepo, externalRepo, nil, whatsappDiscoveryMinMsgs),
 	)
 	whatsappEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(client)
 	whatsappEngine := whatsapp.NewAggregationEngine(
@@ -400,7 +404,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		ingestService:   ingestService,
 		macHostID:       macHostID,
 		peerMatcher:     &telegramPeerMatcherDeps{matcher: peerMatcher, engine: tgAggEngine},
-		whatsapp:        &whatsappDeps{ingestor: whatsappIngestor},
+		whatsapp:        &whatsappDeps{ingestor: whatsappIngestor, discoveryMinMessages: whatsappDiscoveryMinMsgs},
 		groupMaxMembers: groupMaxMembers,
 		created:         newCreated(),
 	}

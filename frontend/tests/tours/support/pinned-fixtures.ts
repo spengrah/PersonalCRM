@@ -24,6 +24,10 @@ export const FIXTURE_NO_ACTIVITY = 'fxnoactivity'
 export const FIXTURE_OUTREACH = 'fxoutreach'
 export const FIXTURE_RESPONSE = 'fxresponse'
 export const FIXTURE_PENDING = 'fxpending'
+// The WhatsApp DM subject. Exported for the drift check and for the marker
+// gate, like the overdue pair below: no tour resolves it, because the WhatsApp
+// integration itself is flag-gated off in every toured environment.
+export const FIXTURE_WHATSAPP = 'fxwhatsapp'
 export const FIXTURE_MERGE_TARGET = 'fxmergetarget'
 export const FIXTURE_MERGE_SOURCE = 'fxmergesource'
 export const FIXTURE_SEARCH = 'fxsearchsubject'
@@ -43,6 +47,7 @@ export const ALL_FIXTURE_MARKERS = [
   FIXTURE_OUTREACH,
   FIXTURE_RESPONSE,
   FIXTURE_PENDING,
+  FIXTURE_WHATSAPP,
   FIXTURE_MERGE_TARGET,
   FIXTURE_MERGE_SOURCE,
   FIXTURE_SEARCH,

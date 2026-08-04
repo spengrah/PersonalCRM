@@ -51,6 +51,12 @@ const (
 	// (last_response_at set) — the "last response" subject, distinct from the
 	// outreach one. Seeded by its own recipe (it needs a bridged message pair).
 	FixtureMarkerResponse = "fxresponse"
+	// FixtureMarkerWhatsApp marks the contact carrying a settled WhatsApp DM
+	// conversation (an outbound burst bridged by an inbound reply → one mutual
+	// interaction with a dm venue). Seeded by its own recipe (it needs the
+	// message history), and it is how the WhatsApp source's seeded content is
+	// reachable in a world where the integration itself is flag-gated off.
+	FixtureMarkerWhatsApp = "fxwhatsapp"
 	// FixtureMarkerPending marks the contact carrying a live follow-up loop — the
 	// "awaiting reply" subject. Seeded by its own recipe (it needs the whole causal
 	// chain: a cadence, an outbound-bearing interaction, then the live loop).
@@ -101,7 +107,7 @@ const (
 const TourOverdueCaptureCap = 96
 
 // PinnedFixtureMarkers is every pinned tour-fixture marker: first the ones
-// buildPinnedTourFixtures builds from a bare contact spec, then the three whose
+// buildPinnedTourFixtures builds from a bare contact spec, then the four whose
 // causal chain needs its own recipe. Within each group the order is declaration
 // order and is NOT load-bearing — nothing reads this slice positionally, and the
 // fixtures are not built in this sequence (the overdue pair is appended from its
@@ -119,6 +125,7 @@ var PinnedFixtureMarkers = []string{
 	FixtureMarkerOutreach,
 	FixtureMarkerResponse,
 	FixtureMarkerPending,
+	FixtureMarkerWhatsApp,
 }
 
 // pinnedOverdueFixtures is the (cadence, created-age) table for the two

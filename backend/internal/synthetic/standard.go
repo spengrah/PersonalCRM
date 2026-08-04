@@ -8,6 +8,8 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/declare"
 	"personal-crm/backend/internal/synthetic/factory"
+
+	"github.com/google/uuid"
 )
 
 // ProfileStandard is the DECLARED world: every registered declaration, then
@@ -55,6 +57,31 @@ const (
 	messageMutualReplyAge = messageMutualOutboundAge - 6*time.Hour
 )
 
+// Offsets for the two WhatsApp riders. The gaps are stated relative to the
+// source's own windows (burst 2h, reply bridge 48h — WHATSAPP_BURST_WINDOW_HOURS
+// / WHATSAPP_REPLY_BRIDGE_HOURS, defaults in config), because it is the gaps and
+// not the ages that decide how many interactions the conversation aggregates to.
+const (
+	// whatsappOutboundAge dates the DM rider's FIRST outbound, far enough back to
+	// clear the source's own recency windows.
+	whatsappOutboundAge = 4 * 24 * time.Hour
+	// whatsappBurstGap places the second outbound INSIDE the burst window, so the
+	// two collapse into one interaction rather than two.
+	whatsappBurstGap = 30 * time.Minute
+	// whatsappReplyGap places the inbound reply well inside the reply bridge, so
+	// it promotes the outbound interaction in place to mutual rather than opening
+	// a second one. The bridge is the only constraint the gap has to satisfy:
+	// sessions are split by DIRECTION before any gap is measured, so an inbound
+	// can never join an outbound burst however close it lands.
+	whatsappReplyGap = 6 * time.Hour
+	// whatsappDiscoveryAge dates the unmatched peer's first message.
+	whatsappDiscoveryAge = 2 * 24 * time.Hour
+	// whatsappDiscoveryGap spaces that peer's messages. Discovery counts staged
+	// rows and is indifferent to their spacing, so this only keeps the staged
+	// conversation readable.
+	whatsappDiscoveryGap = time.Hour
+)
+
 // runStandardProfile builds the declared world and maps it onto the shared
 // ProfileResult / SeedTimings shape, so crm-admin's existing summary printer
 // works unchanged (one phase per world step).
@@ -99,13 +126,15 @@ func mapStandardWorldResult(world declare.WorldResult, res ProfileResult) Profil
 	return res
 }
 
-// seedStandardTail seeds the ELEVEN pinned tour fixtures and reports them in
-// creation order.
+// seedStandardTail seeds the TWELVE pinned tour fixtures and reports them in
+// creation order, plus the one fixture that mints no contact at all (the
+// unmatched WhatsApp peer, which is an import candidate rather than a contact).
 //
-// All eleven, not eight: three of the markers need a whole causal chain behind
+// All twelve, not eight: four of the markers need a whole causal chain behind
 // them rather than a bare contact — an awaiting-reply contact, an outbound-only
-// contact, and a reply-bridged mutual contact — so they are seeded by their own
-// recipes below instead of by the replay-free pinned block.
+// contact, a reply-bridged telegram mutual contact and a WhatsApp DM contact —
+// so they are seeded by their own recipes below instead of by the replay-free
+// pinned block.
 func seedStandardTail(ctx context.Context, h *Harness, params SeedParams, res *ProfileResult) ([]declare.Seeded, error) {
 	gen := h.Generator()
 	out := make([]declare.Seeded, 0, len(PinnedFixtureMarkers))
@@ -124,6 +153,17 @@ func seedStandardTail(ctx context.Context, h *Harness, params SeedParams, res *P
 
 	response, seedErr := seedResponseFixture(ctx, h, gen)
 	if err := accountStandardTailRider(riderResponse, response, seedErr, res, &out); err != nil {
+		return out, fmt.Errorf("profile %s: %w", params.Profile, err)
+	}
+
+	whatsapp, seedErr := seedWhatsAppFixture(ctx, h, gen)
+	if err := accountStandardTailRider(riderWhatsApp, whatsapp, seedErr, res, &out); err != nil {
+		return out, fmt.Errorf("profile %s: %w", params.Profile, err)
+	}
+
+	// No rider accounting: this one creates an import candidate, not a contact,
+	// so it contributes nothing to the world manifest.
+	if err := seedWhatsAppDiscoveryFixture(ctx, h, gen); err != nil {
 		return out, fmt.Errorf("profile %s: %w", params.Profile, err)
 	}
 
@@ -147,6 +187,7 @@ const (
 	riderPendingFollowUp riderKind = iota
 	riderOutreach
 	riderResponse
+	riderWhatsApp
 )
 
 type riderSeedResult struct {
@@ -188,7 +229,7 @@ func accountCompletedRider(kind riderKind, res *ProfileResult) {
 		res.SeededPendingFollowUps = 1
 	case riderOutreach:
 		res.OutboundOnlyContacts++
-	case riderResponse:
+	case riderResponse, riderWhatsApp:
 		res.MutualMessageContacts++
 	}
 }
@@ -282,4 +323,92 @@ func seedResponseFixture(ctx context.Context, h *Harness, gen *factory.Generator
 		return riderSeedResult{contact: contact, payloads: 1}, fmt.Errorf("replay mutual telegram reply: %w", err)
 	}
 	return riderSeedResult{contact: contact, payloads: 2}, nil
+}
+
+// seedWhatsAppFixture builds the settled WhatsApp DM conversation: two outbound
+// messages inside one burst window, then an inbound reply that bridges them.
+// The world ends up with one MUTUAL whatsapp interaction over three messages,
+// carrying a dm venue (the venue kind falls out of the chat JID's user server,
+// so a direct chat is a dm by construction).
+//
+// Seeded with a PHONE and no whatsapp method on purpose: the WhatsApp identifier
+// type searches both whatsapp and phone contact methods, so a phone is the
+// weaker precondition and therefore the honest one to prove the match under.
+//
+// The messages are CLONES of one spec — same chat JID, same peer, same account —
+// because a second gen.WhatsAppMessage call would draw a fresh peer and neither
+// the burst nor the bridge can span two chats. Only the external id (which
+// keeps its namespace prefix, so cleanup still reclaims it), the direction and
+// the send time move.
+//
+// The engine runs through the messaging-aggregate WORKER rather than inline, so
+// each replay settles on its own message being linked before the next is staged
+// — which is what makes the burst and the bridge observable states rather than a
+// race between three enqueued jobs.
+func seedWhatsAppFixture(ctx context.Context, h *Harness, gen *factory.Generator) (riderSeedResult, error) {
+	spec := gen.Contact(factory.WithPhone(), factory.WithNameMarker(FixtureMarkerWhatsApp))
+	contact, err := h.SeedContact(ctx, spec)
+	if err != nil {
+		return riderSeedResult{}, fmt.Errorf("seed whatsapp contact: %w", err)
+	}
+
+	outbound := gen.WhatsAppMessage(spec, factory.MatchSeeded, factory.WithOutbound(), factory.WithMessageAge(whatsappOutboundAge))
+	if _, err := h.ReplayWhatsApp(ctx, contact.ID, outbound); err != nil {
+		return riderSeedResult{contact: contact}, fmt.Errorf("replay whatsapp outbound: %w", err)
+	}
+
+	burst := outbound
+	burst.ExternalID = outbound.ExternalID + "-burst"
+	burst.SentAt = outbound.SentAt.Add(whatsappBurstGap)
+	if _, err := h.ReplayWhatsApp(ctx, contact.ID, burst); err != nil {
+		return riderSeedResult{contact: contact, payloads: 1}, fmt.Errorf("replay whatsapp burst message: %w", err)
+	}
+
+	reply := outbound
+	reply.ExternalID = outbound.ExternalID + "-reply"
+	reply.Outbound = false
+	reply.SentAt = outbound.SentAt.Add(whatsappReplyGap)
+	if _, err := h.ReplayWhatsApp(ctx, contact.ID, reply); err != nil {
+		return riderSeedResult{contact: contact, payloads: 2}, fmt.Errorf("replay whatsapp reply: %w", err)
+	}
+	return riderSeedResult{contact: contact, payloads: 3}, nil
+}
+
+// seedWhatsAppDiscoveryFixture stages an UNMATCHED WhatsApp peer's messages up
+// to the discovery threshold, which is what turns a stranger into an import
+// candidate.
+//
+// The peer spec is built but never seeded — that is the whole state: a
+// conversation with somebody who is not in the CRM. WhatsApp differs from
+// Gmail/GChat here, in that the rows ARE written for an unknown sender and only
+// the candidate makes them actionable, so the fixture is not complete until the
+// candidate exists. It is read back rather than assumed: the threshold lives in
+// the ingest path, and a fixture one message short of it produces staged rows
+// and a silently missing surface.
+//
+// It creates no contact, so it has no rider accounting and no marker: it is
+// found in the imports queue, by the display name the ingest path derives from
+// the peer's namespace-prefixed push name.
+func seedWhatsAppDiscoveryFixture(ctx context.Context, h *Harness, gen *factory.Generator) error {
+	peer := gen.Contact()
+	first := gen.WhatsAppMessage(peer, factory.MatchUnknown, factory.WithMessageAge(whatsappDiscoveryAge))
+
+	threshold := h.WhatsAppDiscoveryMinMessages()
+	for i := 0; i < threshold; i++ {
+		msg := first
+		msg.ExternalID = fmt.Sprintf("%s-%d", first.ExternalID, i)
+		msg.SentAt = first.SentAt.Add(time.Duration(i) * whatsappDiscoveryGap)
+		if _, err := h.ReplayWhatsApp(ctx, uuid.Nil, msg); err != nil {
+			return fmt.Errorf("replay unmatched whatsapp message %d: %w", i, err)
+		}
+	}
+
+	candidate, err := h.ExternalContactRepo().GetBySource(ctx, repository.InteractionSourceWhatsApp, first.PeerJID, nil)
+	if err != nil {
+		return fmt.Errorf("read the whatsapp discovery candidate (threshold %d): %w", threshold, err)
+	}
+	if candidate == nil {
+		return fmt.Errorf("no whatsapp discovery candidate after %d unmatched messages from one peer", threshold)
+	}
+	return nil
 }

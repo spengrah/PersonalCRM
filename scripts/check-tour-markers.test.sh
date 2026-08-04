@@ -158,8 +158,8 @@ test_reads_the_real_ssot() {
     # tells us how many markers the extraction actually found.
     run_check "$REPO_ROOT/backend/internal/synthetic/fixtures.go"
     assert_rc 1 "real SSOT with an empty world"
-    if printf '%s' "$OUT" | grep -qE 'of 11 markers did not resolve uniquely'; then ok
-    else fail "extraction did not find the expected 11 markers in the committed SSOT: $OUT"; fi
+    if printf '%s' "$OUT" | grep -qE 'of 12 markers did not resolve uniquely'; then ok
+    else fail "extraction did not find the expected 12 markers in the committed SSOT: $OUT"; fi
     cleanup_sandbox
 }
 

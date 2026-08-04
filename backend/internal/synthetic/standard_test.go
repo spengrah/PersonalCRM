@@ -106,6 +106,14 @@ func TestRiderAccounting_PartialHelperFailuresStayTruthful(t *testing.T) {
 			name: "response after outbound", kind: riderResponse,
 			rider: riderSeedResult{contact: contact, payloads: 1}, wantWorldEntity: 1,
 		},
+		{
+			name: "whatsapp after contact", kind: riderWhatsApp,
+			rider: riderSeedResult{contact: contact}, wantWorldEntity: 1,
+		},
+		{
+			name: "whatsapp mid-conversation", kind: riderWhatsApp,
+			rider: riderSeedResult{contact: contact, payloads: 2}, wantWorldEntity: 1,
+		},
 	}
 
 	for _, tc := range cases {
@@ -144,6 +152,7 @@ func TestRiderAccounting_ClaimsWholeRiderCountersOnlyOnSuccess(t *testing.T) {
 		},
 		{name: "outreach", kind: riderOutreach, payloads: 1, wantOutbound: 1},
 		{name: "response", kind: riderResponse, payloads: 2, wantMutual: 1},
+		{name: "whatsapp", kind: riderWhatsApp, payloads: 3, wantMutual: 1},
 	}
 
 	for _, tc := range cases {

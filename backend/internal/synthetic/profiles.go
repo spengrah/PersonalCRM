@@ -57,11 +57,11 @@ type ProfileResult struct {
 	// OutboundOnlyContacts / MutualMessageContacts count the two-sided
 	// message-direction riders: the OUTBOUND-only contact ("I messaged them, no reply
 	// yet" → last_outreach_at set, last_contacted NULL) and the reply-bridged
-	// telegram MUTUAL contact (an outbound + a newer inbound within the bridge
-	// window promote in place to one mutual interaction). Kept OUT of the
-	// SettledInteractions equation on purpose: the mutual pair is two replay calls
-	// collapsing to one promoted row, so folding it in would muddy that invariant.
-	// Counts-only / no PII.
+	// MUTUAL contacts — one telegram, one whatsapp — where an outbound plus a newer
+	// inbound within the bridge window promote in place to one mutual interaction.
+	// Kept OUT of the SettledInteractions equation on purpose: a mutual conversation
+	// is several replay calls collapsing to one promoted row, so folding it in would
+	// muddy that invariant. Counts-only / no PII.
 	OutboundOnlyContacts  int
 	MutualMessageContacts int
 	// Timings is the run's wall-clock measurement. It is EXCLUDED from every

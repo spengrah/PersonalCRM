@@ -17,6 +17,22 @@ import (
 // has no adapter registry.
 type whatsappDeps struct {
 	ingestor *whatsapp.Ingestor
+	// discoveryMinMessages is the threshold the ingestor's OWN PeerMatcher was
+	// built with (the same value, not a second reading of the config), so a
+	// caller sizing an unmatched-peer fixture can ask for the count that
+	// actually mints a candidate rather than restating the default.
+	discoveryMinMessages int
+}
+
+// WhatsAppDiscoveryMinMessages is how many unmatched messages one peer needs
+// before the ingest path mints an import candidate for it. Exposed for the same
+// reason GroupMaxMembers is: a fixture that wants the discovered state must size
+// itself against the real threshold, never a magic number.
+func (h *Harness) WhatsAppDiscoveryMinMessages() int {
+	if h.whatsapp == nil {
+		return 0
+	}
+	return h.whatsapp.discoveryMinMessages
 }
 
 // WhatsAppResult is the settled outcome of a WhatsApp replay.
@@ -69,10 +85,19 @@ func (h *Harness) ReplayWhatsApp(ctx context.Context, contactID uuid.UUID, spec 
 	}
 
 	// An unmatched peer that crosses the discovery threshold mints an
-	// external_contact candidate whose source_id is a bare JID — the ns-prefix
-	// cleanup step cannot reach it, so track it by id.
+	// external_contact candidate whose source_id is a bare JID: it carries no
+	// namespace token, so NEITHER prefix sweep can reach it. It therefore needs
+	// both recovery keys — the in-memory ledger, which serves this run's own
+	// teardown, and the durable ownership record, which is the only thing a LATER
+	// stateless namespace cleanup can find the row by (the same pairing
+	// SeedTitleCandidate and the declared telegram candidate use). Recording is
+	// fatal rather than best-effort: a candidate whose recovery key never landed
+	// is a row no cleanup can ever reclaim.
 	if external, err := h.externalRepo.GetBySource(ctx, repository.InteractionSourceWhatsApp, spec.PeerJID, nil); err == nil && external != nil {
 		h.track(func(c *created) { c.addExternalContact(external.ID) })
+		if err := h.support.RecordNamespaceEntity(ctx, h.namespace, repository.EntityKindExternalContact, external.ID); err != nil {
+			return WhatsAppResult{}, fmt.Errorf("whatsapp: record discovery candidate ownership: %w", err)
+		}
 	}
 
 	if spec.Intent == factory.MatchUnknown {
