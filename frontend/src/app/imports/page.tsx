@@ -57,11 +57,12 @@ import type {
 // Constants
 const DEFAULT_PAGE_SIZE = 20
 const SOURCE_FILTERS = [
-  { value: '', label: 'All Sources' },
+  { value: '', label: 'All' },
   { value: 'gcontacts', label: 'Google Contacts' },
   { value: 'gcal_attendee', label: 'Calendar' },
   { value: 'icloud_contacts', label: 'iCloud Contacts' },
   { value: 'telegram', label: 'Telegram' },
+  { value: 'whatsapp', label: 'WhatsApp' },
   { value: 'anarlog_humans', label: 'Anarlog' },
 ] as const
 
