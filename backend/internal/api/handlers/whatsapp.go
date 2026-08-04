@@ -163,6 +163,15 @@ func (h *WhatsAppHandler) Disconnect(c *gin.Context) {
 		// unlink" would send the user at the half that already worked.
 		api.SendError(c, http.StatusBadGateway, "BAD_GATEWAY",
 			"The WhatsApp device is unlinked remotely, but the stored credentials could not be cleared; retry to clear them locally", err.Error())
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		// The CALLER went away; the unlink did not. It is already queued on the
+		// actor and runs to completion, so this is not a server fault and must
+		// not be counted as one. 499 (client closed request) rather than 408:
+		// the request was received in full and is being worked on, which is not
+		// what 408 means. There is no prior caller-abandoned case in this API,
+		// so this is the convention being set.
+		api.SendError(c, 499, "CLIENT_CLOSED_REQUEST",
+			"The request was abandoned before the unlink finished; it is still running — check the status", err.Error())
 	case errors.Is(err, wapkg.ErrOperationSuperseded):
 		// The session this unlink decided about was replaced while it ran, so its
 		// outcome was deliberately not published.

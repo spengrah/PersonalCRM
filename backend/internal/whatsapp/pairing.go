@@ -74,7 +74,11 @@ type pairingState struct {
 // before the manager started is not a fact about the link — the attempt reached
 // the slot by PASSING the readiness gate — so it is the one value not restored.
 func (p *pairingState) displaced() (state, reason string) {
-	if p.prevState == "" || p.prevState == StateNotReady {
+	switch p.prevState {
+	case "", StateNotReady, StatePairing:
+		// Neither is a fact about the link. not_ready is stale by construction —
+		// the attempt reached the slot by PASSING the readiness gate — and
+		// pairing would republish an attempt that no longer exists.
 		return StateNotPaired, ""
 	}
 	return p.prevState, p.prevReason
@@ -388,9 +392,14 @@ func (m *Manager) onQRItem(st *actorState, p *pairingState, item whatsmeow.QRCha
 		// codes while the user waits for a prompt that never comes.
 		logger.Warn().Str("event", item.Event).Msg("whatsapp: pairing requires a passkey confirmation, which is not supported")
 		m.abandonPairingTurn(st, p, ErrPasskeyPairingUnsupported)
-		// After the attempt ends, so the restore does not wipe it: why the
-		// pairing the user was watching stopped is the one thing they need.
-		st.status.Reason = ReasonPasskeyPairingUnsupported
+		// Why the attempt stopped is what the user was watching for, but only
+		// where it does not contradict what the restore just put back: a device
+		// that is disconnected because it was logged out must not be reported as
+		// disconnected because of a passkey. The attempt's own reason therefore
+		// belongs to the state the attempt itself produced.
+		if st.status.State == StateNotPaired {
+			st.status.Reason = ReasonPasskeyPairingUnsupported
+		}
 
 	default:
 		// Everything that is left ends the attempt: timeout, an outdated client,

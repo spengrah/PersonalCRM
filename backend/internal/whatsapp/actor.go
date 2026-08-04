@@ -268,17 +268,29 @@ func (st *actorState) endAttempt(p *pairingState, keepSession bool) {
 	if keepSession {
 		return
 	}
-	if p.sess != nil {
-		st.endOwnership(p.sess)
-	}
-	if p.sess == nil && !p.drainStarted {
+	// Through retire, like every other death path, so the held check applies
+	// here too rather than this being the one writer that can queue a release
+	// for a client an operation is still using.
+	st.retire(p.sess, true)
+	if !p.drainStarted {
 		return
 	}
+	// The drain handle is the one thing retire has no argument for, so it is
+	// attached to the release retire just queued.
+	if p.sess != nil {
+		for i := range st.pendingRelease {
+			if st.pendingRelease[i].sess == p.sess {
+				st.pendingRelease[i].drainDone = p.drainDone
+				st.pendingRelease[i].drainStarted = true
+				return
+			}
+		}
+	}
+	// No release to attach it to: the attempt never built a client, or an
+	// operation still holds the one it did. The drain must unwind either way.
 	st.pendingRelease = append(st.pendingRelease, sessionRelease{
-		sess:         p.sess,
 		drainDone:    p.drainDone,
-		drainStarted: p.drainStarted,
-		deleteDevice: true,
+		drainStarted: true,
 	})
 }
 
@@ -1097,6 +1109,16 @@ func awaitDrain(started bool, done <-chan struct{}, wait time.Duration) {
 	}
 }
 
+// deviceAlreadyGone reports the store's way of saying there is nothing to
+// delete: an attempt cancelled before the library ever saved a device has no
+// JID, so this is the ORDINARY outcome of an ordinary cancel, not a failure. It
+// is checked wherever a device delete is attempted, because the quiet path is
+// the common one and a warning on it is noise that trains people to ignore
+// warnings.
+func deviceAlreadyGone(err error) bool {
+	return errors.Is(err, sqlstore.ErrDeviceIDMustBeSet)
+}
+
 // releaseSession is the shared implementation, so Stop tears a session down the
 // same way a turn does.
 func releaseSession(ctx context.Context, sess *session, deleteDevice bool) {
@@ -1113,7 +1135,7 @@ func releaseSession(ctx context.Context, sess *session, deleteDevice bool) {
 	}
 	sess.client.Disconnect()
 	if deleteDevice && sess.deleteDevice != nil {
-		if err := sess.deleteDevice(ctx); err != nil {
+		if err := sess.deleteDevice(ctx); err != nil && !deviceAlreadyGone(err) {
 			logger.Warn().Err(err).Msg("whatsapp: failed to delete an abandoned pairing device")
 		}
 	}
@@ -1178,12 +1200,7 @@ func (e deleteDeviceEffect) run(ctx context.Context) stepResult {
 			attemptCtx, cancel := turnCtx(ctx)
 			defer cancel()
 			return e.sess.deleteDevice(attemptCtx)
-		}(); err == nil {
-			return stepResult{}
-		}
-		if errors.Is(err, sqlstore.ErrDeviceIDMustBeSet) {
-			// The row is already gone — an ordinary outcome on a cancelled
-			// pairing, not a failure worth a warning.
+		}(); err == nil || deviceAlreadyGone(err) {
 			return stepResult{}
 		}
 	}

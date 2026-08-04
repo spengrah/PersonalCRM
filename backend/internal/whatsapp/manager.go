@@ -1178,28 +1178,18 @@ func (m *Manager) onTerminal(st *actorState, from *session, reason string, banne
 // event, so a SetIngestor landing mid-event cannot make one event use two
 // ingestors. It is deliberately session-agnostic: attribution exists to stop a
 // dead client publishing state, and a real message is a real message.
-// chunkOrderInt32 narrows the library's uint32 chunk order to the column's
-// int32. A value that cannot fit is not a chunk order — it is a corrupt or
-// hostile payload — so it is clamped and reported rather than wrapped into a
-// negative that would sort before every real chunk.
-func chunkOrderInt32(order uint32) int32 {
-	if order > math.MaxInt32 {
-		logger.Warn().Uint32("chunk_order", order).
-			Msg("whatsapp: history chunk order exceeds the column's range; clamping")
-		return math.MaxInt32
-	}
-	return int32(order)
-}
-
-// handleMessage projects a live message onto the source-agnostic shape and hands
-// it to the ingestor.
 //
-// The projection is DELIBERATELY partial. Only MessageID, ChatJID, IsOutgoing
-// and SentAt are filled; Text, SenderJID, PushName, IsGroup and the reply and
-// media fields are left at their zero values because the parser that fills them
-// is the next PR's. A consumer that reads them today reads an empty string, not
-// an absent message — so nothing downstream may branch on them until that parser
-// lands.
+// The projection onto IngestedMessage is DELIBERATELY partial: it fills
+// MessageID, ChatJID, IsOutgoing and SentAt, and nothing else. Every remaining field is left at its
+// zero value, because the parser that fills them is the next PR's —
+//
+//	strings, empty:   ChatType, MessageType
+//	pointers, NIL:    ChatTitle, Body, ReplyTargetID, PeerJID, PeerPhoneE164,
+//	                  PushName, MemberCount
+//
+// The pointers are the trap: a consumer that reads one today does not get an
+// empty value, it dereferences nil. Nothing downstream may read any field
+// outside the four above until that parser lands.
 func (m *Manager) handleMessage(ctx context.Context, e *events.Message) bool {
 	var ingestor MessageIngestor
 	if s := m.snap.Load(); s != nil {
@@ -1304,4 +1294,17 @@ func (m *Manager) handleHistoryNotification(ctx context.Context, e *events.Messa
 			Msg("whatsapp: bootstrap chunk arrived inline against a non-inline request; dropped un-projected")
 	}
 	return true
+}
+
+// chunkOrderInt32 narrows the library's uint32 chunk order to the column's
+// int32. A value that cannot fit is not a chunk order — it is a corrupt or
+// hostile payload — so it is clamped and reported rather than wrapped into a
+// negative that would sort before every real chunk.
+func chunkOrderInt32(order uint32) int32 {
+	if order > math.MaxInt32 {
+		logger.Warn().Uint32("chunk_order", order).
+			Msg("whatsapp: history chunk order exceeds the column's range; clamping")
+		return math.MaxInt32
+	}
+	return int32(order)
 }

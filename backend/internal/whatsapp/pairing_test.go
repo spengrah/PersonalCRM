@@ -1448,8 +1448,31 @@ func TestQRItems_NonTerminalItemsDoNotEndTheAttempt(t *testing.T) {
 				return m.Status().Pairing == nil
 			})
 			assert.Equal(t, ReasonPasskeyPairingUnsupported, m.Status().Reason)
+			assert.Equal(t, StateNotPaired, m.Status().State, "and the pair is coherent")
 		})
 	}
+
+	t.Run("a passkey item over a durable terminal state does not overwrite it", func(t *testing.T) {
+		cli := newFakeClient()
+		m, _, _, _ := newTestManager(t, cli, true)
+		require.NoError(t, m.Start(context.Background()))
+		require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
+		require.True(t, dispatchEvent(t, m, nil, &events.LoggedOut{}))
+		require.Equal(t, StateDisconnected, m.Status().State)
+
+		pairClient := newFakeClient()
+		useClient(m, pairClient, false)
+		require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+
+		pairClient.qrChan <- whatsmeow.QRChannelItem{Event: whatsmeow.QRChannelEventPasskeyRequest}
+		eventually(t, "the attempt ends", func() bool { return m.Status().Pairing == nil })
+
+		status := m.Status()
+		assert.Equal(t, StateDisconnected, status.State,
+			"the device is still logged out; the failed re-pair did not change that")
+		assert.Equal(t, ReasonLoggedOut, status.Reason,
+			"and the reason must describe the state it is attached to, not the attempt that failed over it")
+	})
 }
 
 // TestCancelledPairing_RestoresWhatItDisplaced: a re-pair started over a durable
@@ -1496,4 +1519,47 @@ func TestLogoutFailedAfterRemoteUnlink_MatchesOnlyTheLibrarysOwnWrapper(t *testi
 	assert.False(t, logoutFailedAfterRemoteUnlink(
 		fmt.Errorf("error sending logout request: %w", errors.New("server said: error deleting data from store"))),
 		"a server-supplied message that merely CONTAINS the marker must not be read as a successful unlink")
+}
+
+// TestDisconnect_CallerGivingUpDoesNotCancelTheUnlink pins what the context
+// bounds, which is the WAIT and not the work.
+//
+// An unlink that has reached WhatsApp cannot be recalled by an HTTP client that
+// hung up, so a cancelled caller gets its goroutine back and nothing else
+// changes: the operation stays queued on the actor, finishes, and publishes.
+func TestDisconnect_CallerGivingUpDoesNotCancelTheUnlink(t *testing.T) {
+	cli := newFakeClient()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	cli.logoutEntered, cli.logoutBlock = entered, release
+
+	m, _, _, _ := newTestManager(t, cli, true)
+	require.NoError(t, m.Start(context.Background()))
+	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	returned := make(chan error, 1)
+	go func() {
+		_, err := m.Disconnect(ctx, false)
+		returned <- err
+	}()
+	<-entered
+
+	// The caller hangs up while the logout is still in flight.
+	cancel()
+
+	select {
+	case err := <-returned:
+		assert.ErrorIs(t, err, context.Canceled,
+			"the caller is released with its own cancellation, not left holding a reply nobody will send")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Disconnect ignored its context and kept the caller waiting on an unlink it had abandoned")
+	}
+
+	// And the unlink itself runs to completion regardless.
+	close(release)
+	eventually(t, "the abandoned caller's unlink still finishes and publishes", func() bool {
+		return m.Status().State == StateNotPaired
+	})
+	assert.Contains(t, cli.callLog(), "logout")
 }

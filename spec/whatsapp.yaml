@@ -118,7 +118,7 @@ behaviors:
       - key: force-disconnect-clears-local-state-with-warning
         text: a forced disconnect returns 200 with a body warning that the device must still be unlinked from the phone
     provenance: [WhatsAppHandler.StartPairing, WhatsAppHandler.CancelPairing, WhatsAppHandler.Disconnect]
-    notes: Scoped to the outcomes the shipped wiring can actually produce. Everything that requires a linkable account is WHA-015, which is proposed until the integration is wired end to end.
+    notes: Scoped to the outcomes the shipped wiring can produce without a linkable account. Everything that needs one is WHA-015.
 
   - id: WHA-015
     title: Pairing outcomes once an account can be linked
@@ -168,7 +168,7 @@ behaviors:
       - key: status-always-carries-terminal-reason-persisted
         text: the status body always carries whether the permanent-disconnect reason was durably recorded, including when it was NOT — a client that cannot tell "absent" from "false" cannot tell a restart-safe decision from one that will be lost
     provenance: [WhatsAppHandler.GetStatus, RegisterWhatsAppRoutes]
-    notes: Scoped to what the shipped wiring can report. The fields that require a linked account or an in-flight pairing are WHA-016, proposed until one is possible.
+    notes: Scoped to what the status reports without a linked account. The fields that need one, or a live pairing, are WHA-016.
 
   - id: WHA-016
     title: Status fields that require a linked account or a live pairing
