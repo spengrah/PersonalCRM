@@ -85,10 +85,19 @@ func (h *Harness) ReplayWhatsApp(ctx context.Context, contactID uuid.UUID, spec 
 	}
 
 	// An unmatched peer that crosses the discovery threshold mints an
-	// external_contact candidate whose source_id is a bare JID — the ns-prefix
-	// cleanup step cannot reach it, so track it by id.
+	// external_contact candidate whose source_id is a bare JID: it carries no
+	// namespace token, so NEITHER prefix sweep can reach it. It therefore needs
+	// both recovery keys — the in-memory ledger, which serves this run's own
+	// teardown, and the durable ownership record, which is the only thing a LATER
+	// stateless namespace cleanup can find the row by (the same pairing
+	// SeedTitleCandidate and the declared telegram candidate use). Recording is
+	// fatal rather than best-effort: a candidate whose recovery key never landed
+	// is a row no cleanup can ever reclaim.
 	if external, err := h.externalRepo.GetBySource(ctx, repository.InteractionSourceWhatsApp, spec.PeerJID, nil); err == nil && external != nil {
 		h.track(func(c *created) { c.addExternalContact(external.ID) })
+		if err := h.support.RecordNamespaceEntity(ctx, h.namespace, repository.EntityKindExternalContact, external.ID); err != nil {
+			return WhatsAppResult{}, fmt.Errorf("whatsapp: record discovery candidate ownership: %w", err)
+		}
 	}
 
 	if spec.Intent == factory.MatchUnknown {

@@ -68,9 +68,11 @@ const (
 	// whatsappBurstGap places the second outbound INSIDE the burst window, so the
 	// two collapse into one interaction rather than two.
 	whatsappBurstGap = 30 * time.Minute
-	// whatsappReplyGap places the inbound reply OUTSIDE the burst window but well
-	// inside the reply bridge, so it promotes the outbound interaction in place to
-	// mutual instead of extending the burst or opening a second interaction.
+	// whatsappReplyGap places the inbound reply well inside the reply bridge, so
+	// it promotes the outbound interaction in place to mutual rather than opening
+	// a second one. The bridge is the only constraint the gap has to satisfy:
+	// sessions are split by DIRECTION before any gap is measured, so an inbound
+	// can never join an outbound burst however close it lands.
 	whatsappReplyGap = 6 * time.Hour
 	// whatsappDiscoveryAge dates the unmatched peer's first message.
 	whatsappDiscoveryAge = 2 * 24 * time.Hour
@@ -392,9 +394,6 @@ func seedWhatsAppDiscoveryFixture(ctx context.Context, h *Harness, gen *factory.
 	first := gen.WhatsAppMessage(peer, factory.MatchUnknown, factory.WithMessageAge(whatsappDiscoveryAge))
 
 	threshold := h.WhatsAppDiscoveryMinMessages()
-	if threshold <= 0 {
-		return fmt.Errorf("whatsapp discovery threshold is %d — the harness has no whatsapp ingest deps", threshold)
-	}
 	for i := 0; i < threshold; i++ {
 		msg := first
 		msg.ExternalID = fmt.Sprintf("%s-%d", first.ExternalID, i)

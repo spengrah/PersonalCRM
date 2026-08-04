@@ -309,12 +309,8 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	whatsappRepo := repository.NewWhatsAppRepository(database.Queries)
 	// One reading of the threshold feeds BOTH the matcher and the accessor a
 	// fixture sizes itself by, so the two can never disagree about how many
-	// unmatched messages mint a candidate. Defend against a zero/unset value the
-	// same way groupMaxMembers does.
+	// unmatched messages mint a candidate.
 	whatsappDiscoveryMinMsgs := cfg.WhatsApp.DiscoveryMinMessages
-	if whatsappDiscoveryMinMsgs <= 0 {
-		whatsappDiscoveryMinMsgs = config.DefaultWhatsAppDiscoveryMinMessages
-	}
 	whatsappIngestor := whatsapp.NewIngestor(
 		commsRepo,
 		whatsapp.NewChatGate(whatsappRepo, cfg.WhatsApp.GroupMaxMembers),
