@@ -78,11 +78,20 @@ func (f *fakeWhatsAppManager) Disconnect(_ context.Context, force bool) (*wapkg.
 var _ handlers.WhatsAppManager = (*fakeWhatsAppManager)(nil)
 
 // setupWhatsAppRouter builds the production route surface over a fake manager.
+// The auth tests never touch the chat seam, so they get the nil-chats shape —
+// which is also the production shape when the device store fails to open.
 func setupWhatsAppRouter(t *testing.T, manager handlers.WhatsAppManager) *gin.Engine {
+	t.Helper()
+	return setupWhatsAppRouterWithChats(t, manager, nil)
+}
+
+// setupWhatsAppRouterWithChats builds the production route surface over both
+// seams. Shared with whatsapp_chats_api_test.go, in the same package.
+func setupWhatsAppRouterWithChats(t *testing.T, manager handlers.WhatsAppManager, chats handlers.WhatsAppChatSettings) *gin.Engine {
 	t.Helper()
 	router := gin.New()
 	v1 := router.Group("/api/v1")
-	handlers.RegisterWhatsAppRoutes(v1, handlers.NewWhatsAppHandler(manager))
+	handlers.RegisterWhatsAppRoutes(v1, handlers.NewWhatsAppHandler(manager, chats))
 	return router
 }
 
