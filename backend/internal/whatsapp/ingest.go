@@ -76,9 +76,10 @@ func (i *Ingestor) PeerMatcher() *PeerMatcher {
 // goroutine:
 //   - group chats add one config read, plus one network lookup and one config
 //     write only while the size is unresolved;
-//   - a matched peer costs a match, one candidate read, and the tombstone probe
-//     — the candidate read's follow-up work is first-match-gated, so a known
-//     peer's steady state adds nothing beyond that read;
+//   - a matched peer costs the identity match, the staging write and the
+//     tombstone probe. Marking the import candidate and syncing contact methods
+//     are first-match-gated on the identity being newly bound, so a peer that
+//     has matched before adds nothing beyond those;
 //   - an unmatched peer costs a match attempt, the reverse probe, the staging
 //     write and the discovery upsert.
 func (i *Ingestor) IngestMessage(ctx context.Context, msg IngestedMessage) error {

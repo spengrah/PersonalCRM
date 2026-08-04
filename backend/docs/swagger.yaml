@@ -1028,6 +1028,11 @@ definitions:
           in a group the size gate declines to track is counted too — so it is a
           measure of how much of the conversation graph cannot be attributed
           automatically, not a count of unattributed records or of messages.
+
+          The count SATURATES at an internal cap (5000) rather than growing without
+          bound, so a value at the cap means "at least this many" rather than
+          exactly this many. The cap is far above any plausible personal address
+          book, so in practice the number is exact.
         type: integer
     type: object
   handlers.WhatsAppPairRequest:

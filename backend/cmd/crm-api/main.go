@@ -306,7 +306,10 @@ func run() int {
 		if telegramManager != nil {
 			importHandler.RegisterPostImportHook(telegram.NewPostImportHook(telegramManager))
 		}
-		if waIngestor != nil {
+		// The matcher check is not redundant with the ingestor one: the hook
+		// constructor takes an interface, so handing it a nil *PeerMatcher
+		// would produce a non-nil interface that panics on use.
+		if waIngestor != nil && waIngestor.PeerMatcher() != nil {
 			importHandler.RegisterPostImportHook(wapkg.NewPostImportHook(waIngestor.PeerMatcher()))
 		}
 	}

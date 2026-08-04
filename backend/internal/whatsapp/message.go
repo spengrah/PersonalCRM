@@ -94,22 +94,39 @@ func (o ownIdentity) isSelf(jid types.JID) bool {
 	return false
 }
 
-// accountJID is the value stamped onto comms_message.account_id.
+// canonicalAccountJID picks the single canonical string form of one account's
+// identity: the phone-number JID when known, else the internal id, always
+// normalized and non-AD.
+//
+// It is SHARED by the two places that must agree on that form — the parser,
+// which stamps it onto every message, and the group-info seam, which reports it
+// so the gate can refuse to ask the wrong account about a group. If those two
+// derived it independently and disagreed about which form represents an
+// account, every group message would look like it came from a different account
+// and the gate would withhold its ack forever.
 //
 // ToNonAD is load-bearing rather than decoration: the device store's own ID is
 // an AD JID and String() re-appends ":<device>" whenever the device number is
 // non-zero — and that number is reassigned on every re-link. Storing the AD
 // form would fragment account_id across exactly the re-pair this integration
 // has to survive.
-func (o ownIdentity) accountJID() *string {
-	source := o.PN
+func canonicalAccountJID(pn, lid types.JID) string {
+	source := pn
 	if source.IsEmpty() {
-		source = o.LID
+		source = lid
 	}
 	if source.IsEmpty() {
+		return ""
+	}
+	return normalizeServer(source).ToNonAD().String()
+}
+
+// accountJID is the value stamped onto comms_message.account_id.
+func (o ownIdentity) accountJID() *string {
+	out := canonicalAccountJID(o.PN, o.LID)
+	if out == "" {
 		return nil
 	}
-	out := normalizeServer(source).ToNonAD().String()
 	return &out
 }
 

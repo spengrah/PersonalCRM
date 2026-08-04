@@ -26,6 +26,12 @@ type PostImportHook struct {
 }
 
 // NewPostImportHook wraps the ingest path's peer matcher.
+//
+// The parameter is an interface, so a TYPED nil (a nil *PeerMatcher) makes it
+// non-nil and defeats the guard in OnPeerLinked, panicking on the nil receiver.
+// Passing an untyped nil is safe and is what the tests do; passing a typed nil
+// is the caller's responsibility, and the composition root avoids it by
+// registering the hook only when it built an ingestor with a matcher.
 func NewPostImportHook(matcher whatsappPeerLinker) *PostImportHook {
 	return &PostImportHook{matcher: matcher}
 }

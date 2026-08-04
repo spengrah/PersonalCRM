@@ -1298,6 +1298,20 @@ func (m *Manager) handleMessage(ctx context.Context, sess *session, e *events.Me
 //
 // The fallback is SelfJID — a snapshot read — and never Status(), which runs two
 // database queries through backfillStatus and must not be on a per-message path.
+//
+// COUPLING, because it is not local: the identity returned here decides the
+// account JID stamped on every message, and the group gate refuses to consult a
+// client reporting a DIFFERENT account. The session branch is safe by
+// construction — it hands both forms to canonicalAccountJID, exactly as
+// clientGroupInfoFetcher.AccountJID does, so the two cannot disagree. The
+// fallback branch has only ONE published JID to work with, so if it ever ran for
+// an account published in its internal-id form while the live client reported
+// the phone-number form, every group message would look like a foreign account:
+// permanently undecided, permanently redelivered. That is a livelock, not a
+// dropped message, and it is unreachable today because production always builds
+// its sessions through newClient, which always sets sess.wa. Anything that makes
+// the fallback reachable must publish both forms, or drop the account
+// comparison for messages resolved through it.
 func (m *Manager) ownIdentityFor(sess *session) (ownIdentity, peerAltResolver) {
 	if sess != nil && sess.wa != nil && sess.wa.Store != nil {
 		device := sess.wa.Store

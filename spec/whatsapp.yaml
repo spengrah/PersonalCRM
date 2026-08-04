@@ -168,7 +168,7 @@ behaviors:
       - key: status-always-carries-terminal-reason-persisted
         text: the status body always carries whether the permanent-disconnect reason was durably recorded, including when it was NOT — a client that cannot tell "absent" from "false" cannot tell a restart-safe decision from one that will be lost
       - key: status-reports-unresolved-lid-peers
-        text: the status carries how many peers the integration has seen but could not resolve to a phone number, since a message from such a peer cannot be matched to a contact automatically and can reach one only through the import queue
+        text: the status carries how many peers the integration has seen but could not resolve to a phone number — counted up to a cap, above which it reports "at least this many" — since a message from such a peer cannot be matched to a contact automatically and can reach one only through the import queue
     provenance: [WhatsAppHandler.GetStatus, RegisterWhatsAppRoutes]
     notes: Scoped to what the status reports without a linked account. The fields that need one, or a live pairing, are WHA-016.
 

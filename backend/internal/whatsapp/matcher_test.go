@@ -20,7 +20,11 @@ import (
 type fakeIdentityMatcher struct {
 	contactID *uuid.UUID
 	err       error
-	requests  []service.MatchRequest
+	// cached mirrors what the identity service reports when the identity row
+	// already existed AND already pointed at a live contact — i.e. this peer
+	// was reconciled by an earlier message.
+	cached   bool
+	requests []service.MatchRequest
 }
 
 func (f *fakeIdentityMatcher) MatchOrCreate(_ context.Context, req service.MatchRequest) (*service.MatchResult, error) {
@@ -28,7 +32,7 @@ func (f *fakeIdentityMatcher) MatchOrCreate(_ context.Context, req service.Match
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &service.MatchResult{ContactID: f.contactID, MatchType: repository.MatchTypeExact}, nil
+	return &service.MatchResult{ContactID: f.contactID, MatchType: repository.MatchTypeExact, Cached: f.cached}, nil
 }
 
 type fakeCommsPeerStore struct {
@@ -371,27 +375,94 @@ func TestDiscovery_UpsertErrorIsNonFatal(t *testing.T) {
 }
 
 // TestMatchPeer_ReconcileIsFirstMatchGated is the per-message cost guard: this
-// runs inline on the library's serialized handler goroutine, so a known peer's
-// steady state must be ONE candidate read and nothing else — not a read to mark,
-// a second read to enrich, and a method-sync transaction on every message.
+// runs inline on the library's serialized handler goroutine, so a peer that has
+// already matched must cost NOTHING beyond the identity match — not a read, not
+// a mark, and above all not a method-sync transaction.
+//
+// The no-candidate-row row is the one that matters most: a peer whose phone
+// matched a contact on its FIRST message never gets a candidate row at all,
+// because discovery only runs on the unmatched branch. Gating on the candidate
+// row instead of on the identity would leave exactly that population — the
+// majority of matched peers — synthesizing and re-enriching forever.
 func TestMatchPeer_ReconcileIsFirstMatchGated(t *testing.T) {
+	matchedCandidate := &repository.ExternalContact{
+		ID: uuid.New(), Source: "whatsapp", SourceID: "15559876543@s.whatsapp.net",
+		MatchStatus: repository.MatchStatusMatched, Metadata: map[string]any{},
+	}
+
+	tests := []struct {
+		name                                string
+		cached                              bool
+		candidate                           *repository.ExternalContact
+		wantGets, wantUpdates, wantEnriched int
+	}{
+		{
+			name:   "repeat message, no candidate row — the dominant matched case",
+			cached: true, candidate: nil,
+			wantGets: 0, wantUpdates: 0, wantEnriched: 0,
+		},
+		{
+			name:   "repeat message, candidate row exists",
+			cached: true, candidate: matchedCandidate,
+			wantGets: 0, wantUpdates: 0, wantEnriched: 0,
+		},
+		{
+			name:   "first match, no candidate row",
+			cached: false, candidate: nil,
+			wantGets: 1, wantUpdates: 0, wantEnriched: 1,
+		},
+		{
+			name:   "uncached but already reconciled elsewhere (an import, a rematch)",
+			cached: false, candidate: matchedCandidate,
+			wantGets: 1, wantUpdates: 0, wantEnriched: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := uuid.New()
+			ids := &fakeIdentityMatcher{contactID: &want, cached: tt.cached}
+			ext := &countingExternalContactUpserter{fakeExternalContactUpserter: fakeExternalContactUpserter{
+				getResult: tt.candidate,
+			}}
+			enricher := &fakeEnricher{}
+			m := NewPeerMatcher(ids, &fakeCommsPeerStore{}, ext, enricher, 3)
+
+			got, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
+			require.NoError(t, err)
+			require.NotNil(t, got, "the match itself is unaffected by the gate")
+
+			assert.Equal(t, tt.wantGets, ext.getCalls, "candidate reads")
+			assert.Equal(t, tt.wantUpdates, ext.updateCalls, "candidate mark writes")
+			assert.Equal(t, tt.wantEnriched, enricher.calls, "method-sync transactions")
+		})
+	}
+}
+
+// TestMatchPeer_RepeatedMessagesFromAKnownPeerCostNothingExtra is the finding
+// stated as a scenario: five messages from a peer with no candidate row must not
+// produce five method-sync transactions.
+func TestMatchPeer_RepeatedMessagesFromAKnownPeerCostNothingExtra(t *testing.T) {
 	want := uuid.New()
 	ids := &fakeIdentityMatcher{contactID: &want}
-	ext := &countingExternalContactUpserter{fakeExternalContactUpserter: fakeExternalContactUpserter{
-		getResult: &repository.ExternalContact{
-			ID: uuid.New(), Source: "whatsapp", SourceID: "15559876543@s.whatsapp.net",
-			MatchStatus: repository.MatchStatusMatched, Metadata: map[string]any{},
-		},
-	}}
+	ext := &countingExternalContactUpserter{}
 	enricher := &fakeEnricher{}
 	m := NewPeerMatcher(ids, &fakeCommsPeerStore{}, ext, enricher, 3)
 
+	// First message: the identity is newly bound, so it reconciles once.
 	_, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
 	require.NoError(t, err)
+	require.Equal(t, 1, enricher.calls)
 
-	assert.Equal(t, 1, ext.getCalls, "one candidate read, not two")
-	assert.Zero(t, ext.updateCalls, "an already-matched candidate needs no re-marking")
-	assert.Zero(t, enricher.calls, "and no method-sync transaction per message")
+	// Every later message finds the identity cached.
+	ids.cached = true
+	for range 5 {
+		_, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, 1, enricher.calls, "one sync in total, not one per message")
+	assert.Equal(t, 1, ext.getCalls, "and one candidate read in total")
 }
 
 func TestMatchPeer_ReconcileRunsOnceForANewCandidate(t *testing.T) {

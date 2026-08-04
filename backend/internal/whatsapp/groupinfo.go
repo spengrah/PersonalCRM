@@ -49,20 +49,16 @@ type clientGroupInfoFetcher struct {
 
 var _ GroupInfoFetcher = (*clientGroupInfoFetcher)(nil)
 
-// AccountJID reports the linked account this client belongs to, in the same
-// non-AD form the parser stamps onto each message.
+// AccountJID reports the linked account this client belongs to.
+//
+// It goes through canonicalAccountJID — the SAME derivation the parser uses to
+// stamp each message — so the comparison in the gate cannot fail merely because
+// the two sides preferred different forms of one identity.
 func (f *clientGroupInfoFetcher) AccountJID() string {
 	if f.cli == nil || f.cli.Store == nil {
 		return ""
 	}
-	jid := f.cli.Store.GetJID()
-	if jid.IsEmpty() {
-		jid = f.cli.Store.GetLID()
-	}
-	if jid.IsEmpty() {
-		return ""
-	}
-	return normalizeServer(jid).ToNonAD().String()
+	return canonicalAccountJID(f.cli.Store.GetJID(), f.cli.Store.GetLID())
 }
 
 // GroupInfo resolves a group's title and member count.

@@ -99,7 +99,27 @@ func (m *PeerMatcher) MatchPeer(ctx context.Context, peerJID string, phoneE164, 
 		return nil, nil
 	}
 
-	m.reconcileOnMatch(ctx, *result.ContactID, peerJID, phoneE164)
+	// Reconciliation is FIRST-MATCH work: marking the import candidate matched
+	// and syncing the contact methods the peer implies each have to happen once,
+	// not on every message this peer ever sends.
+	//
+	// The gate is Cached, which the identity service sets when the identity row
+	// ALREADY existed and ALREADY pointed at a live contact — precisely "this
+	// peer was reconciled by an earlier message". Gating on the candidate row
+	// instead would not work: a peer whose phone matched a contact on its very
+	// FIRST message never gets a candidate row at all (discovery runs only on
+	// the unmatched branch), so the read would return nothing every time and the
+	// method sync would run forever, inline on the library's serialized handler
+	// goroutine. That is the dominant matched population, not an edge case.
+	//
+	// The cost of gating here rather than after the read: if the mark below
+	// fails transiently, no later message retries it, so the candidate can stay
+	// labelled unmatched while its contact is bound. That is cosmetic — the
+	// contact link itself is on the identity row — and it is the price of not
+	// paying a read per message forever.
+	if !result.Cached {
+		m.reconcileOnMatch(ctx, *result.ContactID, peerJID, phoneE164)
+	}
 	logger.Info().
 		Str("contact_id", result.ContactID.String()).
 		Str("match_type", string(result.MatchType)).
@@ -219,12 +239,15 @@ func discoveryDisplayName(row repository.UnmatchedPeerCount) string {
 // contact methods it implies. Errors are logged at warn and never fail the
 // match.
 //
-// This runs on the message-handling path, so it does exactly ONE candidate read
-// and then FIRST-MATCH-GATES the rest: a candidate already recorded as matched
-// or imported has been through both steps on an earlier message, so the steady
-// state for a known peer is one indexed read and nothing else. Reading twice —
-// once to mark and once to enrich — and re-running the method sync on every
-// message is what this shape exists to avoid.
+// The CALLER gates this on the first match for a peer, so a known peer's steady
+// state costs nothing here at all — no read, no write, no method sync. When it
+// does run it does ONE candidate read and reuses it for both steps; reading
+// twice, once to mark and once to enrich, is what this shape replaced.
+//
+// The already-matched/imported short-circuit below is a second, narrower guard
+// for the case the caller's gate cannot see: an identity that was bound by some
+// other flow (an import, a rematch) and is reaching the live path uncached for
+// the first time.
 func (m *PeerMatcher) reconcileOnMatch(ctx context.Context, contactID uuid.UUID, peerJID string, phoneE164 *string) {
 	external, err := m.externalContactRepo.GetBySource(ctx, syncSource, peerJID, nil)
 	if err != nil {

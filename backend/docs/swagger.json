@@ -6530,7 +6530,7 @@
             "type": "object",
             "properties": {
                 "unresolved_lid_peers": {
-                    "description": "UnresolvedLIDPeers counts distinct peers OBSERVED whose phone number the\nintegration could not recover from their WhatsApp-internal id. Such a\npeer cannot be matched to a contact automatically, so any message of\ntheirs that is stored is stored without one and can reach a contact only\nthrough the import queue.\n\nIt counts peers observed, not peers whose messages were stored — a sender\nin a group the size gate declines to track is counted too — so it is a\nmeasure of how much of the conversation graph cannot be attributed\nautomatically, not a count of unattributed records or of messages.",
+                    "description": "UnresolvedLIDPeers counts distinct peers OBSERVED whose phone number the\nintegration could not recover from their WhatsApp-internal id. Such a\npeer cannot be matched to a contact automatically, so any message of\ntheirs that is stored is stored without one and can reach a contact only\nthrough the import queue.\n\nIt counts peers observed, not peers whose messages were stored — a sender\nin a group the size gate declines to track is counted too — so it is a\nmeasure of how much of the conversation graph cannot be attributed\nautomatically, not a count of unattributed records or of messages.\n\nThe count SATURATES at an internal cap (5000) rather than growing without\nbound, so a value at the cap means \"at least this many\" rather than\nexactly this many. The cap is far above any plausible personal address\nbook, so in practice the number is exact.",
                     "type": "integer"
                 }
             }

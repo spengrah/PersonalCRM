@@ -35,6 +35,12 @@ type PostImportHook struct {
 }
 
 // NewPostImportHook wraps a Telegram manager.
+//
+// The parameter is an interface, so a TYPED nil (a nil *TelegramManager) makes
+// it non-nil and defeats the guard in OnPeerLinked, panicking on the nil
+// receiver. Passing an untyped nil is safe and is what the tests do; passing a
+// typed nil is the caller's responsibility, and the composition root avoids it
+// by registering the hook only when it built a manager.
 func NewPostImportHook(mgr telegramPeerLinker) *PostImportHook {
 	return &PostImportHook{mgr: mgr}
 }
