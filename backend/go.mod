@@ -2,6 +2,17 @@ module personal-crm/backend
 
 go 1.25.0
 
+// The SINGLE source of the compiler every environment builds with. Without it,
+// `go 1.25.0` is only a floor: GOTOOLCHAIN=auto uses any locally-installed
+// toolchain that satisfies it, so a developer on a newer patch compiled with
+// that one while CI and the release images downloaded exactly 1.25.0 — the
+// binary shipped to prod was built by a different compiler than the one the
+// change was written and tested against. Pinning binds all three.
+//
+// Bumping this is a deliberate act: it changes the compiler for local, CI and
+// the published images together, which is the point.
+toolchain go1.25.5
+
 require (
 	github.com/gin-gonic/gin v1.10.1
 	github.com/go-playground/validator/v10 v10.27.0

@@ -27,7 +27,7 @@ A single-user, local-first customer relationship management system with AI-power
 ## Prerequisites
 
 - Docker and Docker Compose
-- Go 1.24+
+- Go 1.25+
 - Bun 1.0+ (for frontend)
 - Make
 
@@ -167,10 +167,10 @@ Deploy PersonalCRM as a systemd service on Raspberry Pi for automatic startup on
    curl -sSL https://get.docker.com | sh
    sudo usermod -aG docker $USER
    ```
-3. **Go 1.24+**:
+3. **Go 1.25+**:
    ```bash
-   wget https://go.dev/dl/go1.24.0.linux-arm64.tar.gz
-   sudo tar -C /usr/local -xzf go1.24.0.linux-arm64.tar.gz
+   wget https://go.dev/dl/go1.25.5.linux-arm64.tar.gz
+   sudo tar -C /usr/local -xzf go1.25.5.linux-arm64.tar.gz
    export PATH=$PATH:/usr/local/go/bin
    ```
 4. **Bun**:
