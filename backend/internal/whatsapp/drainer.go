@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -153,7 +155,15 @@ func (d *HistoryDrainer) Drain(ctx context.Context) error {
 				logger.Info().Str("chunk_id", n.ID.String()).
 					Msg("whatsapp: history chunk lease moved on; a successor owns it")
 			case errors.Is(err, errChunkFailed):
-				// Already recorded as failed and no longer claimable.
+				// DELIBERATELY not returned. A terminal failure is a DECISION,
+				// not a job failure: the row is already recorded as failed and
+				// is no longer claimable, terminalFailure has logged it at
+				// ERROR, and it is surfaced in Status().Backfill.Failed and in
+				// --whatsapp-list-history. Returning it would abort the rest of
+				// the backlog for a chunk nothing can do anything about, and
+				// would put a decided outcome in river_job where it would
+				// compete for attention with the genuinely transient failures
+				// that ARE returned.
 			default:
 				return err
 			}
@@ -192,9 +202,7 @@ func (d *HistoryDrainer) drainOne(ctx context.Context, fetcher HistoryFetcher, n
 	}
 
 	if phase == repository.HistoryPhaseAcked {
-		if err := d.deleteMedia(ctx, fetcher, n, token); err != nil {
-			return err
-		}
+		d.deleteMedia(ctx, fetcher, n)
 		if err := d.advance(ctx, n.ID, token, repository.HistoryPhaseAcked, repository.HistoryPhaseDeleted); err != nil {
 			return err
 		}
@@ -271,17 +279,23 @@ func (d *HistoryDrainer) classifyDownloadFailure(ctx context.Context, n *reposit
 		return "", d.terminalFailure(ctx, n, token, cause)
 
 	case isMediaGone(cause):
-		checkpoint, resumable := parseHistoryCheckpoint(n.Checkpoint)
-		if phase != repository.HistoryPhaseDownloaded || !resumable {
+		checkpoint, ok := parseHistoryCheckpoint(n.Checkpoint)
+		// "Something was stored" is the predicate, not "a conversation
+		// completed": the loop checkpoints after every TRACKED conversation,
+		// including one whose messages were all pre-horizon, so a completed
+		// conversation alone does not mean a single row exists.
+		if phase != repository.HistoryPhaseDownloaded || !ok || checkpoint.Staged == 0 {
 			// Nothing was ever stored from this chunk and no retry can produce
 			// the blob. Terminal, and operator-recoverable by requeue.
 			return "", d.terminalFailure(ctx, n, token, cause)
 		}
-		// At least one conversation completed, so its content is already in
-		// comms_message and no retry can produce the rest. Completing the
-		// protocol is strictly better than throwing the staged half away.
+		// Messages from this chunk are already in comms_message and no retry
+		// can produce the rest. Completing the protocol is strictly better than
+		// throwing the staged part away — at the cost, recorded in WHA-063,
+		// that the unreached conversations are lost.
 		logger.Warn().Err(cause).Str("chunk_id", n.ID.String()).
 			Int("conversations_completed", *checkpoint.ConversationIndex+1).
+			Int("staged", checkpoint.Staged).
 			Msg("whatsapp: history media is gone after a partial projection; completing the chunk with what was stored")
 		if err := d.advance(ctx, n.ID, token, repository.HistoryPhaseDownloaded, repository.HistoryPhaseProjected); err != nil {
 			return "", err
@@ -296,27 +310,32 @@ func (d *HistoryDrainer) classifyDownloadFailure(ctx context.Context, n *reposit
 // deleteMedia removes our own history blob from WhatsApp's media server.
 //
 // A dropped-inline row never downloaded anything, so there is no blob to
-// delete — a documented no-op, not a skipped step. A delete that finds the
-// media already gone is SUCCESS: that is exactly the outcome the step wanted.
-func (d *HistoryDrainer) deleteMedia(ctx context.Context, fetcher HistoryFetcher, n *repository.HistoryNotification, token uuid.UUID) error {
+// delete — a documented no-op, not a skipped step.
+//
+// A FAILED delete is treated as satisfied, with a WARN. This is the one step
+// whose failure cannot be classified, because whatsmeow's DeleteMedia reports
+// every non-2xx response as a bare formatted string carrying no sentinel and no
+// wrapped cause (upload.go), so "the blob is already gone" and "the request
+// failed" are indistinguishable without matching an unversioned message.
+//
+// Given that, satisfied is the right side to err on: by this phase the chunk is
+// fully staged AND already acknowledged, so WhatsApp will never redeliver it
+// and there is no history left to protect. Retrying instead would burn the
+// attempt budget and then record a COMPLETE chunk as permanently failed — a lie
+// in Status().Backfill.Failed whose operator remedy, a requeue, re-sends a
+// receipt for a chunk that was already acknowledged. The cost of this choice is
+// bounded to one of our own payloads left on WhatsApp's media server, which
+// WhatsApp expires on its own.
+func (d *HistoryDrainer) deleteMedia(ctx context.Context, fetcher HistoryFetcher, n *repository.HistoryNotification) {
 	if n.Disposition == repository.HistoryDispositionDroppedInline {
 		logger.Debug().Str("chunk_id", n.ID.String()).
 			Msg("whatsapp: dropped-inline chunk has no server-side media to delete")
-		return nil
+		return
 	}
-	err := fetcher.DeleteHistoryMedia(ctx, n.Notification)
-	if err == nil {
-		return nil
+	if err := fetcher.DeleteHistoryMedia(ctx, n.Notification); err != nil {
+		logger.Warn().Err(err).Str("chunk_id", n.ID.String()).
+			Msg("whatsapp: could not delete the history payload; the chunk is already stored and acknowledged, so it completes and the blob is left to expire")
 	}
-	if isMediaGone(err) {
-		logger.Debug().Err(err).Str("chunk_id", n.ID.String()).
-			Msg("whatsapp: history media was already gone; the delete step is satisfied")
-		return nil
-	}
-	if errors.Is(err, ErrHistoryNotificationMalformed) {
-		return d.terminalFailure(ctx, n, token, err)
-	}
-	return d.transient(ctx, n, token, err)
 }
 
 // chatDecision is one conversation's pre-pass result.
@@ -436,9 +455,16 @@ func (d *HistoryDrainer) project(ctx context.Context, fetcher HistoryFetcher, n 
 	conversations := chunk.GetConversations()
 	floor := BackfillFloorTime()
 
-	var staged, stubSkipped, stubWithContent, malformed, preClamp int
+	// staged is CUMULATIVE for the chunk, seeded from the resume point, so an
+	// interrupted-twice chunk does not under-report what it has stored.
+	start, staged := resumeFrom(n.Checkpoint, conversations)
+	var stubSkipped, undated, malformed, preClamp int
+	// stubTypes collects the DISTINCT stub types seen alongside real content,
+	// reported once with the chunk summary. A per-message WARN would be a line
+	// per message over a year of history if a common type ever co-occurs.
+	stubTypes := map[string]int{}
 
-	for i := resumePoint(n.Checkpoint, conversations); i < len(conversations); i++ {
+	for i := start; i < len(conversations); i++ {
 		conv := conversations[i]
 		decision := decisions[conv.GetID()]
 		if !decision.Track {
@@ -461,11 +487,9 @@ func (d *HistoryDrainer) project(ctx context.Context, fetcher HistoryFetcher, n 
 				// A stub type ON CONTENT is staged, not guessed away: nothing
 				// in the pinned library confirms or refutes that a genuine turn
 				// can carry one, and this payload is one-shot, so a wrong guess
-				// is irreversible loss. The counter is the evidence a future
+				// is irreversible loss. The census is the evidence a future
 				// tightening would need.
-				stubWithContent++
-				logger.Warn().Str("stub_type", web.GetMessageStubType().String()).
-					Msg("whatsapp: history message carries a stub type alongside real content; staging it")
+				stubTypes[web.GetMessageStubType().String()]++
 			}
 			if web.GetKey().GetID() == "" {
 				// IngestMessage refuses an empty id; skipping one malformed row
@@ -476,7 +500,11 @@ func (d *HistoryDrainer) project(ctx context.Context, fetcher HistoryFetcher, n 
 			// The clamp runs on the RAW timestamp, before the parser: a
 			// pre-horizon message is never decoded, never reaches
 			// IngestedMessage, and cannot reach any writer.
-			if time.Unix(int64(web.GetMessageTimestamp()), 0).UTC().Before(floor) {
+			switch classifyTimestamp(web.GetMessageTimestamp(), floor) {
+			case timestampUndated:
+				undated++
+				continue
+			case timestampPreHorizon:
 				preClamp++
 				continue
 			}
@@ -497,7 +525,7 @@ func (d *HistoryDrainer) project(ctx context.Context, fetcher HistoryFetcher, n 
 		}
 		staged += conversationStaged
 
-		ok, err := d.repo.SaveCheckpoint(ctx, n.ID, token, checkpointJSON(i, conv.GetID()))
+		ok, err := d.repo.SaveCheckpoint(ctx, n.ID, token, checkpointJSON(i, conv.GetID(), staged))
 		if err != nil {
 			return fmt.Errorf("whatsapp: save history checkpoint: %w", err)
 		}
@@ -509,14 +537,34 @@ func (d *HistoryDrainer) project(ctx context.Context, fetcher HistoryFetcher, n 
 		}
 	}
 
+	if len(stubTypes) > 0 {
+		logger.Warn().Str("chunk_id", n.ID.String()).
+			Str("stub_types", summarizeStubTypes(stubTypes)).
+			Msg("whatsapp: history messages carried a stub type alongside real content and were staged anyway")
+	}
 	logger.Info().Str("chunk_id", n.ID.String()).
 		Int("staged", staged).
 		Int("stub_skipped", stubSkipped).
-		Int("stub_with_content", stubWithContent).
+		Int("undated", undated).
 		Int("malformed", malformed).
 		Int("pre_clamp", preClamp).
 		Msg("whatsapp: history chunk projected")
 	return nil
+}
+
+// summarizeStubTypes renders the distinct stub-type census as "TYPE=n,TYPE=n",
+// sorted so the line is stable across runs and greppable.
+func summarizeStubTypes(counts map[string]int) string {
+	names := make([]string, 0, len(counts))
+	for name := range counts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%s=%d", name, counts[name]))
+	}
+	return strings.Join(parts, ",")
 }
 
 // pace yields between conversations that actually staged something. It is a
@@ -583,6 +631,13 @@ func (d *HistoryDrainer) terminalFailure(ctx context.Context, n *repository.Hist
 type historyCheckpoint struct {
 	ConversationIndex *int   `json:"conversation_index"`
 	ChatJID           string `json:"chat_jid"`
+	// Staged is how many messages the chunk has stored SO FAR, cumulative
+	// across resumes. It exists because "a conversation completed" and
+	// "something was stored" are different facts — the loop checkpoints after
+	// every tracked conversation, including one whose messages were all
+	// pre-horizon — and the media-gone-completes-successfully rule is only
+	// justified by the second.
+	Staged int `json:"staged"`
 }
 
 // parseHistoryCheckpoint reports whether a conversation has completed, and
@@ -603,36 +658,40 @@ func parseHistoryCheckpoint(raw []byte) (historyCheckpoint, bool) {
 	return checkpoint, true
 }
 
-// resumePoint returns the conversation index the projection loop starts at.
+// resumeFrom returns the conversation index the projection loop starts at, and
+// how many messages the chunk has already stored.
 //
 // The stored index is the last COMPLETED conversation, so the loop resumes at
 // index+1; returning it unchanged would re-walk a conversation that already
 // finished. The chat_jid check turns "two downloads decode to the same
 // conversation order" from an assumption into a verified precondition: on a
 // mismatch the checkpoint is discarded and the chunk is re-projected from the
-// start, which is safe because the staging upsert is content-immutable.
-func resumePoint(raw []byte, conversations []*waHistorySync.Conversation) int {
+// start, which is safe because the staging upsert is content-immutable — and
+// the staged count restarts with it, because that re-projection will re-count
+// every row it re-stores.
+func resumeFrom(raw []byte, conversations []*waHistorySync.Conversation) (start, staged int) {
 	checkpoint, ok := parseHistoryCheckpoint(raw)
 	if !ok {
-		return 0
+		return 0, 0
 	}
 	index := *checkpoint.ConversationIndex
 	if index < 0 || index >= len(conversations) {
 		logger.Warn().Int("conversation_index", index).Int("conversations", len(conversations)).
 			Msg("whatsapp: history checkpoint is out of range; re-projecting from the start")
-		return 0
+		return 0, 0
 	}
 	if conversations[index].GetID() != checkpoint.ChatJID {
 		logger.Warn().Int("conversation_index", index).
 			Msg("whatsapp: history checkpoint does not match the re-downloaded chunk; re-projecting from the start")
-		return 0
+		return 0, 0
 	}
-	return index + 1
+	return index + 1, checkpoint.Staged
 }
 
-// checkpointJSON renders the resume point for one completed conversation.
-func checkpointJSON(index int, chatJID string) []byte {
-	raw, err := json.Marshal(historyCheckpoint{ConversationIndex: &index, ChatJID: chatJID})
+// checkpointJSON renders the resume point for one completed conversation, with
+// the chunk's cumulative staged count.
+func checkpointJSON(index int, chatJID string, staged int) []byte {
+	raw, err := json.Marshal(historyCheckpoint{ConversationIndex: &index, ChatJID: chatJID, Staged: staged})
 	if err != nil {
 		// Unreachable: the struct is two JSON-native fields.
 		logger.Warn().Err(err).Msg("whatsapp: could not render the history checkpoint")
@@ -641,9 +700,44 @@ func checkpointJSON(index int, chatJID string) []byte {
 	return raw
 }
 
-// isMediaGone reports whether an error means the server-side blob no longer
-// exists. For a DOWNLOAD that is terminal; for the DELETE it is success, since
-// a blob that is already gone is exactly what the step wanted.
+// timestampVerdict says why a history message's own timestamp disqualifies it,
+// and is a named type rather than two inline conditions so the DISTINCTION is
+// unit-testable: both outcomes skip the message, so a test that could only see
+// which messages were stored cannot tell them apart.
+type timestampVerdict int
+
+const (
+	// timestampInHorizon means the message is datable and inside the horizon.
+	timestampInHorizon timestampVerdict = iota
+	// timestampUndated means the envelope carried no timestamp at all. It reads
+	// as 0, which converts to 1970 and would silently pass the clamp's test —
+	// reporting undatable history as history the horizon deliberately excluded.
+	// A message with no time cannot be placed on a timeline either way, so it
+	// is still skipped; it is the DIAGNOSIS that differs, and on a one-shot
+	// payload the two causes call for different follow-up.
+	timestampUndated
+	// timestampPreHorizon means the message predates the CRM's history floor.
+	timestampPreHorizon
+)
+
+func classifyTimestamp(seconds uint64, floor time.Time) timestampVerdict {
+	if seconds == 0 {
+		return timestampUndated
+	}
+	if time.Unix(int64(seconds), 0).UTC().Before(floor) {
+		return timestampPreHorizon
+	}
+	return timestampInHorizon
+}
+
+// isMediaGone reports whether a DOWNLOAD error means the server-side blob no
+// longer exists, which is terminal for the chunk.
+//
+// It is scoped to the download deliberately: these four sentinels are
+// DownloadHTTPError values whose Is() compares status codes, and only the
+// download path produces them. whatsmeow's DeleteMedia reports a non-2xx as a
+// bare formatted string, so calling this on a delete error would be a check
+// that can never fire — see deleteMedia for what happens there instead.
 func isMediaGone(err error) bool {
 	return errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith403) ||
 		errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404) ||

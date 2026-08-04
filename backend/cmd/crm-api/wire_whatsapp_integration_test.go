@@ -19,6 +19,7 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/testdb"
+	wapkg "personal-crm/backend/internal/whatsapp"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -108,8 +109,13 @@ func TestWireWhatsApp_TurnsTheFeatureOn(t *testing.T) {
 	ready, missing := stk.Manager.Ready()
 	assert.True(t, ready, "every readiness prerequisite is satisfied, so the client may connect")
 	assert.Empty(t, missing)
-	assert.NotEqual(t, "not_ready", stk.Manager.Status().State,
-		"the gate passed, so Start proceeded past it")
+	// Asserting the EXACT state, not merely "not not_ready": this test drives a
+	// Ready manager through the real Start, and it stays offline only because
+	// the clone carries no linked device. Pinning not_paired makes that
+	// precondition explicit, so a future seeded-device template turns this red
+	// rather than turning CI into a live dial against WhatsApp.
+	assert.Equal(t, wapkg.StateNotPaired, stk.Manager.Status().State,
+		"the gate passed and Start found no stored device, so nothing connects")
 
 	assert.Contains(t, h.reg.workerKinds, "whatsapp_history_drain",
 		"DrainReady may only be true because a worker really was registered")

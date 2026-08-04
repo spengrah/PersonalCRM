@@ -302,7 +302,7 @@ behaviors:
     when: the backfill drain runs
     then:
       - key: order-is-project-ack-delete
-        text: the chunk's messages are stored before WhatsApp is told the chunk was handled, and the payload on WhatsApp's servers is removed only after that, so no acknowledgement is ever sent for history that was not stored
+        text: the chunk's messages are stored before WhatsApp is told the chunk was handled, and the payload on WhatsApp's servers is removed only after that, so the integration never acknowledges a chunk it has not tried to store
       - key: whole-backlog-drains
         text: one drain run works through every chunk waiting for it rather than one per tick, so a link-time backfill completes in minutes rather than over an hour
       - key: fresh-chunk-completes-in-one-pass
@@ -359,7 +359,9 @@ behaviors:
         text: an operator can list the failed chunks and put one back in the queue by hand, and the listing never prints the stored payload or the projection bookkeeping
       - key: a-requeue-does-not-erase-the-attempt-history
         text: requeueing does not reset how many times the chunk has been tried, because that count is what tells an operator whether to keep trying
-    provenance: [HistoryDrainer.terminalFailure, runListWhatsAppHistory, runRequeueWhatsAppHistory, TestHistoryDrainer_TransientFailuresAreCappedAndBecomeRequeueable, TestCrmAdmin_ListWhatsAppHistoryNeverPrintsThePayload]
+      - key: a-partly-stored-chunk-whose-payload-vanished-is-completed-not-discarded
+        text: when the payload disappears from WhatsApp's servers after part of a chunk was already stored, the chunk is completed and acknowledged rather than failed — the stored part is real and no retry can recover the rest — and the conversations it never reached are lost, which is reported rather than hidden; a chunk that had stored NOTHING is failed instead, so an acknowledgement is never sent for a chunk with nothing to show for it
+    provenance: [HistoryDrainer.terminalFailure, HistoryDrainer.classifyDownloadFailure, runListWhatsAppHistory, runRequeueWhatsAppHistory, TestHistoryDrainer_TransientFailuresAreCappedAndBecomeRequeueable, TestHistoryDrainer_MediaMissingAtDownloadedWithACheckpointCompletesSuccessfully, TestHistoryDrainer_MediaMissingAtDownloadedWithAnEmptyCheckpointFails, TestCrmAdmin_ListWhatsAppHistoryNeverPrintsThePayload]
 
   - id: WHA-064
     title: Group tracking is decided for a whole chunk before any of it is stored

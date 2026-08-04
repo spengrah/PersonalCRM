@@ -416,23 +416,26 @@ func TestHistoryDrainer_ChunkWithNoConversationsCompletes(t *testing.T) {
 
 // --- the gate pre-pass ------------------------------------------------------
 
-// TestHistoryDrainer_ResolvesGroupInfoBeforeProjecting: every group in the
-// chunk is decided before the FIRST message is staged, which is what makes "a
-// chunk is never half-gated" true.
-func TestHistoryDrainer_ResolvesGroupInfoBeforeProjecting(t *testing.T) {
+// TestHistoryDrainer_ResolvesEachGroupExactlyOnce: the pre-pass costs one
+// metadata lookup per DISTINCT group, not one per message.
+//
+// It makes no ordering claim — neither fake here records a sequence, so it
+// could not tell a pre-pass from a per-conversation lazy gate. The ordering
+// property is asserted by TestHistoryDrainer_ResolvesEveryGroupBeforeTheFirstIngest
+// (a shared call log) and by _FailsClosedOnUnresolvableGroup (a DM ahead of an
+// undecidable group stores nothing).
+func TestHistoryDrainer_ResolvesEachGroupExactlyOnce(t *testing.T) {
 	env := newDrainEnv(t, chunk(
 		withParticipants(conversation(testHistoryGroupJID, webMessage("g-1", afterFloor, "hi")), "Book Club", 4),
 		conversation(testHistoryDMJID, webMessage("d-1", afterFloor, "hey")),
 	))
 	env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	// The group fetcher records when it was asked; the ingestor records when it
-	// was called. The pre-pass must be finished before the first ingest.
 	env.group.info = &ChatGroupInfo{Title: "Book Club", MemberCount: 4}
 
 	require.NoError(t, env.drainer.Drain(context.Background()))
 
-	assert.Equal(t, 1, env.group.calls, "one lookup per distinct group, before any projection")
+	assert.Equal(t, 1, env.group.calls, "one lookup per distinct group, however many messages it carries")
 	assert.Equal(t, []string{"g-1", "d-1"}, env.ingestedIDs())
 }
 
@@ -651,7 +654,7 @@ func TestHistoryDrainer_MediaMissingAtDownloadedWithACheckpointCompletesSuccessf
 	row := env.store.add(&repository.HistoryNotification{
 		ProtocolMsgID: "pm-1",
 		Phase:         repository.HistoryPhaseDownloaded,
-		Checkpoint:    checkpointJSON(0, testHistoryDMJID),
+		Checkpoint:    checkpointJSON(0, testHistoryDMJID, 3),
 	})
 	env.fetcher.downloadErr = fmt.Errorf("download: %w", whatsmeow.ErrMediaDownloadFailedWith403)
 
@@ -663,30 +666,55 @@ func TestHistoryDrainer_MediaMissingAtDownloadedWithACheckpointCompletesSuccessf
 	assert.Empty(t, env.store.failures)
 }
 
-// TestHistoryDrainer_DeleteMediaGoneCompletesSuccessfully: a delete that finds
-// the blob already gone got exactly the outcome the step wanted.
-func TestHistoryDrainer_DeleteMediaGoneCompletesSuccessfully(t *testing.T) {
+// TestHistoryDrainer_DeleteFailureStillCompletesTheChunk.
+//
+// The errors are the ones whatsmeow's DeleteMedia really produces: a bare
+// formatted string with no sentinel and no wrapped cause, so "already gone" and
+// "request failed" are indistinguishable to the caller. Both must complete: by
+// this phase the chunk is fully staged AND acknowledged, so retrying would burn
+// the attempt budget and then record a COMPLETE chunk as permanently failed.
+func TestHistoryDrainer_DeleteFailureStillCompletesTheChunk(t *testing.T) {
+	for _, deleteErr := range []error{
+		// The exact shapes upload.go produces.
+		errors.New("media delete failed with status code 404"),
+		errors.New("media delete failed with status code 500"),
+		errors.New("failed to execute request: dial tcp: connection reset"),
+	} {
+		t.Run(deleteErr.Error(), func(t *testing.T) {
+			env := newDrainEnv(t, chunk(conversation(testHistoryDMJID, webMessage("m-1", afterFloor, "hi"))))
+			row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
+			env.fetcher.deleteErr = deleteErr
+
+			require.NoError(t, env.drainer.Drain(context.Background()))
+
+			stored := env.store.find(row.ID)
+			assert.Equal(t, repository.HistoryNotificationStateDone, stored.State,
+				"a fully staged, already-acknowledged chunk must never be recorded as failed")
+			assert.Empty(t, env.store.failures)
+			assert.Equal(t, 1, env.ingestor.count(), "and its messages are still stored")
+		})
+	}
+}
+
+// TestHistoryDrainer_DeleteIsNeverRetriedIntoAFailedChunk is the regression
+// guard for the classification that could not fire.
+//
+// An earlier shape keyed the delete on whatsmeow's DOWNLOAD sentinels, which
+// DeleteMedia cannot produce, so every delete failure was transient: past the
+// attempt cap a complete chunk became permanently failed, and the operator
+// remedy re-sent a receipt for a chunk WhatsApp had already been told about.
+func TestHistoryDrainer_DeleteIsNeverRetriedIntoAFailedChunk(t *testing.T) {
 	env := newDrainEnv(t, chunk(conversation(testHistoryDMJID, webMessage("m-1", afterFloor, "hi"))))
 	row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
-	env.fetcher.deleteErr = fmt.Errorf("delete: %w", whatsmeow.ErrMediaDownloadFailedWith404)
+	row.Attempts = maxTransientAttempts + 5 // long past the cap
+	env.fetcher.deleteErr = errors.New("media delete failed with status code 410")
 
 	require.NoError(t, env.drainer.Drain(context.Background()))
 
 	assert.Equal(t, repository.HistoryNotificationStateDone, env.store.find(row.ID).State)
-}
-
-// TestHistoryDrainer_DeleteFailureIsTransient: any OTHER delete failure is a
-// retry, and the chunk holds at 'acked' so the retry does not re-acknowledge.
-func TestHistoryDrainer_DeleteFailureIsTransient(t *testing.T) {
-	env := newDrainEnv(t, chunk(conversation(testHistoryDMJID, webMessage("m-1", afterFloor, "hi"))))
-	row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
-	env.fetcher.deleteErr = errors.New("connection reset")
-
-	require.Error(t, env.drainer.Drain(context.Background()))
-
-	stored := env.store.find(row.ID)
-	assert.Equal(t, repository.HistoryPhaseAcked, stored.Phase)
-	assert.Equal(t, repository.HistoryNotificationStateProcessing, stored.State)
+	assert.Empty(t, env.store.failures)
+	assert.Equal(t, []string{"download", "ack", "delete"}, env.fetcher.calls,
+		"exactly one receipt and one delete attempt")
 }
 
 // TestHistoryDrainer_MalformedNotificationIsTerminal: the stored bytes are what
@@ -781,7 +809,7 @@ func TestHistoryDrainer_ResumeSkipsCompletedConversations(t *testing.T) {
 	env.store.add(&repository.HistoryNotification{
 		ProtocolMsgID: "pm-1",
 		Phase:         repository.HistoryPhaseDownloaded,
-		Checkpoint:    checkpointJSON(1, "15551110002@s.whatsapp.net"),
+		Checkpoint:    checkpointJSON(1, "15551110002@s.whatsapp.net", 2),
 	})
 
 	require.NoError(t, env.drainer.Drain(context.Background()))
@@ -801,7 +829,7 @@ func TestHistoryDrainer_CheckpointMismatchReprojectsFromTheStart(t *testing.T) {
 	env.store.add(&repository.HistoryNotification{
 		ProtocolMsgID: "pm-1",
 		Phase:         repository.HistoryPhaseDownloaded,
-		Checkpoint:    checkpointJSON(0, "15559999999@s.whatsapp.net"),
+		Checkpoint:    checkpointJSON(0, "15559999999@s.whatsapp.net", 1),
 	})
 
 	require.NoError(t, env.drainer.Drain(context.Background()))
@@ -816,10 +844,11 @@ func TestHistoryDrainer_CheckpointIsSemanticNotBytes(t *testing.T) {
 		_, ok := parseHistoryCheckpoint(raw)
 		assert.False(t, ok, "%q must not read as a completed conversation", raw)
 	}
-	cp, ok := parseHistoryCheckpoint(checkpointJSON(0, testHistoryDMJID))
+	cp, ok := parseHistoryCheckpoint(checkpointJSON(0, testHistoryDMJID, 4))
 	require.True(t, ok, "conversation 0 IS progress, which a value-typed index could not express")
 	assert.Equal(t, 0, *cp.ConversationIndex)
 	assert.Equal(t, testHistoryDMJID, cp.ChatJID)
+	assert.Equal(t, 4, cp.Staged)
 }
 
 // TestHistoryDrainer_AbandonsTheChunkWhenTheLeaseIsLost: a lease that moved on
@@ -920,4 +949,155 @@ func TestHistoryDrainer_ClaimFailureIsReturned(t *testing.T) {
 	env.store.claimErr = errors.New("pool exhausted")
 
 	require.Error(t, env.drainer.Drain(context.Background()))
+}
+
+// TestHistoryDrainer_MediaMissingAtDownloadedWithAnEmptyCheckpointFails is the
+// second half of the media-gone predicate, and the reason it counts STAGED rows
+// rather than completed conversations.
+//
+// The loop checkpoints after every TRACKED conversation, including one whose
+// messages were all pre-horizon — so a chunk can hold a perfectly valid
+// checkpoint while having stored NOTHING. Completing it would send a receipt
+// for history that was never stored and lose the rest of a one-shot payload.
+func TestHistoryDrainer_MediaMissingAtDownloadedWithAnEmptyCheckpointFails(t *testing.T) {
+	env := newDrainEnv(t, chunk(conversation(testHistoryDMJID, webMessage("m-1", afterFloor, "hi"))))
+	row := env.store.add(&repository.HistoryNotification{
+		ProtocolMsgID: "pm-1",
+		Phase:         repository.HistoryPhaseDownloaded,
+		// A completed conversation that staged nothing.
+		Checkpoint: checkpointJSON(0, testHistoryDMJID, 0),
+	})
+	env.fetcher.downloadErr = fmt.Errorf("download: %w", whatsmeow.ErrMediaDownloadFailedWith410)
+
+	require.NoError(t, env.drainer.Drain(context.Background()))
+
+	assert.Equal(t, repository.HistoryNotificationStateFailed, env.store.find(row.ID).State)
+	assert.NotContains(t, env.fetcher.calls, "ack",
+		"a chunk that stored nothing must not be acknowledged, whatever its checkpoint says")
+}
+
+// TestHistoryDrainer_CheckpointStagedCountSurvivesAResume: the count is
+// CUMULATIVE, so a chunk interrupted twice does not under-report what it stored
+// and then fail the media-gone predicate it should pass.
+func TestHistoryDrainer_CheckpointStagedCountSurvivesAResume(t *testing.T) {
+	env := newDrainEnv(t, chunk(
+		conversation("15551110001@s.whatsapp.net", webMessage("a-1", afterFloor, "one")),
+		conversation("15551110002@s.whatsapp.net", webMessage("b-1", afterFloor, "two")),
+	))
+	row := env.store.add(&repository.HistoryNotification{
+		ProtocolMsgID: "pm-1",
+		Phase:         repository.HistoryPhaseDownloaded,
+		Checkpoint:    checkpointJSON(0, "15551110001@s.whatsapp.net", 1),
+	})
+
+	require.NoError(t, env.drainer.Drain(context.Background()))
+
+	cp, ok := parseHistoryCheckpoint(env.store.find(row.ID).Checkpoint)
+	require.True(t, ok)
+	assert.Equal(t, 2, cp.Staged, "one row from the first run plus one from this one")
+}
+
+// TestHistoryDrainer_UndatedMessagesAreNotCountedAsPreHorizon.
+//
+// An absent timestamp reads as 0, which converts to 1970 and would be silently
+// folded into the clamp's count — reporting undatable history as history the
+// horizon deliberately excluded, on a one-shot payload where the two call for
+// different follow-up.
+func TestHistoryDrainer_UndatedMessagesAreNotCountedAsPreHorizon(t *testing.T) {
+	undated := webMessage("undated-1", afterFloor, "no timestamp")
+	undated.MessageTimestamp = nil
+
+	env := newDrainEnv(t, chunk(conversation(testHistoryDMJID,
+		undated,
+		webMessage("old-1", beforeFloor, "genuinely ancient"),
+		webMessage("good-1", afterFloor, "fine"),
+	)))
+	env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
+
+	require.NoError(t, env.drainer.Drain(context.Background()))
+
+	assert.Equal(t, []string{"good-1"}, env.ingestedIDs(),
+		"an undatable message cannot be placed on a timeline, so it is not stored either")
+	assert.Equal(t, []string{"good-1"}, env.fetcher.projected)
+
+	// Both are skipped, so the row set alone cannot tell them apart. The
+	// DIAGNOSIS is the thing under test, and it is decided here.
+	floor := BackfillFloorTime()
+	assert.Equal(t, timestampUndated, classifyTimestamp(0, floor),
+		"an absent timestamp must not be reported as history the horizon excluded")
+	assert.Equal(t, timestampPreHorizon, classifyTimestamp(uint64(beforeFloor.Unix()), floor))
+	assert.Equal(t, timestampInHorizon, classifyTimestamp(uint64(afterFloor.Unix()), floor))
+}
+
+// --- ordering ---------------------------------------------------------------
+
+// sequencedGroupInfo and sequencedIngestor share one call log, which is what
+// makes an ORDER assertion possible: neither fake alone can see the other.
+type sequencedGroupInfo struct {
+	inner *fakeGroupInfoFetcher
+	log   *[]string
+}
+
+func (s *sequencedGroupInfo) GroupInfo(ctx context.Context, chatJID string) (*ChatGroupInfo, error) {
+	*s.log = append(*s.log, "gate")
+	return s.inner.GroupInfo(ctx, chatJID)
+}
+func (s *sequencedGroupInfo) AccountJID() string { return s.inner.AccountJID() }
+
+type sequencedIngestor struct {
+	inner *fakeIngestor
+	log   *[]string
+}
+
+func (s *sequencedIngestor) IngestMessage(ctx context.Context, msg IngestedMessage) error {
+	*s.log = append(*s.log, "ingest")
+	return s.inner.IngestMessage(ctx, msg)
+}
+
+// TestHistoryDrainer_ResolvesEveryGroupBeforeTheFirstIngest asserts the ORDER
+// directly: every gate lookup in the chunk precedes every ingest call.
+//
+// That is what "a chunk is never half-gated" means, and it is the property a
+// per-conversation lazy gate would break while still producing the same rows
+// and the same lookup count.
+func TestHistoryDrainer_ResolvesEveryGroupBeforeTheFirstIngest(t *testing.T) {
+	var log []string
+	group := &fakeGroupInfoFetcher{info: &ChatGroupInfo{Title: "Book Club", MemberCount: 4}, account: testAccountJID}
+	ingestor := &fakeIngestor{}
+
+	gate := NewChatGate(&fakeChatConfigStore{}, 10)
+	gate.BindGroupInfoSource(func() GroupInfoFetcher { return &sequencedGroupInfo{inner: group, log: &log} })
+	gate.lookupTimeout = testLookupTimeout
+
+	fetcher := newRecordingFetcher(chunk(
+		// A DM first, so a lazy gate would ingest before it ever looked one up.
+		conversation(testHistoryDMJID, webMessage("d-1", afterFloor, "hey")),
+		withParticipants(conversation(testHistoryGroupJID, webMessage("g-1", afterFloor, "hi")), "Book Club", 4),
+		conversation("15551110009@s.whatsapp.net", webMessage("d-2", afterFloor, "hello")),
+	))
+	store := &fakeHistoryStore{}
+	store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
+
+	drainer := NewHistoryDrainer(store, &sequencedIngestor{inner: ingestor, log: &log},
+		gate, func() HistoryFetcher { return fetcher })
+	drainer.pacing = 0
+
+	require.NoError(t, drainer.Drain(context.Background()))
+
+	require.NotEmpty(t, log)
+	lastGate := -1
+	firstIngest := len(log)
+	for i, entry := range log {
+		if entry == "gate" {
+			lastGate = i
+		}
+		if entry == "ingest" && i < firstIngest {
+			firstIngest = i
+		}
+	}
+	require.GreaterOrEqual(t, lastGate, 0, "the pre-pass must actually run, or the order below is vacuous")
+	require.Less(t, firstIngest, len(log), "and something must actually be ingested")
+	assert.Less(t, lastGate, firstIngest,
+		"every group in the chunk is decided before the first message from any of it is stored")
+	assert.Equal(t, 3, ingestor.count())
 }

@@ -454,7 +454,7 @@ func TestHistoryDrainer_ResumesAfterLostLease(t *testing.T) {
 		Body: strPtr2("one"), MessageType: whatsapp.MessageTypeText, PeerJID: &peerA,
 	}))
 	ok, err = env.wa.SaveCheckpoint(env.ctx, id, *first.ClaimToken,
-		[]byte(fmt.Sprintf(`{"conversation_index":0,"chat_jid":%q}`, env.ns+"a@s.whatsapp.net")))
+		[]byte(fmt.Sprintf(`{"conversation_index":0,"chat_jid":%q,"staged":1}`, env.ns+"a@s.whatsapp.net")))
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NoError(t, env.wa.BackdateClaimForTest(env.ctx, id))

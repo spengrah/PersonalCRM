@@ -1486,3 +1486,19 @@ func TestManagerHistoryFetcher_UnparseableChatJIDIsThatMessagesError(t *testing.
 	require.Error(t, err)
 	assert.False(t, eligible)
 }
+
+// TestManagerHistoryFetcher_RefusesToAcknowledgeAnIdlessChunk.
+//
+// SendProtocolMessageReceipt returns nil immediately for an empty id, so
+// passing one through would advance the chunk to done having told WhatsApp
+// nothing: the inbox would read complete while WhatsApp redelivered the chunk
+// indefinitely. protocol_msg_id is NOT NULL UNIQUE but not constrained
+// non-empty, so this guard is what closes it.
+func TestManagerHistoryFetcher_RefusesToAcknowledgeAnIdlessChunk(t *testing.T) {
+	_, fetcher := newProjectionSeam(t, &fakeLIDStore{})
+
+	err := fetcher.AckHistorySync(context.Background(), "")
+
+	require.Error(t, err, "an ack that tells WhatsApp nothing must not report success")
+	assert.Contains(t, err.Error(), "protocol message id")
+}

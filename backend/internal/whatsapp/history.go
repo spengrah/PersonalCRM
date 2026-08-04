@@ -180,7 +180,16 @@ func VerifyHistoryLIDMappings(ctx context.Context, lids store.LIDStore, chunk *w
 // AckHistorySync sends the protocol receipt for a handled chunk. In its default
 // mode the library sends this itself, unconditionally, before the download —
 // manual mode moves WHEN it fires, not whether.
+//
+// An empty id is REFUSED rather than passed through: SendProtocolMessageReceipt
+// returns nil immediately for one, so the chunk would advance to done having
+// told WhatsApp nothing — an inbox that reads complete while WhatsApp
+// redelivers the chunk indefinitely. The column is NOT NULL UNIQUE but not
+// constrained non-empty, so this guard is what closes it.
 func (f *clientHistoryFetcher) AckHistorySync(ctx context.Context, protocolMsgID string) error {
+	if protocolMsgID == "" {
+		return errors.New("whatsapp: refusing to acknowledge a history chunk with no protocol message id")
+	}
 	if err := f.cli.SendProtocolMessageReceipt(ctx, protocolMsgID, types.ReceiptTypeHistorySync); err != nil {
 		return fmt.Errorf("whatsapp: ack history sync: %w", err)
 	}
