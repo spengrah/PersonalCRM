@@ -58,6 +58,21 @@ behaviors:
     provenance: [usernameMatchGap, NormalizeHandleForNameMatch, applyExactHandleBonus]
     notes: Ambiguous common handles must not guess; the collision-gap rule is reused by anarlog title-token matching.
 
+  - id: IMP-041
+    title: An identifier matching one contact under several method types is not ambiguous
+    type: business-logic
+    status: current
+    surface: none
+    given: an external identifier whose type resolves against more than one kind of contact method (a WhatsApp peer is looked up against both whatsapp and phone methods)
+    when: the matching engine decides which contact it belongs to
+    then:
+      - key: several-methods-on-one-contact-still-match
+        text: a contact holding the identifier under several of those method types is matched, because the duplication is about how many ways one person is reachable rather than about which person the identifier belongs to
+      - key: distinct-contacts-refuse-to-guess
+        text: the identifier is left unmatched only when two or more DISTINCT contacts claim it, since guessing between real people would mis-attribute every message from that peer
+    provenance: [resolveContactFromMethods, findContactByMethod, findContactByMethodTx, MapIdentifierTypeToContactMethodTypes, TestResolveContactFromMethods_AmbiguityIsPerContactNotPerRow, TestIdentityService_Integration]
+    notes: Counting matched method ROWS instead of distinct contacts refuses a contact that is not in doubt, and reconciliation mints a second method on a peer's first successful match, so a row count strands every peer from its second message onward.
+
   - id: IMP-005
     title: The import queue only ever suggests
     type: invariant

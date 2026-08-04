@@ -398,18 +398,48 @@ func (s *IdentityService) findContactByMethodTx(ctx context.Context, tx pgx.Tx, 
 		return nil, repository.MatchTypeUnmatched, err
 	}
 
+	contactID, matchType := resolveContactFromMethods(identifier, matches)
+	return contactID, matchType, nil
+}
+
+// resolveContactFromMethods collapses contact-method matches down to a single
+// contact.
+//
+// Ambiguity is a property of CONTACTS, not of rows. An identifier type may map
+// to SEVERAL contact-method types — whatsapp resolves against
+// [whatsapp, phone] so a peer can match a contact who only ever had a phone
+// number on file — so one contact legitimately returns one row per method it
+// holds the value under. Counting rows calls that a conflict and refuses to
+// match a contact that is not in doubt.
+//
+// That misfire is self-inflicting rather than rare: reconciliation mints the
+// whatsapp method for a contact the moment its first message matches on the
+// phone method, so under a row count every peer matches exactly once and is
+// permanently unmatched from its second message onward.
+//
+// Two or more DISTINCT contacts sharing the identifier is the real ambiguity,
+// and it still refuses to guess.
+func resolveContactFromMethods(identifier string, matches []repository.ContactMethodMatch) (*uuid.UUID, repository.MatchType) {
 	if len(matches) == 0 {
-		return nil, repository.MatchTypeUnmatched, nil
+		return nil, repository.MatchTypeUnmatched
 	}
-	if len(matches) == 1 {
-		return &matches[0].ContactID, repository.MatchTypeExact, nil
+
+	distinct := make(map[uuid.UUID]struct{}, len(matches))
+	for _, m := range matches {
+		distinct[m.ContactID] = struct{}{}
 	}
-	// Multiple matches — ambiguous, leave for user to resolve.
-	logger.Warn().
-		Str("identifier", identifier).
-		Int("match_count", len(matches)).
-		Msg("ambiguous identity match - multiple contacts found")
-	return nil, repository.MatchTypeUnmatched, nil
+	if len(distinct) > 1 {
+		logger.Warn().
+			Str("identifier", identifier).
+			Int("match_count", len(matches)).
+			Int("contact_count", len(distinct)).
+			Msg("ambiguous identity match - multiple contacts found")
+		return nil, repository.MatchTypeUnmatched
+	}
+
+	// Return the first row's contact rather than a map key: every row agrees on
+	// the contact here, and map iteration order is randomized.
+	return &matches[0].ContactID, repository.MatchTypeExact
 }
 
 // findContactByMethod searches contact_method table for a match
@@ -436,22 +466,7 @@ func (s *IdentityService) findContactByMethod(ctx context.Context, identifier st
 		return nil, repository.MatchTypeUnmatched
 	}
 
-	// Handle match results
-	if len(matches) == 0 {
-		return nil, repository.MatchTypeUnmatched
-	}
-
-	if len(matches) == 1 {
-		// Unique match found
-		return &matches[0].ContactID, repository.MatchTypeExact
-	}
-
-	// Multiple matches - ambiguous, let user resolve
-	logger.Warn().
-		Str("identifier", identifier).
-		Int("match_count", len(matches)).
-		Msg("ambiguous identity match - multiple contacts found")
-	return nil, repository.MatchTypeUnmatched
+	return resolveContactFromMethods(identifier, matches)
 }
 
 // LinkIdentity manually links an identity to a contact

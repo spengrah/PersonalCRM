@@ -547,6 +547,88 @@ func TestIdentityService_Integration(t *testing.T) {
 		assert.Nil(t, unlinked.ContactID)
 		assert.Equal(t, repository.MatchTypeUnmatched, unlinked.MatchType)
 	})
+
+	// A WhatsApp identifier resolves against BOTH whatsapp and phone contact
+	// methods, so a contact holding one number under both returns two rows for
+	// one contact. These two sub-tests pin the halves apart: same contact still
+	// matches, different contacts still refuse.
+	//
+	// The first is the production failure mode rather than a hypothetical —
+	// reconciliation mints the whatsapp method for a contact whose phone method
+	// just matched, so this is the state EVERY matched peer lands in.
+	phoneNS := func() string {
+		return fmt.Sprintf("+1555%07d", uuid.New().ID()%10_000_000)
+	}
+
+	t.Run("MatchOrCreate_WhatsApp_OneContactUnderBothMethodTypes", func(t *testing.T) {
+		number := phoneNS()
+
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+			FullName: "WhatsApp Dual Method Test",
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, contact.ID) }()
+		defer func() { _ = methodRepo.DeleteContactMethodsByContact(ctx, contact.ID) }()
+
+		for _, mt := range []repository.ContactMethodType{
+			repository.ContactMethodPhone,
+			repository.ContactMethodWhatsApp,
+		} {
+			_, err = methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+				ContactID: contact.ID,
+				Type:      string(mt),
+				Value:     number,
+			})
+			require.NoError(t, err, "one contact may hold the same number under both types")
+		}
+
+		result, err := identityService.MatchOrCreate(ctx, service.MatchRequest{
+			RawIdentifier: number,
+			Type:          identity.IdentifierTypeWhatsApp,
+			Source:        "test_wa_dual_" + ns,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		defer func() { _ = identityRepo.Delete(ctx, result.Identity.ID) }()
+
+		require.NotNil(t, result.ContactID,
+			"two methods on ONE contact is not ambiguity about who the peer is")
+		assert.Equal(t, contact.ID, *result.ContactID)
+		assert.Equal(t, repository.MatchTypeExact, result.MatchType)
+	})
+
+	t.Run("MatchOrCreate_WhatsApp_TwoContactsShareTheNumberStaysUnmatched", func(t *testing.T) {
+		number := phoneNS()
+
+		for i, name := range []string{"WhatsApp Shared A", "WhatsApp Shared B"} {
+			c, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
+				FullName: fmt.Sprintf("%s %s-%d", name, ns, i),
+			})
+			require.NoError(t, err)
+			defer func() { _ = contactRepo.HardDeleteContact(ctx, c.ID) }()
+			defer func() { _ = methodRepo.DeleteContactMethodsByContact(ctx, c.ID) }()
+
+			_, err = methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
+				ContactID: c.ID,
+				Type:      string(repository.ContactMethodPhone),
+				Value:     number,
+			})
+			require.NoError(t, err)
+		}
+
+		result, err := identityService.MatchOrCreate(ctx, service.MatchRequest{
+			RawIdentifier: number,
+			Type:          identity.IdentifierTypeWhatsApp,
+			Source:        "test_wa_shared_" + ns,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		defer func() { _ = identityRepo.Delete(ctx, result.Identity.ID) }()
+
+		assert.Nil(t, result.ContactID,
+			"two DISTINCT contacts claiming one number is the real ambiguity; guessing would mis-attribute")
+		assert.Equal(t, repository.MatchTypeUnmatched, result.MatchType)
+	})
 }
 
 // TestIdentityService_NormalizationPolicy_Integration exercises the
