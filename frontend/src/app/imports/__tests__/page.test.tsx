@@ -544,16 +544,17 @@ describe('ImportsPage - Source Filter', () => {
     render(<ImportsPage />, { wrapper: createWrapper() })
 
     expect(screen.getByText('Filter:')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'All Sources' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'All' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Google Contacts' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Telegram' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'WhatsApp' })).toBeInTheDocument()
   })
 
-  it('All Sources filter is selected by default', () => {
+  it('All filter is selected by default', () => {
     render(<ImportsPage />, { wrapper: createWrapper() })
 
-    const allSourcesButton = screen.getByRole('button', { name: 'All Sources' })
+    const allSourcesButton = screen.getByRole('button', { name: 'All' })
     expect(allSourcesButton).toHaveClass('bg-blue-600')
 
     const googleContactsButton = screen.getByRole('button', { name: 'Google Contacts' })
@@ -598,7 +599,18 @@ describe('ImportsPage - Source Filter', () => {
     expect(useSuggestions).toHaveBeenCalledWith(expect.objectContaining({ source: 'telegram' }))
   })
 
-  it('clicking All Sources removes source filter', async () => {
+  it('clicking WhatsApp filter updates selection', async () => {
+    const user = userEvent.setup()
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    const whatsAppButton = screen.getByRole('button', { name: 'WhatsApp' })
+    await user.click(whatsAppButton)
+
+    // useSuggestions should be called with the source filter
+    expect(useSuggestions).toHaveBeenCalledWith(expect.objectContaining({ source: 'whatsapp' }))
+  })
+
+  it('clicking All removes source filter', async () => {
     const user = userEvent.setup()
     render(<ImportsPage />, { wrapper: createWrapper() })
 
@@ -606,8 +618,8 @@ describe('ImportsPage - Source Filter', () => {
     const calendarButton = screen.getByRole('button', { name: 'Calendar' })
     await user.click(calendarButton)
 
-    // Then click All Sources
-    const allSourcesButton = screen.getByRole('button', { name: 'All Sources' })
+    // Then click All
+    const allSourcesButton = screen.getByRole('button', { name: 'All' })
     await user.click(allSourcesButton)
 
     // useSuggestions should be called without source filter (undefined)

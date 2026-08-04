@@ -85,15 +85,17 @@ test.describe('Imports Page @area:imports', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // The source filter pills exist.
-    const allSources = page.getByRole('button', { name: 'All Sources', exact: true })
+    const allFilter = page.getByRole('button', { name: 'All', exact: true })
     const googleContacts = page.getByRole('button', { name: 'Google Contacts', exact: true })
     const calendar = page.getByRole('button', { name: 'Calendar', exact: true })
-    await expect(allSources).toBeVisible()
+    const whatsApp = page.getByRole('button', { name: 'WhatsApp', exact: true })
+    await expect(allFilter).toBeVisible()
     await expect(googleContacts).toBeVisible()
     await expect(calendar).toBeVisible()
+    await expect(whatsApp).toBeVisible()
 
-    // All Sources is the default selection.
-    await expect(allSources).toHaveAttribute('aria-pressed', 'true')
+    // All is the default selection.
+    await expect(allFilter).toHaveAttribute('aria-pressed', 'true')
 
     // Selecting a source flips the pressed state AND refetches the
     // suggestions feed scoped to that source (network-param proof).
@@ -106,7 +108,7 @@ test.describe('Imports Page @area:imports', () => {
     await googleContacts.click()
     await gcontactsResponse
     await expect(googleContacts).toHaveAttribute('aria-pressed', 'true')
-    await expect(allSources).toHaveAttribute('aria-pressed', 'false')
+    await expect(allFilter).toHaveAttribute('aria-pressed', 'false')
 
     const gcalResponse = page.waitForResponse(
       res =>
