@@ -278,19 +278,11 @@ func run() int {
 		} else {
 			waIngestor = buildWhatsAppIngestor(cfg, database, messaging.CommsMessageRepo, ingest.IdentityService, externalContactRepo, domain.EnrichmentService)
 		}
-		// The prerequisite set the readiness gate reads. It is still
-		// deliberately partial: the drain worker is not built yet, so the
-		// manager reports not_ready and never connects. Filling the remaining
-		// field is what turns WhatsApp on.
-		//
-		// The nil check is load-bearing: assigning a nil *Ingestor into the
-		// interface field would produce a non-nil interface holding a nil
-		// pointer, which the readiness gate would read as "wired".
-		prereqs := whatsappPrereqs{}
-		if waIngestor != nil {
-			prereqs.Ingestor = waIngestor
-		}
-		whatsappStk = buildWhatsApp(ctx, cfg, database, prereqs)
+		// wireWhatsApp builds the stack, registers the history drain worker,
+		// and activates the manager — including SetHistoryDrainReady, the line
+		// that turns the integration on. It is a function rather than inline
+		// code so that flip is reachable from a test.
+		whatsappStk = wireWhatsApp(ctx, cfg, database, reg, waIngestor)
 	}
 	whatsappManager := whatsappStk.Manager
 	whatsappHandler := whatsappStk.Handler

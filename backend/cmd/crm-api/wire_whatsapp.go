@@ -2,22 +2,31 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	wapkg "personal-crm/backend/internal/whatsapp"
+
+	"github.com/riverqueue/river"
 )
 
-// whatsappStack holds the WhatsApp manager + handler. A zero whatsappStack
-// (returned when WhatsApp sync is disabled) is exactly a nil manager / nil
+// whatsappStack holds the WhatsApp manager + handler + the default history
+// recorder. A zero whatsappStack (returned when WhatsApp sync is disabled, or
+// when the device store could not be opened) is exactly a nil manager / nil
 // handler, so nothing downstream needs a second flag check.
 type whatsappStack struct {
 	Manager *wapkg.Manager
 	Handler *handlers.WhatsAppHandler
+	// Recorder is the default history-notification recorder, built over the
+	// same WhatsAppRepository the manager got. Keeping it on the stack gives
+	// the recorder exactly one construction site.
+	Recorder wapkg.HistoryNotificationRecorder
 }
 
 // whatsappPrereqs is the readiness gate expressed as a struct the caller must
@@ -49,14 +58,17 @@ type whatsappManagerSeam interface {
 	Start(context.Context) error
 }
 
-// buildWhatsApp constructs the WhatsApp device store, manager and handler,
-// installs whichever prerequisites are present, and starts the manager. It does
-// NOT register the Stop defer — the caller (run()) owns that, so it fires on
-// run() return rather than when this function returns.
+// newWhatsAppStack constructs the WhatsApp device store, manager, handler and
+// default history recorder. It installs NO prerequisite and does NOT start the
+// manager — activation is wireWhatsApp's job, textually after the drain worker
+// is registered, because the readiness gate reads that registration.
+//
+// It does NOT register the Stop defer either: the caller (run()) owns that, so
+// it fires on run() return rather than when this function returns.
 //
 // Nothing here is fatal to the process: a WhatsApp failure leaves the rest of
 // the CRM running, exactly as a Telegram failure does.
-func buildWhatsApp(ctx context.Context, cfg *config.Config, database *db.Database, prereqs whatsappPrereqs) whatsappStack {
+func newWhatsAppStack(ctx context.Context, cfg *config.Config, database *db.Database) whatsappStack {
 	waLog := wapkg.NewWALogger("whatsapp")
 
 	container, err := wapkg.NewDeviceContainer(ctx, database.Pool, waLog)
@@ -70,34 +82,108 @@ func buildWhatsApp(ctx context.Context, cfg *config.Config, database *db.Databas
 
 	manager := wapkg.NewManager(container, waLog, &cfg.WhatsApp, syncRepo, whatsappRepo)
 
-	if prereqs.Recorder == nil {
-		prereqs.Recorder = wapkg.NewHistoryRecorder(whatsappRepo)
-	}
-	activateWhatsApp(ctx, manager, prereqs)
-
-	// NOTE: manager.Stop() is deferred by the caller (run()) as a nil-guarded
-	// defer — a defer here would fire when THIS function returns, stopping the
-	// client at boot.
-
 	logger.Info().Msg("WhatsApp integration initialized")
 
 	return whatsappStack{
-		Manager: manager,
-		Handler: handlers.NewWhatsAppHandler(manager),
+		Manager:  manager,
+		Handler:  handlers.NewWhatsAppHandler(manager),
+		Recorder: wapkg.NewHistoryRecorder(whatsappRepo),
 	}
+}
+
+// registerWhatsAppHistoryDrain registers the history drain worker and its
+// 1-minute periodic, and reports whether it did — which is what
+// whatsappPrereqs.DrainReady is set from, so the readiness flag can never claim
+// a worker that was not registered.
+//
+// The feature gate lives INSIDE the function, mirroring registerSyncScheduler,
+// so the golden wire chain can call it unconditionally and its config-shape pin
+// is not vacuous. Registration deliberately does not depend on a manager or an
+// ingestor existing: a config shape's registered-kind list must not vary with
+// device-store availability. The drainer normalizes a nil fetcher source into
+// one that defers, which is exactly the boot where the device store failed.
+func registerWhatsAppHistoryDrain(
+	reg *riverRegistrar,
+	cfg *config.Config,
+	database *db.Database,
+	ingestor wapkg.MessageIngestor,
+	gate *wapkg.ChatGate,
+	fetcherSource func() wapkg.HistoryFetcher,
+) bool {
+	if !cfg.Features.EnableWhatsAppSync {
+		return false
+	}
+
+	drainer := wapkg.NewHistoryDrainer(repository.NewWhatsAppRepository(database.Queries), ingestor, gate, fetcherSource)
+	addWorker(reg, wapkg.NewHistoryDrainWorker(drainer))
+	reg.addPeriodic(consumerjobs.WhatsAppHistoryDrainArgs{}.Kind(), river.NewPeriodicJob(
+		river.PeriodicInterval(1*time.Minute),
+		func() (river.JobArgs, *river.InsertOpts) {
+			return consumerjobs.WhatsAppHistoryDrainArgs{}, nil
+		},
+		&river.PeriodicJobOpts{RunOnStart: true},
+	))
+	return true
+}
+
+// wireWhatsApp is the whole WhatsApp composition, extracted from run() so the
+// line that TURNS THE FEATURE ON has a call site a test can drive. It is a
+// no-op returning a zero stack when the feature is off.
+//
+// The ingestor is a PARAMETER rather than built here: run() declares it outside
+// the gated block because the post-import hook wiring further down references
+// the same instance, so moving its construction in would break that hook.
+func wireWhatsApp(
+	ctx context.Context,
+	cfg *config.Config,
+	database *db.Database,
+	reg *riverRegistrar,
+	waIngestor *wapkg.Ingestor,
+) whatsappStack {
+	if !cfg.Features.EnableWhatsAppSync {
+		return whatsappStack{}
+	}
+
+	stk := newWhatsAppStack(ctx, cfg, database)
+
+	prereqs := whatsappPrereqs{Recorder: stk.Recorder}
+	// The nil check is load-bearing: assigning a nil *Ingestor into the
+	// interface field would produce a non-nil interface holding a nil pointer,
+	// which the readiness gate would read as "wired".
+	var gate *wapkg.ChatGate
+	if waIngestor != nil {
+		prereqs.Ingestor = waIngestor
+		// The SAME gate instance the ingest path uses: Manager.SetIngestor
+		// binds the group-info source on that instance and only that one.
+		gate = waIngestor.ChatGate()
+	}
+	// Left nil when the device store failed to open. That is the case
+	// NewHistoryDrainer normalizes, not something this function papers over.
+	var fetcherSource func() wapkg.HistoryFetcher
+	if stk.Manager != nil {
+		fetcherSource = stk.Manager.HistoryFetcher
+	}
+
+	prereqs.DrainReady = registerWhatsAppHistoryDrain(reg, cfg, database, prereqs.Ingestor, gate, fetcherSource)
+
+	if stk.Manager != nil {
+		activateWhatsApp(ctx, stk.Manager, prereqs)
+	}
+	return stk
 }
 
 // buildWhatsAppIngestor constructs the live-message ingest path.
 //
-// It is built by the caller rather than inside buildWhatsApp because its
+// It is built by run() rather than inside wireWhatsApp because its
 // dependencies — the identity and enrichment services — are composed earlier
-// than the WhatsApp stack, and it reaches the manager through
-// whatsappPrereqs.Ingestor, the readiness field it satisfies. Its manager seam
+// than the WhatsApp stack, AND because the post-import hook wiring further down
+// run() references the same instance. It reaches the manager through
+// whatsappPrereqs.Ingestor, the readiness field it satisfies; its manager seam
 // (the group-info source) is bound by Manager.SetIngestor, before Start.
 //
 // The WhatsAppRepository built here is a stateless wrapper over the shared
-// db.Querier, so the second instance buildWhatsApp constructs for the manager is
-// the same thing; there is no state to share.
+// db.Querier, so the second instance newWhatsAppStack constructs for the
+// manager is the same thing; there is no state to share.
 func buildWhatsAppIngestor(
 	cfg *config.Config,
 	database *db.Database,

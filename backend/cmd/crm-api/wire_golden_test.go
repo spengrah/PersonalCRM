@@ -96,6 +96,14 @@ var basePeriodicKinds = sortedCopy([]string{
 // syncPeriodicKinds adds the external-sync-gated scheduler tick.
 var syncPeriodicKinds = sortedCopy(append([]string{"scheduler_tick"}, basePeriodicKinds...))
 
+// whatsappWorkerKinds / whatsappPeriodicKinds add the WhatsApp-gated history
+// drain (shape 7). WhatsApp requires external sync — config.Validate refuses
+// the pair as inconsistent — so the shape builds on the sync lists, not the
+// base ones.
+var whatsappWorkerKinds = sortedCopy(append([]string{"whatsapp_history_drain"}, syncWorkerKinds...))
+
+var whatsappPeriodicKinds = sortedCopy(append([]string{"whatsapp_history_drain"}, syncPeriodicKinds...))
+
 // shape3Providers is the fully-configured external-sync provider set.
 var shape3Providers = sortedCopy([]string{
 	"gcontacts", "gcal", "email", "gchat", "todoist",
@@ -156,6 +164,19 @@ func TestWireGoldenLists(t *testing.T) {
 			wantWorkers:   syncWorkerKinds,
 			wantPeriodic:  syncPeriodicKinds,
 			wantProviders: shape6Providers,
+		},
+		{
+			// The WhatsApp shape sets BOTH flags because config.Validate
+			// refuses WhatsApp-on / external-sync-off as inconsistent, and a
+			// golden shape that could not boot pins nothing real.
+			name: "shape7_whatsapp_sync",
+			mutate: func(c *config.Config) {
+				c.Features.EnableExternalSync = true
+				c.Features.EnableWhatsAppSync = true
+			},
+			wantWorkers:   whatsappWorkerKinds,
+			wantPeriodic:  whatsappPeriodicKinds,
+			wantProviders: shape3Providers,
 		},
 	}
 
@@ -262,6 +283,14 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 	if cfg.Features.EnableExternalSync {
 		syncStk = buildExternalSync(ctx, cfg, database, core, contactService, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
 	}
+
+	// WhatsApp: only the drain REGISTRATION is driven, at the position
+	// wireWhatsApp calls it. The rest of wireWhatsApp opens the device store
+	// and calls Manager.Start, which must never run in this chain — the same
+	// reason buildTelegram is skipped. The registration deliberately takes no
+	// manager/ingestor/gate, so a config shape's kind list does not depend on
+	// device-store availability, and the drainer normalizes the nil source.
+	registerWhatsAppHistoryDrain(reg, cfg, database, nil, nil, nil)
 
 	// Telegram is intentionally SKIPPED (Start must not run); a nil
 	// telegramManager is exactly a telegram-disabled boot for aggregation.
