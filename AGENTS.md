@@ -7,7 +7,7 @@ Read and follow: `.ai/rules/core.md`
 Personal CRM: single-user, local-first CRM for privacy-focused personal use.
 Target deployment: Raspberry Pi backend, access via Tailscale.
 
-**Stack:** Go 1.24 + Gin + PostgreSQL 16 + sqlc | Next.js 15 + React 19 + TailwindCSS 4 | bun (never npm)
+**Stack:** Go 1.25 + Gin + PostgreSQL 16 + sqlc | Next.js 15 + React 19 + TailwindCSS 4 | bun (never npm)
 
 Run `make help` from project root for the full command reference.
 

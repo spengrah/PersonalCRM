@@ -49,7 +49,7 @@ retired.
 - **Network connection** (Ethernet or WiFi)
 
 ### Your Mac
-- Git, Go 1.24+, Bun (for building)
+- Git, Go 1.25+, Bun (for building)
 - SSH configured for passwordless login to Pi
 - Pi accessible via Tailscale (recommended) or local network
 

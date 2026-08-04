@@ -44,7 +44,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25.5'
           cache: false
 
       # Rolling Go module download cache. Per-job primary key (trailing token)
@@ -57,10 +57,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-quality
+          key: go-mod-${{ runner.os }}-go1.25.5-${{ hashFiles('backend/go.sum') }}-quality
           restore-keys: |
-            go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-
-            go-mod-${{ runner.os }}-go1.23-
+            go-mod-${{ runner.os }}-go1.25.5-${{ hashFiles('backend/go.sum') }}-
+            go-mod-${{ runner.os }}-go1.25.5-
 
       # Rolling Go build cache. SHA-keyed so every run misses its exact key and
       # saves a fresh entry; restore-keys brings the most recent prior build
@@ -71,9 +71,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/go-build
-          key: go-build-quality-${{ runner.os }}-go1.23-${{ github.sha }}
+          key: go-build-quality-${{ runner.os }}-go1.25.5-${{ github.sha }}
           restore-keys: |
-            go-build-quality-${{ runner.os }}-go1.23-
+            go-build-quality-${{ runner.os }}-go1.25.5-
 
       # The Makefile defaults GOCACHE to a workspace-local dir via `?=`, which
       # would bypass the restored ~/.cache/go-build for every make-driven Go
@@ -92,7 +92,14 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          # Pinned, not `latest`: with `latest` this job silently re-versions
+          # itself, so the same commit can lint clean today and fail tomorrow,
+          # and a local binary drifts from it with no signal. A stale local
+          # linter then reports failures CI never sees — SA5011 false positives
+          # that a newer staticcheck no longer emits — which read exactly like
+          # real regressions on develop.
+          # Keep in lockstep with GOLANGCI_LINT_VERSION in scripts/setup-dev.sh.
+          version: v2.12.2
           working-directory: backend
           # No --timeout flag: inherit the single source in .golangci.yml (10m).
 
@@ -154,7 +161,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25.5'
           cache: false
       - name: Run spec linter
         run: make spec-lint
@@ -198,7 +205,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25.5'
           cache: false
       - name: Check generated API types are in sync
         run: make api-types-check
@@ -221,7 +228,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25.5'
           cache: false
 
       # Rolling Go module download cache. Per-job primary key (trailing token)
@@ -234,10 +241,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-tests
+          key: go-mod-${{ runner.os }}-go1.25.5-${{ hashFiles('backend/go.sum') }}-tests
           restore-keys: |
-            go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-
-            go-mod-${{ runner.os }}-go1.23-
+            go-mod-${{ runner.os }}-go1.25.5-${{ hashFiles('backend/go.sum') }}-
+            go-mod-${{ runner.os }}-go1.25.5-
 
       # Rolling Go build cache. SHA-keyed so every run misses its exact key and
       # saves a fresh entry; restore-keys brings the most recent prior build
@@ -248,9 +255,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/go-build
-          key: go-build-tests-${{ runner.os }}-go1.23-${{ github.sha }}
+          key: go-build-tests-${{ runner.os }}-go1.25.5-${{ github.sha }}
           restore-keys: |
-            go-build-tests-${{ runner.os }}-go1.23-
+            go-build-tests-${{ runner.os }}-go1.25.5-
 
       # See backend-quality: pin GOCACHE so make-invoked builds (the
       # integration step calls `make test-integration-fast`) reuse the
@@ -528,7 +535,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25.5'
           cache: false
 
       # Rolling Go module download cache. Per-job primary key (trailing token)
@@ -544,10 +551,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
-          key: go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-e2e-${{ matrix.shard }}
+          key: go-mod-${{ runner.os }}-go1.25.5-${{ hashFiles('backend/go.sum') }}-e2e-${{ matrix.shard }}
           restore-keys: |
-            go-mod-${{ runner.os }}-go1.23-${{ hashFiles('backend/go.sum') }}-
-            go-mod-${{ runner.os }}-go1.23-
+            go-mod-${{ runner.os }}-go1.25.5-${{ hashFiles('backend/go.sum') }}-
+            go-mod-${{ runner.os }}-go1.25.5-
 
       # Rolling Go build cache. SHA-keyed so every run misses its exact key and
       # saves a fresh entry; restore-keys brings the most recent prior build
@@ -562,9 +569,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/go-build
-          key: go-build-e2e-${{ runner.os }}-go1.23-${{ github.sha }}-${{ matrix.shard }}
+          key: go-build-e2e-${{ runner.os }}-go1.25.5-${{ github.sha }}-${{ matrix.shard }}
           restore-keys: |
-            go-build-e2e-${{ runner.os }}-go1.23-
+            go-build-e2e-${{ runner.os }}-go1.25.5-
 
       # The Playwright webServer launches the backend via `go run`; pin GOCACHE
       # to the ~/.cache/go-build restored by the explicit actions/cache step

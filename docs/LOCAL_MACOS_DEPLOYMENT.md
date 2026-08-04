@@ -58,14 +58,14 @@ brew install --cask docker
 # Start Docker Desktop from Applications
 ```
 
-#### Go 1.24+
+#### Go 1.25+
 ```bash
 # Using Homebrew:
 brew install go@1.24
 
 # Verify:
 go version
-# Should output: go version go1.24.x darwin/amd64 (or darwin/arm64)
+# Should output: go version go1.25.x darwin/amd64 (or darwin/arm64)
 ```
 
 #### Bun

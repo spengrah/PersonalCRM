@@ -72,27 +72,38 @@ echo_step "Installing Go tools..."
 GOPATH="${GOPATH:-$HOME/go}"
 mkdir -p "$GOPATH/bin"
 
-# golangci-lint v2 (installed via curl, not go install, for version compatibility)
-if command -v golangci-lint &> /dev/null || [ -f "$GOPATH/bin/golangci-lint" ]; then
-    LINT_VERSION=$("$GOPATH/bin/golangci-lint" --version 2>/dev/null | head -1 || golangci-lint --version 2>/dev/null | head -1)
-    if [[ "$LINT_VERSION" == *"version 2"* ]]; then
-        echo_ok "golangci-lint v2 already installed"
-    else
-        echo_warn "golangci-lint v1 found, upgrading to v2..."
-        if curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$GOPATH/bin" latest; then
-            echo_ok "golangci-lint v2 installed"
-        else
-            echo_err "Failed to install golangci-lint"
-            MANUAL_STEPS+=("Install golangci-lint: https://golangci-lint.run/welcome/install/")
-        fi
-    fi
+# golangci-lint, installed via curl rather than `go install`: a go-installed
+# build reports its version as "(unknown, modified: ?)" and can bundle a
+# different staticcheck than the release, so it disagrees with CI while looking
+# like the same tool.
+#
+# PINNED, and matched EXACTLY rather than "any v2". The previous any-v2 check is
+# what let a 2.7.2 binary sit here untouched while CI (`version: latest`) moved
+# to 2.12.2: `make lint` then reported SA5011 failures that CI never saw and
+# that reproduced on a clean develop, which reads exactly like a real regression.
+# Keep in lockstep with the golangci-lint-action version in .github/workflows/ci.yml.
+GOLANGCI_LINT_VERSION="v2.12.2"
+
+lint_version_line() {
+    "$GOPATH/bin/golangci-lint" version 2>/dev/null | head -1 \
+        || command -v golangci-lint &> /dev/null && golangci-lint version 2>/dev/null | head -1 \
+        || true
+}
+
+CURRENT_LINT="$(lint_version_line)"
+if [[ "$CURRENT_LINT" == *"version ${GOLANGCI_LINT_VERSION#v} "* ]]; then
+    echo_ok "golangci-lint ${GOLANGCI_LINT_VERSION} already installed"
 else
-    echo "   Installing golangci-lint v2..."
-    if curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$GOPATH/bin" latest; then
-        echo_ok "golangci-lint v2 installed"
+    if [ -n "$CURRENT_LINT" ]; then
+        echo_warn "golangci-lint does not match the pin (${GOLANGCI_LINT_VERSION}), reinstalling..."
+    else
+        echo "   Installing golangci-lint ${GOLANGCI_LINT_VERSION}..."
+    fi
+    if curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$GOPATH/bin" "$GOLANGCI_LINT_VERSION"; then
+        echo_ok "golangci-lint ${GOLANGCI_LINT_VERSION} installed"
     else
         echo_err "Failed to install golangci-lint"
-        MANUAL_STEPS+=("Install golangci-lint: https://golangci-lint.run/welcome/install/")
+        MANUAL_STEPS+=("Install golangci-lint ${GOLANGCI_LINT_VERSION}: https://golangci-lint.run/welcome/install/")
     fi
 fi
 
