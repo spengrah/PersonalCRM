@@ -314,8 +314,8 @@ func run() int {
 		}
 	}
 
-	// Aggregation engines (messages + gchat) + reenqueuer registry.
-	agg := buildAggregationEngines(database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, telegramManager, gchatProvider, gchatSyncStates)
+	// Aggregation engines (messages + gchat + whatsapp) + reenqueuer registry.
+	agg := buildAggregationEngines(cfg, database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, telegramManager, gchatProvider, gchatSyncStates)
 
 	// Register the chat-aware messaging aggregate worker + sweeper (+ periodic).
 	registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)

@@ -721,3 +721,91 @@ func interactionVenueColumnExists(ctx context.Context, t *testing.T, database *d
 	require.NoError(t, err)
 	return exists
 }
+
+// whatsappVenueKindFor stages one comms_message(source='whatsapp') row with the
+// given chat JID as its thread id, resolves it through the SAME registry the
+// recorder uses, and returns the venue's kind. It proves the reader where every
+// other VenueContainerReader is proved — against a staged row, through
+// ResolveMessageVenueTx — because no test anywhere exercises
+// ContainerForMessageTx directly.
+func whatsappVenueKindFor(t *testing.T, ctx context.Context, database *db.Database, chatJID, externalID string) string {
+	t.Helper()
+
+	commsRepo := repository.NewCommsMessageRepository(database.Queries)
+	body := "whatsapp venue body"
+	peer := chatJID
+	row, err := commsRepo.UpsertChatMessage(ctx, repository.UpsertChatMessageParams{
+		Source:     repository.InteractionSourceWhatsApp,
+		ExternalID: externalID,
+		ThreadID:   chatJID,
+		Body:       &body,
+		PeerHandle: &peer,
+		Direction:  repository.InteractionDirectionInbound,
+		SentAt:     accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Microsecond),
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		// LIKE pattern: the trailing % is what makes this a prefix delete.
+		_ = commsRepo.HardDeleteBySourceAndExternalIDPrefix(context.Background(), repository.InteractionSourceWhatsApp, externalID+"%")
+	})
+
+	venueRepo := repository.NewVenueRepository(database.Queries)
+	resolver := repository.NewVenueResolverRegistry(
+		venueRepo,
+		map[string]repository.VenueContainerReader{
+			repository.InteractionSourceWhatsApp: repository.NewWhatsAppVenueContainerReader(),
+		},
+		nil,
+	)
+
+	tx, err := database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	venueID, err := resolver.ResolveMessageVenueTx(ctx, tx, repository.InteractionSourceWhatsApp, []uuid.UUID{row.ID})
+	require.NoError(t, err)
+	require.NotNil(t, venueID, "the whatsapp reader must resolve a venue for a staged row")
+
+	venue, err := repository.NewVenueRepository(db.New(tx)).GetVenue(ctx, *venueID)
+	require.NoError(t, err)
+	require.Equal(t, chatJID, venue.SourceContainerID)
+	return venue.Kind
+}
+
+// TestWhatsAppVenue_DirectJIDIsDM: a one-to-one chat JID yields a dm venue.
+//
+// spec: WHA-043.direct-chat-is-a-dm
+func TestWhatsAppVenue_DirectJIDIsDM(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+	database, ctx := newSyntheticDB(t)
+	t.Parallel()
+
+	suffix := uuid.NewString()[:8]
+	kind := whatsappVenueKindFor(t, ctx, database, "1204555"+suffix+"@s.whatsapp.net", "wa-venue-dm-"+suffix)
+	assert.Equal(t, repository.VenueKindDM, kind)
+}
+
+// TestWhatsAppVenue_GroupJIDIsGroupChat: a group chat JID yields a group_chat
+// venue. This is the case GChat's reader gets wrong as a template — it
+// hard-codes group_chat, which is right for spaces and wrong for WhatsApp.
+//
+// spec: WHA-043.group-chat-is-a-group-chat
+func TestWhatsAppVenue_GroupJIDIsGroupChat(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+	database, ctx := newSyntheticDB(t)
+	t.Parallel()
+
+	suffix := uuid.NewString()[:8]
+	kind := whatsappVenueKindFor(t, ctx, database, "1204555"+suffix+"-1690000000@g.us", "wa-venue-group-"+suffix)
+	assert.Equal(t, repository.VenueKindGroupChat, kind)
+}

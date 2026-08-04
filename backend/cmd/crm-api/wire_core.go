@@ -187,6 +187,11 @@ func buildMessagingFoundation(queries db.Querier, messagesMessageRepo *repositor
 			// zero-rows-affected rollback fires and the engine reprocesses
 			// forever. Inert until a chat provider writes gchat rows.
 			repository.InteractionSourceGChat: repository.NewCommsSessionStagingProcessor(commsMessageRepo),
+			// WhatsApp create-path: same source-agnostic session-scoped
+			// processor as gchat, over the same comms_message table. Without
+			// it the recorder's zero-rows-affected rollback fires and the
+			// engine reprocesses forever.
+			repository.InteractionSourceWhatsApp: repository.NewCommsSessionStagingProcessor(commsMessageRepo),
 		},
 	)
 
@@ -202,6 +207,10 @@ func buildMessagingFoundation(queries db.Querier, messagesMessageRepo *repositor
 			repository.InteractionSourceTelegram: repository.NewTelegramVenueContainerReader(),
 			repository.InteractionSourceMessages: repository.NewMessagesVenueContainerReader(),
 			repository.InteractionSourceGChat:    repository.NewGChatVenueContainerReader(),
+			// WhatsApp carries BOTH kinds, so its reader discriminates on the
+			// chat JID suffix rather than hard-coding one kind the way gchat's
+			// (always a space) does.
+			repository.InteractionSourceWhatsApp: repository.NewWhatsAppVenueContainerReader(),
 		},
 		calendarRepo,
 	)

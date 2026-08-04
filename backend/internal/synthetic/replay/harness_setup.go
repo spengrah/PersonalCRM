@@ -22,6 +22,7 @@ import (
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic/factory"
 	"personal-crm/backend/internal/telegram"
+	"personal-crm/backend/internal/whatsapp"
 
 	"github.com/google/uuid"
 	"github.com/riverqueue/river"
@@ -244,6 +245,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramRepo),
 		repository.InteractionSourceMessages: repository.NewMessagesStagingProcessor(messagesRepo),
 		repository.InteractionSourceGChat:    repository.NewCommsSessionStagingProcessor(commsRepo),
+		repository.InteractionSourceWhatsApp: repository.NewCommsSessionStagingProcessor(commsRepo),
 	})
 
 	// Venue resolver: populates interaction.venue_id so replay adapters can
@@ -256,6 +258,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 			repository.InteractionSourceTelegram: repository.NewTelegramVenueContainerReader(),
 			repository.InteractionSourceMessages: repository.NewMessagesVenueContainerReader(),
 			repository.InteractionSourceGChat:    repository.NewGChatVenueContainerReader(),
+			repository.InteractionSourceWhatsApp: repository.NewWhatsAppVenueContainerReader(),
 		},
 		calendarEventRepo,
 	)
@@ -300,11 +303,31 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		google.GChatBurstWindowHours, google.GChatReplyBridgeHours,
 		commsRepo, interactionRepo, contactService, contactService, bus, database.Pool, gchatEnqueuer,
 	)
+	// WhatsApp: the REAL ingest trio (repo → gate → matcher → ingestor),
+	// reproducing buildWhatsAppIngestor, plus its aggregation engine. The
+	// adapter drives the ingestor; the worker drives the engine.
+	whatsappRepo := repository.NewWhatsAppRepository(database.Queries)
+	whatsappIngestor := whatsapp.NewIngestor(
+		commsRepo,
+		whatsapp.NewChatGate(whatsappRepo, cfg.WhatsApp.GroupMaxMembers),
+		// enricher nil: EnrichmentService is not constructed in this package and
+		// PeerMatcher tolerates a nil one.
+		whatsapp.NewPeerMatcher(identityService, commsRepo, externalRepo, nil, cfg.WhatsApp.DiscoveryMinMessages),
+	)
+	whatsappEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(client)
+	whatsappEngine := whatsapp.NewAggregationEngine(
+		cfg.WhatsApp.BurstWindowHours, cfg.WhatsApp.ReplyBridgeHours,
+		commsRepo, interactionRepo, contactService, contactService, bus, database.Pool, whatsappEnqueuer,
+	)
+
 	chatListerRegistry := scheduler.NewPerSourceChatListerRegistry(
 		map[string]func(ctx context.Context, contactID uuid.UUID) ([]string, error){
 			repository.InteractionSourceMessages: messagesRepo.ListUnprocessedChatsByContact,
 			repository.InteractionSourceGChat: func(ctx context.Context, contactID uuid.UUID) ([]string, error) {
 				return commsRepo.ListUnprocessedChatsByContactForSource(ctx, repository.InteractionSourceGChat, contactID)
+			},
+			repository.InteractionSourceWhatsApp: func(ctx context.Context, contactID uuid.UUID) ([]string, error) {
+				return commsRepo.ListUnprocessedChatsByContactForSource(ctx, repository.InteractionSourceWhatsApp, contactID)
 			},
 		},
 	)
@@ -312,6 +335,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		map[string]scheduler.ChatAwareAggregator{
 			repository.InteractionSourceMessages: messagesEngine,
 			repository.InteractionSourceGChat:    gchatEngine,
+			repository.InteractionSourceWhatsApp: whatsappEngine,
 		},
 		chatListerRegistry,
 	))
@@ -376,6 +400,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		ingestService:   ingestService,
 		macHostID:       macHostID,
 		peerMatcher:     &telegramPeerMatcherDeps{matcher: peerMatcher, engine: tgAggEngine},
+		whatsapp:        &whatsappDeps{ingestor: whatsappIngestor},
 		groupMaxMembers: groupMaxMembers,
 		created:         newCreated(),
 	}

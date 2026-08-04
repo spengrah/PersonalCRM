@@ -1,0 +1,175 @@
+package tests
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/identity"
+	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
+	tgpkg "personal-crm/backend/internal/telegram"
+	wapkg "personal-crm/backend/internal/whatsapp"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// seedUnmatchedWhatsAppPeer stages two unmatched rows for a peer whose recovered
+// phone number is e164, mirroring what the ingest path writes for a peer with no
+// contact yet.
+func (e *whatsappTestEnv) seedUnmatchedWhatsAppPeer(t *testing.T, chatJID, e164, prefix string) {
+	t.Helper()
+	base := accelerated.GetCurrentTime().Add(-time.Hour).Truncate(time.Microsecond)
+	for i, at := range []time.Time{base, base.Add(20 * time.Minute)} {
+		body := "whatsapp body"
+		peer := chatJID
+		normalized := e164
+		_, err := e.commsRepo.UpsertChatMessage(e.ctx, repository.UpsertChatMessageParams{
+			Source:         repository.InteractionSourceWhatsApp,
+			ExternalID:     prefix + string(rune('a'+i)),
+			ThreadID:       chatJID,
+			Body:           &body,
+			PeerHandle:     &peer,
+			PeerNormalized: &normalized,
+			Direction:      repository.InteractionDirectionInbound,
+			SentAt:         at,
+		})
+		require.NoError(t, err)
+	}
+}
+
+// whatsappPeerFixture is the (chat JID, normalized phone) pair a synthetic
+// contact's phone number produces on the ingest path.
+func whatsappPeerFixture(t *testing.T, rawPhone string) (chatJID, e164 string) {
+	t.Helper()
+	e164 = identity.Normalize(rawPhone, identity.IdentifierTypeWhatsApp)
+	require.NotEmpty(t, e164)
+	require.Equal(t, "+", e164[:1], "the normalized WhatsApp identifier is E.164")
+	return e164[1:] + "@s.whatsapp.net", e164
+}
+
+// spec: WHA-042.attach-by-recovered-number
+// spec: WHA-042.interactions-appear-without-waiting-for-a-sweep
+func TestWhatsAppRematch_OnPhoneMethodAdded(t *testing.T) {
+	t.Parallel()
+	e := setupWhatsAppEngineTest(t)
+	e.commsRepo.SetPool(e.database.Pool)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
+
+	contact := e.newWhatsAppContact(t, "WhatsApp Rematch Phone "+suffix)
+	chatJID, e164 := whatsappPeerFixture(t, "+1-204-555-0142")
+	e.seedUnmatchedWhatsAppPeer(t, chatJID, e164, "wa-rm-phone-"+suffix+"-")
+
+	handler := wapkg.NewPhoneRematchHandler(e.commsRepo, e.engine)
+	require.Equal(t, "phone", handler.IdentifierType())
+
+	n, err := handler.Rematch(e.ctx, contact.ID, e164)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n, "both staged rows for that number must attach")
+
+	interactions := waitForInteractionCountExact(t, e.ctx, e.interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout)
+	assert.Equal(t, repository.InteractionSourceWhatsApp, interactions[0].Source)
+}
+
+// spec: WHA-042.attach-by-recovered-number
+func TestWhatsAppRematch_OnWhatsAppMethodAdded(t *testing.T) {
+	t.Parallel()
+	e := setupWhatsAppEngineTest(t)
+	e.commsRepo.SetPool(e.database.Pool)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
+
+	contact := e.newWhatsAppContact(t, "WhatsApp Rematch Method "+suffix)
+	chatJID, e164 := whatsappPeerFixture(t, "+1-204-555-0143")
+	e.seedUnmatchedWhatsAppPeer(t, chatJID, e164, "wa-rm-wa-"+suffix+"-")
+
+	handler := wapkg.NewWhatsAppMethodRematchHandler(e.commsRepo, e.engine)
+	require.Equal(t, "whatsapp", handler.IdentifierType())
+
+	n, err := handler.Rematch(e.ctx, contact.ID, e164)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+
+	interactions := waitForInteractionCountExact(t, e.ctx, e.interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout)
+	assert.Equal(t, repository.InteractionSourceWhatsApp, interactions[0].Source)
+}
+
+// countingRematchHandler wraps a real RematchHandler and records how many times
+// Run dispatched to it. It exists because RematchService.Run returns only an
+// error: without observing the wrapped handler directly, a Run that stopped
+// after the first productive handler — or a registration that silently dropped
+// one — would look identical to a healthy fan-out.
+type countingRematchHandler struct {
+	inner  service.RematchHandler
+	calls  int
+	counts []int
+	errs   []error
+}
+
+func (c *countingRematchHandler) IdentifierType() string { return c.inner.IdentifierType() }
+
+func (c *countingRematchHandler) Rematch(ctx context.Context, contactID uuid.UUID, value string) (int, error) {
+	c.calls++
+	n, err := c.inner.Rematch(ctx, contactID, value)
+	c.counts = append(c.counts, n)
+	c.errs = append(c.errs, err)
+	return n, err
+}
+
+// TestWhatsAppRematch_TelegramPhoneHandlerUnaffected is R5.4's guard. Adding a
+// WhatsApp handler for the 'phone' type means TWO handlers now run for a phone
+// method; RematchService fans out to every one and FAILS FAST on the first
+// error, so a WhatsApp attach failure would stop Telegram's handler running in
+// the same pass. Both handlers are therefore wrapped and each is asserted to
+// have been dispatched exactly once and to have reported its own count without
+// erroring — the fan-out itself is the claim, not just the absence of an error.
+func TestWhatsAppRematch_TelegramPhoneHandlerUnaffected(t *testing.T) {
+	t.Parallel()
+	e := setupWhatsAppEngineTest(t)
+	e.commsRepo.SetPool(e.database.Pool)
+	gen, _ := migrationGenerator(t)
+	suffix := gen.Prefix()
+
+	contact := e.newWhatsAppContact(t, "WhatsApp Rematch Coexist "+suffix)
+	chatJID, e164 := whatsappPeerFixture(t, "+1-204-555-0144")
+	e.seedUnmatchedWhatsAppPeer(t, chatJID, e164, "wa-rm-coexist-"+suffix+"-")
+
+	telegramRepo := repository.NewTelegramMessageRepository(e.database.Queries)
+	identitySvc := service.NewIdentityService(repository.NewIdentityRepository(e.database.Queries))
+	telegramMatcher := tgpkg.NewPeerMatcher(
+		identitySvc, telegramRepo, repository.NewExternalContactRepository(e.database.Queries), nil, 3,
+	)
+	telegramEngine := tgpkg.NewAggregationEngine(
+		2, 48, telegramRepo, e.interactionRepo, nil, nil, nil, e.database.Pool, nil,
+	)
+
+	telegramHandler := &countingRematchHandler{inner: tgpkg.NewPhoneRematchHandler(telegramRepo, telegramMatcher, telegramEngine)}
+	whatsappHandler := &countingRematchHandler{inner: wapkg.NewPhoneRematchHandler(e.commsRepo, e.engine)}
+
+	svc := service.NewRematchService()
+	// Registration order mirrors the composition root: telegram (main.go builds
+	// it first) then whatsapp.
+	svc.Register(telegramHandler)
+	svc.Register(whatsappHandler)
+
+	require.Len(t, svc.EligibleMethods([]service.Method{{Type: "phone", Value: e164}}), 1)
+
+	err := svc.Run(e.ctx, uuid.New(), contact.ID, []service.Method{{Type: "phone", Value: e164}})
+	require.NoError(t, err, "neither phone handler may error when both are registered")
+
+	// BOTH handlers ran, each reporting its own count over its own source's rows.
+	require.Equal(t, 1, telegramHandler.calls, "the telegram phone handler must still be dispatched")
+	require.Equal(t, 1, whatsappHandler.calls, "the whatsapp phone handler must be dispatched")
+	assert.Equal(t, []int{0}, telegramHandler.counts, "telegram owns no rows for this peer, so it reports zero")
+	assert.Equal(t, []error{nil}, telegramHandler.errs, "telegram's handler must not error when whatsapp co-registers")
+	assert.Equal(t, []int{2}, whatsappHandler.counts, "whatsapp attaches both of its staged rows")
+	assert.Equal(t, []error{nil}, whatsappHandler.errs)
+
+	// The WhatsApp handler did its own work: the staged rows became an interaction.
+	interactions := waitForInteractionCountExact(t, e.ctx, e.interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout)
+	assert.Equal(t, repository.InteractionSourceWhatsApp, interactions[0].Source)
+}

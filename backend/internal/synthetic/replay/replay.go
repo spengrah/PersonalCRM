@@ -289,6 +289,11 @@ type Harness struct {
 	// the telegram adapter.
 	peerMatcher *telegramPeerMatcherDeps
 
+	// whatsapp bundles the WhatsApp ingestor for the whatsapp adapter. The
+	// engine it feeds is registered in the ChatAwareAggregator map rather than
+	// held here, because the adapter drives aggregation through the WORKER.
+	whatsapp *whatsappDeps
+
 	// groupMaxMembers is the size threshold the MessageHandler is built with,
 	// sourced from the test config (TELEGRAM_GROUP_MAX_MEMBERS default) so the
 	// harness tracks the production default rather than hard-coding a copy.

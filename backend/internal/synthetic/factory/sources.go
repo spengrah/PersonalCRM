@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/identity"
 
 	"github.com/google/uuid"
 	calendarapi "google.golang.org/api/calendar/v3"
@@ -825,3 +826,74 @@ func encodeBody(s string) string {
 func trimAngle(s string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(s, "<"), ">")
 }
+
+// --- WhatsApp ---------------------------------------------------------------
+
+// WhatsAppMessageSpec bundles everything the WhatsApp replay adapter needs to
+// drive one message through the REAL Ingestor: the chat, the peer, and the
+// linked account. DIRECT CHATS ONLY — a group spec would write
+// whatsapp_chat_config rows, whose table has no namespace column and would need
+// its own tracked-id cleanup step.
+type WhatsAppMessageSpec struct {
+	ExternalID string // "<ns>wa-<seq>" → comms_message.external_id (the ns is what cleanup reclaims by)
+	ChatJID    string // "<digits>@s.whatsapp.net"; == PeerJID for a direct chat
+	PeerJID    string
+	PeerPhone  string // NORMALIZED E.164 ("+12045550107"), never the raw dashed form
+	AccountJID string // "<digits>@s.whatsapp.net" for the linked device
+	PushName   string
+	Body       string
+	SentAt     time.Time
+	Outbound   bool
+	Intent     MatchIntent
+}
+
+// WhatsAppMessage builds a direct-chat WhatsApp message from the target contact
+// (MatchSeeded) or from an unknown peer (MatchUnknown → the row IS written, with
+// no contact, which is legal for WhatsApp unlike Gmail/GChat). Inbound by
+// default; WithOutbound() flips the direction. Anchor-relative sent time.
+//
+// PeerPhone is normalized HERE because nothing downstream normalizes it: the
+// ingestor writes peer_normalized verbatim, and on the live path the value is
+// already E.164 only because the message parser ran identity.Normalize. A raw
+// dashed number would stage a peer_normalized production can never write,
+// silently falsifying both the rematch attach and the phone-prefix cleanup path.
+func (g *Generator) WhatsAppMessage(target ContactSpec, intent MatchIntent, opts ...MessageOption) WhatsAppMessageSpec {
+	mo := applyMessageOptions(opts)
+	ns := g.Prefix()
+	seq := g.bumpSourceSeq()
+	sentAt := g.at(-time.Hour - mo.age)
+
+	raw := target.Phone
+	if intent == MatchUnknown || raw == "" {
+		raw = g.unknownPhone()
+	}
+	peerPhone := identity.Normalize(raw, identity.IdentifierTypeWhatsApp)
+	// The normalized form is "+" followed by digits; a JID's user part is the
+	// digits alone.
+	peerJID := strings.TrimPrefix(peerPhone, "+") + "@" + whatsappUserServer
+
+	// The linked account is "me", not a contact, so it deliberately does NOT
+	// draw from the namespace's 555-01XX contact-phone block: that block is only
+	// 100 lines wide and every draw is a line a future contact cannot have. A
+	// fixed 555-0000 line in the same namespace area code is disjoint from every
+	// issuable contact phone and still namespace-scoped.
+	accountJID := fmt.Sprintf("1%d5550000@%s", g.PhoneAreaCode(), whatsappUserServer)
+
+	return WhatsAppMessageSpec{
+		ExternalID: fmt.Sprintf("%swa-%d", ns, seq),
+		ChatJID:    peerJID, // direct chat: the chat IS the peer
+		PeerJID:    peerJID,
+		PeerPhone:  peerPhone,
+		AccountJID: accountJID,
+		PushName:   target.FullName,
+		Body:       "synthetic whatsapp message",
+		SentAt:     sentAt,
+		Outbound:   mo.outbound,
+		Intent:     intent,
+	}
+}
+
+// whatsappUserServer is the phone-number user server every direct-chat JID this
+// factory mints is addressed on. Declared here rather than imported from the
+// whatsapp package so the factory carries no whatsmeow dependency.
+const whatsappUserServer = "s.whatsapp.net"

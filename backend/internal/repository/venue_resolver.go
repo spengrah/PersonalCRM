@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 
 	"personal-crm/backend/internal/db"
 
@@ -218,6 +219,44 @@ func (r *GChatVenueContainerReader) ContainerForMessageTx(ctx context.Context, t
 	}
 	return VenueContainer{
 		Kind:        VenueKindGroupChat,
+		ContainerID: containerID,
+	}, nil
+}
+
+// whatsappGroupJIDSuffix is the server part of a WhatsApp group JID
+// (`<digits>-<digits>@g.us`). It is the ONLY discriminator the reader needs:
+// the ingest path's person-to-person allowlist refuses every chat server except
+// the group server and the two user servers (`s.whatsapp.net`, `lid`), so a
+// thread id that is not a group JID is necessarily a direct chat.
+const whatsappGroupJIDSuffix = "@g.us"
+
+// WhatsAppVenueContainerReader reads the WhatsApp chat container off a
+// comms_message staging row. Unlike GChat (whose spaces are always group
+// chats), WhatsApp carries both kinds, so the kind is derived from the chat
+// JID's server suffix.
+type WhatsAppVenueContainerReader struct{}
+
+// NewWhatsAppVenueContainerReader builds the reader.
+func NewWhatsAppVenueContainerReader() *WhatsAppVenueContainerReader {
+	return &WhatsAppVenueContainerReader{}
+}
+
+// ContainerForMessageTx implements VenueContainerReader for whatsapp.
+func (r *WhatsAppVenueContainerReader) ContainerForMessageTx(ctx context.Context, tx pgx.Tx, messageID uuid.UUID) (VenueContainer, error) {
+	row, err := db.New(tx).GetCommsMessageContainer(ctx, uuidToPgUUID(messageID))
+	if err != nil {
+		return VenueContainer{}, err
+	}
+	var containerID string
+	if row.ThreadID.Valid {
+		containerID = row.ThreadID.String
+	}
+	kind := VenueKindDM
+	if strings.HasSuffix(containerID, whatsappGroupJIDSuffix) {
+		kind = VenueKindGroupChat
+	}
+	return VenueContainer{
+		Kind:        kind,
 		ContainerID: containerID,
 	}, nil
 }

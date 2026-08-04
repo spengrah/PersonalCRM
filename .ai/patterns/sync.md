@@ -126,7 +126,7 @@ time-based + explicit reply bridging, same-direction coalescing) and depends
 only on interfaces — `SourceAdapter`, `MessageStore`, `InteractionFinder`,
 `InteractionPromoter`, `InteractionExtender`, `EventPublisher`.
 
-Three sources call the engine today: `telegram`, `messages`, and `gchat`.
+Four sources call the engine today: `telegram`, `messages`, `gchat`, and `whatsapp`.
 
 ### Where new chat-like sources stage content
 
@@ -158,7 +158,10 @@ two sources that predate `comms_message`. They are not the template.
    (`commsadapter.NewStore`), the `InteractionFinder`
    (`commsadapter.NewInteractionFinder`), and the bus wrappers. Declare the
    burst/reply-bridge windows as constants beside the source's own constructor,
-   not as wiring literals — the synthetic seed sizes its input to them.
+   not as wiring literals — the synthetic seed sizes its input to them. A source
+   whose windows are operator-tunable (telegram, whatsapp) instead passes config
+   values through and documents its defaults in `backend/internal/config`, so the
+   seed sizes to the documented default rather than to a wiring literal.
 3. **Source constant + CHECK** — add a `repository.InteractionSource*` constant
    and widen the `interaction_source_check` CHECK in a migration.
    `TestInteractionSourceCheck_AgreesWithDescriptorAndConstants` fails until

@@ -381,6 +381,10 @@
     "tags": ["@area:settings"]
   },
   {
+    "pattern": "^backend/internal/repository/venue_resolver\\.go$",
+    "tags": ["@area:contacts"]
+  },
+  {
     "pattern": "^backend/internal/repository/contact\\.go$",
     "tags": ["@area:contacts", "@area:contact-navigation", "@area:contact-merge", "@area:overdue"]
   },

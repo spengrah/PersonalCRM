@@ -17,6 +17,16 @@ import (
 	"github.com/riverqueue/river"
 )
 
+// messagingWorkerWiring is the set of source-keyed registries
+// registerMessagingWorkers hands to the workers. Returned (rather than only
+// closed over) so the composition-root parity test can invoke a per-source
+// entry; run() discards it.
+type messagingWorkerWiring struct {
+	ChatListers    *scheduler.PerSourceChatListerRegistry
+	Engines        map[string]scheduler.ChatAwareAggregator
+	SweeperListers map[string]scheduler.UnprocessedContactLister
+}
+
 // registerMessagingWorkers registers the chat-aware messaging aggregate
 // worker + the 5-min sweeper worker and its periodic job. The chat-lister
 // and sweeper-lister registries map source → repository lister; future
@@ -27,11 +37,12 @@ func registerMessagingWorkers(
 	messaging messagingFoundation,
 	agg aggregationStack,
 	riverClient *river.Client[pgx.Tx],
-) {
+) messagingWorkerWiring {
 	messagesMessageRepo := ingest.MessagesMessage
 	commsMessageRepo := messaging.CommsMessageRepo
 	messagesEngine := agg.MessagesEngine
 	gchatEngine := agg.GChatEngine
+	whatsappEngine := agg.WhatsAppEngine
 
 	// Register the messaging aggregate workers. The chat-lister
 	// registry maps source → repository's ListUnprocessedChatsByContact;
@@ -45,13 +56,19 @@ func registerMessagingWorkers(
 			repository.InteractionSourceGChat: func(ctx context.Context, contactID uuid.UUID) ([]string, error) {
 				return commsMessageRepo.ListUnprocessedChatsByContactForSource(ctx, repository.InteractionSourceGChat, contactID)
 			},
+			// Same source-bound closure, pinned to 'whatsapp'.
+			repository.InteractionSourceWhatsApp: func(ctx context.Context, contactID uuid.UUID) ([]string, error) {
+				return commsMessageRepo.ListUnprocessedChatsByContactForSource(ctx, repository.InteractionSourceWhatsApp, contactID)
+			},
 		},
 	)
+	chatAwareEngines := map[string]scheduler.ChatAwareAggregator{
+		repository.InteractionSourceMessages: messagesEngine,
+		repository.InteractionSourceGChat:    gchatEngine,
+		repository.InteractionSourceWhatsApp: whatsappEngine,
+	}
 	addWorker(reg, scheduler.NewMessagingAggregateForContactWorker(
-		map[string]scheduler.ChatAwareAggregator{
-			repository.InteractionSourceMessages: messagesEngine,
-			repository.InteractionSourceGChat:    gchatEngine,
-		},
+		chatAwareEngines,
 		chatListerRegistry,
 	))
 
@@ -64,6 +81,8 @@ func registerMessagingWorkers(
 		// Source-bound adapter: comms_message is multi-source, so wrap the
 		// repo with a 'gchat'-pinned lister.
 		repository.InteractionSourceGChat: newCommsSourceContactLister(commsMessageRepo, repository.InteractionSourceGChat),
+		// Same source-pinned adapter, for 'whatsapp'.
+		repository.InteractionSourceWhatsApp: newCommsSourceContactLister(commsMessageRepo, repository.InteractionSourceWhatsApp),
 	}
 	addWorker(reg, scheduler.NewMessagingAggregateSweeperWorker(sweeperListers, riverClient))
 	reg.addPeriodic(consumerjobs.MessagingAggregateSweeperArgs{}.Kind(), river.NewPeriodicJob(
@@ -73,6 +92,12 @@ func registerMessagingWorkers(
 		},
 		&river.PeriodicJobOpts{RunOnStart: true},
 	))
+
+	return messagingWorkerWiring{
+		ChatListers:    chatListerRegistry,
+		Engines:        chatAwareEngines,
+		SweeperListers: sweeperListers,
+	}
 }
 
 // stalenessStack holds the staleness service (consumed by the health
