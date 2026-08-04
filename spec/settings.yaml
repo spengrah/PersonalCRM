@@ -395,6 +395,21 @@ behaviors:
     provenance: [telegram-section.tsx not_configured state, use-telegram.ts status 404 handling]
     notes: The connect / code-verification / two-factor / disconnect flow and group-chat tracking live under this section but are telegram-domain scope; settings owns only that the section renders and its not-configured empty state.
 
+  - id: SET-036
+    title: The WhatsApp section renders on settings with a not-configured state when the feature is off
+    type: ux
+    status: current
+    surface: ui
+    given: the settings page
+    when: the WhatsApp section renders
+    then:
+      - key: section-present-settings-surface
+        text: the section is present on the settings surface
+      - key: not-configured-state-when-disabled
+        text: when the WhatsApp feature is not enabled on the backend, the section shows a not-configured state naming the configuration required to enable it
+    provenance: [whatsapp-section.tsx not_configured state, use-whatsapp.ts status 404 handling]
+    notes: The pairing / status / unlink flow and group-chat tracking live under this section but are whatsapp-domain scope; settings owns only that the section renders and its not-configured empty state.
+
   # --- Data backup & restore ---
 
   - id: SET-028
