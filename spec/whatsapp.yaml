@@ -432,3 +432,80 @@ behaviors:
       - a candidate from a source with no back-fill is imported normally, without error
       - a back-fill failure does not fail the import, which has already succeeded
     provenance: [ImportHandler.RegisterPostImportHook, triggerPostImportHook, telegram.PostImportHook, whatsapp.PostImportHook]
+
+  # --- Aggregation ---
+
+  - id: WHA-040
+    title: Stored WhatsApp messages become interactions through the shared aggregation pipeline
+    type: business-logic
+    status: current
+    surface: none
+    given: WhatsApp messages stored against a contact
+    when: aggregation runs for that contact
+    then:
+      - key: interaction-per-burst
+        text: consecutive messages in one chat collapse into a single interaction per burst rather than one interaction per message, and a later message inside the same burst extends that interaction instead of adding another
+      - key: source-is-whatsapp
+        text: the interaction is attributed to WhatsApp, so it is distinguishable from the other messaging sources on the same shared store
+      - key: source-ref-is-chat-scoped
+        text: the interaction's reference identifies the chat and the burst's first message, so re-running aggregation recognises the same burst rather than duplicating it
+      - key: description-names-whatsapp
+        text: the description names WhatsApp and whether the burst was outreach, a response, or an exchange, together with how many messages it covered
+      - key: rows-marked-processed
+        text: every message the interaction covers is marked processed and linked to it, so no message is aggregated twice
+      - key: last-contacted-moves
+        text: an inbound or mutual WhatsApp interaction moves the contact's last-contacted, so WhatsApp counts toward cadence like any other conversation
+    provenance: [whatsapp.NewAggregationEngine, commsadapter.NewEngine, CommsSessionStagingProcessor, TestWhatsAppPipeline_StagedRowBecomesInteraction, TestWhatsAppWiring_ProductionRegistriesDispatchWhatsApp]
+    notes: The engine, the burst/session/bridge machinery and the interaction recorder are the shared ones every comms-backed source uses; WhatsApp supplies only its source name, product label, and its two operator-tunable windows.
+
+  - id: WHA-041
+    title: WhatsApp messages with no contact never become interactions
+    type: business-logic
+    status: current
+    surface: none
+    given: a WhatsApp message stored without a contact, which is a normal outcome for an unrecognised peer
+    when: aggregation runs
+    then:
+      - key: unmatched-row-never-aggregated
+        text: the message is never aggregated and stays unprocessed, so an unrecognised peer can never produce an interaction attributed to the wrong person or to nobody
+      - key: attach-makes-it-eligible
+        text: once the message is attached to a contact it becomes eligible on the next aggregation pass, with no further intervention
+    provenance: [ListUnprocessedCommsContactIDsForSource, ClaimCommsMessages, TestWhatsAppAggregation_UnmatchedRowIsNeverAggregated]
+
+  - id: WHA-042
+    title: Adding a phone or WhatsApp contact method attaches that number's stored WhatsApp messages
+    type: business-logic
+    status: current
+    surface: none
+    given: WhatsApp messages stored for a peer whose phone number is known but who has no contact
+    when: a contact gains a phone or WhatsApp contact method carrying that number
+    then:
+      - key: attach-by-recovered-number
+        text: every stored WhatsApp message for that number is attached to the contact, including messages the same person sent under more than one WhatsApp identifier that both resolved to it
+      - key: interactions-appear-without-waiting-for-a-sweep
+        text: the attached messages are aggregated in the same pass, so the interactions appear immediately rather than after the next periodic sweep
+      - key: attach-failure-is-reported
+        text: a failure to attach is reported rather than swallowed, so the retry can run and the user is not left with messages that silently never arrived
+      - key: no-attachment-means-no-aggregation
+        text: when nothing was attached, no aggregation is driven, so adding an unrelated number costs nothing
+    provenance: [whatsapp.NewWhatsAppMethodRematchHandler, whatsapp.NewPhoneRematchHandler, AttachUnmatchedByPeer, TestWhatsAppRematch_AttachesByNormalizedPhoneOnly, TestWhatsAppRematch_OnPhoneMethodAdded]
+    notes: >-
+      These handlers are registered only while the WhatsApp integration is enabled, so a deployment with WhatsApp
+      off does not make a bare phone number rematch-eligible where it was not before. A peer whose phone number was
+      never recovered is not reachable this way — that population is reached through the import path, which carries
+      the peer's WhatsApp identifier (WHA-025).
+
+  - id: WHA-043
+    title: A WhatsApp interaction's venue reflects whether the conversation was one-to-one or a group
+    type: business-logic
+    status: current
+    surface: none
+    given: a WhatsApp interaction being recorded
+    when: its venue is resolved
+    then:
+      - key: direct-chat-is-a-dm
+        text: an interaction from a one-to-one chat is placed in a direct-message venue
+      - key: group-chat-is-a-group-chat
+        text: an interaction from a group chat is placed in a group-chat venue
+    provenance: [WhatsAppVenueContainerReader, VenueResolverRegistry, TestWhatsAppVenue_DirectJIDIsDM, TestWhatsAppVenue_GroupJIDIsGroupChat]
+    notes: Unlike Google Chat, whose spaces are always group containers, WhatsApp carries both kinds, so the kind is derived per chat rather than fixed for the source.
