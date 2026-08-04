@@ -14,10 +14,10 @@ import (
 )
 
 // ReplyTargetMetadataKey is the source_metadata key under which an explicit
-// reply's target external message id is stored. No provider writes this key yet
-// (explicit-reply bridging is deferred), so the projection's ReplyTargetID is
-// currently always nil — but wiring the field here means a later explicit-reply
-// provider need not touch the adapter.
+// reply's target external message id is stored. The WhatsApp ingest path writes
+// it, and the WhatsApp aggregation engine reads it through this projection, so
+// the key is live rather than reserved. A source that carries no explicit-reply
+// signal simply omits it and the projection's ReplyTargetID stays nil.
 const ReplyTargetMetadataKey = "reply_target_external_id"
 
 // StoreAdapter projects repository.CommsMessage rows into aggregation.Message,
