@@ -713,6 +713,54 @@ func (q *Queries) ListSyncStates(ctx context.Context) ([]*ExternalSyncState, err
 	return items, nil
 }
 
+const MarkSyncStateTerminal = `-- name: MarkSyncStateTerminal :one
+UPDATE external_sync_state
+SET status = 'error',
+    error_message = $2,
+    error_count = error_count + 1,
+    metadata = $3,
+    last_sync_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_successful_sync_at, next_sync_at, sync_cursor, error_message, error_count, metadata, created_at, updated_at
+`
+
+type MarkSyncStateTerminalParams struct {
+	ID           pgtype.UUID `json:"id"`
+	ErrorMessage pgtype.Text `json:"error_message"`
+	Metadata     []byte      `json:"metadata"`
+}
+
+// Records a manager-driven source's permanent-disconnect decision: the durable
+// terminal metadata AND the error status, in one statement.
+//
+// They cannot be two writes. The staleness watchdog opens an immediate breach
+// only for a row that is BOTH status='error' and carries a terminal reason, so
+// a metadata write that landed while the status write failed would leave a row
+// that is durably terminal and permanently invisible.
+func (q *Queries) MarkSyncStateTerminal(ctx context.Context, arg MarkSyncStateTerminalParams) (*ExternalSyncState, error) {
+	row := q.db.QueryRow(ctx, MarkSyncStateTerminal, arg.ID, arg.ErrorMessage, arg.Metadata)
+	var i ExternalSyncState
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.AccountID,
+		&i.Enabled,
+		&i.Status,
+		&i.Strategy,
+		&i.LastSyncAt,
+		&i.LastSuccessfulSyncAt,
+		&i.NextSyncAt,
+		&i.SyncCursor,
+		&i.ErrorMessage,
+		&i.ErrorCount,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
+}
+
 const ResetSyncStateBackfillCursor = `-- name: ResetSyncStateBackfillCursor :one
 UPDATE external_sync_state
 SET sync_cursor = $1,

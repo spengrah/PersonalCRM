@@ -103,7 +103,7 @@ GOTEST_VERBOSE ?= -v
 #   INTEGRATION_RUN  -> appends -run '<regex>' when non-empty (else no -run).
 #   INTEGRATION_PKGS -> the package list (default = today's full list).
 INTEGRATION_RUN ?=
-INTEGRATION_PKGS ?= ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... ./cmd/crm-admin/... ./cmd/crm-api/...
+INTEGRATION_PKGS ?= ./tests/... ./internal/todoist/... ./internal/google/... ./internal/testdb/... ./internal/whatsapp/... ./cmd/crm-admin/... ./cmd/crm-api/...
 # The leading space is embedded ONLY when non-empty so the recipe is
 # byte-identical to today when the knob is unset (no trailing/double space).
 INTEGRATION_RUN_FLAG := $(if $(INTEGRATION_RUN), -run '$(INTEGRATION_RUN)')
@@ -467,6 +467,14 @@ test: test-unit test-integration test-frontend
 test-unit:
 	@echo "Running backend unit tests..."
 	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... ./internal/synthetic ./internal/synthetic/factory/... ./internal/synthetic/replay/... ./internal/synthetic/declare/... ./internal/spec/... ./cmd/spec-lint/... ./cmd/spec-coverage/... ./cmd/spec-drift/... $(GOTEST_VERBOSE) -short
+	@echo "Running whatsapp actor tests under the race detector..."
+	@# The race detector is the real enforcement for "manager state never escapes
+	@# the loop": with all state loop-owned, any escape is a genuine data race
+	@# under tests that already dispatch events and drive operations from several
+	@# goroutines. The untagged run compiles only the in-package unit tests (the
+	@# DB-backed files carry //go:build integration_testdb), so it needs no
+	@# database and stays fast.
+	@cd backend && go test -race ./internal/whatsapp/... $(GOTEST_VERBOSE) -short
 
 # Provisions the per-worktree Postgres instance BEFORE the integration recipes
 # expand $(TEST_DATABASE_URL) (gh #433). As a prerequisite it runs to

@@ -1,0 +1,290 @@
+domain: whatsapp
+prefix: WHA
+maturity: reviewed
+settled: [ui, api]
+behaviors:
+  # --- Scope fence ---
+
+  - id: WHA-001
+    title: The WhatsApp integration never acts on the account beyond session maintenance
+    type: invariant
+    status: current
+    surface: none
+    statement: The WhatsApp integration never sends a message, marks a chat read, signals presence, or requests history. The only account-state mutations it makes are unlinking its own device on disconnect and the protocol-level acknowledgements the linked-device session itself requires — delivery acknowledgements, retry receipts, and retrieval and cleanup of its own history payload.
+    provenance: [whatsapp package scope fence, TestManagerNeverCallsOutboundAPI]
+    notes: Delivery receipts go out as inactive because presence is never signalled, so a conversation partner sees no read marks and no online status. The library's own protocol traffic is enumerated in the arc plan and is out of the guard's scope because it is not our code.
+
+  # --- Connection lifecycle ---
+
+  - id: WHA-002
+    title: The client connects on startup only when a device is already linked
+    type: business-logic
+    status: current
+    surface: none
+    given: the WhatsApp integration is enabled and ready to ingest (WHA-013)
+    when: the backend starts
+    then:
+      - a stored linked device is resumed without any user action
+      - with no stored device the integration stays idle and reports that it is not paired, rather than opening a connection
+      - a connection is attempted only when the stored state can be read back; a status row the integration cannot read is treated as a reason not to connect, never as an absent one
+      - a first connection that fails for a transient reason keeps retrying in the background and is reported as still connecting, rather than being left down until the backend is restarted
+    provenance: [Manager.Start, resolveLinkedDevice, Manager.ensureSyncState, InitialAutoReconnect]
+
+  - id: WHA-003
+    title: The linked session survives a backend restart without re-pairing
+    type: business-logic
+    status: current
+    surface: none
+    given: a WhatsApp account that has been linked
+    when: the backend is restarted
+    then:
+      - the linked device is found again and the session resumes without the user scanning a code
+      - re-linking replaces the stored device rather than adding to it, so a restart always resumes the account most recently linked
+      - if the replaced device cannot be removed, the removal is retried, the leftover is reported as a degraded state rather than passed off as a clean replacement, and the restart still resumes the account that was actually linked
+      - when more than one set of stored credentials survives and none of them is the account the integration recorded as linked, it refuses to resume any of them and reports the ambiguity, rather than resuming an arbitrary one
+      - a single surviving set of credentials is always resumed, even when the record of which account was linked is missing or stale, and that record is repaired at the same time
+      - credentials left behind by a pairing or unlink that a restart interrupted are the next startup's to reckon with rather than the shutdown's, because shutdown ends connections only — what it leaves is reported by the same degraded-store rules above instead of being chased down by a dying process
+    provenance: [whatsmeow device store on the shared database, resolveLinkedDevice, TestWhatsAppDeviceStore_PairedDeviceSurvivesNewManager, TestWhatsAppRePair_LeavesExactlyOneStoredDevice, TestWhatsAppRePair_RetainedDeviceStillResumesTheLinkedOne, TestResolveLinkedDevice_RefusesToGuess]
+
+  - id: WHA-004
+    title: A permanent disconnect is recorded, surfaced, and not retried
+    type: business-logic
+    status: current
+    surface: none
+    given: a linked WhatsApp session
+    when: it ends permanently — unlinked from the phone, session replaced by another client, client too old, or temporarily banned
+    then:
+      - the reason is recorded durably before the connection is torn down, and the write is retried rather than abandoned on a single failure
+      - the recorded reason and the error state the staleness watchdog reads are written as one operation, so a permanent disconnect can never end up recorded but invisible to the watchdog
+      - the integration reports a disconnected status carrying that reason
+      - when the reason could not be recorded durably, the status says so, because the decision will then not survive a restart
+      - reconnect attempts stop, and no other sync source is affected
+    provenance: [Manager.onTerminal, Manager.markTerminal, MarkSyncStateTerminal, external_sync_state metadata]
+
+  - id: WHA-005
+    title: Transient disconnects reconnect by themselves; terminal ones stay terminal across restarts
+    type: business-logic
+    status: current
+    surface: none
+    given: a WhatsApp session that has dropped
+    when: the cause is transient rather than permanent
+    then:
+      - the connection is re-established automatically, with no user action and no change to the linked device
+      - a permanently ended session is not reconnected, including after a restart, because the terminal decision is read back from storage rather than held only in memory
+      - an expired temporary ban is no longer treated as terminal
+    provenance: [Manager.Start terminal gate, TestStart_DoesNotReconnectAfterPersistedTerminalReason]
+
+  - id: WHA-017
+    title: Connection events only ever speak for the connection that emitted them
+    type: business-logic
+    status: current
+    surface: none
+    given: the integration has held more than one connection over its lifetime — a cancelled pairing, an attempt superseded by a newer one, or a session that was replaced
+    when: a connection event arrives from one of them
+    then:
+      - only events from the connection the integration currently owns change the reported state, the durable record, or which device is linked
+      - deciding whose event it is and acting on that decision are one indivisible step, because all connection state is owned by a single sequencer and an event or operation is handled to completion before the next is started
+      - a connection that has been replaced or has already ended permanently is retired, and stays ignored for good — including for events it had already queued
+      - an event from an abandoned connection is ignored and that connection is closed, rather than being applied to the live one or left holding a socket
+      - a failed pairing attempt ends that attempt only, and never records a permanent-disconnect decision against the linked device
+      - a linked device that ends permanently ends only itself, and does not cancel a pairing the user is in the middle of
+      - a completed pairing is adopted but reported as still connecting until the source confirms the connection, because linking is followed by a reconnection
+      - adopting a newly linked account drops the ban and the permanent-disconnect record that belonged to the account it replaced, rather than reporting them against the new one
+      - the same rule governs user-initiated operations and not only events — an unlink whose session is replaced while it is in flight abandons its own outcome and reports a conflict, rather than applying it to the session that replaced it
+    provenance: [Manager actor loop, actorState, session retirement, fence, Manager.onTerminal, Manager.onConnected, Manager.onPairSuccess, Manager.Disconnect]
+    notes: >-
+      The source dispatches most connection events asynchronously, so an event queued by a
+      connection that has since been abandoned can arrive at any later moment — including after
+      its credentials were deleted and a different connection installed.
+
+  # --- Pairing and status API ---
+
+  - id: WHA-006
+    title: WhatsApp pairing endpoints map outcomes to status codes
+    type: api
+    status: current
+    surface: api
+    given: requests to the WhatsApp pairing endpoints
+    when: they are handled
+    then:
+      - key: start-refused-until-ingest-wired
+        text: starting a pairing before the parts that store incoming messages and history are in place is a conflict (409) whose body names both a stable machine-readable code and the missing dependency
+      - key: phone-start-requires-e164
+        text: a phone pairing with a number that is not E.164, or an unrecognised pairing method, is a validation error (400) that never reaches the integration
+      - key: cancel-is-idempotent
+        text: cancelling a pairing always succeeds with no content (204), whether or not one was in flight
+      - key: disconnect-when-not-paired-conflicts
+        text: disconnecting with no linked device is a conflict (409), and a successful disconnect returns 200 with a body reporting how the unlink resolved
+      - key: force-disconnect-clears-local-state-with-warning
+        text: a forced disconnect returns 200 with a body warning that the device must still be unlinked from the phone
+    provenance: [WhatsAppHandler.StartPairing, WhatsAppHandler.CancelPairing, WhatsAppHandler.Disconnect]
+    notes: Scoped to the outcomes the shipped wiring can produce without a linkable account. Everything that needs one is WHA-015.
+
+  - id: WHA-015
+    title: Pairing outcomes once an account can be linked
+    type: api
+    status: current
+    surface: api
+    given: requests to the WhatsApp pairing endpoints, once the integration is wired end to end
+    when: they are handled
+    then:
+      - key: qr-start-returns-code
+        text: starting a QR pairing is accepted (202) and the response carries the first scannable code
+      - key: qr-start-times-out-without-code
+        text: a pairing whose websocket produces no code within the bounded wait is a gateway timeout (504) naming the timeout, and no pairing code is requested on a connection that never established
+      - key: start-when-connected-conflicts
+        text: starting a pairing while an account is already linked is a conflict (409)
+      - key: start-when-pairing-conflicts
+        text: starting a second pairing while one is in flight is a conflict (409)
+      - key: disconnect-reports-failure-when-remote-logout-fails
+        text: a disconnect whose remote unlink fails is a bad gateway (502), the local credentials are kept, and the status reports that the unlink failed so the user can retry
+      - key: disconnect-while-unlink-in-flight-conflicts
+        text: a second unlink requested while one is in flight is a conflict (409) rather than a second remote unlink of the same device
+      - key: link-and-unlink-are-mutually-exclusive
+        text: unlinking while a pairing is in flight, and starting a pairing while an unlink is in flight, are both conflicts (409) naming the operation to finish or cancel first — the two operations are never interleaved
+    provenance: [WhatsAppHandler.StartPairing, WhatsAppHandler.Disconnect, Manager.StartPairing, Manager.opDisconnect]
+    notes: >-
+      Every outcome here needs a pairing the readiness gate lets proceed, which the citing tests wire
+      explicitly. The gate is what a deployment without the history drainer hits first (WHA-013), so
+      what the PR registering the drainer changes is which of these a user can reach, not whether the
+      contract holds.
+
+  - id: WHA-007
+    title: The WhatsApp status endpoint reports connection, identity, pairing and backfill
+    type: api
+    status: current
+    surface: api
+    given: a request for WhatsApp status
+    when: it is handled
+    then:
+      - key: status-reports-state
+        text: status returns 200 with the current connection state
+      - key: status-reports-not-ready-reason
+        text: when the integration is not ready to link an account, the state says so and names the missing piece
+      - key: status-reports-backfill-counts
+        text: the status carries the history-backfill counts, including how many chunks were dropped un-projected and how far back the delivered history actually reached
+      - key: status-absent-when-feature-disabled
+        text: with the feature disabled the WhatsApp endpoints do not exist (404), which is how the settings surface recognises an unconfigured integration
+      - key: status-always-carries-terminal-reason-persisted
+        text: the status body always carries whether the permanent-disconnect reason was durably recorded, including when it was NOT — a client that cannot tell "absent" from "false" cannot tell a restart-safe decision from one that will be lost
+    provenance: [WhatsAppHandler.GetStatus, RegisterWhatsAppRoutes]
+    notes: Scoped to what the status reports without a linked account. The fields that need one, or a live pairing, are WHA-016.
+
+  - id: WHA-016
+    title: Status fields that require a linked account or a live pairing
+    type: api
+    status: current
+    surface: api
+    given: a request for WhatsApp status, once the integration is wired end to end
+    when: it is handled
+    then:
+      - key: status-reports-account-identity
+        text: when an account is linked, the status carries its identity — account id, phone number, display name, and when it connected
+      - key: status-carries-live-pairing-code
+        text: during a pairing the status carries the live code and its expiry, so a client can poll for a refreshed code, and a phone-code pairing reports only the code the user types
+    provenance: [WhatsAppHandler.GetStatus, Manager.Status]
+    notes: Both require a linked account or a live pairing, which the citing tests set up explicitly. Which of them a user can reach in a given deployment is governed by the readiness gate (WHA-013).
+
+  # --- History capture ---
+
+  - id: WHA-008
+    title: The history window is fixed when the device is linked and cannot be widened afterwards
+    type: data
+    status: current
+    surface: none
+    given: a WhatsApp device about to be linked
+    when: the pairing registration is built
+    then:
+      - the maximum history window is requested, as a fixed value rather than a configurable one
+      - the request asks for history as a media payload rather than embedded in the protocol message
+      - the window is baked into the registration, so changing it requires unlinking and re-pairing
+    provenance: [applyDeviceProps, HistorySyncDaysLimit]
+
+  - id: WHA-009
+    title: A delivered history chunk is recorded durably before it is acknowledged
+    type: data
+    status: current
+    surface: none
+    given: WhatsApp delivers a chunk of conversation history
+    when: the integration receives it
+    then:
+      - the chunk is recorded durably before the integration acknowledges receipt, and nothing is downloaded, projected, acknowledged or deleted at that point
+      - a failure to record withholds the acknowledgement, so WhatsApp redelivers the chunk rather than the history being lost
+      - a redelivered chunk collapses onto the existing record rather than creating a duplicate
+      - a bootstrap chunk the server delivers with its history embedded inline, against the explicit request not to, is dropped without being stored — because storing it would retain message content older than the history horizon allows — and the drop is counted so the gap is visible
+    provenance: [Manager.handleHistoryNotification, HistoryRecorder, whatsapp_history_notification]
+    notes: The dropped-inline case is a spec exception the user ratified on 2026-08-03, recorded in the design spec's success criteria.
+
+  - id: WHA-010
+    title: An unprocessable incoming message is redelivered rather than dropped
+    type: business-logic
+    status: current
+    surface: none
+    given: an incoming WhatsApp message
+    when: it cannot be stored
+    then:
+      - the message is not acknowledged, so WhatsApp redelivers it
+      - acknowledgements are withheld until processing has actually completed, so a crash mid-processing also produces a redelivery
+    provenance: [Manager.handleEvent, SynchronousAck]
+
+  # --- Unlinking ---
+
+  - id: WHA-011
+    title: Unlinking keeps local credentials unless the remote unlink is confirmed
+    type: business-logic
+    status: current
+    surface: none
+    given: a request to unlink the WhatsApp device
+    when: the remote unlink cannot be confirmed
+    then:
+      - local credentials are kept and the failure is reported, so the user can retry rather than being left with a linked device and no way to reach it
+      - a failure to connect is never treated as proof that the device was already unlinked
+      - a device the server has already reported as unlinked is cleared without a further remote call
+      - a forced local-only clear is available and states that the device must be unlinked from the phone
+      - an unlink that succeeded remotely but could not clear the local credentials is reported as such, and the remedy offered is completing the local clear rather than retrying an unlink that already worked
+      - any path that clears local credentials without a remote call reports a failure to delete them, instead of reporting the integration as unlinked while the device is still stored
+      - a forced clear that failed is never later read as proof that the device was unlinked, because forcing makes no remote call and so learns nothing about it
+      - a clear that could not reach the stored credentials at all is reported as a failure, not as a completed unlink
+      - the failure a forced clear reports says the device may still be linked and must be removed from the phone, because forcing contacted the source not at all
+      - clearing local credentials removes every set of credentials the clear found when it started, not only the one in use, so a device left behind by a failed replacement cannot be resumed afterwards; credentials created after the clear began are left alone and the clear reports that it was superseded
+      - an unlink that failed still ends the client it used, so a retry or a restart cannot leave two clients contending for one device
+    provenance: [Manager.Disconnect, Manager.contPurgeFenced, Manager.contDisconnect, serverConfirmedUnlinked, WhatsAppHandler.Disconnect]
+
+  # --- Enablement ---
+
+  - id: WHA-012
+    title: Enabling WhatsApp without external sync is a rejected configuration
+    type: business-logic
+    status: current
+    surface: none
+    given: WhatsApp sync is enabled but external sync is not
+    when: configuration is validated at startup
+    then:
+      - startup fails and names the missing setting, rather than running without discovery, import, or contact-method enrichment
+    provenance: [config.Validate]
+
+  - id: WHA-013
+    title: An account cannot be linked until incoming messages and history have somewhere to go
+    type: business-logic
+    status: current
+    surface: none
+    given: the WhatsApp integration is enabled
+    when: the parts that store incoming messages and historical conversations are not both in place
+    then:
+      - the integration reports that it is not ready and names the missing piece
+      - it declines to connect, and declines to start a pairing, rather than linking an account whose messages would be acknowledged and discarded
+    provenance: [Manager.Ready, Manager.Start, Manager.StartPairing]
+    notes: This is what makes the integration shippable in pieces — the client can land before the ingest and backfill paths without any risk of silently discarding a one-shot message or history chunk.
+
+  - id: WHA-014
+    title: WhatsApp connection failures reach the sync-staleness watchdog
+    type: business-logic
+    status: current
+    surface: none
+    given: a WhatsApp connection in an error state
+    when: sync staleness is evaluated
+    then:
+      - the error is evaluated even when external sync is disabled, because the connection is owned by a long-lived manager rather than by the polling scheduler
+      - the error is evaluated even though the status row is not scheduler-enabled, since a manager-driven row is deliberately kept out of the polling scheduler's work queue
+      - WhatsApp is not evaluated for sync staleness, because it has no periodic sync to fall behind on
+    provenance: [managerDrivenSources, evaluateSyncStateBreaches]

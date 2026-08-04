@@ -243,6 +243,36 @@ func evaluateHeartbeatBreaches(now time.Time, cfg config.StalenessConfig, hosts 
 // row are excluded from sync_stale (they never write last_successful_sync_at);
 // telegram IS evaluated for sync_error (its manager runs independent of the
 // external-sync flag).
+
+// managerDrivenSources are the sources whose connection is owned by a
+// long-lived in-process manager rather than by the polling scheduler.
+//
+// Their rows carry a connection status the user needs to see even when external
+// sync is off, and they never have a "last successful sync" to go stale
+// against. They are also stored with enabled = FALSE on purpose: ListDueSyncStates
+// selects `enabled = TRUE`, so an enabled row would be handed to the scheduler,
+// which has no provider registered for these sources. That is why the
+// enabled-row filter below has to make an exception for them — without it the
+// status row is written, and read by the settings page, but never evaluated for
+// sync_error by the watchdog.
+var managerDrivenSources = map[string]struct{}{
+	"telegram": {},
+	"whatsapp": {},
+}
+
+// evaluatedWhenDisabled is deliberately NARROWER than managerDrivenSources.
+//
+// Telegram's row is stored disabled too, which has always made its sync_error
+// carve-out unreachable — the enabled filter skips the row before the carve-out
+// is ever consulted. That is the behaviour on develop, and waking it up would
+// make existing telegram error rows breach for the first time. Bringing a
+// dormant alert to life for an integration that is already in service is a
+// decision of its own, not a side effect of adding a new integration, so this
+// set holds only the source that needs it now.
+var evaluatedWhenDisabled = map[string]struct{}{
+	"whatsapp": {},
+}
+
 func evaluateSyncStateBreaches(
 	now time.Time,
 	cfg config.StalenessConfig,
@@ -251,26 +281,31 @@ func evaluateSyncStateBreaches(
 ) []breachCandidate {
 	var out []breachCandidate
 	for _, st := range states {
-		if !st.Enabled {
+		_, isManagerDriven := managerDrivenSources[st.Source]
+		_, evenWhenDisabled := evaluatedWhenDisabled[st.Source]
+		// A manager-driven row is enabled = FALSE by construction (see
+		// managerDrivenSources), so skipping disabled rows would make its
+		// sync_error evaluation unreachable — for the sources listed as needing
+		// that, and no others.
+		if !st.Enabled && !evenWhenDisabled {
 			continue
 		}
-		isTelegram := st.Source == "telegram"
 		isPush := st.Strategy == repository.SyncStrategyPush
 
-		// sync_stale: enabled, non-push, non-telegram pull rows, gated on the
-		// external-sync feature flag.
-		if cfg.PullThreshold != 0 && !isPush && !isTelegram && externalSyncEnabled {
+		// sync_stale: enabled, non-push, non-manager-driven pull rows, gated on
+		// the external-sync feature flag.
+		if cfg.PullThreshold != 0 && !isPush && !isManagerDriven && externalSyncEnabled {
 			if c, ok := evalSyncStale(now, cfg, st); ok {
 				out = append(out, c)
 			}
 		}
 
 		// sync_error: enabled rows in 'error' status. Pull rows are gated on
-		// the feature flag; the telegram row is always evaluated. Push rows
+		// the feature flag; a manager-driven row is always evaluated. Push rows
 		// never reach status='error' (they have no Sync run) so they are
 		// excluded structurally by the status check below.
-		if cfg.ErrorMinCount != 0 && (externalSyncEnabled || isTelegram) {
-			if c, ok := evalSyncError(now, cfg, st); ok {
+		if cfg.ErrorMinCount != 0 && (externalSyncEnabled || isManagerDriven) {
+			if c, ok := evalSyncError(now, cfg, st, isManagerDriven); ok {
 				out = append(out, c)
 			}
 		}
@@ -306,10 +341,42 @@ func evalSyncStale(now time.Time, cfg config.StalenessConfig, st repository.Sync
 // (ErrorThreshold == 0 OR the stale anchor is older than ErrorThreshold). The
 // duration term supplies the persistence floor that error_count alone cannot
 // (count increments on every retry, seconds apart).
-func evalSyncError(now time.Time, cfg config.StalenessConfig, st repository.SyncState) (breachCandidate, bool) {
+func evalSyncError(now time.Time, cfg config.StalenessConfig, st repository.SyncState, isManagerDriven bool) (breachCandidate, bool) {
 	if st.Status != repository.SyncStatusError {
 		return breachCandidate{}, false
 	}
+
+	// A manager-driven source that recorded a TERMINAL reason breaches
+	// immediately, bypassing both the count and the duration terms.
+	//
+	// Those two terms exist to distinguish a persistent failure from a retry
+	// blip, and they assume the source keeps retrying — each attempt bumps
+	// error_count and ages the anchor. A terminal reason is the opposite
+	// situation: the connection is over until the user acts, so the integration
+	// writes the error exactly once and then stops by design. Waiting for three
+	// consecutive errors would mean the row sat at one forever and the breach
+	// never opened at all.
+	//
+	// This stays the same sync_error breach type, so it surfaces where every
+	// other sync problem does rather than introducing a new alert class.
+	if isManagerDriven {
+		if reason, ok := repository.SyncStateTerminalReason(st); ok {
+			ref := staleReference(st)
+			details := "connection ended: " + reason
+			if st.ErrorMessage != nil && *st.ErrorMessage != "" {
+				details += " (" + truncate(*st.ErrorMessage, maxBreachDetailLen) + ")"
+			}
+			return breachCandidate{
+				source:           st.Source,
+				accountID:        accountIDOf(st),
+				breachType:       repository.BreachTypeSyncError,
+				staleSince:       ref.UTC(),
+				thresholdSeconds: int64(cfg.ErrorThreshold.Seconds()),
+				details:          details,
+			}, true
+		}
+	}
+
 	if int(st.ErrorCount) < cfg.ErrorMinCount {
 		return breachCandidate{}, false
 	}

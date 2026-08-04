@@ -17,6 +17,27 @@ import (
 	"github.com/riverqueue/river/rivertype"
 )
 
+// SyncStateMetadataTerminalReason is the external_sync_state.metadata key a
+// manager-driven source writes when its connection ends permanently — unlinked
+// from the phone, session replaced, client too old, temporarily banned.
+//
+// It lives here rather than in the owning integration because two packages read
+// it: the integration that writes it, and the staleness watchdog, which treats
+// a row carrying one as an immediate breach. A terminal reason is not a
+// transient error streak — the connection will not come back without user
+// action, and the integration deliberately stops writing errors once it is set.
+const SyncStateMetadataTerminalReason = "terminal_reason"
+
+// SyncStateTerminalReason reads the terminal reason off a sync state's metadata.
+// The bool reports whether one is present and non-empty.
+func SyncStateTerminalReason(st SyncState) (string, bool) {
+	reason, ok := st.Metadata[SyncStateMetadataTerminalReason].(string)
+	if !ok || reason == "" {
+		return "", false
+	}
+	return reason, true
+}
+
 // SyncStatus represents the status of a sync source. The legacy
 // 'syncing' status value is no longer written by any Go code path —
 // river_job state (available / running / completed / retryable) is the
@@ -478,6 +499,40 @@ func (r *SyncRepository) UpdateSyncStateMetadata(ctx context.Context, id uuid.UU
 	dbState, err := r.queries.UpdateSyncStateMetadata(ctx, db.UpdateSyncStateMetadataParams{
 		ID:       uuidToPgUUID(id),
 		Metadata: metadataBytes,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+
+	state := convertDbSyncState(dbState)
+	return &state, nil
+}
+
+// MarkSyncStateTerminal records a manager-driven source's permanent-disconnect
+// decision — the durable terminal metadata and the error status the staleness
+// watchdog reads — as a single write.
+//
+// It is deliberately not expressible as UpdateSyncStateStatus followed by
+// UpdateSyncStateMetadata: the watchdog opens an immediate breach only for a row
+// that is both in error and carries a terminal reason, so a failure between two
+// writes would leave a row that is durably terminal and permanently invisible.
+func (r *SyncRepository) MarkSyncStateTerminal(ctx context.Context, id uuid.UUID, reason string, metadata map[string]any) (*SyncState, error) {
+	var metadataBytes []byte
+	if metadata != nil {
+		var err error
+		metadataBytes, err = json.Marshal(metadata)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	dbState, err := r.queries.MarkSyncStateTerminal(ctx, db.MarkSyncStateTerminalParams{
+		ID:           uuidToPgUUID(id),
+		ErrorMessage: stringToPgText(&reason),
+		Metadata:     metadataBytes,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

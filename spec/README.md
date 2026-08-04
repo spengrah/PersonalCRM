@@ -79,7 +79,7 @@ A behavior that moves domains gets a new ID; the old one is retired with a point
 
 ## Domain taxonomy and prefixes
 
-★ marks the exemplar-cycle domains (derived and curated first). **The corpus is complete: all twelve rows have a shipped file at `maturity: reviewed`, and every prefix here is in use — none is held in reserve.** A domain split or merge from here is a README table edit plus new prefixes, with the retirement rules covering any moves.
+★ marks the exemplar-cycle domains (derived and curated first). **The corpus is complete: all thirteen rows have a shipped file at `maturity: reviewed`, and every prefix here is in use — none is held in reserve.** A domain split or merge from here is a README table edit plus new prefixes, with the retirement rules covering any moves.
 
 | Domain | Prefix | Covers |
 |---|---|---|
@@ -95,6 +95,7 @@ A behavior that moves domains gets a new ID; the old one is retired with a point
 | mac-host | `MAC` | daemon endpoints, auth, address-book reconcile, anarlog |
 | settings | `SET` | settings surfaces, OAuth flows, provider enablement |
 | dashboard | `DSH` | dashboard surfaces, search |
+| whatsapp | `WHA` | whatsmeow client lifecycle, pairing, history capture, ingest |
 
 ## Curation rules
 

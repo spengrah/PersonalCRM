@@ -355,6 +355,10 @@ handlers.RegisterNewTableRoutes(v1, handlers.NewTableRouteDeps{
 | **Todoist** | `/todoist/settings` | GET/PATCH | TodoistHandler | Todoist settings |
 | | `/todoist/projects` | GET | TodoistHandler | List projects |
 | | `/todoist/labels` | GET | TodoistHandler | List labels |
+| **WhatsApp** | `/whatsapp/auth/start` | POST | WhatsAppHandler | Start pairing (`{"method":"qr"\|"phone","phone":"+E164"}`). 202 with the first code; 409 `ingest_not_wired` while the readiness gate is unsatisfied; 504 `qr_code_timeout`. Gated by `ENABLE_WHATSAPP_SYNC` |
+| | `/whatsapp/auth/cancel` | POST | WhatsAppHandler | Cancel an in-flight pairing (204, idempotent) |
+| | `/whatsapp/auth` | DELETE | WhatsAppHandler | Unlink the device. 200 with a body; 502 when the remote unlink fails and local credentials were KEPT; `?force=true` clears locally with a manual-unlink warning |
+| | `/whatsapp/auth/status` | GET | WhatsAppHandler | Connection state, linked identity, live pairing code, backfill counts. Absent (404) when the feature is off |
 | **System** | `/system/time` | GET | SystemHandler | Current time |
 | | `/export` | POST | SystemHandler | Export data |
 | | `/import` | POST | SystemHandler | Import data |
