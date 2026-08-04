@@ -4147,6 +4147,15 @@ paths:
                 error:
                   $ref: '#/definitions/api.APIError'
               type: object
+        "499":
+          description: ""
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
         "502":
           description: Bad Gateway
           schema:

@@ -118,6 +118,14 @@ func (h *WhatsAppHandler) CancelPairing(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// StatusClientClosedRequest is nginx's 499: the client closed the connection
+// before the server answered. It is not in the RFCs, and it is used here
+// deliberately — the alternative, 408, means the client failed to send a request
+// in time, which is the opposite of what happened. The request arrived in full
+// and the work it started is still running; only the caller left. Keeping it out
+// of 5xx is what stops an abandoned request from reading as a server fault.
+const StatusClientClosedRequest = 499
+
 // Disconnect unlinks the WhatsApp device
 // @Summary Disconnect WhatsApp
 // @Description Unlink the WhatsApp device. Local credentials are kept when the remote unlink fails, so the user can retry; ?force=true clears them locally without contacting WhatsApp and returns a warning that the device must be unlinked from the phone.
@@ -126,6 +134,7 @@ func (h *WhatsAppHandler) CancelPairing(c *gin.Context) {
 // @Param force query boolean false "Clear local credentials without contacting WhatsApp"
 // @Success 200 {object} api.APIResponse{data=WhatsAppDisconnectResponse}
 // @Failure 409 {object} api.APIResponse{error=api.APIError}
+// @Failure 499 {object} api.APIResponse{error=api.APIError}
 // @Failure 502 {object} api.APIResponse{error=api.APIError}
 // @Failure 503 {object} api.APIResponse{error=api.APIError}
 // @Router /whatsapp/auth [delete]
@@ -166,11 +175,9 @@ func (h *WhatsAppHandler) Disconnect(c *gin.Context) {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		// The CALLER went away; the unlink did not. It is already queued on the
 		// actor and runs to completion, so this is not a server fault and must
-		// not be counted as one. 499 (client closed request) rather than 408:
-		// the request was received in full and is being worked on, which is not
-		// what 408 means. There is no prior caller-abandoned case in this API,
-		// so this is the convention being set.
-		api.SendError(c, 499, "CLIENT_CLOSED_REQUEST",
+		// not be counted as one. There is no prior caller-abandoned case in this
+		// API, so StatusClientClosedRequest is the convention being set.
+		api.SendError(c, StatusClientClosedRequest, "CLIENT_CLOSED_REQUEST",
 			"The request was abandoned before the unlink finished; it is still running — check the status", err.Error())
 	case errors.Is(err, wapkg.ErrOperationSuperseded):
 		// The session this unlink decided about was replaced while it ran, so its

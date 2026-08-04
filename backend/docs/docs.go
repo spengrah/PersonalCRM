@@ -4847,6 +4847,24 @@ const docTemplate = `{
                             ]
                         }
                     },
+                    "499": {
+                        "description": "",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {

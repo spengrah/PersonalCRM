@@ -322,6 +322,12 @@ func TestAPI_WhatsAppLocalCleanupFailureGuidanceDependsOnForce(t *testing.T) {
 // TestAPI_WhatsAppDisconnectSupersededIsAConflict: an unlink whose session was
 // replaced while it ran deliberately does not publish its outcome, and the
 // caller is told to look at the status rather than being handed a stale one.
+func TestAPI_WhatsAppDisconnectSupersededIsAConflict(t *testing.T) {
+	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{disconnErr: wapkg.ErrOperationSuperseded})
+	rec := doWhatsAppRequest(t, router, http.MethodDelete, "/api/v1/whatsapp/auth", nil)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+}
+
 // TestAPI_WhatsAppDisconnectAbandonedByTheCallerIsNotAServerError: the caller
 // hung up, which is not a fault of ours and must not be logged or alerted as
 // one. The unlink is still running on the actor.
@@ -329,14 +335,9 @@ func TestAPI_WhatsAppDisconnectAbandonedByTheCallerIsNotAServerError(t *testing.
 	for _, err := range []error{context.Canceled, context.DeadlineExceeded} {
 		router := setupWhatsAppRouter(t, &fakeWhatsAppManager{disconnErr: err})
 		rec := doWhatsAppRequest(t, router, http.MethodDelete, "/api/v1/whatsapp/auth", nil)
-		assert.Equal(t, 499, rec.Code, "%v must not be reported as a server error", err)
+		assert.Equal(t, handlers.StatusClientClosedRequest, rec.Code,
+			"%v must not be reported as a server error", err)
 	}
-}
-
-func TestAPI_WhatsAppDisconnectSupersededIsAConflict(t *testing.T) {
-	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{disconnErr: wapkg.ErrOperationSuperseded})
-	rec := doWhatsAppRequest(t, router, http.MethodDelete, "/api/v1/whatsapp/auth", nil)
-	assert.Equal(t, http.StatusConflict, rec.Code)
 }
 
 func TestAPI_WhatsAppDisconnectSucceedsWithBody(t *testing.T) {

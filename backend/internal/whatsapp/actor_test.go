@@ -1572,3 +1572,45 @@ func TestDisconnect_LibraryEchoDoesNotKillTheUnlinkInFlight(t *testing.T) {
 			"an unlink that reached the server must not be reported as a failure")
 	})
 }
+
+// TestEndAttempt_ReleaseWaitsForTheDrainItAttached is the ordering the drain
+// handle exists for, end to end through the act that attaches it.
+//
+// An abandoned attempt's client is read by our own drain goroutine, so closing
+// it while that goroutine is still going pulls the channel out from under it.
+// endAttempt therefore attaches the attempt's drain handle to the release it
+// queues, and the release waits on it before it closes anything. Both halves are
+// asserted here, because the attachment is invisible to every other test: a
+// release with no handle simply does not wait, and the suite stays green.
+func TestEndAttempt_ReleaseWaitsForTheDrainItAttached(t *testing.T) {
+	cli := newFakeClient()
+	sess := fakeSessionFor(cli, false, nil)
+
+	st := &actorState{}
+	p := &pairingState{sess: sess, drainDone: make(chan struct{}), drainStarted: true}
+	st.pairing = p
+
+	st.endAttempt(p, false)
+
+	require.Len(t, st.pendingRelease, 1, "ending an attempt queues exactly one release")
+	rel := st.pendingRelease[0]
+	require.Same(t, sess, rel.sess)
+	require.True(t, rel.drainStarted, "the attempt's drain handle travels with the release, or nothing waits for it")
+
+	// Running that release must not touch the client while the drain is parked.
+	effect := releaseSessionEffect{release: rel, drainWait: 3 * time.Second}
+	done := make(chan struct{})
+	go func() { defer close(done); effect.run(context.Background()) }()
+
+	consistently(t, "the client the drain is still reading for must stay open until the drain unwinds",
+		300*time.Millisecond, func() bool { return indexOf(cli.callLog(), "disconnect") < 0 })
+
+	close(p.drainDone)
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the release never completed after its drain unwound")
+	}
+	assert.Contains(t, cli.callLog(), "disconnect", "and then it closes")
+}

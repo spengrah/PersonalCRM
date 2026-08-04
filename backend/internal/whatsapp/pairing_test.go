@@ -1531,6 +1531,8 @@ func TestDisconnect_CallerGivingUpDoesNotCancelTheUnlink(t *testing.T) {
 	cli := newFakeClient()
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	// No lock: the client is not shared with anything yet — the manager below
+	// has not been built, so no goroutine can be reading these.
 	cli.logoutEntered, cli.logoutBlock = entered, release
 
 	m, _, _, _ := newTestManager(t, cli, true)
