@@ -147,6 +147,25 @@ ON CONFLICT (chat_jid) DO UPDATE SET
     updated_at = NOW()
 RETURNING *;
 
+-- name: ListWhatsAppChatConfigs :many
+-- The settings surface's chat list. Only groups are ever written here (the gate
+-- returns before touching the repository for a private chat), so this is the
+-- discovered-group list without needing a chat_type filter. Ordered by title
+-- with the JID as tie-breaker, because titles are neither unique nor NOT NULL
+-- and an arbitrary order would reshuffle the list between reads.
+SELECT * FROM whatsapp_chat_config
+ORDER BY chat_title NULLS LAST, chat_jid;
+
+-- name: UpdateWhatsAppChatConfigStatus :one
+-- The user's per-chat tracking override — the ONLY writer of this column, since
+-- UpsertWhatsAppChatConfig deliberately preserves it on every re-observation.
+-- Matching an existing row only: an override for a chat the integration has
+-- never observed is a 404, not a new row.
+UPDATE whatsapp_chat_config
+SET status = @status, updated_at = NOW()
+WHERE chat_jid = @chat_jid
+RETURNING *;
+
 -- name: BackdateWhatsAppHistoryClaim :exec
 -- Test-only helper: ages a claim past the 15-minute lease so a fresh claim can
 -- reclaim it, simulating a worker that died mid-chunk. Mirror of

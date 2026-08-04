@@ -158,6 +158,46 @@ func (q *Queries) GetWhatsAppChatConfig(ctx context.Context, chatJid string) (*W
 	return &i, err
 }
 
+const ListWhatsAppChatConfigs = `-- name: ListWhatsAppChatConfigs :many
+SELECT id, chat_jid, chat_title, chat_type, member_count, status, last_lookup_at, created_at, updated_at FROM whatsapp_chat_config
+ORDER BY chat_title NULLS LAST, chat_jid
+`
+
+// The settings surface's chat list. Only groups are ever written here (the gate
+// returns before touching the repository for a private chat), so this is the
+// discovered-group list without needing a chat_type filter. Ordered by title
+// with the JID as tie-breaker, because titles are neither unique nor NOT NULL
+// and an arbitrary order would reshuffle the list between reads.
+func (q *Queries) ListWhatsAppChatConfigs(ctx context.Context) ([]*WhatsappChatConfig, error) {
+	rows, err := q.db.Query(ctx, ListWhatsAppChatConfigs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*WhatsappChatConfig{}
+	for rows.Next() {
+		var i WhatsappChatConfig
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChatJid,
+			&i.ChatTitle,
+			&i.ChatType,
+			&i.MemberCount,
+			&i.Status,
+			&i.LastLookupAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListWhatsAppHistoryNotifications = `-- name: ListWhatsAppHistoryNotifications :many
 SELECT id, protocol_msg_id, notification, sync_type, chunk_order, state, disposition, phase, oldest_msg_ts, attempts, claim_token, last_error, checkpoint, claimed_at, received_at, processed_at FROM whatsapp_history_notification
 WHERE state = ANY($1::text[])
@@ -359,6 +399,39 @@ func (q *Queries) SaveWhatsAppHistoryCheckpoint(ctx context.Context, arg SaveWha
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const UpdateWhatsAppChatConfigStatus = `-- name: UpdateWhatsAppChatConfigStatus :one
+UPDATE whatsapp_chat_config
+SET status = $1, updated_at = NOW()
+WHERE chat_jid = $2
+RETURNING id, chat_jid, chat_title, chat_type, member_count, status, last_lookup_at, created_at, updated_at
+`
+
+type UpdateWhatsAppChatConfigStatusParams struct {
+	Status  string `json:"status"`
+	ChatJid string `json:"chat_jid"`
+}
+
+// The user's per-chat tracking override — the ONLY writer of this column, since
+// UpsertWhatsAppChatConfig deliberately preserves it on every re-observation.
+// Matching an existing row only: an override for a chat the integration has
+// never observed is a 404, not a new row.
+func (q *Queries) UpdateWhatsAppChatConfigStatus(ctx context.Context, arg UpdateWhatsAppChatConfigStatusParams) (*WhatsappChatConfig, error) {
+	row := q.db.QueryRow(ctx, UpdateWhatsAppChatConfigStatus, arg.Status, arg.ChatJid)
+	var i WhatsappChatConfig
+	err := row.Scan(
+		&i.ID,
+		&i.ChatJid,
+		&i.ChatTitle,
+		&i.ChatType,
+		&i.MemberCount,
+		&i.Status,
+		&i.LastLookupAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return &i, err
 }
 
 const UpsertWhatsAppChatConfig = `-- name: UpsertWhatsAppChatConfig :one

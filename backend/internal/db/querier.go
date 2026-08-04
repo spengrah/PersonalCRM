@@ -1485,6 +1485,12 @@ type Querier interface {
 	ListUpcomingEventsForContact(ctx context.Context, arg ListUpcomingEventsForContactParams) ([]*CalendarEvent, error)
 	// List upcoming events that have matched CRM contacts
 	ListUpcomingEventsWithContacts(ctx context.Context, arg ListUpcomingEventsWithContactsParams) ([]*CalendarEvent, error)
+	// The settings surface's chat list. Only groups are ever written here (the gate
+	// returns before touching the repository for a private chat), so this is the
+	// discovered-group list without needing a chat_type filter. Ordered by title
+	// with the JID as tie-breaker, because titles are neither unique nor NOT NULL
+	// and an arbitrary order would reshuffle the list between reads.
+	ListWhatsAppChatConfigs(ctx context.Context) ([]*WhatsappChatConfig, error)
 	// Status surface + crm-admin listing, in claim order.
 	ListWhatsAppHistoryNotifications(ctx context.Context, states []string) ([]*WhatsappHistoryNotification, error)
 	// Acquires a FOR UPDATE lock on the contact row before the date recompute
@@ -2903,6 +2909,11 @@ type Querier interface {
 	UpdateTelegramMessageContact(ctx context.Context, arg UpdateTelegramMessageContactParams) error
 	UpdateTelegramSessionAuthState(ctx context.Context, authState string) (*TelegramSession, error)
 	UpdateTelegramSessionUserInfo(ctx context.Context, arg UpdateTelegramSessionUserInfoParams) (*TelegramSession, error)
+	// The user's per-chat tracking override — the ONLY writer of this column, since
+	// UpsertWhatsAppChatConfig deliberately preserves it on every re-observation.
+	// Matching an existing row only: an override for a chat the integration has
+	// never observed is a 404, not a new row.
+	UpdateWhatsAppChatConfigStatus(ctx context.Context, arg UpdateWhatsAppChatConfigStatusParams) (*WhatsappChatConfig, error)
 	// Insert or update a calendar event from Google Calendar
 	// Note: last_contacted_updated is reset when matched_contact_ids changes (order-insensitive)
 	// so newly matched contacts can be processed. Otherwise we preserve the processed state

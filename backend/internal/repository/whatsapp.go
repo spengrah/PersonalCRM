@@ -350,6 +350,39 @@ func (r *WhatsAppRepository) UpsertChatConfig(ctx context.Context, cfg WhatsAppC
 	return &out, nil
 }
 
+// ListChatConfigs returns every chat the gate has observed, title-ordered. The
+// gate only ever writes group chats, so this is the discovered-group list.
+func (r *WhatsAppRepository) ListChatConfigs(ctx context.Context) ([]WhatsAppChatConfig, error) {
+	rows, err := r.queries.ListWhatsAppChatConfigs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]WhatsAppChatConfig, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, convertDbWhatsAppChatConfig(row))
+	}
+	return out, nil
+}
+
+// SetChatStatus records the user's tracking override. Returns db.ErrNotFound
+// when the chat has never been observed — the override is a decision ABOUT an
+// observed chat, never a way to mint one. The status value is not validated
+// here; the handler owns that and the column's CHECK is the backstop.
+func (r *WhatsAppRepository) SetChatStatus(ctx context.Context, chatJID, status string) (*WhatsAppChatConfig, error) {
+	row, err := r.queries.UpdateWhatsAppChatConfigStatus(ctx, db.UpdateWhatsAppChatConfigStatusParams{
+		ChatJid: chatJID,
+		Status:  status,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	out := convertDbWhatsAppChatConfig(row)
+	return &out, nil
+}
+
 // BackdateClaimForTest is a test-only helper that ages a chunk's claim past the
 // 15-minute lease so a fresh claim reclaims it — the "worker died mid-chunk"
 // case. Production code MUST NOT call this.
