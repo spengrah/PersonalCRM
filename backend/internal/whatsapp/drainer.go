@@ -198,9 +198,11 @@ func (d *HistoryDrainer) drainOne(ctx context.Context, fetcher HistoryFetcher, n
 		if err := d.advance(ctx, n.ID, token, repository.HistoryPhaseAcked, repository.HistoryPhaseDeleted); err != nil {
 			return err
 		}
-		phase = repository.HistoryPhaseDeleted
 	}
 
+	// The chunk is now at 'deleted' whichever step this claim entered at. The
+	// completion is fenced on that phase in SQL, not on the local variable, so
+	// there is no fourth assignment to make.
 	done, err := d.repo.MarkNotificationDone(ctx, n.ID, token)
 	if err != nil {
 		return fmt.Errorf("whatsapp: mark history chunk done: %w", err)
