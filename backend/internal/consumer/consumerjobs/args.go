@@ -254,3 +254,12 @@ type KnowledgeCacheUpdaterJobArgs struct {
 
 // Kind returns the river job-kind identifier for KnowledgeCacheUpdater jobs.
 func (KnowledgeCacheUpdaterJobArgs) Kind() string { return "knowledge_cache_updater" }
+
+// WhatsAppHistoryDrainArgs drives the one-shot WhatsApp history backfill: it
+// carries no payload because the work is "drain whatever the durable
+// notification inbox holds", and the inbox itself is the queue. Enqueued by a
+// 1-minute periodic while ENABLE_WHATSAPP_SYNC is on.
+type WhatsAppHistoryDrainArgs struct{}
+
+// Kind returns the river job-kind identifier for WhatsAppHistoryDrain jobs.
+func (WhatsAppHistoryDrainArgs) Kind() string { return "whatsapp_history_drain" }

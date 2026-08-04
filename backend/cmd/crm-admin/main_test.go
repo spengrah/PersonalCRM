@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
@@ -1701,5 +1702,188 @@ func TestRunRiverTier0Error(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "river tier0 stats") {
 		t.Fatalf("expected wrapped error, got %v", err)
+	}
+}
+
+// --- --whatsapp-list-history / --whatsapp-requeue-history tests ---
+
+// fakeWhatsAppHistoryAdmin stands in for the WhatsApp repository.
+type fakeWhatsAppHistoryAdmin struct {
+	rows        []repository.HistoryNotification
+	listErr     error
+	requeueErr  error
+	askedStates []string
+	requeued    []uuid.UUID
+}
+
+func (f *fakeWhatsAppHistoryAdmin) ListNotifications(_ context.Context, states []string) ([]repository.HistoryNotification, error) {
+	f.askedStates = states
+	return f.rows, f.listErr
+}
+
+func (f *fakeWhatsAppHistoryAdmin) RequeueFailedNotification(_ context.Context, id uuid.UUID) error {
+	f.requeued = append(f.requeued, id)
+	return f.requeueErr
+}
+
+// TestCrmAdmin_WhatsAppHistoryFlagsAreMutuallyExclusive: both are ordinary
+// subcommands, so each must validate alone and neither may pair with another.
+func TestCrmAdmin_WhatsAppHistoryFlagsAreMutuallyExclusive(t *testing.T) {
+	if err := validateSubcommand(runOptions{listWhatsAppHistory: true}); err != nil {
+		t.Fatalf("--whatsapp-list-history alone should validate, got %v", err)
+	}
+	if err := validateSubcommand(runOptions{requeueWhatsAppHistoryID: uuid.NewString()}); err != nil {
+		t.Fatalf("--whatsapp-requeue-history alone should validate, got %v", err)
+	}
+
+	cases := []runOptions{
+		{listWhatsAppHistory: true, requeueWhatsAppHistoryID: uuid.NewString()},
+		{listWhatsAppHistory: true, listHosts: true},
+		{requeueWhatsAppHistoryID: uuid.NewString(), migrate: true},
+	}
+	for _, opts := range cases {
+		err := validateSubcommand(opts)
+		if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+			t.Fatalf("expected mutual-exclusion error, got %v", err)
+		}
+	}
+}
+
+// TestCrmAdmin_ListWhatsAppHistoryNeverPrintsThePayload: the listing is triage
+// evidence, not a dump. The media pointer and the projection checkpoint are raw
+// protobuf/JSON blobs an operator has no use for.
+func TestCrmAdmin_ListWhatsAppHistoryNeverPrintsThePayload(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	failure := "gave up after 9 attempts: connection reset"
+	oldest := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	id := uuid.New()
+	deps.whatsappHistory = &fakeWhatsAppHistoryAdmin{rows: []repository.HistoryNotification{{
+		ID:            id,
+		ProtocolMsgID: "proto-1",
+		Notification:  []byte("SECRET-MEDIA-POINTER"),
+		Checkpoint:    []byte(`{"conversation_index":3,"chat_jid":"SECRET-CHAT"}`),
+		SyncType:      "FULL",
+		ChunkOrder:    2,
+		State:         repository.HistoryNotificationStateFailed,
+		Disposition:   repository.HistoryDispositionProject,
+		Phase:         repository.HistoryPhaseDownloaded,
+		Attempts:      9,
+		OldestMsgTS:   &oldest,
+		LastError:     &failure,
+		ReceivedAt:    time.Date(2026, 2, 3, 5, 0, 0, 0, time.UTC),
+	}}}
+
+	if err := run(context.Background(), runOptions{listWhatsAppHistory: true}, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"id=" + id.String(), "state=failed", "phase=downloaded", "attempts=9",
+		"chunk_order=2", "gave up after 9 attempts",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q in the listing, got %q", want, out)
+		}
+	}
+	for _, forbidden := range []string{"SECRET-MEDIA-POINTER", "SECRET-CHAT", "conversation_index"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("the listing must not print %q: %q", forbidden, out)
+		}
+	}
+}
+
+// TestCrmAdmin_ListWhatsAppHistoryValidatesTheStateFilter: an unknown state is
+// a usage error, not a query that silently returns nothing.
+func TestCrmAdmin_ListWhatsAppHistoryValidatesTheStateFilter(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	fake := &fakeWhatsAppHistoryAdmin{}
+	deps.whatsappHistory = fake
+
+	err := run(context.Background(), runOptions{listWhatsAppHistory: true, historyState: "pending,bogus"}, deps)
+	if err == nil || !strings.Contains(err.Error(), "unknown state") {
+		t.Fatalf("expected an unknown-state usage error, got %v", err)
+	}
+	if fake.askedStates != nil {
+		t.Fatalf("a rejected filter must not reach the repository, got %v", fake.askedStates)
+	}
+
+	if err := run(context.Background(), runOptions{listWhatsAppHistory: true}, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fake.askedStates) != 4 {
+		t.Fatalf("an empty filter means every state, got %v", fake.askedStates)
+	}
+}
+
+// TestCrmAdmin_RequeueWhatsAppHistoryRejectsANonFailedRow: one query, two
+// causes. Naming both is what stops an operator concluding the chunk is gone
+// when it is merely still running.
+func TestCrmAdmin_RequeueWhatsAppHistoryRejectsANonFailedRow(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	deps.whatsappHistory = &fakeWhatsAppHistoryAdmin{requeueErr: db.ErrNotFound}
+
+	err := run(context.Background(), runOptions{requeueWhatsAppHistoryID: uuid.NewString()}, deps)
+	if err == nil {
+		t.Fatal("expected an error for a chunk that could not be requeued")
+	}
+	for _, want := range []string{"no such chunk", "not in the failed state"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected %q in the error, got %v", want, err)
+		}
+	}
+}
+
+// TestCrmAdmin_RequeueWhatsAppHistoryRejectsAMalformedID.
+func TestCrmAdmin_RequeueWhatsAppHistoryRejectsAMalformedID(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	fake := &fakeWhatsAppHistoryAdmin{}
+	deps.whatsappHistory = fake
+
+	err := run(context.Background(), runOptions{requeueWhatsAppHistoryID: "not-a-uuid"}, deps)
+	if err == nil || !strings.Contains(err.Error(), "valid UUID") {
+		t.Fatalf("expected a UUID usage error, got %v", err)
+	}
+	if len(fake.requeued) != 0 {
+		t.Fatal("a malformed id must not reach the repository")
+	}
+}
+
+// TestCrmAdmin_RequeueWhatsAppHistorySucceeds.
+func TestCrmAdmin_RequeueWhatsAppHistorySucceeds(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	fake := &fakeWhatsAppHistoryAdmin{}
+	deps.whatsappHistory = fake
+	id := uuid.New()
+
+	if err := run(context.Background(), runOptions{requeueWhatsAppHistoryID: id.String()}, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(fake.requeued) != 1 || fake.requeued[0] != id {
+		t.Fatalf("expected the parsed id to reach the repository, got %v", fake.requeued)
+	}
+	if !strings.Contains(stdout.String(), id.String()) {
+		t.Fatalf("expected the requeued id in the summary, got %q", stdout.String())
+	}
+}
+
+// TestCrmAdmin_ParseArgsBindsTheWhatsAppHistoryFlags pins the flag shape, so a
+// rename is caught here rather than by an operator at 2am.
+func TestCrmAdmin_ParseArgsBindsTheWhatsAppHistoryFlags(t *testing.T) {
+	id := uuid.NewString()
+	opts, err := parseArgs([]string{"--whatsapp-list-history", "--history-state", "failed,processing"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !opts.listWhatsAppHistory || opts.historyState != "failed,processing" {
+		t.Fatalf("unexpected parse: %+v", opts)
+	}
+
+	opts, err = parseArgs([]string{"--whatsapp-requeue-history", id})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.requeueWhatsAppHistoryID != id {
+		t.Fatalf("unexpected parse: %+v", opts)
 	}
 }

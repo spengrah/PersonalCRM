@@ -524,3 +524,18 @@ func TestParseMessage_FillsEveryLiveKnowableField(t *testing.T) {
 	assert.Nil(t, msg.ChatTitle, "the live parser makes no group-metadata call, by design")
 	assert.Nil(t, msg.MemberCount, "the size lives in whatsapp_chat_config, written by the gate")
 }
+
+// TestClassifyMessage_NilMessageDrops is the defence-in-depth half of the
+// stub filter.
+//
+// The live path never reaches it — the library does not dispatch an
+// *events.Message with no message — but "the zero value means store it" is
+// exactly the shape that let WhatsApp's non-message envelopes (revokes, missed
+// calls, security notices) through as bodiless conversational turns, and a
+// future caller deserves the safe default.
+func TestClassifyMessage_NilMessageDrops(t *testing.T) {
+	content := classifyMessage(nil)
+
+	assert.True(t, content.Drop, "no message is not a message")
+	assert.Equal(t, dropReasonStub, content.DropReason)
+}

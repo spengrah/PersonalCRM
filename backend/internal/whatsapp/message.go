@@ -37,6 +37,11 @@ const (
 	dropReasonProtocol = "protocol"
 	dropReasonReaction = "reaction"
 	dropReasonPollVote = "poll_vote"
+	// dropReasonStub covers an envelope with no message at all: WhatsApp uses
+	// the same wrapper for records of things that HAPPENED — a revoke, an
+	// undecryptable ciphertext, a missed call, a membership or security-code
+	// change — as for things that were SAID.
+	dropReasonStub = "stub"
 )
 
 // phoneUserPattern is what a subscriber number looks like in a JID's user part.
@@ -173,7 +178,12 @@ type classifiedContent struct {
 // are not conversational turns. A poll CREATION is a real message and stages.
 func classifyMessage(msg *waE2E.Message) classifiedContent {
 	if msg == nil {
-		return classifiedContent{MessageType: MessageTypeOther}
+		// The safe default is DROP, not "store it as other". The live path
+		// never reaches this — the library does not dispatch an *events.Message
+		// with no message — but the history envelope carries non-messages under
+		// exactly this shape, and a zero-valued Drop would stage every missed
+		// call and security notice as a bodiless conversational turn.
+		return classifiedContent{Drop: true, DropReason: dropReasonStub}
 	}
 
 	switch {

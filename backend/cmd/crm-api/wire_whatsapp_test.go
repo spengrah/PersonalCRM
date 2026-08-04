@@ -146,32 +146,12 @@ func countCalls(haystack []string, needle string) int {
 	return n
 }
 
-// TestWhatsAppWiring_IngestorIsWiredAndDrainerIsNot is the D18 guard: this PR
-// genuinely satisfies the ingest prerequisite, and the feature is STILL off.
-//
-// It drives the real activation sequence with the real ingestor shape, so it
-// discriminates between "the ingestor is wired" and "the manager will connect".
-func TestWhatsAppWiring_IngestorIsWiredAndDrainerIsNot(t *testing.T) {
-	m := wapkg.NewManager(nil, wapkg.NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, nil, nil)
-	t.Cleanup(m.Stop)
-
-	ingestor := wapkg.NewIngestor(nil, wapkg.NewChatGate(nil, 10), nil)
-	activateWhatsApp(context.Background(), m, whatsappPrereqs{
-		Ingestor: ingestor,
-		Recorder: stubRecorder{},
-		// DrainReady deliberately false: the drain worker is the next PR's.
-	})
-
-	ready, missing := m.Ready()
-	assert.False(t, ready, "the feature must still be off")
-	assert.Contains(t, missing, "history drain worker",
-		"the ingest prerequisite is genuinely satisfied, so the NEXT missing piece must be the drainer")
-	assert.NotContains(t, missing, "message ingestor")
-
-	status := m.Status()
-	assert.Equal(t, wapkg.StateNotReady, status.State)
-	assert.Equal(t, wapkg.ReasonIngestNotWired, status.Reason)
-}
+// The D18 "ingest is wired and the drainer is not" guard is deliberately gone:
+// this PR registers the drainer, so its assertion is no longer true of the
+// wiring. Its replacement is TestWireWhatsApp_TurnsTheFeatureOn in
+// wire_whatsapp_integration_test.go, which drives the real wireWhatsApp — the
+// only place the feature-on flip is observable — and needs a database, hence
+// the integration_testdb tag.
 
 // TestWhatsAppWiring_ActivationBindsTheGroupInfoSource asserts exactly what it
 // can see: that driving the real activation sequence leaves the ingestor's

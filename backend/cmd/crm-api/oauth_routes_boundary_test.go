@@ -109,15 +109,12 @@ func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 	syncStk := buildExternalSyncIfEnabled(ctx, cfg, database, core, contactService, graph, ingest, messaging, consumers, domain, eventBus, riverClient, pubBus)
 
 	// WhatsApp IS driven here, unlike Telegram: its Start() cannot open a
-	// connection (the readiness gate refuses without an ingestor and a drainer),
-	// so running the real gate is both safe and the only way to prove the route
-	// tree reflects ENABLE_WHATSAPP_SYNC rather than a hand-built handler.
-	var whatsappStk whatsappStack
-	if cfg.Features.EnableWhatsAppSync {
-		whatsappStk = buildWhatsApp(ctx, cfg, database, whatsappPrereqs{})
-		if whatsappStk.Manager != nil {
-			t.Cleanup(whatsappStk.Manager.Stop)
-		}
+	// connection (the readiness gate refuses without an ingestor), so running
+	// the real seam is both safe and the only way to prove the route tree
+	// reflects ENABLE_WHATSAPP_SYNC rather than a hand-built handler.
+	whatsappStk := wireWhatsApp(ctx, cfg, database, reg, nil)
+	if whatsappStk.Manager != nil {
+		t.Cleanup(whatsappStk.Manager.Stop)
 	}
 
 	// Telegram is intentionally SKIPPED (Start must not run); a nil

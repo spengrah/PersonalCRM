@@ -633,6 +633,10 @@
     "tags": ["@area:settings", "@area:contacts"]
   },
   {
+    "pattern": "^backend/internal/consumer/consumerjobs/args\\.go$",
+    "tags": ["@area:settings"]
+  },
+  {
     "pattern": "^backend/internal/api/handlers/whatsapp\\.go$",
     "tags": ["@area:settings"]
   },

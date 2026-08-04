@@ -100,6 +100,38 @@ func (g *ChatGate) BindGroupInfoSource(src func() GroupInfoFetcher) {
 // rules: they say an unresolved group's messages must not be stored, never that
 // they must be acknowledged as handled.
 func (g *ChatGate) ShouldTrack(ctx context.Context, chatJID, chatType, accountJID string) (bool, error) {
+	return g.decide(ctx, chatJID, chatType, accountJID, nil)
+}
+
+// ShouldTrackHistoryChat is the history drainer's entry point. It is
+// ShouldTrack with ONE narrow addition: a participant snapshot the chunk itself
+// carried, usable only when the live client reports that we are NOT IN the
+// group at all.
+//
+// The two permanent answers lookupGroup can take are materially different and
+// must not be collapsed:
+//
+//   - permanentUnavailable — we are not in the group, or it does not exist.
+//     Such a group produces no live messages, so a count adopted from the
+//     chunk can only ever gate the historical conversation that carried it.
+//     This is the case the fallback exists for: without it, every group the
+//     user has left is dropped from the backfill.
+//   - permanentSizeUnknown — we ARE in the group; the server simply did not
+//     report a size. Adopting a historical count here would persist it, and
+//     because the gate re-looks-up only while member_count is NULL, it would
+//     freeze as the answer for every FUTURE LIVE message from a group whose
+//     real size is unknown. That is the fail-open this gate exists to refuse,
+//     so it stays fail-closed.
+//
+// snapshot may be nil (an empty participant list), in which case the decision
+// is byte-identical to ShouldTrack's.
+func (g *ChatGate) ShouldTrackHistoryChat(ctx context.Context, chatJID string, snapshot *ChatGroupInfo, accountJID string) (bool, error) {
+	return g.decide(ctx, chatJID, ChatTypeGroup, accountJID, snapshot)
+}
+
+// decide is the gate's whole body. ShouldTrack passes a nil fallback, which
+// makes every branch below identical to the live path's.
+func (g *ChatGate) decide(ctx context.Context, chatJID, chatType, accountJID string, fallback *ChatGroupInfo) (bool, error) {
 	// The gate is the group-SIZE gate. A private chat has already passed the
 	// person-to-person allowlist upstream.
 	if chatType != ChatTypeGroup {
@@ -135,23 +167,41 @@ func (g *ChatGate) ShouldTrack(ctx context.Context, chatJID, chatType, accountJI
 	// unresolved, and a successful one is always something new to persist.
 	looked := false
 	if cfg == nil || count == nil {
-		info, err := g.lookupGroup(ctx, chatJID, accountJID)
+		info, reason, err := g.lookupGroup(ctx, chatJID, accountJID)
 		if err != nil {
 			return false, err
 		}
-		if info == nil {
+		switch {
+		case info != nil:
+			resolved := info.MemberCount
+			count = &resolved
+			if info.Title != "" {
+				title = &info.Title
+			}
+			now := accelerated.GetCurrentTime()
+			lookup = &now
+			looked = true
+
+		case reason == permanentUnavailable && fallback != nil && fallback.MemberCount > 0:
+			// The one permitted fallback: the live client says we are not in
+			// this group, so its size can never gate a live message, and the
+			// chunk carried WhatsApp's own participant list for it.
+			//
+			// LastLookupAt stays nil deliberately — no live lookup produced
+			// this count, and the column is the record of one.
+			resolved := fallback.MemberCount
+			count = &resolved
+			if fallback.Title != "" {
+				fallbackTitle := fallback.Title
+				title = &fallbackTitle
+			}
+			looked = true
+
+		default:
 			// A decided-permanent lookup failure: nothing is stored, nothing is
 			// written, and the message is consumed.
 			return false, nil
 		}
-		resolved := info.MemberCount
-		count = &resolved
-		if info.Title != "" {
-			title = &info.Title
-		}
-		now := accelerated.GetCurrentTime()
-		lookup = &now
-		looked = true
 	}
 
 	// Re-writing an unchanged row on every group message is a pointless write
@@ -186,18 +236,32 @@ func (g *ChatGate) ShouldTrack(ctx context.Context, chatJID, chatType, accountJI
 	return EffectiveTracked(status, count, g.groupMaxMembers), nil
 }
 
+// permanentReason names WHICH decided-permanent answer a lookup took, so a
+// caller can distinguish "we are not in this group" from "we are in it and the
+// server did not say how big it is". Only the FIRST may be superseded by a
+// historical snapshot; the second must stay fail-closed, because the group is
+// live and its real size is merely unreported.
+type permanentReason string
+
+const (
+	permanentNone        permanentReason = ""
+	permanentUnavailable permanentReason = "group_unavailable"
+	permanentSizeUnknown permanentReason = "group_size_unknown"
+)
+
 // lookupGroup resolves the group's metadata, splitting failures by whether a
 // later delivery could plausibly answer differently.
 //
-// (nil, nil) means DECIDED-not-tracked: the server answered, and its answer
-// does not change on redelivery. A non-nil error is undecided.
-func (g *ChatGate) lookupGroup(ctx context.Context, chatJID, accountJID string) (*ChatGroupInfo, error) {
+// (nil, <reason>, nil) means DECIDED-not-tracked: the server answered, and its
+// answer does not change on redelivery. A non-nil error is undecided, and its
+// reason is always permanentNone.
+func (g *ChatGate) lookupGroup(ctx context.Context, chatJID, accountJID string) (*ChatGroupInfo, permanentReason, error) {
 	if g.groupInfoSource == nil {
-		return nil, fmt.Errorf("%w: no group info source", ErrChatGateUndecided)
+		return nil, permanentNone, fmt.Errorf("%w: no group info source", ErrChatGateUndecided)
 	}
 	fetcher := g.groupInfoSource()
 	if fetcher == nil {
-		return nil, fmt.Errorf("%w: no connected client", ErrChatGateUndecided)
+		return nil, permanentNone, fmt.Errorf("%w: no connected client", ErrChatGateUndecided)
 	}
 
 	// The fetcher comes from the PUBLISHED session; the message came from its
@@ -208,7 +272,7 @@ func (g *ChatGate) lookupGroup(ctx context.Context, chatJID, accountJID string) 
 	// re-pair settles), so it is undecided, and no lookup is made at all.
 	if accountJID != "" {
 		if live := fetcher.AccountJID(); live != "" && live != accountJID {
-			return nil, fmt.Errorf("%w: the connected client is a different account than the one that observed this message", ErrChatGateUndecided)
+			return nil, permanentNone, fmt.Errorf("%w: the connected client is a different account than the one that observed this message", ErrChatGateUndecided)
 		}
 	}
 
@@ -217,16 +281,23 @@ func (g *ChatGate) lookupGroup(ctx context.Context, chatJID, accountJID string) 
 
 	info, err := fetcher.GroupInfo(lookupCtx, chatJID)
 	if err == nil {
-		return info, nil
+		return info, permanentNone, nil
 	}
-	if errors.Is(err, ErrGroupUnavailable) || errors.Is(err, ErrGroupSizeUnknown) {
-		// We are not in the group, it does not exist, or it has no reportable
-		// size. Withholding here would redeliver forever.
-		logger.Debug().Err(err).Msg("whatsapp: group is permanently unsizable; not tracking")
-		return nil, nil
+	if errors.Is(err, ErrGroupUnavailable) {
+		// We are not in the group, or it does not exist. Withholding here would
+		// redeliver forever.
+		logger.Debug().Err(err).Msg("whatsapp: group is unavailable to this account; not tracking")
+		return nil, permanentUnavailable, nil
+	}
+	if errors.Is(err, ErrGroupSizeUnknown) {
+		// We ARE in the group; the server just did not report a size. Also
+		// permanent — but never superseded by a historical count, because this
+		// group's live messages keep arriving.
+		logger.Debug().Err(err).Msg("whatsapp: group size is unreported; not tracking")
+		return nil, permanentSizeUnknown, nil
 	}
 	logger.Warn().Err(err).Msg("whatsapp: group lookup failed; withholding the ack")
-	return nil, fmt.Errorf("%w: %v", ErrChatGateUndecided, err)
+	return nil, permanentNone, fmt.Errorf("%w: %v", ErrChatGateUndecided, err)
 }
 
 // int32PtrToIntPtr converts the repository's column width to the gate's.

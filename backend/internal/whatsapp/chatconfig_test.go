@@ -446,3 +446,164 @@ func TestGroupGate_UnknownAccountSkipsTheComparison(t *testing.T) {
 		})
 	}
 }
+
+// --- ShouldTrackHistoryChat -------------------------------------------------
+
+// TestChatGate_ShouldTrackIsUnchangedByTheHistoryRefactor replays the gate's
+// decisive cases through the extracted decide() + the three-valued lookupGroup,
+// with the outcomes written out rather than compared against the other entry
+// point — a table that only asserted "both paths agree" could not tell a
+// correct pair from a pair that broke together.
+func TestChatGate_ShouldTrackIsUnchangedByTheHistoryRefactor(t *testing.T) {
+	tests := []struct {
+		name        string
+		cfg         *repository.WhatsAppChatConfig
+		fetcher     *fakeGroupInfoFetcher
+		chatType    string
+		wantTracked bool
+		wantErr     bool
+		wantUpserts int
+	}{
+		{
+			name:        "a private chat needs no group decision",
+			fetcher:     &fakeGroupInfoFetcher{},
+			chatType:    ChatTypePrivate,
+			wantTracked: true,
+		},
+		{
+			name:        "a small resolved group is tracked and persisted",
+			fetcher:     &fakeGroupInfoFetcher{info: &ChatGroupInfo{Title: "Book Club", MemberCount: 4}},
+			chatType:    ChatTypeGroup,
+			wantTracked: true,
+			wantUpserts: 1,
+		},
+		{
+			name:        "an oversized resolved group is not tracked but is still persisted",
+			fetcher:     &fakeGroupInfoFetcher{info: &ChatGroupInfo{Title: "Big", MemberCount: 400}},
+			chatType:    ChatTypeGroup,
+			wantTracked: false,
+			wantUpserts: 1,
+		},
+		{
+			name:        "an explicit track override skips the lookup entirely",
+			cfg:         &repository.WhatsAppChatConfig{ChatJID: testGroupChatJID, Status: ChatStatusTracked},
+			fetcher:     &fakeGroupInfoFetcher{err: errors.New("must not be called")},
+			chatType:    ChatTypeGroup,
+			wantTracked: true,
+		},
+		{
+			name:        "an unavailable group is decided, not withheld, and writes nothing",
+			fetcher:     &fakeGroupInfoFetcher{err: errors.Join(ErrGroupUnavailable, errors.New("status 403"))},
+			chatType:    ChatTypeGroup,
+			wantTracked: false,
+		},
+		{
+			name:        "an unreported size is decided, not withheld, and writes nothing",
+			fetcher:     &fakeGroupInfoFetcher{err: ErrGroupSizeUnknown},
+			chatType:    ChatTypeGroup,
+			wantTracked: false,
+		},
+		{
+			name:     "a transient lookup failure is undecided",
+			fetcher:  &fakeGroupInfoFetcher{err: errors.New("socket closed")},
+			chatType: ChatTypeGroup,
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeChatConfigStore{cfg: tc.cfg}
+			gate := gateWith(store, tc.fetcher, 10)
+
+			tracked, err := gate.ShouldTrack(context.Background(), testGroupChatJID, tc.chatType, testAccountJID)
+
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.ErrorIs(t, err, ErrChatGateUndecided)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantTracked, tracked)
+			assert.Len(t, store.upserts, tc.wantUpserts)
+		})
+	}
+}
+
+// TestChatGate_HistoryFallbackAppliesOnlyToAnUnavailableGroup pins the one case
+// the fallback exists for: a group the user has LEFT, whose history would
+// otherwise be dropped entirely because no live lookup can size it.
+func TestChatGate_HistoryFallbackAppliesOnlyToAnUnavailableGroup(t *testing.T) {
+	store := &fakeChatConfigStore{}
+	fetcher := &fakeGroupInfoFetcher{err: errors.Join(ErrGroupUnavailable, errors.New("status 403"))}
+	gate := gateWith(store, fetcher, 10)
+
+	tracked, err := gate.ShouldTrackHistoryChat(context.Background(), testGroupChatJID,
+		&ChatGroupInfo{Title: "Old Trip", MemberCount: 5}, testAccountJID)
+
+	require.NoError(t, err)
+	assert.True(t, tracked, "the chunk's own participant list sizes a group we are no longer in")
+	require.Len(t, store.upserts, 1, "the adopted count is persisted, or every chunk re-decides it")
+	assert.Equal(t, int32(5), *store.upserts[0].MemberCount)
+	require.NotNil(t, store.upserts[0].ChatTitle)
+	assert.Equal(t, "Old Trip", *store.upserts[0].ChatTitle)
+	assert.Nil(t, store.upserts[0].LastLookupAt,
+		"no live lookup produced this count, and that column is the record of one")
+}
+
+// TestChatGate_SizeUnknownGroupIsNotTrackedEvenWithAChunkSnapshot is the
+// fail-open guard.
+//
+// ErrGroupSizeUnknown fires for a group we are STILL IN whose size attribute
+// was merely absent. Adopting the chunk's historical count would persist it,
+// and because the gate re-looks-up only while member_count is NULL, that number
+// would then gate every FUTURE LIVE message from the group — the unknown-means-
+// track branch this integration deliberately refuses, arriving by the back door.
+func TestChatGate_SizeUnknownGroupIsNotTrackedEvenWithAChunkSnapshot(t *testing.T) {
+	store := &fakeChatConfigStore{}
+	fetcher := &fakeGroupInfoFetcher{err: ErrGroupSizeUnknown}
+	gate := gateWith(store, fetcher, 10)
+
+	tracked, err := gate.ShouldTrackHistoryChat(context.Background(), testGroupChatJID,
+		&ChatGroupInfo{Title: "Still In This One", MemberCount: 8}, testAccountJID)
+
+	require.NoError(t, err)
+	assert.False(t, tracked, "we are in this group; a historical count must not decide it")
+	assert.Empty(t, store.upserts,
+		"no member_count may be written, or a future live message would inherit a historical size")
+}
+
+// TestChatGate_LiveCountAlwaysWinsOverTheChunkSnapshot: a successful live
+// lookup ignores the snapshot entirely, so a stale historical participant list
+// can never make a currently-oversized group look small.
+func TestChatGate_LiveCountAlwaysWinsOverTheChunkSnapshot(t *testing.T) {
+	store := &fakeChatConfigStore{}
+	fetcher := &fakeGroupInfoFetcher{info: &ChatGroupInfo{Title: "Grew A Lot", MemberCount: 300}}
+	gate := gateWith(store, fetcher, 10)
+
+	tracked, err := gate.ShouldTrackHistoryChat(context.Background(), testGroupChatJID,
+		&ChatGroupInfo{Title: "Back When It Was Small", MemberCount: 4}, testAccountJID)
+
+	require.NoError(t, err)
+	assert.False(t, tracked, "the live size is 300, whatever the chunk remembers")
+	require.Len(t, store.upserts, 1)
+	assert.Equal(t, int32(300), *store.upserts[0].MemberCount)
+	require.NotNil(t, store.upserts[0].LastLookupAt, "this WAS a live lookup")
+}
+
+// TestChatGate_HistoryFallbackIsIgnoredWithoutAUsableSnapshot: an empty
+// participant list means no fallback, and the group falls to the live answer
+// exactly as it does today.
+func TestChatGate_HistoryFallbackIsIgnoredWithoutAUsableSnapshot(t *testing.T) {
+	for _, snapshot := range []*ChatGroupInfo{nil, {Title: "Empty", MemberCount: 0}} {
+		store := &fakeChatConfigStore{}
+		fetcher := &fakeGroupInfoFetcher{err: errors.Join(ErrGroupUnavailable, errors.New("status 404"))}
+		gate := gateWith(store, fetcher, 10)
+
+		tracked, err := gate.ShouldTrackHistoryChat(context.Background(), testGroupChatJID, snapshot, testAccountJID)
+
+		require.NoError(t, err)
+		assert.False(t, tracked)
+		assert.Empty(t, store.upserts)
+	}
+}
