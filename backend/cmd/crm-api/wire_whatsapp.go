@@ -8,6 +8,7 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	wapkg "personal-crm/backend/internal/whatsapp"
 )
 
@@ -84,6 +85,37 @@ func buildWhatsApp(ctx context.Context, cfg *config.Config, database *db.Databas
 		Manager: manager,
 		Handler: handlers.NewWhatsAppHandler(manager),
 	}
+}
+
+// buildWhatsAppIngestor constructs the live-message ingest path.
+//
+// It is built by the caller rather than inside buildWhatsApp because its
+// dependencies — the identity and enrichment services — are composed earlier
+// than the WhatsApp stack, and it reaches the manager through
+// whatsappPrereqs.Ingestor, the readiness field it satisfies. Its manager seam
+// (the group-info source) is bound by Manager.SetIngestor, before Start.
+//
+// The WhatsAppRepository built here is a stateless wrapper over the shared
+// db.Querier, so the second instance buildWhatsApp constructs for the manager is
+// the same thing; there is no state to share.
+func buildWhatsAppIngestor(
+	cfg *config.Config,
+	database *db.Database,
+	commsMessageRepo *repository.CommsMessageRepository,
+	identityService *service.IdentityService,
+	externalContactRepo *repository.ExternalContactRepository,
+	enricher *service.EnrichmentService,
+) *wapkg.Ingestor {
+	whatsappRepo := repository.NewWhatsAppRepository(database.Queries)
+	gate := wapkg.NewChatGate(whatsappRepo, cfg.WhatsApp.GroupMaxMembers)
+	matcher := wapkg.NewPeerMatcher(
+		identityService,
+		commsMessageRepo,
+		externalContactRepo,
+		enricher,
+		cfg.WhatsApp.DiscoveryMinMessages,
+	)
+	return wapkg.NewIngestor(commsMessageRepo, gate, matcher)
 }
 
 // activateWhatsApp installs every prerequisite that is present and THEN calls

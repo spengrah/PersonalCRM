@@ -1014,6 +1014,17 @@ definitions:
           phone.
         type: string
     type: object
+  handlers.WhatsAppIngestResponse:
+    properties:
+      unresolved_lid_peers:
+        description: |-
+          UnresolvedLIDPeers counts distinct peers whose phone number the
+          integration could not recover from their WhatsApp-internal id. Their
+          messages are stored without a contact and can reach one only through the
+          import queue, so this is the visible size of that gap — not a message
+          volume.
+        type: integer
+    type: object
   handlers.WhatsAppPairRequest:
     properties:
       method:
@@ -1055,6 +1066,8 @@ definitions:
       connected_at:
         format: date-time
         type: string
+      ingest:
+        $ref: '#/definitions/handlers.WhatsAppIngestResponse'
       jid:
         type: string
       link_selector_persisted:
@@ -4274,8 +4287,8 @@ paths:
   /whatsapp/auth/status:
     get:
       description: Report the WhatsApp connection state, the linked account when paired,
-        any in-flight pairing code, and the history-backfill counts. Absent (404)
-        when the feature is disabled.
+        any in-flight pairing code, the history-backfill counts, and what the live
+        message path observed. Absent (404) when the feature is disabled.
       produces:
       - application/json
       responses:

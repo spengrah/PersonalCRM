@@ -5077,7 +5077,7 @@ const docTemplate = `{
         },
         "/whatsapp/auth/status": {
             "get": {
-                "description": "Report the WhatsApp connection state, the linked account when paired, any in-flight pairing code, and the history-backfill counts. Absent (404) when the feature is disabled.",
+                "description": "Report the WhatsApp connection state, the linked account when paired, any in-flight pairing code, the history-backfill counts, and what the live message path observed. Absent (404) when the feature is disabled.",
                 "produces": [
                     "application/json"
                 ],
@@ -6528,6 +6528,15 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.WhatsAppIngestResponse": {
+            "type": "object",
+            "properties": {
+                "unresolved_lid_peers": {
+                    "description": "UnresolvedLIDPeers counts distinct peers whose phone number the\nintegration could not recover from their WhatsApp-internal id. Their\nmessages are stored without a contact and can reach one only through the\nimport queue, so this is the visible size of that gap — not a message\nvolume.",
+                    "type": "integer"
+                }
+            }
+        },
         "handlers.WhatsAppPairRequest": {
             "type": "object",
             "required": [
@@ -6584,6 +6593,9 @@ const docTemplate = `{
                 "connected_at": {
                     "type": "string",
                     "format": "date-time"
+                },
+                "ingest": {
+                    "$ref": "#/definitions/handlers.WhatsAppIngestResponse"
                 },
                 "jid": {
                     "type": "string"

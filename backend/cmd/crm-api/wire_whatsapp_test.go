@@ -145,3 +145,54 @@ func countCalls(haystack []string, needle string) int {
 	}
 	return n
 }
+
+// TestWhatsAppWiring_IngestorIsWiredAndDrainerIsNot is the D18 guard: this PR
+// genuinely satisfies the ingest prerequisite, and the feature is STILL off.
+//
+// It drives the real activation sequence with the real ingestor shape, so it
+// discriminates between "the ingestor is wired" and "the manager will connect".
+func TestWhatsAppWiring_IngestorIsWiredAndDrainerIsNot(t *testing.T) {
+	m := wapkg.NewManager(nil, wapkg.NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, nil, nil)
+	t.Cleanup(m.Stop)
+
+	ingestor := wapkg.NewIngestor(nil, wapkg.NewChatGate(nil, 10), nil)
+	activateWhatsApp(context.Background(), m, whatsappPrereqs{
+		Ingestor: ingestor,
+		Recorder: stubRecorder{},
+		// DrainReady deliberately false: the drain worker is the next PR's.
+	})
+
+	ready, missing := m.Ready()
+	assert.False(t, ready, "the feature must still be off")
+	assert.Contains(t, missing, "history drain worker",
+		"the ingest prerequisite is genuinely satisfied, so the NEXT missing piece must be the drainer")
+	assert.NotContains(t, missing, "message ingestor")
+
+	status := m.Status()
+	assert.Equal(t, wapkg.StateNotReady, status.State)
+	assert.Equal(t, wapkg.ReasonIngestNotWired, status.Reason)
+}
+
+// TestWhatsAppWiring_GroupInfoSourceBoundBeforeStart pins the ordering the group
+// gate depends on: the seam is bound by SetIngestor, which the activation
+// sequence runs before the single Start, so no connected client can reach an
+// ingestor whose group-info source is still nil.
+func TestWhatsAppWiring_GroupInfoSourceBoundBeforeStart(t *testing.T) {
+	m := wapkg.NewManager(nil, wapkg.NewWALogger("whatsapp-test"), &config.WhatsAppConfig{}, nil, nil)
+	t.Cleanup(m.Stop)
+
+	binder := &bindOrderIngestor{}
+	activateWhatsApp(context.Background(), m, whatsappPrereqs{
+		Ingestor:   binder,
+		Recorder:   stubRecorder{},
+		DrainReady: true,
+	})
+
+	assert.True(t, binder.bound, "the group-info source must be bound, not left nil")
+}
+
+// bindOrderIngestor records whether the group-info seam was bound.
+type bindOrderIngestor struct{ bound bool }
+
+func (b *bindOrderIngestor) IngestMessage(context.Context, wapkg.IngestedMessage) error { return nil }
+func (b *bindOrderIngestor) BindGroupInfoSource(func() wapkg.GroupInfoFetcher)          { b.bound = true }

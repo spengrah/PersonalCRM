@@ -333,6 +333,10 @@
     "tags": ["@area:imports"]
   },
   {
+    "pattern": "^backend/internal/service/external_methods\\.go$",
+    "tags": ["@area:imports"]
+  },
+  {
     "pattern": "^backend/internal/api/handlers/calendar\\.go$",
     "tags": ["@area:meetings"]
   },

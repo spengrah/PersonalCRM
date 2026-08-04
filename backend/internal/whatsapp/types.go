@@ -215,6 +215,8 @@ type Status struct {
 	// Backfill reports the history drain. PR3 records notifications; the
 	// counts stay zero until a chunk arrives.
 	Backfill BackfillStatus `json:"backfill"`
+	// Ingest reports what the live message path observed.
+	Ingest IngestStatus `json:"ingest"`
 }
 
 // clone deep-copies every pointer target.
@@ -225,6 +227,9 @@ type Status struct {
 // clones what it read — because either alone leaves a mutable path: publish-only
 // lets two concurrent readers share targets, read-only lets the loop keep
 // aliases into what it published.
+//
+// IngestStatus holds no pointers, so the exhaustiveness claim above stays true
+// without a line for it.
 func (s Status) clone() Status {
 	out := s
 	out.JID = cloneStringPtr(s.JID)
@@ -288,6 +293,17 @@ type BackfillStatus struct {
 	Stale bool `json:"stale,omitempty"`
 }
 
+// IngestStatus is what the live message path observed since this process
+// started. It is deliberately NOT persisted: it reports the current process's
+// view, so a restart resets it to zero.
+type IngestStatus struct {
+	// UnresolvedLIDPeers counts DISTINCT peers whose phone number could not be
+	// recovered from their LID. Their messages stage without a contact and can
+	// reach one only through the import queue, so the count is the visible size
+	// of that gap — not a message volume.
+	UnresolvedLIDPeers int `json:"unresolved_lid_peers"`
+}
+
 // Pairing is the in-flight pairing attempt. There is no session token: only one
 // pairing runs at a time and its state is read back through the status
 // endpoint.
@@ -338,6 +354,33 @@ type IngestedMessage struct {
 	PeerPhoneE164 *string // nil when unresolvable
 	PushName      *string
 	MemberCount   *int // groups only
+	// AccountJID is the EMITTING session's own JID, in non-AD form. It is
+	// carried per event rather than read from the published snapshot: during a
+	// re-pair a snapshot read would stamp a retired session's in-flight message
+	// with the new account's JID, and the non-AD form is what stops the device
+	// number a re-link reassigns from fragmenting account_id.
+	AccountJID *string
+}
+
+// ChatGroupInfo is a group's metadata, projected off whatsmeow's types.
+type ChatGroupInfo struct {
+	Title       string
+	MemberCount int
+}
+
+// GroupInfoFetcher is the seam the group gate uses to reach the live client for
+// the one metadata call this integration makes. It is defined on the manager so
+// the gate never holds a *whatsmeow.Client.
+type GroupInfoFetcher interface {
+	GroupInfo(ctx context.Context, chatJID string) (*ChatGroupInfo, error)
+}
+
+// GroupInfoBinder is implemented by an ingestor that needs to reach the live
+// client for group metadata. SetIngestor binds it, so an ingestor cannot be
+// installed without its source — there is no window in which one is installed
+// and the other is not.
+type GroupInfoBinder interface {
+	BindGroupInfoSource(src func() GroupInfoFetcher)
 }
 
 // MessageIngestor is the projected-message path: live messages now, and the

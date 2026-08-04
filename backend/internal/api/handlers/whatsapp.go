@@ -196,7 +196,7 @@ func (h *WhatsAppHandler) Disconnect(c *gin.Context) {
 
 // GetStatus returns the WhatsApp connection status
 // @Summary Get WhatsApp status
-// @Description Report the WhatsApp connection state, the linked account when paired, any in-flight pairing code, and the history-backfill counts. Absent (404) when the feature is disabled.
+// @Description Report the WhatsApp connection state, the linked account when paired, any in-flight pairing code, the history-backfill counts, and what the live message path observed. Absent (404) when the feature is disabled.
 // @Tags whatsapp
 // @Produce json
 // @Success 200 {object} api.APIResponse{data=WhatsAppStatusResponse}
@@ -233,6 +233,9 @@ func whatsAppStatusResponse(status wapkg.Status) WhatsAppStatusResponse {
 			DroppedInlineChunks: status.Backfill.DroppedInlineChunks,
 			ObservedFloorAt:     formatTimePtr(status.Backfill.ObservedFloorAt),
 			Stale:               status.Backfill.Stale,
+		},
+		Ingest: WhatsAppIngestResponse{
+			UnresolvedLIDPeers: status.Ingest.UnresolvedLIDPeers,
 		},
 	}
 	if status.Pairing != nil {

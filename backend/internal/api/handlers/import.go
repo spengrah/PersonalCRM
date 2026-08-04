@@ -24,10 +24,15 @@ import (
 const MaxCandidatesForSorting = 10000
 
 // ImportHandler handles import candidate HTTP requests
-// PostImportHook is called after a Telegram candidate is imported/linked
+// PostImportHook is called after a chat-source candidate is imported or linked,
 // to back-fill message matching and trigger aggregation.
+//
+// It is keyed by Source() rather than assuming one source, and it receives the
+// whole external_contact row: every source keys its candidates differently, so
+// the field extraction belongs in the source's own adapter, not in this handler.
 type PostImportHook interface {
-	OnPeerLinked(ctx context.Context, peerUserID int64, peerUsername string, contactID uuid.UUID) error
+	Source() string
+	OnPeerLinked(ctx context.Context, external *repository.ExternalContact, contactID uuid.UUID) error
 }
 
 // ImportHandler holds the dependencies the import endpoints need. It
@@ -38,14 +43,14 @@ type PostImportHook interface {
 // routed through identitySvc so handler code does not call the
 // identity repository directly.
 type ImportHandler struct {
-	externalRepo   *repository.ExternalContactRepository
-	identitySvc    *service.IdentityService
-	contactSvc     *service.ContactService
-	matchSvc       *service.ImportMatchService
-	enricher       *service.EnrichmentService
-	suggestionSvc  *service.SuggestionService
-	validator      *validator.Validate
-	postImportHook PostImportHook
+	externalRepo    *repository.ExternalContactRepository
+	identitySvc     *service.IdentityService
+	contactSvc      *service.ContactService
+	matchSvc        *service.ImportMatchService
+	enricher        *service.EnrichmentService
+	suggestionSvc   *service.SuggestionService
+	validator       *validator.Validate
+	postImportHooks map[string]PostImportHook
 }
 
 // NewImportHandler creates a new import handler. identitySvc may be
@@ -72,9 +77,17 @@ func NewImportHandler(
 	}
 }
 
-// SetPostImportHook sets an optional hook for post-import processing (e.g., Telegram back-linking).
-func (h *ImportHandler) SetPostImportHook(hook PostImportHook) {
-	h.postImportHook = hook
+// RegisterPostImportHook registers an optional per-source hook for post-import
+// processing (message back-linking). Registering a second hook for the same
+// source replaces the first.
+func (h *ImportHandler) RegisterPostImportHook(hook PostImportHook) {
+	if hook == nil {
+		return
+	}
+	if h.postImportHooks == nil {
+		h.postImportHooks = make(map[string]PostImportHook)
+	}
+	h.postImportHooks[hook.Source()] = hook
 }
 
 // ImportCandidateResponse represents an import candidate for the API
@@ -569,22 +582,20 @@ func (h *ImportHandler) LinkContact(c *gin.Context) {
 	}, nil)
 }
 
-// triggerPostImportHook calls the post-import hook for Telegram candidates (best-effort).
+// triggerPostImportHook dispatches to the hook registered for the candidate's
+// source (best-effort). A source with no hook is a no-op.
 func (h *ImportHandler) triggerPostImportHook(ctx context.Context, external *repository.ExternalContact, contactID uuid.UUID) {
-	if h.postImportHook == nil || external.Source != "telegram" {
+	if len(h.postImportHooks) == 0 || external == nil {
 		return
 	}
-	peerUserID, err := strconv.ParseInt(external.SourceID, 10, 64)
-	if err != nil {
-		logger.Warn().Err(err).Str("source_id", external.SourceID).Msg("failed to parse telegram peer user ID for post-import hook")
+	hook, ok := h.postImportHooks[external.Source]
+	if !ok {
 		return
 	}
-	var peerUsername string
-	if username, ok := external.Metadata["username"].(string); ok {
-		peerUsername = strings.TrimPrefix(username, "@")
-	}
-	if err := h.postImportHook.OnPeerLinked(ctx, peerUserID, peerUsername, contactID); err != nil {
-		logger.Warn().Err(err).Int64("peer_user_id", peerUserID).Msg("telegram: post-import hook failed")
+	if err := hook.OnPeerLinked(ctx, external, contactID); err != nil {
+		// No identifier value is logged: the source alone is enough to locate
+		// the failure, and the peer key is personal data.
+		logger.Warn().Err(err).Str("source", external.Source).Msg("post-import hook failed")
 	}
 }
 

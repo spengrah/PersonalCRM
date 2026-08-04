@@ -40,6 +40,8 @@ import (
 	"personal-crm/backend/internal/health"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/telegram"
+	wapkg "personal-crm/backend/internal/whatsapp"
 
 	"github.com/gin-gonic/gin"
 	"github.com/riverqueue/river"
@@ -173,6 +175,11 @@ func run() int {
 
 	// Message-store repos + staging registry + venue resolver.
 	messaging := buildMessagingFoundation(database.Queries, messagesMessageRepo, calendarRepoForIngest)
+	// The pool is a property of the repository, not of any feature: without it
+	// AttachUnmatchedByPeer — whose two statements must commit together — fails
+	// at runtime. Unconditional and outside every feature gate, matching the
+	// contact repository's precedent.
+	messaging.CommsMessageRepo.SetPool(database.Pool)
 
 	// Event-bus consumers (Cadence / Knowledge / FollowUp) + their shared
 	// collaborators, built BEFORE ContactService so they can be passed to
@@ -258,12 +265,32 @@ func run() int {
 	// external-sync-off configuration, so no second gate is needed here. A zero
 	// whatsappStack reproduces the nil manager/handler when disabled.
 	var whatsappStk whatsappStack
+	// Declared outside the gated block because the post-import hook wiring
+	// below is outside it and must reference the same instance.
+	var waIngestor *wapkg.Ingestor
 	if cfg.Features.EnableWhatsAppSync {
-		// The prerequisite set the readiness gate reads. It is deliberately
-		// partial: the ingestor and the drain worker are not built yet, so the
+		// Config validation refuses WhatsApp-on / external-sync-off, so a nil
+		// external contact repository here is a validation escape rather than a
+		// supported configuration: it leaves the ingestor nil, which keeps the
+		// readiness gate reporting not_ready.
+		if externalContactRepo == nil {
+			logger.Error().Msg("whatsapp: external contact repository is absent; ingest stays unwired")
+		} else {
+			waIngestor = buildWhatsAppIngestor(cfg, database, messaging.CommsMessageRepo, ingest.IdentityService, externalContactRepo, domain.EnrichmentService)
+		}
+		// The prerequisite set the readiness gate reads. It is still
+		// deliberately partial: the drain worker is not built yet, so the
 		// manager reports not_ready and never connects. Filling the remaining
-		// fields is what turns WhatsApp on.
-		whatsappStk = buildWhatsApp(ctx, cfg, database, whatsappPrereqs{})
+		// field is what turns WhatsApp on.
+		//
+		// The nil check is load-bearing: assigning a nil *Ingestor into the
+		// interface field would produce a non-nil interface holding a nil
+		// pointer, which the readiness gate would read as "wired".
+		prereqs := whatsappPrereqs{}
+		if waIngestor != nil {
+			prereqs.Ingestor = waIngestor
+		}
+		whatsappStk = buildWhatsApp(ctx, cfg, database, prereqs)
 	}
 	whatsappManager := whatsappStk.Manager
 	whatsappHandler := whatsappStk.Handler
@@ -273,9 +300,15 @@ func run() int {
 		defer whatsappManager.Stop()
 	}
 
-	// Wire Telegram post-import hook (if both Telegram and imports are enabled)
-	if telegramManager != nil && importHandler != nil {
-		importHandler.SetPostImportHook(telegramManager)
+	// Wire the per-source post-import hooks (message back-linking). Each is
+	// registered only when its integration is built.
+	if importHandler != nil {
+		if telegramManager != nil {
+			importHandler.RegisterPostImportHook(telegram.NewPostImportHook(telegramManager))
+		}
+		if waIngestor != nil {
+			importHandler.RegisterPostImportHook(wapkg.NewPostImportHook(waIngestor.PeerMatcher()))
+		}
 	}
 
 	// Aggregation engines (messages + gchat) + reenqueuer registry.

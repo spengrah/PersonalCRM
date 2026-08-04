@@ -1374,6 +1374,7 @@ func (m *Manager) Status() Status {
 	// leave the loop holding aliases into what it published.
 	out := s.status.clone()
 	out.Backfill = m.backfillStatus(context.Background())
+	out.Ingest = m.ingestStatus()
 	return out
 }
 

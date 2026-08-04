@@ -11,6 +11,9 @@ const SOURCE_DISPLAY_MAP: Record<string, SourceDisplayInfo> = {
   gcal_attendee: { label: 'Google Calendar', icon: Calendar },
   icloud_contacts: { label: 'iCloud Contacts', icon: Cloud },
   telegram: { label: 'Telegram', icon: Send },
+  // lucide-react ships no WhatsApp glyph; MessageCircle is the generic
+  // chat mark already used for anarlog_humans.
+  whatsapp: { label: 'WhatsApp', icon: MessageCircle },
   // anarlog_humans candidates flow through the ordinary candidate queue;
   // anarlog_title name-candidate rows live behind the dedicated People-tab
   // name-candidates section and never carry this badge.

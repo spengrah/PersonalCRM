@@ -110,7 +110,12 @@ func TestPackageHasNoMutex(t *testing.T) {
 	allowed := map[string]int{
 		"sync.Once":      2, // the process-wide device props, and Manager.stopOnce
 		"sync.WaitGroup": 1, // Manager.effects, the effect-goroutine census
-		"atomic.Pointer": 2, // the published snapshot, and the backfill cache
+		// The published snapshot, the backfill cache, and the unresolved-LID
+		// peer set. The third is a COPY-ON-WRITE map: it is off-loop shared
+		// state, and this is how the package holds such state without a lock —
+		// every published map is immutable and a writer installs a replacement
+		// by CAS, so a reader can never observe a half-built set.
+		"atomic.Pointer": 3,
 		// dialSettled: the dial and its watchdog race to decide one outcome.
 		// They share no state beyond this flag and the channel it guards, and
 		// the CAS is the decision itself, so there is nothing for a lock to make

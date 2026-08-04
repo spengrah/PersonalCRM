@@ -13,7 +13,8 @@ import (
 //
 // Callers are responsible for deduplicating against existing contact methods
 // on the target contact — this function returns everything the external
-// contact carries, in a stable order: emails, then phones, then telegram.
+// contact carries, in a stable order: emails, then phones, then the
+// source-specific handle.
 func BuildMethodsFromExternal(external *repository.ExternalContact) []ContactMethodInput {
 	if external == nil {
 		return nil
@@ -36,14 +37,30 @@ func BuildMethodsFromExternal(external *repository.ExternalContact) []ContactMet
 		}
 	}
 
+	// WhatsApp candidates are keyed by their raw peer JID, and only the
+	// resolved E.164 is a usable contact method. A peer whose number was never
+	// recovered therefore emits nothing — correct, and silent rather than
+	// wrong: there is no identifier type for a WhatsApp-internal id, and the
+	// raw JID is an unusable string in a user-facing field.
+	if external.Source == "whatsapp" {
+		if phone, ok := external.Metadata["phone_e164"].(string); ok {
+			canonical := canonicalizeMethodValue("whatsapp", phone)
+			if canonical != "" {
+				methods = append(methods, ContactMethodInput{Type: "whatsapp", Value: canonical})
+			}
+		}
+	}
+
 	return methods
 }
 
 // canonicalizeMethodValue converts a user- or frontend-supplied raw method
 // value into the canonical form stored in contact_method.value. For
 // handle-based types (telegram/twitter/discord), strips leading '@' and
-// trims whitespace. Does NOT lowercase — storage preserves user casing;
-// value_normalized in the DB carries the lowercased form via the trigger.
+// trims whitespace. Every other type — including whatsapp, whose value is an
+// already-normalized E.164 — passes through unchanged. Does NOT lowercase:
+// storage preserves user casing; value_normalized in the DB carries the
+// lowercased form via the trigger.
 func canonicalizeMethodValue(methodType, rawValue string) string {
 	switch methodType {
 	case "telegram", "twitter", "discord":

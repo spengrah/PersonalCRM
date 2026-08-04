@@ -563,7 +563,8 @@ func (h *Harness) SeedTelegramDiscoveryCandidate(ctx context.Context, spec facto
 	if spec.Username != "" {
 		metadata["username"] = spec.Username
 	}
-	req := repository.UpsertTelegramDiscoveryCandidateRequest{
+	req := repository.UpsertDiscoveryCandidateRequest{
+		Source:      "telegram",
 		SourceID:    strconv.FormatInt(spec.PeerUserID, 10),
 		DisplayName: nilIfBlank(spec.DisplayName),
 		FirstName:   nilIfBlank(spec.FirstName),
@@ -571,7 +572,7 @@ func (h *Harness) SeedTelegramDiscoveryCandidate(ctx context.Context, spec facto
 		Metadata:    metadata,
 		SyncedAt:    &now,
 	}
-	ec, err := h.externalRepo.UpsertTelegramDiscoveryCandidate(ctx, req)
+	ec, err := h.externalRepo.UpsertDiscoveryCandidate(ctx, req)
 	if err != nil {
 		return uuid.Nil, "", fmt.Errorf("seed telegram discovery candidate: %w", err)
 	}

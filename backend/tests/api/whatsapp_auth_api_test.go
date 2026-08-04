@@ -498,6 +498,42 @@ func TestAPI_WhatsAppStatusReportsBackfillCounts(t *testing.T) {
 	assert.Equal(t, floor.Format(time.RFC3339), *backfill.ObservedFloorAt)
 }
 
+// TestAPI_WhatsAppStatusReportsUnresolvedLIDPeers is the wire contract for the
+// ingest observation: a peer the integration could not resolve to a phone number
+// is reachable only through the import queue, so the size of that gap has to be
+// visible.
+//
+// The count is driven to two DISTINCT values, which is what makes the test able
+// to fail: a dropped field, a field that is never mapped, and a field mapped to
+// a constant all fail here, where an assertion that "the key exists" or that "a
+// zero was serialized" would pass against every one of them. The end-to-end
+// drive — two unresolvable peers actually producing a count of two — is
+// TestStatus_ReportsUnresolvedLIDCount, in the package that owns the counter.
+func TestAPI_WhatsAppStatusReportsUnresolvedLIDPeers(t *testing.T) {
+	// spec: WHA-007.status-reports-unresolved-lid-peers
+	for _, want := range []int{0, 2} {
+		manager := &fakeWhatsAppManager{status: wapkg.Status{
+			Configured: true,
+			State:      wapkg.StateConnected,
+			Ingest:     wapkg.IngestStatus{UnresolvedLIDPeers: want},
+		}}
+		router := setupWhatsAppRouter(t, manager)
+
+		rec := doWhatsAppRequest(t, router, http.MethodGet, "/api/v1/whatsapp/auth/status", nil)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, want, decodeWhatsAppStatus(t, rec).Ingest.UnresolvedLIDPeers,
+			"the reported count must track the integration's own, not a constant")
+	}
+
+	// And the field is always present, including at zero: a client cannot tell
+	// "no unresolved peers" from "this build does not report it" if it vanishes.
+	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{status: wapkg.Status{Configured: true, State: wapkg.StateConnected}})
+	rec := doWhatsAppRequest(t, router, http.MethodGet, "/api/v1/whatsapp/auth/status", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"unresolved_lid_peers":0`)
+}
+
 func TestAPI_WhatsAppStatusNamesTheMissingDependency(t *testing.T) {
 	// spec: WHA-007.status-reports-not-ready-reason
 	router := setupWhatsAppRouter(t, &fakeWhatsAppManager{status: wapkg.Status{
