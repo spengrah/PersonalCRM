@@ -1,6 +1,7 @@
 package main
 
 import (
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -11,25 +12,32 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	tgpkg "personal-crm/backend/internal/telegram"
+	wapkg "personal-crm/backend/internal/whatsapp"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 )
 
-// aggregationStack holds the messages + gchat aggregation engines, consumed
-// by registerMessagingWorkers.
+// aggregationStack holds the messages + gchat + whatsapp aggregation engines,
+// consumed by registerMessagingWorkers. ReenqueuerEntries is the same map handed
+// to NewAggregatorReenqueuerRegistry — returned so the composition-root parity
+// test can invoke a per-source entry.
 type aggregationStack struct {
-	MessagesEngine *aggregation.Engine
-	GChatEngine    *aggregation.Engine
+	MessagesEngine    *aggregation.Engine
+	GChatEngine       *aggregation.Engine
+	WhatsAppEngine    *aggregation.Engine
+	ReenqueuerEntries map[string]consumer.AggregatorReenqueuer
 }
 
-// buildAggregationEngines constructs the messages + gchat aggregation engines
-// and their reenqueuers, registers the gchat rematch handlers (gated on a
-// constructed gchat provider), and populates the deferred aggregator-reenqueuer
+// buildAggregationEngines constructs the messages + gchat + whatsapp aggregation
+// engines and their reenqueuers, registers the gchat rematch handlers (gated on a
+// constructed gchat provider) and the whatsapp ones (gated on the WhatsApp
+// feature flag), and populates the deferred aggregator-reenqueuer
 // registry. Wired unconditionally — the engines are stateless and inert until
 // their source rows exist. telegramManager / gchatProvider / gchatSyncStates
 // are nil-safe params exactly as the old inline fallbacks.
 func buildAggregationEngines(
+	cfg *config.Config,
 	database *db.Database,
 	core coreRepos,
 	contactService *service.ContactService,
@@ -121,6 +129,42 @@ func buildAggregationEngines(
 		repository.InteractionSourceGChat,
 	)
 
+	// WhatsApp aggregation engine over comms_message. LIVE but INERT on the same
+	// terms as gchat: every query is source='whatsapp'-scoped and returns zero
+	// rows until ingest writes one. It is deliberately NOT gated on
+	// EnableWhatsAppSync — rows staged under an earlier ON boot must still
+	// aggregate after a restart with the flag off. Unlike gchat's, the
+	// burst/reply windows are operator-tunable env knobs.
+	whatsappEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(riverClient)
+	whatsappEngine := wapkg.NewAggregationEngine(
+		cfg.WhatsApp.BurstWindowHours,
+		cfg.WhatsApp.ReplyBridgeHours,
+		commsMessageRepo,
+		interactionRepo,
+		contactService,
+		contactService,
+		eventBus,
+		database.Pool,
+		whatsappEnqueuer,
+	)
+
+	// WhatsApp rematch handlers: registered ONLY when WhatsApp sync is enabled.
+	// Unlike the engine, these are not inert when off — registering the 'phone'
+	// handler unconditionally would make a bare phone method rematch-eligible on
+	// deployments with both Telegram and WhatsApp disabled, minting a rematch job
+	// where none exists today (RematchService.EligibleMethods).
+	if cfg.Features.EnableWhatsAppSync {
+		rematchService.Register(wapkg.NewWhatsAppMethodRematchHandler(commsMessageRepo, whatsappEngine))
+		rematchService.Register(wapkg.NewPhoneRematchHandler(commsMessageRepo, whatsappEngine))
+		logger.Info().Msg("WhatsApp rematch handlers registered (whatsapp + phone contact methods)")
+	}
+
+	whatsappReenqueuer := consumer.NewCommsAggregatorReenqueuer(
+		whatsappEngine,
+		riverClient,
+		repository.InteractionSourceWhatsApp,
+	)
+
 	// Wire the per-source aggregator reenqueuer registry. The
 	// InteractionRecorderWorker holds the deferred holder; this
 	// assignment makes the post-commit reenqueue path live for both
@@ -131,6 +175,7 @@ func buildAggregationEngines(
 	reenqueuerEntries := map[string]consumer.AggregatorReenqueuer{
 		repository.InteractionSourceMessages: messagesReenqueuer,
 		repository.InteractionSourceGChat:    gchatReenqueuer,
+		repository.InteractionSourceWhatsApp: whatsappReenqueuer,
 	}
 	if telegramManager != nil {
 		reenqueuerEntries[repository.InteractionSourceTelegram] = consumer.NewTelegramAggregatorReenqueuer(telegramManager.AggregationEngine())
@@ -140,7 +185,9 @@ func buildAggregationEngines(
 	aggregatorReenqueuerHolder.set(consumer.NewAggregatorReenqueuerRegistry(reenqueuerEntries))
 
 	return aggregationStack{
-		MessagesEngine: messagesEngine,
-		GChatEngine:    gchatEngine,
+		MessagesEngine:    messagesEngine,
+		GChatEngine:       gchatEngine,
+		WhatsAppEngine:    whatsappEngine,
+		ReenqueuerEntries: reenqueuerEntries,
 	}
 }

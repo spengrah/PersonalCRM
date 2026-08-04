@@ -31,6 +31,7 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/testdb"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/stretchr/testify/require"
@@ -170,7 +171,8 @@ func TestWireGoldenLists(t *testing.T) {
 			cfg.Database.MigrationsPath = migrationsPathForTest()
 			tc.mutate(cfg)
 
-			reg, syncStk := buildWireChainForGolden(t, cfg)
+			chain := buildWireChainForGolden(t, cfg)
+			reg, syncStk := chain.reg, chain.sync
 
 			require.Equal(t, tc.wantWorkers, sortedCopy(reg.workerKinds), "worker kinds")
 			require.Equal(t, tc.wantPeriodic, sortedCopy(reg.periodicKinds), "periodic kinds")
@@ -187,11 +189,27 @@ func TestWireGoldenLists(t *testing.T) {
 	}
 }
 
+// wireChain is everything buildWireChainForGolden produces. The golden lists
+// read reg + sync; the WhatsApp composition-root parity test
+// (whatsapp_wiring_test.go) invokes the source-keyed registries in messaging,
+// agg and wiring, which is why they are returned rather than discarded.
+type wireChain struct {
+	reg       *riverRegistrar
+	sync      syncStack
+	database  *db.Database
+	core      coreRepos
+	messaging messagingFoundation
+	agg       aggregationStack
+	wiring    messagingWorkerWiring
+	river     *river.Client[pgx.Tx]
+	bus       *events.Bus
+	eventRepo *repository.EventRepository
+}
+
 // buildWireChainForGolden drives the wire chain in run()'s exact order, minus
 // buildTelegram (telegram-skip rule) and minus riverClient.Start / the HTTP
-// server. It returns the registrar (recording worker/periodic kinds) and the
-// external-sync stack (for provider enumeration).
-func buildWireChainForGolden(t *testing.T, cfg *config.Config) (*riverRegistrar, syncStack) {
+// server.
+func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 	t.Helper()
 	ctx := context.Background()
 
@@ -241,8 +259,8 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) (*riverRegistrar,
 
 	// Telegram is intentionally SKIPPED (Start must not run); a nil
 	// telegramManager is exactly a telegram-disabled boot for aggregation.
-	agg := buildAggregationEngines(database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, nil, syncStk.GChatProvider, syncStk.GChatSyncStates)
-	registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)
+	agg := buildAggregationEngines(cfg, database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, nil, syncStk.GChatProvider, syncStk.GChatSyncStates)
+	wiring := registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)
 
 	machost := buildMacHost(reg, database, core, ingest)
 	buildStaleness(reg, cfg, database, machost)
@@ -253,7 +271,18 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) (*riverRegistrar,
 	// pinned by the golden lists.
 	registerJobSampleWorkers(reg, repository.NewJobSampleRepository(database.Queries), cfg)
 
-	return reg, syncStk
+	return wireChain{
+		reg:       reg,
+		sync:      syncStk,
+		database:  database,
+		core:      core,
+		messaging: messaging,
+		agg:       agg,
+		wiring:    wiring,
+		river:     riverClient,
+		bus:       eventBus,
+		eventRepo: eventRepo,
+	}
 }
 
 func sortedCopy(in []string) []string {
