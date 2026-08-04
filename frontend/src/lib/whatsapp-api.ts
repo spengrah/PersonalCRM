@@ -1,10 +1,16 @@
 import { apiClient } from './api-client'
 
 // These types are hand-written, mirroring backend/internal/api/handlers/
-// whatsapp_dto.go field for field — the same convention telegram-api.ts uses.
-// Every field typed here is read by whatsapp-section.tsx and exercised by a
-// named test in whatsapp-settings.spec.ts; a field the UI never reads must be
-// rendered or dropped, not carried unused.
+// whatsapp_dto.go — the same convention telegram-api.ts uses. They cover the
+// fields the UI CONSUMES, not the whole wire shape: every field typed here is
+// read by whatsapp-section.tsx and exercised by a named test in
+// whatsapp-settings.spec.ts, so a field the UI never reads is dropped rather
+// than carried unused. That equality is what bounds the drift risk of
+// hand-writing them, so keep it exact — an unread field silently widens the
+// unverified surface. The response envelope carries more (`configured`,
+// `chat_type`, and the disconnect result's `remote_unlinked` /
+// `already_unlinked` / `forced`); those are pinned Go-side by the API tests
+// over the real router.
 
 export type WhatsAppState =
   | 'not_ready'
@@ -38,7 +44,6 @@ export interface WhatsAppIngest {
 }
 
 export interface WhatsAppStatus {
-  configured: boolean
   state: WhatsAppState
   reason?: string
   missing?: string
@@ -60,9 +65,8 @@ export interface WhatsAppStatus {
 }
 
 export interface WhatsAppDisconnectResult {
-  remote_unlinked: boolean
-  already_unlinked: boolean
-  forced: boolean
+  // Only the warning is consumed: it is the one field that changes what the
+  // user must do next (finish the unlink from their phone).
   warning?: string
 }
 
@@ -76,7 +80,6 @@ export type WhatsAppChatStatus = 'auto' | 'tracked' | 'ignored'
 export interface WhatsAppChat {
   chat_jid: string
   chat_title?: string
-  chat_type: string
   member_count?: number
   status: WhatsAppChatStatus
   effective_tracked: boolean

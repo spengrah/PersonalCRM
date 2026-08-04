@@ -84,9 +84,16 @@ export function useDisconnectWhatsApp() {
     mutationFn: ({ force }: { force?: boolean } = {}) => whatsappApi.disconnect(force),
     onSuccess: () => {
       queryClient.setQueryData<WhatsAppStatus>(whatsappKeys.status(), notPairedSnapshot)
-      queryClient.invalidateQueries({ queryKey: whatsappKeys.status() })
       // An unlinked account's chat list is no longer meaningful.
       queryClient.invalidateQueries({ queryKey: whatsappKeys.chats() })
+    },
+    // onSettled, not onSuccess: a REFUSED unlink (409, or the 499 whose copy
+    // says the unlink is still running) leaves the section rendering a status
+    // nothing else would refresh — the poll is off while connected, and a
+    // failed mutation invalidates nothing. The snap above runs first on the
+    // success path, so this refetches into the corrected shape either way.
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: whatsappKeys.status() })
     },
   })
 }

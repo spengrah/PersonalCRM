@@ -10,7 +10,6 @@ import type { WhatsAppState, WhatsAppStatus } from '@/lib/whatsapp-api'
 
 function statusWith(overrides: Partial<WhatsAppStatus>): WhatsAppStatus {
   return {
-    configured: true,
     state: 'not_paired',
     backfill: { pending: 0, processing: 0, failed: 0, dropped_inline_chunks: 0 },
     ingest: { unresolved_lid_peers: 0 },
@@ -99,8 +98,11 @@ describe('deriveWhatsAppStep', () => {
     ).toBe('pairing_phone')
   })
 
-  // A pairing whose method has not arrived yet still has to render something;
-  // QR is the branch that tolerates a missing code.
+  // A pairing state with no pairing object is backend-unreachable, but the
+  // derivation must still settle on a branch rather than throwing — this pins
+  // that an incomplete payload cannot crash the step machine. (The QR branch it
+  // lands on is itself gated on `status.pairing`, so nothing is rendered from
+  // the absent object.)
   it('falls back to the QR branch when a pairing carries no method', () => {
     expect(derive({ status: statusWith({ state: 'pairing' }) })).toBe('pairing_qr')
   })

@@ -107,7 +107,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
       timeout: 10000,
     })
     // And it resolves rather than spinning forever.
-    await expect(section.getByRole('button', { name: 'Link WhatsApp' })).toBeVisible({
+    await expect(section.getByRole('button', { name: 'Link WhatsApp', exact: true })).toBeVisible({
       timeout: 10000,
     })
   })
@@ -131,7 +131,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await expect(section.getByText(/history drain worker is not registered/)).toBeVisible()
     // The button is ABSENT, not disabled: the backend would answer 409, and a
     // disabled control invites the user to wonder what unlocks it.
-    await expect(section.getByRole('button', { name: 'Link WhatsApp' })).toHaveCount(0)
+    await expect(section.getByRole('button', { name: 'Link WhatsApp', exact: true })).toHaveCount(0)
   })
 
   // spec: WHA-070.link-offers-qr-and-phone
@@ -141,7 +141,9 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await section.getByRole('button', { name: 'Link WhatsApp' }).click({ timeout: 10000 })
+    await section
+      .getByRole('button', { name: 'Link WhatsApp', exact: true })
+      .click({ timeout: 10000 })
     await expect(section.getByRole('button', { name: 'Scan a QR code' })).toBeVisible()
     await expect(section.getByRole('button', { name: 'Use a phone pairing code' })).toBeVisible()
   })
@@ -152,6 +154,9 @@ test.describe('WhatsApp Settings @area:settings', () => {
   }) => {
     // Codes expire, so the section polls; what the E2E can prove is the
     // mechanism — the rendered code follows the polled status.
+    // The first TWO polls serve the same code: the 3s refetch would otherwise
+    // race the first assertion, and a swap that happens before it lands would
+    // read as the code never having arrived.
     let poll = 0
     await page.route('**/api/v1/whatsapp/auth/status', route => {
       poll += 1
@@ -161,7 +166,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
           state: 'pairing',
           pairing: {
             method: 'qr',
-            qr_code: poll === 1 ? 'MOCK-QR-FIRST' : 'MOCK-QR-REFRESHED',
+            qr_code: poll <= 2 ? 'MOCK-QR-FIRST' : 'MOCK-QR-REFRESHED',
             expires_at: '2030-01-01T00:00:00Z',
           },
         }),
@@ -215,7 +220,9 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await section.getByRole('button', { name: 'Link WhatsApp' }).click({ timeout: 10000 })
+    await section
+      .getByRole('button', { name: 'Link WhatsApp', exact: true })
+      .click({ timeout: 10000 })
     await section.getByRole('button', { name: 'Use a phone pairing code' }).click()
     await section.getByLabel('Phone Number').fill('+15551234567')
 
@@ -272,7 +279,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     // assertion is what keeps the pair-mode reset rule from being decorative: a
     // cancel that left the mode set would drop the user back into the middle of
     // the flow they just abandoned.
-    await expect(section.getByRole('button', { name: 'Link WhatsApp' })).toBeVisible({
+    await expect(section.getByRole('button', { name: 'Link WhatsApp', exact: true })).toBeVisible({
       timeout: 10000,
     })
     await expect(section.getByRole('button', { name: 'Scan a QR code' })).toHaveCount(0)
@@ -440,7 +447,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await section.getByRole('button', { name: /Disconnect/ }).click()
     await deleteRequest
 
-    await expect(section.getByRole('button', { name: 'Link WhatsApp' })).toBeVisible({
+    await expect(section.getByRole('button', { name: 'Link WhatsApp', exact: true })).toBeVisible({
       timeout: 10000,
     })
   })
@@ -751,5 +758,26 @@ test.describe('WhatsApp Settings @area:settings', () => {
     const section = whatsappRegion(page)
     await expect(section.getByText(/WhatsApp could not start/)).toBeVisible({ timeout: 10000 })
     await expect(section.getByText(/could not be resolved to the linked account/)).toBeVisible()
+  })
+
+  // spec: WHA-077.terminal-disconnect-offers-a-fresh-link
+  test('a terminal disconnect offers a fresh link that reaches the method choice', async ({
+    page,
+  }) => {
+    // A terminal reason means the integration will not reconnect on its own, so
+    // linking again is the only way forward. The affordance is only real if it
+    // reaches the SAME method choice a first-time link does — the step is
+    // derived from the backend state, which still reads disconnected.
+    await mockStatus(page, statusPayload({ state: 'disconnected', reason: 'logged_out' }))
+
+    await openSettings(page)
+
+    const section = whatsappRegion(page)
+    const relink = section.getByRole('button', { name: 'Link WhatsApp again' })
+    await expect(relink).toBeVisible({ timeout: 10000 })
+    await relink.click()
+
+    await expect(section.getByRole('button', { name: 'Scan a QR code' })).toBeVisible()
+    await expect(section.getByRole('button', { name: 'Use a phone pairing code' })).toBeVisible()
   })
 })

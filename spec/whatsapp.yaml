@@ -779,6 +779,8 @@ behaviors:
         text: a temporary restriction also reports when it lifts, which is its only actionable half
       - key: startup-failure-shows-its-reason
         text: a stack that could not be brought up at all reports its reason too, rather than rendering as an empty section
+      - key: terminal-disconnect-offers-a-fresh-link
+        text: a connection that ended terminally offers linking again, and taking that offer reaches the same choice of pairing methods a first-time link does
     provenance: [whatsapp-section.tsx disconnected + error branches, whatsapp terminal reason constants]
     notes: The browser half of WHA-004 and WHA-005 (the terminal-disconnect contract). An unmapped future reason falls back to the raw value, so a newer backend still shows something true rather than nothing.
 
