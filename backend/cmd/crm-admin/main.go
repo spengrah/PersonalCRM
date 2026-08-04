@@ -300,6 +300,14 @@ type tier0Reader interface {
 	Tier0StatsByKind(ctx context.Context, cutoff time.Time) ([]repository.Tier0Row, error)
 }
 
+// whatsappHistoryAdmin is the slice of WhatsAppRepository the two WhatsApp
+// history subcommands need. It is stateless over the shared db.Querier, so no
+// River client and no manager are involved.
+type whatsappHistoryAdmin interface {
+	ListNotifications(ctx context.Context, states []string) ([]repository.HistoryNotification, error)
+	RequeueFailedNotification(ctx context.Context, id uuid.UUID) error
+}
+
 // adminDeps groups the per-subcommand dependencies. Tests inject
 // fakes for each interface; the production wiring builds a single
 // MacHostService and a small adapter for rematch.
@@ -329,9 +337,12 @@ type adminDeps struct {
 	migrateContactKnowledge contactKnowledgeMigrator
 	// tier0 serves --river-tier0 (one-shot wait/run-by-kind read over live
 	// river_job). Wired to a JobSampleRepository.
-	tier0  tier0Reader
-	stdout io.Writer
-	stderr io.Writer
+	tier0 tier0Reader
+	// whatsappHistory serves --whatsapp-list-history / --whatsapp-requeue-history
+	// (the operator recovery path for a history chunk that failed to drain).
+	whatsappHistory whatsappHistoryAdmin
+	stdout          io.Writer
+	stderr          io.Writer
 }
 
 // runOptions captures parsed flags. Exposed as a struct so tests can
@@ -382,6 +393,13 @@ type runOptions struct {
 	// by --river-tier0.
 	riverTier0  bool
 	windowHours int
+	// WhatsApp history recovery. listWhatsAppHistory <- --whatsapp-list-history
+	// (the bool subcommand selector); historyState is an auxiliary filter used
+	// only by it. requeueWhatsAppHistoryID <- --whatsapp-requeue-history (empty
+	// = unset; non-empty selects the requeue subcommand).
+	listWhatsAppHistory      bool
+	historyState             string
+	requeueWhatsAppHistoryID string
 }
 
 // exitErr carries an explicit process exit code so a subcommand can drive a
@@ -538,6 +556,12 @@ func validateSubcommand(opts runOptions) error {
 	if opts.riverTier0 {
 		active++
 	}
+	if opts.listWhatsAppHistory {
+		active++
+	}
+	if opts.requeueWhatsAppHistoryID != "" {
+		active++
+	}
 	if active == 0 {
 		return errors.New("no subcommand specified; pass exactly one of " +
 			subcommandList)
@@ -555,7 +579,8 @@ const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-me
 	"--rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, " +
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
 	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
-	"--migrate-contact-knowledge-columns, --river-tier0"
+	"--migrate-contact-knowledge-columns, --river-tier0, --whatsapp-list-history, " +
+	"--whatsapp-requeue-history <uuid>"
 
 // parseArgs uses a private FlagSet so tests can drive the parser
 // without polluting flag's global state.
@@ -643,6 +668,17 @@ func parseArgs(args []string) (runOptions, error) {
 			"compare it numerically to the Tier-1 queue_wait_ms metric. Read-only; safe with crm-api running.")
 	fs.IntVar(&opts.windowHours, "window-hours", 24,
 		"Look-back window in hours for --river-tier0 (default 24; must be >= 1).")
+	fs.BoolVar(&opts.listWhatsAppHistory, "whatsapp-list-history", false,
+		"List WhatsApp history-sync chunks (one key=value row per chunk) for backfill inspection. "+
+			"Use with --history-state. Read-only; safe with crm-api running. Never prints the media "+
+			"pointer or the checkpoint.")
+	fs.StringVar(&opts.historyState, "history-state", "",
+		"Comma-separated WhatsApp history chunk states to filter --whatsapp-list-history "+
+			"(default: all of pending, processing, done, failed).")
+	fs.StringVar(&opts.requeueWhatsAppHistoryID, "whatsapp-requeue-history", "",
+		"Return a FAILED WhatsApp history chunk (by UUID from --whatsapp-list-history) to pending so "+
+			"the drainer retries it. Attempts are NOT reset -- they are lifetime triage evidence -- so "+
+			"a chunk past the attempt cap gets exactly one fresh attempt per requeue.")
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
@@ -752,6 +788,10 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runMigrateContactKnowledge(ctx, deps)
 	case opts.riverTier0:
 		return runRiverTier0(ctx, opts, deps)
+	case opts.listWhatsAppHistory:
+		return runListWhatsAppHistory(ctx, opts, deps)
+	case opts.requeueWhatsAppHistoryID != "":
+		return runRequeueWhatsAppHistory(ctx, opts, deps)
 	case opts.migrate, opts.migrateCheck:
 		// Migration subcommands are dispatched PRE-DB in runMain (they need
 		// only the database URL + migrations path, not deps), so they never
@@ -1528,6 +1568,9 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		migrateContactKnowledge: contactKnowledgeMigration,
 		// --river-tier0: read-only wait/run-by-kind over live river_job.
 		tier0: repository.NewJobSampleRepository(database.Queries),
+		// --whatsapp-list-history / --whatsapp-requeue-history: stateless over
+		// the shared querier, so no River client and no manager are needed.
+		whatsappHistory: repository.NewWhatsAppRepository(database.Queries),
 	}
 
 	// LAZY: build the correspondence re-derivation stack ONLY for
@@ -1714,4 +1757,118 @@ func (h noopRematchHandler) IdentifierType() string { return h.idType }
 
 func (h noopRematchHandler) Rematch(_ context.Context, _ uuid.UUID, _ string) (int, error) {
 	return 0, nil
+}
+
+// --- WhatsApp history recovery ---------------------------------------------
+
+// whatsappHistoryStates is the set --history-state is validated against. It
+// mirrors the DB CHECK on whatsapp_history_notification.state; a token outside
+// it is a usage error rather than a query that silently returns nothing.
+var whatsappHistoryStates = []string{
+	repository.HistoryNotificationStatePending,
+	repository.HistoryNotificationStateProcessing,
+	repository.HistoryNotificationStateDone,
+	repository.HistoryNotificationStateFailed,
+}
+
+// parseWhatsAppHistoryStates splits the comma-separated state filter, defaulting
+// to every state. Whitespace is trimmed; an unknown token lists the valid ones.
+func parseWhatsAppHistoryStates(filter string) ([]string, error) {
+	if strings.TrimSpace(filter) == "" {
+		return whatsappHistoryStates, nil
+	}
+	valid := make(map[string]struct{}, len(whatsappHistoryStates))
+	for _, s := range whatsappHistoryStates {
+		valid[s] = struct{}{}
+	}
+	var states []string
+	for _, tok := range strings.Split(filter, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		if _, ok := valid[tok]; !ok {
+			return nil, fmt.Errorf("--history-state: unknown state %q (valid: %s)",
+				tok, strings.Join(whatsappHistoryStates, ", "))
+		}
+		states = append(states, tok)
+	}
+	if len(states) == 0 {
+		return nil, errors.New("--history-state: at least one state required")
+	}
+	return states, nil
+}
+
+// runListWhatsAppHistory prints the history-sync inbox as key=value rows.
+//
+// It deliberately omits `notification` and `checkpoint`: the first is the raw
+// media pointer and the second is projection bookkeeping, and neither is
+// something an operator reads. Everything printed is triage evidence — which
+// phase the chunk reached, how many times it has been tried, and why it failed.
+func runListWhatsAppHistory(ctx context.Context, opts runOptions, deps adminDeps) error {
+	states, err := parseWhatsAppHistoryStates(opts.historyState)
+	if err != nil {
+		return err
+	}
+
+	rows, err := deps.whatsappHistory.ListNotifications(ctx, states)
+	if err != nil {
+		return fmt.Errorf("list whatsapp history chunks: %w", err)
+	}
+	if len(rows) == 0 {
+		if _, err := fmt.Fprintf(deps.stdout, "no whatsapp history chunks found (states=%s)\n",
+			strings.Join(states, ",")); err != nil {
+			return fmt.Errorf("write empty list: %w", err)
+		}
+		return nil
+	}
+	for _, n := range rows {
+		if err := writeWhatsAppHistoryRow(deps.stdout, n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeWhatsAppHistoryRow prints one chunk as a key=value row (runListHosts
+// style). last_error is printed with %q so a multi-line drain error stays on one
+// line. oldest_msg_ts is "none" when the chunk did not report one.
+func writeWhatsAppHistoryRow(w io.Writer, n repository.HistoryNotification) error {
+	oldest := "none"
+	if n.OldestMsgTS != nil {
+		oldest = n.OldestMsgTS.UTC().Format(time.RFC3339)
+	}
+	lastError := ""
+	if n.LastError != nil {
+		lastError = *n.LastError
+	}
+	if _, err := fmt.Fprintf(w,
+		"id=%s state=%s disposition=%s phase=%s sync_type=%s chunk_order=%d attempts=%d oldest_msg_ts=%s received_at=%s last_error=%q\n",
+		n.ID, n.State, n.Disposition, n.Phase, n.SyncType, n.ChunkOrder, n.Attempts,
+		oldest, n.ReceivedAt.UTC().Format(time.RFC3339), lastError); err != nil {
+		return fmt.Errorf("write whatsapp history row: %w", err)
+	}
+	return nil
+}
+
+// runRequeueWhatsAppHistory returns a failed chunk to pending so the drainer
+// picks it up again. Safe with crm-api running — the live drainer claims it on
+// its next tick.
+func runRequeueWhatsAppHistory(ctx context.Context, opts runOptions, deps adminDeps) error {
+	id, err := uuid.Parse(strings.TrimSpace(opts.requeueWhatsAppHistoryID))
+	if err != nil {
+		return fmt.Errorf("--whatsapp-requeue-history must be a valid UUID: %w", err)
+	}
+	if err := deps.whatsappHistory.RequeueFailedNotification(ctx, id); err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			// One query, two causes; naming both is what stops an operator
+			// concluding the chunk is gone when it is merely still running.
+			return fmt.Errorf("whatsapp history chunk %s was not requeued: no such chunk, or it is not in the failed state", id)
+		}
+		return fmt.Errorf("requeue whatsapp history chunk: %w", err)
+	}
+	if _, err := fmt.Fprintf(deps.stdout, "requeued whatsapp history chunk %s\n", id); err != nil {
+		return fmt.Errorf("write requeue summary: %w", err)
+	}
+	return nil
 }
