@@ -305,8 +305,15 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	)
 	// WhatsApp: the REAL ingest trio (repo → gate → matcher → ingestor),
 	// reproducing buildWhatsAppIngestor, plus its aggregation engine. The
-	// adapter drives the ingestor; the worker drives the engine.
+	// engine is built FIRST — the matcher needs the same instance so a link
+	// aggregates in the same pass rather than waiting on the sweeper — then
+	// reused by the worker that drives it.
 	whatsappRepo := repository.NewWhatsAppRepository(database.Queries)
+	whatsappEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(client)
+	whatsappEngine := whatsapp.NewAggregationEngine(
+		cfg.WhatsApp.BurstWindowHours, cfg.WhatsApp.ReplyBridgeHours,
+		commsRepo, interactionRepo, contactService, contactService, bus, database.Pool, whatsappEnqueuer,
+	)
 	// One reading of the threshold feeds BOTH the matcher and the accessor a
 	// fixture sizes itself by, so the two can never disagree about how many
 	// unmatched messages mint a candidate.
@@ -316,12 +323,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		whatsapp.NewChatGate(whatsappRepo, cfg.WhatsApp.GroupMaxMembers),
 		// enricher nil: EnrichmentService is not constructed in this package and
 		// PeerMatcher tolerates a nil one.
-		whatsapp.NewPeerMatcher(identityService, commsRepo, externalRepo, nil, whatsappDiscoveryMinMsgs),
-	)
-	whatsappEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(client)
-	whatsappEngine := whatsapp.NewAggregationEngine(
-		cfg.WhatsApp.BurstWindowHours, cfg.WhatsApp.ReplyBridgeHours,
-		commsRepo, interactionRepo, contactService, contactService, bus, database.Pool, whatsappEnqueuer,
+		whatsapp.NewPeerMatcher(identityService, commsRepo, externalRepo, nil, whatsappEngine, whatsappDiscoveryMinMsgs),
 	)
 
 	chatListerRegistry := scheduler.NewPerSourceChatListerRegistry(

@@ -150,7 +150,7 @@ func setupIngestTest(t *testing.T) *ingestEnv {
 func (e *ingestEnv) rebuild(store commsChatStore) {
 	gate := whatsapp.NewChatGate(e.waRepo, 10)
 	gate.BindGroupInfoSource(func() whatsapp.GroupInfoFetcher { return e.group })
-	e.matcher = whatsapp.NewPeerMatcher(e.identity, e.comms, e.externals, nil, 2)
+	e.matcher = whatsapp.NewPeerMatcher(e.identity, e.comms, e.externals, nil, nil, 2)
 	e.ingestor = whatsapp.NewIngestor(store, gate, e.matcher)
 }
 

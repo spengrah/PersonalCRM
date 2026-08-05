@@ -294,7 +294,8 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 
 	// Telegram is intentionally SKIPPED (Start must not run); a nil
 	// telegramManager is exactly a telegram-disabled boot for aggregation.
-	agg := buildAggregationEngines(cfg, database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, nil, syncStk.GChatProvider, syncStk.GChatSyncStates)
+	whatsappEngine := buildWhatsAppAggregationEngine(cfg, database, core.Interaction, messaging.CommsMessageRepo, contactService, eventBus, riverClient)
+	agg := buildAggregationEngines(cfg, database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, nil, syncStk.GChatProvider, syncStk.GChatSyncStates, whatsappEngine)
 	wiring := registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)
 
 	machost := buildMacHost(reg, database, core, ingest)

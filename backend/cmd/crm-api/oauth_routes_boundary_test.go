@@ -119,7 +119,8 @@ func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 
 	// Telegram is intentionally SKIPPED (Start must not run); a nil
 	// telegramManager is exactly a telegram-disabled boot for aggregation.
-	agg := buildAggregationEngines(cfg, database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, nil, syncStk.GChatProvider, syncStk.GChatSyncStates)
+	whatsappEngine := buildWhatsAppAggregationEngine(cfg, database, core.Interaction, messaging.CommsMessageRepo, contactService, eventBus, riverClient)
+	agg := buildAggregationEngines(cfg, database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, nil, syncStk.GChatProvider, syncStk.GChatSyncStates, whatsappEngine)
 	registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)
 
 	handlersCore := buildCoreHandlers(database, core, contactService, graph, cfg, domain.NoteService, manualHandler, eventBus)

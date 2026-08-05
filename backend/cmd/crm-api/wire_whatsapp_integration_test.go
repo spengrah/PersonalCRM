@@ -91,14 +91,21 @@ func TestWireWhatsApp_TurnsTheFeatureOn(t *testing.T) {
 		c.Features.EnableWhatsAppSync = true
 	})
 
-	// The real ingestor, built the way run() builds it — so the gate the
+	// The real ingestor, built through run()'s own builder — so the gate the
 	// drainer is handed is the same instance SetIngestor binds.
+	//
+	// The enricher and the aggregation engine are both nil, which the matcher
+	// tolerates: this test drives readiness and the drain gate, never a peer
+	// link, so neither is reachable from anything it asserts. Constructing a
+	// real engine would mean standing up a contact service, an event bus and a
+	// river client for dependencies nothing here calls.
 	ingestor := buildWhatsAppIngestor(
 		h.cfg,
 		h.database,
 		repository.NewCommsMessageRepository(h.database.Queries),
 		service.NewIdentityService(repository.NewIdentityRepository(h.database.Queries)),
 		repository.NewExternalContactRepository(h.database.Queries),
+		nil,
 		nil,
 	)
 

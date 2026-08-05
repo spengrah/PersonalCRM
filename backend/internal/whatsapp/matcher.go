@@ -49,7 +49,8 @@ type PeerMatcher struct {
 	identityService     identityMatcher
 	commsRepo           commsPeerStore
 	externalContactRepo externalContactUpserter
-	enricher            contactEnricher // may be nil (tests)
+	enricher            contactEnricher   // may be nil (tests)
+	engine              contactAggregator // may be nil (tests)
 	discoveryMinMsgs    int
 }
 
@@ -59,6 +60,7 @@ func NewPeerMatcher(
 	commsRepo commsPeerStore,
 	externalContactRepo externalContactUpserter,
 	enricher contactEnricher,
+	engine contactAggregator,
 	discoveryMinMsgs int,
 ) *PeerMatcher {
 	return &PeerMatcher{
@@ -66,6 +68,7 @@ func NewPeerMatcher(
 		commsRepo:           commsRepo,
 		externalContactRepo: externalContactRepo,
 		enricher:            enricher,
+		engine:              engine,
 		discoveryMinMsgs:    discoveryMinMsgs,
 	}
 }
@@ -158,6 +161,35 @@ func (m *PeerMatcher) OnPeerLinked(ctx context.Context, peerJID string, phoneE16
 		Int64("attached", attached).
 		Int64("deduped", deduped).
 		Msg("whatsapp: peer linked, staged messages attached")
+
+	// Deriving the interactions HERE, rather than leaving them to the periodic
+	// sweeper, is what makes the attach above visible: the user's evidence that
+	// a link worked is the contact's activity, not a row count nobody sees. A
+	// candidate carrying dozens of staged messages that binds instantly but
+	// still shows zero interactions for up to five minutes (the sweeper's
+	// interval) is indistinguishable, at the moment the user acts, from a link
+	// that silently failed. Skipped when nothing was attached — an
+	// already-linked peer's repeat call has nothing new to aggregate — and
+	// guarded on a nil engine for the many test call sites that pass nil.
+	//
+	// A failure here is logged and swallowed rather than returned: the rows ARE
+	// attached, so the link itself succeeded, and returning the error would
+	// report a successful link as failed. The periodic sweeper is the retry for
+	// whatever aggregation could not finish.
+	//
+	// This is the OPPOSITE of what the contact-method rematch path does with the
+	// same error, and deliberately so: that path runs inside a River job, where
+	// returning the error is what schedules the retry and makes the failure
+	// visible as a failed job. A link is a synchronous user action with no job
+	// behind it, so there is nothing for a returned error to retry — only a
+	// success the user would be told had failed.
+	if attached > 0 && m.engine != nil {
+		if err := m.engine.AggregateForContactBatch(ctx, contactID); err != nil {
+			logger.Warn().Err(err).
+				Str("contact_id", contactID.String()).
+				Msg("whatsapp: post-link aggregation failed; the periodic sweeper will retry")
+		}
+	}
 	return nil
 }
 

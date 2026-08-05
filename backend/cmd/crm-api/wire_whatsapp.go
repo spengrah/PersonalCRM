@@ -9,6 +9,7 @@ import (
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/logger"
+	"personal-crm/backend/internal/messaging/aggregation"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	wapkg "personal-crm/backend/internal/whatsapp"
@@ -189,6 +190,11 @@ func wireWhatsApp(
 // The WhatsAppRepository built here is a stateless wrapper over the shared
 // db.Querier, so the second instance newWhatsAppStack constructs for the
 // manager is the same thing; there is no state to share.
+//
+// engine is the SAME aggregation engine instance buildAggregationEngines wires
+// in — built earlier, by buildWhatsAppAggregationEngine, so the matcher's
+// post-link aggregation and the periodic sweep share one engine rather than
+// two. It is never nil in production: the caller builds it unconditionally.
 func buildWhatsAppIngestor(
 	cfg *config.Config,
 	database *db.Database,
@@ -196,6 +202,7 @@ func buildWhatsAppIngestor(
 	identityService *service.IdentityService,
 	externalContactRepo *repository.ExternalContactRepository,
 	enricher *service.EnrichmentService,
+	engine *aggregation.Engine,
 ) *wapkg.Ingestor {
 	whatsappRepo := repository.NewWhatsAppRepository(database.Queries)
 	gate := wapkg.NewChatGate(whatsappRepo, cfg.WhatsApp.GroupMaxMembers)
@@ -204,6 +211,7 @@ func buildWhatsAppIngestor(
 		commsMessageRepo,
 		externalContactRepo,
 		enricher,
+		engine,
 		cfg.WhatsApp.DiscoveryMinMessages,
 	)
 	return wapkg.NewIngestor(commsMessageRepo, gate, matcher)
