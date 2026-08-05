@@ -50,6 +50,21 @@ const (
 // normalized into a plausible-looking identifier.
 var phoneUserPattern = regexp.MustCompile(`^[0-9]{5,15}$`)
 
+// nullUserJID is the user part WhatsApp addresses protocol and system
+// records to — not a subscriber, and not anybody the CRM could ever have a
+// conversation with. An envelope that names it (as the chat itself, or as a
+// sender inside a group) describes no person, and must never be allowed to
+// mint a discovery candidate or be attributed to a real contact.
+//
+// The match is on the exact user part, never a prefix: a real subscriber
+// number can legitimately begin with a zero.
+const nullUserJID = "0"
+
+// isNullUserJID reports whether jid is the protocol's null user.
+func isNullUserJID(jid types.JID) bool {
+	return jid.User == nullUserJID
+}
+
 // normalizeServer rewrites device-domain and legacy servers onto the canonical
 // user servers, so eligibility is decided on IDENTITY rather than on transport.
 //
@@ -148,6 +163,9 @@ func classifyChat(chat types.JID, own ownIdentity) (string, bool) {
 		return ChatTypeGroup, true
 	case types.DefaultUserServer, types.HiddenUserServer:
 		if own.isSelf(chat) {
+			return "", false
+		}
+		if isNullUserJID(chat) {
 			return "", false
 		}
 		return ChatTypePrivate, true
@@ -354,7 +372,14 @@ func resolvePeer(evt *events.Message, chat types.JID, chatType string) (peer typ
 	if evt.Info.IsFromMe {
 		return types.EmptyJID, types.EmptyJID, false
 	}
-	return normalizeServer(evt.Info.Sender).ToNonAD(), normalizeServer(evt.Info.SenderAlt).ToNonAD(), true
+	sender := normalizeServer(evt.Info.Sender).ToNonAD()
+	if isNullUserJID(sender) {
+		// A system envelope inside a tracked group still stages — the group
+		// itself is real — but it has no human counterpart, so it must not
+		// carry a peer handle that could mint a discovery candidate.
+		return types.EmptyJID, types.EmptyJID, false
+	}
+	return sender, normalizeServer(evt.Info.SenderAlt).ToNonAD(), true
 }
 
 // resolvePeerPhone walks the four-rung ladder. The order is load-bearing: each

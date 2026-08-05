@@ -444,7 +444,9 @@ behaviors:
       - a note to self is not ingested, in whichever of the account's own forms it is addressed
       - the same person reached through a different device domain is treated as the same person, not as an unrecognised address to discard
       - a chat that is not ingested is treated as handled rather than as a failure, so it is not delivered again forever
-    provenance: [classifyChat, normalizeServer, parseMessage]
+      - key: null-user-envelope-refused
+        text: an envelope addressed to the protocol's null user describes no person and is refused, whether the null user is the chat itself or a sender inside a group
+    provenance: [classifyChat, normalizeServer, parseMessage, resolvePeer]
     notes: The account's own identity is required before any of this can be decided; without it the message is left undelivered rather than guessed at, since an acknowledged message is never sent again.
 
   - id: WHA-021
