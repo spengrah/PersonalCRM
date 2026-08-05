@@ -87,6 +87,7 @@ func setupHistoryDrainTest(t *testing.T) *drainEnv {
 		env.comms,
 		repository.NewExternalContactRepository(database.Queries),
 		nil,
+		nil,
 		2,
 	)
 	env.ingestor = whatsapp.NewIngestor(env.comms, gate, matcher)

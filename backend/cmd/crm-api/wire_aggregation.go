@@ -29,13 +29,56 @@ type aggregationStack struct {
 	ReenqueuerEntries map[string]consumer.AggregatorReenqueuer
 }
 
-// buildAggregationEngines constructs the messages + gchat + whatsapp aggregation
-// engines and their reenqueuers, registers the gchat rematch handlers (gated on a
+// buildWhatsAppAggregationEngine constructs the WhatsApp aggregation engine
+// over comms_message.
+//
+// Extracted into its own builder — rather than inlined in
+// buildAggregationEngines, where it used to live — because
+// PeerMatcher.OnPeerLinked (backend/internal/whatsapp/matcher.go) needs this
+// SAME engine instance at construction time, and the matcher is wired earlier
+// in main.go than buildAggregationEngines runs. Calling this builder first and
+// threading its result into both call sites keeps exactly one engine instance
+// alive rather than two.
+//
+// LIVE but INERT: every query is source='whatsapp'-scoped and returns zero
+// rows until ingest writes one. It is deliberately NOT gated on
+// EnableWhatsAppSync — rows staged under an earlier ON boot must still
+// aggregate after a restart with the flag off, and the matcher's post-link
+// aggregation must work the same way regardless of the flag's current value.
+func buildWhatsAppAggregationEngine(
+	cfg *config.Config,
+	database *db.Database,
+	interactionRepo *repository.InteractionRepository,
+	commsMessageRepo *repository.CommsMessageRepository,
+	contactService *service.ContactService,
+	eventBus *events.Bus,
+	riverClient *river.Client[pgx.Tx],
+) *aggregation.Engine {
+	whatsappEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(riverClient)
+	return wapkg.NewAggregationEngine(
+		cfg.WhatsApp.BurstWindowHours,
+		cfg.WhatsApp.ReplyBridgeHours,
+		commsMessageRepo,
+		interactionRepo,
+		contactService,
+		contactService,
+		eventBus,
+		database.Pool,
+		whatsappEnqueuer,
+	)
+}
+
+// buildAggregationEngines constructs the messages + gchat aggregation engines
+// and their reenqueuers, registers the gchat rematch handlers (gated on a
 // constructed gchat provider) and the whatsapp ones (gated on the WhatsApp
 // feature flag), and populates the deferred aggregator-reenqueuer
 // registry. Wired unconditionally — the engines are stateless and inert until
 // their source rows exist. telegramManager / gchatProvider / gchatSyncStates
 // are nil-safe params exactly as the old inline fallbacks.
+//
+// whatsappEngine is built by buildWhatsAppAggregationEngine and passed in
+// rather than built here, so the composition root holds exactly one WhatsApp
+// engine instance — the same one PeerMatcher.OnPeerLinked drives.
 func buildAggregationEngines(
 	cfg *config.Config,
 	database *db.Database,
@@ -50,6 +93,7 @@ func buildAggregationEngines(
 	telegramManager *tgpkg.TelegramManager,
 	gchatProvider *google.GChatSyncProvider,
 	gchatSyncStates google.GChatSyncStateLister,
+	whatsappEngine *aggregation.Engine,
 ) aggregationStack {
 	interactionRepo := core.Interaction
 	rematchService := graph.RematchService
@@ -127,25 +171,6 @@ func buildAggregationEngines(
 		gchatEngine,
 		riverClient,
 		repository.InteractionSourceGChat,
-	)
-
-	// WhatsApp aggregation engine over comms_message. LIVE but INERT on the same
-	// terms as gchat: every query is source='whatsapp'-scoped and returns zero
-	// rows until ingest writes one. It is deliberately NOT gated on
-	// EnableWhatsAppSync — rows staged under an earlier ON boot must still
-	// aggregate after a restart with the flag off. Unlike gchat's, the
-	// burst/reply windows are operator-tunable env knobs.
-	whatsappEnqueuer := consumer.NewRiverInteractionRecorderEnqueuer(riverClient)
-	whatsappEngine := wapkg.NewAggregationEngine(
-		cfg.WhatsApp.BurstWindowHours,
-		cfg.WhatsApp.ReplyBridgeHours,
-		commsMessageRepo,
-		interactionRepo,
-		contactService,
-		contactService,
-		eventBus,
-		database.Pool,
-		whatsappEnqueuer,
 	)
 
 	// WhatsApp rematch handlers: registered ONLY when WhatsApp sync is enabled.

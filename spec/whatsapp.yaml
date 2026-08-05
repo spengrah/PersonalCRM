@@ -533,6 +533,10 @@ behaviors:
       - a peer stored before their phone number was known is still found, by either the identifier the messages carry or the recovered number
       - a message already stored against the contact is reconciled rather than duplicated
       - a failure to attach is reported rather than silently swallowed, because attaching is the visible effect of linking
+      - key: interactions-derived-in-the-same-pass
+        text: the attached messages are aggregated in the same pass rather than being left to the next periodic sweep
+      - key: aggregation-failure-does-not-fail-the-link
+        text: a failure to aggregate does not fail or undo the link, because the periodic sweep retries the aggregation
     provenance: [PeerMatcher.OnPeerLinked, AttachUnmatchedByPeer]
 
   - id: WHA-026

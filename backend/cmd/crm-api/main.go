@@ -261,6 +261,16 @@ func run() int {
 		defer telegramManager.Stop()
 	}
 
+	// WhatsApp aggregation engine over comms_message, built HERE — before the
+	// gated WhatsApp block below — and unconditionally, not behind
+	// cfg.Features.EnableWhatsAppSync: PeerMatcher.OnPeerLinked needs this exact
+	// instance to derive interactions right after a link, and rows staged under
+	// an earlier ON boot must still aggregate after a restart with the flag off
+	// (see buildWhatsAppAggregationEngine). Threading one instance into both
+	// buildWhatsAppIngestor and buildAggregationEngines keeps a single engine
+	// alive rather than two.
+	whatsappEngine := buildWhatsAppAggregationEngine(cfg, database, core.Interaction, messaging.CommsMessageRepo, contactService, eventBus, riverClient)
+
 	// WhatsApp integration. Config validation already refuses a WhatsApp-on /
 	// external-sync-off configuration, so no second gate is needed here. A zero
 	// whatsappStack reproduces the nil manager/handler when disabled.
@@ -276,7 +286,7 @@ func run() int {
 		if externalContactRepo == nil {
 			logger.Error().Msg("whatsapp: external contact repository is absent; ingest stays unwired")
 		} else {
-			waIngestor = buildWhatsAppIngestor(cfg, database, messaging.CommsMessageRepo, ingest.IdentityService, externalContactRepo, domain.EnrichmentService)
+			waIngestor = buildWhatsAppIngestor(cfg, database, messaging.CommsMessageRepo, ingest.IdentityService, externalContactRepo, domain.EnrichmentService, whatsappEngine)
 		}
 		// wireWhatsApp builds the stack, registers the history drain worker,
 		// and activates the manager — including SetHistoryDrainReady, the line
@@ -307,7 +317,8 @@ func run() int {
 	}
 
 	// Aggregation engines (messages + gchat + whatsapp) + reenqueuer registry.
-	agg := buildAggregationEngines(cfg, database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, telegramManager, gchatProvider, gchatSyncStates)
+	// whatsappEngine is the SAME instance built above, before the WhatsApp block.
+	agg := buildAggregationEngines(cfg, database, core, contactService, graph, ingest, messaging, consumers, eventBus, riverClient, telegramManager, gchatProvider, gchatSyncStates, whatsappEngine)
 
 	// Register the chat-aware messaging aggregate worker + sweeper (+ periodic).
 	registerMessagingWorkers(reg, ingest, messaging, agg, riverClient)
