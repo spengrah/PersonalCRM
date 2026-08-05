@@ -50,6 +50,22 @@ const (
 // normalized into a plausible-looking identifier.
 var phoneUserPattern = regexp.MustCompile(`^[0-9]{5,15}$`)
 
+// isNonPersonUserJID reports whether jid's user part could never belong to a
+// subscriber: the protocol's null user (types.PSAJID, matched on its User
+// field rather than a locally re-derived copy — the library's own PSA-sender
+// checks compare the same way), or an empty user part (types.ServerJID, one
+// of the library's own "contacted often" JIDs). Neither is a subscriber, and
+// neither is anybody the CRM could ever have a conversation with. An
+// envelope that names either — as the chat itself, or as a sender inside a
+// group — describes no person, and must never be allowed to mint a
+// discovery candidate or be attributed to a real contact.
+//
+// The null-user match is on the exact user part, never a prefix: a real
+// subscriber number can legitimately begin with a zero.
+func isNonPersonUserJID(jid types.JID) bool {
+	return jid.User == "" || jid.User == types.PSAJID.User
+}
+
 // normalizeServer rewrites device-domain and legacy servers onto the canonical
 // user servers, so eligibility is decided on IDENTITY rather than on transport.
 //
@@ -148,6 +164,9 @@ func classifyChat(chat types.JID, own ownIdentity) (string, bool) {
 		return ChatTypeGroup, true
 	case types.DefaultUserServer, types.HiddenUserServer:
 		if own.isSelf(chat) {
+			return "", false
+		}
+		if isNonPersonUserJID(chat) {
 			return "", false
 		}
 		return ChatTypePrivate, true
@@ -354,7 +373,14 @@ func resolvePeer(evt *events.Message, chat types.JID, chatType string) (peer typ
 	if evt.Info.IsFromMe {
 		return types.EmptyJID, types.EmptyJID, false
 	}
-	return normalizeServer(evt.Info.Sender).ToNonAD(), normalizeServer(evt.Info.SenderAlt).ToNonAD(), true
+	sender := normalizeServer(evt.Info.Sender).ToNonAD()
+	if isNonPersonUserJID(sender) {
+		// A system envelope inside a tracked group still stages — the group
+		// itself is real — but it has no human counterpart, so it must not
+		// carry a peer handle that could mint a discovery candidate.
+		return types.EmptyJID, types.EmptyJID, false
+	}
+	return sender, normalizeServer(evt.Info.SenderAlt).ToNonAD(), true
 }
 
 // resolvePeerPhone walks the four-rung ladder. The order is load-bearing: each

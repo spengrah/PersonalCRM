@@ -157,6 +157,32 @@ func TestChatEligibility_HostedDirectChatAccepted(t *testing.T) {
 	assert.Equal(t, ChatTypePrivate, chatType)
 }
 
+// spec: WHA-020.null-user-envelope-refused
+func TestChatEligibility_NullUserJIDRejected(t *testing.T) {
+	nullUser := types.NewJID("0", types.DefaultUserServer)
+	_, ok := classifyChat(nullUser, testOwn())
+	assert.False(t, ok, "WhatsApp addresses protocol/system records to the null user; that describes no person")
+}
+
+// spec: WHA-020.null-user-envelope-refused
+func TestChatEligibility_NullUserJIDInHiddenServerRejected(t *testing.T) {
+	nullUser := types.NewJID("0", types.HiddenUserServer)
+	_, ok := classifyChat(nullUser, testOwn())
+	assert.False(t, ok, "the null user is refused on either user server")
+}
+
+// spec: WHA-020.null-user-envelope-refused
+// TestChatEligibility_EmptyUserJIDRejected pins the sibling non-person shape:
+// types.ServerJID has an empty user part, is not the account itself and is
+// not the protocol's null user, so it would otherwise classify as an
+// ordinary private chat and mint peer_handle "s.whatsapp.net" — the same
+// defect as the null-user case under a different label.
+func TestChatEligibility_EmptyUserJIDRejected(t *testing.T) {
+	emptyUser := types.NewJID("", types.DefaultUserServer)
+	_, ok := classifyChat(emptyUser, testOwn())
+	assert.False(t, ok, "an empty user part can never belong to a subscriber")
+}
+
 // --- classifyMessage --------------------------------------------------------
 
 func TestClassifyMessage_TextConversation(t *testing.T) {
@@ -366,6 +392,20 @@ func TestPeerResolution_NonPhoneUserRejected(t *testing.T) {
 	assert.Equal(t, weird.String(), unresolved)
 }
 
+// TestPeerResolution_NumberStartingWithZeroAccepted is the falsification test
+// for the null-user guard: it must be an exact match on the user part "0",
+// never a prefix test, because a real subscriber number can begin with a
+// zero.
+func TestPeerResolution_NumberStartingWithZeroAccepted(t *testing.T) {
+	leadingZero := types.NewJID("0100000099", types.DefaultUserServer)
+	evt := textEvent("m1", types.MessageSource{Chat: leadingZero}, "hi")
+
+	msg, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
+	require.True(t, eligible)
+	require.NotNil(t, msg.PeerJID)
+	assert.Equal(t, leadingZero.String(), *msg.PeerJID)
+}
+
 func TestPeerResolution_HostedPeerNormalizedToDefaultServer(t *testing.T) {
 	hosted := types.NewJID("15559876543", types.HostedServer)
 	evt := textEvent("m1", types.MessageSource{Chat: hosted}, "hi")
@@ -428,6 +468,40 @@ func TestParseMessage_GroupOutboundHasNilPeer(t *testing.T) {
 
 	require.True(t, eligible, "an outbound group message is still stored")
 	assert.Nil(t, msg.PeerJID, "there is no single counterpart in a group I sent to")
+	assert.Nil(t, msg.PeerPhoneE164)
+	assert.Empty(t, unresolved, "a nil peer is not an unresolved one")
+}
+
+// spec: WHA-020.null-user-envelope-refused
+// TestParseMessage_PrivateNullUserChatRejected proves the null-user guard
+// through parseMessage rather than through a direct classifyChat call: the
+// production shape was a PRIVATE chat whose chat JID was the null user,
+// arriving through history ingest, and a refactor that bypassed the
+// classifyChat call inside parseMessage would leave a classifyChat-only test
+// green while that exact bug returned.
+func TestParseMessage_PrivateNullUserChatRejected(t *testing.T) {
+	nullUser := types.NewJID("0", types.DefaultUserServer)
+	evt := textEvent("m1", types.MessageSource{Chat: nullUser}, "hi")
+
+	_, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
+	assert.False(t, eligible, "a private chat addressed to the null user describes no person")
+}
+
+// spec: WHA-020.null-user-envelope-refused
+// TestParseMessage_GroupNullUserSenderHasNilPeer proves the null-user guard in
+// the group branch: the message still stages (it happened in a tracked
+// group), but it carries no peer handle, so it can never mint a discovery
+// candidate or attribute system noise to a real contact.
+func TestParseMessage_GroupNullUserSenderHasNilPeer(t *testing.T) {
+	nullUser := types.NewJID("0", types.DefaultUserServer)
+	evt := textEvent("m1", types.MessageSource{
+		Chat:   testGroupJID,
+		Sender: nullUser,
+	}, "hi")
+	msg, unresolved, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
+
+	require.True(t, eligible, "the group message still stages")
+	assert.Nil(t, msg.PeerJID, "a null-user sender describes no person")
 	assert.Nil(t, msg.PeerPhoneE164)
 	assert.Empty(t, unresolved, "a nil peer is not an unresolved one")
 }
