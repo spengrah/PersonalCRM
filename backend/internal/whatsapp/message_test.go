@@ -171,6 +171,18 @@ func TestChatEligibility_NullUserJIDInHiddenServerRejected(t *testing.T) {
 	assert.False(t, ok, "the null user is refused on either user server")
 }
 
+// spec: WHA-020.null-user-envelope-refused
+// TestChatEligibility_EmptyUserJIDRejected pins the sibling non-person shape:
+// types.ServerJID has an empty user part, is not the account itself and is
+// not the protocol's null user, so it would otherwise classify as an
+// ordinary private chat and mint peer_handle "s.whatsapp.net" — the same
+// defect as the null-user case under a different label.
+func TestChatEligibility_EmptyUserJIDRejected(t *testing.T) {
+	emptyUser := types.NewJID("", types.DefaultUserServer)
+	_, ok := classifyChat(emptyUser, testOwn())
+	assert.False(t, ok, "an empty user part can never belong to a subscriber")
+}
+
 // --- classifyMessage --------------------------------------------------------
 
 func TestClassifyMessage_TextConversation(t *testing.T) {
@@ -458,6 +470,21 @@ func TestParseMessage_GroupOutboundHasNilPeer(t *testing.T) {
 	assert.Nil(t, msg.PeerJID, "there is no single counterpart in a group I sent to")
 	assert.Nil(t, msg.PeerPhoneE164)
 	assert.Empty(t, unresolved, "a nil peer is not an unresolved one")
+}
+
+// spec: WHA-020.null-user-envelope-refused
+// TestParseMessage_PrivateNullUserChatRejected proves the null-user guard
+// through parseMessage rather than through a direct classifyChat call: the
+// production shape was a PRIVATE chat whose chat JID was the null user,
+// arriving through history ingest, and a refactor that bypassed the
+// classifyChat call inside parseMessage would leave a classifyChat-only test
+// green while that exact bug returned.
+func TestParseMessage_PrivateNullUserChatRejected(t *testing.T) {
+	nullUser := types.NewJID("0", types.DefaultUserServer)
+	evt := textEvent("m1", types.MessageSource{Chat: nullUser}, "hi")
+
+	_, _, eligible := parseMessage(context.Background(), evt, testOwn(), nil, testAltTimeout)
+	assert.False(t, eligible, "a private chat addressed to the null user describes no person")
 }
 
 // spec: WHA-020.null-user-envelope-refused

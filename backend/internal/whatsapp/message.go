@@ -50,19 +50,20 @@ const (
 // normalized into a plausible-looking identifier.
 var phoneUserPattern = regexp.MustCompile(`^[0-9]{5,15}$`)
 
-// nullUserJID is the user part WhatsApp addresses protocol and system
-// records to — not a subscriber, and not anybody the CRM could ever have a
-// conversation with. An envelope that names it (as the chat itself, or as a
-// sender inside a group) describes no person, and must never be allowed to
-// mint a discovery candidate or be attributed to a real contact.
+// isNonPersonUserJID reports whether jid's user part could never belong to a
+// subscriber: the protocol's null user (types.PSAJID, matched on its User
+// field rather than a locally re-derived copy — the library's own PSA-sender
+// checks compare the same way), or an empty user part (types.ServerJID, one
+// of the library's own "contacted often" JIDs). Neither is a subscriber, and
+// neither is anybody the CRM could ever have a conversation with. An
+// envelope that names either — as the chat itself, or as a sender inside a
+// group — describes no person, and must never be allowed to mint a
+// discovery candidate or be attributed to a real contact.
 //
-// The match is on the exact user part, never a prefix: a real subscriber
-// number can legitimately begin with a zero.
-const nullUserJID = "0"
-
-// isNullUserJID reports whether jid is the protocol's null user.
-func isNullUserJID(jid types.JID) bool {
-	return jid.User == nullUserJID
+// The null-user match is on the exact user part, never a prefix: a real
+// subscriber number can legitimately begin with a zero.
+func isNonPersonUserJID(jid types.JID) bool {
+	return jid.User == "" || jid.User == types.PSAJID.User
 }
 
 // normalizeServer rewrites device-domain and legacy servers onto the canonical
@@ -165,7 +166,7 @@ func classifyChat(chat types.JID, own ownIdentity) (string, bool) {
 		if own.isSelf(chat) {
 			return "", false
 		}
-		if isNullUserJID(chat) {
+		if isNonPersonUserJID(chat) {
 			return "", false
 		}
 		return ChatTypePrivate, true
@@ -373,7 +374,7 @@ func resolvePeer(evt *events.Message, chat types.JID, chatType string) (peer typ
 		return types.EmptyJID, types.EmptyJID, false
 	}
 	sender := normalizeServer(evt.Info.Sender).ToNonAD()
-	if isNullUserJID(sender) {
+	if isNonPersonUserJID(sender) {
 		// A system envelope inside a tracked group still stages — the group
 		// itself is real — but it has no human counterpart, so it must not
 		// carry a peer handle that could mint a discovery candidate.
