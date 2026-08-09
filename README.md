@@ -639,7 +639,7 @@ make lint-fix    # Auto-fix some issues
 Run the complete smoke test that handles everything automatically:
 
 ```bash
-./smoke-test.sh
+scripts/smoke-test.sh
 ```
 
 This script will:
@@ -649,19 +649,6 @@ This script will:
 4. ✅ Test all endpoints
 5. ✅ Create and cleanup test data
 6. ✅ Generate detailed logs
-
-**🐛 Debug & Share Logs**
-
-If something goes wrong, collect all logs for debugging:
-
-```bash
-./share-logs.sh
-```
-
-This creates a comprehensive debug bundle with:
-- System information and running processes
-- API test results and Docker container status
-- Environment variables and recent log files
 
 ## Database
 
