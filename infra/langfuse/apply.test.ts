@@ -53,6 +53,13 @@ function makeTransport(existing: Array<Record<string, unknown>>, opts: { pageSiz
     if (method === 'POST' && url.pathname === '/api/public/models') {
       const body = init?.body ? JSON.parse(String(init.body)) : {}
       calls.push({ method, path, body })
+      // Mirror Langfuse's PricingTierInputSchema: every tier requires a
+      // non-empty name — a POST without one 400s live, so the fake must
+      // reject it too or the whole suite proves nothing about the payload.
+      const tiers = (body.pricingTiers ?? []) as Array<Record<string, unknown>>
+      if (tiers.some(t => typeof t.name !== 'string' || t.name.length === 0)) {
+        return new Response(JSON.stringify({ error: 'pricing tier name is required' }), { status: 400 })
+      }
       const created = { id: `new-${nextId++}`, isLangfuseManaged: false, ...body }
       store.push(created)
       return new Response(JSON.stringify(created), { status: 200 })
@@ -152,7 +159,7 @@ describe('POST body contract', () => {
     expect(cacheBody.unit).toBe('TOKENS')
     expect(cacheBody.matchPattern).toBe('(?i)^gpt\\-5\\.4\\-mini$')
     expect(cacheBody.pricingTiers).toEqual([
-      { isDefault: true, priority: 0, conditions: [], prices: { input: 7.5e-7, output: 4.5e-6, input_cached_tokens: 7.5e-8 } },
+      { name: 'Standard', isDefault: true, priority: 0, conditions: [], prices: { input: 7.5e-7, output: 4.5e-6, input_cached_tokens: 7.5e-8 } },
     ])
 
     const noCacheBody = posts.find(b => b.modelName === 'gpt-5.6-terra')!
@@ -263,6 +270,22 @@ describe('legacy conflicting definitions', () => {
     const writes = calls.filter(c => c.method !== 'GET')
     expect(writes.some(c => c.method === 'DELETE' && c.path.includes('legacy-versioned'))).toBe(true)
     expect(writes.some(c => c.method === 'POST')).toBe(true)
+    expect(result.warnings).toHaveLength(0)
+  })
+
+  test('a stray capturing only the venice/ alias of a declared venice row is also deleted', async () => {
+    const venice = row({ modelName: 'qwen3-235b', source: 'venice', sourceId: 'qwen3-235b', prices: { input: 4.5e-7, output: 3.5e-6 } })
+    const prefixOnly = {
+      id: 'legacy-prefixed',
+      modelName: 'venice-alias-row',
+      matchPattern: '(?i)^venice\\/qwen3\\-235b$', // matches venice/qwen3-235b but not bare qwen3-235b
+      isLangfuseManaged: false,
+      unit: 'TOKENS',
+      pricingTiers: [{ id: 't', name: 'Standard', isDefault: true, priority: 0, conditions: [], prices: { input: 1e-6, output: 2e-6 } }],
+    }
+    const { fetchFn, calls } = makeTransport([prefixOnly])
+    const result = await applyPrices([venice], cfg, { fetchFn })
+    expect(calls.some(c => c.method === 'DELETE' && c.path.includes('legacy-prefixed'))).toBe(true)
     expect(result.warnings).toHaveLength(0)
   })
 

@@ -74,7 +74,7 @@ async function createDefinition(
       modelName: row.modelName,
       matchPattern,
       unit: 'TOKENS',
-      pricingTiers: [{ isDefault: true, priority: 0, conditions: [], prices }],
+      pricingTiers: [{ name: 'Standard', isDefault: true, priority: 0, conditions: [], prices }],
     },
     fetchFn
   )
@@ -139,7 +139,7 @@ export async function applyPrices(
   }
 
   for (const stray of byName.values()) {
-    const conflict = rows.find(r => strayPatternMatches(stray.matchPattern, r.modelName))
+    const conflict = rows.find(r => aliasesFor(r).some(alias => strayPatternMatches(stray.matchPattern, alias)))
     if (conflict !== undefined) {
       await api(cfg, 'DELETE', `/api/public/models/${encodeURIComponent(stray.id)}`, undefined, opts.fetchFn)
       deleted++
@@ -154,6 +154,13 @@ export async function applyPrices(
   }
 
   return { created, deleted, unchanged, warnings }
+}
+
+// Every model string a declared row's own emitted pattern accepts. Mirrors
+// emitMatchPattern: venice patterns carry an optional "venice/" prefix, so a
+// venice row answers for both spellings and a stray capturing either conflicts.
+function aliasesFor(row: ModelRow): string[] {
+  return row.source === 'venice' ? [row.modelName, `venice/${row.sourceId}`] : [row.modelName]
 }
 
 // A stray whose pattern captures a declared model string is not benign: two
