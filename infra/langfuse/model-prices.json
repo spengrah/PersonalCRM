@@ -1,0 +1,44 @@
+{
+  "models": [
+    {
+      "modelName": "gpt-5.4-mini",
+      "source": "open-router",
+      "sourceId": "openai/gpt-5.4-mini",
+      "prices": {
+        "input": 7.5e-7,
+        "output": 0.0000045,
+        "cachedInput": 7.5e-8
+      }
+    },
+    {
+      "modelName": "gpt-5.5",
+      "source": "open-router",
+      "sourceId": "openai/gpt-5.5",
+      "prices": {
+        "input": 0.000005,
+        "output": 0.00003,
+        "cachedInput": 5e-7
+      }
+    },
+    {
+      "modelName": "gpt-5.6-luna",
+      "source": "open-router",
+      "sourceId": "openai/gpt-5.6-luna",
+      "prices": {
+        "input": 1e-7,
+        "output": 6e-7,
+        "cachedInput": 1e-8
+      }
+    },
+    {
+      "modelName": "gpt-5.6-terra",
+      "source": "open-router",
+      "sourceId": "openai/gpt-5.6-terra",
+      "prices": {
+        "input": 0.000001,
+        "output": 0.000006,
+        "cachedInput": 1e-7
+      }
+    }
+  ]
+}

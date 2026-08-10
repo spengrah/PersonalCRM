@@ -102,6 +102,14 @@ assert_not_in_group ".ai/spec/2026-07-01-behavior-ssot-design.md" spec
 assert_not_in_group "spec/contacts.yaml" backend
 assert_not_in_group "spec/contacts.yaml" frontend
 
+# --- infra/langfuse group membership: tooling gates the frontend lane, the
+# checked-in price file does not (a price-only diff must sit in NO test-lane
+# group — the architectural constraint the sync workflow's PRs depend on). ---
+assert_in_group     "infra/langfuse/sync.ts" frontend
+assert_in_group     "infra/langfuse/sync.test.ts" frontend
+assert_not_in_group "infra/langfuse/model-prices.json" frontend
+assert_not_in_group "infra/langfuse/model-prices.json" backend
+
 # --- any_file_in_groups: the Go/frontend gate's decision boundary ---
 # Daemon-only push does NOT run Go suite (headline invariant).
 assert_false "any_file_in_groups daemon-only -> Go suite NOT run" \
