@@ -51,8 +51,55 @@ describe('assertCost', () => {
 
   test('zero observations found -> not ok, distinct "nothing to assert" message', async () => {
     const fetchFn = transportFor([])
-    const result = await assertCost(FROM, cfg, { fetchFn })
+    const result = await assertCost(FROM, cfg, { fetchFn, retries: 0 })
     expect(result.ok).toBe(false)
     expect(result.message).toMatch(/no .*observations|nothing to assert/i)
+  })
+})
+
+// Langfuse materializes exported observations asynchronously; only the
+// zero-OBSERVATIONS case retries — a zero-COST observation is the signal itself.
+describe('ingestion-lag retry', () => {
+  function sequencedTransport(pages: Array<Array<Record<string, unknown>>>) {
+    let call = 0
+    const fetchFn: typeof fetch = async () => {
+      const rows = pages[Math.min(call++, pages.length - 1)]
+      return new Response(
+        JSON.stringify({ data: rows, meta: { page: 1, limit: 100, totalItems: rows.length, totalPages: 1 } }),
+        { status: 200 }
+      )
+    }
+    return { fetchFn, callCount: () => call }
+  }
+
+  test('zero observations retries on the bounded schedule, then succeeds', async () => {
+    const { fetchFn, callCount } = sequencedTransport([[], [], [{ model: 'gpt-5.5', costDetails: { total: 0.01 } }]])
+    const sleeps: number[] = []
+    const result = await assertCost(FROM, cfg, {
+      fetchFn,
+      retries: 3,
+      retryDelayMs: 5,
+      sleep: async ms => void sleeps.push(ms),
+    })
+    expect(result.ok).toBe(true)
+    expect(callCount()).toBe(3)
+    expect(sleeps).toEqual([5, 5])
+  })
+
+  test('still zero after all retries -> nothing to assert', async () => {
+    const { fetchFn, callCount } = sequencedTransport([[]])
+    const sleeps: number[] = []
+    const result = await assertCost(FROM, cfg, { fetchFn, retries: 2, retryDelayMs: 1, sleep: async ms => void sleeps.push(ms) })
+    expect(result.ok).toBe(false)
+    expect(result.message).toMatch(/nothing to assert/i)
+    expect(callCount()).toBe(3)
+    expect(sleeps).toHaveLength(2)
+  })
+
+  test('a zero-cost observation is reported immediately, never retried', async () => {
+    const { fetchFn, callCount } = sequencedTransport([[{ model: 'gpt-5.5', costDetails: { total: 0 } }]])
+    const result = await assertCost(FROM, cfg, { fetchFn, retries: 3, retryDelayMs: 1, sleep: async () => {} })
+    expect(result.ok).toBe(false)
+    expect(callCount()).toBe(1)
   })
 })

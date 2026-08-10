@@ -43,6 +43,8 @@ export class ApiError extends Error {
 // a real network call.
 export type FetchFn = typeof fetch
 
+export const REQUEST_TIMEOUT_MS = 30_000
+
 // A single Langfuse public-API call. Always builds the request URL as
 // `${cfg.host}${path}` and nothing else — apply.ts and assert-cost.ts rely on that
 // fact to never reach any host but Langfuse's.
@@ -57,6 +59,9 @@ export async function api(
     method,
     headers: { Authorization: authHeader(cfg), 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
+    // A hung connection must fail loudly, not stall the caller: the nightly
+    // round's fail-open handling only fires if apply/assert-cost actually exit.
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   const text = await res.text()
   if (!res.ok) throw new ApiError(res.status, text, method, path)
@@ -77,11 +82,23 @@ export async function apiGetAllPages(
   for (;;) {
     const sep = path.includes('?') ? '&' : '?'
     const res = await api(cfg, 'GET', `${path}${sep}page=${page}&limit=${limit}`, undefined, fetchFn)
-    const data = Array.isArray(res.data) ? res.data : []
-    items.push(...(data as Array<Record<string, unknown>>))
+    // A 200 with a malformed pagination envelope must fail loudly: silently
+    // treating a partial page as the complete list would let apply act on
+    // partial state (e.g. re-create definitions that exist on omitted pages).
+    if (!Array.isArray(res.data)) {
+      throw new Error(`GET ${path}: page ${page} response has no data array`)
+    }
+    const data = res.data as Array<Record<string, unknown>>
     const meta = res.meta as Record<string, unknown> | undefined
-    const totalPages = typeof meta?.totalPages === 'number' ? meta.totalPages : page
-    if (page >= totalPages || data.length === 0) break
+    const totalPages = typeof meta?.totalPages === 'number' ? meta.totalPages : undefined
+    if (totalPages === undefined) {
+      throw new Error(`GET ${path}: page ${page} response has no meta.totalPages`)
+    }
+    if (data.length === 0 && page < totalPages) {
+      throw new Error(`GET ${path}: page ${page} of ${totalPages} is unexpectedly empty`)
+    }
+    items.push(...data)
+    if (page >= totalPages) break
     page += 1
   }
   return items

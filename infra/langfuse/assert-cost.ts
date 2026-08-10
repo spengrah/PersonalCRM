@@ -17,7 +17,19 @@ export interface AssertCostResult {
 
 export interface AssertCostOpts {
   fetchFn?: FetchFn
+  // Langfuse materializes exported observations asynchronously, so an immediate
+  // read can see none yet. Zero observations is retried on a bounded schedule
+  // before being reported; a zero-COST observation is never retried (it is the
+  // signal this tool exists to surface). Scoping is by timestamp only — the qa
+  // instance has a single nightly writer, and filtering by trace/run identity
+  // would couple this self-contained tool to the judge tree's id derivation.
+  retries?: number
+  retryDelayMs?: number
+  sleep?: (ms: number) => Promise<void>
 }
+
+const DEFAULT_RETRIES = 3
+const DEFAULT_RETRY_DELAY_MS = 20_000
 
 function numOf(v: unknown): number | undefined {
   return typeof v === 'number' ? v : undefined
@@ -34,11 +46,15 @@ export async function assertCost(
   cfg: LangfuseConfig,
   opts: AssertCostOpts = {}
 ): Promise<AssertCostResult> {
-  const rows = await apiGetAllPages(
-    cfg,
-    `/api/public/observations?type=GENERATION&fromStartTime=${encodeURIComponent(fromIso)}`,
-    opts.fetchFn
-  )
+  const retries = opts.retries ?? DEFAULT_RETRIES
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
+  const path = `/api/public/observations?type=GENERATION&fromStartTime=${encodeURIComponent(fromIso)}`
+
+  let rows = await apiGetAllPages(cfg, path, opts.fetchFn)
+  for (let attempt = 0; rows.length === 0 && attempt < retries; attempt++) {
+    await sleep(opts.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS)
+    rows = await apiGetAllPages(cfg, path, opts.fetchFn)
+  }
 
   if (rows.length === 0) {
     return { ok: false, message: `assert-cost: nothing to assert — no GENERATION observations found since ${fromIso}` }

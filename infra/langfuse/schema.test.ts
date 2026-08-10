@@ -144,4 +144,21 @@ describe('parseFile validation', () => {
       })
     ).toThrow(/input/)
   })
+
+  test('rejects a row whose emitted pattern does not match its own modelName', () => {
+    // A venice row's pattern derives from sourceId; if that diverges from the
+    // usage-stream modelName, the row prices nothing — loud failure, not silence.
+    expect(() =>
+      parseFile({
+        models: [
+          {
+            modelName: 'my-usage-stream-name',
+            source: 'venice',
+            sourceId: 'venice-catalog-id',
+            prices: { input: 1e-6, output: 1e-6 },
+          },
+        ],
+      })
+    ).toThrow(/does not match its own modelName/)
+  })
 })

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { applyPrices } from './apply'
 import type { ModelRow } from './schema'
-import type { LangfuseConfig } from './http'
+import { api, apiGetAllPages, type LangfuseConfig } from './http'
 
 const cfg: LangfuseConfig = { host: 'https://fake-langfuse.test', publicKey: 'pk', secretKey: 'sk' }
 
@@ -244,5 +244,56 @@ describe('negative contract: apply never reads upstream', () => {
     // makeTransport itself throws if a non-Langfuse URL is requested (see above);
     // applyPrices completing without throwing IS the negative-contract proof.
     await expect(applyPrices([r], cfg, { fetchFn })).resolves.toBeDefined()
+  })
+})
+
+describe('tier-structure convergence', () => {
+  test('an existing definition with a matching default tier PLUS a conditional tier is replaced', async () => {
+    const r = row()
+    const legacy = converged(r)
+    ;(legacy.pricingTiers as Array<Record<string, unknown>>).push({
+      id: `${r.modelName}-large-context`,
+      isDefault: false,
+      priority: 1,
+      conditions: [{ key: 'input_tokens', operator: '>', value: 272000 }],
+      prices: { input: r.prices.input * 2, output: r.prices.output * 2 },
+    })
+    const { fetchFn, calls } = makeTransport([legacy])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    const writes = calls.filter(c => c.method !== 'GET')
+    expect(writes.map(c => c.method)).toEqual(['DELETE', 'POST'])
+    expect(result.unchanged).toBe(0)
+  })
+})
+
+describe('pagination envelope validation', () => {
+  const envelopeTransport = (body: unknown): typeof fetch => async () =>
+    new Response(JSON.stringify(body), { status: 200 })
+
+  test('missing meta.totalPages rejects instead of returning a partial list', async () => {
+    const fetchFn = envelopeTransport({ data: [{ id: 'x' }] })
+    await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/totalPages/)
+  })
+
+  test('non-array data rejects', async () => {
+    const fetchFn = envelopeTransport({ data: 'oops', meta: { totalPages: 1 } })
+    await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/data array/)
+  })
+
+  test('an unexpectedly empty non-terminal page rejects', async () => {
+    const fetchFn = envelopeTransport({ data: [], meta: { totalPages: 3 } })
+    await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/unexpectedly empty/)
+  })
+})
+
+describe('request bounding', () => {
+  test('every api() request carries an abort signal', async () => {
+    let sawSignal: unknown
+    const fetchFn: typeof fetch = async (_input, init) => {
+      sawSignal = init?.signal
+      return new Response('{}', { status: 200 })
+    }
+    await api(cfg, 'GET', '/api/public/models', undefined, fetchFn)
+    expect(sawSignal).toBeInstanceOf(AbortSignal)
   })
 })

@@ -34,6 +34,7 @@ jobs:
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.MODEL_PRICES_SYNC_PAT }}
+          sign-commits: true
           base: develop
           branch: chore/model-prices-sync
           add-paths: infra/langfuse/model-prices.json

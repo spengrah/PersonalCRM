@@ -136,6 +136,16 @@ export function compileMatchPattern(pattern: string): RegExp {
 // candidate target set — that is what Langfuse actually compares matchPattern
 // against.
 export function checkCollisions(rows: ModelRow[]): void {
+  // Self-match first: a row whose emitted pattern does not match its own
+  // modelName prices nothing — its usage stream would resolve to no definition
+  // (e.g. a venice row whose sourceId diverges from the model string it reports).
+  for (const row of rows) {
+    if (!compileMatchPattern(emitMatchPattern(row)).test(row.modelName)) {
+      throw new Error(
+        `model-prices.json: row ${row.modelName} (source ${row.source}, sourceId ${row.sourceId}) emits a matchPattern that does not match its own modelName`
+      )
+    }
+  }
   for (const target of rows.map(r => r.modelName)) {
     const matches = rows.filter(r => compileMatchPattern(emitMatchPattern(r)).test(target))
     if (matches.length > 1) {

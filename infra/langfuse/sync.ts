@@ -16,6 +16,7 @@
 //     Non-Goals.
 
 import type { ModelRow } from './schema'
+import { REQUEST_TIMEOUT_MS } from './http'
 
 const VENICE_MODELS_URL = 'https://api.venice.ai/api/v1/models'
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models'
@@ -28,12 +29,18 @@ export interface CatalogFetchers {
 export function liveFetchers(): CatalogFetchers {
   return {
     fetchVenice: async () => {
-      const res = await fetch(VENICE_MODELS_URL, { headers: { Accept: 'application/json' } })
+      const res = await fetch(VENICE_MODELS_URL, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      })
       if (!res.ok) throw new Error(`venice models fetch failed: ${res.status} ${await res.text()}`)
       return res.json()
     },
     fetchOpenRouter: async () => {
-      const res = await fetch(OPENROUTER_MODELS_URL, { headers: { Accept: 'application/json' } })
+      const res = await fetch(OPENROUTER_MODELS_URL, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      })
       if (!res.ok) throw new Error(`open-router models fetch failed: ${res.status} ${await res.text()}`)
       return res.json()
     },

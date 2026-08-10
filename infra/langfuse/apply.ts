@@ -114,7 +114,14 @@ export async function applyPrices(
 
     const defaultTier = existing.pricingTiers.find(t => t.isDefault === true)
     const existingPrices = defaultTier?.prices ?? {}
-    const identical = existing.matchPattern === desiredPattern && pricesEqual(existingPrices, desiredPrices)
+    // Identity requires the WHOLE tier structure, not just the default tier's
+    // prices: a definition that also retains a conditional tier (e.g. one the
+    // retired reconciler mirrored from upstream) has not converged to the flat
+    // one-tier shape, even when its default prices already match.
+    const identical =
+      existing.matchPattern === desiredPattern &&
+      existing.pricingTiers.length === 1 &&
+      pricesEqual(existingPrices, desiredPrices)
 
     if (identical) {
       unchanged++
