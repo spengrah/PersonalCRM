@@ -247,6 +247,43 @@ describe('negative contract: apply never reads upstream', () => {
   })
 })
 
+describe('legacy conflicting definitions', () => {
+  test('a stray whose pattern captures a declared model string is deleted, not preserved', async () => {
+    const r = row() // modelName gpt-5.5
+    const legacy = {
+      id: 'legacy-versioned',
+      modelName: 'gpt-5.5-2026-04-23',
+      matchPattern: '(?i)^(openai\\/)?(gpt-5\\.5(-2026-04-23)?)$',
+      isLangfuseManaged: false,
+      unit: 'TOKENS',
+      pricingTiers: [{ id: 't', isDefault: true, priority: 0, conditions: [], prices: { input: 1e-6, output: 2e-6 } }],
+    }
+    const { fetchFn, calls } = makeTransport([legacy])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    const writes = calls.filter(c => c.method !== 'GET')
+    expect(writes.some(c => c.method === 'DELETE' && c.path.includes('legacy-versioned'))).toBe(true)
+    expect(writes.some(c => c.method === 'POST')).toBe(true)
+    expect(result.warnings).toHaveLength(0)
+  })
+
+  test('a stray matching nothing declared is still warned about, never deleted', async () => {
+    const r = row()
+    const unrelated = {
+      id: 'unrelated-1',
+      modelName: 'some-other-model',
+      matchPattern: '(?i)^some\\-other\\-model$',
+      isLangfuseManaged: false,
+      unit: 'TOKENS',
+      pricingTiers: [{ id: 't', isDefault: true, priority: 0, conditions: [], prices: { input: 1e-6, output: 2e-6 } }],
+    }
+    const { fetchFn, calls } = makeTransport([converged(r), unrelated])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    expect(calls.filter(c => c.method === 'DELETE')).toHaveLength(0)
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain('some-other-model')
+  })
+})
+
 describe('tier-structure convergence', () => {
   test('an existing definition with a matching default tier PLUS a conditional tier is replaced', async () => {
     const r = row()

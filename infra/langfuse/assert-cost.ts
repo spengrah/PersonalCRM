@@ -20,9 +20,13 @@ export interface AssertCostOpts {
   // Langfuse materializes exported observations asynchronously, so an immediate
   // read can see none yet. Zero observations is retried on a bounded schedule
   // before being reported; a zero-COST observation is never retried (it is the
-  // signal this tool exists to surface). Scoping is by timestamp only — the qa
-  // instance has a single nightly writer, and filtering by trace/run identity
-  // would couple this self-contained tool to the judge tree's id derivation.
+  // signal this tool exists to surface). Two bounds are ACCEPTED, not oversights:
+  // scoping is by timestamp only, and a non-empty first batch ends polling even
+  // if later worker batches are still materializing. Closing either would
+  // require the export's run identity or observation count — coupling this
+  // self-contained tool to the judge tree, which the design forbids. The check
+  // is an advisory fail-open signal on a single-writer instance; the next
+  // night's round re-covers anything a partial batch missed.
   retries?: number
   retryDelayMs?: number
   sleep?: (ms: number) => Promise<void>

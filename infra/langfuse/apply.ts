@@ -139,12 +139,39 @@ export async function applyPrices(
   }
 
   for (const stray of byName.values()) {
+    const conflict = rows.find(r => strayPatternMatches(stray.matchPattern, r.modelName))
+    if (conflict !== undefined) {
+      await api(cfg, 'DELETE', `/api/public/models/${encodeURIComponent(stray.id)}`, undefined, opts.fetchFn)
+      deleted++
+      log(
+        `deleted conflicting project-scoped definition ${stray.modelName} — its matchPattern also captures declared model "${conflict.modelName}"`
+      )
+      continue
+    }
     const msg = `stray project-scoped model definition not in model-prices.json: ${stray.modelName}`
     warnings.push(msg)
     log(`WARNING ${msg}`)
   }
 
   return { created, deleted, unchanged, warnings }
+}
+
+// A stray whose pattern captures a declared model string is not benign: two
+// project-scoped rows matching one observation leave Langfuse without a
+// deterministic tiebreak (both custom, both null startDate), so stale prices can
+// stay silently effective — e.g. a retired-reconciler override under a versioned
+// modelName whose pattern also matches the bare model string. The file claims
+// that string, so conflicting strays are deleted; strays matching nothing
+// declared are only warned about — apply never reaps unrelated definitions.
+function strayPatternMatches(pattern: string, modelName: string): boolean {
+  const body = pattern.startsWith('(?i)') ? pattern.slice('(?i)'.length) : pattern
+  try {
+    return new RegExp(body, 'i').test(modelName)
+  } catch {
+    // Unevaluable server-side pattern: fall through to the stray warning rather
+    // than deleting on uncertainty.
+    return false
+  }
 }
 
 async function main(): Promise<number> {
