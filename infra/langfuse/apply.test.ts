@@ -266,6 +266,23 @@ describe('legacy conflicting definitions', () => {
     expect(result.warnings).toHaveLength(0)
   })
 
+  test('a case-sensitive stray pattern is evaluated case-sensitively — not deleted on a case-only match', async () => {
+    const r = row() // modelName gpt-5.5
+    const caseSensitive = {
+      id: 'case-sensitive-1',
+      modelName: 'GPT-CUSTOM',
+      matchPattern: '^GPT-5[.]5$', // no (?i): Postgres would NOT match gpt-5.5
+      isLangfuseManaged: false,
+      unit: 'TOKENS',
+      pricingTiers: [{ id: 't', isDefault: true, priority: 0, conditions: [], prices: { input: 1e-6, output: 2e-6 } }],
+    }
+    const { fetchFn, calls } = makeTransport([converged(r), caseSensitive])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    expect(calls.filter(c => c.method === 'DELETE')).toHaveLength(0)
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain('GPT-CUSTOM')
+  })
+
   test('a stray matching nothing declared is still warned about, never deleted', async () => {
     const r = row()
     const unrelated = {

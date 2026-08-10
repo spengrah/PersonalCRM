@@ -164,9 +164,14 @@ export async function applyPrices(
 // that string, so conflicting strays are deleted; strays matching nothing
 // declared are only warned about — apply never reaps unrelated definitions.
 function strayPatternMatches(pattern: string, modelName: string): boolean {
-  const body = pattern.startsWith('(?i)') ? pattern.slice('(?i)'.length) : pattern
+  // Case-insensitivity must mirror what Postgres would do: only when the
+  // pattern itself opts in via the `(?i)` prefix. Forcing the `i` flag would
+  // misclassify a deliberately case-sensitive definition as conflicting and
+  // delete it wrongly.
+  const insensitive = pattern.startsWith('(?i)')
+  const body = insensitive ? pattern.slice('(?i)'.length) : pattern
   try {
-    return new RegExp(body, 'i').test(modelName)
+    return new RegExp(body, insensitive ? 'i' : '').test(modelName)
   } catch {
     // Unevaluable server-side pattern: fall through to the stray warning rather
     // than deleting on uncertainty.
