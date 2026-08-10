@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export qa-obs-smoke qa-model-prices qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export model-prices-sync model-prices-apply qa-cost-assert qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -306,14 +306,14 @@ qa-report: ## Render the advisory report over a tours run dir (RUNDIR relative t
 qa-export: ## Ship a judge run's GenAI spans (TRACE=<trace.jsonl>, written when the judge runs with QA_JUDGE_TRACE set) to Langfuse, screenshots included. No-op without LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY. QA_RUN_ID/QA_GIT_SHA stamp per-round provenance tags + a session; QA_SALT_PASSES (default 3) sets how many passing traces are salted into the triage queue. The round wrapper sets QA_RUN_ID/QA_GIT_SHA from manifest.json; each is validated + applied independently (an invalid one is dropped, never fail-closed). The recipe inherits the environment (no env -i), so these pass through.
 	@cd frontend && bun run tests/tours/judge/export/run.ts "$(TRACE)"
 
-qa-obs-smoke: ## Live-verify the usage generation observation end-to-end against a WRITABLE Langfuse. Ships ONE synthetic span (behavior SMOKE-OBS, per-invocation ids stable within the run, fixed token counts, near-present span instants) twice, reads the observation back from the observations endpoint, and asserts observations non-empty, usageDetails echoed exactly, the observation's own costDetails total == the hand-computed figure, startTime from the span (not export time), and — after re-exporting the same span — still exactly ONE observation at the same id and cost (a re-export does not duplicate; it also does not update). Cross-checks the trace detail endpoint and names any disagreement between the two views. Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY with WRITE access. Non-zero exit on any failed assertion.
-	@cd frontend && bun run tests/tours/judge/export/obs-smoke.ts
+model-prices-sync: ## Refresh every declared row in infra/langfuse/model-prices.json from its source (Venice or OpenRouter, both anonymous — no credentials needed). Rewrites the file deterministically sorted; the diff is the review surface. Never adds or removes rows — declaring a model is a hand edit. Loud, non-zero-exit failure (file left untouched) if a declared row is absent from its source's catalog or a Venice row is not a text model.
+	@cd infra/langfuse && bun run sync.ts
 
-qa-model-prices: ## Sync this project's Langfuse model prices for the judge's ACTIVE models (QA_JUDGE_MODEL + QA_INTENT_MODEL, or MODELS=a,b) against upstream's default-model-prices.json. RECONCILES: zero drift = zero writes, and an override is DELETED once the managed row catches up. DRY_RUN=1 prints intended changes without writing; FORCE=1 overrides the >5x implausible-delta guard; STRICT=1 exits non-zero on failure (default is fail-open, for the nightly); UPSTREAM=<file> reads the payload from a local file instead of fetching (test/smoke seam); RESET=<model> deletes this project's override for <model> and exits. Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY with WRITE access.
-	@cd frontend && bun run tests/tours/judge/export/model-prices.ts \
-	  $(if $(MODELS),--models "$(MODELS)",) $(if $(filter 1,$(DRY_RUN)),--dry-run,) \
-	  $(if $(filter 1,$(FORCE)),--force,) $(if $(filter 1,$(STRICT)),--strict,) \
-	  $(if $(UPSTREAM),--upstream "$(UPSTREAM)",) $(if $(RESET),--reset "$(RESET)",)
+model-prices-apply: ## Converge Langfuse's project-scoped model definitions to infra/langfuse/model-prices.json. Idempotent — identical rows write nothing; changed rows are replaced delete-then-create. Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY with WRITE access. Do not run while an export is in flight — the delete-then-create gap would price a concurrently-ingested observation at zero. Non-zero exit on any failure.
+	@cd infra/langfuse && bun run apply.ts
+
+qa-cost-assert: ## Assert every GENERATION observation since FROM=<ISO8601> carries non-zero cost. Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY. Non-zero exit if any observation has zero/missing cost or none are found.
+	@cd infra/langfuse && bun run assert-cost.ts "$(FROM)"
 
 qa-langfuse-setup: ## Idempotently provision the standing QA triage queue (ground_truth+disposition dims) + verdict/ground_truth/disposition score configs in Langfuse (obs). Re-runnable; reconciles desired state. Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY (errors non-zero without them).
 	@cd frontend && bun run tests/tours/judge/export/setup.ts
@@ -557,6 +557,8 @@ test-clean-clones:
 test-frontend:
 	@echo "Running frontend tests..."
 	@cd frontend && bun run test
+	@echo "Running infra/langfuse tests..."
+	@cd infra/langfuse && bun test
 
 test-api:
 	@echo "Running API tests..."

@@ -366,6 +366,10 @@ jobs:
         working-directory: frontend
         run: bun run test
 
+      - name: Run infra/langfuse tests
+        working-directory: infra/langfuse
+        run: bun test
+
       - name: Build frontend
         working-directory: frontend
         env:

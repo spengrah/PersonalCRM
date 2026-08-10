@@ -3,13 +3,22 @@
 #   - CI: .github/workflows/ci.yml `changes` job (dorny/paths-filter@v3, filters: ./path-filters.yml)
 #   - Local: scripts/hooks/pre-push (group-aware bash parser, file_in_group)
 #
-# LCD constraint: flat named groups, each a plain list of 'dir/**' string globs.
+# LCD constraint: flat named groups, each a plain list of glob strings — almost
+# always 'dir/**', with a single deliberate exception: 'infra/langfuse/*.ts'
+# (single-star, one directory deep, no recursion) so that infra/langfuse/'s
+# checked-in price file (model-prices.json) stays OUT of the frontend group while
+# its tooling stays in it — see that group's comment below.
 # NO YAML anchors/aliases, NO negation patterns — the bash parser is a dumb
 # line-scanner and dorny is the other consumer; keep it lowest-common-denominator.
 #
 # Group → consumer mapping:
 #   backend     → CI backend-tests + e2e-tests; local Go/frontend test suite (∪ frontend)
-#   frontend    → CI frontend-tests + e2e-tests; local Go/frontend test suite (∪ backend)
+#   frontend    → CI frontend-tests + e2e-tests; local Go/frontend test suite (∪ backend).
+#                 ALSO gates infra/langfuse/'s TypeScript tooling (bun test folded into
+#                 `make test-frontend` + a CI frontend-tests step) — but NOT
+#                 model-prices.json, which stays in NO group, so a price-only diff
+#                 (including every PR the scheduled sync workflow opens) triggers only
+#                 the always-on `changes`/lint jobs, never a test lane.
 #   mac_daemon  → CI mac-daemon-tests. NOTE: the local Swift gate (check_swift) does NOT
 #                 use this group; it uses a stricter literal 'mac-daemon/' prefix test, so a
 #                 ci.yml-only push runs mac-daemon-tests in CI but NOT swift test locally.
@@ -40,6 +49,7 @@ backend:
   - 'path-filters.yml'
 frontend:
   - 'frontend/**'
+  - 'infra/langfuse/*.ts'
 mac_daemon:
   - 'mac-daemon/**'
   - '.github/workflows/ci.yml'

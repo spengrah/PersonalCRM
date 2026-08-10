@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  activeModels,
   DEFAULT_INTENT_EFFORT,
   DEFAULT_INTENT_MODEL,
   DEFAULT_JUDGE_EFFORT,
@@ -13,74 +12,6 @@ describe('judge model defaults', () => {
     expect(DEFAULT_JUDGE_EFFORT).toBe('low')
     expect(DEFAULT_INTENT_MODEL).toBe('gpt-5.5')
     expect(DEFAULT_INTENT_EFFORT).toBe('medium')
-  })
-})
-
-describe('activeModels', () => {
-  it('returns both passes’ defaults, sorted', () => {
-    expect(activeModels({})).toEqual(['gpt-5.4-mini', 'gpt-5.5'])
-  })
-
-  it('honors both env overrides', () => {
-    expect(
-      activeModels({ QA_JUDGE_MODEL: 'gpt-5.6-luna', QA_INTENT_MODEL: 'gpt-5.6-terra' })
-    ).toEqual(['gpt-5.6-luna', 'gpt-5.6-terra'])
-  })
-
-  // The intent model is the expensive one; resolving only QA_JUDGE_MODEL would
-  // leave an experiment's intent model unpriced while everything still looked
-  // healthy.
-  it('honors the intent override on its own', () => {
-    expect(activeModels({ QA_INTENT_MODEL: 'gpt-5.6-terra' })).toEqual([
-      'gpt-5.4-mini',
-      'gpt-5.6-terra',
-    ])
-  })
-
-  it('honors the ux override on its own', () => {
-    expect(activeModels({ QA_JUDGE_MODEL: 'gpt-5.6-luna' })).toEqual(['gpt-5.5', 'gpt-5.6-luna'])
-  })
-
-  it('dedupes when both passes resolve to the same model', () => {
-    expect(activeModels({ QA_JUDGE_MODEL: 'gpt-5.5' })).toEqual(['gpt-5.5'])
-  })
-
-  // `??` parity with the transports: an empty override must NOT fall back to
-  // the default here, because the transport resolves it to '' and then sends no
-  // model at all. An '' target matches nothing upstream and is reported loudly;
-  // a defaulted target would silently price a model nothing sends.
-  // Pinned for BOTH variables: a `||` regression on either branch alone would
-  // otherwise stay green here.
-  it('does not default away an empty-string ux override', () => {
-    expect(activeModels({ QA_JUDGE_MODEL: '' })).toEqual(['', 'gpt-5.5'])
-  })
-
-  it('does not default away an empty-string intent override', () => {
-    expect(activeModels({ QA_INTENT_MODEL: '' })).toEqual(['', 'gpt-5.4-mini'])
-  })
-
-  // The default argument is the production path — every other test passes an
-  // explicit env, so swapping `process.env` for `{}` would leave them all green
-  // while real callers stopped seeing overrides entirely.
-  it('reads process.env when called with no argument', () => {
-    const prevJudge = process.env.QA_JUDGE_MODEL
-    const prevIntent = process.env.QA_INTENT_MODEL
-    try {
-      process.env.QA_JUDGE_MODEL = 'gpt-5.6-luna'
-      process.env.QA_INTENT_MODEL = 'gpt-5.6-terra'
-      expect(activeModels()).toEqual(['gpt-5.6-luna', 'gpt-5.6-terra'])
-    } finally {
-      if (prevJudge === undefined) delete process.env.QA_JUDGE_MODEL
-      else process.env.QA_JUDGE_MODEL = prevJudge
-      if (prevIntent === undefined) delete process.env.QA_INTENT_MODEL
-      else process.env.QA_INTENT_MODEL = prevIntent
-    }
-  })
-
-  // The http adapter resolves its own model and is a reference stub no round
-  // runs — its default is deliberately not a sync target.
-  it('excludes the http stub’s model', () => {
-    expect(activeModels({})).not.toContain('gpt-4o-mini')
   })
 })
 

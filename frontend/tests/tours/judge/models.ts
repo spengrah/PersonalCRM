@@ -25,32 +25,3 @@ export const DEFAULT_JUDGE_EFFORT = 'low'
 // QA_INTENT_EFFORT; QA_JUDGE still selects the adapter kind.
 export const DEFAULT_INTENT_MODEL = 'gpt-5.5'
 export const DEFAULT_INTENT_EFFORT = 'medium'
-
-/**
- * The distinct model strings a round will actually send, deduped + sorted.
- *
- * The two passes read DIFFERENT env vars — resolving only QA_JUDGE_MODEL would
- * leave an experiment's intent model unpriced, which is the more expensive of
- * the two. Sorted + deduped so a caller (the price sync) has a stable, minimal
- * target list.
- *
- * NOT included by design: the http adapter's own default (`gpt-4o-mini`). That
- * adapter resolves its model itself from QA_JUDGE_HTTP_MODEL and is a non-codex
- * reference stub no round runs — including it here would price a model nothing
- * sends. This exclusion is a decision, not an oversight.
- */
-export function activeModels(env: Record<string, string | undefined> = process.env): string[] {
-  // `??`, NOT `||`, and deliberately so: this must resolve EXACTLY as the
-  // transports do (they all use `??`). With `||`, an empty override
-  // (QA_JUDGE_MODEL=) would resolve to the default here while the transport
-  // resolves it to '' — and threadOptionsFor's `if (model)` then sets NO model
-  // and lets codex pick. We would faithfully price a model nothing sends.
-  // Under `??` an empty override yields the target '', which matches zero
-  // upstream entries and is reported LOUDLY by the sync's absence path — the
-  // honest outcome for a misconfigured harness.
-  const models = [
-    env.QA_JUDGE_MODEL ?? DEFAULT_JUDGE_MODEL,
-    env.QA_INTENT_MODEL ?? DEFAULT_INTENT_MODEL,
-  ]
-  return [...new Set(models)].sort()
-}

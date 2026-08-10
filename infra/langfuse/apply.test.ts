@@ -1,0 +1,406 @@
+import { describe, expect, test } from 'bun:test'
+import { applyPrices } from './apply'
+import type { ModelRow } from './schema'
+import { api, apiGetAllPages, type LangfuseConfig } from './http'
+
+const cfg: LangfuseConfig = { host: 'https://fake-langfuse.test', publicKey: 'pk', secretKey: 'sk' }
+
+interface Call {
+  method: string
+  path: string
+  body: unknown
+}
+
+// A fake transport recording every call in order, backed by an in-memory list of
+// "existing" model definitions it serves through the paginated GET endpoint (one
+// or two pages, per test) and mutates on DELETE/POST like the real API would.
+function makeTransport(existing: Array<Record<string, unknown>>, opts: { pageSize?: number } = {}) {
+  const calls: Call[] = []
+  const store = [...existing]
+  let nextId = 1000
+  const pageSize = opts.pageSize ?? 100
+
+  const fetchFn: typeof fetch = async (input, init) => {
+    const url = new URL(String(input))
+    // Negative contract: apply must never call anything but the configured
+    // Langfuse host.
+    if (`${url.protocol}//${url.host}` !== cfg.host) {
+      throw new Error(`apply issued a request to a non-Langfuse host: ${url.href}`)
+    }
+    const method = init?.method ?? 'GET'
+    const path = url.pathname + url.search
+
+    if (method === 'GET' && url.pathname === '/api/public/models') {
+      const page = Number(url.searchParams.get('page') ?? '1')
+      calls.push({ method, path, body: undefined })
+      const start = (page - 1) * pageSize
+      const pageItems = store.slice(start, start + pageSize)
+      const totalPages = Math.max(1, Math.ceil(store.length / pageSize))
+      return new Response(
+        JSON.stringify({ data: pageItems, meta: { page, limit: pageSize, totalItems: store.length, totalPages } }),
+        { status: 200 }
+      )
+    }
+
+    if (method === 'DELETE' && url.pathname.startsWith('/api/public/models/')) {
+      const id = decodeURIComponent(url.pathname.slice('/api/public/models/'.length))
+      calls.push({ method, path, body: undefined })
+      const idx = store.findIndex(m => m.id === id)
+      if (idx >= 0) store.splice(idx, 1)
+      return new Response('{}', { status: 200 })
+    }
+
+    if (method === 'POST' && url.pathname === '/api/public/models') {
+      const body = init?.body ? JSON.parse(String(init.body)) : {}
+      calls.push({ method, path, body })
+      // Mirror Langfuse's PricingTierInputSchema: every tier requires a
+      // non-empty name — a POST without one 400s live, so the fake must
+      // reject it too or the whole suite proves nothing about the payload.
+      const tiers = (body.pricingTiers ?? []) as Array<Record<string, unknown>>
+      if (tiers.some(t => typeof t.name !== 'string' || t.name.length === 0)) {
+        return new Response(JSON.stringify({ error: 'pricing tier name is required' }), { status: 400 })
+      }
+      const created = { id: `new-${nextId++}`, isLangfuseManaged: false, ...body }
+      store.push(created)
+      return new Response(JSON.stringify(created), { status: 200 })
+    }
+
+    throw new Error(`fake transport: unexpected ${method} ${path}`)
+  }
+
+  return { fetchFn, calls, store }
+}
+
+function row(over: Partial<ModelRow> = {}): ModelRow {
+  return {
+    modelName: 'gpt-5.5',
+    source: 'open-router',
+    sourceId: 'openai/gpt-5.5',
+    prices: { input: 5e-6, output: 3e-5 },
+    ...over,
+  }
+}
+
+function converged(r: ModelRow, extra: Record<string, unknown> = {}) {
+  return {
+    id: `existing-${r.modelName}`,
+    modelName: r.modelName,
+    matchPattern: `(?i)^${r.modelName.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&')}$`,
+    isLangfuseManaged: false,
+    unit: 'TOKENS',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    prices: { input: r.prices.input, output: r.prices.output }, // deprecated top-level view — must be ignored
+    pricingTiers: [
+      {
+        id: `${r.modelName}-tier`,
+        isDefault: true,
+        priority: 0,
+        conditions: [],
+        prices: {
+          input: r.prices.input,
+          output: r.prices.output,
+          ...(r.prices.cachedInput !== undefined ? { input_cached_tokens: r.prices.cachedInput } : {}),
+        },
+      },
+    ],
+    ...extra,
+  }
+}
+
+describe('idempotent', () => {
+  test('an already-converged instance performs zero DELETE/POST calls', async () => {
+    const r = row()
+    const { fetchFn, calls } = makeTransport([converged(r)])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    expect(calls.filter(c => c.method !== 'GET')).toHaveLength(0)
+    expect(result.unchanged).toBe(1)
+    expect(result.created).toBe(0)
+    expect(result.deleted).toBe(0)
+  })
+})
+
+describe('one edit', () => {
+  test('exactly one DELETE then one POST, both touching only the edited row', async () => {
+    const r = row()
+    const stale = converged(row({ prices: { input: 1e-6, output: 1e-6 } }))
+    const { fetchFn, calls } = makeTransport([stale])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    const writes = calls.filter(c => c.method !== 'GET')
+    expect(writes.map(c => c.method)).toEqual(['DELETE', 'POST'])
+    expect(writes[0]?.path).toBe(`/api/public/models/${stale.id}`)
+    expect((writes[1]?.body as { modelName: string }).modelName).toBe(r.modelName)
+    expect(result.deleted).toBe(1)
+    expect(result.created).toBe(1)
+  })
+})
+
+describe('row missing from instance', () => {
+  test('one POST, no DELETE', async () => {
+    const r = row()
+    const { fetchFn, calls } = makeTransport([])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    const writes = calls.filter(c => c.method !== 'GET')
+    expect(writes.map(c => c.method)).toEqual(['POST'])
+    expect(result.created).toBe(1)
+    expect(result.deleted).toBe(0)
+  })
+})
+
+describe('POST body contract', () => {
+  test('unit TOKENS, matchPattern, exactly one default tier; input_cached_tokens iff cachedInput set', async () => {
+    const withCache = row({ modelName: 'gpt-5.4-mini', sourceId: 'openai/gpt-5.4-mini', prices: { input: 7.5e-7, output: 4.5e-6, cachedInput: 7.5e-8 } })
+    const noCache = row({ modelName: 'gpt-5.6-terra', sourceId: 'openai/gpt-5.6-terra' })
+    const { fetchFn, calls } = makeTransport([])
+    await applyPrices([withCache, noCache], cfg, { fetchFn })
+    const posts = calls.filter(c => c.method === 'POST').map(c => c.body as Record<string, unknown>)
+
+    const cacheBody = posts.find(b => b.modelName === 'gpt-5.4-mini')!
+    expect(cacheBody.unit).toBe('TOKENS')
+    expect(cacheBody.matchPattern).toBe('(?i)^gpt\\-5\\.4\\-mini$')
+    expect(cacheBody.pricingTiers).toEqual([
+      { name: 'Standard', isDefault: true, priority: 0, conditions: [], prices: { input: 7.5e-7, output: 4.5e-6, input_cached_tokens: 7.5e-8 } },
+    ])
+
+    const noCacheBody = posts.find(b => b.modelName === 'gpt-5.6-terra')!
+    const tiers = noCacheBody.pricingTiers as Array<{ prices: Record<string, number> }>
+    expect(Object.keys(tiers[0]!.prices).sort()).toEqual(['input', 'output'])
+  })
+})
+
+describe('editing only cachedInput', () => {
+  test('participates in the identity comparison: DELETE then POST', async () => {
+    const withoutCache = row()
+    const withCache = row({ prices: { ...withoutCache.prices, cachedInput: 1e-7 } })
+    const stale = converged(withoutCache)
+    const { fetchFn, calls } = makeTransport([stale])
+    const result = await applyPrices([withCache], cfg, { fetchFn })
+    const writes = calls.filter(c => c.method !== 'GET')
+    expect(writes.map(c => c.method)).toEqual(['DELETE', 'POST'])
+    expect(result.deleted).toBe(1)
+    expect(result.created).toBe(1)
+  })
+})
+
+describe('comparison ignores server-side noise', () => {
+  test('differing id/timestamps/unit-echo/deprecated top-level prices still counts identical', async () => {
+    const r = row()
+    const noisy = converged(r, {
+      id: 'totally-different-id',
+      createdAt: '2020-01-01T00:00:00.000Z',
+      updatedAt: '2020-01-01T00:00:00.000Z',
+      unit: 'CHARACTERS', // echoed differently server-side; not part of the comparison
+      prices: { input: 999, output: 999 }, // deprecated flattened view, deliberately wrong
+    })
+    const { fetchFn, calls } = makeTransport([noisy])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    expect(calls.filter(c => c.method !== 'GET')).toHaveLength(0)
+    expect(result.unchanged).toBe(1)
+  })
+})
+
+describe('managed rows', () => {
+  test('only project-scoped rows considered; a managed row matching the name is never DELETEd', async () => {
+    const r = row()
+    const managed = converged(r, { id: 'managed-1', isLangfuseManaged: true })
+    const { fetchFn, calls } = makeTransport([managed])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    const writes = calls.filter(c => c.method !== 'GET')
+    // No override exists (the only row is managed), so apply creates one; it must
+    // never DELETE the managed row.
+    expect(writes.some(c => c.method === 'DELETE')).toBe(false)
+    expect(result.created).toBe(1)
+  })
+})
+
+describe('pagination', () => {
+  test('a two-page fake GET is walked to completion', async () => {
+    const r1 = row({ modelName: 'gpt-5.5', sourceId: 'openai/gpt-5.5' })
+    const r2 = row({ modelName: 'gpt-5.6-luna', sourceId: 'openai/gpt-5.6-luna' })
+    const existing = [converged(r1), converged(r2)]
+    const { fetchFn, calls } = makeTransport(existing, { pageSize: 1 })
+    const result = await applyPrices([r1, r2], cfg, { fetchFn })
+    expect(calls.filter(c => c.method === 'GET').length).toBeGreaterThanOrEqual(2)
+    expect(result.unchanged).toBe(2)
+  })
+})
+
+describe('stray rows', () => {
+  test('a project-scoped row not in the file is warned, never deleted', async () => {
+    const r = row()
+    const stray = converged(row({ modelName: 'orphaned-model', sourceId: 'openai/orphaned-model' }))
+    const { fetchFn, calls } = makeTransport([converged(r), stray])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    expect(calls.some(c => c.method === 'DELETE')).toBe(false)
+    expect(result.warnings.some(w => w.includes('orphaned-model'))).toBe(true)
+  })
+})
+
+describe('HTTP failure', () => {
+  test('any transport failure rejects', async () => {
+    const r = row()
+    const fetchFn: typeof fetch = async () => new Response('boom', { status: 500 })
+    await expect(applyPrices([r], cfg, { fetchFn })).rejects.toThrow()
+  })
+})
+
+describe('negative contract: apply never reads upstream', () => {
+  test('a fake transport that only serves the Langfuse host completes with no throw', async () => {
+    const r = row()
+    const { fetchFn } = makeTransport([converged(r)])
+    // makeTransport itself throws if a non-Langfuse URL is requested (see above);
+    // applyPrices completing without throwing IS the negative-contract proof.
+    await expect(applyPrices([r], cfg, { fetchFn })).resolves.toBeDefined()
+  })
+})
+
+describe('legacy conflicting definitions', () => {
+  test('a stray whose pattern captures a declared model string gets a distinct conflict warning, never a delete', async () => {
+    const r = row() // modelName gpt-5.5
+    const legacy = {
+      id: 'legacy-versioned',
+      modelName: 'gpt-5.5-2026-04-23',
+      matchPattern: '(?i)^(openai\\/)?(gpt-5\\.5(-2026-04-23)?)$',
+      isLangfuseManaged: false,
+      unit: 'TOKENS',
+      pricingTiers: [{ id: 't', name: 'Standard', isDefault: true, priority: 0, conditions: [], prices: { input: 1e-6, output: 2e-6 } }],
+    }
+    const { fetchFn, calls } = makeTransport([legacy])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    // The declared row is still created; the stray is reported, not touched.
+    expect(calls.some(c => c.method === 'DELETE')).toBe(false)
+    expect(calls.some(c => c.method === 'POST')).toBe(true)
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain('legacy-versioned')
+    expect(result.warnings[0]).toContain('gpt-5.5')
+    expect(result.warnings[0]).toMatch(/no deterministic tiebreak/)
+  })
+
+  test('a stray capturing only the venice/ alias of a declared venice row is also flagged as a conflict', async () => {
+    const venice = row({ modelName: 'qwen3-235b', source: 'venice', sourceId: 'qwen3-235b', prices: { input: 4.5e-7, output: 3.5e-6 } })
+    const prefixOnly = {
+      id: 'legacy-prefixed',
+      modelName: 'venice-alias-row',
+      matchPattern: '(?i)^venice\\/qwen3\\-235b$', // matches venice/qwen3-235b but not bare qwen3-235b
+      isLangfuseManaged: false,
+      unit: 'TOKENS',
+      pricingTiers: [{ id: 't', name: 'Standard', isDefault: true, priority: 0, conditions: [], prices: { input: 1e-6, output: 2e-6 } }],
+    }
+    const { fetchFn, calls } = makeTransport([prefixOnly])
+    const result = await applyPrices([venice], cfg, { fetchFn })
+    expect(calls.some(c => c.method === 'DELETE')).toBe(false)
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toMatch(/no deterministic tiebreak/)
+  })
+
+  test('a case-sensitive stray pattern is evaluated case-sensitively — not deleted on a case-only match', async () => {
+    const r = row() // modelName gpt-5.5
+    const caseSensitive = {
+      id: 'case-sensitive-1',
+      modelName: 'GPT-CUSTOM',
+      matchPattern: '^GPT-5[.]5$', // no (?i): Postgres would NOT match gpt-5.5
+      isLangfuseManaged: false,
+      unit: 'TOKENS',
+      pricingTiers: [{ id: 't', isDefault: true, priority: 0, conditions: [], prices: { input: 1e-6, output: 2e-6 } }],
+    }
+    const { fetchFn, calls } = makeTransport([converged(r), caseSensitive])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    expect(calls.filter(c => c.method === 'DELETE')).toHaveLength(0)
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain('GPT-CUSTOM')
+  })
+
+  test('a stray matching nothing declared is still warned about, never deleted', async () => {
+    const r = row()
+    const unrelated = {
+      id: 'unrelated-1',
+      modelName: 'some-other-model',
+      matchPattern: '(?i)^some\\-other\\-model$',
+      isLangfuseManaged: false,
+      unit: 'TOKENS',
+      pricingTiers: [{ id: 't', isDefault: true, priority: 0, conditions: [], prices: { input: 1e-6, output: 2e-6 } }],
+    }
+    const { fetchFn, calls } = makeTransport([converged(r), unrelated])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    expect(calls.filter(c => c.method === 'DELETE')).toHaveLength(0)
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain('some-other-model')
+  })
+})
+
+describe('tier-structure convergence', () => {
+  test('an existing definition with a matching default tier PLUS a conditional tier is replaced', async () => {
+    const r = row()
+    const legacy = converged(r)
+    ;(legacy.pricingTiers as Array<Record<string, unknown>>).push({
+      id: `${r.modelName}-large-context`,
+      isDefault: false,
+      priority: 1,
+      conditions: [{ key: 'input_tokens', operator: '>', value: 272000 }],
+      prices: { input: r.prices.input * 2, output: r.prices.output * 2 },
+    })
+    const { fetchFn, calls } = makeTransport([legacy])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    const writes = calls.filter(c => c.method !== 'GET')
+    expect(writes.map(c => c.method)).toEqual(['DELETE', 'POST'])
+    expect(result.unchanged).toBe(0)
+  })
+})
+
+describe('tier-structure convergence', () => {
+  test('a single tier with matching prices but non-default shape (priority/conditions) is replaced', async () => {
+    const r = row()
+    const skewed = converged(r)
+    const tier = (skewed.pricingTiers as Array<Record<string, unknown>>)[0]!
+    tier.priority = 1
+    tier.conditions = [{ key: 'input_tokens', operator: '>', value: 0 }]
+    const { fetchFn, calls } = makeTransport([skewed])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    expect(calls.filter(c => c.method !== 'GET').map(c => c.method)).toEqual(['DELETE', 'POST'])
+    expect(result.unchanged).toBe(0)
+  })
+})
+
+describe('pagination envelope validation', () => {
+  const envelopeTransport = (body: unknown): typeof fetch => async () =>
+    new Response(JSON.stringify(body), { status: 200 })
+
+  test('missing meta.totalPages rejects instead of returning a partial list', async () => {
+    const fetchFn = envelopeTransport({ data: [{ id: 'x' }] })
+    await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/totalPages/)
+  })
+
+  test('non-array data rejects', async () => {
+    const fetchFn = envelopeTransport({ data: 'oops', meta: { totalPages: 1 } })
+    await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/data array/)
+  })
+
+  test('an unexpectedly empty non-terminal page rejects', async () => {
+    const fetchFn = envelopeTransport({ data: [], meta: { page: 1, totalPages: 3 } })
+    await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/unexpectedly empty/)
+  })
+
+  test('missing or non-numeric meta.page rejects', async () => {
+    const fetchFn = envelopeTransport({ data: [{ id: 'x' }], meta: { totalPages: 1 } })
+    await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/meta\.page/)
+  })
+
+  test('a replayed page (response echoing the wrong page number) rejects', async () => {
+    // Always claims to be page 1 across a 2-page walk — the replay case.
+    const fetchFn: typeof fetch = async () =>
+      new Response(JSON.stringify({ data: [{ id: 'a' }], meta: { page: 1, totalPages: 2 } }), { status: 200 })
+    await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/echoes page/)
+  })
+})
+
+describe('request bounding', () => {
+  test('every api() request carries an abort signal', async () => {
+    let sawSignal: unknown
+    const fetchFn: typeof fetch = async (_input, init) => {
+      sawSignal = init?.signal
+      return new Response('{}', { status: 200 })
+    }
+    await api(cfg, 'GET', '/api/public/models', undefined, fetchFn)
+    expect(sawSignal).toBeInstanceOf(AbortSignal)
+  })
+})
