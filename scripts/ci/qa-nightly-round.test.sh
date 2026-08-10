@@ -86,11 +86,8 @@ log="${STUB_CALL_LOG:?}"
 printf 'make %s | args:%s | gitenv:GIT_DIR=%s,GIT_WORK_TREE=%s,GIT_INDEX_FILE=%s,GIT_COMMON_DIR=%s,GIT_OBJECT_DIRECTORY=%s | skip_reset=%s | judge_trace=%s | run_id=%s | git_sha=%s | reseed_cmd=%s | sha_cmd=%s | gen_cmd=%s | lang_secret=%s | tours_key=%s | strict=%s\n' \
     "$1" "$*" "${GIT_DIR:-}" "${GIT_WORK_TREE:-}" "${GIT_INDEX_FILE:-}" "${GIT_COMMON_DIR:-}" "${GIT_OBJECT_DIRECTORY:-}" "${TOURS_SKIP_RESET:-}" "${QA_JUDGE_TRACE:-}" "${QA_RUN_ID:-}" "${QA_GIT_SHA:-}" "${QA_RESEED_CMD:-}" "${QA_DEPLOYED_SHA_CMD:-}" "${QA_DEPLOYED_GEN_CMD:-}" "${LANGFUSE_SECRET_KEY:-}" "${TOURS_API_KEY:-}" "${STRICT:-}" >> "$log"
 case "$1" in
-  qa-model-prices)
-    printf '%s\n' "${STUB_PRICE_SYNC_OUT:-model=gpt-5.4-mini action=none reason=no drift
-summary: 1 targets, 0 created, 0 replaced, 0 deleted, 0 refused, 0 absent, 0 failed
-upstream_sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
-    exit "${STUB_PRICE_SYNC_RC:-0}" ;;
+  model-prices-apply)
+    exit "${STUB_APPLY_RC:-0}" ;;
   tours)
     mkdir -p "frontend/tests/tours/.runs/${TOURS_RUN_ID:?}"
     printf '{"gitSha":"%s"}\n' "${STUB_MANIFEST_SHA:-unknown}" > "frontend/tests/tours/.runs/${TOURS_RUN_ID}/manifest.json"
@@ -101,23 +98,12 @@ upstream_sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   qa-export)
     printf '%s\n' "${STUB_EXPORT_OUT:-qa-export: 5 trace(s), 12 screenshot(s); enqueued 3/3}"
     exit "${STUB_EXPORT_RC:-0}" ;;
+  qa-cost-assert)
+    exit "${STUB_COST_RC:-0}" ;;
   *) echo "stub make: unexpected target $1" >&2; exit 99 ;;
 esac
 EOF
     chmod +x "$FIXTURE/bin/make"
-
-    # Stub provenance merge (QA_MANIFEST_MERGE seam): records its argv so the
-    # orchestrator's contract — merged AFTER tours wrote the manifest, with the
-    # status + sha it captured — is assertable without bun. What the merge WRITES is
-    # the merge script's own property and is pinned by manifest-merge.test.ts against
-    # the real implementation; re-implementing it here would only prove this stub
-    # agrees with itself.
-    cat > "$FIXTURE/bin/merge" <<'EOF'
-#!/usr/bin/env bash
-printf 'merge | args:%s | manifest_exists=%s\n' "$*" "$([ -f "$1" ] && echo yes || echo no)" >> "${STUB_CALL_LOG:?}"
-exit "${STUB_MERGE_RC:-0}"
-EOF
-    chmod +x "$FIXTURE/bin/merge"
 }
 
 cleanup_fixture() { [ -n "${FIXTURE:-}" ] && rm -rf "$FIXTURE"; }
@@ -130,7 +116,6 @@ run_orch() {
     OUT="$FIXTURE/out.txt"; ERR="$FIXTURE/err.txt"
     ( cd "$FIXTURE" && env \
         QA_MAKE="$FIXTURE/bin/make" \
-        QA_MANIFEST_MERGE="$FIXTURE/bin/merge" \
         GITHUB_ENV="$GHENV" \
         STUB_CALL_LOG="$CALL_LOG" \
         QA_BASE_SHA="$BASE_SHA" QA_HEAD_SHA="$HEAD_SHA" QA_DAYS_SINCE=0 \
@@ -691,145 +676,132 @@ test_git_env_isolation() {
 }
 
 # ===========================================================================
-# Model-price sync (3-pre) — ordering, strictness, provenance, fail-open.
+# Model-price apply (3b-post) + cost assertion (post-export) — ordering, env
+# hygiene, fail-open.
 # ===========================================================================
-test_price_sync_runs_first() {
-    echo "test: the price sync runs on a clean round, BEFORE tours and the export, with STRICT=1"
+test_price_apply_position() {
+    echo "test: model-prices-apply runs on a clean round, BEFORE tours and the export"
     make_fixture
     run_orch
-    assert_rc0 price-order
-    assert_ran qa-model-prices price-order
-    # Prices resolve at INGESTION time, so the sync must precede the export (and it
+    assert_rc0 apply-position
+    assert_ran model-prices-apply apply-position
+    # Prices resolve at INGESTION time, so apply must precede the export (and it
     # precedes tours too, which is where the round's work starts).
-    assert_before '^make qa-model-prices ' '^make tours ' price-order-tours
-    assert_before '^make qa-model-prices ' '^make qa-export ' price-order-export
-    # STRICT=1 makes the child's exit code trustworthy; the fail-open lives in the
-    # orchestrator not aborting. It rides the ARGV as a command-line assignment (not the
-    # environment) alongside the cleared mode flags. Dropping any of them reddens here.
-    assert_call '^make qa-model-prices \| args:qa-model-prices DRY_RUN= RESET= FORCE= MODELS= UPSTREAM= STRICT=1 \|' price-strict
-    assert_kv price_sync ok price-ok
-    assert_kv price_sync_upstream_sha 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef price-sha
+    assert_before '^make model-prices-apply ' '^make tours ' apply-position-tours
+    assert_before '^make model-prices-apply ' '^make qa-export ' apply-position-export
     cleanup_fixture
 }
 
-test_price_sync_after_preflight() {
-    echo "test: a failed pre-tours sha pin / missing trace path aborts WITHOUT having mutated prices"
-    make_fixture
-    # The sync is the round's first EXTERNAL mutation, so it must not run until the
-    # round has proven it is running the checkout it thinks it is.
-    run_orch STUB_ASSERT_PRE_RC=1
-    assert_rc_nz price-preflight-sha
-    assert_kv round aborted price-preflight-sha
-    assert_not_ran qa-model-prices price-preflight-sha
-    cleanup_fixture
-
-    make_fixture
-    # An unwritable trace path aborts at the same preflight stage.
-    run_orch QA_JUDGE_TRACE=/nonexistent-dir/trace.jsonl
-    assert_rc_nz price-preflight-trace
-    assert_kv round aborted price-preflight-trace
-    assert_not_ran qa-model-prices price-preflight-trace
-    cleanup_fixture
-}
-
-test_price_sync_after_reservation() {
-    echo "test: a run-id collision aborts WITHOUT having synced prices (the loser never mutates)"
-    make_fixture
-    # Two invocations can share a second-granular run id; the atomic run-dir
-    # reservation is what picks a winner. The loser must abort before touching shared
-    # Langfuse pricing state, so the sync sits AFTER the reservation.
-    mkdir -p "$FIXTURE/frontend/tests/tours/.runs/20260101T000000Z"
-    run_orch QA_RUN_ID_OVERRIDE=20260101T000000Z
-    assert_rc_nz price-reservation
-    assert_kv round aborted price-reservation
-    assert_not_ran qa-model-prices price-reservation
-    assert_not_ran tours price-reservation
-    cleanup_fixture
-}
-
-test_price_sync_skipped_round() {
-    echo "test: cadence gate says skip -> the price sync never runs"
+test_price_apply_not_run_when_skipped() {
+    echo "test: cadence gate says skip -> model-prices-apply never runs"
     make_fixture
     run_orch STUB_RUN_ROUND=false
-    assert_rc0 price-skip
-    assert_not_ran qa-model-prices price-skip
+    assert_rc0 apply-skip
+    assert_not_ran model-prices-apply apply-skip
     cleanup_fixture
 }
 
-test_price_sync_failure_is_not_ok() {
-    echo "test: a non-zero price sync -> price_sync=failed + reason, and the round STILL advances"
+test_price_apply_not_run_when_aborted() {
+    echo "test: a failed preflight (pre-tours pin, or a run-id collision) aborts WITHOUT having applied prices"
     make_fixture
-    run_orch STUB_PRICE_SYNC_RC=1
-    assert_rc0 price-fail
-    assert_kv price_sync failed price-fail
-    if [ -n "$(ghv price_sync_reason)" ]; then ok; else fail "price-fail: price_sync_reason should be set"; fi
-    # Fail-open: stale prices make cost approximate; a skipped round makes QA absent.
-    assert_kv round clean price-fail-advance
-    assert_kv advance true price-fail-advance
+    # Apply is the round's first EXTERNAL mutation, so it must not run before the
+    # round proves it is running the checkout it thinks it is.
+    run_orch STUB_ASSERT_PRE_RC=1
+    assert_rc_nz apply-abort-preflight
+    assert_kv round aborted apply-abort-preflight
+    assert_not_ran model-prices-apply apply-abort-preflight
     cleanup_fixture
-}
 
-test_price_sync_ignores_ambient_mode_flags() {
-    echo "test: ambient DRY_RUN/RESET/FORCE/MODELS/UPSTREAM do NOT reach the sync's effective config"
     make_fixture
-    # make imports the ambient environment as make VARIABLES, so an unattended round would
-    # otherwise inherit the wrapper's environment and silently do something else (a dry-run
-    # that writes nothing, a RESET that deletes an override, a FORCE past the delta guard).
-    # The invocation must therefore be self-contained: every mode variable passed as a
-    # command-line assignment, which outranks both the environment and the makefile default.
-    run_orch DRY_RUN=1 RESET=some-model FORCE=1 MODELS=wrong-a,wrong-b UPSTREAM=/tmp/hostile.json
-    assert_rc0 price-ambient
-    assert_call '^make qa-model-prices \| args:qa-model-prices DRY_RUN= RESET= FORCE= MODELS= UPSTREAM= STRICT=1 \|' price-ambient
-    assert_kv price_sync ok price-ambient
+    # A run-id collision: the loser must abort before touching shared Langfuse
+    # pricing state, so apply sits AFTER the atomic run-dir reservation.
+    mkdir -p "$FIXTURE/frontend/tests/tours/.runs/20260101T000000Z"
+    run_orch QA_RUN_ID_OVERRIDE=20260101T000000Z
+    assert_rc_nz apply-abort-collision
+    assert_kv round aborted apply-abort-collision
+    assert_not_ran model-prices-apply apply-abort-collision
     cleanup_fixture
 }
 
-test_price_sync_malformed_provenance() {
-    echo "test: exit 0 with no valid upstream_sha256 -> sha EMPTY and the sync is NOT ok"
-    make_fixture
-    run_orch STUB_PRICE_SYNC_OUT='upstream_sha256=not-a-sha
-qa-model-prices: upstream unavailable'
-    assert_rc0 price-malformed
-    assert_kv price_sync_upstream_sha "" price-malformed
-    # An unknown payload cannot be claimed as a traceable reconciliation.
-    assert_kv price_sync failed price-malformed
-    if [ -n "$(ghv price_sync_reason)" ]; then ok; else fail "price-malformed: price_sync_reason should be set"; fi
-    assert_kv round clean price-malformed-advance
-    assert_kv advance true price-malformed-advance
-    cleanup_fixture
-}
-
-test_price_sync_missing_provenance() {
-    echo "test: exit 0 printing NO hash at all -> price_sync=failed (fail-open, honestly labelled)"
-    make_fixture
-    run_orch STUB_PRICE_SYNC_OUT='summary: 1 targets, 0 created, 0 replaced, 0 deleted, 0 refused, 0 absent, 0 failed'
-    assert_rc0 price-nohash
-    assert_kv price_sync failed price-nohash
-    assert_kv price_sync_upstream_sha "" price-nohash
-    if [ -n "$(ghv price_sync_reason)" ]; then ok; else fail "price-nohash: price_sync_reason should be set"; fi
-    assert_kv round clean price-nohash-advance
-    assert_kv advance true price-nohash-advance
-    cleanup_fixture
-}
-
-test_price_sync_provenance_merged() {
-    echo "test: the provenance merge runs AFTER tours wrote the manifest, with the status + sha"
+test_price_apply_success() {
+    echo "test: a clean round emits price_apply=ok"
     make_fixture
     run_orch
-    assert_rc0 price-merge
-    assert_before '^make tours ' '^merge ' price-merge-order
-    assert_call '^merge \| args:.*/manifest\.json ok 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \| manifest_exists=yes$' price-merge-args
+    assert_rc0 apply-success
+    assert_kv price_apply ok apply-success
     cleanup_fixture
 }
 
-test_price_sync_merge_failure_non_fatal() {
-    echo "test: a failed provenance merge warns on stderr and the round still completes"
+test_price_apply_failure_fail_open() {
+    echo "test: a non-zero apply -> price_apply=failed + reason, and the round STILL runs to a decision and advances"
     make_fixture
-    run_orch STUB_MERGE_RC=1
-    assert_rc0 price-merge-fail
-    assert_stderr "WARNING price-sync provenance merge failed" price-merge-fail
-    assert_kv round clean price-merge-fail
-    assert_kv advance true price-merge-fail
+    run_orch STUB_APPLY_RC=1
+    assert_rc0 apply-fail
+    assert_kv price_apply failed apply-fail
+    if [ -n "$(ghv price_apply_reason)" ]; then ok; else fail "apply-fail: price_apply_reason should be set"; fi
+    # Fail-open: stale prices make cost approximate; a skipped round makes QA absent.
+    assert_kv round clean apply-fail-advance
+    assert_kv advance true apply-fail-advance
+    cleanup_fixture
+}
+
+test_price_apply_env_hygiene() {
+    echo "test: apply strips the injected command vars + tours key, keeps LANGFUSE_*, and passes NO mode flags"
+    make_fixture
+    run_orch QA_DEPLOYED_GEN_CMD="echo 1" LANGFUSE_SECRET_KEY=sk-SECRET TOURS_API_KEY=tk-SECRET
+    assert_rc0 apply-hygiene
+    # argv is EXACTLY "model-prices-apply" — the flag matrix is gone.
+    assert_call '^make model-prices-apply \| args:model-prices-apply \|' apply-hygiene-argv
+    local line; line="$(grep '^make model-prices-apply ' "$CALL_LOG")"
+    if printf '%s' "$line" | grep -qE 'reseed_cmd=[^ ]|sha_cmd=[^ ]|gen_cmd=echo|tours_key=tk-SECRET'; then
+        fail "apply-hygiene: a stripped var leaked into the apply call ($line)"
+    else
+        ok
+    fi
+    if printf '%s' "$line" | grep -qE 'lang_secret=sk-SECRET'; then
+        ok
+    else
+        fail "apply-hygiene: LANGFUSE_SECRET_KEY should be retained ($line)"
+    fi
+    cleanup_fixture
+}
+
+test_cost_assert_position() {
+    echo "test: qa-cost-assert runs after qa-export, with a FROM=<ISO8601> argument (timestamp captured before tours)"
+    make_fixture
+    run_orch
+    assert_rc0 cost-position
+    assert_ran qa-cost-assert cost-position
+    assert_before '^make qa-export ' '^make qa-cost-assert ' cost-position-order
+    assert_call '^make qa-cost-assert \| args:qa-cost-assert FROM=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z \|' cost-position-from
+    cleanup_fixture
+}
+
+test_cost_assert_success() {
+    echo "test: a clean round emits cost_check=ok; a skipped round never invokes qa-cost-assert"
+    make_fixture
+    run_orch
+    assert_rc0 cost-success
+    assert_kv cost_check ok cost-success
+    cleanup_fixture
+
+    make_fixture
+    run_orch STUB_RUN_ROUND=false
+    assert_rc0 cost-skip
+    assert_not_ran qa-cost-assert cost-skip
+    cleanup_fixture
+}
+
+test_cost_assert_failure_warn_only() {
+    echo "test: a non-zero cost assertion -> cost_check=failed, a note is appended, reasons unaffected -> still advance=true"
+    make_fixture
+    run_orch STUB_COST_RC=1
+    assert_rc0 cost-fail
+    assert_kv cost_check failed cost-fail
+    case "$(ghv notes)" in *"cost assertion failed"*) ok;; *) fail "cost-fail: notes should mention the failed cost assertion, got '$(ghv notes)'";; esac
+    # Warn-only: the failure feeds notes, never reasons — a clean round still advances.
+    assert_kv round clean cost-fail
+    assert_kv advance true cost-fail
     cleanup_fixture
 }
 
@@ -1095,16 +1067,15 @@ main() {
     test_reseed_after_runid_validation
     test_gen_baseline_before_reseed
 
-    test_price_sync_runs_first
-    test_price_sync_after_preflight
-    test_price_sync_after_reservation
-    test_price_sync_skipped_round
-    test_price_sync_failure_is_not_ok
-    test_price_sync_ignores_ambient_mode_flags
-    test_price_sync_malformed_provenance
-    test_price_sync_missing_provenance
-    test_price_sync_provenance_merged
-    test_price_sync_merge_failure_non_fatal
+    test_price_apply_position
+    test_price_apply_not_run_when_skipped
+    test_price_apply_not_run_when_aborted
+    test_price_apply_success
+    test_price_apply_failure_fail_open
+    test_price_apply_env_hygiene
+    test_cost_assert_position
+    test_cost_assert_success
+    test_cost_assert_failure_warn_only
 
     test_require_tmpdir_fails_closed
     test_git_env_isolation
