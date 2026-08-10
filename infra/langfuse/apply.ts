@@ -121,6 +121,9 @@ export async function applyPrices(
     const identical =
       existing.matchPattern === desiredPattern &&
       existing.pricingTiers.length === 1 &&
+      defaultTier !== undefined &&
+      defaultTier.priority === 0 &&
+      defaultTier.conditions.length === 0 &&
       pricesEqual(existingPrices, desiredPrices)
 
     if (identical) {

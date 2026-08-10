@@ -266,6 +266,20 @@ describe('tier-structure convergence', () => {
   })
 })
 
+describe('tier-structure convergence', () => {
+  test('a single tier with matching prices but non-default shape (priority/conditions) is replaced', async () => {
+    const r = row()
+    const skewed = converged(r)
+    const tier = (skewed.pricingTiers as Array<Record<string, unknown>>)[0]!
+    tier.priority = 1
+    tier.conditions = [{ key: 'input_tokens', operator: '>', value: 0 }]
+    const { fetchFn, calls } = makeTransport([skewed])
+    const result = await applyPrices([r], cfg, { fetchFn })
+    expect(calls.filter(c => c.method !== 'GET').map(c => c.method)).toEqual(['DELETE', 'POST'])
+    expect(result.unchanged).toBe(0)
+  })
+})
+
 describe('pagination envelope validation', () => {
   const envelopeTransport = (body: unknown): typeof fetch => async () =>
     new Response(JSON.stringify(body), { status: 200 })

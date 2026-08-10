@@ -22,6 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Always sync from develop: a workflow_dispatch launched from another
+          # ref would otherwise regenerate the file from that ref's checkout
+          # while the PR still targets develop.
+          ref: develop
 
       - uses: oven-sh/setup-bun@v2
         with:
