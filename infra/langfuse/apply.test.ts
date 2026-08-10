@@ -255,7 +255,7 @@ describe('negative contract: apply never reads upstream', () => {
 })
 
 describe('legacy conflicting definitions', () => {
-  test('a stray whose pattern captures a declared model string is deleted, not preserved', async () => {
+  test('a stray whose pattern captures a declared model string gets a distinct conflict warning, never a delete', async () => {
     const r = row() // modelName gpt-5.5
     const legacy = {
       id: 'legacy-versioned',
@@ -263,17 +263,20 @@ describe('legacy conflicting definitions', () => {
       matchPattern: '(?i)^(openai\\/)?(gpt-5\\.5(-2026-04-23)?)$',
       isLangfuseManaged: false,
       unit: 'TOKENS',
-      pricingTiers: [{ id: 't', isDefault: true, priority: 0, conditions: [], prices: { input: 1e-6, output: 2e-6 } }],
+      pricingTiers: [{ id: 't', name: 'Standard', isDefault: true, priority: 0, conditions: [], prices: { input: 1e-6, output: 2e-6 } }],
     }
     const { fetchFn, calls } = makeTransport([legacy])
     const result = await applyPrices([r], cfg, { fetchFn })
-    const writes = calls.filter(c => c.method !== 'GET')
-    expect(writes.some(c => c.method === 'DELETE' && c.path.includes('legacy-versioned'))).toBe(true)
-    expect(writes.some(c => c.method === 'POST')).toBe(true)
-    expect(result.warnings).toHaveLength(0)
+    // The declared row is still created; the stray is reported, not touched.
+    expect(calls.some(c => c.method === 'DELETE')).toBe(false)
+    expect(calls.some(c => c.method === 'POST')).toBe(true)
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toContain('legacy-versioned')
+    expect(result.warnings[0]).toContain('gpt-5.5')
+    expect(result.warnings[0]).toMatch(/no deterministic tiebreak/)
   })
 
-  test('a stray capturing only the venice/ alias of a declared venice row is also deleted', async () => {
+  test('a stray capturing only the venice/ alias of a declared venice row is also flagged as a conflict', async () => {
     const venice = row({ modelName: 'qwen3-235b', source: 'venice', sourceId: 'qwen3-235b', prices: { input: 4.5e-7, output: 3.5e-6 } })
     const prefixOnly = {
       id: 'legacy-prefixed',
@@ -285,8 +288,9 @@ describe('legacy conflicting definitions', () => {
     }
     const { fetchFn, calls } = makeTransport([prefixOnly])
     const result = await applyPrices([venice], cfg, { fetchFn })
-    expect(calls.some(c => c.method === 'DELETE' && c.path.includes('legacy-prefixed'))).toBe(true)
-    expect(result.warnings).toHaveLength(0)
+    expect(calls.some(c => c.method === 'DELETE')).toBe(false)
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toMatch(/no deterministic tiebreak/)
   })
 
   test('a case-sensitive stray pattern is evaluated case-sensitively — not deleted on a case-only match', async () => {
@@ -372,8 +376,13 @@ describe('pagination envelope validation', () => {
   })
 
   test('an unexpectedly empty non-terminal page rejects', async () => {
-    const fetchFn = envelopeTransport({ data: [], meta: { totalPages: 3 } })
+    const fetchFn = envelopeTransport({ data: [], meta: { page: 1, totalPages: 3 } })
     await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/unexpectedly empty/)
+  })
+
+  test('missing or non-numeric meta.page rejects', async () => {
+    const fetchFn = envelopeTransport({ data: [{ id: 'x' }], meta: { totalPages: 1 } })
+    await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/meta\.page/)
   })
 
   test('a replayed page (response echoing the wrong page number) rejects', async () => {

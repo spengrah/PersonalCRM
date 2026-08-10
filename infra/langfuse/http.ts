@@ -94,7 +94,10 @@ export async function apiGetAllPages(
     if (totalPages === undefined) {
       throw new Error(`GET ${path}: page ${page} response has no meta.totalPages`)
     }
-    if (typeof meta?.page === 'number' && meta.page !== page) {
+    if (typeof meta?.page !== 'number' || !Number.isInteger(meta.page)) {
+      throw new Error(`GET ${path}: page ${page} response has no numeric meta.page`)
+    }
+    if (meta.page !== page) {
       throw new Error(`GET ${path}: requested page ${page} but response echoes page ${meta.page}`)
     }
     if (data.length === 0 && page < totalPages) {

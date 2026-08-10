@@ -141,11 +141,12 @@ export async function applyPrices(
   for (const stray of byName.values()) {
     const conflict = rows.find(r => aliasesFor(r).some(alias => strayPatternMatches(stray.matchPattern, alias)))
     if (conflict !== undefined) {
-      await api(cfg, 'DELETE', `/api/public/models/${encodeURIComponent(stray.id)}`, undefined, opts.fetchFn)
-      deleted++
-      log(
-        `deleted conflicting project-scoped definition ${stray.modelName} — its matchPattern also captures declared model "${conflict.modelName}"`
-      )
+      const msg =
+        `stray project-scoped definition ${stray.modelName} (id ${stray.id}) appears to also capture declared model ` +
+        `"${conflict.modelName}" — two custom rows matching one observation have no deterministic tiebreak; ` +
+        `delete the stray by id if the conflict is real`
+      warnings.push(msg)
+      log(`WARNING CONFLICT ${msg}`)
       continue
     }
     const msg = `stray project-scoped model definition not in model-prices.json: ${stray.modelName}`
@@ -157,31 +158,31 @@ export async function applyPrices(
 }
 
 // Every model string a declared row's own emitted pattern accepts. Mirrors
-// emitMatchPattern: venice patterns carry an optional "venice/" prefix, so a
-// venice row answers for both spellings and a stray capturing either conflicts.
+// emitMatchPattern, which derives the venice alternative from sourceId — so a
+// venice row answers for the bare id and the venice/-prefixed spelling.
 function aliasesFor(row: ModelRow): string[] {
-  return row.source === 'venice' ? [row.modelName, `venice/${row.sourceId}`] : [row.modelName]
+  return row.source === 'venice'
+    ? [...new Set([row.modelName, row.sourceId, `venice/${row.sourceId}`])]
+    : [row.modelName]
 }
 
 // A stray whose pattern captures a declared model string is not benign: two
 // project-scoped rows matching one observation leave Langfuse without a
 // deterministic tiebreak (both custom, both null startDate), so stale prices can
-// stay silently effective — e.g. a retired-reconciler override under a versioned
-// modelName whose pattern also matches the bare model string. The file claims
-// that string, so conflicting strays are deleted; strays matching nothing
-// declared are only warned about — apply never reaps unrelated definitions.
+// stay silently effective. Apply REPORTS the suspected conflict and never deletes
+// on it: the pattern is a Postgres regex and this evaluation is JavaScript's —
+// the dialects diverge (`\b`, character classes, …), and a destructive decision
+// on approximated semantics can destroy an unrelated definition, while a wrongly
+// preserved one is a visible warning a human resolves once. Best-effort matching
+// is exactly good enough for a warning and no more.
 function strayPatternMatches(pattern: string, modelName: string): boolean {
-  // Case-insensitivity must mirror what Postgres would do: only when the
-  // pattern itself opts in via the `(?i)` prefix. Forcing the `i` flag would
-  // misclassify a deliberately case-sensitive definition as conflicting and
-  // delete it wrongly.
+  // Case-insensitivity mirrors Postgres only when the pattern opts in via `(?i)`.
   const insensitive = pattern.startsWith('(?i)')
   const body = insensitive ? pattern.slice('(?i)'.length) : pattern
   try {
     return new RegExp(body, insensitive ? 'i' : '').test(modelName)
   } catch {
-    // Unevaluable server-side pattern: fall through to the stray warning rather
-    // than deleting on uncertainty.
+    // Unevaluable server-side pattern: fall through to the plain stray warning.
     return false
   }
 }
