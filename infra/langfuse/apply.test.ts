@@ -375,6 +375,13 @@ describe('pagination envelope validation', () => {
     const fetchFn = envelopeTransport({ data: [], meta: { totalPages: 3 } })
     await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/unexpectedly empty/)
   })
+
+  test('a replayed page (response echoing the wrong page number) rejects', async () => {
+    // Always claims to be page 1 across a 2-page walk — the replay case.
+    const fetchFn: typeof fetch = async () =>
+      new Response(JSON.stringify({ data: [{ id: 'a' }], meta: { page: 1, totalPages: 2 } }), { status: 200 })
+    await expect(apiGetAllPages(cfg, '/api/public/models', fetchFn)).rejects.toThrow(/echoes page/)
+  })
 })
 
 describe('request bounding', () => {
