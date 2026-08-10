@@ -1,0 +1,45 @@
+name: Model Prices Sync
+
+# Weekly refresh of infra/langfuse/model-prices.json from its declared sources
+# (Venice, OpenRouter — both anonymous, no vendor secret needed). Opens a PR
+# only when a price drifted; nothing here merges unattended, so every price
+# change is reviewed by a human before it reaches Langfuse. The PR step uses a
+# repo-scoped fine-grained PAT (MODEL_PRICES_SYNC_PAT) instead of the default
+# GITHUB_TOKEN, because PRs opened with the default token do not trigger CI,
+# and develop requires green CI to merge.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Sync model prices
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.2
+
+      - name: Sync prices from declared sources
+        run: make model-prices-sync
+
+      - name: Open a PR if prices drifted
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.MODEL_PRICES_SYNC_PAT }}
+          base: develop
+          branch: chore/model-prices-sync
+          add-paths: infra/langfuse/model-prices.json
+          commit-message: "chore(langfuse): sync model prices"
+          title: "chore(langfuse): sync model prices"
+          body: |
+            Automated weekly refresh of `infra/langfuse/model-prices.json` from its declared sources (Venice, OpenRouter — both anonymous APIs).
+
+            Review the diff before merging: each row's price came directly from its source catalog, with no reconciliation against Langfuse's own managed prices. Merging applies these prices to Langfuse on the next nightly QA round.

@@ -1,7 +1,7 @@
 # Langfuse token + cost tracking for judge traces
 
 Date: 2026-07-22
-Status: PROPOSED
+Status: The observation/cost half (D1–D9) is IMPLEMENTED. The price-sync half (D10–D17, work items 5–6, and the model-prices test plan) is SUPERSEDED by `2026-08-09-checked-in-model-prices.md`.
 
 This doc is the SSOT for wiring **token usage and USD cost** into the ux-qa judge's Langfuse export, and for **keeping the instance's model prices current** so those costs stay true. It exists because the judge's spend is currently invisible in Langfuse, and because the upcoming `gpt-5.6-luna` / `gpt-5.6-terra` judge-model comparison (queued in `2026-07-19-codex-sdk-judge-transport.md`) is a cost/quality tradeoff that cannot be evaluated without the cost half.
 
