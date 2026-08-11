@@ -78,13 +78,21 @@ func run() int {
 	logger.Init(cfg.Logger)
 
 	// Boot the process clock from config. Never fatal: a bad acceleration
-	// setting must not stop the process, only leave the clock on wall time.
-	// This call site runs for real in E2E — Playwright's webServer launches
-	// this binary via `go run ./cmd/crm-api` (frontend/playwright.config.ts),
-	// no test env sets TIME_ACCELERATION, and dashboard.spec.ts's "marking
-	// contact as contacted updates dashboard immediately without navigation"
-	// asserts the server clock IS the wall clock — which only holds if this
-	// line ran and left acceleration inactive by default.
+	// setting must not stop the process, only leave the clock on wall time —
+	// the logged warning below is the entire failure handling this needs, no
+	// further machinery.
+	//
+	// E2E runs this call for real (Playwright's webServer launches this
+	// binary via `go run ./cmd/crm-api`), but that does NOT discriminate
+	// whether the line ran: no E2E env sets TIME_ACCELERATION, so a correct
+	// boot and an accidentally deleted call both leave the package at its
+	// inactive default, and dashboard.spec.ts's server-clock-is-wall-clock
+	// assertion holds either way. What actually proves this wiring executes
+	// and applies a configured value is TestRunMain_AppliesAccelerationBoot
+	// (backend/cmd/crm-admin/main_test.go), which drives crm-admin's runMain
+	// through the same shared accelerated.ConfigureAtBoot call this line
+	// makes — the two binaries wire it identically, differing only in how
+	// they report a non-fatal failure (logger here, stderr there).
 	if err := accelerated.ConfigureAtBoot(cfg.Runtime.TimeAcceleration, cfg.Runtime.TimeBase); err != nil {
 		logger.Warn().Err(err).Msg("time acceleration not applied")
 	}

@@ -2106,6 +2106,13 @@ func TestRunMain_AppliesAccelerationBoot(t *testing.T) {
 	t.Cleanup(accelerated.Reset)
 	t.Setenv("DATABASE_URL", "postgres://unused-never-connected-to")
 	t.Setenv("CRM_ENV", "production") // trips SeedAllowed's PRE-DB rejection
+	// NODE_ENV pinned to non-production explicitly: config.Validate's
+	// IsProduction() checks NODE_ENV, not CRM_ENV, and requires
+	// SESSION_SECRET/API_KEY when it's "production". Without this, an
+	// ambient NODE_ENV=production in the test's environment would fail
+	// config.Load() before this test ever reaches the boot line, reporting a
+	// false regression.
+	t.Setenv("NODE_ENV", "development")
 	t.Setenv("TIME_ACCELERATION", "60")
 	t.Setenv("TIME_BASE", "1700000000")
 

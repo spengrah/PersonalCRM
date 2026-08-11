@@ -191,6 +191,19 @@ func TestSetTimeAcceleration_AppliedAtIsTheAnchoredBase(t *testing.T) {
 	want := fractional.Truncate(time.Second)
 	assert.True(t, postEnv.Data.AppliedAt.Equal(want), "applied_at = %v, want the anchored, truncated base %v — a fresh post-anchor GetCurrentTime() read would instead land at roughly %v (the discarded 750ms scaled by factor 60)", postEnv.Data.AppliedAt, want, want.Add(45*time.Second))
 	assert.Zero(t, postEnv.Data.AppliedAt.Nanosecond(), "applied_at must be truncated to a whole second")
+
+	// applied_at reporting the right value is not enough on its own — a
+	// mutant that reports applied_at correctly while installing a DIFFERENT
+	// factor or base (e.g. leaving the clock at factor 1) would still pass
+	// the two assertions above. Confirm the installed clock itself: factor
+	// 60 anchored at the SAME truncated instant applied_at reports.
+	getCode, getEnv := getSystemTime(t, r)
+	require.Equal(t, http.StatusOK, getCode)
+	assert.True(t, getEnv.Data.IsAccelerated)
+	assert.Equal(t, 60, getEnv.Data.AccelerationFactor)
+	installedBase, err := time.Parse(time.RFC3339, getEnv.Data.BaseTime)
+	require.NoError(t, err)
+	assert.True(t, installedBase.Equal(want), "installed base = %v, want the same anchored base %v applied_at reported", installedBase, want)
 }
 
 // TestSystemTime_FactorEdgeCases pins the factor contract across the entire
