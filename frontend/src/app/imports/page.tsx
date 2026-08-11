@@ -62,6 +62,7 @@ const SOURCE_FILTERS = [
   { value: 'gcontacts', label: 'Google Contacts' },
   { value: 'gcal_attendee', label: 'Calendar' },
   { value: 'icloud_contacts', label: 'iCloud Contacts' },
+  { value: 'gmail', label: 'Gmail' },
   { value: 'telegram', label: 'Telegram' },
   { value: 'whatsapp', label: 'WhatsApp' },
   { value: 'anarlog_humans', label: 'Anarlog' },

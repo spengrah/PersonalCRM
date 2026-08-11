@@ -240,3 +240,38 @@ func TestParticipantCandidate_ImportWithoutNameRejected(t *testing.T) {
 	assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	assert.Equal(t, "Cannot import contact without a name", response.Error.Message)
 }
+
+// The combined "gmail" filter value covers BOTH Gmail discovery sources —
+// the link-only correspondence rows and the trust-anchored participant rows
+// — and nothing else. The isolated database clone makes the absence
+// assertion deterministic (no other test's rows exist here).
+func TestSuggestions_GmailCombinedFilter(t *testing.T) {
+	t.Parallel()
+	router, database, ctx, _ := newParticipantTestRouter(t)
+
+	participantWorld, err := declare.Run(ctx, database, "IMP-048", declaredAPINS(t), factory.DefaultSeed)
+	require.NoError(t, err)
+	participantID := participantWorld.Entities["participant"].ID
+
+	correspondenceWorld, err := declare.Run(ctx, database, "IMP-037", declaredAPINS(t), factory.DefaultSeed)
+	require.NoError(t, err)
+	correspondenceID := correspondenceWorld.Entities["corr"].ID
+
+	gcontactsWorld, err := declare.Run(ctx, database, "IMP-007", declaredAPINS(t), factory.DefaultSeed)
+	require.NoError(t, err)
+	gcontactsID := gcontactsWorld.Entities["cand"].ID
+
+	gmailItems, _ := getSuggestions(t, router, "source=gmail&limit=10000")
+	assert.GreaterOrEqual(t, findSuggestionItemIndex(gmailItems, "contact", participantID), 0,
+		"gmail filter must include the gmail_participant candidate")
+	assert.GreaterOrEqual(t, findSuggestionItemIndex(gmailItems, "contact", correspondenceID), 0,
+		"gmail filter must include the gmail_correspondence candidate")
+	assert.Equal(t, -1, findSuggestionItemIndex(gmailItems, "contact", gcontactsID),
+		"gmail filter must exclude non-gmail sources")
+
+	gcItems, _ := getSuggestions(t, router, "source=gcontacts&limit=10000")
+	assert.GreaterOrEqual(t, findSuggestionItemIndex(gcItems, "contact", gcontactsID), 0,
+		"single-source filtering is unchanged by the group mechanism")
+	assert.Equal(t, -1, findSuggestionItemIndex(gcItems, "contact", participantID),
+		"a real-source filter must not leak group members")
+}
