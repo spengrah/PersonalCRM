@@ -473,6 +473,13 @@ type PgIndex struct {
 	Indexdef   string `json:"indexdef"`
 }
 
+type PgStatActivity struct {
+	Pid           int32       `json:"pid"`
+	State         pgtype.Text `json:"state"`
+	WaitEventType pgtype.Text `json:"wait_event_type"`
+	Datname       pgtype.Text `json:"datname"`
+}
+
 type PhoneCall struct {
 	ID               pgtype.UUID        `json:"id"`
 	CallUniqueID     string             `json:"call_unique_id"`

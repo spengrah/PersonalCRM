@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/logger"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -829,6 +833,77 @@ func (r *ContactTaskRepository) CompleteLiveTasksForContactTx(ctx context.Contex
 			Provider:       row.Provider,
 			PendingTempID:  row.PendingTempID,
 		}
+		if row.ID.Valid {
+			ref.ID = uuid.UUID(row.ID.Bytes)
+		}
+		refs = append(refs, ref)
+	}
+	return refs, nil
+}
+
+// transferAutomatedTaskConstraints are the partial unique indexes
+// TransferAutomatedTasksForMergeTx's query guards against with its NOT
+// EXISTS clauses. A unique-violation on any other constraint is an
+// unexpected integrity defect, not a lost race, and must not be swallowed.
+var transferAutomatedTaskConstraints = map[string]bool{
+	"unique_contact_provider_cadence":       true,
+	"idx_contact_task_followup_unique_live": true,
+	"idx_contact_task_followup_idempotency": true,
+}
+
+// TransferredTaskRef identifies a contact_task row
+// TransferAutomatedTasksForMergeTx moved onto the target.
+type TransferredTaskRef struct {
+	ID        uuid.UUID
+	Lifecycle string
+}
+
+// TransferAutomatedTasksForMergeTx moves the source's transferable automated
+// rows onto the target inside a savepoint. A concurrent reconcile insert can
+// win the race between the query's NOT EXISTS guard and its UPDATE; the
+// resulting 23505 would abort the caller's whole merge tx, so it is absorbed
+// here and the rows are left for the close path instead.
+func (r *ContactTaskRepository) TransferAutomatedTasksForMergeTx(
+	ctx context.Context, tx pgx.Tx, sourceID, targetID uuid.UUID,
+) ([]TransferredTaskRef, error) {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("open automated task transfer savepoint: %w", err)
+	}
+
+	rows, err := db.New(sp).TransferAutomatedContactTasksToContact(ctx, db.TransferAutomatedContactTasksToContactParams{
+		SourceContactID: uuidToPgUUID(sourceID),
+		TargetContactID: uuidToPgUUID(targetID),
+	})
+	if err != nil {
+		var pgErr *pgconn.PgError
+		recoverable := errors.As(err, &pgErr) &&
+			pgErr.Code == pgerrcode.UniqueViolation &&
+			transferAutomatedTaskConstraints[pgErr.ConstraintName]
+
+		if rbErr := sp.Rollback(ctx); rbErr != nil {
+			return nil, fmt.Errorf("rollback automated task transfer savepoint: %w (transfer: %w)", rbErr, err)
+		}
+
+		if !recoverable {
+			return nil, fmt.Errorf("transfer automated tasks for merge: %w", err)
+		}
+
+		logger.Warn().
+			Str("source_contact_id", sourceID.String()).
+			Str("target_contact_id", targetID.String()).
+			Str("constraint", pgErr.ConstraintName).
+			Msg("merge: automated task transfer lost a race; falling back to close")
+		return nil, nil
+	}
+
+	if err := sp.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit automated task transfer savepoint: %w", err)
+	}
+
+	refs := make([]TransferredTaskRef, 0, len(rows))
+	for _, row := range rows {
+		ref := TransferredTaskRef{Lifecycle: row.Lifecycle}
 		if row.ID.Valid {
 			ref.ID = uuid.UUID(row.ID.Bytes)
 		}

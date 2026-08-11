@@ -430,7 +430,7 @@ behaviors:
   - id: CON-031
     title: Merge closes automated tasks and repoints manual ones
     type: business-logic
-    status: current
+    status: retired
     surface: none
     given: a source contact with live contact tasks
     when: it is merged into a target
@@ -438,7 +438,7 @@ behaviors:
       - manual tasks (user content) are repointed to the target
       - automated tasks (cadence/follow-up) are closed rather than repointed
     provenance: [RepointManualContactTasksToContact, CompleteLiveTasksForContactTx]
-    notes: Repointing automated tasks would collide with the target's own live automated rows under the per-contact uniqueness rule. Propagating the close to the remote task provider is todoist-domain scope.
+    notes: Repointing automated tasks would collide with the target's own live automated rows under the per-contact uniqueness rule. Propagating the close to the remote task provider is todoist-domain scope. Superseded by CON-067 — automated tasks now transfer to the survivor whenever no unique index blocks the move.
 
   - id: CON-032
     title: Merge applies per-field user selections with the target as default
@@ -1001,6 +1001,21 @@ behaviors:
       - key: list-returns-first-page
         text: the list returns to the first page rather than carrying the prior page position into the new view
     provenance: [contacts page applyContext/handleSearchInput, buildContactListUrl page arg]
+
+  - id: CON-067
+    title: Merge transfers automated tasks when no uniqueness rule blocks the move, and repoints manual ones
+    type: business-logic
+    status: current
+    surface: none
+    given: a source contact with live contact tasks
+    when: it is merged into a target
+    then:
+      - manual tasks (user content) are repointed to the target in every state
+      - automated tasks (cadence/follow-up) transfer to the target whenever no uniqueness rule blocks the move
+      - a transfer that loses a race to a concurrent insert falls back to closing rather than failing the merge
+      - automated tasks that cannot move are closed, with a durable remote close only for those carrying a real provider task id
+    provenance: [TransferAutomatedContactTasksToContact, TransferAutomatedTasksForMergeTx, CompleteLiveTasksForContactTx, RepointManualContactTasksToContact]
+    notes: Supersedes CON-031, retired. Merge deletes no contact_task row — orphan cleanup of merge-closed automated tasks is tracked separately (issue #811).
 
   # --- Intents (judged experience goals — Track B agentic judge only) ---
 

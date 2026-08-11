@@ -253,13 +253,15 @@ RETURNING *;
 
 -- name: CompleteLiveContactTasksForContact :many
 -- Merge-time close of the source contact's live AUTOMATED tasks (cadence_due
--- + followup_loop). Manual-lifecycle rows are deliberately excluded — they
--- are user content and are REPOINTED to the merge target instead (see
--- RepointManualContactTasksToContact). Automated rows cannot be repointed:
--- unique_contact_provider_cadence has no state filter, so a repoint collides
--- whenever the target has ANY cadence_due row, and the target's own automated
--- rows already cover the survivor. Returns the closed rows' identifying
--- fields plus the pending_temp_id metadata key so the service can decide
+-- + followup_loop) that TransferAutomatedContactTasksToContact could not
+-- move. Manual-lifecycle rows are deliberately excluded — they are user
+-- content and are REPOINTED to the merge target instead (see
+-- RepointManualContactTasksToContact). Automated rows cannot always be
+-- repointed: unique_contact_provider_cadence has no state filter, so a
+-- transfer collides whenever the target has ANY cadence_due row, and a
+-- follow-up collides on a live target row or a shared idempotency key. This
+-- query is the fallback for exactly those blocked rows. Returns the closed
+-- rows' identifying fields plus the pending_temp_id metadata key so the service can decide
 -- remote-close enqueue eligibility (real external id only — never a pending
 -- temp id, mirroring todoist.isPendingTempID).
 UPDATE contact_task
@@ -270,6 +272,40 @@ WHERE contact_id = @contact_id
   AND state IN ('managed', 'pending_remote_create')
 RETURNING id, external_task_id, provider,
     COALESCE(metadata->>sqlc.arg(pending_temp_id_key)::text, '')::text AS pending_temp_id;
+
+-- name: TransferAutomatedContactTasksToContact :many
+-- Merge-time transfer of the source's LIVE automated rows to the target, for
+-- the rows where the move is legal under the existing partial unique indexes.
+-- A row moves only when the target has no colliding row:
+--   cadence_due    — unique_contact_provider_cadence is state-agnostic, so the
+--                    target must have NO cadence_due row in any state.
+--   followup_loop  — idx_contact_task_followup_unique_live covers live states
+--                    only, so the target must have no LIVE follow-up; and
+--                    idx_contact_task_followup_idempotency covers
+--                    (contact_id, idempotency_key), so the key must be free.
+-- Rows that cannot move are left for CompleteLiveContactTasksForContact.
+UPDATE contact_task AS src
+SET contact_id = sqlc.arg(target_contact_id),
+    updated_at = NOW()
+WHERE src.contact_id = sqlc.arg(source_contact_id)
+  AND src.lifecycle IN ('cadence_due', 'followup_loop')
+  AND src.state IN ('managed', 'pending_remote_create')
+  AND NOT EXISTS (
+      SELECT 1 FROM contact_task tgt
+      WHERE tgt.contact_id = sqlc.arg(target_contact_id)
+        AND tgt.provider = src.provider
+        AND tgt.lifecycle = src.lifecycle
+        AND (src.lifecycle = 'cadence_due'
+             OR tgt.state IN ('managed', 'pending_remote_create'))
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM contact_task idem
+      WHERE idem.contact_id = sqlc.arg(target_contact_id)
+        AND idem.lifecycle = 'followup_loop'
+        AND idem.idempotency_key IS NOT NULL
+        AND idem.idempotency_key = src.idempotency_key
+  )
+RETURNING id, lifecycle;
 
 -- name: RepointManualContactTasksToContact :exec
 -- Merge-time repoint of the source contact's MANUAL tasks (user to-dos) to
