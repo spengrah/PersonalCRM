@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"sort"
-	"strconv"
 	"testing"
 	"time"
 
@@ -388,8 +387,8 @@ func TestGoogleCallback_ExpiredStateAbortsBeforeExchange(t *testing.T) {
 	}
 	handler := NewOAuthHandler(mock, "http://localhost:3000")
 
-	t.Setenv("TIME_ACCELERATION", "60")
-	t.Setenv("TIME_BASE", strconv.FormatInt(fixedOAuthTestBaseUnix, 10))
+	accelerated.Configure(60, time.Unix(fixedOAuthTestBaseUnix, 0))
+	t.Cleanup(accelerated.Reset)
 
 	state := "expiring-state-" + uuid.New().String()[:8]
 	handler.storeState(state)
@@ -399,7 +398,7 @@ func TestGoogleCallback_ExpiredStateAbortsBeforeExchange(t *testing.T) {
 	// (a 1000s base shift * 60x acceleration = 60,000 accelerated seconds,
 	// which dwarfs both the 600s TTL and any real-wall-clock jitter between
 	// the two GetCurrentTime() calls involved).
-	t.Setenv("TIME_BASE", strconv.FormatInt(fixedOAuthTestBaseUnix-1000, 10))
+	accelerated.Configure(60, time.Unix(fixedOAuthTestBaseUnix-1000, 0))
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -880,13 +879,13 @@ func validateStateAfterShift(t *testing.T, shiftSeconds int64) bool {
 	t.Helper()
 	handler := NewOAuthHandler(&MockOAuthService{}, "http://localhost:3000")
 
-	t.Setenv("TIME_ACCELERATION", "2")
-	t.Setenv("TIME_BASE", strconv.FormatInt(fixedOAuthTestBaseUnix, 10))
+	accelerated.Configure(2, time.Unix(fixedOAuthTestBaseUnix, 0))
+	t.Cleanup(accelerated.Reset)
 
 	state := "ttl-state-" + uuid.New().String()[:8]
 	handler.storeState(state)
 
-	t.Setenv("TIME_BASE", strconv.FormatInt(fixedOAuthTestBaseUnix-shiftSeconds, 10))
+	accelerated.Configure(2, time.Unix(fixedOAuthTestBaseUnix-shiftSeconds, 0))
 	return handler.validateState(state)
 }
 

@@ -2,8 +2,6 @@ package handlers
 
 import (
 	"net/http"
-	"os"
-	"strconv"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
@@ -40,26 +38,16 @@ type AccelerationSettings struct {
 
 // GetSystemTime returns the current accelerated time and settings
 func (h *SystemHandler) GetSystemTime(c *gin.Context) {
-	currentTime := accelerated.GetCurrentTime()
-	accelerationStr := os.Getenv("TIME_ACCELERATION")
-	accelerationFactor := 1
-	isAccelerated := false
+	// One atomic load (D2-7): current_time and the factor/base/active that
+	// produced it can never straddle a concurrent reconfiguration. Do not
+	// replace this with accelerated.GetCurrentTime() + accelerated.Snapshot()
+	// — that is two loads and reintroduces the torn response this call
+	// exists to prevent.
+	currentTime, accelerationFactor, base, isAccelerated := accelerated.SnapshotWithTime()
 
-	if accelerationStr != "" {
-		if factor, err := strconv.Atoi(accelerationStr); err == nil {
-			accelerationFactor = factor
-			isAccelerated = factor > 1
-		}
-	}
-
-	// Get base_time for client-side acceleration calculation
 	baseTime := ""
 	if isAccelerated {
-		if baseUnix := os.Getenv("TIME_BASE"); baseUnix != "" {
-			if unixSec, err := strconv.ParseInt(baseUnix, 10, 64); err == nil {
-				baseTime = time.Unix(unixSec, 0).Format(time.RFC3339) //nolint:forbidigo // Need wall-clock conversion
-			}
-		}
+		baseTime = base.Format(time.RFC3339)
 	}
 
 	response := TimeResponse{
@@ -87,39 +75,16 @@ func (h *SystemHandler) SetTimeAcceleration(c *gin.Context) {
 		return
 	}
 
-	// Set environment variables (note: this only affects current process)
-	if err := os.Setenv("TIME_ACCELERATION", strconv.Itoa(settings.Factor)); err != nil {
-		// Preserve the existing non-standard body (system.go is E2E-selected); just
-		// add the logged cause + c.Error revival.
-		api.LogServerError(c, err)
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to set TIME_ACCELERATION environment variable",
-		})
-		return
-	}
-	if settings.Factor > 1 {
-		if err := os.Setenv("TIME_BASE", strconv.FormatInt(time.Now().Unix(), 10)); err != nil { //nolint:forbidigo // Need wall-clock base for acceleration
-			api.LogServerError(c, err)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Failed to set TIME_BASE environment variable",
-			})
-			return
-		}
-	} else {
-		if err := os.Unsetenv("TIME_BASE"); err != nil {
-			api.LogServerError(c, err)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Failed to unset TIME_BASE environment variable",
-			})
-			return
-		}
-	}
+	// The package owns the wall clock (rule 1); the handler captures none of
+	// its own. Setting process state cannot fail, so there is nothing left to
+	// 500 on.
+	appliedAt := accelerated.ConfigureNow(settings.Factor)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
 			"acceleration_factor": settings.Factor,
-			"applied_at":          accelerated.GetCurrentTime(),
+			"applied_at":          appliedAt,
 		},
 	})
 }

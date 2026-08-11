@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/cadence"
 
 	"github.com/stretchr/testify/assert"
@@ -538,14 +539,15 @@ func TestGetOverdueDaysWithConfig(t *testing.T) {
 // TestGetOverdueDaysWithConfig_Accelerated covers the CRM_ENV=accelerated scaled-day
 // branch (1 "day" = 10 minutes / 7), which the table test above does not reach. That
 // branch is guarded: GetOverdueDaysWithConfig returns real 24h days whenever
-// TIME_ACCELERATION is active, so the test neutralizes TIME_ACCELERATION (empty →
+// TIME_ACCELERATION is active, so the test neutralizes the process clock state (reset →
 // isAccelerationActive() false) to fall through to the CRM_ENV switch. checkTime is
 // placed exactly overdueDays scaled-days past the due point, so the branch's truncating
-// division yields exactly overdueDays. Serial (t.Setenv mutates process env) so it does
-// not race sibling cadence tests; deliberately does NOT touch IsTestingMode (#645).
+// division yields exactly overdueDays. Serial (the clock is package-global state) so it
+// does not race sibling cadence tests; deliberately does NOT touch IsTestingMode (#645).
 func TestGetOverdueDaysWithConfig_Accelerated(t *testing.T) {
 	t.Setenv("CRM_ENV", "accelerated")
-	t.Setenv("TIME_ACCELERATION", "")
+	accelerated.Reset()
+	t.Cleanup(accelerated.Reset)
 
 	const overdueDays = 5
 	scaledDay := 10 * time.Minute / 7 // the accelerated branch's "1 day"

@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
@@ -75,6 +76,12 @@ func run() int {
 
 	// Initialize structured logger with configuration
 	logger.Init(cfg.Logger)
+
+	// Boot the process clock from config. Never fatal: a bad acceleration
+	// setting must not stop the process, only leave the clock on wall time.
+	if err := accelerated.ConfigureAtBoot(cfg.Runtime.TimeAcceleration, cfg.Runtime.TimeBase); err != nil {
+		logger.Warn().Err(err).Msg("time acceleration not applied")
+	}
 
 	// Record the serving build (stamped via -ldflags at build time). In prod this
 	// lands in `podman logs crm-backend`, a log-side record of which commit is live.

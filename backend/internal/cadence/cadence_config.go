@@ -2,8 +2,9 @@ package cadence
 
 import (
 	"os"
-	"strconv"
 	"time"
+
+	"personal-crm/backend/internal/accelerated"
 )
 
 // CadenceConfig manages different cadence mappings for testing vs production
@@ -201,10 +202,6 @@ func GetOverdueDaysWithConfig(cadenceType CadenceType, lastContacted *time.Time,
 
 // isAccelerationActive checks if time acceleration is currently enabled
 func isAccelerationActive() bool {
-	accelerationStr := os.Getenv("TIME_ACCELERATION")
-	if accelerationStr == "" {
-		return false
-	}
-	acceleration, err := strconv.Atoi(accelerationStr)
-	return err == nil && acceleration > 1
+	_, _, active := accelerated.Snapshot()
+	return active
 }

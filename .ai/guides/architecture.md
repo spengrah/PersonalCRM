@@ -291,8 +291,10 @@ lock, so the pre-check cannot race with a concurrent insert.
 
 **Solution:** `accelerated.GetCurrentTime()` instead of `time.Now()`
 
+At boot, `TIME_ACCELERATION`/`TIME_BASE` are read once into `config.RuntimeConfig` and handed to `accelerated.ConfigureAtBoot`, which becomes the package's only process-global clock state (an `atomic.Pointer`, not env reads on every call). `TIME_BASE` accepts either Unix seconds or an RFC3339 timestamp. A factor above 1 with no usable base does not activate acceleration — the clock stays on wall time and boot logs a warning; the settings endpoint's `POST /system/time/acceleration` always anchors a base together with the factor, so that case is reachable only through boot config, never through the API.
+
 ```go
-// Environment variables control time
+// Environment variables control time at boot
 TIME_ACCELERATION=1440  // 1 minute = 1 day
 TIME_BASE=2024-01-01T00:00:00Z
 
@@ -786,9 +788,10 @@ Interaction, cadence, and follow-up consumers each have an `EVENT_BUS_*_MODE` fl
 
 ### Time-Accelerated Testing
 
-Use `.env.example.testing` for fast cadence testing:
+Use `.env.example.testing` for fast cadence testing. `TIME_ACCELERATION` requires a `TIME_BASE` to activate — a factor with no base leaves the clock on wall time:
 ```bash
 TIME_ACCELERATION=1440  # 1 min = 1 day
+TIME_BASE=2024-01-01T00:00:00Z
 # Weekly cadence = 2 minutes
 # Monthly cadence = 8 minutes
 ```
