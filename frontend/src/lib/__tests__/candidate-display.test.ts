@@ -73,4 +73,34 @@ describe('getCandidateDisplayName', () => {
       )
     ).toBe('Dale Dobeck')
   })
+
+  it('falls back to the address for a nameless gmail_participant', () => {
+    expect(
+      getCandidateDisplayName(
+        candidate({ source: 'gmail_participant', emails: ['alex@example.net'] })
+      )
+    ).toBe('alex@example.net')
+  })
+
+  it('prefers stored name fields over the gmail_participant address fallback', () => {
+    expect(
+      getCandidateDisplayName(
+        candidate({
+          source: 'gmail_participant',
+          first_name: 'Alex',
+          emails: ['alex@example.net'],
+        })
+      )
+    ).toBe('Alex')
+  })
+
+  it('keeps Unknown fallback for nameless non-participant sources with no email', () => {
+    expect(getCandidateDisplayName(candidate({ source: 'gcontacts', emails: [] }))).toBe('Unknown')
+  })
+
+  it('returns Unknown when a gmail_participant candidate has no email either', () => {
+    expect(getCandidateDisplayName(candidate({ source: 'gmail_participant', emails: [] }))).toBe(
+      'Unknown'
+    )
+  })
 })

@@ -281,6 +281,17 @@ function ContactCandidateResolver({
 
   const candidate = candidates[currentIndex]
   const displayName = candidate ? getCandidateDisplayName(candidate) : ''
+  // Whether the candidate carries any source-provided name field.
+  const candidateHasSourceName = candidate
+    ? Boolean(candidate.display_name || candidate.first_name || candidate.last_name)
+    : false
+  // A gmail_participant candidate discovered from mail headers can have no
+  // name field at all — displayName then falls back to its address, which
+  // must never be seeded into the editable name (there is nothing to
+  // delete). Every other nameless-fallback source (e.g. a handle-only
+  // Telegram peer) has a real handle worth pre-filling, so this is scoped
+  // to gmail_participant specifically rather than "any nameless candidate."
+  const isNamelessParticipant = candidate?.source === 'gmail_participant' && !candidateHasSourceName
   const unresolvedTelegram = candidate ? isUnresolvedTelegramCandidate(candidate) : false
   const sourceInfo = candidate ? getSourceDisplay(candidate.source) : null
   // Link-only sources (e.g. gmail_correspondence) cannot create a new
@@ -453,20 +464,39 @@ function ContactCandidateResolver({
     }
   }, [mode, selectedContact])
 
+  // The seeding effect re-runs whenever any of its deps change identity
+  // (e.g. selectedContact refreshing with the same underlying contact, or a
+  // background candidates refetch producing a new candidate object for the
+  // same id). Reseeding on every such re-run would clobber a name the user
+  // is mid-typing. lastSeededRef remembers the last combination the effect
+  // actually seeded for, so only a REAL transition (a different candidate,
+  // mode, or selected contact) reseeds — same-key churn is a no-op. The
+  // key deliberately includes selectedContact's id, not the object itself,
+  // so the deliberate none -> contact-id reseed (link mode's contact fetch
+  // resolving) still fires while an identity-only refresh of the same
+  // contact does not.
+  const lastSeededRef = useRef<string | null>(null)
+
   // Initialize editedName when candidate/mode/contact changes (GH-155)
   useEffect(() => {
+    const seedKey = `${currentId}:${mode}:${selectedContact?.id ?? 'none'}`
+    if (lastSeededRef.current === seedKey) return
+    lastSeededRef.current = seedKey
+
     if (mode === 'import') {
-      // Import mode: use external name
-      setEditedName(displayName)
+      // Import mode: use external name, unless this is a nameless
+      // gmail_participant (the address fallback must never be pre-filled).
+      setEditedName(isNamelessParticipant ? '' : displayName)
     } else if (mode === 'link' && selectedContact) {
       // Link mode: use CRM contact name
       setEditedName(selectedContact.full_name)
     } else if (mode === 'link') {
-      // Link mode but no contact selected yet: use external name as placeholder
-      setEditedName(displayName)
+      // Link mode but no contact selected yet: use external name as
+      // placeholder, same nameless-participant rule as import mode.
+      setEditedName(isNamelessParticipant ? '' : displayName)
     }
     setIsEditingName(false)
-  }, [mode, selectedContact, displayName, currentId])
+  }, [mode, selectedContact, displayName, currentId, isNamelessParticipant])
 
   // Initialize primary method from CRM contact in link mode (GH-159)
   useEffect(() => {
@@ -611,9 +641,6 @@ function ContactCandidateResolver({
     // For candidates with no source name fields (e.g. Telegram peers where the
     // displayed heading is a metadata.username fallback), always send the name
     // — the backend cannot derive one from display_name/first_name/last_name.
-    const candidateHasSourceName = Boolean(
-      candidate.display_name || candidate.first_name || candidate.last_name
-    )
     const nameToSend = candidateHasSourceName
       ? editedName.trim() !== displayName
         ? editedName.trim()
@@ -1113,7 +1140,9 @@ function ContactCandidateResolver({
               <Button
                 onClick={handleImport}
                 loading={importMutation.isPending}
-                disabled={isLoading}
+                disabled={
+                  isLoading || (candidate.source === 'gmail_participant' && !editedName.trim())
+                }
               >
                 <UserPlus className="w-4 h-4 mr-1" />
                 {importMutation.isPending ? 'Importing...' : 'Import as New Contact'}

@@ -13,4 +13,12 @@ describe('candidate-actions (link-only policy mirror)', () => {
     expect(allowedActionsForSource('gmail_correspondence')).toEqual(['link', 'ignore'])
     expect(sourceAllowsImport('gmail_correspondence')).toBe(false)
   })
+
+  it('gmail_participant allows import, link and ignore', () => {
+    // Unlike gmail_correspondence, a gmail_participant candidate is allowed
+    // to seed a brand-new contact: it is deliberately absent from
+    // LINK_ONLY_SOURCES.
+    expect(allowedActionsForSource('gmail_participant')).toEqual(['import', 'link', 'ignore'])
+    expect(sourceAllowsImport('gmail_participant')).toBe(true)
+  })
 })
