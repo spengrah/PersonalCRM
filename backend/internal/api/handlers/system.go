@@ -38,11 +38,13 @@ type AccelerationSettings struct {
 
 // GetSystemTime returns the current accelerated time and settings
 func (h *SystemHandler) GetSystemTime(c *gin.Context) {
-	// One atomic load (D2-7): current_time and the factor/base/active that
-	// produced it can never straddle a concurrent reconfiguration. Do not
-	// replace this with accelerated.GetCurrentTime() + accelerated.Snapshot()
-	// — that is two loads and reintroduces the torn response this call
-	// exists to prevent.
+	// One atomic load: current_time and the factor/base/active that produced
+	// it can never straddle a concurrent reconfiguration. Do not replace this
+	// with accelerated.GetCurrentTime() + accelerated.Snapshot() — that is two
+	// loads, and a reconfiguration landing between them would report a
+	// current_time computed under the old settings alongside the new
+	// factor/base/active, an inconsistent response this call exists to
+	// prevent.
 	currentTime, accelerationFactor, base, isAccelerated := accelerated.SnapshotWithTime()
 
 	baseTime := ""

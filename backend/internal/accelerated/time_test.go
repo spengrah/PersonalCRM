@@ -166,7 +166,7 @@ func TestGetCurrentTime_ProcessState(t *testing.T) {
 	})
 }
 
-// TestConfigureNow_TruncatesBaseToSecond pins D2-6: every entry point stores
+// TestConfigureNow_TruncatesBaseToSecond pins that every entry point stores
 // a whole-second base so the server's RFC3339 echo is a lossless encoding of
 // the value it actually computes from, and the browser's second-resolution
 // copy never drifts from it.

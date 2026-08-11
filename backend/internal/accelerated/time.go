@@ -38,8 +38,11 @@ func GetCurrentTime() time.Time {
 }
 
 // Configure sets the process clock from an explicit base. The base is
-// TRUNCATED TO WHOLE SECONDS (D2-6). factor <= 1 disables acceleration but is
-// still recorded verbatim for Snapshot. Safe from any goroutine.
+// TRUNCATED TO WHOLE SECONDS, so the RFC3339 timestamp this package later
+// echoes is a lossless encoding of the exact value it computes from and a
+// client's second-resolution copy of it never drifts. factor <= 1 disables
+// acceleration but is still recorded verbatim for Snapshot. Safe from any
+// goroutine.
 func Configure(factor int, base time.Time) {
 	current.Store(&settings{
 		factor: factor,
@@ -48,9 +51,10 @@ func Configure(factor int, base time.Time) {
 	})
 }
 
-// ConfigureNow anchors the base at the current wall clock TRUNCATED TO WHOLE
-// SECONDS (D2-6) and sets the factor, returning the new base. The package owns
-// the wall clock (rule 1), so the settings handler must not capture its own.
+// ConfigureNow anchors the base at the current wall clock, TRUNCATED TO WHOLE
+// SECONDS for the same reason as Configure, and sets the factor, returning the
+// new base. The package owns the wall clock (rule 1), so the settings handler
+// must not capture its own.
 func ConfigureNow(factor int) time.Time {
 	base := nowFn().Truncate(time.Second)
 	current.Store(&settings{
@@ -62,10 +66,11 @@ func ConfigureNow(factor int) time.Time {
 }
 
 // ConfigureAtBoot applies settings from configuration. baseStr accepts Unix
-// seconds or RFC3339; either way the base is truncated to whole seconds
-// (D2-6). A missing or unparseable base with factor > 1 records the factor,
-// leaves the clock inactive, and returns an error describing why. Parameter
-// types match config.RuntimeConfig exactly (int, string).
+// seconds or RFC3339; either way the base is truncated to whole seconds for
+// the same reason as Configure. A missing or unparseable base with factor > 1
+// records the factor, leaves the clock inactive, and returns an error
+// describing why. Parameter types match config.RuntimeConfig exactly (int,
+// string).
 func ConfigureAtBoot(factor int, baseStr string) error {
 	if factor <= 1 {
 		current.Store(&settings{factor: factor})
@@ -112,8 +117,8 @@ func Snapshot() (factor int, base time.Time, active bool) {
 
 // SnapshotWithTime reports the app clock AND the settings that produced it,
 // from ONE atomic load, so an HTTP response can never pair a current_time
-// computed under one configuration with a factor/base/active from another
-// (D2-7). This is the only reader GetSystemTime may use.
+// computed under one configuration with a factor/base/active from another.
+// This is the only reader GetSystemTime may use.
 func SnapshotWithTime() (now time.Time, factor int, base time.Time, active bool) {
 	s := load()
 	n := nowFn()

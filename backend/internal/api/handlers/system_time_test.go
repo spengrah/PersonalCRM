@@ -116,6 +116,11 @@ func TestSystemTime_BootEnableReanchorDisableCycle(t *testing.T) {
 	postCode, postEnv := postAcceleration(t, r, `{"factor": 60}`)
 	assert.Equal(t, http.StatusOK, postCode)
 	assert.Equal(t, 60, postEnv.Data.AccelerationFactor)
+	// applied_at is the anchored base ConfigureNow returns, truncated to a
+	// whole second (zero nanoseconds) — not a fresh, possibly-fractional
+	// current-time read taken after the anchor.
+	assert.True(t, postEnv.Data.AppliedAt.Equal(now), "applied_at = %v, want the anchored base %v", postEnv.Data.AppliedAt, now)
+	assert.Zero(t, postEnv.Data.AppliedAt.Nanosecond(), "applied_at must be truncated to a whole second")
 
 	code, env = getSystemTime(t, r)
 	assert.Equal(t, http.StatusOK, code)
@@ -158,9 +163,10 @@ func TestSystemTime_BootEnableReanchorDisableCycle(t *testing.T) {
 	assert.True(t, env.Data.CurrentTime.Equal(now), "current_time after disable = %v, want the fake wall clock %v (accelerated offset discarded)", env.Data.CurrentTime, now)
 }
 
-// TestSystemTime_FactorEdgeCases pins D2-5b/D2-5c across the integer range:
-// any factor <= 1, negative included, disables acceleration and clears the
-// base, while the factor itself is always echoed verbatim.
+// TestSystemTime_FactorEdgeCases pins the factor contract across the entire
+// integer range: any factor <= 1, negative included, disables acceleration
+// and clears the base, while the factor itself is always echoed back exactly
+// as supplied.
 //
 // spec: SET-037.factor-echoed-verbatim, SET-037.non-positive-factor-disables-acceleration
 func TestSystemTime_FactorEdgeCases(t *testing.T) {
@@ -295,12 +301,13 @@ func TestSetTimeAcceleration_MissingFactorIsBadRequest(t *testing.T) {
 	})
 }
 
-// TestSystemTime_FactorWithoutBaseReportsInactive pins the one declared HTTP
-// delta (D2-3): today's handler reports is_accelerated: true here
-// (system.go:51); after this PR it reports false, because activation
-// requires a factor > 1 AND a usable base. This state is unreachable through
-// the setter (ConfigureNow always anchors a base) and reachable only through
-// boot config, so it is driven via accelerated.ConfigureAtBoot directly.
+// TestSystemTime_FactorWithoutBaseReportsInactive pins that activation
+// requires a factor > 1 AND a usable base: a factor with no parseable base
+// reports is_accelerated: false rather than true with an unusable empty
+// base_time, because a client cannot compute a clock from a base it never
+// received. This state is unreachable through the setter (ConfigureNow
+// always anchors a base) and reachable only through boot config, so it is
+// driven via accelerated.ConfigureAtBoot directly.
 //
 // spec: SET-037.factor-without-usable-base-reports-inactive
 func TestSystemTime_FactorWithoutBaseReportsInactive(t *testing.T) {
@@ -343,7 +350,9 @@ func TestSystemTime_FactorWithoutBaseReportsInactive(t *testing.T) {
 	})
 }
 
-// TestSystemTime_SingleLoadSnapshot is the D2-7 proof. It forces a
+// TestSystemTime_SingleLoadSnapshot proves the response GetSystemTime returns
+// is always self-consistent — current_time and the factor/base/is_accelerated
+// beside it always describe the same configuration. It forces a
 // reconfiguration to land BETWEEN a two-load handler's two loads by hooking
 // the package clock: the hook reconfigures the package the first time it is
 // called (guarded by sync.Once) and then returns a fixed instant on every
