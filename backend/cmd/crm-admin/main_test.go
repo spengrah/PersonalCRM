@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/sync"
 	"personal-crm/backend/internal/synthetic"
 
 	"github.com/google/uuid"
@@ -1885,5 +1887,200 @@ func TestCrmAdmin_ParseArgsBindsTheWhatsAppHistoryFlags(t *testing.T) {
 	}
 	if opts.requeueWhatsAppHistoryID != id {
 		t.Fatalf("unexpected parse: %+v", opts)
+	}
+}
+
+// --- --set-email-own-domains dispatch tests ---
+
+// fakeEmailOwnDomainsRepo satisfies emailOwnDomainsRepo. ListSyncStates
+// returns whatever rows the test seeded (across sources, mirroring the real
+// repository); UpdateSyncStateMetadata records the exact map it received so
+// tests can assert the full read-modify-write result, and updates the seeded
+// row in place so a second read (if a test ever added one) would see it.
+type fakeEmailOwnDomainsRepo struct {
+	states         []repository.SyncState
+	listErr        error
+	updateErr      error
+	updateCalls    int
+	lastUpdateID   uuid.UUID
+	lastUpdateMeta map[string]any
+}
+
+func (f *fakeEmailOwnDomainsRepo) ListSyncStates(_ context.Context) ([]repository.SyncState, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.states, nil
+}
+
+func (f *fakeEmailOwnDomainsRepo) UpdateSyncStateMetadata(_ context.Context, id uuid.UUID, metadata map[string]any) (*repository.SyncState, error) {
+	f.updateCalls++
+	f.lastUpdateID = id
+	f.lastUpdateMeta = metadata
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
+	for i := range f.states {
+		if f.states[i].ID == id {
+			f.states[i].Metadata = metadata
+			return &f.states[i], nil
+		}
+	}
+	return &repository.SyncState{ID: id, Source: google.GmailSourceName, Metadata: metadata}, nil
+}
+
+// TestSetEmailOwnDomains_ExplicitEmptyClears proves that
+// --set-email-own-domains="" is detected as an explicit SET via flag
+// presence (not the string's zero value), reaches the handler, and clears
+// the key while leaving unrelated metadata untouched.
+func TestSetEmailOwnDomains_ExplicitEmptyClears(t *testing.T) {
+	deps, _, _, _, _, _ := newTestDeps()
+	id := uuid.New()
+	account := "acct-a@own-domain.example"
+	fake := &fakeEmailOwnDomainsRepo{
+		states: []repository.SyncState{
+			{
+				ID:        id,
+				Source:    google.GmailSourceName,
+				AccountID: &account,
+				Metadata: map[string]any{
+					"backfill_since":                "2026-01-01",
+					"terminal_reason":               "manual",
+					sync.MetadataKeyEmailOwnDomains: []any{"own-domain.example"},
+				},
+			},
+		},
+	}
+	deps.emailOwnDomains = fake
+
+	opts, err := parseArgs([]string{"--set-email-own-domains="})
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if !opts.setEmailOwnDomainsSet {
+		t.Fatal("expected explicit empty --set-email-own-domains to be detected as SET, not omitted")
+	}
+
+	if err := run(context.Background(), opts, deps); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fake.updateCalls != 1 {
+		t.Fatalf("expected 1 update call, got %d", fake.updateCalls)
+	}
+	if _, present := fake.lastUpdateMeta[sync.MetadataKeyEmailOwnDomains]; present {
+		t.Fatalf("expected discovery_own_domains removed, got %v", fake.lastUpdateMeta)
+	}
+	if fake.lastUpdateMeta["backfill_since"] != "2026-01-01" {
+		t.Fatalf("backfill_since not preserved: %v", fake.lastUpdateMeta)
+	}
+	if fake.lastUpdateMeta["terminal_reason"] != "manual" {
+		t.Fatalf("terminal_reason not preserved: %v", fake.lastUpdateMeta)
+	}
+}
+
+// TestSetEmailOwnDomains_AccountSelection covers the zero/one/two/explicit
+// resolution matrix for the target external_sync_state row.
+func TestSetEmailOwnDomains_AccountSelection(t *testing.T) {
+	acctA := "acct-a@own-domain.example"
+	acctB := "acct-b@own-domain.example"
+	stateA := repository.SyncState{ID: uuid.New(), Source: google.GmailSourceName, AccountID: &acctA, Metadata: map[string]any{}}
+	stateB := repository.SyncState{ID: uuid.New(), Source: google.GmailSourceName, AccountID: &acctB, Metadata: map[string]any{}}
+
+	t.Run("zero email states errors", func(t *testing.T) {
+		deps, _, _, _, _, _ := newTestDeps()
+		deps.emailOwnDomains = &fakeEmailOwnDomainsRepo{}
+		err := run(context.Background(), runOptions{setEmailOwnDomains: "second.example", setEmailOwnDomainsSet: true}, deps)
+		if err == nil {
+			t.Fatal("expected error with zero email sync states")
+		}
+	})
+
+	t.Run("exactly one is targeted without --account", func(t *testing.T) {
+		deps, _, _, _, _, _ := newTestDeps()
+		fake := &fakeEmailOwnDomainsRepo{states: []repository.SyncState{stateA}}
+		deps.emailOwnDomains = fake
+		err := run(context.Background(), runOptions{setEmailOwnDomains: "second.example", setEmailOwnDomainsSet: true}, deps)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if fake.lastUpdateID != stateA.ID {
+			t.Fatalf("expected the sole state to be targeted, got %s", fake.lastUpdateID)
+		}
+	})
+
+	t.Run("two email states without --account errors naming the accounts", func(t *testing.T) {
+		deps, _, _, _, _, _ := newTestDeps()
+		fake := &fakeEmailOwnDomainsRepo{states: []repository.SyncState{stateA, stateB}}
+		deps.emailOwnDomains = fake
+		err := run(context.Background(), runOptions{setEmailOwnDomains: "second.example", setEmailOwnDomainsSet: true}, deps)
+		if err == nil {
+			t.Fatal("expected ambiguous-account error")
+		}
+		if !strings.Contains(err.Error(), acctA) || !strings.Contains(err.Error(), acctB) {
+			t.Fatalf("expected error to name both accounts, got %v", err)
+		}
+		if fake.updateCalls != 0 {
+			t.Fatalf("expected no update call on the ambiguous path, got %d", fake.updateCalls)
+		}
+	})
+
+	t.Run("--account selects among two", func(t *testing.T) {
+		deps, _, _, _, _, _ := newTestDeps()
+		fake := &fakeEmailOwnDomainsRepo{states: []repository.SyncState{stateA, stateB}}
+		deps.emailOwnDomains = fake
+		err := run(context.Background(), runOptions{
+			setEmailOwnDomains:     "second.example",
+			setEmailOwnDomainsSet:  true,
+			emailOwnDomainsAccount: acctB,
+		}, deps)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if fake.lastUpdateID != stateB.ID {
+			t.Fatalf("expected account B to be targeted, got %s", fake.lastUpdateID)
+		}
+	})
+}
+
+// TestSetEmailOwnDomains_WritesPreservedMetadata pins the happy-path
+// read-modify-write: the EXACT full metadata map handed to the fake repo's
+// UpdateSyncStateMetadata equals the prior map plus normalized lowercased
+// domains under discovery_own_domains — nothing more, nothing less.
+func TestSetEmailOwnDomains_WritesPreservedMetadata(t *testing.T) {
+	deps, stdout, _, _, _, _ := newTestDeps()
+	id := uuid.New()
+	account := "acct-a@own-domain.example"
+	fake := &fakeEmailOwnDomainsRepo{
+		states: []repository.SyncState{
+			{
+				ID:        id,
+				Source:    google.GmailSourceName,
+				AccountID: &account,
+				Metadata: map[string]any{
+					"backfill_since":  "2026-01-01",
+					"terminal_reason": "manual",
+				},
+			},
+		},
+	}
+	deps.emailOwnDomains = fake
+
+	err := run(context.Background(), runOptions{
+		setEmailOwnDomains:    " Own-Domain.Example , Second.Example ",
+		setEmailOwnDomainsSet: true,
+	}, deps)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := map[string]any{
+		"backfill_since":                "2026-01-01",
+		"terminal_reason":               "manual",
+		sync.MetadataKeyEmailOwnDomains: []any{"own-domain.example", "second.example"},
+	}
+	if !reflect.DeepEqual(fake.lastUpdateMeta, want) {
+		t.Fatalf("metadata mismatch:\n got:  %#v\nwant: %#v", fake.lastUpdateMeta, want)
+	}
+	if !strings.Contains(stdout.String(), "own-domain.example") || !strings.Contains(stdout.String(), "second.example") {
+		t.Fatalf("expected the resulting domain list in the summary, got %q", stdout.String())
 	}
 }
