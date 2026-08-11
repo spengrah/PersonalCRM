@@ -851,6 +851,22 @@ var transferAutomatedTaskConstraints = map[string]bool{
 	"idx_contact_task_followup_idempotency": true,
 }
 
+// classifyTransferConflict decides whether an error from the transfer query
+// is a recoverable race — a concurrent insert winning against one of the
+// three indexes the query's own NOT EXISTS clauses guard — or an unexpected
+// integrity defect that must propagate. Matching on the SQLSTATE alone would
+// swallow an unrelated integrity defect and silently degrade every merge to
+// close-everything, which is why ConstraintName is checked too. Extracted
+// from TransferAutomatedTasksForMergeTx so the classification can be unit
+// tested without a database.
+func classifyTransferConflict(err error) (pgErr *pgconn.PgError, recoverable bool) {
+	if !errors.As(err, &pgErr) {
+		return nil, false
+	}
+	recoverable = pgErr.Code == pgerrcode.UniqueViolation && transferAutomatedTaskConstraints[pgErr.ConstraintName]
+	return pgErr, recoverable
+}
+
 // TransferredTaskRef identifies a contact_task row
 // TransferAutomatedTasksForMergeTx moved onto the target.
 type TransferredTaskRef struct {
@@ -876,10 +892,7 @@ func (r *ContactTaskRepository) TransferAutomatedTasksForMergeTx(
 		TargetContactID: uuidToPgUUID(targetID),
 	})
 	if err != nil {
-		var pgErr *pgconn.PgError
-		recoverable := errors.As(err, &pgErr) &&
-			pgErr.Code == pgerrcode.UniqueViolation &&
-			transferAutomatedTaskConstraints[pgErr.ConstraintName]
+		pgErr, recoverable := classifyTransferConflict(err)
 
 		if rbErr := sp.Rollback(ctx); rbErr != nil {
 			return nil, fmt.Errorf("rollback automated task transfer savepoint: %w (transfer: %w)", rbErr, err)

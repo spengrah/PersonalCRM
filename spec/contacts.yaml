@@ -1010,10 +1010,14 @@ behaviors:
     given: a source contact with live contact tasks
     when: it is merged into a target
     then:
-      - manual tasks (user content) are repointed to the target in every state
-      - automated tasks (cadence/follow-up) transfer to the target whenever no uniqueness rule blocks the move
-      - a transfer that loses a race to a concurrent insert falls back to closing rather than failing the merge
-      - automated tasks that cannot move are closed, with a durable remote close only for those carrying a real provider task id
+      - key: manual-repoints-every-state
+        text: manual tasks (user content) are repointed to the target in every state
+      - key: automated-transfers-when-unblocked
+        text: automated tasks (cadence/follow-up) transfer to the target whenever no uniqueness rule blocks the move
+      - key: race-falls-back-to-close
+        text: a transfer that loses a race to a concurrent insert falls back to closing rather than failing the merge
+      - key: blocked-tasks-close-real-id-only
+        text: automated tasks that cannot move are closed, with a durable remote close only for those carrying a real provider task id
     provenance: [TransferAutomatedContactTasksToContact, TransferAutomatedTasksForMergeTx, CompleteLiveTasksForContactTx, RepointManualContactTasksToContact]
     notes: Supersedes CON-031, retired. Merge deletes no contact_task row — orphan cleanup of merge-closed automated tasks is tracked separately (issue #811).
 
