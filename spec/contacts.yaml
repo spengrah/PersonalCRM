@@ -369,7 +369,7 @@ behaviors:
     surface: none
     statement: every contact list ordering (all sorts, relevance-ranked search, and the no-sort default) includes a final unique tie-breaker so that equal-valued rows never swap between requests, paginated pages never drop or duplicate rows, and prev/next navigation order is stable.
     provenance: [TestContactList_DeterministicTieBreak, backend/internal/db/querygen/contact_list.sql.tmpl]
-    notes: Every sort rung, relevance-ranked search, and the no-sort default share one ORDER BY ladder (generated from the fragment above into contact_list.gen.sql) terminating in `c.full_name ASC, c.id ASC`; the id tiebreak is the final rung under every sort. Pinned by TestContactList_DeterministicTieBreak, which seeds three same-named contacts at fixed, deliberately reverse-ordered ids and asserts the recovered order survives both single-row pagination and a repeated walk.
+    notes: Every sort rung, relevance-ranked search, and the no-sort default share one ORDER BY ladder (generated from the fragment above into contact_list.gen.sql) terminating in `c.full_name ASC, c.id ASC`; the id tiebreak is the final rung under every sort. Pinned by TestContactList_DeterministicTieBreak, which seeds three same-named, otherwise-NULL contacts at fixed, deliberately reverse-ordered ids — ties on every field the ladder recognises, not just name — and walks every named sort field in both directions plus relevance-ranked search plus the no-sort default, asserting the recovered order survives both single-row pagination and a repeated walk at every one.
 
   # --- Merge ---
 

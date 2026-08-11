@@ -9,6 +9,7 @@ import (
 
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -26,11 +27,11 @@ var tieBreakTrioIDs = []uuid.UUID{
 }
 
 // seedTieBreakTrio inserts three contacts sharing one full name at the fixed
-// ids above, in insertion order (descending). PR5 adds contact_id_node_fk,
-// after which a contact insert with no node fails; TestInsertContactAtID
-// bypasses CreateContact's own node handling (it exists to attach a contact
-// to a pre-existing node), so the person node is created first here — this
-// keeps the fixture green when PR5 lands in wave C.
+// ids above, in insertion order (descending). Every contact is expected to
+// share its id with a person node: TestInsertContactAtID bypasses
+// CreateContact's own node handling (it exists to attach a contact to a
+// pre-existing node), so the person node is created first here to honor that
+// invariant regardless of how it is presently enforced.
 func seedTieBreakTrio(ctx context.Context, t *testing.T, database *db.Database, fullName string) {
 	t.Helper()
 	nodeRepo := repository.NewNodeRepository(database.Queries)
@@ -42,15 +43,26 @@ func seedTieBreakTrio(ctx context.Context, t *testing.T, database *db.Database, 
 	}
 }
 
-// TestContactList_DeterministicTieBreak pins CON-026's default fallback +
-// tiebreaker rung (contact.sql: "name asc then id, so ... equal sort keys
-// never paginate nondeterministically"). Three contacts share one full name
-// at fixed, reverse-ordered ids; only the `c.id ASC` tiebreak rung can
-// recover ascending order from descending insertion order.
+// TestContactList_DeterministicTieBreak pins CON-026: every contact list
+// ordering — every named sort field in both directions, relevance-ranked
+// search, and the no-sort default — includes a final unique tie-breaker
+// (backend/internal/db/querygen/contact_list.sql.tmpl: `c.full_name ASC,
+// c.id ASC`) so equal sort keys never paginate nondeterministically.
+//
+// Three contacts share one full name at fixed, reverse-ordered ids and are
+// otherwise maximally sparse (every other column is NULL). That makes them
+// tie under EVERY sort_field the ladder recognises — a NULL location
+// coalesces to an empty string for all three, a NULL cadence falls to the same rank-7
+// ELSE, NULL date columns tie under NULLS LAST, and identical full_name text
+// produces an identical ts_rank score under relevance search — so the
+// `c.id ASC` fallback rung is the only thing that can recover ascending
+// order from the descending insertion order, under every axis this test
+// walks.
 func TestContactList_DeterministicTieBreak(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	ctx := context.Background()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
@@ -81,22 +93,37 @@ func TestContactList_DeterministicTieBreak(t *testing.T) {
 		return got
 	}
 
-	for _, tc := range []struct {
-		name   string
-		params repository.ListContactsParams
-	}{
-		{"no_sort_default", repository.ListContactsParams{}},
-		{"sort_field_name", repository.ListContactsParams{Sort: "name", Order: "asc"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := walk(tc.params)
-			require.Equal(t, want, got,
-				"id ASC tiebreak must recover ascending order from descending insertion order, with no duplicate and no omission")
+	assertRecovers := func(t *testing.T, params repository.ListContactsParams) {
+		t.Helper()
+		got := walk(params)
+		require.Equal(t, want, got,
+			"id ASC tiebreak must recover ascending order from descending insertion order, with no duplicate and no omission")
 
-			again := walk(tc.params)
-			require.Equal(t, got, again, "repeated walk must be byte-identical")
-		})
+		again := walk(params)
+		require.Equal(t, got, again, "repeated walk must be byte-identical")
 	}
+
+	sortFields := []string{"", "name", "location", "birthday", "last_contacted", "last_response_at", "contact_by", "cadence"}
+	sortOrders := []string{"asc", "desc"}
+	for _, sortField := range sortFields {
+		label := sortField
+		if label == "" {
+			label = "default"
+		}
+		for _, sortOrder := range sortOrders {
+			t.Run(fmt.Sprintf("sort_field_%s/order_%s", label, sortOrder), func(t *testing.T) {
+				assertRecovers(t, repository.ListContactsParams{Sort: sortField, Order: sortOrder})
+			})
+		}
+	}
+
+	t.Run("relevance_ranked_search", func(t *testing.T) {
+		// All three rows carry identical full_name text and no contact_method
+		// rows, so ts_rank scores identically for all three under any search
+		// term the name contains — the relevance CASE ties too, falling
+		// through to the same id ASC fallback rung.
+		assertRecovers(t, repository.ListContactsParams{Query: "Tiebreak"})
+	})
 }
 
 // TestContactList_TripleParity locks ListContacts/CountContacts/ListContactIDs
@@ -112,11 +139,13 @@ func TestContactList_TripleParity(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
+	t.Parallel()
 
 	ctx := context.Background()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	taskRepo := repository.NewContactTaskRepository(database.Queries)
+	gen, _ := migrationGenerator(t)
 
 	const searchTerm = "zqxparity"
 	const paddingName = "Padding Shared Name"
@@ -136,21 +165,25 @@ func TestContactList_TripleParity(t *testing.T) {
 	}
 	require.Len(t, cells, 8, "the fixture must be a full factorial over the three binary axes")
 
-	for i, c := range cells {
-		name := fmt.Sprintf("Factorial Contact %02d", i)
-		if c.search {
-			name += " " + searchTerm
-		}
-		var cadencePtr *string
+	for _, c := range cells {
+		// The cadence and search axes are ordinary ContactSpec shape, so they
+		// go through the synthetic factory (migrationGenerator/factory.Contact)
+		// like every other repo-test contact fixture. The followup axis does
+		// not: no ContactOption creates a contact_task — a followup_loop row is
+		// a downstream FollowUpManager side effect of a real outbound
+		// interaction in production, and replaying that here would trade a
+		// direct, deterministic CreateContactTask call for an async
+		// settle-gated pipeline, for a test whose subject is SQL query-shape
+		// parity, not follow-up creation. That axis stays hand-rolled through
+		// ContactTaskRepository.
+		var opts []factory.ContactOption
 		if c.cadence {
-			weekly := "weekly"
-			cadencePtr = &weekly
+			opts = append(opts, factory.WithCadence("weekly"))
 		}
-		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: name,
-			Cadence:  cadencePtr,
-		})
-		require.NoError(t, err)
+		if c.search {
+			opts = append(opts, factory.WithNameMarker(searchTerm))
+		}
+		contact, _ := seedMigrationContact(ctx, t, database, gen, opts...)
 
 		if c.followup {
 			_, err := taskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
@@ -175,9 +208,11 @@ func TestContactList_TripleParity(t *testing.T) {
 	// search_query: the seeded term, or "" which repository.ListContactsParams
 	// maps to NULL (no search).
 	searchQueries := []string{searchTerm, ""}
-	// sort_field, read off the ORDER BY ladder at contact.sql:35-64 (the
-	// authority). No last_interaction_at/last_outreach_at rung: those columns
-	// exist on contact but the list queries do not sort on them, and a
+	// sort_field, read off the ORDER BY ladder in
+	// backend/internal/db/querygen/contact_list.sql.tmpl (the authority — the
+	// three list queries, and their shared ORDER BY ladder, no longer live in
+	// contact.sql). No last_interaction_at/last_outreach_at rung: those
+	// columns exist on contact but the list queries do not sort on them, and a
 	// sort_field the SQL does not recognise falls through to the default rung
 	// — adding them here would silently duplicate cells.
 	sortFields := []string{"", "name", "location", "birthday", "last_contacted", "last_response_at", "contact_by", "cadence"}
