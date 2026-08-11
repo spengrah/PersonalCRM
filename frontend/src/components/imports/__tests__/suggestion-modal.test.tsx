@@ -484,6 +484,37 @@ describe('ContactCandidateResolver nameless candidate naming (gmail_participant)
     )
   })
 
+  it('escape-cancel reverts to empty, never to the address', async () => {
+    const user = userEvent.setup()
+    mockCandidatesQuery([namelessParticipant])
+    renderModal([namelessParticipant], namelessParticipant.id)
+
+    await user.click(heading())
+    await user.type(screen.getByRole('textbox'), 'partial')
+    await user.keyboard('{Escape}')
+
+    // Cancel restores the SEEDED value. For a nameless participant that is
+    // the empty string — reverting to displayName would silently put the
+    // address into the name and enable Import.
+    await user.click(heading())
+    expect(screen.getByRole('textbox')).toHaveValue('')
+    expect(screen.getByRole('button', { name: /Import as New Contact/ })).toBeDisabled()
+  })
+
+  it('offers no quick-fill of the address while editing', async () => {
+    const user = userEvent.setup()
+    mockCandidatesQuery([namelessParticipant])
+    renderModal([namelessParticipant], namelessParticipant.id)
+
+    await user.click(heading())
+    // The context line still shows the address for identification, but as
+    // plain text — a one-click fill would make the address the contact name.
+    expect(
+      screen.queryByRole('button', { name: `"${'alex@example.net'}"` })
+    ).not.toBeInTheDocument()
+    expect(screen.getByText(`"${'alex@example.net'}"`)).toBeInTheDocument()
+  })
+
   it('a typed name survives a background refetch', async () => {
     const user = userEvent.setup()
     mockCandidatesQuery([namelessParticipant])

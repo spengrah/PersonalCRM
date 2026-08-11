@@ -101,6 +101,7 @@ func getCandidate(t *testing.T, router http.Handler, id string) map[string]inter
 // gmail_participant into linkOnlySources (or drops it from the ordinary
 // path) fails loudly against a live sibling, not just an isolated assertion.
 func TestParticipantCandidate_AllowedActionsOnWire(t *testing.T) {
+	t.Parallel()
 	router, database, ctx, _ := newParticipantTestRouter(t)
 
 	participantWorld, err := declare.Run(ctx, database, "IMP-048", declaredAPINS(t), factory.DefaultSeed)
@@ -138,6 +139,7 @@ func TestParticipantCandidate_AllowedActionsOnWire(t *testing.T) {
 // address-only, self-anchored sighting) imports successfully once the user
 // supplies a name — the link-only rejection never applies to this source.
 func TestParticipantCandidate_ImportWithNameSucceeds(t *testing.T) {
+	t.Parallel()
 	router, database, ctx, contactRepo := newParticipantTestRouter(t)
 
 	ns := declaredAPINS(t)
@@ -213,6 +215,7 @@ func TestParticipantCandidate_ImportWithNameSucceeds(t *testing.T) {
 // candidate rejects a nameless import for lack of a name (400), never for
 // being link-only (403 is gmail_correspondence's rejection).
 func TestParticipantCandidate_ImportWithoutNameRejected(t *testing.T) {
+	t.Parallel()
 	router, database, ctx, _ := newParticipantTestRouter(t)
 
 	world, err := declare.Run(ctx, database, "IMP-047", declaredAPINS(t), factory.DefaultSeed)

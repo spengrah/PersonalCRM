@@ -583,9 +583,11 @@ function ContactCandidateResolver({
   }
 
   const handleCancelNameEdit = () => {
-    // Revert to original name
+    // Revert to the seeded value. A nameless participant seeds EMPTY — its
+    // displayName is the address fallback, which must never become the
+    // contact name via a cancel.
     if (mode === 'import') {
-      setEditedName(displayName)
+      setEditedName(isNamelessParticipant ? '' : displayName)
     } else if (selectedContact) {
       setEditedName(selectedContact.full_name)
     }
@@ -925,13 +927,19 @@ function ContactCandidateResolver({
                 <p className="text-sm text-gray-500 mt-1 h-5 flex items-center gap-1">
                   <SourceIcon className="w-3 h-3" />
                   {sourceInfo?.label?.replace(' Contacts', '') || candidate.source}:
-                  <button
-                    type="button"
-                    className="text-blue-600 hover:underline"
-                    onClick={() => handleQuickFillName(displayName)}
-                  >
-                    &quot;{displayName}&quot;
-                  </button>
+                  {isNamelessParticipant ? (
+                    /* Address-only identification: no quick-fill — the address
+                       must never become the contact name via one click. */
+                    <span>&quot;{displayName}&quot;</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="text-blue-600 hover:underline"
+                      onClick={() => handleQuickFillName(displayName)}
+                    >
+                      &quot;{displayName}&quot;
+                    </button>
+                  )}
                 </p>
               ) : hasNameMismatch && selectedContact && !isEditingName ? (
                 /* Link mode with mismatch: show external name hint */
