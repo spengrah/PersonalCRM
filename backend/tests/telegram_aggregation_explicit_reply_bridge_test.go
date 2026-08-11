@@ -144,9 +144,10 @@ func TestAggregation_IncrementalExplicitReplyBridge_CrossBatch(t *testing.T) {
 	assert.Equal(t, outboundInteractionID, *inboundRow.InteractionID)
 
 	// And no message.received event was published for the inbound's
-	// would-be source_ref (the promote path consumes the message
-	// rather than going through the publisher).
-	wouldBeRef := fmt.Sprintf("tg:%d:%d", chatID, msgIDBase+1)
+	// would-be claim/event key (the promote path consumes the message
+	// rather than going through the publisher). The key is scoped to
+	// this contact the same way the engine derives its claim key.
+	wouldBeRef := fmt.Sprintf("tg:%d:%d:%s", chatID, msgIDBase+1, contact.ID.String())
 	_, err = eventRepo.FindEventBySource(ctx, repository.InteractionSourceTelegram, wouldBeRef)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound for the would-be inbound event, got %v", err)
