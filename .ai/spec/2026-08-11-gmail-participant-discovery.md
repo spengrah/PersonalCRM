@@ -3,7 +3,7 @@
 **Status:** Draft v1 — user-confirmed exploration, ready for planning (spec-pinned TDD workflow)
 **Date:** 2026-08-11
 **GH:** #789 (primary), folds in #803; #390 closed as stale during grounding; #391 narrowed (see Relations)
-**Behavior items:** IMP-042 … IMP-049 in `spec/imports-matching.yaml` (all `status: proposed`)
+**Behavior items:** IMP-042 … IMP-049 in `spec/imports-matching.yaml` (all `status: current`)
 
 ## Context & problem
 
@@ -105,7 +105,7 @@ Calibrate P-levels to this feature's actual cost structure, not generic severity
 
 ## Desired behavior
 
-Normative statements live as behavior items IMP-042 … IMP-049 (`spec/imports-matching.yaml`, `status: proposed`), minted in this session:
+Normative statements live as behavior items IMP-042 … IMP-049 (`spec/imports-matching.yaml`, `status: current`), minted in this session:
 
 - IMP-042 — trusted-sender participants become create candidates (incl. nameless, evidence, exclusions)
 - IMP-043 — untrusted senders never produce create candidates (negative)

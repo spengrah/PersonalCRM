@@ -637,7 +637,7 @@ behaviors:
   - id: IMP-042
     title: Trusted-sender participants become create candidates
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: a fetched Gmail message whose sender is an existing contact or one of the user's own accounts
     when: discovery evaluates the message's To and Cc participants
@@ -651,7 +651,7 @@ behaviors:
   - id: IMP-043
     title: Untrusted senders never produce create candidates
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: a fetched Gmail message whose sender is neither an existing contact nor one of the user's own accounts
     when: discovery evaluates the message's participants
@@ -663,7 +663,7 @@ behaviors:
   - id: IMP-044
     title: The recipient cap suppresses create proposals only
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: a fetched Gmail message whose To and Cc together exceed 20 recipients
     when: discovery evaluates the message
@@ -676,7 +676,7 @@ behaviors:
   - id: IMP-045
     title: Link precedence and one card per address across Gmail sources
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: an unknown address observed by Gmail discovery
     when: both the name-match link gate and the trusted-sender gate could apply
@@ -691,28 +691,34 @@ behaviors:
   - id: IMP-046
     title: The server declares import, link, and ignore for gmail_participant
     type: api
-    status: proposed
+    status: current
     surface: api
     given: a gmail_participant candidate
     when: the candidate is served or acted on
     then:
-      - the declared allowed actions are import, link, and ignore
-      - an import with a user-supplied name succeeds; the link-only rejection never applies to this source
+      - key: allowed-actions-import-link-ignore
+        text: the declared allowed actions are import, link, and ignore
+      - key: import-with-name-succeeds
+        text: an import with a user-supplied name succeeds; the link-only rejection never applies to this source
     provenance: ['#789', AllowedActionsForSource, 2026-08-11-gmail-participant-discovery.md]
     notes: Deliberately absent from linkOnlySources — the counterpart of IMP-014.
 
   - id: IMP-047
     title: Nameless candidates are importable after naming
     type: ux
-    status: proposed
+    status: current
     surface: ui
     given: a gmail_participant candidate with no observed display name
     when: the user reviews it in the imports queue
     then:
-      - the queue row and the modal identify the candidate by its address, never as a generic unknown label
-      - the editable name starts empty
-      - import is unavailable until the user supplies a name
-      - a name the user has typed survives a background data refresh
+      - key: identified-by-address-never-unknown
+        text: the queue row and the modal identify the candidate by its address, never as a generic unknown label
+      - key: name-starts-empty
+        text: the editable name starts empty
+      - key: import-blocked-until-named
+        text: import is unavailable until the user supplies a name
+      - key: typed-name-survives-refresh
+        text: a name the user has typed survives a background data refresh
     provenance: ['#789', 2026-08-11-gmail-participant-discovery.md]
 
   - id: IMP-048
@@ -733,7 +739,7 @@ behaviors:
   - id: IMP-049
     title: Own-domain addresses count as the user in discovery only
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: a Gmail account configured with one or more own domains
     when: discovery evaluates fetched messages

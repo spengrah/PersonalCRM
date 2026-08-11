@@ -1,5 +1,4 @@
 import type { ImportCandidate } from '@/types/import'
-import { getCandidateDisplayName } from '@/lib/candidate-display'
 
 function formatMessageCount(count: number): string {
   return `${count} ${count === 1 ? 'message' : 'messages'}`
@@ -13,11 +12,10 @@ function formatLastMessageAt(timestamp: string): string | null {
 
 /**
  * The counterpart segment: who or what this address's evidence is anchored
- * to, per source. Telegram's username is shown here only when the card's
- * existing username chip (imports/page.tsx) would be suppressed — i.e. when
- * the candidate has no name fields and the display name already fell back to
- * the username itself — so the chip and the evidence line never repeat the
- * same identity.
+ * to, per source. Telegram carries no counterpart segment here — its
+ * identity (name or handle) already renders in the card's heading and/or
+ * username chip, and repeating it in the evidence line would show the same
+ * identity twice.
  */
 function counterpartSegment(candidate: ImportCandidate): string | null {
   const metadata = candidate.metadata
@@ -35,11 +33,6 @@ function counterpartSegment(candidate: ImportCandidate): string | null {
 
   if (candidate.source === 'whatsapp' && metadata.push_name) {
     return metadata.push_name
-  }
-
-  if (candidate.source === 'telegram' && metadata.username) {
-    const displayName = getCandidateDisplayName(candidate)
-    return metadata.username === displayName ? metadata.username : null
   }
 
   return null
