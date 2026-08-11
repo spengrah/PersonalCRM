@@ -20,6 +20,17 @@ export interface ImportCandidateMetadata {
   display_names_seen?: string[]
   co_occurring_contact?: { id: string; name?: string }
   message_count?: number
+  // Shared discovery evidence (whatsapp, telegram, gmail_participant).
+  last_message_at?: string
+  inbound_count?: number
+  outbound_count?: number
+  // WhatsApp peer metadata (source: 'whatsapp').
+  push_name?: string
+  phone_e164?: string
+  peer_jid?: string
+  // Gmail participant evidence (source: 'gmail_participant').
+  trusted_sender?: { address: string; name?: string; self?: boolean }
+  anchor_subject?: string
 }
 
 export interface ImportCandidate {

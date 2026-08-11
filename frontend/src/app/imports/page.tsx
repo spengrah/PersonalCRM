@@ -42,6 +42,7 @@ import {
 import { useGoogleAccounts } from '@/hooks/use-google-accounts'
 import { getCandidateDisplayName, isUnresolvedTelegramCandidate } from '@/lib/candidate-display'
 import { sourceAllowsImport } from '@/lib/candidate-actions'
+import { candidateEvidenceLabel } from '@/lib/candidate-evidence'
 import { importsApi } from '@/lib/imports-api'
 import { importKeys } from '@/lib/query-invalidation'
 import type {
@@ -166,22 +167,10 @@ function CandidateCard({
     ? meetingContext.meeting_link
     : null
 
-  // Gmail-correspondence evidence: the co-occurring contact and how many
-  // messages this address was seen in.
-  const correspondence =
-    candidate.source === 'gmail_correspondence' && candidate.metadata ? candidate.metadata : null
-  const correspondenceLabel = correspondence
-    ? [
-        correspondence.co_occurring_contact?.name
-          ? `Seen with ${correspondence.co_occurring_contact.name}`
-          : null,
-        correspondence.message_count
-          ? `${correspondence.message_count} ${correspondence.message_count === 1 ? 'message' : 'messages'}`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    : null
+  // Evidence line: counterpart + message count + recency, generalized across
+  // every discovery source that writes evidence metadata (gmail_correspondence,
+  // whatsapp, telegram, gmail_participant).
+  const evidenceLabel = candidateEvidenceLabel(candidate)
 
   return (
     <div className="p-4 bg-white border border-gray-200 rounded-lg hover:shadow-sm transition-shadow">
@@ -227,12 +216,12 @@ function CandidateCard({
                     From: {meetingContext.meeting_title}
                   </span>
                 ))}
-              {/* Inline correspondence-evidence badge for gmail_correspondence
-                  candidates: who this address co-appeared with + message count. */}
-              {correspondenceLabel && (
+              {/* Inline evidence badge: counterpart + message count + recency,
+                  for any discovery source that recorded evidence metadata. */}
+              {evidenceLabel && (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
                   <Users className="w-3 h-3 mr-1" />
-                  {correspondenceLabel}
+                  {evidenceLabel}
                 </span>
               )}
               {unresolvedTelegram && (

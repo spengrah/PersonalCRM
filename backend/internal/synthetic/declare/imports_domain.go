@@ -24,6 +24,10 @@ import "fmt"
 func init() {
 	RegisterNone("IMP-031", "every citing test rides the fixture of the behavior whose surface it exercises (IMP-012/013/026/027/030/037); the claim is that resolving an item invalidates dependent surfaces, which needs no fixture of its own")
 
+	RegisterNone("IMP-047", "proposed behavior whose gmail_participant source has no implementation yet, so there is nothing to seed; the implementing change replaces this entry with a real declaration")
+
+	RegisterNone("IMP-048", "its citing E2E renders evidence metadata already written and seeded by other behaviors' declarations (IMP-036's telegram candidate, IMP-037's correspondence candidate); the rendering provisions no data of its own")
+
 	// One unmatched candidate: the row awaiting review, and the row the ignore
 	// action turns terminal.
 	Register(Declaration{

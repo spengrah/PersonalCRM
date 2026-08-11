@@ -718,13 +718,15 @@ behaviors:
   - id: IMP-048
     title: The evidence line renders for every discovery source
     type: ux
-    status: proposed
+    status: current
     surface: ui
     given: a discovery candidate whose row carries evidence metadata
     when: the imports queue renders it
     then:
-      - message count and recency evidence are visible regardless of the candidate's source
-      - the counterpart evidence the source recorded (co-occurring contact, trusted sender, or chat peer identity) is visible
+      - key: count-recency-visible-any-source
+        text: message count and recency evidence are visible regardless of the candidate's source
+      - key: counterpart-visible
+        text: the counterpart evidence the source recorded (co-occurring contact, trusted sender, or chat peer identity) is visible
     provenance: ['#803', 2026-08-11-gmail-participant-discovery.md]
     notes: Generalizes the line previously hard-gated to gmail_correspondence; motivated by a real prod mis-link between two rows rendered as bare phone numbers.
 
