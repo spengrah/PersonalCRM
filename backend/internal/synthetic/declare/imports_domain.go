@@ -24,10 +24,6 @@ import "fmt"
 func init() {
 	RegisterNone("IMP-031", "every citing test rides the fixture of the behavior whose surface it exercises (IMP-012/013/026/027/030/037); the claim is that resolving an item invalidates dependent surfaces, which needs no fixture of its own")
 
-	RegisterNone("IMP-047", "proposed behavior whose gmail_participant source has no implementation yet, so there is nothing to seed; the implementing change replaces this entry with a real declaration")
-
-	RegisterNone("IMP-048", "its citing E2E renders evidence metadata already written and seeded by other behaviors' declarations (IMP-036's telegram candidate, IMP-037's correspondence candidate); the rendering provisions no data of its own")
-
 	// One unmatched candidate: the row awaiting review, and the row the ignore
 	// action turns terminal.
 	Register(Declaration{
@@ -191,6 +187,32 @@ func init() {
 			ExternalCandidate("cand", Source(SourceGContacts)),
 		},
 	})
+
+	// A trust-anchored participant candidate carrying the sender evidence the
+	// badge renders: a known contact whose address anchored the message, and the
+	// observed message count. Keyed to IMP-048 (the evidence-line behavior, ui
+	// surface) rather than IMP-042 (gmail_participant's own gate logic, surface
+	// none — its citing tests are EL2's Go fakes and need no declared fixture):
+	// this fixture exists to give IMP-048's evidence-rendering E2E a real
+	// gmail_participant candidate to render, which is exactly the behavior that
+	// consumes it.
+	Register(Declaration{
+		Behavior: "IMP-048",
+		Entities: []Entity{
+			Contact("sender"),
+			ExternalCandidate("participant", Source(SourceGmailParticipant),
+				ParticipantEvidence(participantEvidenceMessages, "sender")),
+		},
+	})
+
+	// The address-only sighting: a trust-anchored participant whose own address was
+	// never seen under any name, so the row carries no display name at all.
+	Register(Declaration{
+		Behavior: "IMP-047",
+		Entities: []Entity{
+			ExternalCandidate("nameless-participant", Source(SourceGmailParticipant), NoIdentity()),
+		},
+	})
 }
 
 // importsPaginationFixtureSize is one row past the twenty-row page size, so page 2
@@ -210,6 +232,11 @@ const importsTitleTokenGroup = "lena"
 // badge renders. The citing test asserts the rendered copy, so the number has to
 // be stated once and read from here rather than restated on both sides.
 const correspondenceEvidenceMessages = 4
+
+// participantEvidenceMessages is the observed message count IMP-048's
+// gmail_participant evidence badge renders, stated once for the same reason
+// correspondenceEvidenceMessages is.
+const participantEvidenceMessages = 3
 
 // importsQueueFixture is the People tab's holding: a link target for the token
 // group's link-to-existing path, a pageful-and-one of ordinary address-book

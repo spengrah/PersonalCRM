@@ -62,10 +62,11 @@ const (
 // OWN production writer, because a candidate written any other way is a row the
 // sync path cannot produce:
 //
-//	gcontacts, gmail_correspondence, gcal_attendee — ExternalContactRepository.Upsert,
-//	    the direct write the Google providers use (google/contacts.go,
-//	    google/gmail_correspondence.go, google/calendar.go). The ingest registry
-//	    does not admit these sources at all.
+//	gcontacts, gmail_correspondence, gcal_attendee, gmail_participant —
+//	    ExternalContactRepository.Upsert, the direct write the Google providers use
+//	    (google/contacts.go, google/gmail_correspondence.go, google/calendar.go,
+//	    google/gmail_participant.go via CorrespondenceDiscoverer.upsertParticipant).
+//	    The ingest registry does not admit these sources at all.
 //	icloud_contacts, anarlog_humans — the mac-daemon ingest pipeline, which is the
 //	    ONLY writer for them (service.externalContactAllowedSources admits exactly
 //	    these two and rejects every other source).
@@ -73,9 +74,10 @@ const (
 //	    upsert PeerMatcher uses.
 //	anarlog_title — anarlog.DiscoveryWriter.UpsertTitleCandidateTx.
 //
-// The last two key their source_id on a decimal peer id and a SHA-256 digest, so
-// neither carries the namespace prefix cleanup's name-derived sweep looks for.
-// That is why every declared candidate also records namespace ownership by row id.
+// The telegram and anarlog_title sources key their source_id on a decimal peer id
+// and a SHA-256 digest, so neither carries the namespace prefix cleanup's
+// name-derived sweep looks for. That is why every declared candidate also records
+// namespace ownership by row id.
 const (
 	SourceGContacts        = "gcontacts"
 	SourceCorrespondence   = "gmail_correspondence"
@@ -84,6 +86,7 @@ const (
 	SourceAnarlogHumans    = "anarlog_humans"
 	SourceTelegram         = "telegram"
 	SourceAnarlogTitle     = "anarlog_title"
+	SourceGmailParticipant = "gmail_participant"
 )
 
 var candidateSources = map[string]bool{
@@ -94,23 +97,25 @@ var candidateSources = map[string]bool{
 	SourceAnarlogHumans:    true,
 	SourceTelegram:         true,
 	SourceAnarlogTitle:     true,
+	SourceGmailParticipant: true,
 }
 
 // directUpsertSources are the sources whose production writer is the plain
 // ExternalContactRepository.Upsert, and therefore the only ones whose emails,
 // phones and display name a declaration can choose. The ingest sources mint their
-// own display name and email inside the factory payload, and the two dedicated
-// writers store no methods at all.
+// own display name and email inside the factory payload, and the dedicated
+// discovery writers store no methods at all.
 var directUpsertSources = map[string]bool{
 	SourceGContacts:        true,
 	SourceCorrespondence:   true,
 	SourceCalendarAttendee: true,
+	SourceGmailParticipant: true,
 }
 
 // methodBearingSources are the direct-upsert sources whose row carries a
-// declarable EMAIL. gmail_correspondence is excluded: its single email IS its
-// source_id, so choosing it independently would not be a row the discoverer can
-// produce.
+// declarable EMAIL. gmail_correspondence and gmail_participant are excluded:
+// each one's single email IS its source_id, so choosing it independently would
+// not be a row the discoverer can produce.
 var methodBearingSources = map[string]bool{
 	SourceGContacts:        true,
 	SourceCalendarAttendee: true,
@@ -729,6 +734,10 @@ type externalCandidatePlan struct {
 	titleToken      string
 	messageCount    int
 	coOccurringWith string
+	// participantMessageCount / participantSenderHandle carry ParticipantEvidence,
+	// the gmail_participant counterpart to CorrespondenceEvidence.
+	participantMessageCount int
+	participantSenderHandle string
 }
 
 func (p *externalCandidatePlan) handle() string { return p.name }
@@ -740,7 +749,7 @@ func (p *externalCandidatePlan) kind() string   { return "external_contact" }
 func (p *externalCandidatePlan) refs() []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, ref := range []string{p.sameNameAs, p.sameEmailAs, p.coOccurringWith} {
+	for _, ref := range []string{p.sameNameAs, p.sameEmailAs, p.coOccurringWith, p.participantSenderHandle} {
 		if ref == "" || seen[ref] {
 			continue
 		}
@@ -797,13 +806,29 @@ func TelegramHandle() CandidateProp {
 	return func(p *externalCandidatePlan) { p.telegramHandle = true }
 }
 
-// NoIdentity declares a telegram peer with NO name fields at all. Combined with
-// TelegramHandle it is the handle-only peer whose heading falls back to the
-// handle; on its own it is the UNRESOLVED peer the Imports queue hides behind its
-// opt-in toggle. Fixture-by-omission: the state is defined by what the discovery
-// pass did NOT learn, so there is nothing to set.
+// NoIdentity declares a candidate with NO name fields at all — a telegram peer,
+// or (the other producible case) a gmail_participant address-only sighting, where
+// the trust anchor came from the sender rather than from any name the recipient
+// address was ever seen under. Combined with TelegramHandle it is the handle-only
+// telegram peer whose heading falls back to the handle; on its own for telegram it
+// is the UNRESOLVED peer the Imports queue hides behind its opt-in toggle.
+// Fixture-by-omission: the state is defined by what the discovery pass did NOT
+// learn, so there is nothing to set.
 func NoIdentity() CandidateProp {
 	return func(p *externalCandidatePlan) { p.noIdentity = true }
+}
+
+// ParticipantEvidence declares the trust-anchor evidence a gmail_participant
+// candidate's badge renders: the observed message count, and an EARLIER contact
+// handle whose generated address and name become the trusted sender that anchored
+// the message (production resolves the sender to an address plus, when it is a
+// known contact, that contact's name — never a contact id, which the metadata
+// never carries).
+func ParticipantEvidence(messageCount int, senderHandle string) CandidateProp {
+	return func(p *externalCandidatePlan) {
+		p.participantMessageCount = messageCount
+		p.participantSenderHandle = senderHandle
+	}
 }
 
 // TitleToken declares an anarlog_title weak candidate for the named token group.
@@ -868,8 +893,8 @@ func (p *externalCandidatePlan) validate() error {
 		return fmt.Errorf("external candidate %q: TelegramHandle requires Source(%q)", p.name, SourceTelegram)
 	}
 	if p.noIdentity {
-		if p.source != SourceTelegram {
-			return fmt.Errorf("external candidate %q: NoIdentity requires Source(%q) — every other writer stores a name", p.name, SourceTelegram)
+		if p.source != SourceTelegram && p.source != SourceGmailParticipant {
+			return fmt.Errorf("external candidate %q: NoIdentity requires Source(%q) or Source(%q) — every other writer stores a name", p.name, SourceTelegram, SourceGmailParticipant)
 		}
 		if p.sameNameAs != "" {
 			return fmt.Errorf("external candidate %q: NoIdentity and SameNameAs are mutually exclusive — one omits every name field, the other pins one", p.name)
@@ -885,6 +910,14 @@ func (p *externalCandidatePlan) validate() error {
 		}
 		if p.messageCount < 1 || p.coOccurringWith == "" {
 			return fmt.Errorf("external candidate %q: CorrespondenceEvidence needs a positive message count AND a co-occurring contact handle", p.name)
+		}
+	}
+	if p.participantMessageCount != 0 || p.participantSenderHandle != "" {
+		if p.source != SourceGmailParticipant {
+			return fmt.Errorf("external candidate %q: ParticipantEvidence requires Source(%q)", p.name, SourceGmailParticipant)
+		}
+		if p.participantMessageCount < 1 || p.participantSenderHandle == "" {
+			return fmt.Errorf("external candidate %q: ParticipantEvidence needs a positive message count AND a sender contact handle", p.name)
 		}
 	}
 	return nil

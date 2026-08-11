@@ -602,7 +602,8 @@ func (g *Generator) MacContactForSource(target ContactSpec, intent MatchIntent, 
 // ExternalContactCandidateSpec is a direct-upsert (non-ingest) external_contact
 // import candidate — the shape the Google sync providers write straight through
 // ExternalContactRepository.Upsert (gcontacts via contacts.go, gmail_correspondence
-// via gmail_correspondence.go, gcal_attendee via calendar.go). Those sources are NOT
+// via gmail_correspondence.go, gcal_attendee via calendar.go, gmail_participant via
+// gmail_participant.go). Those sources are NOT
 // ingest-allowed, so the seed mirrors the providers' write path rather than the
 // ingest envelope path. The replay harness maps this neutral spec into an
 // UpsertExternalContactRequest and chooses the source_id keying + extra fields per
