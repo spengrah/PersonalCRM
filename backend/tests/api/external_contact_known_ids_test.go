@@ -72,7 +72,7 @@ func setupKnownIDsByHostEnv(t *testing.T) *knownIDsByHostEnv {
 	router.Use(api.CORSMiddleware(cfg.CORS))
 
 	limiter := auth.NewPairingIPRateLimiter()
-	macHandler := handlers.NewMacHostHandler(macService, limiter)
+	macHandler := handlers.NewMacHostHandler(macService, hostRepo, limiter)
 	handlers.RegisterMacHostRoutes(router, handlers.MacHostRouteDeps{
 		HostRepo:    hostRepo,
 		Handler:     macHandler,

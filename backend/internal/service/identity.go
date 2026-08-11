@@ -480,36 +480,6 @@ func (s *IdentityService) LinkIdentity(ctx context.Context, identityID, contactI
 	})
 }
 
-// UnlinkIdentity unlinks an identity from its contact
-func (s *IdentityService) UnlinkIdentity(ctx context.Context, identityID uuid.UUID) (*repository.ExternalIdentity, error) {
-	return s.identityRepo.UnlinkFromContact(ctx, identityID)
-}
-
-// GetIdentity retrieves an identity by ID
-func (s *IdentityService) GetIdentity(ctx context.Context, id uuid.UUID) (*repository.ExternalIdentity, error) {
-	return s.identityRepo.GetByID(ctx, id)
-}
-
-// ListUnmatchedIdentities returns unmatched identities with pagination
-func (s *IdentityService) ListUnmatchedIdentities(ctx context.Context, limit, offset int32) ([]repository.ExternalIdentity, error) {
-	return s.identityRepo.ListUnmatched(ctx, limit, offset)
-}
-
-// CountUnmatchedIdentities returns the count of unmatched identities
-func (s *IdentityService) CountUnmatchedIdentities(ctx context.Context) (int64, error) {
-	return s.identityRepo.CountUnmatched(ctx)
-}
-
-// ListIdentitiesForContact returns all identities linked to a contact
-func (s *IdentityService) ListIdentitiesForContact(ctx context.Context, contactID uuid.UUID) ([]repository.ExternalIdentity, error) {
-	return s.identityRepo.ListForContact(ctx, contactID)
-}
-
-// DeleteIdentity removes an identity
-func (s *IdentityService) DeleteIdentity(ctx context.Context, id uuid.UUID) error {
-	return s.identityRepo.Delete(ctx, id)
-}
-
 // BulkLinkIdentities links multiple identities to a contact
 func (s *IdentityService) BulkLinkIdentities(ctx context.Context, identityIDs []uuid.UUID, contactID uuid.UUID) error {
 	confidence := 1.0

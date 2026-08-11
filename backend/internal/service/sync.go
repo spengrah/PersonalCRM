@@ -403,44 +403,9 @@ func (s *SyncService) completeSyncWithError(ctx context.Context, state *reposito
 	}
 }
 
-// GetSyncStatus returns sync status for all sources
-func (s *SyncService) GetSyncStatus(ctx context.Context) ([]repository.SyncState, error) {
-	return s.syncRepo.ListSyncStates(ctx)
-}
-
-// GetSyncStateBySource returns sync state for a specific source
-func (s *SyncService) GetSyncStateBySource(ctx context.Context, source string, accountID *string) (*repository.SyncState, error) {
-	return s.syncRepo.GetSyncStateBySource(ctx, source, accountID)
-}
-
-// GetSyncState returns sync state by ID
-func (s *SyncService) GetSyncState(ctx context.Context, id uuid.UUID) (*repository.SyncState, error) {
-	return s.syncRepo.GetSyncState(ctx, id)
-}
-
-// EnableSync enables/disables sync for a source
-func (s *SyncService) EnableSync(ctx context.Context, id uuid.UUID, enabled bool) (*repository.SyncState, error) {
-	return s.syncRepo.UpdateSyncStateEnabled(ctx, id, enabled)
-}
-
-// GetSyncLogs returns sync logs for a specific state
-func (s *SyncService) GetSyncLogs(ctx context.Context, stateID uuid.UUID, limit, offset int32) ([]repository.SyncLog, error) {
-	return s.syncRepo.ListSyncLogsByState(ctx, stateID, limit, offset)
-}
-
-// GetRecentSyncLogs returns the most recent sync logs across all sources
-func (s *SyncService) GetRecentSyncLogs(ctx context.Context, limit int32) ([]repository.SyncLog, error) {
-	return s.syncRepo.ListRecentSyncLogs(ctx, limit)
-}
-
 // GetAvailableProviders returns list of registered sync providers
 func (s *SyncService) GetAvailableProviders() []sync.SourceConfig {
 	return s.registry.List()
-}
-
-// CountSyncLogs returns the count of sync logs for a specific state
-func (s *SyncService) CountSyncLogs(ctx context.Context, stateID uuid.UUID) (int64, error) {
-	return s.syncRepo.CountSyncLogsByState(ctx, stateID)
 }
 
 // DeleteOldSyncLogs removes sync logs older than the specified duration

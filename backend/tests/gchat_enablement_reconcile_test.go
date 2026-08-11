@@ -385,7 +385,7 @@ func TestReconcileGChat_StatusSurfacesGChatState(t *testing.T) {
 	// state must surface there with the generic SyncState shape (no new fields)
 	// once reconciliation enables it — this is what "mirror Gmail's status
 	// shape" means (DD-5): GChat surfaces through the identical generic row.
-	states, err := e.service.GetSyncStatus(e.ctx)
+	states, err := e.syncRepo.ListSyncStates(e.ctx)
 	require.NoError(t, err)
 
 	var found *repository.SyncState

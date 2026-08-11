@@ -199,8 +199,8 @@ func buildExternalSync(
 		}
 	}
 
-	stack.SyncHandler = handlers.NewSyncHandler(syncService)
-	stack.IdentityHandler = handlers.NewIdentityHandler(identityService)
+	stack.SyncHandler = handlers.NewSyncHandler(syncService, syncRepo)
+	stack.IdentityHandler = handlers.NewIdentityHandler(identityService, identityRepo)
 
 	// Suggestion service composes the method-suggestion group with the
 	// confidence-ranked candidate list and runs resolve/dismiss. Shared

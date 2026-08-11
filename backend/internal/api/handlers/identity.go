@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"personal-crm/backend/internal/api"
+	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -15,13 +16,15 @@ import (
 // IdentityHandler handles identity-related HTTP requests
 type IdentityHandler struct {
 	identityService *service.IdentityService
+	identityRepo    *repository.IdentityRepository
 	validator       *validator.Validate
 }
 
 // NewIdentityHandler creates a new identity handler
-func NewIdentityHandler(identityService *service.IdentityService) *IdentityHandler {
+func NewIdentityHandler(identityService *service.IdentityService, identityRepo *repository.IdentityRepository) *IdentityHandler {
 	return &IdentityHandler{
 		identityService: identityService,
+		identityRepo:    identityRepo,
 		validator:       sharedValidator,
 	}
 }
@@ -55,13 +58,13 @@ func (h *IdentityHandler) ListUnmatchedIdentities(c *gin.Context) {
 
 	offset := int32((page - 1) * limit)
 
-	identities, err := h.identityService.ListUnmatchedIdentities(c.Request.Context(), int32(limit), offset)
+	identities, err := h.identityRepo.ListUnmatched(c.Request.Context(), int32(limit), offset)
 	if err != nil {
 		api.RespondInternal(c, err)
 		return
 	}
 
-	total, err := h.identityService.CountUnmatchedIdentities(c.Request.Context())
+	total, err := h.identityRepo.CountUnmatched(c.Request.Context())
 	if err != nil {
 		api.RespondInternal(c, err)
 		return
@@ -89,7 +92,7 @@ func (h *IdentityHandler) GetIdentity(c *gin.Context) {
 		return
 	}
 
-	identity, err := h.identityService.GetIdentity(c.Request.Context(), id)
+	identity, err := h.identityRepo.GetByID(c.Request.Context(), id)
 	if err != nil {
 		api.RespondError(c, err, "Identity")
 		return
@@ -155,7 +158,7 @@ func (h *IdentityHandler) UnlinkIdentity(c *gin.Context) {
 		return
 	}
 
-	identity, err := h.identityService.UnlinkIdentity(c.Request.Context(), identityID)
+	identity, err := h.identityRepo.UnlinkFromContact(c.Request.Context(), identityID)
 	if err != nil {
 		api.RespondError(c, err, "Identity")
 		return
@@ -180,7 +183,7 @@ func (h *IdentityHandler) DeleteIdentity(c *gin.Context) {
 		return
 	}
 
-	if err := h.identityService.DeleteIdentity(c.Request.Context(), id); err != nil {
+	if err := h.identityRepo.Delete(c.Request.Context(), id); err != nil {
 		api.RespondInternal(c, err)
 		return
 	}
@@ -204,7 +207,7 @@ func (h *IdentityHandler) ListIdentitiesForContact(c *gin.Context) {
 		return
 	}
 
-	identities, err := h.identityService.ListIdentitiesForContact(c.Request.Context(), contactID)
+	identities, err := h.identityRepo.ListForContact(c.Request.Context(), contactID)
 	if err != nil {
 		api.RespondInternal(c, err)
 		return

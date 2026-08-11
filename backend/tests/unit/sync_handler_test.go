@@ -71,37 +71,46 @@ func (m *mockSyncService) TriggerSync(ctx context.Context, source string, accoun
 	return nil
 }
 
-func (m *mockSyncService) GetSyncStatus(ctx context.Context) ([]repository.SyncState, error) {
-	return nil, nil
-}
-
-func (m *mockSyncService) GetSyncStateBySource(ctx context.Context, source string, accountID *string) (*repository.SyncState, error) {
-	return nil, nil
-}
-
-func (m *mockSyncService) EnableSync(ctx context.Context, id uuid.UUID, enabled bool) (*repository.SyncState, error) {
-	return nil, nil
-}
-
-func (m *mockSyncService) GetSyncLogs(ctx context.Context, syncStateID uuid.UUID, limit, offset int32) ([]repository.SyncLog, error) {
-	return nil, nil
-}
-
-func (m *mockSyncService) CountSyncLogs(ctx context.Context, syncStateID uuid.UUID) (int64, error) {
-	return 0, nil
-}
-
-func (m *mockSyncService) GetRecentSyncLogs(ctx context.Context, limit int32) ([]repository.SyncLog, error) {
-	return nil, nil
-}
-
 func (m *mockSyncService) GetAvailableProviders() []psync.SourceConfig {
 	return m.availableProviders
 }
 
+// stubSyncStateStore implements handlers.SyncStateStore with no-op returns.
+// This suite only exercises the TriggerSync route, which never reaches the
+// store, so the stub exists solely to satisfy NewSyncHandler's second
+// parameter.
+type stubSyncStateStore struct{}
+
+// Verify stubSyncStateStore implements handlers.SyncStateStore
+var _ handlers.SyncStateStore = (*stubSyncStateStore)(nil)
+
+func (s *stubSyncStateStore) ListSyncStates(ctx context.Context) ([]repository.SyncState, error) {
+	return nil, nil
+}
+
+func (s *stubSyncStateStore) GetSyncStateBySource(ctx context.Context, source string, accountID *string) (*repository.SyncState, error) {
+	return nil, nil
+}
+
+func (s *stubSyncStateStore) UpdateSyncStateEnabled(ctx context.Context, id uuid.UUID, enabled bool) (*repository.SyncState, error) {
+	return nil, nil
+}
+
+func (s *stubSyncStateStore) ListSyncLogsByState(ctx context.Context, stateID uuid.UUID, limit, offset int32) ([]repository.SyncLog, error) {
+	return nil, nil
+}
+
+func (s *stubSyncStateStore) CountSyncLogsByState(ctx context.Context, stateID uuid.UUID) (int64, error) {
+	return 0, nil
+}
+
+func (s *stubSyncStateStore) ListRecentSyncLogs(ctx context.Context, limit int32) ([]repository.SyncLog, error) {
+	return nil, nil
+}
+
 func setupSyncHandlerTestRouter(mockService *mockSyncService) *gin.Engine {
 	// Create handler with mock service
-	handler := handlers.NewSyncHandler(mockService)
+	handler := handlers.NewSyncHandler(mockService, &stubSyncStateStore{})
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())

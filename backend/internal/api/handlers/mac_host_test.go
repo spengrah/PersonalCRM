@@ -28,10 +28,6 @@ type stubMacHostService struct {
 	rotateResult *service.RotateAPIKeyResult
 	rotateErr    error
 	rotateCalls  int
-
-	heartbeatResult *repository.MacHost
-	heartbeatErr    error
-	heartbeatCalls  int
 }
 
 func (s *stubMacHostService) RotateAPIKey(_ context.Context, _ uuid.UUID, _ string, _ string) (*service.RotateAPIKeyResult, error) {
@@ -45,24 +41,11 @@ func (s *stubMacHostService) CreatePairingToken(_ context.Context) (string, time
 func (s *stubMacHostService) PairWithToken(_ context.Context, _ string, _ string, _ string, _ int32) (*service.PairResult, error) {
 	panic("PairWithToken not expected in this test")
 }
-func (s *stubMacHostService) Heartbeat(_ context.Context, _ uuid.UUID, _ repository.HeartbeatPayload) (*repository.MacHost, error) {
-	s.heartbeatCalls++
-	if s.heartbeatResult != nil || s.heartbeatErr != nil {
-		return s.heartbeatResult, s.heartbeatErr
-	}
-	panic("Heartbeat not expected in this test")
-}
 func (s *stubMacHostService) CommitCursor(_ context.Context, _ repository.CommitMacHostCursorParams) error {
 	panic("CommitCursor not expected in this test")
 }
 func (s *stubMacHostService) GetCursor(_ context.Context, _ string, _ uuid.UUID) (*repository.MacHostCursor, error) {
 	panic("GetCursor not expected in this test")
-}
-func (s *stubMacHostService) ListActiveHosts(_ context.Context) ([]*repository.MacHost, error) {
-	panic("ListActiveHosts not expected in this test")
-}
-func (s *stubMacHostService) GetHost(_ context.Context, _ uuid.UUID) (*repository.MacHost, error) {
-	panic("GetHost not expected in this test")
 }
 func (s *stubMacHostService) RevokeHost(_ context.Context, _ uuid.UUID) error {
 	panic("RevokeHost not expected in this test")
@@ -75,6 +58,31 @@ func (s *stubMacHostService) KnownIDsForSource(_ context.Context, _ uuid.UUID, _
 }
 func (s *stubMacHostService) GetSourceCounts(_ context.Context, _ uuid.UUID) (map[string]int, error) {
 	panic("GetSourceCounts not expected in this test")
+}
+
+// stubMacHostStore satisfies the handler's MacHostStore interface
+// (the repository surface the handler now reads directly for
+// heartbeat/list/get). Only UpdateHeartbeat is exercised by this
+// file; the other methods panic on call so a stray invocation is
+// surfaced as a test failure rather than masked as success.
+type stubMacHostStore struct {
+	heartbeatResult *repository.MacHost
+	heartbeatErr    error
+	heartbeatCalls  int
+}
+
+func (s *stubMacHostStore) UpdateHeartbeat(_ context.Context, _ uuid.UUID, _ repository.HeartbeatPayload) (*repository.MacHost, error) {
+	s.heartbeatCalls++
+	if s.heartbeatResult != nil || s.heartbeatErr != nil {
+		return s.heartbeatResult, s.heartbeatErr
+	}
+	panic("UpdateHeartbeat not expected in this test")
+}
+func (s *stubMacHostStore) ListActiveHosts(_ context.Context) ([]*repository.MacHost, error) {
+	panic("ListActiveHosts not expected in this test")
+}
+func (s *stubMacHostStore) GetHost(_ context.Context, _ uuid.UUID) (*repository.MacHost, error) {
+	panic("GetHost not expected in this test")
 }
 
 // fakeHostRepo is a deterministic MacHostKeyValidator that returns a
@@ -113,7 +121,7 @@ func TestRotateKey_HostRevokedBetweenMiddlewareAndTx(t *testing.T) {
 		APIKeyHash: "test-hash",
 	}
 	stub := &stubMacHostService{rotateErr: db.ErrNotFound}
-	handler := NewMacHostHandler(stub, nil)
+	handler := NewMacHostHandler(stub, nil, nil)
 
 	r := gin.New()
 	r.Use(auth.MacHostAuthMiddleware(
@@ -166,7 +174,7 @@ func TestRotateKey_ConcurrentRotationLoser_MapsStaleAuthTo401(t *testing.T) {
 		APIKeyHash: "test-hash",
 	}
 	stub := &stubMacHostService{rotateErr: service.ErrAPIKeyStaleAuth}
-	handler := NewMacHostHandler(stub, nil)
+	handler := NewMacHostHandler(stub, nil, nil)
 
 	r := gin.New()
 	r.Use(auth.MacHostAuthMiddleware(
@@ -213,8 +221,9 @@ func TestHeartbeat_HostRevokedBetweenMiddlewareAndTx(t *testing.T) {
 		Hostname:   "test-host",
 		APIKeyHash: "test-hash",
 	}
-	stub := &stubMacHostService{heartbeatErr: db.ErrNotFound}
-	handler := NewMacHostHandler(stub, nil)
+	stub := &stubMacHostService{}
+	store := &stubMacHostStore{heartbeatErr: db.ErrNotFound}
+	handler := NewMacHostHandler(stub, store, nil)
 
 	r := gin.New()
 	r.Use(auth.MacHostAuthMiddleware(
@@ -239,7 +248,7 @@ func TestHeartbeat_HostRevokedBetweenMiddlewareAndTx(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusUnauthorized, w.Code, "body: %s", w.Body.String())
-	require.Equal(t, 1, stub.heartbeatCalls, "service must be invoked exactly once")
+	require.Equal(t, 1, store.heartbeatCalls, "store must be invoked exactly once")
 
 	var body2 map[string]any
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&body2))
@@ -261,7 +270,7 @@ func TestRotateKey_MissingPairingToken(t *testing.T) {
 		APIKeyHash: "test-hash",
 	}
 	stub := &stubMacHostService{}
-	handler := NewMacHostHandler(stub, nil)
+	handler := NewMacHostHandler(stub, nil, nil)
 
 	r := gin.New()
 	r.Use(auth.MacHostAuthMiddleware(

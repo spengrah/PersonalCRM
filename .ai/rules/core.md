@@ -6,7 +6,7 @@ These rules apply to all AI agents working on this project.
 
 1. **Never use `time.Now()`** → Use `accelerated.GetCurrentTime()`
 2. **Never write raw SQL in Go** → Use sqlc-generated queries (`make sqlc`). Applies to ALL Go code: production code, integration tests, test fixtures, and helper scripts — add a test-only sqlc query + repository wrapper rather than inlining `pool.Exec(ctx, "INSERT ...", ...)` in a test file.
-3. **Never skip layers** → Handler → Service → Repository → DB
+3. **A layer exists where it earns its keep** → handlers never call sqlc (see rule 5); anything with business logic, multi-repository orchestration, or a transaction goes in a service; a handler may call a repository directly when the call adds nothing but a rename. See `.ai/guides/feature-development.md` "When NOT to create a service".
 4. **Never use npm/npx** → Use bun/bunx
 5. **Never call queries from handlers** → Go through repository
 6. **Always sign commits** → `git commit -S -m "..."`
@@ -97,7 +97,7 @@ See `.ai/rules/code-review.md` for details
 
 ## Layered Architecture
 
-See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full sequence (`Handler → Service → Repository → sqlc → PostgreSQL`).
+See [Request Flow Diagram](../guides/architecture.md#why-layered) for the write-path sequence (`Handler → Service → Repository → sqlc → PostgreSQL`). Read-heavy handlers may bind directly to a repository surface when the service layer would only forward (rule: a layer exists where it earns its keep).
 
 ## Common Gotchas
 

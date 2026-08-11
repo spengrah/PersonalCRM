@@ -74,7 +74,7 @@ func newSyncAPITest(t *testing.T) (router *gin.Engine, syncRepo *repository.Sync
 	registry = sync.NewProviderRegistry()
 
 	svc := service.NewSyncService(syncRepo, contactRepo, registry)
-	handler := handlers.NewSyncHandler(svc)
+	handler := handlers.NewSyncHandler(svc, syncRepo)
 
 	router = gin.New()
 	v1 := router.Group("/api/v1")
