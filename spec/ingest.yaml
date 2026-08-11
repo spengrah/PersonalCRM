@@ -337,7 +337,9 @@ behaviors:
       - an explicit or time-based reply to a prior outbound message promotes that interaction to mutual
       - same-direction messages within the burst window extend the existing interaction rather than creating a new one
       - otherwise a new interaction is created by publishing a message event
-    provenance: [Engine.AggregateForContact, tryExplicitReplyBridge]
+      - key: fanout-claim-and-event-key-is-per-contact
+        text: when one staged message fans out to several contacts in the same chat, each contact claims and publishes under its own contact-scoped key, so every contact's session aggregates into its own interaction instead of colliding on a key shared across contacts
+    provenance: [Engine.AggregateForContact, Engine.createInteractionForSession, tryExplicitReplyBridge]
     notes: Batch/backfill aggregation is create-only (no extend or bridge); provider-specific staging adapters are CAL/TGM/MAC scope.
 
   - id: ING-027
