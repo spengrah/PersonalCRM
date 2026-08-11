@@ -484,13 +484,6 @@ func (s *MacHostService) RotateAPIKey(
 	}, nil
 }
 
-// Heartbeat updates the host's heartbeat fields. Returns the updated
-// host (so the handler can echo cursor_epoch back to the daemon) or
-// db.ErrNotFound if the host has been revoked.
-func (s *MacHostService) Heartbeat(ctx context.Context, hostID uuid.UUID, payload repository.HeartbeatPayload) (*repository.MacHost, error) {
-	return s.hostRepo.UpdateHeartbeat(ctx, hostID, payload)
-}
-
 // CommitCursor wraps SyncRepository.CommitMacHostCursor. Returns the
 // repository's typed errors directly so handlers can map them to
 // status codes. Defence-in-depth: rejects sources outside the
@@ -512,19 +505,6 @@ func (s *MacHostService) GetCursor(ctx context.Context, source string, hostID uu
 		return nil, fmt.Errorf("%w: unknown push source %q", ErrUnknownPushSource, source)
 	}
 	return s.syncRepo.GetMacHostSyncCursor(ctx, source, hostID)
-}
-
-// ListActiveHosts returns the admin-view list. Returned slice may be
-// empty (no host paired yet).
-func (s *MacHostService) ListActiveHosts(ctx context.Context) ([]*repository.MacHost, error) {
-	return s.hostRepo.ListActiveHosts(ctx)
-}
-
-// GetHost is the admin-view detail. Returns db.ErrNotFound for an
-// unknown UUID; revoked hosts are returned (the UI may want to show
-// historical detail).
-func (s *MacHostService) GetHost(ctx context.Context, id uuid.UUID) (*repository.MacHost, error) {
-	return s.hostRepo.GetHost(ctx, id)
 }
 
 // RevokeHost marks the host revoked AND cascades: deletes the host's

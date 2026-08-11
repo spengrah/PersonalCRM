@@ -67,7 +67,7 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 	// real bcrypt path.
 	macService := service.NewMacHostService(hostRepo, tokenRepo, syncRepo, nil, externalRepo, nil, database.Pool, 4)
 	limiter := auth.NewPairingIPRateLimiter()
-	macHandler := handlers.NewMacHostHandler(macService, limiter)
+	macHandler := handlers.NewMacHostHandler(macService, hostRepo, limiter)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())

@@ -1552,7 +1552,7 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 
 	deps := adminDeps{
 		tokens:     hostService,
-		hosts:      hostService,
+		hosts:      hostRepo,
 		revoker:    hostService,
 		rematch:    rematch,
 		reconcile:  addressBookReconcile,

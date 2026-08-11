@@ -26,15 +26,19 @@ type MacHostService interface {
 	CreatePairingToken(ctx context.Context) (plaintext string, expiresAt time.Time, err error)
 	PairWithToken(ctx context.Context, plaintextToken, hostname, daemonVersion string, protocolVersion int32) (*service.PairResult, error)
 	RotateAPIKey(ctx context.Context, hostID uuid.UUID, expectedCurrentHash string, plaintextToken string) (*service.RotateAPIKeyResult, error)
-	Heartbeat(ctx context.Context, hostID uuid.UUID, payload repository.HeartbeatPayload) (*repository.MacHost, error)
 	CommitCursor(ctx context.Context, params repository.CommitMacHostCursorParams) error
 	GetCursor(ctx context.Context, source string, hostID uuid.UUID) (*repository.MacHostCursor, error)
-	ListActiveHosts(ctx context.Context) ([]*repository.MacHost, error)
-	GetHost(ctx context.Context, id uuid.UUID) (*repository.MacHost, error)
 	RevokeHost(ctx context.Context, id uuid.UUID) error
 	KnownIdentifiers(ctx context.Context) (*service.KnownIdentifiersResult, error)
 	KnownIDsForSource(ctx context.Context, hostID uuid.UUID, source string) ([]service.KnownExternalContactID, error)
 	GetSourceCounts(ctx context.Context, hostID uuid.UUID) (map[string]int, error)
+}
+
+// MacHostStore is the repository surface the mac-host handler reads directly.
+type MacHostStore interface {
+	UpdateHeartbeat(ctx context.Context, id uuid.UUID, payload repository.HeartbeatPayload) (*repository.MacHost, error)
+	ListActiveHosts(ctx context.Context) ([]*repository.MacHost, error)
+	GetHost(ctx context.Context, id uuid.UUID) (*repository.MacHost, error)
 }
 
 // MacHostHandler handles Mac-daemon HTTP requests + admin UI requests
@@ -47,13 +51,14 @@ type MacHostService interface {
 //     middleware. Reached from the UI.
 type MacHostHandler struct {
 	svc            MacHostService
+	store          MacHostStore
 	pairingLimiter *auth.PairingIPRateLimiter
 }
 
 // NewMacHostHandler constructs the handler. pairingLimiter is REQUIRED
 // for the Pair endpoint; pass auth.NewPairingIPRateLimiter() at wire-up.
-func NewMacHostHandler(svc MacHostService, pairingLimiter *auth.PairingIPRateLimiter) *MacHostHandler {
-	return &MacHostHandler{svc: svc, pairingLimiter: pairingLimiter}
+func NewMacHostHandler(svc MacHostService, store MacHostStore, pairingLimiter *auth.PairingIPRateLimiter) *MacHostHandler {
+	return &MacHostHandler{svc: svc, store: store, pairingLimiter: pairingLimiter}
 }
 
 // MacHostView is the JSON shape returned to the admin UI. Pointer fields
@@ -237,7 +242,7 @@ func (h *MacHostHandler) Heartbeat(c *gin.Context) {
 		return
 	}
 
-	host, err := h.svc.Heartbeat(c.Request.Context(), hostID, repository.HeartbeatPayload{
+	host, err := h.store.UpdateHeartbeat(c.Request.Context(), hostID, repository.HeartbeatPayload{
 		DaemonVersion:   req.DaemonVersion,
 		ProtocolVersion: req.ProtocolVersion,
 		Permissions:     req.Permissions,
@@ -537,7 +542,7 @@ func (h *MacHostHandler) KnownIdentifiers(c *gin.Context) {
 
 // ListHosts is the admin list view.
 func (h *MacHostHandler) ListHosts(c *gin.Context) {
-	hosts, err := h.svc.ListActiveHosts(c.Request.Context())
+	hosts, err := h.store.ListActiveHosts(c.Request.Context())
 	if err != nil {
 		api.RespondInternal(c, err)
 		return
@@ -555,7 +560,7 @@ func (h *MacHostHandler) GetHostAdmin(c *gin.Context) {
 	if !ok {
 		return
 	}
-	host, err := h.svc.GetHost(c.Request.Context(), id)
+	host, err := h.store.GetHost(c.Request.Context(), id)
 	if err != nil {
 		api.RespondError(c, err, "Mac host")
 		return

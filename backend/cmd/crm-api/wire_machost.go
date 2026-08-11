@@ -47,7 +47,7 @@ func buildMacHost(reg *riverRegistrar, database *db.Database, core coreRepos, in
 		0, // default bcrypt cost
 	)
 	pairingIPLimiter := auth.NewPairingIPRateLimiter()
-	macHostHandler := handlers.NewMacHostHandler(macHostService, pairingIPLimiter)
+	macHostHandler := handlers.NewMacHostHandler(macHostService, macHostRepo, pairingIPLimiter)
 
 	// Register the pairing-token janitor periodic job (5 min). Worker
 	// registered unconditionally; the periodic-job inserter triggers it
