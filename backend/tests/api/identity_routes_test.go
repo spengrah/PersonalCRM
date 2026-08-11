@@ -5,10 +5,9 @@
 // drove the repository and service directly, so a rewrite of a handler call
 // site to a wrong-but-signature-compatible repository method (e.g.
 // identityRepo.GetByID standing in for identityRepo.UnlinkFromContact) would
-// have shipped green. This suite exercises the five registered identity
-// routes that PR1-E1 rewrote from service calls to repository calls, through
-// the real router, asserting status plus a discriminating field of the
-// response shape rather than just 200.
+// have shipped green. This suite exercises the five identity routes that
+// bind directly to the repository, through the real router, asserting status
+// plus a discriminating field of the response shape rather than just 200.
 package api
 
 import (
@@ -107,10 +106,10 @@ func seedIdentity(t *testing.T, ctx context.Context, identityRepo *repository.Id
 	return ident
 }
 
-// TestIdentityRoutes covers the five identity routes PR1-E1 rewrote from
-// IdentityService calls to IdentityRepository calls. POST /identities/:id/link
-// is excluded: it reaches IdentityService.LinkIdentity, a near-pass-through
-// that this element does not touch.
+// TestIdentityRoutes covers the five identity routes that call
+// IdentityRepository directly. POST /identities/:id/link is excluded: it
+// reaches IdentityService.LinkIdentity, which carries real logic and keeps
+// its service call.
 func TestIdentityRoutes(t *testing.T) {
 	t.Parallel()
 

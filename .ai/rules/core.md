@@ -97,7 +97,7 @@ See `.ai/rules/code-review.md` for details
 
 ## Layered Architecture
 
-See [Request Flow Diagram](../guides/architecture.md#why-layered) for the full sequence (`Handler → Service → Repository → sqlc → PostgreSQL`).
+See [Request Flow Diagram](../guides/architecture.md#why-layered) for the write-path sequence (`Handler → Service → Repository → sqlc → PostgreSQL`). Read-heavy handlers may bind directly to a repository surface when the service layer would only forward (rule: a layer exists where it earns its keep).
 
 ## Common Gotchas
 

@@ -70,7 +70,7 @@ graph TB
 
 ### Why Layered?
 
-The backend follows a strict layered architecture to maintain separation of concerns and testability:
+The backend follows a layered architecture to maintain separation of concerns and testability. The service layer is present where it earns its keep (transactions, cross-repository writes, business logic); read-heavy handlers may bind directly to a repository surface:
 
 ```mermaid
 sequenceDiagram
