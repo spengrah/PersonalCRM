@@ -75,6 +75,7 @@ type fakeStore struct {
 	markProcessedCalls    []markProcessedCall
 	markProcessedTxCalls  []markProcessedTxCall
 	clearStaleClaimCalls  []clearStaleClaimCall
+	claimRowsTxCalls      []claimRowsTxCall
 
 	// listUnprocessedByContactErr controls injection points for negative tests.
 	listUnprocessedByContactErr error
@@ -100,6 +101,11 @@ type markProcessedTxCall struct {
 type clearStaleClaimCall struct {
 	messageIDs         []uuid.UUID
 	expectedSessionRef string
+}
+
+type claimRowsTxCall struct {
+	messageIDs []uuid.UUID
+	sessionRef string
 }
 
 func newFakeStore() *fakeStore {
@@ -140,7 +146,13 @@ func (s *fakeStore) MarkProcessed(_ context.Context, messageIDs []uuid.UUID, int
 
 // ClaimRowsTx default: full claim success (returns the requested IDs).
 // Tests can override by replacing the field below or wrapping the store.
-func (s *fakeStore) ClaimRowsTx(_ context.Context, _ pgx.Tx, messageIDs []uuid.UUID, _ string) ([]uuid.UUID, error) {
+// The sessionRef argument is captured so tests can assert the engine
+// derived the contact-scoped claim key correctly.
+func (s *fakeStore) ClaimRowsTx(_ context.Context, _ pgx.Tx, messageIDs []uuid.UUID, sessionRef string) ([]uuid.UUID, error) {
+	s.claimRowsTxCalls = append(s.claimRowsTxCalls, claimRowsTxCall{
+		messageIDs: append([]uuid.UUID(nil), messageIDs...),
+		sessionRef: sessionRef,
+	})
 	if s.claimRowsTxErr != nil {
 		return nil, s.claimRowsTxErr
 	}
@@ -540,7 +552,7 @@ func TestEngine_FakeSource_AggregateForContactBatch_CreatesEvents(t *testing.T) 
 	require.Len(t, publisher.envelopes, 1)
 	env := publisher.envelopes[0]
 	assert.Equal(t, "fakesrc", env.Source)
-	assert.Equal(t, "fakesrc:chatA:m1", env.SourceID)
+	assert.Equal(t, "fakesrc:chatA:m1:"+contactID.String(), env.SourceID)
 	assert.Equal(t, events.KindMessageReceived, env.Kind)
 }
 
@@ -769,7 +781,7 @@ func TestEngine_FakeSource_NoMatch_PublishesCreateEvent(t *testing.T) {
 	require.Len(t, publisher.envelopes, 1)
 	assert.Equal(t, events.KindMessageReceived, publisher.envelopes[0].Kind)
 	assert.Equal(t, "fakesrc", publisher.envelopes[0].Source)
-	assert.Equal(t, "fakesrc:chatA:i1", publisher.envelopes[0].SourceID)
+	assert.Equal(t, "fakesrc:chatA:i1:"+contactID.String(), publisher.envelopes[0].SourceID)
 	// No staging-row mark — the consumer's tx does that in the create path.
 	assert.Empty(t, store.markProcessedCalls)
 }
@@ -820,7 +832,7 @@ func TestEngine_TelegramShape_SourceRefMatchesLegacyFormat(t *testing.T) {
 
 	require.NoError(t, engine.AggregateForContactBatch(ctx, contactID))
 	require.Len(t, publisher.envelopes, 1)
-	assert.Equal(t, "tg:12345:50001", publisher.envelopes[0].SourceID)
+	assert.Equal(t, "tg:12345:50001:"+contactID.String(), publisher.envelopes[0].SourceID)
 	assert.Equal(t, repository.InteractionSourceTelegram, publisher.envelopes[0].Source)
 }
 
@@ -1063,9 +1075,9 @@ func TestEngine_ClaimPath_PartialClaimRollsBack(t *testing.T) {
 
 // TestEngine_StaleRecovery_LooksUpEventAndEnqueues exercises gate 2:
 // when at least one row's ClaimedSessionRef matches the computed
-// sourceRef, the engine consults EventLookup and (on hit) enqueues an
-// InteractionRecorder job via ConsumerJobEnqueuer — without publishing
-// a duplicate event.
+// contact-scoped claim key, the engine consults EventLookup and (on
+// hit) enqueues an InteractionRecorder job via ConsumerJobEnqueuer —
+// without publishing a duplicate event.
 func TestEngine_StaleRecovery_LooksUpEventAndEnqueues(t *testing.T) {
 	ctx := context.Background()
 	base := accelerated.GetCurrentTime()
@@ -1074,8 +1086,9 @@ func TestEngine_StaleRecovery_LooksUpEventAndEnqueues(t *testing.T) {
 
 	adapter := fakeAdapter{name: "fakesrc"}
 	store := newFakeStore()
-	// SourceRef the adapter will compute for this session: "fakesrc:chatA:m1".
-	staleRef := "fakesrc:chatA:m1"
+	// The claim key the engine will compute for this session+contact:
+	// sourceRef ("fakesrc:chatA:m1") + ":" + contactID.
+	staleRef := "fakesrc:chatA:m1:" + contactID.String()
 	staleTime := base.Add(-10 * time.Minute)
 	store.byContactAndChat[contactID.String()+"|chatA"] = []Message{
 		{
@@ -1113,7 +1126,9 @@ func TestEngine_StaleRecovery_NoEventClearsClaim(t *testing.T) {
 
 	adapter := fakeAdapter{name: "fakesrc"}
 	store := newFakeStore()
-	staleRef := "fakesrc:chatA:m1"
+	// The claim key the engine will compute for this session+contact:
+	// sourceRef ("fakesrc:chatA:m1") + ":" + contactID.
+	staleRef := "fakesrc:chatA:m1:" + contactID.String()
 	staleTime := base.Add(-10 * time.Minute)
 	store.byContactAndChat[contactID.String()+"|chatA"] = []Message{
 		{
@@ -1163,6 +1178,109 @@ func TestEngine_NoTxBeginnerFallsBackToNonTxPublish(t *testing.T) {
 	engine := NewEngine(adapter, store, finder, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, nil, nil, nil)
 	require.NoError(t, engine.AggregateForContact(ctx, contactID, "chatA"))
 	require.Len(t, publisher.envelopes, 1, "non-tx Publish path produced one envelope")
+}
+
+// TestCreateInteractionForSession_ClaimAndEventKeyAreContactScoped is the
+// direct regression test for the fanned-out collision: two different
+// contacts aggregating the identical (chatID, firstExternalID) session
+// share the same sourceRef but must NOT collide on claim or event
+// identity. Asserts the exact key format (sourceRef + ":" +
+// contactID.String()) rather than mere inequality — an implementation
+// that derives the key from contactID alone (dropping sourceRef) would
+// pass an inequality check here while still colliding two different
+// sessions of the SAME contact on the event unique key.
+func TestCreateInteractionForSession_ClaimAndEventKeyAreContactScoped(t *testing.T) {
+	ctx := context.Background()
+	base := accelerated.GetCurrentTime()
+	contactA := uuid.New()
+	contactB := uuid.New()
+
+	adapter := fakeAdapter{name: "fakesrc"}
+	store := newFakeStore()
+	publisher := &fakePublisher{}
+	beginner := &fakeTxBeginner{}
+
+	sourceRef := adapter.SourceRef("chatA", "m1")
+	sess := msgSession{
+		direction:       repository.InteractionDirectionInbound,
+		chatID:          "chatA",
+		firstExternalID: "m1",
+		messages: []Message{
+			{ID: uuid.New(), ChatID: "chatA", ExternalID: "m1", IsOutgoing: false, SentAt: base},
+		},
+	}
+
+	engine := NewEngine(adapter, store, &fakeFinder{}, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, beginner, nil, nil)
+
+	require.NoError(t, engine.createInteractionForSession(ctx, contactA, sess))
+	require.NoError(t, engine.createInteractionForSession(ctx, contactB, sess))
+
+	wantKeyA := sourceRef + ":" + contactA.String()
+	wantKeyB := sourceRef + ":" + contactB.String()
+
+	require.Len(t, store.claimRowsTxCalls, 2)
+	assert.Equal(t, wantKeyA, store.claimRowsTxCalls[0].sessionRef)
+	assert.Equal(t, wantKeyB, store.claimRowsTxCalls[1].sessionRef)
+
+	require.Len(t, publisher.envelopes, 2)
+	assert.Equal(t, wantKeyA, publisher.envelopes[0].SourceID)
+	assert.Equal(t, wantKeyB, publisher.envelopes[1].SourceID)
+
+	var payloadA, payloadB events.MessageReceivedPayload
+	require.NoError(t, events.Unmarshal(&publisher.envelopes[0], &payloadA))
+	require.NoError(t, events.Unmarshal(&publisher.envelopes[1], &payloadB))
+	assert.Equal(t, sourceRef, payloadA.ExternalMessageID, "interaction.source_ref stays contact-free")
+	assert.Equal(t, sourceRef, payloadB.ExternalMessageID, "interaction.source_ref stays contact-free")
+}
+
+// TestCreateInteractionForSession_ContactFreeClaimIsBoundaryShift proves
+// the backlog self-heals: a staging row still carrying the pre-fix
+// contact-free claimed_session_ref must be read as a boundary-shift (the
+// old claim is cleared and the rows re-claimed under the new
+// contact-scoped key), not as stale-recovery for a completed session —
+// which would look up an event, find none matching, and yield without
+// publishing, leaving the row stranded forever.
+func TestCreateInteractionForSession_ContactFreeClaimIsBoundaryShift(t *testing.T) {
+	ctx := context.Background()
+	base := accelerated.GetCurrentTime()
+	contactID := uuid.New()
+
+	adapter := fakeAdapter{name: "fakesrc"}
+	store := newFakeStore()
+	publisher := &fakePublisher{}
+	beginner := &fakeTxBeginner{}
+	lookup := &fakeEventLookup{}        // must not be consulted
+	enqueuer := &fakeConsumerEnqueuer{} // must not be called
+
+	sourceRef := adapter.SourceRef("chatA", "m1")
+	staleTime := base.Add(-10 * time.Minute)
+	sess := msgSession{
+		direction:       repository.InteractionDirectionInbound,
+		chatID:          "chatA",
+		firstExternalID: "m1",
+		messages: []Message{
+			{
+				ID: uuid.New(), ChatID: "chatA", ExternalID: "m1", IsOutgoing: false, SentAt: base,
+				ClaimedAt: &staleTime, ClaimedSessionRef: &sourceRef, // pre-fix, contact-free claim
+			},
+		},
+	}
+
+	engine := NewEngine(adapter, store, &fakeFinder{}, &fakePromoter{}, &fakeExtender{}, publisher, 2, 48, beginner, lookup, enqueuer)
+	require.NoError(t, engine.createInteractionForSession(ctx, contactID, sess))
+
+	assert.Equal(t, 0, lookup.calls, "boundary-shift path must not consult EventLookup")
+	assert.Equal(t, 0, enqueuer.calls, "boundary-shift path must not re-enqueue a recovery job")
+
+	require.Len(t, store.clearStaleClaimCalls, 1)
+	assert.Equal(t, sourceRef, store.clearStaleClaimCalls[0].expectedSessionRef, "clears the OLD contact-free ref")
+
+	wantKey := sourceRef + ":" + contactID.String()
+	require.Len(t, store.claimRowsTxCalls, 1)
+	assert.Equal(t, wantKey, store.claimRowsTxCalls[0].sessionRef, "re-claims under the new contact-scoped key")
+
+	require.Len(t, publisher.envelopes, 1, "publishes a fresh event rather than silently yielding")
+	assert.Equal(t, wantKey, publisher.envelopes[0].SourceID)
 }
 
 // TestSameIDSet covers the partial-claim helper.

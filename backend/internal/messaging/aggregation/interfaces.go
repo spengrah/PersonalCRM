@@ -26,6 +26,8 @@ import (
 // Race Mechanics). The engine reads these to detect stale-claim
 // recovery / boundary-shift scenarios without re-querying the staging
 // table. Per-source adapters populate them from the underlying row.
+// ClaimedSessionRef holds the contact-scoped claim key (sourceRef +
+// ":" + contactID), not the bare sourceRef — see claimKey in engine.go.
 type Message struct {
 	ID                uuid.UUID
 	ChatID            string     // source-neutral chat scope key (numeric stringified for sources with numeric chat IDs, opaque guid for sources like Apple Messages)
@@ -128,18 +130,22 @@ type MessageStore interface {
 	// ClaimRowsTx writes claimed_at = NOW() and claimed_session_ref =
 	// sessionRef on rows that are STILL eligible at write time
 	// (unprocessed AND unclaimed-or-stale AND not soft-deleted).
-	// Returns the IDs actually claimed; caller MUST compare against the
-	// requested set to detect partial claims and roll back the tx when
-	// the sets differ. Called inside the engine's create-path tx;
-	// commits atomically with the event publish via the same tx.
+	// sessionRef is the engine's contact-scoped claim key (see claimKey
+	// in engine.go), not the bare sourceRef — this is what keeps a
+	// fanned-out message's per-contact staging rows from colliding on
+	// the same claim. Returns the IDs actually claimed; caller MUST
+	// compare against the requested set to detect partial claims and
+	// roll back the tx when the sets differ. Called inside the engine's
+	// create-path tx; commits atomically with the event publish via the
+	// same tx.
 	ClaimRowsTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, sessionRef string) (claimed []uuid.UUID, err error)
 
 	// ClearStaleClaimTx is the recovery-defensive branch. Clears claim
 	// columns for rows whose claimed_session_ref still matches the
-	// expected stale ref but for which no event-log row could be found
-	// (spec §3 defensive case), and for the boundary-shift case (rows
-	// claimed for an older session under a new computed sourceRef).
-	// Called inside a tx opened by the engine.
+	// expected stale claim key but for which no event-log row could be
+	// found (spec §3 defensive case), and for the boundary-shift case
+	// (rows claimed for an older session under a newly computed claim
+	// key). Called inside a tx opened by the engine.
 	ClearStaleClaimTx(ctx context.Context, tx pgx.Tx, messageIDs []uuid.UUID, expectedSessionRef string) error
 }
 
@@ -152,7 +158,10 @@ type TxBeginner interface {
 
 // EventLookup finds an existing event by (source, source_id) so the
 // engine can decide whether to re-publish vs. re-enqueue against an
-// existing event during stale-claim recovery.
+// existing event during stale-claim recovery. sourceID here is the
+// engine's contact-scoped claim key (see claimKey in engine.go), matching
+// what the create path wrote as the envelope's SourceID — not the bare
+// sourceRef.
 //
 // Returns (uuid.Nil, false, nil) when no row matches; (id, true, nil)
 // on hit; non-nil error only on infrastructure failure.

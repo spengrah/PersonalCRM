@@ -338,8 +338,9 @@ func (e *Engine) createInteractionForSession(ctx context.Context, contactID uuid
 		return fmt.Errorf("aggregation: cutover wiring requires publisher; refusing to drop interaction (mode=off/shadow is post-cutover broken per spec §3.9)")
 	}
 	sourceRef := sess.sourceRef(e.adapter)
+	key := claimKey(sourceRef, contactID)
 	desc := sess.description(e.adapter)
-	env, err := e.buildEnvelope(contactID, sess, sourceRef, &desc)
+	env, err := e.buildEnvelope(contactID, sess, sourceRef, key, &desc)
 	if err != nil {
 		return err
 	}
@@ -357,12 +358,12 @@ func (e *Engine) createInteractionForSession(ctx context.Context, contactID uuid
 	}
 
 	// Gate 2: recovery pass. Any row whose ClaimedSessionRef matches
-	// the just-computed sourceRef tells us the session was previously
+	// the just-computed claim key tells us the session was previously
 	// claimed but Stage 3 never completed. Look up the existing event
 	// and re-enqueue a consumer job — re-publishing would be
 	// dedup-rejected by the event-log unique index.
-	if sess.isStaleRecovery(sourceRef) {
-		return e.handleStaleRecovery(ctx, sess, sourceRef)
+	if sess.isStaleRecovery(key) {
+		return e.handleStaleRecovery(ctx, sess, key)
 	}
 
 	// Gates 1 + 3: open one tx that wraps both the boundary-shift
@@ -373,7 +374,7 @@ func (e *Engine) createInteractionForSession(ctx context.Context, contactID uuid
 	// so an uncommitted-clear-then-failed-claim window would let the
 	// stale consumer mark the rows under the old interaction.
 	requested := sess.messageIDs()
-	staleRefs := sess.staleBoundaryShiftRefs(sourceRef)
+	staleRefs := sess.staleBoundaryShiftRefs(key)
 
 	tx, err := e.txBeginner.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -396,7 +397,7 @@ func (e *Engine) createInteractionForSession(ctx context.Context, contactID uuid
 	}
 
 	// Gate 1: conditional claim against the (possibly just-cleared) rows.
-	claimed, err := e.store.ClaimRowsTx(ctx, tx, requested, sourceRef)
+	claimed, err := e.store.ClaimRowsTx(ctx, tx, requested, key)
 	if err != nil {
 		return fmt.Errorf("aggregation: claim rows: %w", err)
 	}
@@ -406,7 +407,7 @@ func (e *Engine) createInteractionForSession(ctx context.Context, contactID uuid
 		// eligible.
 		log.Info().
 			Str("source", e.adapter.SourceName()).
-			Str("source_ref", sourceRef).
+			Str("claim_key", key).
 			Int("requested", len(requested)).
 			Int("claimed", len(claimed)).
 			Msg("aggregation: partial claim; rolling back and yielding to racing worker")
@@ -423,19 +424,19 @@ func (e *Engine) createInteractionForSession(ctx context.Context, contactID uuid
 }
 
 // handleStaleRecovery is taken when the session's rows show a prior
-// claim for the same sourceRef. Per spec §3, do NOT re-publish (event-
+// claim for the same claim key. Per spec §3, do NOT re-publish (event-
 // log dedup would suppress); look up the existing event and re-enqueue
 // a consumer job against it. The recovery enqueue is bounded by River
 // UniqueOpts so repeated stale passes coalesce into one in-flight job.
-func (e *Engine) handleStaleRecovery(ctx context.Context, sess msgSession, sourceRef string) error {
+func (e *Engine) handleStaleRecovery(ctx context.Context, sess msgSession, key string) error {
 	if e.eventLookup == nil || e.consumerEnqueuer == nil {
 		log.Warn().
 			Str("source", e.adapter.SourceName()).
-			Str("source_ref", sourceRef).
+			Str("claim_key", key).
 			Msg("aggregation: stale-claim recovery skipped; lookup/enqueuer not wired")
 		return nil
 	}
-	eventID, found, err := e.eventLookup.FindEventBySourceRef(ctx, e.adapter.SourceName(), sourceRef)
+	eventID, found, err := e.eventLookup.FindEventBySourceRef(ctx, e.adapter.SourceName(), key)
 	if err != nil {
 		return fmt.Errorf("aggregation: event lookup for stale-claim recovery: %w", err)
 	}
@@ -443,11 +444,11 @@ func (e *Engine) handleStaleRecovery(ctx context.Context, sess msgSession, sourc
 		// Spec §3 defensive: claim_session_ref exists but no event
 		// matches. Treat as unclaimed — clear the stale claim columns
 		// and let the next pass re-publish.
-		return e.clearStaleClaimAndYield(ctx, sess, sourceRef)
+		return e.clearStaleClaimAndYield(ctx, sess, key)
 	}
 	log.Warn().
 		Str("source", e.adapter.SourceName()).
-		Str("source_ref", sourceRef).
+		Str("claim_key", key).
 		Str("event_id", eventID.String()).
 		Msg("aggregation: stale-claim recovery — re-enqueuing consumer job")
 	if err := e.consumerEnqueuer.EnqueueInteractionRecorderJob(ctx, eventID); err != nil {
@@ -457,17 +458,17 @@ func (e *Engine) handleStaleRecovery(ctx context.Context, sess msgSession, sourc
 }
 
 // clearStaleClaimAndYield clears the claim columns for rows whose
-// ClaimedSessionRef still equals the supplied stale ref. Used by the
+// ClaimedSessionRef still equals the supplied stale key. Used by the
 // defensive recovery branch (FindEventBySource returned no row). The
 // next aggregator pass will see rows as unclaimed and proceed normally.
-func (e *Engine) clearStaleClaimAndYield(ctx context.Context, sess msgSession, staleRef string) error {
+func (e *Engine) clearStaleClaimAndYield(ctx context.Context, sess msgSession, staleKey string) error {
 	tx, err := e.txBeginner.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("aggregation: begin tx for stale-claim clear: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if err := e.store.ClearStaleClaimTx(ctx, tx, sess.messageIDs(), staleRef); err != nil {
+	if err := e.store.ClearStaleClaimTx(ctx, tx, sess.messageIDs(), staleKey); err != nil {
 		return fmt.Errorf("aggregation: clear stale claim: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -486,11 +487,17 @@ func (e *Engine) clearStaleClaimAndYield(ctx context.Context, sess msgSession, s
 //   - outbound session → KindMessageSent (Direction="")
 //   - mutual session   → KindMessageReceived (Direction="mutual")
 //
-// SourceID = sourceRef so publisher-idempotency dedupes retries.
+// SourceID = eventKey (the contact-scoped claim key, not sourceRef) so
+// publisher-idempotency dedupes retries per contact rather than
+// colliding across every contact fanned into the same chat message.
+// The payload's ExternalMessageID stays sourceRef — interaction dedup
+// keys off (contact_id, source, source_ref), which is already
+// contact-scoped via contact_id, so that string must not change here.
 func (e *Engine) buildEnvelope(
 	contactID uuid.UUID,
 	sess msgSession,
 	sourceRef string,
+	eventKey string,
 	description *string,
 ) (*events.Envelope, error) {
 	cid := contactID
@@ -548,11 +555,25 @@ func (e *Engine) buildEnvelope(
 
 	return &events.Envelope{
 		Source:     e.adapter.SourceName(),
-		SourceID:   sourceRef,
+		SourceID:   eventKey,
 		Kind:       kind,
 		Payload:    raw,
 		ObservedAt: messageAt,
 	}, nil
+}
+
+// claimKey scopes the aggregation claim + event-log identity to the
+// contact being aggregated. sourceRef alone is shared by every contact
+// a message fans out to (e.g. every matched member of a group chat),
+// so using it bare as comms_message.claimed_session_ref / event.source_id
+// collides: the first contact to aggregate wins the claim and the event,
+// and every other contact's claim commits with no event to record an
+// interaction against. Appending the contact id splits the claim/event
+// identity per contact while leaving interaction.source_ref (still
+// sourceRef, via the payload's ExternalMessageID) untouched — its dedup
+// index is already (contact_id, source, source_ref)-scoped.
+func claimKey(sourceRef string, contactID uuid.UUID) string {
+	return sourceRef + ":" + contactID.String()
 }
 
 // sameIDSet reports whether a and b contain the same UUIDs
