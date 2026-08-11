@@ -365,11 +365,11 @@ behaviors:
   - id: CON-026
     title: Every list ordering is deterministic under ties
     type: invariant
-    status: proposed
+    status: current
     surface: none
     statement: every contact list ordering (all sorts, relevance-ranked search, and the no-sort default) includes a final unique tie-breaker so that equal-valued rows never swap between requests, paginated pages never drop or duplicate rows, and prev/next navigation order is stable.
-    provenance: [.ai/rules/core.md deterministic ordering gotcha, contact.sql]
-    notes: 'Proposed: today only the cadence sort has a tie-breaker (full name) and the default unsorted list has no ORDER BY at all; ties can reorder across requests.'
+    provenance: [TestContactList_DeterministicTieBreak, backend/internal/db/querygen/contact_list.sql.tmpl]
+    notes: Every sort rung, relevance-ranked search, and the no-sort default share one ORDER BY ladder (generated from the fragment above into contact_list.gen.sql) terminating in `c.full_name ASC, c.id ASC`; the id tiebreak is the final rung under every sort. Pinned by TestContactList_DeterministicTieBreak, which seeds three same-named contacts at fixed, deliberately reverse-ordered ids and asserts the recovered order survives both single-row pagination and a repeated walk.
 
   # --- Merge ---
 

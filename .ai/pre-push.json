@@ -13,7 +13,8 @@
       { "name": "Spec coverage", "command": "make spec-coverage" },
       { "name": "Spec drift", "command": "make spec-drift" },
       { "name": "API types drift", "command": "make api-types-check" },
-      { "name": "API docs drift", "command": "make api-docs-check" }
+      { "name": "API docs drift", "command": "make api-docs-check" },
+      { "name": "Contact query drift", "command": "make contact-queries-check" }
     ]
   },
   "swift": {

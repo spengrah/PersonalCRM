@@ -214,6 +214,8 @@ jobs:
       # resolve aborted the run, and nothing was watching the exit code).
       - name: Check generated API docs are in sync
         run: make api-docs-check
+      - name: Check generated contact list queries are in sync
+        run: make contact-queries-check
 
   backend-tests:
     name: Backend Tests
