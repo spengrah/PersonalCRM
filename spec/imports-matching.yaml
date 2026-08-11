@@ -631,3 +631,115 @@ behaviors:
       - the person is represented in the queue only by the canonical row
     provenance: [MarkAsDuplicate, external_contact.sql unmatched queries, duplicate_of_id]
     notes: Reconciliation-side duplicate precedence is IMP-017.
+
+  # --- Gmail participant discovery (trusted-sender create candidates) ---
+
+  - id: IMP-042
+    title: Trusted-sender participants become create candidates
+    type: business-logic
+    status: proposed
+    surface: none
+    given: a fetched Gmail message whose sender is an existing contact or one of the user's own accounts
+    when: discovery evaluates the message's To and Cc participants
+    then:
+      - an unknown participant is upserted as a gmail_participant create candidate on first sighting, with no minimum message count
+      - a participant with no display name still qualifies
+      - the candidate records the trusted sender's identity and an anchor message subject as evidence, alongside message count
+      - known addresses, the user's own addresses, and sticky-ignored addresses are never proposed
+    provenance: ['#789', 2026-08-11-gmail-participant-discovery.md]
+
+  - id: IMP-043
+    title: Untrusted senders never produce create candidates
+    type: business-logic
+    status: proposed
+    surface: none
+    given: a fetched Gmail message whose sender is neither an existing contact nor one of the user's own accounts
+    when: discovery evaluates the message's participants
+    then:
+      - no gmail_participant candidate is produced, even when known contacts appear among the recipients
+    provenance: ['#789', 2026-08-11-gmail-participant-discovery.md]
+    notes: The whole design anchors on sender trust — co-occurrence with a known contact is nearly free by construction of the fetch query and must never qualify on its own.
+
+  - id: IMP-044
+    title: The recipient cap suppresses create proposals only
+    type: business-logic
+    status: proposed
+    surface: none
+    given: a fetched Gmail message whose To and Cc together exceed 20 recipients
+    when: discovery evaluates the message
+    then:
+      - no gmail_participant candidate is produced from that message
+      - link-candidate discovery for the same message is unaffected
+    provenance: ['#789', 2026-08-11-gmail-participant-discovery.md]
+    notes: The cap exists so a mass announcement cannot flood the ungated create path; the link path stays uncapped because its trigram gate already filters.
+
+  - id: IMP-045
+    title: Link precedence and one card per address across Gmail sources
+    type: business-logic
+    status: proposed
+    surface: none
+    given: an unknown address observed by Gmail discovery
+    when: both the name-match link gate and the trusted-sender gate could apply
+    then:
+      - a strong name match to an existing contact takes precedence and yields a gmail_correspondence link candidate
+      - otherwise a trust-anchored sighting yields a gmail_participant create candidate
+      - an address with an existing candidate row under either Gmail source is never proposed under the other
+      - the first classification is sticky until the user resolves the card
+    provenance: ['#789', 2026-08-11-gmail-participant-discovery.md]
+    notes: Mutual exclusion is cross-source and therefore not covered by the per-source dedup of IMP-006. No migration machinery — misclassification is cheap, the user picks link or import in the UI.
+
+  - id: IMP-046
+    title: The server declares import, link, and ignore for gmail_participant
+    type: api
+    status: proposed
+    surface: api
+    given: a gmail_participant candidate
+    when: the candidate is served or acted on
+    then:
+      - the declared allowed actions are import, link, and ignore
+      - an import with a user-supplied name succeeds; the link-only rejection never applies to this source
+    provenance: ['#789', AllowedActionsForSource, 2026-08-11-gmail-participant-discovery.md]
+    notes: Deliberately absent from linkOnlySources — the counterpart of IMP-014.
+
+  - id: IMP-047
+    title: Nameless candidates are importable after naming
+    type: ux
+    status: proposed
+    surface: ui
+    given: a gmail_participant candidate with no observed display name
+    when: the user reviews it in the imports queue
+    then:
+      - the queue row and the modal identify the candidate by its address, never as a generic unknown label
+      - the editable name starts empty
+      - import is unavailable until the user supplies a name
+      - a name the user has typed survives a background data refresh
+    provenance: ['#789', 2026-08-11-gmail-participant-discovery.md]
+
+  - id: IMP-048
+    title: The evidence line renders for every discovery source
+    type: ux
+    status: current
+    surface: ui
+    given: a discovery candidate whose row carries evidence metadata
+    when: the imports queue renders it
+    then:
+      - key: count-recency-visible-any-source
+        text: message count and recency evidence are visible regardless of the candidate's source
+      - key: counterpart-visible
+        text: the counterpart evidence the source recorded (co-occurring contact, trusted sender, or chat peer identity) is visible
+    provenance: ['#803', 2026-08-11-gmail-participant-discovery.md]
+    notes: Generalizes the line previously hard-gated to gmail_correspondence; motivated by a real prod mis-link between two rows rendered as bare phone numbers.
+
+  - id: IMP-049
+    title: Own-domain addresses count as the user in discovery only
+    type: business-logic
+    status: proposed
+    surface: none
+    given: a Gmail account configured with one or more own domains
+    when: discovery evaluates fetched messages
+    then:
+      - a sender address at an own domain anchors trust like a connected account address
+      - participant addresses at own domains are never proposed as candidates
+      - message storage and inbound-outbound classification are unchanged by the own-domain list
+    provenance: ['#789', 2026-08-11-gmail-participant-discovery.md]
+    notes: The user operates aliases on a personal domain; the domain list is per-account runtime configuration and is never hardcoded in code, fixtures, or tests (repo PII rule).

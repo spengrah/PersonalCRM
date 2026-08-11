@@ -291,6 +291,10 @@
     "tags": ["@area:imports"]
   },
   {
+    "pattern": "^frontend/src/lib/candidate-evidence\\.ts$",
+    "tags": ["@area:imports"]
+  },
+  {
     "pattern": "^frontend/src/lib/calendar-api\\.ts$",
     "tags": ["@area:meetings"]
   },
