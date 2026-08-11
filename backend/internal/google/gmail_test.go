@@ -849,7 +849,7 @@ func TestScanWindowChunks_FiltersByInternalDateAndStoresBoundaryHashes(t *testin
 		StartEpoch:          start,
 		EndEpoch:            end,
 		PriorBoundaryHashes: map[string]struct{}{},
-	}, map[string]*gmail.Message{}, nil, nil)
+	}, map[string]*gmail.Message{}, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, res.Processed)
 	require.Equal(t, 0, res.Matched)
@@ -874,7 +874,7 @@ func TestScanWindowChunks_PriorBoundarySkipsReplayAllowsNewSameSecond(t *testing
 		PriorBoundaryHashes: map[string]struct{}{
 			hashGmailMessageID("replayed"): {},
 		},
-	}, map[string]*gmail.Message{}, nil, nil)
+	}, map[string]*gmail.Message{}, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, res.Processed)
 	require.Equal(t, 0, f.getCalls["replayed"], "known boundary id is skipped by identity hash before refetch")
@@ -895,7 +895,7 @@ func TestScanWindowChunks_ReusesFetchedMessageAcrossOverlappingWindows(t *testin
 		StartEpoch:          1000,
 		EndEpoch:            1100,
 		PriorBoundaryHashes: map[string]struct{}{},
-	}, fetchedMessages, nil, nil)
+	}, fetchedMessages, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, first.Processed, "neighboring overlap fetch is outside the exact first window")
 	require.Equal(t, 1, f.getCalls["overlap"])
@@ -904,7 +904,7 @@ func TestScanWindowChunks_ReusesFetchedMessageAcrossOverlappingWindows(t *testin
 		StartEpoch:          1100,
 		EndEpoch:            1200,
 		PriorBoundaryHashes: map[string]struct{}{},
-	}, fetchedMessages, nil, nil)
+	}, fetchedMessages, nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, second.Processed, "cached body is still processed in its exact window")
 	require.Equal(t, 1, f.getCalls["overlap"], "overlap body is fetched once across the run")
@@ -919,7 +919,7 @@ func TestScanWindowChunks_ListFailureReturnsError(t *testing.T) {
 		StartEpoch:          1000,
 		EndEpoch:            1100,
 		PriorBoundaryHashes: map[string]struct{}{},
-	}, map[string]*gmail.Message{}, nil, nil)
+	}, map[string]*gmail.Message{}, nil, nil, nil)
 	require.Error(t, err)
 }
 

@@ -100,6 +100,22 @@ type participant struct {
 	address string
 }
 
+// participantMessageContext carries the per-message trust-anchor facts
+// foldDiscovery computes once (trust anchor, cap eligibility, sender
+// identity, subject, epoch) into aggregateParticipants, which folds them onto
+// every unknown address the message contributes.
+type participantMessageContext struct {
+	// createEligible is trustAnchored && recipientCount <= 20 — the gate that
+	// lets a message anchor the gmail_participant CREATE path (link discovery
+	// is unaffected by the cap).
+	createEligible  bool
+	senderNorm      string
+	senderContactID uuid.UUID
+	senderIsSelf    bool
+	subject         string
+	epochSeconds    int64
+}
+
 // correspondenceAggregate accumulates per-unknown-address evidence across all
 // messages in one sync pass before the §4 gate runs once per address.
 type correspondenceAggregate struct {
@@ -111,19 +127,42 @@ type correspondenceAggregate struct {
 	// most-frequent is the co-occurring contact recorded as evidence (tie-break
 	// by id for stability).
 	coOccurrence map[uuid.UUID]int
+
+	// trustAnchored is set true the first time a create-eligible (trust-
+	// anchored, cap-OK) message contributes this address. It never resets: a
+	// qualifying sighting on ANY message in the pass is enough — the cap does
+	// not stick across messages.
+	trustAnchored bool
+	// anchorEpoch/anchorSubject/anchorSenderNorm/anchorSenderContactID/
+	// anchorSenderSelf record the create-eligible message with the GREATEST
+	// epoch seen so far (strict `>`, so the first-folded message wins a tie) —
+	// the most-recent trust-anchored message's evidence, per §1.2.
+	anchorEpoch           int64
+	anchorSubject         string
+	anchorSenderNorm      string
+	anchorSenderContactID uuid.UUID
+	anchorSenderSelf      bool
+	// lastMessageEpoch is the greatest epoch of ANY contributing message
+	// (trust-anchored or not) — feeds evidence's last_message_at for both
+	// gmail_correspondence and gmail_participant.
+	lastMessageEpoch int64
 }
 
 // aggregateParticipants folds one message's (name, address) participant pairs
-// into the shared per-pass aggregate map, dropping known and own-account
-// addresses. coOccurIDs is the set of known contacts present on this same
-// message (computed by the provider over From/To/Cc only) — each unknown
-// address the message contributes accrues one co-occurrence count per known id.
-// The aggregate map is the caller's per-pass local (NOT a shared field), so
-// concurrent account syncs never clobber each other.
+// into the shared per-pass aggregate map, dropping known, own-account, and
+// own-domain addresses (own-domain addresses are the user, so they must never
+// enter either candidate pool). coOccurIDs is the set of
+// known contacts present on this same message (computed by the provider over
+// From/To/Cc only) — each unknown address the message contributes accrues one
+// co-occurrence count per known id. msgCtx carries this message's trust-anchor
+// facts (computed once by foldDiscovery), folded onto every address the
+// message contributes. The aggregate map is the caller's per-pass local (NOT a
+// shared field), so concurrent account syncs never clobber each other.
 func aggregateParticipants(
 	parts []participant,
-	known, own map[string]struct{},
+	known, own, ownDomains map[string]struct{},
 	coOccurIDs []uuid.UUID,
+	msgCtx participantMessageContext,
 	into map[string]*correspondenceAggregate,
 ) {
 	// Track which unknown addresses this single message contributed to, so an
@@ -142,6 +181,9 @@ func aggregateParticipants(
 		if _, ok := own[normAddr]; ok {
 			continue
 		}
+		if _, ok := ownDomains[domainOf(normAddr)]; ok {
+			continue
+		}
 		agg := into[normAddr]
 		if agg == nil {
 			agg = &correspondenceAggregate{
@@ -156,6 +198,19 @@ func aggregateParticipants(
 			for _, id := range coOccurIDs {
 				if id != uuid.Nil {
 					agg.coOccurrence[id]++
+				}
+			}
+			if msgCtx.epochSeconds > agg.lastMessageEpoch {
+				agg.lastMessageEpoch = msgCtx.epochSeconds
+			}
+			if msgCtx.createEligible {
+				agg.trustAnchored = true
+				if msgCtx.epochSeconds > agg.anchorEpoch {
+					agg.anchorEpoch = msgCtx.epochSeconds
+					agg.anchorSubject = msgCtx.subject
+					agg.anchorSenderNorm = msgCtx.senderNorm
+					agg.anchorSenderContactID = msgCtx.senderContactID
+					agg.anchorSenderSelf = msgCtx.senderIsSelf
 				}
 			}
 		}
@@ -206,40 +261,61 @@ func (d *CorrespondenceDiscoverer) EvaluateAddresses(ctx context.Context, aggreg
 	return upserted, nil
 }
 
-// evaluateAndUpsert applies the §4 gate to one aggregated address and, if it
-// qualifies, upserts its gmail_correspondence candidate. Returns true iff a
-// candidate was upserted.
+// evaluateAndUpsert applies the two-gate evaluator to one aggregated address:
+// the link gate (§4 trigram match) runs FIRST (precedence); only when it does
+// NOT fire does the trust-anchor gate run. The two candidate sources are
+// mutually exclusive per address — whichever classification wins first is
+// sticky — enforced by a cross-source existence check before each source's
+// own upsert. Returns true iff a candidate was upserted.
 func (d *CorrespondenceDiscoverer) evaluateAndUpsert(ctx context.Context, agg *correspondenceAggregate) (bool, error) {
 	// Take the most-informative observed display name (the most tokens, then the
-	// longest) — bare first names are dropped by the token gate.
+	// longest) — bare first names are dropped by the token gate. The link gate
+	// only runs when the name clears the token floor; a 1-token name never
+	// reaches FindSimilarContacts.
 	name := bestDisplayName(agg.namesSeen)
-	if tokenCount(name) < correspondenceMinNameTokens {
-		return false, nil
+	if tokenCount(name) >= correspondenceMinNameTokens {
+		matches, err := d.contactRepo.FindSimilarContacts(ctx, name, correspondenceSimFloor, correspondenceMatchLimit)
+		if err != nil {
+			return false, fmt.Errorf("find similar contacts: %w", err)
+		}
+		var best *repository.ContactMatch
+		for i := range matches {
+			// Go-side `>=` re-check: the SQL is strict `>` against the floor, so
+			// honor the spec's `>= 0.60` here.
+			if matches[i].Similarity < correspondenceSimThreshold {
+				continue
+			}
+			if best == nil || matches[i].Similarity > best.Similarity {
+				best = &matches[i]
+			}
+		}
+		if best != nil {
+			return d.upsertCorrespondence(ctx, agg, name)
+		}
 	}
 
-	matches, err := d.contactRepo.FindSimilarContacts(ctx, name, correspondenceSimFloor, correspondenceMatchLimit)
+	if agg.trustAnchored {
+		return d.upsertParticipant(ctx, agg)
+	}
+	return false, nil
+}
+
+// upsertCorrespondence writes the link-gate candidate. Cross-source check
+// FIRST: a live gmail_participant row for this address (any match status)
+// means the address was already classified as a participant candidate in an
+// earlier pass — first classification is sticky, so no correspondence
+// candidate is proposed. Then the existing same-source sticky-ignore check
+// (write-avoidance only: the shared Upsert's DO UPDATE never touches
+// match_status, so an ignored row stays ignored regardless).
+func (d *CorrespondenceDiscoverer) upsertCorrespondence(ctx context.Context, agg *correspondenceAggregate, name string) (bool, error) {
+	otherSource, err := d.externalRepo.GetBySource(ctx, ParticipantSource, agg.address, nil)
 	if err != nil {
-		return false, fmt.Errorf("find similar contacts: %w", err)
+		return false, fmt.Errorf("get existing participant candidate: %w", err)
 	}
-	var best *repository.ContactMatch
-	for i := range matches {
-		// Go-side `>=` re-check: the SQL is strict `>` against the floor, so
-		// honor the spec's `>= 0.60` here.
-		if matches[i].Similarity < correspondenceSimThreshold {
-			continue
-		}
-		if best == nil || matches[i].Similarity > best.Similarity {
-			best = &matches[i]
-		}
-	}
-	if best == nil {
+	if otherSource != nil && otherSource.DeletedAt == nil {
 		return false, nil
 	}
 
-	// Sticky-ignore: if a live ignored row already exists for this address, skip
-	// the upsert. This is a write-avoidance optimization — the shared Upsert's
-	// DO UPDATE SET never touches match_status, so an ignored row would stay
-	// ignored even without this guard, but skipping avoids a pointless write.
 	existing, err := d.externalRepo.GetBySource(ctx, CorrespondenceSource, agg.address, nil)
 	if err != nil {
 		return false, fmt.Errorf("get existing candidate: %w", err)
@@ -264,14 +340,62 @@ func (d *CorrespondenceDiscoverer) evaluateAndUpsert(ctx context.Context, agg *c
 	return true, nil
 }
 
+// upsertParticipant writes the trust-anchor-gate candidate. Cross-source check
+// FIRST (symmetric with upsertCorrespondence): a live gmail_correspondence row
+// for this address (any match status) is sticky, so no participant candidate
+// is proposed. Then the same-source sticky-ignore check. DisplayName is nil
+// for an address-only sighting — a 1-token observed name IS used here (the
+// 2-token trigram gate is link-only).
+func (d *CorrespondenceDiscoverer) upsertParticipant(ctx context.Context, agg *correspondenceAggregate) (bool, error) {
+	otherSource, err := d.externalRepo.GetBySource(ctx, CorrespondenceSource, agg.address, nil)
+	if err != nil {
+		return false, fmt.Errorf("get existing correspondence candidate: %w", err)
+	}
+	if otherSource != nil && otherSource.DeletedAt == nil {
+		return false, nil
+	}
+
+	existing, err := d.externalRepo.GetBySource(ctx, ParticipantSource, agg.address, nil)
+	if err != nil {
+		return false, fmt.Errorf("get existing participant candidate: %w", err)
+	}
+	if existing != nil && existing.DeletedAt == nil && existing.MatchStatus == repository.MatchStatusIgnored {
+		return false, nil
+	}
+
+	name := bestDisplayName(agg.namesSeen)
+	var displayName *string
+	if name != "" {
+		displayName = &name
+	}
+	metadata := buildParticipantEvidence(ctx, d.contactRepo, agg)
+	now := accelerated.GetCurrentTime()
+	if _, err := d.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
+		Source:      ParticipantSource,
+		SourceID:    agg.address,
+		DisplayName: displayName,
+		Emails:      []repository.EmailEntry{{Value: agg.address}},
+		Metadata:    metadata,
+		SyncedAt:    &now,
+	}); err != nil {
+		return false, fmt.Errorf("upsert candidate: %w", err)
+	}
+	return true, nil
+}
+
 // buildEvidence assembles the metadata the card renders: deduped observed
-// names, message count, and the strongest co-occurring known contact (id +
-// resolved name). A name-lookup failure degrades to id-only evidence rather
-// than dropping the candidate.
+// names, message count, recency, and the strongest co-occurring known contact
+// (id + resolved name). A name-lookup failure degrades to id-only evidence
+// rather than dropping the candidate. last_message_at is omitted when no
+// contributing message's epoch was recorded (cheap evidence gap, not an
+// error) — the renderer treats it as optional.
 func (d *CorrespondenceDiscoverer) buildEvidence(ctx context.Context, agg *correspondenceAggregate) map[string]any {
 	metadata := map[string]any{
 		"display_names_seen": agg.namesSeen,
 		"message_count":      agg.messageCount,
+	}
+	if agg.lastMessageEpoch > 0 {
+		metadata["last_message_at"] = formatEvidenceTime(agg.lastMessageEpoch)
 	}
 	if co := strongestCoOccurrence(agg.coOccurrence); co != uuid.Nil {
 		coContact := map[string]any{"id": co.String()}
