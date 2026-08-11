@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures'
 import type { APIRequestContext } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
-import { candidateCardByName } from './helpers/imports-helpers'
+import { candidateCardByName, findCandidateByName } from './helpers/imports-helpers'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
@@ -75,7 +75,10 @@ test.describe('Imports evidence line @area:imports', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // --- Telegram (chat source): count + recency evidence line, peer
-    // identity visible via the existing username chip on the card. ---
+    // identity visible via the existing username chip on the card. The
+    // shared queue is paginated under parallel-worker load, so the card is
+    // located via the paging helper rather than a direct locator.
+    await findCandidateByName(page, telegramName)
     const telegramCard = candidateCardByName(page, telegramName)
     await expect(telegramCard).toBeVisible({ timeout: 10000 })
     await expect(
@@ -87,6 +90,7 @@ test.describe('Imports evidence line @area:imports', () => {
     await expect(telegramCard.getByRole('link', { name: telegramHandle })).toBeVisible()
 
     // --- Gmail correspondence: unchanged "Seen with X · N messages" text. ---
+    await findCandidateByName(page, correspondenceName)
     const correspondenceCard = candidateCardByName(page, correspondenceName)
     await expect(correspondenceCard).toBeVisible()
     await expect(correspondenceCard.getByText(`Seen with ${coOccurringName}`)).toBeVisible()

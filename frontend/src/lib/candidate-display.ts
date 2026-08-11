@@ -1,10 +1,12 @@
 import type { ImportCandidate } from '@/types/import'
 
 /**
- * Compute the display name for a candidate, with Telegram @username as the
- * last-resort fallback before "Unknown". Returns the stored '@handle' when
- * all name fields are empty for a Telegram candidate so cards never render
- * a meaningless "Unknown" heading for peers we actually have a handle for.
+ * Compute the display name for a candidate, with Telegram @username and the
+ * first email address as last-resort fallbacks before "Unknown". Telegram
+ * candidates fall back to their stored '@handle'; gmail_participant
+ * candidates (discovered from mail headers, so often no display name is
+ * ever observed) fall back to their address so cards never render a
+ * meaningless "Unknown" heading for a person we do have contact info for.
  */
 export function getCandidateDisplayName(candidate: ImportCandidate): string {
   if (candidate.display_name) return candidate.display_name
@@ -12,6 +14,9 @@ export function getCandidateDisplayName(candidate: ImportCandidate): string {
   if (name) return name
   if (candidate.source === 'telegram' && candidate.metadata?.username) {
     return candidate.metadata.username
+  }
+  if (candidate.source === 'gmail_participant' && candidate.emails[0]) {
+    return candidate.emails[0]
   }
   return 'Unknown'
 }

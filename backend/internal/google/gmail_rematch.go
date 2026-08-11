@@ -10,6 +10,7 @@ import (
 
 	"personal-crm/backend/internal/matching"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/sync"
 )
 
 // emailSyncStateLister is the narrow seam the rematch handler uses to find the
@@ -118,7 +119,8 @@ func (h *GmailRematchHandler) Rematch(ctx context.Context, _ uuid.UUID, valueNor
 	var scanErrs []error
 	for _, st := range emailStates {
 		afterEpoch := backfillSinceEpoch(st.Metadata)
-		n, scanErr := h.provider.ScanIdentifier(ctx, *st.AccountID, addr, knownMap, meSet, afterEpoch)
+		ownDomains := sync.EmailOwnDomains(st.Metadata)
+		n, scanErr := h.provider.ScanIdentifier(ctx, *st.AccountID, addr, knownMap, meSet, ownDomains, afterEpoch)
 		matched += n
 		if scanErr != nil {
 			// The account id is the operator's OWN connected mailbox, kept raw

@@ -295,6 +295,10 @@
     "tags": ["@area:imports"]
   },
   {
+    "pattern": "^frontend/src/lib/candidate-display\\.ts$",
+    "tags": ["@area:imports"]
+  },
+  {
     "pattern": "^frontend/src/lib/calendar-api\\.ts$",
     "tags": ["@area:meetings"]
   },
@@ -614,6 +618,10 @@
   },
   {
     "pattern": "^backend/internal/google/correspondence_rederive\\.go$",
+    "tags": ["@area:imports"]
+  },
+  {
+    "pattern": "^backend/internal/sync/email_settings\\.go$",
     "tags": ["@area:imports"]
   },
   {

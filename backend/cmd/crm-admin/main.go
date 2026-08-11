@@ -50,6 +50,19 @@
 //	                              row's backfill floor, mark them due, and
 //	                              clear error state. Prints counts only.
 //
+//	--set-email-own-domains <comma-list>
+//	      [--account <email>]     Set (or, passed as an empty string, CLEAR)
+//	                              an email external_sync_state row's
+//	                              discovery_own_domains metadata: domains that
+//	                              count as "me" for Gmail participant
+//	                              discovery (anchors trust; excluded from the
+//	                              candidate pool). Read-modify-write —
+//	                              preserves every other metadata key.
+//	                              --account selects the target row when more
+//	                              than one email account is configured;
+//	                              omissible when exactly one exists. Prints
+//	                              the resulting domain list.
+//
 //	--mint-pairing-token          Mint a single-use pairing token for
 //	                              `crm-mac install --pair`. Optional
 //	                              --hostname-label is operator-side
@@ -192,6 +205,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -205,6 +219,7 @@ import (
 	"personal-crm/backend/internal/messages"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/sync"
 	"personal-crm/backend/internal/synthetic"
 
 	"github.com/google/uuid"
@@ -256,6 +271,16 @@ type rederiveRunner interface {
 // *service.EmailBackfillCursorResetService.ResetGmailBackfillCursors.
 type gmailBackfillCursorResetter interface {
 	ResetGmailBackfillCursors(ctx context.Context) (service.EmailBackfillCursorResetResult, error)
+}
+
+// emailOwnDomainsRepo is the narrow interface --set-email-own-domains needs:
+// list all sync states (to resolve/disambiguate the target email account) and
+// perform the read-modify-write metadata update. Production wires this to
+// *repository.SyncRepository (already constructed for --reset-gmail-backfill-
+// cursors, so no new repository dependency is introduced).
+type emailOwnDomainsRepo interface {
+	ListSyncStates(ctx context.Context) ([]repository.SyncState, error)
+	UpdateSyncStateMetadata(ctx context.Context, id uuid.UUID, metadata map[string]any) (*repository.SyncState, error)
 }
 
 // tagMigrator is the narrow interface --migrate-tags needs. Production wires this
@@ -323,7 +348,11 @@ type adminDeps struct {
 	// Nil for all other subcommands.
 	rederive   rederiveRunner
 	gmailReset gmailBackfillCursorResetter
-	seed       seedRunner
+	// emailOwnDomains serves --set-email-own-domains (resolve target email
+	// sync-state row + read-modify-write its discovery_own_domains metadata).
+	// Wired to *repository.SyncRepository.
+	emailOwnDomains emailOwnDomainsRepo
+	seed            seedRunner
 	// jobs serves --list-jobs / --retry-job. Wired to the insert-only river
 	// client in buildProductionDeps (JobList/JobRetry go through the driver,
 	// no worker pool needed).
@@ -352,6 +381,16 @@ type runOptions struct {
 	reconcileAddressBook   bool
 	rederiveCorrespondence bool
 	resetGmailBackfill     bool
+	// setEmailOwnDomains <- --set-email-own-domains (comma-separated domain
+	// list; explicit "" CLEARS the key). setEmailOwnDomainsSet tracks flag
+	// PRESENCE (via fs.Visit at parse time) — the string's zero value alone
+	// cannot distinguish "flag omitted" from "flag passed as empty", and the
+	// dispatch/mutual-exclusion logic needs that distinction to make the
+	// documented clear semantics reachable. emailOwnDomainsAccount <-
+	// optional --account disambiguating among multiple email sync states.
+	setEmailOwnDomains     string
+	setEmailOwnDomainsSet  bool
+	emailOwnDomainsAccount string
 	mintPairingToken       bool
 	hostnameLabel          string
 	listHosts              bool
@@ -517,6 +556,9 @@ func validateSubcommand(opts runOptions) error {
 	if opts.resetGmailBackfill {
 		active++
 	}
+	if opts.setEmailOwnDomainsSet {
+		active++
+	}
 	if opts.mintPairingToken {
 		active++
 	}
@@ -576,7 +618,8 @@ func validateSubcommand(opts runOptions) error {
 // subcommandList is the canonical subcommand enumeration shared by the
 // no-subcommand and mutual-exclusion usage errors.
 const subcommandList = "--messages-rematch-stranded, --reconcile-address-book-methods, " +
-	"--rederive-correspondence-names, --reset-gmail-backfill-cursors, --mint-pairing-token, " +
+	"--rederive-correspondence-names, --reset-gmail-backfill-cursors, " +
+	"--set-email-own-domains <comma-list> [--account <email>], --mint-pairing-token, " +
 	"--list-hosts, --revoke-host <uuid>, --rotate-host-key <uuid>, --seed, --reset-and-seed, " +
 	"--migrate, --migrate-check, --list-jobs, --retry-job <id>, --migrate-tags, " +
 	"--migrate-contact-knowledge-columns, --river-tier0, --whatsapp-list-history, " +
@@ -602,6 +645,15 @@ func parseArgs(args []string) (runOptions, error) {
 	fs.BoolVar(&opts.resetGmailBackfill, "reset-gmail-backfill-cursors", false,
 		"Rewind enabled Gmail sync cursors to each row's backfill floor, mark them due, "+
 			"and clear error state. Prints counts only.")
+	fs.StringVar(&opts.setEmailOwnDomains, "set-email-own-domains", "",
+		"Set (or, passed as an empty string, CLEAR) an email account's own-domain discovery "+
+			"list: a comma-separated list of domains that count as \"me\" for Gmail participant "+
+			"discovery (anchors trust; excluded from the candidate pool). Explicit empty is "+
+			"distinct from omitting the flag. With exactly one email sync-state row, --account "+
+			"is optional; with zero or multiple, --account selects the target.")
+	fs.StringVar(&opts.emailOwnDomainsAccount, "account", "",
+		"Email address selecting the target external_sync_state row for "+
+			"--set-email-own-domains, when more than one email account is configured.")
 	fs.BoolVar(&opts.mintPairingToken, "mint-pairing-token", false,
 		"Mint a single-use pairing token for `crm-mac install --pair`.")
 	fs.StringVar(&opts.hostnameLabel, "hostname-label", "",
@@ -682,6 +734,15 @@ func parseArgs(args []string) (runOptions, error) {
 	if err := fs.Parse(args); err != nil {
 		return runOptions{}, err
 	}
+	// fs.Visit calls back only for flags that actually appeared on the command
+	// line (regardless of the value they were given), which is how
+	// --set-email-own-domains="" is distinguished from omitting the flag
+	// entirely — the zero value of the string alone cannot express that.
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "set-email-own-domains" {
+			opts.setEmailOwnDomainsSet = true
+		}
+	})
 	return opts, nil
 }
 
@@ -774,6 +835,8 @@ func run(ctx context.Context, opts runOptions, deps adminDeps) error {
 		return runRederiveCorrespondenceNames(ctx, deps)
 	case opts.resetGmailBackfill:
 		return runResetGmailBackfillCursors(ctx, deps)
+	case opts.setEmailOwnDomainsSet:
+		return runSetEmailOwnDomains(ctx, opts, deps)
 	case opts.doSeed:
 		return runSeed(ctx, opts, deps)
 	case opts.resetAndSeed:
@@ -1263,6 +1326,98 @@ func runResetGmailBackfillCursors(ctx context.Context, deps adminDeps) error {
 	return nil
 }
 
+// runSetEmailOwnDomains resolves the target email (source="email")
+// external_sync_state row, then read-modify-writes its metadata: it
+// normalizes the comma-separated domain list and applies
+// sync.WithEmailOwnDomains, which preserves every other metadata key
+// (backfill_since, terminal_reason, ...) because UpdateSyncStateMetadata is a
+// full JSONB replace. An explicit empty input (opts.setEmailOwnDomains == ""
+// with opts.setEmailOwnDomainsSet true) clears the key rather than adding no
+// domains and leaving the existing list untouched.
+func runSetEmailOwnDomains(ctx context.Context, opts runOptions, deps adminDeps) error {
+	var domains []string
+	if trimmed := strings.TrimSpace(opts.setEmailOwnDomains); trimmed != "" {
+		domains = strings.Split(trimmed, ",")
+	}
+	normalized, err := sync.NormalizeOwnDomains(domains)
+	if err != nil {
+		return fmt.Errorf("--set-email-own-domains: %w", err)
+	}
+
+	states, err := deps.emailOwnDomains.ListSyncStates(ctx)
+	if err != nil {
+		return fmt.Errorf("list sync states: %w", err)
+	}
+	var emailStates []repository.SyncState
+	for _, st := range states {
+		if st.Source == google.GmailSourceName {
+			emailStates = append(emailStates, st)
+		}
+	}
+
+	account := strings.TrimSpace(opts.emailOwnDomainsAccount)
+	var target *repository.SyncState
+	switch {
+	case len(emailStates) == 0:
+		return errors.New("--set-email-own-domains: no email sync state exists yet; connect Gmail first")
+	case account != "":
+		for i := range emailStates {
+			if emailStates[i].AccountID != nil && *emailStates[i].AccountID == account {
+				target = &emailStates[i]
+				break
+			}
+		}
+		if target == nil {
+			return fmt.Errorf("--account %s: no email sync state with that account (known: %s)",
+				account, emailAccountList(emailStates))
+		}
+	case len(emailStates) == 1:
+		target = &emailStates[0]
+	default:
+		return fmt.Errorf("--set-email-own-domains: multiple email accounts configured, pass --account to select one (known: %s)",
+			emailAccountList(emailStates))
+	}
+
+	updatedMetadata := sync.WithEmailOwnDomains(target.Metadata, normalized)
+	updated, err := deps.emailOwnDomains.UpdateSyncStateMetadata(ctx, target.ID, updatedMetadata)
+	if err != nil {
+		return fmt.Errorf("update sync state metadata: %w", err)
+	}
+
+	result := sync.EmailOwnDomains(updated.Metadata)
+	printedDomains := make([]string, 0, len(result))
+	for d := range result {
+		printedDomains = append(printedDomains, d)
+	}
+	sort.Strings(printedDomains)
+	if _, err := fmt.Fprintf(deps.stdout, "set-email-own-domains: account=%s domains=%s\n",
+		accountLabel(target.AccountID), strings.Join(printedDomains, ",")); err != nil {
+		return fmt.Errorf("write summary: %w", err)
+	}
+	return nil
+}
+
+// emailAccountList renders the known email accounts for a disambiguation
+// error message. Printed to the operator's own terminal only (never logs or
+// commits), so the account address — the operator's OWN connected mailbox —
+// carries no PII concern, mirroring GmailRematchHandler.Rematch's precedent.
+func emailAccountList(states []repository.SyncState) string {
+	accounts := make([]string, 0, len(states))
+	for _, st := range states {
+		accounts = append(accounts, accountLabel(st.AccountID))
+	}
+	sort.Strings(accounts)
+	return strings.Join(accounts, ", ")
+}
+
+// accountLabel renders a sync state's account id, or "(none)" when unset.
+func accountLabel(accountID *string) string {
+	if accountID == nil || strings.TrimSpace(*accountID) == "" {
+		return "(none)"
+	}
+	return *accountID
+}
+
 // jobListMaxLimit is the upper bound River's JobListParams.First enforces (it
 // panics outside 1..10000). We validate --job-limit against it BEFORE calling
 // First so the operator gets a friendly usage error instead of a panic.
@@ -1557,6 +1712,10 @@ func buildProductionDeps(ctx context.Context, cfg *config.Config, database *db.D
 		rematch:    rematch,
 		reconcile:  addressBookReconcile,
 		gmailReset: service.NewEmailBackfillCursorResetService(syncRepo),
+		// --set-email-own-domains: resolve target email sync-state row(s) +
+		// read-modify-write metadata. syncRepo already satisfies the interface
+		// structurally (ListSyncStates + UpdateSyncStateMetadata).
+		emailOwnDomains: syncRepo,
 		seed: seedAdapter{
 			database: database,
 			support:  repository.NewSyntheticSupportRepository(database.Queries),

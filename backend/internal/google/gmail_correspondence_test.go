@@ -41,25 +41,52 @@ func (f *fakeCorrespondenceContacts) GetContact(_ context.Context, id uuid.UUID)
 	return nil, nil
 }
 
-// fakeCorrespondenceExternal records upserts and serves a seeded sticky-ignore
-// row. Keyed by source_id (the normalized address). upsertErr maps a source_id
-// to an error the Upsert should return (to exercise the continue-on-error /
+// fakeExternalKey is the (source, sourceID) key fakeCorrespondenceExternal
+// indexes by. Re-keyed from a sourceID-only map (contract review finding): a
+// sourceID-only fake would make every cross-source assertion vacuous — a test
+// could pass even if production checked the WRONG source, since both sources'
+// candidates share the same normalized-address sourceID space.
+type fakeExternalKey struct {
+	source   string
+	sourceID string
+}
+
+// fakeExternalLookup records one GetBySource call so a test can assert the
+// opposite-source cross-check actually happened (not just that its outcome
+// looked right).
+type fakeExternalLookup struct {
+	source    string
+	sourceID  string
+	accountID *string
+}
+
+// fakeCorrespondenceExternal records upserts and serves seeded rows, keyed by
+// (source, sourceID) — see fakeExternalKey. upsertErr maps a source_id to an
+// error the Upsert should return (to exercise the continue-on-error /
 // aggregate-error path).
 type fakeCorrespondenceExternal struct {
-	existing  map[string]*repository.ExternalContact
+	existing  map[fakeExternalKey]*repository.ExternalContact
 	upserts   []repository.UpsertExternalContactRequest
 	upsertErr map[string]error
+	lookups   []fakeExternalLookup
 }
 
 func newFakeExternal() *fakeCorrespondenceExternal {
 	return &fakeCorrespondenceExternal{
-		existing:  map[string]*repository.ExternalContact{},
+		existing:  map[fakeExternalKey]*repository.ExternalContact{},
 		upsertErr: map[string]error{},
 	}
 }
 
-func (f *fakeCorrespondenceExternal) GetBySource(_ context.Context, _, sourceID string, _ *string) (*repository.ExternalContact, error) {
-	return f.existing[sourceID], nil
+// seedExisting seeds a live row for (source, sourceID) — the source-qualified
+// replacement for direct map assignment.
+func (f *fakeCorrespondenceExternal) seedExisting(source, sourceID string, row *repository.ExternalContact) {
+	f.existing[fakeExternalKey{source: source, sourceID: sourceID}] = row
+}
+
+func (f *fakeCorrespondenceExternal) GetBySource(_ context.Context, source, sourceID string, accountID *string) (*repository.ExternalContact, error) {
+	f.lookups = append(f.lookups, fakeExternalLookup{source: source, sourceID: sourceID, accountID: accountID})
+	return f.existing[fakeExternalKey{source: source, sourceID: sourceID}], nil
 }
 
 func (f *fakeCorrespondenceExternal) Upsert(_ context.Context, req repository.UpsertExternalContactRequest) (*repository.ExternalContact, error) {
@@ -67,6 +94,7 @@ func (f *fakeCorrespondenceExternal) Upsert(_ context.Context, req repository.Up
 		return nil, err
 	}
 	f.upserts = append(f.upserts, req)
+	key := fakeExternalKey{source: req.Source, sourceID: req.SourceID}
 	row := &repository.ExternalContact{
 		Source:      req.Source,
 		SourceID:    req.SourceID,
@@ -74,11 +102,21 @@ func (f *fakeCorrespondenceExternal) Upsert(_ context.Context, req repository.Up
 	}
 	// Preserve a pre-existing status (mirrors the real upsert's DO UPDATE SET
 	// which never touches match_status).
-	if prior := f.existing[req.SourceID]; prior != nil {
+	if prior := f.existing[key]; prior != nil {
 		row.MatchStatus = prior.MatchStatus
 	}
-	f.existing[req.SourceID] = row
+	f.existing[key] = row
 	return row, nil
+}
+
+// lookedUp reports whether GetBySource was ever called for (source, sourceID).
+func (f *fakeCorrespondenceExternal) lookedUp(source, sourceID string) bool {
+	for _, l := range f.lookups {
+		if l.source == source && l.sourceID == sourceID {
+			return true
+		}
+	}
+	return false
 }
 
 // --- helpers ---
@@ -89,7 +127,10 @@ func contactMatch(id uuid.UUID, name string, sim float64) repository.ContactMatc
 
 // runDiscovery folds one message's participants into a fresh aggregate then
 // evaluates it, returning the upserted count + any aggregated error — the exact
-// per-pass shape the provider hook drives.
+// per-pass shape the provider hook drives. msgCtx defaults to the zero value
+// (not trust-anchored) for the link-gate-only tests in this file; the
+// participant-gate test suite (gmail_participant_test.go) drives real
+// foldDiscovery output instead of calling this helper.
 func runDiscovery(
 	t *testing.T,
 	d *CorrespondenceDiscoverer,
@@ -99,7 +140,7 @@ func runDiscovery(
 ) (int, error) {
 	t.Helper()
 	agg := map[string]*correspondenceAggregate{}
-	aggregateParticipants(parts, known, own, coOccurIDs, agg)
+	aggregateParticipants(parts, known, own, emptySet(), coOccurIDs, participantMessageContext{}, agg)
 	return d.EvaluateAddresses(context.Background(), sortedAggregates(agg))
 }
 
@@ -237,9 +278,9 @@ func TestDiscovery_DedupByAddressAcrossMessages(t *testing.T) {
 
 	agg := map[string]*correspondenceAggregate{}
 	// msg1: To = the unknown address.
-	aggregateParticipants([]participant{{name: "Pat Carter", address: "pat@example.com"}}, emptySet(), emptySet(), nil, agg)
+	aggregateParticipants([]participant{{name: "Pat Carter", address: "pat@example.com"}}, emptySet(), emptySet(), emptySet(), nil, participantMessageContext{}, agg)
 	// msg2: Cc = the same unknown address.
-	aggregateParticipants([]participant{{name: "Pat Carter", address: "pat@example.com"}}, emptySet(), emptySet(), nil, agg)
+	aggregateParticipants([]participant{{name: "Pat Carter", address: "pat@example.com"}}, emptySet(), emptySet(), emptySet(), nil, participantMessageContext{}, agg)
 
 	n, err := d.EvaluateAddresses(context.Background(), sortedAggregates(agg))
 	require.NoError(t, err)
@@ -336,11 +377,11 @@ func TestDiscovery_StickyIgnoreNoClobber(t *testing.T) {
 		},
 	}
 	ext := newFakeExternal()
-	ext.existing["ignored@example.com"] = &repository.ExternalContact{
+	ext.seedExisting(CorrespondenceSource, "ignored@example.com", &repository.ExternalContact{
 		Source:      CorrespondenceSource,
 		SourceID:    "ignored@example.com",
 		MatchStatus: repository.MatchStatusIgnored,
-	}
+	})
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
 	parts := []participant{{name: "Ignored Person", address: "ignored@example.com"}}
@@ -348,7 +389,7 @@ func TestDiscovery_StickyIgnoreNoClobber(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
 	require.Empty(t, ext.upserts, "ignored row → no redundant write")
-	require.Equal(t, repository.MatchStatusIgnored, ext.existing["ignored@example.com"].MatchStatus)
+	require.Equal(t, repository.MatchStatusIgnored, ext.existing[fakeExternalKey{source: CorrespondenceSource, sourceID: "ignored@example.com"}].MatchStatus)
 }
 
 // 8a. BCC excluded — candidate. collectDiscoveryParticipants must NOT return a
@@ -420,7 +461,7 @@ func TestDiscovery_BccKnownContactNotEvidence(t *testing.T) {
 
 	known := map[string]struct{}{"a@example.com": {}, "bcc@example.com": {}}
 	agg := map[string]*correspondenceAggregate{}
-	aggregateParticipants(parts, known, emptySet(), coOccurIDs, agg)
+	aggregateParticipants(parts, known, emptySet(), emptySet(), coOccurIDs, participantMessageContext{}, agg)
 	n, err := d.EvaluateAddresses(context.Background(), sortedAggregates(agg))
 	require.NoError(t, err)
 	require.Equal(t, 1, n, "the Cc unknown address still produces a candidate")
@@ -466,8 +507,8 @@ func TestDiscovery_PerAddressErrorAggregated(t *testing.T) {
 	d := NewCorrespondenceDiscoverer(contacts, ext)
 
 	agg := map[string]*correspondenceAggregate{}
-	aggregateParticipants([]participant{{name: "Good Person", address: "good@example.com"}}, emptySet(), emptySet(), nil, agg)
-	aggregateParticipants([]participant{{name: "Bad Person", address: "bad@example.com"}}, emptySet(), emptySet(), nil, agg)
+	aggregateParticipants([]participant{{name: "Good Person", address: "good@example.com"}}, emptySet(), emptySet(), emptySet(), nil, participantMessageContext{}, agg)
+	aggregateParticipants([]participant{{name: "Bad Person", address: "bad@example.com"}}, emptySet(), emptySet(), emptySet(), nil, participantMessageContext{}, agg)
 
 	n, err := d.EvaluateAddresses(context.Background(), sortedAggregates(agg))
 	require.Error(t, err, "an upsert failure must surface as a non-nil aggregated error")

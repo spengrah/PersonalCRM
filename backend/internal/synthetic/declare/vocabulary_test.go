@@ -147,7 +147,7 @@ func TestExternalCandidate_OnlyWriterBackedSourcesAreDeclarable(t *testing.T) {
 	// anarlog_title's row IS a token, so it is declared with one.
 	for _, source := range []string{
 		SourceGContacts, SourceCorrespondence, SourceCalendarAttendee,
-		SourceICloudContacts, SourceAnarlogHumans, SourceTelegram,
+		SourceICloudContacts, SourceAnarlogHumans, SourceTelegram, SourceGmailParticipant,
 	} {
 		assert.NoError(t, validateEntityOrder([]Entity{ExternalCandidate("c", Source(source))}), source)
 	}
@@ -182,12 +182,23 @@ func TestCandidateProps_AreRefusedOnSourcesThatCannotStoreThem(t *testing.T) {
 		"a telegram handle on a non-telegram source": {
 			ExternalCandidate("c", Source(SourceGContacts), TelegramHandle()),
 		},
-		"no identity on a non-telegram source": {
+		"no identity on a non-telegram, non-participant source": {
 			ExternalCandidate("c", Source(SourceGContacts), NoIdentity()),
 		},
 		"no identity together with a pinned twin name": {
 			Contact("a"),
 			ExternalCandidate("c", Source(SourceTelegram), NoIdentity(), SameNameAs("a")),
+		},
+		"methods on gmail_participant, whose single address is its source_id": {
+			ExternalCandidate("c", Source(SourceGmailParticipant), Emails(2)),
+		},
+		"participant evidence on a non-participant source": {
+			Contact("a"),
+			ExternalCandidate("c", Source(SourceGContacts), ParticipantEvidence(3, "a")),
+		},
+		"participant evidence with no message count": {
+			Contact("a"),
+			ExternalCandidate("c", Source(SourceGmailParticipant), ParticipantEvidence(0, "a")),
 		},
 		"a title token on a non-title source": {
 			ExternalCandidate("c", Source(SourceGContacts), TitleToken("lena")),
@@ -240,7 +251,100 @@ func TestCandidateProps_AreRefusedOnSourcesThatCannotStoreThem(t *testing.T) {
 		ExternalCandidate("cal", Source(SourceCalendarAttendee), SameNameAs("a")),
 		ExternalCandidate("tg", Source(SourceTelegram), NoIdentity(), TelegramHandle()),
 		ExternalCandidate("corr", Source(SourceCorrespondence), CorrespondenceEvidence(4, "a")),
+		// gmail_participant's two producible shapes: a trust-anchored sighting with
+		// sender evidence, and the nameless address-only sighting NoIdentity widens
+		// to admit (previously telegram-only).
+		ExternalCandidate("participant", Source(SourceGmailParticipant), ParticipantEvidence(3, "a")),
+		ExternalCandidate("nameless-participant", Source(SourceGmailParticipant), NoIdentity()),
 	}))
+}
+
+// The IMP-048/047 declarations are the named/nameless gmail_participant pair the
+// synthetic E2E seeds by handle. The evidence-bearing candidate is keyed to
+// IMP-048 (the ui-surface evidence-line behavior its E2E renders) rather than
+// IMP-042 (gmail_participant's own gate logic — surface none, cited only by
+// EL2's Go fakes, so it needs no declared fixture and the declare-completeness
+// gate rejects registering it at all). Read directly off the registry (this test
+// file is IN package declare, so the unexported plan fields are reachable)
+// rather than re-asserted as a duplicate literal — a change to either
+// declaration's shape fails here instead of silently drifting from what the
+// props actually encode.
+func TestIMP048And047_DeclareTheNamedAndNamelessParticipantPair(t *testing.T) {
+	named, ok := Lookup("IMP-048")
+	require.True(t, ok, "IMP-048 must be declared")
+	var participant *externalCandidatePlan
+	for _, e := range named.Entities {
+		if e.handle() == "participant" {
+			participant, ok = e.(*externalCandidatePlan)
+			require.True(t, ok, "handle %q must be an external candidate", e.handle())
+		}
+	}
+	require.NotNil(t, participant, "IMP-048 must declare a %q handle", "participant")
+	assert.Equal(t, SourceGmailParticipant, participant.source)
+	assert.False(t, participant.noIdentity, "IMP-048's participant candidate is NAMED — the generator-derived display name is what makes it named")
+	assert.Equal(t, participantEvidenceMessages, participant.participantMessageCount)
+	assert.Equal(t, "sender", participant.participantSenderHandle)
+	assert.Zero(t, participant.emails, "no Emails() override — the lowering floors to exactly one production-shaped email on its own")
+
+	nameless, ok := Lookup("IMP-047")
+	require.True(t, ok, "IMP-047 must be declared")
+	require.Len(t, nameless.Entities, 1)
+	npart, ok := nameless.Entities[0].(*externalCandidatePlan)
+	require.True(t, ok)
+	assert.Equal(t, "nameless-participant", npart.handle())
+	assert.Equal(t, SourceGmailParticipant, npart.source)
+	assert.True(t, npart.noIdentity, "IMP-047's candidate is the address-only sighting — NoIdentity is what makes it nameless")
+	assert.Zero(t, npart.participantMessageCount, "no ParticipantEvidence — the lowering falls back to its own default evidence shape")
+	assert.Empty(t, npart.participantSenderHandle)
+	assert.Zero(t, npart.emails, "no Emails() override — the lowering floors to exactly one production-shaped email on its own")
+}
+
+// Pins the gmail_participant metadata SHAPE the replay seeder writes, for both
+// the named (evidence-bearing) and nameless (default) cases — the exact keys
+// production's buildParticipantEvidence writes (google/gmail_participant.go).
+// This is what would catch a seeder that silently drifted from that shape (e.g. a
+// renamed metadata key), which would let a synthetic E2E render against a shape
+// production never produces and pass vacuously.
+func TestParticipantMetadata_PinsProductionShape(t *testing.T) {
+	anchor := time.Date(2026, time.March, 4, 9, 30, 0, 0, time.UTC)
+	now := time.Date(2026, time.March, 4, 12, 0, 0, 0, time.UTC)
+
+	t.Run("named, with evidence", func(t *testing.T) {
+		metadata, displayName := replay.ParticipantMetadata("Jordan Example", "me@synthetic.example", &replay.ParticipantEvidence{
+			MessageCount:         3,
+			TrustedSenderAddress: "sender@synthetic.example",
+			TrustedSenderName:    "Sender Example",
+			AnchorSubject:        "Re: sync",
+			LastMessageAt:        anchor,
+		}, now)
+
+		require.NotNil(t, displayName)
+		assert.Equal(t, "Jordan Example", *displayName)
+		assert.Equal(t, map[string]any{
+			"message_count":      3,
+			"last_message_at":    "2026-03-04T09:30:00Z",
+			"anchor_subject":     "Re: sync",
+			"display_names_seen": []string{"Jordan Example"},
+			"trusted_sender": map[string]any{
+				"address": "sender@synthetic.example",
+				"name":    "Sender Example",
+			},
+		}, metadata)
+	})
+
+	t.Run("nameless, no evidence", func(t *testing.T) {
+		metadata, displayName := replay.ParticipantMetadata("", "me@synthetic.example", nil, now)
+
+		assert.Nil(t, displayName)
+		assert.Equal(t, map[string]any{
+			"message_count":   1,
+			"last_message_at": "2026-03-04T12:00:00Z",
+			"trusted_sender": map[string]any{
+				"address": "me@synthetic.example",
+				"self":    true,
+			},
+		}, metadata)
+	})
 }
 
 // --- meeting notes + method suggestions -------------------------------------

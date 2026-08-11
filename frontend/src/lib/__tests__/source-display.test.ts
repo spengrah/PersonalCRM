@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { getSourceDisplay } from '../source-display'
-import { Users, Calendar, Send, Cloud, MessageCircle, HelpCircle } from 'lucide-react'
+import { Users, Calendar, Send, Cloud, MessageCircle, Mail, HelpCircle } from 'lucide-react'
 
 describe('getSourceDisplay', () => {
   it('returns friendly name and icon for gcontacts', () => {
@@ -33,6 +33,12 @@ describe('getSourceDisplay', () => {
     const result = getSourceDisplay('whatsapp')
     expect(result.label).toBe('WhatsApp')
     expect(result.icon).toBe(MessageCircle)
+  })
+
+  it('returns a Gmail participant label and the mail icon for gmail_participant', () => {
+    const result = getSourceDisplay('gmail_participant')
+    expect(result.label).toBe('Gmail participant')
+    expect(result.icon).toBe(Mail)
   })
 
   it('returns raw source name for unknown sources', () => {

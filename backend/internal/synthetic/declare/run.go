@@ -697,11 +697,11 @@ func runExternalCandidate(
 }
 
 // seedUpsertCandidate is the direct-upsert path (gcontacts, gcal_attendee,
-// gmail_correspondence). SameNameAs overrides the generated display name with an
-// earlier contact's rendered name, which is what makes the candidate collide with
-// that contact in the matcher rather than merely resemble it; SameEmailAs does the
-// same for the primary email, which is what lifts that collision to a
-// high-confidence match.
+// gmail_correspondence, gmail_participant). SameNameAs overrides the generated
+// display name with an earlier contact's rendered name, which is what makes the
+// candidate collide with that contact in the matcher rather than merely resemble
+// it; SameEmailAs does the same for the primary email, which is what lifts that
+// collision to a high-confidence match.
 func seedUpsertCandidate(
 	ctx context.Context,
 	h *replay.Harness,
@@ -727,6 +727,12 @@ func seedUpsertCandidate(
 		}
 		spec.Emails[0] = twin.Email
 	}
+	if p.noIdentity && p.source == SourceGmailParticipant {
+		// Address-only sighting: the discoverer never learned a name for this
+		// address, which the participant seed branch stores as a nil DisplayName
+		// rather than the generator's default.
+		spec.DisplayName, spec.FirstName, spec.LastName = "", "", ""
+	}
 
 	var evidence *replay.CorrespondenceEvidence
 	if p.coOccurringWith != "" {
@@ -745,7 +751,25 @@ func seedUpsertCandidate(
 		}
 	}
 
-	id, err := h.SeedExternalContactCandidate(ctx, spec, evidence)
+	var participantEvidence *replay.ParticipantEvidence
+	if p.participantSenderHandle != "" {
+		sender, ok := st.specs[p.participantSenderHandle]
+		if !ok {
+			return uuid.Nil, "", fmt.Errorf("ParticipantEvidence(%q): no such contact in this run", p.participantSenderHandle)
+		}
+		// The metadata's trusted_sender carries an ADDRESS and, when resolvable, a
+		// NAME — never a contact id (buildParticipantEvidence resolves the sender's
+		// contact only to read its FullName). AnchorSubject/LastMessageAt are left
+		// zero-valued: the seeder falls back to its own production-shaped defaults
+		// for both, exactly as it does for a declaration with no evidence at all.
+		participantEvidence = &replay.ParticipantEvidence{
+			MessageCount:         p.participantMessageCount,
+			TrustedSenderAddress: sender.Email,
+			TrustedSenderName:    sender.FullName,
+		}
+	}
+
+	id, err := h.SeedExternalContactCandidate(ctx, spec, evidence, participantEvidence)
 	if err != nil {
 		return uuid.Nil, "", err
 	}

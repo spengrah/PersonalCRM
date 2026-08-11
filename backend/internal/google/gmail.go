@@ -295,7 +295,7 @@ func (p *GmailSyncProvider) Config() sync.SourceConfig {
 		DisplayName:          "Gmail",
 		Strategy:             repository.SyncStrategyContactDriven,
 		SupportsMultiAccount: true,
-		SupportsDiscovery:    false,
+		SupportsDiscovery:    true,
 		DefaultInterval:      GmailDefaultInterval,
 		RequiresAccount:      true, // OAuth token is keyed by account; Sync nil-checks AccountID
 	}
@@ -401,6 +401,10 @@ func (p *GmailSyncProvider) Sync(
 	for addr := range knownMap {
 		knownSet[addr] = struct{}{}
 	}
+	// ownDomains anchors trust for participant discovery and drops its own
+	// addresses from BOTH candidate pools (discovery-only; storage's meSet is
+	// untouched — see foldDiscovery).
+	ownDomains := sync.EmailOwnDomains(state.Metadata)
 
 	result := &sync.SyncResult{}
 	windowsScanned := 0
@@ -421,7 +425,7 @@ func (p *GmailSyncProvider) Sync(
 		}
 		chunks := buildWindowORChunks(addresses, window.StartEpoch, window.EndEpoch)
 
-		scanned, err := p.scanWindowChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, window, fetchedMessages, knownSet, discoveryAgg)
+		scanned, err := p.scanWindowChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, window, fetchedMessages, knownSet, ownDomains, discoveryAgg)
 		if err != nil {
 			// Hard failure: abort the sweep, return the stored cursor unchanged
 			// so no unproven window is skipped on the next tick.
@@ -496,6 +500,7 @@ func (p *GmailSyncProvider) scanWindowChunks(
 	window gmailScanWindow,
 	fetchedMessages map[string]*gmail.Message,
 	knownSet map[string]struct{},
+	ownDomains map[string]struct{},
 	discoveryAgg map[string]*correspondenceAggregate,
 ) (gmailWindowScanResult, error) {
 	var result gmailWindowScanResult
@@ -558,7 +563,7 @@ func (p *GmailSyncProvider) scanWindowChunks(
 				// From/To/Cc participants into the per-pass aggregate, regardless
 				// of whether the storage gate qualified it. No-op when no
 				// discoverer is wired.
-				p.foldDiscovery(msg, knownMap, knownSet, meSet, discoveryAgg)
+				p.foldDiscovery(msg, knownMap, knownSet, meSet, ownDomains, discoveryAgg)
 			}
 			pageToken = next
 			if pageToken == "" {
@@ -587,6 +592,7 @@ func (p *GmailSyncProvider) scanChunks(
 	knownMap map[string][]uuid.UUID,
 	meSet map[string]struct{},
 	knownSet map[string]struct{},
+	ownDomains map[string]struct{},
 	discoveryAgg map[string]*correspondenceAggregate,
 ) (processed, matched int, err error) {
 	seen := make(map[string]struct{})
@@ -624,7 +630,7 @@ func (p *GmailSyncProvider) scanChunks(
 
 				// In-sync correspondence discovery over the rematch backfill seam
 				// (harmless + idempotent). No-op when no discoverer is wired.
-				p.foldDiscovery(msg, knownMap, knownSet, meSet, discoveryAgg)
+				p.foldDiscovery(msg, knownMap, knownSet, meSet, ownDomains, discoveryAgg)
 			}
 			pageToken = next
 			if pageToken == "" {
@@ -648,6 +654,7 @@ func (p *GmailSyncProvider) ScanIdentifier(
 	accountID, addrNormalized string,
 	knownMap map[string][]uuid.UUID,
 	meSet map[string]struct{},
+	ownDomains map[string]struct{},
 	afterEpoch int64,
 ) (matched int, err error) {
 	if p.bus == nil || p.pool == nil {
@@ -676,7 +683,7 @@ func (p *GmailSyncProvider) ScanIdentifier(
 	}
 
 	// scanChunks creates its own per-account `seen` set; no cursor math here.
-	_, matched, err = p.scanChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, knownSet, discoveryAgg)
+	_, matched, err = p.scanChunks(ctx, fetcher, chunks, accountID, knownMap, meSet, knownSet, ownDomains, discoveryAgg)
 	if err != nil {
 		return matched, fmt.Errorf("scan identifier: %w", err)
 	}
@@ -753,21 +760,93 @@ func (p *GmailSyncProvider) MeSet(ctx context.Context) (map[string]struct{}, err
 // foldDiscovery folds one fetched message's From/To/Cc participants into the
 // per-pass discovery aggregate. No-op when no discoverer is wired (the common
 // case for the many constructor call sites that never call
-// SetCorrespondenceDiscoverer). The known/own filtering and the BCC-free
-// co-occurrence id set are computed here so aggregateParticipants stays a pure
-// fold.
+// SetCorrespondenceDiscoverer). Headers are parsed ONCE (parseDiscoveryHeaders)
+// to compute the participant list plus this message's trust-anchor facts:
+// trustAnchored = From ∈ knownSet ∪ meSet ∪ an own-domain; recipientCount =
+// |unique normalized To∪Cc|; createEligible = trustAnchored && recipientCount
+// <= 20 (the cap suppresses the CREATE path only — link discovery, driven by
+// aggregateParticipants' known/own/ownDomains pool filtering plus the
+// evaluator's separate trigram gate, stays uncapped). The known/own filtering
+// and the BCC-free co-occurrence id set are computed here so
+// aggregateParticipants stays a pure fold.
 func (p *GmailSyncProvider) foldDiscovery(
 	msg *gmail.Message,
 	knownMap map[string][]uuid.UUID,
-	knownSet, meSet map[string]struct{},
+	knownSet, meSet, ownDomains map[string]struct{},
 	discoveryAgg map[string]*correspondenceAggregate,
 ) {
 	if p.discoverer == nil {
 		return
 	}
-	parts := p.collectDiscoveryParticipants(msg)
-	coOccurIDs := discoveryCoOccurIDs(parts, knownMap)
-	aggregateParticipants(parts, knownSet, meSet, coOccurIDs, discoveryAgg)
+	h := parseDiscoveryHeaders(msg)
+	coOccurIDs := discoveryCoOccurIDs(h.parts, knownMap)
+
+	_, fromKnown := knownSet[h.fromNorm]
+	_, fromMe := meSet[h.fromNorm]
+	fromOwnDomain := false
+	if h.fromNorm != "" {
+		if _, ok := ownDomains[domainOf(h.fromNorm)]; ok {
+			fromOwnDomain = true
+		}
+	}
+	trustAnchored := fromKnown || fromMe || fromOwnDomain
+
+	recipients := make(map[string]struct{}, len(h.toNorm)+len(h.ccNorm))
+	for _, n := range h.toNorm {
+		if n != "" {
+			recipients[n] = struct{}{}
+		}
+	}
+	for _, n := range h.ccNorm {
+		if n != "" {
+			recipients[n] = struct{}{}
+		}
+	}
+	createEligible := trustAnchored && len(recipients) <= gmailParticipantRecipientCap
+
+	var senderContactID uuid.UUID
+	if ids := knownMap[h.fromNorm]; len(ids) > 0 {
+		senderContactID = smallestUUID(ids)
+	}
+
+	msgCtx := participantMessageContext{
+		createEligible:  createEligible,
+		senderNorm:      h.fromNorm,
+		senderContactID: senderContactID,
+		senderIsSelf:    fromMe || fromOwnDomain,
+		subject:         h.subject,
+		epochSeconds:    h.epochSeconds,
+	}
+
+	aggregateParticipants(h.parts, knownSet, meSet, ownDomains, coOccurIDs, msgCtx, discoveryAgg)
+}
+
+// gmailParticipantRecipientCap is the participant-discovery CREATE-path
+// recipient cap (spec: To∪Cc > 20 suppresses create proposals from that
+// message; link discovery is unaffected). Exactly 20 passes.
+const gmailParticipantRecipientCap = 20
+
+// domainOf returns the substring after the last '@' in a normalized address,
+// or "" when absent.
+func domainOf(normAddr string) string {
+	idx := strings.LastIndex(normAddr, "@")
+	if idx < 0 || idx == len(normAddr)-1 {
+		return ""
+	}
+	return normAddr[idx+1:]
+}
+
+// smallestUUID returns the lexicographically smallest id in ids (deterministic
+// tie-break for a shared address mapping to multiple contacts), mirroring
+// strongestCoOccurrence's tie-break. Returns uuid.Nil for an empty slice.
+func smallestUUID(ids []uuid.UUID) uuid.UUID {
+	best := uuid.Nil
+	for _, id := range ids {
+		if best == uuid.Nil || id.String() < best.String() {
+			best = id
+		}
+	}
+	return best
 }
 
 // runDiscovery evaluates the per-pass discovery aggregate once, best-effort. A
@@ -799,20 +878,51 @@ func (p *GmailSyncProvider) runDiscovery(ctx context.Context, accountID string, 
 // collectDiscoveryParticipants extracts the (display_name, address) pairs from a
 // fetched message's From, To, and Cc headers using the SAME parsers
 // processMessage uses. Bcc is intentionally omitted from discovery per spec;
-// Gmail strips it from sent copies and it is out of scope.
+// Gmail strips it from sent copies and it is out of scope. A thin wrapper over
+// parseDiscoveryHeaders (the single per-message header parse foldDiscovery
+// also uses), kept as its own entry point for RunDiscoverParticipantsForTest.
 func (p *GmailSyncProvider) collectDiscoveryParticipants(msg *gmail.Message) []participant {
-	headers := newHeaderLookup(msg.Payload)
-	fromRaw, _, fromName := parseSingleAddress(headers.first("From"))
-	toRaws, _, toNames := parseAddressList(headers.first("To"))
-	ccRaws, _, ccNames := parseAddressList(headers.first("Cc"))
+	return parseDiscoveryHeaders(msg).parts
+}
 
-	out := make([]participant, 0, 1+len(toRaws)+len(ccRaws))
+// discoveryHeaders is the result of parsing a fetched message's From/To/Cc/
+// Subject headers ONCE for discovery: the participant list plus the facts
+// foldDiscovery needs to compute this message's trust-anchor context
+// (fromNorm/toNorm/ccNorm/subject/epochSeconds).
+type discoveryHeaders struct {
+	parts        []participant
+	fromNorm     string
+	toNorm       []string
+	ccNorm       []string
+	subject      string
+	epochSeconds int64
+}
+
+// parseDiscoveryHeaders parses a fetched message's From/To/Cc/Subject headers
+// once. Bcc is intentionally excluded (Gmail strips it from sent copies; the
+// spec scopes discovery to To ∪ Cc).
+func parseDiscoveryHeaders(msg *gmail.Message) discoveryHeaders {
+	headers := newHeaderLookup(msg.Payload)
+	fromRaw, fromNorm, fromName := parseSingleAddress(headers.first("From"))
+	toRaws, toNorm, toNames := parseAddressList(headers.first("To"))
+	ccRaws, ccNorm, ccNames := parseAddressList(headers.first("Cc"))
+	subject := headers.first("Subject")
+
+	parts := make([]participant, 0, 1+len(toRaws)+len(ccRaws))
 	if fromRaw != "" {
-		out = append(out, participant{name: fromName, address: fromRaw})
+		parts = append(parts, participant{name: fromName, address: fromRaw})
 	}
-	out = appendParticipants(out, toRaws, toNames)
-	out = appendParticipants(out, ccRaws, ccNames)
-	return out
+	parts = appendParticipants(parts, toRaws, toNames)
+	parts = appendParticipants(parts, ccRaws, ccNames)
+
+	return discoveryHeaders{
+		parts:        parts,
+		fromNorm:     fromNorm,
+		toNorm:       toNorm,
+		ccNorm:       ccNorm,
+		subject:      subject,
+		epochSeconds: msg.InternalDate / 1000,
+	}
 }
 
 // appendParticipants pairs each raw address with its index-aligned name (a

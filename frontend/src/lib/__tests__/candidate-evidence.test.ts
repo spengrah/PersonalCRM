@@ -27,12 +27,11 @@ describe('candidateEvidenceLabel', () => {
     ).toBe('Seen with Alex Rivera · 4 messages')
   })
 
-  it('renders count, recency and counterpart for telegram metadata', () => {
-    // Handle-only telegram candidates have no name fields, so
-    // getCandidateDisplayName falls back to the username itself — the exact
-    // case where the card's existing username chip is suppressed as
-    // redundant with the heading, and the evidence line picks up the
-    // counterpart instead (no duplicate rendering with the chip).
+  it('renders count and recency for telegram metadata, with no counterpart segment', () => {
+    // Telegram's identity (name or, for a handle-only candidate, the
+    // username itself) already renders in the card's heading and/or its
+    // username chip — the evidence line never repeats it, regardless of
+    // whether the candidate is named or handle-only.
     expect(
       candidateEvidenceLabel(
         candidate({
@@ -44,13 +43,10 @@ describe('candidateEvidenceLabel', () => {
           },
         })
       )
-    ).toBe('@dalepeer5 · 12 messages · Last: Aug 1, 2026')
+    ).toBe('12 messages · Last: Aug 1, 2026')
   })
 
-  it('omits the counterpart segment for telegram when a chip already shows it', () => {
-    // A named candidate (display_name != username) is exactly when the
-    // existing username chip in page.tsx renders — the evidence line must
-    // not repeat it.
+  it('omits the counterpart segment for a named telegram candidate too', () => {
     expect(
       candidateEvidenceLabel(
         candidate({

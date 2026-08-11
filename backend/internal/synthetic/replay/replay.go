@@ -459,18 +459,80 @@ type CorrespondenceEvidence struct {
 	CoOccurringName      string
 }
 
+// ParticipantEvidence is the trust-anchor evidence a gmail_participant candidate
+// carries: how many messages the discoverer observed the address on, the sender
+// that anchored trust for it, and the anchor message's subject and recency.
+//
+// TrustedSenderAddress is always set — production always resolves a sender
+// address for a row it creates. TrustedSenderName is set only when that sender
+// resolves to a known contact (address-only sender otherwise); the metadata never
+// carries a sender contact id, matching buildParticipantEvidence exactly.
+type ParticipantEvidence struct {
+	MessageCount         int
+	TrustedSenderAddress string
+	TrustedSenderName    string
+	AnchorSubject        string
+	LastMessageAt        time.Time
+}
+
+// ParticipantMetadata builds the §5.2 gmail_participant metadata map and
+// resolves the row's stored display name, mirroring buildParticipantEvidence
+// (google/gmail_participant.go) key-for-key: displayName empty → nil stored name
+// and no display_names_seen key (the address-only sighting NoIdentity declares);
+// evidence nil → the default production shape a trust-anchored message with no
+// declared evidence still carries (a self-sent anchor, one sighting, a formatted
+// recency). anchor_subject and display_names_seen are OMITTED rather than
+// zero-valued when absent, matching the production writer's own omission
+// semantics.
+//
+// Pulled out of the SeedExternalContactCandidate switch as its own function so
+// the declare vocabulary's tests can pin this metadata SHAPE directly, without a
+// live harness — a shape divergence here is exactly what would let a synthetic
+// E2E pass vacuously against a metadata shape production never writes.
+func ParticipantMetadata(displayName, accountAddress string, evidence *ParticipantEvidence, now time.Time) (metadata map[string]any, storedDisplayName *string) {
+	if displayName != "" {
+		name := displayName
+		storedDisplayName = &name
+	}
+	trustedSender := map[string]any{"address": accountAddress, "self": true}
+	metadata = map[string]any{
+		"message_count":   1,
+		"last_message_at": now.UTC().Format("2006-01-02T15:04:05Z"),
+	}
+	if evidence != nil {
+		metadata["message_count"] = evidence.MessageCount
+		trustedSender = map[string]any{"address": evidence.TrustedSenderAddress}
+		if evidence.TrustedSenderName != "" {
+			trustedSender["name"] = evidence.TrustedSenderName
+		}
+		if !evidence.LastMessageAt.IsZero() {
+			metadata["last_message_at"] = evidence.LastMessageAt.UTC().Format("2006-01-02T15:04:05Z")
+		}
+		if evidence.AnchorSubject != "" {
+			metadata["anchor_subject"] = evidence.AnchorSubject
+		}
+	}
+	metadata["trusted_sender"] = trustedSender
+	if displayName != "" {
+		metadata["display_names_seen"] = []string{displayName}
+	}
+	return metadata, storedDisplayName
+}
+
 // SeedExternalContactCandidate writes one UNMATCHED external_contact import
 // candidate through the PRODUCTION ExternalContactRepository.Upsert path — the
 // SAME write the Google sync providers use for the sources the ingest registry does
 // NOT allow (gcontacts: google/contacts.go; gmail_correspondence:
-// google/gmail_correspondence.go; gcal_attendee: google/calendar.go). The Upsert
-// hardcodes match_status='unmatched' on insert, so this produces an Imports-queue
+// google/gmail_correspondence.go; gcal_attendee: google/calendar.go;
+// gmail_participant: google/gmail_participant.go, via
+// CorrespondenceDiscoverer.upsertParticipant). The Upsert hardcodes
+// match_status='unmatched' on insert, so this produces an Imports-queue
 // candidate only (matched/linked candidates need the match path and are out of
 // scope here). The field shape mirrors each provider so the Imports UI renders the
 // candidate: gcontacts is account-scoped with first/last name and an id-shaped
 // source_id; gcal_attendee is account-scoped and keys its source_id on the
-// normalized attendee email; the correspondence source keys its source_id on the
-// email and carries the evidence metadata the card reads.
+// normalized attendee email; the correspondence and participant sources key their
+// source_id on the email and carry the evidence metadata the card reads.
 //
 // The ns-prefixed source_id is reclaimed by the teardown's external_contact
 // source_id-prefix sweep; the declared-seeding caller ALSO records namespace
@@ -480,6 +542,7 @@ func (h *Harness) SeedExternalContactCandidate(
 	ctx context.Context,
 	spec factory.ExternalContactCandidateSpec,
 	evidence *CorrespondenceEvidence,
+	participantEvidence *ParticipantEvidence,
 ) (uuid.UUID, error) {
 	now := accelerated.GetCurrentTime()
 	emails := make([]repository.EmailEntry, 0, len(spec.Emails))
@@ -513,6 +576,16 @@ func (h *Harness) SeedExternalContactCandidate(
 				"name": evidence.CoOccurringName,
 			}
 		}
+		req.Metadata = metadata
+	case google.ParticipantSource:
+		// The participant discoverer keys source_id on the email address too, but
+		// unlike correspondence its DisplayName is OPTIONAL: an address-only sighting
+		// (NoIdentity) is a real production shape, so an empty generated name is not a
+		// display name to store — buildParticipantEvidence's own sibling upsert writes
+		// a nil pointer for exactly this case.
+		req.SourceID = spec.Emails[0]
+		metadata, storedDisplayName := ParticipantMetadata(spec.DisplayName, spec.AccountID, participantEvidence, now)
+		req.DisplayName = storedDisplayName
 		req.Metadata = metadata
 	case google.CalendarAttendeeSource:
 		// The calendar provider dedupes attendees on the NORMALIZED email, and

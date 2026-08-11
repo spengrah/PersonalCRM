@@ -44,6 +44,15 @@ const C = cand('cand-c', 'Candidate C')
 const X = cand('cand-x', 'Candidate X')
 const Y = cand('cand-y', 'Candidate Y')
 
+// A gmail_participant candidate discovered from mail headers with no name
+// ever observed — no display_name/first_name/last_name, address-only.
+const namelessParticipant: ImportCandidate = {
+  id: 'cand-p',
+  source: 'gmail_participant',
+  emails: ['alex@example.net'],
+  phones: [],
+}
+
 let refetchMock: ReturnType<typeof vi.fn>
 let importAsync: ReturnType<typeof vi.fn>
 
@@ -435,5 +444,188 @@ describe('ContactCandidateResolver candidate tracking', () => {
       await screen.findByRole('heading', { level: 3, name: /Candidate A/ }, { timeout: 5000 })
     ).toBeInTheDocument()
     expect(props.onClose).not.toHaveBeenCalled()
+  })
+})
+
+describe('ContactCandidateResolver nameless candidate naming (gmail_participant)', () => {
+  it('seeds an empty name for a source-nameless candidate', async () => {
+    const user = userEvent.setup()
+    mockCandidatesQuery([namelessParticipant])
+    renderModal([namelessParticipant], namelessParticipant.id)
+
+    // The heading falls back to the address (never "Unknown"), but the
+    // editable name itself must start empty — there is nothing to delete.
+    expect(heading()).toHaveTextContent('alex@example.net')
+
+    await user.click(heading())
+    expect(screen.getByRole('textbox')).toHaveValue('')
+  })
+
+  it('disables Import until a name is typed, then imports the typed name', async () => {
+    const user = userEvent.setup()
+    mockCandidatesQuery([namelessParticipant])
+    renderModal([namelessParticipant], namelessParticipant.id)
+
+    expect(screen.getByRole('button', { name: /Import as New Contact/ })).toBeDisabled()
+
+    await user.click(heading())
+    await user.type(screen.getByRole('textbox'), 'Pat Example')
+
+    const importButton = screen.getByRole('button', { name: /Import as New Contact/ })
+    expect(importButton).not.toBeDisabled()
+
+    await user.click(importButton)
+
+    expect(importAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: namelessParticipant.id,
+        request: expect.objectContaining({ name: 'Pat Example' }),
+      })
+    )
+  })
+
+  it('escape-cancel reverts to empty, never to the address', async () => {
+    const user = userEvent.setup()
+    mockCandidatesQuery([namelessParticipant])
+    renderModal([namelessParticipant], namelessParticipant.id)
+
+    await user.click(heading())
+    await user.type(screen.getByRole('textbox'), 'partial')
+    await user.keyboard('{Escape}')
+
+    // Cancel restores the SEEDED value. For a nameless participant that is
+    // the empty string — reverting to displayName would silently put the
+    // address into the name and enable Import.
+    await user.click(heading())
+    expect(screen.getByRole('textbox')).toHaveValue('')
+    expect(screen.getByRole('button', { name: /Import as New Contact/ })).toBeDisabled()
+  })
+
+  it('offers no quick-fill of the address while editing', async () => {
+    const user = userEvent.setup()
+    mockCandidatesQuery([namelessParticipant])
+    renderModal([namelessParticipant], namelessParticipant.id)
+
+    await user.click(heading())
+    // The context line still shows the address for identification, but as
+    // plain text — a one-click fill would make the address the contact name.
+    expect(
+      screen.queryByRole('button', { name: `"${'alex@example.net'}"` })
+    ).not.toBeInTheDocument()
+    expect(screen.getByText(`"${'alex@example.net'}"`)).toBeInTheDocument()
+  })
+
+  it('a typed name survives a background refetch', async () => {
+    const user = userEvent.setup()
+    mockCandidatesQuery([namelessParticipant])
+    const { rerenderModal } = renderModal([namelessParticipant], namelessParticipant.id)
+
+    await user.click(heading())
+    await user.type(screen.getByRole('textbox'), 'Pat Example')
+    expect(screen.getByRole('textbox')).toHaveValue('Pat Example')
+
+    // A background refetch delivers a CHANGED same-id candidate that now
+    // carries a first_name (a later sync pass resolved a name for this
+    // address). This actually feeds the seeding effect's deps
+    // (candidateHasSourceName flips false -> true, displayName changes) so
+    // the effect genuinely re-fires — unlike a metadata-only change, which
+    // touches none of those deps and would leave the effect never
+    // re-running at all, making the guard untested either way.
+    const refreshed: ImportCandidate = {
+      ...namelessParticipant,
+      first_name: 'Alex',
+    }
+    mockCandidatesQuery([refreshed])
+    rerenderModal()
+
+    // The typed name — and edit mode — survive the refetch, because the
+    // guard sees the seed key (id:mode:contact) is unchanged and skips
+    // reseeding even though the effect re-ran.
+    expect(screen.getByRole('textbox')).toHaveValue('Pat Example')
+  })
+
+  it('link-mode reseeds when the selected contact resolves', async () => {
+    const user = userEvent.setup()
+    const contactAlice = { id: 'contact-alice', full_name: 'Alice CRM', methods: [], cadence: '' }
+    const contactBob = { id: 'contact-bob', full_name: 'Bob CRM', methods: [], cadence: '' }
+
+    vi.mocked(useContact).mockReturnValue({ data: undefined } as any)
+    mockCandidatesQuery([A, B])
+    const { rerenderModal } = renderModal([A, B], A.id, { initialMode: 'link' })
+
+    // No contact resolved yet: the external candidate's name is the
+    // placeholder.
+    expect(heading()).toHaveTextContent('Candidate A')
+
+    // Contact resolves asynchronously (the none -> contact-id transition):
+    // the guard must NOT suppress this deliberate reseed.
+    vi.mocked(useContact).mockReturnValue({ data: contactAlice } as any)
+    rerenderModal()
+    expect(heading()).toHaveTextContent('Alice CRM')
+
+    // Switching to a different contact reseeds again.
+    vi.mocked(useContact).mockReturnValue({ data: contactBob } as any)
+    rerenderModal()
+    expect(heading()).toHaveTextContent('Bob CRM')
+
+    // Switching mode away and back reseeds too (mode is part of the guard
+    // key) — a stale link-mode name never survives the round trip.
+    await user.click(screen.getByRole('button', { name: 'Import as New' }))
+    expect(heading()).toHaveTextContent('Candidate A')
+
+    await user.click(screen.getByRole('button', { name: 'Link to Existing' }))
+    expect(heading()).toHaveTextContent('Bob CRM')
+
+    // Candidate navigation also reseeds (currentId is part of the guard
+    // key), even with the contact portion of the key unresolved on both
+    // sides.
+    vi.mocked(useContact).mockReturnValue({ data: undefined } as any)
+    rerenderModal()
+    expect(heading()).toHaveTextContent('Candidate A')
+
+    await user.click(screen.getByRole('button', { name: 'Next candidate' }))
+    expect(
+      await screen.findByRole('heading', { level: 3, name: /Candidate B/ }, { timeout: 5000 })
+    ).toBeInTheDocument()
+  })
+})
+
+describe('ContactCandidateResolver nameless-seeding scope (gmail_participant only)', () => {
+  it('still seeds a handle-only Telegram candidate’s handle, with Import enabled', async () => {
+    // A handle-only Telegram peer has no name FIELDS either (same shape as
+    // a nameless gmail_participant), but its display fallback is a real
+    // @handle worth pre-filling and importing without an edit (IMP-012) —
+    // the empty-seed/disabled-Import behavior must stay scoped to
+    // gmail_participant and not swallow this pre-existing flow.
+    const user = userEvent.setup()
+    const handleOnlyTelegram: ImportCandidate = {
+      id: 'cand-t',
+      source: 'telegram',
+      emails: [],
+      phones: [],
+      metadata: { username: '@daledobeck' },
+    }
+    mockCandidatesQuery([handleOnlyTelegram])
+    renderModal([handleOnlyTelegram], handleOnlyTelegram.id)
+
+    expect(heading()).toHaveTextContent('@daledobeck')
+    expect(screen.getByRole('button', { name: /Import as New Contact/ })).not.toBeDisabled()
+
+    await user.click(heading())
+    expect(screen.getByRole('textbox')).toHaveValue('@daledobeck')
+  })
+
+  it('keeps Import enabled for a non-participant candidate even after the name is cleared', async () => {
+    // Non-participant sources rely on the existing click-then-validate path
+    // (handleImport's own empty-name check), not a disabled button — only
+    // gmail_participant gates the button itself.
+    const user = userEvent.setup()
+    mockCandidatesQuery([A])
+    renderModal([A], A.id)
+
+    await user.click(heading())
+    await user.clear(screen.getByRole('textbox'))
+
+    expect(screen.getByRole('button', { name: /Import as New Contact/ })).not.toBeDisabled()
   })
 })

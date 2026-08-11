@@ -21,6 +21,10 @@ const SOURCE_DISPLAY_MAP: Record<string, SourceDisplayInfo> = {
   // gmail_correspondence is a link-only source (the link-only candidate and
   // the method-suggestion card both render this label).
   gmail_correspondence: { label: 'Email correspondence', icon: Mail },
+  // gmail_participant candidates are discovered from mail headers, not from
+  // an established correspondence pattern, so it gets a distinct label
+  // while sharing the mail icon family.
+  gmail_participant: { label: 'Gmail participant', icon: Mail },
 }
 
 /**
