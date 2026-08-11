@@ -172,7 +172,7 @@ func TestWhatsAppWiring_ProductionRegistriesDispatchWhatsApp(t *testing.T) {
 	require.NotNil(t, engine, "site 6: no ChatAwareAggregator registered for whatsapp")
 	require.NoError(t, engine.AggregateForContact(ctx, fx.contactID, fx.chatC))
 
-	wantRefC := repository.InteractionSourceWhatsApp + ":" + fx.chatC + ":" + fx.firstC
+	wantRefC := repository.InteractionSourceWhatsApp + ":" + fx.chatC + ":" + fx.firstC + ":" + fx.contactID.String()
 	envC, err := chain.eventRepo.FindEventBySource(ctx, repository.InteractionSourceWhatsApp, wantRefC)
 	require.NoError(t, err, "sites 3+6: the whatsapp engine published no event for %s", wantRefC)
 	require.NotNil(t, envC)
@@ -249,7 +249,7 @@ func TestWhatsAppWiring_ProductionRegistriesDispatchWhatsApp(t *testing.T) {
 	envD := envelopeWithPeerRef(t, repository.InteractionSourceWhatsApp+":"+fx.chatD)
 	require.NoError(t, reenqueuer.Reenqueue(ctx, envD, fx.contactID))
 
-	wantRefD := repository.InteractionSourceWhatsApp + ":" + fx.chatD + ":" + fx.firstD
+	wantRefD := repository.InteractionSourceWhatsApp + ":" + fx.chatD + ":" + fx.firstD + ":" + fx.contactID.String()
 	envDOut, err := chain.eventRepo.FindEventBySource(ctx, repository.InteractionSourceWhatsApp, wantRefD)
 	require.NoError(t, err, "site 4: the whatsapp reenqueuer aggregated nothing for %s", wantRefD)
 	require.NotNil(t, envDOut)

@@ -119,10 +119,11 @@ func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
 		"extend path must link the staging row to the baseline interaction")
 
 	// The extend path must NOT publish a message.received event for
-	// the extending message's source_ref (would-be source_ref is based
-	// on msgIDBase+1). Use FindEventBySource for a targeted query —
-	// avoids cross-query counts on the shared DB.
-	wouldBeRef := fmt.Sprintf("tg:%d:%d", chatID, msgIDBase+1)
+	// the extending message's claim/event key (would-be source_ref is
+	// based on msgIDBase+1, scoped to this contact the same way the
+	// engine derives its claim key). Use FindEventBySource for a
+	// targeted query — avoids cross-query counts on the shared DB.
+	wouldBeRef := fmt.Sprintf("tg:%d:%d:%s", chatID, msgIDBase+1, contact.ID.String())
 	_, err = eventRepo.FindEventBySource(ctx, repository.InteractionSourceTelegram, wouldBeRef)
 	require.Error(t, err, "extend path must not publish a create event for the inbound extension")
 	assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound for the missing extend event, got %v", err)
