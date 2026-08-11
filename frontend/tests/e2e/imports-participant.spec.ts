@@ -5,6 +5,7 @@ import {
   candidateCardByName,
   expectModalCandidate,
   findCandidateByName,
+  findCandidateByNameNoReload,
   resolverDialog,
 } from './helpers/imports-helpers'
 
@@ -245,5 +246,39 @@ test.describe('Imports gmail_participant @area:imports', () => {
       card.getByText(`${messageCount} ${messageCount === 1 ? 'message' : 'messages'}`)
     ).toBeVisible()
     await expect(card.getByText(/Last: [A-Za-z]{3} \d{1,2}, \d{4}/)).toBeVisible()
+  })
+
+  test('the combined Gmail filter surfaces both Gmail sources', async ({ page }) => {
+    const participantWorld = await testApi.seedBehavior('IMP-048')
+    const participantName = participantWorld.entities['participant'].name
+    const correspondenceWorld = await testApi.seedBehavior('IMP-037')
+    const correspondenceName = correspondenceWorld.entities['corr'].name
+
+    await page.goto('/imports')
+    // The pill drives a server-side source-group filter; a fresh request
+    // always fires because the filter changes the query key. Exclusion
+    // semantics (non-gmail sources filtered out, single-source filters
+    // unchanged) are pinned deterministically by the API integration test —
+    // this test proves the UI wiring sends the COMBINED virtual value and
+    // renders rows from BOTH member sources. The param is parsed exactly:
+    // a substring check would also match a broken single-source value like
+    // source=gmail_participant, passing while correspondence rows vanish.
+    const filtered = page.waitForResponse(
+      res =>
+        res.request().method() === 'GET' &&
+        new URL(res.url()).searchParams.get('source') === 'gmail'
+    )
+    await page.getByRole('button', { name: 'Gmail', exact: true }).click()
+    await filtered
+    await expect(page.getByRole('button', { name: 'Gmail', exact: true })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    )
+    // No-reload walks: the source filter is client state, and
+    // findCandidateByName's reload recovery would silently reset it to All —
+    // the walk would then "find" the cards under no filter at all. One card
+    // from EACH Gmail source proves the group, not just a member.
+    await findCandidateByNameNoReload(page, participantName)
+    await findCandidateByNameNoReload(page, correspondenceName)
   })
 })

@@ -28,6 +28,9 @@ func (emptySuggestionDeps) GetByID(ctx context.Context, id uuid.UUID) (*reposito
 func (emptySuggestionDeps) ListUnmatched(ctx context.Context, source string, limit, offset int32, includeUnresolvedTelegram bool) ([]repository.ExternalContact, error) {
 	return nil, nil
 }
+func (emptySuggestionDeps) ListUnmatchedBySources(ctx context.Context, sources []string, limit, offset int32, includeUnresolvedTelegram bool) ([]repository.ExternalContact, error) {
+	return nil, nil
+}
 func (emptySuggestionDeps) ListAllUnmatched(ctx context.Context, limit, offset int32, includeUnresolvedTelegram bool) ([]repository.ExternalContact, error) {
 	return nil, nil
 }

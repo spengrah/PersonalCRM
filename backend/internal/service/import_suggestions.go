@@ -58,6 +58,15 @@ func IsLinkOnlySource(source string) bool {
 	return linkOnlySources[source]
 }
 
+// sourceFilterGroups maps virtual UI filter values to the set of real
+// sources they cover. "gmail" combines the two Gmail discovery sources
+// (link-only correspondence + trust-anchored participant) so the imports
+// queue can filter all mail-derived candidates at once. A virtual value
+// never collides with a real source tag.
+var sourceFilterGroups = map[string][]string{
+	"gmail": {"gmail_correspondence", "gmail_participant"},
+}
+
 // CandidateWithMatch pairs an unmatched external_contact with its
 // pre-computed suggested match, in the confidence-sorted order the
 // candidate surface renders. Both the existing /imports/candidates handler
@@ -125,6 +134,7 @@ type DismissResult struct {
 type suggestionExternalRepo interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*repository.ExternalContact, error)
 	ListUnmatched(ctx context.Context, source string, limit, offset int32, includeUnresolvedTelegram bool) ([]repository.ExternalContact, error)
+	ListUnmatchedBySources(ctx context.Context, sources []string, limit, offset int32, includeUnresolvedTelegram bool) ([]repository.ExternalContact, error)
 	ListAllUnmatched(ctx context.Context, limit, offset int32, includeUnresolvedTelegram bool) ([]repository.ExternalContact, error)
 	CountHiddenUnresolvedTelegram(ctx context.Context, source string) (int64, error)
 	ListPendingMethodSuggestionRows(ctx context.Context, sourceFilter string) ([]repository.PendingMethodSuggestionRow, error)
@@ -205,7 +215,9 @@ func NewSuggestionService(
 func (s *SuggestionService) BuildSortedCandidates(ctx context.Context, source string, maxCandidates int32, includeUnresolvedTelegram bool) ([]CandidateWithMatch, error) {
 	var contacts []repository.ExternalContact
 	var err error
-	if source != "" {
+	if sources, ok := sourceFilterGroups[source]; ok {
+		contacts, err = s.externalRepo.ListUnmatchedBySources(ctx, sources, maxCandidates, 0, includeUnresolvedTelegram)
+	} else if source != "" {
 		contacts, err = s.externalRepo.ListUnmatched(ctx, source, maxCandidates, 0, includeUnresolvedTelegram)
 	} else {
 		contacts, err = s.externalRepo.ListAllUnmatched(ctx, maxCandidates, 0, includeUnresolvedTelegram)

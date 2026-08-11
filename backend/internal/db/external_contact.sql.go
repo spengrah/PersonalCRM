@@ -1330,6 +1330,93 @@ func (q *Queries) ListUnmatchedExternalContacts(ctx context.Context, arg ListUnm
 	return items, nil
 }
 
+const ListUnmatchedExternalContactsBySources = `-- name: ListUnmatchedExternalContactsBySources :many
+SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
+WHERE source = ANY($1::text[])
+  AND source != 'anarlog_title'
+  AND match_status = 'unmatched'
+  AND duplicate_of_id IS NULL
+  AND deleted_at IS NULL
+  AND (
+    $2::bool
+    OR NOT (
+      source = 'telegram'
+      AND NULLIF(BTRIM(COALESCE(display_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(first_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(last_name, '')), '') IS NULL
+      AND NULLIF(BTRIM(COALESCE(metadata->>'username', '')), '') IS NULL
+      AND COALESCE(jsonb_array_length(emails), 0) = 0
+      AND COALESCE(jsonb_array_length(phones), 0) = 0
+    )
+  )
+ORDER BY display_name
+LIMIT $4 OFFSET $3
+`
+
+type ListUnmatchedExternalContactsBySourcesParams struct {
+	Sources                   []string `json:"sources"`
+	IncludeUnresolvedTelegram bool     `json:"include_unresolved_telegram"`
+	PageOffset                int32    `json:"page_offset"`
+	PageLimit                 int32    `json:"page_limit"`
+}
+
+// Multi-source variant of ListUnmatchedExternalContacts for combined UI
+// filters (a filter value that groups several real sources, e.g. the two
+// Gmail discovery sources). Same anarlog_title defense and unresolved-
+// telegram gate as the single-source query.
+func (q *Queries) ListUnmatchedExternalContactsBySources(ctx context.Context, arg ListUnmatchedExternalContactsBySourcesParams) ([]*ExternalContact, error) {
+	rows, err := q.db.Query(ctx, ListUnmatchedExternalContactsBySources,
+		arg.Sources,
+		arg.IncludeUnresolvedTelegram,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ExternalContact{}
+	for rows.Next() {
+		var i ExternalContact
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.SourceID,
+			&i.AccountID,
+			&i.DisplayName,
+			&i.FirstName,
+			&i.LastName,
+			&i.Emails,
+			&i.Phones,
+			&i.Addresses,
+			&i.Organization,
+			&i.JobTitle,
+			&i.Birthday,
+			&i.PhotoUrl,
+			&i.CrmContactID,
+			&i.MatchStatus,
+			&i.DuplicateOfID,
+			&i.Etag,
+			&i.Metadata,
+			&i.SyncedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.HostID,
+			&i.LastContentHash,
+			&i.PendingMethodSuggestions,
+			&i.DismissedMethodSuggestions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const MarkAnarlogTitleSiblingsIgnoredByToken = `-- name: MarkAnarlogTitleSiblingsIgnoredByToken :exec
 UPDATE external_contact SET
     match_status = 'ignored',

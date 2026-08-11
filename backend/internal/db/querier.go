@@ -1435,6 +1435,11 @@ type Querier interface {
 	// injection), this query returns empty rather than leaking weak
 	// discovery rows into the per-source UI.
 	ListUnmatchedExternalContacts(ctx context.Context, arg ListUnmatchedExternalContactsParams) ([]*ExternalContact, error)
+	// Multi-source variant of ListUnmatchedExternalContacts for combined UI
+	// filters (a filter value that groups several real sources, e.g. the two
+	// Gmail discovery sources). Same anarlog_title defense and unresolved-
+	// telegram gate as the single-source query.
+	ListUnmatchedExternalContactsBySources(ctx context.Context, arg ListUnmatchedExternalContactsBySourcesParams) ([]*ExternalContact, error)
 	ListUnmatchedIdentities(ctx context.Context, arg ListUnmatchedIdentitiesParams) ([]*ExternalIdentity, error)
 	// Eligible rows for a contact within one source. Orders by thread_id then
 	// sent_at — thread_id carries the chat scope, mirroring messages' ORDER BY

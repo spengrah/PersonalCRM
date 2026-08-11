@@ -599,6 +599,31 @@ func (r *ExternalContactRepository) ListUnmatched(ctx context.Context, source st
 	return contacts, nil
 }
 
+// ListUnmatchedBySources returns unmatched candidates whose source is any of
+// the given set — the read behind combined UI filter values that group
+// several real sources (e.g. the Gmail pair).
+func (r *ExternalContactRepository) ListUnmatchedBySources(ctx context.Context, sources []string, limit, offset int32, includeUnresolvedTelegram bool) ([]ExternalContact, error) {
+	dbContacts, err := r.queries.ListUnmatchedExternalContactsBySources(ctx, db.ListUnmatchedExternalContactsBySourcesParams{
+		Sources:                   sources,
+		IncludeUnresolvedTelegram: includeUnresolvedTelegram,
+		PageLimit:                 limit,
+		PageOffset:                offset,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	contacts := make([]ExternalContact, 0, len(dbContacts))
+	for _, dbContact := range dbContacts {
+		contact, err := convertDbExternalContact(dbContact)
+		if err != nil {
+			continue
+		}
+		contacts = append(contacts, *contact)
+	}
+	return contacts, nil
+}
+
 // ListAllUnmatched returns all unmatched external contacts across sources.
 func (r *ExternalContactRepository) ListAllUnmatched(ctx context.Context, limit, offset int32, includeUnresolvedTelegram bool) ([]ExternalContact, error) {
 	dbContacts, err := r.queries.ListAllUnmatchedExternalContacts(ctx, db.ListAllUnmatchedExternalContactsParams{
