@@ -123,7 +123,8 @@ func (h *ContactHandler) CreateContact(c *gin.Context) {
         return
     }
 
-    // 3. Call repository/service
+    // 3. Call the repository directly — simple CRUD adds nothing but a
+    //    rename through a service (rule 3, .ai/rules/core.md)
     contact, err := h.repo.CreateContact(c.Request.Context(), repository.CreateContactRequest{
         FullName: req.FullName,
         Email:    req.Email,

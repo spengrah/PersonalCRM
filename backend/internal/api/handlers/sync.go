@@ -21,25 +21,31 @@ import (
 // This allows for easier testing with mock implementations.
 type SyncService interface {
 	TriggerSync(ctx context.Context, source string, accountID *string) error
-	GetSyncStatus(ctx context.Context) ([]repository.SyncState, error)
-	GetSyncStateBySource(ctx context.Context, source string, accountID *string) (*repository.SyncState, error)
-	EnableSync(ctx context.Context, id uuid.UUID, enabled bool) (*repository.SyncState, error)
-	GetSyncLogs(ctx context.Context, syncStateID uuid.UUID, limit, offset int32) ([]repository.SyncLog, error)
-	CountSyncLogs(ctx context.Context, syncStateID uuid.UUID) (int64, error)
-	GetRecentSyncLogs(ctx context.Context, limit int32) ([]repository.SyncLog, error)
 	GetAvailableProviders() []sync.SourceConfig
+}
+
+// SyncStateStore is the repository surface the sync handler reads directly.
+type SyncStateStore interface {
+	ListSyncStates(ctx context.Context) ([]repository.SyncState, error)
+	GetSyncStateBySource(ctx context.Context, source string, accountID *string) (*repository.SyncState, error)
+	UpdateSyncStateEnabled(ctx context.Context, id uuid.UUID, enabled bool) (*repository.SyncState, error)
+	ListSyncLogsByState(ctx context.Context, stateID uuid.UUID, limit, offset int32) ([]repository.SyncLog, error)
+	CountSyncLogsByState(ctx context.Context, stateID uuid.UUID) (int64, error)
+	ListRecentSyncLogs(ctx context.Context, limit int32) ([]repository.SyncLog, error)
 }
 
 // SyncHandler handles sync-related HTTP requests
 type SyncHandler struct {
 	syncService SyncService
+	syncStore   SyncStateStore
 	validator   *validator.Validate
 }
 
 // NewSyncHandler creates a new sync handler
-func NewSyncHandler(syncService SyncService) *SyncHandler {
+func NewSyncHandler(syncService SyncService, syncStore SyncStateStore) *SyncHandler {
 	return &SyncHandler{
 		syncService: syncService,
+		syncStore:   syncStore,
 		validator:   sharedValidator,
 	}
 }
@@ -59,7 +65,7 @@ type TriggerSyncRequest struct {
 // @Failure 500 {object} api.APIResponse{error=api.APIError}
 // @Router /sync/status [get]
 func (h *SyncHandler) GetSyncStatus(c *gin.Context) {
-	states, err := h.syncService.GetSyncStatus(c.Request.Context())
+	states, err := h.syncStore.ListSyncStates(c.Request.Context())
 	if err != nil {
 		api.RespondInternal(c, err)
 		return
@@ -104,7 +110,7 @@ func (h *SyncHandler) GetSyncState(c *gin.Context) {
 		accountIDPtr = &accountID
 	}
 
-	state, err := h.syncService.GetSyncStateBySource(c.Request.Context(), source, accountIDPtr)
+	state, err := h.syncStore.GetSyncStateBySource(c.Request.Context(), source, accountIDPtr)
 	if err != nil {
 		api.RespondError(c, err, "Sync state")
 		return
@@ -207,7 +213,7 @@ func (h *SyncHandler) EnableSync(c *gin.Context) {
 		return
 	}
 
-	state, err := h.syncService.EnableSync(c.Request.Context(), id, enabled)
+	state, err := h.syncStore.UpdateSyncStateEnabled(c.Request.Context(), id, enabled)
 	if err != nil {
 		api.RespondError(c, err, "Sync state")
 		return
@@ -246,14 +252,14 @@ func (h *SyncHandler) GetSyncLogs(c *gin.Context) {
 
 	offset := int32((page - 1) * limit)
 
-	logs, err := h.syncService.GetSyncLogs(c.Request.Context(), id, int32(limit), offset)
+	logs, err := h.syncStore.ListSyncLogsByState(c.Request.Context(), id, int32(limit), offset)
 	if err != nil {
 		api.RespondInternal(c, err)
 		return
 	}
 
 	// Get total count for pagination
-	total, err := h.syncService.CountSyncLogs(c.Request.Context(), id)
+	total, err := h.syncStore.CountSyncLogsByState(c.Request.Context(), id)
 	if err != nil {
 		api.RespondInternal(c, err)
 		return
@@ -280,7 +286,7 @@ func (h *SyncHandler) GetRecentSyncLogs(c *gin.Context) {
 		limit = 20
 	}
 
-	logs, err := h.syncService.GetRecentSyncLogs(c.Request.Context(), int32(limit))
+	logs, err := h.syncStore.ListRecentSyncLogs(c.Request.Context(), int32(limit))
 	if err != nil {
 		api.RespondInternal(c, err)
 		return

@@ -113,7 +113,7 @@ sequenceDiagram
 
 **Trade-offs:**
 - More boilerplate than using an ORM directly from handlers
-- Requires discipline to not skip layers
+- A layer exists where it earns its keep: a service is required wherever there is business logic, multi-repository orchestration, or a transaction; a handler may call a repository directly when the call would add nothing but a rename (see `.ai/rules/core.md` rule 3)
 
 ---
 

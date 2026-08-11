@@ -7,7 +7,7 @@ body:
       value: |
         ## Before You Start
         - Read [AGENTS.md](../AGENTS.md) for development guidelines
-        - Follow the layered architecture: Handler → Service → Repository → DB
+        - Follow the layered architecture: a layer exists where it earns its keep (Handler → [Service →] Repository → DB; handlers never call sqlc)
         - Write tests for all new features
         
   - type: input

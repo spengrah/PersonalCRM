@@ -542,7 +542,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		assert.Equal(t, repository.MatchTypeManual, linked.MatchType)
 
 		// Unlink
-		unlinked, err := identityService.UnlinkIdentity(ctx, result.Identity.ID)
+		unlinked, err := identityRepo.UnlinkFromContact(ctx, result.Identity.ID)
 		require.NoError(t, err)
 		assert.Nil(t, unlinked.ContactID)
 		assert.Equal(t, repository.MatchTypeUnmatched, unlinked.MatchType)
