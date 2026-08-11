@@ -621,8 +621,8 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 
 	h := newMergeAttrHarness(t, ctx)
 
-	// spec: CON-067.blocked-tasks-close-real-id-only
 	t.Run("real external id closes and enqueues, colliding target row survives", func(t *testing.T) {
+		// spec: CON-067.blocked-tasks-close-real-id-only
 		a := h.createContact(t, ctx, "task close survivor 1")
 		b := h.createContact(t, ctx, "task close loser 1")
 		// COLLISION SHAPE: A and B EACH have a live follow-up. A repoint
@@ -643,8 +643,8 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, aTask.ID), "no close job for the survivor's own follow-up")
 	})
 
-	// spec: CON-067.blocked-tasks-close-real-id-only
 	t.Run("pending shapes close locally without a close job", func(t *testing.T) {
+		// spec: CON-067.blocked-tasks-close-real-id-only
 		a := h.createContact(t, ctx, "task close survivor 2")
 		b := h.createContact(t, ctx, "task close loser 2")
 		// A holds a live row in EACH automated lifecycle so the transfer
@@ -673,8 +673,8 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, tempTask.ID), "no close job for a pending temp id")
 	})
 
-	// spec: CON-067.manual-repoints-every-state
 	t.Run("manual tasks repoint to the survivor in every state", func(t *testing.T) {
+		// spec: CON-067.manual-repoints-every-state
 		a := h.createContact(t, ctx, "task close survivor 3")
 		b := h.createContact(t, ctx, "task close loser 3")
 		// Both sides have a live manual task — no unique index covers
@@ -682,12 +682,15 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 		aManual := h.seedTask(t, ctx, a.ID, contacttask.LifecycleManual, "managed", "tsk-man-a3", nil)
 		bManual := h.seedTask(t, ctx, b.ID, contacttask.LifecycleManual, "managed", "tsk-man-b3", nil)
 		// CON-067 claims manual tasks repoint "in every state", not just
-		// live ones. Seed the terminal/dismissed states on the source too,
-		// so that claim is proven by a passing assertion rather than merely
-		// exercised by a single managed row.
+		// live ones. Seed every other state on the source too, so that
+		// claim is proven by a passing assertion rather than merely
+		// exercised by a single managed row. pending_remote_create is
+		// included because migration 041 permits it on any lifecycle, not
+		// just followup_loop — the state CHECK constraint is global.
 		bCompleted := h.seedTask(t, ctx, b.ID, contacttask.LifecycleManual, "completed", "tsk-man-b3-completed", nil)
 		bDismissed := h.seedTask(t, ctx, b.ID, contacttask.LifecycleManual, "dismissed", "tsk-man-b3-dismissed", nil)
 		bUnmanaged := h.seedTask(t, ctx, b.ID, contacttask.LifecycleManual, "unmanaged", "tsk-man-b3-unmanaged", nil)
+		bPendingRemoteCreate := h.seedTask(t, ctx, b.ID, contacttask.LifecycleManual, "pending_remote_create", "tsk-man-b3-pending", nil)
 
 		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
 			SourceContactID: b.ID,
@@ -700,15 +703,16 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 		h.requireTaskState(t, ctx, aManual.ID, repository.ContactTaskStateManaged, a.ID)
 		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bManual.ID), "manual tasks are never remotely closed by merge")
 
-		// Terminal/dismissed manual rows repoint too, state untouched —
+		// Every other state repoints too, state untouched —
 		// RepointManualContactTasksToContact has no state filter.
 		h.requireTaskState(t, ctx, bCompleted.ID, repository.ContactTaskStateCompleted, a.ID)
 		h.requireTaskState(t, ctx, bDismissed.ID, repository.ContactTaskStateDismissed, a.ID)
 		h.requireTaskState(t, ctx, bUnmanaged.ID, repository.ContactTaskStateUnmanaged, a.ID)
+		h.requireTaskState(t, ctx, bPendingRemoteCreate.ID, repository.ContactTaskStatePendingRemoteCreate, a.ID)
 	})
 
-	// spec: CON-067.automated-transfers-when-unblocked
 	t.Run("transfers live cadence row when target has no cadence row", func(t *testing.T) {
+		// spec: CON-067.automated-transfers-when-unblocked
 		a := h.createContact(t, ctx, "task transfer survivor 4")
 		b := h.createContact(t, ctx, "task transfer loser 4")
 		// A has no cadence_due row at all, so the transfer's state-agnostic
@@ -725,13 +729,12 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bTask.ID), "a transferred row is never closed")
 	})
 
-	// spec: CON-067.automated-transfers-when-unblocked
 	t.Run("transfers a pending_remote_create row awaiting its real id", func(t *testing.T) {
+		// spec: CON-067.automated-transfers-when-unblocked
 		a := h.createContact(t, ctx, "task transfer survivor 9")
 		b := h.createContact(t, ctx, "task transfer loser 9")
 		// No blocking row on A. src.state IN ('managed', 'pending_remote_create')
-		// deliberately includes the two-step create's in-flight state — the
-		// service's Risks section verifies this is safe because
+		// deliberately includes the two-step create's in-flight state:
 		// finalizeTempIDMappingTx resolves the row by id, never by
 		// contact_id, so a transfer mid-flight is a mere ownership change.
 		// Every other transfer subtest in this file seeds "managed"; this
@@ -748,8 +751,8 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bTask.ID), "a transferred row is never closed")
 	})
 
-	// spec: CON-067.automated-transfers-when-unblocked
 	t.Run("a colliding row for a different provider does not block transfer", func(t *testing.T) {
+		// spec: CON-067.automated-transfers-when-unblocked
 		a := h.createContact(t, ctx, "task transfer survivor 10")
 		b := h.createContact(t, ctx, "task transfer loser 10")
 		// A's blocking cadence_due row is for a DIFFERENT provider. The
@@ -769,8 +772,8 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bTask.ID), "a transferred row is never closed")
 	})
 
-	// spec: CON-067.blocked-tasks-close-real-id-only
 	t.Run("closes live cadence row when target holds a completed cadence row", func(t *testing.T) {
+		// spec: CON-067.blocked-tasks-close-real-id-only
 		a := h.createContact(t, ctx, "task transfer survivor 5")
 		b := h.createContact(t, ctx, "task transfer loser 5")
 		// A's cadence_due row is TERMINAL, but unique_contact_provider_cadence
@@ -789,8 +792,8 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 		assert.EqualValues(t, 1, h.closeJobCount(t, ctx, bTask.ID), "blocked transfer falls back to the close path")
 	})
 
-	// spec: CON-067.automated-transfers-when-unblocked
 	t.Run("transfers live follow-up when target holds only a terminal follow-up", func(t *testing.T) {
+		// spec: CON-067.automated-transfers-when-unblocked
 		a := h.createContact(t, ctx, "task transfer survivor 6")
 		b := h.createContact(t, ctx, "task transfer loser 6")
 		// A's follow-up is TERMINAL: idx_contact_task_followup_unique_live only
@@ -809,8 +812,8 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bTask.ID), "a transferred row is never closed")
 	})
 
-	// spec: CON-067.blocked-tasks-close-real-id-only
 	t.Run("does not transfer follow-up with a colliding idempotency key", func(t *testing.T) {
+		// spec: CON-067.blocked-tasks-close-real-id-only
 		a := h.createContact(t, ctx, "task transfer survivor 7")
 		b := h.createContact(t, ctx, "task transfer loser 7")
 		// A's follow-up is TERMINAL (would not block on the live-state guard
