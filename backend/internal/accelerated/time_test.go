@@ -2,6 +2,7 @@ package accelerated
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,8 +36,12 @@ func TestGetCurrentTime_ProcessState(t *testing.T) {
 		if got := GetCurrentTime(); !got.Equal(fakeNow) {
 			t.Fatalf("GetCurrentTime() = %v, want wall clock %v", got, fakeNow)
 		}
-		if _, _, active := Snapshot(); active {
+		_, base, active := Snapshot()
+		if active {
 			t.Fatal("Snapshot() active = true, want false for factor 1")
+		}
+		if !base.IsZero() {
+			t.Fatalf("Snapshot() base = %v, want the zero value — a disabling Configure must clear the stored base, not just gate it behind active", base)
 		}
 	})
 
@@ -123,12 +128,15 @@ func TestGetCurrentTime_ProcessState(t *testing.T) {
 
 		Configure(-5, fakeNow.Add(-time.Hour))
 
-		factor, _, active := Snapshot()
+		factor, base, active := Snapshot()
 		if factor != -5 {
 			t.Fatalf("Snapshot() factor = %d, want -5", factor)
 		}
 		if active {
 			t.Fatal("Snapshot() active = true, want false for a non-positive factor")
+		}
+		if !base.IsZero() {
+			t.Fatalf("Snapshot() base = %v, want the zero value even though a base argument was supplied — a disabling Configure clears it", base)
 		}
 		if got := GetCurrentTime(); !got.Equal(fakeNow) {
 			t.Fatalf("GetCurrentTime() = %v, want wall clock %v", got, fakeNow)
@@ -219,6 +227,48 @@ func TestConfigureNow_TruncatesBaseToSecond(t *testing.T) {
 	})
 }
 
+// TestConfigure_DisablingClearsTheBase pins that every entry point clears the
+// STORED base to the zero value when the supplied factor disables
+// acceleration (<= 1), not merely that GetCurrentTime ignores it via the
+// active flag. A direct Snapshot caller — anything other than the HTTP
+// handler, which happens to gate base_time behind is_accelerated — must not
+// see a base left over from a prior active configuration.
+func TestConfigure_DisablingClearsTheBase(t *testing.T) {
+	fakeNow := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("Configure", func(t *testing.T) {
+		t.Cleanup(Reset)
+		Configure(10, fakeNow.Add(-time.Hour))
+		Configure(1, fakeNow.Add(-time.Hour)) // re-configure to disable
+		_, base, active := Snapshot()
+		if active {
+			t.Fatal("Snapshot() active = true, want false")
+		}
+		if !base.IsZero() {
+			t.Fatalf("Snapshot() base = %v, want the zero value after disabling", base)
+		}
+	})
+
+	t.Run("ConfigureNow", func(t *testing.T) {
+		t.Cleanup(Reset)
+		restore := SetNowForTest(func() time.Time { return fakeNow })
+		t.Cleanup(restore)
+
+		ConfigureNow(60)          // activate first, anchoring a real base
+		anchor := ConfigureNow(1) // then disable via the handler's own call path
+		if !anchor.Equal(fakeNow) {
+			t.Fatalf("ConfigureNow(1) returned anchor %v, want %v — it always reports the instant it was called, even when disabling", anchor, fakeNow)
+		}
+		_, base, active := Snapshot()
+		if active {
+			t.Fatal("Snapshot() active = true, want false")
+		}
+		if !base.IsZero() {
+			t.Fatalf("Snapshot() base = %v, want the zero value after ConfigureNow(1) disables — the prior active base must not leak through Snapshot", base)
+		}
+	})
+}
+
 // TestConfigureAtBoot_AppliesAndWarns pins the contract crm-api's and
 // crm-admin's boot wiring both depend on: a good boot config activates, a
 // missing or unparseable base echoes the factor but stays inactive and
@@ -251,6 +301,9 @@ func TestConfigureAtBoot_AppliesAndWarns(t *testing.T) {
 		if err == nil {
 			t.Fatal("ConfigureAtBoot returned nil error, want non-nil naming the missing base")
 		}
+		if !strings.Contains(err.Error(), "empty") {
+			t.Fatalf("ConfigureAtBoot error = %q, want it to name the missing base (contain \"empty\")", err.Error())
+		}
 		factor, _, active := Snapshot()
 		if active {
 			t.Fatal("Snapshot() active = true, want false")
@@ -265,6 +318,9 @@ func TestConfigureAtBoot_AppliesAndWarns(t *testing.T) {
 		err := ConfigureAtBoot(60, "not-a-timestamp")
 		if err == nil {
 			t.Fatal("ConfigureAtBoot returned nil error, want non-nil naming the unparseable base")
+		}
+		if !strings.Contains(err.Error(), "not-a-timestamp") {
+			t.Fatalf("ConfigureAtBoot error = %q, want it to name the unparseable base value", err.Error())
 		}
 		factor, _, active := Snapshot()
 		if active {

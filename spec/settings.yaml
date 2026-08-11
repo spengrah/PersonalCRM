@@ -547,9 +547,9 @@ behaviors:
     when: the clock is read or the acceleration factor is set
     then:
       - key: factor-echoed-verbatim
-        text: the acceleration factor is echoed back exactly as supplied, including values at or below one and negative values
+        text: an accepted acceleration factor is echoed back exactly as supplied, including negative values and a factor of exactly one (zero is not an accepted factor — see missing-factor-rejected-without-mutation)
       - key: non-positive-factor-disables-acceleration
-        text: any factor at or below one, negative included, disables acceleration and clears the reported base
+        text: any accepted factor at or below one — negative values and exactly one, zero being rejected before reaching this logic — disables acceleration and clears the reported base
       - key: enabling-anchors-base-atomically
         text: enabling acceleration anchors a new base at the current instant, and setting the factor again re-anchors the base without an intervening moment where the factor and base disagree
       - key: disabling-discards-accumulated-offset

@@ -20,10 +20,9 @@ import (
 // newSystemTimeTestRouter builds the two system-time routes on a real gin
 // engine, through the same RegisterSystemRoutes call site production uses so
 // the test cannot drift from the real path shape. SystemHandler's contactRepo
-// is nil deliberately: neither GetSystemTime nor SetTimeAcceleration touches
-// it (system.go:42, :77), and a nil pointer makes an accidental repository
-// read panic loudly instead of silently succeeding against a database this
-// test does not have.
+// is nil deliberately: neither GetSystemTime nor SetTimeAcceleration reads
+// it, and a nil pointer makes an accidental repository read panic loudly
+// instead of silently succeeding against a database this test does not have.
 func newSystemTimeTestRouter(t *testing.T, env string) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -55,7 +54,8 @@ type envelopeError struct {
 }
 
 // setAccelerationData decodes POST /system/time/acceleration's ad-hoc success
-// body (system.go:118-124), which is not the api.SendSuccess envelope shape.
+// body, built inline in SetTimeAcceleration rather than through
+// api.SendSuccess, so it is not that envelope's shape.
 type setAccelerationData struct {
 	AccelerationFactor int       `json:"acceleration_factor"`
 	AppliedAt          time.Time `json:"applied_at"`
@@ -103,7 +103,7 @@ func TestSystemTime_BootEnableReanchorDisableCycle(t *testing.T) {
 
 	r := newSystemTimeTestRouter(t, "test")
 
-	// Step 1: boot state.
+	// Boot state: unconfigured, wall clock.
 	code, env := getSystemTime(t, r)
 	assert.Equal(t, http.StatusOK, code)
 	assert.False(t, env.Data.IsAccelerated)
@@ -112,13 +112,15 @@ func TestSystemTime_BootEnableReanchorDisableCycle(t *testing.T) {
 	assert.True(t, env.Data.CurrentTime.Equal(now), "current_time = %v, want %v", env.Data.CurrentTime, now)
 	assert.Equal(t, "test", env.Data.Environment)
 
-	// Step 2: enable.
+	// Enable acceleration: the base anchors at the current instant.
 	postCode, postEnv := postAcceleration(t, r, `{"factor": 60}`)
 	assert.Equal(t, http.StatusOK, postCode)
 	assert.Equal(t, 60, postEnv.Data.AccelerationFactor)
-	// applied_at is the anchored base ConfigureNow returns, truncated to a
-	// whole second (zero nanoseconds) — not a fresh, possibly-fractional
-	// current-time read taken after the anchor.
+	// applied_at is the anchored base ConfigureNow returns. This fixture's
+	// fake clock is whole-second already, so this check alone can't tell that
+	// implementation apart from a rejected one (a fresh GetCurrentTime() read
+	// taken after the anchor) — TestSetTimeAcceleration_AppliedAtIsTheAnchoredBase
+	// below uses a fractional-second clock specifically so the two diverge.
 	assert.True(t, postEnv.Data.AppliedAt.Equal(now), "applied_at = %v, want the anchored base %v", postEnv.Data.AppliedAt, now)
 	assert.Zero(t, postEnv.Data.AppliedAt.Nanosecond(), "applied_at must be truncated to a whole second")
 
@@ -132,7 +134,7 @@ func TestSystemTime_BootEnableReanchorDisableCycle(t *testing.T) {
 	assert.True(t, baseTime.Equal(now), "base_time = %v, want %v", baseTime, now)
 	assert.True(t, env.Data.CurrentTime.Equal(now), "current_time = %v, want %v (zero elapsed since anchor)", env.Data.CurrentTime, now)
 
-	// Step 3: advance then re-anchor.
+	// Advance the wall clock, then re-anchor at the new instant.
 	now = now.Add(60 * time.Second)
 	code, env = getSystemTime(t, r)
 	assert.Equal(t, http.StatusOK, code)
@@ -150,7 +152,7 @@ func TestSystemTime_BootEnableReanchorDisableCycle(t *testing.T) {
 	assert.True(t, reanchoredBase.Equal(now), "base_time after re-anchor = %v, want the advanced now %v", reanchoredBase, now)
 	assert.True(t, env.Data.CurrentTime.Equal(reanchoredBase), "current_time after re-anchor = %v, want the new base %v exactly", env.Data.CurrentTime, reanchoredBase)
 
-	// Step 4: disable.
+	// Disable acceleration: the accumulated offset is discarded, base cleared.
 	postCode, postEnv = postAcceleration(t, r, `{"factor": 1}`)
 	assert.Equal(t, http.StatusOK, postCode)
 	assert.Equal(t, 1, postEnv.Data.AccelerationFactor)
@@ -161,6 +163,34 @@ func TestSystemTime_BootEnableReanchorDisableCycle(t *testing.T) {
 	assert.Equal(t, 1, env.Data.AccelerationFactor)
 	assert.Equal(t, "", env.Data.BaseTime)
 	assert.True(t, env.Data.CurrentTime.Equal(now), "current_time after disable = %v, want the fake wall clock %v (accelerated offset discarded)", env.Data.CurrentTime, now)
+}
+
+// TestSetTimeAcceleration_AppliedAtIsTheAnchoredBase pins that applied_at is
+// ConfigureNow's own anchored, whole-second-truncated base, not a value
+// freshly recomputed by calling GetCurrentTime() again after anchoring. The
+// fake clock deliberately carries a non-zero sub-second component: under
+// acceleration, a fresh post-anchor GetCurrentTime() read would scale that
+// discarded fraction by the factor and land somewhere else entirely, so a
+// whole-second fixture (as used elsewhere in this file) cannot tell the two
+// implementations apart — this one can.
+//
+// spec: SET-037.enabling-anchors-base-atomically
+func TestSetTimeAcceleration_AppliedAtIsTheAnchoredBase(t *testing.T) {
+	accelerated.Reset()
+	t.Cleanup(accelerated.Reset)
+
+	fractional := time.Date(2026, 3, 1, 12, 0, 0, 750_000_000, time.UTC)
+	restore := accelerated.SetNowForTest(func() time.Time { return fractional })
+	t.Cleanup(restore)
+
+	r := newSystemTimeTestRouter(t, "test")
+
+	postCode, postEnv := postAcceleration(t, r, `{"factor": 60}`)
+	require.Equal(t, http.StatusOK, postCode)
+
+	want := fractional.Truncate(time.Second)
+	assert.True(t, postEnv.Data.AppliedAt.Equal(want), "applied_at = %v, want the anchored, truncated base %v — a fresh post-anchor GetCurrentTime() read would instead land at roughly %v (the discarded 750ms scaled by factor 60)", postEnv.Data.AppliedAt, want, want.Add(45*time.Second))
+	assert.Zero(t, postEnv.Data.AppliedAt.Nanosecond(), "applied_at must be truncated to a whole second")
 }
 
 // TestSystemTime_FactorEdgeCases pins the factor contract across the entire
@@ -277,13 +307,23 @@ func TestSetTimeAcceleration_MissingFactorIsBadRequest(t *testing.T) {
 	t.Run("malformed json against an active clock", func(t *testing.T) {
 		accelerated.Reset()
 		t.Cleanup(accelerated.Reset)
-		restore := accelerated.SetNowForTest(func() time.Time { return now })
+		cur := now
+		restore := accelerated.SetNowForTest(func() time.Time { return cur })
 		t.Cleanup(restore)
 		r := newSystemTimeTestRouter(t, "test")
 
 		setCode, setEnv := postAcceleration(t, r, `{"factor": 60}`)
 		require.Equal(t, http.StatusOK, setCode)
 		require.Equal(t, 60, setEnv.Data.AccelerationFactor)
+
+		beforeCode, beforeEnv := getSystemTime(t, r)
+		require.Equal(t, http.StatusOK, beforeCode)
+		require.NotEmpty(t, beforeEnv.Data.BaseTime)
+
+		// Advance the clock before the rejected request: if a bug silently
+		// re-anchored the base on rejection, the base_time comparison below
+		// would only catch it if the anchor instant actually moved.
+		cur = cur.Add(10 * time.Second)
 
 		code, env := postAcceleration(t, r, `{"factor":`)
 		assert.Equal(t, http.StatusBadRequest, code)
@@ -293,11 +333,15 @@ func TestSetTimeAcceleration_MissingFactorIsBadRequest(t *testing.T) {
 
 		// The unchanged-clock assertion checked against an ACTIVE clock, not
 		// only the reset state: the rejected malformed request must not have
-		// disturbed the factor 60 configured just above.
+		// disturbed the factor 60 configured just above. Pin the base too, not
+		// just factor/is_accelerated — a regression that re-anchored the base
+		// on a rejected request while leaving the factor untouched would pass
+		// factor/is_accelerated-only assertions.
 		getCode, getEnv := getSystemTime(t, r)
 		assert.Equal(t, http.StatusOK, getCode)
 		assert.True(t, getEnv.Data.IsAccelerated)
 		assert.Equal(t, 60, getEnv.Data.AccelerationFactor)
+		assert.Equal(t, beforeEnv.Data.BaseTime, getEnv.Data.BaseTime, "base_time must be unchanged by a rejected request")
 	})
 }
 

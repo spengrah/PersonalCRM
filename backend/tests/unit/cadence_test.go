@@ -563,6 +563,35 @@ func TestGetOverdueDaysWithConfig_Accelerated(t *testing.T) {
 	assert.Equal(t, overdueDays, result)
 }
 
+// TestGetOverdueDaysWithConfig_AccelerationActive covers the branch the test
+// above deliberately neutralizes: when the process clock IS active,
+// GetOverdueDaysWithConfig must take the real-24h-days branch and skip the
+// CRM_ENV scaled-day switch entirely — even with CRM_ENV set to "accelerated",
+// which would otherwise select the compressed 10-minutes-per-week "day". An
+// isAccelerationActive implementation that never actually observes the
+// process clock (e.g. a body that unconditionally returns false) would fall
+// through to the scaled-day branch instead and produce a count off by three
+// orders of magnitude, so this test — not just its inactive/scaled sibling
+// above — is what proves the active branch is reachable and correct.
+func TestGetOverdueDaysWithConfig_AccelerationActive(t *testing.T) {
+	t.Setenv("CRM_ENV", "accelerated")
+	accelerated.Configure(60, time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	t.Cleanup(accelerated.Reset)
+
+	const overdueDays = 5
+	lastContact := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	created := time.Date(2023, 12, 1, 12, 0, 0, 0, time.UTC)
+	// nextContactDue = lastContact + the accelerated weekly duration
+	// (GetCadenceDuration itself still reads CRM_ENV regardless of process
+	// acceleration state); checkTime sits exactly overdueDays REAL 24h days
+	// past it, since that's the unit the active branch must use.
+	nextDue := lastContact.Add(cadence.GetCadenceDuration(cadence.CadenceWeekly))
+	checkTime := nextDue.Add(overdueDays * 24 * time.Hour)
+
+	result := cadence.GetOverdueDaysWithConfig(cadence.CadenceWeekly, &lastContact, created, checkTime)
+	assert.Equal(t, overdueDays, result)
+}
+
 // TestBiweeklyCadenceComprehensive tests biweekly cadence across all functions
 func TestBiweeklyCadenceComprehensive(t *testing.T) {
 	t.Parallel()

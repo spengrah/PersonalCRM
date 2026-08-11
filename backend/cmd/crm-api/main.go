@@ -79,6 +79,12 @@ func run() int {
 
 	// Boot the process clock from config. Never fatal: a bad acceleration
 	// setting must not stop the process, only leave the clock on wall time.
+	// This call site runs for real in E2E — Playwright's webServer launches
+	// this binary via `go run ./cmd/crm-api` (frontend/playwright.config.ts),
+	// no test env sets TIME_ACCELERATION, and dashboard.spec.ts's "marking
+	// contact as contacted updates dashboard immediately without navigation"
+	// asserts the server clock IS the wall clock — which only holds if this
+	// line ran and left acceleration inactive by default.
 	if err := accelerated.ConfigureAtBoot(cfg.Runtime.TimeAcceleration, cfg.Runtime.TimeBase); err != nil {
 		logger.Warn().Err(err).Msg("time acceleration not applied")
 	}

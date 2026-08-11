@@ -41,28 +41,36 @@ func GetCurrentTime() time.Time {
 // TRUNCATED TO WHOLE SECONDS, so the RFC3339 timestamp this package later
 // echoes is a lossless encoding of the exact value it computes from and a
 // client's second-resolution copy of it never drifts. factor <= 1 disables
-// acceleration but is still recorded verbatim for Snapshot. Safe from any
-// goroutine.
+// acceleration AND clears the stored base to the zero value — Snapshot must
+// never report a base left over from a prior active configuration once the
+// clock is disabled, even though GetCurrentTime already ignores it via the
+// active flag. The factor itself is still recorded verbatim for Snapshot.
+// Safe from any goroutine.
 func Configure(factor int, base time.Time) {
-	current.Store(&settings{
-		factor: factor,
-		base:   base.Truncate(time.Second),
-		active: factor > 1,
-	})
+	s := &settings{factor: factor}
+	if factor > 1 {
+		s.base = base.Truncate(time.Second)
+		s.active = true
+	}
+	current.Store(s)
 }
 
 // ConfigureNow anchors the base at the current wall clock, TRUNCATED TO WHOLE
-// SECONDS for the same reason as Configure, and sets the factor, returning the
-// new base. The package owns the wall clock (rule 1), so the settings handler
-// must not capture its own.
+// SECONDS for the same reason as Configure, and sets the factor, always
+// returning that anchor instant regardless of whether the factor activates
+// acceleration (the caller uses it to report when the setting was applied).
+// The STORED base follows the same clear-on-disable rule as Configure: only
+// factor > 1 persists a base for Snapshot to report. The package owns the
+// wall clock (rule 1), so the settings handler must not capture its own.
 func ConfigureNow(factor int) time.Time {
-	base := nowFn().Truncate(time.Second)
-	current.Store(&settings{
-		factor: factor,
-		base:   base,
-		active: factor > 1,
-	})
-	return base
+	anchor := nowFn().Truncate(time.Second)
+	s := &settings{factor: factor}
+	if factor > 1 {
+		s.base = anchor
+		s.active = true
+	}
+	current.Store(s)
+	return anchor
 }
 
 // ConfigureAtBoot applies settings from configuration. baseStr accepts Unix
