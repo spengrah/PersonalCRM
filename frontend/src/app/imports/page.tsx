@@ -68,6 +68,16 @@ const SOURCE_FILTERS = [
   { value: 'anarlog_humans', label: 'Anarlog' },
 ] as const
 
+/** Empty-state copy for the candidate list. Names the active source when one
+ * is selected, so a filtered empty list does not claim every source is
+ * exhausted; otherwise speaks to the connected sources as a whole. */
+function emptyCandidatesMessage(source: string | undefined): string {
+  const active = SOURCE_FILTERS.find(filter => filter.value === (source || ''))
+  return active && active.value !== ''
+    ? `Everything from ${active.label} has been imported or is already linked.`
+    : 'Everything from your connected sources has been imported or is already linked.'
+}
+
 /** Normalize the inbound `?tab` param to a canonical tab. `needs-attention`
  * is a transitional alias for `interactions`; everything else (including
  * `people` and unknown values) resolves to People. */
@@ -345,7 +355,7 @@ function ImportsPageFallback() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
-      <div className="max-w-5xl mx-auto py-6 sm:px-6 lg:px-8">
+      <div className="max-w-6xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="space-y-4">
           {[...Array(5)].map((_, i) => (
             <div key={i} className="h-24 bg-gray-200 rounded-lg animate-pulse"></div>
@@ -719,9 +729,9 @@ function ImportsPageInner() {
     <div className="min-h-screen bg-gray-50">
       <Navigation />
 
-      <div className="max-w-5xl mx-auto py-6 sm:px-6 lg:px-8">
+      <div className="max-w-6xl mx-auto py-6 sm:px-6 lg:px-8">
         {/* Header */}
-        <div className="md:flex md:items-center md:justify-between mb-6">
+        <div className="mb-6">
           <div className="flex-1 min-w-0">
             <div className="flex items-center space-x-3">
               <CloudDownload className="w-8 h-8 text-blue-600" />
@@ -736,16 +746,6 @@ function ImportsPageInner() {
                   ? headerSummary(methodSuggestions.length, data?.total ?? 0)
                   : 'Nothing to review'}
             </p>
-          </div>
-          <div className="mt-4 flex md:mt-0 md:ml-4 space-x-2">
-            <Button variant="outline" onClick={handleSyncContacts} loading={syncMutation.isPending}>
-              <RefreshCw className="w-4 h-4 mr-2" />
-              Sync Contacts
-            </Button>
-            <Button variant="outline" onClick={handleSyncCalendar} loading={syncMutation.isPending}>
-              <Calendar className="w-4 h-4 mr-2" />
-              Sync Calendar
-            </Button>
           </div>
         </div>
 
@@ -775,21 +775,30 @@ function ImportsPageInner() {
           <>
             {/* Source filter (People tab only) */}
             <div className="mb-6 flex flex-wrap items-center gap-2">
-              <span className="text-sm text-gray-500">Filter:</span>
-              {SOURCE_FILTERS.map(filter => (
-                <button
-                  key={filter.value}
-                  onClick={() => handleSourceFilter(filter.value)}
-                  aria-pressed={(params.source || '') === filter.value}
-                  className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
-                    (params.source || '') === filter.value
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  {filter.label}
-                </button>
-              ))}
+              {/* The pills carry their own group label so the row does not
+                  spend horizontal space on a visible "Filter:" caption — the
+                  source list is wide enough that the caption pushed the
+                  unresolved toggle onto a second line. */}
+              <div
+                role="group"
+                aria-label="Filter by source"
+                className="flex flex-wrap items-center gap-2"
+              >
+                {SOURCE_FILTERS.map(filter => (
+                  <button
+                    key={filter.value}
+                    onClick={() => handleSourceFilter(filter.value)}
+                    aria-pressed={(params.source || '') === filter.value}
+                    className={`px-3 py-1.5 text-sm rounded-full transition-colors ${
+                      (params.source || '') === filter.value
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {filter.label}
+                  </button>
+                ))}
+              </div>
               {((data?.hidden_unresolved_telegram_count ?? 0) > 0 ||
                 params.include_unresolved_telegram) && (
                 <button
@@ -857,7 +866,7 @@ function ImportsPageInner() {
                   <CloudDownload className="mx-auto h-12 w-12 text-gray-400" />
                   <h3 className="mt-2 text-sm font-medium text-gray-900">No import candidates</h3>
                   <p className="mt-1 text-sm text-gray-500">
-                    All contacts from Google have been imported or are already linked.
+                    {emptyCandidatesMessage(params.source)}
                   </p>
                   <div className="mt-6 flex justify-center space-x-2">
                     <Button

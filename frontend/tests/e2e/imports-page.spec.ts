@@ -167,6 +167,15 @@ test.describe('Imports Page @area:imports', () => {
       }
       return corsFulfill(route, { success: true, data: null })
     })
+    // The triggers live in the candidate list's empty state, so force an empty
+    // list rather than depending on whatever the shared E2E database holds.
+    await page.route('**/api/v1/imports/suggestions*', route =>
+      corsFulfill(route, {
+        success: true,
+        data: [],
+        meta: { pagination: { total: 0, page: 1, limit: 20, pages: 0 } },
+      })
+    )
 
     // The triggers act only once the account list has loaded — wait for it
     // before clicking, else the click lands on the no-accounts branch.
@@ -177,10 +186,9 @@ test.describe('Imports Page @area:imports', () => {
     await page.waitForLoadState('domcontentloaded')
     await accountsLoaded
 
-    // Both per-source triggers are offered. (.first(): an empty candidate
-    // list renders a second contacts-sync affordance in the empty state.)
-    const syncContacts = page.getByRole('button', { name: /Sync Contacts/i }).first()
-    const syncCalendar = page.getByRole('button', { name: /Sync Calendar/i }).first()
+    // Both per-source triggers are offered, in the candidate list's empty state.
+    const syncContacts = page.getByRole('button', { name: /Sync Contacts/i })
+    const syncCalendar = page.getByRole('button', { name: /Sync Calendar/i })
     await expect(syncContacts).toBeVisible()
     await expect(syncCalendar).toBeVisible()
 

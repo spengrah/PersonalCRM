@@ -402,7 +402,7 @@ behaviors:
       - key: interactions-tab-holds-conflicts
         text: an Interactions tab holds conflicts and orphans, with an attention badge counting only those (discovery items excluded)
       - key: manual-sync-triggers-offered
-        text: manual sync triggers are offered for contact and calendar sources
+        text: manual sync triggers are offered for contact and calendar sources when the candidate list is empty
       - key: low-confidence-names-section
         text: a low-confidence names section appears at the bottom only when title-derived tokens exist
     provenance: [imports/page.tsx, SubTabs, NameCandidateSection]
