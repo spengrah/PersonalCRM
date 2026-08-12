@@ -43,6 +43,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // cadenceWritingSymbols enumerates the sqlc query + repository wrapper
@@ -383,12 +385,11 @@ func sqlcQuerierIdent(name string) bool {
 	return strings.HasSuffix(name, "Queries")
 }
 
-// TestUpdateContactSQL_DoesNotTouchCadenceColumns parses contact.sql
-// and asserts the UpdateContact query's SET clause never includes a
-// cadence column. A regression that adds e.g. `last_contacted = $X` to
-// UpdateContact would trip here, independent of the call-site guard.
-func TestUpdateContactSQL_DoesNotTouchCadenceColumns(t *testing.T) {
-	t.Parallel()
+// updateContactSetClauseColumns parses contact.sql's UpdateContact query and
+// returns the sorted, deduplicated set of columns its SET clause assigns.
+// Shared by TestUpdateContactSQL_SetClauseIsExactlyProfileColumns.
+func updateContactSetClauseColumns(t *testing.T) []string {
+	t.Helper()
 	moduleRoot, err := backendModuleRoot()
 	if err != nil {
 		t.Fatalf("locate backend module root: %v", err)
@@ -408,33 +409,46 @@ func TestUpdateContactSQL_DoesNotTouchCadenceColumns(t *testing.T) {
 	}
 	queryBody := m[1]
 
-	forbidden := []string{
-		"last_contacted",
-		"last_interaction_at",
-		"last_outreach_at",
-		"last_response_at",
-		"contact_by",
-	}
-	for _, col := range forbidden {
-		// Match a SET assignment for the column (`<col> =` with any
-		// whitespace). This catches `last_contacted = $N` even on
-		// continuation lines, while tolerating the column being
-		// mentioned in a comment.
-		setRe := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(col) + `\s*=`)
-		// Strip SQL line comments so a comment mentioning the column
-		// doesn't cause a false positive.
-		lines := strings.Split(queryBody, "\n")
-		var stripped []string
-		for _, ln := range lines {
-			if i := strings.Index(ln, "--"); i >= 0 {
-				ln = ln[:i]
-			}
-			stripped = append(stripped, ln)
+	// Strip SQL line comments so a comment mentioning a column doesn't
+	// contribute a false assignment.
+	lines := strings.Split(queryBody, "\n")
+	var stripped []string
+	for _, ln := range lines {
+		if i := strings.Index(ln, "--"); i >= 0 {
+			ln = ln[:i]
 		}
-		if setRe.MatchString(strings.Join(stripped, "\n")) {
-			t.Errorf("UpdateContact query must not write cadence column %q — route cadence mutations through CadenceUpdater", col)
-		}
+		stripped = append(stripped, ln)
 	}
+
+	assignRe := regexp.MustCompile(`(?m)^\s*(\w+)\s*=`)
+	matches := assignRe.FindAllStringSubmatch(strings.Join(stripped, "\n"), -1)
+	seen := map[string]struct{}{}
+	var cols []string
+	for _, mm := range matches {
+		col := mm[1]
+		if _, dup := seen[col]; dup {
+			continue
+		}
+		seen[col] = struct{}{}
+		cols = append(cols, col)
+	}
+	sort.Strings(cols)
+	return cols
+}
+
+// TestUpdateContactSQL_SetClauseIsExactlyProfileColumns parses contact.sql and
+// asserts UpdateContact's SET clause is EXACTLY {cadence, full_name,
+// profile_photo, updated_at} — an exact-set comparison, not a denylist (GI-4).
+// A denylist naming only the five cadence columns would silently permit a
+// knowledge column (e.g. `location = $5`) or any other future column; F6
+// falsifies this by injecting exactly that and requiring this test to catch
+// it where the old denylist did not.
+func TestUpdateContactSQL_SetClauseIsExactlyProfileColumns(t *testing.T) {
+	t.Parallel()
+	require.Equal(t,
+		[]string{"cadence", "full_name", "profile_photo", "updated_at"},
+		updateContactSetClauseColumns(t),
+	)
 }
 
 // TestCadenceSoleWriter_NegativeGuardCatchesNewWrite synthesizes a tiny
