@@ -441,18 +441,25 @@ func updateContactSetClauseColumns(t *testing.T) []string {
 
 	// Isolate the SET clause itself — between SET and the top-level WHERE —
 	// so a WHERE-clause comparison (`WHERE id = $1`) is never mistaken for a
-	// SET assignment. Word-boundaried so a future column literally named
-	// e.g. "offset" or "asset" can't collide with SET/WHERE as a substring.
-	setLoc := regexp.MustCompile(`\bSET\b`).FindStringIndex(stripped)
-	if setLoc == nil {
-		t.Fatalf("could not locate SET in UpdateContact query")
+	// SET assignment. Both keyword searches are PAREN-DEPTH-AWARE (reusing
+	// findTopLevelKeyword from sqlc_select_list_static_test.go): a scalar
+	// subquery in an assignment's RHS (e.g. `updated_at = (SELECT NOW()
+	// WHERE true)`) contains its own nested "WHERE", and a depth-blind
+	// search would terminate the scan there — truncating the clause BEFORE
+	// a later real assignment and silently dropping it, the same class of
+	// vacuity the comma split above already guards against. Word-boundaried
+	// so a future column literally named e.g. "offset" or "asset" can't
+	// collide with SET/WHERE as a substring.
+	setIdx, ok := findTopLevelKeyword(stripped, "set", 0)
+	if !ok {
+		t.Fatalf("could not locate a top-level SET in UpdateContact query")
 	}
-	rest := stripped[setLoc[1]:]
-	whereLoc := regexp.MustCompile(`\bWHERE\b`).FindStringIndex(rest)
-	if whereLoc == nil {
-		t.Fatalf("could not locate WHERE in UpdateContact query")
+	rest := stripped[setIdx+len("SET"):]
+	whereIdx, ok := findTopLevelKeyword(rest, "where", 0)
+	if !ok {
+		t.Fatalf("could not locate a top-level WHERE in UpdateContact query")
 	}
-	setClause := rest[:whereLoc[0]]
+	setClause := rest[:whereIdx]
 
 	// Split on TOP-LEVEL commas (paren-depth-aware) rather than lines: SQL
 	// permits multiple assignments on one physical line
