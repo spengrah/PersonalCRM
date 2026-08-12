@@ -430,19 +430,61 @@ func updateContactSetClauseColumns(t *testing.T) []string {
 	// Strip SQL line comments so a comment mentioning a column doesn't
 	// contribute a false assignment.
 	lines := strings.Split(queryBody, "\n")
-	var stripped []string
+	var strippedLines []string
 	for _, ln := range lines {
 		if i := strings.Index(ln, "--"); i >= 0 {
 			ln = ln[:i]
 		}
-		stripped = append(stripped, ln)
+		strippedLines = append(strippedLines, ln)
 	}
+	stripped := strings.Join(strippedLines, "\n")
 
-	assignRe := regexp.MustCompile(`(?m)^\s*(\w+)\s*=`)
-	matches := assignRe.FindAllStringSubmatch(strings.Join(stripped, "\n"), -1)
+	// Isolate the SET clause itself — between SET and the top-level WHERE —
+	// so a WHERE-clause comparison (`WHERE id = $1`) is never mistaken for a
+	// SET assignment. Word-boundaried so a future column literally named
+	// e.g. "offset" or "asset" can't collide with SET/WHERE as a substring.
+	setLoc := regexp.MustCompile(`\bSET\b`).FindStringIndex(stripped)
+	if setLoc == nil {
+		t.Fatalf("could not locate SET in UpdateContact query")
+	}
+	rest := stripped[setLoc[1]:]
+	whereLoc := regexp.MustCompile(`\bWHERE\b`).FindStringIndex(rest)
+	if whereLoc == nil {
+		t.Fatalf("could not locate WHERE in UpdateContact query")
+	}
+	setClause := rest[:whereLoc[0]]
+
+	// Split on TOP-LEVEL commas (paren-depth-aware) rather than lines: SQL
+	// permits multiple assignments on one physical line
+	// (`profile_photo = $4, location = $5,`), and a line-anchored `^` match
+	// would silently miss every assignment after the first on that line —
+	// exactly the shape that let a denylist-successor regression hide.
+	var assignments []string
+	depth := 0
+	start := 0
+	for i, r := range setClause {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				assignments = append(assignments, setClause[start:i])
+				start = i + 1
+			}
+		}
+	}
+	assignments = append(assignments, setClause[start:])
+
+	assignRe := regexp.MustCompile(`^\s*(\w+)\s*=`)
 	seen := map[string]struct{}{}
 	var cols []string
-	for _, mm := range matches {
+	for _, a := range assignments {
+		mm := assignRe.FindStringSubmatch(a)
+		if mm == nil {
+			continue
+		}
 		col := mm[1]
 		if _, dup := seen[col]; dup {
 			continue

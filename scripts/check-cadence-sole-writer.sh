@@ -45,8 +45,15 @@ DISTINCTIVE_PATTERN='\.(UpdateContactCadenceForward|UpdateContactCadenceUncondit
 
 # Querier-scoped CreateContactWithNode/UpdateContact. Match only when the
 # receiver chain looks like an sqlc Querier: `queries.X(`, `q.X(`,
-# `txQueries.X(`, or `db.New(tx).X(`.
-QUERIER_SCOPED_PATTERN='((\.queries|\.q|\.txQueries|queries|txQueries|db\.New\([^)]*\))\.(CreateContactWithNode|UpdateContact))\('
+# `txQueries.X(`, or `db.New(tx).X(` — bare OR dotted (e.g. `r.queries.X(`,
+# `r.q.X(`). The receiver identifier must be a WHOLE token: `(^|[^A-Za-z0-9_])`
+# is the POSIX-ERE word-boundary substitute (grep -E has no \b), so a variable
+# merely ENDING in "q" (e.g. `req.UpdateContact(`) does not false-positive —
+# `q` alone, without that boundary, would match the "q." tail of any such
+# identifier. This was a real gap: `\.q` (a literal-dot-then-q alternative)
+# only matched a DOTTED q (`r.q.X(`), never a BARE q.X( receiver — the single
+# most common name for a Queries handle in this codebase.
+QUERIER_SCOPED_PATTERN='(((^|[^A-Za-z0-9_])(queries|q|txQueries))|db\.New\([^)]*\))\.(CreateContactWithNode|UpdateContact)\('
 
 SYMBOLS_PATTERN="${DISTINCTIVE_PATTERN}|${QUERIER_SCOPED_PATTERN}"
 

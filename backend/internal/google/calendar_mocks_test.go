@@ -94,11 +94,6 @@ func (m *mockCalendarRepo) MarkCancelledByGcalID(ctx context.Context, gcalEventI
 
 // mockContactRepo is a mock implementation of contactRepoInterface
 type mockContactRepo struct {
-	updateLastContactedCalled bool
-	updateLastContactedIDs    []uuid.UUID
-	updateLastContactedTimes  []time.Time
-	updateLastContactedError  error
-
 	findSimilarCalled  bool
 	findSimilarName    string
 	findSimilarResults []repository.ContactMatch
