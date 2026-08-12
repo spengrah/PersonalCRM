@@ -907,9 +907,8 @@ func (q *Queries) SyntheticCountCommsMessagesByExternalIds(ctx context.Context, 
 
 const SyntheticCountContactMethodsByValueNormalizedPrefix = `-- name: SyntheticCountContactMethodsByValueNormalizedPrefix :one
 SELECT COUNT(*) FROM contact_method cm
-JOIN contact c ON c.id = cm.contact_id
+JOIN live_contact c ON c.id = cm.contact_id
 WHERE cm.value_normalized LIKE $1 || '%'
-  AND c.deleted_at IS NULL
 `
 
 // Harness setup collision detection (D5) — PRIMARY phone-band check. A seeded
@@ -2755,6 +2754,22 @@ func (q *Queries) TestCountBackendsBlockedBy(ctx context.Context, blockerPid int
 	return column_1, err
 }
 
+const TestCountPlainViews = `-- name: TestCountPlainViews :one
+SELECT count(*)::bigint FROM information_schema.views
+WHERE table_schema = 'public' AND table_name = $1::text
+`
+
+// View-kind test only: 1 when the named relation is a PLAIN view. A
+// MATERIALIZED view does not appear in information_schema.views at all
+// (verified against PostgreSQL 16), so this doubles as the not-materialized
+// assertion — and a materialized view would not be inlined by the planner.
+func (q *Queries) TestCountPlainViews(ctx context.Context, viewName string) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountPlainViews, viewName)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const TestCountTaggedAsAssertionsForSubject = `-- name: TestCountTaggedAsAssertionsForSubject :one
 SELECT COUNT(*) FROM assertion
 WHERE subject_node_id = $1
@@ -3278,6 +3293,43 @@ func (q *Queries) TestListPublicTables(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		items = append(items, table_name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const TestListViewColumns = `-- name: TestListViewColumns :many
+SELECT ordinal_position::int AS position,
+       column_name::text     AS column_name,
+       data_type::text       AS data_type
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = $1::text
+ORDER BY ordinal_position
+`
+
+type TestListViewColumnsRow struct {
+	Position   int32  `json:"position"`
+	ColumnName string `json:"column_name"`
+	DataType   string `json:"data_type"`
+}
+
+// View-shape test only: the projected column list of one view, in ordinal
+// order, straight from the catalog. Read-only, mirroring TestListPublicTables.
+func (q *Queries) TestListViewColumns(ctx context.Context, viewName string) ([]*TestListViewColumnsRow, error) {
+	rows, err := q.db.Query(ctx, TestListViewColumns, viewName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TestListViewColumnsRow{}
+	for rows.Next() {
+		var i TestListViewColumnsRow
+		if err := rows.Scan(&i.Position, &i.ColumnName, &i.DataType); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

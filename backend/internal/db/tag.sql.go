@@ -143,8 +143,7 @@ func (q *Queries) GetTagByName(ctx context.Context, name string) (*Tag, error) {
 const ListContactTagsWithLiveContact = `-- name: ListContactTagsWithLiveContact :many
 SELECT ct.contact_id, ct.tag_id, ct.created_at
 FROM contact_tag ct
-JOIN contact c ON c.id = ct.contact_id
-WHERE c.deleted_at IS NULL
+JOIN live_contact c ON c.id = ct.contact_id
 ORDER BY ct.contact_id ASC, ct.tag_id ASC
 `
 

@@ -106,10 +106,9 @@ func (q *Queries) DemoteContactMethodPrimaryByContact(ctx context.Context, arg D
 const FindMethodsByNormalizedValue = `-- name: FindMethodsByNormalizedValue :many
 SELECT cm.id, cm.contact_id, cm.type, cm.value, cm.is_primary, cm.created_at, cm.updated_at, cm.value_normalized, c.full_name as contact_name
 FROM contact_method cm
-JOIN contact c ON c.id = cm.contact_id
+JOIN live_contact c ON c.id = cm.contact_id
 WHERE cm.type = ANY($1::text[])
   AND cm.value_normalized = $2
-  AND c.deleted_at IS NULL
 `
 
 type FindMethodsByNormalizedValueParams struct {
@@ -225,10 +224,9 @@ func (q *Queries) InsertContactMethodWithIdentity(ctx context.Context, arg Inser
 const ListCanonicalIdentifiersByType = `-- name: ListCanonicalIdentifiersByType :many
 SELECT DISTINCT cm.value_normalized
 FROM contact_method cm
-JOIN contact c ON c.id = cm.contact_id
+JOIN live_contact c ON c.id = cm.contact_id
 WHERE cm.type = ANY($1::text[])
   AND cm.value_normalized <> ''
-  AND c.deleted_at IS NULL
 ORDER BY cm.value_normalized ASC
 `
 
@@ -311,10 +309,9 @@ func (q *Queries) ListContactMethodsByContact(ctx context.Context, contactID pgt
 const ListEmailIdentitiesForSync = `-- name: ListEmailIdentitiesForSync :many
 SELECT cm.value_normalized, cm.contact_id
 FROM contact_method cm
-JOIN contact c ON c.id = cm.contact_id
+JOIN live_contact c ON c.id = cm.contact_id
 WHERE cm.type = 'email'
   AND cm.value_normalized <> ''
-  AND c.deleted_at IS NULL
 ORDER BY cm.value_normalized ASC, cm.contact_id ASC
 `
 
@@ -351,10 +348,9 @@ func (q *Queries) ListEmailIdentitiesForSync(ctx context.Context) ([]*ListEmailI
 const ListGChatIdentitiesForSync = `-- name: ListGChatIdentitiesForSync :many
 SELECT cm.value_normalized, cm.contact_id, cm.type AS source_type
 FROM contact_method cm
-JOIN contact c ON c.id = cm.contact_id
+JOIN live_contact c ON c.id = cm.contact_id
 WHERE cm.type IN ('gchat', 'email')
   AND cm.value_normalized <> ''
-  AND c.deleted_at IS NULL
 ORDER BY cm.value_normalized ASC, cm.contact_id ASC, cm.type ASC
 `
 
@@ -464,9 +460,8 @@ SET is_primary = $2,
     updated_at = NOW()
 WHERE cm.id = $1
   AND EXISTS (
-    SELECT 1 FROM contact c
+    SELECT 1 FROM live_contact c
     WHERE c.id = cm.contact_id
-      AND c.deleted_at IS NULL
   )
 `
 
@@ -533,9 +528,8 @@ SET value = $2,
     updated_at = NOW()
 WHERE cm.id = $1
   AND EXISTS (
-    SELECT 1 FROM contact c
+    SELECT 1 FROM live_contact c
     WHERE c.id = cm.contact_id
-      AND c.deleted_at IS NULL
   )
 RETURNING id, contact_id, type, value, is_primary, created_at, updated_at, value_normalized
 `

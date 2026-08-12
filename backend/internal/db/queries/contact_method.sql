@@ -40,19 +40,17 @@ SET value = $2,
     updated_at = NOW()
 WHERE cm.id = $1
   AND EXISTS (
-    SELECT 1 FROM contact c
+    SELECT 1 FROM live_contact c
     WHERE c.id = cm.contact_id
-      AND c.deleted_at IS NULL
   )
 RETURNING *;
 
 -- name: FindMethodsByNormalizedValue :many
 SELECT cm.*, c.full_name as contact_name
 FROM contact_method cm
-JOIN contact c ON c.id = cm.contact_id
+JOIN live_contact c ON c.id = cm.contact_id
 WHERE cm.type = ANY($1::text[])
-  AND cm.value_normalized = $2
-  AND c.deleted_at IS NULL;
+  AND cm.value_normalized = $2;
 
 -- name: SetContactMethodPrimary :exec
 UPDATE contact_method cm
@@ -60,9 +58,8 @@ SET is_primary = $2,
     updated_at = NOW()
 WHERE cm.id = $1
   AND EXISTS (
-    SELECT 1 FROM contact c
+    SELECT 1 FROM live_contact c
     WHERE c.id = cm.contact_id
-      AND c.deleted_at IS NULL
   );
 
 -- name: ListCanonicalIdentifiersByType :many
@@ -74,10 +71,9 @@ WHERE cm.id = $1
 -- collapses the same value across multiple contacts.
 SELECT DISTINCT cm.value_normalized
 FROM contact_method cm
-JOIN contact c ON c.id = cm.contact_id
+JOIN live_contact c ON c.id = cm.contact_id
 WHERE cm.type = ANY($1::text[])
   AND cm.value_normalized <> ''
-  AND c.deleted_at IS NULL
 ORDER BY cm.value_normalized ASC;
 
 -- name: ListEmailIdentitiesForSync :many
@@ -88,10 +84,9 @@ ORDER BY cm.value_normalized ASC;
 -- lowercased by the contact_method trigger. Ordered deterministically.
 SELECT cm.value_normalized, cm.contact_id
 FROM contact_method cm
-JOIN contact c ON c.id = cm.contact_id
+JOIN live_contact c ON c.id = cm.contact_id
 WHERE cm.type = 'email'
   AND cm.value_normalized <> ''
-  AND c.deleted_at IS NULL
 ORDER BY cm.value_normalized ASC, cm.contact_id ASC;
 
 -- name: ListGChatIdentitiesForSync :many
@@ -111,10 +106,9 @@ ORDER BY cm.value_normalized ASC, cm.contact_id ASC;
 -- the same address has both a gchat and an email method on one contact.
 SELECT cm.value_normalized, cm.contact_id, cm.type AS source_type
 FROM contact_method cm
-JOIN contact c ON c.id = cm.contact_id
+JOIN live_contact c ON c.id = cm.contact_id
 WHERE cm.type IN ('gchat', 'email')
   AND cm.value_normalized <> ''
-  AND c.deleted_at IS NULL
 ORDER BY cm.value_normalized ASC, cm.contact_id ASC, cm.type ASC;
 
 -- name: InsertContactMethodWithIdentity :one

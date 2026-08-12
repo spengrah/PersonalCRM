@@ -65,7 +65,7 @@ ORDER BY created_at DESC;
 -- List all managed tasks for a provider (for reconciliation)
 SELECT ct.*, c.full_name, c.cadence, c.contact_by, c.last_contacted
 FROM contact_task ct
-JOIN contact c ON c.id = ct.contact_id AND c.deleted_at IS NULL
+JOIN live_contact c ON c.id = ct.contact_id
 WHERE ct.provider = $1 AND ct.state = 'managed'
 ORDER BY ct.created_at;
 

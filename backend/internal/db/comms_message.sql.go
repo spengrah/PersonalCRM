@@ -620,7 +620,7 @@ func (q *Queries) ListCommsMessagesByContact(ctx context.Context, matchedContact
 const ListCommsMessagesMissingParticipantNames = `-- name: ListCommsMessagesMissingParticipantNames :many
 SELECT cm.id, cm.account_id, cm.source_metadata
 FROM comms_message cm
-JOIN contact c ON c.id = cm.matched_contact_id AND c.deleted_at IS NULL
+JOIN live_contact c ON c.id = cm.matched_contact_id
 WHERE cm.source = 'email'
   AND cm.deleted_at IS NULL
   AND cm.sent_at >= $1
@@ -648,7 +648,7 @@ type ListCommsMessagesMissingParticipantNamesRow struct {
 // capture shipped), paged by id > @after_id so the runner advances the cursor
 // regardless of per-row outcome — a skipped/failed row never blocks later rows
 // (livelock avoidance). account_id + source_metadata.account_gmail_ids together
-// locate the per-mailbox gmail id to re-fetch. The INNER JOIN on a live contact
+// locate the per-mailbox gmail id to re-fetch. The INNER JOIN on live_contact
 // drops rows whose matched contact was soft-deleted (soft-delete does not cascade
 // to comms_message), so the re-derivation never spends Gmail quota re-fetching
 // mail for a deleted contact.
