@@ -535,3 +535,30 @@ behaviors:
         text: a non-empty application version is shown
     provenance: [settings/page.tsx System Information section]
     notes: The version string is build-stamped (NEXT_PUBLIC_BUILD_VERSION, with a dev fallback when unstamped); the backend build stamp is covered separately by TestHealthEndpoint_StampedBuildInfo. Pinning the exact fallback copy is deliberately avoided.
+
+  # --- Time acceleration clock state ---
+
+  - id: SET-037
+    title: The system clock reports one atomically consistent view of acceleration state
+    type: business-logic
+    status: current
+    surface: api
+    given: the system time and manual acceleration control (GET /system/time, POST /system/time/acceleration)
+    when: the clock is read or the acceleration factor is set
+    then:
+      - key: factor-echoed-verbatim
+        text: an accepted acceleration factor is echoed back exactly as supplied, including negative values and a factor of exactly one (zero is not an accepted factor — see missing-factor-rejected-without-mutation)
+      - key: non-positive-factor-disables-acceleration
+        text: any accepted factor at or below one — negative values and exactly one, zero being rejected before reaching this logic — disables acceleration and clears the reported base
+      - key: enabling-anchors-base-atomically
+        text: enabling acceleration anchors a new base at the current instant, and setting the factor again re-anchors the base without an intervening moment where the factor and base disagree
+      - key: disabling-discards-accumulated-offset
+        text: disabling acceleration discards any accumulated accelerated offset rather than carrying it forward, and reports no base
+      - key: missing-factor-rejected-without-mutation
+        text: a request with no factor field, an explicit factor of zero, or malformed JSON is rejected with a 400 validation error and does not change the clock's current configuration
+      - key: factor-without-usable-base-reports-inactive
+        text: a factor above one with no usable base (unset or unparseable) reports the clock as not accelerated, even though the factor itself is still echoed
+      - key: response-reflects-one-configuration
+        text: current_time and the factor/base/is_accelerated reported alongside it always describe the same configuration, never a current_time computed under one configuration paired with settings from another
+    provenance: [accelerated.ConfigureNow, accelerated.Snapshot, accelerated.SnapshotWithTime, SystemHandler.SetTimeAcceleration, SystemHandler.GetSystemTime]
+    notes: 'Delta from prior behavior: before this behavior was minted, a factor above one with no usable base reported is_accelerated true (with an empty, unusable base_time) rather than false. That case is unreachable through the setter, which always anchors a base together with the factor; it is reachable only through boot configuration.'

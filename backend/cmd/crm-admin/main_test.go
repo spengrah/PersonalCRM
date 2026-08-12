@@ -2084,3 +2084,51 @@ func TestSetEmailOwnDomains_WritesPreservedMetadata(t *testing.T) {
 		t.Fatalf("expected the resulting domain list in the summary, got %q", stdout.String())
 	}
 }
+
+// TestRunMain_AppliesAccelerationBoot proves the ACTUAL wiring in runMain —
+// not just accelerated.ConfigureAtBoot, the function it calls — reads
+// TIME_ACCELERATION/TIME_BASE off the process environment via config.Load()
+// and applies them before subcommand dispatch. Every other test in this file
+// drives run() directly, deliberately bypassing runMain to avoid
+// config.Load()'s production-shaped validation requirements (main_test.go's
+// header comment), so none of them exercises this call site: deleting the
+// two lines that wire it would leave every other test in this file green.
+//
+// This routes through --seed under CRM_ENV=production, which
+// synthetic.SeedAllowed rejects PRE-DB (main.go's seed/reset gate runs before
+// db.NewDatabase), so the boot line executes and the process fails fast
+// afterward without ever needing a real database connection. NODE_ENV is
+// left at its "development" default so config.Validate's production-only
+// SESSION_SECRET/API_KEY requirements (keyed off NODE_ENV, not CRM_ENV) don't
+// also need stubbing.
+func TestRunMain_AppliesAccelerationBoot(t *testing.T) {
+	accelerated.Reset()
+	t.Cleanup(accelerated.Reset)
+	t.Setenv("DATABASE_URL", "postgres://unused-never-connected-to")
+	t.Setenv("CRM_ENV", "production") // trips SeedAllowed's PRE-DB rejection
+	// NODE_ENV pinned to non-production explicitly: config.Validate's
+	// IsProduction() checks NODE_ENV, not CRM_ENV, and requires
+	// SESSION_SECRET/API_KEY when it's "production". Without this, an
+	// ambient NODE_ENV=production in the test's environment would fail
+	// config.Load() before this test ever reaches the boot line, reporting a
+	// false regression.
+	t.Setenv("NODE_ENV", "development")
+	t.Setenv("TIME_ACCELERATION", "60")
+	t.Setenv("TIME_BASE", "1700000000")
+
+	err := runMain([]string{"--seed"})
+	if err == nil {
+		t.Fatal("runMain returned nil error, want the CRM_ENV=production seed-refused error")
+	}
+	if !strings.Contains(err.Error(), "production") {
+		t.Fatalf("runMain error = %q, want it to name the production refusal (confirms we reached the seed gate, not some earlier failure)", err.Error())
+	}
+
+	factor, _, active := accelerated.Snapshot()
+	if !active {
+		t.Fatal("accelerated.Snapshot() active = false, want true — runMain must have applied TIME_ACCELERATION/TIME_BASE from config before dispatching, not merely have accelerated.ConfigureAtBoot exist and pass in isolation")
+	}
+	if factor != 60 {
+		t.Fatalf("accelerated.Snapshot() factor = %d, want 60", factor)
+	}
+}

@@ -33,6 +33,7 @@ import (
 	"syscall"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
@@ -75,6 +76,26 @@ func run() int {
 
 	// Initialize structured logger with configuration
 	logger.Init(cfg.Logger)
+
+	// Boot the process clock from config. Never fatal: a bad acceleration
+	// setting must not stop the process, only leave the clock on wall time —
+	// the logged warning below is the entire failure handling this needs, no
+	// further machinery.
+	//
+	// E2E runs this call for real (Playwright's webServer launches this
+	// binary via `go run ./cmd/crm-api`), but that does NOT discriminate
+	// whether the line ran: no E2E env sets TIME_ACCELERATION, so a correct
+	// boot and an accidentally deleted call both leave the package at its
+	// inactive default, and dashboard.spec.ts's server-clock-is-wall-clock
+	// assertion holds either way. What actually proves this wiring executes
+	// and applies a configured value is TestRunMain_AppliesAccelerationBoot
+	// (backend/cmd/crm-admin/main_test.go), which drives crm-admin's runMain
+	// through the same shared accelerated.ConfigureAtBoot call this line
+	// makes — the two binaries wire it identically, differing only in how
+	// they report a non-fatal failure (logger here, stderr there).
+	if err := accelerated.ConfigureAtBoot(cfg.Runtime.TimeAcceleration, cfg.Runtime.TimeBase); err != nil {
+		logger.Warn().Err(err).Msg("time acceleration not applied")
+	}
 
 	// Record the serving build (stamped via -ldflags at build time). In prod this
 	// lands in `podman logs crm-backend`, a log-side record of which commit is live.

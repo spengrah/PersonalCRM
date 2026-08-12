@@ -28,6 +28,5 @@ linters:
       # Legitimate exceptions use inline //nolint:forbidigo comments:
       # - backend/internal/accelerated/time.go (wrapper implementation)
       # - backend/internal/api/middleware.go (latency measurement)
-      # - backend/internal/api/handlers/system.go:83 (TIME_BASE setting)
       # - backend/internal/synthetic/replay/replay.go (Stopwatch: seed/settle
       #   duration measurement — infrastructure timing, not domain time)

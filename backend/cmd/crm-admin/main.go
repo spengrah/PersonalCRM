@@ -483,6 +483,20 @@ func runMain(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// Boot the process clock from config. Never fatal: a bad acceleration
+	// setting must not abort every crm-admin subcommand, only leave the
+	// clock on wall time. crm-admin has no structured logger, so this uses
+	// the file's own non-fatal stderr idiom (see main()'s exitErr branch)
+	// rather than adding a logger dependency for one warning. This exact call
+	// site (not just the accelerated.ConfigureAtBoot function it calls) is
+	// covered by TestRunMain_AppliesAccelerationBoot in main_test.go, which
+	// drives runMain end to end through a PRE-DB rejection path so it needs
+	// no database.
+	if err := accelerated.ConfigureAtBoot(cfg.Runtime.TimeAcceleration, cfg.Runtime.TimeBase); err != nil {
+		fmt.Fprintln(os.Stderr, "crm-admin:", "time acceleration not applied:", err)
+	}
+
 	ctx := context.Background()
 
 	// Migration subcommands run PRE-DB: they need only the database URL +

@@ -77,7 +77,7 @@ type FeatureFlags struct {
 type RuntimeConfig struct {
 	CRMEnvironment   string // production|staging|test|accelerated (staging shares production cadence durations; test/accelerated run compressed cadences)
 	TimeAcceleration int    // Default: 1 (no acceleration)
-	TimeBase         string // RFC3339 timestamp for acceleration base
+	TimeBase         string // Unix seconds or RFC3339 timestamp for acceleration base
 }
 
 // ExternalConfig holds external service credentials
