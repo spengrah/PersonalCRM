@@ -456,9 +456,8 @@ WHERE identifier LIKE @identifier_prefix || '%';
 -- rows whose normalized value shares the namespace's phone prefix. Caller passes
 -- a BARE prefix; '%' is appended here.
 SELECT COUNT(*) FROM contact_method cm
-JOIN contact c ON c.id = cm.contact_id
-WHERE cm.value_normalized LIKE @value_normalized_prefix || '%'
-  AND c.deleted_at IS NULL;
+JOIN live_contact c ON c.id = cm.contact_id
+WHERE cm.value_normalized LIKE @value_normalized_prefix || '%';
 
 -- name: SyntheticCountStrandedTelegramMessagesByPeer :one
 -- Settle Gate A (telegram unknown-sender): a message row exists for the peer
@@ -1101,6 +1100,40 @@ SELECT (xpath('/row/c/text()',
 SELECT table_name::text FROM information_schema.tables
 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
 ORDER BY table_name;
+
+-- name: TestListViewColumns :many
+-- View-shape test only: the projected column list of one view, in ordinal
+-- order, straight from the catalog. Read-only, mirroring TestListPublicTables.
+SELECT ordinal_position::int AS position,
+       column_name::text     AS column_name,
+       data_type::text       AS data_type
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = sqlc.arg(view_name)::text
+ORDER BY ordinal_position;
+
+-- name: TestCountPlainViews :one
+-- View-kind test only: 1 when the named relation is a PLAIN view. A
+-- MATERIALIZED view does not appear in information_schema.views at all
+-- (verified against PostgreSQL 16), so this doubles as the not-materialized
+-- assertion — and a materialized view would not be inlined by the planner.
+SELECT count(*)::bigint FROM information_schema.views
+WHERE table_schema = 'public' AND table_name = sqlc.arg(view_name)::text;
+
+-- name: TestGetViewDefAndOptions :one
+-- View-optimizer-precondition test only: the view's rendered definition
+-- (pg_get_viewdef) and its storage options (pg_class.reloptions), the two
+-- catalog facts that determine whether the planner's subquery pull-up can
+-- fire. reloptions is NULL/empty unless a storage parameter (security_barrier
+-- among them) was set; array_to_string(NULL, ',') is NULL, so a NULL/empty
+-- result here means no such parameter is set. pg_get_viewdef renders the
+-- view's actual parsed query shape, so a DISTINCT, GROUP BY, LIMIT, HAVING,
+-- or set-op would appear in the returned text — this doubles as an "is it a
+-- simple SELECT" probe without enumerating each blocking feature by name.
+-- Read-only catalog access, mirroring TestListPublicTables.
+SELECT pg_get_viewdef(c.oid)::text AS view_definition,
+       COALESCE(array_to_string(c.reloptions, ','), '')::text AS reloptions
+FROM pg_class c
+WHERE c.oid = sqlc.arg(view_name)::text::regclass;
 
 -- name: TestListIndexDefsForTable :many
 -- Index-definition test only: enumerate every index on one table with

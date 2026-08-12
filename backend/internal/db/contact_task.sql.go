@@ -836,7 +836,7 @@ func (q *Queries) ListContactTasksByProvider(ctx context.Context, arg ListContac
 const ListManagedContactTasks = `-- name: ListManagedContactTasks :many
 SELECT ct.id, ct.contact_id, ct.provider, ct.kind, ct.external_task_id, ct.state, ct.metadata, ct.created_at, ct.updated_at, ct.idempotency_key, ct.lifecycle, c.full_name, c.cadence, c.contact_by, c.last_contacted
 FROM contact_task ct
-JOIN contact c ON c.id = ct.contact_id AND c.deleted_at IS NULL
+JOIN live_contact c ON c.id = ct.contact_id
 WHERE ct.provider = $1 AND ct.state = 'managed'
 ORDER BY ct.created_at
 `

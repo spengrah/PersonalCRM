@@ -354,6 +354,24 @@ type JobExecSample struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type LiveContact struct {
+	ID                pgtype.UUID        `json:"id"`
+	FullName          string             `json:"full_name"`
+	Location          pgtype.Text        `json:"location"`
+	Birthday          pgtype.Date        `json:"birthday"`
+	HowMet            pgtype.Text        `json:"how_met"`
+	Cadence           pgtype.Text        `json:"cadence"`
+	LastContacted     pgtype.Timestamptz `json:"last_contacted"`
+	ProfilePhoto      pgtype.Text        `json:"profile_photo"`
+	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	ContactBy         pgtype.Date        `json:"contact_by"`
+	LastInteractionAt pgtype.Timestamptz `json:"last_interaction_at"`
+	LastOutreachAt    pgtype.Timestamptz `json:"last_outreach_at"`
+	LastResponseAt    pgtype.Timestamptz `json:"last_response_at"`
+}
+
 type MacHost struct {
 	ID              pgtype.UUID        `json:"id"`
 	Hostname        string             `json:"hostname"`
@@ -458,6 +476,12 @@ type OauthCredential struct {
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	RefreshTokenNonce     []byte             `json:"refresh_token_nonce"`
+}
+
+type PgClass struct {
+	Oid        pgtype.Uint32 `json:"oid"`
+	Relname    string        `json:"relname"`
+	Reloptions []string      `json:"reloptions"`
 }
 
 type PgConstraint struct {

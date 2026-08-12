@@ -58,3 +58,20 @@ $$ LANGUAGE sql;
 CREATE FUNCTION pg_backend_pid() RETURNS integer AS $$
     SELECT 0;
 $$ LANGUAGE sql;
+
+-- pg_class.reloptions and pg_get_viewdef() back TestGetViewDefAndOptions
+-- (internal/db/queries/test.sql), which proves live_contact carries none of
+-- the storage/query-shape options (security_barrier, DISTINCT, GROUP BY,
+-- LIMIT, HAVING, a set-op) that would block the planner's subquery pull-up.
+-- sqlc v1.30.0 does not model pg_class or pg_get_viewdef; as above, only the
+-- columns/signature that query touches are declared, and the live catalog is
+-- the source of truth at runtime.
+CREATE TABLE pg_class (
+    oid        oid NOT NULL,
+    relname    text NOT NULL,
+    reloptions text[]
+);
+
+CREATE FUNCTION pg_get_viewdef(view_oid oid) RETURNS text AS $$
+    SELECT ''::text;
+$$ LANGUAGE sql;

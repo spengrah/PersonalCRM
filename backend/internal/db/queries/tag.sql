@@ -17,8 +17,7 @@ SELECT * FROM tag ORDER BY name ASC;
 -- name: ListContactTagsWithLiveContact :many
 SELECT ct.contact_id, ct.tag_id, ct.created_at
 FROM contact_tag ct
-JOIN contact c ON c.id = ct.contact_id
-WHERE c.deleted_at IS NULL
+JOIN live_contact c ON c.id = ct.contact_id
 ORDER BY ct.contact_id ASC, ct.tag_id ASC;
 
 -- CountContactTagsWithDeletedContact counts the contact_tag rows the migration

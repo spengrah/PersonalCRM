@@ -349,7 +349,7 @@ behaviors:
     status: current
     surface: none
     statement: soft-deleted contacts are excluded from every list, search, count, navigation-ID, and single-contact read; only their id-preserving rows remain in the database.
-    provenance: [contact.sql deleted_at IS NULL filters, .ai/rules/core.md Soft Deletes]
+    provenance: [contact.sql deleted_at IS NULL filters, live_contact view, .ai/rules/core.md Soft Deletes]
 
   - id: CON-025
     title: Navigation IDs apply the same query semantics as the list

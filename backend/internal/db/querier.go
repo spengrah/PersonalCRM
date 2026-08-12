@@ -1237,7 +1237,7 @@ type Querier interface {
 	// capture shipped), paged by id > @after_id so the runner advances the cursor
 	// regardless of per-row outcome — a skipped/failed row never blocks later rows
 	// (livelock avoidance). account_id + source_metadata.account_gmail_ids together
-	// locate the per-mailbox gmail id to re-fetch. The INNER JOIN on a live contact
+	// locate the per-mailbox gmail id to re-fetch. The INNER JOIN on live_contact
 	// drops rows whose matched contact was soft-deleted (soft-delete does not cascade
 	// to comms_message), so the re-derivation never spends Gmail quota re-fetching
 	// mail for a deleted contact.
@@ -2558,6 +2558,11 @@ type Querier interface {
 	// Test-only: counts venue-type nodes that no live interaction references via
 	// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
 	TestCountOrphanVenueNodes(ctx context.Context) (int64, error)
+	// View-kind test only: 1 when the named relation is a PLAIN view. A
+	// MATERIALIZED view does not appear in information_schema.views at all
+	// (verified against PostgreSQL 16), so this doubles as the not-materialized
+	// assertion — and a materialized view would not be inlined by the planner.
+	TestCountPlainViews(ctx context.Context, viewName string) (int64, error)
 	// Tag-migration test only: count the LIVE accepted `tagged_as` assertions whose
 	// subject is a given node, so a test asserts exactly one per migrated contact_tag
 	// and that an idempotent re-run creates no duplicates.
@@ -2599,6 +2604,17 @@ type Querier interface {
 	// never handed to a worker at all — a positive statement, unlike "not
 	// finalized", which a job nobody ever looked at also satisfies.
 	TestGetRiverJobDispositionByID(ctx context.Context, id int64) (*TestGetRiverJobDispositionByIDRow, error)
+	// View-optimizer-precondition test only: the view's rendered definition
+	// (pg_get_viewdef) and its storage options (pg_class.reloptions), the two
+	// catalog facts that determine whether the planner's subquery pull-up can
+	// fire. reloptions is NULL/empty unless a storage parameter (security_barrier
+	// among them) was set; array_to_string(NULL, ',') is NULL, so a NULL/empty
+	// result here means no such parameter is set. pg_get_viewdef renders the
+	// view's actual parsed query shape, so a DISTINCT, GROUP BY, LIMIT, HAVING,
+	// or set-op would appear in the returned text — this doubles as an "is it a
+	// simple SELECT" probe without enumerating each blocking feature by name.
+	// Read-only catalog access, mirroring TestListPublicTables.
+	TestGetViewDefAndOptions(ctx context.Context, viewName string) (*TestGetViewDefAndOptionsRow, error)
 	// TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
 	// by integration tests that exercise the "target row vanished between
 	// snapshot and resolve-link" path. Production code must NOT call this.
@@ -2764,6 +2780,9 @@ type Querier interface {
 	// so the catalog guard can assert each is in the wiped list, is schema_migrations,
 	// or matches the river_% allowlist. Read-only catalog access.
 	TestListPublicTables(ctx context.Context) ([]string, error)
+	// View-shape test only: the projected column list of one view, in ordinal
+	// order, straight from the catalog. Read-only, mirroring TestListPublicTables.
+	TestListViewColumns(ctx context.Context, viewName string) ([]*TestListViewColumnsRow, error)
 	// TEST ONLY. Probe a contact row with FOR UPDATE NOWAIT: fails immediately
 	// (lock_not_available) when another tx holds a conflicting lock on the row.
 	// Used by the recompute lock-ordering regression test to prove (without a
