@@ -27,8 +27,10 @@ import (
 // contact_id_node_fk (migration 077) makes "every contact has a node" a
 // database constraint, not just a convention ContactService happens to honor.
 // These tests exercise the constraint itself, the repository change that makes
-// it satisfiable at pool scope (D5-1/D5-2), and the migration that installs it
-// (D5-4).
+// it satisfiable at pool scope (a single data-modifying-CTE insert creates the
+// contact and its node atomically, with no surrounding transaction required),
+// and the migration that installs the constraint (backfill, type-collision
+// preflight, then the FK).
 
 // contactNodeFKPreVersion is the golang-migrate version immediately before the
 // contact→node identity FK migration (077). The round-trip positions each
