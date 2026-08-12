@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export model-prices-sync model-prices-apply qa-cost-assert qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export model-prices-sync model-prices-apply qa-cost-assert qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -144,6 +144,8 @@ help:
 	@echo "  api-types-check - Fail if generated API types drifted (non-mutating)"
 	@echo "  api-docs    - Regenerate the Swagger spec from Go annotations"
 	@echo "  api-docs-check - Fail if the generated Swagger spec drifted (non-mutating)"
+	@echo "  contact-queries - Regenerate the contact-list query triple from its shared fragment"
+	@echo "  contact-queries-check - Fail if the generated contact-list queries drifted (non-mutating)"
 	@echo "  lint        - Run all linters (backend + frontend)"
 	@echo "  spec-lint   - Lint the behavior spec corpus (spec/*.yaml)"
 	@echo "  spec-coverage - Report per-then-item coverage: ui behaviors (E2E), api behaviors (Go)"
@@ -738,6 +740,23 @@ api-types-check:
 		exit 1; \
 	fi && \
 	echo "✅ Generated API types are in sync"
+
+# Generate the ListContacts/CountContacts/ListContactIDs query triple from
+# the shared WHERE/ORDER BY fragment (backend/internal/db/querygen).
+contact-queries:
+	@cd backend && go run ./cmd/gen-contact-queries
+	@echo "✅ contact list queries generated"
+
+# Non-mutating drift check: generates into a temp path and diffs against the
+# committed backend/internal/db/queries/contact_list.gen.sql.
+contact-queries-check:
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
+	(cd backend && go run ./cmd/gen-contact-queries -o "$$tmp/contact_list.gen.sql") && \
+	if ! diff -u backend/internal/db/queries/contact_list.gen.sql "$$tmp/contact_list.gen.sql"; then \
+		echo "❌ Generated contact list queries are stale — run 'make contact-queries' and commit"; \
+		exit 1; \
+	fi && \
+	echo "✅ Generated contact list queries are in sync"
 
 api-build:
 	@echo "Building API server..."

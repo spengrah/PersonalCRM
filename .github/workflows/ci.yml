@@ -184,16 +184,18 @@ jobs:
       - name: Run spec drift check
         run: make spec-drift
 
-  # Guards drift between Go source and the two committed generated artifacts:
-  #   - frontend types  (backend/tygo.yaml → frontend/src/types/generated/)
-  #   - the Swagger spec (Go annotations   → backend/docs/)
-  # Both share one job on purpose: each check takes ~2s, so a second job would
-  # spend ~45s of runner setup to save nothing. Gated on backend OR frontend —
-  # a backend DTO change regenerates differently, and a frontend hand-edit of a
-  # generated file diverges from the source. The docs check does not need the
-  # frontend trigger, but running it there costs ~2s and keeps one gate.
-  # Deliberately minimal (no caches): both generators' dependency closures are
-  # small, so the cold path is seconds.
+  # Guards drift between Go source and the three committed generated artifacts:
+  #   - frontend types       (backend/tygo.yaml                     → frontend/src/types/generated/)
+  #   - the Swagger spec     (Go annotations                        → backend/docs/)
+  #   - contact-list queries (querygen/contact_list.sql.tmpl        → backend/internal/db/queries/contact_list.gen.sql)
+  # All three share one job on purpose: each check takes ~2s, so a separate job
+  # would spend ~45s of runner setup to save nothing. Gated on backend OR
+  # frontend — a backend DTO or query change regenerates differently, and a
+  # frontend hand-edit of a generated file diverges from the source. The docs
+  # and contact-list checks do not need the frontend trigger, but running them
+  # there costs ~2s each and keeps one gate.
+  # Deliberately minimal (no caches): all three generators' dependency
+  # closures are small, so the cold path is seconds.
   generated-artifacts-drift:
     name: Generated Artifacts Drift
     runs-on: ubuntu-latest
@@ -214,6 +216,8 @@ jobs:
       # resolve aborted the run, and nothing was watching the exit code).
       - name: Check generated API docs are in sync
         run: make api-docs-check
+      - name: Check generated contact list queries are in sync
+        run: make contact-queries-check
 
   backend-tests:
     name: Backend Tests
