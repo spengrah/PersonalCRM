@@ -65,9 +65,9 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 	contactRepo := repository.NewContactRepository(database.Queries)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
-	live, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "PR6 Migration Live"})
+	live, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "LiveContactView Migration Live"})
 	require.NoError(t, err)
-	deleted, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "PR6 Migration Deleted"})
+	deleted, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "LiveContactView Migration Deleted"})
 	require.NoError(t, err)
 	require.NoError(t, contactRepo.SoftDeleteContact(ctx, deleted.ID))
 
@@ -87,7 +87,7 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 
 	liveFromDB, err := contactRepo.GetContact(ctx, live.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "PR6 Migration Live", liveFromDB.FullName)
+	assert.Equal(t, "LiveContactView Migration Live", liveFromDB.FullName)
 
 	// Roll 078 down. Steps(-1), not Migrate(<version>): the clone's tip is
 	// wherever the migrations directory currently ends (078 here), so rolling
@@ -120,9 +120,12 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 
 // TestLiveContactView_Shape asserts live_contact's KIND (plain, not
 // materialized) and its projected column list (names, ordinal order, and
-// types) against db.Contact — the precondition instruction 5's plan-equivalence
-// argument rests on, since no plan-comparison test exists (D6-5, and see the
-// element's instruction 5 for why one cannot be built under the mandated sqlc).
+// types) against db.Contact. An EXPLAIN-based plan-equivalence test is not
+// buildable under the pinned sqlc version (EXPLAIN's runtime column shape is
+// never inferred at generation time), so this catalog assertion guards the
+// precondition plan-equivalence actually relies on instead: a plain,
+// non-materialized view with an exact, ordered projection is substituted and
+// flattened by the planner's subquery pull-up.
 func TestLiveContactView_Shape(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -175,13 +178,13 @@ func seedLiveContactFixture(t *testing.T, ctx context.Context, contactRepo *repo
 	token := uuid.NewString()[:8]
 
 	live, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "PR6 " + tag + " Live " + token,
+		FullName: "LiveContactView " + tag + " Live " + token,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(context.Background(), live.ID) })
 
 	deleted, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "PR6 " + tag + " Deleted " + token,
+		FullName: "LiveContactView " + tag + " Deleted " + token,
 	})
 	require.NoError(t, err)
 	require.NoError(t, contactRepo.SoftDeleteContact(ctx, deleted.ID))
@@ -209,8 +212,8 @@ func TestLiveContactView_ExcludesSoftDeletedOwners(t *testing.T) {
 
 	fx := seedLiveContactFixture(t, ctx, contactRepo, "excl")
 	token := uuid.NewString()[:8]
-	liveEmail := "pr6-excl-live-" + token + "@example.com"
-	deletedEmail := "pr6-excl-deleted-" + token + "@example.com"
+	liveEmail := "live-contact-view-excl-live-" + token + "@example.com"
+	deletedEmail := "live-contact-view-excl-deleted-" + token + "@example.com"
 
 	_, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 		ContactID: fx.live.ID, Type: string(repository.ContactMethodEmail), Value: liveEmail, IsPrimary: true,
@@ -271,8 +274,8 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 		t.Parallel()
 		fx := seedLiveContactFixture(t, ctx, contactRepo, "rr-canon")
 		token := uuid.NewString()[:8]
-		liveVal := "pr6-rr-canon-live-" + token + "@example.com"
-		deletedVal := "pr6-rr-canon-deleted-" + token + "@example.com"
+		liveVal := "live-contact-view-rr-canon-live-" + token + "@example.com"
+		deletedVal := "live-contact-view-rr-canon-deleted-" + token + "@example.com"
 		_, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: fx.live.ID, Type: string(repository.ContactMethodEmail), Value: liveVal, IsPrimary: true,
 		})
@@ -295,8 +298,8 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 		t.Parallel()
 		fx := seedLiveContactFixture(t, ctx, contactRepo, "rr-email")
 		token := uuid.NewString()[:8]
-		liveVal := "pr6-rr-email-live-" + token + "@example.com"
-		deletedVal := "pr6-rr-email-deleted-" + token + "@example.com"
+		liveVal := "live-contact-view-rr-email-live-" + token + "@example.com"
+		deletedVal := "live-contact-view-rr-email-deleted-" + token + "@example.com"
 		_, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: fx.live.ID, Type: string(repository.ContactMethodEmail), Value: liveVal, IsPrimary: true,
 		})
@@ -328,8 +331,8 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 		t.Parallel()
 		fx := seedLiveContactFixture(t, ctx, contactRepo, "rr-gchat")
 		token := uuid.NewString()[:8]
-		liveVal := "pr6-rr-gchat-live-" + token + "@example.com"
-		deletedVal := "pr6-rr-gchat-deleted-" + token + "@example.com"
+		liveVal := "live-contact-view-rr-gchat-live-" + token + "@example.com"
+		deletedVal := "live-contact-view-rr-gchat-deleted-" + token + "@example.com"
 		_, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: fx.live.ID, Type: string(repository.ContactMethodGChat), Value: liveVal, IsPrimary: true,
 		})
@@ -365,14 +368,14 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 		since := accelerated.GetCurrentTime().Add(-time.Minute)
 
 		liveMsg, err := commsRepo.UpsertMessage(ctx, repository.UpsertCommsMessageParams{
-			Source: "email", ExternalID: "pr6-rr-msg-live-" + token, Direction: "inbound",
+			Source: "email", ExternalID: "live-contact-view-rr-msg-live-" + token, Direction: "inbound",
 			SentAt: accelerated.GetCurrentTime(), MatchedContactID: fx.live.ID, SourceMetadata: []byte(`{}`),
 		})
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = commsRepo.HardDeleteByContact(context.Background(), fx.live.ID) })
 
 		deletedMsg, err := commsRepo.UpsertMessage(ctx, repository.UpsertCommsMessageParams{
-			Source: "email", ExternalID: "pr6-rr-msg-deleted-" + token, Direction: "inbound",
+			Source: "email", ExternalID: "live-contact-view-rr-msg-deleted-" + token, Direction: "inbound",
 			SentAt: accelerated.GetCurrentTime(), MatchedContactID: fx.deleted.ID, SourceMetadata: []byte(`{}`),
 		})
 		require.NoError(t, err)
@@ -397,9 +400,9 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 		t.Parallel()
 		fx := seedLiveContactFixture(t, ctx, contactRepo, "rr-tag")
 		token := uuid.NewString()[:8]
-		liveTagID, err := support.InsertTagForMigration(ctx, "pr6-rr-tag-live-"+token, nil)
+		liveTagID, err := support.InsertTagForMigration(ctx, "live-contact-view-rr-tag-live-"+token, nil)
 		require.NoError(t, err)
-		deletedTagID, err := support.InsertTagForMigration(ctx, "pr6-rr-tag-deleted-"+token, nil)
+		deletedTagID, err := support.InsertTagForMigration(ctx, "live-contact-view-rr-tag-deleted-"+token, nil)
 		require.NoError(t, err)
 		now := accelerated.GetCurrentTime()
 		require.NoError(t, support.InsertContactTagAtTime(ctx, fx.live.ID, liveTagID, now))
@@ -424,7 +427,7 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 		t.Parallel()
 		fx := seedLiveContactFixture(t, ctx, contactRepo, "rr-find")
 		token := uuid.NewString()[:8]
-		val := "pr6-rr-find-shared-" + token + "@example.com"
+		val := "live-contact-view-rr-find-shared-" + token + "@example.com"
 		_, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: fx.live.ID, Type: string(repository.ContactMethodEmail), Value: val, IsPrimary: true,
 		})
@@ -455,16 +458,16 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 		t.Parallel()
 		fx := seedLiveContactFixture(t, ctx, contactRepo, "rr-task")
 		token := uuid.NewString()[:8]
-		provider := "pr6-rr-task-" + token
+		provider := "live-contact-view-rr-task-" + token
 		liveTask, err := taskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID: fx.live.ID, Provider: provider, Kind: contacttask.KindReachOut,
-			Lifecycle: contacttask.LifecycleCadenceDue, ExternalTaskID: "pr6-rr-task-live-" + token,
+			Lifecycle: contacttask.LifecycleCadenceDue, ExternalTaskID: "live-contact-view-rr-task-live-" + token,
 			State: string(repository.ContactTaskStateManaged),
 		})
 		require.NoError(t, err)
 		deletedTask, err := taskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 			ContactID: fx.deleted.ID, Provider: provider, Kind: contacttask.KindReachOut,
-			Lifecycle: contacttask.LifecycleCadenceDue, ExternalTaskID: "pr6-rr-task-deleted-" + token,
+			Lifecycle: contacttask.LifecycleCadenceDue, ExternalTaskID: "live-contact-view-rr-task-deleted-" + token,
 			State: string(repository.ContactTaskStateManaged),
 		})
 		require.NoError(t, err)
@@ -511,11 +514,10 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 }
 
 // TestLiveContactView_UpdateGuardsHonourLiveness proves the two EXISTS-shaped
-// UPDATE guards (D6-4) — UpdateContactMethodValue and SetContactMethodPrimary —
-// each succeed for a live owner and no-op for a soft-deleted one. Neither guard
-// had integration coverage of the blocked branch before this PR (verified by
-// grep), so this is a genuine red-first for that branch, not just a regression
-// pin.
+// UPDATE guards — UpdateContactMethodValue and SetContactMethodPrimary — each
+// succeed for a live owner and no-op for a soft-deleted one. Neither guard had
+// integration coverage of the blocked branch previously (verified by grep), so
+// this is a genuine red-first for that branch, not just a regression pin.
 func TestLiveContactView_UpdateGuardsHonourLiveness(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -533,16 +535,16 @@ func TestLiveContactView_UpdateGuardsHonourLiveness(t *testing.T) {
 		token := uuid.NewString()[:8]
 		liveMethod, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: fx.live.ID, Type: string(repository.ContactMethodEmail),
-			Value: "pr6-guard-live-old-" + token + "@example.com", IsPrimary: true,
+			Value: "live-contact-view-guard-live-old-" + token + "@example.com", IsPrimary: true,
 		})
 		require.NoError(t, err)
 		deletedMethod, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: fx.deleted.ID, Type: string(repository.ContactMethodEmail),
-			Value: "pr6-guard-deleted-old-" + token + "@example.com", IsPrimary: true,
+			Value: "live-contact-view-guard-deleted-old-" + token + "@example.com", IsPrimary: true,
 		})
 		require.NoError(t, err)
 
-		newLiveVal := "pr6-guard-live-new-" + token + "@example.com"
+		newLiveVal := "live-contact-view-guard-live-new-" + token + "@example.com"
 		require.NoError(t, methodRepo.UpdateContactMethod(ctx, liveMethod.ID,
 			repository.UpdateContactMethodRequest{Type: string(repository.ContactMethodEmail), Value: newLiveVal}))
 		liveMethods, err := methodRepo.ListContactMethodsByContact(ctx, fx.live.ID)
@@ -553,7 +555,7 @@ func TestLiveContactView_UpdateGuardsHonourLiveness(t *testing.T) {
 		// UpdateContactMethodValue is a :one query (RETURNING *), so the guard's
 		// blocked branch surfaces as pgx.ErrNoRows on the zero-row UPDATE, not a
 		// silent success — unlike SetContactMethodPrimary below, which is :exec.
-		newDeletedVal := "pr6-guard-deleted-new-" + token + "@example.com"
+		newDeletedVal := "live-contact-view-guard-deleted-new-" + token + "@example.com"
 		err = methodRepo.UpdateContactMethod(ctx, deletedMethod.ID,
 			repository.UpdateContactMethodRequest{Type: string(repository.ContactMethodEmail), Value: newDeletedVal})
 		assert.ErrorIs(t, err, pgx.ErrNoRows, "the guard must reject a soft-deleted owner's method as not found")
@@ -569,12 +571,12 @@ func TestLiveContactView_UpdateGuardsHonourLiveness(t *testing.T) {
 		token := uuid.NewString()[:8]
 		liveMethod, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: fx.live.ID, Type: string(repository.ContactMethodEmail),
-			Value: "pr6-guard-primary-live-" + token + "@example.com", IsPrimary: false,
+			Value: "live-contact-view-guard-primary-live-" + token + "@example.com", IsPrimary: false,
 		})
 		require.NoError(t, err)
 		deletedMethod, err := methodRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
 			ContactID: fx.deleted.ID, Type: string(repository.ContactMethodEmail),
-			Value: "pr6-guard-primary-deleted-" + token + "@example.com", IsPrimary: false,
+			Value: "live-contact-view-guard-primary-deleted-" + token + "@example.com", IsPrimary: false,
 		})
 		require.NoError(t, err)
 
