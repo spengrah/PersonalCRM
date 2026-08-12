@@ -143,6 +143,7 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	require.NoError(t, err)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
+	contactRepo.SetPool(database.Pool)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	eventRepo := repository.NewEventRepository(database.Queries)
 
@@ -328,7 +329,7 @@ func createManagedCadenceTask(t *testing.T, env *atomicTxTestEnv, namePrefix str
 
 	// Seed contact_by so skip handler can advance it.
 	contactBy := accelerated.GetCurrentTime().UTC().Truncate(24*time.Hour).AddDate(0, 0, 7)
-	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, contactBy))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{ContactBy: &contactBy}))
 	reloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)
 	require.NoError(t, err)
 
@@ -1053,10 +1054,10 @@ func TestSync_StaleTodoistDeadline_OutreachRecovery(t *testing.T) {
 	require.NoError(t, err)
 
 	// Advance contact_by + last_outreach_at to simulate the post-PATCH
-	// state. UpdateContactBy is the test fixture's seeding tool (still
-	// allowed for fixtures); UpdateContactOutreachAt sets last_outreach_at.
-	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, advancedContactBy))
-	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, advancedOutreach, true))
+	// state. TestSeedContactCadenceFields is the test fixture's seeding tool
+	// (still allowed for fixtures, and declares the cadence owner itself).
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{ContactBy: &advancedContactBy}))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{LastOutreachAt: &advancedOutreach}))
 
 	// Scripted client returns the cadence task with its stale deadline.
 	syncItem := SyncItem{
@@ -1154,8 +1155,8 @@ func TestSync_StaleTodoistDeadline_CRMDriftPath(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, advancedContactBy))
-	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, stableOutreach, true))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{ContactBy: &advancedContactBy}))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{LastOutreachAt: &stableOutreach}))
 
 	syncItem := SyncItem{
 		ID:        cadenceExtID,
@@ -1246,7 +1247,7 @@ func TestProcessItem_DeadlineEditTxFailure_RollsBackAndSurfacesErr(t *testing.T)
 	// Legitimate-edit precondition: synced_deadline ≠ item.Deadline AND
 	// item.Deadline ≠ contact.ContactBy.
 	originalContactBy := time.Date(2027, 2, 3, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, originalContactBy))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{ContactBy: &originalContactBy}))
 
 	cadenceExtID := "td-txfail-" + uuid.New().String()[:8]
 	_, err = env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{
@@ -1341,7 +1342,7 @@ func TestSync_LegitimateTodoistEdit_SameTickReconcileIsNotSpuriousCloseCreate(t 
 	require.NoError(t, err)
 
 	originalContactBy := time.Date(2027, 2, 3, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, originalContactBy))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{ContactBy: &originalContactBy}))
 
 	cadenceExtID := "td-sametick-" + uuid.New().String()[:8]
 	_, err = env.contactTaskRepo.CreateContactTask(env.ctx, repository.CreateContactTaskRequest{

@@ -66,7 +66,7 @@ func TestReconcile_CloseCadenceTaskOnOutreachWithPendingFollowUp(t *testing.T) {
 
 	// Advance last_outreach_at (simulating a new Telegram outbound).
 	newOutreach := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
-	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, newOutreach, true))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{LastOutreachAt: &newOutreach}))
 
 	// Run reconciler.
 	commands := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID, false)
@@ -158,7 +158,7 @@ func TestReconcile_OutreachClosesWithoutPendingFollowUp(t *testing.T) {
 
 	// Advance last_outreach_at.
 	newOutreach := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
-	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, newOutreach, true))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{LastOutreachAt: &newOutreach}))
 
 	// First reconcile: cadence task should be closed.
 	commands := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID, false)
@@ -230,7 +230,7 @@ func TestReconcile_LegacyTaskBackfillsWithoutClosing(t *testing.T) {
 
 	// Second cycle: advance last_outreach_at past the backfilled value.
 	newOutreach := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
-	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, newOutreach, true))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{LastOutreachAt: &newOutreach}))
 
 	commands2 := env.provider.reconcileContactTasks(env.ctx, nil, env.settings, env.accountID, false)
 
@@ -264,7 +264,7 @@ func TestReconcile_OutreachDetectionStateFailureSkipsClose(t *testing.T) {
 
 	// Advance last_outreach_at so wasReachedOutSinceSync returns true.
 	newOutreach := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
-	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, newOutreach, true))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{LastOutreachAt: &newOutreach}))
 
 	// Reload contact for closeOnOutreach.
 	reloadedContact, err := env.contactRepo.GetContact(env.ctx, contact.ID)
@@ -312,7 +312,7 @@ func TestCloseOnOutreach_PendingTempID(t *testing.T) {
 
 	// Advance last_outreach_at so outreach is detected.
 	newOutreach := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
-	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, newOutreach, true))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{LastOutreachAt: &newOutreach}))
 
 	// Reload contact.
 	reloadedContact, err := env.contactRepo.GetContact(env.ctx, contact.ID)

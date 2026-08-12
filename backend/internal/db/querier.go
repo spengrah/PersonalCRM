@@ -2887,8 +2887,6 @@ type Querier interface {
 	// Knowledge-cache sole-writer: refreshes the derived birthday cache column
 	// from the current-accepted birthday fact (NULL when no current value).
 	UpdateContactBirthdayCache(ctx context.Context, arg UpdateContactBirthdayCacheParams) error
-	// Updates just the contact_by field (for Todoist deadline sync).
-	UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error
 	// Forward-only cadence write (spec §3.4.2). Each of the cadence columns
 	// is updated only when its apply-flag is true AND the new value strictly
 	// exceeds the existing one (or the existing is NULL).
@@ -2916,13 +2914,6 @@ type Querier interface {
 	// Knowledge-cache sole-writer: refreshes the derived how_met cache column
 	// from the current-accepted how_met fact (NULL when no current value).
 	UpdateContactHowMetCache(ctx context.Context, arg UpdateContactHowMetCacheParams) error
-	// Updates last_contacted, contact_by, and all direction timestamp fields (for mutual interactions)
-	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
-	// Updates last_contacted and contact_by only if the new date is later.
-	// Also updates direction timestamp fields (this path is used by gcal, which is always mutual).
-	// contact_by is recalculated from the new last_contacted date using the contact's existing cadence.
-	// Cadence day mappings: weekly=7, biweekly=14, monthly=30, quarterly=90, biannual=180, annual=365
-	UpdateContactLastContactedIfLater(ctx context.Context, arg UpdateContactLastContactedIfLaterParams) error
 	// Knowledge-cache sole-writer: refreshes the derived location cache column
 	// from the current-accepted lives_in edge's place node label (NULL when no
 	// current value). updated_at is intentionally NOT bumped — a cache refresh
@@ -2939,15 +2930,6 @@ type Querier interface {
 	// never be acted on.
 	UpdateContactMethodByContact(ctx context.Context, arg UpdateContactMethodByContactParams) (*ContactMethod, error)
 	UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error)
-	// Updates all direction fields + last_contacted + contact_by (for mutual interactions).
-	// Uses forward-only semantics for automated sources; manual always updates.
-	UpdateContactMutualFields(ctx context.Context, arg UpdateContactMutualFieldsParams) error
-	// Updates only last_outreach_at (for outbound-only interactions).
-	// Uses forward-only semantics: only updates if the new time is later.
-	UpdateContactOutreachAt(ctx context.Context, arg UpdateContactOutreachAtParams) error
-	// Updates last_contacted, last_interaction_at, last_response_at, and contact_by (for inbound interactions).
-	// Uses forward-only semantics for automated sources; manual always updates.
-	UpdateContactResponseFields(ctx context.Context, arg UpdateContactResponseFieldsParams) error
 	// Update the external task ID (when creating a new Todoist task).
 	// Finalizes the two-step follow-up create: transitions a
 	// pending_remote_create row to state='managed' once the remote

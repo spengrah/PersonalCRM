@@ -348,6 +348,9 @@ func (h *CadenceUpdater) applyTx(ctx context.Context, tx pgx.Tx, req cadenceWrit
 	if !req.ApplyLastContacted && !req.ApplyLastInteractionAt && !req.ApplyLastOutreachAt && !req.ApplyLastResponseAt && !req.ApplyContactBy {
 		return nil
 	}
+	if err := repository.SetDerivedWriterTx(ctx, tx, repository.DerivedWriterCadence); err != nil {
+		return err
+	}
 	q := db.New(tx)
 	switch req.Branch {
 	case repository.CadenceBranchForward:

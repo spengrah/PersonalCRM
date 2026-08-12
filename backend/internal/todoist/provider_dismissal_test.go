@@ -63,11 +63,12 @@ func (b *busRecorder) Published() []*events.Envelope {
 }
 
 // fakeCadenceOverrider is a test double for cadenceOverrider. It delegates
-// to contactRepo.UpdateContactByTx so the SQL end state matches the real
-// CadenceUpdater's unconditional branch, which keeps Harness B's existing
-// rollback assertions intact. Optional fault injection mirrors the
-// faultyContactTaskWriter shape: set faultyMethod = "ApplyContactByOverride"
-// to inject context.Canceled. Safe for concurrent use.
+// to contactRepo.TestSeedContactCadenceFieldsTx (which declares the cadence
+// owner before writing) so the SQL end state matches the real CadenceUpdater's
+// unconditional branch, which keeps Harness B's existing rollback assertions
+// intact. Optional fault injection mirrors the faultyContactTaskWriter shape:
+// set faultyMethod = "ApplyContactByOverride" to inject context.Canceled.
+// Safe for concurrent use.
 type fakeCadenceOverrider struct {
 	contactRepo  *repository.ContactRepository
 	mu           sync.Mutex
@@ -88,7 +89,7 @@ func (f *fakeCadenceOverrider) ApplyContactByOverride(ctx context.Context, tx pg
 	if contactBy == nil {
 		return errors.New("fakeCadenceOverrider: nil contactBy not used by todoist provider")
 	}
-	return f.contactRepo.UpdateContactByTx(ctx, tx, contactID, *contactBy)
+	return f.contactRepo.TestSeedContactCadenceFieldsTx(ctx, tx, contactID, repository.TestCadenceSeed{ContactBy: contactBy})
 }
 
 func (f *fakeCadenceOverrider) Calls() int {
@@ -151,6 +152,7 @@ func newProviderTestEnv(t *testing.T) *providerTestEnv {
 	require.NoError(t, err)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
+	contactRepo.SetPool(database.Pool)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	cfg := config.TestConfig()
 
@@ -251,11 +253,17 @@ func createDismissalContact(t *testing.T, env *dismissalTestEnv, nameSuffix stri
 	now := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
 	mutualAt := now.AddDate(0, 0, -5)
 	contactBy := mutualAt.AddDate(0, 1, 0)
-	require.NoError(t, env.contactRepo.UpdateContactMutualFields(env.ctx, contact.ID, mutualAt, &contactBy, true))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{
+		LastContacted:     &mutualAt,
+		LastInteractionAt: &mutualAt,
+		LastOutreachAt:    &mutualAt,
+		LastResponseAt:    &mutualAt,
+		ContactBy:         &contactBy,
+	}))
 
 	// Seed last_outreach_at separately — outbound updates only that field.
 	outreachAt := now.AddDate(0, 0, -1)
-	require.NoError(t, env.contactRepo.UpdateContactOutreachAt(env.ctx, contact.ID, outreachAt, true))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{LastOutreachAt: &outreachAt}))
 
 	// Reload to capture persisted values.
 	reloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)
@@ -1076,9 +1084,9 @@ func TestHandleSkipTrigger_PublishesEventAtomicallyWithStateAdvance(t *testing.T
 }
 
 // TestHandleSkipTrigger_DBFailureRollsBackEventAndState verifies that when
-// the in-tx UpdateContactByTx or UpdateContactTaskMetadataTx fails, no event
-// row is visible, contact_by stays unchanged, and no replacement command is
-// returned.
+// the in-tx TestSeedContactCadenceFieldsTx or UpdateContactTaskMetadataTx
+// fails, no event row is visible, contact_by stays unchanged, and no
+// replacement command is returned.
 func TestHandleSkipTrigger_DBFailureRollsBackEventAndState(t *testing.T) {
 	env, cleanup := setupDismissalTest(t)
 	defer cleanup()

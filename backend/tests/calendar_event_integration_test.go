@@ -167,62 +167,6 @@ func TestCalendarEventUpsertResetsLastContactedUpdated(t *testing.T) {
 	})
 }
 
-func TestUpdateContactLastContactedIfLater_OnlyUpdatesWhenLater(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	t.Parallel()
-	ctx := context.Background()
-
-	// Migrations are applied once by TestMain.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
-	defer database.Close()
-
-	gen, _ := migrationGenerator(t)
-	contactRepo := repository.NewContactRepository(database.Queries)
-
-	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
-	defer contactCleanup()
-
-	initial := accelerated.GetCurrentTime().Add(-2 * time.Hour)
-	later := initial.Add(2 * time.Hour)
-	earlier := initial.Add(-2 * time.Hour)
-
-	err = contactRepo.UpdateContactLastContacted(ctx, contact.ID, initial, nil)
-	require.NoError(t, err)
-
-	err = contactRepo.UpdateContactLastContactedIfLater(ctx, contact.ID, earlier)
-	require.NoError(t, err)
-
-	contactAfterEarlier, err := contactRepo.GetContact(ctx, contact.ID)
-	require.NoError(t, err)
-	require.NotNil(t, contactAfterEarlier.LastContacted)
-	assert.WithinDuration(t, initial, *contactAfterEarlier.LastContacted, time.Second)
-
-	err = contactRepo.UpdateContactLastContactedIfLater(ctx, contact.ID, later)
-	require.NoError(t, err)
-
-	contactAfterLater, err := contactRepo.GetContact(ctx, contact.ID)
-	require.NoError(t, err)
-	require.NotNil(t, contactAfterLater.LastContacted)
-	assert.WithinDuration(t, later, *contactAfterLater.LastContacted, time.Second)
-}
-
 // spec: CAL-020
 //
 // TestCalendarEventCountForContact_ExcludesCancelled binds the count read
