@@ -37,74 +37,40 @@ api.SendConflict(c, "Email already exists")
 
 ## Repository Conversion Pattern
 
-Convert between sqlc-generated DB types and clean domain types:
+sqlc emits domain-shaped types directly (`uuid.UUID`, `time.Time`, `string`, and pointer variants for nullable columns) via the global override block in `backend/sqlc.yaml`, so the repository layer no longer unwraps driver types. Its remaining conversion job is mapping generated row structs onto domain structs: naming, grouping, JSONB unmarshalling.
 
 ```go
-// Domain model (no pgtype, clean types)
+// Domain model — same shapes the generated code now uses
 type Contact struct {
     ID            uuid.UUID
     FullName      string
-    Email         *string  // nullable
+    Email         *string  // nullable column -> pointer, nil = SQL NULL
     LastContacted *time.Time
     CreatedAt     time.Time
     UpdatedAt     time.Time
 }
 
-// Convert DB type to domain type
+// Convert DB row to domain struct: mostly direct assignment
 func convertDbContact(dbContact *db.Contact) Contact {
-    contact := Contact{
-        ID:       uuid.UUID(dbContact.ID.Bytes),
-        FullName: dbContact.FullName,
+    return Contact{
+        ID:            dbContact.ID,
+        FullName:      dbContact.FullName,
+        Email:         dbContact.Email,
+        LastContacted: utcPtr(dbContact.LastContacted),
+        CreatedAt:     dbContact.CreatedAt.UTC(),
+        UpdatedAt:     dbContact.UpdatedAt.UTC(),
     }
-
-    // Handle nullable string - copy value before taking address
-    if dbContact.Email.Valid {
-        emailStr := dbContact.Email.String
-        contact.Email = &emailStr
-    }
-
-    // Handle nullable time - copy value before taking address
-    if dbContact.LastContacted.Valid {
-        lastContactedTime := dbContact.LastContacted.Time
-        contact.LastContacted = &lastContactedTime
-    }
-
-    // Handle timestamps
-    if dbContact.CreatedAt.Valid {
-        contact.CreatedAt = dbContact.CreatedAt.Time
-    }
-
-    if dbContact.UpdatedAt.Valid {
-        contact.UpdatedAt = dbContact.UpdatedAt.Time
-    }
-
-    return contact
-}
-
-// Helper: string pointer to pgtype.Text
-func stringToNullString(s *string) pgtype.Text {
-    if s == nil {
-        return pgtype.Text{Valid: false}
-    }
-    return pgtype.Text{String: *s, Valid: true}
-}
-
-// Helper: uuid.UUID to pgtype.UUID
-func uuidToPgUUID(id uuid.UUID) pgtype.UUID {
-    return pgtype.UUID{
-        Bytes: [16]byte(id),
-        Valid: true,
-    }
-}
-
-// Helper: time pointer to pgtype.Timestamptz
-func timeToNullTime(t *time.Time) pgtype.Timestamptz {
-    if t == nil {
-        return pgtype.Timestamptz{Valid: false}
-    }
-    return pgtype.Timestamptz{Time: *t, Valid: true}
 }
 ```
+
+The four helpers in `repository/conversions.go` cover the residual semantics:
+
+- `deref(p)` — zero value on nil, for reads that historically flattened SQL NULL to the zero value.
+- `utcPtr(t)` — UTC-normalises a nullable timestamp without changing the instant (pgx scans timestamptz into local time; `==` and `reflect.DeepEqual` are Location-sensitive).
+- `nilIfEmpty(s)` — empty string to nil, so `''` never reaches a WHERE clause expecting NULL semantics.
+- `jsonbOrEmpty(b)` — `'{}'` for a nil patch, preserving NOT NULL JSONB contracts.
+
+Two things the compiler cannot check: a nullable column written from a value type silently stores the zero value instead of NULL (keep nullable params as pointers end to end), and a `db_type` in `sqlc.yaml` that sqlc does not recognise is silently ignored (the residual-selector check catches it, eyes do not). Computed/aggregate outputs that can be NULL are generated as `interface{}` — sqlc\'s static analyzer cannot type them nullable — and get a small typed adapter at the repository (see `health.go`, `whatsapp.go`).
 
 ## Handler Validation Pattern
 

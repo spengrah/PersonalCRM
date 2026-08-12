@@ -88,7 +88,7 @@ sequenceDiagram
     Note over S: Business logic<br/>Orchestration
 
     S->>R: CreateContact(ctx, params)
-    Note over R: Convert to DB types<br/>(pgtype.Text, etc.)
+    Note over R: Map domain structs to<br/>generated params (native types)
 
     R->>Q: CreateContact(ctx, args)
     Note over Q: Type-safe SQL<br/>INSERT ... RETURNING *
@@ -349,28 +349,28 @@ WHERE deleted_at IS NULL
 
 ### 4. Repository Pattern with Type Conversion
 
-**Problem:** sqlc generates types with `pgtype.Text`, `pgtype.UUID`, etc. These are verbose to work with.
+**Problem (resolved at the codegen layer):** sqlc used to generate `pgtype.*` wrapper types that were verbose to work with; the repository layer existed largely to unwrap them.
 
-**Solution:** Repository layer converts to clean domain types.
+**Solution:** global type overrides in `backend/sqlc.yaml` make sqlc emit native Go types directly — `uuid.UUID`, `time.Time`, `string`, with pointer variants for nullable columns. The repository still converts generated row structs to domain structs (naming, grouping, JSONB), but no driver types leak anywhere.
 
 ```go
 // sqlc generates this
 type DbContact struct {
-    ID    pgtype.UUID
-    Email pgtype.Text  // nullable
-}
-
-// Repository converts to this
-type Contact struct {
     ID    uuid.UUID
     Email *string  // nullable
+}
+
+// Repository maps to this
+type Contact struct {
+    ID    uuid.UUID
+    Email *string
 }
 ```
 
 **Benefits:**
+- One source of truth for type mapping (`backend/sqlc.yaml`)
 - Cleaner code in services/handlers
-- Hide database-specific types
-- Easier testing (no pgtype in mocks)
+- No database-specific types anywhere in hand-written code
 
 **Trade-off:**
 - Boilerplate conversion functions
