@@ -30,3 +30,24 @@ CREATE TABLE pg_indexes (
     indexname  text NOT NULL,
     indexdef   text NOT NULL
 );
+
+-- pg_stat_activity, pg_blocking_pids(), and pg_backend_pid() back the merge
+-- transfer race test's blocking probe (TestBackendPID, TestCountBackendsBlockedBy
+-- in internal/db/queries/test.sql); sqlc v1.30.0 does not model any of them.
+-- As above, only the columns/signatures those queries touch are declared, and
+-- the live catalog is the source of truth at runtime — the stub function
+-- bodies are placeholders sqlc only type-checks against.
+CREATE TABLE pg_stat_activity (
+    pid             integer NOT NULL,
+    state           text,
+    wait_event_type text,
+    datname         text
+);
+
+CREATE FUNCTION pg_blocking_pids(pid integer) RETURNS integer[] AS $$
+    SELECT ARRAY[]::integer[];
+$$ LANGUAGE sql;
+
+CREATE FUNCTION pg_backend_pid() RETURNS integer AS $$
+    SELECT 0;
+$$ LANGUAGE sql;

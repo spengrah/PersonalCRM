@@ -3,8 +3,12 @@
 package tests
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
@@ -14,6 +18,7 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/identity"
+	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/todoist"
@@ -539,9 +544,20 @@ func TestMergeContacts_SecondPassRepointsRacedRows(t *testing.T) {
 // explicit (kind, lifecycle, state, external id, metadata) shape.
 func (h *mergeAttrHarness) seedTask(t *testing.T, ctx context.Context, contactID uuid.UUID, lifecycle, state, externalID string, metadata map[string]any) *repository.ContactTask {
 	t.Helper()
+	return h.seedTaskForProvider(t, ctx, contactID, todoist.SourceName, lifecycle, state, externalID, metadata)
+}
+
+// seedTaskForProvider is seedTask with an explicit provider, used only by
+// the provider-scoping transfer subtest: the transfer query's NOT EXISTS
+// guards are scoped by tgt.provider = src.provider, so a fixture needs a
+// second provider value to prove a colliding row for provider X does not
+// block a transfer for provider Y. The provider column is free-text (no
+// CHECK constraint), so any non-todoist string is a legal fixture value.
+func (h *mergeAttrHarness) seedTaskForProvider(t *testing.T, ctx context.Context, contactID uuid.UUID, provider, lifecycle, state, externalID string, metadata map[string]any) *repository.ContactTask {
+	t.Helper()
 	task, err := h.taskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      contactID,
-		Provider:       todoist.SourceName,
+		Provider:       provider,
 		Kind:           contacttask.KindReachOut,
 		Lifecycle:      lifecycle,
 		ExternalTaskID: externalID,
@@ -569,9 +585,33 @@ func (h *mergeAttrHarness) closeJobCount(t *testing.T, ctx context.Context, task
 	return n
 }
 
-// TestMergeContacts_ClosesLiveContactTasks covers the D4 lifecycle split:
-// automated rows (cadence_due / followup_loop) close (with a durable remote
-// close job only for real external ids), manual rows repoint to the survivor.
+// seedTaskWithIdempotencyKey seeds a contact_task carrying an idempotency_key,
+// which the plain CreateContactTask path (seedTask) cannot set. Used only by
+// the transfer idempotency-guard subtest.
+func (h *mergeAttrHarness) seedTaskWithIdempotencyKey(t *testing.T, ctx context.Context, contactID uuid.UUID, lifecycle, state, externalID, idempotencyKey string) *repository.ContactTask {
+	t.Helper()
+	tx, err := h.database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	task, err := h.taskRepo.CreateContactTaskTx(ctx, tx, repository.CreateContactTaskRequest{
+		ContactID:      contactID,
+		Provider:       todoist.SourceName,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      lifecycle,
+		ExternalTaskID: externalID,
+		State:          state,
+	}, &idempotencyKey)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+	return task
+}
+
+// TestMergeContacts_ClosesLiveContactTasks covers the merge-time contact_task
+// split: automated rows (cadence_due / followup_loop) transfer to the
+// survivor whenever no unique index blocks the move, and otherwise close
+// (with a durable remote close job only for real external ids); manual rows
+// repoint to the survivor in every state.
 func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -582,6 +622,7 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 	h := newMergeAttrHarness(t, ctx)
 
 	t.Run("real external id closes and enqueues, colliding target row survives", func(t *testing.T) {
+		// spec: CON-067.blocked-tasks-close-real-id-only
 		a := h.createContact(t, ctx, "task close survivor 1")
 		b := h.createContact(t, ctx, "task close loser 1")
 		// COLLISION SHAPE: A and B EACH have a live follow-up. A repoint
@@ -603,8 +644,16 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 	})
 
 	t.Run("pending shapes close locally without a close job", func(t *testing.T) {
+		// spec: CON-067.blocked-tasks-close-real-id-only
 		a := h.createContact(t, ctx, "task close survivor 2")
 		b := h.createContact(t, ctx, "task close loser 2")
+		// A holds a live row in EACH automated lifecycle so the transfer
+		// guard blocks both of B's rows below and they fall back to the
+		// close path — this subtest is about the close path's no-close-job
+		// guarantee for pending/temp shapes, not the transfer guard itself
+		// (which the transfer subtests below cover on their own).
+		h.seedTask(t, ctx, a.ID, contacttask.LifecycleCadenceDue, "managed", "tsk-blocker-cad-a2", nil)
+		h.seedTask(t, ctx, a.ID, contacttask.LifecycleFollowUpLoop, "managed", "tsk-blocker-fu-a2", nil)
 		// pending_remote_create follow-up: no external id yet.
 		pendingTask := h.seedTask(t, ctx, b.ID, contacttask.LifecycleFollowUpLoop, "pending_remote_create", "", nil)
 		// cadence row still carrying its Todoist temp id.
@@ -624,13 +673,24 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, tempTask.ID), "no close job for a pending temp id")
 	})
 
-	t.Run("manual tasks repoint to the survivor", func(t *testing.T) {
+	t.Run("manual tasks repoint to the survivor in every state", func(t *testing.T) {
+		// spec: CON-067.manual-repoints-every-state
 		a := h.createContact(t, ctx, "task close survivor 3")
 		b := h.createContact(t, ctx, "task close loser 3")
 		// Both sides have a live manual task — no unique index covers
 		// lifecycle='manual', so the repoint must be collision-free.
 		aManual := h.seedTask(t, ctx, a.ID, contacttask.LifecycleManual, "managed", "tsk-man-a3", nil)
 		bManual := h.seedTask(t, ctx, b.ID, contacttask.LifecycleManual, "managed", "tsk-man-b3", nil)
+		// CON-067 claims manual tasks repoint "in every state", not just
+		// live ones. Seed every other state on the source too, so that
+		// claim is proven by a passing assertion rather than merely
+		// exercised by a single managed row. pending_remote_create is
+		// included because migration 041 permits it on any lifecycle, not
+		// just followup_loop — the state CHECK constraint is global.
+		bCompleted := h.seedTask(t, ctx, b.ID, contacttask.LifecycleManual, "completed", "tsk-man-b3-completed", nil)
+		bDismissed := h.seedTask(t, ctx, b.ID, contacttask.LifecycleManual, "dismissed", "tsk-man-b3-dismissed", nil)
+		bUnmanaged := h.seedTask(t, ctx, b.ID, contacttask.LifecycleManual, "unmanaged", "tsk-man-b3-unmanaged", nil)
+		bPendingRemoteCreate := h.seedTask(t, ctx, b.ID, contacttask.LifecycleManual, "pending_remote_create", "tsk-man-b3-pending", nil)
 
 		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
 			SourceContactID: b.ID,
@@ -642,6 +702,175 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 		h.requireTaskState(t, ctx, bManual.ID, repository.ContactTaskStateManaged, a.ID)
 		h.requireTaskState(t, ctx, aManual.ID, repository.ContactTaskStateManaged, a.ID)
 		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bManual.ID), "manual tasks are never remotely closed by merge")
+
+		// Every other state repoints too, state untouched —
+		// RepointManualContactTasksToContact has no state filter.
+		h.requireTaskState(t, ctx, bCompleted.ID, repository.ContactTaskStateCompleted, a.ID)
+		h.requireTaskState(t, ctx, bDismissed.ID, repository.ContactTaskStateDismissed, a.ID)
+		h.requireTaskState(t, ctx, bUnmanaged.ID, repository.ContactTaskStateUnmanaged, a.ID)
+		h.requireTaskState(t, ctx, bPendingRemoteCreate.ID, repository.ContactTaskStatePendingRemoteCreate, a.ID)
+	})
+
+	t.Run("transfers live cadence row when target has no cadence row", func(t *testing.T) {
+		// spec: CON-067.automated-transfers-when-unblocked
+		a := h.createContact(t, ctx, "task transfer survivor 4")
+		b := h.createContact(t, ctx, "task transfer loser 4")
+		// A has no cadence_due row at all, so the transfer's state-agnostic
+		// NOT EXISTS guard on unique_contact_provider_cadence is satisfied.
+		bTask := h.seedTask(t, ctx, b.ID, contacttask.LifecycleCadenceDue, "managed", "tsk-xfer-cad-b4", nil)
+
+		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: b.ID,
+			TargetContactID: a.ID,
+		})
+		require.NoError(t, err)
+
+		h.requireTaskState(t, ctx, bTask.ID, repository.ContactTaskStateManaged, a.ID)
+		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bTask.ID), "a transferred row is never closed")
+	})
+
+	t.Run("transfers a pending_remote_create row awaiting its real id", func(t *testing.T) {
+		// spec: CON-067.automated-transfers-when-unblocked
+		a := h.createContact(t, ctx, "task transfer survivor 9")
+		b := h.createContact(t, ctx, "task transfer loser 9")
+		// No blocking row on A. src.state IN ('managed', 'pending_remote_create')
+		// deliberately includes the two-step create's in-flight state:
+		// finalizeTempIDMappingTx resolves the row by id, never by
+		// contact_id, so a transfer mid-flight is a mere ownership change.
+		// Every other transfer subtest in this file seeds "managed"; this
+		// one is the dedicated proof for the other live state.
+		bTask := h.seedTask(t, ctx, b.ID, contacttask.LifecycleFollowUpLoop, "pending_remote_create", "", nil)
+
+		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: b.ID,
+			TargetContactID: a.ID,
+		})
+		require.NoError(t, err)
+
+		h.requireTaskState(t, ctx, bTask.ID, repository.ContactTaskStatePendingRemoteCreate, a.ID)
+		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bTask.ID), "a transferred row is never closed")
+	})
+
+	t.Run("a colliding row for a different provider does not block transfer", func(t *testing.T) {
+		// spec: CON-067.automated-transfers-when-unblocked
+		a := h.createContact(t, ctx, "task transfer survivor 10")
+		b := h.createContact(t, ctx, "task transfer loser 10")
+		// A's blocking cadence_due row is for a DIFFERENT provider. The
+		// transfer query's NOT EXISTS guard is scoped by tgt.provider =
+		// src.provider, so a same-lifecycle collision on another provider
+		// must not be treated as a collision.
+		h.seedTaskForProvider(t, ctx, a.ID, "other-provider", contacttask.LifecycleCadenceDue, "managed", "tsk-other-a10", nil)
+		bTask := h.seedTask(t, ctx, b.ID, contacttask.LifecycleCadenceDue, "managed", "tsk-xfer-cad-b10", nil)
+
+		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: b.ID,
+			TargetContactID: a.ID,
+		})
+		require.NoError(t, err)
+
+		h.requireTaskState(t, ctx, bTask.ID, repository.ContactTaskStateManaged, a.ID)
+		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bTask.ID), "a transferred row is never closed")
+	})
+
+	t.Run("closes live cadence row when target holds a completed cadence row", func(t *testing.T) {
+		// spec: CON-067.blocked-tasks-close-real-id-only
+		a := h.createContact(t, ctx, "task transfer survivor 5")
+		b := h.createContact(t, ctx, "task transfer loser 5")
+		// A's cadence_due row is TERMINAL, but unique_contact_provider_cadence
+		// has no state filter — the transfer guard sees ANY row and refuses.
+		aTask := h.seedTask(t, ctx, a.ID, contacttask.LifecycleCadenceDue, "completed", "tsk-xfer-cad-a5", nil)
+		bTask := h.seedTask(t, ctx, b.ID, contacttask.LifecycleCadenceDue, "managed", "tsk-xfer-cad-b5", nil)
+
+		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: b.ID,
+			TargetContactID: a.ID,
+		})
+		require.NoError(t, err)
+
+		h.requireTaskState(t, ctx, bTask.ID, repository.ContactTaskStateCompleted, b.ID)
+		h.requireTaskState(t, ctx, aTask.ID, repository.ContactTaskStateCompleted, a.ID)
+		assert.EqualValues(t, 1, h.closeJobCount(t, ctx, bTask.ID), "blocked transfer falls back to the close path")
+	})
+
+	t.Run("transfers live follow-up when target holds only a terminal follow-up", func(t *testing.T) {
+		// spec: CON-067.automated-transfers-when-unblocked
+		a := h.createContact(t, ctx, "task transfer survivor 6")
+		b := h.createContact(t, ctx, "task transfer loser 6")
+		// A's follow-up is TERMINAL: idx_contact_task_followup_unique_live only
+		// covers live states, so a terminal target row does not block transfer.
+		aTask := h.seedTask(t, ctx, a.ID, contacttask.LifecycleFollowUpLoop, "completed", "tsk-xfer-fu-a6", nil)
+		bTask := h.seedTask(t, ctx, b.ID, contacttask.LifecycleFollowUpLoop, "managed", "tsk-xfer-fu-b6", nil)
+
+		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: b.ID,
+			TargetContactID: a.ID,
+		})
+		require.NoError(t, err)
+
+		h.requireTaskState(t, ctx, bTask.ID, repository.ContactTaskStateManaged, a.ID)
+		h.requireTaskState(t, ctx, aTask.ID, repository.ContactTaskStateCompleted, a.ID)
+		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bTask.ID), "a transferred row is never closed")
+	})
+
+	t.Run("does not transfer follow-up with a colliding idempotency key", func(t *testing.T) {
+		// spec: CON-067.blocked-tasks-close-real-id-only
+		a := h.createContact(t, ctx, "task transfer survivor 7")
+		b := h.createContact(t, ctx, "task transfer loser 7")
+		// A's follow-up is TERMINAL (would not block on the live-state guard
+		// alone) but shares B's idempotency_key: the second NOT EXISTS must
+		// still refuse the transfer. B ALSO carries an unrelated, cleanly
+		// transferable cadence_due row in the SAME UPDATE statement — this
+		// is what makes the guard's presence observable: the transfer query
+		// is one statement per merge, so if the idempotency guard did not
+		// exclude the colliding row from the row-set, the whole statement
+		// would abort on the first constraint hit and the savepoint
+		// fallback would sweep the innocent cadence row into the close path
+		// too, even though nothing blocks it on its own.
+		const key = "shared-idem-key-7"
+		aTask := h.seedTaskWithIdempotencyKey(t, ctx, a.ID, contacttask.LifecycleFollowUpLoop, "completed", "tsk-xfer-idem-a7", key)
+		bFollowUp := h.seedTaskWithIdempotencyKey(t, ctx, b.ID, contacttask.LifecycleFollowUpLoop, "managed", "tsk-xfer-idem-b7", key)
+		bCadence := h.seedTask(t, ctx, b.ID, contacttask.LifecycleCadenceDue, "managed", "tsk-xfer-idem-cad-b7", nil)
+
+		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: b.ID,
+			TargetContactID: a.ID,
+		})
+		require.NoError(t, err)
+
+		h.requireTaskState(t, ctx, bFollowUp.ID, repository.ContactTaskStateCompleted, b.ID)
+		h.requireTaskState(t, ctx, aTask.ID, repository.ContactTaskStateCompleted, a.ID)
+		assert.EqualValues(t, 1, h.closeJobCount(t, ctx, bFollowUp.ID), "idempotency-blocked transfer falls back to the close path")
+
+		// The unrelated cadence row must transfer cleanly, unaffected by its
+		// sibling's idempotency collision in the same UPDATE statement.
+		h.requireTaskState(t, ctx, bCadence.ID, repository.ContactTaskStateManaged, a.ID)
+		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bCadence.ID), "the unblocked sibling row is never closed")
+	})
+
+	t.Run("no task row is deleted by a merge", func(t *testing.T) {
+		a := h.createContact(t, ctx, "task transfer survivor 8")
+		b := h.createContact(t, ctx, "task transfer loser 8")
+		// A mix of transferable, blocked, and manual rows on the source —
+		// the point is that every one of B's row ids must survive the merge
+		// SOMEWHERE, whether it moved to A or stayed on B closed.
+		h.seedTask(t, ctx, b.ID, contacttask.LifecycleCadenceDue, "managed", "tsk-nodelete-cad-8", nil)
+		h.seedTask(t, ctx, b.ID, contacttask.LifecycleFollowUpLoop, "managed", "tsk-nodelete-fu-8", nil)
+		h.seedTask(t, ctx, b.ID, contacttask.LifecycleManual, "managed", "tsk-nodelete-man-8", nil)
+
+		preIDs, err := h.taskRepo.ListContactTasksByContact(ctx, b.ID)
+		require.NoError(t, err)
+		require.Len(t, preIDs, 3, "fixture sanity: three rows seeded on the source")
+
+		_, err = h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: b.ID,
+			TargetContactID: a.ID,
+		})
+		require.NoError(t, err)
+
+		for _, pre := range preIDs {
+			_, err := h.taskRepo.GetContactTask(ctx, pre.ID)
+			require.NoError(t, err, "row %s must still exist after the merge, transferred or not", pre.ID)
+		}
 	})
 }
 
@@ -661,6 +890,9 @@ func TestMergeContacts_EnqueuerNotWired_Errors(t *testing.T) {
 		h := newMergeAttrHarnessWith(t, ctx, false, false)
 		a := h.createContact(t, ctx, "enqueuer survivor 1")
 		b := h.createContact(t, ctx, "enqueuer loser 1")
+		// A holds a live follow-up so B's row below is blocked from
+		// transfer and reaches the close path this subtest exercises.
+		h.seedTask(t, ctx, a.ID, contacttask.LifecycleFollowUpLoop, "managed", "tsk-wire-blocker-a1", nil)
 		bTask := h.seedTask(t, ctx, b.ID, contacttask.LifecycleFollowUpLoop, "managed", "tsk-wire-b1", nil)
 
 		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
@@ -681,6 +913,9 @@ func TestMergeContacts_EnqueuerNotWired_Errors(t *testing.T) {
 		h := newMergeAttrHarnessWith(t, ctx, true, false)
 		a := h.createContact(t, ctx, "enqueuer survivor 2")
 		b := h.createContact(t, ctx, "enqueuer loser 2")
+		// A holds a live follow-up so B's row below is blocked from
+		// transfer and reaches the close path this subtest exercises.
+		h.seedTask(t, ctx, a.ID, contacttask.LifecycleFollowUpLoop, "managed", "tsk-wire-blocker-a2", nil)
 		bTask := h.seedTask(t, ctx, b.ID, contacttask.LifecycleFollowUpLoop, "managed", "tsk-wire-b2", nil)
 
 		_, err := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
@@ -692,6 +927,118 @@ func TestMergeContacts_EnqueuerNotWired_Errors(t *testing.T) {
 		h.requireTaskState(t, ctx, bTask.ID, repository.ContactTaskStateCompleted, b.ID)
 		assert.EqualValues(t, 0, h.closeJobCount(t, ctx, bTask.ID), "no close job in mode off")
 	})
+}
+
+// TestMergeContacts_TransferRaceFallsBackToClose proves the savepoint
+// recovers a concurrent insert winning the race between the transfer
+// query's NOT EXISTS guard and its UPDATE: under READ COMMITTED, a
+// concurrent insert on the target can commit between the guard's read and
+// the UPDATE's write, raising a 23505 that would otherwise abort the whole
+// merge transaction. The savepoint absorbs it and the row falls back to the
+// close path instead.
+//
+// Uses logger.SetOutput, process-global mutable state, so this test does
+// NOT run t.Parallel() (see internal/logger/logger.go SetOutput doc).
+//
+// spec: CON-067.race-falls-back-to-close
+func TestMergeContacts_TransferRaceFallsBackToClose(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	ctx := ctx0()
+
+	h := newMergeAttrHarness(t, ctx)
+	a := h.createContact(t, ctx, "race survivor")
+	b := h.createContact(t, ctx, "race loser")
+	bTask := h.seedTask(t, ctx, b.ID, contacttask.LifecycleCadenceDue, "managed", "tsk-race-b", nil)
+
+	var logBuf bytes.Buffer
+	restore := logger.SetOutput(&logBuf)
+	defer restore()
+
+	// Tx B: insert a live cadence_due row for the TARGET, deliberately left
+	// uncommitted. Under READ COMMITTED, tx A's NOT EXISTS guard cannot see
+	// this row (not yet committed), so the guard passes and A's UPDATE then
+	// blocks on unique_contact_provider_cadence, held by B.
+	txB, err := h.database.Pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = txB.Rollback(ctx) }()
+
+	_, err = h.taskRepo.CreateContactTaskTx(ctx, txB, repository.CreateContactTaskRequest{
+		ContactID:      a.ID,
+		Provider:       todoist.SourceName,
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleCadenceDue,
+		ExternalTaskID: "tsk-race-a",
+		State:          "managed",
+	}, nil)
+	require.NoError(t, err)
+
+	// Read B's own backend pid ON tx B — a pool checkout is a different
+	// backend and would identify the wrong session.
+	bPID, err := db.New(txB).TestBackendPID(ctx)
+	require.NoError(t, err)
+
+	// Tx A: run the merge in a goroutine. It will block inside the
+	// transfer's UPDATE once it reaches the lock B holds.
+	mergeDone := make(chan error, 1)
+	go func() {
+		_, mergeErr := h.contactSvc.MergeContacts(ctx, service.MergeContactsRequest{
+			SourceContactID: b.ID,
+			TargetContactID: a.ID,
+		})
+		mergeDone <- mergeErr
+	}()
+
+	// Poll from a THIRD connection (off the pool, via h.database.Queries —
+	// neither tx A nor tx B) until exactly one backend is blocked by B's
+	// pid. Scoped to B's own backend so a parallel sibling test waiting on
+	// an unrelated lock cannot satisfy the poll. A timeout here means A
+	// never reached the lock, and everything after it would be theatre —
+	// require.Eventually fails the test rather than falling through.
+	require.Eventually(t, func() bool {
+		n, countErr := h.database.Queries.TestCountBackendsBlockedBy(ctx, bPID)
+		return countErr == nil && n == 1
+	}, 5*time.Second, 10*time.Millisecond, "merge transaction never blocked on tx B's lock")
+
+	require.NoError(t, txB.Commit(ctx))
+
+	require.NoError(t, <-mergeDone, "the savepoint must absorb the 23505 and let the merge commit")
+
+	// The transfer lost the race; the row fell back to the close path.
+	h.requireTaskState(t, ctx, bTask.ID, repository.ContactTaskStateCompleted, b.ID)
+	assert.EqualValues(t, 1, h.closeJobCount(t, ctx, bTask.ID), "blocked-by-race transfer falls back to close")
+
+	// Parse the captured log as structured JSON records and assert on the
+	// specific record's field NAMES and values, rather than substring-
+	// searching the whole buffer — a substring match would still pass if
+	// the field names were renamed out from under the assertion (only the
+	// values would then differ), silently losing coverage of the contract.
+	type transferWarnRecord struct {
+		Level           string `json:"level"`
+		Message         string `json:"message"`
+		SourceContactID string `json:"source_contact_id"`
+		TargetContactID string `json:"target_contact_id"`
+		Constraint      string `json:"constraint"`
+	}
+	var warnRecord *transferWarnRecord
+	for _, line := range strings.Split(strings.TrimSpace(logBuf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec transferWarnRecord
+		require.NoError(t, json.Unmarshal([]byte(line), &rec), "each captured log line must be valid JSON")
+		if rec.Message == "merge: automated task transfer lost a race; falling back to close" {
+			require.Nil(t, warnRecord, "expected exactly one fallback warning record")
+			recCopy := rec
+			warnRecord = &recCopy
+		}
+	}
+	require.NotNil(t, warnRecord, "fallback warning was never logged")
+	assert.Equal(t, "warn", warnRecord.Level, "logged at warn level")
+	assert.Equal(t, b.ID.String(), warnRecord.SourceContactID, "source_contact_id field")
+	assert.Equal(t, a.ID.String(), warnRecord.TargetContactID, "target_contact_id field")
+	assert.Equal(t, "unique_contact_provider_cadence", warnRecord.Constraint, "constraint field")
 }
 
 // TestMatchOrCreate_TombstonedCacheFallsThroughToSurvivor isolates the
@@ -820,6 +1167,10 @@ func TestMergeContacts_CloseEnqueue_ExecutesThroughAdapter(t *testing.T) {
 	h := newMergeAttrHarness(t, ctx)
 	a := h.createContact(t, ctx, "adapter survivor")
 	b := h.createContact(t, ctx, "adapter loser")
+	// A holds a live follow-up so B's row below is blocked from transfer
+	// and reaches the close path — this test is about the close path's
+	// adapter execution, not the transfer guard.
+	h.seedTask(t, ctx, a.ID, contacttask.LifecycleFollowUpLoop, "managed", "tsk-adapter-blocker-a", nil)
 	// B carries a real-external-id follow-up so the merge enqueues a close.
 	bTask := h.seedTask(t, ctx, b.ID, contacttask.LifecycleFollowUpLoop, "managed", "tsk-adapter-b", nil)
 

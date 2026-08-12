@@ -180,13 +180,15 @@ type Querier interface {
 	// transitions the row to completed.
 	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
 	// Merge-time close of the source contact's live AUTOMATED tasks (cadence_due
-	// + followup_loop). Manual-lifecycle rows are deliberately excluded — they
-	// are user content and are REPOINTED to the merge target instead (see
-	// RepointManualContactTasksToContact). Automated rows cannot be repointed:
-	// unique_contact_provider_cadence has no state filter, so a repoint collides
-	// whenever the target has ANY cadence_due row, and the target's own automated
-	// rows already cover the survivor. Returns the closed rows' identifying
-	// fields plus the pending_temp_id metadata key so the service can decide
+	// + followup_loop) that TransferAutomatedContactTasksToContact could not
+	// move. Manual-lifecycle rows are deliberately excluded — they are user
+	// content and are REPOINTED to the merge target instead (see
+	// RepointManualContactTasksToContact). Automated rows cannot always be
+	// repointed: unique_contact_provider_cadence has no state filter, so a
+	// transfer collides whenever the target has ANY cadence_due row, and a
+	// follow-up collides on a live target row or a shared idempotency key. This
+	// query is the fallback for exactly those blocked rows. Returns the closed
+	// rows' identifying fields plus the pending_temp_id metadata key so the service can decide
 	// remote-close enqueue eligibility (real external id only — never a pending
 	// temp id, mirroring todoist.isPendingTempID).
 	CompleteLiveContactTasksForContact(ctx context.Context, arg CompleteLiveContactTasksForContactParams) ([]*CompleteLiveContactTasksForContactRow, error)
@@ -2526,12 +2528,19 @@ type Querier interface {
 	// be executed on a dedicated pooled connection — session advisory locks belong
 	// to the connection that took them.
 	SyntheticTryAdvisoryLock(ctx context.Context, lockKey int64) (bool, error)
+	// Race-test only: the PostgreSQL backend pid serving THIS connection. Run on
+	// the blocking transaction so a sibling can ask who is waiting on it.
+	TestBackendPID(ctx context.Context) (int32, error)
 	// Reset integration test only: count ALL rows in a single table by name. Used by
 	// the clone-DB reset test to assert each wiped table is empty after the reset and
 	// that schema_migrations survives. The table name is validated against the wiped
 	// list by the test before it reaches here; format() with %I quotes the
 	// identifier so it can never be an injection vector.
 	TestCountAllRows(ctx context.Context, tableName string) (int64, error)
+	// Race-test only: how many active backends are waiting on a lock held by the
+	// given backend. Scoped to one blocker, so a parallel sibling waiting on an
+	// unrelated lock cannot satisfy the poll.
+	TestCountBackendsBlockedBy(ctx context.Context, blockerPid int32) (int64, error)
 	// Test-only: counts venue-type nodes that no live interaction references via
 	// venue_id. Used by the venue backfill test to assert the no-orphan-node guard.
 	TestCountOrphanVenueNodes(ctx context.Context) (int64, error)
@@ -2752,6 +2761,17 @@ type Querier interface {
 	// NOT compare it numerically to the Tier-1 queue_wait_ms metric, which is
 	// River's exact QueueWaitDuration.
 	Tier0RiverJobStatsByKind(ctx context.Context, cutoff pgtype.Timestamptz) ([]*Tier0RiverJobStatsByKindRow, error)
+	// Merge-time transfer of the source's LIVE automated rows to the target, for
+	// the rows where the move is legal under the existing partial unique indexes.
+	// A row moves only when the target has no colliding row:
+	//   cadence_due    — unique_contact_provider_cadence is state-agnostic, so the
+	//                    target must have NO cadence_due row in any state.
+	//   followup_loop  — idx_contact_task_followup_unique_live covers live states
+	//                    only, so the target must have no LIVE follow-up; and
+	//                    idx_contact_task_followup_idempotency covers
+	//                    (contact_id, idempotency_key), so the key must be free.
+	// Rows that cannot move are left for CompleteLiveContactTasksForContact.
+	TransferAutomatedContactTasksToContact(ctx context.Context, arg TransferAutomatedContactTasksToContactParams) ([]*TransferAutomatedContactTasksToContactRow, error)
 	// Contact merge queries
 	// These queries support merging one contact (source) into another (target)
 	// Transfer contact methods from source to target contact

@@ -2680,6 +2680,19 @@ func (q *Queries) SyntheticTryAdvisoryLock(ctx context.Context, lockKey int64) (
 	return pg_try_advisory_lock, err
 }
 
+const TestBackendPID = `-- name: TestBackendPID :one
+SELECT pg_backend_pid()::int
+`
+
+// Race-test only: the PostgreSQL backend pid serving THIS connection. Run on
+// the blocking transaction so a sibling can ask who is waiting on it.
+func (q *Queries) TestBackendPID(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, TestBackendPID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const TestCountAllRows = `-- name: TestCountAllRows :one
 SELECT (xpath('/row/c/text()',
     query_to_xml(format('SELECT COUNT(*) AS c FROM %I', $1::text), false, true, '')))[1]::text::bigint
@@ -2692,6 +2705,24 @@ SELECT (xpath('/row/c/text()',
 // identifier so it can never be an injection vector.
 func (q *Queries) TestCountAllRows(ctx context.Context, tableName string) (int64, error) {
 	row := q.db.QueryRow(ctx, TestCountAllRows, tableName)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const TestCountBackendsBlockedBy = `-- name: TestCountBackendsBlockedBy :one
+SELECT count(*)::bigint
+FROM pg_stat_activity
+WHERE state = 'active'
+  AND pid <> $1::int
+  AND pg_blocking_pids(pid) @> ARRAY[$1::int]
+`
+
+// Race-test only: how many active backends are waiting on a lock held by the
+// given backend. Scoped to one blocker, so a parallel sibling waiting on an
+// unrelated lock cannot satisfy the poll.
+func (q *Queries) TestCountBackendsBlockedBy(ctx context.Context, blockerPid int32) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountBackendsBlockedBy, blockerPid)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err

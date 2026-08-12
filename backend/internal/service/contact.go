@@ -1340,18 +1340,30 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		return nil, fmt.Errorf("repoint comms_message staging rows: %w", err)
 	}
 
-	// 6c. contact_task, split by lifecycle: manual rows are USER CONTENT and
-	// follow the survivor (collision-free — no unique index covers
-	// lifecycle='manual'); automated rows (cadence_due/followup_loop) are
-	// CLOSED instead, because repointing them collides with the target's own
-	// automated rows (unique_contact_provider_cadence has no state filter)
-	// and the target's rows already cover the survivor.
+	// 6c. contact_task, split by lifecycle: manual rows (user content) follow
+	// the survivor in every state (collision-free — no unique index covers
+	// lifecycle='manual'). Automated rows (cadence_due/followup_loop)
+	// transfer to the survivor whenever no unique index blocks the move; a
+	// transfer that loses a race to a concurrent insert falls back to
+	// closing rather than failing the merge. The rest close, with a durable
+	// remote close only for rows carrying a real external id. No row is ever
+	// deleted by a merge — orphan cleanup of merge-closed automated tasks is
+	// tracked separately (issue #811).
 	if err := txQueries.RepointManualContactTasksToContact(ctx, db.RepointManualContactTasksToContactParams{
 		SourceContactID: sourceUUID,
 		TargetContactID: targetUUID,
 	}); err != nil {
 		return nil, fmt.Errorf("repoint manual contact tasks: %w", err)
 	}
+	transferredRefs, err := s.contactTaskRepo.TransferAutomatedTasksForMergeTx(ctx, tx, req.SourceContactID, req.TargetContactID)
+	if err != nil {
+		return nil, fmt.Errorf("transfer automated contact tasks: %w", err)
+	}
+	logger.Debug().
+		Str("source_contact_id", req.SourceContactID.String()).
+		Str("target_contact_id", req.TargetContactID.String()).
+		Int("transferred_tasks", len(transferredRefs)).
+		Msg("merge: transferred automated contact tasks to survivor")
 	closedRefs, err := s.contactTaskRepo.CompleteLiveTasksForContactTx(ctx, tx, req.SourceContactID, todoist.MetadataKeyPendingTempID)
 	if err != nil {
 		return nil, fmt.Errorf("close live contact tasks: %w", err)

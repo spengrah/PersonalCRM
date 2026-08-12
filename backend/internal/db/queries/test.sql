@@ -1084,6 +1084,21 @@ SELECT indexname::text, indexdef::text FROM pg_indexes
 WHERE schemaname = 'public' AND tablename = @table_name
 ORDER BY indexname;
 
+-- name: TestBackendPID :one
+-- Race-test only: the PostgreSQL backend pid serving THIS connection. Run on
+-- the blocking transaction so a sibling can ask who is waiting on it.
+SELECT pg_backend_pid()::int;
+
+-- name: TestCountBackendsBlockedBy :one
+-- Race-test only: how many active backends are waiting on a lock held by the
+-- given backend. Scoped to one blocker, so a parallel sibling waiting on an
+-- unrelated lock cannot satisfy the poll.
+SELECT count(*)::bigint
+FROM pg_stat_activity
+WHERE state = 'active'
+  AND pid <> sqlc.arg(blocker_pid)::int
+  AND pg_blocking_pids(pid) @> ARRAY[sqlc.arg(blocker_pid)::int];
+
 -- name: TestInsertNonFinalRiverJob :exec
 -- Reset/additive-seed test only: plant ONE queued (non-finalized) river_job so a
 -- test can assert the additive --seed preflight REFUSES while --reset-and-seed
