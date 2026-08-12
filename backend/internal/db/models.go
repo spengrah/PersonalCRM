@@ -478,6 +478,12 @@ type OauthCredential struct {
 	RefreshTokenNonce     []byte             `json:"refresh_token_nonce"`
 }
 
+type PgClass struct {
+	Oid        pgtype.Uint32 `json:"oid"`
+	Relname    string        `json:"relname"`
+	Reloptions []string      `json:"reloptions"`
+}
+
 type PgConstraint struct {
 	Oid          pgtype.Uint32 `json:"oid"`
 	Conname      string        `json:"conname"`

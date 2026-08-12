@@ -2604,6 +2604,17 @@ type Querier interface {
 	// never handed to a worker at all — a positive statement, unlike "not
 	// finalized", which a job nobody ever looked at also satisfies.
 	TestGetRiverJobDispositionByID(ctx context.Context, id int64) (*TestGetRiverJobDispositionByIDRow, error)
+	// View-optimizer-precondition test only: the view's rendered definition
+	// (pg_get_viewdef) and its storage options (pg_class.reloptions), the two
+	// catalog facts that determine whether the planner's subquery pull-up can
+	// fire. reloptions is NULL/empty unless a storage parameter (security_barrier
+	// among them) was set; array_to_string(NULL, ',') is NULL, so a NULL/empty
+	// result here means no such parameter is set. pg_get_viewdef renders the
+	// view's actual parsed query shape, so a DISTINCT, GROUP BY, LIMIT, HAVING,
+	// or set-op would appear in the returned text — this doubles as an "is it a
+	// simple SELECT" probe without enumerating each blocking feature by name.
+	// Read-only catalog access, mirroring TestListPublicTables.
+	TestGetViewDefAndOptions(ctx context.Context, viewName string) (*TestGetViewDefAndOptionsRow, error)
 	// TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
 	// by integration tests that exercise the "target row vanished between
 	// snapshot and resolve-link" path. Production code must NOT call this.

@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -154,14 +156,54 @@ func TestLiveContactView_Shape(t *testing.T) {
 	baseCols, err := database.Queries.TestListViewColumns(ctx, "contact")
 	require.NoError(t, err)
 	baseTypes := make(map[string]string, len(baseCols))
-	for _, c := range baseCols {
+	baseNames := make([]string, len(baseCols))
+	for i, c := range baseCols {
 		baseTypes[c.ColumnName] = c.DataType
+		baseNames[i] = c.ColumnName
 	}
 	for _, c := range viewCols {
 		baseType, ok := baseTypes[c.ColumnName]
 		require.Truef(t, ok, "view column %s must exist on contact", c.ColumnName)
 		assert.Equalf(t, baseType, c.DataType, "view column %s must keep contact's type", c.ColumnName)
 	}
+	// The loop above only proves every VIEW column exists on contact — it
+	// would pass even if contact carried a 16th column the view never picked
+	// up (D6-2's drift risk). Compare the complete SETS instead: a column
+	// added to contact without a matching migration to the view now fails
+	// here, red-first, rather than silently disappearing from every
+	// child-table read that joins through live_contact.
+	expectedNames := append([]string(nil), liveContactColumnOrder...)
+	sort.Strings(expectedNames)
+	gotBaseNames := append([]string(nil), baseNames...)
+	sort.Strings(gotBaseNames)
+	assert.Equal(t, expectedNames, gotBaseNames,
+		"contact's full column set must equal live_contact's projected set — no column may exist on one without the other")
+
+	// The KIND and per-column checks above don't rule out a view shape that
+	// still blocks the planner's subquery pull-up: a security_barrier view
+	// projects the same columns and passes information_schema.views (still a
+	// plain, non-materialized relation) while pull-up is disabled, and the
+	// same is true of a SELECT DISTINCT/GROUP BY/LIMIT/HAVING/set-op
+	// projecting the same 15 names. Assert BOTH catalog facts pull-up
+	// actually depends on: no storage option is set (reloptions), and the
+	// compiled definition is exactly the simple predicate this migration
+	// wrote — not merely "some select over these columns".
+	defAndOpts, err := database.Queries.TestGetViewDefAndOptions(ctx, "live_contact")
+	require.NoError(t, err)
+	assert.Empty(t, defAndOpts.Reloptions,
+		"live_contact must carry no storage options (e.g. security_barrier) — any would block subquery pull-up")
+
+	expectedViewDef := "SELECT " + strings.Join(liveContactColumnOrder, ", ") + " FROM contact WHERE (deleted_at IS NULL);"
+	assert.Equal(t, expectedViewDef, normalizeSQL(defAndOpts.ViewDefinition),
+		"live_contact's compiled definition must be exactly a simple SELECT of these columns from contact with the liveness predicate — a DISTINCT, GROUP BY, LIMIT, HAVING, or set-op would change this text and also block pull-up")
+}
+
+// normalizeSQL collapses all whitespace (including the embedded newlines and
+// variable indentation PostgreSQL's pretty-printer puts into
+// pg_get_viewdef's output) into single spaces, so the comparison depends on
+// the SQL's content, not its formatting.
+func normalizeSQL(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // liveContactFixture is one live and one soft-deleted contact, seeded through
