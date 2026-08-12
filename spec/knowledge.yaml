@@ -325,7 +325,7 @@ behaviors:
       - when no current-accepted assertion exists, the column is cleared to NULL
       - the location column carries the linked place node's display label
       - a current location edge with no place node is surfaced as a hard error, never a silently blank cache
-    provenance: [KnowledgeCacheUpdater.RefreshTx, resolveLivesInLabel, GetCurrentAccepted]
+    provenance: [KnowledgeCacheUpdater.RefreshTx, resolveLivesInLabel, GetCurrentAccepted, reject_unauthorized_derived_contact_write trigger (migration 079)]
     notes: The contact-side rule that contact writes never touch these columns directly is CON-004; this behavior owns the derivation itself.
 
   - id: KNW-025
@@ -352,7 +352,7 @@ behaviors:
       - the contact's updated-at timestamp is not bumped
       - a soft-deleted contact row is never written
       - a deleted or merged-away contact has no current-accepted values (node liveness gating), so its cached knowledge never resurrects
-    provenance: [UpdateContactLocationCache, contact.sql cache queries, GetCurrentAccepted node join]
+    provenance: [UpdateContactLocationCache, contact.sql cache queries, GetCurrentAccepted node join, reject_unauthorized_derived_contact_write trigger (migration 079)]
 
   # --- Contact profile fields as knowledge (the cutover write path) ---
 

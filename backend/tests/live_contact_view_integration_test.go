@@ -4,6 +4,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -27,6 +28,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// liveContactViewVersion is the golang-migrate version of 078. The round-trip
+// positions the clone here explicitly so Steps(-1) rolls down 078
+// specifically, robust to later migrations landing above it (PR7's 079 does
+// exactly that) — same discipline as whatsappFoundationsVersion.
+const liveContactViewVersion = 78
 
 // liveContactColumnOrder is db.Contact's field order (backend/internal/db/models.go),
 // which live_contact's projection (migration 078) must match column-for-column
@@ -64,6 +71,12 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = m.Close() })
 
+	// Position the clone at 078 explicitly (liveContactViewVersion), robust to
+	// later migrations landing above it — PR7's 079 is exactly that case.
+	if err := m.Migrate(liveContactViewVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err, "position the clone at the live_contact view tip")
+	}
+
 	contactRepo := repository.NewContactRepository(database.Queries)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -73,13 +86,13 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, contactRepo.SoftDeleteContact(ctx, deleted.ID))
 
-	// The clone starts at the template's tip, which already includes 078: the
-	// view exists as a plain view and its row count already excludes the
-	// soft-deleted contact (this clone is a fresh database, so the two seeded
-	// contacts are its only rows and the count is exact, not DB-wide).
+	// The clone is positioned at 078: the view exists as a plain view and its
+	// row count already excludes the soft-deleted contact (this clone is a
+	// fresh database, so the two seeded contacts are its only rows and the
+	// count is exact, not DB-wide).
 	kindCount, err := database.Queries.TestCountPlainViews(ctx, "live_contact")
 	require.NoError(t, err)
-	require.Equal(t, int64(1), kindCount, "live_contact must exist as a plain view at the clone's tip")
+	require.Equal(t, int64(1), kindCount, "live_contact must exist as a plain view at the 078 tip")
 
 	totalContacts, err := support.CountAllRows(ctx, "contact")
 	require.NoError(t, err)
@@ -91,13 +104,7 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "LiveContactView Migration Live", liveFromDB.FullName)
 
-	// Roll 078 down. Steps(-1), not Migrate(<version>): the clone's tip is
-	// wherever the migrations directory currently ends (078 here), so rolling
-	// back exactly one migration from the tip is robust to gaps or later
-	// migrations landing above it, without hardcoding the prior version number
-	// (see migration076Env's whatsappFoundationsVersion for the
-	// Migrate(<version>) form used where a FIXED intermediate position matters;
-	// here only "one migration below the tip" matters).
+	// Roll 078 down.
 	require.NoError(t, m.Steps(-1))
 
 	kindCount, err = database.Queries.TestCountPlainViews(ctx, "live_contact")

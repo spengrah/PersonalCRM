@@ -65,8 +65,8 @@ behaviors:
     status: current
     surface: none
     statement: contact create, update, and merge never write the location, birthday, or how_met columns directly — those fields are routed through the knowledge domain, and the contact returned from a write already reflects the routed values.
-    provenance: [knowledgeWriter.assertCreate, contact.sql, .ai/guides/architecture.md]
-    notes: Enforced by code wiring (services hard-error if the knowledge writer is unset), not by a DB constraint. How the knowledge domain derives and refreshes these cache columns is knowledge-domain scope.
+    provenance: [knowledgeWriter.assertCreate, contact.sql, .ai/guides/architecture.md, reject_unauthorized_derived_contact_write trigger (migration 079)]
+    notes: Enforced both by code wiring (services hard-error if the knowledge writer is unset) and, from migration 079, by a database trigger that rejects any UPDATE changing location, birthday, or how_met without crm.derived_writer='knowledge_cache'. How the knowledge domain derives and refreshes these cache columns is knowledge-domain scope.
 
   - id: CON-005
     title: Fetching a contact reports liveness and follow-up state

@@ -73,113 +73,6 @@ UPDATE contact SET birthday = $2 WHERE id = $1 AND deleted_at IS NULL;
 -- from the current-accepted how_met fact (NULL when no current value).
 UPDATE contact SET how_met = $2 WHERE id = $1 AND deleted_at IS NULL;
 
--- name: UpdateContactLastContacted :exec
--- Updates last_contacted, contact_by, and all direction timestamp fields (for mutual interactions)
-UPDATE contact SET
-  last_contacted = $2,
-  contact_by = $3,
-  last_interaction_at = $2,
-  last_outreach_at = $2,
-  last_response_at = $2,
-  updated_at = NOW()
-WHERE id = $1 AND deleted_at IS NULL;
-
--- name: UpdateContactLastContactedIfLater :exec
--- Updates last_contacted and contact_by only if the new date is later.
--- Also updates direction timestamp fields (this path is used by gcal, which is always mutual).
--- contact_by is recalculated from the new last_contacted date using the contact's existing cadence.
--- Cadence day mappings: weekly=7, biweekly=14, monthly=30, quarterly=90, biannual=180, annual=365
-UPDATE contact SET
-  last_contacted = GREATEST(COALESCE(last_contacted, '1970-01-01'::timestamptz), $2),
-  last_interaction_at = GREATEST(COALESCE(last_interaction_at, '1970-01-01'::timestamptz), $2),
-  last_outreach_at = GREATEST(COALESCE(last_outreach_at, '1970-01-01'::timestamptz), $2),
-  last_response_at = GREATEST(COALESCE(last_response_at, '1970-01-01'::timestamptz), $2),
-  contact_by = CASE
-    WHEN $2 > COALESCE(last_contacted, '1970-01-01'::timestamptz) AND cadence IS NOT NULL AND cadence != '' THEN
-      ($2::date + CASE cadence
-        WHEN 'weekly' THEN 7
-        WHEN 'biweekly' THEN 14
-        WHEN 'monthly' THEN 30
-        WHEN 'quarterly' THEN 90
-        WHEN 'biannual' THEN 180
-        WHEN 'annual' THEN 365
-        ELSE 0
-      END)
-    WHEN $2 > COALESCE(last_contacted, '1970-01-01'::timestamptz) THEN NULL
-    ELSE contact_by
-  END,
-  updated_at = NOW()
-WHERE id = $1 AND deleted_at IS NULL;
-
--- name: UpdateContactOutreachAt :exec
--- Updates only last_outreach_at (for outbound-only interactions).
--- Uses forward-only semantics: only updates if the new time is later.
-UPDATE contact SET
-  last_outreach_at = CASE
-    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(outreach_at)::timestamptz
-    WHEN sqlc.arg(outreach_at)::timestamptz > COALESCE(last_outreach_at, '1970-01-01'::timestamptz) THEN sqlc.arg(outreach_at)::timestamptz
-    ELSE last_outreach_at
-  END,
-  updated_at = NOW()
-WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
-
--- name: UpdateContactResponseFields :exec
--- Updates last_contacted, last_interaction_at, last_response_at, and contact_by (for inbound interactions).
--- Uses forward-only semantics for automated sources; manual always updates.
-UPDATE contact SET
-  last_contacted = CASE
-    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
-    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_contacted, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
-    ELSE last_contacted
-  END,
-  last_interaction_at = CASE
-    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
-    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_interaction_at, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
-    ELSE last_interaction_at
-  END,
-  last_response_at = CASE
-    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
-    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_response_at, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
-    ELSE last_response_at
-  END,
-  contact_by = CASE
-    WHEN sqlc.narg('contact_by')::date IS NOT NULL THEN sqlc.narg('contact_by')::date
-    ELSE contact_by
-  END,
-  updated_at = NOW()
-WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
-
--- name: UpdateContactMutualFields :exec
--- Updates all direction fields + last_contacted + contact_by (for mutual interactions).
--- Uses forward-only semantics for automated sources; manual always updates.
-UPDATE contact SET
-  last_contacted = CASE
-    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
-    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_contacted, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
-    ELSE last_contacted
-  END,
-  last_interaction_at = CASE
-    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
-    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_interaction_at, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
-    ELSE last_interaction_at
-  END,
-  last_outreach_at = CASE
-    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
-    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_outreach_at, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
-    ELSE last_outreach_at
-  END,
-  last_response_at = CASE
-    WHEN sqlc.arg(is_manual)::boolean THEN sqlc.arg(occurred_at)::timestamptz
-    WHEN sqlc.arg(occurred_at)::timestamptz > COALESCE(last_response_at, '1970-01-01'::timestamptz) THEN sqlc.arg(occurred_at)::timestamptz
-    ELSE last_response_at
-  END,
-  contact_by = CASE
-    WHEN sqlc.narg('contact_by')::date IS NOT NULL THEN sqlc.narg('contact_by')::date
-    ELSE contact_by
-  END,
-  updated_at = NOW()
-WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
-
 -- name: UpdateContactCadenceForward :exec
 -- Forward-only cadence write (spec §3.4.2). Each of the cadence columns
 -- is updated only when its apply-flag is true AND the new value strictly
@@ -356,13 +249,6 @@ WHERE deleted_at IS NULL
 ORDER BY contact_by ASC
 LIMIT $1;
 
--- name: UpdateContactBy :exec
--- Updates just the contact_by field (for Todoist deadline sync).
-UPDATE contact SET
-  contact_by = $2,
-  updated_at = NOW()
-WHERE id = $1 AND deleted_at IS NULL;
-
 -- name: ListContactsWithCadence :many
 -- Lists contacts that have a cadence set (used for Todoist sync reconciliation).
 SELECT * FROM contact
@@ -451,6 +337,20 @@ UPDATE contact SET
   contact_by          = sqlc.narg(new_contact_by)::date,
   updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
+-- name: SetDerivedWriter :exec
+-- Declares which owner the CALLING TRANSACTION is authorized to write derived
+-- contact columns for. set_config(..., true) is the function form of
+-- SET LOCAL: the value lives exactly as long as the transaction, so it can
+-- never leak to the next checkout of this pooled connection. Read back by the
+-- reject_unauthorized_derived_contact_write trigger (migration 079) via
+-- current_setting('crm.derived_writer', true).
+--
+-- Callers MUST be inside a transaction. Issued at pool scope this sets the
+-- value for a single implicit transaction and is then discarded, which is
+-- silently useless rather than an error — hence repository.SetDerivedWriterTx
+-- takes a pgx.Tx rather than a Querier.
+SELECT set_config('crm.derived_writer', sqlc.arg(owner)::text, true);
 
 -- name: ListContactsWithKnowledgeColumns :many
 -- Backfill source for --migrate-contact-knowledge-columns: every non-deleted

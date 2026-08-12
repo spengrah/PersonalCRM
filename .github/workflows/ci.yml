@@ -103,7 +103,7 @@ jobs:
           working-directory: backend
           # No --timeout flag: inherit the single source in .golangci.yml (10m).
 
-      - name: Check cadence sole-writer invariant
+      - name: Check derived-column sole-writer invariant
         run: ./scripts/check-cadence-sole-writer.sh
 
       - name: Check follow-up sole-writer invariant

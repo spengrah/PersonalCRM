@@ -545,7 +545,7 @@ func (p *CadenceSyncProvider) processItem(
 	// Check for deadline edit (Todoist wins) — only for cadence-due tasks.
 	// Follow-up tasks use a separate grace-period deadline (last_outreach_at +
 	// watchdog_days) that is unrelated to contact_by; allowing them through
-	// here previously regressed contact_by via UpdateContactBy on the next
+	// here previously regressed contact_by via ApplyContactByOverride on the next
 	// sync tick (see fix/followup-deadline-regression). Manual and legacy
 	// action tasks have already been routed out above; the explicit
 	// LifecycleCadenceDue check is self-documenting and load-bearing.
@@ -769,7 +769,7 @@ func (p *CadenceSyncProvider) handleTaskCompletion(
 // handleSkipTrigger handles a skip trigger (task deleted, label removed, deadline removed).
 //
 // Atomic publish + mutate: opens a pgx.Tx, publishes task.skipped via PublishTx,
-// advances contact.contact_by via UpdateContactByTx, writes metadata keys
+// advances contact.contact_by via ApplyContactByOverride, writes metadata keys
 // (pending_temp_id, synced_deadline, synced_last_*) via UpdateContactTaskMetadataTx,
 // commits. Rollback on any error rolls back event row, contact_by advance, and
 // metadata together — no partial commits.

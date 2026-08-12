@@ -384,12 +384,14 @@ if syncedDeadline != currentDeadline {
 
 ```go
 // ❌ Wrong: Only update CRM
-if err := contactRepo.UpdateContactBy(ctx, contactID, newDeadline); err != nil { ... }
+if err := cadenceUpdater.ApplyContactByOverride(ctx, tx, contactID, &newDeadline); err != nil { ... }
 
 // ✅ Right: Update both CRM and synced metadata
-if err := contactRepo.UpdateContactBy(ctx, contactID, newDeadline); err != nil { ... }
+if err := cadenceUpdater.ApplyContactByOverride(ctx, tx, contactID, &newDeadline); err != nil { ... }
 metadata[MetadataKeySyncedDeadline] = newDeadlineStr
 contactTaskRepo.UpdateContactTaskMetadata(ctx, taskID, metadata)
 ```
+
+`contact_by` is a derived column (sole-writer trigger, migration 079): a Todoist-driven deadline change routes through `CadenceUpdater.ApplyContactByOverride`, which declares the `cadence` owner on the caller's tx before writing — never through a direct contact-table UPDATE.
 
 Without this, reconciliation treats the external-originated change as CRM drift and triggers unnecessary operations (e.g., completing and recreating tasks).

@@ -1580,3 +1580,34 @@ SELECT c.convalidated, c.confdeltype::text AS confdeltype
 FROM pg_constraint c
 WHERE c.conrelid = 'contact'::regclass
   AND c.conname = 'contact_id_node_fk';
+
+-- name: TestCountTriggers :one
+-- Migration round-trip test only: how many triggers of the given name exist on
+-- the given table. Read-only catalog access, mirroring TestListPublicTables.
+-- information_schema.triggers holds one row per (trigger, event type), and
+-- this trigger fires on UPDATE only, so the expected live count is 1.
+SELECT count(*)::bigint FROM information_schema.triggers
+WHERE trigger_schema = 'public'
+  AND event_object_table = sqlc.arg(table_name)::text
+  AND trigger_name = sqlc.arg(trigger_name)::text;
+
+-- name: TestRegprocedureExists :one
+-- Migration round-trip test only: does a function with the given signature
+-- exist? to_regprocedure returns NULL rather than raising for an unknown
+-- signature, which is what makes it usable as a boolean probe. This exists
+-- because the up migration uses CREATE OR REPLACE FUNCTION: a down that
+-- dropped only the trigger would leave the function behind, and every
+-- behavioral assertion would still pass because the reapply overwrites it.
+SELECT (to_regprocedure(sqlc.arg(signature)::text) IS NOT NULL)::boolean;
+
+-- name: TestDerivedWriterSettingIsNull :one
+-- Rejection tests only: is crm.derived_writer genuinely UNDEFINED on THIS
+-- physical connection? A custom GUC is a placeholder: it does not exist until
+-- something sets it, and once anything does it stays defined for the session
+-- with reset value '' — SET LOCAL reverts the value, not the definition. So an
+-- "unset" rejection test running on a recycled pool connection would silently
+-- be testing '' instead of NULL. The two unauthorized-write tests assert this
+-- returns true on their dedicated connection before every write.
+-- Wrapped in IS NULL rather than returning the setting itself so the result is
+-- a non-nullable boolean, the same shape as TestRegprocedureExists.
+SELECT (current_setting('crm.derived_writer', true) IS NULL)::boolean;

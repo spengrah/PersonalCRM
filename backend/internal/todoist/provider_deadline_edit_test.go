@@ -45,7 +45,7 @@ func TestProcessItem_FollowUpDeadlineDoesNotOverwriteContactBy(t *testing.T) {
 	// 2027-02-03 is well in the future, far enough from any natural cadence
 	// computation that an accidental write would be obvious.
 	seededContactBy := time.Date(2027, 2, 3, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, seededContactBy))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{ContactBy: &seededContactBy}))
 
 	externalID := "td-fu-deadline-" + uuid.New().String()[:8]
 	followupMetadata := map[string]any{
@@ -64,8 +64,8 @@ func TestProcessItem_FollowUpDeadlineDoesNotOverwriteContactBy(t *testing.T) {
 	require.NoError(t, err)
 
 	// item.Deadline (2026-02-24) differs from contact.ContactBy (2027-02-03).
-	// Without the guard, the branch would fire UpdateContactBy(2026-02-24)
-	// and clobber the cadence state.
+	// Without the guard, the branch would seed contact_by = 2026-02-24 and
+	// clobber the cadence state.
 	r := env.provider.processItem(env.ctx, SyncItem{
 		ID:        externalID,
 		IsDeleted: false,
@@ -112,7 +112,7 @@ func TestProcessItem_LegitimateTodoistEditStillClobbersContactBy(t *testing.T) {
 	contact, _ := createDismissalContact(t, env, "CadenceDeadline")
 
 	seededContactBy := time.Date(2027, 2, 3, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, seededContactBy))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{ContactBy: &seededContactBy}))
 
 	externalID := "td-cad-deadline-" + uuid.New().String()[:8]
 	cadenceMetadata := map[string]any{
@@ -182,7 +182,7 @@ func TestProcessItem_StaleTodoistDeadlineDoesNotClobberContactBy(t *testing.T) {
 	// the old deadline (2026-04-19) and synced_deadline matches it
 	// because we haven't pushed the new value yet.
 	advancedContactBy := time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, advancedContactBy))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{ContactBy: &advancedContactBy}))
 
 	externalID := "td-stale-" + uuid.New().String()[:8]
 	staleDeadline := "2026-04-19"
@@ -247,7 +247,7 @@ func TestProcessItem_MissingSyncedDeadlineStillClobbers(t *testing.T) {
 	contact, _ := createDismissalContact(t, env, "LegacyNoSynced")
 
 	seededContactBy := time.Date(2027, 2, 3, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, seededContactBy))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{ContactBy: &seededContactBy}))
 
 	externalID := "td-legacy-" + uuid.New().String()[:8]
 	// No synced_deadline key — legacy task.
@@ -353,7 +353,7 @@ func TestProcessItem_StaleTodoistDeadline_DoubleDeliveryIsIdempotent(t *testing.
 	contact, _ := createDismissalContact(t, env, "DoubleDelivery")
 
 	seededContactBy := time.Date(2027, 2, 3, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, env.contactRepo.UpdateContactBy(env.ctx, contact.ID, seededContactBy))
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{ContactBy: &seededContactBy}))
 
 	externalID := "td-dbl-" + uuid.New().String()[:8]
 	cadenceMetadata := map[string]any{

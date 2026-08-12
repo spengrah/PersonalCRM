@@ -1881,6 +1881,18 @@ type Querier interface {
 	// issues item_add to keep Todoist in sync, and records the resulting ID
 	// without flipping the row back to 'managed'.
 	SetContactTaskExternalIDOnly(ctx context.Context, arg SetContactTaskExternalIDOnlyParams) error
+	// Declares which owner the CALLING TRANSACTION is authorized to write derived
+	// contact columns for. set_config(..., true) is the function form of
+	// SET LOCAL: the value lives exactly as long as the transaction, so it can
+	// never leak to the next checkout of this pooled connection. Read back by the
+	// reject_unauthorized_derived_contact_write trigger (migration 079) via
+	// current_setting('crm.derived_writer', true).
+	//
+	// Callers MUST be inside a transaction. Issued at pool scope this sets the
+	// value for a single implicit transaction and is then discarded, which is
+	// silently useless rather than an error — hence repository.SetDerivedWriterTx
+	// takes a pgx.Tx rather than a Querier.
+	SetDerivedWriter(ctx context.Context, owner string) error
 	// TEST ONLY: pre-seeds the dismissed_method_suggestions column so the
 	// dismissed-skip reconcile test can verify a dismissed (type,value) is
 	// not re-suggested. The production dismissal path appends via a read-
@@ -2566,6 +2578,11 @@ type Querier interface {
 	// subject is a given node, so a test asserts exactly one per migrated contact_tag
 	// and that an idempotent re-run creates no duplicates.
 	TestCountTaggedAsAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error)
+	// Migration round-trip test only: how many triggers of the given name exist on
+	// the given table. Read-only catalog access, mirroring TestListPublicTables.
+	// information_schema.triggers holds one row per (trigger, event type), and
+	// this trigger fires on UPDATE only, so the expected live count is 1.
+	TestCountTriggers(ctx context.Context, arg TestCountTriggersParams) (int64, error)
 	// Test-only: counts venue-type nodes. Used by the venue backfill test.
 	TestCountVenueNodes(ctx context.Context) (int64, error)
 	// TEST ONLY. Hard-deletes calendar_event rows whose gcal_event_id starts
@@ -2580,6 +2597,16 @@ type Querier interface {
 	// Tag-migration cleanup: hard-delete the legacy tag rows a test seeded, keyed by
 	// the tracked tag ids (scoped to the test's own tags on the shared DB).
 	TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID) (int64, error)
+	// Rejection tests only: is crm.derived_writer genuinely UNDEFINED on THIS
+	// physical connection? A custom GUC is a placeholder: it does not exist until
+	// something sets it, and once anything does it stays defined for the session
+	// with reset value '' — SET LOCAL reverts the value, not the definition. So an
+	// "unset" rejection test running on a recycled pool connection would silently
+	// be testing '' instead of NULL. The two unauthorized-write tests assert this
+	// returns true on their dedicated connection before every write.
+	// Wrapped in IS NULL rather than returning the setting itself so the result is
+	// a non-nullable boolean, the same shape as TestRegprocedureExists.
+	TestDerivedWriterSettingIsNull(ctx context.Context) (bool, error)
 	// Failure-injection fixture: finalizes a planted job so the "refuses while
 	// pending, cleans once safe" tests have an explicit, honest safe-state step
 	// rather than a hand-wave.
@@ -2800,6 +2827,13 @@ type Querier interface {
 	// to well-formed JSONB arrays (jsonb_array_elements raises on scalar/object
 	// input). Do NOT call from production code.
 	TestParityFindExternalContactsByNormalizedEmailLegacy(ctx context.Context, lower string) ([]*ExternalContact, error)
+	// Migration round-trip test only: does a function with the given signature
+	// exist? to_regprocedure returns NULL rather than raising for an unknown
+	// signature, which is what makes it usable as a boolean probe. This exists
+	// because the up migration uses CREATE OR REPLACE FUNCTION: a down that
+	// dropped only the trigger would leave the function behind, and every
+	// behavioral assertion would still pass because the reapply overwrites it.
+	TestRegprocedureExists(ctx context.Context, signature string) (bool, error)
 	// One-shot wait/run-by-kind read over river_job rows finalized since @cutoff,
 	// before job_exec_sample has accrued. finalized_at is authoritative here (only
 	// finished rows have it); this reads the live River table, not our sample table.
@@ -2853,8 +2887,6 @@ type Querier interface {
 	// Knowledge-cache sole-writer: refreshes the derived birthday cache column
 	// from the current-accepted birthday fact (NULL when no current value).
 	UpdateContactBirthdayCache(ctx context.Context, arg UpdateContactBirthdayCacheParams) error
-	// Updates just the contact_by field (for Todoist deadline sync).
-	UpdateContactBy(ctx context.Context, arg UpdateContactByParams) error
 	// Forward-only cadence write (spec §3.4.2). Each of the cadence columns
 	// is updated only when its apply-flag is true AND the new value strictly
 	// exceeds the existing one (or the existing is NULL).
@@ -2882,13 +2914,6 @@ type Querier interface {
 	// Knowledge-cache sole-writer: refreshes the derived how_met cache column
 	// from the current-accepted how_met fact (NULL when no current value).
 	UpdateContactHowMetCache(ctx context.Context, arg UpdateContactHowMetCacheParams) error
-	// Updates last_contacted, contact_by, and all direction timestamp fields (for mutual interactions)
-	UpdateContactLastContacted(ctx context.Context, arg UpdateContactLastContactedParams) error
-	// Updates last_contacted and contact_by only if the new date is later.
-	// Also updates direction timestamp fields (this path is used by gcal, which is always mutual).
-	// contact_by is recalculated from the new last_contacted date using the contact's existing cadence.
-	// Cadence day mappings: weekly=7, biweekly=14, monthly=30, quarterly=90, biannual=180, annual=365
-	UpdateContactLastContactedIfLater(ctx context.Context, arg UpdateContactLastContactedIfLaterParams) error
 	// Knowledge-cache sole-writer: refreshes the derived location cache column
 	// from the current-accepted lives_in edge's place node label (NULL when no
 	// current value). updated_at is intentionally NOT bumped — a cache refresh
@@ -2905,15 +2930,6 @@ type Querier interface {
 	// never be acted on.
 	UpdateContactMethodByContact(ctx context.Context, arg UpdateContactMethodByContactParams) (*ContactMethod, error)
 	UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error)
-	// Updates all direction fields + last_contacted + contact_by (for mutual interactions).
-	// Uses forward-only semantics for automated sources; manual always updates.
-	UpdateContactMutualFields(ctx context.Context, arg UpdateContactMutualFieldsParams) error
-	// Updates only last_outreach_at (for outbound-only interactions).
-	// Uses forward-only semantics: only updates if the new time is later.
-	UpdateContactOutreachAt(ctx context.Context, arg UpdateContactOutreachAtParams) error
-	// Updates last_contacted, last_interaction_at, last_response_at, and contact_by (for inbound interactions).
-	// Uses forward-only semantics for automated sources; manual always updates.
-	UpdateContactResponseFields(ctx context.Context, arg UpdateContactResponseFieldsParams) error
 	// Update the external task ID (when creating a new Todoist task).
 	// Finalizes the two-step follow-up create: transitions a
 	// pending_remote_create row to state='managed' once the remote

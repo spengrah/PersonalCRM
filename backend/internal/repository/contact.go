@@ -384,6 +384,9 @@ func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req
 // the sole writer of this column post-cutover; it recomputes the value from the
 // current-accepted lives_in edge's place-node label.
 func (r *ContactRepository) UpdateContactLocationCacheTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, location *string) error {
+	if err := SetDerivedWriterTx(ctx, tx, DerivedWriterKnowledgeCache); err != nil {
+		return err
+	}
 	return db.New(tx).UpdateContactLocationCache(ctx, db.UpdateContactLocationCacheParams{
 		ID:       uuidToPgUUID(id),
 		Location: stringToPgText(location),
@@ -393,6 +396,9 @@ func (r *ContactRepository) UpdateContactLocationCacheTx(ctx context.Context, tx
 // UpdateContactBirthdayCacheTx refreshes the derived birthday cache column from
 // the knowledge store (nil clears it to NULL). Sole-writer consumer path.
 func (r *ContactRepository) UpdateContactBirthdayCacheTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, birthday *time.Time) error {
+	if err := SetDerivedWriterTx(ctx, tx, DerivedWriterKnowledgeCache); err != nil {
+		return err
+	}
 	return db.New(tx).UpdateContactBirthdayCache(ctx, db.UpdateContactBirthdayCacheParams{
 		ID:       uuidToPgUUID(id),
 		Birthday: timeToPgDate(birthday),
@@ -402,109 +408,12 @@ func (r *ContactRepository) UpdateContactBirthdayCacheTx(ctx context.Context, tx
 // UpdateContactHowMetCacheTx refreshes the derived how_met cache column from the
 // knowledge store (nil clears it to NULL). Sole-writer consumer path.
 func (r *ContactRepository) UpdateContactHowMetCacheTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, howMet *string) error {
+	if err := SetDerivedWriterTx(ctx, tx, DerivedWriterKnowledgeCache); err != nil {
+		return err
+	}
 	return db.New(tx).UpdateContactHowMetCache(ctx, db.UpdateContactHowMetCacheParams{
 		ID:     uuidToPgUUID(id),
 		HowMet: stringToPgText(howMet),
-	})
-}
-
-// UpdateContactLastContacted updates the last contacted date and contact_by for a contact.
-// contactBy should be the newly calculated next due date based on lastContacted + cadence.
-func (r *ContactRepository) UpdateContactLastContacted(ctx context.Context, id uuid.UUID, lastContacted time.Time, contactBy *time.Time) error {
-	return r.queries.UpdateContactLastContacted(ctx, db.UpdateContactLastContactedParams{
-		ID:            uuidToPgUUID(id),
-		LastContacted: pgtype.Timestamptz{Time: lastContacted, Valid: true},
-		ContactBy:     timeToPgDate(contactBy),
-	})
-}
-
-// UpdateContactLastContactedIfLater updates last_contacted to the later of the current value or the provided value.
-// This prevents last_contacted from moving backward when events are processed out of order.
-// The contact_by date is automatically recalculated in SQL using the contact's existing cadence.
-func (r *ContactRepository) UpdateContactLastContactedIfLater(ctx context.Context, id uuid.UUID, lastContacted time.Time) error {
-	return r.queries.UpdateContactLastContactedIfLater(ctx, db.UpdateContactLastContactedIfLaterParams{
-		ID:            uuidToPgUUID(id),
-		LastContacted: pgtype.Timestamptz{Time: lastContacted, Valid: true},
-	})
-}
-
-// UpdateContactBy updates just the contact_by field (used by Todoist sync for deadline changes)
-func (r *ContactRepository) UpdateContactBy(ctx context.Context, id uuid.UUID, contactBy time.Time) error {
-	return r.queries.UpdateContactBy(ctx, db.UpdateContactByParams{
-		ID:        uuidToPgUUID(id),
-		ContactBy: timeToPgDate(&contactBy),
-	})
-}
-
-// UpdateContactByTx is the tx-threaded variant of UpdateContactBy.
-func (r *ContactRepository) UpdateContactByTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, contactBy time.Time) error {
-	q := r.queries
-	if tx != nil {
-		q = db.New(tx)
-	}
-	return q.UpdateContactBy(ctx, db.UpdateContactByParams{
-		ID:        uuidToPgUUID(id),
-		ContactBy: timeToPgDate(&contactBy),
-	})
-}
-
-// UpdateContactOutreachAt updates only last_outreach_at (for outbound interactions)
-func (r *ContactRepository) UpdateContactOutreachAt(ctx context.Context, id uuid.UUID, outreachAt time.Time, isManual bool) error {
-	return r.queries.UpdateContactOutreachAt(ctx, db.UpdateContactOutreachAtParams{
-		ID:         uuidToPgUUID(id),
-		OutreachAt: pgtype.Timestamptz{Time: outreachAt, Valid: true},
-		IsManual:   isManual,
-	})
-}
-
-// UpdateContactOutreachAtTx is the tx-threaded variant of UpdateContactOutreachAt.
-// Used by InteractionRecorder / ContactService.RecordInteractionTx so the
-// cadence UPDATE shares the caller's tx — spec §3.4.1 atomicity contract.
-func (r *ContactRepository) UpdateContactOutreachAtTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, outreachAt time.Time, isManual bool) error {
-	return db.New(tx).UpdateContactOutreachAt(ctx, db.UpdateContactOutreachAtParams{
-		ID:         uuidToPgUUID(id),
-		OutreachAt: pgtype.Timestamptz{Time: outreachAt, Valid: true},
-		IsManual:   isManual,
-	})
-}
-
-// UpdateContactResponseFields updates last_contacted, last_interaction_at, last_response_at, contact_by (for inbound interactions)
-func (r *ContactRepository) UpdateContactResponseFields(ctx context.Context, id uuid.UUID, occurredAt time.Time, contactBy *time.Time, isManual bool) error {
-	return r.queries.UpdateContactResponseFields(ctx, db.UpdateContactResponseFieldsParams{
-		ID:         uuidToPgUUID(id),
-		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
-		ContactBy:  timeToPgDate(contactBy),
-		IsManual:   isManual,
-	})
-}
-
-// UpdateContactResponseFieldsTx is the tx-threaded variant of UpdateContactResponseFields.
-func (r *ContactRepository) UpdateContactResponseFieldsTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, occurredAt time.Time, contactBy *time.Time, isManual bool) error {
-	return db.New(tx).UpdateContactResponseFields(ctx, db.UpdateContactResponseFieldsParams{
-		ID:         uuidToPgUUID(id),
-		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
-		ContactBy:  timeToPgDate(contactBy),
-		IsManual:   isManual,
-	})
-}
-
-// UpdateContactMutualFields updates all direction fields + last_contacted + contact_by (for mutual interactions)
-func (r *ContactRepository) UpdateContactMutualFields(ctx context.Context, id uuid.UUID, occurredAt time.Time, contactBy *time.Time, isManual bool) error {
-	return r.queries.UpdateContactMutualFields(ctx, db.UpdateContactMutualFieldsParams{
-		ID:         uuidToPgUUID(id),
-		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
-		ContactBy:  timeToPgDate(contactBy),
-		IsManual:   isManual,
-	})
-}
-
-// UpdateContactMutualFieldsTx is the tx-threaded variant of UpdateContactMutualFields.
-func (r *ContactRepository) UpdateContactMutualFieldsTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, occurredAt time.Time, contactBy *time.Time, isManual bool) error {
-	return db.New(tx).UpdateContactMutualFields(ctx, db.UpdateContactMutualFieldsParams{
-		ID:         uuidToPgUUID(id),
-		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
-		ContactBy:  timeToPgDate(contactBy),
-		IsManual:   isManual,
 	})
 }
 
@@ -875,26 +784,7 @@ func (r *ContactRepository) ListContactsWithKnowledgeColumns(ctx context.Context
 // caller treats that as a benign no-op (the interaction is already
 // soft-deleted; a deleted contact needs no recompute).
 func (r *ContactRepository) RecomputeContactDatesAfterDeleteTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, deletedAt time.Time) error {
-	return recomputeContactDatesAfterDelete(ctx, db.New(tx), contactID, deletedAt)
-}
-
-// RecomputeContactDatesAfterDelete is the non-tx variant of
-// RecomputeContactDatesAfterDeleteTx, used for direct testing only. Its three
-// statements (LockContactForDateRecompute → ComputeContactDatesAfterDelete →
-// WriteContactDatesAfterDelete) run on the repository's base querier, i.e.
-// each in its own autocommit transaction.
-//
-// CONCURRENCY WARNING: because the statements do NOT share a transaction, the
-// LockContactForDateRecompute FOR UPDATE lock is released the instant that
-// statement commits — it does NOT hold across the aggregate read. This variant
-// therefore lacks the lock-then-aggregate serialization that closes the
-// concurrent-writer race, so it MUST NOT be wired into the production recompute
-// path. Production routes the recompute exclusively through
-// RecomputeContactDatesAfterDeleteTx, which holds the lock across all three
-// statements in the caller's single tx. This variant is safe only for
-// single-threaded direct tests.
-func (r *ContactRepository) RecomputeContactDatesAfterDelete(ctx context.Context, contactID uuid.UUID, deletedAt time.Time) error {
-	return recomputeContactDatesAfterDelete(ctx, r.queries, contactID, deletedAt)
+	return recomputeContactDatesAfterDelete(ctx, tx, contactID, deletedAt)
 }
 
 // LockContactForDateRecomputeTx acquires the contact-row FOR UPDATE lock
@@ -926,11 +816,132 @@ func (r *ContactRepository) TestLockContactForUpdateNoWaitTx(ctx context.Context
 	return nil
 }
 
-// recomputeContactDatesAfterDelete is the shared orchestration body for the
-// tx and non-tx wrappers. Locks the contact row, reads the recomputed
-// timestamps + the fields the contact_by decision needs, decides contact_by
-// in Go, then writes.
-func recomputeContactDatesAfterDelete(ctx context.Context, q db.Querier, contactID uuid.UUID, deletedAt time.Time) error {
+// TestCadenceSeed is the field set for the cadence test fixtures. A nil field
+// leaves its column unchanged; a non-nil field overwrites it unconditionally.
+// There is deliberately no way to write NULL — no fixture needs it, and adding
+// one would mean distinguishing "absent" from "explicitly null" in a struct
+// whose whole job is brevity at 20 call sites.
+type TestCadenceSeed struct {
+	LastContacted     *time.Time
+	LastInteractionAt *time.Time
+	LastOutreachAt    *time.Time
+	LastResponseAt    *time.Time
+	ContactBy         *time.Time
+}
+
+// params maps the seed onto the PRODUCTION unconditional cadence query. The
+// fixture reuses UpdateContactCadenceUnconditional rather than minting a
+// near-identical test query, so fixture semantics cannot drift from the
+// writer whose behavior they stand in for.
+func (s TestCadenceSeed) params(id uuid.UUID) db.UpdateContactCadenceUnconditionalParams {
+	return db.UpdateContactCadenceUnconditionalParams{
+		ApplyLastContacted:     s.LastContacted != nil,
+		LastContacted:          timeToPgTimestamptz(s.LastContacted),
+		ApplyLastInteractionAt: s.LastInteractionAt != nil,
+		LastInteractionAt:      timeToPgTimestamptz(s.LastInteractionAt),
+		ApplyLastOutreachAt:    s.LastOutreachAt != nil,
+		LastOutreachAt:         timeToPgTimestamptz(s.LastOutreachAt),
+		ApplyLastResponseAt:    s.LastResponseAt != nil,
+		LastResponseAt:         timeToPgTimestamptz(s.LastResponseAt),
+		ApplyContactBy:         s.ContactBy != nil,
+		ContactBy:              timeToPgDate(s.ContactBy),
+		ID:                     uuidToPgUUID(id),
+	}
+}
+
+// TestKnowledgeSeed is the knowledge-column counterpart. Same nil semantics.
+type TestKnowledgeSeed struct {
+	Location *string
+	Birthday *time.Time
+	HowMet   *string
+}
+
+// TestSeedContactCadenceFieldsTx is a TEST-ONLY fixture writer: it declares the
+// cadence owner on the caller's tx and writes the requested columns.
+// Production code must NOT call it; both sole-writer guards inventory this
+// symbol and will fail the build if it appears outside the allowlist.
+func (r *ContactRepository) TestSeedContactCadenceFieldsTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, seed TestCadenceSeed) error {
+	if err := SetDerivedWriterTx(ctx, tx, DerivedWriterCadence); err != nil {
+		return err
+	}
+	return db.New(tx).UpdateContactCadenceUnconditional(ctx, seed.params(id))
+}
+
+// TestSeedContactCadenceFields is the pool-level variant, for the 19 fixture
+// sites that have no transaction of their own. It opens a short-lived tx so the
+// SET LOCAL and the UPDATE share one, mirroring SnapshotContactCadenceFields.
+// Requires SetPool. Production code must NOT call it.
+func (r *ContactRepository) TestSeedContactCadenceFields(ctx context.Context, id uuid.UUID, seed TestCadenceSeed) error {
+	if r.pool == nil {
+		return errors.New("contact repo: TestSeedContactCadenceFields requires SetPool (pool not configured)")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin cadence seed tx: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+	if err := r.TestSeedContactCadenceFieldsTx(ctx, tx, id, seed); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// TestWriteCadenceColumnsWithoutGUCTx deliberately writes cadence columns
+// WITHOUT declaring an owner. It exists solely so the derived-writer trigger's
+// rejection tests can attempt an unauthorized write: raw SQL in Go is banned
+// (.ai/rules/core.md rule 2) and every other path now declares an owner, so
+// without this there would be no legal way to observe a rejection. It also
+// serves the wrong-owner tests, where the caller declares some OTHER value
+// earlier in the same tx and this call leaves that declaration in force.
+// Production code must NOT call it.
+func (r *ContactRepository) TestWriteCadenceColumnsWithoutGUCTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, seed TestCadenceSeed) error {
+	return db.New(tx).UpdateContactCadenceUnconditional(ctx, seed.params(id))
+}
+
+// TestWriteKnowledgeColumnsWithoutGUCTx is the knowledge-side counterpart.
+// Writes only the non-nil fields, each through its existing cache query, with
+// no owner declared. Same rationale, same prohibition.
+func (r *ContactRepository) TestWriteKnowledgeColumnsWithoutGUCTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, seed TestKnowledgeSeed) error {
+	q := db.New(tx)
+	if seed.Location != nil {
+		if err := q.UpdateContactLocationCache(ctx, db.UpdateContactLocationCacheParams{
+			ID: uuidToPgUUID(id), Location: stringToPgText(seed.Location),
+		}); err != nil {
+			return err
+		}
+	}
+	if seed.Birthday != nil {
+		if err := q.UpdateContactBirthdayCache(ctx, db.UpdateContactBirthdayCacheParams{
+			ID: uuidToPgUUID(id), Birthday: timeToPgDate(seed.Birthday),
+		}); err != nil {
+			return err
+		}
+	}
+	if seed.HowMet != nil {
+		if err := q.UpdateContactHowMetCache(ctx, db.UpdateContactHowMetCacheParams{
+			ID: uuidToPgUUID(id), HowMet: stringToPgText(seed.HowMet),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// recomputeContactDatesAfterDelete is the shared orchestration body for
+// RecomputeContactDatesAfterDeleteTx. Declares the cadence owner, locks the
+// contact row, reads the recomputed timestamps + the fields the contact_by
+// decision needs, decides contact_by in Go, then writes — all inside the
+// caller's tx, which is what lets the lock-then-aggregate serialization and
+// the derived-writer declaration share one transaction.
+func recomputeContactDatesAfterDelete(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, deletedAt time.Time) error {
+	if err := SetDerivedWriterTx(ctx, tx, DerivedWriterCadence); err != nil {
+		return err
+	}
+	q := db.New(tx)
 	// Acquire the contact-row lock as a SEPARATE statement first: once held
 	// (waiting out any concurrent interaction/cadence writer), the subsequent
 	// ComputeContactDatesAfterDelete runs at a fresh snapshot that includes
