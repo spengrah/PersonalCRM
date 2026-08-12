@@ -452,6 +452,20 @@ UPDATE contact SET
   updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 
+-- name: SetDerivedWriter :exec
+-- Declares which owner the CALLING TRANSACTION is authorized to write derived
+-- contact columns for. set_config(..., true) is the function form of
+-- SET LOCAL: the value lives exactly as long as the transaction, so it can
+-- never leak to the next checkout of this pooled connection. Read back by the
+-- reject_unauthorized_derived_contact_write trigger (migration 079) via
+-- current_setting('crm.derived_writer', true).
+--
+-- Callers MUST be inside a transaction. Issued at pool scope this sets the
+-- value for a single implicit transaction and is then discarded, which is
+-- silently useless rather than an error — hence repository.SetDerivedWriterTx
+-- takes a pgx.Tx rather than a Querier.
+SELECT set_config('crm.derived_writer', sqlc.arg(owner)::text, true);
+
 -- name: ListContactsWithKnowledgeColumns :many
 -- Backfill source for --migrate-contact-knowledge-columns: every non-deleted
 -- contact whose location/birthday/how_met cache column still holds a value, so

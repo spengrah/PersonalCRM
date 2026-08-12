@@ -926,6 +926,121 @@ func (r *ContactRepository) TestLockContactForUpdateNoWaitTx(ctx context.Context
 	return nil
 }
 
+// TestCadenceSeed is the field set for the cadence test fixtures. A nil field
+// leaves its column unchanged; a non-nil field overwrites it unconditionally.
+// There is deliberately no way to write NULL — no fixture needs it, and adding
+// one would mean distinguishing "absent" from "explicitly null" in a struct
+// whose whole job is brevity at 20 call sites.
+type TestCadenceSeed struct {
+	LastContacted     *time.Time
+	LastInteractionAt *time.Time
+	LastOutreachAt    *time.Time
+	LastResponseAt    *time.Time
+	ContactBy         *time.Time
+}
+
+// params maps the seed onto the PRODUCTION unconditional cadence query. The
+// fixture reuses UpdateContactCadenceUnconditional rather than minting a
+// near-identical test query, so fixture semantics cannot drift from the
+// writer whose behavior they stand in for.
+func (s TestCadenceSeed) params(id uuid.UUID) db.UpdateContactCadenceUnconditionalParams {
+	return db.UpdateContactCadenceUnconditionalParams{
+		ApplyLastContacted:     s.LastContacted != nil,
+		LastContacted:          timeToPgTimestamptz(s.LastContacted),
+		ApplyLastInteractionAt: s.LastInteractionAt != nil,
+		LastInteractionAt:      timeToPgTimestamptz(s.LastInteractionAt),
+		ApplyLastOutreachAt:    s.LastOutreachAt != nil,
+		LastOutreachAt:         timeToPgTimestamptz(s.LastOutreachAt),
+		ApplyLastResponseAt:    s.LastResponseAt != nil,
+		LastResponseAt:         timeToPgTimestamptz(s.LastResponseAt),
+		ApplyContactBy:         s.ContactBy != nil,
+		ContactBy:              timeToPgDate(s.ContactBy),
+		ID:                     uuidToPgUUID(id),
+	}
+}
+
+// TestKnowledgeSeed is the knowledge-column counterpart. Same nil semantics.
+type TestKnowledgeSeed struct {
+	Location *string
+	Birthday *time.Time
+	HowMet   *string
+}
+
+// TestSeedContactCadenceFieldsTx is a TEST-ONLY fixture writer: it declares the
+// cadence owner on the caller's tx and writes the requested columns.
+// Production code must NOT call it; both sole-writer guards inventory this
+// symbol and will fail the build if it appears outside the allowlist.
+func (r *ContactRepository) TestSeedContactCadenceFieldsTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, seed TestCadenceSeed) error {
+	if err := SetDerivedWriterTx(ctx, tx, DerivedWriterCadence); err != nil {
+		return err
+	}
+	return db.New(tx).UpdateContactCadenceUnconditional(ctx, seed.params(id))
+}
+
+// TestSeedContactCadenceFields is the pool-level variant, for the 19 fixture
+// sites that have no transaction of their own. It opens a short-lived tx so the
+// SET LOCAL and the UPDATE share one, mirroring SnapshotContactCadenceFields.
+// Requires SetPool. Production code must NOT call it.
+func (r *ContactRepository) TestSeedContactCadenceFields(ctx context.Context, id uuid.UUID, seed TestCadenceSeed) error {
+	if r.pool == nil {
+		return errors.New("contact repo: TestSeedContactCadenceFields requires SetPool (pool not configured)")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin cadence seed tx: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+	if err := r.TestSeedContactCadenceFieldsTx(ctx, tx, id, seed); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// TestWriteCadenceColumnsWithoutGUCTx deliberately writes cadence columns
+// WITHOUT declaring an owner. It exists solely so the derived-writer trigger's
+// rejection tests can attempt an unauthorized write: raw SQL in Go is banned
+// (.ai/rules/core.md rule 2) and every other path now declares an owner, so
+// without this there would be no legal way to observe a rejection. It also
+// serves the wrong-owner tests, where the caller declares some OTHER value
+// earlier in the same tx and this call leaves that declaration in force.
+// Production code must NOT call it.
+func (r *ContactRepository) TestWriteCadenceColumnsWithoutGUCTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, seed TestCadenceSeed) error {
+	return db.New(tx).UpdateContactCadenceUnconditional(ctx, seed.params(id))
+}
+
+// TestWriteKnowledgeColumnsWithoutGUCTx is the knowledge-side counterpart.
+// Writes only the non-nil fields, each through its existing cache query, with
+// no owner declared. Same rationale, same prohibition.
+func (r *ContactRepository) TestWriteKnowledgeColumnsWithoutGUCTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, seed TestKnowledgeSeed) error {
+	q := db.New(tx)
+	if seed.Location != nil {
+		if err := q.UpdateContactLocationCache(ctx, db.UpdateContactLocationCacheParams{
+			ID: uuidToPgUUID(id), Location: stringToPgText(seed.Location),
+		}); err != nil {
+			return err
+		}
+	}
+	if seed.Birthday != nil {
+		if err := q.UpdateContactBirthdayCache(ctx, db.UpdateContactBirthdayCacheParams{
+			ID: uuidToPgUUID(id), Birthday: timeToPgDate(seed.Birthday),
+		}); err != nil {
+			return err
+		}
+	}
+	if seed.HowMet != nil {
+		if err := q.UpdateContactHowMetCache(ctx, db.UpdateContactHowMetCacheParams{
+			ID: uuidToPgUUID(id), HowMet: stringToPgText(seed.HowMet),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // recomputeContactDatesAfterDelete is the shared orchestration body for the
 // tx and non-tx wrappers. Locks the contact row, reads the recomputed
 // timestamps + the fields the contact_by decision needs, decides contact_by

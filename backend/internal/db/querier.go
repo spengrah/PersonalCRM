@@ -1881,6 +1881,18 @@ type Querier interface {
 	// issues item_add to keep Todoist in sync, and records the resulting ID
 	// without flipping the row back to 'managed'.
 	SetContactTaskExternalIDOnly(ctx context.Context, arg SetContactTaskExternalIDOnlyParams) error
+	// Declares which owner the CALLING TRANSACTION is authorized to write derived
+	// contact columns for. set_config(..., true) is the function form of
+	// SET LOCAL: the value lives exactly as long as the transaction, so it can
+	// never leak to the next checkout of this pooled connection. Read back by the
+	// reject_unauthorized_derived_contact_write trigger (migration 079) via
+	// current_setting('crm.derived_writer', true).
+	//
+	// Callers MUST be inside a transaction. Issued at pool scope this sets the
+	// value for a single implicit transaction and is then discarded, which is
+	// silently useless rather than an error — hence repository.SetDerivedWriterTx
+	// takes a pgx.Tx rather than a Querier.
+	SetDerivedWriter(ctx context.Context, owner string) error
 	// TEST ONLY: pre-seeds the dismissed_method_suggestions column so the
 	// dismissed-skip reconcile test can verify a dismissed (type,value) is
 	// not re-suggested. The production dismissal path appends via a read-
@@ -2566,6 +2578,11 @@ type Querier interface {
 	// subject is a given node, so a test asserts exactly one per migrated contact_tag
 	// and that an idempotent re-run creates no duplicates.
 	TestCountTaggedAsAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error)
+	// Migration round-trip test only: how many triggers of the given name exist on
+	// the given table. Read-only catalog access, mirroring TestListPublicTables.
+	// information_schema.triggers holds one row per (trigger, event type), and
+	// this trigger fires on UPDATE only, so the expected live count is 1.
+	TestCountTriggers(ctx context.Context, arg TestCountTriggersParams) (int64, error)
 	// Test-only: counts venue-type nodes. Used by the venue backfill test.
 	TestCountVenueNodes(ctx context.Context) (int64, error)
 	// TEST ONLY. Hard-deletes calendar_event rows whose gcal_event_id starts
@@ -2580,6 +2597,16 @@ type Querier interface {
 	// Tag-migration cleanup: hard-delete the legacy tag rows a test seeded, keyed by
 	// the tracked tag ids (scoped to the test's own tags on the shared DB).
 	TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID) (int64, error)
+	// Rejection tests only: is crm.derived_writer genuinely UNDEFINED on THIS
+	// physical connection? A custom GUC is a placeholder: it does not exist until
+	// something sets it, and once anything does it stays defined for the session
+	// with reset value '' — SET LOCAL reverts the value, not the definition. So an
+	// "unset" rejection test running on a recycled pool connection would silently
+	// be testing '' instead of NULL. The two unauthorized-write tests assert this
+	// returns true on their dedicated connection before every write.
+	// Wrapped in IS NULL rather than returning the setting itself so the result is
+	// a non-nullable boolean, the same shape as TestRegprocedureExists.
+	TestDerivedWriterSettingIsNull(ctx context.Context) (bool, error)
 	// Failure-injection fixture: finalizes a planted job so the "refuses while
 	// pending, cleans once safe" tests have an explicit, honest safe-state step
 	// rather than a hand-wave.
@@ -2800,6 +2827,13 @@ type Querier interface {
 	// to well-formed JSONB arrays (jsonb_array_elements raises on scalar/object
 	// input). Do NOT call from production code.
 	TestParityFindExternalContactsByNormalizedEmailLegacy(ctx context.Context, lower string) ([]*ExternalContact, error)
+	// Migration round-trip test only: does a function with the given signature
+	// exist? to_regprocedure returns NULL rather than raising for an unknown
+	// signature, which is what makes it usable as a boolean probe. This exists
+	// because the up migration uses CREATE OR REPLACE FUNCTION: a down that
+	// dropped only the trigger would leave the function behind, and every
+	// behavioral assertion would still pass because the reapply overwrites it.
+	TestRegprocedureExists(ctx context.Context, signature string) (bool, error)
 	// One-shot wait/run-by-kind read over river_job rows finalized since @cutoff,
 	// before job_exec_sample has accrued. finalized_at is authoritative here (only
 	// finished rows have it); this reads the live River table, not our sample table.

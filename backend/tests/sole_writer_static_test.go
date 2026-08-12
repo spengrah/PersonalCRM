@@ -38,6 +38,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,17 +87,40 @@ var querierScopedSymbols = map[string]struct{}{
 	"UpdateContact": {},
 }
 
-// allowedCallSites maps (file, enclosingFunc) → justification. A hit on
-// a cadenceWritingSymbol is accepted only if its call site is in this
-// map. Keys use forward slashes relative to the backend module root.
+// allowedCallSite records which inventoried selectors one (file, function)
+// may call, and why. Permission is per SYMBOL, not per function: an entry
+// that may call the three knowledge Tx wrappers must NOT thereby be able to
+// call a cadence fixture writer, which would declare the cadence owner for
+// itself and write cadence columns with every gate green.
+type allowedCallSite struct {
+	symbols []string
+	why     string
+}
+
+// allowedCallSites maps (file, enclosingFunc) → the inventoried selectors
+// that call site may invoke. A hit on a cadenceWritingSymbol is accepted
+// only if its call site is in this map AND the matched selector is in that
+// entry's symbols list. Keys use forward slashes relative to the backend
+// module root.
 //
 // The sole writer lives in consumer/cadence_updater.go:applyTx. Other
 // entries are narrow, documented carve-outs.
-var allowedCallSites = map[string]string{
+//
+// NOTE (round 1 of PR7's red/green split): this is an interim state. Two of
+// the four new fixture-wrapper entries below (TestSeedContactCadenceFields,
+// TestWriteKnowledgeColumnsWithoutGUCTx) name symbols not yet present in
+// cadenceWritingSymbols, so they are inert until the green phase adds them.
+// The ten-symbol inventory extension, the CreateContact -> CreateContactWithNode
+// rename, and the RefreshTx / knowledge-wrapper entries land later in the
+// same PR.
+var allowedCallSites = map[string]allowedCallSite{
 	// The authoritative consumer-owned cadence writer. applyTx dispatches
 	// to UpdateContactCadenceForward/Unconditional; this is the one
 	// place cadence SQL is allowed to live.
-	"internal/consumer/cadence_updater.go:applyTx": "sole writer",
+	"internal/consumer/cadence_updater.go:applyTx": {
+		symbols: []string{"UpdateContactCadenceForward", "UpdateContactCadenceUnconditional"},
+		why:     "sole writer",
+	},
 
 	// Repository wrappers. Each wrapper is a thin method that delegates
 	// to the corresponding sqlc query. All production cadence writes
@@ -106,18 +130,54 @@ var allowedCallSites = map[string]string{
 	// directly to seed contact_by without going through the sole-writer
 	// path. Adding a NEW wrapper here requires a matching allowlist
 	// entry, so regressions surface at review time.
-	"internal/repository/contact.go:CreateContact":                     "initial row seed carve-out",
-	"internal/repository/contact.go:UpdateContact":                     "profile-only wrapper (post-cutover cadence columns not written)",
-	"internal/repository/contact.go:UpdateContactBy":                   "test-fixture / implementation wrapper; production writes route through CadenceUpdater",
-	"internal/repository/contact.go:UpdateContactByTx":                 "test-fixture / implementation wrapper; production writes route through CadenceUpdater",
-	"internal/repository/contact.go:UpdateContactLastContacted":        "legacy wrapper (no production callers post-cutover)",
-	"internal/repository/contact.go:UpdateContactLastContactedIfLater": "legacy wrapper (no production callers post-cutover)",
-	"internal/repository/contact.go:UpdateContactOutreachAt":           "legacy wrapper (no production callers post-cutover)",
-	"internal/repository/contact.go:UpdateContactOutreachAtTx":         "legacy wrapper (no production callers post-cutover)",
-	"internal/repository/contact.go:UpdateContactResponseFields":       "legacy wrapper (no production callers post-cutover)",
-	"internal/repository/contact.go:UpdateContactResponseFieldsTx":     "legacy wrapper (no production callers post-cutover)",
-	"internal/repository/contact.go:UpdateContactMutualFields":         "legacy wrapper (no production callers post-cutover)",
-	"internal/repository/contact.go:UpdateContactMutualFieldsTx":       "legacy wrapper (no production callers post-cutover)",
+	"internal/repository/contact.go:CreateContact": {
+		symbols: []string{"CreateContact"},
+		why:     "initial row seed carve-out",
+	},
+	"internal/repository/contact.go:UpdateContact": {
+		symbols: []string{"UpdateContact"},
+		why:     "profile-only wrapper (post-cutover cadence columns not written)",
+	},
+	"internal/repository/contact.go:UpdateContactBy": {
+		symbols: []string{"UpdateContactBy"},
+		why:     "test-fixture / implementation wrapper; production writes route through CadenceUpdater",
+	},
+	"internal/repository/contact.go:UpdateContactByTx": {
+		symbols: []string{"UpdateContactBy"},
+		why:     "test-fixture / implementation wrapper; production writes route through CadenceUpdater",
+	},
+	"internal/repository/contact.go:UpdateContactLastContacted": {
+		symbols: []string{"UpdateContactLastContacted"},
+		why:     "legacy wrapper (no production callers post-cutover)",
+	},
+	"internal/repository/contact.go:UpdateContactLastContactedIfLater": {
+		symbols: []string{"UpdateContactLastContactedIfLater"},
+		why:     "legacy wrapper (no production callers post-cutover)",
+	},
+	"internal/repository/contact.go:UpdateContactOutreachAt": {
+		symbols: []string{"UpdateContactOutreachAt"},
+		why:     "legacy wrapper (no production callers post-cutover)",
+	},
+	"internal/repository/contact.go:UpdateContactOutreachAtTx": {
+		symbols: []string{"UpdateContactOutreachAt"},
+		why:     "legacy wrapper (no production callers post-cutover)",
+	},
+	"internal/repository/contact.go:UpdateContactResponseFields": {
+		symbols: []string{"UpdateContactResponseFields"},
+		why:     "legacy wrapper (no production callers post-cutover)",
+	},
+	"internal/repository/contact.go:UpdateContactResponseFieldsTx": {
+		symbols: []string{"UpdateContactResponseFields"},
+		why:     "legacy wrapper (no production callers post-cutover)",
+	},
+	"internal/repository/contact.go:UpdateContactMutualFields": {
+		symbols: []string{"UpdateContactMutualFields"},
+		why:     "legacy wrapper (no production callers post-cutover)",
+	},
+	"internal/repository/contact.go:UpdateContactMutualFieldsTx": {
+		symbols: []string{"UpdateContactMutualFields"},
+		why:     "legacy wrapper (no production callers post-cutover)",
+	},
 
 	// Removal-path recompute after soft-deleting a declined calendar
 	// interaction: surgical backward correction keyed on the deleted
@@ -126,7 +186,32 @@ var allowedCallSites = map[string]string{
 	// from CadenceUpdater's additive forward path. recomputeContactDatesAfterDelete
 	// is the shared body that calls WriteContactDatesAfterDelete; the two
 	// exported wrappers (RecomputeContactDatesAfterDelete[Tx]) delegate to it.
-	"internal/repository/contact.go:recomputeContactDatesAfterDelete": "removal-path recompute (declined calendar interaction); distinct from CadenceUpdater forward path",
+	"internal/repository/contact.go:recomputeContactDatesAfterDelete": {
+		symbols: []string{"WriteContactDatesAfterDelete"},
+		why:     "removal-path recompute (declined calendar interaction); distinct from CadenceUpdater forward path",
+	},
+
+	// Test-only fixture wrapper selectors (PR7 D7-7). Two of these symbols
+	// (TestSeedContactCadenceFieldsTx here; TestWriteCadenceColumnsWithoutGUCTx
+	// below) call UpdateContactCadenceUnconditional, already inventoried, so
+	// their entries are live from round 1. The other two name symbols the
+	// green phase adds to the inventory and are inert until then.
+	"internal/repository/contact.go:TestSeedContactCadenceFieldsTx": {
+		symbols: []string{"UpdateContactCadenceUnconditional"},
+		why:     "test fixture writer; declares the cadence owner before writing",
+	},
+	"internal/repository/contact.go:TestSeedContactCadenceFields": {
+		symbols: []string{"TestSeedContactCadenceFieldsTx"},
+		why:     "test fixture writer (pool-level); opens its own tx, then delegates",
+	},
+	"internal/repository/contact.go:TestWriteCadenceColumnsWithoutGUCTx": {
+		symbols: []string{"UpdateContactCadenceUnconditional"},
+		why:     "deliberate unauthorized probe for the derived-writer trigger's rejection tests",
+	},
+	"internal/repository/contact.go:TestWriteKnowledgeColumnsWithoutGUCTx": {
+		symbols: []string{"UpdateContactLocationCache", "UpdateContactBirthdayCache", "UpdateContactHowMetCache"},
+		why:     "deliberate unauthorized probe (knowledge columns)",
+	},
 }
 
 // TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL walks the Go AST
@@ -216,7 +301,7 @@ func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
 						}
 					}
 					key := filepath.ToSlash(rel) + ":" + fnName
-					if _, allowed := allowedCallSites[key]; allowed {
+					if site, hasKey := allowedCallSites[key]; hasKey && slices.Contains(site.symbols, name) {
 						return true
 					}
 					pos := fset.Position(call.Pos())

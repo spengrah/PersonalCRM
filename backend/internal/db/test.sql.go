@@ -2788,6 +2788,29 @@ func (q *Queries) TestCountTaggedAsAssertionsForSubject(ctx context.Context, sub
 	return count, err
 }
 
+const TestCountTriggers = `-- name: TestCountTriggers :one
+SELECT count(*)::bigint FROM information_schema.triggers
+WHERE trigger_schema = 'public'
+  AND event_object_table = $1::text
+  AND trigger_name = $2::text
+`
+
+type TestCountTriggersParams struct {
+	TableName   string `json:"table_name"`
+	TriggerName string `json:"trigger_name"`
+}
+
+// Migration round-trip test only: how many triggers of the given name exist on
+// the given table. Read-only catalog access, mirroring TestListPublicTables.
+// information_schema.triggers holds one row per (trigger, event type), and
+// this trigger fires on UPDATE only, so the expected live count is 1.
+func (q *Queries) TestCountTriggers(ctx context.Context, arg TestCountTriggersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, TestCountTriggers, arg.TableName, arg.TriggerName)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const TestDeleteContactTagsByContactIds = `-- name: TestDeleteContactTagsByContactIds :execrows
 DELETE FROM contact_tag WHERE contact_id = ANY($1::uuid[])
 `
@@ -2814,6 +2837,26 @@ func (q *Queries) TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID)
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const TestDerivedWriterSettingIsNull = `-- name: TestDerivedWriterSettingIsNull :one
+SELECT (current_setting('crm.derived_writer', true) IS NULL)::boolean
+`
+
+// Rejection tests only: is crm.derived_writer genuinely UNDEFINED on THIS
+// physical connection? A custom GUC is a placeholder: it does not exist until
+// something sets it, and once anything does it stays defined for the session
+// with reset value ” — SET LOCAL reverts the value, not the definition. So an
+// "unset" rejection test running on a recycled pool connection would silently
+// be testing ” instead of NULL. The two unauthorized-write tests assert this
+// returns true on their dedicated connection before every write.
+// Wrapped in IS NULL rather than returning the setting itself so the result is
+// a non-nullable boolean, the same shape as TestRegprocedureExists.
+func (q *Queries) TestDerivedWriterSettingIsNull(ctx context.Context) (bool, error) {
+	row := q.db.QueryRow(ctx, TestDerivedWriterSettingIsNull)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const TestFinalizeRiverJobByID = `-- name: TestFinalizeRiverJobByID :exec
@@ -3364,4 +3407,21 @@ func (q *Queries) TestListViewColumns(ctx context.Context, viewName string) ([]*
 		return nil, err
 	}
 	return items, nil
+}
+
+const TestRegprocedureExists = `-- name: TestRegprocedureExists :one
+SELECT (to_regprocedure($1::text) IS NOT NULL)::boolean
+`
+
+// Migration round-trip test only: does a function with the given signature
+// exist? to_regprocedure returns NULL rather than raising for an unknown
+// signature, which is what makes it usable as a boolean probe. This exists
+// because the up migration uses CREATE OR REPLACE FUNCTION: a down that
+// dropped only the trigger would leave the function behind, and every
+// behavioral assertion would still pass because the reapply overwrites it.
+func (q *Queries) TestRegprocedureExists(ctx context.Context, signature string) (bool, error) {
+	row := q.db.QueryRow(ctx, TestRegprocedureExists, signature)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
