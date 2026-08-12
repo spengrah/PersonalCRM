@@ -1,34 +1,45 @@
-// Package tests — cutover sole-writer AST guard.
+// Package tests — derived-column sole-writer AST guard.
 //
-// This test enforces the acceptance criterion that CadenceUpdater is the
-// sole post-create writer of contact.last_contacted,
-// contact.last_interaction_at, contact.last_outreach_at,
-// contact.last_response_at, and contact.contact_by. It walks every .go
-// file under backend/internal and backend/cmd/crm-api, flags any call
-// to one of the cadence-writing sqlc-generated queries or repository
-// tx wrappers, and compares the hit set against a function-level
-// allowlist.
+// This test enforces the rule that contact's eight derived columns each have
+// exactly one owner: CadenceUpdater (last_contacted, last_interaction_at,
+// last_outreach_at, last_response_at, contact_by) and
+// KnowledgeCacheUpdater.RefreshTx (location, birthday, how_met). It walks
+// every .go file under backend/internal and backend/cmd/crm-api, flags any
+// call to one of the derived-writing sqlc-generated queries or repository
+// tx wrappers, and compares the hit set against a per-(file, function,
+// symbol) allowlist. From migration 079 onward this is the SECOND enforcer —
+// a BEFORE UPDATE trigger on contact rejects the write at the database layer
+// regardless of what Go code attempts it — but this guard still earns its
+// keep: it fails at `make test-unit` / CI time with a source-level message,
+// before a test ever reaches the database.
 //
 // Design:
-//   - Inventory tracks the sqlc query names that mutate one or more
-//     cadence columns, INCLUDING CreateContact + UpdateContact (both
-//     write cadence-family columns in their full column lists, even
-//     though post-cutover UpdateContact is profile-only by convention).
-//   - For CreateContact/UpdateContact specifically, we only flag calls
-//     whose receiver is an sqlc Querier (r.queries, q, db.New(tx)) —
-//     wrapper-to-wrapper calls (contactRepo.CreateContact from service)
-//     are legitimate and should NOT trip. This avoids flagging every
-//     handler that goes through the service layer.
-//   - Allowlist is FUNCTION-LEVEL: a (file, funcName) pair must be
-//     explicitly listed for a hit to be accepted. A new method anywhere
-//     in an allowlisted file that adds a cadence-write call will still
-//     trip the guard unless the allowlist is expanded.
+//   - Inventory tracks the sqlc query + wrapper selector names that mutate
+//     one or more derived columns, INCLUDING CreateContactWithNode +
+//     UpdateContact (both write derived-family columns in their full column
+//     lists, even though post-cutover UpdateContact is profile-only by
+//     convention and CreateContactWithNode's write is an INSERT the trigger
+//     does not reach).
+//   - For CreateContactWithNode/UpdateContact specifically, we only flag
+//     calls whose receiver is an sqlc Querier (r.queries, q, db.New(tx)) —
+//     wrapper-to-wrapper calls (contactRepo.CreateContact from service) are
+//     legitimate and should NOT trip. This avoids flagging every handler
+//     that goes through the service layer.
+//   - Allowlist is per (file, function, SYMBOL): a hit is accepted only when
+//     its (file, function) key is present AND the matched selector is in
+//     that entry's symbol list. Permission is per symbol, not per function,
+//     because a function allowed to call one derived-writing symbol (e.g.
+//     RefreshTx calling the three knowledge Tx wrappers) must NOT thereby be
+//     able to call a DIFFERENT symbol from a different owner (e.g. a cadence
+//     fixture writer) — that would authorize a cross-owner write with every
+//     gate green.
 //
-// Also includes TestUpdateContactSQL_DoesNotTouchCadenceColumns, which
-// parses contact.sql and asserts the UpdateContact query's SET clause
-// never includes a cadence column — a future regression that adds
-// `last_contacted = $X` to UpdateContact would trip at the SQL layer
-// without having to wait for a call-site guard to miss it.
+// Also includes TestUpdateContactSQL_SetClauseIsExactlyProfileColumns, which
+// parses contact.sql and asserts UpdateContact's SET clause is EXACTLY
+// {cadence, full_name, profile_photo, updated_at} — an exact-set comparison
+// rather than a denylist, so a future regression that adds ANY derived
+// column (cadence or knowledge) trips at the SQL layer without having to
+// wait for a call-site guard to miss it.
 package tests
 
 import (
@@ -47,46 +58,62 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// cadenceWritingSymbols enumerates the sqlc query + repository wrapper
-// selector names that mutate one or more cadence columns. Matching is by
-// call-expression selector name only, with a receiver-scope refinement
-// for CreateContact/UpdateContact (see scopedToSqlcQuerier below).
+// derivedWritingSymbols enumerates the sqlc query + repository wrapper
+// selector names that mutate one or more of contact's eight derived columns
+// (five cadence + three knowledge-cache). Matching is by call-expression
+// selector name only, with a receiver-scope refinement for
+// CreateContactWithNode/UpdateContact (see scopedToSqlcQuerier below).
 //
-// Kept in sync with backend/internal/db/queries/contact.sql. When
-// adding a new cadence-writing query, add its name here.
-var cadenceWritingSymbols = map[string]struct{}{
-	"UpdateContactLastContacted":        {},
-	"UpdateContactLastContactedIfLater": {},
-	"UpdateContactOutreachAt":           {},
-	"UpdateContactOutreachAtTx":         {},
-	"UpdateContactResponseFields":       {},
-	"UpdateContactResponseFieldsTx":     {},
-	"UpdateContactMutualFields":         {},
-	"UpdateContactMutualFieldsTx":       {},
+// Three symbol classes, because inventorying only the underlying sqlc query
+// is not enough — the guard matches on call-expression SELECTOR name and
+// skips _test.go, so what it can see is exactly what is in this map:
+//   - sqlc query selectors: the direct db.New(tx).X(...) call.
+//   - fixture wrapper selectors (Test-prefixed): contactRepo.X(...) from a
+//     test; two of these DECLARE their own owner, so an uninventoried caller
+//     would be a fully-authorized production back door.
+//   - knowledge Tx wrapper selectors: contactRepo.X(...); production calls
+//     THESE, not the sqlc queries directly, and each declares the
+//     knowledge_cache owner for itself — the same back-door risk.
+//
+// Kept in sync with backend/internal/db/queries/contact.sql and
+// backend/internal/repository/contact.go. When adding a new derived-writing
+// query or wrapper, add its name here AND a scoped allowedCallSites entry.
+var derivedWritingSymbols = map[string]struct{}{
+	// sqlc query selectors.
 	"UpdateContactCadenceForward":       {},
 	"UpdateContactCadenceUnconditional": {},
-	"UpdateContactBy":                   {},
-	"UpdateContactByTx":                 {},
 	"WriteContactDatesAfterDelete":      {},
-	// Include CreateContact + UpdateContact so a future regression
-	// that adds a cadence column to either query is caught. Selector
+	"UpdateContactLocationCache":        {},
+	"UpdateContactBirthdayCache":        {},
+	"UpdateContactHowMetCache":          {},
+	// fixture wrapper selectors.
+	"TestSeedContactCadenceFields":          {},
+	"TestSeedContactCadenceFieldsTx":        {},
+	"TestWriteCadenceColumnsWithoutGUCTx":   {},
+	"TestWriteKnowledgeColumnsWithoutGUCTx": {},
+	// knowledge Tx wrapper selectors.
+	"UpdateContactLocationCacheTx": {},
+	"UpdateContactBirthdayCacheTx": {},
+	"UpdateContactHowMetCacheTx":   {},
+	// Include CreateContactWithNode + UpdateContact so a future regression
+	// that adds a derived column to either query is caught. Selector
 	// matching alone would flag every service-layer wrapper caller;
 	// querierScopedSymbols below restricts these two names to direct
 	// sqlc-Querier call sites.
-	"CreateContact": {},
-	"UpdateContact": {},
+	"CreateContactWithNode": {},
+	"UpdateContact":         {},
 }
 
-// querierScopedSymbols are cadence-writing queries whose names collide
+// querierScopedSymbols are derived-writing queries whose names collide
 // with higher-level wrapper methods (repo → service → handler). For
-// these, a call is only treated as a cadence write when the RECEIVER
+// these, a call is only treated as a derived-column write when the RECEIVER
 // chain matches an sqlc Querier shape — i.e., the call bypasses the
 // service layer and talks to the database directly. Wrapper-level
 // callers (contactRepo.CreateContact from the service, etc.) are NOT
 // flagged.
 var querierScopedSymbols = map[string]struct{}{
-	"CreateContact": {},
-	"UpdateContact": {},
+	"CreateContactWithNode": {},
+	"UpdateContact":         {},
 }
 
 // allowedCallSite records which inventoried selectors one (file, function)
@@ -100,21 +127,15 @@ type allowedCallSite struct {
 }
 
 // allowedCallSites maps (file, enclosingFunc) → the inventoried selectors
-// that call site may invoke. A hit on a cadenceWritingSymbol is accepted
+// that call site may invoke. A hit on a derivedWritingSymbol is accepted
 // only if its call site is in this map AND the matched selector is in that
 // entry's symbols list. Keys use forward slashes relative to the backend
 // module root.
 //
-// The sole writer lives in consumer/cadence_updater.go:applyTx. Other
-// entries are narrow, documented carve-outs.
-//
-// NOTE (round 1 of PR7's red/green split): this is an interim state. Two of
-// the four new fixture-wrapper entries below (TestSeedContactCadenceFields,
-// TestWriteKnowledgeColumnsWithoutGUCTx) name symbols not yet present in
-// cadenceWritingSymbols, so they are inert until the green phase adds them.
-// The ten-symbol inventory extension, the CreateContact -> CreateContactWithNode
-// rename, and the RefreshTx / knowledge-wrapper entries land later in the
-// same PR.
+// Two owners, twelve entries: CadenceUpdater.applyTx for the five cadence
+// columns; KnowledgeCacheUpdater.RefreshTx — the SOLE permitted caller of the
+// three knowledge Tx wrappers — for the three knowledge columns. Every other
+// entry is a narrow, documented carve-out.
 var allowedCallSites = map[string]allowedCallSite{
 	// The authoritative consumer-owned cadence writer. applyTx dispatches
 	// to UpdateContactCadenceForward/Unconditional; this is the one
@@ -123,87 +144,62 @@ var allowedCallSites = map[string]allowedCallSite{
 		symbols: []string{"UpdateContactCadenceForward", "UpdateContactCadenceUnconditional"},
 		why:     "sole writer",
 	},
-
-	// Repository wrappers. Each wrapper is a thin method that delegates
-	// to the corresponding sqlc query. All production cadence writes
-	// route through CadenceUpdater; these wrappers remain in the
-	// allowlist because the wrapper bodies themselves call cadence SQL
-	// and because test fixtures use UpdateContactBy/UpdateContactByTx
-	// directly to seed contact_by without going through the sole-writer
-	// path. Adding a NEW wrapper here requires a matching allowlist
-	// entry, so regressions surface at review time.
+	// The authoritative consumer-owned knowledge-cache writer, and the ONLY
+	// permitted caller of the three knowledge Tx wrappers — those wrappers
+	// each declare the knowledge_cache owner for themselves, so any OTHER
+	// caller would write a knowledge column with full authorization while
+	// bypassing KnowledgeCacheUpdater's recompute/supersession/closure logic
+	// entirely.
+	"internal/consumer/knowledge_cache.go:RefreshTx": {
+		symbols: []string{"UpdateContactLocationCacheTx", "UpdateContactBirthdayCacheTx", "UpdateContactHowMetCacheTx"},
+		why:     "the ONLY permitted caller of the three knowledge Tx wrappers; KnowledgeCacheUpdater is the column owner",
+	},
 	"internal/repository/contact.go:CreateContact": {
-		symbols: []string{"CreateContact"},
-		why:     "initial row seed carve-out",
+		symbols: []string{"CreateContactWithNode"}, // PR5 renamed the query; the wrapper method kept its name
+		why:     "initial row seed carve-out (INSERT; the trigger is UPDATE-only)",
 	},
 	"internal/repository/contact.go:UpdateContact": {
 		symbols: []string{"UpdateContact"},
-		why:     "profile-only wrapper (post-cutover cadence columns not written)",
+		why:     "profile-only wrapper; SET clause pinned by TestUpdateContactSQL_SetClauseIsExactlyProfileColumns",
 	},
-	"internal/repository/contact.go:UpdateContactBy": {
-		symbols: []string{"UpdateContactBy"},
-		why:     "test-fixture / implementation wrapper; production writes route through CadenceUpdater",
-	},
-	"internal/repository/contact.go:UpdateContactByTx": {
-		symbols: []string{"UpdateContactBy"},
-		why:     "test-fixture / implementation wrapper; production writes route through CadenceUpdater",
-	},
-	"internal/repository/contact.go:UpdateContactLastContacted": {
-		symbols: []string{"UpdateContactLastContacted"},
-		why:     "legacy wrapper (no production callers post-cutover)",
-	},
-	"internal/repository/contact.go:UpdateContactLastContactedIfLater": {
-		symbols: []string{"UpdateContactLastContactedIfLater"},
-		why:     "legacy wrapper (no production callers post-cutover)",
-	},
-	"internal/repository/contact.go:UpdateContactOutreachAt": {
-		symbols: []string{"UpdateContactOutreachAt"},
-		why:     "legacy wrapper (no production callers post-cutover)",
-	},
-	"internal/repository/contact.go:UpdateContactOutreachAtTx": {
-		symbols: []string{"UpdateContactOutreachAt"},
-		why:     "legacy wrapper (no production callers post-cutover)",
-	},
-	"internal/repository/contact.go:UpdateContactResponseFields": {
-		symbols: []string{"UpdateContactResponseFields"},
-		why:     "legacy wrapper (no production callers post-cutover)",
-	},
-	"internal/repository/contact.go:UpdateContactResponseFieldsTx": {
-		symbols: []string{"UpdateContactResponseFields"},
-		why:     "legacy wrapper (no production callers post-cutover)",
-	},
-	"internal/repository/contact.go:UpdateContactMutualFields": {
-		symbols: []string{"UpdateContactMutualFields"},
-		why:     "legacy wrapper (no production callers post-cutover)",
-	},
-	"internal/repository/contact.go:UpdateContactMutualFieldsTx": {
-		symbols: []string{"UpdateContactMutualFields"},
-		why:     "legacy wrapper (no production callers post-cutover)",
-	},
-
 	// Removal-path recompute after soft-deleting a declined calendar
 	// interaction: surgical backward correction keyed on the deleted
 	// interaction's occurred_at, contact_by computed via
 	// cadence.CalculateContactBy to match the forward writer; distinct
 	// from CadenceUpdater's additive forward path. recomputeContactDatesAfterDelete
-	// is the shared body that calls WriteContactDatesAfterDelete; the two
-	// exported wrappers (RecomputeContactDatesAfterDelete[Tx]) delegate to it.
+	// is the shared body that calls WriteContactDatesAfterDelete; the exported
+	// wrapper (RecomputeContactDatesAfterDeleteTx) delegates to it.
 	"internal/repository/contact.go:recomputeContactDatesAfterDelete": {
 		symbols: []string{"WriteContactDatesAfterDelete"},
 		why:     "removal-path recompute (declined calendar interaction); distinct from CadenceUpdater forward path",
 	},
-
-	// Test-only fixture wrapper selectors (PR7 D7-7). Two of these symbols
-	// (TestSeedContactCadenceFieldsTx here; TestWriteCadenceColumnsWithoutGUCTx
-	// below) call UpdateContactCadenceUnconditional, already inventoried, so
-	// their entries are live from round 1. The other two name symbols the
-	// green phase adds to the inventory and are inert until then.
+	// The three knowledge-cache sole-writer wrapper BODIES: each declares the
+	// knowledge_cache owner for itself before calling its sqlc query. Not to
+	// be confused with the Tx wrappers' own selectors above, which is what
+	// RefreshTx is allowlisted to call.
+	"internal/repository/contact.go:UpdateContactLocationCacheTx": {
+		symbols: []string{"UpdateContactLocationCache"},
+		why:     "knowledge-cache sole-writer wrapper body; declares the knowledge_cache owner",
+	},
+	"internal/repository/contact.go:UpdateContactBirthdayCacheTx": {
+		symbols: []string{"UpdateContactBirthdayCache"},
+		why:     "knowledge-cache sole-writer wrapper body; declares the knowledge_cache owner",
+	},
+	"internal/repository/contact.go:UpdateContactHowMetCacheTx": {
+		symbols: []string{"UpdateContactHowMetCache"},
+		why:     "knowledge-cache sole-writer wrapper body; declares the knowledge_cache owner",
+	},
+	// Test-only fixture wrapper selectors (PR7 D7-7). No new write SQL: the
+	// cadence pair reuses the production UpdateContactCadenceUnconditional
+	// query; the deliberate unauthorized probes exist solely so the
+	// derived-writer trigger's rejection tests have a legal way to attempt a
+	// rejected write (raw SQL in Go is banned).
 	"internal/repository/contact.go:TestSeedContactCadenceFieldsTx": {
 		symbols: []string{"UpdateContactCadenceUnconditional"},
 		why:     "test fixture writer; declares the cadence owner before writing",
 	},
 	"internal/repository/contact.go:TestSeedContactCadenceFields": {
-		symbols: []string{"TestSeedContactCadenceFieldsTx"},
+		symbols: []string{"TestSeedContactCadenceFieldsTx"}, // pool-level variant delegates to the tx form
 		why:     "test fixture writer (pool-level); opens its own tx, then delegates",
 	},
 	"internal/repository/contact.go:TestWriteCadenceColumnsWithoutGUCTx": {
@@ -218,8 +214,10 @@ var allowedCallSites = map[string]allowedCallSite{
 
 // TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL walks the Go AST
 // of backend/internal + backend/cmd/crm-api and asserts every call to a
-// cadence-writing symbol lives in the allowedCallSites map. Generated
-// sqlc files and test files are skipped.
+// derived-writing symbol lives in the allowedCallSites map, for the symbol
+// actually matched. Generated sqlc files and test files are skipped. Name
+// unchanged from the cadence-only era — it is a test identifier, not a
+// public interface, and GI-6 governs symbol/query names, not test names.
 func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
 	t.Parallel()
 	moduleRoot, err := backendModuleRoot()
@@ -233,10 +231,11 @@ func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
 	}
 
 	type violation struct {
-		file string
-		line int
-		fn   string
-		call string
+		file              string
+		line              int
+		fn                string
+		call              string
+		allowlistedButNot bool // this (file, function) is allowlisted, just not for this symbol
 	}
 	var violations []violation
 
@@ -291,7 +290,7 @@ func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
 						return true
 					}
 					name := sel.Sel.Name
-					if _, hit := cadenceWritingSymbols[name]; !hit {
+					if _, hit := derivedWritingSymbols[name]; !hit {
 						return true
 					}
 					// For collision-prone names, require the receiver
@@ -303,15 +302,17 @@ func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
 						}
 					}
 					key := filepath.ToSlash(rel) + ":" + fnName
-					if site, hasKey := allowedCallSites[key]; hasKey && slices.Contains(site.symbols, name) {
+					site, hasKey := allowedCallSites[key]
+					if hasKey && slices.Contains(site.symbols, name) {
 						return true
 					}
 					pos := fset.Position(call.Pos())
 					violations = append(violations, violation{
-						file: filepath.ToSlash(rel),
-						line: pos.Line,
-						fn:   fnName,
-						call: name,
+						file:              filepath.ToSlash(rel),
+						line:              pos.Line,
+						fn:                fnName,
+						call:              name,
+						allowlistedButNot: hasKey, // key hit, but not for THIS symbol — see the message below
 					})
 					return true
 				})
@@ -330,9 +331,14 @@ func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
 			return violations[i].line < violations[j].line
 		})
 		var msg strings.Builder
-		msg.WriteString("cadence sole-writer guard: cadence-writing calls found outside the function-level allowlist.\n")
-		msg.WriteString("Either route the write through CadenceUpdater, or add a justified entry to allowedCallSites.\n\n")
+		msg.WriteString("derived-column sole-writer guard: writes to a derived contact column found outside the per-symbol allowlist.\n")
+		msg.WriteString("Cadence columns (last_contacted, last_interaction_at, last_outreach_at, last_response_at, contact_by) route through CadenceUpdater; ")
+		msg.WriteString("knowledge-cache columns (location, birthday, how_met) route through KnowledgeCacheUpdater.RefreshTx. ")
+		msg.WriteString("Otherwise add a justified allowedCallSites entry naming the specific symbol.\n\n")
 		for _, v := range violations {
+			// This exact line format — "  <file>:<line> in <fn> — <call>" — is
+			// pinned by F4's anchored grep; do not change it independently of
+			// the falsification commands in the PR body.
 			msg.WriteString("  ")
 			msg.WriteString(v.file)
 			msg.WriteString(":")
@@ -342,6 +348,18 @@ func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
 			msg.WriteString(" — ")
 			msg.WriteString(v.call)
 			msg.WriteString("\n")
+			if v.allowlistedButNot {
+				// Distinct from "not allowlisted at all": this (file, function)
+				// IS in allowedCallSites, just not permitted to call THIS
+				// symbol — the per-symbol scoping F4d falsifies.
+				msg.WriteString("    (")
+				msg.WriteString(v.file)
+				msg.WriteString(":")
+				msg.WriteString(v.fn)
+				msg.WriteString(" is allowlisted but not for ")
+				msg.WriteString(v.call)
+				msg.WriteString(")\n")
+			}
 		}
 		t.Fatal(msg.String())
 	}
@@ -452,24 +470,28 @@ func TestUpdateContactSQL_SetClauseIsExactlyProfileColumns(t *testing.T) {
 }
 
 // TestCadenceSoleWriter_NegativeGuardCatchesNewWrite synthesizes a tiny
-// Go file that calls r.queries.UpdateContactMutualFields from an
+// Go file that calls r.queries.UpdateContactCadenceForward from an
 // unallowlisted function, runs the same AST check against it, and
 // asserts a violation is reported. Without this, a future loosening
 // of the check (e.g., all-files-allowed) could silently pass.
+//
+// Synthesizes UpdateContactCadenceForward rather than UpdateContactMutualFields
+// (the pre-PR7 choice): the latter left the inventory when the legacy cadence
+// queries were deleted, and UpdateContactCadenceForward is a symbol that stays.
 func TestCadenceSoleWriter_NegativeGuardCatchesNewWrite(t *testing.T) {
 	t.Parallel()
 	src := `package poc
 
 type querier struct{}
 
-func (q *querier) UpdateContactMutualFields() {}
+func (q *querier) UpdateContactCadenceForward() {}
 
 type poc struct {
 	queries *querier
 }
 
 func (p *poc) FakeNewWriter() {
-	p.queries.UpdateContactMutualFields()
+	p.queries.UpdateContactCadenceForward()
 }
 `
 	fset := token.NewFileSet()
@@ -494,7 +516,7 @@ func (p *poc) FakeNewWriter() {
 			if !ok {
 				return true
 			}
-			if _, hit := cadenceWritingSymbols[sel.Sel.Name]; !hit {
+			if _, hit := derivedWritingSymbols[sel.Sel.Name]; !hit {
 				return true
 			}
 			// Simulate the allowlist lookup against a fake path that

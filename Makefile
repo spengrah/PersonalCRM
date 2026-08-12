@@ -651,10 +651,14 @@ lint-ingest-registry:
 ci-test: lint check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"
 
-# Sole-writer guard: verifies only CadenceUpdater calls cadence-writing queries.
-# Runs alongside the Go AST test at backend/tests/sole_writer_static_test.go;
-# produces reviewer-visible file/line evidence whenever a cadence-writing
-# symbol escapes the allowlist. See scripts/check-cadence-sole-writer.sh.
+# Sole-writer guard: verifies contact's eight derived columns each have
+# exactly one owner — CadenceUpdater for the five cadence columns
+# (last_contacted, last_interaction_at, last_outreach_at, last_response_at,
+# contact_by) and KnowledgeCacheUpdater.RefreshTx for the three knowledge
+# columns (location, birthday, how_met). Runs alongside the Go AST test at
+# backend/tests/sole_writer_static_test.go; produces reviewer-visible
+# file/line evidence whenever a derived-writing symbol escapes the allowlist.
+# See scripts/check-cadence-sole-writer.sh.
 check-cadence-sole-writer:
 	@$(REPO_ROOT)/scripts/check-cadence-sole-writer.sh
 

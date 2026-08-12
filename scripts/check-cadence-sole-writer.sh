@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 # check-cadence-sole-writer.sh — belt-and-suspenders grep guard.
 #
-# Ships alongside the AST test at backend/tests/sole_writer_static_test.go.
-# Enforces that cadence-writing queries are only reachable from
-# backend/internal/consumer/cadence_updater.go (the authoritative
-# writer), the repository wrapper methods themselves, and the two
-# explicit Todoist carve-outs.
+# The name is narrower than its subject and is left alone deliberately (it is
+# the make target name and a CI step key — GI-6 treats those as interfaces).
+# What it enforces: contact's eight derived columns each have exactly one
+# owner. Ships alongside the AST test at
+# backend/tests/sole_writer_static_test.go. Enforces that derived-writing
+# queries are only reachable from backend/internal/consumer/cadence_updater.go
+# (the cadence owner), backend/internal/consumer/knowledge_cache.go (the
+# knowledge-cache owner), and the repository wrapper methods themselves.
 #
 # Enforcement detail:
-#   - Inventory includes CreateContact + UpdateContact, scoped to sqlc
-#     Querier receivers (`queries.X`, `db.New(tx).X`, `txQueries.X`) so
+#   - Inventory includes CreateContactWithNode + UpdateContact, scoped to
+#     sqlc Querier receivers (`queries.X`, `db.New(tx).X`, `txQueries.X`) so
 #     wrapper-to-wrapper calls from the service layer are NOT flagged.
-#   - Allowlist is file-level here (the belt); function-level precision
-#     lives in the AST test (the suspenders). Any file that matches the
-#     grep pattern MUST also be covered by the AST allowlist.
+#   - Allowlist is file-level here (the belt); function-level AND per-symbol
+#     precision lives in the AST test (the suspenders). Any file that
+#     matches the grep pattern MUST also be covered by the AST allowlist.
 #
 # Exits 0 when the hit set matches the allowlist. Exits 1 (with a diff
 # against the allowlist) otherwise.
@@ -27,23 +30,23 @@ cd "$(dirname "$0")/.."
 # precision within each file; this script is the coarse first check.
 ALLOWLIST=(
   "backend/internal/consumer/cadence_updater.go"
+  "backend/internal/consumer/knowledge_cache.go"
   "backend/internal/repository/contact.go"
-  "backend/internal/todoist/provider.go"
 )
 
-# Cadence-writing symbols with their receiver-scope restrictions. Most
+# Derived-writing symbols with their receiver-scope restrictions. Most
 # names are distinctive and can match on `\.SYMBOL\(` alone; the two
-# collision-prone names (CreateContact, UpdateContact) require an sqlc
-# Querier receiver to avoid flagging every service/handler caller.
+# collision-prone names (CreateContactWithNode, UpdateContact) require an
+# sqlc Querier receiver to avoid flagging every service/handler caller.
 #
-# Keep in sync with cadenceWritingSymbols + querierScopedSymbols in
+# Keep in sync with derivedWritingSymbols + querierScopedSymbols in
 # backend/tests/sole_writer_static_test.go.
-DISTINCTIVE_PATTERN='\.(UpdateContactLastContacted|UpdateContactLastContactedIfLater|UpdateContactOutreachAt|UpdateContactOutreachAtTx|UpdateContactResponseFields|UpdateContactResponseFieldsTx|UpdateContactMutualFields|UpdateContactMutualFieldsTx|UpdateContactCadenceForward|UpdateContactCadenceUnconditional|UpdateContactBy)\('
+DISTINCTIVE_PATTERN='\.(UpdateContactCadenceForward|UpdateContactCadenceUnconditional|WriteContactDatesAfterDelete|TestSeedContactCadenceFieldsTx|TestSeedContactCadenceFields|TestWriteCadenceColumnsWithoutGUCTx|TestWriteKnowledgeColumnsWithoutGUCTx|UpdateContactLocationCacheTx|UpdateContactLocationCache|UpdateContactBirthdayCacheTx|UpdateContactBirthdayCache|UpdateContactHowMetCacheTx|UpdateContactHowMetCache)\('
 
-# Querier-scoped CreateContact/UpdateContact. Match only when the
+# Querier-scoped CreateContactWithNode/UpdateContact. Match only when the
 # receiver chain looks like an sqlc Querier: `queries.X(`, `q.X(`,
 # `txQueries.X(`, or `db.New(tx).X(`.
-QUERIER_SCOPED_PATTERN='((\.queries|\.q|\.txQueries|queries|txQueries|db\.New\([^)]*\))\.(CreateContact|UpdateContact))\('
+QUERIER_SCOPED_PATTERN='((\.queries|\.q|\.txQueries|queries|txQueries|db\.New\([^)]*\))\.(CreateContactWithNode|UpdateContact))\('
 
 SYMBOLS_PATTERN="${DISTINCTIVE_PATTERN}|${QUERIER_SCOPED_PATTERN}"
 
@@ -87,7 +90,7 @@ for f in "${HIT_LINES[@]:-}"; do
 done
 
 if [[ ${#VIOLATIONS[@]} -gt 0 ]]; then
-  echo "❌ cadence sole-writer grep guard: cadence-writing symbols found in non-allowlisted files:" >&2
+  echo "❌ derived-column sole-writer grep guard: derived-writing symbols found in non-allowlisted files:" >&2
   for v in "${VIOLATIONS[@]}"; do
     echo "   $v" >&2
     if command -v rg >/dev/null 2>&1; then
@@ -97,10 +100,11 @@ if [[ ${#VIOLATIONS[@]} -gt 0 ]]; then
     fi
   done
   echo >&2
-  echo "Fix: route the write through CadenceUpdater, or justify + allowlist the file" >&2
-  echo "in both this script's ALLOWLIST and backend/tests/sole_writer_static_test.go's" >&2
+  echo "Fix: cadence columns route through CadenceUpdater; knowledge-cache columns" >&2
+  echo "route through KnowledgeCacheUpdater.RefreshTx. Otherwise justify + allowlist" >&2
+  echo "the file in both this script's ALLOWLIST and backend/tests/sole_writer_static_test.go's" >&2
   echo "allowedCallSites map." >&2
   exit 1
 fi
 
-echo "✓ cadence sole-writer grep guard: ${#HIT_LINES[@]} hit file(s), all allowlisted"
+echo "✓ derived-column sole-writer grep guard: ${#HIT_LINES[@]} hit file(s), all allowlisted"
