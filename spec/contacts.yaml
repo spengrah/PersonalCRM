@@ -55,7 +55,9 @@ behaviors:
       - a person-type graph node is created in the same transaction
       - the node id equals the contact id
       - the node canonical label equals the contact full name
-    provenance: [ContactService.CreateContact, NodeRepository.CreateNodeTx, .ai/guides/architecture.md]
+      - key: fk-enforced
+        text: the node/contact identity equation is enforced by a database foreign key, not just application code
+    provenance: [ContactRepository.CreateContact, contact_id_node_fk, .ai/guides/architecture.md]
 
   - id: CON-004
     title: Contact writes never set location, birthday, or how-met directly

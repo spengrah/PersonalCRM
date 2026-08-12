@@ -379,6 +379,20 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	assertionRepo := repository.NewAssertionRepository(database.Queries)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
+	m, err := migrate.New(fmt.Sprintf("file://%s", migrationsPath), cloneURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = m.Close() })
+
+	// Position the clone at the backfill tip (068) BEFORE any fixture seeding,
+	// not after: the ephemeral clone starts at the fully-migrated head, and one
+	// fixture below deletes a person node while its contact row still exists —
+	// legal before 077 (contact_id_node_fk), a foreign-key violation at head
+	// once 077 exists. Seeding below 077 keeps this test's own fixtures usable
+	// regardless of what graph-adjacent migrations (069+) have landed above 068.
+	if err := m.Migrate(backfillPersonNodesVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err, "position the clone at the backfill tip")
+	}
+
 	// Seed a contact via the dual-write service path so a live person node
 	// exists at the contact's id (this is what 068's down must consider). It
 	// has no assertions, so the guarded down is free to delete it.
@@ -462,15 +476,8 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, nodeRepo.SetNodeMergedInto(ctx, loserID, winnerID))
 
-	m, err := migrate.New(fmt.Sprintf("file://%s", migrationsPath), cloneURL)
-	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = m.Close() })
-
-	// Position the clone at the backfill tip (068) FIRST, so Steps(-1) rolls
-	// 068 specifically — robust to later migrations (069+) landing above it.
-	if err := m.Migrate(backfillPersonNodesVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		require.NoError(t, err, "position the clone at the backfill tip")
-	}
+	// The clone was already positioned at the backfill tip (068) before the
+	// fixture seeding above.
 
 	// Roll down ONE step: the 068 guarded delete. The unreferenced person node
 	// is removed; the assertion-referenced one is preserved.

@@ -138,14 +138,13 @@ func (h *knowledgeCutoverHarness) registerCleanup(t *testing.T, ctx context.Cont
 	})
 }
 
-// seedPreCutoverContact creates a contact + its person node (repo path, which no
-// longer writes the cache columns) and then sets the cache columns directly,
+// seedPreCutoverContact creates a contact (ContactRepository.CreateContact
+// creates its person node in the same statement, repo path which no longer
+// writes the cache columns) and then sets the cache columns directly,
 // simulating a pre-cutover contact: cache populated, NO knowledge assertions.
 func (h *knowledgeCutoverHarness) seedPreCutoverContact(t *testing.T, ctx context.Context, name string, location *string, birthday *time.Time) *repository.Contact {
 	t.Helper()
 	contact, err := h.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
-	require.NoError(t, err)
-	_, err = h.nodeRepo.CreateNode(ctx, contact.ID, repository.NodeTypePerson, name)
 	require.NoError(t, err)
 	err = pgx.BeginTxFunc(ctx, h.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		if err := h.contactRepo.UpdateContactLocationCacheTx(ctx, tx, contact.ID, location); err != nil {

@@ -356,13 +356,6 @@ type Querier interface {
 	CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
 	// Backs Status().Backfill, including the dropped-inline chunk count.
 	CountWhatsAppHistoryNotificationsByStateAndDisposition(ctx context.Context) ([]*CountWhatsAppHistoryNotificationsByStateAndDispositionRow, error)
-	// location/birthday/how_met are NOT written here: they are derived cache
-	// columns whose sole writer is the knowledge-cache consumer, which fills
-	// them from the current-accepted lives_in/birthday/how_met assertions
-	// ContactService emits in the same tx. The columns retain their values
-	// via that consumer; the create INSERT leaves them at their DB default
-	// (NULL) until the consumer refreshes.
-	CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
 	CreateContactTask(ctx context.Context, arg CreateContactTaskParams) (*ContactTask, error)
 	// Seed-only variant of CreateContactTask that sets created_at explicitly, so the
@@ -376,6 +369,19 @@ type Querier interface {
 	// non-NULL keys collide with the partial unique index
 	// idx_contact_task_followup_idempotency on repeats.
 	CreateContactTaskWithIdempotencyKey(ctx context.Context, arg CreateContactTaskWithIdempotencyKeyParams) (*ContactTask, error)
+	// The person node and the contact are inserted by ONE statement, so the pair is
+	// atomic at pool scope as well as inside a caller's transaction. The outer
+	// INSERT selects new_node.id as the contact's id: data-modifying CTEs run in an
+	// unpredictable order and RETURNING is the only channel between them, so the
+	// read is what forces node-before-contact and what guarantees the two rows
+	// share an id by construction rather than by passing the same argument twice.
+	// location/birthday/how_met are NOT written here: they are derived cache
+	// columns whose sole writer is the knowledge-cache consumer, which fills
+	// them from the current-accepted lives_in/birthday/how_met assertions
+	// ContactService emits in the same tx. The columns retain their values
+	// via that consumer; the create INSERT leaves them at their DB default
+	// (NULL) until the consumer refreshes.
+	CreateContactWithNode(ctx context.Context, arg CreateContactWithNodeParams) (*Contact, error)
 	CreateEnrichment(ctx context.Context, arg CreateEnrichmentParams) (*ContactEnrichment, error)
 	// Entity subtype queries (graph foundation).
 	//
@@ -998,7 +1004,6 @@ type Querier interface {
 	// shared-DB runs — and because 076's down migration refuses to revert while any
 	// NULL-contact row exists. Production code MUST NOT call this.
 	HardDeleteCommsMessagesBySourceAndExternalIDPrefix(ctx context.Context, arg HardDeleteCommsMessagesBySourceAndExternalIDPrefixParams) error
-	HardDeleteContact(ctx context.Context, id pgtype.UUID) error
 	// Test-only: hard-deletes event rows whose (source, source_id) match the
 	// given source and a LIKE-prefix on source_id. Used by integration tests
 	// to purge per-run event envelopes so a re-run does not collide on the
@@ -2573,6 +2578,12 @@ type Querier interface {
 	// test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
 	// without a sleep/timeout. Production code must NOT call this.
 	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
+	// Contact→node identity FK migration test support: read a contact's deleted_at
+	// with NO liveness filter, so a migration round-trip test can assert the
+	// backfilled node's deleted_at mirrors the contact's exactly (not just "is
+	// non-nil"). GetContact/SoftDeleteContact deliberately never expose this because
+	// production code has no reason to read a soft-deleted contact's own tombstone.
+	TestGetContactDeletedAtIncludingDeleted(ctx context.Context, id pgtype.UUID) (pgtype.Timestamptz, error)
 	// Test assertion — a planted job's disposition: its state, whether it is
 	// finalized, and its attempt counter. `attempt` is the load-bearing one for
 	// queue isolation: River increments it on FETCH, so attempt = 0 says the job was
@@ -2583,6 +2594,16 @@ type Querier interface {
 	// by integration tests that exercise the "target row vanished between
 	// snapshot and resolve-link" path. Production code must NOT call this.
 	TestHardDeleteCalendarEventByID(ctx context.Context, id pgtype.UUID) error
+	// Test-cleanup only, zero production callers. Hard-deletes the contact and, in
+	// the same statement, its person node — otherwise every one of the ~170
+	// HardDeleteContact cleanup sites leaks a latent node now that the repository
+	// creates one per contact, and the test database accumulates them across runs.
+	// The node delete is guarded because assertion.subject_node_id is a RESTRICT FK
+	// (backend/migrations/067_assertion_store.up.sql:32): a contact created through
+	// ContactService has assertions pinning its node, and those are the synthetic
+	// teardown's to remove, not this query's. The guard makes that case a no-op on
+	// the node rather than an error.
+	TestHardDeleteContactWithNode(ctx context.Context, id pgtype.UUID) error
 	// TEST ONLY. Hard-deletes every meeting_note row owned by the given
 	// mac_host. Used by t.Cleanup when the test seeds meeting_notes with
 	// system-generated UUIDs (no exploitable prefix). Covers both live and

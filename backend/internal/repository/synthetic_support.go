@@ -974,6 +974,17 @@ func (r *SyntheticSupportRepository) InsertContactAtID(ctx context.Context, id u
 	})
 }
 
+// GetContactDeletedAtIncludingDeleted reads a contact's deleted_at with no
+// liveness filter, so a migration round-trip test can assert a backfilled
+// node's deleted_at mirrors the contact's exactly.
+func (r *SyntheticSupportRepository) GetContactDeletedAtIncludingDeleted(ctx context.Context, id uuid.UUID) (*time.Time, error) {
+	deletedAt, err := r.queries.TestGetContactDeletedAtIncludingDeleted(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	if err != nil {
+		return nil, err
+	}
+	return pgTimestamptzToTimePtr(deletedAt), nil
+}
+
 // InsertTagForMigration seeds a legacy tag row with an explicit name + color (a
 // nil color round-trips as SQL NULL), returning the generated id, so a
 // --migrate-tags test can assert the color survives into the tag entity node's

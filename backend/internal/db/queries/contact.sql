@@ -13,18 +13,29 @@ SELECT EXISTS(
     WHERE id = $1 AND deleted_at IS NULL
 ) AS is_live;
 
--- name: CreateContact :one
+-- name: CreateContactWithNode :one
+-- The person node and the contact are inserted by ONE statement, so the pair is
+-- atomic at pool scope as well as inside a caller's transaction. The outer
+-- INSERT selects new_node.id as the contact's id: data-modifying CTEs run in an
+-- unpredictable order and RETURNING is the only channel between them, so the
+-- read is what forces node-before-contact and what guarantees the two rows
+-- share an id by construction rather than by passing the same argument twice.
 -- location/birthday/how_met are NOT written here: they are derived cache
 -- columns whose sole writer is the knowledge-cache consumer, which fills
 -- them from the current-accepted lives_in/birthday/how_met assertions
 -- ContactService emits in the same tx. The columns retain their values
 -- via that consumer; the create INSERT leaves them at their DB default
 -- (NULL) until the consumer refreshes.
-INSERT INTO contact (
-  full_name, cadence, last_contacted, profile_photo, created_at, contact_by
-) VALUES (
-  $1, $2, $3, $4, $5, $6
-) RETURNING *;
+WITH new_node AS (
+    INSERT INTO node (id, type, canonical_label, created_at)
+    VALUES (sqlc.arg(id), 'person', sqlc.arg(full_name), sqlc.arg(created_at))
+    RETURNING id
+)
+INSERT INTO contact (id, full_name, cadence, last_contacted, profile_photo, created_at, contact_by)
+SELECT new_node.id, sqlc.arg(full_name), sqlc.arg(cadence), sqlc.arg(last_contacted),
+       sqlc.arg(profile_photo), sqlc.arg(created_at), sqlc.arg(contact_by)
+FROM new_node
+RETURNING contact.*;
 
 -- name: UpdateContact :one
 -- Profile-only update path. Writes name, cadence, profile_photo — NEVER
@@ -266,9 +277,6 @@ UPDATE contact SET
   deleted_at = NOW(),
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL;
-
--- name: HardDeleteContact :exec
-DELETE FROM contact WHERE id = $1;
 
 -- name: FindSimilarContacts :many
 SELECT

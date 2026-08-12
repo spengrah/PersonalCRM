@@ -100,37 +100,50 @@ func (q *Queries) ContactIsLive(ctx context.Context, id pgtype.UUID) (bool, erro
 	return is_live, err
 }
 
-const CreateContact = `-- name: CreateContact :one
-INSERT INTO contact (
-  full_name, cadence, last_contacted, profile_photo, created_at, contact_by
-) VALUES (
-  $1, $2, $3, $4, $5, $6
-) RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at
+const CreateContactWithNode = `-- name: CreateContactWithNode :one
+WITH new_node AS (
+    INSERT INTO node (id, type, canonical_label, created_at)
+    VALUES ($7, 'person', $1, $5)
+    RETURNING id
+)
+INSERT INTO contact (id, full_name, cadence, last_contacted, profile_photo, created_at, contact_by)
+SELECT new_node.id, $1, $2, $3,
+       $4, $5, $6
+FROM new_node
+RETURNING contact.id, contact.full_name, contact.location, contact.birthday, contact.how_met, contact.cadence, contact.last_contacted, contact.profile_photo, contact.deleted_at, contact.created_at, contact.updated_at, contact.contact_by, contact.last_interaction_at, contact.last_outreach_at, contact.last_response_at
 `
 
-type CreateContactParams struct {
+type CreateContactWithNodeParams struct {
 	FullName      string             `json:"full_name"`
 	Cadence       pgtype.Text        `json:"cadence"`
 	LastContacted pgtype.Timestamptz `json:"last_contacted"`
 	ProfilePhoto  pgtype.Text        `json:"profile_photo"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	ContactBy     pgtype.Date        `json:"contact_by"`
+	ID            pgtype.UUID        `json:"id"`
 }
 
+// The person node and the contact are inserted by ONE statement, so the pair is
+// atomic at pool scope as well as inside a caller's transaction. The outer
+// INSERT selects new_node.id as the contact's id: data-modifying CTEs run in an
+// unpredictable order and RETURNING is the only channel between them, so the
+// read is what forces node-before-contact and what guarantees the two rows
+// share an id by construction rather than by passing the same argument twice.
 // location/birthday/how_met are NOT written here: they are derived cache
 // columns whose sole writer is the knowledge-cache consumer, which fills
 // them from the current-accepted lives_in/birthday/how_met assertions
 // ContactService emits in the same tx. The columns retain their values
 // via that consumer; the create INSERT leaves them at their DB default
 // (NULL) until the consumer refreshes.
-func (q *Queries) CreateContact(ctx context.Context, arg CreateContactParams) (*Contact, error) {
-	row := q.db.QueryRow(ctx, CreateContact,
+func (q *Queries) CreateContactWithNode(ctx context.Context, arg CreateContactWithNodeParams) (*Contact, error) {
+	row := q.db.QueryRow(ctx, CreateContactWithNode,
 		arg.FullName,
 		arg.Cadence,
 		arg.LastContacted,
 		arg.ProfilePhoto,
 		arg.CreatedAt,
 		arg.ContactBy,
+		arg.ID,
 	)
 	var i Contact
 	err := row.Scan(
@@ -328,15 +341,6 @@ func (q *Queries) GetContact(ctx context.Context, id pgtype.UUID) (*Contact, err
 		&i.LastResponseAt,
 	)
 	return &i, err
-}
-
-const HardDeleteContact = `-- name: HardDeleteContact :exec
-DELETE FROM contact WHERE id = $1
-`
-
-func (q *Queries) HardDeleteContact(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, HardDeleteContact, id)
-	return err
 }
 
 const ListContactsWithCadence = `-- name: ListContactsWithCadence :many

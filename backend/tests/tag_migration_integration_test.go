@@ -78,14 +78,13 @@ func newTagMigrationHarness(t *testing.T, ctx context.Context) (*tagMigrationHar
 	}, ctx
 }
 
-// seedContactWithNode creates a contact and its person node (node.id ==
-// contact.id), mirroring the production person-node backfill that guarantees
-// every non-deleted contact has a node. Returns the contact id.
+// seedContactWithNode creates a contact — ContactRepository.CreateContact
+// creates its person node in the same statement (node.id == contact.id,
+// contact_id_node_fk), mirroring the production person-node backfill that
+// guarantees every non-deleted contact has a node. Returns the contact id.
 func (h *tagMigrationHarness) seedContactWithNode(t *testing.T, ctx context.Context, fullName string) uuid.UUID {
 	t.Helper()
 	contact, err := h.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: fullName})
-	require.NoError(t, err)
-	_, err = h.nodeRepo.CreateNode(ctx, contact.ID, repository.NodeTypePerson, fullName)
 	require.NoError(t, err)
 	h.contactIDs = append(h.contactIDs, contact.ID)
 	return contact.ID

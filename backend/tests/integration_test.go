@@ -99,8 +99,14 @@ func TestMigration020_UnifyEmailDedup(t *testing.T) {
 	_, err = tx.Exec(ctx, `ALTER TABLE contact_method DISABLE TRIGGER set_contact_method_value_normalized`)
 	require.NoError(t, err)
 
+	// contact_id_node_fk (migration 077) requires a matching node row before
+	// the contact insert — this raw insert predates that constraint, so it
+	// must supply its own id and create the node first.
+	nodeID := uuid.New()
+	_, err = tx.Exec(ctx, `INSERT INTO node (id, type, canonical_label) VALUES ($1, 'person', 'Migration 020 Test')`, nodeID)
+	require.NoError(t, err)
 	var contactID uuid.UUID
-	err = tx.QueryRow(ctx, `INSERT INTO contact (full_name) VALUES ('Migration 020 Test') RETURNING id`).Scan(&contactID)
+	err = tx.QueryRow(ctx, `INSERT INTO contact (id, full_name) VALUES ($1, 'Migration 020 Test') RETURNING id`, nodeID).Scan(&contactID)
 	require.NoError(t, err)
 
 	_, err = tx.Exec(ctx, `

@@ -2788,6 +2788,22 @@ func (q *Queries) TestFinalizeRiverJobByID(ctx context.Context, id int64) error 
 	return err
 }
 
+const TestGetContactDeletedAtIncludingDeleted = `-- name: TestGetContactDeletedAtIncludingDeleted :one
+SELECT deleted_at FROM contact WHERE id = $1
+`
+
+// Contact→node identity FK migration test support: read a contact's deleted_at
+// with NO liveness filter, so a migration round-trip test can assert the
+// backfilled node's deleted_at mirrors the contact's exactly (not just "is
+// non-nil"). GetContact/SoftDeleteContact deliberately never expose this because
+// production code has no reason to read a soft-deleted contact's own tombstone.
+func (q *Queries) TestGetContactDeletedAtIncludingDeleted(ctx context.Context, id pgtype.UUID) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, TestGetContactDeletedAtIncludingDeleted, id)
+	var deleted_at pgtype.Timestamptz
+	err := row.Scan(&deleted_at)
+	return deleted_at, err
+}
+
 const TestGetRiverJobDispositionByID = `-- name: TestGetRiverJobDispositionByID :one
 SELECT state::text AS state,
        (finalized_at IS NOT NULL)::bool AS finalized,
@@ -2811,6 +2827,33 @@ func (q *Queries) TestGetRiverJobDispositionByID(ctx context.Context, id int64) 
 	var i TestGetRiverJobDispositionByIDRow
 	err := row.Scan(&i.State, &i.Finalized, &i.Attempt)
 	return &i, err
+}
+
+const TestHardDeleteContactWithNode = `-- name: TestHardDeleteContactWithNode :exec
+WITH deleted_contact AS (
+    DELETE FROM contact WHERE id = $1 RETURNING id
+)
+DELETE FROM node
+WHERE id = (SELECT id FROM deleted_contact)
+  AND type = 'person'
+  AND NOT EXISTS (
+      SELECT 1 FROM assertion
+      WHERE subject_node_id = $1 OR object_node_id = $1
+  )
+`
+
+// Test-cleanup only, zero production callers. Hard-deletes the contact and, in
+// the same statement, its person node — otherwise every one of the ~170
+// HardDeleteContact cleanup sites leaks a latent node now that the repository
+// creates one per contact, and the test database accumulates them across runs.
+// The node delete is guarded because assertion.subject_node_id is a RESTRICT FK
+// (backend/migrations/067_assertion_store.up.sql:32): a contact created through
+// ContactService has assertions pinning its node, and those are the synthetic
+// teardown's to remove, not this query's. The guard makes that case a no-op on
+// the node rather than an error.
+func (q *Queries) TestHardDeleteContactWithNode(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, TestHardDeleteContactWithNode, id)
+	return err
 }
 
 const TestInsertAvailableRematchJobForContact = `-- name: TestInsertAvailableRematchJobForContact :one
