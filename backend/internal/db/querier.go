@@ -1844,7 +1844,6 @@ type Querier interface {
 	// Token-fenced. Zero rows means the lease moved on and the caller must abandon
 	// the chunk without writing further state.
 	SaveWhatsAppHistoryCheckpoint(ctx context.Context, arg SaveWhatsAppHistoryCheckpointParams) (int64, error)
-	SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error)
 	// Seeds an external_sync_state row at caller-supplied next_sync_at.
 	// Used by scheduler-exclusion tests to plant a push-strategy row whose
 	// next_sync_at is due, then assert ListDueAccounts skips it.

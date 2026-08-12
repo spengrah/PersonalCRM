@@ -193,49 +193,6 @@ func (q *Queries) ListContactNotes(ctx context.Context, arg ListContactNotesPara
 	return items, nil
 }
 
-const SearchNotes = `-- name: SearchNotes :many
-SELECT id, contact_id, body, category, created_at, updated_at FROM note
-WHERE to_tsvector('english', body) @@ plainto_tsquery('english', $1)
-ORDER BY ts_rank(
-  to_tsvector('english', body),
-  plainto_tsquery('english', $1)
-) DESC, created_at DESC
-LIMIT $2 OFFSET $3
-`
-
-type SearchNotesParams struct {
-	PlaintoTsquery string `json:"plainto_tsquery"`
-	Limit          int32  `json:"limit"`
-	Offset         int32  `json:"offset"`
-}
-
-func (q *Queries) SearchNotes(ctx context.Context, arg SearchNotesParams) ([]*Note, error) {
-	rows, err := q.db.Query(ctx, SearchNotes, arg.PlaintoTsquery, arg.Limit, arg.Offset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []*Note{}
-	for rows.Next() {
-		var i Note
-		if err := rows.Scan(
-			&i.ID,
-			&i.ContactID,
-			&i.Body,
-			&i.Category,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, &i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const UpdateNote = `-- name: UpdateNote :one
 UPDATE note SET
   body = $2,
