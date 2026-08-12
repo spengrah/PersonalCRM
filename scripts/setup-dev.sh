@@ -107,17 +107,14 @@ else
     fi
 fi
 
-# sqlc (requires Go)
-if command -v sqlc &> /dev/null || [ -f "$GOPATH/bin/sqlc" ]; then
-    echo_ok "sqlc already installed"
+# sqlc: pinned as a go.mod tool (backend/go.mod `tool` directive), invoked via
+# `go tool sqlc` by `make sqlc` — no separate install needed. Kept here only as
+# an informational check.
+if [ "$GO_AVAILABLE" = true ] && (cd backend && go tool sqlc version &> /dev/null); then
+    echo_ok "sqlc available via go tool (pinned in backend/go.mod)"
 elif [ "$GO_AVAILABLE" = true ]; then
-    echo "   Installing sqlc..."
-    if go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest; then
-        echo_ok "sqlc installed"
-    else
-        echo_err "Failed to install sqlc"
-        MANUAL_STEPS+=("Install sqlc: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest")
-    fi
+    echo_err "go tool sqlc failed — run 'cd backend && go mod download'"
+    MANUAL_STEPS+=("Fetch pinned sqlc: cd backend && go mod download")
 else
     echo_warn "Skipped sqlc (Go not available)"
     MANUAL_STEPS+=("After installing Go, run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest")
