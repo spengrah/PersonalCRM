@@ -128,20 +128,41 @@ func (h *tagMigrationHarness) seedContactTagNull(t *testing.T, ctx context.Conte
 // once per test; t.Cleanup runs LIFO so call it right after the harness is built
 // (before seeding), and it executes after every subtest finishes.
 //
-// Order inside the closure (assertion→node FK is restrict, so assertions clear
-// before nodes): delete each contact node's assertions (+ provenance cascade) and
-// their event rows; delete contact_tags; resolve + delete the tag entity nodes
-// (entity cascades); delete the person nodes; delete contacts + legacy tags.
+// Order inside the closure: delete each contact node's assertions (+ provenance
+// cascade) and their event rows first (assertion→node is a RESTRICT FK); then
+// contact_tags; then contact tasks and the contact rows themselves — both must
+// clear before the person nodes, since contact.id references node.id via
+// contact_id_node_fk (NO ACTION, so a node delete while its contact still
+// exists is rejected); then the person nodes and the tag entity nodes; finally
+// the legacy tags. A failed step here is logged (not silently discarded), since
+// a swallowed error here is exactly what leaks a node into the shared test
+// database across runs.
 func (h *tagMigrationHarness) registerCleanup(t *testing.T, ctx context.Context) {
 	t.Cleanup(func() {
+		logIfErr := func(step string, err error) {
+			if err != nil {
+				t.Logf("tagMigrationHarness cleanup: %s: %v", step, err)
+			}
+		}
+
 		for _, cid := range h.contactIDs {
 			assertions, _ := h.assertionRepo.ListAssertionsBySubject(ctx, cid)
 			for _, a := range assertions {
-				_ = h.eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, "assertion", a.ID.String())
+				logIfErr("delete assertion events", h.eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, "assertion", a.ID.String()))
 			}
-			_, _ = h.support.DeleteAssertionsForNode(ctx, cid)
+			_, err := h.support.DeleteAssertionsForNode(ctx, cid)
+			logIfErr("delete assertions for node", err)
 		}
-		_, _ = h.support.DeleteContactTagsByContactIds(ctx, h.contactIDs)
+		_, err := h.support.DeleteContactTagsByContactIds(ctx, h.contactIDs)
+		logIfErr("delete contact_tags", err)
+
+		// contact_task and contact must clear before the person nodes: contact.id
+		// references node.id via contact_id_node_fk (NO ACTION), so deleting the
+		// node first is rejected by the FK.
+		_, err = h.support.DeleteContactTasksByContactIds(ctx, h.contactIDs)
+		logIfErr("delete contact tasks", err)
+		_, err = h.support.DeleteContactsByIds(ctx, h.contactIDs)
+		logIfErr("delete contacts", err)
 
 		// Resolve the tag entity node ids the migration created (node.id != tag.id)
 		// by their normalized name, then hard-delete those nodes (entity cascades).
@@ -152,12 +173,13 @@ func (h *tagMigrationHarness) registerCleanup(t *testing.T, ctx context.Context)
 				tagNodeIDs = append(tagNodeIDs, entity.NodeID)
 			}
 		}
-		_, _ = h.support.DeleteNodesByIds(ctx, tagNodeIDs)
+		_, err = h.support.DeleteNodesByIds(ctx, tagNodeIDs)
+		logIfErr("delete tag entity nodes", err)
 
-		_, _ = h.support.DeleteNodesByIds(ctx, h.contactIDs)
-		_, _ = h.support.DeleteContactTasksByContactIds(ctx, h.contactIDs)
-		_, _ = h.support.DeleteContactsByIds(ctx, h.contactIDs)
-		_, _ = h.support.DeleteTagsByIds(ctx, h.tagIDs)
+		_, err = h.support.DeleteNodesByIds(ctx, h.contactIDs)
+		logIfErr("delete person nodes", err)
+		_, err = h.support.DeleteTagsByIds(ctx, h.tagIDs)
+		logIfErr("delete legacy tags", err)
 	})
 }
 

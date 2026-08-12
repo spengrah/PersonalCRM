@@ -923,6 +923,31 @@ func (r *SyntheticSupportRepository) CountContactsByFullName(ctx context.Context
 	return r.queries.SyntheticCountContactsByFullName(ctx, fullName)
 }
 
+// ContactIdNodeFkCatalog is contact_id_node_fk's live pg_constraint state:
+// Validated (false would mean NOT VALID — enforces new writes but silently
+// admits pre-existing orphans) and NoAction (false would mean the FK cascades
+// or nullifies on a node delete instead of blocking it).
+type ContactIdNodeFkCatalog struct {
+	Validated bool
+	NoAction  bool
+}
+
+// GetContactIdNodeFkCatalog reads contact_id_node_fk's catalog properties
+// directly, so a migration test can assert the FK is validated and NO ACTION
+// rather than merely existing — constraintExists alone cannot distinguish a
+// VALIDATED, NO ACTION foreign key from a NOT VALID or CASCADE one with the
+// same name.
+func (r *SyntheticSupportRepository) GetContactIdNodeFkCatalog(ctx context.Context) (ContactIdNodeFkCatalog, error) {
+	row, err := r.queries.GetContactIdNodeFkCatalog(ctx)
+	if err != nil {
+		return ContactIdNodeFkCatalog{}, err
+	}
+	return ContactIdNodeFkCatalog{
+		Validated: row.Convalidated,
+		NoAction:  row.Confdeltype == "a",
+	}, nil
+}
+
 // DeleteNodesByIds hard-deletes the person nodes a seeded contact owns
 // (node.id == contact.id), so the harness teardown removes the nodes its
 // dual-writing SeedContact created alongside the contacts it tracks.

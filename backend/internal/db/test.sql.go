@@ -480,6 +480,33 @@ func (q *Queries) DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUs
 	return result.RowsAffected(), nil
 }
 
+const GetContactIdNodeFkCatalog = `-- name: GetContactIdNodeFkCatalog :one
+SELECT c.convalidated, c.confdeltype::text AS confdeltype
+FROM pg_constraint c
+WHERE c.conrelid = 'contact'::regclass
+  AND c.conname = 'contact_id_node_fk'
+`
+
+type GetContactIdNodeFkCatalogRow struct {
+	Convalidated bool   `json:"convalidated"`
+	Confdeltype  string `json:"confdeltype"`
+}
+
+// Test assertion — reads contact_id_node_fk's live pg_constraint properties:
+// convalidated (must be true — a NOT VALID FK enforces new writes but would
+// silently let a pre-existing orphan row through, unlike this migration's
+// backfill-then-constrain shape) and confdeltype (must be 'a', NO ACTION — a
+// CASCADE delete would silently take the contact with its node). Existence
+// alone (constraintExists) does not distinguish either property from its
+// unsafe alternative. Read-only catalog access; production code never calls
+// this.
+func (q *Queries) GetContactIdNodeFkCatalog(ctx context.Context) (*GetContactIdNodeFkCatalogRow, error) {
+	row := q.db.QueryRow(ctx, GetContactIdNodeFkCatalog)
+	var i GetContactIdNodeFkCatalogRow
+	err := row.Scan(&i.Convalidated, &i.Confdeltype)
+	return &i, err
+}
+
 const GetInteractionSourceCheckDef = `-- name: GetInteractionSourceCheckDef :one
 SELECT pg_get_constraintdef(c.oid)::text AS constraint_def
 FROM pg_constraint c

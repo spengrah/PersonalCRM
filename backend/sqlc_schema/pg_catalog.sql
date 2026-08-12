@@ -8,11 +8,18 @@
 -- This file is intentionally NOT under backend/migrations/ so
 -- golang-migrate never applies it to a real database — the live catalog
 -- is always the source of truth at runtime.
-
+--
+-- convalidated and confdeltype are added for GetContactIdNodeFkCatalog: real
+-- Postgres types are bool and "char" respectively (confdeltype is a
+-- single-byte code — 'a' NO ACTION, 'r' RESTRICT, 'c' CASCADE, 'n' SET NULL,
+-- 'd' SET DEFAULT); the stub uses text for confdeltype since sqlc's "char"
+-- support is unreliable, and the query casts it explicitly.
 CREATE TABLE pg_constraint (
-    oid      oid NOT NULL,
-    conname  text NOT NULL,
-    conrelid oid NOT NULL
+    oid          oid NOT NULL,
+    conname      text NOT NULL,
+    conrelid     oid NOT NULL,
+    convalidated bool NOT NULL,
+    confdeltype  text NOT NULL
 );
 
 CREATE FUNCTION pg_get_constraintdef(constraint_oid oid) RETURNS text AS $$

@@ -461,9 +461,11 @@ type OauthCredential struct {
 }
 
 type PgConstraint struct {
-	Oid      pgtype.Uint32 `json:"oid"`
-	Conname  string        `json:"conname"`
-	Conrelid pgtype.Uint32 `json:"conrelid"`
+	Oid          pgtype.Uint32 `json:"oid"`
+	Conname      string        `json:"conname"`
+	Conrelid     pgtype.Uint32 `json:"conrelid"`
+	Convalidated bool          `json:"convalidated"`
+	Confdeltype  string        `json:"confdeltype"`
 }
 
 type PgIndex struct {

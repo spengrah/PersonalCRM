@@ -34,15 +34,15 @@ import (
 
 // contactNodeFKPreVersion is the golang-migrate version immediately before the
 // contact→node identity FK migration (077). The round-trip positions each
-// clone here first so Steps(1) applies 077 specifically, robust to 078/079
-// (PR6/PR7's pre-allocated migrations, arc D5) landing above it later in the
-// arc.
+// clone here first so Steps(1) applies 077 specifically, robust to later
+// migrations landing above it as the schema evolves.
 const contactNodeFKPreVersion = 76
 
 // TestContactNodeFK_RejectsContactWithoutNode proves the constraint itself
 // rejects an orphan contact row. Without this, contact_id_node_fk would be
 // asserted only by its own existence, which proves nothing.
 func TestContactNodeFK_RejectsContactWithoutNode(t *testing.T) {
+	// spec: CON-003.fk-enforced
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -182,8 +182,15 @@ func TestHardDeleteContact_LeavesNoOrphanNode(t *testing.T) {
 			PropositionKey: gen.Prefix() + "harddelete-pinned-prop",
 		})
 		require.NoError(t, err)
-		t.Cleanup(func() { _, _ = support.DeleteAssertionsForNode(ctx, contact.ID) })
-		t.Cleanup(func() { _, _ = support.DeleteNodesByIds(ctx, []uuid.UUID{contact.ID}) })
+		// One closure, not two t.Cleanup registrations: t.Cleanup runs LIFO, and
+		// the node delete must run AFTER the assertion delete (assertion.
+		// subject_node_id is a RESTRICT FK), so two separate registrations in
+		// assertion-then-node order would execute node-then-assertion and leak the
+		// node when its delete is rejected and swallowed.
+		t.Cleanup(func() {
+			_, _ = support.DeleteAssertionsForNode(ctx, contact.ID)
+			_, _ = support.DeleteNodesByIds(ctx, []uuid.UUID{contact.ID})
+		})
 
 		require.NoError(t, contactRepo.HardDeleteContact(ctx, contact.ID))
 
@@ -191,6 +198,50 @@ func TestHardDeleteContact_LeavesNoOrphanNode(t *testing.T) {
 		assert.ErrorIs(t, err, db.ErrNotFound, "hard delete must still remove the contact row")
 		_, err = nodeRepo.GetNodeIncludingDeleted(ctx, contact.ID)
 		assert.NoError(t, err, "a node an assertion still references must survive the hard delete")
+	})
+
+	t.Run("node pinned only as an assertion's object survives hard delete", func(t *testing.T) {
+		t.Parallel()
+		fullName := gen.Prefix() + "harddelete-object-pinned"
+		contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: fullName})
+		require.NoError(t, err)
+
+		// A second node references contact.ID only as an assertion's OBJECT (a
+		// person→person edge) — never as its subject. The guard in
+		// TestHardDeleteContactWithNode checks both positions
+		// (subject_node_id OR object_node_id); the "pinned by an assertion"
+		// subtest above only exercises the subject arm, so a regression that
+		// dropped the object_node_id half of the guard would pass that subtest
+		// while failing here.
+		subjectID := uuid.New()
+		_, err = nodeRepo.CreateNode(ctx, subjectID, repository.NodeTypePerson, gen.Prefix()+"harddelete-object-pinned-subject")
+		require.NoError(t, err)
+
+		assertionRepo := repository.NewAssertionRepository(database.Queries)
+		_, err = assertionRepo.InsertAssertion(ctx, repository.InsertAssertionParams{
+			SubjectNodeID:  subjectID,
+			PredicateKey:   "parent_of",
+			ObjectNodeID:   &contact.ID,
+			KnowledgeFrom:  accelerated.GetCurrentTime().UTC(),
+			Confidence:     80,
+			Salience:       45,
+			Status:         repository.AssertionStatusAccepted,
+			PropositionKey: gen.Prefix() + "harddelete-object-pinned-prop",
+		})
+		require.NoError(t, err)
+		// One closure, for the same LIFO reason as the subject-pinned subtest
+		// above: assertions must clear before either node.
+		t.Cleanup(func() {
+			_, _ = support.DeleteAssertionsForNode(ctx, subjectID)
+			_, _ = support.DeleteNodesByIds(ctx, []uuid.UUID{subjectID, contact.ID})
+		})
+
+		require.NoError(t, contactRepo.HardDeleteContact(ctx, contact.ID))
+
+		_, err = contactRepo.GetContact(ctx, contact.ID)
+		assert.ErrorIs(t, err, db.ErrNotFound, "hard delete must still remove the contact row")
+		_, err = nodeRepo.GetNodeIncludingDeleted(ctx, contact.ID)
+		assert.NoError(t, err, "a node referenced only as an assertion's object must survive the hard delete")
 	})
 }
 
@@ -279,6 +330,13 @@ func TestContactNodeFK_MigrationUpDown(t *testing.T) {
 		assert.True(t, constraintExists(env.ctx, t, env.database, "contact_id_node_fk"),
 			"077 must add the FK after the backfill+preflight succeed")
 
+		catalog, err := support.GetContactIdNodeFkCatalog(env.ctx)
+		require.NoError(t, err)
+		assert.True(t, catalog.Validated,
+			"contact_id_node_fk must be VALIDATED, not NOT VALID — a NOT VALID FK enforces new writes but admits pre-existing orphans")
+		assert.True(t, catalog.NoAction,
+			"contact_id_node_fk must be NO ACTION — a CASCADE or SET NULL delete would silently take the contact with its node")
+
 		require.NoError(t, env.migrator.Steps(-1), "the down must drop only the constraint")
 
 		assert.False(t, constraintExists(env.ctx, t, env.database, "contact_id_node_fk"),
@@ -289,25 +347,25 @@ func TestContactNodeFK_MigrationUpDown(t *testing.T) {
 		assert.NoError(t, err, "the down must NOT delete the backfilled tombstoned node")
 	})
 
-	// contactNodeFKCollisionXID and contactNodeFKCollisionYID are fixed so the
-	// mandatory falsification (deleting BEGIN/COMMIT from 077.up.sql) can be
-	// run against a reproducible fixture outside this Go test.
 	t.Run("collision/aborts", func(t *testing.T) {
 		env := newContactNodeFKEnv(t)
 		support := repository.NewSyntheticSupportRepository(env.database.Queries)
 		nodeRepo := repository.NewNodeRepository(env.database.Queries)
 
 		// Contact X's id collides with an existing entity node — the case the
-		// preflight exists to catch.
+		// preflight exists to catch. The preflight runs before the backfill, so
+		// this collision is detected against the pre-existing node, not one the
+		// backfill created.
 		collidingID := uuid.New()
 		_, err := nodeRepo.CreateNode(env.ctx, collidingID, repository.NodeTypeEntity, "contact-node-fk-collision-entity")
 		require.NoError(t, err)
 		require.NoError(t, support.InsertContactAtID(env.ctx, collidingID, "contact-node-fk-collision-contact"))
 
-		// Contact Y has NO node at all — the backfill will insert one for it
-		// BEFORE the preflight raises. This is what makes the BEGIN/COMMIT
-		// wrapper falsifiable: without it, Y's inserted node survives a failed
-		// migration.
+		// Contact Y has no node at all and no collision of its own. Because the
+		// preflight runs before the backfill, the abort on X happens before Y's
+		// backfill insert ever executes — Y stays nodeless either way, proving the
+		// abort leaves no partial state rather than proving anything about
+		// BEGIN/COMMIT specifically.
 		nodelessID := uuid.New()
 		require.NoError(t, support.InsertContactAtID(env.ctx, nodelessID, "contact-node-fk-collision-nodeless"))
 
@@ -319,6 +377,6 @@ func TestContactNodeFK_MigrationUpDown(t *testing.T) {
 			"an aborted migration must not leave the FK in place")
 		_, err = nodeRepo.GetNodeIncludingDeleted(env.ctx, nodelessID)
 		assert.ErrorIs(t, err, db.ErrNotFound,
-			"the aborted migration must roll back the backfilled node for the nodeless contact")
+			"the aborted migration must leave the unrelated nodeless contact without a node")
 	})
 }

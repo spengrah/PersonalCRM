@@ -1533,3 +1533,17 @@ SELECT state::text AS state,
        (finalized_at IS NOT NULL)::bool AS finalized,
        attempt::int AS attempt
 FROM river_job WHERE id = @id;
+
+-- name: GetContactIdNodeFkCatalog :one
+-- Test assertion — reads contact_id_node_fk's live pg_constraint properties:
+-- convalidated (must be true — a NOT VALID FK enforces new writes but would
+-- silently let a pre-existing orphan row through, unlike this migration's
+-- backfill-then-constrain shape) and confdeltype (must be 'a', NO ACTION — a
+-- CASCADE delete would silently take the contact with its node). Existence
+-- alone (constraintExists) does not distinguish either property from its
+-- unsafe alternative. Read-only catalog access; production code never calls
+-- this.
+SELECT c.convalidated, c.confdeltype::text AS confdeltype
+FROM pg_constraint c
+WHERE c.conrelid = 'contact'::regclass
+  AND c.conname = 'contact_id_node_fk';

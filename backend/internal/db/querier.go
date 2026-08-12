@@ -794,6 +794,15 @@ type Querier interface {
 	GetCommsMessageLatestByExternalID(ctx context.Context, arg GetCommsMessageLatestByExternalIDParams) (*CommsMessage, error)
 	// Contact queries
 	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
+	// Test assertion — reads contact_id_node_fk's live pg_constraint properties:
+	// convalidated (must be true — a NOT VALID FK enforces new writes but would
+	// silently let a pre-existing orphan row through, unlike this migration's
+	// backfill-then-constrain shape) and confdeltype (must be 'a', NO ACTION — a
+	// CASCADE delete would silently take the contact with its node). Existence
+	// alone (constraintExists) does not distinguish either property from its
+	// unsafe alternative. Read-only catalog access; production code never calls
+	// this.
+	GetContactIdNodeFkCatalog(ctx context.Context) (*GetContactIdNodeFkCatalogRow, error)
 	// Get a single note for a contact by category (e.g., 'notepad')
 	GetContactNoteByCategory(ctx context.Context, arg GetContactNoteByCategoryParams) (*Note, error)
 	GetContactTags(ctx context.Context, contactID pgtype.UUID) ([]*Tag, error)
