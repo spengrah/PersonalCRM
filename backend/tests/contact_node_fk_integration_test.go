@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -29,8 +31,8 @@ import (
 // These tests exercise the constraint itself, the repository change that makes
 // it satisfiable at pool scope (a single data-modifying-CTE insert creates the
 // contact and its node atomically, with no surrounding transaction required),
-// and the migration that installs the constraint (backfill, type-collision
-// preflight, then the FK).
+// and the migration that installs the constraint (type-collision preflight,
+// backfill, then the FK).
 
 // contactNodeFKPreVersion is the golang-migrate version immediately before the
 // contact→node identity FK migration (077). The round-trip positions each
@@ -186,10 +188,20 @@ func TestHardDeleteContact_LeavesNoOrphanNode(t *testing.T) {
 		// the node delete must run AFTER the assertion delete (assertion.
 		// subject_node_id is a RESTRICT FK), so two separate registrations in
 		// assertion-then-node order would execute node-then-assertion and leak the
-		// node when its delete is rejected and swallowed.
+		// node when its delete is rejected and swallowed. Each step's error now
+		// fails the test (not swallowed), and the trailing GetNodeIncludingDeleted
+		// check is the second line of defense so a reintroduced ordering bug goes
+		// red here even if some future delete call silently affects zero rows.
 		t.Cleanup(func() {
-			_, _ = support.DeleteAssertionsForNode(ctx, contact.ID)
-			_, _ = support.DeleteNodesByIds(ctx, []uuid.UUID{contact.ID})
+			if _, err := support.DeleteAssertionsForNode(ctx, contact.ID); err != nil {
+				t.Errorf("cleanup: delete assertions for node %s: %v", contact.ID, err)
+			}
+			if _, err := support.DeleteNodesByIds(ctx, []uuid.UUID{contact.ID}); err != nil {
+				t.Errorf("cleanup: delete node %s: %v", contact.ID, err)
+			}
+			if _, err := nodeRepo.GetNodeIncludingDeleted(ctx, contact.ID); !errors.Is(err, db.ErrNotFound) {
+				t.Errorf("cleanup: person node %s still exists after cleanup (err=%v)", contact.ID, err)
+			}
 		})
 
 		require.NoError(t, contactRepo.HardDeleteContact(ctx, contact.ID))
@@ -230,10 +242,22 @@ func TestHardDeleteContact_LeavesNoOrphanNode(t *testing.T) {
 		})
 		require.NoError(t, err)
 		// One closure, for the same LIFO reason as the subject-pinned subtest
-		// above: assertions must clear before either node.
+		// above: assertions must clear before either node. Errors fail the test
+		// and the trailing existence checks are the second line of defense, same
+		// rationale as that subtest.
 		t.Cleanup(func() {
-			_, _ = support.DeleteAssertionsForNode(ctx, subjectID)
-			_, _ = support.DeleteNodesByIds(ctx, []uuid.UUID{subjectID, contact.ID})
+			if _, err := support.DeleteAssertionsForNode(ctx, subjectID); err != nil {
+				t.Errorf("cleanup: delete assertions for node %s: %v", subjectID, err)
+			}
+			if _, err := support.DeleteNodesByIds(ctx, []uuid.UUID{subjectID, contact.ID}); err != nil {
+				t.Errorf("cleanup: delete nodes %s,%s: %v", subjectID, contact.ID, err)
+			}
+			if _, err := nodeRepo.GetNodeIncludingDeleted(ctx, subjectID); !errors.Is(err, db.ErrNotFound) {
+				t.Errorf("cleanup: subject node %s still exists after cleanup (err=%v)", subjectID, err)
+			}
+			if _, err := nodeRepo.GetNodeIncludingDeleted(ctx, contact.ID); !errors.Is(err, db.ErrNotFound) {
+				t.Errorf("cleanup: person node %s still exists after cleanup (err=%v)", contact.ID, err)
+			}
 		})
 
 		require.NoError(t, contactRepo.HardDeleteContact(ctx, contact.ID))
@@ -293,6 +317,21 @@ func TestContactNodeFK_MigrationUpDown(t *testing.T) {
 	if os.Getenv("DATABASE_URL") == "" {
 		t.Skip("DATABASE_URL not set, skipping integration test")
 	}
+
+	// Source-order oracle for D5-4: with the whole file running as one implicit
+	// transaction, "collision/aborts" below observes the same end state
+	// (nodelessID has no node) whether the preflight runs before or after the
+	// backfill — a reverted-to-backfill-first regression would still pass that
+	// subtest. Read the migration source directly so a reversion is caught here
+	// instead.
+	migrationSrc, err := os.ReadFile(filepath.Join(getMigrationsPath(), "077_contact_node_identity_fk.up.sql"))
+	require.NoError(t, err)
+	preflightIdx := strings.Index(string(migrationSrc), "DO $$")
+	backfillIdx := strings.Index(string(migrationSrc), "INSERT INTO node")
+	require.NotEqual(t, -1, preflightIdx, "077 must contain the DO $$ preflight block")
+	require.NotEqual(t, -1, backfillIdx, "077 must contain the INSERT INTO node backfill")
+	assert.Less(t, preflightIdx, backfillIdx,
+		"the type-collision preflight (DO $$) must precede the backfill (INSERT INTO node) in 077's source, per D5-4")
 
 	t.Run("success/up_and_down", func(t *testing.T) {
 		env := newContactNodeFKEnv(t)

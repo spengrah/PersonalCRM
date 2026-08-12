@@ -5,6 +5,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -134,35 +135,37 @@ func (h *tagMigrationHarness) seedContactTagNull(t *testing.T, ctx context.Conte
 // clear before the person nodes, since contact.id references node.id via
 // contact_id_node_fk (NO ACTION, so a node delete while its contact still
 // exists is rejected); then the person nodes and the tag entity nodes; finally
-// the legacy tags. A failed step here is logged (not silently discarded), since
+// the legacy tags. A failed step here FAILS the test (not merely logged), since
 // a swallowed error here is exactly what leaks a node into the shared test
-// database across runs.
+// database across runs — the trailing leftover-node check below is the second
+// line of defense in case a step's error return itself goes unnoticed (e.g. an
+// :execrows call that "succeeds" but affects zero rows).
 func (h *tagMigrationHarness) registerCleanup(t *testing.T, ctx context.Context) {
 	t.Cleanup(func() {
-		logIfErr := func(step string, err error) {
+		failOnErr := func(step string, err error) {
 			if err != nil {
-				t.Logf("tagMigrationHarness cleanup: %s: %v", step, err)
+				t.Errorf("tagMigrationHarness cleanup: %s: %v", step, err)
 			}
 		}
 
 		for _, cid := range h.contactIDs {
 			assertions, _ := h.assertionRepo.ListAssertionsBySubject(ctx, cid)
 			for _, a := range assertions {
-				logIfErr("delete assertion events", h.eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, "assertion", a.ID.String()))
+				failOnErr("delete assertion events", h.eventRepo.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, "assertion", a.ID.String()))
 			}
 			_, err := h.support.DeleteAssertionsForNode(ctx, cid)
-			logIfErr("delete assertions for node", err)
+			failOnErr("delete assertions for node", err)
 		}
 		_, err := h.support.DeleteContactTagsByContactIds(ctx, h.contactIDs)
-		logIfErr("delete contact_tags", err)
+		failOnErr("delete contact_tags", err)
 
 		// contact_task and contact must clear before the person nodes: contact.id
 		// references node.id via contact_id_node_fk (NO ACTION), so deleting the
 		// node first is rejected by the FK.
 		_, err = h.support.DeleteContactTasksByContactIds(ctx, h.contactIDs)
-		logIfErr("delete contact tasks", err)
+		failOnErr("delete contact tasks", err)
 		_, err = h.support.DeleteContactsByIds(ctx, h.contactIDs)
-		logIfErr("delete contacts", err)
+		failOnErr("delete contacts", err)
 
 		// Resolve the tag entity node ids the migration created (node.id != tag.id)
 		// by their normalized name, then hard-delete those nodes (entity cascades).
@@ -174,12 +177,23 @@ func (h *tagMigrationHarness) registerCleanup(t *testing.T, ctx context.Context)
 			}
 		}
 		_, err = h.support.DeleteNodesByIds(ctx, tagNodeIDs)
-		logIfErr("delete tag entity nodes", err)
+		failOnErr("delete tag entity nodes", err)
 
 		_, err = h.support.DeleteNodesByIds(ctx, h.contactIDs)
-		logIfErr("delete person nodes", err)
+		failOnErr("delete person nodes", err)
 		_, err = h.support.DeleteTagsByIds(ctx, h.tagIDs)
-		logIfErr("delete legacy tags", err)
+		failOnErr("delete legacy tags", err)
+
+		// Leftover-node check: a reintroduced ordering bug (node delete before
+		// contact delete) fails silently at the sqlc layer if a future refactor
+		// ever routes it through an :exec call that discards the error, so this
+		// checks the actual database state rather than trusting the delete calls
+		// above reported honestly.
+		for _, cid := range h.contactIDs {
+			if _, err := h.support.GetNodeForContact(ctx, cid); !errors.Is(err, db.ErrNotFound) {
+				t.Errorf("tagMigrationHarness cleanup: person node %s still exists after cleanup (err=%v)", cid, err)
+			}
+		}
 	})
 }
 
