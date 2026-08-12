@@ -543,7 +543,7 @@ describe('ImportsPage - Source Filter', () => {
   it('displays source filter buttons', () => {
     render(<ImportsPage />, { wrapper: createWrapper() })
 
-    expect(screen.getByText('Filter:')).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Filter by source' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'All' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Google Contacts' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument()
@@ -636,6 +636,29 @@ describe('ImportsPage - Source Filter', () => {
 
     // Should reset page to 1 when changing filter
     expect(useSuggestions).toHaveBeenCalledWith(expect.objectContaining({ page: 1 }))
+  })
+
+  it('speaks to every connected source in the empty state when no filter is active', () => {
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    expect(
+      screen.getByText(
+        'Everything from your connected sources has been imported or is already linked.'
+      )
+    ).toBeInTheDocument()
+  })
+
+  it('names the active source in the empty state when a filter is applied', async () => {
+    const user = userEvent.setup()
+    render(<ImportsPage />, { wrapper: createWrapper() })
+
+    await user.click(screen.getByRole('button', { name: 'Gmail' }))
+
+    // A filtered empty list must not claim every source is exhausted.
+    expect(
+      screen.getByText('Everything from Gmail has been imported or is already linked.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/your connected sources/)).not.toBeInTheDocument()
   })
 })
 
@@ -785,7 +808,7 @@ describe('ImportsPage - Sub-tabs and name candidates', () => {
   it('defaults to the People tab and shows the source filter', () => {
     render(<ImportsPage />, { wrapper: createWrapper() })
     expect(screen.getByRole('tab', { name: /People/ })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByText('Filter:')).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Filter by source' })).toBeInTheDocument()
   })
 
   it('shows the amber badge with the conflict + orphan count (name candidates excluded)', () => {
@@ -816,7 +839,7 @@ describe('ImportsPage - Sub-tabs and name candidates', () => {
     // Conflict candidate + orphan affordances are present; source filter is hidden.
     expect(screen.getByText('Project sync')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Open Anarlog/ })).toBeInTheDocument()
-    expect(screen.queryByText('Filter:')).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Filter by source' })).not.toBeInTheDocument()
   })
 
   it('shows the empty state on Interactions when the queue is empty', () => {
