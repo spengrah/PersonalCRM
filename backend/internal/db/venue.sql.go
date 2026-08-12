@@ -8,7 +8,7 @@ package db
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const AcquireVenueContainerLock = `-- name: AcquireVenueContainerLock :exec
@@ -36,11 +36,11 @@ RETURNING node_id, kind, source, source_container_id, title
 `
 
 type CreateVenueParams struct {
-	NodeID            pgtype.UUID `json:"node_id"`
-	Kind              string      `json:"kind"`
-	Source            string      `json:"source"`
-	SourceContainerID string      `json:"source_container_id"`
-	Title             pgtype.Text `json:"title"`
+	NodeID            uuid.UUID `json:"node_id"`
+	Kind              string    `json:"kind"`
+	Source            string    `json:"source"`
+	SourceContainerID string    `json:"source_container_id"`
+	Title             *string   `json:"title"`
 }
 
 // Venue subtype queries (graph foundation).
@@ -82,12 +82,12 @@ RETURNING node_id
 `
 
 type CreateVenueNodeParams struct {
-	NodeID            pgtype.UUID `json:"node_id"`
-	Kind              string      `json:"kind"`
-	Source            string      `json:"source"`
-	SourceContainerID string      `json:"source_container_id"`
-	Title             pgtype.Text `json:"title"`
-	CanonicalLabel    string      `json:"canonical_label"`
+	NodeID            uuid.UUID `json:"node_id"`
+	Kind              string    `json:"kind"`
+	Source            string    `json:"source"`
+	SourceContainerID string    `json:"source_container_id"`
+	Title             *string   `json:"title"`
+	CanonicalLabel    string    `json:"canonical_label"`
 }
 
 // Creates the node + venue pair for a container in one statement with a
@@ -96,7 +96,7 @@ type CreateVenueNodeParams struct {
 // concurrent winner or a re-run is a no-op without orphaning a node. Returns the
 // venue node id on a fresh create; returns no row when the venue already existed
 // (caller falls back to FindVenueByContainer under the advisory lock).
-func (q *Queries) CreateVenueNode(ctx context.Context, arg CreateVenueNodeParams) (pgtype.UUID, error) {
+func (q *Queries) CreateVenueNode(ctx context.Context, arg CreateVenueNodeParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, CreateVenueNode,
 		arg.NodeID,
 		arg.Kind,
@@ -105,7 +105,7 @@ func (q *Queries) CreateVenueNode(ctx context.Context, arg CreateVenueNodeParams
 		arg.Title,
 		arg.CanonicalLabel,
 	)
-	var node_id pgtype.UUID
+	var node_id uuid.UUID
 	err := row.Scan(&node_id)
 	return node_id, err
 }
@@ -144,7 +144,7 @@ JOIN node ON node.id = venue.node_id
 WHERE venue.node_id = $1 AND node.deleted_at IS NULL
 `
 
-func (q *Queries) GetVenue(ctx context.Context, nodeID pgtype.UUID) (*Venue, error) {
+func (q *Queries) GetVenue(ctx context.Context, nodeID uuid.UUID) (*Venue, error) {
 	row := q.db.QueryRow(ctx, GetVenue, nodeID)
 	var i Venue
 	err := row.Scan(
@@ -166,11 +166,11 @@ RETURNING node_id, kind, source, source_container_id, title
 `
 
 type UpsertVenueParams struct {
-	NodeID            pgtype.UUID `json:"node_id"`
-	Kind              string      `json:"kind"`
-	Source            string      `json:"source"`
-	SourceContainerID string      `json:"source_container_id"`
-	Title             pgtype.Text `json:"title"`
+	NodeID            uuid.UUID `json:"node_id"`
+	Kind              string    `json:"kind"`
+	Source            string    `json:"source"`
+	SourceContainerID string    `json:"source_container_id"`
+	Title             *string   `json:"title"`
 }
 
 // Idempotent venue creation for the interaction backfill / live recorders: a

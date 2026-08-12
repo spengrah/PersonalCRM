@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // MessagesMessage is the in-memory representation of a messages_message
@@ -81,47 +80,20 @@ func convertDbMessagesMessage(m *db.MessagesMessage) MessagesMessage {
 		IsOutgoing:  m.IsOutgoing,
 		IsGroupChat: m.IsGroupChat,
 	}
-	if m.ID.Valid {
-		msg.ID = uuid.UUID(m.ID.Bytes)
-	}
-	if m.PeerNormalized.Valid {
-		msg.PeerNormalized = &m.PeerNormalized.String
-	}
-	if m.Text.Valid {
-		msg.Text = &m.Text.String
-	}
-	if m.SentAt.Valid {
-		msg.SentAt = m.SentAt.Time
-	}
-	if m.ReplyToGuid.Valid {
-		msg.ReplyToGuid = &m.ReplyToGuid.String
-	}
-	if m.MatchedContactID.Valid {
-		id := uuid.UUID(m.MatchedContactID.Bytes)
-		msg.MatchedContactID = &id
-	}
-	if m.InteractionID.Valid {
-		id := uuid.UUID(m.InteractionID.Bytes)
-		msg.InteractionID = &id
-	}
-	if m.MacHostID.Valid {
-		id := uuid.UUID(m.MacHostID.Bytes)
-		msg.MacHostID = &id
-	}
-	if m.ProcessedAt.Valid {
-		msg.ProcessedAt = &m.ProcessedAt.Time
-	}
-	if m.ClaimedAt.Valid {
-		msg.ClaimedAt = &m.ClaimedAt.Time
-	}
-	if m.ClaimedSessionRef.Valid {
-		msg.ClaimedSessionRef = &m.ClaimedSessionRef.String
-	}
-	if m.DeletedAt.Valid {
-		msg.DeletedAt = &m.DeletedAt.Time
-	}
-	if m.CreatedAt.Valid {
-		msg.CreatedAt = m.CreatedAt.Time
+	msg.ID = m.ID
+	msg.PeerNormalized = m.PeerNormalized
+	msg.Text = m.Text
+	msg.SentAt = m.SentAt
+	msg.ReplyToGuid = m.ReplyToGuid
+	msg.MatchedContactID = m.MatchedContactID
+	msg.InteractionID = m.InteractionID
+	msg.MacHostID = m.MacHostID
+	msg.ProcessedAt = m.ProcessedAt
+	msg.ClaimedAt = m.ClaimedAt
+	msg.ClaimedSessionRef = m.ClaimedSessionRef
+	msg.DeletedAt = m.DeletedAt
+	if m.CreatedAt != nil {
+		msg.CreatedAt = *m.CreatedAt
 	}
 	return msg
 }
@@ -149,32 +121,24 @@ func (r *MessagesMessageRepository) UpsertMessageTx(ctx context.Context, tx pgx.
 	return &msg, nil
 }
 
-// buildUpsertMessagesMessageParams centralizes the pgtype conversion
+// buildUpsertMessagesMessageParams centralizes the field mapping
 // shared between the tx and non-tx upsert paths. Keeping this in one
 // place ensures both variants stay in lockstep — drift would silently
 // produce different on-disk shapes depending on caller.
 func buildUpsertMessagesMessageParams(params UpsertMessagesMessageParams) db.UpsertMessagesMessageParams {
-	var matchedContactID pgtype.UUID
-	if params.MatchedContactID != nil {
-		matchedContactID = uuidToPgUUID(*params.MatchedContactID)
-	}
-	var macHostID pgtype.UUID
-	if params.MacHostID != nil {
-		macHostID = uuidToPgUUID(*params.MacHostID)
-	}
 	return db.UpsertMessagesMessageParams{
 		Guid:             params.Guid,
 		ChatGuid:         params.ChatGuid,
 		PeerHandle:       params.PeerHandle,
-		PeerNormalized:   stringToPgText(params.PeerNormalized),
-		Text:             stringToPgText(params.Text),
+		PeerNormalized:   params.PeerNormalized,
+		Text:             params.Text,
 		MessageType:      params.MessageType,
-		SentAt:           timeToPgTimestamptz(&params.SentAt),
+		SentAt:           params.SentAt,
 		IsOutgoing:       params.IsOutgoing,
 		IsGroupChat:      params.IsGroupChat,
-		ReplyToGuid:      stringToPgText(params.ReplyToGuid),
-		MatchedContactID: matchedContactID,
-		MacHostID:        macHostID,
+		ReplyToGuid:      params.ReplyToGuid,
+		MatchedContactID: params.MatchedContactID,
+		MacHostID:        params.MacHostID,
 	}
 }
 
@@ -217,8 +181,8 @@ func (r *MessagesMessageRepository) ListUnprocessedContactIDs(ctx context.Contex
 	}
 	ids := make([]uuid.UUID, 0, len(pgIDs))
 	for _, pgID := range pgIDs {
-		if pgID.Valid {
-			ids = append(ids, uuid.UUID(pgID.Bytes))
+		if pgID != nil {
+			ids = append(ids, *pgID)
 		}
 	}
 	return ids, nil
@@ -226,7 +190,7 @@ func (r *MessagesMessageRepository) ListUnprocessedContactIDs(ctx context.Contex
 
 // ListUnprocessedByContact returns eligible rows for a contact.
 func (r *MessagesMessageRepository) ListUnprocessedByContact(ctx context.Context, contactID uuid.UUID) ([]MessagesMessage, error) {
-	dbMsgs, err := r.queries.ListUnprocessedMessagesByContact(ctx, uuidToPgUUID(contactID))
+	dbMsgs, err := r.queries.ListUnprocessedMessagesByContact(ctx, &contactID)
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +211,7 @@ func (r *MessagesMessageRepository) ListUnprocessedByContact(ctx context.Context
 // tend to collide on the same chat first; this improves the partial-
 // claim retry path's convergence properties.
 func (r *MessagesMessageRepository) ListUnprocessedChatsByContact(ctx context.Context, contactID uuid.UUID) ([]string, error) {
-	return r.queries.ListUnprocessedMessagesChatsByContact(ctx, uuidToPgUUID(contactID))
+	return r.queries.ListUnprocessedMessagesChatsByContact(ctx, &contactID)
 }
 
 // UpdateMatchedContactParams is the input for UpdateMatchedContact.
@@ -281,9 +245,9 @@ func (r *MessagesMessageRepository) ListStranded(ctx context.Context) ([]Message
 // no-op.
 func (r *MessagesMessageRepository) UpdateMatchedContact(ctx context.Context, params UpdateMatchedContactParams) error {
 	return r.queries.UpdateMatchedContactForStrandedMessage(ctx, db.UpdateMatchedContactForStrandedMessageParams{
-		ID:               uuidToPgUUID(params.ID),
-		MatchedContactID: uuidToPgUUID(params.MatchedContactID),
-		PeerNormalized:   pgtype.Text{String: params.PeerNormalized, Valid: true},
+		ID:               params.ID,
+		MatchedContactID: &params.MatchedContactID,
+		PeerNormalized:   &params.PeerNormalized,
 	})
 }
 
@@ -291,7 +255,7 @@ func (r *MessagesMessageRepository) UpdateMatchedContact(ctx context.Context, pa
 // chat_guid pair.
 func (r *MessagesMessageRepository) ListUnprocessedByContactAndChat(ctx context.Context, contactID uuid.UUID, chatGuid string) ([]MessagesMessage, error) {
 	dbMsgs, err := r.queries.ListUnprocessedMessagesByContactAndChat(ctx, db.ListUnprocessedMessagesByContactAndChatParams{
-		MatchedContactID: uuidToPgUUID(contactID),
+		MatchedContactID: &contactID,
 		ChatGuid:         chatGuid,
 	})
 	if err != nil {
@@ -311,13 +275,9 @@ func (r *MessagesMessageRepository) MarkMessagesProcessed(ctx context.Context, m
 	if len(messageIDs) == 0 {
 		return nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
 	return r.queries.MarkMessagesMessagesProcessed(ctx, db.MarkMessagesMessagesProcessedParams{
-		InteractionID: uuidToPgUUID(interactionID),
-		MessageIds:    pgIDs,
+		InteractionID: &interactionID,
+		MessageIds:    messageIDs,
 	})
 }
 
@@ -334,14 +294,10 @@ func (r *MessagesMessageRepository) MarkMessagesProcessedTx(ctx context.Context,
 	if len(messageIDs) == 0 {
 		return 0, nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
 	return db.New(tx).MarkMessagesMessagesProcessedForSession(ctx, db.MarkMessagesMessagesProcessedForSessionParams{
-		InteractionID: uuidToPgUUID(interactionID),
-		MessageIds:    pgIDs,
-		SessionRef:    pgtype.Text{String: sessionRef, Valid: true},
+		InteractionID: &interactionID,
+		MessageIds:    messageIDs,
+		SessionRef:    &sessionRef,
 	})
 }
 
@@ -352,24 +308,10 @@ func (r *MessagesMessageRepository) ClaimMessages(ctx context.Context, messageID
 	if len(messageIDs) == 0 {
 		return nil, nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
-	claimed, err := r.queries.ClaimMessagesMessages(ctx, db.ClaimMessagesMessagesParams{
-		SessionRef: pgtype.Text{String: sessionRef, Valid: true},
-		MessageIds: pgIDs,
+	return r.queries.ClaimMessagesMessages(ctx, db.ClaimMessagesMessagesParams{
+		SessionRef: &sessionRef,
+		MessageIds: messageIDs,
 	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]uuid.UUID, 0, len(claimed))
-	for _, id := range claimed {
-		if id.Valid {
-			out = append(out, uuid.UUID(id.Bytes))
-		}
-	}
-	return out, nil
 }
 
 // ClaimMessagesTx is the tx-bound variant of ClaimMessages. Used by the
@@ -380,24 +322,10 @@ func (r *MessagesMessageRepository) ClaimMessagesTx(ctx context.Context, tx pgx.
 	if len(messageIDs) == 0 {
 		return nil, nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
-	claimed, err := db.New(tx).ClaimMessagesMessages(ctx, db.ClaimMessagesMessagesParams{
-		SessionRef: pgtype.Text{String: sessionRef, Valid: true},
-		MessageIds: pgIDs,
+	return db.New(tx).ClaimMessagesMessages(ctx, db.ClaimMessagesMessagesParams{
+		SessionRef: &sessionRef,
+		MessageIds: messageIDs,
 	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]uuid.UUID, 0, len(claimed))
-	for _, id := range claimed {
-		if id.Valid {
-			out = append(out, uuid.UUID(id.Bytes))
-		}
-	}
-	return out, nil
 }
 
 // ClearStaleClaimTx clears claim columns for rows still carrying the
@@ -407,13 +335,9 @@ func (r *MessagesMessageRepository) ClearStaleClaimTx(ctx context.Context, tx pg
 	if len(messageIDs) == 0 {
 		return nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
 	return db.New(tx).ClearMessagesMessageStaleClaim(ctx, db.ClearMessagesMessageStaleClaimParams{
-		MessageIds:         pgIDs,
-		ExpectedSessionRef: pgtype.Text{String: expectedSessionRef, Valid: true},
+		MessageIds:         messageIDs,
+		ExpectedSessionRef: &expectedSessionRef,
 	})
 }
 
@@ -423,11 +347,7 @@ func (r *MessagesMessageRepository) BackdateClaim(ctx context.Context, messageID
 	if len(messageIDs) == 0 {
 		return nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
-	return r.queries.BackdateMessagesMessageClaim(ctx, pgIDs)
+	return r.queries.BackdateMessagesMessageClaim(ctx, messageIDs)
 }
 
 // HardDeleteByMacHost is a test-only helper that hard-deletes
@@ -435,7 +355,7 @@ func (r *MessagesMessageRepository) BackdateClaim(ctx context.Context, messageID
 // per-run cleanup; soft-delete is unsafe because the upsert does not
 // clear deleted_at on conflict.
 func (r *MessagesMessageRepository) HardDeleteByMacHost(ctx context.Context, macHostID uuid.UUID) error {
-	return r.queries.HardDeleteMessagesMessagesByMacHost(ctx, uuidToPgUUID(macHostID))
+	return r.queries.HardDeleteMessagesMessagesByMacHost(ctx, &macHostID)
 }
 
 // MessagesStagingProcessor adapts *MessagesMessageRepository to the

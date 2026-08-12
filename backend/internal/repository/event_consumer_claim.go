@@ -53,7 +53,7 @@ func (r *EventConsumerClaimRepository) TryClaimTx(ctx context.Context, tx pgx.Tx
 		return false, fmt.Errorf("event_consumer_claim: empty consumer name")
 	}
 	rows, err := db.New(tx).InsertEventConsumerClaim(ctx, db.InsertEventConsumerClaimParams{
-		EventID:  uuidToPgUUID(eventID),
+		EventID:  eventID,
 		Consumer: consumer,
 	})
 	if err != nil {
@@ -71,7 +71,7 @@ func (r *EventConsumerClaimRepository) ExistsTx(ctx context.Context, tx pgx.Tx, 
 		q = db.New(tx)
 	}
 	return q.ExistsEventConsumerClaim(ctx, db.ExistsEventConsumerClaimParams{
-		EventID:  uuidToPgUUID(eventID),
+		EventID:  eventID,
 		Consumer: consumer,
 	})
 }

@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const BackdateMessagesMessageClaim = `-- name: BackdateMessagesMessageClaim :exec
@@ -19,7 +20,7 @@ WHERE id = ANY($1::uuid[])
 
 // Test-only helper: ages the claim past the 5-minute TTL. Production
 // code MUST NOT call this.
-func (q *Queries) BackdateMessagesMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error {
+func (q *Queries) BackdateMessagesMessageClaim(ctx context.Context, messageIds []uuid.UUID) error {
 	_, err := q.db.Exec(ctx, BackdateMessagesMessageClaim, messageIds)
 	return err
 }
@@ -36,22 +37,22 @@ RETURNING id
 `
 
 type ClaimMessagesMessagesParams struct {
-	SessionRef pgtype.Text   `json:"session_ref"`
-	MessageIds []pgtype.UUID `json:"message_ids"`
+	SessionRef *string     `json:"session_ref"`
+	MessageIds []uuid.UUID `json:"message_ids"`
 }
 
 // Race-safe conditional claim — same predicate shape as
 // ClaimTelegramMessages. Returns the IDs actually claimed so the engine
 // can detect partial claims.
-func (q *Queries) ClaimMessagesMessages(ctx context.Context, arg ClaimMessagesMessagesParams) ([]pgtype.UUID, error) {
+func (q *Queries) ClaimMessagesMessages(ctx context.Context, arg ClaimMessagesMessagesParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, ClaimMessagesMessages, arg.SessionRef, arg.MessageIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []uuid.UUID{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
@@ -74,8 +75,8 @@ WHERE id = ANY($1::uuid[])
 `
 
 type ClearMessagesMessageStaleClaimParams struct {
-	MessageIds         []pgtype.UUID `json:"message_ids"`
-	ExpectedSessionRef pgtype.Text   `json:"expected_session_ref"`
+	MessageIds         []uuid.UUID `json:"message_ids"`
+	ExpectedSessionRef *string     `json:"expected_session_ref"`
 }
 
 // Defensive recovery branch: clears claim columns for rows still
@@ -178,7 +179,7 @@ type GetMessagesMessageContainerRow struct {
 // its UUID. Used by the live interaction recorder to resolve the messages
 // venue. The container is consistent across all messages in one aggregated
 // session, so reading the first id is sufficient.
-func (q *Queries) GetMessagesMessageContainer(ctx context.Context, id pgtype.UUID) (*GetMessagesMessageContainerRow, error) {
+func (q *Queries) GetMessagesMessageContainer(ctx context.Context, id uuid.UUID) (*GetMessagesMessageContainerRow, error) {
 	row := q.db.QueryRow(ctx, GetMessagesMessageContainer, id)
 	var i GetMessagesMessageContainerRow
 	err := row.Scan(&i.ChatGuid, &i.IsGroupChat)
@@ -195,7 +196,7 @@ WHERE mac_host_id = $1
 // on conflict, so soft-deleted rows would resurrect as phantoms on the
 // next run. Scoped by mac_host_id so tests can pass a fresh mac_host UUID
 // per run and clean only their own rows.
-func (q *Queries) HardDeleteMessagesMessagesByMacHost(ctx context.Context, macHostID pgtype.UUID) error {
+func (q *Queries) HardDeleteMessagesMessagesByMacHost(ctx context.Context, macHostID *uuid.UUID) error {
 	_, err := q.db.Exec(ctx, HardDeleteMessagesMessagesByMacHost, macHostID)
 	return err
 }
@@ -262,7 +263,7 @@ WHERE matched_contact_id = $1
 ORDER BY chat_guid, sent_at
 `
 
-func (q *Queries) ListUnprocessedMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*MessagesMessage, error) {
+func (q *Queries) ListUnprocessedMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]*MessagesMessage, error) {
 	rows, err := q.db.Query(ctx, ListUnprocessedMessagesByContact, matchedContactID)
 	if err != nil {
 		return nil, err
@@ -313,8 +314,8 @@ ORDER BY sent_at
 `
 
 type ListUnprocessedMessagesByContactAndChatParams struct {
-	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
-	ChatGuid         string      `json:"chat_guid"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
+	ChatGuid         string     `json:"chat_guid"`
 }
 
 func (q *Queries) ListUnprocessedMessagesByContactAndChat(ctx context.Context, arg ListUnprocessedMessagesByContactAndChatParams) ([]*MessagesMessage, error) {
@@ -372,7 +373,7 @@ ORDER BY chat_guid ASC
 // messaging aggregator worker to drive per-chat AggregateForContact
 // invocations — the chat-aware path is what preserves the engine's
 // extend/bridge/coalesce contract (see spec §3 "Stage 2 — Aggregator").
-func (q *Queries) ListUnprocessedMessagesChatsByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]string, error) {
+func (q *Queries) ListUnprocessedMessagesChatsByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]string, error) {
 	rows, err := q.db.Query(ctx, ListUnprocessedMessagesChatsByContact, matchedContactID)
 	if err != nil {
 		return nil, err
@@ -402,15 +403,15 @@ WHERE matched_contact_id IS NOT NULL
 `
 
 // Claim-aware filter — same predicate shape as telegram_message.
-func (q *Queries) ListUnprocessedMessagesContactIDs(ctx context.Context) ([]pgtype.UUID, error) {
+func (q *Queries) ListUnprocessedMessagesContactIDs(ctx context.Context) ([]*uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, ListUnprocessedMessagesContactIDs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []*uuid.UUID{}
 	for rows.Next() {
-		var matched_contact_id pgtype.UUID
+		var matched_contact_id *uuid.UUID
 		if err := rows.Scan(&matched_contact_id); err != nil {
 			return nil, err
 		}
@@ -433,8 +434,8 @@ WHERE id = ANY($2::uuid[])
 `
 
 type MarkMessagesMessagesProcessedParams struct {
-	InteractionID pgtype.UUID   `json:"interaction_id"`
-	MessageIds    []pgtype.UUID `json:"message_ids"`
+	InteractionID *uuid.UUID  `json:"interaction_id"`
+	MessageIds    []uuid.UUID `json:"message_ids"`
 }
 
 // Non-tx variant. Mirror of MarkTelegramMessagesProcessed — used by the
@@ -458,9 +459,9 @@ WHERE id = ANY($2::uuid[])
 `
 
 type MarkMessagesMessagesProcessedForSessionParams struct {
-	InteractionID pgtype.UUID   `json:"interaction_id"`
-	MessageIds    []pgtype.UUID `json:"message_ids"`
-	SessionRef    pgtype.Text   `json:"session_ref"`
+	InteractionID *uuid.UUID  `json:"interaction_id"`
+	MessageIds    []uuid.UUID `json:"message_ids"`
+	SessionRef    *string     `json:"session_ref"`
 }
 
 // Tx-bound variant. Mirror of MarkTelegramMessagesProcessedForSession —
@@ -496,13 +497,13 @@ RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type,
 `
 
 type TestInsertMessagesMessageLinkedParams struct {
-	Guid          string             `json:"guid"`
-	ChatGuid      string             `json:"chat_guid"`
-	PeerHandle    string             `json:"peer_handle"`
-	SentAt        pgtype.Timestamptz `json:"sent_at"`
-	IsOutgoing    bool               `json:"is_outgoing"`
-	IsGroupChat   bool               `json:"is_group_chat"`
-	InteractionID pgtype.UUID        `json:"interaction_id"`
+	Guid          string     `json:"guid"`
+	ChatGuid      string     `json:"chat_guid"`
+	PeerHandle    string     `json:"peer_handle"`
+	SentAt        time.Time  `json:"sent_at"`
+	IsOutgoing    bool       `json:"is_outgoing"`
+	IsGroupChat   bool       `json:"is_group_chat"`
+	InteractionID *uuid.UUID `json:"interaction_id"`
 }
 
 // Test-only: inserts a messages_message already linked to an interaction. Used
@@ -554,9 +555,9 @@ WHERE id = $3
 `
 
 type UpdateMatchedContactForStrandedMessageParams struct {
-	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
-	PeerNormalized   pgtype.Text `json:"peer_normalized"`
-	ID               pgtype.UUID `json:"id"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
+	PeerNormalized   *string    `json:"peer_normalized"`
+	ID               uuid.UUID  `json:"id"`
 }
 
 // Sets matched_contact_id + peer_normalized on a single stranded row.
@@ -589,18 +590,18 @@ RETURNING id, guid, chat_guid, peer_handle, peer_normalized, text, message_type,
 `
 
 type UpsertMessagesMessageParams struct {
-	Guid             string             `json:"guid"`
-	ChatGuid         string             `json:"chat_guid"`
-	PeerHandle       string             `json:"peer_handle"`
-	PeerNormalized   pgtype.Text        `json:"peer_normalized"`
-	Text             pgtype.Text        `json:"text"`
-	MessageType      string             `json:"message_type"`
-	SentAt           pgtype.Timestamptz `json:"sent_at"`
-	IsOutgoing       bool               `json:"is_outgoing"`
-	IsGroupChat      bool               `json:"is_group_chat"`
-	ReplyToGuid      pgtype.Text        `json:"reply_to_guid"`
-	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
-	MacHostID        pgtype.UUID        `json:"mac_host_id"`
+	Guid             string     `json:"guid"`
+	ChatGuid         string     `json:"chat_guid"`
+	PeerHandle       string     `json:"peer_handle"`
+	PeerNormalized   *string    `json:"peer_normalized"`
+	Text             *string    `json:"text"`
+	MessageType      string     `json:"message_type"`
+	SentAt           time.Time  `json:"sent_at"`
+	IsOutgoing       bool       `json:"is_outgoing"`
+	IsGroupChat      bool       `json:"is_group_chat"`
+	ReplyToGuid      *string    `json:"reply_to_guid"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
+	MacHostID        *uuid.UUID `json:"mac_host_id"`
 }
 
 // Insert with no-op on guid conflict. peer_normalized and matched_contact_id

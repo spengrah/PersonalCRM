@@ -16,7 +16,6 @@ import (
 	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/gotd/td/tg"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -110,7 +109,7 @@ func setupSparseEnrichTest(t *testing.T) *sparseEnrichEnv {
 func cleanupExternalBySource(t *testing.T, env *sparseEnrichEnv, peerIDStr string) {
 	t.Helper()
 	ctx := context.Background()
-	_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: peerIDStr, Valid: true})
+	_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, &peerIDStr)
 }
 
 // cleanupSparseEnrichTestData hard-deletes any telegram_message rows for the

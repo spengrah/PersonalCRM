@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const TestDeleteCalendarEventsByGcalEventIDPrefix = `-- name: TestDeleteCalendarEventsByGcalEventIDPrefix :exec
@@ -63,14 +64,14 @@ RETURNING id, gcal_event_id, gcal_calendar_id, google_account_id, title, descrip
 `
 
 type TestInsertCalendarEventRawAttendeesParams struct {
-	GcalEventID       string             `json:"gcal_event_id"`
-	GcalCalendarID    string             `json:"gcal_calendar_id"`
-	GoogleAccountID   string             `json:"google_account_id"`
-	StartTime         pgtype.Timestamptz `json:"start_time"`
-	EndTime           pgtype.Timestamptz `json:"end_time"`
-	Status            string             `json:"status"`
-	Attendees         []byte             `json:"attendees"`
-	MatchedContactIds []pgtype.UUID      `json:"matched_contact_ids"`
+	GcalEventID       string      `json:"gcal_event_id"`
+	GcalCalendarID    string      `json:"gcal_calendar_id"`
+	GoogleAccountID   string      `json:"google_account_id"`
+	StartTime         time.Time   `json:"start_time"`
+	EndTime           time.Time   `json:"end_time"`
+	Status            string      `json:"status"`
+	Attendees         []byte      `json:"attendees"`
+	MatchedContactIds []uuid.UUID `json:"matched_contact_ids"`
 }
 
 // TEST ONLY. See TestInsertExternalContactRawEmails. Same rationale for
@@ -186,8 +187,8 @@ WHERE EXISTS (
 `
 
 type TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacyParams struct {
-	Email     string      `json:"email"`
-	ContactID pgtype.UUID `json:"contact_id"`
+	Email     string    `json:"email"`
+	ContactID uuid.UUID `json:"contact_id"`
 }
 
 // TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of

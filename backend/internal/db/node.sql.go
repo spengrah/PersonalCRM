@@ -8,7 +8,7 @@ package db
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CreateNode = `-- name: CreateNode :one
@@ -19,9 +19,9 @@ RETURNING id, type, canonical_label, created_at, deleted_at, merged_into
 `
 
 type CreateNodeParams struct {
-	ID             pgtype.UUID `json:"id"`
-	Type           string      `json:"type"`
-	CanonicalLabel string      `json:"canonical_label"`
+	ID             uuid.UUID `json:"id"`
+	Type           string    `json:"type"`
+	CanonicalLabel string    `json:"canonical_label"`
 }
 
 // Node registry queries (graph foundation).
@@ -44,7 +44,7 @@ const GetNode = `-- name: GetNode :one
 SELECT id, type, canonical_label, created_at, deleted_at, merged_into FROM node WHERE id = $1 AND deleted_at IS NULL
 `
 
-func (q *Queries) GetNode(ctx context.Context, id pgtype.UUID) (*Node, error) {
+func (q *Queries) GetNode(ctx context.Context, id uuid.UUID) (*Node, error) {
 	row := q.db.QueryRow(ctx, GetNode, id)
 	var i Node
 	err := row.Scan(
@@ -62,7 +62,7 @@ const GetNodeIncludingDeleted = `-- name: GetNodeIncludingDeleted :one
 SELECT id, type, canonical_label, created_at, deleted_at, merged_into FROM node WHERE id = $1
 `
 
-func (q *Queries) GetNodeIncludingDeleted(ctx context.Context, id pgtype.UUID) (*Node, error) {
+func (q *Queries) GetNodeIncludingDeleted(ctx context.Context, id uuid.UUID) (*Node, error) {
 	row := q.db.QueryRow(ctx, GetNodeIncludingDeleted, id)
 	var i Node
 	err := row.Scan(
@@ -81,8 +81,8 @@ UPDATE node SET merged_into = $2, deleted_at = NOW() WHERE id = $1
 `
 
 type SetNodeMergedIntoParams struct {
-	ID         pgtype.UUID `json:"id"`
-	MergedInto pgtype.UUID `json:"merged_into"`
+	ID         uuid.UUID  `json:"id"`
+	MergedInto *uuid.UUID `json:"merged_into"`
 }
 
 // Records the merge alias (loser → winner) and tombstones the loser node.
@@ -95,7 +95,7 @@ const SoftDeleteNode = `-- name: SoftDeleteNode :exec
 UPDATE node SET deleted_at = NOW() WHERE id = $1
 `
 
-func (q *Queries) SoftDeleteNode(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) SoftDeleteNode(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, SoftDeleteNode, id)
 	return err
 }
@@ -132,8 +132,8 @@ UPDATE node SET canonical_label = $2 WHERE id = $1
 `
 
 type UpdateNodeCanonicalLabelParams struct {
-	ID             pgtype.UUID `json:"id"`
-	CanonicalLabel string      `json:"canonical_label"`
+	ID             uuid.UUID `json:"id"`
+	CanonicalLabel string    `json:"canonical_label"`
 }
 
 func (q *Queries) UpdateNodeCanonicalLabel(ctx context.Context, arg UpdateNodeCanonicalLabelParams) error {

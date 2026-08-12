@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const AdvanceWhatsAppHistoryPhase = `-- name: AdvanceWhatsAppHistoryPhase :execrows
@@ -18,10 +19,10 @@ WHERE id = $2 AND claim_token = $3 AND phase = $4
 `
 
 type AdvanceWhatsAppHistoryPhaseParams struct {
-	ToPhase    string      `json:"to_phase"`
-	ID         pgtype.UUID `json:"id"`
-	ClaimToken pgtype.UUID `json:"claim_token"`
-	FromPhase  string      `json:"from_phase"`
+	ToPhase    string     `json:"to_phase"`
+	ID         uuid.UUID  `json:"id"`
+	ClaimToken *uuid.UUID `json:"claim_token"`
+	FromPhase  string     `json:"from_phase"`
 }
 
 // Token-fenced AND predecessor-fenced. The phase = @from predicate is what
@@ -50,7 +51,7 @@ WHERE id = $1
 // Test-only helper: ages a claim past the 15-minute lease so a fresh claim can
 // reclaim it, simulating a worker that died mid-chunk. Mirror of
 // BackdateCommsMessageClaim. Production code MUST NOT call this.
-func (q *Queries) BackdateWhatsAppHistoryClaim(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) BackdateWhatsAppHistoryClaim(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, BackdateWhatsAppHistoryClaim, id)
 	return err
 }
@@ -256,8 +257,8 @@ WHERE id = $1
 `
 
 type MarkWhatsAppHistoryNotificationDoneParams struct {
-	ID         pgtype.UUID `json:"id"`
-	ClaimToken pgtype.UUID `json:"claim_token"`
+	ID         uuid.UUID  `json:"id"`
+	ClaimToken *uuid.UUID `json:"claim_token"`
 }
 
 // Terminal success. Clears the lease so the row can never be reclaimed — which
@@ -285,9 +286,9 @@ WHERE id = $2 AND claim_token = $3
 `
 
 type MarkWhatsAppHistoryNotificationFailedParams struct {
-	LastError  pgtype.Text `json:"last_error"`
-	ID         pgtype.UUID `json:"id"`
-	ClaimToken pgtype.UUID `json:"claim_token"`
+	LastError  *string    `json:"last_error"`
+	ID         uuid.UUID  `json:"id"`
+	ClaimToken *uuid.UUID `json:"claim_token"`
 }
 
 // Terminal failure, reserved for errors no retry can fix at a phase where no
@@ -315,12 +316,12 @@ RETURNING id
 `
 
 type RecordWhatsAppHistoryNotificationParams struct {
-	ProtocolMsgID string             `json:"protocol_msg_id"`
-	Notification  []byte             `json:"notification"`
-	SyncType      string             `json:"sync_type"`
-	ChunkOrder    int32              `json:"chunk_order"`
-	OldestMsgTs   pgtype.Timestamptz `json:"oldest_msg_ts"`
-	Disposition   string             `json:"disposition"`
+	ProtocolMsgID string     `json:"protocol_msg_id"`
+	Notification  []byte     `json:"notification"`
+	SyncType      string     `json:"sync_type"`
+	ChunkOrder    int32      `json:"chunk_order"`
+	OldestMsgTs   *time.Time `json:"oldest_msg_ts"`
+	Disposition   string     `json:"disposition"`
 }
 
 // WhatsApp-owned state that is NOT message content: the durable one-shot
@@ -344,7 +345,7 @@ type RecordWhatsAppHistoryNotificationParams struct {
 // exactly one enforcement point: 'dropped_inline' enters at 'projected', a
 // media-backed chunk at 'recorded'.
 // @notification MUST already have InitialHistBootstrapInlinePayload nil'd.
-func (q *Queries) RecordWhatsAppHistoryNotification(ctx context.Context, arg RecordWhatsAppHistoryNotificationParams) (pgtype.UUID, error) {
+func (q *Queries) RecordWhatsAppHistoryNotification(ctx context.Context, arg RecordWhatsAppHistoryNotificationParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, RecordWhatsAppHistoryNotification,
 		arg.ProtocolMsgID,
 		arg.Notification,
@@ -353,7 +354,7 @@ func (q *Queries) RecordWhatsAppHistoryNotification(ctx context.Context, arg Rec
 		arg.OldestMsgTs,
 		arg.Disposition,
 	)
-	var id pgtype.UUID
+	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
 }
@@ -371,7 +372,7 @@ WHERE id = $1 AND state = 'failed'
 // for a dropped_inline row the retry can only re-send the receipt, since its
 // phase is already 'projected' and it has no media. Not token-fenced: a failed
 // row holds no lease.
-func (q *Queries) RequeueFailedWhatsAppHistoryNotification(ctx context.Context, id pgtype.UUID) (int64, error) {
+func (q *Queries) RequeueFailedWhatsAppHistoryNotification(ctx context.Context, id uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, RequeueFailedWhatsAppHistoryNotification, id)
 	if err != nil {
 		return 0, err
@@ -386,9 +387,9 @@ WHERE id = $2 AND claim_token = $3
 `
 
 type SaveWhatsAppHistoryCheckpointParams struct {
-	Checkpoint []byte      `json:"checkpoint"`
-	ID         pgtype.UUID `json:"id"`
-	ClaimToken pgtype.UUID `json:"claim_token"`
+	Checkpoint []byte     `json:"checkpoint"`
+	ID         uuid.UUID  `json:"id"`
+	ClaimToken *uuid.UUID `json:"claim_token"`
 }
 
 // Token-fenced. Zero rows means the lease moved on and the caller must abandon
@@ -451,12 +452,12 @@ RETURNING id, chat_jid, chat_title, chat_type, member_count, status, last_lookup
 `
 
 type UpsertWhatsAppChatConfigParams struct {
-	ChatJid      string             `json:"chat_jid"`
-	ChatTitle    pgtype.Text        `json:"chat_title"`
-	ChatType     string             `json:"chat_type"`
-	MemberCount  pgtype.Int4        `json:"member_count"`
-	Status       string             `json:"status"`
-	LastLookupAt pgtype.Timestamptz `json:"last_lookup_at"`
+	ChatJid      string     `json:"chat_jid"`
+	ChatTitle    *string    `json:"chat_title"`
+	ChatType     string     `json:"chat_type"`
+	MemberCount  *int32     `json:"member_count"`
+	Status       string     `json:"status"`
+	LastLookupAt *time.Time `json:"last_lookup_at"`
 }
 
 // Mirrors UpsertTelegramChatConfig's preserve semantics: a re-observation

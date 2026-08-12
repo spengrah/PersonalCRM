@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const BackdateTelegramMessageClaim = `-- name: BackdateTelegramMessageClaim :exec
@@ -21,7 +22,7 @@ WHERE id = ANY($1::uuid[])
 // touching time.Now()/accelerated.GetCurrentTime() (the claim filter
 // uses NOW(), so the test must rewrite the DB clock for those rows).
 // Production code MUST NOT call this.
-func (q *Queries) BackdateTelegramMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error {
+func (q *Queries) BackdateTelegramMessageClaim(ctx context.Context, messageIds []uuid.UUID) error {
 	_, err := q.db.Exec(ctx, BackdateTelegramMessageClaim, messageIds)
 	return err
 }
@@ -38,23 +39,23 @@ RETURNING id
 `
 
 type ClaimTelegramMessagesParams struct {
-	SessionRef pgtype.Text   `json:"session_ref"`
-	MessageIds []pgtype.UUID `json:"message_ids"`
+	SessionRef *string     `json:"session_ref"`
+	MessageIds []uuid.UUID `json:"message_ids"`
 }
 
 // Race-safe conditional claim: only writes claim columns on rows still
 // eligible per the same filter the unprocessed-list queries use. Returns
 // the row IDs actually claimed (RETURNING id) so the caller can detect
 // partial claims and roll back.
-func (q *Queries) ClaimTelegramMessages(ctx context.Context, arg ClaimTelegramMessagesParams) ([]pgtype.UUID, error) {
+func (q *Queries) ClaimTelegramMessages(ctx context.Context, arg ClaimTelegramMessagesParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, ClaimTelegramMessages, arg.SessionRef, arg.MessageIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []uuid.UUID{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
@@ -77,8 +78,8 @@ WHERE id = ANY($1::uuid[])
 `
 
 type ClearTelegramMessageStaleClaimParams struct {
-	MessageIds         []pgtype.UUID `json:"message_ids"`
-	ExpectedSessionRef pgtype.Text   `json:"expected_session_ref"`
+	MessageIds         []uuid.UUID `json:"message_ids"`
+	ExpectedSessionRef *string     `json:"expected_session_ref"`
 }
 
 // Defensive recovery branch: clears claim columns for rows still
@@ -135,7 +136,7 @@ GROUP BY peer_user_id
 `
 
 type CountTelegramMessagesByPeerRow struct {
-	PeerUserID    pgtype.Int8 `json:"peer_user_id"`
+	PeerUserID    *int64      `json:"peer_user_id"`
 	TotalCount    int64       `json:"total_count"`
 	OutboundCount int64       `json:"outbound_count"`
 	InboundCount  int64       `json:"inbound_count"`
@@ -186,7 +187,7 @@ type CountTelegramMessagesByPeerIDRow struct {
 }
 
 // Count messages for a single peer (for incremental discovery threshold check)
-func (q *Queries) CountTelegramMessagesByPeerID(ctx context.Context, peerUserID pgtype.Int8) (*CountTelegramMessagesByPeerIDRow, error) {
+func (q *Queries) CountTelegramMessagesByPeerID(ctx context.Context, peerUserID *int64) (*CountTelegramMessagesByPeerIDRow, error) {
 	row := q.db.QueryRow(ctx, CountTelegramMessagesByPeerID, peerUserID)
 	var i CountTelegramMessagesByPeerIDRow
 	err := row.Scan(
@@ -207,7 +208,7 @@ WHERE peer_user_id = $1
 
 // Counts messages about to be linked for a given peer. Read BEFORE
 // OnPeerLinked so the matched-count reporting observes the pre-link state.
-func (q *Queries) CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error) {
+func (q *Queries) CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID *int64) (int64, error) {
 	row := q.db.QueryRow(ctx, CountUnmatchedMessagesByPeer, peerUserID)
 	var count int64
 	err := row.Scan(&count)
@@ -227,8 +228,8 @@ ORDER BY peer_user_id,
 `
 
 type FindDistinctUnmatchedPeerUserIDsByPhoneRow struct {
-	PeerUserID   pgtype.Int8 `json:"peer_user_id"`
-	PeerUsername pgtype.Text `json:"peer_username"`
+	PeerUserID   *int64  `json:"peer_user_id"`
+	PeerUsername *string `json:"peer_username"`
 }
 
 // peer_phone is stored raw from MTProto (typically digits only); contact_method
@@ -269,8 +270,8 @@ ORDER BY peer_user_id,
 `
 
 type FindDistinctUnmatchedPeerUserIDsByUsernameRow struct {
-	PeerUserID   pgtype.Int8 `json:"peer_user_id"`
-	PeerUsername pgtype.Text `json:"peer_username"`
+	PeerUserID   *int64  `json:"peer_user_id"`
+	PeerUsername *string `json:"peer_username"`
 }
 
 // Returns distinct peer_user_ids whose unmatched messages carry the given
@@ -317,11 +318,11 @@ LIMIT 1
 `
 
 type GetPeerEntityByUserIDRow struct {
-	PeerUserID    pgtype.Int8 `json:"peer_user_id"`
-	PeerUsername  pgtype.Text `json:"peer_username"`
-	PeerFirstName pgtype.Text `json:"peer_first_name"`
-	PeerLastName  pgtype.Text `json:"peer_last_name"`
-	PeerPhone     pgtype.Text `json:"peer_phone"`
+	PeerUserID    *int64  `json:"peer_user_id"`
+	PeerUsername  *string `json:"peer_username"`
+	PeerFirstName *string `json:"peer_first_name"`
+	PeerLastName  *string `json:"peer_last_name"`
+	PeerPhone     *string `json:"peer_phone"`
 }
 
 // Returns the best-known entity data for a given peer_user_id, used by the
@@ -337,7 +338,7 @@ type GetPeerEntityByUserIDRow struct {
 // undone by resurrecting an older non-blank handle. Falls back to the
 // best-non-blank ordering for legacy rows where no resolved=true history
 // exists yet.
-func (q *Queries) GetPeerEntityByUserID(ctx context.Context, peerUserID pgtype.Int8) (*GetPeerEntityByUserIDRow, error) {
+func (q *Queries) GetPeerEntityByUserID(ctx context.Context, peerUserID *int64) (*GetPeerEntityByUserIDRow, error) {
 	row := q.db.QueryRow(ctx, GetPeerEntityByUserID, peerUserID)
 	var i GetPeerEntityByUserIDRow
 	err := row.Scan(
@@ -401,7 +402,7 @@ SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message
 // Test-only: fetches a row by id WITHOUT the deleted_at IS NULL filter, so the
 // all-fields-populated test can read back a row whose deleted_at is set.
 // Production code MUST NOT call this (it would return soft-deleted rows).
-func (q *Queries) GetTelegramMessageByIDForTest(ctx context.Context, id pgtype.UUID) (*TelegramMessage, error) {
+func (q *Queries) GetTelegramMessageByIDForTest(ctx context.Context, id uuid.UUID) (*TelegramMessage, error) {
 	row := q.db.QueryRow(ctx, GetTelegramMessageByIDForTest, id)
 	var i TelegramMessage
 	err := row.Scan(
@@ -440,16 +441,16 @@ WHERE id = $1 AND deleted_at IS NULL
 `
 
 type GetTelegramMessageContainerRow struct {
-	TelegramChatID int64       `json:"telegram_chat_id"`
-	ChatType       string      `json:"chat_type"`
-	ChatTitle      pgtype.Text `json:"chat_title"`
+	TelegramChatID int64   `json:"telegram_chat_id"`
+	ChatType       string  `json:"chat_type"`
+	ChatTitle      *string `json:"chat_title"`
 }
 
 // Returns the venue-container key (chat id + type + title) for a staging row by
 // its UUID. Used by the live interaction recorder to resolve the telegram
 // venue. The container is consistent across all messages in one aggregated
 // session, so reading the first id is sufficient.
-func (q *Queries) GetTelegramMessageContainer(ctx context.Context, id pgtype.UUID) (*GetTelegramMessageContainerRow, error) {
+func (q *Queries) GetTelegramMessageContainer(ctx context.Context, id uuid.UUID) (*GetTelegramMessageContainerRow, error) {
 	row := q.db.QueryRow(ctx, GetTelegramMessageContainer, id)
 	var i GetTelegramMessageContainerRow
 	err := row.Scan(&i.TelegramChatID, &i.ChatType, &i.ChatTitle)
@@ -500,28 +501,28 @@ RETURNING id, telegram_message_id, telegram_chat_id, chat_type, chat_title, mess
 `
 
 type InsertFullTelegramMessageForTestParams struct {
-	TelegramMessageID  int32              `json:"telegram_message_id"`
-	TelegramChatID     int64              `json:"telegram_chat_id"`
-	ChatType           string             `json:"chat_type"`
-	ChatTitle          pgtype.Text        `json:"chat_title"`
-	MessageText        pgtype.Text        `json:"message_text"`
-	MessageType        string             `json:"message_type"`
-	SentAt             pgtype.Timestamptz `json:"sent_at"`
-	EditedAt           pgtype.Timestamptz `json:"edited_at"`
-	IsOutgoing         bool               `json:"is_outgoing"`
-	ReplyToMsgID       pgtype.Int4        `json:"reply_to_msg_id"`
-	PeerUserID         pgtype.Int8        `json:"peer_user_id"`
-	PeerUsername       pgtype.Text        `json:"peer_username"`
-	PeerFirstName      pgtype.Text        `json:"peer_first_name"`
-	PeerLastName       pgtype.Text        `json:"peer_last_name"`
-	PeerPhone          pgtype.Text        `json:"peer_phone"`
-	MatchedContactID   pgtype.UUID        `json:"matched_contact_id"`
-	InteractionID      pgtype.UUID        `json:"interaction_id"`
-	ProcessedAt        pgtype.Timestamptz `json:"processed_at"`
-	DeletedAt          pgtype.Timestamptz `json:"deleted_at"`
-	PeerEntityResolved bool               `json:"peer_entity_resolved"`
-	ClaimedAt          pgtype.Timestamptz `json:"claimed_at"`
-	ClaimedSessionRef  pgtype.Text        `json:"claimed_session_ref"`
+	TelegramMessageID  int32      `json:"telegram_message_id"`
+	TelegramChatID     int64      `json:"telegram_chat_id"`
+	ChatType           string     `json:"chat_type"`
+	ChatTitle          *string    `json:"chat_title"`
+	MessageText        *string    `json:"message_text"`
+	MessageType        string     `json:"message_type"`
+	SentAt             time.Time  `json:"sent_at"`
+	EditedAt           *time.Time `json:"edited_at"`
+	IsOutgoing         bool       `json:"is_outgoing"`
+	ReplyToMsgID       *int32     `json:"reply_to_msg_id"`
+	PeerUserID         *int64     `json:"peer_user_id"`
+	PeerUsername       *string    `json:"peer_username"`
+	PeerFirstName      *string    `json:"peer_first_name"`
+	PeerLastName       *string    `json:"peer_last_name"`
+	PeerPhone          *string    `json:"peer_phone"`
+	MatchedContactID   *uuid.UUID `json:"matched_contact_id"`
+	InteractionID      *uuid.UUID `json:"interaction_id"`
+	ProcessedAt        *time.Time `json:"processed_at"`
+	DeletedAt          *time.Time `json:"deleted_at"`
+	PeerEntityResolved bool       `json:"peer_entity_resolved"`
+	ClaimedAt          *time.Time `json:"claimed_at"`
+	ClaimedSessionRef  *string    `json:"claimed_session_ref"`
 }
 
 // Test-only: inserts a telegram_message row with EVERY column explicitly set
@@ -601,11 +602,11 @@ ORDER BY peer_user_id,
 `
 
 type ListDistinctUnmatchedPeersRow struct {
-	PeerUserID    pgtype.Int8 `json:"peer_user_id"`
-	PeerUsername  pgtype.Text `json:"peer_username"`
-	PeerFirstName pgtype.Text `json:"peer_first_name"`
-	PeerLastName  pgtype.Text `json:"peer_last_name"`
-	PeerPhone     pgtype.Text `json:"peer_phone"`
+	PeerUserID    *int64  `json:"peer_user_id"`
+	PeerUsername  *string `json:"peer_username"`
+	PeerFirstName *string `json:"peer_first_name"`
+	PeerLastName  *string `json:"peer_last_name"`
+	PeerPhone     *string `json:"peer_phone"`
 }
 
 // Prefer rows with username/phone for identity matching, then rows with
@@ -705,15 +706,15 @@ WHERE matched_contact_id IS NOT NULL
 // Distinct contact IDs with at least one eligible (unprocessed AND
 // unclaimed-or-stale) row. Used by AggregateAll batch mode after backfill
 // and by the periodic aggregation sweeper.
-func (q *Queries) ListUnprocessedContactIDs(ctx context.Context) ([]pgtype.UUID, error) {
+func (q *Queries) ListUnprocessedContactIDs(ctx context.Context) ([]*uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, ListUnprocessedContactIDs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []*uuid.UUID{}
 	for rows.Next() {
-		var matched_contact_id pgtype.UUID
+		var matched_contact_id *uuid.UUID
 		if err := rows.Scan(&matched_contact_id); err != nil {
 			return nil, err
 		}
@@ -734,7 +735,7 @@ WHERE matched_contact_id = $1
 ORDER BY telegram_chat_id, sent_at
 `
 
-func (q *Queries) ListUnprocessedTelegramMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*TelegramMessage, error) {
+func (q *Queries) ListUnprocessedTelegramMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]*TelegramMessage, error) {
 	rows, err := q.db.Query(ctx, ListUnprocessedTelegramMessagesByContact, matchedContactID)
 	if err != nil {
 		return nil, err
@@ -790,8 +791,8 @@ ORDER BY sent_at
 `
 
 type ListUnprocessedTelegramMessagesByContactAndChatParams struct {
-	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
-	TelegramChatID   int64       `json:"telegram_chat_id"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
+	TelegramChatID   int64      `json:"telegram_chat_id"`
 }
 
 // Claim-aware filter: rows not yet processed AND not currently claimed
@@ -853,8 +854,8 @@ WHERE id = ANY($2::uuid[])
 `
 
 type MarkTelegramMessagesProcessedParams struct {
-	InteractionID pgtype.UUID   `json:"interaction_id"`
-	MessageIds    []pgtype.UUID `json:"message_ids"`
+	InteractionID *uuid.UUID  `json:"interaction_id"`
+	MessageIds    []uuid.UUID `json:"message_ids"`
 }
 
 // Non-tx variant used by the engine's extend/promote/bridge paths only,
@@ -878,9 +879,9 @@ WHERE id = ANY($2::uuid[])
 `
 
 type MarkTelegramMessagesProcessedForSessionParams struct {
-	InteractionID pgtype.UUID   `json:"interaction_id"`
-	MessageIds    []pgtype.UUID `json:"message_ids"`
-	SessionRef    pgtype.Text   `json:"session_ref"`
+	InteractionID *uuid.UUID  `json:"interaction_id"`
+	MessageIds    []uuid.UUID `json:"message_ids"`
+	SessionRef    *string     `json:"session_ref"`
 }
 
 // Tx-bound variant. Used by InteractionRecorder consumer when
@@ -953,8 +954,8 @@ WHERE peer_user_id = $2
 `
 
 type UpdateTelegramMessageContactParams struct {
-	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
-	PeerUserID       pgtype.Int8 `json:"peer_user_id"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
+	PeerUserID       *int64     `json:"peer_user_id"`
 }
 
 func (q *Queries) UpdateTelegramMessageContact(ctx context.Context, arg UpdateTelegramMessageContactParams) error {
@@ -988,22 +989,22 @@ RETURNING id, telegram_message_id, telegram_chat_id, chat_type, chat_title, mess
 `
 
 type UpsertTelegramMessageParams struct {
-	TelegramMessageID  int32              `json:"telegram_message_id"`
-	TelegramChatID     int64              `json:"telegram_chat_id"`
-	ChatType           string             `json:"chat_type"`
-	ChatTitle          pgtype.Text        `json:"chat_title"`
-	MessageText        pgtype.Text        `json:"message_text"`
-	MessageType        string             `json:"message_type"`
-	SentAt             pgtype.Timestamptz `json:"sent_at"`
-	EditedAt           pgtype.Timestamptz `json:"edited_at"`
-	IsOutgoing         bool               `json:"is_outgoing"`
-	ReplyToMsgID       pgtype.Int4        `json:"reply_to_msg_id"`
-	PeerUserID         pgtype.Int8        `json:"peer_user_id"`
-	PeerUsername       pgtype.Text        `json:"peer_username"`
-	PeerFirstName      pgtype.Text        `json:"peer_first_name"`
-	PeerLastName       pgtype.Text        `json:"peer_last_name"`
-	PeerPhone          pgtype.Text        `json:"peer_phone"`
-	PeerEntityResolved bool               `json:"peer_entity_resolved"`
+	TelegramMessageID  int32      `json:"telegram_message_id"`
+	TelegramChatID     int64      `json:"telegram_chat_id"`
+	ChatType           string     `json:"chat_type"`
+	ChatTitle          *string    `json:"chat_title"`
+	MessageText        *string    `json:"message_text"`
+	MessageType        string     `json:"message_type"`
+	SentAt             time.Time  `json:"sent_at"`
+	EditedAt           *time.Time `json:"edited_at"`
+	IsOutgoing         bool       `json:"is_outgoing"`
+	ReplyToMsgID       *int32     `json:"reply_to_msg_id"`
+	PeerUserID         *int64     `json:"peer_user_id"`
+	PeerUsername       *string    `json:"peer_username"`
+	PeerFirstName      *string    `json:"peer_first_name"`
+	PeerLastName       *string    `json:"peer_last_name"`
+	PeerPhone          *string    `json:"peer_phone"`
+	PeerEntityResolved bool       `json:"peer_entity_resolved"`
 }
 
 func (q *Queries) UpsertTelegramMessage(ctx context.Context, arg UpsertTelegramMessageParams) (*TelegramMessage, error) {

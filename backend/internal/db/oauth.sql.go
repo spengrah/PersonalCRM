@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CountOAuthCredentials = `-- name: CountOAuthCredentials :one
@@ -28,7 +29,7 @@ DELETE FROM oauth_credential WHERE id = $1
 `
 
 // Delete an OAuth credential by ID
-func (q *Queries) DeleteOAuthCredential(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) DeleteOAuthCredential(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteOAuthCredential, id)
 	return err
 }
@@ -83,7 +84,7 @@ WHERE id = $1
 `
 
 // Get a specific OAuth credential by UUID
-func (q *Queries) GetOAuthCredentialByID(ctx context.Context, id pgtype.UUID) (*OauthCredential, error) {
+func (q *Queries) GetOAuthCredentialByID(ctx context.Context, id uuid.UUID) (*OauthCredential, error) {
 	row := q.db.QueryRow(ctx, GetOAuthCredentialByID, id)
 	var i OauthCredential
 	err := row.Scan(
@@ -119,18 +120,18 @@ WHERE id = $1
 `
 
 type GetOAuthCredentialStatusRow struct {
-	ID          pgtype.UUID        `json:"id"`
-	Provider    string             `json:"provider"`
-	AccountID   string             `json:"account_id"`
-	AccountName pgtype.Text        `json:"account_name"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
-	Scopes      []string           `json:"scopes"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID          uuid.UUID  `json:"id"`
+	Provider    string     `json:"provider"`
+	AccountID   string     `json:"account_id"`
+	AccountName *string    `json:"account_name"`
+	ExpiresAt   *time.Time `json:"expires_at"`
+	Scopes      []string   `json:"scopes"`
+	CreatedAt   *time.Time `json:"created_at"`
+	UpdatedAt   *time.Time `json:"updated_at"`
 }
 
 // Get non-sensitive credential info for display
-func (q *Queries) GetOAuthCredentialStatus(ctx context.Context, id pgtype.UUID) (*GetOAuthCredentialStatusRow, error) {
+func (q *Queries) GetOAuthCredentialStatus(ctx context.Context, id uuid.UUID) (*GetOAuthCredentialStatusRow, error) {
 	row := q.db.QueryRow(ctx, GetOAuthCredentialStatus, id)
 	var i GetOAuthCredentialStatusRow
 	err := row.Scan(
@@ -202,14 +203,14 @@ ORDER BY created_at DESC
 `
 
 type ListOAuthCredentialStatusesRow struct {
-	ID          pgtype.UUID        `json:"id"`
-	Provider    string             `json:"provider"`
-	AccountID   string             `json:"account_id"`
-	AccountName pgtype.Text        `json:"account_name"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
-	Scopes      []string           `json:"scopes"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID          uuid.UUID  `json:"id"`
+	Provider    string     `json:"provider"`
+	AccountID   string     `json:"account_id"`
+	AccountName *string    `json:"account_name"`
+	ExpiresAt   *time.Time `json:"expires_at"`
+	Scopes      []string   `json:"scopes"`
+	CreatedAt   *time.Time `json:"created_at"`
+	UpdatedAt   *time.Time `json:"updated_at"`
 }
 
 // List non-sensitive credential info for all credentials of a provider
@@ -300,12 +301,12 @@ RETURNING id, provider, account_id, account_name, access_token_encrypted, refres
 `
 
 type UpdateOAuthCredentialTokensParams struct {
-	AccessTokenEncrypted  []byte             `json:"access_token_encrypted"`
-	RefreshTokenEncrypted []byte             `json:"refresh_token_encrypted"`
-	RefreshTokenNonce     []byte             `json:"refresh_token_nonce"`
-	EncryptionNonce       []byte             `json:"encryption_nonce"`
-	ExpiresAt             pgtype.Timestamptz `json:"expires_at"`
-	ID                    pgtype.UUID        `json:"id"`
+	AccessTokenEncrypted  []byte     `json:"access_token_encrypted"`
+	RefreshTokenEncrypted []byte     `json:"refresh_token_encrypted"`
+	RefreshTokenNonce     []byte     `json:"refresh_token_nonce"`
+	EncryptionNonce       []byte     `json:"encryption_nonce"`
+	ExpiresAt             *time.Time `json:"expires_at"`
+	ID                    uuid.UUID  `json:"id"`
 }
 
 // Update only the token data (for token refresh).
@@ -386,16 +387,16 @@ RETURNING id, provider, account_id, account_name, access_token_encrypted, refres
 `
 
 type UpsertOAuthCredentialParams struct {
-	Provider              string             `json:"provider"`
-	AccountID             string             `json:"account_id"`
-	AccountName           pgtype.Text        `json:"account_name"`
-	AccessTokenEncrypted  []byte             `json:"access_token_encrypted"`
-	RefreshTokenEncrypted []byte             `json:"refresh_token_encrypted"`
-	RefreshTokenNonce     []byte             `json:"refresh_token_nonce"`
-	EncryptionNonce       []byte             `json:"encryption_nonce"`
-	TokenType             pgtype.Text        `json:"token_type"`
-	ExpiresAt             pgtype.Timestamptz `json:"expires_at"`
-	Scopes                []string           `json:"scopes"`
+	Provider              string     `json:"provider"`
+	AccountID             string     `json:"account_id"`
+	AccountName           *string    `json:"account_name"`
+	AccessTokenEncrypted  []byte     `json:"access_token_encrypted"`
+	RefreshTokenEncrypted []byte     `json:"refresh_token_encrypted"`
+	RefreshTokenNonce     []byte     `json:"refresh_token_nonce"`
+	EncryptionNonce       []byte     `json:"encryption_nonce"`
+	TokenType             *string    `json:"token_type"`
+	ExpiresAt             *time.Time `json:"expires_at"`
+	Scopes                []string   `json:"scopes"`
 }
 
 // Insert or update an OAuth credential.

@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CreateContactMethod = `-- name: CreateContactMethod :one
@@ -24,11 +25,11 @@ INSERT INTO contact_method (
 `
 
 type CreateContactMethodParams struct {
-	ContactID       pgtype.UUID `json:"contact_id"`
-	Type            string      `json:"type"`
-	Value           string      `json:"value"`
-	ValueNormalized string      `json:"value_normalized"`
-	IsPrimary       pgtype.Bool `json:"is_primary"`
+	ContactID       uuid.UUID `json:"contact_id"`
+	Type            string    `json:"type"`
+	Value           string    `json:"value"`
+	ValueNormalized string    `json:"value_normalized"`
+	IsPrimary       *bool     `json:"is_primary"`
 }
 
 func (q *Queries) CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error) {
@@ -60,8 +61,8 @@ WHERE id = $1
 `
 
 type DeleteContactMethodByContactParams struct {
-	ID        pgtype.UUID `json:"id"`
-	ContactID pgtype.UUID `json:"contact_id"`
+	ID        uuid.UUID `json:"id"`
+	ContactID uuid.UUID `json:"contact_id"`
 }
 
 // Contact-scoped single-row delete. Used both for removals and for the first
@@ -76,7 +77,7 @@ DELETE FROM contact_method
 WHERE contact_id = $1
 `
 
-func (q *Queries) DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error {
+func (q *Queries) DeleteContactMethodsByContact(ctx context.Context, contactID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteContactMethodsByContact, contactID)
 	return err
 }
@@ -89,8 +90,8 @@ WHERE id = $1
 `
 
 type DemoteContactMethodPrimaryByContactParams struct {
-	ID        pgtype.UUID `json:"id"`
-	ContactID pgtype.UUID `json:"contact_id"`
+	ID        uuid.UUID `json:"id"`
+	ContactID uuid.UUID `json:"contact_id"`
 }
 
 // Clears is_primary on ONE named row of ONE contact.
@@ -117,15 +118,15 @@ type FindMethodsByNormalizedValueParams struct {
 }
 
 type FindMethodsByNormalizedValueRow struct {
-	ID              pgtype.UUID        `json:"id"`
-	ContactID       pgtype.UUID        `json:"contact_id"`
-	Type            string             `json:"type"`
-	Value           string             `json:"value"`
-	IsPrimary       pgtype.Bool        `json:"is_primary"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-	ValueNormalized string             `json:"value_normalized"`
-	ContactName     string             `json:"contact_name"`
+	ID              uuid.UUID  `json:"id"`
+	ContactID       uuid.UUID  `json:"contact_id"`
+	Type            string     `json:"type"`
+	Value           string     `json:"value"`
+	IsPrimary       *bool      `json:"is_primary"`
+	CreatedAt       *time.Time `json:"created_at"`
+	UpdatedAt       *time.Time `json:"updated_at"`
+	ValueNormalized string     `json:"value_normalized"`
+	ContactName     string     `json:"contact_name"`
 }
 
 func (q *Queries) FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error) {
@@ -173,12 +174,12 @@ INSERT INTO contact_method (
 `
 
 type InsertContactMethodWithIdentityParams struct {
-	ID        pgtype.UUID        `json:"id"`
-	ContactID pgtype.UUID        `json:"contact_id"`
-	Type      string             `json:"type"`
-	Value     string             `json:"value"`
-	IsPrimary pgtype.Bool        `json:"is_primary"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID        uuid.UUID  `json:"id"`
+	ContactID uuid.UUID  `json:"contact_id"`
+	Type      string     `json:"type"`
+	Value     string     `json:"value"`
+	IsPrimary *bool      `json:"is_primary"`
+	CreatedAt *time.Time `json:"created_at"`
 }
 
 // Inserts a contact method with an EXPLICIT id and created_at so the apply
@@ -277,7 +278,7 @@ ORDER BY
 `
 
 // Contact method queries
-func (q *Queries) ListContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactMethod, error) {
+func (q *Queries) ListContactMethodsByContact(ctx context.Context, contactID uuid.UUID) ([]*ContactMethod, error) {
 	rows, err := q.db.Query(ctx, ListContactMethodsByContact, contactID)
 	if err != nil {
 		return nil, err
@@ -316,8 +317,8 @@ ORDER BY cm.value_normalized ASC, cm.contact_id ASC
 `
 
 type ListEmailIdentitiesForSyncRow struct {
-	ValueNormalized string      `json:"value_normalized"`
-	ContactID       pgtype.UUID `json:"contact_id"`
+	ValueNormalized string    `json:"value_normalized"`
+	ContactID       uuid.UUID `json:"contact_id"`
 }
 
 // Returns (value_normalized, contact_id) for every email contact_method of a
@@ -355,9 +356,9 @@ ORDER BY cm.value_normalized ASC, cm.contact_id ASC, cm.type ASC
 `
 
 type ListGChatIdentitiesForSyncRow struct {
-	ValueNormalized string      `json:"value_normalized"`
-	ContactID       pgtype.UUID `json:"contact_id"`
-	SourceType      string      `json:"source_type"`
+	ValueNormalized string    `json:"value_normalized"`
+	ContactID       uuid.UUID `json:"contact_id"`
+	SourceType      string    `json:"source_type"`
 }
 
 // Dual-source variant of ListEmailIdentitiesForSync for the Google Chat
@@ -404,9 +405,9 @@ WHERE id = $1
 // a method id is not a capability) from "this id does not exist at all"
 // (a removal succeeds as a no-op, so a retried removal is idempotent). Those
 // two cases are indistinguishable from one contact's pre-state alone.
-func (q *Queries) LookupContactMethodOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+func (q *Queries) LookupContactMethodOwner(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, LookupContactMethodOwner, id)
-	var contact_id pgtype.UUID
+	var contact_id uuid.UUID
 	err := row.Scan(&contact_id)
 	return contact_id, err
 }
@@ -442,8 +443,8 @@ WHERE id = $1
 `
 
 type PromoteContactMethodPrimaryByContactParams struct {
-	ID        pgtype.UUID `json:"id"`
-	ContactID pgtype.UUID `json:"contact_id"`
+	ID        uuid.UUID `json:"id"`
+	ContactID uuid.UUID `json:"contact_id"`
 }
 
 // Sets is_primary on one named row of one contact. Added rather than reusing
@@ -466,8 +467,8 @@ WHERE cm.id = $1
 `
 
 type SetContactMethodPrimaryParams struct {
-	ID        pgtype.UUID `json:"id"`
-	IsPrimary pgtype.Bool `json:"is_primary"`
+	ID        uuid.UUID `json:"id"`
+	IsPrimary *bool     `json:"is_primary"`
 }
 
 func (q *Queries) SetContactMethodPrimary(ctx context.Context, arg SetContactMethodPrimaryParams) error {
@@ -485,10 +486,10 @@ RETURNING id, contact_id, type, value, is_primary, created_at, updated_at, value
 `
 
 type UpdateContactMethodByContactParams struct {
-	Type      string      `json:"type"`
-	Value     string      `json:"value"`
-	ID        pgtype.UUID `json:"id"`
-	ContactID pgtype.UUID `json:"contact_id"`
+	Type      string    `json:"type"`
+	Value     string    `json:"value"`
+	ID        uuid.UUID `json:"id"`
+	ContactID uuid.UUID `json:"contact_id"`
 }
 
 // In-place value/type update for a row whose (type, value_normalized) key is
@@ -535,9 +536,9 @@ RETURNING id, contact_id, type, value, is_primary, created_at, updated_at, value
 `
 
 type UpdateContactMethodValueParams struct {
-	ID              pgtype.UUID `json:"id"`
-	Value           string      `json:"value"`
-	ValueNormalized string      `json:"value_normalized"`
+	ID              uuid.UUID `json:"id"`
+	Value           string    `json:"value"`
+	ValueNormalized string    `json:"value_normalized"`
 }
 
 func (q *Queries) UpdateContactMethodValue(ctx context.Context, arg UpdateContactMethodValueParams) (*ContactMethod, error) {

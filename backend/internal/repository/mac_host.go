@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // MacHost is the repository-layer view of a paired Mac daemon. Pointer
@@ -53,26 +52,15 @@ func convertDbMacHost(m *db.MacHost) *MacHost {
 		CursorEpoch:     m.CursorEpoch,
 		APIKeyHash:      m.ApiKeyHash,
 	}
-	if m.ID.Valid {
-		out.ID = uuid.UUID(m.ID.Bytes)
+	out.ID = m.ID
+	out.LastHeartbeatAt = m.LastHeartbeatAt
+	out.APIKeyRevokedAt = m.ApiKeyRevokedAt
+	out.APIKeyRotatedAt = m.ApiKeyRotatedAt
+	if m.CreatedAt != nil {
+		out.CreatedAt = *m.CreatedAt
 	}
-	if m.LastHeartbeatAt.Valid {
-		t := m.LastHeartbeatAt.Time
-		out.LastHeartbeatAt = &t
-	}
-	if m.ApiKeyRevokedAt.Valid {
-		t := m.ApiKeyRevokedAt.Time
-		out.APIKeyRevokedAt = &t
-	}
-	if m.ApiKeyRotatedAt.Valid {
-		t := m.ApiKeyRotatedAt.Time
-		out.APIKeyRotatedAt = &t
-	}
-	if m.CreatedAt.Valid {
-		out.CreatedAt = m.CreatedAt.Time
-	}
-	if m.UpdatedAt.Valid {
-		out.UpdatedAt = m.UpdatedAt.Time
+	if m.UpdatedAt != nil {
+		out.UpdatedAt = *m.UpdatedAt
 	}
 	return out
 }
@@ -81,22 +69,12 @@ func convertDbPairingToken(t *db.MacHostPairingToken) *MacHostPairingToken {
 	out := &MacHostPairingToken{
 		TokenHash: t.TokenHash,
 	}
-	if t.ID.Valid {
-		out.ID = uuid.UUID(t.ID.Bytes)
-	}
-	if t.ExpiresAt.Valid {
-		out.ExpiresAt = t.ExpiresAt.Time
-	}
-	if t.ConsumedAt.Valid {
-		c := t.ConsumedAt.Time
-		out.ConsumedAt = &c
-	}
-	if t.ConsumedHostID.Valid {
-		id := uuid.UUID(t.ConsumedHostID.Bytes)
-		out.ConsumedHostID = &id
-	}
-	if t.CreatedAt.Valid {
-		out.CreatedAt = t.CreatedAt.Time
+	out.ID = t.ID
+	out.ExpiresAt = t.ExpiresAt
+	out.ConsumedAt = t.ConsumedAt
+	out.ConsumedHostID = t.ConsumedHostID
+	if t.CreatedAt != nil {
+		out.CreatedAt = *t.CreatedAt
 	}
 	return out
 }
@@ -160,7 +138,7 @@ func createMacHost(
 // "no such id" and "id is revoked" — the middleware does not need to
 // distinguish.
 func (r *MacHostRepository) GetActiveHostByID(ctx context.Context, id uuid.UUID) (*MacHost, error) {
-	row, err := r.queries.GetActiveMacHostByID(ctx, uuidToPgUUID(id))
+	row, err := r.queries.GetActiveMacHostByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -182,7 +160,7 @@ func (r *MacHostRepository) GetActiveHostByIDForUpdateTx(
 	tx pgx.Tx,
 	id uuid.UUID,
 ) (*MacHost, error) {
-	row, err := db.New(tx).GetActiveMacHostByIDForUpdate(ctx, uuidToPgUUID(id))
+	row, err := db.New(tx).GetActiveMacHostByIDForUpdate(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -195,7 +173,7 @@ func (r *MacHostRepository) GetActiveHostByIDForUpdateTx(
 // GetHost returns the row for id regardless of revocation status. Used
 // by admin handlers + delete-cascade flow.
 func (r *MacHostRepository) GetHost(ctx context.Context, id uuid.UUID) (*MacHost, error) {
-	row, err := r.queries.GetMacHost(ctx, uuidToPgUUID(id))
+	row, err := r.queries.GetMacHost(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -233,7 +211,7 @@ func (r *MacHostRepository) RevokeHostTx(ctx context.Context, tx pgx.Tx, id uuid
 }
 
 func (r *MacHostRepository) revokeHost(ctx context.Context, q db.Querier, id uuid.UUID) (*MacHost, error) {
-	row, err := q.RevokeMacHost(ctx, uuidToPgUUID(id))
+	row, err := q.RevokeMacHost(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -267,7 +245,7 @@ func (r *MacHostRepository) UpdateHeartbeat(ctx context.Context, id uuid.UUID, p
 		sourceHealth = json.RawMessage("{}")
 	}
 	row, err := r.queries.UpdateMacHostHeartbeat(ctx, db.UpdateMacHostHeartbeatParams{
-		ID:              uuidToPgUUID(id),
+		ID:              id,
 		DaemonVersion:   payload.DaemonVersion,
 		ProtocolVersion: payload.ProtocolVersion,
 		Permissions:     permissions,
@@ -293,7 +271,7 @@ func (r *MacHostRepository) RotateAPIKeyTx(
 	newAPIKeyHash string,
 ) (*MacHost, error) {
 	row, err := db.New(tx).RotateMacHostAPIKey(ctx, db.RotateMacHostAPIKeyParams{
-		ID:         uuidToPgUUID(id),
+		ID:         id,
 		ApiKeyHash: newAPIKeyHash,
 	})
 	if err != nil {
@@ -318,7 +296,7 @@ type MacHostCursorEpoch struct {
 // lock inside the caller-supplied tx. Returns db.ErrNotFound when the
 // host id doesn't exist.
 func (r *MacHostRepository) GetCursorEpochForCommitTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*MacHostCursorEpoch, error) {
-	row, err := db.New(tx).GetMacHostCursorEpoch(ctx, uuidToPgUUID(id))
+	row, err := db.New(tx).GetMacHostCursorEpoch(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -326,11 +304,9 @@ func (r *MacHostRepository) GetCursorEpochForCommitTx(ctx context.Context, tx pg
 		return nil, fmt.Errorf("get mac_host cursor_epoch: %w", err)
 	}
 	out := &MacHostCursorEpoch{
+		ID:          row.ID,
 		CursorEpoch: row.CursorEpoch,
-		Revoked:     row.ApiKeyRevokedAt.Valid,
-	}
-	if row.ID.Valid {
-		out.ID = uuid.UUID(row.ID.Bytes)
+		Revoked:     row.ApiKeyRevokedAt != nil,
 	}
 	return out, nil
 }
@@ -416,8 +392,8 @@ func (r *MacHostRepository) SeedRevokedHostForTest(
 // heartbeat POST is the only real writer.
 func (r *MacHostRepository) SetHeartbeatAtForTest(ctx context.Context, id uuid.UUID, heartbeatAt time.Time) error {
 	return r.queries.SetMacHostHeartbeatAtForTest(ctx, db.SetMacHostHeartbeatAtForTestParams{
-		ID:              uuidToPgUUID(id),
-		LastHeartbeatAt: pgtype.Timestamptz{Time: heartbeatAt, Valid: true},
+		ID:              id,
+		LastHeartbeatAt: &heartbeatAt,
 	})
 }
 
@@ -437,7 +413,7 @@ func NewMacHostPairingTokenRepository(queries db.Querier) *MacHostPairingTokenRe
 func (r *MacHostPairingTokenRepository) CreateToken(ctx context.Context, tokenHash string, expiresAt time.Time) (*MacHostPairingToken, error) {
 	row, err := r.queries.CreatePairingToken(ctx, db.CreatePairingTokenParams{
 		TokenHash: tokenHash,
-		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		ExpiresAt: expiresAt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create pairing token: %w", err)
@@ -464,8 +440,8 @@ func (r *MacHostPairingTokenRepository) GetTokenByHashForUpdateTx(ctx context.Co
 // atomic.
 func (r *MacHostPairingTokenRepository) MarkConsumedTx(ctx context.Context, tx pgx.Tx, tokenID, consumedHostID uuid.UUID) (*MacHostPairingToken, error) {
 	row, err := db.New(tx).MarkPairingTokenConsumed(ctx, db.MarkPairingTokenConsumedParams{
-		ID:             uuidToPgUUID(tokenID),
-		ConsumedHostID: uuidToPgUUID(consumedHostID),
+		ID:             tokenID,
+		ConsumedHostID: &consumedHostID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

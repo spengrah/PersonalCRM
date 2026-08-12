@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const AbandonRunningLogsForState = `-- name: AbandonRunningLogsForState :exec
@@ -23,7 +24,7 @@ WHERE sync_state_id = $1 AND status = 'running'
 // log row for this sync_state as 'abandoned' so that the new retry attempt
 // can insert a fresh log row without leaving orphan 'running' rows behind.
 // Requires migration 037 (widens the status CHECK).
-func (q *Queries) AbandonRunningLogsForState(ctx context.Context, syncStateID pgtype.UUID) error {
+func (q *Queries) AbandonRunningLogsForState(ctx context.Context, syncStateID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, AbandonRunningLogsForState, syncStateID)
 	return err
 }
@@ -41,12 +42,12 @@ RETURNING id, sync_state_id, source, account_id, started_at, completed_at, statu
 `
 
 type CompleteSyncLogParams struct {
-	ID             pgtype.UUID `json:"id"`
-	Status         string      `json:"status"`
-	ItemsProcessed pgtype.Int4 `json:"items_processed"`
-	ItemsMatched   pgtype.Int4 `json:"items_matched"`
-	ItemsCreated   pgtype.Int4 `json:"items_created"`
-	ErrorMessage   pgtype.Text `json:"error_message"`
+	ID             uuid.UUID `json:"id"`
+	Status         string    `json:"status"`
+	ItemsProcessed *int32    `json:"items_processed"`
+	ItemsMatched   *int32    `json:"items_matched"`
+	ItemsCreated   *int32    `json:"items_created"`
+	ErrorMessage   *string   `json:"error_message"`
 }
 
 func (q *Queries) CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error) {
@@ -86,8 +87,8 @@ WHERE kind = 'sync_provider_account'
 `
 
 type CountInFlightSyncJobsParams struct {
-	Source    string      `json:"source"`
-	AccountID pgtype.Text `json:"account_id"`
+	Source    string  `json:"source"`
+	AccountID *string `json:"account_id"`
 }
 
 // Counts river_job rows that represent an in-flight SyncProviderAccountJob
@@ -108,7 +109,7 @@ SELECT COUNT(*) FROM external_sync_log
 WHERE sync_state_id = $1
 `
 
-func (q *Queries) CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error) {
+func (q *Queries) CountSyncLogsByState(ctx context.Context, syncStateID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, CountSyncLogsByState, syncStateID)
 	var count int64
 	err := row.Scan(&count)
@@ -133,10 +134,10 @@ INSERT INTO external_sync_log (
 `
 
 type CreateSyncLogParams struct {
-	SyncStateID pgtype.UUID `json:"sync_state_id"`
-	Source      string      `json:"source"`
-	AccountID   pgtype.Text `json:"account_id"`
-	Metadata    []byte      `json:"metadata"`
+	SyncStateID uuid.UUID `json:"sync_state_id"`
+	Source      string    `json:"source"`
+	AccountID   *string   `json:"account_id"`
+	Metadata    []byte    `json:"metadata"`
 }
 
 // External Sync Log Queries
@@ -187,13 +188,13 @@ INSERT INTO external_sync_state (
 `
 
 type CreateSyncStateParams struct {
-	Source     string             `json:"source"`
-	AccountID  pgtype.Text        `json:"account_id"`
-	Enabled    bool               `json:"enabled"`
-	Status     interface{}        `json:"status"`
-	Strategy   interface{}        `json:"strategy"`
-	NextSyncAt pgtype.Timestamptz `json:"next_sync_at"`
-	Metadata   []byte             `json:"metadata"`
+	Source     string      `json:"source"`
+	AccountID  *string     `json:"account_id"`
+	Enabled    bool        `json:"enabled"`
+	Status     interface{} `json:"status"`
+	Strategy   interface{} `json:"strategy"`
+	NextSyncAt *time.Time  `json:"next_sync_at"`
+	Metadata   []byte      `json:"metadata"`
 }
 
 func (q *Queries) CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error) {
@@ -251,7 +252,7 @@ DELETE FROM external_sync_log
 WHERE created_at < $1
 `
 
-func (q *Queries) DeleteOldSyncLogs(ctx context.Context, createdAt pgtype.Timestamptz) error {
+func (q *Queries) DeleteOldSyncLogs(ctx context.Context, createdAt *time.Time) error {
 	_, err := q.db.Exec(ctx, DeleteOldSyncLogs, createdAt)
 	return err
 }
@@ -261,7 +262,7 @@ DELETE FROM external_sync_state
 WHERE id = $1
 `
 
-func (q *Queries) DeleteSyncState(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) DeleteSyncState(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteSyncState, id)
 	return err
 }
@@ -271,7 +272,7 @@ DELETE FROM external_sync_state
 WHERE account_id IS NOT NULL AND account_id = $1
 `
 
-func (q *Queries) DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error {
+func (q *Queries) DeleteSyncStatesByAccountID(ctx context.Context, accountID *string) error {
 	_, err := q.db.Exec(ctx, DeleteSyncStatesByAccountID, accountID)
 	return err
 }
@@ -325,7 +326,7 @@ SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, 
 WHERE id = $1
 `
 
-func (q *Queries) GetSyncLog(ctx context.Context, id pgtype.UUID) (*ExternalSyncLog, error) {
+func (q *Queries) GetSyncLog(ctx context.Context, id uuid.UUID) (*ExternalSyncLog, error) {
 	row := q.db.QueryRow(ctx, GetSyncLog, id)
 	var i ExternalSyncLog
 	err := row.Scan(
@@ -353,7 +354,7 @@ WHERE id = $1
 `
 
 // External Sync State Queries
-func (q *Queries) GetSyncState(ctx context.Context, id pgtype.UUID) (*ExternalSyncState, error) {
+func (q *Queries) GetSyncState(ctx context.Context, id uuid.UUID) (*ExternalSyncState, error) {
 	row := q.db.QueryRow(ctx, GetSyncState, id)
 	var i ExternalSyncState
 	err := row.Scan(
@@ -382,8 +383,8 @@ WHERE source = $1 AND COALESCE(account_id, '') = COALESCE($2, '')
 `
 
 type GetSyncStateBySourceParams struct {
-	Source    string      `json:"source"`
-	AccountID pgtype.Text `json:"account_id"`
+	Source    string  `json:"source"`
+	AccountID *string `json:"account_id"`
 }
 
 func (q *Queries) GetSyncStateBySource(ctx context.Context, arg GetSyncStateBySourceParams) (*ExternalSyncState, error) {
@@ -421,16 +422,16 @@ RETURNING id, sync_cursor, metadata
 `
 
 type InsertMacHostSyncCursorParams struct {
-	Source           string      `json:"source"`
-	AccountID        pgtype.Text `json:"account_id"`
-	NewCursor        pgtype.Text `json:"new_cursor"`
-	BackfillComplete bool        `json:"backfill_complete"`
+	Source           string  `json:"source"`
+	AccountID        *string `json:"account_id"`
+	NewCursor        *string `json:"new_cursor"`
+	BackfillComplete bool    `json:"backfill_complete"`
 }
 
 type InsertMacHostSyncCursorRow struct {
-	ID         pgtype.UUID `json:"id"`
-	SyncCursor pgtype.Text `json:"sync_cursor"`
-	Metadata   []byte      `json:"metadata"`
+	ID         uuid.UUID `json:"id"`
+	SyncCursor *string   `json:"sync_cursor"`
+	Metadata   []byte    `json:"metadata"`
 }
 
 // First-commit insert path. ON CONFLICT DO NOTHING handles the
@@ -463,7 +464,7 @@ ORDER BY next_sync_at ASC NULLS FIRST
 // River job state (available/running/completed/retryable) is the
 // source of truth for "in-flight" — this query only needs to filter
 // out 'disabled' rows whose next_sync_at has come due.
-func (q *Queries) ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error) {
+func (q *Queries) ListDueSyncStates(ctx context.Context, nextSyncAt *time.Time) ([]*ExternalSyncState, error) {
 	rows, err := q.db.Query(ctx, ListDueSyncStates, nextSyncAt)
 	if err != nil {
 		return nil, err
@@ -633,9 +634,9 @@ LIMIT $2 OFFSET $3
 `
 
 type ListSyncLogsByStateParams struct {
-	SyncStateID pgtype.UUID `json:"sync_state_id"`
-	Limit       int32       `json:"limit"`
-	Offset      int32       `json:"offset"`
+	SyncStateID uuid.UUID `json:"sync_state_id"`
+	Limit       int32     `json:"limit"`
+	Offset      int32     `json:"offset"`
 }
 
 func (q *Queries) ListSyncLogsByState(ctx context.Context, arg ListSyncLogsByStateParams) ([]*ExternalSyncLog, error) {
@@ -726,9 +727,9 @@ RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_
 `
 
 type MarkSyncStateTerminalParams struct {
-	ID           pgtype.UUID `json:"id"`
-	ErrorMessage pgtype.Text `json:"error_message"`
-	Metadata     []byte      `json:"metadata"`
+	ID           uuid.UUID `json:"id"`
+	ErrorMessage *string   `json:"error_message"`
+	Metadata     []byte    `json:"metadata"`
 }
 
 // Records a manager-driven source's permanent-disconnect decision: the durable
@@ -774,9 +775,9 @@ RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_
 `
 
 type ResetSyncStateBackfillCursorParams struct {
-	SyncCursor pgtype.Text        `json:"sync_cursor"`
-	NextSyncAt pgtype.Timestamptz `json:"next_sync_at"`
-	ID         pgtype.UUID        `json:"id"`
+	SyncCursor *string    `json:"sync_cursor"`
+	NextSyncAt *time.Time `json:"next_sync_at"`
+	ID         uuid.UUID  `json:"id"`
 }
 
 func (q *Queries) ResetSyncStateBackfillCursor(ctx context.Context, arg ResetSyncStateBackfillCursorParams) (*ExternalSyncState, error) {
@@ -813,12 +814,12 @@ WHERE id = $6
 `
 
 type SetSyncStateFreshnessForTestParams struct {
-	Status               string             `json:"status"`
-	LastSyncAt           pgtype.Timestamptz `json:"last_sync_at"`
-	LastSuccessfulSyncAt pgtype.Timestamptz `json:"last_successful_sync_at"`
-	ErrorCount           int32              `json:"error_count"`
-	ErrorMessage         pgtype.Text        `json:"error_message"`
-	ID                   pgtype.UUID        `json:"id"`
+	Status               string     `json:"status"`
+	LastSyncAt           *time.Time `json:"last_sync_at"`
+	LastSuccessfulSyncAt *time.Time `json:"last_successful_sync_at"`
+	ErrorCount           int32      `json:"error_count"`
+	ErrorMessage         *string    `json:"error_message"`
+	ID                   uuid.UUID  `json:"id"`
 }
 
 // Test-only: stamps the freshness/error columns of an external_sync_state
@@ -854,16 +855,16 @@ RETURNING id, sync_cursor, metadata
 `
 
 type UpdateMacHostSyncCursorParams struct {
-	NewCursor        pgtype.Text `json:"new_cursor"`
-	BackfillComplete bool        `json:"backfill_complete"`
-	ID               pgtype.UUID `json:"id"`
-	BaseCursor       string      `json:"base_cursor"`
+	NewCursor        *string   `json:"new_cursor"`
+	BackfillComplete bool      `json:"backfill_complete"`
+	ID               uuid.UUID `json:"id"`
+	BaseCursor       string    `json:"base_cursor"`
 }
 
 type UpdateMacHostSyncCursorRow struct {
-	ID         pgtype.UUID `json:"id"`
-	SyncCursor pgtype.Text `json:"sync_cursor"`
-	Metadata   []byte      `json:"metadata"`
+	ID         uuid.UUID `json:"id"`
+	SyncCursor *string   `json:"sync_cursor"`
+	Metadata   []byte    `json:"metadata"`
 }
 
 // CAS-style update: only updates when sync_cursor matches base_cursor.
@@ -890,8 +891,8 @@ WHERE id = $1
 `
 
 type UpdateSyncStateCursorParams struct {
-	ID         pgtype.UUID `json:"id"`
-	SyncCursor pgtype.Text `json:"sync_cursor"`
+	ID         uuid.UUID `json:"id"`
+	SyncCursor *string   `json:"sync_cursor"`
 }
 
 func (q *Queries) UpdateSyncStateCursor(ctx context.Context, arg UpdateSyncStateCursorParams) error {
@@ -909,8 +910,8 @@ RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_
 `
 
 type UpdateSyncStateEnabledParams struct {
-	ID      pgtype.UUID `json:"id"`
-	Enabled bool        `json:"enabled"`
+	ID      uuid.UUID `json:"id"`
+	Enabled bool      `json:"enabled"`
 }
 
 func (q *Queries) UpdateSyncStateEnabled(ctx context.Context, arg UpdateSyncStateEnabledParams) (*ExternalSyncState, error) {
@@ -945,8 +946,8 @@ RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_
 `
 
 type UpdateSyncStateMetadataParams struct {
-	ID       pgtype.UUID `json:"id"`
-	Metadata []byte      `json:"metadata"`
+	ID       uuid.UUID `json:"id"`
+	Metadata []byte    `json:"metadata"`
 }
 
 func (q *Queries) UpdateSyncStateMetadata(ctx context.Context, arg UpdateSyncStateMetadataParams) (*ExternalSyncState, error) {
@@ -980,8 +981,8 @@ WHERE id = $1
 `
 
 type UpdateSyncStateNextSyncParams struct {
-	ID         pgtype.UUID        `json:"id"`
-	NextSyncAt pgtype.Timestamptz `json:"next_sync_at"`
+	ID         uuid.UUID  `json:"id"`
+	NextSyncAt *time.Time `json:"next_sync_at"`
 }
 
 func (q *Queries) UpdateSyncStateNextSync(ctx context.Context, arg UpdateSyncStateNextSyncParams) error {
@@ -1001,9 +1002,9 @@ RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_
 `
 
 type UpdateSyncStateStatusParams struct {
-	ID           pgtype.UUID `json:"id"`
-	Status       string      `json:"status"`
-	ErrorMessage pgtype.Text `json:"error_message"`
+	ID           uuid.UUID `json:"id"`
+	Status       string    `json:"status"`
+	ErrorMessage *string   `json:"error_message"`
 }
 
 func (q *Queries) UpdateSyncStateStatus(ctx context.Context, arg UpdateSyncStateStatusParams) (*ExternalSyncState, error) {
@@ -1044,9 +1045,9 @@ RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_
 `
 
 type UpdateSyncStateSuccessParams struct {
-	ID         pgtype.UUID        `json:"id"`
-	NextSyncAt pgtype.Timestamptz `json:"next_sync_at"`
-	SyncCursor pgtype.Text        `json:"sync_cursor"`
+	ID         uuid.UUID  `json:"id"`
+	NextSyncAt *time.Time `json:"next_sync_at"`
+	SyncCursor *string    `json:"sync_cursor"`
 }
 
 func (q *Queries) UpdateSyncStateSuccess(ctx context.Context, arg UpdateSyncStateSuccessParams) (*ExternalSyncState, error) {

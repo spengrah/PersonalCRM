@@ -8,7 +8,7 @@ package db
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const ExistsEventConsumerClaim = `-- name: ExistsEventConsumerClaim :one
@@ -19,8 +19,8 @@ SELECT EXISTS (
 `
 
 type ExistsEventConsumerClaimParams struct {
-	EventID  pgtype.UUID `json:"event_id"`
-	Consumer string      `json:"consumer"`
+	EventID  uuid.UUID `json:"event_id"`
+	Consumer string    `json:"consumer"`
 }
 
 // Non-mutating lookup. Returns true when a claim row exists for the
@@ -42,8 +42,8 @@ ON CONFLICT (event_id, consumer) DO NOTHING
 `
 
 type InsertEventConsumerClaimParams struct {
-	EventID  pgtype.UUID `json:"event_id"`
-	Consumer string      `json:"consumer"`
+	EventID  uuid.UUID `json:"event_id"`
+	Consumer string    `json:"consumer"`
 }
 
 // Event consumer claim queries (migration 040; spec §3.4.2).

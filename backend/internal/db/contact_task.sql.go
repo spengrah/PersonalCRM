@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CompleteFollowUpForContact = `-- name: CompleteFollowUpForContact :many
@@ -25,7 +26,7 @@ RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, cre
 // response arrives). Matches the same live-state set as FindPendingFollowUp
 // so an inbound arriving while the create worker is mid-flight still
 // transitions the row to completed.
-func (q *Queries) CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error) {
+func (q *Queries) CompleteFollowUpForContact(ctx context.Context, contactID uuid.UUID) ([]*ContactTask, error) {
 	rows, err := q.db.Query(ctx, CompleteFollowUpForContact, contactID)
 	if err != nil {
 		return nil, err
@@ -69,15 +70,15 @@ RETURNING id, external_task_id, provider,
 `
 
 type CompleteLiveContactTasksForContactParams struct {
-	ContactID        pgtype.UUID `json:"contact_id"`
-	PendingTempIDKey string      `json:"pending_temp_id_key"`
+	ContactID        uuid.UUID `json:"contact_id"`
+	PendingTempIDKey string    `json:"pending_temp_id_key"`
 }
 
 type CompleteLiveContactTasksForContactRow struct {
-	ID             pgtype.UUID `json:"id"`
-	ExternalTaskID string      `json:"external_task_id"`
-	Provider       string      `json:"provider"`
-	PendingTempID  string      `json:"pending_temp_id"`
+	ID             uuid.UUID `json:"id"`
+	ExternalTaskID string    `json:"external_task_id"`
+	Provider       string    `json:"provider"`
+	PendingTempID  string    `json:"pending_temp_id"`
 }
 
 // Merge-time close of the source contact's live AUTOMATED tasks (cadence_due
@@ -200,7 +201,7 @@ INSERT INTO contact_task (
 `
 
 type CreateContactTaskParams struct {
-	ContactID      pgtype.UUID `json:"contact_id"`
+	ContactID      uuid.UUID   `json:"contact_id"`
 	Provider       string      `json:"provider"`
 	Kind           string      `json:"kind"`
 	Lifecycle      string      `json:"lifecycle"`
@@ -259,14 +260,14 @@ INSERT INTO contact_task (
 `
 
 type CreateContactTaskAtTimeParams struct {
-	ContactID      pgtype.UUID        `json:"contact_id"`
-	Provider       string             `json:"provider"`
-	Kind           string             `json:"kind"`
-	Lifecycle      string             `json:"lifecycle"`
-	ExternalTaskID string             `json:"external_task_id"`
-	State          interface{}        `json:"state"`
-	Metadata       []byte             `json:"metadata"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ContactID      uuid.UUID   `json:"contact_id"`
+	Provider       string      `json:"provider"`
+	Kind           string      `json:"kind"`
+	Lifecycle      string      `json:"lifecycle"`
+	ExternalTaskID string      `json:"external_task_id"`
+	State          interface{} `json:"state"`
+	Metadata       []byte      `json:"metadata"`
+	CreatedAt      *time.Time  `json:"created_at"`
 }
 
 // Seed-only variant of CreateContactTask that sets created_at explicitly, so the
@@ -324,14 +325,14 @@ INSERT INTO contact_task (
 `
 
 type CreateContactTaskWithIdempotencyKeyParams struct {
-	ContactID      pgtype.UUID `json:"contact_id"`
+	ContactID      uuid.UUID   `json:"contact_id"`
 	Provider       string      `json:"provider"`
 	Kind           string      `json:"kind"`
 	Lifecycle      string      `json:"lifecycle"`
 	ExternalTaskID string      `json:"external_task_id"`
 	State          interface{} `json:"state"`
 	Metadata       []byte      `json:"metadata"`
-	IdempotencyKey pgtype.Text `json:"idempotency_key"`
+	IdempotencyKey *string     `json:"idempotency_key"`
 }
 
 // Variant of CreateContactTask that accepts an explicit idempotency_key,
@@ -372,7 +373,7 @@ DELETE FROM contact_task
 WHERE id = $1
 `
 
-func (q *Queries) DeleteContactTask(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) DeleteContactTask(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteContactTask, id)
 	return err
 }
@@ -385,8 +386,8 @@ WHERE contact_id = $1
 `
 
 type DeleteContactTaskByContactCadenceDueParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Provider  string      `json:"provider"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Provider  string    `json:"provider"`
 }
 
 // Delete the cadence-due task link for a contact+provider (e.g., when
@@ -419,7 +420,7 @@ LIMIT 1
 // Find a pending follow-up task for a contact. Matches both 'managed'
 // and 'pending_remote_create' live states so the two-step create flow
 // is visible to non-tx callers (e.g. Todoist provider's closeOnOutreach).
-func (q *Queries) FindPendingFollowUp(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error) {
+func (q *Queries) FindPendingFollowUp(ctx context.Context, contactID uuid.UUID) (*ContactTask, error) {
 	row := q.db.QueryRow(ctx, FindPendingFollowUp, contactID)
 	var i ContactTask
 	err := row.Scan(
@@ -450,7 +451,7 @@ LIMIT 1
 // and 'pending_remote_create' live states so the future cutover's
 // two-step creation is visible to this guard. Used by the
 // FollowUpManager consumer when running inside a worker transaction.
-func (q *Queries) FindPendingFollowUpTx(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error) {
+func (q *Queries) FindPendingFollowUpTx(ctx context.Context, contactID uuid.UUID) (*ContactTask, error) {
 	row := q.db.QueryRow(ctx, FindPendingFollowUpTx, contactID)
 	var i ContactTask
 	err := row.Scan(
@@ -476,7 +477,7 @@ WHERE id = $1
 `
 
 // Contact Task Queries (for Todoist cadence sync)
-func (q *Queries) GetContactTask(ctx context.Context, id pgtype.UUID) (*ContactTask, error) {
+func (q *Queries) GetContactTask(ctx context.Context, id uuid.UUID) (*ContactTask, error) {
 	row := q.db.QueryRow(ctx, GetContactTask, id)
 	var i ContactTask
 	err := row.Scan(
@@ -503,8 +504,8 @@ WHERE contact_id = $1
 `
 
 type GetContactTaskByContactCadenceDueParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Provider  string      `json:"provider"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Provider  string    `json:"provider"`
 }
 
 // Look up the cadence-due task for a contact+provider. Backed by the
@@ -538,8 +539,8 @@ WHERE contact_id = $1
 `
 
 type GetContactTaskByContactFollowUpLiveParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Provider  string      `json:"provider"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Provider  string    `json:"provider"`
 }
 
 // Look up the live follow-up task for a contact+provider. Backed by the
@@ -602,8 +603,8 @@ WHERE contact_id = $1
 `
 
 type GetContactTaskByIdempotencyKeyParams struct {
-	ContactID      pgtype.UUID `json:"contact_id"`
-	IdempotencyKey pgtype.Text `json:"idempotency_key"`
+	ContactID      uuid.UUID `json:"contact_id"`
+	IdempotencyKey *string   `json:"idempotency_key"`
 }
 
 // Partial-index lookup for the local idempotency key used by the
@@ -669,8 +670,8 @@ LIMIT 1
 `
 
 type GetLegacyActionTaskByContactParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Provider  string      `json:"provider"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Provider  string    `json:"provider"`
 }
 
 // Legacy lookup for action-kind rows (no new creator path; preserved for
@@ -702,7 +703,7 @@ ORDER BY provider, kind
 `
 
 // List all tasks for a contact
-func (q *Queries) ListContactTasksByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error) {
+func (q *Queries) ListContactTasksByContact(ctx context.Context, contactID uuid.UUID) ([]*ContactTask, error) {
 	rows, err := q.db.Query(ctx, ListContactTasksByContact, contactID)
 	if err != nil {
 		return nil, err
@@ -744,10 +745,10 @@ ORDER BY created_at DESC
 `
 
 type ListContactTasksByContactFilteredParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	State     pgtype.Text `json:"state"`
-	Kind      pgtype.Text `json:"kind"`
-	Lifecycle pgtype.Text `json:"lifecycle"`
+	ContactID uuid.UUID `json:"contact_id"`
+	State     *string   `json:"state"`
+	Kind      *string   `json:"kind"`
+	Lifecycle *string   `json:"lifecycle"`
 }
 
 // List tasks for a contact with optional state, kind, and lifecycle filters
@@ -796,8 +797,8 @@ ORDER BY created_at DESC
 `
 
 type ListContactTasksByProviderParams struct {
-	Provider string      `json:"provider"`
-	State    pgtype.Text `json:"state"`
+	Provider string  `json:"provider"`
+	State    *string `json:"state"`
 }
 
 // List all tasks for a provider (optionally filtered by state)
@@ -842,21 +843,21 @@ ORDER BY ct.created_at
 `
 
 type ListManagedContactTasksRow struct {
-	ID             pgtype.UUID        `json:"id"`
-	ContactID      pgtype.UUID        `json:"contact_id"`
-	Provider       string             `json:"provider"`
-	Kind           string             `json:"kind"`
-	ExternalTaskID string             `json:"external_task_id"`
-	State          string             `json:"state"`
-	Metadata       []byte             `json:"metadata"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	IdempotencyKey pgtype.Text        `json:"idempotency_key"`
-	Lifecycle      string             `json:"lifecycle"`
-	FullName       string             `json:"full_name"`
-	Cadence        pgtype.Text        `json:"cadence"`
-	ContactBy      pgtype.Date        `json:"contact_by"`
-	LastContacted  pgtype.Timestamptz `json:"last_contacted"`
+	ID             uuid.UUID  `json:"id"`
+	ContactID      uuid.UUID  `json:"contact_id"`
+	Provider       string     `json:"provider"`
+	Kind           string     `json:"kind"`
+	ExternalTaskID string     `json:"external_task_id"`
+	State          string     `json:"state"`
+	Metadata       []byte     `json:"metadata"`
+	CreatedAt      *time.Time `json:"created_at"`
+	UpdatedAt      *time.Time `json:"updated_at"`
+	IdempotencyKey *string    `json:"idempotency_key"`
+	Lifecycle      string     `json:"lifecycle"`
+	FullName       string     `json:"full_name"`
+	Cadence        *string    `json:"cadence"`
+	ContactBy      *time.Time `json:"contact_by"`
+	LastContacted  *time.Time `json:"last_contacted"`
 }
 
 // List all managed tasks for a provider (for reconciliation)
@@ -905,8 +906,8 @@ WHERE contact_id = $2
 `
 
 type RepointManualContactTasksToContactParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID uuid.UUID `json:"target_contact_id"`
+	SourceContactID uuid.UUID `json:"source_contact_id"`
 }
 
 // Merge-time repoint of the source contact's MANUAL tasks (user to-dos) to
@@ -930,8 +931,8 @@ WHERE id = $1
 `
 
 type SetContactTaskExternalIDOnlyParams struct {
-	ID             pgtype.UUID `json:"id"`
-	ExternalTaskID string      `json:"external_task_id"`
+	ID             uuid.UUID `json:"id"`
+	ExternalTaskID string    `json:"external_task_id"`
 }
 
 // Persist external_task_id on a row without touching state. Used by the
@@ -970,13 +971,13 @@ RETURNING id, lifecycle
 `
 
 type TransferAutomatedContactTasksToContactParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID uuid.UUID `json:"target_contact_id"`
+	SourceContactID uuid.UUID `json:"source_contact_id"`
 }
 
 type TransferAutomatedContactTasksToContactRow struct {
-	ID        pgtype.UUID `json:"id"`
-	Lifecycle string      `json:"lifecycle"`
+	ID        uuid.UUID `json:"id"`
+	Lifecycle string    `json:"lifecycle"`
 }
 
 // Merge-time transfer of the source's LIVE automated rows to the target, for
@@ -1021,8 +1022,8 @@ RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, cre
 `
 
 type UpdateContactTaskExternalIDParams struct {
-	ID             pgtype.UUID `json:"id"`
-	ExternalTaskID string      `json:"external_task_id"`
+	ID             uuid.UUID `json:"id"`
+	ExternalTaskID string    `json:"external_task_id"`
 }
 
 // Update the external task ID (when creating a new Todoist task).
@@ -1058,8 +1059,8 @@ RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, cre
 `
 
 type UpdateContactTaskMetadataParams struct {
-	ID       pgtype.UUID `json:"id"`
-	Metadata []byte      `json:"metadata"`
+	ID       uuid.UUID `json:"id"`
+	Metadata []byte    `json:"metadata"`
 }
 
 func (q *Queries) UpdateContactTaskMetadata(ctx context.Context, arg UpdateContactTaskMetadataParams) (*ContactTask, error) {
@@ -1090,8 +1091,8 @@ RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, cre
 `
 
 type UpdateContactTaskStateParams struct {
-	ID    pgtype.UUID `json:"id"`
-	State string      `json:"state"`
+	ID    uuid.UUID `json:"id"`
+	State string    `json:"state"`
 }
 
 func (q *Queries) UpdateContactTaskState(ctx context.Context, arg UpdateContactTaskStateParams) (*ContactTask, error) {
@@ -1138,7 +1139,7 @@ RETURNING id, contact_id, provider, kind, external_task_id, state, metadata, cre
 `
 
 type UpsertContactTaskParams struct {
-	ContactID      pgtype.UUID `json:"contact_id"`
+	ContactID      uuid.UUID   `json:"contact_id"`
 	Provider       string      `json:"provider"`
 	Kind           string      `json:"kind"`
 	Lifecycle      string      `json:"lifecycle"`

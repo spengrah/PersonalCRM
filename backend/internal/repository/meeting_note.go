@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Linkage state constants for meeting_note.linkage_state. Match the
@@ -145,42 +144,18 @@ func convertDbMeetingNote(row *db.MeetingNote) (*MeetingNote, error) {
 		InputHash:       row.InputHash,
 		ResolvedSetHash: row.ResolvedSetHash,
 	}
-	if row.ID.Valid {
-		mn.ID = uuid.UUID(row.ID.Bytes)
-	}
-	if row.AnarlogSessionID.Valid {
-		mn.AnarlogSessionID = uuid.UUID(row.AnarlogSessionID.Bytes)
-	}
-	if row.Title.Valid {
-		mn.Title = &row.Title.String
-	}
-	if row.Summary.Valid {
-		mn.Summary = &row.Summary.String
-	}
-	if row.Memo.Valid {
-		mn.Memo = &row.Memo.String
-	}
-	if row.MacHostID.Valid {
-		id := uuid.UUID(row.MacHostID.Bytes)
-		mn.MacHostID = &id
-	}
-	if row.LinkedKind.Valid {
-		mn.LinkedKind = &row.LinkedKind.String
-	}
-	if row.LinkedID.Valid {
-		id := uuid.UUID(row.LinkedID.Bytes)
-		mn.LinkedID = &id
-	}
-	if row.LastContentHash.Valid {
-		mn.LastContentHash = &row.LastContentHash.String
-	}
-	if row.MeetingAt.Valid {
-		mn.MeetingAt = row.MeetingAt.Time.UTC()
-	}
-	if row.CreatedAt.Valid {
-		mn.CreatedAt = row.CreatedAt.Time.UTC()
-	}
-	mn.DeletedAt = pgTimestamptzToTimePtr(row.DeletedAt)
+	mn.ID = row.ID
+	mn.AnarlogSessionID = row.AnarlogSessionID
+	mn.Title = row.Title
+	mn.Summary = row.Summary
+	mn.Memo = row.Memo
+	mn.MacHostID = row.MacHostID
+	mn.LinkedKind = row.LinkedKind
+	mn.LinkedID = row.LinkedID
+	mn.LastContentHash = row.LastContentHash
+	mn.MeetingAt = row.MeetingAt.UTC()
+	mn.CreatedAt = row.CreatedAt.UTC()
+	mn.DeletedAt = utcPtr(row.DeletedAt)
 	if len(row.ConflictCandidates) > 0 {
 		// Copy the bytes so the caller can hold the slice past the row's
 		// scan lifetime without aliasing pgx-owned memory.
@@ -223,19 +198,19 @@ func (r *MeetingNoteRepository) InsertMeetingNoteTx(ctx context.Context, tx pgx.
 		return nil, err
 	}
 	row, err := db.New(tx).InsertMeetingNote(ctx, db.InsertMeetingNoteParams{
-		AnarlogSessionID:   uuidToPgUUID(params.AnarlogSessionID),
-		Title:              stringToPgText(params.Title),
-		Summary:            stringToPgText(params.Summary),
-		Memo:               stringToPgText(params.Memo),
+		AnarlogSessionID:   params.AnarlogSessionID,
+		Title:              params.Title,
+		Summary:            params.Summary,
+		Memo:               params.Memo,
 		Participants:       partsJSON,
-		MacHostID:          nullableUUIDToPg(params.MacHostID),
-		LinkedKind:         stringToPgText(params.LinkedKind),
-		LinkedID:           nullableUUIDToPg(params.LinkedID),
+		MacHostID:          params.MacHostID,
+		LinkedKind:         params.LinkedKind,
+		LinkedID:           params.LinkedID,
 		LinkageState:       params.LinkageState,
 		InputHash:          params.InputHash,
 		ResolvedSetHash:    params.ResolvedSetHash,
-		LastContentHash:    stringToPgText(params.LastContentHash),
-		MeetingAt:          pgtype.Timestamptz{Time: params.MeetingAt, Valid: true},
+		LastContentHash:    params.LastContentHash,
+		MeetingAt:          params.MeetingAt,
 		ConflictCandidates: params.ConflictCandidates,
 	})
 	if err != nil {
@@ -256,18 +231,18 @@ func (r *MeetingNoteRepository) UpdateMeetingNoteOnResyncTx(ctx context.Context,
 		return nil, err
 	}
 	row, err := db.New(tx).UpdateMeetingNoteOnResync(ctx, db.UpdateMeetingNoteOnResyncParams{
-		ID:                 uuidToPgUUID(params.ID),
-		Title:              stringToPgText(params.Title),
-		Summary:            stringToPgText(params.Summary),
-		Memo:               stringToPgText(params.Memo),
+		ID:                 params.ID,
+		Title:              params.Title,
+		Summary:            params.Summary,
+		Memo:               params.Memo,
 		Participants:       partsJSON,
-		LinkedKind:         stringToPgText(params.LinkedKind),
-		LinkedID:           nullableUUIDToPg(params.LinkedID),
+		LinkedKind:         params.LinkedKind,
+		LinkedID:           params.LinkedID,
 		LinkageState:       params.LinkageState,
 		InputHash:          params.InputHash,
 		ResolvedSetHash:    params.ResolvedSetHash,
-		LastContentHash:    stringToPgText(params.LastContentHash),
-		MeetingAt:          pgtype.Timestamptz{Time: params.MeetingAt, Valid: true},
+		LastContentHash:    params.LastContentHash,
+		MeetingAt:          params.MeetingAt,
 		ConflictCandidates: params.ConflictCandidates,
 	})
 	if err != nil {
@@ -288,18 +263,18 @@ func (r *MeetingNoteRepository) ReviveMeetingNoteTx(ctx context.Context, tx pgx.
 		return nil, err
 	}
 	row, err := db.New(tx).ReviveMeetingNote(ctx, db.ReviveMeetingNoteParams{
-		ID:                 uuidToPgUUID(params.ID),
-		Title:              stringToPgText(params.Title),
-		Summary:            stringToPgText(params.Summary),
-		Memo:               stringToPgText(params.Memo),
+		ID:                 params.ID,
+		Title:              params.Title,
+		Summary:            params.Summary,
+		Memo:               params.Memo,
 		Participants:       partsJSON,
-		LinkedKind:         stringToPgText(params.LinkedKind),
-		LinkedID:           nullableUUIDToPg(params.LinkedID),
+		LinkedKind:         params.LinkedKind,
+		LinkedID:           params.LinkedID,
 		LinkageState:       params.LinkageState,
 		InputHash:          params.InputHash,
 		ResolvedSetHash:    params.ResolvedSetHash,
-		LastContentHash:    stringToPgText(params.LastContentHash),
-		MeetingAt:          pgtype.Timestamptz{Time: params.MeetingAt, Valid: true},
+		LastContentHash:    params.LastContentHash,
+		MeetingAt:          params.MeetingAt,
 		ConflictCandidates: params.ConflictCandidates,
 	})
 	if err != nil {
@@ -315,7 +290,7 @@ func (r *MeetingNoteRepository) ReviveMeetingNoteTx(ctx context.Context, tx pgx.
 // given anarlog session UUID. Returns (nil, db.ErrNotFound) when no
 // live row exists. Live-only — tombstoned rows are NOT returned.
 func (r *MeetingNoteRepository) GetMeetingNoteBySessionIDTx(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID) (*MeetingNote, error) {
-	row, err := db.New(tx).GetMeetingNoteBySessionID(ctx, uuidToPgUUID(sessionID))
+	row, err := db.New(tx).GetMeetingNoteBySessionID(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -330,7 +305,7 @@ func (r *MeetingNoteRepository) GetMeetingNoteBySessionIDTx(ctx context.Context,
 // row-level lock for the caller's tx. Used by the inline handler to
 // serialize concurrent re-syncs for the same session UUID.
 func (r *MeetingNoteRepository) GetMeetingNoteBySessionIDForUpdateTx(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID) (*MeetingNote, error) {
-	row, err := db.New(tx).GetMeetingNoteBySessionIDForUpdate(ctx, uuidToPgUUID(sessionID))
+	row, err := db.New(tx).GetMeetingNoteBySessionIDForUpdate(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -344,7 +319,7 @@ func (r *MeetingNoteRepository) GetMeetingNoteBySessionIDForUpdateTx(ctx context
 // a given session UUID, or (nil, db.ErrNotFound) when none exists.
 // Used by the revive-bypass probe in the dispatch loop.
 func (r *MeetingNoteRepository) GetTombstonedMeetingNoteBySessionIDTx(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID) (*MeetingNote, error) {
-	row, err := db.New(tx).GetTombstonedMeetingNoteBySessionID(ctx, uuidToPgUUID(sessionID))
+	row, err := db.New(tx).GetTombstonedMeetingNoteBySessionID(ctx, sessionID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -357,7 +332,7 @@ func (r *MeetingNoteRepository) GetTombstonedMeetingNoteBySessionIDTx(ctx contex
 // SoftDeleteMeetingNoteBySessionIDTx tombstones the live row for a
 // given session UUID. Idempotent (no-op when no live row exists).
 func (r *MeetingNoteRepository) SoftDeleteMeetingNoteBySessionIDTx(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID) error {
-	return db.New(tx).SoftDeleteMeetingNoteBySessionID(ctx, uuidToPgUUID(sessionID))
+	return db.New(tx).SoftDeleteMeetingNoteBySessionID(ctx, sessionID)
 }
 
 // GetMeetingNoteByID returns a single live meeting_note row by primary
@@ -365,7 +340,7 @@ func (r *MeetingNoteRepository) SoftDeleteMeetingNoteBySessionIDTx(ctx context.C
 // path before opening the FOR UPDATE tx, and by handler-call-path code
 // that doesn't need a long-running tx.
 func (r *MeetingNoteRepository) GetMeetingNoteByID(ctx context.Context, id uuid.UUID) (*MeetingNote, error) {
-	row, err := r.queries.GetMeetingNoteByID(ctx, uuidToPgUUID(id))
+	row, err := r.queries.GetMeetingNoteByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -377,7 +352,7 @@ func (r *MeetingNoteRepository) GetMeetingNoteByID(ctx context.Context, id uuid.
 
 // GetMeetingNoteByIDTx is the tx-bound variant of GetMeetingNoteByID.
 func (r *MeetingNoteRepository) GetMeetingNoteByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*MeetingNote, error) {
-	row, err := db.New(tx).GetMeetingNoteByID(ctx, uuidToPgUUID(id))
+	row, err := db.New(tx).GetMeetingNoteByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -392,7 +367,7 @@ func (r *MeetingNoteRepository) GetMeetingNoteByIDTx(ctx context.Context, tx pgx
 // by the resolve-link flow so concurrent resolve attempts on the same
 // row serialize behind the first writer.
 func (r *MeetingNoteRepository) GetMeetingNoteByIDForUpdateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*MeetingNote, error) {
-	row, err := db.New(tx).GetMeetingNoteByIDForUpdate(ctx, uuidToPgUUID(id))
+	row, err := db.New(tx).GetMeetingNoteByIDForUpdate(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -408,11 +383,7 @@ func (r *MeetingNoteRepository) GetMeetingNoteByIDForUpdateTx(ctx context.Contex
 // rows owned by that mac_host. Ordered by meeting_at DESC so the
 // newest entries surface first.
 func (r *MeetingNoteRepository) ListMeetingNotesNeedingAttention(ctx context.Context, hostID *uuid.UUID) ([]MeetingNote, error) {
-	var arg pgtype.UUID
-	if hostID != nil {
-		arg = pgtype.UUID{Bytes: *hostID, Valid: true}
-	}
-	rows, err := r.queries.ListMeetingNotesNeedingAttention(ctx, arg)
+	rows, err := r.queries.ListMeetingNotesNeedingAttention(ctx, hostID)
 	if err != nil {
 		return nil, err
 	}
@@ -440,9 +411,9 @@ func (r *MeetingNoteRepository) ListMeetingNotesNeedingAttention(ctx context.Con
 // SQL state-guard returns zero rows in that case.
 func (r *MeetingNoteRepository) ResolveMeetingNoteToLinkedTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, kind string, linkedID uuid.UUID) (*MeetingNote, error) {
 	row, err := db.New(tx).ResolveMeetingNoteToLinked(ctx, db.ResolveMeetingNoteToLinkedParams{
-		ID:         uuidToPgUUID(id),
-		LinkedKind: pgtype.Text{String: kind, Valid: true},
-		LinkedID:   uuidToPgUUID(linkedID),
+		ID:         id,
+		LinkedKind: &kind,
+		LinkedID:   &linkedID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -467,7 +438,7 @@ func (r *MeetingNoteRepository) ResolveMeetingNoteToLinkedTx(ctx context.Context
 // when the matching inputs haven't drifted.
 func (r *MeetingNoteRepository) ClearMeetingNoteConflictTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, newState string, newResolvedSetHash string) (*MeetingNote, error) {
 	row, err := db.New(tx).ClearMeetingNoteConflict(ctx, db.ClearMeetingNoteConflictParams{
-		ID:                 uuidToPgUUID(id),
+		ID:                 id,
 		NewState:           newState,
 		NewResolvedSetHash: newResolvedSetHash,
 	})
@@ -486,17 +457,13 @@ func (r *MeetingNoteRepository) ClearMeetingNoteConflictTx(ctx context.Context, 
 // Returns the SAME KnownExternalContactID DTO shape so the service
 // layer can dispatch uniformly across sources.
 func (r *MeetingNoteRepository) ListKnownMeetingNoteSessionIDsByHost(ctx context.Context, hostID uuid.UUID) ([]KnownExternalContactID, error) {
-	rows, err := r.queries.ListKnownMeetingNoteIDsByHost(ctx, uuidToPgUUID(hostID))
+	rows, err := r.queries.ListKnownMeetingNoteIDsByHost(ctx, &hostID)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]KnownExternalContactID, 0, len(rows))
 	for _, row := range rows {
-		entry := KnownExternalContactID{SourceID: row.SourceID}
-		if row.LastContentHash.Valid {
-			h := row.LastContentHash.String
-			entry.LastContentHash = &h
-		}
+		entry := KnownExternalContactID{SourceID: row.SourceID, LastContentHash: row.LastContentHash}
 		out = append(out, entry)
 	}
 	return out, nil
@@ -515,14 +482,5 @@ func (r *MeetingNoteRepository) TestHardDeleteBySessionIDPrefix(ctx context.Cont
 // seeds rows with system-generated session UUIDs (no exploitable prefix).
 // Production code must NOT call this.
 func (r *MeetingNoteRepository) TestHardDeleteByHostID(ctx context.Context, hostID uuid.UUID) error {
-	return r.queries.TestHardDeleteMeetingNotesByHostID(ctx, uuidToPgUUID(hostID))
-}
-
-// nullableUUIDToPg converts a *uuid.UUID into a pgtype.UUID with
-// Valid=false when the pointer is nil.
-func nullableUUIDToPg(id *uuid.UUID) pgtype.UUID {
-	if id == nil {
-		return pgtype.UUID{Valid: false}
-	}
-	return pgtype.UUID{Bytes: *id, Valid: true}
+	return r.queries.TestHardDeleteMeetingNotesByHostID(ctx, &hostID)
 }

@@ -49,15 +49,9 @@ func convertDbRelationshipSignal(dbSignal *db.RelationshipSignal) RelationshipSi
 		Value:         dbSignal.Value,
 		MethodVersion: dbSignal.MethodVersion,
 	}
-	if dbSignal.SubjectNodeID.Valid {
-		signal.SubjectNodeID = uuid.UUID(dbSignal.SubjectNodeID.Bytes)
-	}
-	if dbSignal.ComputedAt.Valid {
-		signal.ComputedAt = dbSignal.ComputedAt.Time.UTC()
-	}
-	if dbSignal.AsOf.Valid {
-		signal.AsOf = dbSignal.AsOf.Time.UTC()
-	}
+	signal.SubjectNodeID = dbSignal.SubjectNodeID
+	signal.ComputedAt = dbSignal.ComputedAt.UTC()
+	signal.AsOf = dbSignal.AsOf.UTC()
 	return signal
 }
 
@@ -65,10 +59,10 @@ func convertDbRelationshipSignal(dbSignal *db.RelationshipSignal) RelationshipSi
 // signal_key) signal; a recompute overwrites the value and watermarks.
 func (r *RelationshipSignalRepository) UpsertRelationshipSignal(ctx context.Context, req UpsertRelationshipSignalRequest) error {
 	return r.queries.UpsertRelationshipSignal(ctx, db.UpsertRelationshipSignalParams{
-		SubjectNodeID: uuidToPgUUID(req.SubjectNodeID),
+		SubjectNodeID: req.SubjectNodeID,
 		SignalKey:     req.SignalKey,
 		Value:         req.Value,
-		AsOf:          timeToPgTimestamptz(&req.AsOf),
+		AsOf:          req.AsOf,
 		MethodVersion: req.MethodVersion,
 	})
 }
@@ -76,7 +70,7 @@ func (r *RelationshipSignalRepository) UpsertRelationshipSignal(ctx context.Cont
 // GetRelationshipSignal retrieves one signal by its composite key.
 func (r *RelationshipSignalRepository) GetRelationshipSignal(ctx context.Context, subjectNodeID uuid.UUID, signalKey string) (*RelationshipSignal, error) {
 	dbSignal, err := r.queries.GetRelationshipSignal(ctx, db.GetRelationshipSignalParams{
-		SubjectNodeID: uuidToPgUUID(subjectNodeID),
+		SubjectNodeID: subjectNodeID,
 		SignalKey:     signalKey,
 	})
 	if err != nil {
@@ -91,7 +85,7 @@ func (r *RelationshipSignalRepository) GetRelationshipSignal(ctx context.Context
 
 // ListSignalsForSubject returns every signal for one node, ordered by key.
 func (r *RelationshipSignalRepository) ListSignalsForSubject(ctx context.Context, subjectNodeID uuid.UUID) ([]RelationshipSignal, error) {
-	dbSignals, err := r.queries.ListSignalsForSubject(ctx, uuidToPgUUID(subjectNodeID))
+	dbSignals, err := r.queries.ListSignalsForSubject(ctx, subjectNodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -104,5 +98,5 @@ func (r *RelationshipSignalRepository) ListSignalsForSubject(ctx context.Context
 
 // DeleteSignalsForSubject wipes every signal for one node.
 func (r *RelationshipSignalRepository) DeleteSignalsForSubject(ctx context.Context, subjectNodeID uuid.UUID) error {
-	return r.queries.DeleteSignalsForSubject(ctx, uuidToPgUUID(subjectNodeID))
+	return r.queries.DeleteSignalsForSubject(ctx, subjectNodeID)
 }

@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const ClearMeetingNoteConflict = `-- name: ClearMeetingNoteConflict :one
@@ -25,9 +26,9 @@ RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_i
 `
 
 type ClearMeetingNoteConflictParams struct {
-	NewState           string      `json:"new_state"`
-	NewResolvedSetHash string      `json:"new_resolved_set_hash"`
-	ID                 pgtype.UUID `json:"id"`
+	NewState           string    `json:"new_state"`
+	NewResolvedSetHash string    `json:"new_resolved_set_hash"`
+	ID                 uuid.UUID `json:"id"`
 }
 
 // Promotes a row in EITHER attention state (conflict_pending or
@@ -75,7 +76,7 @@ WHERE id = $1 AND deleted_at IS NULL
 // resolve-link service to pre-validate the row exists before opening
 // the FOR UPDATE tx (and by the needs-attention list endpoint when it
 // needs a fresh read outside the list query).
-func (q *Queries) GetMeetingNoteByID(ctx context.Context, id pgtype.UUID) (*MeetingNote, error) {
+func (q *Queries) GetMeetingNoteByID(ctx context.Context, id uuid.UUID) (*MeetingNote, error) {
 	row := q.db.QueryRow(ctx, GetMeetingNoteByID, id)
 	var i MeetingNote
 	err := row.Scan(
@@ -108,7 +109,7 @@ FOR UPDATE
 
 // FOR UPDATE variant of GetMeetingNoteByID. Used inside the resolve-link
 // tx to serialize concurrent resolve attempts on the same row.
-func (q *Queries) GetMeetingNoteByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MeetingNote, error) {
+func (q *Queries) GetMeetingNoteByIDForUpdate(ctx context.Context, id uuid.UUID) (*MeetingNote, error) {
 	row := q.db.QueryRow(ctx, GetMeetingNoteByIDForUpdate, id)
 	var i MeetingNote
 	err := row.Scan(
@@ -141,7 +142,7 @@ WHERE anarlog_session_id = $1
 
 // Returns the live (non-soft-deleted) meeting_note row for a given anarlog
 // session UUID. Used by the ingest path for dedup and re-sync detection.
-func (q *Queries) GetMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error) {
+func (q *Queries) GetMeetingNoteBySessionID(ctx context.Context, anarlogSessionID uuid.UUID) (*MeetingNote, error) {
 	row := q.db.QueryRow(ctx, GetMeetingNoteBySessionID, anarlogSessionID)
 	var i MeetingNote
 	err := row.Scan(
@@ -177,7 +178,7 @@ FOR UPDATE
 // concurrent re-sync for the same session UUID serializes behind the
 // first writer. Returns tombstoned rows too — the revive path inspects
 // DeletedAt to decide between revive and re-link branches.
-func (q *Queries) GetMeetingNoteBySessionIDForUpdate(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error) {
+func (q *Queries) GetMeetingNoteBySessionIDForUpdate(ctx context.Context, anarlogSessionID uuid.UUID) (*MeetingNote, error) {
 	row := q.db.QueryRow(ctx, GetMeetingNoteBySessionIDForUpdate, anarlogSessionID)
 	var i MeetingNote
 	err := row.Scan(
@@ -215,7 +216,7 @@ LIMIT 1
 // revive instead of silently leaving the row tombstoned. Filters
 // explicitly to tombstoned rows because the live partial-unique index
 // already covers the live-row case.
-func (q *Queries) GetTombstonedMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error) {
+func (q *Queries) GetTombstonedMeetingNoteBySessionID(ctx context.Context, anarlogSessionID uuid.UUID) (*MeetingNote, error) {
 	row := q.db.QueryRow(ctx, GetTombstonedMeetingNoteBySessionID, anarlogSessionID)
 	var i MeetingNote
 	err := row.Scan(
@@ -278,20 +279,20 @@ RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_i
 `
 
 type InsertMeetingNoteParams struct {
-	AnarlogSessionID   pgtype.UUID        `json:"anarlog_session_id"`
-	Title              pgtype.Text        `json:"title"`
-	Summary            pgtype.Text        `json:"summary"`
-	Memo               pgtype.Text        `json:"memo"`
-	Participants       []byte             `json:"participants"`
-	MacHostID          pgtype.UUID        `json:"mac_host_id"`
-	LinkedKind         pgtype.Text        `json:"linked_kind"`
-	LinkedID           pgtype.UUID        `json:"linked_id"`
-	LinkageState       string             `json:"linkage_state"`
-	InputHash          string             `json:"input_hash"`
-	ResolvedSetHash    string             `json:"resolved_set_hash"`
-	LastContentHash    pgtype.Text        `json:"last_content_hash"`
-	MeetingAt          pgtype.Timestamptz `json:"meeting_at"`
-	ConflictCandidates []byte             `json:"conflict_candidates"`
+	AnarlogSessionID   uuid.UUID  `json:"anarlog_session_id"`
+	Title              *string    `json:"title"`
+	Summary            *string    `json:"summary"`
+	Memo               *string    `json:"memo"`
+	Participants       []byte     `json:"participants"`
+	MacHostID          *uuid.UUID `json:"mac_host_id"`
+	LinkedKind         *string    `json:"linked_kind"`
+	LinkedID           *uuid.UUID `json:"linked_id"`
+	LinkageState       string     `json:"linkage_state"`
+	InputHash          string     `json:"input_hash"`
+	ResolvedSetHash    string     `json:"resolved_set_hash"`
+	LastContentHash    *string    `json:"last_content_hash"`
+	MeetingAt          time.Time  `json:"meeting_at"`
+	ConflictCandidates []byte     `json:"conflict_candidates"`
 }
 
 // Meeting Note queries
@@ -357,8 +358,8 @@ ORDER BY source_id
 `
 
 type ListKnownMeetingNoteIDsByHostRow struct {
-	SourceID        string      `json:"source_id"`
-	LastContentHash pgtype.Text `json:"last_content_hash"`
+	SourceID        string  `json:"source_id"`
+	LastContentHash *string `json:"last_content_hash"`
 }
 
 // Returns (source_id, last_content_hash) for every live meeting_note
@@ -366,7 +367,7 @@ type ListKnownMeetingNoteIDsByHostRow struct {
 // /api/v1/host/:id/sync/anarlog_sessions/known-ids. Tombstoned rows are
 // excluded — the daemon's set-diff reconciliation requires that rows
 // the Pi has soft-deleted are NOT reported as known.
-func (q *Queries) ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID pgtype.UUID) ([]*ListKnownMeetingNoteIDsByHostRow, error) {
+func (q *Queries) ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID *uuid.UUID) ([]*ListKnownMeetingNoteIDsByHostRow, error) {
 	rows, err := q.db.Query(ctx, ListKnownMeetingNoteIDsByHost, macHostID)
 	if err != nil {
 		return nil, err
@@ -401,7 +402,7 @@ ORDER BY meeting_at DESC
 // attention items surface first. Index-backed by the partial
 // idx_meeting_note_linkage_state from migration 053; the in-memory sort
 // on the small filtered set is cheap.
-func (q *Queries) ListMeetingNotesNeedingAttention(ctx context.Context, hostID pgtype.UUID) ([]*MeetingNote, error) {
+func (q *Queries) ListMeetingNotesNeedingAttention(ctx context.Context, hostID *uuid.UUID) ([]*MeetingNote, error) {
 	rows, err := q.db.Query(ctx, ListMeetingNotesNeedingAttention, hostID)
 	if err != nil {
 		return nil, err
@@ -452,9 +453,9 @@ RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_i
 `
 
 type ResolveMeetingNoteToLinkedParams struct {
-	LinkedKind pgtype.Text `json:"linked_kind"`
-	LinkedID   pgtype.UUID `json:"linked_id"`
-	ID         pgtype.UUID `json:"id"`
+	LinkedKind *string    `json:"linked_kind"`
+	LinkedID   *uuid.UUID `json:"linked_id"`
+	ID         uuid.UUID  `json:"id"`
 }
 
 // Sets linked_kind, linked_id, linkage_state='linked',
@@ -506,19 +507,19 @@ RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_i
 `
 
 type ReviveMeetingNoteParams struct {
-	Title              pgtype.Text        `json:"title"`
-	Summary            pgtype.Text        `json:"summary"`
-	Memo               pgtype.Text        `json:"memo"`
-	Participants       []byte             `json:"participants"`
-	LinkedKind         pgtype.Text        `json:"linked_kind"`
-	LinkedID           pgtype.UUID        `json:"linked_id"`
-	LinkageState       string             `json:"linkage_state"`
-	InputHash          string             `json:"input_hash"`
-	ResolvedSetHash    string             `json:"resolved_set_hash"`
-	LastContentHash    pgtype.Text        `json:"last_content_hash"`
-	MeetingAt          pgtype.Timestamptz `json:"meeting_at"`
-	ConflictCandidates []byte             `json:"conflict_candidates"`
-	ID                 pgtype.UUID        `json:"id"`
+	Title              *string    `json:"title"`
+	Summary            *string    `json:"summary"`
+	Memo               *string    `json:"memo"`
+	Participants       []byte     `json:"participants"`
+	LinkedKind         *string    `json:"linked_kind"`
+	LinkedID           *uuid.UUID `json:"linked_id"`
+	LinkageState       string     `json:"linkage_state"`
+	InputHash          string     `json:"input_hash"`
+	ResolvedSetHash    string     `json:"resolved_set_hash"`
+	LastContentHash    *string    `json:"last_content_hash"`
+	MeetingAt          time.Time  `json:"meeting_at"`
+	ConflictCandidates []byte     `json:"conflict_candidates"`
+	ID                 uuid.UUID  `json:"id"`
 }
 
 // Clears deleted_at + writes the full updatable column set in a single
@@ -573,7 +574,7 @@ WHERE anarlog_session_id = $1 AND deleted_at IS NULL
 // input_hash, meeting_at are preserved on the row so a future revive
 // has the prior content snapshot available. Idempotent (no-op when no
 // live row exists).
-func (q *Queries) SoftDeleteMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) error {
+func (q *Queries) SoftDeleteMeetingNoteBySessionID(ctx context.Context, anarlogSessionID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, SoftDeleteMeetingNoteBySessionID, anarlogSessionID)
 	return err
 }
@@ -587,7 +588,7 @@ WHERE mac_host_id = $1
 // mac_host. Used by t.Cleanup when the test seeds meeting_notes with
 // system-generated UUIDs (no exploitable prefix). Covers both live and
 // tombstoned rows.
-func (q *Queries) TestHardDeleteMeetingNotesByHostID(ctx context.Context, macHostID pgtype.UUID) error {
+func (q *Queries) TestHardDeleteMeetingNotesByHostID(ctx context.Context, macHostID *uuid.UUID) error {
 	_, err := q.db.Exec(ctx, TestHardDeleteMeetingNotesByHostID, macHostID)
 	return err
 }
@@ -624,19 +625,19 @@ RETURNING id, anarlog_session_id, title, summary, memo, participants, mac_host_i
 `
 
 type UpdateMeetingNoteOnResyncParams struct {
-	Title              pgtype.Text        `json:"title"`
-	Summary            pgtype.Text        `json:"summary"`
-	Memo               pgtype.Text        `json:"memo"`
-	Participants       []byte             `json:"participants"`
-	LinkedKind         pgtype.Text        `json:"linked_kind"`
-	LinkedID           pgtype.UUID        `json:"linked_id"`
-	LinkageState       string             `json:"linkage_state"`
-	InputHash          string             `json:"input_hash"`
-	ResolvedSetHash    string             `json:"resolved_set_hash"`
-	LastContentHash    pgtype.Text        `json:"last_content_hash"`
-	MeetingAt          pgtype.Timestamptz `json:"meeting_at"`
-	ConflictCandidates []byte             `json:"conflict_candidates"`
-	ID                 pgtype.UUID        `json:"id"`
+	Title              *string    `json:"title"`
+	Summary            *string    `json:"summary"`
+	Memo               *string    `json:"memo"`
+	Participants       []byte     `json:"participants"`
+	LinkedKind         *string    `json:"linked_kind"`
+	LinkedID           *uuid.UUID `json:"linked_id"`
+	LinkageState       string     `json:"linkage_state"`
+	InputHash          string     `json:"input_hash"`
+	ResolvedSetHash    string     `json:"resolved_set_hash"`
+	LastContentHash    *string    `json:"last_content_hash"`
+	MeetingAt          time.Time  `json:"meeting_at"`
+	ConflictCandidates []byte     `json:"conflict_candidates"`
+	ID                 uuid.UUID  `json:"id"`
 }
 
 // Single update query used for both carry-forward and re-link branches

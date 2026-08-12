@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CountStalenessBreachesByAccountForTest = `-- name: CountStalenessBreachesByAccountForTest :one
@@ -33,7 +34,7 @@ WHERE resolved_at IS NOT NULL AND resolved_at < $1
 
 // Retention prune: drops resolved breaches whose resolved_at predates the
 // cutoff. Open breaches (resolved_at IS NULL) are never touched.
-func (q *Queries) DeleteResolvedStalenessBreachesBefore(ctx context.Context, cutoff pgtype.Timestamptz) error {
+func (q *Queries) DeleteResolvedStalenessBreachesBefore(ctx context.Context, cutoff *time.Time) error {
 	_, err := q.db.Exec(ctx, DeleteResolvedStalenessBreachesBefore, cutoff)
 	return err
 }
@@ -86,8 +87,8 @@ WHERE id = $2 AND resolved_at IS NULL
 `
 
 type ResolveStalenessBreachParams struct {
-	ResolvedAt pgtype.Timestamptz `json:"resolved_at"`
-	ID         pgtype.UUID        `json:"id"`
+	ResolvedAt *time.Time `json:"resolved_at"`
+	ID         uuid.UUID  `json:"id"`
 }
 
 // Marks one open breach resolved. The resolved_at IS NULL guard makes this
@@ -132,13 +133,13 @@ RETURNING id, source, account_id, breach_type, stale_since, threshold_seconds, d
 `
 
 type UpsertOpenStalenessBreachParams struct {
-	Source           string             `json:"source"`
-	AccountID        string             `json:"account_id"`
-	BreachType       string             `json:"breach_type"`
-	StaleSince       pgtype.Timestamptz `json:"stale_since"`
-	ThresholdSeconds int64              `json:"threshold_seconds"`
-	Details          string             `json:"details"`
-	ObservedAt       pgtype.Timestamptz `json:"observed_at"`
+	Source           string    `json:"source"`
+	AccountID        string    `json:"account_id"`
+	BreachType       string    `json:"breach_type"`
+	StaleSince       time.Time `json:"stale_since"`
+	ThresholdSeconds int64     `json:"threshold_seconds"`
+	Details          string    `json:"details"`
+	ObservedAt       time.Time `json:"observed_at"`
 }
 
 // Sync-staleness watchdog breach queries.

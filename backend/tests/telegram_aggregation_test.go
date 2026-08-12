@@ -13,7 +13,6 @@ import (
 	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -443,7 +442,7 @@ func TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = database.Queries.DeleteTelegramMessagesByPeerUserID(
 			ctx,
-			pgtype.Int8{Int64: testPeerID, Valid: true},
+			ptrInt64(testPeerID),
 		)
 	})
 
@@ -517,7 +516,7 @@ func TestListDistinctUnmatchedPeers_TreatsBlankStringsAsAbsent(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = database.Queries.DeleteTelegramMessagesByPeerUserID(
 			ctx,
-			pgtype.Int8{Int64: testPeerID, Valid: true},
+			ptrInt64(testPeerID),
 		)
 	})
 

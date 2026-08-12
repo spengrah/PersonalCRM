@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type ContactMethodType string
@@ -77,20 +76,16 @@ func convertDbContactMethod(dbMethod *db.ContactMethod) ContactMethod {
 		Value: dbMethod.Value,
 	}
 
-	if dbMethod.ID.Valid {
-		method.ID = uuid.UUID(dbMethod.ID.Bytes)
+	method.ID = dbMethod.ID
+	method.ContactID = dbMethod.ContactID
+	if dbMethod.IsPrimary != nil {
+		method.IsPrimary = *dbMethod.IsPrimary
 	}
-	if dbMethod.ContactID.Valid {
-		method.ContactID = uuid.UUID(dbMethod.ContactID.Bytes)
+	if dbMethod.CreatedAt != nil {
+		method.CreatedAt = *dbMethod.CreatedAt
 	}
-	if dbMethod.IsPrimary.Valid {
-		method.IsPrimary = dbMethod.IsPrimary.Bool
-	}
-	if dbMethod.CreatedAt.Valid {
-		method.CreatedAt = dbMethod.CreatedAt.Time
-	}
-	if dbMethod.UpdatedAt.Valid {
-		method.UpdatedAt = dbMethod.UpdatedAt.Time
+	if dbMethod.UpdatedAt != nil {
+		method.UpdatedAt = *dbMethod.UpdatedAt
 	}
 	method.ValueNormalized = dbMethod.ValueNormalized
 
@@ -120,7 +115,7 @@ func mapMethodTypeToIdentifier(methodType string) identity.IdentifierType {
 }
 
 func (r *ContactMethodRepository) ListContactMethodsByContact(ctx context.Context, contactID uuid.UUID) ([]ContactMethod, error) {
-	dbMethods, err := r.queries.ListContactMethodsByContact(ctx, uuidToPgUUID(contactID))
+	dbMethods, err := r.queries.ListContactMethodsByContact(ctx, contactID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return []ContactMethod{}, nil
@@ -139,11 +134,11 @@ func (r *ContactMethodRepository) ListContactMethodsByContact(ctx context.Contex
 func (r *ContactMethodRepository) CreateContactMethod(ctx context.Context, req CreateContactMethodRequest) (*ContactMethod, error) {
 	normalized := NormalizeContactMethodValue(req.Type, req.Value)
 	dbMethod, err := r.queries.CreateContactMethod(ctx, db.CreateContactMethodParams{
-		ContactID:       uuidToPgUUID(req.ContactID),
+		ContactID:       req.ContactID,
 		Type:            req.Type,
 		Value:           req.Value,
 		ValueNormalized: normalized,
-		IsPrimary:       pgtype.Bool{Bool: req.IsPrimary, Valid: true},
+		IsPrimary:       &req.IsPrimary,
 	})
 	if err != nil {
 		return nil, err
@@ -154,7 +149,7 @@ func (r *ContactMethodRepository) CreateContactMethod(ctx context.Context, req C
 }
 
 func (r *ContactMethodRepository) DeleteContactMethodsByContact(ctx context.Context, contactID uuid.UUID) error {
-	return r.queries.DeleteContactMethodsByContact(ctx, uuidToPgUUID(contactID))
+	return r.queries.DeleteContactMethodsByContact(ctx, contactID)
 }
 
 // UpdateContactMethodRequest holds parameters for updating a contact method
@@ -168,7 +163,7 @@ type UpdateContactMethodRequest struct {
 func (r *ContactMethodRepository) UpdateContactMethod(ctx context.Context, id uuid.UUID, req UpdateContactMethodRequest) error {
 	normalized := NormalizeContactMethodValue(req.Type, req.Value)
 	_, err := r.queries.UpdateContactMethodValue(ctx, db.UpdateContactMethodValueParams{
-		ID:              uuidToPgUUID(id),
+		ID:              id,
 		Value:           req.Value,
 		ValueNormalized: normalized,
 	})
@@ -178,8 +173,8 @@ func (r *ContactMethodRepository) UpdateContactMethod(ctx context.Context, id uu
 // SetPrimary updates the is_primary flag for a contact method
 func (r *ContactMethodRepository) SetPrimary(ctx context.Context, id uuid.UUID, isPrimary bool) error {
 	return r.queries.SetContactMethodPrimary(ctx, db.SetContactMethodPrimaryParams{
-		ID:        uuidToPgUUID(id),
-		IsPrimary: pgtype.Bool{Bool: isPrimary, Valid: true},
+		ID:        id,
+		IsPrimary: &isPrimary,
 	})
 }
 
@@ -267,12 +262,12 @@ func (r *ContactMethodRepository) InsertContactMethodWithIdentity(
 	req InsertContactMethodWithIdentityRequest,
 ) (*ContactMethod, error) {
 	dbMethod, err := r.queries.InsertContactMethodWithIdentity(ctx, db.InsertContactMethodWithIdentityParams{
-		ID:        uuidToPgUUID(req.ID),
-		ContactID: uuidToPgUUID(req.ContactID),
+		ID:        req.ID,
+		ContactID: req.ContactID,
 		Type:      req.Type,
 		Value:     req.Value,
-		IsPrimary: pgtype.Bool{Bool: req.IsPrimary, Valid: true},
-		CreatedAt: timeToPgTimestamptz(&req.CreatedAt),
+		IsPrimary: &req.IsPrimary,
+		CreatedAt: &req.CreatedAt,
 	})
 	if err != nil {
 		return nil, classifyContactMethodWriteError(err)
@@ -290,8 +285,8 @@ func (r *ContactMethodRepository) UpdateContactMethodByContact(
 	methodType, value string,
 ) (*ContactMethod, error) {
 	dbMethod, err := r.queries.UpdateContactMethodByContact(ctx, db.UpdateContactMethodByContactParams{
-		ID:        uuidToPgUUID(id),
-		ContactID: uuidToPgUUID(contactID),
+		ID:        id,
+		ContactID: contactID,
 		Type:      methodType,
 		Value:     value,
 	})
@@ -308,8 +303,8 @@ func (r *ContactMethodRepository) UpdateContactMethodByContact(
 // DeleteContactMethodByContact deletes one method of one contact.
 func (r *ContactMethodRepository) DeleteContactMethodByContact(ctx context.Context, contactID, id uuid.UUID) error {
 	return r.queries.DeleteContactMethodByContact(ctx, db.DeleteContactMethodByContactParams{
-		ID:        uuidToPgUUID(id),
-		ContactID: uuidToPgUUID(contactID),
+		ID:        id,
+		ContactID: contactID,
 	})
 }
 
@@ -318,16 +313,16 @@ func (r *ContactMethodRepository) DeleteContactMethodByContact(ctx context.Conte
 // caller did not name.
 func (r *ContactMethodRepository) DemoteContactMethodPrimaryByContact(ctx context.Context, contactID, id uuid.UUID) error {
 	return r.queries.DemoteContactMethodPrimaryByContact(ctx, db.DemoteContactMethodPrimaryByContactParams{
-		ID:        uuidToPgUUID(id),
-		ContactID: uuidToPgUUID(contactID),
+		ID:        id,
+		ContactID: contactID,
 	})
 }
 
 // PromoteContactMethodPrimaryByContact sets is_primary on one named row.
 func (r *ContactMethodRepository) PromoteContactMethodPrimaryByContact(ctx context.Context, contactID, id uuid.UUID) error {
 	err := r.queries.PromoteContactMethodPrimaryByContact(ctx, db.PromoteContactMethodPrimaryByContactParams{
-		ID:        uuidToPgUUID(id),
-		ContactID: uuidToPgUUID(contactID),
+		ID:        id,
+		ContactID: contactID,
 	})
 	return classifyContactMethodWriteError(err)
 }
@@ -340,17 +335,17 @@ func (r *ContactMethodRepository) PromoteContactMethodPrimaryByContact(ctx conte
 // because a method id is not a capability, while the second lets a retried
 // removal succeed as a no-op.
 func (r *ContactMethodRepository) LookupContactMethodOwner(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
-	owner, err := r.queries.LookupContactMethodOwner(ctx, uuidToPgUUID(id))
+	owner, err := r.queries.LookupContactMethodOwner(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, db.ErrNotFound
 		}
 		return uuid.Nil, err
 	}
-	if !owner.Valid {
+	if owner == uuid.Nil {
 		return uuid.Nil, db.ErrNotFound
 	}
-	return uuid.UUID(owner.Bytes), nil
+	return owner, nil
 }
 
 // NormalizeContactMethodValueViaTrigger calls the live SQL normalization

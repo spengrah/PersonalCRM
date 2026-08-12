@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Assertion status constants. The state machine is proposed → accepted | rejected
@@ -181,45 +180,21 @@ func convertDbAssertion(a *db.Assertion) Assertion {
 		Status:         a.Status,
 		PropositionKey: a.PropositionKey,
 	}
-	if a.ID.Valid {
-		out.ID = uuid.UUID(a.ID.Bytes)
-	}
-	if a.SubjectNodeID.Valid {
-		out.SubjectNodeID = uuid.UUID(a.SubjectNodeID.Bytes)
-	}
-	if a.ObjectNodeID.Valid {
-		id := uuid.UUID(a.ObjectNodeID.Bytes)
-		out.ObjectNodeID = &id
-	}
-	if a.ValueText.Valid {
-		out.ValueText = &a.ValueText.String
-	}
-	if a.ValueNum.Valid {
-		out.ValueNum = &a.ValueNum.Float64
-	}
-	out.ValueDate = pgDateToTimePtr(a.ValueDate)
-	if a.ValueBool.Valid {
-		out.ValueBool = &a.ValueBool.Bool
-	}
-	out.ValidFrom = pgTimestamptzToTimePtr(a.ValidFrom)
-	out.ValidTo = pgTimestamptzToTimePtr(a.ValidTo)
-	if a.KnowledgeFrom.Valid {
-		out.KnowledgeFrom = a.KnowledgeFrom.Time.UTC()
-	}
-	out.KnowledgeTo = pgTimestamptzToTimePtr(a.KnowledgeTo)
-	if a.ClosureReason.Valid {
-		out.ClosureReason = &a.ClosureReason.String
-	}
-	if a.SupersededBy.Valid {
-		id := uuid.UUID(a.SupersededBy.Bytes)
-		out.SupersededBy = &id
-	}
-	if a.TrustTier.Valid {
-		out.TrustTier = &a.TrustTier.String
-	}
-	if a.CreatedAt.Valid {
-		out.CreatedAt = a.CreatedAt.Time.UTC()
-	}
+	out.ID = a.ID
+	out.SubjectNodeID = a.SubjectNodeID
+	out.ObjectNodeID = a.ObjectNodeID
+	out.ValueText = a.ValueText
+	out.ValueNum = a.ValueNum
+	out.ValueDate = utcPtr(a.ValueDate)
+	out.ValueBool = a.ValueBool
+	out.ValidFrom = utcPtr(a.ValidFrom)
+	out.ValidTo = utcPtr(a.ValidTo)
+	out.KnowledgeFrom = a.KnowledgeFrom.UTC()
+	out.KnowledgeTo = utcPtr(a.KnowledgeTo)
+	out.ClosureReason = a.ClosureReason
+	out.SupersededBy = a.SupersededBy
+	out.TrustTier = a.TrustTier
+	out.CreatedAt = a.CreatedAt.UTC()
 	return out
 }
 
@@ -232,27 +207,13 @@ func convertDbProvenance(p *db.AssertionProvenance) Provenance {
 		ProducerVersion: p.ProducerVersion,
 		InputHash:       p.InputHash,
 	}
-	if p.AssertionID.Valid {
-		out.AssertionID = uuid.UUID(p.AssertionID.Bytes)
-	}
-	if p.Field.Valid {
-		out.Field = &p.Field.String
-	}
-	if p.StartOffset.Valid {
-		out.StartOffset = &p.StartOffset.Int32
-	}
-	if p.EndOffset.Valid {
-		out.EndOffset = &p.EndOffset.Int32
-	}
-	if p.ChunkID.Valid {
-		out.ChunkID = &p.ChunkID.String
-	}
-	if p.Quote.Valid {
-		out.Quote = &p.Quote.String
-	}
-	if p.CreatedAt.Valid {
-		out.CreatedAt = p.CreatedAt.Time.UTC()
-	}
+	out.AssertionID = p.AssertionID
+	out.Field = p.Field
+	out.StartOffset = p.StartOffset
+	out.EndOffset = p.EndOffset
+	out.ChunkID = p.ChunkID
+	out.Quote = p.Quote
+	out.CreatedAt = p.CreatedAt.UTC()
 	return out
 }
 
@@ -274,23 +235,23 @@ func dbAssertionsToDomain(rows []*db.Assertion) []Assertion {
 
 func insertAssertionParams(p InsertAssertionParams) db.InsertAssertionParams {
 	return db.InsertAssertionParams{
-		SubjectNodeID:  uuidToPgUUID(p.SubjectNodeID),
+		SubjectNodeID:  p.SubjectNodeID,
 		PredicateKey:   p.PredicateKey,
-		ObjectNodeID:   uuidPtrToPgUUID(p.ObjectNodeID),
-		ValueText:      stringToPgText(p.ValueText),
-		ValueNum:       float64ToPgFloat8(p.ValueNum),
-		ValueDate:      timeToPgDate(p.ValueDate),
-		ValueBool:      boolToPgBool(p.ValueBool),
-		ValidFrom:      timeToPgTimestamptz(p.ValidFrom),
-		ValidTo:        timeToPgTimestamptz(p.ValidTo),
-		KnowledgeFrom:  pgtype.Timestamptz{Time: p.KnowledgeFrom, Valid: true},
-		KnowledgeTo:    timeToPgTimestamptz(p.KnowledgeTo),
+		ObjectNodeID:   p.ObjectNodeID,
+		ValueText:      p.ValueText,
+		ValueNum:       p.ValueNum,
+		ValueDate:      p.ValueDate,
+		ValueBool:      p.ValueBool,
+		ValidFrom:      p.ValidFrom,
+		ValidTo:        p.ValidTo,
+		KnowledgeFrom:  p.KnowledgeFrom,
+		KnowledgeTo:    p.KnowledgeTo,
 		Confidence:     p.Confidence,
 		Salience:       p.Salience,
 		Status:         p.Status,
-		ClosureReason:  stringToPgText(p.ClosureReason),
-		SupersededBy:   uuidPtrToPgUUID(p.SupersededBy),
-		TrustTier:      stringToPgText(p.TrustTier),
+		ClosureReason:  p.ClosureReason,
+		SupersededBy:   p.SupersededBy,
+		TrustTier:      p.TrustTier,
 		PropositionKey: p.PropositionKey,
 	}
 }
@@ -328,7 +289,7 @@ func (r *AssertionRepository) GetAssertionTx(ctx context.Context, tx pgx.Tx, id 
 // a lifecycle transition's status-precondition check and the status update are
 // atomic within the tx. Tx-only (the lock is held until commit).
 func (r *AssertionRepository) GetAssertionForUpdateTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*Assertion, error) {
-	row, err := db.New(tx).GetAssertionForUpdate(ctx, uuidToPgUUID(id))
+	row, err := db.New(tx).GetAssertionForUpdate(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -340,7 +301,7 @@ func (r *AssertionRepository) GetAssertionForUpdateTx(ctx context.Context, tx pg
 }
 
 func getAssertion(ctx context.Context, q db.Querier, id uuid.UUID) (*Assertion, error) {
-	row, err := q.GetAssertion(ctx, uuidToPgUUID(id))
+	row, err := q.GetAssertion(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -381,10 +342,10 @@ func findLiveProposition(ctx context.Context, q db.Querier, propositionKey strin
 // FOR UPDATE, so it is tx-only (the lock is held for the rest of the tx).
 func (r *AssertionRepository) FindAcceptedForSlotTx(ctx context.Context, tx pgx.Tx, subjectNodeID uuid.UUID, predicateKey string, effectiveFrom time.Time, newValidTo *time.Time) ([]Assertion, error) {
 	rows, err := db.New(tx).FindAcceptedForSlot(ctx, db.FindAcceptedForSlotParams{
-		SubjectNodeID: uuidToPgUUID(subjectNodeID),
+		SubjectNodeID: subjectNodeID,
 		PredicateKey:  predicateKey,
-		EffectiveFrom: pgtype.Timestamptz{Time: effectiveFrom, Valid: true},
-		NewValidTo:    timeToPgTimestamptz(newValidTo),
+		EffectiveFrom: effectiveFrom,
+		NewValidTo:    newValidTo,
 	})
 	if err != nil {
 		return nil, err
@@ -398,10 +359,10 @@ func (r *AssertionRepository) FindAcceptedForSlotTx(ctx context.Context, tx pgx.
 func (r *AssertionRepository) FindAcceptedForSlotSymmetricTx(ctx context.Context, tx pgx.Tx, predicateKey string, participantA, participantB uuid.UUID, effectiveFrom time.Time, newValidTo *time.Time) ([]Assertion, error) {
 	rows, err := db.New(tx).FindAcceptedForSlotSymmetric(ctx, db.FindAcceptedForSlotSymmetricParams{
 		PredicateKey:  predicateKey,
-		ParticipantA:  uuidToPgUUID(participantA),
-		ParticipantB:  uuidToPgUUID(participantB),
-		EffectiveFrom: pgtype.Timestamptz{Time: effectiveFrom, Valid: true},
-		NewValidTo:    timeToPgTimestamptz(newValidTo),
+		ParticipantA:  participantA,
+		ParticipantB:  participantB,
+		EffectiveFrom: effectiveFrom,
+		NewValidTo:    newValidTo,
 	})
 	if err != nil {
 		return nil, err
@@ -422,12 +383,12 @@ func (r *AssertionRepository) CloseAssertionTx(ctx context.Context, tx pgx.Tx, p
 
 func closeAssertion(ctx context.Context, q db.Querier, p CloseAssertionParams) error {
 	return q.CloseAssertion(ctx, db.CloseAssertionParams{
-		ID:            uuidToPgUUID(p.ID),
-		ValidTo:       timeToPgTimestamptz(p.ValidTo),
+		ID:            p.ID,
+		ValidTo:       p.ValidTo,
 		Status:        p.Status,
-		ClosureReason: stringToPgText(p.ClosureReason),
-		SupersededBy:  uuidPtrToPgUUID(p.SupersededBy),
-		KnowledgeTo:   timeToPgTimestamptz(p.KnowledgeTo),
+		ClosureReason: p.ClosureReason,
+		SupersededBy:  p.SupersededBy,
+		KnowledgeTo:   p.KnowledgeTo,
 	})
 }
 
@@ -435,9 +396,9 @@ func closeAssertion(ctx context.Context, q db.Querier, p CloseAssertionParams) e
 // future successor while keeping it accepted/knowledge-open.
 func (r *AssertionRepository) BoundPendingSuccessorTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, validTo time.Time, supersededBy uuid.UUID) error {
 	return db.New(tx).BoundPendingSuccessor(ctx, db.BoundPendingSuccessorParams{
-		ID:           uuidToPgUUID(id),
-		ValidTo:      pgtype.Timestamptz{Time: validTo, Valid: true},
-		SupersededBy: uuidToPgUUID(supersededBy),
+		ID:           id,
+		ValidTo:      &validTo,
+		SupersededBy: &supersededBy,
 	})
 }
 
@@ -446,8 +407,8 @@ func (r *AssertionRepository) BoundPendingSuccessorTx(ctx context.Context, tx pg
 // rollover sweep terminalizes it at the bound.
 func (r *AssertionRepository) SetAssertionPendingSuccessorTx(ctx context.Context, tx pgx.Tx, id, successorID uuid.UUID) error {
 	return db.New(tx).SetAssertionPendingSuccessor(ctx, db.SetAssertionPendingSuccessorParams{
-		ID:           uuidToPgUUID(id),
-		SupersededBy: uuidToPgUUID(successorID),
+		ID:           id,
+		SupersededBy: &successorID,
 	})
 }
 
@@ -455,9 +416,9 @@ func (r *AssertionRepository) SetAssertionPendingSuccessorTx(ctx context.Context
 // evidence and sets the recomputed proposition_key.
 func (r *AssertionRepository) WidenAssertionValidityTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, validFrom, validTo *time.Time, propositionKey string) error {
 	return db.New(tx).WidenAssertionValidity(ctx, db.WidenAssertionValidityParams{
-		ID:             uuidToPgUUID(id),
-		ValidFrom:      timeToPgTimestamptz(validFrom),
-		ValidTo:        timeToPgTimestamptz(validTo),
+		ID:             id,
+		ValidFrom:      validFrom,
+		ValidTo:        validTo,
 		PropositionKey: propositionKey,
 	})
 }
@@ -477,7 +438,7 @@ func (r *AssertionRepository) RolloverDueBoundedSuccessorsTx(ctx context.Context
 }
 
 func rolloverDueBoundedSuccessors(ctx context.Context, q db.Querier, knowledgeTo time.Time) ([]Assertion, error) {
-	rows, err := q.RolloverDueBoundedSuccessors(ctx, pgtype.Timestamptz{Time: knowledgeTo, Valid: true})
+	rows, err := q.RolloverDueBoundedSuccessors(ctx, knowledgeTo)
 	if err != nil {
 		return nil, err
 	}
@@ -488,10 +449,10 @@ func rolloverDueBoundedSuccessors(ctx context.Context, q db.Querier, knowledgeTo
 // knowledgeTo + closureReason are nil for a non-terminal transition.
 func (r *AssertionRepository) TransitionStatusTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, status string, knowledgeTo *time.Time, closureReason *string) error {
 	return db.New(tx).TransitionStatus(ctx, db.TransitionStatusParams{
-		ID:            uuidToPgUUID(id),
+		ID:            id,
 		Status:        status,
-		KnowledgeTo:   timeToPgTimestamptz(knowledgeTo),
-		ClosureReason: stringToPgText(closureReason),
+		KnowledgeTo:   knowledgeTo,
+		ClosureReason: closureReason,
 	})
 }
 
@@ -509,9 +470,9 @@ func (r *AssertionRepository) GetCurrentAcceptedTx(ctx context.Context, tx pgx.T
 
 func getCurrentAccepted(ctx context.Context, q db.Querier, subjectNodeID uuid.UUID, predicateKey string, now time.Time) (*Assertion, error) {
 	row, err := q.GetCurrentAccepted(ctx, db.GetCurrentAcceptedParams{
-		SubjectNodeID: uuidToPgUUID(subjectNodeID),
+		SubjectNodeID: subjectNodeID,
 		PredicateKey:  predicateKey,
-		Now:           pgtype.Timestamptz{Time: now, Valid: true},
+		Now:           &now,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -526,7 +487,7 @@ func getCurrentAccepted(ctx context.Context, q db.Querier, subjectNodeID uuid.UU
 // ListAssertionsBySubject returns all assertions for a subject node (any status),
 // newest first.
 func (r *AssertionRepository) ListAssertionsBySubject(ctx context.Context, subjectNodeID uuid.UUID) ([]Assertion, error) {
-	rows, err := r.queries.ListAssertionsBySubject(ctx, uuidToPgUUID(subjectNodeID))
+	rows, err := r.queries.ListAssertionsBySubject(ctx, subjectNodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -538,7 +499,7 @@ func (r *AssertionRepository) ListAssertionsBySubject(ctx context.Context, subje
 // procedure uses it to find every loser-referencing row to re-point onto the
 // winner. Tx-bound so it sees rows the same merge tx wrote earlier.
 func (r *AssertionRepository) ListAssertionsTouchingNodeTx(ctx context.Context, tx pgx.Tx, nodeID uuid.UUID) ([]Assertion, error) {
-	rows, err := db.New(tx).ListAssertionsTouchingNode(ctx, uuidToPgUUID(nodeID))
+	rows, err := db.New(tx).ListAssertionsTouchingNode(ctx, nodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -549,7 +510,7 @@ func (r *AssertionRepository) ListAssertionsTouchingNodeTx(ctx context.Context, 
 // either orientation (the symmetric two-direction read).
 func (r *AssertionRepository) ListLiveEdgesForNode(ctx context.Context, nodeID uuid.UUID, predicateKey string) ([]Assertion, error) {
 	rows, err := r.queries.ListLiveEdgesForNode(ctx, db.ListLiveEdgesForNodeParams{
-		SubjectNodeID: uuidToPgUUID(nodeID),
+		SubjectNodeID: nodeID,
 		PredicateKey:  predicateKey,
 	})
 	if err != nil {
@@ -562,8 +523,8 @@ func (r *AssertionRepository) ListLiveEdgesForNode(ctx context.Context, nodeID u
 // and sets the recomputed proposition_key (merge primitive).
 func (r *AssertionRepository) RepointAssertionSubjectTx(ctx context.Context, tx pgx.Tx, id, subjectNodeID uuid.UUID, propositionKey string) error {
 	return db.New(tx).RepointAssertionSubject(ctx, db.RepointAssertionSubjectParams{
-		ID:             uuidToPgUUID(id),
-		SubjectNodeID:  uuidToPgUUID(subjectNodeID),
+		ID:             id,
+		SubjectNodeID:  subjectNodeID,
 		PropositionKey: propositionKey,
 	})
 }
@@ -572,8 +533,8 @@ func (r *AssertionRepository) RepointAssertionSubjectTx(ctx context.Context, tx 
 // sets the recomputed proposition_key (merge primitive).
 func (r *AssertionRepository) RepointAssertionObjectTx(ctx context.Context, tx pgx.Tx, id, objectNodeID uuid.UUID, propositionKey string) error {
 	return db.New(tx).RepointAssertionObject(ctx, db.RepointAssertionObjectParams{
-		ID:             uuidToPgUUID(id),
-		ObjectNodeID:   uuidToPgUUID(objectNodeID),
+		ID:             id,
+		ObjectNodeID:   &objectNodeID,
 		PropositionKey: propositionKey,
 	})
 }
@@ -582,9 +543,9 @@ func (r *AssertionRepository) RepointAssertionObjectTx(ctx context.Context, tx p
 // corroborating write. trustTier is nil to leave it NULL.
 func (r *AssertionRepository) UpdateAssertionConfidenceTrustTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, confidence int16, trustTier *string) error {
 	return db.New(tx).UpdateAssertionConfidenceTrust(ctx, db.UpdateAssertionConfidenceTrustParams{
-		ID:         uuidToPgUUID(id),
+		ID:         id,
 		Confidence: confidence,
-		TrustTier:  stringToPgText(trustTier),
+		TrustTier:  trustTier,
 	})
 }
 
@@ -609,18 +570,18 @@ func (r *AssertionRepository) InsertProvenanceTx(ctx context.Context, tx pgx.Tx,
 
 func insertProvenance(ctx context.Context, q db.Querier, p InsertProvenanceParams) (bool, error) {
 	affected, err := q.InsertProvenance(ctx, db.InsertProvenanceParams{
-		AssertionID:     uuidToPgUUID(p.AssertionID),
+		AssertionID:     p.AssertionID,
 		LocatorHash:     p.LocatorHash,
 		SourceKind:      p.SourceKind,
 		SourceID:        p.SourceID,
 		ProducerKind:    p.ProducerKind,
 		ProducerVersion: p.ProducerVersion,
-		Field:           stringToPgText(p.Field),
-		StartOffset:     int32ToPgInt4(p.StartOffset),
-		EndOffset:       int32ToPgInt4(p.EndOffset),
-		ChunkID:         stringToPgText(p.ChunkID),
+		Field:           p.Field,
+		StartOffset:     p.StartOffset,
+		EndOffset:       p.EndOffset,
+		ChunkID:         p.ChunkID,
 		InputHash:       p.InputHash,
-		Quote:           stringToPgText(p.Quote),
+		Quote:           p.Quote,
 	})
 	if err != nil {
 		return false, err
@@ -641,7 +602,7 @@ func (r *AssertionRepository) ListProvenanceTx(ctx context.Context, tx pgx.Tx, a
 }
 
 func listProvenance(ctx context.Context, q db.Querier, assertionID uuid.UUID) ([]Provenance, error) {
-	rows, err := q.ListProvenance(ctx, uuidToPgUUID(assertionID))
+	rows, err := q.ListProvenance(ctx, assertionID)
 	if err != nil {
 		return nil, err
 	}
@@ -665,7 +626,7 @@ func (r *AssertionRepository) ListProvenanceBySource(ctx context.Context, source
 // DeleteProvenanceLocatorTx drops a single locator (re-extraction retirement).
 func (r *AssertionRepository) DeleteProvenanceLocatorTx(ctx context.Context, tx pgx.Tx, assertionID uuid.UUID, locatorHash string) error {
 	return db.New(tx).DeleteProvenanceLocator(ctx, db.DeleteProvenanceLocatorParams{
-		AssertionID: uuidToPgUUID(assertionID),
+		AssertionID: assertionID,
 		LocatorHash: locatorHash,
 	})
 }
@@ -705,20 +666,19 @@ func (r *AssertionRepository) ExistsContentRowTx(ctx context.Context, tx pgx.Tx,
 }
 
 func existsContentRow(ctx context.Context, q db.Querier, sourceKind string, id uuid.UUID) (bool, error) {
-	pgID := uuidToPgUUID(id)
 	switch sourceKind {
 	case SourceKindCommsMessage:
-		return q.ExistsCommsMessage(ctx, pgID)
+		return q.ExistsCommsMessage(ctx, id)
 	case SourceKindTelegramMessage:
-		return q.ExistsTelegramMessage(ctx, pgID)
+		return q.ExistsTelegramMessage(ctx, id)
 	case SourceKindMessagesMessage:
-		return q.ExistsMessagesMessage(ctx, pgID)
+		return q.ExistsMessagesMessage(ctx, id)
 	case SourceKindMeetingNote:
-		return q.ExistsMeetingNote(ctx, pgID)
+		return q.ExistsMeetingNote(ctx, id)
 	case SourceKindCalendarEvent:
-		return q.ExistsCalendarEvent(ctx, pgID)
+		return q.ExistsCalendarEvent(ctx, id)
 	case SourceKindPhoneCall:
-		return q.ExistsPhoneCall(ctx, pgID)
+		return q.ExistsPhoneCall(ctx, id)
 	default:
 		return false, errors.New("ExistsContentRow called for a source kind with no backing-row check: " + sourceKind)
 	}

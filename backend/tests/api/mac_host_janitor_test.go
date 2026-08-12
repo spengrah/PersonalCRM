@@ -13,7 +13,6 @@ import (
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
 	"github.com/stretchr/testify/require"
 )
@@ -43,7 +42,7 @@ func TestPairingTokenJanitor_DeletesExpired(t *testing.T) {
 		hashBytes := sha256.Sum256([]byte("janitor-test-" + suffix))
 		_, err := database.Queries.SeedPairingToken(ctx, db.SeedPairingTokenParams{
 			TokenHash: hex.EncodeToString(hashBytes[:]),
-			ExpiresAt: pgtype.Timestamptz{Time: expires, Valid: true},
+			ExpiresAt: expires,
 		})
 		require.NoError(t, err)
 	}

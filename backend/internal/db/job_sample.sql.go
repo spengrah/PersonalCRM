@@ -7,8 +7,7 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"time"
 )
 
 const InsertJobExecSample = `-- name: InsertJobExecSample :exec
@@ -19,15 +18,15 @@ ON CONFLICT (river_job_id, attempt, attempted_at) DO NOTHING
 `
 
 type InsertJobExecSampleParams struct {
-	RiverJobID  int64              `json:"river_job_id"`
-	Kind        string             `json:"kind"`
-	Queue       string             `json:"queue"`
-	AttemptedAt pgtype.Timestamptz `json:"attempted_at"`
-	FinalizedAt pgtype.Timestamptz `json:"finalized_at"`
-	Attempt     int32              `json:"attempt"`
-	State       string             `json:"state"`
-	QueueWaitMs int64              `json:"queue_wait_ms"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	RiverJobID  int64     `json:"river_job_id"`
+	Kind        string    `json:"kind"`
+	Queue       string    `json:"queue"`
+	AttemptedAt time.Time `json:"attempted_at"`
+	FinalizedAt time.Time `json:"finalized_at"`
+	Attempt     int32     `json:"attempt"`
+	State       string    `json:"state"`
+	QueueWaitMs int64     `json:"queue_wait_ms"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Queries over job_exec_sample (the River job-execution sampling table) plus
@@ -75,8 +74,8 @@ SELECT COALESCE(MAX(c), 0)::int AS max_concurrency FROM running
 `
 
 type JobExecMaxConcurrencyParams struct {
-	WindowStart pgtype.Timestamptz `json:"window_start"`
-	WindowEnd   pgtype.Timestamptz `json:"window_end"`
+	WindowStart time.Time `json:"window_start"`
+	WindowEnd   time.Time `json:"window_end"`
 }
 
 // Metric 1: peak concurrency over [@window_start,@window_end]. Intervals are selected by
@@ -103,8 +102,8 @@ ORDER BY kind
 `
 
 type JobExecRunDurationByKindParams struct {
-	WindowStart pgtype.Timestamptz `json:"window_start"`
-	WindowEnd   pgtype.Timestamptz `json:"window_end"`
+	WindowStart time.Time `json:"window_start"`
+	WindowEnd   time.Time `json:"window_end"`
 }
 
 type JobExecRunDurationByKindRow struct {
@@ -163,9 +162,9 @@ FROM seg WHERE next_t IS NOT NULL
 `
 
 type JobExecSaturatedSecondsParams struct {
-	Threshold   int32              `json:"threshold"`
-	WindowStart pgtype.Timestamptz `json:"window_start"`
-	WindowEnd   pgtype.Timestamptz `json:"window_end"`
+	Threshold   int32     `json:"threshold"`
+	WindowStart time.Time `json:"window_start"`
+	WindowEnd   time.Time `json:"window_end"`
 }
 
 // Metric 1: total wall-seconds spent at concurrency >= @threshold (pass
@@ -190,8 +189,8 @@ ORDER BY kind
 `
 
 type JobExecWaitByKindParams struct {
-	WindowStart pgtype.Timestamptz `json:"window_start"`
-	WindowEnd   pgtype.Timestamptz `json:"window_end"`
+	WindowStart time.Time `json:"window_start"`
+	WindowEnd   time.Time `json:"window_end"`
 }
 
 type JobExecWaitByKindRow struct {
@@ -275,9 +274,9 @@ ORDER BY kind
 `
 
 type JobExecWaitDuringSaturationByKindParams struct {
-	WindowStart pgtype.Timestamptz `json:"window_start"`
-	WindowEnd   pgtype.Timestamptz `json:"window_end"`
-	Threshold   int32              `json:"threshold"`
+	WindowStart time.Time `json:"window_start"`
+	WindowEnd   time.Time `json:"window_end"`
+	Threshold   int32     `json:"threshold"`
 }
 
 type JobExecWaitDuringSaturationByKindRow struct {
@@ -362,9 +361,9 @@ ORDER BY wait_kind, blame_slot_s DESC
 `
 
 type JobExecWaitSlotBlameByKindParams struct {
-	WindowStart pgtype.Timestamptz `json:"window_start"`
-	WindowEnd   pgtype.Timestamptz `json:"window_end"`
-	Threshold   int32              `json:"threshold"`
+	WindowStart time.Time `json:"window_start"`
+	WindowEnd   time.Time `json:"window_end"`
+	Threshold   int32     `json:"threshold"`
 }
 
 type JobExecWaitSlotBlameByKindRow struct {
@@ -406,15 +405,15 @@ FROM job_exec_sample WHERE river_job_id = ANY($1::bigint[]) ORDER BY river_job_i
 `
 
 type ListJobExecSamplesByRiverJobIDForTestRow struct {
-	RiverJobID  int64              `json:"river_job_id"`
-	Kind        string             `json:"kind"`
-	Queue       string             `json:"queue"`
-	AttemptedAt pgtype.Timestamptz `json:"attempted_at"`
-	FinalizedAt pgtype.Timestamptz `json:"finalized_at"`
-	Attempt     int32              `json:"attempt"`
-	State       string             `json:"state"`
-	QueueWaitMs int64              `json:"queue_wait_ms"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	RiverJobID  int64     `json:"river_job_id"`
+	Kind        string    `json:"kind"`
+	Queue       string    `json:"queue"`
+	AttemptedAt time.Time `json:"attempted_at"`
+	FinalizedAt time.Time `json:"finalized_at"`
+	Attempt     int32     `json:"attempt"`
+	State       string    `json:"state"`
+	QueueWaitMs int64     `json:"queue_wait_ms"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Test-only read of sample rows by river_job_id (raw SQL is banned in Go tests,
@@ -481,7 +480,7 @@ type Tier0RiverJobStatsByKindRow struct {
 // under/over-states the true available-wait. It is a rough first signal ONLY; do
 // NOT compare it numerically to the Tier-1 queue_wait_ms metric, which is
 // River's exact QueueWaitDuration.
-func (q *Queries) Tier0RiverJobStatsByKind(ctx context.Context, cutoff pgtype.Timestamptz) ([]*Tier0RiverJobStatsByKindRow, error) {
+func (q *Queries) Tier0RiverJobStatsByKind(ctx context.Context, cutoff time.Time) ([]*Tier0RiverJobStatsByKindRow, error) {
 	rows, err := q.db.Query(ctx, Tier0RiverJobStatsByKind, cutoff)
 	if err != nil {
 		return nil, err
@@ -512,7 +511,7 @@ DELETE FROM job_exec_sample WHERE created_at < $1::timestamptz
 
 // Housekeeping DELETE. Cutoff is accelerated-now minus the retention window,
 // computed by the caller (NOT SQL NOW()).
-func (q *Queries) TrimJobExecSamples(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+func (q *Queries) TrimJobExecSamples(ctx context.Context, cutoff time.Time) (int64, error) {
 	result, err := q.db.Exec(ctx, TrimJobExecSamples, cutoff)
 	if err != nil {
 		return 0, err

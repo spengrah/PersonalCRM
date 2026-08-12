@@ -1611,3 +1611,11 @@ SELECT (to_regprocedure(sqlc.arg(signature)::text) IS NOT NULL)::boolean;
 -- Wrapped in IS NULL rather than returning the setting itself so the result is
 -- a non-nullable boolean, the same shape as TestRegprocedureExists.
 SELECT (current_setting('crm.derived_writer', true) IS NULL)::boolean;
+
+-- name: CountOAuthCredentialWithNullTokenType :one
+-- Id-scoped NULL probe for the token_type column: the repository's
+-- OAuthCredential struct flattens NULL and '' to the same Go value, so the
+-- discriminating assertion must read the stored column. Scoped to one id
+-- because a global count is vacuous under t.Parallel() — any sibling's NULL
+-- row satisfies it.
+SELECT count(*) FROM oauth_credential WHERE id = $1 AND token_type IS NULL;

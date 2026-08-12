@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const AppendMatchedContact = `-- name: AppendMatchedContact :exec
@@ -20,8 +21,8 @@ WHERE id = $2::uuid
 `
 
 type AppendMatchedContactParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	EventID   pgtype.UUID `json:"event_id"`
+	ContactID uuid.UUID `json:"contact_id"`
+	EventID   uuid.UUID `json:"event_id"`
 }
 
 // Atomically appends a contact to an event's matched_contact_ids iff it isn't
@@ -40,7 +41,7 @@ WHERE $1::uuid = ANY(matched_contact_ids)
 `
 
 // Count events for a specific contact
-func (q *Queries) CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error) {
+func (q *Queries) CountEventsForContact(ctx context.Context, contactID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, CountEventsForContact, contactID)
 	var count int64
 	err := row.Scan(&count)
@@ -87,8 +88,8 @@ ORDER BY start_time ASC
 `
 
 type FindCalendarEventsInWindowParams struct {
-	WindowStart pgtype.Timestamptz `json:"window_start"`
-	WindowEnd   pgtype.Timestamptz `json:"window_end"`
+	WindowStart time.Time `json:"window_start"`
+	WindowEnd   time.Time `json:"window_end"`
 }
 
 // Returns candidate calendar_event rows for the meeting_note.recorded
@@ -146,8 +147,8 @@ WHERE jsonb_array_lower_values(attendees, 'email') && ARRAY[LOWER($1::text)]
 `
 
 type FindEventsByAttendeeEmailUnmatchedForContactParams struct {
-	Email     string      `json:"email"`
-	ContactID pgtype.UUID `json:"contact_id"`
+	Email     string    `json:"email"`
+	ContactID uuid.UUID `json:"contact_id"`
 }
 
 // Finds events whose JSONB attendees contain the given normalized email but
@@ -248,7 +249,7 @@ LIMIT 1
 `
 
 // Look up an event by its UUID
-func (q *Queries) GetCalendarEventByID(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error) {
+func (q *Queries) GetCalendarEventByID(ctx context.Context, id uuid.UUID) (*CalendarEvent, error) {
 	row := q.db.QueryRow(ctx, GetCalendarEventByID, id)
 	var i CalendarEvent
 	err := row.Scan(
@@ -287,7 +288,7 @@ FOR SHARE
 // holds the row until the attended tx commits, so an interleaving decline
 // DELETE either blocks (attended inserts, decline then soft-deletes) or has
 // already committed (this read returns no row, attended skips the insert).
-func (q *Queries) GetCalendarEventByIDForShare(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error) {
+func (q *Queries) GetCalendarEventByIDForShare(ctx context.Context, id uuid.UUID) (*CalendarEvent, error) {
 	row := q.db.QueryRow(ctx, GetCalendarEventByIDForShare, id)
 	var i CalendarEvent
 	err := row.Scan(
@@ -325,9 +326,9 @@ ORDER BY start_time ASC
 `
 
 type ListEventsByAccountAndDateRangeParams struct {
-	GoogleAccountID string             `json:"google_account_id"`
-	StartTime       pgtype.Timestamptz `json:"start_time"`
-	StartTime_2     pgtype.Timestamptz `json:"start_time_2"`
+	GoogleAccountID string    `json:"google_account_id"`
+	StartTime       time.Time `json:"start_time"`
+	StartTime_2     time.Time `json:"start_time_2"`
 }
 
 // List events by Google account within a date range
@@ -381,9 +382,9 @@ LIMIT $3 OFFSET $2
 `
 
 type ListEventsForContactParams struct {
-	ContactID   pgtype.UUID `json:"contact_id"`
-	EventOffset int32       `json:"event_offset"`
-	EventLimit  int32       `json:"event_limit"`
+	ContactID   uuid.UUID `json:"contact_id"`
+	EventOffset int32     `json:"event_offset"`
+	EventLimit  int32     `json:"event_limit"`
 }
 
 // List calendar events involving a specific contact
@@ -439,8 +440,8 @@ LIMIT $2
 `
 
 type ListPastEventsNeedingUpdateParams struct {
-	EndTime pgtype.Timestamptz `json:"end_time"`
-	Limit   int32              `json:"limit"`
+	EndTime time.Time `json:"end_time"`
+	Limit   int32     `json:"limit"`
 }
 
 // List past events that haven't updated last_contacted yet
@@ -495,9 +496,9 @@ LIMIT $3
 `
 
 type ListUpcomingEventsForContactParams struct {
-	ContactID  pgtype.UUID        `json:"contact_id"`
-	AfterTime  pgtype.Timestamptz `json:"after_time"`
-	EventLimit int32              `json:"event_limit"`
+	ContactID  uuid.UUID `json:"contact_id"`
+	AfterTime  time.Time `json:"after_time"`
+	EventLimit int32     `json:"event_limit"`
 }
 
 // List upcoming calendar events for a specific contact
@@ -552,9 +553,9 @@ LIMIT $2 OFFSET $3
 `
 
 type ListUpcomingEventsWithContactsParams struct {
-	StartTime pgtype.Timestamptz `json:"start_time"`
-	Limit     int32              `json:"limit"`
-	Offset    int32              `json:"offset"`
+	StartTime time.Time `json:"start_time"`
+	Limit     int32     `json:"limit"`
+	Offset    int32     `json:"offset"`
 }
 
 // List upcoming events that have matched CRM contacts
@@ -633,7 +634,7 @@ WHERE id = $1
 `
 
 // Mark an event as having updated last_contacted for its contacts
-func (q *Queries) MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) MarkLastContactedUpdated(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, MarkLastContactedUpdated, id)
 	return err
 }
@@ -650,7 +651,7 @@ FOR UPDATE NOWAIT
 // branch). Used by the attended-vs-decline lock-serialization integration
 // test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
 // without a sleep/timeout. Production code must NOT call this.
-func (q *Queries) TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error) {
+func (q *Queries) TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id uuid.UUID) (*CalendarEvent, error) {
 	row := q.db.QueryRow(ctx, TestGetCalendarEventByIDForUpdateNoWait, id)
 	var i CalendarEvent
 	err := row.Scan(
@@ -685,7 +686,7 @@ DELETE FROM calendar_event WHERE id = $1
 // TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
 // by integration tests that exercise the "target row vanished between
 // snapshot and resolve-link" path. Production code must NOT call this.
-func (q *Queries) TestHardDeleteCalendarEventByID(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) TestHardDeleteCalendarEventByID(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, TestHardDeleteCalendarEventByID, id)
 	return err
 }
@@ -699,8 +700,8 @@ RETURNING id, gcal_event_id, gcal_calendar_id, google_account_id, title, descrip
 `
 
 type UpdateMatchedContactsParams struct {
-	ID                pgtype.UUID   `json:"id"`
-	MatchedContactIds []pgtype.UUID `json:"matched_contact_ids"`
+	ID                uuid.UUID   `json:"id"`
+	MatchedContactIds []uuid.UUID `json:"matched_contact_ids"`
 }
 
 // Update the matched contact IDs for an event
@@ -780,23 +781,23 @@ RETURNING id, gcal_event_id, gcal_calendar_id, google_account_id, title, descrip
 `
 
 type UpsertCalendarEventParams struct {
-	GcalEventID          string             `json:"gcal_event_id"`
-	GcalCalendarID       string             `json:"gcal_calendar_id"`
-	GoogleAccountID      string             `json:"google_account_id"`
-	Title                pgtype.Text        `json:"title"`
-	Description          pgtype.Text        `json:"description"`
-	Location             pgtype.Text        `json:"location"`
-	StartTime            pgtype.Timestamptz `json:"start_time"`
-	EndTime              pgtype.Timestamptz `json:"end_time"`
-	AllDay               pgtype.Bool        `json:"all_day"`
-	Status               pgtype.Text        `json:"status"`
-	UserResponse         pgtype.Text        `json:"user_response"`
-	OrganizerEmail       pgtype.Text        `json:"organizer_email"`
-	Attendees            []byte             `json:"attendees"`
-	MatchedContactIds    []pgtype.UUID      `json:"matched_contact_ids"`
-	SyncedAt             pgtype.Timestamptz `json:"synced_at"`
-	LastContactedUpdated pgtype.Bool        `json:"last_contacted_updated"`
-	HtmlLink             pgtype.Text        `json:"html_link"`
+	GcalEventID          string      `json:"gcal_event_id"`
+	GcalCalendarID       string      `json:"gcal_calendar_id"`
+	GoogleAccountID      string      `json:"google_account_id"`
+	Title                *string     `json:"title"`
+	Description          *string     `json:"description"`
+	Location             *string     `json:"location"`
+	StartTime            time.Time   `json:"start_time"`
+	EndTime              time.Time   `json:"end_time"`
+	AllDay               *bool       `json:"all_day"`
+	Status               *string     `json:"status"`
+	UserResponse         *string     `json:"user_response"`
+	OrganizerEmail       *string     `json:"organizer_email"`
+	Attendees            []byte      `json:"attendees"`
+	MatchedContactIds    []uuid.UUID `json:"matched_contact_ids"`
+	SyncedAt             *time.Time  `json:"synced_at"`
+	LastContactedUpdated *bool       `json:"last_contacted_updated"`
+	HtmlLink             *string     `json:"html_link"`
 }
 
 // Insert or update a calendar event from Google Calendar

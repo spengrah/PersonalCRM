@@ -18,7 +18,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -85,9 +84,10 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 	imports.GET("/candidates", importHandler.ListImportCandidates)
 
 	cleanup := func() {
+		prefix := "tg-suggestion-"
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
 			context.Background(),
-			pgtype.Text{String: "tg-suggestion-", Valid: true},
+			&prefix,
 		)
 		database.Close()
 	}

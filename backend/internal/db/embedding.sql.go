@@ -8,7 +8,7 @@ package db
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 	"github.com/pgvector/pgvector-go"
 )
 
@@ -18,8 +18,8 @@ WHERE target_kind = $1 AND target_id = $2
 `
 
 type DeleteEmbeddingsForTargetParams struct {
-	TargetKind string      `json:"target_kind"`
-	TargetID   pgtype.UUID `json:"target_id"`
+	TargetKind string    `json:"target_kind"`
+	TargetID   uuid.UUID `json:"target_id"`
 }
 
 // Wipe every model's embedding for one target (e.g. when the target's content
@@ -35,9 +35,9 @@ WHERE target_kind = $1 AND target_id = $2 AND model_version = $3
 `
 
 type GetEmbeddingParams struct {
-	TargetKind   string      `json:"target_kind"`
-	TargetID     pgtype.UUID `json:"target_id"`
-	ModelVersion string      `json:"model_version"`
+	TargetKind   string    `json:"target_kind"`
+	TargetID     uuid.UUID `json:"target_id"`
+	ModelVersion string    `json:"model_version"`
 }
 
 func (q *Queries) GetEmbedding(ctx context.Context, arg GetEmbeddingParams) (*Embedding, error) {
@@ -63,7 +63,7 @@ DO UPDATE SET vector = EXCLUDED.vector, computed_at = EXCLUDED.computed_at
 
 type UpsertEmbeddingParams struct {
 	TargetKind   string          `json:"target_kind"`
-	TargetID     pgtype.UUID     `json:"target_id"`
+	TargetID     uuid.UUID       `json:"target_id"`
 	ModelVersion string          `json:"model_version"`
 	Vector       pgvector.Vector `json:"vector"`
 }

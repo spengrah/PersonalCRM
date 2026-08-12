@@ -59,12 +59,8 @@ func convertDbEmbedding(dbEmbedding *db.Embedding) Embedding {
 		ModelVersion: dbEmbedding.ModelVersion,
 		Vector:       dbEmbedding.Vector.Slice(),
 	}
-	if dbEmbedding.TargetID.Valid {
-		embedding.TargetID = uuid.UUID(dbEmbedding.TargetID.Bytes)
-	}
-	if dbEmbedding.ComputedAt.Valid {
-		embedding.ComputedAt = dbEmbedding.ComputedAt.Time.UTC()
-	}
+	embedding.TargetID = dbEmbedding.TargetID
+	embedding.ComputedAt = dbEmbedding.ComputedAt.UTC()
 	return embedding
 }
 
@@ -73,7 +69,7 @@ func convertDbEmbedding(dbEmbedding *db.Embedding) Embedding {
 func (r *EmbeddingRepository) UpsertEmbedding(ctx context.Context, req UpsertEmbeddingRequest) error {
 	return r.queries.UpsertEmbedding(ctx, db.UpsertEmbeddingParams{
 		TargetKind:   req.TargetKind,
-		TargetID:     uuidToPgUUID(req.TargetID),
+		TargetID:     req.TargetID,
 		ModelVersion: req.ModelVersion,
 		Vector:       pgvector.NewVector(req.Vector),
 	})
@@ -83,7 +79,7 @@ func (r *EmbeddingRepository) UpsertEmbedding(ctx context.Context, req UpsertEmb
 func (r *EmbeddingRepository) GetEmbedding(ctx context.Context, targetKind string, targetID uuid.UUID, modelVersion string) (*Embedding, error) {
 	dbEmbedding, err := r.queries.GetEmbedding(ctx, db.GetEmbeddingParams{
 		TargetKind:   targetKind,
-		TargetID:     uuidToPgUUID(targetID),
+		TargetID:     targetID,
 		ModelVersion: modelVersion,
 	})
 	if err != nil {
@@ -100,6 +96,6 @@ func (r *EmbeddingRepository) GetEmbedding(ctx context.Context, targetKind strin
 func (r *EmbeddingRepository) DeleteEmbeddingsForTarget(ctx context.Context, targetKind string, targetID uuid.UUID) error {
 	return r.queries.DeleteEmbeddingsForTarget(ctx, db.DeleteEmbeddingsForTargetParams{
 		TargetKind: targetKind,
-		TargetID:   uuidToPgUUID(targetID),
+		TargetID:   targetID,
 	})
 }

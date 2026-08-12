@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const ApplyCommsMessageEditByExternalID = `-- name: ApplyCommsMessageEditByExternalID :execrows
@@ -57,12 +58,12 @@ WHERE source = $5
 `
 
 type ApplyCommsMessageEditByExternalIDParams struct {
-	Body           pgtype.Text `json:"body"`
-	Snippet        pgtype.Text `json:"snippet"`
-	EditedAt       string      `json:"edited_at"`
-	LastUpdateTime string      `json:"last_update_time"`
-	Source         string      `json:"source"`
-	ExternalID     string      `json:"external_id"`
+	Body           *string `json:"body"`
+	Snippet        *string `json:"snippet"`
+	EditedAt       string  `json:"edited_at"`
+	LastUpdateTime string  `json:"last_update_time"`
+	Source         string  `json:"source"`
+	ExternalID     string  `json:"external_id"`
 }
 
 // =====================================================================
@@ -122,10 +123,10 @@ WHERE source = $2
 `
 
 type AttachUnmatchedCommsMessagesByPeerParams struct {
-	ContactID      pgtype.UUID `json:"contact_id"`
-	Source         string      `json:"source"`
-	PeerHandle     pgtype.Text `json:"peer_handle"`
-	PeerNormalized pgtype.Text `json:"peer_normalized"`
+	ContactID      *uuid.UUID `json:"contact_id"`
+	Source         string     `json:"source"`
+	PeerHandle     *string    `json:"peer_handle"`
+	PeerNormalized *string    `json:"peer_normalized"`
 }
 
 // Retroactive attach: binds a source's remaining unmatched rows for one peer to
@@ -157,7 +158,7 @@ WHERE id = ANY($1::uuid[])
 // Test-only helper: ages the claim past the 5-minute TTL so a fresh
 // aggregate pass can re-claim a stale claim. Mirror of
 // BackdateMessagesMessageClaim. Production code MUST NOT call this.
-func (q *Queries) BackdateCommsMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error {
+func (q *Queries) BackdateCommsMessageClaim(ctx context.Context, messageIds []uuid.UUID) error {
 	_, err := q.db.Exec(ctx, BackdateCommsMessageClaim, messageIds)
 	return err
 }
@@ -191,11 +192,11 @@ WHERE id = $5
 `
 
 type BackfillCommsMessageParticipantNamesParams struct {
-	FromName string      `json:"from_name"`
-	ToNames  []byte      `json:"to_names"`
-	CcNames  []byte      `json:"cc_names"`
-	BccNames []byte      `json:"bcc_names"`
-	ID       pgtype.UUID `json:"id"`
+	FromName string    `json:"from_name"`
+	ToNames  []byte    `json:"to_names"`
+	CcNames  []byte    `json:"cc_names"`
+	BccNames []byte    `json:"bcc_names"`
+	ID       uuid.UUID `json:"id"`
 }
 
 // Additively merge the four display-name keys onto an EXISTING row's stored
@@ -233,23 +234,23 @@ RETURNING id
 `
 
 type ClaimCommsMessagesParams struct {
-	SessionRef pgtype.Text   `json:"session_ref"`
-	MessageIds []pgtype.UUID `json:"message_ids"`
+	SessionRef *string     `json:"session_ref"`
+	MessageIds []uuid.UUID `json:"message_ids"`
 }
 
 // Race-safe conditional claim — mirror of ClaimMessagesMessages. No @source
 // filter needed: id is the PK and globally unique; the caller already scoped to
 // source when it listed the rows. Returns the IDs actually claimed so the engine
 // can detect partial claims.
-func (q *Queries) ClaimCommsMessages(ctx context.Context, arg ClaimCommsMessagesParams) ([]pgtype.UUID, error) {
+func (q *Queries) ClaimCommsMessages(ctx context.Context, arg ClaimCommsMessagesParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, ClaimCommsMessages, arg.SessionRef, arg.MessageIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []uuid.UUID{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
@@ -272,8 +273,8 @@ WHERE id = ANY($1::uuid[])
 `
 
 type ClearStaleCommsClaimParams struct {
-	MessageIds         []pgtype.UUID `json:"message_ids"`
-	ExpectedSessionRef pgtype.Text   `json:"expected_session_ref"`
+	MessageIds         []uuid.UUID `json:"message_ids"`
+	ExpectedSessionRef *string     `json:"expected_session_ref"`
 }
 
 // Defensive recovery branch: clears claim columns for rows still carrying the
@@ -317,9 +318,9 @@ WHERE source = $1
 `
 
 type GetCommsMessageParams struct {
-	Source           string      `json:"source"`
-	ExternalID       string      `json:"external_id"`
-	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
+	Source           string     `json:"source"`
+	ExternalID       string     `json:"external_id"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
 }
 
 // Natural-key lookup used by the email interaction consumer to locate the
@@ -358,7 +359,7 @@ WHERE id = $1
   AND deleted_at IS NULL
 `
 
-func (q *Queries) GetCommsMessageByID(ctx context.Context, id pgtype.UUID) (*CommsMessage, error) {
+func (q *Queries) GetCommsMessageByID(ctx context.Context, id uuid.UUID) (*CommsMessage, error) {
 	row := q.db.QueryRow(ctx, GetCommsMessageByID, id)
 	var i CommsMessage
 	err := row.Scan(
@@ -396,10 +397,10 @@ WHERE source = $1
 `
 
 type GetCommsMessageByReplyTargetParams struct {
-	Source           string      `json:"source"`
-	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
-	ThreadID         pgtype.Text `json:"thread_id"`
-	ReplyTargetID    string      `json:"reply_target_id"`
+	Source           string     `json:"source"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
+	ThreadID         *string    `json:"thread_id"`
+	ReplyTargetID    string     `json:"reply_target_id"`
 }
 
 // Resolves the row a reply points at. comms_message has NO reply_to column;
@@ -452,8 +453,8 @@ WHERE id = $1 AND deleted_at IS NULL
 `
 
 type GetCommsMessageContainerRow struct {
-	Source   string      `json:"source"`
-	ThreadID pgtype.Text `json:"thread_id"`
+	Source   string  `json:"source"`
+	ThreadID *string `json:"thread_id"`
 }
 
 // Returns the venue-container key (source + thread_id) for a staging row by its
@@ -461,7 +462,7 @@ type GetCommsMessageContainerRow struct {
 // resolves its venue from the EmailInteractionConsumer's comms row directly).
 // The thread is consistent across all messages in one aggregated session, so
 // reading the first id is sufficient.
-func (q *Queries) GetCommsMessageContainer(ctx context.Context, id pgtype.UUID) (*GetCommsMessageContainerRow, error) {
+func (q *Queries) GetCommsMessageContainer(ctx context.Context, id uuid.UUID) (*GetCommsMessageContainerRow, error) {
 	row := q.db.QueryRow(ctx, GetCommsMessageContainer, id)
 	var i GetCommsMessageContainerRow
 	err := row.Scan(&i.Source, &i.ThreadID)
@@ -516,7 +517,7 @@ func (q *Queries) GetCommsMessageLatestByExternalID(ctx context.Context, arg Get
 }
 
 const GetOldestCommsMessageSentAtForSource = `-- name: GetOldestCommsMessageSentAtForSource :one
-SELECT MIN(sent_at)::timestamptz AS oldest_sent_at
+SELECT MIN(sent_at) AS oldest_sent_at
 FROM comms_message
 WHERE source = $1
   AND deleted_at IS NULL
@@ -525,10 +526,12 @@ WHERE source = $1
 // Oldest staged sent_at for one source, over live rows (matched or not). Backs
 // the WhatsApp status endpoint's observed backfill floor — the empirical answer
 // to "how deep did the one-shot history actually reach". Returns NULL when the
-// source has staged nothing yet.
-func (q *Queries) GetOldestCommsMessageSentAtForSource(ctx context.Context, source string) (pgtype.Timestamptz, error) {
+// source has staged nothing yet — which is why the aggregate carries no cast:
+// sqlc's static analyzer marks any cast NOT NULL, and NULL must stay scannable.
+// Generated as interface{}; the repository type-asserts (nil = no floor).
+func (q *Queries) GetOldestCommsMessageSentAtForSource(ctx context.Context, source string) (interface{}, error) {
 	row := q.db.QueryRow(ctx, GetOldestCommsMessageSentAtForSource, source)
-	var oldest_sent_at pgtype.Timestamptz
+	var oldest_sent_at interface{}
 	err := row.Scan(&oldest_sent_at)
 	return oldest_sent_at, err
 }
@@ -542,7 +545,7 @@ WHERE matched_contact_id = $1
 // the upsert does not clear deleted_at on conflict, so soft-deleted rows would
 // resurrect across shared-DB test runs (gotcha table). Production code MUST NOT
 // call this.
-func (q *Queries) HardDeleteCommsMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) error {
+func (q *Queries) HardDeleteCommsMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) error {
 	_, err := q.db.Exec(ctx, HardDeleteCommsMessagesByContact, matchedContactID)
 	return err
 }
@@ -576,7 +579,7 @@ ORDER BY sent_at DESC, id
 `
 
 // Per-contact content, newest first (backs idx_comms_message_contact_sent).
-func (q *Queries) ListCommsMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*CommsMessage, error) {
+func (q *Queries) ListCommsMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]*CommsMessage, error) {
 	rows, err := q.db.Query(ctx, ListCommsMessagesByContact, matchedContactID)
 	if err != nil {
 		return nil, err
@@ -631,15 +634,15 @@ LIMIT $3
 `
 
 type ListCommsMessagesMissingParticipantNamesParams struct {
-	Since     pgtype.Timestamptz `json:"since"`
-	AfterID   pgtype.UUID        `json:"after_id"`
-	BatchSize int32              `json:"batch_size"`
+	Since     time.Time `json:"since"`
+	AfterID   uuid.UUID `json:"after_id"`
+	BatchSize int32     `json:"batch_size"`
 }
 
 type ListCommsMessagesMissingParticipantNamesRow struct {
-	ID             pgtype.UUID `json:"id"`
-	AccountID      pgtype.Text `json:"account_id"`
-	SourceMetadata []byte      `json:"source_metadata"`
+	ID             uuid.UUID `json:"id"`
+	AccountID      *string   `json:"account_id"`
+	SourceMetadata []byte    `json:"source_metadata"`
 }
 
 // Keyset-paged rows for the one-time historical display-name re-derivation
@@ -699,19 +702,19 @@ ORDER BY total_count DESC, peer_handle ASC
 `
 
 type ListUnmatchedCommsPeerCountsParams struct {
-	Source      string      `json:"source"`
-	PeerHandle  pgtype.Text `json:"peer_handle"`
-	MinMessages int64       `json:"min_messages"`
+	Source      string  `json:"source"`
+	PeerHandle  *string `json:"peer_handle"`
+	MinMessages int64   `json:"min_messages"`
 }
 
 type ListUnmatchedCommsPeerCountsRow struct {
-	PeerHandle     pgtype.Text        `json:"peer_handle"`
-	PeerNormalized string             `json:"peer_normalized"`
-	TotalCount     int64              `json:"total_count"`
-	InboundCount   int64              `json:"inbound_count"`
-	OutboundCount  int64              `json:"outbound_count"`
-	LastMessageAt  pgtype.Timestamptz `json:"last_message_at"`
-	LastPushName   string             `json:"last_push_name"`
+	PeerHandle     *string   `json:"peer_handle"`
+	PeerNormalized string    `json:"peer_normalized"`
+	TotalCount     int64     `json:"total_count"`
+	InboundCount   int64     `json:"inbound_count"`
+	OutboundCount  int64     `json:"outbound_count"`
+	LastMessageAt  time.Time `json:"last_message_at"`
+	LastPushName   string    `json:"last_push_name"`
 }
 
 // Discovery counts over unmatched rows for one source, grouped by peer.
@@ -765,8 +768,8 @@ ORDER BY thread_id, sent_at
 `
 
 type ListUnprocessedCommsByContactParams struct {
-	Source           string      `json:"source"`
-	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
+	Source           string     `json:"source"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
 }
 
 // Eligible rows for a contact within one source. Orders by thread_id then
@@ -825,9 +828,9 @@ ORDER BY sent_at
 `
 
 type ListUnprocessedCommsByContactAndChatParams struct {
-	Source           string      `json:"source"`
-	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
-	ThreadID         pgtype.Text `json:"thread_id"`
+	Source           string     `json:"source"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
+	ThreadID         *string    `json:"thread_id"`
 }
 
 // Eligible rows for a (contact, thread/chat) pair within one source.
@@ -885,8 +888,8 @@ ORDER BY thread_id ASC
 `
 
 type ListUnprocessedCommsChatsByContactParams struct {
-	Source           string      `json:"source"`
-	MatchedContactID pgtype.UUID `json:"matched_contact_id"`
+	Source           string     `json:"source"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
 }
 
 // Distinct thread_id (chat scope) values for a contact with at least one
@@ -895,15 +898,15 @@ type ListUnprocessedCommsChatsByContactParams struct {
 // NOT a MessageStore interface method. thread_id is nullable on comms_message;
 // the Go wrapper filters NULLs defensively (chat sources always write it
 // non-null).
-func (q *Queries) ListUnprocessedCommsChatsByContact(ctx context.Context, arg ListUnprocessedCommsChatsByContactParams) ([]pgtype.Text, error) {
+func (q *Queries) ListUnprocessedCommsChatsByContact(ctx context.Context, arg ListUnprocessedCommsChatsByContactParams) ([]*string, error) {
 	rows, err := q.db.Query(ctx, ListUnprocessedCommsChatsByContact, arg.Source, arg.MatchedContactID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.Text{}
+	items := []*string{}
 	for rows.Next() {
-		var thread_id pgtype.Text
+		var thread_id *string
 		if err := rows.Scan(&thread_id); err != nil {
 			return nil, err
 		}
@@ -937,15 +940,15 @@ WHERE source = $1
 // Claim-aware filter — same predicate shape as ListUnprocessedMessagesContactIDs,
 // plus the @source scope. matched_contact_id is NOT NULL on comms_message;
 // the IS NOT NULL guard is retained for parity/safety (harmless).
-func (q *Queries) ListUnprocessedCommsContactIDs(ctx context.Context, source string) ([]pgtype.UUID, error) {
+func (q *Queries) ListUnprocessedCommsContactIDs(ctx context.Context, source string) ([]*uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, ListUnprocessedCommsContactIDs, source)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []*uuid.UUID{}
 	for rows.Next() {
-		var matched_contact_id pgtype.UUID
+		var matched_contact_id *uuid.UUID
 		if err := rows.Scan(&matched_contact_id); err != nil {
 			return nil, err
 		}
@@ -969,8 +972,8 @@ WHERE id = ANY($2::uuid[])
 `
 
 type MarkCommsMessagesProcessedParams struct {
-	InteractionID pgtype.UUID   `json:"interaction_id"`
-	MessageIds    []pgtype.UUID `json:"message_ids"`
+	InteractionID *uuid.UUID  `json:"interaction_id"`
+	MessageIds    []uuid.UUID `json:"message_ids"`
 }
 
 // Link content rows to the aggregated interaction + set processed_at, AND
@@ -1008,9 +1011,9 @@ WHERE id = ANY($2::uuid[])
 `
 
 type MarkCommsMessagesProcessedForSessionParams struct {
-	InteractionID pgtype.UUID   `json:"interaction_id"`
-	MessageIds    []pgtype.UUID `json:"message_ids"`
-	SessionRef    pgtype.Text   `json:"session_ref"`
+	InteractionID *uuid.UUID  `json:"interaction_id"`
+	MessageIds    []uuid.UUID `json:"message_ids"`
+	SessionRef    *string     `json:"session_ref"`
 }
 
 // Tx-bound, session-scoped variant for the chat create-path. Mirror of
@@ -1044,8 +1047,8 @@ WHERE matched_contact_id = $2
 `
 
 type RepointCommsMessageContactParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID *uuid.UUID `json:"target_contact_id"`
+	SourceContactID *uuid.UUID `json:"source_contact_id"`
 }
 
 // Merge dedup step 2: re-point ALL remaining source-matched rows (live +
@@ -1069,7 +1072,7 @@ WHERE id = $1
 // Test-only helper: soft-deletes a single comms_message row by id, simulating
 // the upstream delete a chat provider would observe. Used by the delete-no-op
 // aggregation test. There is no production chat delete path yet.
-func (q *Queries) SoftDeleteCommsMessageByID(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) SoftDeleteCommsMessageByID(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, SoftDeleteCommsMessageByID, id)
 	return err
 }
@@ -1083,9 +1086,9 @@ WHERE source = $2
 `
 
 type SoftDeleteCommsMessagesByExternalIDParams struct {
-	Now        pgtype.Timestamptz `json:"now"`
-	Source     string             `json:"source"`
-	ExternalID string             `json:"external_id"`
+	Now        *time.Time `json:"now"`
+	Source     string     `json:"source"`
+	ExternalID string     `json:"external_id"`
 }
 
 // Soft-delete every stored row for (source, external_id) — the production chat
@@ -1115,8 +1118,8 @@ WHERE comms_message.matched_contact_id = $1
 `
 
 type SoftDeleteDuplicateCommsMessagesForMergeParams struct {
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID *uuid.UUID `json:"source_contact_id"`
+	TargetContactID *uuid.UUID `json:"target_contact_id"`
 }
 
 // Merge dedup step 1 (see CommsMessageRepository.RepointContactForMergeTx):
@@ -1153,10 +1156,10 @@ WHERE comms_message.source = $1
 `
 
 type SoftDeleteDuplicateUnmatchedCommsMessagesParams struct {
-	Source         string      `json:"source"`
-	PeerHandle     pgtype.Text `json:"peer_handle"`
-	PeerNormalized pgtype.Text `json:"peer_normalized"`
-	ContactID      pgtype.UUID `json:"contact_id"`
+	Source         string     `json:"source"`
+	PeerHandle     *string    `json:"peer_handle"`
+	PeerNormalized *string    `json:"peer_normalized"`
+	ContactID      *uuid.UUID `json:"contact_id"`
 }
 
 // Reconciliation half of the retroactive attach. An unmatched row whose
@@ -1216,13 +1219,13 @@ RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handl
 `
 
 type TestInsertCommsMessageLinkedParams struct {
-	Source           string             `json:"source"`
-	ExternalID       string             `json:"external_id"`
-	ThreadID         pgtype.Text        `json:"thread_id"`
-	Direction        string             `json:"direction"`
-	SentAt           pgtype.Timestamptz `json:"sent_at"`
-	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
-	InteractionID    pgtype.UUID        `json:"interaction_id"`
+	Source           string     `json:"source"`
+	ExternalID       string     `json:"external_id"`
+	ThreadID         *string    `json:"thread_id"`
+	Direction        string     `json:"direction"`
+	SentAt           time.Time  `json:"sent_at"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
+	InteractionID    *uuid.UUID `json:"interaction_id"`
 }
 
 // Test-only: inserts a comms_message already linked to an interaction. Used by
@@ -1282,18 +1285,18 @@ RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handl
 `
 
 type UpsertChatCommsMessageMatchedParams struct {
-	Source           string             `json:"source"`
-	ExternalID       string             `json:"external_id"`
-	ThreadID         pgtype.Text        `json:"thread_id"`
-	Body             pgtype.Text        `json:"body"`
-	Snippet          pgtype.Text        `json:"snippet"`
-	PeerHandle       pgtype.Text        `json:"peer_handle"`
-	PeerNormalized   pgtype.Text        `json:"peer_normalized"`
-	Direction        string             `json:"direction"`
-	SentAt           pgtype.Timestamptz `json:"sent_at"`
-	AccountID        pgtype.Text        `json:"account_id"`
-	SourceMetadata   []byte             `json:"source_metadata"`
-	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
+	Source           string     `json:"source"`
+	ExternalID       string     `json:"external_id"`
+	ThreadID         *string    `json:"thread_id"`
+	Body             *string    `json:"body"`
+	Snippet          *string    `json:"snippet"`
+	PeerHandle       *string    `json:"peer_handle"`
+	PeerNormalized   *string    `json:"peer_normalized"`
+	Direction        string     `json:"direction"`
+	SentAt           time.Time  `json:"sent_at"`
+	AccountID        *string    `json:"account_id"`
+	SourceMetadata   []byte     `json:"source_metadata"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
 }
 
 // =====================================================================
@@ -1371,17 +1374,17 @@ RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handl
 `
 
 type UpsertChatCommsMessageUnmatchedParams struct {
-	Source         string             `json:"source"`
-	ExternalID     string             `json:"external_id"`
-	ThreadID       pgtype.Text        `json:"thread_id"`
-	Body           pgtype.Text        `json:"body"`
-	Snippet        pgtype.Text        `json:"snippet"`
-	PeerHandle     pgtype.Text        `json:"peer_handle"`
-	PeerNormalized pgtype.Text        `json:"peer_normalized"`
-	Direction      string             `json:"direction"`
-	SentAt         pgtype.Timestamptz `json:"sent_at"`
-	AccountID      pgtype.Text        `json:"account_id"`
-	SourceMetadata []byte             `json:"source_metadata"`
+	Source         string    `json:"source"`
+	ExternalID     string    `json:"external_id"`
+	ThreadID       *string   `json:"thread_id"`
+	Body           *string   `json:"body"`
+	Snippet        *string   `json:"snippet"`
+	PeerHandle     *string   `json:"peer_handle"`
+	PeerNormalized *string   `json:"peer_normalized"`
+	Direction      string    `json:"direction"`
+	SentAt         time.Time `json:"sent_at"`
+	AccountID      *string   `json:"account_id"`
+	SourceMetadata []byte    `json:"source_metadata"`
 }
 
 // Same, for a message whose peer is not (yet) a contact. matched_contact_id is
@@ -1507,20 +1510,20 @@ RETURNING id, source, external_id, thread_id, subject, body, snippet, peer_handl
 `
 
 type UpsertCommsMessageParams struct {
-	Source           string             `json:"source"`
-	ExternalID       string             `json:"external_id"`
-	ThreadID         pgtype.Text        `json:"thread_id"`
-	Subject          pgtype.Text        `json:"subject"`
-	Body             pgtype.Text        `json:"body"`
-	Snippet          pgtype.Text        `json:"snippet"`
-	PeerHandle       pgtype.Text        `json:"peer_handle"`
-	PeerNormalized   pgtype.Text        `json:"peer_normalized"`
-	Direction        string             `json:"direction"`
-	SentAt           pgtype.Timestamptz `json:"sent_at"`
-	AccountID        pgtype.Text        `json:"account_id"`
-	SourceMetadata   []byte             `json:"source_metadata"`
-	GmailMessageID   string             `json:"gmail_message_id"`
-	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
+	Source           string     `json:"source"`
+	ExternalID       string     `json:"external_id"`
+	ThreadID         *string    `json:"thread_id"`
+	Subject          *string    `json:"subject"`
+	Body             *string    `json:"body"`
+	Snippet          *string    `json:"snippet"`
+	PeerHandle       *string    `json:"peer_handle"`
+	PeerNormalized   *string    `json:"peer_normalized"`
+	Direction        string     `json:"direction"`
+	SentAt           time.Time  `json:"sent_at"`
+	AccountID        *string    `json:"account_id"`
+	SourceMetadata   []byte     `json:"source_metadata"`
+	GmailMessageID   string     `json:"gmail_message_id"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
 }
 
 // Insert-or-merge by the partial unique (source, external_id, matched_contact_id)

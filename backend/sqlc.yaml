@@ -15,3 +15,34 @@ sql:
         emit_empty_slices: true
         emit_exported_queries: true
         emit_result_struct_pointers: true
+        overrides:
+          - db_type: "uuid"
+            go_type: "github.com/google/uuid.UUID"
+          - db_type: "uuid"
+            nullable: true
+            go_type: { import: "github.com/google/uuid", type: "UUID", pointer: true }
+          - db_type: "timestamptz"
+            go_type: "time.Time"
+          - db_type: "timestamptz"
+            nullable: true
+            go_type: { type: "time.Time", pointer: true }
+          - db_type: "date"
+            go_type: "time.Time"
+          - db_type: "date"
+            nullable: true
+            go_type: { type: "time.Time", pointer: true }
+          - db_type: "text"
+            nullable: true
+            go_type: { type: "string", pointer: true }
+          - db_type: "pg_catalog.int4"
+            nullable: true
+            go_type: { type: "int32", pointer: true }
+          - db_type: "pg_catalog.int8"
+            nullable: true
+            go_type: { type: "int64", pointer: true }
+          - db_type: "pg_catalog.bool"
+            nullable: true
+            go_type: { type: "bool", pointer: true }
+          - db_type: "pg_catalog.float8"
+            nullable: true
+            go_type: { type: "float64", pointer: true }

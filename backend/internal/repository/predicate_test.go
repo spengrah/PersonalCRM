@@ -5,31 +5,32 @@ import (
 
 	"personal-crm/backend/internal/db"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // Pure unit coverage of the predicate converter: it translates a generated read
-// row (pgtype-wrapped) into the domain struct, surfacing NULL nullable fields as
-// nil pointers. Reads never project the embedding column (the nullable vector is
-// not selected — see predicate.sql), so Embedding is always nil here. DB-backed
+// row into the domain struct, surfacing NULL nullable fields as nil pointers.
+// Reads never project the embedding column (the nullable vector is not
+// selected — see predicate.sql), so Embedding is always nil here. DB-backed
 // round-trips and the CHECK rejections live in the integration suite.
 
 func TestConvertPredicateRow(t *testing.T) {
 	t.Run("edge predicate with inverse", func(t *testing.T) {
+		objectType := "person"
+		inverse := "child_of"
 		got := convertPredicateRow(predicateRowFromGet(&db.GetPredicateRow{
 			Key:                 "parent_of",
 			Kind:                PredicateKindEdge,
 			SubjectType:         "person",
-			ObjectType:          pgtype.Text{String: "person", Valid: true},
-			ValueType:           pgtype.Text{Valid: false},
+			ObjectType:          &objectType,
+			ValueType:           nil,
 			Cardinality:         PredicateCardinalityMulti,
 			Symmetric:           false,
-			InversePredicate:    pgtype.Text{String: "child_of", Valid: true},
+			InversePredicate:    &inverse,
 			TemporalProfile:     PredicateTemporalPermanent,
-			BaseRateDays:        pgtype.Int4{Valid: false},
-			TypicalDurationDays: pgtype.Int4{Valid: false},
+			BaseRateDays:        nil,
+			TypicalDurationDays: nil,
 			DefaultSalience:     80,
 			DefaultReviewPolicy: PredicateReviewAlwaysConfirm,
 			PropositionBucket:   PredicateBucketNone,
@@ -56,16 +57,17 @@ func TestConvertPredicateRow(t *testing.T) {
 	t.Run("fact predicate with priors", func(t *testing.T) {
 		base := int32(0)
 		dur := int32(180)
+		valueType := PredicateValueTypeBool
 		got := convertPredicateRow(predicateRowFromGet(&db.GetPredicateRow{
 			Key:                 "job_seeking",
 			Kind:                PredicateKindFact,
 			SubjectType:         "person",
-			ObjectType:          pgtype.Text{Valid: false},
-			ValueType:           pgtype.Text{String: PredicateValueTypeBool, Valid: true},
+			ObjectType:          nil,
+			ValueType:           &valueType,
 			Cardinality:         PredicateCardinalitySingle,
 			TemporalProfile:     PredicateTemporalBounded,
-			BaseRateDays:        pgtype.Int4{Int32: base, Valid: true},
-			TypicalDurationDays: pgtype.Int4{Int32: dur, Valid: true},
+			BaseRateDays:        &base,
+			TypicalDurationDays: &dur,
 			DefaultSalience:     60,
 			DefaultReviewPolicy: PredicateReviewAutoIfConfident,
 			PropositionBucket:   PredicateBucketDay,
@@ -84,27 +86,30 @@ func TestConvertPredicateRow(t *testing.T) {
 	t.Run("each generated row adapter normalizes onto the same shape", func(t *testing.T) {
 		// The four generated row types are field-identical; the adapters convert
 		// them onto predicateRow so the single converter handles every read path.
+		createValueType := PredicateValueTypeText
 		create := convertPredicateRow(predicateRowFromCreate(&db.CreatePredicateRow{
 			Key: "x", Kind: PredicateKindFact, SubjectType: "person",
-			ValueType:   pgtype.Text{String: PredicateValueTypeText, Valid: true},
+			ValueType:   &createValueType,
 			Cardinality: PredicateCardinalitySingle, TemporalProfile: PredicateTemporalMutable,
 			DefaultReviewPolicy: PredicateReviewAutoIfConfident, PropositionBucket: PredicateBucketDay,
 			Status: PredicateStatusProvisional, Synonyms: []string{},
 		}))
 		assert.Equal(t, "x", create.Key)
 
+		listObjectType := "person"
 		list := convertPredicateRow(predicateRowFromList(&db.ListPredicatesByStatusRow{
 			Key: "y", Kind: PredicateKindEdge, SubjectType: "person",
-			ObjectType:  pgtype.Text{String: "person", Valid: true},
+			ObjectType:  &listObjectType,
 			Cardinality: PredicateCardinalityMulti, TemporalProfile: PredicateTemporalMutable,
 			DefaultReviewPolicy: PredicateReviewAutoIfConfident, PropositionBucket: PredicateBucketNone,
 			Status: PredicateStatusCurated, Synonyms: []string{},
 		}))
 		assert.Equal(t, "y", list.Key)
 
+		curatedValueType := PredicateValueTypeDate
 		curated := convertPredicateRow(predicateRowFromCurated(&db.ListCuratedPredicatesRow{
 			Key: "z", Kind: PredicateKindFact, SubjectType: "person",
-			ValueType:   pgtype.Text{String: PredicateValueTypeDate, Valid: true},
+			ValueType:   &curatedValueType,
 			Cardinality: PredicateCardinalitySingle, TemporalProfile: PredicateTemporalPermanent,
 			DefaultReviewPolicy: PredicateReviewAutoIfConfident, PropositionBucket: PredicateBucketNone,
 			Status: PredicateStatusCurated, Synonyms: []string{},

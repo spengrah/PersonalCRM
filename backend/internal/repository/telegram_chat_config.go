@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TelegramChatConfig represents a Telegram chat configuration
@@ -52,23 +51,15 @@ func convertDbTelegramChatConfig(c *db.TelegramChatConfig) TelegramChatConfig {
 		Status:           c.Status,
 		BackfillComplete: c.BackfillComplete,
 	}
-	if c.ID.Valid {
-		cfg.ID = uuid.UUID(c.ID.Bytes)
+	cfg.ID = c.ID
+	cfg.ChatTitle = c.ChatTitle
+	cfg.MemberCount = c.MemberCount
+	cfg.BackfillCursor = c.BackfillCursor
+	if c.CreatedAt != nil {
+		cfg.CreatedAt = *c.CreatedAt
 	}
-	if c.ChatTitle.Valid {
-		cfg.ChatTitle = &c.ChatTitle.String
-	}
-	if c.MemberCount.Valid {
-		cfg.MemberCount = &c.MemberCount.Int32
-	}
-	if c.BackfillCursor.Valid {
-		cfg.BackfillCursor = &c.BackfillCursor.Int32
-	}
-	if c.CreatedAt.Valid {
-		cfg.CreatedAt = c.CreatedAt.Time
-	}
-	if c.UpdatedAt.Valid {
-		cfg.UpdatedAt = c.UpdatedAt.Time
+	if c.UpdatedAt != nil {
+		cfg.UpdatedAt = *c.UpdatedAt
 	}
 	return cfg
 }
@@ -90,9 +81,9 @@ func (r *TelegramChatConfigRepository) GetConfig(ctx context.Context, telegramCh
 func (r *TelegramChatConfigRepository) UpsertConfig(ctx context.Context, params UpsertTelegramChatConfigParams) (*TelegramChatConfig, error) {
 	dbCfg, err := r.queries.UpsertTelegramChatConfig(ctx, db.UpsertTelegramChatConfigParams{
 		TelegramChatID: params.TelegramChatID,
-		ChatTitle:      stringToPgText(params.ChatTitle),
+		ChatTitle:      params.ChatTitle,
 		ChatType:       params.ChatType,
-		MemberCount:    int32ToPgInt4(params.MemberCount),
+		MemberCount:    params.MemberCount,
 		Status:         params.Status,
 	})
 	if err != nil {
@@ -134,7 +125,7 @@ func (r *TelegramChatConfigRepository) ListConfigs(ctx context.Context) ([]Teleg
 // UpdateBackfillCursor updates the backfill cursor for a chat.
 func (r *TelegramChatConfigRepository) UpdateBackfillCursor(ctx context.Context, telegramChatID int64, cursor int32) error {
 	return r.queries.UpdateTelegramChatConfigBackfillCursor(ctx, db.UpdateTelegramChatConfigBackfillCursorParams{
-		BackfillCursor: pgtype.Int4{Int32: cursor, Valid: true},
+		BackfillCursor: &cursor,
 		TelegramChatID: telegramChatID,
 	})
 }
@@ -165,7 +156,7 @@ func (r *TelegramChatConfigRepository) ListForBackfill(ctx context.Context) ([]T
 // UpdateMemberCount updates the member count for a chat.
 func (r *TelegramChatConfigRepository) UpdateMemberCount(ctx context.Context, telegramChatID int64, memberCount int32) error {
 	return r.queries.UpdateTelegramChatConfigMemberCount(ctx, db.UpdateTelegramChatConfigMemberCountParams{
-		MemberCount:    pgtype.Int4{Int32: memberCount, Valid: true},
+		MemberCount:    &memberCount,
 		TelegramChatID: telegramChatID,
 	})
 }

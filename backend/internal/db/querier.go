@@ -6,8 +6,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 type Querier interface {
@@ -15,7 +16,7 @@ type Querier interface {
 	// log row for this sync_state as 'abandoned' so that the new retry attempt
 	// can insert a fresh log row without leaving orphan 'running' rows behind.
 	// Requires migration 037 (widens the status CHECK).
-	AbandonRunningLogsForState(ctx context.Context, syncStateID pgtype.UUID) error
+	AbandonRunningLogsForState(ctx context.Context, syncStateID uuid.UUID) error
 	// The transaction-scoped advisory lock guarding the single-cardinality conflict
 	// check. The caller passes the Go-computed int64 slot key (e.g.
 	// hashtextextended of the slot identity); the lock auto-releases at tx end. This
@@ -93,19 +94,19 @@ type Querier interface {
 	// Test-only helper: ages the claim past the 5-minute TTL so a fresh
 	// aggregate pass can re-claim a stale claim. Mirror of
 	// BackdateMessagesMessageClaim. Production code MUST NOT call this.
-	BackdateCommsMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error
+	BackdateCommsMessageClaim(ctx context.Context, messageIds []uuid.UUID) error
 	// Test-only helper: ages the claim past the 5-minute TTL. Production
 	// code MUST NOT call this.
-	BackdateMessagesMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error
+	BackdateMessagesMessageClaim(ctx context.Context, messageIds []uuid.UUID) error
 	// Test-only helper: ages the claim past the 5-minute TTL without
 	// touching time.Now()/accelerated.GetCurrentTime() (the claim filter
 	// uses NOW(), so the test must rewrite the DB clock for those rows).
 	// Production code MUST NOT call this.
-	BackdateTelegramMessageClaim(ctx context.Context, messageIds []pgtype.UUID) error
+	BackdateTelegramMessageClaim(ctx context.Context, messageIds []uuid.UUID) error
 	// Test-only helper: ages a claim past the 15-minute lease so a fresh claim can
 	// reclaim it, simulating a worker that died mid-chunk. Mirror of
 	// BackdateCommsMessageClaim. Production code MUST NOT call this.
-	BackdateWhatsAppHistoryClaim(ctx context.Context, id pgtype.UUID) error
+	BackdateWhatsAppHistoryClaim(ctx context.Context, id uuid.UUID) error
 	// Additively merge the four display-name keys onto an EXISTING row's stored
 	// source_metadata, preserving every existing content key (from/to/cc/bcc/
 	// subject/html/attachments/labels) and the provenance keys (observed_accounts/
@@ -124,16 +125,16 @@ type Querier interface {
 	// Admin operation. Bumps cursor_epoch so the daemon discards its
 	// local cursor cache on next heartbeat. Currently used only by the
 	// repository layer; no admin endpoint is wired to it yet.
-	BumpMacHostCursorEpoch(ctx context.Context, id pgtype.UUID) (int64, error)
+	BumpMacHostCursorEpoch(ctx context.Context, id uuid.UUID) (int64, error)
 	// Race-safe conditional claim — mirror of ClaimMessagesMessages. No @source
 	// filter needed: id is the PK and globally unique; the caller already scoped to
 	// source when it listed the rows. Returns the IDs actually claimed so the engine
 	// can detect partial claims.
-	ClaimCommsMessages(ctx context.Context, arg ClaimCommsMessagesParams) ([]pgtype.UUID, error)
+	ClaimCommsMessages(ctx context.Context, arg ClaimCommsMessagesParams) ([]uuid.UUID, error)
 	// Race-safe conditional claim — same predicate shape as
 	// ClaimTelegramMessages. Returns the IDs actually claimed so the engine
 	// can detect partial claims.
-	ClaimMessagesMessages(ctx context.Context, arg ClaimMessagesMessagesParams) ([]pgtype.UUID, error)
+	ClaimMessagesMessages(ctx context.Context, arg ClaimMessagesMessagesParams) ([]uuid.UUID, error)
 	// Takes the next pending chunk, or reclaims one whose 15-minute lease expired,
 	// and stamps a FRESH claim_token that every later transition must present. The
 	// FOR UPDATE SKIP LOCKED subselect is the same shape comms_message's claim uses.
@@ -142,7 +143,7 @@ type Querier interface {
 	// eligible per the same filter the unprocessed-list queries use. Returns
 	// the row IDs actually claimed (RETURNING id) so the caller can detect
 	// partial claims and roll back.
-	ClaimTelegramMessages(ctx context.Context, arg ClaimTelegramMessagesParams) ([]pgtype.UUID, error)
+	ClaimTelegramMessages(ctx context.Context, arg ClaimTelegramMessagesParams) ([]uuid.UUID, error)
 	// Promotes a row in EITHER attention state (conflict_pending or
 	// orphan_needs_review) to a "none of these" outcome. For a
 	// conflict_pending row the caller derives the outcome from decideLinkage
@@ -178,7 +179,7 @@ type Querier interface {
 	// response arrives). Matches the same live-state set as FindPendingFollowUp
 	// so an inbound arriving while the create worker is mid-flight still
 	// transitions the row to completed.
-	CompleteFollowUpForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
+	CompleteFollowUpForContact(ctx context.Context, contactID uuid.UUID) ([]*ContactTask, error)
 	// Merge-time close of the source contact's live AUTOMATED tasks (cadence_due
 	// + followup_loop) that TransferAutomatedContactTasksToContact could not
 	// move. Manual-lifecycle rows are deliberately excluded — they are user
@@ -206,11 +207,11 @@ type Querier interface {
 	// concurrent writer that committed while waiting for the contact lock (the
 	// FOR UPDATE retained below re-takes the held lock; the load-bearing
 	// serialization is the prior LockContactForDateRecompute statement).
-	ComputeContactDatesAfterDelete(ctx context.Context, arg ComputeContactDatesAfterDeleteParams) (*ComputeContactDatesAfterDeleteRow, error)
+	ComputeContactDatesAfterDelete(ctx context.Context, id uuid.UUID) (*ComputeContactDatesAfterDeleteRow, error)
 	// Liveness probe for the identity-match guard: a cached
 	// external_identity.contact_id pointing at a soft-deleted (e.g. merged-away)
 	// contact must not short-circuit the discovery path.
-	ContactIsLive(ctx context.Context, id pgtype.UUID) (bool, error)
+	ContactIsLive(ctx context.Context, id uuid.UUID) (bool, error)
 	// Test-only count of ACTIVE sync_provider_account river_job rows whose args
 	// JSON source = @source. "Active" means not yet finalized (available, pending,
 	// running, retryable, scheduled); completed/discarded/cancelled are excluded.
@@ -224,8 +225,8 @@ type Querier interface {
 	// ORDER BY state for deterministic output.
 	CountActiveRiverJobsByStateBySourceForTest(ctx context.Context, source string) ([]*CountActiveRiverJobsByStateBySourceForTestRow, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context, includeUnresolvedTelegram bool) (int64, error)
-	CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
-	CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	CountContactInteractions(ctx context.Context, contactID uuid.UUID) (int64, error)
+	CountContactNotes(ctx context.Context, contactID uuid.UUID) (int64, error)
 	// CountContactTagsWithDeletedContact counts the contact_tag rows the migration
 	// SKIPS because their contact is soft-deleted, so the `--migrate-tags` summary can
 	// report the skip explicitly and the operator isn't misled when the migrated
@@ -249,15 +250,15 @@ type Querier interface {
 	// deleted_at filter is needed.
 	CountEventsBySource(ctx context.Context, source string) (int64, error)
 	// Count events for a specific contact
-	CountEventsForContact(ctx context.Context, contactID pgtype.UUID) (int64, error)
-	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	CountEventsForContact(ctx context.Context, contactID uuid.UUID) (int64, error)
+	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 *string) (int64, error)
 	// Counts live external_contact rows per source, scoped to a host. Powers
 	// the GET /api/v1/host/:id/source-counts endpoint (issue #327). Filters
 	// match the "caught up" semantic the Hosts page UI needs:
 	//   - deleted_at IS NULL: excludes tombstoned rows.
 	//   - duplicate_of_id IS NULL: excludes merge-dupe rows that the import
 	//     UI doesn't surface.
-	CountExternalContactsByHostAndSource(ctx context.Context, hostID pgtype.UUID) ([]*CountExternalContactsByHostAndSourceRow, error)
+	CountExternalContactsByHostAndSource(ctx context.Context, hostID *uuid.UUID) ([]*CountExternalContactsByHostAndSourceRow, error)
 	CountHiddenUnresolvedTelegramContacts(ctx context.Context, sourceFilter string) (int64, error)
 	CountIdentitiesBySource(ctx context.Context, source string) (int64, error)
 	// Counts river_job rows that represent an in-flight SyncProviderAccountJob
@@ -277,13 +278,13 @@ type Querier interface {
 	// nothing to tombstone it. O(1) on idx_comms_message_dedup.
 	CountLiveMatchedChatMessage(ctx context.Context, arg CountLiveMatchedChatMessageParams) (int64, error)
 	// Count calendar events involving a contact (for merge preview)
-	CountMergeCalendarEvents(ctx context.Context, dollar_1 pgtype.UUID) (int64, error)
+	CountMergeCalendarEvents(ctx context.Context, dollar_1 uuid.UUID) (int64, error)
 	// Count contact methods for a contact (for merge preview)
-	CountMergeContactMethods(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	CountMergeContactMethods(ctx context.Context, contactID uuid.UUID) (int64, error)
 	// Count interactions for a contact (for merge preview)
-	CountMergeInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	CountMergeInteractions(ctx context.Context, contactID uuid.UUID) (int64, error)
 	// Count notes for a contact (for merge preview)
-	CountMergeNotes(ctx context.Context, contactID pgtype.UUID) (int64, error)
+	CountMergeNotes(ctx context.Context, contactID uuid.UUID) (int64, error)
 	// Test assertion — count rows with the given guid (typically 0 or 1
 	// under the partial unique index). Used by duplicate-detection tests.
 	CountMessagesMessageByGuid(ctx context.Context, guid string) (int64, error)
@@ -294,6 +295,12 @@ type Querier interface {
 	// queue-drain precondition, NOT a live-worker liveness claim (River 0.34 does not
 	// populate river_client, so no sound DB liveness signal exists).
 	CountNonFinalRiverJobs(ctx context.Context) (int64, error)
+	// Id-scoped NULL probe for the token_type column: the repository's
+	// OAuthCredential struct flattens NULL and '' to the same Go value, so the
+	// discriminating assertion must read the stored column. Scoped to one id
+	// because a global count is vacuous under t.Parallel() — any sibling's NULL
+	// row satisfies it.
+	CountOAuthCredentialWithNullTokenType(ctx context.Context, id uuid.UUID) (int64, error)
 	// Count OAuth credentials for a provider
 	CountOAuthCredentials(ctx context.Context, provider string) (int64, error)
 	// Test-only count of river_job rows for the rematch_dispatcher kind
@@ -328,7 +335,7 @@ type Querier interface {
 	// this to confirm resolved history was (or was not) pruned. Production code
 	// never calls this.
 	CountStalenessBreachesByAccountForTest(ctx context.Context, accountID string) (int64, error)
-	CountSyncLogsByState(ctx context.Context, syncStateID pgtype.UUID) (int64, error)
+	CountSyncLogsByState(ctx context.Context, syncStateID uuid.UUID) (int64, error)
 	// Test-only count of external_sync_log rows for a given source in a given
 	// status. Backs the load test's quiescence assertion that no log row ends in
 	// 'running' (core.md rule 2).
@@ -340,7 +347,7 @@ type Querier interface {
 	CountTelegramMessagesByChat(ctx context.Context) ([]*CountTelegramMessagesByChatRow, error)
 	CountTelegramMessagesByPeer(ctx context.Context) ([]*CountTelegramMessagesByPeerRow, error)
 	// Count messages for a single peer (for incremental discovery threshold check)
-	CountTelegramMessagesByPeerID(ctx context.Context, peerUserID pgtype.Int8) (*CountTelegramMessagesByPeerIDRow, error)
+	CountTelegramMessagesByPeerID(ctx context.Context, peerUserID *int64) (*CountTelegramMessagesByPeerIDRow, error)
 	// Test-only count of todoist_task_op river_job rows for a given
 	// contact_task_id and op verb. Used by the follow-up cutover integration
 	// tests to assert a create/close/update_deadline op was (or was not)
@@ -353,7 +360,7 @@ type Querier interface {
 	CountUnmatchedIdentities(ctx context.Context) (int64, error)
 	// Counts messages about to be linked for a given peer. Read BEFORE
 	// OnPeerLinked so the matched-count reporting observes the pre-link state.
-	CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
+	CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID *int64) (int64, error)
 	// Backs Status().Backfill, including the dropped-inline chunk count.
 	CountWhatsAppHistoryNotificationsByStateAndDisposition(ctx context.Context) ([]*CountWhatsAppHistoryNotificationsByStateAndDispositionRow, error)
 	CreateContactMethod(ctx context.Context, arg CreateContactMethodParams) (*ContactMethod, error)
@@ -422,10 +429,10 @@ type Querier interface {
 	// concurrent winner or a re-run is a no-op without orphaning a node. Returns the
 	// venue node id on a fresh create; returns no row when the venue already existed
 	// (caller falls back to FindVenueByContainer under the advisory lock).
-	CreateVenueNode(ctx context.Context, arg CreateVenueNodeParams) (pgtype.UUID, error)
+	CreateVenueNode(ctx context.Context, arg CreateVenueNodeParams) (uuid.UUID, error)
 	// Remove duplicate contact IDs that may result from merge
 	// Uses subquery with DISTINCT to rebuild the array without duplicates
-	DeduplicateCalendarEventContacts(ctx context.Context, targetContactID pgtype.UUID) error
+	DeduplicateCalendarEventContacts(ctx context.Context, targetContactID uuid.UUID) error
 	// Test teardown — hard delete so the singleton index is empty for the
 	// next test. mac_host has no deleted_at column, so soft-delete is not
 	// an option.
@@ -442,14 +449,14 @@ type Querier interface {
 	// triple. Used by the decline/cancel remove branch. calendar_event has no
 	// deleted_at column — removal is a hard DELETE (cf. DeleteEventsByAccount).
 	DeleteCalendarEventByGcalID(ctx context.Context, arg DeleteCalendarEventByGcalIDParams) error
-	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 *string) (int64, error)
 	// Contact-scoped single-row delete. Used both for removals and for the first
 	// phase of the delete-and-reinsert applied to key-changing rows.
 	DeleteContactMethodByContact(ctx context.Context, arg DeleteContactMethodByContactParams) error
-	DeleteContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) error
+	DeleteContactMethodsByContact(ctx context.Context, contactID uuid.UUID) error
 	// Delete a note for a contact by category
 	DeleteContactNoteByCategory(ctx context.Context, arg DeleteContactNoteByCategoryParams) error
-	DeleteContactTask(ctx context.Context, id pgtype.UUID) error
+	DeleteContactTask(ctx context.Context, id uuid.UUID) error
 	// Delete the cadence-due task link for a contact+provider (e.g., when
 	// cadence is disabled). Uses the lifecycle predicate to match the
 	// post-046 schema.
@@ -458,22 +465,22 @@ type Querier interface {
 	DeleteContactTasksByProvider(ctx context.Context, provider string) error
 	// Test data management queries
 	// These queries are used by the test API endpoints to seed and cleanup test data
-	DeleteContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	DeleteContactsByNamePrefix(ctx context.Context, dollar_1 *string) (int64, error)
 	// Delete contact methods from source that already exist in target (by normalized value and type)
 	DeleteDuplicateContactMethods(ctx context.Context, arg DeleteDuplicateContactMethodsParams) error
 	// Wipe every model's embedding for one target (e.g. when the target's content
 	// changes and all embeddings must be rebuilt).
 	DeleteEmbeddingsForTarget(ctx context.Context, arg DeleteEmbeddingsForTargetParams) error
-	DeleteEnrichment(ctx context.Context, id pgtype.UUID) error
-	DeleteEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) error
+	DeleteEnrichment(ctx context.Context, id uuid.UUID) error
+	DeleteEnrichmentsForContact(ctx context.Context, contactID uuid.UUID) error
 	// Delete all events for a Google account (used when revoking access)
 	DeleteEventsByAccount(ctx context.Context, googleAccountID string) error
 	// Test teardown — drop event rows by source. Mirrors
 	// DeleteExternalIdentitiesBySource for the event log.
 	DeleteEventsBySource(ctx context.Context, source string) (int64, error)
 	DeleteExpiredPairingTokens(ctx context.Context) (int64, error)
-	DeleteExternalContact(ctx context.Context, id pgtype.UUID) error
-	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	DeleteExternalContact(ctx context.Context, id uuid.UUID) error
+	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 *string) (int64, error)
 	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
 	// Test teardown — hard-deletes ALL external_contact rows for a given
 	// source string. The known-IDs integration tests use this when they
@@ -482,15 +489,15 @@ type Querier interface {
 	// call this; it bypasses the tombstone contract and the
 	// crm_contact_id/match_status preservation rules.
 	DeleteExternalContactsBySourceForTest(ctx context.Context, source string) (int64, error)
-	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error)
+	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 *string) (int64, error)
 	// Test teardown — drop external_identity rows seeded by a test under
 	// a known source string (e.g., 'messages'). Used in raw_message ingest
 	// integration tests to ensure shared-DB cleanup is complete between
 	// runs.
 	DeleteExternalIdentitiesBySource(ctx context.Context, source string) (int64, error)
-	DeleteExternalIdentitiesBySourceID(ctx context.Context, sourceID pgtype.Text) (int64, error)
-	DeleteIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) error
-	DeleteIdentity(ctx context.Context, id pgtype.UUID) error
+	DeleteExternalIdentitiesBySourceID(ctx context.Context, sourceID *string) (int64, error)
+	DeleteIdentitiesForContact(ctx context.Context, contactID *uuid.UUID) error
+	DeleteIdentity(ctx context.Context, id uuid.UUID) error
 	// Test teardown — drops interactions seeded by a test under the given
 	// (contact_id, source) pair. Scoped to the seeded contact so production
 	// data is never wiped.
@@ -502,12 +509,12 @@ type Querier interface {
 	// emails are not possible by format but the explicit strategy filter
 	// locks the contract).
 	DeleteMacHostSyncStates(ctx context.Context, accountID string) (int64, error)
-	DeleteNote(ctx context.Context, id pgtype.UUID) error
+	DeleteNote(ctx context.Context, id uuid.UUID) error
 	// Delete an OAuth credential by ID
-	DeleteOAuthCredential(ctx context.Context, id pgtype.UUID) error
+	DeleteOAuthCredential(ctx context.Context, id uuid.UUID) error
 	// Delete all OAuth credentials for a provider
 	DeleteOAuthCredentialByProvider(ctx context.Context, provider string) error
-	DeleteOldSyncLogs(ctx context.Context, createdAt pgtype.Timestamptz) error
+	DeleteOldSyncLogs(ctx context.Context, createdAt *time.Time) error
 	// Re-extraction retirement (a later layer): drop a single locator. When the last
 	// locator is removed the write API retracts the assertion.
 	DeleteProvenanceLocator(ctx context.Context, arg DeleteProvenanceLocatorParams) error
@@ -520,7 +527,7 @@ type Querier interface {
 	DeleteProvisionalPredicates(ctx context.Context) error
 	// Retention prune: drops resolved breaches whose resolved_at predates the
 	// cutoff. Open breaches (resolved_at IS NULL) are never touched.
-	DeleteResolvedStalenessBreachesBefore(ctx context.Context, cutoff pgtype.Timestamptz) error
+	DeleteResolvedStalenessBreachesBefore(ctx context.Context, cutoff *time.Time) error
 	// Test teardown — drop river_job rows whose kind is in the given
 	// array. Scoped to test-emitted kinds so we don't wipe production-
 	// shape rows on a shared DB. River doesn't expose a sqlc layer; this
@@ -532,21 +539,21 @@ type Querier interface {
 	DeleteRiverJobsBySourceArgForTest(ctx context.Context, source string) (int64, error)
 	// Wipe every signal for one node (e.g. when the node's inputs change and all
 	// signals must be rebuilt).
-	DeleteSignalsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) error
+	DeleteSignalsForSubject(ctx context.Context, subjectNodeID uuid.UUID) error
 	// Test teardown only — hard-deletes external_sync_log rows for a given
 	// source. external_sync_log carries its own source column (migration 011).
 	DeleteSyncLogsBySourceForTest(ctx context.Context, source string) (int64, error)
-	DeleteSyncState(ctx context.Context, id pgtype.UUID) error
-	DeleteSyncStatesByAccountID(ctx context.Context, accountID pgtype.Text) error
+	DeleteSyncState(ctx context.Context, id uuid.UUID) error
+	DeleteSyncStatesByAccountID(ctx context.Context, accountID *string) error
 	// Test teardown only — hard-deletes external_sync_state rows for a given
 	// source. Used by sync-service tests to scope per-source cleanup without
 	// inlining raw SQL into Go test code (core.md rule 2).
 	DeleteSyncStatesBySourceForTest(ctx context.Context, source string) (int64, error)
-	DeleteTag(ctx context.Context, id pgtype.UUID) error
+	DeleteTag(ctx context.Context, id uuid.UUID) error
 	DeleteTelegramChannelState(ctx context.Context, channelID int64) error
 	DeleteTelegramChatConfig(ctx context.Context, telegramChatID int64) error
 	DeleteTelegramMessagesByMessageIDs(ctx context.Context, dollar_1 []int32) (int64, error)
-	DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
+	DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID *int64) (int64, error)
 	DeleteTelegramSession(ctx context.Context) error
 	DeleteTelegramUpdateState(ctx context.Context, userID int64) error
 	// Clears is_primary on ONE named row of ONE contact.
@@ -561,7 +568,7 @@ type Querier interface {
 	// must be demoted regardless of method type before TransferContactMethods, or a
 	// cross-type dual-primary pair violates the index and fails the merge.
 	DemoteSourcePrimaryMethods(ctx context.Context, arg DemoteSourcePrimaryMethodsParams) error
-	ExistsCalendarEvent(ctx context.Context, id pgtype.UUID) (bool, error)
+	ExistsCalendarEvent(ctx context.Context, id uuid.UUID) (bool, error)
 	// Write-time existence validation: confirm a content source row exists before
 	// accepting a provenance locator that references it. One tiny query per content
 	// table; source_id is parsed to UUID by the caller. The four soft-deletable
@@ -569,16 +576,16 @@ type Querier interface {
 	// pass write-time validation (a NEW assertion may not be grounded in a dead
 	// source; a source deleted AFTER the assertion degrades gracefully via the
 	// preserved quote/input_hash). calendar_event/phone_call have no deleted_at.
-	ExistsCommsMessage(ctx context.Context, id pgtype.UUID) (bool, error)
+	ExistsCommsMessage(ctx context.Context, id uuid.UUID) (bool, error)
 	// Non-mutating lookup. Returns true when a claim row exists for the
 	// given (event_id, consumer). Useful for assertions in tests and for
 	// read-only operator diagnostics; the production dedupe path uses
 	// InsertEventConsumerClaim's rows-inserted signal instead of polling.
 	ExistsEventConsumerClaim(ctx context.Context, arg ExistsEventConsumerClaimParams) (bool, error)
-	ExistsMeetingNote(ctx context.Context, id pgtype.UUID) (bool, error)
-	ExistsMessagesMessage(ctx context.Context, id pgtype.UUID) (bool, error)
-	ExistsPhoneCall(ctx context.Context, id pgtype.UUID) (bool, error)
-	ExistsTelegramMessage(ctx context.Context, id pgtype.UUID) (bool, error)
+	ExistsMeetingNote(ctx context.Context, id uuid.UUID) (bool, error)
+	ExistsMessagesMessage(ctx context.Context, id uuid.UUID) (bool, error)
+	ExistsPhoneCall(ctx context.Context, id uuid.UUID) (bool, error)
+	ExistsTelegramMessage(ctx context.Context, id uuid.UUID) (bool, error)
 	// Single-cardinality conflict check for an ASYMMETRIC predicate: the accepted,
 	// knowledge-open assertion(s) for (subject, predicate) whose valid-time window
 	// OVERLAPS the new one's effective window. The new-side lower bound is
@@ -689,12 +696,12 @@ type Querier interface {
 	// Find a pending follow-up task for a contact. Matches both 'managed'
 	// and 'pending_remote_create' live states so the two-step create flow
 	// is visible to non-tx callers (e.g. Todoist provider's closeOnOutreach).
-	FindPendingFollowUp(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error)
+	FindPendingFollowUp(ctx context.Context, contactID uuid.UUID) (*ContactTask, error)
 	// Transactional sibling of FindPendingFollowUp. Matches both 'managed'
 	// and 'pending_remote_create' live states so the future cutover's
 	// two-step creation is visible to this guard. Used by the
 	// FollowUpManager consumer when running inside a worker transaction.
-	FindPendingFollowUpTx(ctx context.Context, contactID pgtype.UUID) (*ContactTask, error)
+	FindPendingFollowUpTx(ctx context.Context, contactID uuid.UUID) (*ContactTask, error)
 	// Returns phone_call rows whose started_at falls inside the linkage
 	// window for the meeting_note linkage handler. No deleted_at filter —
 	// phone_call has no soft-delete column (see migration 055). Backed by
@@ -741,34 +748,34 @@ type Querier interface {
 	FindVenueByContainer(ctx context.Context, arg FindVenueByContainerParams) (*Venue, error)
 	// Used by MacHostAuthMiddleware. Filters revoked hosts so a revoked
 	// daemon's bearer key cannot authenticate.
-	GetActiveMacHostByID(ctx context.Context, id pgtype.UUID) (*MacHost, error)
+	GetActiveMacHostByID(ctx context.Context, id uuid.UUID) (*MacHost, error)
 	// Tx-bound active-host lookup with row-level write lock. Used by
 	// IngestService for the tx-internal host-liveness check. The
 	// FOR UPDATE clause serializes against concurrent revoke attempts:
 	// a revoke that tries to UPDATE this row blocks until the ingest
 	// batch commits or rolls back. Matches the cursor-commit precedent
 	// in GetMacHostCursorEpoch below.
-	GetActiveMacHostByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MacHost, error)
-	GetAssertion(ctx context.Context, id pgtype.UUID) (*Assertion, error)
+	GetActiveMacHostByIDForUpdate(ctx context.Context, id uuid.UUID) (*MacHost, error)
+	GetAssertion(ctx context.Context, id uuid.UUID) (*Assertion, error)
 	// Row-locking read for the lifecycle transitions (Accept/Reject/Retract): the
 	// caller locks the row FOR UPDATE so the status precondition check + the status
 	// update are atomic within the tx (a concurrent Accept/Reject on the same row
 	// blocks until commit, so the from-status guard cannot be raced).
-	GetAssertionForUpdate(ctx context.Context, id pgtype.UUID) (*Assertion, error)
+	GetAssertionForUpdate(ctx context.Context, id uuid.UUID) (*Assertion, error)
 	// Look up an event by its Google Calendar ID
 	GetCalendarEventByGcalID(ctx context.Context, arg GetCalendarEventByGcalIDParams) (*CalendarEvent, error)
 	// Look up an event by its UUID
-	GetCalendarEventByID(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
+	GetCalendarEventByID(ctx context.Context, id uuid.UUID) (*CalendarEvent, error)
 	// Locking read used by the InteractionRecorder calendar.attended branch to
 	// serialize against a concurrent decline DELETE on the same row. FOR SHARE
 	// holds the row until the attended tx commits, so an interleaving decline
 	// DELETE either blocks (attended inserts, decline then soft-deletes) or has
 	// already committed (this read returns no row, attended skips the insert).
-	GetCalendarEventByIDForShare(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
+	GetCalendarEventByIDForShare(ctx context.Context, id uuid.UUID) (*CalendarEvent, error)
 	// Natural-key lookup used by the email interaction consumer to locate the
 	// content row for a (source, external_id, contact) tuple. deleted_at filtered.
 	GetCommsMessage(ctx context.Context, arg GetCommsMessageParams) (*CommsMessage, error)
-	GetCommsMessageByID(ctx context.Context, id pgtype.UUID) (*CommsMessage, error)
+	GetCommsMessageByID(ctx context.Context, id uuid.UUID) (*CommsMessage, error)
 	// Resolves the row a reply points at. comms_message has NO reply_to column;
 	// the reply target is itself a stored message, looked up by its own external_id
 	// within the same (source, contact, thread/chat) scope. Used by the
@@ -785,7 +792,7 @@ type Querier interface {
 	// resolves its venue from the EmailInteractionConsumer's comms row directly).
 	// The thread is consistent across all messages in one aggregated session, so
 	// reading the first id is sufficient.
-	GetCommsMessageContainer(ctx context.Context, id pgtype.UUID) (*GetCommsMessageContainerRow, error)
+	GetCommsMessageContainer(ctx context.Context, id uuid.UUID) (*GetCommsMessageContainerRow, error)
 	// Read one stored row for (source, external_id), newest first, to supply the
 	// current body for the provider's bodyDiffers no-op-avoidance pre-check. Fanned-
 	// out rows share content, so any one row suffices. Used ONLY for body
@@ -793,7 +800,7 @@ type Querier interface {
 	// SQL ::timestamptz guard in ApplyCommsMessageEditByExternalID).
 	GetCommsMessageLatestByExternalID(ctx context.Context, arg GetCommsMessageLatestByExternalIDParams) (*CommsMessage, error)
 	// Contact queries
-	GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error)
+	GetContact(ctx context.Context, id uuid.UUID) (*Contact, error)
 	// Test assertion — reads contact_id_node_fk's live pg_constraint properties:
 	// convalidated (must be true — a NOT VALID FK enforces new writes but would
 	// silently let a pre-existing orphan row through, unlike this migration's
@@ -805,9 +812,9 @@ type Querier interface {
 	GetContactIdNodeFkCatalog(ctx context.Context) (*GetContactIdNodeFkCatalogRow, error)
 	// Get a single note for a contact by category (e.g., 'notepad')
 	GetContactNoteByCategory(ctx context.Context, arg GetContactNoteByCategoryParams) (*Note, error)
-	GetContactTags(ctx context.Context, contactID pgtype.UUID) ([]*Tag, error)
+	GetContactTags(ctx context.Context, contactID uuid.UUID) ([]*Tag, error)
 	// Contact Task Queries (for Todoist cadence sync)
-	GetContactTask(ctx context.Context, id pgtype.UUID) (*ContactTask, error)
+	GetContactTask(ctx context.Context, id uuid.UUID) (*ContactTask, error)
 	// Look up the cadence-due task for a contact+provider. Backed by the
 	// partial unique index unique_contact_provider_cadence
 	// (lifecycle='cadence_due', no state filter), so at most one row exists.
@@ -837,13 +844,13 @@ type Querier interface {
 	GetEmbedding(ctx context.Context, arg GetEmbeddingParams) (*Embedding, error)
 	GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error)
 	// Contact Enrichment queries
-	GetEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactEnrichment, error)
-	GetEntity(ctx context.Context, nodeID pgtype.UUID) (*Entity, error)
+	GetEnrichmentsForContact(ctx context.Context, contactID uuid.UUID) ([]*ContactEnrichment, error)
+	GetEntity(ctx context.Context, nodeID uuid.UUID) (*Entity, error)
 	GetEntityType(ctx context.Context, key string) (*EntityType, error)
-	GetEvent(ctx context.Context, id pgtype.UUID) (*Event, error)
+	GetEvent(ctx context.Context, id uuid.UUID) (*Event, error)
 	// External Contact queries
 	// Tombstoned rows are not retrievable by ID through normal flows.
-	GetExternalContact(ctx context.Context, id pgtype.UUID) (*ExternalContact, error)
+	GetExternalContact(ctx context.Context, id uuid.UUID) (*ExternalContact, error)
 	// Tombstone-aware: returns tombstoned rows too. The mac-daemon ingest path
 	// needs visibility into tombstoned rows so it can revive them on a fresh
 	// external_contact.upserted event. Existing telegram / gcontacts callers
@@ -854,12 +861,12 @@ type Querier interface {
 	// The caller runs this + SetExternalContactPendingAndDismissed in ONE
 	// pgx.Tx so each action's own read-modify-write is atomic (a single
 	// action cannot half-clobber its own suggestion columns).
-	GetExternalContactForUpdate(ctx context.Context, id pgtype.UUID) (*ExternalContact, error)
+	GetExternalContactForUpdate(ctx context.Context, id uuid.UUID) (*ExternalContact, error)
 	// External identity queries for cross-platform contact identity matching
-	GetIdentityByID(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
+	GetIdentityByID(ctx context.Context, id uuid.UUID) (*ExternalIdentity, error)
 	GetIdentityByIdentifier(ctx context.Context, arg GetIdentityByIdentifierParams) (*ExternalIdentity, error)
 	// Interaction queries
-	GetInteraction(ctx context.Context, id pgtype.UUID) (*Interaction, error)
+	GetInteraction(ctx context.Context, id uuid.UUID) (*Interaction, error)
 	// Test assertion — returns the rendered definition of the
 	// interaction_source_check CHECK constraint via pg_get_constraintdef.
 	// Scoped by (conrelid, conname) because constraint names are NOT
@@ -873,11 +880,11 @@ type Querier interface {
 	// pre-migration rows). Multiple action rows are possible per
 	// contact/provider; this returns the most recent.
 	GetLegacyActionTaskByContact(ctx context.Context, arg GetLegacyActionTaskByContactParams) (*ContactTask, error)
-	GetMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error)
+	GetMacHost(ctx context.Context, id uuid.UUID) (*MacHost, error)
 	// Reads the host's cursor_epoch with a row lock. Used by the cursor
 	// commit path to serialize concurrent commits per host and to bind
 	// the epoch read against the cursor read in the same tx.
-	GetMacHostCursorEpoch(ctx context.Context, id pgtype.UUID) (*GetMacHostCursorEpochRow, error)
+	GetMacHostCursorEpoch(ctx context.Context, id uuid.UUID) (*GetMacHostCursorEpochRow, error)
 	// Mac-daemon push-cursor queries (see backend/internal/repository/mac_host.go).
 	// Cursors for push providers live in external_sync_state keyed by
 	// (source, account_id) where account_id = mac_host.id. cursor_epoch is
@@ -891,19 +898,19 @@ type Querier interface {
 	// resolve-link service to pre-validate the row exists before opening
 	// the FOR UPDATE tx (and by the needs-attention list endpoint when it
 	// needs a fresh read outside the list query).
-	GetMeetingNoteByID(ctx context.Context, id pgtype.UUID) (*MeetingNote, error)
+	GetMeetingNoteByID(ctx context.Context, id uuid.UUID) (*MeetingNote, error)
 	// FOR UPDATE variant of GetMeetingNoteByID. Used inside the resolve-link
 	// tx to serialize concurrent resolve attempts on the same row.
-	GetMeetingNoteByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MeetingNote, error)
+	GetMeetingNoteByIDForUpdate(ctx context.Context, id uuid.UUID) (*MeetingNote, error)
 	// Returns the live (non-soft-deleted) meeting_note row for a given anarlog
 	// session UUID. Used by the ingest path for dedup and re-sync detection.
-	GetMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
+	GetMeetingNoteBySessionID(ctx context.Context, anarlogSessionID uuid.UUID) (*MeetingNote, error)
 	// Tombstone-aware lookup that holds a row-level lock for the duration of
 	// the caller's tx. Used by the meeting_note.recorded inline handler so a
 	// concurrent re-sync for the same session UUID serializes behind the
 	// first writer. Returns tombstoned rows too — the revive path inspects
 	// DeletedAt to decide between revive and re-link branches.
-	GetMeetingNoteBySessionIDForUpdate(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
+	GetMeetingNoteBySessionIDForUpdate(ctx context.Context, anarlogSessionID uuid.UUID) (*MeetingNote, error)
 	// Lookup by guid (primary external identifier). Used by reply-target
 	// resolution.
 	GetMessagesMessage(ctx context.Context, guid string) (*MessagesMessage, error)
@@ -915,23 +922,25 @@ type Querier interface {
 	// its UUID. Used by the live interaction recorder to resolve the messages
 	// venue. The container is consistent across all messages in one aggregated
 	// session, so reading the first id is sufficient.
-	GetMessagesMessageContainer(ctx context.Context, id pgtype.UUID) (*GetMessagesMessageContainerRow, error)
-	GetNode(ctx context.Context, id pgtype.UUID) (*Node, error)
-	GetNodeIncludingDeleted(ctx context.Context, id pgtype.UUID) (*Node, error)
+	GetMessagesMessageContainer(ctx context.Context, id uuid.UUID) (*GetMessagesMessageContainerRow, error)
+	GetNode(ctx context.Context, id uuid.UUID) (*Node, error)
+	GetNodeIncludingDeleted(ctx context.Context, id uuid.UUID) (*Node, error)
 	// Note queries
-	GetNote(ctx context.Context, id pgtype.UUID) (*Note, error)
+	GetNote(ctx context.Context, id uuid.UUID) (*Note, error)
 	// OAuth Credential Queries
 	// Get a specific OAuth credential by provider and account ID
 	GetOAuthCredential(ctx context.Context, arg GetOAuthCredentialParams) (*OauthCredential, error)
 	// Get a specific OAuth credential by UUID
-	GetOAuthCredentialByID(ctx context.Context, id pgtype.UUID) (*OauthCredential, error)
+	GetOAuthCredentialByID(ctx context.Context, id uuid.UUID) (*OauthCredential, error)
 	// Get non-sensitive credential info for display
-	GetOAuthCredentialStatus(ctx context.Context, id pgtype.UUID) (*GetOAuthCredentialStatusRow, error)
+	GetOAuthCredentialStatus(ctx context.Context, id uuid.UUID) (*GetOAuthCredentialStatusRow, error)
 	// Oldest staged sent_at for one source, over live rows (matched or not). Backs
 	// the WhatsApp status endpoint's observed backfill floor — the empirical answer
 	// to "how deep did the one-shot history actually reach". Returns NULL when the
-	// source has staged nothing yet.
-	GetOldestCommsMessageSentAtForSource(ctx context.Context, source string) (pgtype.Timestamptz, error)
+	// source has staged nothing yet — which is why the aggregate carries no cast:
+	// sqlc's static analyzer marks any cast NOT NULL, and NULL must stay scannable.
+	// Generated as interface{}; the repository type-asserts (nil = no floor).
+	GetOldestCommsMessageSentAtForSource(ctx context.Context, source string) (interface{}, error)
 	// Locks the row so the consume path serializes against concurrent
 	// consume attempts for the same token.
 	GetPairingTokenByHashForUpdate(ctx context.Context, tokenHash string) (*MacHostPairingToken, error)
@@ -948,11 +957,11 @@ type Querier interface {
 	// undone by resurrecting an older non-blank handle. Falls back to the
 	// best-non-blank ordering for legacy rows where no resolved=true history
 	// exists yet.
-	GetPeerEntityByUserID(ctx context.Context, peerUserID pgtype.Int8) (*GetPeerEntityByUserIDRow, error)
+	GetPeerEntityByUserID(ctx context.Context, peerUserID *int64) (*GetPeerEntityByUserIDRow, error)
 	// Lookup by primary-key UUID. Used by the meeting_note resolve-link
 	// handler to verify a phone_call target exists before linking. Returns
 	// ErrNoRows on miss.
-	GetPhoneCallByID(ctx context.Context, id pgtype.UUID) (*PhoneCall, error)
+	GetPhoneCallByID(ctx context.Context, id uuid.UUID) (*PhoneCall, error)
 	// Lookup by call_unique_id. Returns ErrNoRows on miss.
 	GetPhoneCallByUniqueID(ctx context.Context, callUniqueID string) (*PhoneCall, error)
 	// Predicate catalog queries (graph foundation).
@@ -969,12 +978,12 @@ type Querier interface {
 	// production sqlc layer; this is the test-boundary seam, mirroring the
 	// existing CountRiverJobsByKind test query.
 	GetRiverJobStateByID(ctx context.Context, id int64) (RiverJobState, error)
-	GetSyncLog(ctx context.Context, id pgtype.UUID) (*ExternalSyncLog, error)
+	GetSyncLog(ctx context.Context, id uuid.UUID) (*ExternalSyncLog, error)
 	// External Sync State Queries
-	GetSyncState(ctx context.Context, id pgtype.UUID) (*ExternalSyncState, error)
+	GetSyncState(ctx context.Context, id uuid.UUID) (*ExternalSyncState, error)
 	GetSyncStateBySource(ctx context.Context, arg GetSyncStateBySourceParams) (*ExternalSyncState, error)
 	// Tag queries
-	GetTag(ctx context.Context, id pgtype.UUID) (*Tag, error)
+	GetTag(ctx context.Context, id uuid.UUID) (*Tag, error)
 	GetTagByName(ctx context.Context, name string) (*Tag, error)
 	GetTelegramChannelState(ctx context.Context, channelID int64) (*TelegramChannelState, error)
 	GetTelegramChatConfig(ctx context.Context, telegramChatID int64) (*TelegramChatConfig, error)
@@ -982,12 +991,12 @@ type Querier interface {
 	// Test-only: fetches a row by id WITHOUT the deleted_at IS NULL filter, so the
 	// all-fields-populated test can read back a row whose deleted_at is set.
 	// Production code MUST NOT call this (it would return soft-deleted rows).
-	GetTelegramMessageByIDForTest(ctx context.Context, id pgtype.UUID) (*TelegramMessage, error)
+	GetTelegramMessageByIDForTest(ctx context.Context, id uuid.UUID) (*TelegramMessage, error)
 	// Returns the venue-container key (chat id + type + title) for a staging row by
 	// its UUID. Used by the live interaction recorder to resolve the telegram
 	// venue. The container is consistent across all messages in one aggregated
 	// session, so reading the first id is sufficient.
-	GetTelegramMessageContainer(ctx context.Context, id pgtype.UUID) (*GetTelegramMessageContainerRow, error)
+	GetTelegramMessageContainer(ctx context.Context, id uuid.UUID) (*GetTelegramMessageContainerRow, error)
 	GetTelegramSession(ctx context.Context) (*TelegramSession, error)
 	GetTelegramUpdateState(ctx context.Context, userID int64) (*TelegramUpdateState, error)
 	// Probe used by the dispatch loop's revive-bypass: when a duplicate
@@ -996,8 +1005,8 @@ type Querier interface {
 	// revive instead of silently leaving the row tombstoned. Filters
 	// explicitly to tombstoned rows because the live partial-unique index
 	// already covers the live-row case.
-	GetTombstonedMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) (*MeetingNote, error)
-	GetVenue(ctx context.Context, nodeID pgtype.UUID) (*Venue, error)
+	GetTombstonedMeetingNoteBySessionID(ctx context.Context, anarlogSessionID uuid.UUID) (*MeetingNote, error)
+	GetVenue(ctx context.Context, nodeID uuid.UUID) (*Venue, error)
 	// =====================================================================
 	// Per-chat group gate
 	// =====================================================================
@@ -1006,7 +1015,7 @@ type Querier interface {
 	// the upsert does not clear deleted_at on conflict, so soft-deleted rows would
 	// resurrect across shared-DB test runs (gotcha table). Production code MUST NOT
 	// call this.
-	HardDeleteCommsMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) error
+	HardDeleteCommsMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) error
 	// Test-only cleanup helper for rows that have NO contact to scope by (the
 	// unmatched chat-staging rows). Hard delete, because the chat upsert does not
 	// clear deleted_at on conflict, so a soft-deleted row would resurrect across
@@ -1030,7 +1039,7 @@ type Querier interface {
 	// on conflict, so soft-deleted rows would resurrect as phantoms on the
 	// next run. Scoped by mac_host_id so tests can pass a fresh mac_host UUID
 	// per run and clean only their own rows.
-	HardDeleteMessagesMessagesByMacHost(ctx context.Context, macHostID pgtype.UUID) error
+	HardDeleteMessagesMessagesByMacHost(ctx context.Context, macHostID *uuid.UUID) error
 	// Test-only helper: deletes a single phone_call row by call_unique_id.
 	// Used by migration round-trip tests to clear the staging row before the
 	// down migration's row-bearing guard runs.
@@ -1040,7 +1049,7 @@ type Querier interface {
 	// staging rows have no aggregator-driven lifecycle). Scoped by mac_host_id
 	// so tests can pass a fresh mac_host UUID per run and clean only their own
 	// rows.
-	HardDeletePhoneCallsByMacHost(ctx context.Context, macHostID pgtype.UUID) error
+	HardDeletePhoneCallsByMacHost(ctx context.Context, macHostID *uuid.UUID) error
 	// GetTelegramMessageByReplyTo removed: identical to GetTelegramMessage.
 	// Use GetMessage repo method for reply resolution.
 	// Test-only: hard-deletes telegram_message rows whose telegram_chat_id
@@ -1055,7 +1064,7 @@ type Querier interface {
 	// out-of-order guard: an outbound event arriving after a response has
 	// already landed must not produce a stale follow-up.
 	HasResponseAfter(ctx context.Context, arg HasResponseAfterParams) (bool, error)
-	IgnoreExternalContact(ctx context.Context, id pgtype.UUID) error
+	IgnoreExternalContact(ctx context.Context, id uuid.UUID) error
 	// Assertion store queries (graph foundation).
 	//
 	// The assertion has no nullable vector column, so the full-row reads use
@@ -1196,8 +1205,8 @@ type Querier interface {
 	// enqueue-trail check would stay fresh while a persistently-FAILING watchdog
 	// worker froze the breach table; the completion trail proves the watchdog
 	// actually RAN successfully. MAX(...) over zero rows returns NULL → nil
-	// *time.Time ("watchdog not running"); the ::timestamptz cast pins the type.
-	LatestCompletedRiverJobByKind(ctx context.Context, kind string) (pgtype.Timestamptz, error)
+	// *time.Time ("watchdog not running"); generated as interface{} (see above).
+	LatestCompletedRiverJobByKind(ctx context.Context, kind string) (interface{}, error)
 	LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error)
 	ListActiveMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all OAuth credentials
@@ -1216,12 +1225,12 @@ type Querier interface {
 	ListAnarlogTitleGroups(ctx context.Context) ([]*ListAnarlogTitleGroupsRow, error)
 	// All assertions for a subject node (any status), newest first — the review /
 	// history surface.
-	ListAssertionsBySubject(ctx context.Context, subjectNodeID pgtype.UUID) ([]*Assertion, error)
+	ListAssertionsBySubject(ctx context.Context, subjectNodeID uuid.UUID) ([]*Assertion, error)
 	// All assertions touching a node in EITHER position (subject OR object), any
 	// status, oldest first — the node-merge re-point scan. The merge procedure
 	// rewrites loser→winner on each row; oldest-first is a stable, deterministic
 	// order so the live-row collision/supersession steps run reproducibly.
-	ListAssertionsTouchingNode(ctx context.Context, subjectNodeID pgtype.UUID) ([]*Assertion, error)
+	ListAssertionsTouchingNode(ctx context.Context, subjectNodeID uuid.UUID) ([]*Assertion, error)
 	// Returns the deduplicated canonicalized value set for the given
 	// contact_method types, scoped to non-deleted contacts. Ordered
 	// alphabetically by value_normalized for deterministic daemon-side diff.
@@ -1230,7 +1239,7 @@ type Querier interface {
 	// collapses the same value across multiple contacts.
 	ListCanonicalIdentifiersByType(ctx context.Context, dollar_1 []string) ([]string, error)
 	// Per-contact content, newest first (backs idx_comms_message_contact_sent).
-	ListCommsMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*CommsMessage, error)
+	ListCommsMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]*CommsMessage, error)
 	// Keyset-paged rows for the one-time historical display-name re-derivation
 	// (crm-admin --rederive-correspondence-names). Returns email rows at/after
 	// @since that lack the from_name key (i.e. ingested before display-name
@@ -1244,10 +1253,10 @@ type Querier interface {
 	ListCommsMessagesMissingParticipantNames(ctx context.Context, arg ListCommsMessagesMissingParticipantNamesParams) ([]*ListCommsMessagesMissingParticipantNamesRow, error)
 	// Lightweight IDs-only variant of ListContacts for navigation (no pagination);
 	// same WHERE + ORDER BY shape as ListContacts.
-	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]pgtype.UUID, error)
+	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]uuid.UUID, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
 	// Contact method queries
-	ListContactMethodsByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactMethod, error)
+	ListContactMethodsByContact(ctx context.Context, contactID uuid.UUID) ([]*ContactMethod, error)
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
 	// ListContactTagsWithLiveContact returns every contact_tag whose contact is NOT
 	// soft-deleted (the `crm-admin --migrate-tags` source set). Deleted contacts are
@@ -1256,7 +1265,7 @@ type Querier interface {
 	// stable sequence.
 	ListContactTagsWithLiveContact(ctx context.Context) ([]*ContactTag, error)
 	// List all tasks for a contact
-	ListContactTasksByContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactTask, error)
+	ListContactTasksByContact(ctx context.Context, contactID uuid.UUID) ([]*ContactTask, error)
 	// List tasks for a contact with optional state, kind, and lifecycle filters
 	ListContactTasksByContactFiltered(ctx context.Context, arg ListContactTasksByContactFilteredParams) ([]*ContactTask, error)
 	// List all tasks for a provider (optionally filtered by state)
@@ -1297,7 +1306,7 @@ type Querier interface {
 	// River job state (available/running/completed/retryable) is the
 	// source of truth for "in-flight" — this query only needs to filter
 	// out 'disabled' rows whose next_sync_at has come due.
-	ListDueSyncStates(ctx context.Context, nextSyncAt pgtype.Timestamptz) ([]*ExternalSyncState, error)
+	ListDueSyncStates(ctx context.Context, nextSyncAt *time.Time) ([]*ExternalSyncState, error)
 	// Returns (value_normalized, contact_id) for every email contact_method of a
 	// non-deleted contact. MANY-TO-ONE allowed: a shared address (joint inbox /
 	// collision) maps to multiple contacts and each pair is returned so the Gmail
@@ -1312,7 +1321,7 @@ type Querier interface {
 	// List calendar events involving a specific contact
 	ListEventsForContact(ctx context.Context, arg ListEventsForContactParams) ([]*CalendarEvent, error)
 	ListExternalContactsBySource(ctx context.Context, arg ListExternalContactsBySourceParams) ([]*ExternalContact, error)
-	ListExternalContactsForCRMContact(ctx context.Context, crmContactID pgtype.UUID) ([]*ExternalContact, error)
+	ListExternalContactsForCRMContact(ctx context.Context, crmContactID *uuid.UUID) ([]*ExternalContact, error)
 	// Address-book rows carrying non-empty pending_method_suggestions, joined
 	// to the canonical so the repo can apply the SAME effective-status
 	// precedence (ignored > imported > matched) as the reconcile driver via
@@ -1336,7 +1345,7 @@ type Querier interface {
 	// the same address has both a gchat and an email method on one contact.
 	ListGChatIdentitiesForSync(ctx context.Context) ([]*ListGChatIdentitiesForSyncRow, error)
 	ListIdentitiesBySource(ctx context.Context, arg ListIdentitiesBySourceParams) ([]*ExternalIdentity, error)
-	ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error)
+	ListIdentitiesForContact(ctx context.Context, contactID *uuid.UUID) ([]*ExternalIdentity, error)
 	// Test-only read of sample rows by river_job_id (raw SQL is banned in Go tests,
 	// so the real-Subscribe integration test reads rows back through this query).
 	ListJobExecSamplesByRiverJobIDForTest(ctx context.Context, riverJobIds []int64) ([]*ListJobExecSamplesByRiverJobIDForTestRow, error)
@@ -1359,7 +1368,7 @@ type Querier interface {
 	// /api/v1/host/:id/sync/anarlog_sessions/known-ids. Tombstoned rows are
 	// excluded — the daemon's set-diff reconciliation requires that rows
 	// the Pi has soft-deleted are NOT reported as known.
-	ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID pgtype.UUID) ([]*ListKnownMeetingNoteIDsByHostRow, error)
+	ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID *uuid.UUID) ([]*ListKnownMeetingNoteIDsByHostRow, error)
 	// Driver query for the address-book method reconcile (forward hooks +
 	// one-time catchup). Returns every live address-book row that is itself
 	// linked OR is a duplicate of a (live) canonical row, joining to the
@@ -1391,7 +1400,7 @@ type Querier interface {
 	// attention items surface first. Index-backed by the partial
 	// idx_meeting_note_linkage_state from migration 053; the in-memory sort
 	// on the small filtered set is cheap.
-	ListMeetingNotesNeedingAttention(ctx context.Context, hostID pgtype.UUID) ([]*MeetingNote, error)
+	ListMeetingNotesNeedingAttention(ctx context.Context, hostID *uuid.UUID) ([]*MeetingNote, error)
 	// List non-sensitive credential info for all credentials of a provider
 	ListOAuthCredentialStatuses(ctx context.Context, provider string) ([]*ListOAuthCredentialStatusesRow, error)
 	// List all OAuth credentials for a provider
@@ -1407,7 +1416,7 @@ type Querier interface {
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
 	ListPredicatesByStatus(ctx context.Context, status string) ([]*ListPredicatesByStatusRow, error)
 	// All locators for an assertion, oldest first.
-	ListProvenance(ctx context.Context, assertionID pgtype.UUID) ([]*AssertionProvenance, error)
+	ListProvenance(ctx context.Context, assertionID uuid.UUID) ([]*AssertionProvenance, error)
 	// Reverse lookup: every provenance locator a given source produced ("what did
 	// this source say"), via the (source_kind, source_id) index. Backs the
 	// source-row-deletion sweep (when a content row is hard-deleted, find the
@@ -1419,8 +1428,8 @@ type Querier interface {
 	// Used by the re-sync diff path in the meeting_note.recorded inline
 	// handler to compute the (existing - desired) set that needs
 	// soft-deleting.
-	ListSessionAttributedInteractions(ctx context.Context, sourceRefPrefix pgtype.Text) ([]*Interaction, error)
-	ListSignalsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) ([]*RelationshipSignal, error)
+	ListSessionAttributedInteractions(ctx context.Context, sourceRefPrefix *string) ([]*Interaction, error)
+	ListSignalsForSubject(ctx context.Context, subjectNodeID uuid.UUID) ([]*RelationshipSignal, error)
 	// Lists rows with matched_contact_id IS NULL — i.e., rows that the
 	// ingest service accepted into staging but couldn't match to a contact
 	// at the time. The crm-admin --messages-rematch-stranded command
@@ -1473,7 +1482,7 @@ type Querier interface {
 	// NOT a MessageStore interface method. thread_id is nullable on comms_message;
 	// the Go wrapper filters NULLs defensively (chat sources always write it
 	// non-null).
-	ListUnprocessedCommsChatsByContact(ctx context.Context, arg ListUnprocessedCommsChatsByContactParams) ([]pgtype.Text, error)
+	ListUnprocessedCommsChatsByContact(ctx context.Context, arg ListUnprocessedCommsChatsByContactParams) ([]*string, error)
 	// =====================================================================
 	// Source-parameterized aggregation-engine queries (GChat is the first
 	// chat source on comms_message; Telegram/Messages migrate onto these
@@ -1485,22 +1494,22 @@ type Querier interface {
 	// Claim-aware filter — same predicate shape as ListUnprocessedMessagesContactIDs,
 	// plus the @source scope. matched_contact_id is NOT NULL on comms_message;
 	// the IS NOT NULL guard is retained for parity/safety (harmless).
-	ListUnprocessedCommsContactIDs(ctx context.Context, source string) ([]pgtype.UUID, error)
+	ListUnprocessedCommsContactIDs(ctx context.Context, source string) ([]*uuid.UUID, error)
 	// Distinct contact IDs with at least one eligible (unprocessed AND
 	// unclaimed-or-stale) row. Used by AggregateAll batch mode after backfill
 	// and by the periodic aggregation sweeper.
-	ListUnprocessedContactIDs(ctx context.Context) ([]pgtype.UUID, error)
-	ListUnprocessedMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*MessagesMessage, error)
+	ListUnprocessedContactIDs(ctx context.Context) ([]*uuid.UUID, error)
+	ListUnprocessedMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]*MessagesMessage, error)
 	ListUnprocessedMessagesByContactAndChat(ctx context.Context, arg ListUnprocessedMessagesByContactAndChatParams) ([]*MessagesMessage, error)
 	// Distinct chat_guid values for a contact with at least one eligible
 	// (unprocessed AND unclaimed-or-stale) staging row. Used by the
 	// messaging aggregator worker to drive per-chat AggregateForContact
 	// invocations — the chat-aware path is what preserves the engine's
 	// extend/bridge/coalesce contract (see spec §3 "Stage 2 — Aggregator").
-	ListUnprocessedMessagesChatsByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]string, error)
+	ListUnprocessedMessagesChatsByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]string, error)
 	// Claim-aware filter — same predicate shape as telegram_message.
-	ListUnprocessedMessagesContactIDs(ctx context.Context) ([]pgtype.UUID, error)
-	ListUnprocessedTelegramMessagesByContact(ctx context.Context, matchedContactID pgtype.UUID) ([]*TelegramMessage, error)
+	ListUnprocessedMessagesContactIDs(ctx context.Context) ([]*uuid.UUID, error)
+	ListUnprocessedTelegramMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]*TelegramMessage, error)
 	// Claim-aware filter: rows not yet processed AND not currently claimed
 	// (or whose claim has aged past the 5-minute TTL). The TTL is inlined
 	// because spec §3 Race Mechanics fixes it at 5 minutes.
@@ -1530,13 +1539,13 @@ type Querier interface {
 	// statement still sees the statement's original snapshot, so a concurrently
 	// committed interaction would be missed. Returns db.ErrNotFound (pgx.ErrNoRows)
 	// when the contact was soft-deleted.
-	LockContactForDateRecompute(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
+	LockContactForDateRecompute(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	// Returns the owning contact_id for a method id, regardless of which contact
 	// owns it. This is what separates "this id belongs to another contact" (404 --
 	// a method id is not a capability) from "this id does not exist at all"
 	// (a removal succeeds as a no-op, so a retried removal is idempotent). Those
 	// two cases are indistinguishable from one contact's pre-state alone.
-	LookupContactMethodOwner(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
+	LookupContactMethodOwner(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	// Single-statement batch mark for the action=ignore ("Not a person")
 	// resolve path: every live unmatched sibling for the token flips to
 	// 'ignored'. No crm_contact_id is set. Same predicate as the other two
@@ -1596,7 +1605,7 @@ type Querier interface {
 	//     original attempt.
 	MarkCommsMessagesProcessedForSession(ctx context.Context, arg MarkCommsMessagesProcessedForSessionParams) (int64, error)
 	// Mark an event as having updated last_contacted for its contacts
-	MarkLastContactedUpdated(ctx context.Context, id pgtype.UUID) error
+	MarkLastContactedUpdated(ctx context.Context, id uuid.UUID) error
 	// Non-tx variant. Mirror of MarkTelegramMessagesProcessed — used by the
 	// engine's extend/promote/bridge paths only; no session-scope predicate
 	// needed because those paths do not publish events.
@@ -1693,10 +1702,11 @@ type Querier interface {
 	// on the scheduler's next pass — neither is "a due job the workers are failing
 	// to pick up", which is what this query measures.
 	//
-	// MIN(...) over zero rows returns NULL; the ::timestamptz cast pins the
-	// aggregate's generated type. The repository maps NULL to a nil *time.Time
-	// ("no due jobs").
-	OldestDueRiverJobScheduledAt(ctx context.Context, now pgtype.Timestamptz) (pgtype.Timestamptz, error)
+	// MIN(...) over zero rows returns NULL. sqlc's static analyzer cannot type an
+	// aggregate output (a cast would force NOT NULL and break NULL scans), so the
+	// generated return is interface{}; the repository type-asserts time.Time and
+	// maps NULL/nil to a nil *time.Time ("no due jobs").
+	OldestDueRiverJobScheduledAt(ctx context.Context, now time.Time) (interface{}, error)
 	// Sets is_primary on one named row of one contact. Added rather than reusing
 	// SetContactMethodPrimary, which matches by method id alone and is used by
 	// enrichment — changing it would move enrichment behavior.
@@ -1722,7 +1732,7 @@ type Querier interface {
 	// exactly one enforcement point: 'dropped_inline' enters at 'projected', a
 	// media-backed chunk at 'recorded'.
 	// @notification MUST already have InitialHistBootstrapInlinePayload nil'd.
-	RecordWhatsAppHistoryNotification(ctx context.Context, arg RecordWhatsAppHistoryNotificationParams) (pgtype.UUID, error)
+	RecordWhatsAppHistoryNotification(ctx context.Context, arg RecordWhatsAppHistoryNotificationParams) (uuid.UUID, error)
 	RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error
 	// Replace source contact ID with target contact ID in calendar event matched_contact_ids array
 	// Uses array_replace for efficient in-place replacement
@@ -1778,7 +1788,7 @@ type Querier interface {
 	// for a dropped_inline row the retry can only re-send the receipt, since its
 	// phase is already 'projected' and it has no media. Not token-fenced: a failed
 	// row holds no lease.
-	RequeueFailedWhatsAppHistoryNotification(ctx context.Context, id pgtype.UUID) (int64, error)
+	RequeueFailedWhatsAppHistoryNotification(ctx context.Context, id uuid.UUID) (int64, error)
 	ResetSyncStateBackfillCursor(ctx context.Context, arg ResetSyncStateBackfillCursorParams) (*ExternalSyncState, error)
 	// ============================================================================
 	// crm-admin --reset-and-seed support: a HARD wipe of every live data table
@@ -1821,13 +1831,13 @@ type Querier interface {
 	// Clears deleted_at on a tombstoned row. Defensive WHERE deleted_at IS NOT
 	// NULL keeps the statement idempotent across concurrent revive races.
 	// Preserves crm_contact_id, match_status, and all content columns.
-	ReviveExternalContact(ctx context.Context, id pgtype.UUID) (*ExternalContact, error)
+	ReviveExternalContact(ctx context.Context, id uuid.UUID) (*ExternalContact, error)
 	// Clears deleted_at + writes the full updatable column set in a single
 	// statement so a tombstoned row that re-receives meeting_note.recorded
 	// comes back live with the new content. Defensive WHERE deleted_at IS
 	// NOT NULL keeps it idempotent across concurrent revive races.
 	ReviveMeetingNote(ctx context.Context, arg ReviveMeetingNoteParams) (*MeetingNote, error)
-	RevokeMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error)
+	RevokeMacHost(ctx context.Context, id uuid.UUID) (*MacHost, error)
 	// The rollover job: terminalize the bounded-with-pending-successor rows whose
 	// bound has been reached. Scoped TIGHT — superseded_by IS NOT NULL excludes
 	// successor-less historical accepted facts (which simply aren't current). Sets
@@ -1836,7 +1846,7 @@ type Querier interface {
 	// future via a KnowledgeFromOverride does not violate the assertion_knowledge_range
 	// CHECK and abort the whole sweep. Returns the updated rows so the caller can emit
 	// one assertion.superseded event per row.
-	RolloverDueBoundedSuccessors(ctx context.Context, now pgtype.Timestamptz) ([]*Assertion, error)
+	RolloverDueBoundedSuccessors(ctx context.Context, now time.Time) ([]*Assertion, error)
 	// Atomically replaces api_key_hash and bumps api_key_rotated_at. Used
 	// by the rotate-key endpoint. Filters revoked hosts so a revoked host
 	// cannot be silently re-activated by a rotation.
@@ -1855,7 +1865,7 @@ type Querier interface {
 	// RETURNING is the minimal id-only set so step-by-step migration tests
 	// that run this against earlier schemas (before columns added in later
 	// migrations exist) don't trip on the column expansion of RETURNING *.
-	SeedMacHost(ctx context.Context, arg SeedMacHostParams) (pgtype.UUID, error)
+	SeedMacHost(ctx context.Context, arg SeedMacHostParams) (uuid.UUID, error)
 	// Inserts a pairing token with caller-supplied hash + expiry. Tests use
 	// this to seed expired tokens (cannot mint via the real Create path
 	// because the service enforces a forward-only TTL).
@@ -1936,17 +1946,17 @@ type Querier interface {
 	// direct-path post-commit closure to capture the post-image inside its
 	// own short-lived tx (plan Decision 5). Consumer does NOT call this —
 	// consumer reads prev from the event payload (plan Decision 2a).
-	SnapshotContactCadenceFields(ctx context.Context, id pgtype.UUID) (*SnapshotContactCadenceFieldsRow, error)
+	SnapshotContactCadenceFields(ctx context.Context, id uuid.UUID) (*SnapshotContactCadenceFieldsRow, error)
 	// Test-only helper: soft-deletes a single comms_message row by id, simulating
 	// the upstream delete a chat provider would observe. Used by the delete-no-op
 	// aggregation test. There is no production chat delete path yet.
-	SoftDeleteCommsMessageByID(ctx context.Context, id pgtype.UUID) error
+	SoftDeleteCommsMessageByID(ctx context.Context, id uuid.UUID) error
 	// Soft-delete every stored row for (source, external_id) — the production chat
 	// delete path. Scoped by (source, external_id) so all fanned-out contacts'
 	// rows drop out of future aggregation. Idempotent: an already-deleted message
 	// affects 0 rows.
 	SoftDeleteCommsMessagesByExternalID(ctx context.Context, arg SoftDeleteCommsMessagesByExternalIDParams) (int64, error)
-	SoftDeleteContact(ctx context.Context, id pgtype.UUID) error
+	SoftDeleteContact(ctx context.Context, id uuid.UUID) error
 	// Merge dedup step 1 (see CommsMessageRepository.RepointContactForMergeTx):
 	// tombstone the merge source's live copy of any (source, external_id) the
 	// target ALSO has live — the email-fanout shape, where one upstream message
@@ -1970,14 +1980,14 @@ type Querier interface {
 	// statement idempotent against a concurrent delete. crm_contact_id,
 	// match_status, and duplicate_of_id are preserved per the external_contact
 	// soft-delete contract.
-	SoftDeleteExternalContact(ctx context.Context, id pgtype.UUID) error
-	SoftDeleteInteraction(ctx context.Context, id pgtype.UUID) error
+	SoftDeleteExternalContact(ctx context.Context, id uuid.UUID) error
+	SoftDeleteInteraction(ctx context.Context, id uuid.UUID) error
 	// Tombstones the live row for a session UUID. last_content_hash,
 	// input_hash, meeting_at are preserved on the row so a future revive
 	// has the prior content snapshot available. Idempotent (no-op when no
 	// live row exists).
-	SoftDeleteMeetingNoteBySessionID(ctx context.Context, anarlogSessionID pgtype.UUID) error
-	SoftDeleteNode(ctx context.Context, id pgtype.UUID) error
+	SoftDeleteMeetingNoteBySessionID(ctx context.Context, anarlogSessionID uuid.UUID) error
+	SoftDeleteNode(ctx context.Context, id uuid.UUID) error
 	SoftDeleteTelegramChannelMessages(ctx context.Context, arg SoftDeleteTelegramChannelMessagesParams) error
 	SoftDeleteTelegramMessages(ctx context.Context, messageIds []int32) error
 	// Tombstones the unmatched staging row for a message that has just been staged
@@ -2011,7 +2021,7 @@ type Querier interface {
 	// Assertion-store test support: count the assertions whose subject is a given
 	// node, so a test scopes its assertions to its own namespace's subject node on
 	// the shared test DB.
-	SyntheticCountAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error)
+	SyntheticCountAssertionsForSubject(ctx context.Context, subjectNodeID uuid.UUID) (int64, error)
 	// Settle Gate A (GCal decline terminal): count ALL calendar_event rows for the
 	// gcal id regardless of status/match. The cutover decline branch DELETES the
 	// row, so the decline test settles on this reaching 0. calendar_event has no
@@ -2031,19 +2041,19 @@ type Querier interface {
 	// collision actually originates. Counts live (non-deleted-contact) contact_method
 	// rows whose normalized value shares the namespace's phone prefix. Caller passes
 	// a BARE prefix; '%' is appended here.
-	SyntheticCountContactMethodsByValueNormalizedPrefix(ctx context.Context, valueNormalizedPrefix pgtype.Text) (int64, error)
+	SyntheticCountContactMethodsByValueNormalizedPrefix(ctx context.Context, valueNormalizedPrefix *string) (int64, error)
 	// Contact→node dual-write test support: count contacts with an exact full_name
 	// (namespace-prefixed names are unique per test), so a rollback test asserts a
 	// failed-tx contact did not survive without paging the whole contact list.
 	SyntheticCountContactsByFullName(ctx context.Context, fullName string) (int64, error)
 	// Cleanup assertion — count surviving contact rows for the given ids.
-	SyntheticCountContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	SyntheticCountContactsByIds(ctx context.Context, contactIds []uuid.UUID) (int64, error)
 	// Cleanup assertion — surviving claims for a set of event ids. event_consumer_claim
 	// has NO fk to event, so deleting an event does not take its claims with it: a
 	// sweep that dropped the events while its claim delete failed would leave rows
 	// that no later cleanup can even name (the event ids are derived FROM the events).
 	// The ids must therefore be captured before the sweep and asserted against after.
-	SyntheticCountEventConsumerClaimsByEventIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
+	SyntheticCountEventConsumerClaimsByEventIds(ctx context.Context, eventIds []uuid.UUID) (int64, error)
 	// Harness setup collision detection: count live external_contact rows holding a
 	// phone in this namespace's reserved area-code band. A declared import candidate
 	// stores its phones ONLY in this JSON array — it is not a CRM contact, so no
@@ -2064,7 +2074,7 @@ type Querier interface {
 	// normalized identifier shares the namespace's phone-digit prefix. Non-zero means
 	// another namespace already occupies this phone sub-block, so NewHarness re-salts.
 	// Caller passes a BARE prefix; '%' is appended here.
-	SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error)
+	SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix *string) (int64, error)
 	// gcal UPCOMING: how many of these (gcal_event_id, contact_id) PAIRS have a
 	// calendar_event row carrying the contact in matched_contact_ids. Deliberately
 	// WITHOUT the last_contacted_updated term its past-event sibling carries: that
@@ -2094,7 +2104,7 @@ type Querier interface {
 	// among the given ids, scoped to THIS run's tracked node ids. Used to assert a merge
 	// winner node stays live (== id count) while soft-deleted + merge-loser nodes are
 	// tombstoned (== 0).
-	SyntheticCountLiveNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	SyntheticCountLiveNodesByIds(ctx context.Context, nodeIds []uuid.UUID) (int64, error)
 	// gcal batch: how many of these (gcal_event_id, contact_id) PAIRS have a
 	// calendar_event row carrying the contact in matched_contact_ids AND
 	// last_contacted_updated = true (the attended interaction published). The pair is
@@ -2108,7 +2118,7 @@ type Querier interface {
 	// Graph identity test support: count nodes whose canonical_label is ns-prefixed,
 	// so a test can scope assertions to its own namespace's nodes on the shared test
 	// DB. Caller passes a BARE prefix; '%' is appended here.
-	SyntheticCountNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error)
+	SyntheticCountNodesByLabelPrefix(ctx context.Context, labelPrefix *string) (int64, error)
 	// Cleanup safety gate, at Gate-B parity: unfinalized River jobs that still
 	// dereference this namespace's rows. Two linkage classes, both required —
 	// event-linked jobs (args->>'event_id'), and messaging_aggregate_for_contact
@@ -2125,7 +2135,7 @@ type Querier interface {
 	// nodes (scoped to THIS run's tracked node ids, so it is immune to parallel tests
 	// seeding their own signals on the shared DB). Used to assert ≥1 signal exists for
 	// the seeded nodes (coverage) and that 0 remain after teardown.
-	SyntheticCountRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	SyntheticCountRelationshipSignalsForNodes(ctx context.Context, nodeIds []uuid.UUID) (int64, error)
 	// Cleanup assertion — does a namespace's private river_queue row still exist?
 	// Every harness starts a producer that upserts one, and a database reset
 	// preserves River's own tables, so an un-deleted row is permanent residue.
@@ -2152,7 +2162,7 @@ type Querier interface {
 	SyntheticCountStrandedMessagesMessageByGuid(ctx context.Context, guid string) (int64, error)
 	// Settle Gate A (telegram unknown-sender): a message row exists for the peer
 	// with matched_contact_id IS NULL (the stranded/discovery-candidate state).
-	SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error)
+	SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID *int64) (int64, error)
 	// Harness setup collision detection: count telegram external_contact +
 	// external_identity rows keyed by a BARE peer-id source_id that falls in this
 	// namespace's reserved peer band [band_start, band_end). A discovery/stranded
@@ -2214,43 +2224,43 @@ type Querier interface {
 	// synthetic unknown attendee carries the 'synth-<ns>-' prefix. Counts those
 	// unmatched candidates for this namespace. Caller passes a BARE prefix; '%'
 	// appended here.
-	SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error)
+	SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx context.Context, sourceIDPrefix *string) (int64, error)
 	// Settle Gate A (Mac-contact unknown-sender): the external_contact row for the
 	// entity id exists with match_status='unmatched'.
 	SyntheticCountUnmatchedExternalContactBySourceId(ctx context.Context, sourceID string) (int64, error)
 	// Cleanup assertion — count surviving venue nodes among the given ids (scoped to
 	// THIS run's tracked venue node ids, so it is immune to parallel tests creating
 	// their own venue nodes on the shared DB, unlike a global venue-node count).
-	SyntheticCountVenueNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	SyntheticCountVenueNodesByIds(ctx context.Context, nodeIds []uuid.UUID) (int64, error)
 	// Assertion-store cleanup: hard-delete the assertions touching a node in EITHER
 	// position (provenance cascades). The assertion → node FK is restrict (NO
 	// ACTION), so a test MUST clear its assertions before deleting its nodes; this
 	// targeted delete is the cleanup primitive for that. superseded_by is a nullable
 	// self-FK, so a single multi-row DELETE clears a closed-pair set in one shot.
-	SyntheticDeleteAssertionsForNode(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error)
+	SyntheticDeleteAssertionsForNode(ctx context.Context, subjectNodeID uuid.UUID) (int64, error)
 	// Cleanup step 4: comms_message rows whose external_id is ns-prefixed.
 	// Caller passes a BARE prefix; '%' is appended here.
-	SyntheticDeleteCommsMessagesByExternalIdPrefix(ctx context.Context, externalIDPrefix pgtype.Text) (int64, error)
+	SyntheticDeleteCommsMessagesByExternalIdPrefix(ctx context.Context, externalIDPrefix *string) (int64, error)
 	// Cleanup step 11: contact_method by contact.
-	SyntheticDeleteContactMethodsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteContactMethodsByContactIds(ctx context.Context, contactIds []uuid.UUID) (int64, error)
 	// Cleanup step 10: contact_task has no deleted_at; hard delete by contact.
-	SyntheticDeleteContactTasksByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteContactTasksByContactIds(ctx context.Context, contactIds []uuid.UUID) (int64, error)
 	// Todoist replay cleanup: delete the contact_task rows the replay's reconcile
 	// created (the before/after diff from SyntheticListContactTaskIdsByProvider).
-	SyntheticDeleteContactTasksByIds(ctx context.Context, taskIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteContactTasksByIds(ctx context.Context, taskIds []uuid.UUID) (int64, error)
 	// Cleanup step 13: contact by tracked id. A true DELETE (not soft) so
 	// ON DELETE CASCADE fires for contact_enrichment (and any cascade FK).
-	SyntheticDeleteContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteContactsByIds(ctx context.Context, contactIds []uuid.UUID) (int64, error)
 	// Graph identity cleanup: entity_type is a catalog table with no canonical_label,
 	// so a test that seeds its own ns-prefixed entity_type rows clears them by key
 	// prefix (the curated catalog seed rows use bare keys and are never
 	// prefix-matched). Caller passes a BARE prefix; '%' is appended here.
-	SyntheticDeleteEntityTypesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error)
+	SyntheticDeleteEntityTypesByKeyPrefix(ctx context.Context, keyPrefix *string) (int64, error)
 	// Cleanup step 1: claims for this replay's events (by tracked event id).
-	SyntheticDeleteEventConsumerClaimsByEventIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteEventConsumerClaimsByEventIds(ctx context.Context, eventIds []uuid.UUID) (int64, error)
 	// Cleanup step 3: events by tracked id (NOT by source — that would wipe
 	// other tests' rows sharing the source value on the shared DB).
-	SyntheticDeleteEventsByIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteEventsByIds(ctx context.Context, eventIds []uuid.UUID) (int64, error)
 	// Cleanup step 9 (ownership): import candidates by the namespace's OWNERSHIP
 	// record, unioned with the source_id-prefix delete above rather than replacing
 	// it. Three of the declarable candidate sources have a production source_id that
@@ -2258,7 +2268,7 @@ type Querier interface {
 	// anarlog_title on a SHA-256 (token || session) digest — so the prefix sweep has
 	// nothing to match for them and this is the only delete that reaches those rows.
 	// A hard DELETE, like every other cleanup step.
-	SyntheticDeleteExternalContactsByIds(ctx context.Context, externalContactIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteExternalContactsByIds(ctx context.Context, externalContactIds []uuid.UUID) (int64, error)
 	// Cleanup step 8: identities whose normalized identifier shares an ns-scoped
 	// prefix. MatchOrCreate for GCal attendee / external_contact email matching
 	// creates identities with source_id NULL keyed by the synthetic IDENTIFIER (e.g.
@@ -2271,10 +2281,10 @@ type Querier interface {
 	// ('+1<area>55501...') — synthetic phones are now ns-scoped via the per-namespace
 	// area code (factory.phoneFor), so phone identities no longer leak. Caller passes
 	// a BARE prefix; '%' appended.
-	SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error)
+	SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix *string) (int64, error)
 	// Cleanup step 8 (backstop): catches any ns-prefixed source_id rows the
 	// identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.
-	SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error)
+	SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx context.Context, sourceIDPrefix *string) (int64, error)
 	// Cleanup: the STATELESS variant of the delete above, for the cross-request path
 	// that has no tracked peer-id list. Importing or linking a telegram candidate
 	// makes the post-import hook write an external_identity keyed by
@@ -2289,17 +2299,17 @@ type Querier interface {
 	// reaches any identity a post-import hook keys to the candidate it came from and
 	// nothing else. MUST run before the owned-candidate external_contact delete,
 	// which removes the rows this reads.
-	SyntheticDeleteIdentitiesForOwnedCandidates(ctx context.Context, externalContactIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteIdentitiesForOwnedCandidates(ctx context.Context, externalContactIds []uuid.UUID) (int64, error)
 	// Cleanup ladder: interactions by contact (hard delete — the ledger's by-id
 	// variant is unavailable cross-request). Soft-deleted rows included.
-	SyntheticDeleteInteractionsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteInteractionsByContactIds(ctx context.Context, contactIds []uuid.UUID) (int64, error)
 	// Cleanup step 2: interactions by tracked id.
-	SyntheticDeleteInteractionsByIds(ctx context.Context, interactionIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteInteractionsByIds(ctx context.Context, interactionIds []uuid.UUID) (int64, error)
 	// Cleanup step 14: the seeded revoked synthetic mac_host by id.
-	SyntheticDeleteMacHostById(ctx context.Context, id pgtype.UUID) (int64, error)
+	SyntheticDeleteMacHostById(ctx context.Context, id uuid.UUID) (int64, error)
 	// Cleanup step 5: messages_message rows whose guid is ns-prefixed.
 	// Caller passes a BARE prefix; '%' is appended here.
-	SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix pgtype.Text) (int64, error)
+	SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix *string) (int64, error)
 	// Cleanup ladder (final block): drops the namespace's ownership records. Runs
 	// with the host-marker delete — only after every earlier step succeeded — so a
 	// partially failed sweep keeps the namespace both discoverable AND recoverable.
@@ -2307,14 +2317,14 @@ type Querier interface {
 	// Cleanup: the person node a seeded contact owns (node.id == contact.id), so
 	// the harness teardown removes the nodes its dual-writing SeedContact created
 	// alongside the contacts. Hard delete, keyed by the tracked contact ids.
-	SyntheticDeleteNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteNodesByIds(ctx context.Context, nodeIds []uuid.UUID) (int64, error)
 	// Graph identity cleanup: hard-delete nodes whose canonical_label is ns-prefixed.
 	// entity and venue cascade via their ON DELETE CASCADE FK to node, so this one
 	// delete removes a namespace's node+entity+venue rows. Caller passes a BARE
 	// prefix; '%' is appended here.
-	SyntheticDeleteNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error)
+	SyntheticDeleteNodesByLabelPrefix(ctx context.Context, labelPrefix *string) (int64, error)
 	// Cleanup step 12: note by contact.
-	SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []uuid.UUID) (int64, error)
 	// Cleanup ladder: the CONSUMED pairing token a declared world's paired host was
 	// created from. Keyed on consumed_host_id because that is the only recovery key
 	// available: CreatePairingToken returns the plaintext and the expiry, never the
@@ -2324,17 +2334,17 @@ type Querier interface {
 	// The production janitor cannot stand in: it deletes only UNCONSUMED expired
 	// tokens. Deliberately by id rather than the whole-table DeleteAllPairingTokens,
 	// which would destroy a concurrent world's token.
-	SyntheticDeletePairingTokensByConsumedHostId(ctx context.Context, consumedHostID pgtype.UUID) (int64, error)
+	SyntheticDeletePairingTokensByConsumedHostId(ctx context.Context, consumedHostID *uuid.UUID) (int64, error)
 	// Predicate-catalog cleanup: a test that mints its own ns-prefixed provisional
 	// predicates clears them by key prefix (the curated seed rows use bare keys and
 	// are never prefix-matched). Caller passes a BARE prefix; '%' is appended here.
-	SyntheticDeletePredicatesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error)
+	SyntheticDeletePredicatesByKeyPrefix(ctx context.Context, keyPrefix *string) (int64, error)
 	// Cleanup: hard-delete the relationship_signal rows a profile seeded on the given
 	// subject nodes, keyed by the tracked node ids. relationship_signal.subject_node_id
 	// is a real FK→node (NO ACTION, no soft delete), so these rows MUST be cleared
 	// BEFORE their subject nodes — the teardown runs this before the person/entity node
 	// deletes.
-	SyntheticDeleteRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteRelationshipSignalsForNodes(ctx context.Context, nodeIds []uuid.UUID) (int64, error)
 	// Cleanup ladder: drops the river_queue row a harness producer created for the
 	// namespace's private queue. Without it every declared seed would leave one
 	// permanent row behind on the shared database.
@@ -2386,7 +2396,7 @@ type Querier interface {
 	// discovery surface groups anarlog_title rows by normalized token DB-WIDE, so it
 	// keeps inflating that token's group for every later run. Runs BEFORE the
 	// meeting_note delete, which removes the rows this reads.
-	SyntheticDeleteTitleCandidatesForHostSessions(ctx context.Context, macHostID pgtype.UUID) (int64, error)
+	SyntheticDeleteTitleCandidatesForHostSessions(ctx context.Context, macHostID *uuid.UUID) (int64, error)
 	// Cleanup ladder: drops the namespace's own ORPHANED River jobs.
 	//
 	// A harness client fetches only its own private queue, so a job left in that
@@ -2404,17 +2414,17 @@ type Querier interface {
 	// NOT EXISTS any interaction still referencing it — so a venue shared with an
 	// interaction this run did not clean up (e.g. a group container another
 	// namespace also used) is left intact rather than raising the restrict FK.
-	SyntheticDeleteVenueNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error)
+	SyntheticDeleteVenueNodesByIds(ctx context.Context, nodeIds []uuid.UUID) (int64, error)
 	// Contact→node dual-write test support: fetch the person node a contact owns
 	// (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
 	// test can assert the dual-write created it with the expected type/label.
-	SyntheticGetNodeForContact(ctx context.Context, id pgtype.UUID) (*Node, error)
+	SyntheticGetNodeForContact(ctx context.Context, id uuid.UUID) (*Node, error)
 	// Todoist replay: snapshot the set of contact_task ids for a provider so the
 	// replay can diff before/after its (globally-scoped) reconcile and track the
 	// rows it created — even for cadence-bearing contacts it did not seed — so
 	// cleanup removes exactly those rows and never strands a task on an unrelated
 	// contact in the shared test DB.
-	SyntheticListContactTaskIdsByProvider(ctx context.Context, provider string) ([]pgtype.UUID, error)
+	SyntheticListContactTaskIdsByProvider(ctx context.Context, provider string) ([]uuid.UUID, error)
 	// Cleanup event-id capture (part 2): adapter-direct root events that carry NO
 	// CRM contact id (raw_message.* / external_contact.upserted roots, and
 	// unknown/pending replays that touch no seeded contact). Keyed by the
@@ -2424,12 +2434,12 @@ type Querier interface {
 	// (source, source_id) unique and skip inline ingest (idempotency break).
 	// Caller passes a BARE prefix; the '%' is appended here (matches the existing
 	// Delete*ByPrefix conventions).
-	SyntheticListEventIdsBySourceAndSourceIdPrefix(ctx context.Context, arg SyntheticListEventIdsBySourceAndSourceIdPrefixParams) ([]pgtype.UUID, error)
+	SyntheticListEventIdsBySourceAndSourceIdPrefix(ctx context.Context, arg SyntheticListEventIdsBySourceAndSourceIdPrefixParams) ([]uuid.UUID, error)
 	// Cleanup event-id capture (part 1): every event.id whose payload references
 	// one of this replay's contacts. Covers the full non-prefixed cascade
 	// (interaction.recorded uses interaction.ID as source_id, calendar.attended
 	// uses an internal ref, etc.) generically via payload->>'contact_id'.
-	SyntheticListEventIdsForContacts(ctx context.Context, contactIds []string) ([]pgtype.UUID, error)
+	SyntheticListEventIdsForContacts(ctx context.Context, contactIds []string) ([]uuid.UUID, error)
 	// The namespace-scoped form of ListPastEventsNeedingUpdate, for the GCal replay
 	// adapters' provider wrapper. Scoping in SQL rather than filtering the production
 	// query's result in Go is not a refinement — it is the difference between working
@@ -2456,7 +2466,7 @@ type Querier interface {
 	// prefix, INCLUDING soft-deleted rows (see the soft-delete exception above).
 	// Caller passes a BARE prefix; '%' is appended here. The namespace charset
 	// excludes the LIKE metacharacters, so the prefix can never over-match.
-	SyntheticSelectContactIdsByFullNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]pgtype.UUID, error)
+	SyntheticSelectContactIdsByFullNamePrefix(ctx context.Context, namePrefix *string) ([]uuid.UUID, error)
 	// Cleanup id-set: the CRM contacts the product linked to this namespace's own
 	// import candidates. It is a third recovery route for contacts, unioned with the
 	// name prefix and the ownership records rather than replacing either.
@@ -2495,7 +2505,7 @@ type Querier interface {
 	// Cross-namespace stamping is not hypothetical: the anarlog_title resolve marks
 	// siblings by normalized token DB-WIDE, so one world's resolve can write its own
 	// contact id onto a candidate THIS namespace owns.
-	SyntheticSelectLinkedContactIdsByExternalContactIds(ctx context.Context, arg SyntheticSelectLinkedContactIdsByExternalContactIdsParams) ([]pgtype.UUID, error)
+	SyntheticSelectLinkedContactIdsByExternalContactIds(ctx context.Context, arg SyntheticSelectLinkedContactIdsByExternalContactIdsParams) ([]*uuid.UUID, error)
 	// Cleanup id-set: the CRM contacts the product created by resolving an
 	// anarlog_title candidate that was itself DERIVED from one of this namespace's
 	// meeting notes. A FOURTH contact-recovery route, and the composition partner of
@@ -2524,29 +2534,29 @@ type Querier interface {
 	// NEIGHBOUR's owned candidate to reach the same contact its declared token would
 	// have to collide with a meeting-note title token, which the namespace-hashed
 	// declared token makes unreachable.
-	SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates(ctx context.Context, arg SyntheticSelectLinkedContactIdsForHostSessionTitleCandidatesParams) ([]pgtype.UUID, error)
+	SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates(ctx context.Context, arg SyntheticSelectLinkedContactIdsForHostSessionTitleCandidatesParams) ([]*uuid.UUID, error)
 	// Cleanup descendant guard: hostnames of any namespace nested UNDER this one
 	// ('synth-<ns>-%-host'). A namespace whose prefix sweep would cross into a live
 	// descendant refuses to clean rather than deleting across it. Note
 	// 'synth-<ns>-host' itself does not match this pattern; the namespace's own
 	// salt variants do and are filtered out by the caller (they are expansion
 	// members, not descendants).
-	SyntheticSelectLiveDescendantHostnames(ctx context.Context, namespacePrefix pgtype.Text) ([]string, error)
+	SyntheticSelectLiveDescendantHostnames(ctx context.Context, namespacePrefix *string) ([]string, error)
 	// Cleanup ladder + namespace occupancy: the namespace's synthetic host, looked
 	// up by EXACT hostname. Deliberately not a prefix match: 'synth-foo-host' used
 	// as a LIKE prefix would also match namespace 'foo-hostile''s
 	// 'synth-foo-hostile-host' and delete another world's marker.
-	SyntheticSelectMacHostIdByHostname(ctx context.Context, hostname string) (pgtype.UUID, error)
+	SyntheticSelectMacHostIdByHostname(ctx context.Context, hostname string) (uuid.UUID, error)
 	// Cleanup id-set: the entity ids this namespace recorded ownership of. Unioned
 	// with the prefix sweep rather than replacing it — the prefix still finds rows
 	// a pre-ownership run seeded, and ownership still finds rows the prefix lost.
-	SyntheticSelectNamespaceEntityIds(ctx context.Context, arg SyntheticSelectNamespaceEntityIdsParams) ([]pgtype.UUID, error)
+	SyntheticSelectNamespaceEntityIds(ctx context.Context, arg SyntheticSelectNamespaceEntityIdsParams) ([]uuid.UUID, error)
 	// Cleanup id-set (step 2): the venue nodes the real recorders minted for this
 	// namespace's interactions. Venue nodes are not contacts and carry an empty
 	// canonical_label, so neither the person-node delete nor the label-prefix sweep
 	// finds them — they must be captured BEFORE the interaction delete removes the
 	// only link. Includes soft-deleted interactions for the same reason as above.
-	SyntheticSelectVenueNodeIdsForContacts(ctx context.Context, contactIds []pgtype.UUID) ([]pgtype.UUID, error)
+	SyntheticSelectVenueNodeIdsForContacts(ctx context.Context, contactIds []uuid.UUID) ([]*uuid.UUID, error)
 	// Namespace reservation (seed + cleanup): NON-BLOCKING session advisory lock.
 	// A held lock means a concurrent run owns the namespace, which is answered
 	// immediately (409 on seed, "busy" on cleanup) rather than queued behind. MUST
@@ -2577,7 +2587,7 @@ type Querier interface {
 	// Tag-migration test only: count the LIVE accepted `tagged_as` assertions whose
 	// subject is a given node, so a test asserts exactly one per migrated contact_tag
 	// and that an idempotent re-run creates no duplicates.
-	TestCountTaggedAsAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error)
+	TestCountTaggedAsAssertionsForSubject(ctx context.Context, subjectNodeID uuid.UUID) (int64, error)
 	// Migration round-trip test only: how many triggers of the given name exist on
 	// the given table. Read-only catalog access, mirroring TestListPublicTables.
 	// information_schema.triggers holds one row per (trigger, event type), and
@@ -2590,13 +2600,13 @@ type Querier interface {
 	TestDeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) error
 	// Tag-migration cleanup: hard-delete the contact_tag rows a test seeded, keyed by
 	// the tracked contact ids (scoped to the test's own contacts on the shared DB).
-	TestDeleteContactTagsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error)
+	TestDeleteContactTagsByContactIds(ctx context.Context, contactIds []uuid.UUID) (int64, error)
 	// TEST ONLY. Hard-deletes external_contact rows whose source_id starts with
 	// the given prefix. Used by t.Cleanup to remove fixtures inserted by a test.
 	TestDeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) error
 	// Tag-migration cleanup: hard-delete the legacy tag rows a test seeded, keyed by
 	// the tracked tag ids (scoped to the test's own tags on the shared DB).
-	TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID) (int64, error)
+	TestDeleteTagsByIds(ctx context.Context, tagIds []uuid.UUID) (int64, error)
 	// Rejection tests only: is crm.derived_writer genuinely UNDEFINED on THIS
 	// physical connection? A custom GUC is a placeholder: it does not exist until
 	// something sets it, and once anything does it stays defined for the session
@@ -2617,13 +2627,13 @@ type Querier interface {
 	// branch). Used by the attended-vs-decline lock-serialization integration
 	// test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
 	// without a sleep/timeout. Production code must NOT call this.
-	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id pgtype.UUID) (*CalendarEvent, error)
+	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id uuid.UUID) (*CalendarEvent, error)
 	// Contact→node identity FK migration test support: read a contact's deleted_at
 	// with NO liveness filter, so a migration round-trip test can assert the
 	// backfilled node's deleted_at mirrors the contact's exactly (not just "is
 	// non-nil"). GetContact/SoftDeleteContact deliberately never expose this because
 	// production code has no reason to read a soft-deleted contact's own tombstone.
-	TestGetContactDeletedAtIncludingDeleted(ctx context.Context, id pgtype.UUID) (pgtype.Timestamptz, error)
+	TestGetContactDeletedAtIncludingDeleted(ctx context.Context, id uuid.UUID) (*time.Time, error)
 	// Test assertion — a planted job's disposition: its state, whether it is
 	// finalized, and its attempt counter. `attempt` is the load-bearing one for
 	// queue isolation: River increments it on FETCH, so attempt = 0 says the job was
@@ -2644,7 +2654,7 @@ type Querier interface {
 	// TEST ONLY. Hard-deletes a calendar_event row by primary key. Used
 	// by integration tests that exercise the "target row vanished between
 	// snapshot and resolve-link" path. Production code must NOT call this.
-	TestHardDeleteCalendarEventByID(ctx context.Context, id pgtype.UUID) error
+	TestHardDeleteCalendarEventByID(ctx context.Context, id uuid.UUID) error
 	// Test-cleanup only, zero production callers. Hard-deletes the contact and, in
 	// the same statement, its person node — otherwise every one of the ~170
 	// HardDeleteContact cleanup sites leaks a latent node now that the repository
@@ -2654,12 +2664,12 @@ type Querier interface {
 	// ContactService has assertions pinning its node, and those are the synthetic
 	// teardown's to remove, not this query's. The guard makes that case a no-op on
 	// the node rather than an error.
-	TestHardDeleteContactWithNode(ctx context.Context, id pgtype.UUID) error
+	TestHardDeleteContactWithNode(ctx context.Context, id uuid.UUID) error
 	// TEST ONLY. Hard-deletes every meeting_note row owned by the given
 	// mac_host. Used by t.Cleanup when the test seeds meeting_notes with
 	// system-generated UUIDs (no exploitable prefix). Covers both live and
 	// tombstoned rows.
-	TestHardDeleteMeetingNotesByHostID(ctx context.Context, macHostID pgtype.UUID) error
+	TestHardDeleteMeetingNotesByHostID(ctx context.Context, macHostID *uuid.UUID) error
 	// TEST ONLY. Hard-deletes meeting_note rows whose session UUID (as text)
 	// starts with the given prefix. Used by t.Cleanup to remove fixtures
 	// inserted by a test. Covers both live and tombstoned rows.
@@ -2768,7 +2778,7 @@ type Querier interface {
 	// Tag-migration test only: seed a legacy tag row with an explicit name + color
 	// so a test can run `--migrate-tags` over it and assert the color survives into
 	// the tag entity node's detail JSONB. Returns the generated id.
-	TestInsertTagForMigration(ctx context.Context, arg TestInsertTagForMigrationParams) (pgtype.UUID, error)
+	TestInsertTagForMigration(ctx context.Context, arg TestInsertTagForMigrationParams) (uuid.UUID, error)
 	// Reset test only: a marker row in tag (a standalone table the harness does not
 	// touch).
 	TestInsertTagMarker(ctx context.Context) error
@@ -2814,7 +2824,7 @@ type Querier interface {
 	// Used by the recompute lock-ordering regression test to prove (without a
 	// sleep) that LockContactForDateRecompute is acquired as a blocking statement.
 	// Production code must NOT call this.
-	TestLockContactForUpdateNoWait(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error)
+	TestLockContactForUpdateNoWait(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	// TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
 	// FindEventsByAttendeeEmailUnmatchedForContact. Permanent regression guard.
 	// Callers must restrict input fixtures to well-formed JSONB arrays
@@ -2842,7 +2852,7 @@ type Querier interface {
 	// under/over-states the true available-wait. It is a rough first signal ONLY; do
 	// NOT compare it numerically to the Tier-1 queue_wait_ms metric, which is
 	// River's exact QueueWaitDuration.
-	Tier0RiverJobStatsByKind(ctx context.Context, cutoff pgtype.Timestamptz) ([]*Tier0RiverJobStatsByKindRow, error)
+	Tier0RiverJobStatsByKind(ctx context.Context, cutoff time.Time) ([]*Tier0RiverJobStatsByKindRow, error)
 	// Merge-time transfer of the source's LIVE automated rows to the target, for
 	// the rows where the move is legal under the existing partial unique indexes.
 	// A row moves only when the target has no colliding row:
@@ -2868,8 +2878,8 @@ type Querier interface {
 	TransitionStatus(ctx context.Context, arg TransitionStatusParams) error
 	// Housekeeping DELETE. Cutoff is accelerated-now minus the retention window,
 	// computed by the caller (NOT SQL NOW()).
-	TrimJobExecSamples(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error)
-	UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error)
+	TrimJobExecSamples(ctx context.Context, cutoff time.Time) (int64, error)
+	UnlinkIdentityFromContact(ctx context.Context, id uuid.UUID) (*ExternalIdentity, error)
 	// Dedup re-aggregate: on a corroborating write, raise confidence (SP1 rule:
 	// max(existing, incoming)) and recompute trust_tier. trust_tier is nullable.
 	UpdateAssertionConfidenceTrust(ctx context.Context, arg UpdateAssertionConfidenceTrustParams) error

@@ -27,7 +27,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // SyntheticSupportRepository wraps the Synthetic* test-only sqlc bindings.
@@ -47,24 +46,6 @@ func contactIDStrings(contactIDs []uuid.UUID) []string {
 	out := make([]string, len(contactIDs))
 	for i, id := range contactIDs {
 		out[i] = id.String()
-	}
-	return out
-}
-
-func pgUUIDs(ids []uuid.UUID) []pgtype.UUID {
-	out := make([]pgtype.UUID, len(ids))
-	for i, id := range ids {
-		out[i] = uuidToPgUUID(id)
-	}
-	return out
-}
-
-func pgUUIDsToUUIDs(in []pgtype.UUID) []uuid.UUID {
-	out := make([]uuid.UUID, 0, len(in))
-	for _, v := range in {
-		if v.Valid {
-			out = append(out, uuid.UUID(v.Bytes))
-		}
 	}
 	return out
 }
@@ -108,7 +89,13 @@ func (r *SyntheticSupportRepository) ListEventIdsForContacts(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	return pgUUIDsToUUIDs(rows), nil
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, id := range rows {
+		if id != uuid.Nil {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 // ListEventIdsBySourceAndSourceIDPrefix returns adapter-direct root event ids
@@ -118,12 +105,18 @@ func (r *SyntheticSupportRepository) ListEventIdsForContacts(ctx context.Context
 func (r *SyntheticSupportRepository) ListEventIdsBySourceAndSourceIDPrefix(ctx context.Context, source, prefix string) ([]uuid.UUID, error) {
 	rows, err := r.queries.SyntheticListEventIdsBySourceAndSourceIdPrefix(ctx, db.SyntheticListEventIdsBySourceAndSourceIdPrefixParams{
 		Source:         source,
-		SourceIDPrefix: pgtype.Text{String: prefix, Valid: true},
+		SourceIDPrefix: &prefix,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return pgUUIDsToUUIDs(rows), nil
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, id := range rows {
+		if id != uuid.Nil {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 // --- ID-tracked, FK-ordered cleanup ----------------------------------------
@@ -134,7 +127,7 @@ func (r *SyntheticSupportRepository) DeleteEventConsumerClaimsByEventIds(ctx con
 	if len(eventIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteEventConsumerClaimsByEventIds(ctx, pgUUIDs(eventIDs))
+	return r.queries.SyntheticDeleteEventConsumerClaimsByEventIds(ctx, eventIDs)
 }
 
 // DeleteInteractionsByIds removes interactions by tracked id (cleanup step 2).
@@ -142,7 +135,7 @@ func (r *SyntheticSupportRepository) DeleteInteractionsByIds(ctx context.Context
 	if len(interactionIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteInteractionsByIds(ctx, pgUUIDs(interactionIDs))
+	return r.queries.SyntheticDeleteInteractionsByIds(ctx, interactionIDs)
 }
 
 // DeleteEventsByIds removes events by tracked id (cleanup step 3).
@@ -150,25 +143,25 @@ func (r *SyntheticSupportRepository) DeleteEventsByIds(ctx context.Context, even
 	if len(eventIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteEventsByIds(ctx, pgUUIDs(eventIDs))
+	return r.queries.SyntheticDeleteEventsByIds(ctx, eventIDs)
 }
 
 // DeleteCommsMessagesByExternalIDPrefix removes comms_message rows whose
 // external_id is ns-prefixed (cleanup step 4).
 func (r *SyntheticSupportRepository) DeleteCommsMessagesByExternalIDPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.SyntheticDeleteCommsMessagesByExternalIdPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.SyntheticDeleteCommsMessagesByExternalIdPrefix(ctx, &prefix)
 }
 
 // DeleteMessagesMessageByGuidPrefix removes messages_message rows whose guid is
 // ns-prefixed (cleanup step 5).
 func (r *SyntheticSupportRepository) DeleteMessagesMessageByGuidPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.SyntheticDeleteMessagesMessageByGuidPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.SyntheticDeleteMessagesMessageByGuidPrefix(ctx, &prefix)
 }
 
 // DeleteTelegramMessagesByPeerUserID removes telegram_message rows for one
 // synthetic peer (cleanup step 6). Reuses the existing prod-test query.
 func (r *SyntheticSupportRepository) DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID int64) (int64, error) {
-	return r.queries.DeleteTelegramMessagesByPeerUserID(ctx, pgtype.Int8{Int64: peerUserID, Valid: true})
+	return r.queries.DeleteTelegramMessagesByPeerUserID(ctx, &peerUserID)
 }
 
 // DeleteTelegramChatConfigsByChatIds removes telegram_chat_config rows for the
@@ -213,7 +206,7 @@ func int64sToStrings(ids []int64) []string {
 // DeleteCalendarEventsByGcalEventIDPrefix removes calendar_event rows whose
 // gcal_event_id is ns-prefixed (cleanup step 7). Reuses the existing query.
 func (r *SyntheticSupportRepository) DeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.DeleteCalendarEventsByGcalEventIdPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.DeleteCalendarEventsByGcalEventIdPrefix(ctx, &prefix)
 }
 
 // DeleteExternalIdentitiesByIdentifierPrefix removes identities whose normalized
@@ -221,13 +214,13 @@ func (r *SyntheticSupportRepository) DeleteCalendarEventsByGcalEventIDPrefix(ctx
 // identities MatchOrCreate produces for GCal/external_contact matching, keyed by
 // the synthetic email/handle, which a source_id-prefix delete would miss.
 func (r *SyntheticSupportRepository) DeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx, &prefix)
 }
 
 // DeleteExternalIdentitiesBySourceIDPrefix is the prefix backstop for
 // ns-prefixed identity source_ids (cleanup step 8 backstop).
 func (r *SyntheticSupportRepository) DeleteExternalIdentitiesBySourceIDPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx, &prefix)
 }
 
 // DeleteIdentitiesForOwnedCandidates removes the external_identity rows a
@@ -241,13 +234,13 @@ func (r *SyntheticSupportRepository) DeleteIdentitiesForOwnedCandidates(ctx cont
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteIdentitiesForOwnedCandidates(ctx, pgUUIDs(ids))
+	return r.queries.SyntheticDeleteIdentitiesForOwnedCandidates(ctx, ids)
 }
 
 // DeleteExternalContactsBySourceIDPrefix removes external_contact rows whose
 // source_id is ns-prefixed (cleanup step 9). Reuses the existing query.
 func (r *SyntheticSupportRepository) DeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.DeleteExternalContactsBySourceIDPrefix(ctx, &prefix)
 }
 
 // SelectLinkedContactIDsByExternalContactIDs returns the CRM contacts the product
@@ -262,13 +255,19 @@ func (r *SyntheticSupportRepository) SelectLinkedContactIDsByExternalContactIDs(
 		return nil, nil
 	}
 	rows, err := r.queries.SyntheticSelectLinkedContactIdsByExternalContactIds(ctx, db.SyntheticSelectLinkedContactIdsByExternalContactIdsParams{
-		ExternalContactIds: pgUUIDs(ids),
+		ExternalContactIds: ids,
 		Namespace:          namespace,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return pgUUIDsToUUIDs(rows), nil
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, id := range rows {
+		if id != nil {
+			out = append(out, *id)
+		}
+	}
+	return out, nil
 }
 
 // DeleteExternalContactsByIds removes external_contact rows by the namespace's
@@ -277,7 +276,7 @@ func (r *SyntheticSupportRepository) DeleteExternalContactsByIds(ctx context.Con
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteExternalContactsByIds(ctx, pgUUIDs(ids))
+	return r.queries.SyntheticDeleteExternalContactsByIds(ctx, ids)
 }
 
 // DeleteTelegramCandidatesInPeerBand removes telegram import candidates whose bare
@@ -298,7 +297,7 @@ func (r *SyntheticSupportRepository) DeleteContactTasksByContactIds(ctx context.
 	if len(contactIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteContactTasksByContactIds(ctx, pgUUIDs(contactIDs))
+	return r.queries.SyntheticDeleteContactTasksByContactIds(ctx, contactIDs)
 }
 
 // ListContactTaskIdsByProvider returns the contact_task ids for a provider. The
@@ -309,7 +308,13 @@ func (r *SyntheticSupportRepository) ListContactTaskIdsByProvider(ctx context.Co
 	if err != nil {
 		return nil, err
 	}
-	return pgUUIDsToUUIDs(rows), nil
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, id := range rows {
+		if id != uuid.Nil {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 // DeleteContactTasksByIds removes contact_task rows by tracked id (the Todoist
@@ -318,7 +323,7 @@ func (r *SyntheticSupportRepository) DeleteContactTasksByIds(ctx context.Context
 	if len(taskIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteContactTasksByIds(ctx, pgUUIDs(taskIDs))
+	return r.queries.SyntheticDeleteContactTasksByIds(ctx, taskIDs)
 }
 
 // DeleteContactMethodsByContactIds removes contact_method rows by contact
@@ -327,7 +332,7 @@ func (r *SyntheticSupportRepository) DeleteContactMethodsByContactIds(ctx contex
 	if len(contactIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteContactMethodsByContactIds(ctx, pgUUIDs(contactIDs))
+	return r.queries.SyntheticDeleteContactMethodsByContactIds(ctx, contactIDs)
 }
 
 // DeleteNotesByContactIds removes note rows by contact (cleanup step 12).
@@ -335,7 +340,7 @@ func (r *SyntheticSupportRepository) DeleteNotesByContactIds(ctx context.Context
 	if len(contactIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteNotesByContactIds(ctx, pgUUIDs(contactIDs))
+	return r.queries.SyntheticDeleteNotesByContactIds(ctx, contactIDs)
 }
 
 // DeleteContactsByIds removes contact rows by tracked id (cleanup step 13). A
@@ -344,7 +349,7 @@ func (r *SyntheticSupportRepository) DeleteContactsByIds(ctx context.Context, co
 	if len(contactIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteContactsByIds(ctx, pgUUIDs(contactIDs))
+	return r.queries.SyntheticDeleteContactsByIds(ctx, contactIDs)
 }
 
 // DeleteMeetingNotesByHostID hard-deletes meeting_note rows scoped to the
@@ -354,7 +359,7 @@ func (r *SyntheticSupportRepository) DeleteContactsByIds(ctx context.Context, co
 // ON DELETE SET NULL, so the host delete alone leaves orphaned note rows). Reuses
 // the existing meeting-note test-cleanup query.
 func (r *SyntheticSupportRepository) DeleteMeetingNotesByHostID(ctx context.Context, hostID uuid.UUID) error {
-	return r.queries.TestHardDeleteMeetingNotesByHostID(ctx, uuidToPgUUID(hostID))
+	return r.queries.TestHardDeleteMeetingNotesByHostID(ctx, &hostID)
 }
 
 // SelectLinkedContactIDsForHostSessionTitleCandidates returns the CRM contacts
@@ -376,7 +381,13 @@ func (r *SyntheticSupportRepository) SelectLinkedContactIDsForHostSessionTitleCa
 	if err != nil {
 		return nil, err
 	}
-	return pgUUIDsToUUIDs(rows), nil
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, id := range rows {
+		if id != nil {
+			out = append(out, *id)
+		}
+	}
+	return out, nil
 }
 
 // DeleteTitleCandidatesForHostSessions removes the anarlog_title candidates the
@@ -385,13 +396,13 @@ func (r *SyntheticSupportRepository) SelectLinkedContactIDsForHostSessionTitleCa
 // namespace-derived, so the session uuid is the only route to them — which means
 // this MUST run before the meeting notes it reads are deleted.
 func (r *SyntheticSupportRepository) DeleteTitleCandidatesForHostSessions(ctx context.Context, hostID uuid.UUID) (int64, error) {
-	return r.queries.SyntheticDeleteTitleCandidatesForHostSessions(ctx, uuidToPgUUID(hostID))
+	return r.queries.SyntheticDeleteTitleCandidatesForHostSessions(ctx, &hostID)
 }
 
 // DeleteMacHostByID removes the seeded revoked synthetic mac_host by id
 // (cleanup step 14).
 func (r *SyntheticSupportRepository) DeleteMacHostByID(ctx context.Context, id uuid.UUID) (int64, error) {
-	return r.queries.SyntheticDeleteMacHostById(ctx, uuidToPgUUID(id))
+	return r.queries.SyntheticDeleteMacHostById(ctx, id)
 }
 
 // DeletePairingTokensByConsumedHostID removes the consumed pairing token(s) a
@@ -400,7 +411,7 @@ func (r *SyntheticSupportRepository) DeleteMacHostByID(ctx context.Context, id u
 // the token row has, so a host deleted first strands it permanently. The
 // production janitor sweeps only UNCONSUMED expired tokens and cannot stand in.
 func (r *SyntheticSupportRepository) DeletePairingTokensByConsumedHostID(ctx context.Context, hostID uuid.UUID) (int64, error) {
-	return r.queries.SyntheticDeletePairingTokensByConsumedHostId(ctx, uuidToPgUUID(hostID))
+	return r.queries.SyntheticDeletePairingTokensByConsumedHostId(ctx, &hostID)
 }
 
 // CountContactsByIds counts surviving contact rows for the given ids (cleanup
@@ -409,7 +420,7 @@ func (r *SyntheticSupportRepository) CountContactsByIds(ctx context.Context, con
 	if len(contactIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticCountContactsByIds(ctx, pgUUIDs(contactIDs))
+	return r.queries.SyntheticCountContactsByIds(ctx, contactIDs)
 }
 
 // CountTelegramMessagesInPeerBand counts live telegram_message rows whose
@@ -418,8 +429,8 @@ func (r *SyntheticSupportRepository) CountContactsByIds(ctx context.Context, con
 // occupies this namespace's sub-block.
 func (r *SyntheticSupportRepository) CountTelegramMessagesInPeerBand(ctx context.Context, bandStart, bandEnd int64) (int64, error) {
 	return r.queries.SyntheticCountTelegramMessagesInPeerBand(ctx, db.SyntheticCountTelegramMessagesInPeerBandParams{
-		BandStart: pgtype.Int8{Int64: bandStart, Valid: true},
-		BandEnd:   pgtype.Int8{Int64: bandEnd, Valid: true},
+		BandStart: &bandStart,
+		BandEnd:   &bandEnd,
 	})
 }
 
@@ -427,7 +438,7 @@ func (r *SyntheticSupportRepository) CountTelegramMessagesInPeerBand(ctx context
 // normalized identifier shares the given prefix. Used by NewHarness for setup-
 // time phone-band collision detection (the synthetic phone-digit prefix).
 func (r *SyntheticSupportRepository) CountExternalIdentitiesByIdentifierPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx, &prefix)
 }
 
 // CountExternalContactPhonesInBand counts live external_contact rows holding a
@@ -480,7 +491,7 @@ func (r *SyntheticSupportRepository) CountTelegramMessagesByChatAndMessageID(ctx
 // contact_method (no external_identity until a later replay), and identity
 // matching cross-matches via contact_method.value_normalized.
 func (r *SyntheticSupportRepository) CountContactMethodsByValueNormalizedPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.SyntheticCountContactMethodsByValueNormalizedPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.SyntheticCountContactMethodsByValueNormalizedPrefix(ctx, &prefix)
 }
 
 // --- Settle Gate A domain predicates (pending / match states) --------------
@@ -508,7 +519,7 @@ func (r *SyntheticSupportRepository) CountLinkedMessagesMessageByGuid(ctx contex
 // colliding message-id bucket in another namespace cannot satisfy it early.
 func (r *SyntheticSupportRepository) CountLinkedTelegramMessageByMessageID(ctx context.Context, peerUserID int64, telegramMessageID int32) (int64, error) {
 	return r.queries.SyntheticCountLinkedTelegramMessageByMessageId(ctx, db.SyntheticCountLinkedTelegramMessageByMessageIdParams{
-		PeerUserID:        pgtype.Int8{Int64: peerUserID, Valid: true},
+		PeerUserID:        &peerUserID,
 		TelegramMessageID: telegramMessageID,
 	})
 }
@@ -519,7 +530,7 @@ func (r *SyntheticSupportRepository) CountLinkedTelegramMessageByMessageID(ctx c
 func (r *SyntheticSupportRepository) CountProcessedCalendarEventByGcalID(ctx context.Context, gcalEventID string, contactID uuid.UUID) (int64, error) {
 	return r.queries.SyntheticCountProcessedCalendarEventByGcalId(ctx, db.SyntheticCountProcessedCalendarEventByGcalIdParams{
 		GcalEventID: gcalEventID,
-		ContactID:   uuidToPgUUID(contactID),
+		ContactID:   contactID,
 	})
 }
 
@@ -603,13 +614,9 @@ func (r *SyntheticSupportRepository) CountMatchedCalendarEventsByGcalIDs(ctx con
 		// gate unsatisfiable rather than wrong-by-a-row.
 		return 0, fmt.Errorf("count matched calendar events: %d event ids but %d contact ids", len(gcalEventIDs), len(contactIDs))
 	}
-	pg := make([]pgtype.UUID, 0, len(contactIDs))
-	for _, id := range contactIDs {
-		pg = append(pg, uuidToPgUUID(id))
-	}
 	return r.queries.SyntheticCountMatchedCalendarEventsByGcalIds(ctx, db.SyntheticCountMatchedCalendarEventsByGcalIdsParams{
 		GcalEventIds: gcalEventIDs,
-		ContactIds:   pg,
+		ContactIds:   contactIDs,
 	})
 }
 
@@ -624,20 +631,16 @@ func (r *SyntheticSupportRepository) CountLinkedCalendarEventsByGcalIDs(ctx cont
 	if len(gcalEventIDs) != len(contactIDs) {
 		return 0, fmt.Errorf("count linked calendar events: %d event ids but %d contact ids", len(gcalEventIDs), len(contactIDs))
 	}
-	pg := make([]pgtype.UUID, 0, len(contactIDs))
-	for _, id := range contactIDs {
-		pg = append(pg, uuidToPgUUID(id))
-	}
 	return r.queries.SyntheticCountLinkedCalendarEventsByGcalIds(ctx, db.SyntheticCountLinkedCalendarEventsByGcalIdsParams{
 		GcalEventIds: gcalEventIDs,
-		ContactIds:   pg,
+		ContactIds:   contactIDs,
 	})
 }
 
 // CountStrandedTelegramMessagesByPeer counts telegram_message rows for the peer
 // with matched_contact_id IS NULL (the stranded / discovery-candidate state).
 func (r *SyntheticSupportRepository) CountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID int64) (int64, error) {
-	return r.queries.SyntheticCountStrandedTelegramMessagesByPeer(ctx, pgtype.Int8{Int64: peerUserID, Valid: true})
+	return r.queries.SyntheticCountStrandedTelegramMessagesByPeer(ctx, &peerUserID)
 }
 
 // CountStrandedMessagesMessageByGuid counts the iMessage staging row for the guid
@@ -677,7 +680,7 @@ func (r *SyntheticSupportRepository) CountCalendarEventByGcalID(ctx context.Cont
 // keyed by the normalized email, not by a synthetic source_id, so it is matched
 // by the email prefix here.
 func (r *SyntheticSupportRepository) CountUnmatchedExternalContactByEmailPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx, &prefix)
 }
 
 // --- revoked synthetic Mac host (host-only ingest kinds) -------------------
@@ -700,10 +703,7 @@ func (r *SyntheticSupportRepository) SeedRevokedMacHost(ctx context.Context, hos
 	if err != nil {
 		return uuid.Nil, err
 	}
-	if !row.ID.Valid {
-		return uuid.Nil, db.ErrNotFound
-	}
-	return uuid.UUID(row.ID.Bytes), nil
+	return row.ID, nil
 }
 
 // --- crm-admin reset + additive-seed preflight -----------------------------
@@ -753,9 +753,8 @@ type PrefixCleanupResult struct {
 // by the caller (escaping stays at the service boundary).
 func (r *SyntheticSupportRepository) CleanupByPrefix(ctx context.Context, escapedPrefix string) (PrefixCleanupResult, error) {
 	var res PrefixCleanupResult
-	prefix := pgtype.Text{String: escapedPrefix, Valid: true}
 
-	deletedContacts, err := r.queries.DeleteContactsByNamePrefix(ctx, prefix)
+	deletedContacts, err := r.queries.DeleteContactsByNamePrefix(ctx, &escapedPrefix)
 	if err != nil {
 		return res, err
 	}
@@ -851,12 +850,12 @@ func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) err
 		RiverJobID:  1,
 		Kind:        "reset_marker",
 		Queue:       "default",
-		AttemptedAt: pgtype.Timestamptz{Time: now.Add(-time.Second), Valid: true},
-		FinalizedAt: pgtype.Timestamptz{Time: now, Valid: true},
+		AttemptedAt: now.Add(-time.Second),
+		FinalizedAt: now,
 		Attempt:     1,
 		State:       "completed",
 		QueueWaitMs: 0,
-		CreatedAt:   pgtype.Timestamptz{Time: now, Valid: true},
+		CreatedAt:   now,
 	})
 }
 
@@ -866,28 +865,28 @@ func (r *SyntheticSupportRepository) InsertResetMarkers(ctx context.Context) err
 // a graph-identity test can scope its assertions to its own namespace on the
 // shared test DB.
 func (r *SyntheticSupportRepository) CountNodesByLabelPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.SyntheticCountNodesByLabelPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.SyntheticCountNodesByLabelPrefix(ctx, &prefix)
 }
 
 // DeleteNodesByLabelPrefix hard-deletes nodes whose canonical_label is
 // ns-prefixed; entity and venue rows cascade via their ON DELETE CASCADE FK to
 // node, so this one delete clears a namespace's node+entity+venue rows.
 func (r *SyntheticSupportRepository) DeleteNodesByLabelPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.SyntheticDeleteNodesByLabelPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.SyntheticDeleteNodesByLabelPrefix(ctx, &prefix)
 }
 
 // DeleteEntityTypesByKeyPrefix hard-deletes entity_type catalog rows whose key
 // is ns-prefixed (a test that seeds its own provisional subtypes; the curated
 // catalog seed rows use bare keys and are never prefix-matched).
 func (r *SyntheticSupportRepository) DeleteEntityTypesByKeyPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.SyntheticDeleteEntityTypesByKeyPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.SyntheticDeleteEntityTypesByKeyPrefix(ctx, &prefix)
 }
 
 // DeletePredicatesByKeyPrefix hard-deletes predicate-catalog rows whose key is
 // ns-prefixed (a test that mints its own provisional predicates; the curated
 // seed rows use bare keys and are never prefix-matched).
 func (r *SyntheticSupportRepository) DeletePredicatesByKeyPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.SyntheticDeletePredicatesByKeyPrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	return r.queries.SyntheticDeletePredicatesByKeyPrefix(ctx, &prefix)
 }
 
 // CountAssertionsForSubject counts the assertions whose subject is a given node,
@@ -896,7 +895,7 @@ func (r *SyntheticSupportRepository) DeletePredicatesByKeyPrefix(ctx context.Con
 // prefix-match, so the scope is the subject node id). Provenance rows cascade
 // from assertion, so a node-prefix delete clears both.
 func (r *SyntheticSupportRepository) CountAssertionsForSubject(ctx context.Context, subjectNodeID uuid.UUID) (int64, error) {
-	return r.queries.SyntheticCountAssertionsForSubject(ctx, pgtype.UUID{Bytes: subjectNodeID, Valid: true})
+	return r.queries.SyntheticCountAssertionsForSubject(ctx, subjectNodeID)
 }
 
 // GetNodeForContact fetches the person node a contact owns (node.id ==
@@ -904,7 +903,7 @@ func (r *SyntheticSupportRepository) CountAssertionsForSubject(ctx context.Conte
 // with the expected type and canonical_label. Returns db.ErrNotFound when no
 // live node is at the contact's id.
 func (r *SyntheticSupportRepository) GetNodeForContact(ctx context.Context, contactID uuid.UUID) (*Node, error) {
-	dbNode, err := r.queries.SyntheticGetNodeForContact(ctx, pgtype.UUID{Bytes: contactID, Valid: true})
+	dbNode, err := r.queries.SyntheticGetNodeForContact(ctx, contactID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -955,7 +954,7 @@ func (r *SyntheticSupportRepository) DeleteNodesByIds(ctx context.Context, nodeI
 	if len(nodeIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteNodesByIds(ctx, pgUUIDs(nodeIDs))
+	return r.queries.SyntheticDeleteNodesByIds(ctx, nodeIDs)
 }
 
 // DeleteVenueNodesByIds hard-deletes the venue nodes the real recorders minted
@@ -967,7 +966,7 @@ func (r *SyntheticSupportRepository) DeleteVenueNodesByIds(ctx context.Context, 
 	if len(nodeIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteVenueNodesByIds(ctx, pgUUIDs(nodeIDs))
+	return r.queries.SyntheticDeleteVenueNodesByIds(ctx, nodeIDs)
 }
 
 // CountVenueNodesByIds counts surviving venue nodes among the given ids (cleanup
@@ -976,7 +975,7 @@ func (r *SyntheticSupportRepository) CountVenueNodesByIds(ctx context.Context, n
 	if len(nodeIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticCountVenueNodesByIds(ctx, pgUUIDs(nodeIDs))
+	return r.queries.SyntheticCountVenueNodesByIds(ctx, nodeIDs)
 }
 
 // DeleteAssertionsForNode hard-deletes the assertions touching a node in either
@@ -985,7 +984,7 @@ func (r *SyntheticSupportRepository) CountVenueNodesByIds(ctx context.Context, n
 // run BEFORE DeleteNodesByLabelPrefix (i.e. register it LAST, since t.Cleanup is
 // LIFO).
 func (r *SyntheticSupportRepository) DeleteAssertionsForNode(ctx context.Context, nodeID uuid.UUID) (int64, error) {
-	return r.queries.SyntheticDeleteAssertionsForNode(ctx, pgtype.UUID{Bytes: nodeID, Valid: true})
+	return r.queries.SyntheticDeleteAssertionsForNode(ctx, nodeID)
 }
 
 // InsertContactAtID inserts a contact row AT a caller-supplied id (node.id ==
@@ -994,7 +993,7 @@ func (r *SyntheticSupportRepository) DeleteAssertionsForNode(ctx context.Context
 // that supplies the id is deferred per spec; this is the test-only mechanic.
 func (r *SyntheticSupportRepository) InsertContactAtID(ctx context.Context, id uuid.UUID, fullName string) error {
 	return r.queries.TestInsertContactAtID(ctx, db.TestInsertContactAtIDParams{
-		ID:       pgtype.UUID{Bytes: id, Valid: true},
+		ID:       id,
 		FullName: fullName,
 	})
 }
@@ -1003,11 +1002,11 @@ func (r *SyntheticSupportRepository) InsertContactAtID(ctx context.Context, id u
 // liveness filter, so a migration round-trip test can assert a backfilled
 // node's deleted_at mirrors the contact's exactly.
 func (r *SyntheticSupportRepository) GetContactDeletedAtIncludingDeleted(ctx context.Context, id uuid.UUID) (*time.Time, error) {
-	deletedAt, err := r.queries.TestGetContactDeletedAtIncludingDeleted(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	deletedAt, err := r.queries.TestGetContactDeletedAtIncludingDeleted(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return pgTimestamptzToTimePtr(deletedAt), nil
+	return utcPtr(deletedAt), nil
 }
 
 // InsertTagForMigration seeds a legacy tag row with an explicit name + color (a
@@ -1017,12 +1016,12 @@ func (r *SyntheticSupportRepository) GetContactDeletedAtIncludingDeleted(ctx con
 func (r *SyntheticSupportRepository) InsertTagForMigration(ctx context.Context, name string, color *string) (uuid.UUID, error) {
 	id, err := r.queries.TestInsertTagForMigration(ctx, db.TestInsertTagForMigrationParams{
 		Name:  name,
-		Color: stringToPgText(color),
+		Color: color,
 	})
 	if err != nil {
 		return uuid.Nil, err
 	}
-	return uuid.UUID(id.Bytes), nil
+	return id, nil
 }
 
 // InsertContactTagAtTime seeds a contact_tag row with an explicit created_at so a
@@ -1030,9 +1029,9 @@ func (r *SyntheticSupportRepository) InsertTagForMigration(ctx context.Context, 
 // KnowledgeFrom (KnowledgeFromOverride).
 func (r *SyntheticSupportRepository) InsertContactTagAtTime(ctx context.Context, contactID, tagID uuid.UUID, createdAt time.Time) error {
 	return r.queries.TestInsertContactTagAtTime(ctx, db.TestInsertContactTagAtTimeParams{
-		ContactID: pgtype.UUID{Bytes: contactID, Valid: true},
-		TagID:     pgtype.UUID{Bytes: tagID, Valid: true},
-		CreatedAt: pgtype.Timestamptz{Time: createdAt, Valid: true},
+		ContactID: contactID,
+		TagID:     tagID,
+		CreatedAt: &createdAt,
 	})
 }
 
@@ -1041,8 +1040,8 @@ func (r *SyntheticSupportRepository) InsertContactTagAtTime(ctx context.Context,
 // falls back to "now" for the assertion knowledge time rather than a zero time.
 func (r *SyntheticSupportRepository) InsertContactTagNullCreatedAt(ctx context.Context, contactID, tagID uuid.UUID) error {
 	return r.queries.TestInsertContactTagNullCreatedAt(ctx, db.TestInsertContactTagNullCreatedAtParams{
-		ContactID: pgtype.UUID{Bytes: contactID, Valid: true},
-		TagID:     pgtype.UUID{Bytes: tagID, Valid: true},
+		ContactID: contactID,
+		TagID:     tagID,
 	})
 }
 
@@ -1052,7 +1051,7 @@ func (r *SyntheticSupportRepository) DeleteContactTagsByContactIds(ctx context.C
 	if len(contactIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.TestDeleteContactTagsByContactIds(ctx, pgUUIDs(contactIDs))
+	return r.queries.TestDeleteContactTagsByContactIds(ctx, contactIDs)
 }
 
 // DeleteTagsByIds hard-deletes the legacy tag rows a test seeded, keyed by the
@@ -1061,14 +1060,14 @@ func (r *SyntheticSupportRepository) DeleteTagsByIds(ctx context.Context, tagIDs
 	if len(tagIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.TestDeleteTagsByIds(ctx, pgUUIDs(tagIDs))
+	return r.queries.TestDeleteTagsByIds(ctx, tagIDs)
 }
 
 // CountTaggedAsAssertionsForSubject counts the LIVE accepted `tagged_as`
 // assertions whose subject is a given node, so a test asserts exactly one per
 // migrated contact_tag and that an idempotent re-run creates no duplicates.
 func (r *SyntheticSupportRepository) CountTaggedAsAssertionsForSubject(ctx context.Context, subjectNodeID uuid.UUID) (int64, error) {
-	return r.queries.TestCountTaggedAsAssertionsForSubject(ctx, pgtype.UUID{Bytes: subjectNodeID, Valid: true})
+	return r.queries.TestCountTaggedAsAssertionsForSubject(ctx, subjectNodeID)
 }
 
 // --- relationship_signal support (graph derived-storage) -------------------
@@ -1081,10 +1080,10 @@ func (r *SyntheticSupportRepository) CountTaggedAsAssertionsForSubject(ctx conte
 // by the caller (anchor-relative, no time.Now()).
 func (r *SyntheticSupportRepository) UpsertRelationshipSignal(ctx context.Context, subjectNodeID uuid.UUID, signalKey string, value float64, asOf time.Time, methodVersion string) error {
 	return r.queries.UpsertRelationshipSignal(ctx, db.UpsertRelationshipSignalParams{
-		SubjectNodeID: uuidToPgUUID(subjectNodeID),
+		SubjectNodeID: subjectNodeID,
 		SignalKey:     signalKey,
 		Value:         value,
-		AsOf:          pgtype.Timestamptz{Time: asOf, Valid: true},
+		AsOf:          asOf,
 		MethodVersion: methodVersion,
 	})
 }
@@ -1097,7 +1096,7 @@ func (r *SyntheticSupportRepository) DeleteRelationshipSignalsForNodes(ctx conte
 	if len(nodeIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteRelationshipSignalsForNodes(ctx, pgUUIDs(nodeIDs))
+	return r.queries.SyntheticDeleteRelationshipSignalsForNodes(ctx, nodeIDs)
 }
 
 // CountRelationshipSignalsForNodes counts surviving relationship_signal rows for
@@ -1108,7 +1107,7 @@ func (r *SyntheticSupportRepository) CountRelationshipSignalsForNodes(ctx contex
 	if len(nodeIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticCountRelationshipSignalsForNodes(ctx, pgUUIDs(nodeIDs))
+	return r.queries.SyntheticCountRelationshipSignalsForNodes(ctx, nodeIDs)
 }
 
 // CountLiveNodesByIds counts the live (deleted_at IS NULL) nodes among the given
@@ -1119,7 +1118,7 @@ func (r *SyntheticSupportRepository) CountLiveNodesByIds(ctx context.Context, no
 	if len(nodeIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticCountLiveNodesByIds(ctx, pgUUIDs(nodeIDs))
+	return r.queries.SyntheticCountLiveNodesByIds(ctx, nodeIDs)
 }
 
 // --- declared-seeding support (internal/synthetic/declare) -----------------
@@ -1136,11 +1135,17 @@ func (r *SyntheticSupportRepository) CountLiveNodesByIds(ctx context.Context, no
 // SelectContactIDsByFullNamePrefix returns every contact (tombstones included)
 // whose full_name carries the namespace prefix. Caller passes a BARE prefix.
 func (r *SyntheticSupportRepository) SelectContactIDsByFullNamePrefix(ctx context.Context, prefix string) ([]uuid.UUID, error) {
-	rows, err := r.queries.SyntheticSelectContactIdsByFullNamePrefix(ctx, pgtype.Text{String: prefix, Valid: true})
+	rows, err := r.queries.SyntheticSelectContactIdsByFullNamePrefix(ctx, &prefix)
 	if err != nil {
 		return nil, err
 	}
-	return pgUUIDsToUUIDs(rows), nil
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, id := range rows {
+		if id != uuid.Nil {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 // SelectVenueNodeIDsForContacts returns the venue nodes referenced by these
@@ -1150,11 +1155,17 @@ func (r *SyntheticSupportRepository) SelectVenueNodeIDsForContacts(ctx context.C
 	if len(contactIDs) == 0 {
 		return nil, nil
 	}
-	rows, err := r.queries.SyntheticSelectVenueNodeIdsForContacts(ctx, pgUUIDs(contactIDs))
+	rows, err := r.queries.SyntheticSelectVenueNodeIdsForContacts(ctx, contactIDs)
 	if err != nil {
 		return nil, err
 	}
-	return pgUUIDsToUUIDs(rows), nil
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, id := range rows {
+		if id != nil {
+			out = append(out, *id)
+		}
+	}
+	return out, nil
 }
 
 // DeleteInteractionsByContactIds hard-deletes interactions by contact.
@@ -1162,7 +1173,7 @@ func (r *SyntheticSupportRepository) DeleteInteractionsByContactIds(ctx context.
 	if len(contactIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticDeleteInteractionsByContactIds(ctx, pgUUIDs(contactIDs))
+	return r.queries.SyntheticDeleteInteractionsByContactIds(ctx, contactIDs)
 }
 
 // SelectMacHostIDByHostname looks up a synthetic host by EXACT hostname. The
@@ -1176,17 +1187,14 @@ func (r *SyntheticSupportRepository) SelectMacHostIDByHostname(ctx context.Conte
 		}
 		return uuid.Nil, false, err
 	}
-	if !row.Valid {
-		return uuid.Nil, false, nil
-	}
-	return uuid.UUID(row.Bytes), true, nil
+	return row, true, nil
 }
 
 // SelectLiveDescendantHostnames returns hostnames of namespaces nested under
 // this one. Caller passes a BARE 'synth-<ns>-' prefix and filters out the
 // namespace's own salt variants (which are expansion members, not descendants).
 func (r *SyntheticSupportRepository) SelectLiveDescendantHostnames(ctx context.Context, namespacePrefix string) ([]string, error) {
-	return r.queries.SyntheticSelectLiveDescendantHostnames(ctx, pgtype.Text{String: namespacePrefix, Valid: true})
+	return r.queries.SyntheticSelectLiveDescendantHostnames(ctx, &namespacePrefix)
 }
 
 // CountPendingJobsForNamespaceCleanup counts unfinalized River jobs still
@@ -1228,7 +1236,7 @@ func (r *SyntheticSupportRepository) RecordNamespaceEntity(ctx context.Context, 
 	return r.queries.SyntheticRecordNamespaceEntity(ctx, db.SyntheticRecordNamespaceEntityParams{
 		Namespace:  namespace,
 		EntityKind: kind,
-		EntityID:   uuidToPgUUID(entityID),
+		EntityID:   entityID,
 	})
 }
 
@@ -1241,7 +1249,13 @@ func (r *SyntheticSupportRepository) SelectNamespaceEntityIDs(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	return pgUUIDsToUUIDs(rows), nil
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, id := range rows {
+		if id != uuid.Nil {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 // DeleteNamespaceEntities drops a namespace's ownership records.
@@ -1282,7 +1296,7 @@ func (r *SyntheticSupportRepository) CountEventConsumerClaimsByEventIds(ctx cont
 	if len(eventIDs) == 0 {
 		return 0, nil
 	}
-	return r.queries.SyntheticCountEventConsumerClaimsByEventIds(ctx, pgUUIDs(eventIDs))
+	return r.queries.SyntheticCountEventConsumerClaimsByEventIds(ctx, eventIDs)
 }
 
 // TryAdvisoryLock takes a NON-BLOCKING session advisory lock; false means

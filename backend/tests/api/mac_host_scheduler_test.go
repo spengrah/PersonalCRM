@@ -13,7 +13,6 @@ import (
 	"personal-crm/backend/internal/service"
 	syncpkg "personal-crm/backend/internal/sync"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,13 +81,14 @@ func TestSyncService_ListDueAccounts_ExcludesPushStrategy(t *testing.T) {
 
 	// Seed one due row per source.
 	nextSync := accelerated.GetCurrentTime().Add(-1 * time.Minute) // due (in the past)
+	pushAccountID := "host-x"
 	_, err = database.Queries.SeedExternalSyncState(ctx, db.SeedExternalSyncStateParams{
 		Source:     pushSource,
-		AccountID:  pgtype.Text{String: "host-x", Valid: true},
+		AccountID:  &pushAccountID,
 		Enabled:    true,
 		Status:     "idle",
 		Strategy:   "push",
-		NextSyncAt: pgtype.Timestamptz{Time: nextSync, Valid: true},
+		NextSyncAt: &nextSync,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -106,11 +106,11 @@ func TestSyncService_ListDueAccounts_ExcludesPushStrategy(t *testing.T) {
 
 	_, err = database.Queries.SeedExternalSyncState(ctx, db.SeedExternalSyncStateParams{
 		Source:     pollSource,
-		AccountID:  pgtype.Text{Valid: false},
+		AccountID:  nil,
 		Enabled:    true,
 		Status:     "idle",
 		Strategy:   "contact_driven",
-		NextSyncAt: pgtype.Timestamptz{Time: nextSync, Valid: true},
+		NextSyncAt: &nextSync,
 	})
 	require.NoError(t, err)
 

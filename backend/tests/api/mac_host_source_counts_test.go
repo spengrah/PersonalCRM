@@ -8,7 +8,6 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,8 +63,7 @@ func TestMacHost_GetSourceCounts_HappyPath(t *testing.T) {
 		// DeleteExternalContactsBySourceIDPrefix is on Queries directly
 		// (no repository wrapper). Prefix-based cleanup is per-test-
 		// isolated because each test generates its own prefix.
-		_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx,
-			pgtype.Text{String: prefix, Valid: true})
+		_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, &prefix)
 	})
 
 	_ = extRepo // silence unused for the cleanup-only-test branches

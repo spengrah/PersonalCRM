@@ -7,15 +7,16 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CountContactNotes = `-- name: CountContactNotes :one
 SELECT COUNT(*) FROM note WHERE contact_id = $1
 `
 
-func (q *Queries) CountContactNotes(ctx context.Context, contactID pgtype.UUID) (int64, error) {
+func (q *Queries) CountContactNotes(ctx context.Context, contactID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, CountContactNotes, contactID)
 	var count int64
 	err := row.Scan(&count)
@@ -29,9 +30,9 @@ RETURNING id, contact_id, body, category, created_at, updated_at
 `
 
 type CreateNoteParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Body      string      `json:"body"`
-	Category  pgtype.Text `json:"category"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Body      string    `json:"body"`
+	Category  *string   `json:"category"`
 }
 
 func (q *Queries) CreateNote(ctx context.Context, arg CreateNoteParams) (*Note, error) {
@@ -55,11 +56,11 @@ RETURNING id, contact_id, body, category, created_at, updated_at
 `
 
 type CreateNoteWithTimestampParams struct {
-	ContactID pgtype.UUID        `json:"contact_id"`
-	Body      string             `json:"body"`
-	Category  pgtype.Text        `json:"category"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	ContactID uuid.UUID  `json:"contact_id"`
+	Body      string     `json:"body"`
+	Category  *string    `json:"category"`
+	CreatedAt *time.Time `json:"created_at"`
+	UpdatedAt *time.Time `json:"updated_at"`
 }
 
 // Create a note with a specific created_at timestamp (for migrations)
@@ -89,8 +90,8 @@ WHERE contact_id = $1 AND category = $2
 `
 
 type DeleteContactNoteByCategoryParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Category  pgtype.Text `json:"category"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Category  *string   `json:"category"`
 }
 
 // Delete a note for a contact by category
@@ -103,7 +104,7 @@ const DeleteNote = `-- name: DeleteNote :exec
 DELETE FROM note WHERE id = $1
 `
 
-func (q *Queries) DeleteNote(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) DeleteNote(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteNote, id)
 	return err
 }
@@ -114,8 +115,8 @@ WHERE contact_id = $1 AND category = $2
 `
 
 type GetContactNoteByCategoryParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Category  pgtype.Text `json:"category"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Category  *string   `json:"category"`
 }
 
 // Get a single note for a contact by category (e.g., 'notepad')
@@ -139,7 +140,7 @@ SELECT id, contact_id, body, category, created_at, updated_at FROM note WHERE id
 `
 
 // Note queries
-func (q *Queries) GetNote(ctx context.Context, id pgtype.UUID) (*Note, error) {
+func (q *Queries) GetNote(ctx context.Context, id uuid.UUID) (*Note, error) {
 	row := q.db.QueryRow(ctx, GetNote, id)
 	var i Note
 	err := row.Scan(
@@ -161,9 +162,9 @@ LIMIT $2 OFFSET $3
 `
 
 type ListContactNotesParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Limit     int32       `json:"limit"`
-	Offset    int32       `json:"offset"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Limit     int32     `json:"limit"`
+	Offset    int32     `json:"offset"`
 }
 
 func (q *Queries) ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error) {
@@ -203,9 +204,9 @@ RETURNING id, contact_id, body, category, created_at, updated_at
 `
 
 type UpdateNoteParams struct {
-	ID       pgtype.UUID `json:"id"`
-	Body     string      `json:"body"`
-	Category pgtype.Text `json:"category"`
+	ID       uuid.UUID `json:"id"`
+	Body     string    `json:"body"`
+	Category *string   `json:"category"`
 }
 
 func (q *Queries) UpdateNote(ctx context.Context, arg UpdateNoteParams) (*Note, error) {
@@ -231,9 +232,9 @@ RETURNING id, contact_id, body, category, created_at, updated_at
 `
 
 type UpsertContactNoteByCategoryParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Body      string      `json:"body"`
-	Category  pgtype.Text `json:"category"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Body      string    `json:"body"`
+	Category  *string   `json:"category"`
 }
 
 // Insert or update a note for a contact by category (atomic operation for concurrent safety)

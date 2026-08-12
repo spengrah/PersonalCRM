@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const AcquirePropositionSlotLock = `-- name: AcquirePropositionSlotLock :exec
@@ -32,9 +33,9 @@ WHERE id = $1
 `
 
 type BoundPendingSuccessorParams struct {
-	ID           pgtype.UUID        `json:"id"`
-	ValidTo      pgtype.Timestamptz `json:"valid_to"`
-	SupersededBy pgtype.UUID        `json:"superseded_by"`
+	ID           uuid.UUID  `json:"id"`
+	ValidTo      *time.Time `json:"valid_to"`
+	SupersededBy *uuid.UUID `json:"superseded_by"`
 }
 
 // The future-successor branch: bound the prior's valid_to and point it at the
@@ -56,12 +57,12 @@ WHERE id = $1
 `
 
 type CloseAssertionParams struct {
-	ID            pgtype.UUID        `json:"id"`
-	ValidTo       pgtype.Timestamptz `json:"valid_to"`
-	Status        string             `json:"status"`
-	ClosureReason pgtype.Text        `json:"closure_reason"`
-	SupersededBy  pgtype.UUID        `json:"superseded_by"`
-	KnowledgeTo   pgtype.Timestamptz `json:"knowledge_to"`
+	ID            uuid.UUID  `json:"id"`
+	ValidTo       *time.Time `json:"valid_to"`
+	Status        string     `json:"status"`
+	ClosureReason *string    `json:"closure_reason"`
+	SupersededBy  *uuid.UUID `json:"superseded_by"`
+	KnowledgeTo   *time.Time `json:"knowledge_to"`
 }
 
 // Terminalizes an assertion: the present-successor, closure-only, retract, and
@@ -93,10 +94,10 @@ FOR UPDATE
 `
 
 type FindAcceptedForSlotParams struct {
-	SubjectNodeID pgtype.UUID        `json:"subject_node_id"`
-	PredicateKey  string             `json:"predicate_key"`
-	EffectiveFrom pgtype.Timestamptz `json:"effective_from"`
-	NewValidTo    pgtype.Timestamptz `json:"new_valid_to"`
+	SubjectNodeID uuid.UUID  `json:"subject_node_id"`
+	PredicateKey  string     `json:"predicate_key"`
+	EffectiveFrom time.Time  `json:"effective_from"`
+	NewValidTo    *time.Time `json:"new_valid_to"`
 }
 
 // Single-cardinality conflict check for an ASYMMETRIC predicate: the accepted,
@@ -175,11 +176,11 @@ FOR UPDATE
 `
 
 type FindAcceptedForSlotSymmetricParams struct {
-	PredicateKey  string             `json:"predicate_key"`
-	ParticipantA  pgtype.UUID        `json:"participant_a"`
-	ParticipantB  pgtype.UUID        `json:"participant_b"`
-	EffectiveFrom pgtype.Timestamptz `json:"effective_from"`
-	NewValidTo    pgtype.Timestamptz `json:"new_valid_to"`
+	PredicateKey  string     `json:"predicate_key"`
+	ParticipantA  uuid.UUID  `json:"participant_a"`
+	ParticipantB  uuid.UUID  `json:"participant_b"`
+	EffectiveFrom time.Time  `json:"effective_from"`
+	NewValidTo    *time.Time `json:"new_valid_to"`
 }
 
 // Single-cardinality conflict check for a SYMMETRIC predicate: the single-current
@@ -275,7 +276,7 @@ const GetAssertion = `-- name: GetAssertion :one
 SELECT id, subject_node_id, predicate_key, object_node_id, value_text, value_num, value_date, value_bool, valid_from, valid_to, knowledge_from, knowledge_to, confidence, salience, status, closure_reason, superseded_by, trust_tier, proposition_key, created_at FROM assertion WHERE id = $1
 `
 
-func (q *Queries) GetAssertion(ctx context.Context, id pgtype.UUID) (*Assertion, error) {
+func (q *Queries) GetAssertion(ctx context.Context, id uuid.UUID) (*Assertion, error) {
 	row := q.db.QueryRow(ctx, GetAssertion, id)
 	var i Assertion
 	err := row.Scan(
@@ -311,7 +312,7 @@ SELECT id, subject_node_id, predicate_key, object_node_id, value_text, value_num
 // caller locks the row FOR UPDATE so the status precondition check + the status
 // update are atomic within the tx (a concurrent Accept/Reject on the same row
 // blocks until commit, so the from-status guard cannot be raced).
-func (q *Queries) GetAssertionForUpdate(ctx context.Context, id pgtype.UUID) (*Assertion, error) {
+func (q *Queries) GetAssertionForUpdate(ctx context.Context, id uuid.UUID) (*Assertion, error) {
 	row := q.db.QueryRow(ctx, GetAssertionForUpdate, id)
 	var i Assertion
 	err := row.Scan(
@@ -355,9 +356,9 @@ LIMIT 1
 `
 
 type GetCurrentAcceptedParams struct {
-	SubjectNodeID pgtype.UUID        `json:"subject_node_id"`
-	PredicateKey  string             `json:"predicate_key"`
-	Now           pgtype.Timestamptz `json:"now"`
+	SubjectNodeID uuid.UUID  `json:"subject_node_id"`
+	PredicateKey  string     `json:"predicate_key"`
+	Now           *time.Time `json:"now"`
 }
 
 // The current-accepted value for a slot: accepted, knowledge-open, and its
@@ -411,24 +412,24 @@ RETURNING id, subject_node_id, predicate_key, object_node_id, value_text, value_
 `
 
 type InsertAssertionParams struct {
-	SubjectNodeID  pgtype.UUID        `json:"subject_node_id"`
-	PredicateKey   string             `json:"predicate_key"`
-	ObjectNodeID   pgtype.UUID        `json:"object_node_id"`
-	ValueText      pgtype.Text        `json:"value_text"`
-	ValueNum       pgtype.Float8      `json:"value_num"`
-	ValueDate      pgtype.Date        `json:"value_date"`
-	ValueBool      pgtype.Bool        `json:"value_bool"`
-	ValidFrom      pgtype.Timestamptz `json:"valid_from"`
-	ValidTo        pgtype.Timestamptz `json:"valid_to"`
-	KnowledgeFrom  pgtype.Timestamptz `json:"knowledge_from"`
-	KnowledgeTo    pgtype.Timestamptz `json:"knowledge_to"`
-	Confidence     int16              `json:"confidence"`
-	Salience       int16              `json:"salience"`
-	Status         string             `json:"status"`
-	ClosureReason  pgtype.Text        `json:"closure_reason"`
-	SupersededBy   pgtype.UUID        `json:"superseded_by"`
-	TrustTier      pgtype.Text        `json:"trust_tier"`
-	PropositionKey string             `json:"proposition_key"`
+	SubjectNodeID  uuid.UUID  `json:"subject_node_id"`
+	PredicateKey   string     `json:"predicate_key"`
+	ObjectNodeID   *uuid.UUID `json:"object_node_id"`
+	ValueText      *string    `json:"value_text"`
+	ValueNum       *float64   `json:"value_num"`
+	ValueDate      *time.Time `json:"value_date"`
+	ValueBool      *bool      `json:"value_bool"`
+	ValidFrom      *time.Time `json:"valid_from"`
+	ValidTo        *time.Time `json:"valid_to"`
+	KnowledgeFrom  time.Time  `json:"knowledge_from"`
+	KnowledgeTo    *time.Time `json:"knowledge_to"`
+	Confidence     int16      `json:"confidence"`
+	Salience       int16      `json:"salience"`
+	Status         string     `json:"status"`
+	ClosureReason  *string    `json:"closure_reason"`
+	SupersededBy   *uuid.UUID `json:"superseded_by"`
+	TrustTier      *string    `json:"trust_tier"`
+	PropositionKey string     `json:"proposition_key"`
 }
 
 // Assertion store queries (graph foundation).
@@ -496,7 +497,7 @@ ORDER BY created_at DESC
 
 // All assertions for a subject node (any status), newest first — the review /
 // history surface.
-func (q *Queries) ListAssertionsBySubject(ctx context.Context, subjectNodeID pgtype.UUID) ([]*Assertion, error) {
+func (q *Queries) ListAssertionsBySubject(ctx context.Context, subjectNodeID uuid.UUID) ([]*Assertion, error) {
 	rows, err := q.db.Query(ctx, ListAssertionsBySubject, subjectNodeID)
 	if err != nil {
 		return nil, err
@@ -547,7 +548,7 @@ ORDER BY created_at, id
 // status, oldest first — the node-merge re-point scan. The merge procedure
 // rewrites loser→winner on each row; oldest-first is a stable, deterministic
 // order so the live-row collision/supersession steps run reproducibly.
-func (q *Queries) ListAssertionsTouchingNode(ctx context.Context, subjectNodeID pgtype.UUID) ([]*Assertion, error) {
+func (q *Queries) ListAssertionsTouchingNode(ctx context.Context, subjectNodeID uuid.UUID) ([]*Assertion, error) {
 	rows, err := q.db.Query(ctx, ListAssertionsTouchingNode, subjectNodeID)
 	if err != nil {
 		return nil, err
@@ -601,8 +602,8 @@ ORDER BY a.created_at
 `
 
 type ListLiveEdgesForNodeParams struct {
-	SubjectNodeID pgtype.UUID `json:"subject_node_id"`
-	PredicateKey  string      `json:"predicate_key"`
+	SubjectNodeID uuid.UUID `json:"subject_node_id"`
+	PredicateKey  string    `json:"predicate_key"`
 }
 
 // Live edges (or facts) of a predicate touching a node in EITHER orientation (the
@@ -660,9 +661,9 @@ WHERE id = $1
 `
 
 type RepointAssertionObjectParams struct {
-	ID             pgtype.UUID `json:"id"`
-	ObjectNodeID   pgtype.UUID `json:"object_node_id"`
-	PropositionKey string      `json:"proposition_key"`
+	ID             uuid.UUID  `json:"id"`
+	ObjectNodeID   *uuid.UUID `json:"object_node_id"`
+	PropositionKey string     `json:"proposition_key"`
 }
 
 // Merge primitive (a later layer): repoint a loser assertion's object to the
@@ -680,9 +681,9 @@ WHERE id = $1
 `
 
 type RepointAssertionSubjectParams struct {
-	ID             pgtype.UUID `json:"id"`
-	SubjectNodeID  pgtype.UUID `json:"subject_node_id"`
-	PropositionKey string      `json:"proposition_key"`
+	ID             uuid.UUID `json:"id"`
+	SubjectNodeID  uuid.UUID `json:"subject_node_id"`
+	PropositionKey string    `json:"proposition_key"`
 }
 
 // Merge primitive (a later layer): repoint a loser assertion's subject to the
@@ -714,7 +715,7 @@ RETURNING id, subject_node_id, predicate_key, object_node_id, value_text, value_
 // future via a KnowledgeFromOverride does not violate the assertion_knowledge_range
 // CHECK and abort the whole sweep. Returns the updated rows so the caller can emit
 // one assertion.superseded event per row.
-func (q *Queries) RolloverDueBoundedSuccessors(ctx context.Context, now pgtype.Timestamptz) ([]*Assertion, error) {
+func (q *Queries) RolloverDueBoundedSuccessors(ctx context.Context, now time.Time) ([]*Assertion, error) {
 	rows, err := q.db.Query(ctx, RolloverDueBoundedSuccessors, now)
 	if err != nil {
 		return nil, err
@@ -762,8 +763,8 @@ WHERE id = $2
 `
 
 type SetAssertionPendingSuccessorParams struct {
-	SupersededBy pgtype.UUID `json:"superseded_by"`
-	ID           pgtype.UUID `json:"id"`
+	SupersededBy *uuid.UUID `json:"superseded_by"`
+	ID           uuid.UUID  `json:"id"`
 }
 
 // Widen-merge linkage inheritance: when a same-value merge absorbs a stint
@@ -785,10 +786,10 @@ WHERE id = $1
 `
 
 type TransitionStatusParams struct {
-	ID            pgtype.UUID        `json:"id"`
-	Status        string             `json:"status"`
-	KnowledgeTo   pgtype.Timestamptz `json:"knowledge_to"`
-	ClosureReason pgtype.Text        `json:"closure_reason"`
+	ID            uuid.UUID  `json:"id"`
+	Status        string     `json:"status"`
+	KnowledgeTo   *time.Time `json:"knowledge_to"`
+	ClosureReason *string    `json:"closure_reason"`
 }
 
 // The accept/reject/retract status transition: set status and (for terminal
@@ -812,9 +813,9 @@ WHERE id = $1
 `
 
 type UpdateAssertionConfidenceTrustParams struct {
-	ID         pgtype.UUID `json:"id"`
-	Confidence int16       `json:"confidence"`
-	TrustTier  pgtype.Text `json:"trust_tier"`
+	ID         uuid.UUID `json:"id"`
+	Confidence int16     `json:"confidence"`
+	TrustTier  *string   `json:"trust_tier"`
 }
 
 // Dedup re-aggregate: on a corroborating write, raise confidence (SP1 rule:
@@ -833,10 +834,10 @@ WHERE id = $1
 `
 
 type WidenAssertionValidityParams struct {
-	ID             pgtype.UUID        `json:"id"`
-	ValidFrom      pgtype.Timestamptz `json:"valid_from"`
-	ValidTo        pgtype.Timestamptz `json:"valid_to"`
-	PropositionKey string             `json:"proposition_key"`
+	ID             uuid.UUID  `json:"id"`
+	ValidFrom      *time.Time `json:"valid_from"`
+	ValidTo        *time.Time `json:"valid_to"`
+	PropositionKey string     `json:"proposition_key"`
 }
 
 // The same-value re-affirmation branch: extend valid_to / lower valid_from to

@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/db"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // HealthRepository reads the river_job state behind the /health river and sync
@@ -35,24 +33,37 @@ func (r *HealthRepository) CountDiscardedRiverJobs(ctx context.Context) (int64, 
 // OldestDueRiverJobScheduledAt returns the earliest scheduled_at among jobs
 // that are due (scheduled_at <= now) but still 'available'/'retryable' — the
 // worker-stall signal. Returns nil when no job is due (the MIN aggregate is
-// NULL over zero rows).
+// NULL over zero rows). sqlc cannot type an untyped aggregate output, so the
+// generated query returns interface{}; pgx scans a NULL MIN(timestamptz) into
+// that as nil, and a non-NULL one as time.Time — the type assertion below is
+// the boundary that restores the documented NULL -> nil *time.Time contract.
 func (r *HealthRepository) OldestDueRiverJobScheduledAt(ctx context.Context, now time.Time) (*time.Time, error) {
-	ts, err := r.queries.OldestDueRiverJobScheduledAt(ctx, pgtype.Timestamptz{Time: now, Valid: true})
+	v, err := r.queries.OldestDueRiverJobScheduledAt(ctx, now)
 	if err != nil {
 		return nil, fmt.Errorf("oldest due river job scheduled_at: %w", err)
 	}
-	return pgTimestamptzToTimePtr(ts), nil
+	ts, ok := v.(time.Time)
+	if !ok {
+		return nil, nil
+	}
+	return utcPtr(&ts), nil
 }
 
 // LatestCompletedRiverJobByKind returns the newest finalized_at among COMPLETED
 // jobs of the given kind — the watchdog-liveness trail. Returns nil when no
-// completed job of that kind exists (the MAX aggregate is NULL over zero rows).
+// completed job of that kind exists (the MAX aggregate is NULL over zero
+// rows). See OldestDueRiverJobScheduledAt for why the type assertion is
+// needed: sqlc cannot type an untyped aggregate output.
 func (r *HealthRepository) LatestCompletedRiverJobByKind(ctx context.Context, kind string) (*time.Time, error) {
-	ts, err := r.queries.LatestCompletedRiverJobByKind(ctx, kind)
+	v, err := r.queries.LatestCompletedRiverJobByKind(ctx, kind)
 	if err != nil {
 		return nil, fmt.Errorf("latest completed river job by kind: %w", err)
 	}
-	return pgTimestamptzToTimePtr(ts), nil
+	ts, ok := v.(time.Time)
+	if !ok {
+		return nil, nil
+	}
+	return utcPtr(&ts), nil
 }
 
 // InsertRiverJobForTest plants one river_job with an explicit kind, state,
@@ -63,7 +74,7 @@ func (r *HealthRepository) InsertRiverJobForTest(ctx context.Context, kind strin
 	return r.queries.TestInsertRiverJobWithStateForTest(ctx, db.TestInsertRiverJobWithStateForTestParams{
 		Kind:        kind,
 		State:       state,
-		ScheduledAt: pgtype.Timestamptz{Time: scheduledAt, Valid: true},
-		FinalizedAt: timeToPgTimestamptz(finalizedAt),
+		ScheduledAt: scheduledAt,
+		FinalizedAt: finalizedAt,
 	})
 }

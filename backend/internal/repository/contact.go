@@ -14,7 +14,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -195,62 +194,34 @@ func convertDbContact(dbContact *db.Contact) Contact {
 	}
 
 	// Convert UUID
-	if dbContact.ID.Valid {
-		contact.ID = uuid.UUID(dbContact.ID.Bytes)
-	}
+	contact.ID = dbContact.ID
 
 	// Convert timestamps
-	if dbContact.CreatedAt.Valid {
-		contact.CreatedAt = dbContact.CreatedAt.Time
+	if dbContact.CreatedAt != nil {
+		contact.CreatedAt = *dbContact.CreatedAt
 	}
-	if dbContact.UpdatedAt.Valid {
-		contact.UpdatedAt = dbContact.UpdatedAt.Time
+	if dbContact.UpdatedAt != nil {
+		contact.UpdatedAt = *dbContact.UpdatedAt
 	}
 
 	// Convert nullable fields
-	if dbContact.Location.Valid {
-		contact.Location = &dbContact.Location.String
-	}
-	if dbContact.Birthday.Valid {
-		birthday := dbContact.Birthday.Time
-		contact.Birthday = &birthday
-	}
-	if dbContact.HowMet.Valid {
-		contact.HowMet = &dbContact.HowMet.String
-	}
-	if dbContact.Cadence.Valid {
-		contact.Cadence = &dbContact.Cadence.String
-	}
-	if dbContact.LastContacted.Valid {
-		lastContacted := dbContact.LastContacted.Time.UTC()
-		contact.LastContacted = &lastContacted
-	}
-	if dbContact.ProfilePhoto.Valid {
-		contact.ProfilePhoto = &dbContact.ProfilePhoto.String
-	}
-	if dbContact.ContactBy.Valid {
-		contactBy := dbContact.ContactBy.Time
-		contact.ContactBy = &contactBy
-	}
-	if dbContact.LastInteractionAt.Valid {
-		t := dbContact.LastInteractionAt.Time.UTC()
-		contact.LastInteractionAt = &t
-	}
-	if dbContact.LastOutreachAt.Valid {
-		t := dbContact.LastOutreachAt.Time.UTC()
-		contact.LastOutreachAt = &t
-	}
-	if dbContact.LastResponseAt.Valid {
-		t := dbContact.LastResponseAt.Time.UTC()
-		contact.LastResponseAt = &t
-	}
+	contact.Location = dbContact.Location
+	contact.Birthday = dbContact.Birthday
+	contact.HowMet = dbContact.HowMet
+	contact.Cadence = dbContact.Cadence
+	contact.LastContacted = utcPtr(dbContact.LastContacted)
+	contact.ProfilePhoto = dbContact.ProfilePhoto
+	contact.ContactBy = dbContact.ContactBy
+	contact.LastInteractionAt = utcPtr(dbContact.LastInteractionAt)
+	contact.LastOutreachAt = utcPtr(dbContact.LastOutreachAt)
+	contact.LastResponseAt = utcPtr(dbContact.LastResponseAt)
 
 	return contact
 }
 
 // GetContact retrieves a contact by ID
 func (r *ContactRepository) GetContact(ctx context.Context, id uuid.UUID) (*Contact, error) {
-	dbContact, err := r.queries.GetContact(ctx, uuidToPgUUID(id))
+	dbContact, err := r.queries.GetContact(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -268,7 +239,7 @@ func (r *ContactRepository) GetContact(ctx context.Context, id uuid.UUID) (*Cont
 // for a missing row so the consumer can propagate it as a clean 404-style
 // error rather than an opaque FK violation.
 func (r *ContactRepository) GetContactTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*Contact, error) {
-	dbContact, err := db.New(tx).GetContact(ctx, uuidToPgUUID(id))
+	dbContact, err := db.New(tx).GetContact(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -279,19 +250,13 @@ func (r *ContactRepository) GetContactTx(ctx context.Context, tx pgx.Tx, id uuid
 	return &contact, nil
 }
 
-// searchToPgText maps an optional search string to the SQL search_query
-// param: empty string means "no search" and must arrive as NULL.
-func searchToPgText(query string) pgtype.Text {
-	return pgtype.Text{String: query, Valid: query != ""}
-}
-
 // ListContacts retrieves a paginated list of contacts, optionally searched
 // via params.Query.
 func (r *ContactRepository) ListContacts(ctx context.Context, params ListContactsParams) ([]Contact, error) {
 	dbContacts, err := r.queries.ListContacts(ctx, db.ListContactsParams{
 		CadenceFilter:  params.CadenceFilter,
 		FollowupFilter: params.FollowupFilter,
-		SearchQuery:    searchToPgText(params.Query),
+		SearchQuery:    nilIfEmpty(params.Query),
 		SortField:      params.Sort,
 		SortOrder:      params.Order,
 		PageOffset:     params.Offset,
@@ -318,7 +283,7 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 	}
 
 	// Calculate contact_by if cadence is set
-	var contactBy pgtype.Date
+	var contactBy *time.Time
 	if req.Cadence != nil && *req.Cadence != "" {
 		if cadenceType, err := cadence.ParseCadence(*req.Cadence); err == nil {
 			// Use created_at as base since last_contacted is typically nil for new contacts
@@ -327,7 +292,7 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 				base = *req.LastContacted
 			}
 			contactByTime := cadence.CalculateContactBy(base, cadenceType)
-			contactBy = pgtype.Date{Time: contactByTime, Valid: true}
+			contactBy = &contactByTime
 		}
 	}
 
@@ -335,12 +300,12 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 	// CreateContactWithNode CTE), so the id must be generated here rather than
 	// left to the contact table's DEFAULT — the node insert needs it first.
 	dbContact, err := r.queries.CreateContactWithNode(ctx, db.CreateContactWithNodeParams{
-		ID:            uuidToPgUUID(uuid.New()),
+		ID:            uuid.New(),
 		FullName:      req.FullName,
-		Cadence:       stringToPgText(req.Cadence),
-		LastContacted: timeToPgTimestamptz(req.LastContacted),
-		ProfilePhoto:  stringToPgText(req.ProfilePhoto),
-		CreatedAt:     pgtype.Timestamptz{Time: createdAt, Valid: true},
+		Cadence:       req.Cadence,
+		LastContacted: req.LastContacted,
+		ProfilePhoto:  req.ProfilePhoto,
+		CreatedAt:     &createdAt,
 		ContactBy:     contactBy,
 	})
 	if err != nil {
@@ -366,10 +331,10 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 // the SQL parameters below.
 func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req UpdateContactRequest) (*Contact, error) {
 	dbContact, err := r.queries.UpdateContact(ctx, db.UpdateContactParams{
-		ID:           uuidToPgUUID(id),
+		ID:           id,
 		FullName:     req.FullName,
-		Cadence:      stringToPgText(req.Cadence),
-		ProfilePhoto: stringToPgText(req.ProfilePhoto),
+		Cadence:      req.Cadence,
+		ProfilePhoto: req.ProfilePhoto,
 	})
 	if err != nil {
 		return nil, err
@@ -388,8 +353,8 @@ func (r *ContactRepository) UpdateContactLocationCacheTx(ctx context.Context, tx
 		return err
 	}
 	return db.New(tx).UpdateContactLocationCache(ctx, db.UpdateContactLocationCacheParams{
-		ID:       uuidToPgUUID(id),
-		Location: stringToPgText(location),
+		ID:       id,
+		Location: location,
 	})
 }
 
@@ -400,8 +365,8 @@ func (r *ContactRepository) UpdateContactBirthdayCacheTx(ctx context.Context, tx
 		return err
 	}
 	return db.New(tx).UpdateContactBirthdayCache(ctx, db.UpdateContactBirthdayCacheParams{
-		ID:       uuidToPgUUID(id),
-		Birthday: timeToPgDate(birthday),
+		ID:       id,
+		Birthday: birthday,
 	})
 }
 
@@ -412,8 +377,8 @@ func (r *ContactRepository) UpdateContactHowMetCacheTx(ctx context.Context, tx p
 		return err
 	}
 	return db.New(tx).UpdateContactHowMetCache(ctx, db.UpdateContactHowMetCacheParams{
-		ID:     uuidToPgUUID(id),
-		HowMet: stringToPgText(howMet),
+		ID:     id,
+		HowMet: howMet,
 	})
 }
 
@@ -443,7 +408,7 @@ func (r *ContactRepository) SnapshotContactCadenceFields(
 		}
 	}()
 
-	row, err := db.New(tx).SnapshotContactCadenceFields(ctx, uuidToPgUUID(id))
+	row, err := db.New(tx).SnapshotContactCadenceFields(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -451,30 +416,30 @@ func (r *ContactRepository) SnapshotContactCadenceFields(
 		return nil, fmt.Errorf("snapshot cadence fields: %w", err)
 	}
 	return &ContactCadenceFields{
-		LastContacted:  pgTimestamptzToTimePtr(row.LastContacted),
-		LastOutreachAt: pgTimestamptzToTimePtr(row.LastOutreachAt),
-		LastResponseAt: pgTimestamptzToTimePtr(row.LastResponseAt),
-		ContactBy:      pgDateToTimePtr(row.ContactBy),
+		LastContacted:  utcPtr(row.LastContacted),
+		LastOutreachAt: utcPtr(row.LastOutreachAt),
+		LastResponseAt: utcPtr(row.LastResponseAt),
+		ContactBy:      utcPtr(row.ContactBy),
 	}, nil
 }
 
 // SoftDeleteContact soft deletes a contact
 func (r *ContactRepository) SoftDeleteContact(ctx context.Context, id uuid.UUID) error {
-	return r.queries.SoftDeleteContact(ctx, uuidToPgUUID(id))
+	return r.queries.SoftDeleteContact(ctx, id)
 }
 
 // SoftDeleteContactTx is the tx-bound variant of SoftDeleteContact. The service
 // soft-delete path uses it so the contact soft-delete and the person-node
 // deleted_at propagation (node.id == contact.id) commit atomically.
 func (r *ContactRepository) SoftDeleteContactTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
-	return db.New(tx).SoftDeleteContact(ctx, uuidToPgUUID(id))
+	return db.New(tx).SoftDeleteContact(ctx, id)
 }
 
 // HardDeleteContact permanently deletes a contact and, in the same statement,
 // its person node (guarded: a node an assertion still references survives).
 // Test-cleanup only — zero production callers.
 func (r *ContactRepository) HardDeleteContact(ctx context.Context, id uuid.UUID) error {
-	return r.queries.TestHardDeleteContactWithNode(ctx, uuidToPgUUID(id))
+	return r.queries.TestHardDeleteContactWithNode(ctx, id)
 }
 
 // CountContacts returns the total number of active contacts matching the
@@ -484,7 +449,7 @@ func (r *ContactRepository) CountContacts(ctx context.Context, params ListContac
 	return r.queries.CountContacts(ctx, db.CountContactsParams{
 		CadenceFilter:  params.CadenceFilter,
 		FollowupFilter: params.FollowupFilter,
-		SearchQuery:    searchToPgText(params.Query),
+		SearchQuery:    nilIfEmpty(params.Query),
 	})
 }
 
@@ -503,7 +468,7 @@ func (r *ContactRepository) ListContactIDs(ctx context.Context, params ListConta
 	dbIDs, err := r.queries.ListContactIDs(ctx, db.ListContactIDsParams{
 		CadenceFilter:  params.CadenceFilter,
 		FollowupFilter: params.FollowupFilter,
-		SearchQuery:    searchToPgText(params.Search),
+		SearchQuery:    nilIfEmpty(params.Search),
 		SortField:      params.Sort,
 		SortOrder:      params.Order,
 	})
@@ -511,14 +476,7 @@ func (r *ContactRepository) ListContactIDs(ctx context.Context, params ListConta
 		return nil, err
 	}
 
-	ids := make([]uuid.UUID, len(dbIDs))
-	for i, dbID := range dbIDs {
-		if dbID.Valid {
-			ids[i] = uuid.UUID(dbID.Bytes)
-		}
-	}
-
-	return ids, nil
+	return dbIDs, nil
 }
 
 // ContactMatch represents a potential contact match with similarity score
@@ -542,10 +500,7 @@ func (r *ContactRepository) FindSimilarContacts(ctx context.Context, name string
 	matches := make([]ContactMatch, 0, len(rows))
 	for _, row := range rows {
 		// Convert UUID
-		var contactID uuid.UUID
-		if row.ID.Valid {
-			contactID = uuid.UUID(row.ID.Bytes)
-		}
+		contactID := row.ID
 
 		// Parse contact methods from JSON
 		var methods []ContactMethod
@@ -628,10 +583,7 @@ func (r *ContactRepository) FindSimilarContactsBatch(
 	resultMap := make(map[string][]ContactMatch)
 	for _, row := range rows {
 		// Convert UUID
-		var contactID uuid.UUID
-		if row.ContactID.Valid {
-			contactID = uuid.UUID(row.ContactID.Bytes)
-		}
+		contactID := row.ContactID
 
 		// Parse contact methods from JSON
 		var methods []ContactMethod
@@ -685,7 +637,7 @@ func (r *ContactRepository) FindSimilarContactsBatch(
 // The today parameter should be the current date in server timezone (use cadence.Today()).
 func (r *ContactRepository) ListOverdueContacts(ctx context.Context, today time.Time, limit int32) ([]Contact, error) {
 	dbContacts, err := r.queries.ListOverdueContacts(ctx, db.ListOverdueContactsParams{
-		Today:      pgtype.Date{Time: today, Valid: true},
+		Today:      today,
 		LimitCount: limit,
 	})
 	if err != nil {
@@ -739,22 +691,16 @@ func (r *ContactRepository) ListContactsWithKnowledgeColumns(ctx context.Context
 		// contact.id is a non-null PK, so an invalid id is unreachable; skip it
 		// defensively rather than emit a uuid.Nil-keyed row a caller would then
 		// assert against the wrong (nil) subject node.
-		if !row.ID.Valid {
+		if row.ID == uuid.Nil {
 			continue
 		}
 		rec := ContactKnowledgeColumns{
-			ContactID: uuid.UUID(row.ID.Bytes),
-			Birthday:  pgDateToTimePtr(row.Birthday),
-			CreatedAt: row.CreatedAt.Time,
+			ContactID: row.ID,
+			Birthday:  utcPtr(row.Birthday),
+			CreatedAt: deref(row.CreatedAt),
 		}
-		if row.Location.Valid {
-			loc := row.Location.String
-			rec.Location = &loc
-		}
-		if row.HowMet.Valid {
-			hm := row.HowMet.String
-			rec.HowMet = &hm
-		}
+		rec.Location = row.Location
+		rec.HowMet = row.HowMet
 		out = append(out, rec)
 	}
 	return out, nil
@@ -792,7 +738,7 @@ func (r *ContactRepository) RecomputeContactDatesAfterDeleteTx(ctx context.Conte
 // test can hold the lock from a concurrent tx. Returns db.ErrNotFound when
 // the contact is soft-deleted.
 func (r *ContactRepository) LockContactForDateRecomputeTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
-	if _, err := db.New(tx).LockContactForDateRecompute(ctx, uuidToPgUUID(contactID)); err != nil {
+	if _, err := db.New(tx).LockContactForDateRecompute(ctx, contactID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return db.ErrNotFound
 		}
@@ -807,7 +753,7 @@ func (r *ContactRepository) LockContactForDateRecomputeTx(ctx context.Context, t
 // lock on the row. Used by the recompute lock-ordering regression test.
 // Production code must NOT call this. Returns db.ErrNotFound when no row.
 func (r *ContactRepository) TestLockContactForUpdateNoWaitTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
-	if _, err := db.New(tx).TestLockContactForUpdateNoWait(ctx, uuidToPgUUID(contactID)); err != nil {
+	if _, err := db.New(tx).TestLockContactForUpdateNoWait(ctx, contactID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return db.ErrNotFound
 		}
@@ -836,16 +782,16 @@ type TestCadenceSeed struct {
 func (s TestCadenceSeed) params(id uuid.UUID) db.UpdateContactCadenceUnconditionalParams {
 	return db.UpdateContactCadenceUnconditionalParams{
 		ApplyLastContacted:     s.LastContacted != nil,
-		LastContacted:          timeToPgTimestamptz(s.LastContacted),
+		LastContacted:          s.LastContacted,
 		ApplyLastInteractionAt: s.LastInteractionAt != nil,
-		LastInteractionAt:      timeToPgTimestamptz(s.LastInteractionAt),
+		LastInteractionAt:      s.LastInteractionAt,
 		ApplyLastOutreachAt:    s.LastOutreachAt != nil,
-		LastOutreachAt:         timeToPgTimestamptz(s.LastOutreachAt),
+		LastOutreachAt:         s.LastOutreachAt,
 		ApplyLastResponseAt:    s.LastResponseAt != nil,
-		LastResponseAt:         timeToPgTimestamptz(s.LastResponseAt),
+		LastResponseAt:         s.LastResponseAt,
 		ApplyContactBy:         s.ContactBy != nil,
-		ContactBy:              timeToPgDate(s.ContactBy),
-		ID:                     uuidToPgUUID(id),
+		ContactBy:              s.ContactBy,
+		ID:                     id,
 	}
 }
 
@@ -909,21 +855,21 @@ func (r *ContactRepository) TestWriteKnowledgeColumnsWithoutGUCTx(ctx context.Co
 	q := db.New(tx)
 	if seed.Location != nil {
 		if err := q.UpdateContactLocationCache(ctx, db.UpdateContactLocationCacheParams{
-			ID: uuidToPgUUID(id), Location: stringToPgText(seed.Location),
+			ID: id, Location: seed.Location,
 		}); err != nil {
 			return err
 		}
 	}
 	if seed.Birthday != nil {
 		if err := q.UpdateContactBirthdayCache(ctx, db.UpdateContactBirthdayCacheParams{
-			ID: uuidToPgUUID(id), Birthday: timeToPgDate(seed.Birthday),
+			ID: id, Birthday: seed.Birthday,
 		}); err != nil {
 			return err
 		}
 	}
 	if seed.HowMet != nil {
 		if err := q.UpdateContactHowMetCache(ctx, db.UpdateContactHowMetCacheParams{
-			ID: uuidToPgUUID(id), HowMet: stringToPgText(seed.HowMet),
+			ID: id, HowMet: seed.HowMet,
 		}); err != nil {
 			return err
 		}
@@ -947,17 +893,14 @@ func recomputeContactDatesAfterDelete(ctx context.Context, tx pgx.Tx, contactID 
 	// ComputeContactDatesAfterDelete runs at a fresh snapshot that includes
 	// that writer's just-committed interaction rows, so the aggregate cannot
 	// miss a concurrently-inserted interaction.
-	if _, err := q.LockContactForDateRecompute(ctx, uuidToPgUUID(contactID)); err != nil {
+	if _, err := q.LockContactForDateRecompute(ctx, contactID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return db.ErrNotFound
 		}
 		return err
 	}
 
-	row, err := q.ComputeContactDatesAfterDelete(ctx, db.ComputeContactDatesAfterDeleteParams{
-		ID:          uuidToPgUUID(contactID),
-		DeletedAtTs: pgtype.Timestamptz{Time: deletedAt, Valid: true},
-	})
+	row, err := q.ComputeContactDatesAfterDelete(ctx, contactID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return db.ErrNotFound
@@ -965,16 +908,58 @@ func recomputeContactDatesAfterDelete(ctx context.Context, tx pgx.Tx, contactID 
 		return err
 	}
 
-	newContactBy := decideContactByAfterDelete(row)
+	// The query can no longer type the four recomputed columns itself: sqlc's
+	// static analyzer types a cast aggregate as NOT NULL and an uncast
+	// CASE/aggregate as interface{}, and "NULL when none remain" is this
+	// query's documented contract. So it returns only the two raw aggregates
+	// (new_non_outbound / new_outreach, each NULL when no live interaction of
+	// that direction subset remains) plus the pre-image columns, and the
+	// per-column CASE that used to run in SQL runs here instead.
+	nonOutbound := recomputeAggTime(row.NewNonOutbound)
+	outreach := recomputeAggTime(row.NewOutreach)
+
+	newLastContacted := recomputeColumn(row.OldLastContacted, deletedAt, nonOutbound)
+	newLastInteractionAt := recomputeColumn(row.OldLastInteractionAt, deletedAt, nonOutbound)
+	newLastResponseAt := recomputeColumn(row.OldLastResponseAt, deletedAt, nonOutbound)
+	newLastOutreachAt := recomputeColumn(row.OldLastOutreachAt, deletedAt, outreach)
+
+	newContactBy := decideContactByAfterDelete(row, newLastContacted)
 
 	return q.WriteContactDatesAfterDelete(ctx, db.WriteContactDatesAfterDeleteParams{
-		NewLastContacted:     row.NewLastContacted,
-		NewLastInteractionAt: row.NewLastInteractionAt,
-		NewLastResponseAt:    row.NewLastResponseAt,
-		NewLastOutreachAt:    row.NewLastOutreachAt,
+		NewLastContacted:     newLastContacted,
+		NewLastInteractionAt: newLastInteractionAt,
+		NewLastResponseAt:    newLastResponseAt,
+		NewLastOutreachAt:    newLastOutreachAt,
 		NewContactBy:         newContactBy,
-		ID:                   uuidToPgUUID(contactID),
+		ID:                   contactID,
 	})
+}
+
+// recomputeAggTime adapts ComputeContactDatesAfterDeleteRow's NewNonOutbound /
+// NewOutreach fields (interface{}, since sqlc cannot type an uncast
+// MAX(timestamptz) aggregate as nullable) into a UTC-normalized *time.Time:
+// pgx scans a non-NULL MAX into time.Time; an all-NULL aggregate (no live
+// interaction remains in that direction subset) scans into a value that
+// fails the type assertion, which this reports as nil.
+func recomputeAggTime(v interface{}) *time.Time {
+	t, ok := v.(time.Time)
+	if !ok {
+		return nil
+	}
+	return utcPtr(&t)
+}
+
+// recomputeColumn reproduces the removed SQL "CASE WHEN column =
+// deleted_at_ts THEN <agg> ELSE column END": a date column is touched ONLY
+// when the just-deleted interaction was its recorded source — i.e. the
+// pre-image value exactly equals deletedAt — in which case it rolls forward
+// to agg (nil when no live interaction of that direction subset remains);
+// otherwise the existing value is preserved untouched.
+func recomputeColumn(old *time.Time, deletedAt time.Time, agg *time.Time) *time.Time {
+	if old != nil && old.Equal(deletedAt) {
+		return agg
+	}
+	return utcPtr(old)
 }
 
 // decideContactByAfterDelete computes the contact_by value to write after a
@@ -989,19 +974,22 @@ func recomputeContactDatesAfterDelete(ctx context.Context, tx pgx.Tx, contactID 
 //   - Else (override-free), contact_by is re-derived from the new base
 //     (new_last_contacted, or created_at when it rolled to NULL) so the
 //     removed interaction's own contribution is undone exactly.
-func decideContactByAfterDelete(row *db.ComputeContactDatesAfterDeleteRow) pgtype.Date {
+//
+// newLastContacted is the already-recomputed last_contacted value (see
+// recomputeColumn) — the row itself no longer carries it, since that
+// computation now happens in Go rather than in the query.
+func decideContactByAfterDelete(row *db.ComputeContactDatesAfterDeleteRow, newLastContacted *time.Time) *time.Time {
 	oldContactBy := row.OldContactBy
 
 	cadenceStr := ""
-	if row.Cadence.Valid {
-		cadenceStr = row.Cadence.String
+	if row.Cadence != nil {
+		cadenceStr = *row.Cadence
 	}
 	if cadenceStr == "" {
 		return oldContactBy
 	}
 
-	oldLastContacted := pgTimestamptzToTimePtr(row.OldLastContacted)
-	newLastContacted := pgTimestamptzToTimePtr(row.NewLastContacted)
+	oldLastContacted := utcPtr(row.OldLastContacted)
 
 	// last_contacted did not move → contact_by is not implicated; preserve.
 	if !lastContactedMoved(oldLastContacted, newLastContacted) {
@@ -1016,7 +1004,7 @@ func decideContactByAfterDelete(row *db.ComputeContactDatesAfterDeleteRow) pgtyp
 	// Override guard: if the stored contact_by differs from what the cadence
 	// would have produced for the old last_contacted, a Todoist/user override
 	// landed since the interaction; preserve it.
-	if oldLastContacted != nil && row.OldContactBy.Valid {
+	if oldLastContacted != nil && row.OldContactBy != nil {
 		expectedOldCb := cadence.CalculateContactBy(*oldLastContacted, cadenceType)
 		if !contactByMatchesStoredDate(row.OldContactBy, expectedOldCb) {
 			return oldContactBy
@@ -1028,7 +1016,7 @@ func decideContactByAfterDelete(row *db.ComputeContactDatesAfterDeleteRow) pgtyp
 	// contact is never dropped from due tracking.
 	base := newLastContacted
 	if base == nil {
-		createdAt := pgTimestamptzToTimePtr(row.CreatedAt)
+		createdAt := utcPtr(row.CreatedAt)
 		base = createdAt
 	}
 	if base == nil {
@@ -1037,7 +1025,7 @@ func decideContactByAfterDelete(row *db.ComputeContactDatesAfterDeleteRow) pgtyp
 		return oldContactBy
 	}
 	newCb := cadence.CalculateContactBy(*base, cadenceType)
-	return pgtype.Date{Time: newCb, Valid: true}
+	return &newCb
 }
 
 // lastContactedMoved reports whether last_contacted changed between the
@@ -1061,11 +1049,11 @@ func lastContactedMoved(old, new *time.Time) bool {
 // existing contact_by parity tests (TestContactBy_* in backend/tests) and is
 // environment-independent. A mismatch means a Todoist/user override landed
 // since the interaction.
-func contactByMatchesStoredDate(stored pgtype.Date, expected time.Time) bool {
-	if !stored.Valid {
+func contactByMatchesStoredDate(stored *time.Time, expected time.Time) bool {
+	if stored == nil {
 		return false
 	}
-	sY, sM, sD := stored.Time.Date()
+	sY, sM, sD := stored.Date()
 	expectedDate := cadence.DateOnly(expected)
 	eY, eM, eD := expectedDate.Date()
 	return sY == eY && sM == eM && sD == eD

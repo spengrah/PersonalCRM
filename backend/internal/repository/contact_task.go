@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // ContactTaskState represents the management state of a contact task
@@ -96,17 +95,13 @@ func convertDbContactTask(dbTask *db.ContactTask) ContactTask {
 		State:          ContactTaskState(dbTask.State),
 	}
 
-	if dbTask.ID.Valid {
-		task.ID = uuid.UUID(dbTask.ID.Bytes)
+	task.ID = dbTask.ID
+	task.ContactID = dbTask.ContactID
+	if dbTask.CreatedAt != nil {
+		task.CreatedAt = *dbTask.CreatedAt
 	}
-	if dbTask.ContactID.Valid {
-		task.ContactID = uuid.UUID(dbTask.ContactID.Bytes)
-	}
-	if dbTask.CreatedAt.Valid {
-		task.CreatedAt = dbTask.CreatedAt.Time
-	}
-	if dbTask.UpdatedAt.Valid {
-		task.UpdatedAt = dbTask.UpdatedAt.Time
+	if dbTask.UpdatedAt != nil {
+		task.UpdatedAt = *dbTask.UpdatedAt
 	}
 
 	if len(dbTask.Metadata) > 0 {
@@ -116,10 +111,7 @@ func convertDbContactTask(dbTask *db.ContactTask) ContactTask {
 		}
 	}
 
-	if dbTask.IdempotencyKey.Valid {
-		key := dbTask.IdempotencyKey.String
-		task.IdempotencyKey = &key
-	}
+	task.IdempotencyKey = dbTask.IdempotencyKey
 
 	return task
 }
@@ -137,17 +129,13 @@ func convertDbContactTaskWithContact(dbRow *db.ListManagedContactTasksRow) Conta
 		FullName: dbRow.FullName,
 	}
 
-	if dbRow.ID.Valid {
-		result.ID = uuid.UUID(dbRow.ID.Bytes)
+	result.ID = dbRow.ID
+	result.ContactID = dbRow.ContactID
+	if dbRow.CreatedAt != nil {
+		result.CreatedAt = *dbRow.CreatedAt
 	}
-	if dbRow.ContactID.Valid {
-		result.ContactID = uuid.UUID(dbRow.ContactID.Bytes)
-	}
-	if dbRow.CreatedAt.Valid {
-		result.CreatedAt = dbRow.CreatedAt.Time
-	}
-	if dbRow.UpdatedAt.Valid {
-		result.UpdatedAt = dbRow.UpdatedAt.Time
+	if dbRow.UpdatedAt != nil {
+		result.UpdatedAt = *dbRow.UpdatedAt
 	}
 
 	if len(dbRow.Metadata) > 0 {
@@ -157,25 +145,16 @@ func convertDbContactTaskWithContact(dbRow *db.ListManagedContactTasksRow) Conta
 		}
 	}
 
-	if dbRow.Cadence.Valid {
-		result.Cadence = &dbRow.Cadence.String
-	}
-	if dbRow.ContactBy.Valid {
-		// ContactBy is a DATE type, convert to time.Time
-		t := dbRow.ContactBy.Time
-		result.ContactBy = &t
-	}
-	if dbRow.LastContacted.Valid {
-		t := dbRow.LastContacted.Time
-		result.LastContacted = &t
-	}
+	result.Cadence = dbRow.Cadence
+	result.ContactBy = dbRow.ContactBy
+	result.LastContacted = dbRow.LastContacted
 
 	return result
 }
 
 // GetContactTask retrieves a contact task by ID
 func (r *ContactTaskRepository) GetContactTask(ctx context.Context, id uuid.UUID) (*ContactTask, error) {
-	dbTask, err := r.queries.GetContactTask(ctx, uuidToPgUUID(id))
+	dbTask, err := r.queries.GetContactTask(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -193,7 +172,7 @@ func (r *ContactTaskRepository) GetContactTask(ctx context.Context, id uuid.UUID
 // filter), so at most one row exists.
 func (r *ContactTaskRepository) GetContactTaskByContactCadenceDue(ctx context.Context, contactID uuid.UUID, provider string) (*ContactTask, error) {
 	dbTask, err := r.queries.GetContactTaskByContactCadenceDue(ctx, db.GetContactTaskByContactCadenceDueParams{
-		ContactID: uuidToPgUUID(contactID),
+		ContactID: contactID,
 		Provider:  provider,
 	})
 	if err != nil {
@@ -213,7 +192,7 @@ func (r *ContactTaskRepository) GetContactTaskByContactCadenceDue(ctx context.Co
 // state IN live states).
 func (r *ContactTaskRepository) GetContactTaskByContactFollowUpLive(ctx context.Context, contactID uuid.UUID, provider string) (*ContactTask, error) {
 	dbTask, err := r.queries.GetContactTaskByContactFollowUpLive(ctx, db.GetContactTaskByContactFollowUpLiveParams{
-		ContactID: uuidToPgUUID(contactID),
+		ContactID: contactID,
 		Provider:  provider,
 	})
 	if err != nil {
@@ -234,7 +213,7 @@ func (r *ContactTaskRepository) GetContactTaskByContactFollowUpLive(ctx context.
 // accidentally pass kind='reach_out' here.
 func (r *ContactTaskRepository) GetLegacyActionTaskByContact(ctx context.Context, contactID uuid.UUID, provider string) (*ContactTask, error) {
 	dbTask, err := r.queries.GetLegacyActionTaskByContact(ctx, db.GetLegacyActionTaskByContactParams{
-		ContactID: uuidToPgUUID(contactID),
+		ContactID: contactID,
 		Provider:  provider,
 	})
 	if err != nil {
@@ -269,7 +248,7 @@ func (r *ContactTaskRepository) GetContactTaskByExternalID(ctx context.Context, 
 func (r *ContactTaskRepository) ListContactTasksByProvider(ctx context.Context, provider string, state *string) ([]ContactTask, error) {
 	dbTasks, err := r.queries.ListContactTasksByProvider(ctx, db.ListContactTasksByProviderParams{
 		Provider: provider,
-		State:    stringToPgText(state),
+		State:    state,
 	})
 	if err != nil {
 		return nil, err
@@ -285,7 +264,7 @@ func (r *ContactTaskRepository) ListContactTasksByProvider(ctx context.Context, 
 
 // ListContactTasksByContact retrieves all contact tasks for a contact
 func (r *ContactTaskRepository) ListContactTasksByContact(ctx context.Context, contactID uuid.UUID) ([]ContactTask, error) {
-	dbTasks, err := r.queries.ListContactTasksByContact(ctx, uuidToPgUUID(contactID))
+	dbTasks, err := r.queries.ListContactTasksByContact(ctx, contactID)
 	if err != nil {
 		return nil, err
 	}
@@ -301,10 +280,10 @@ func (r *ContactTaskRepository) ListContactTasksByContact(ctx context.Context, c
 // ListContactTasksFiltered retrieves contact tasks for a contact with optional filters
 func (r *ContactTaskRepository) ListContactTasksFiltered(ctx context.Context, contactID uuid.UUID, state *string, kind *string, lifecycle *string) ([]ContactTask, error) {
 	dbTasks, err := r.queries.ListContactTasksByContactFiltered(ctx, db.ListContactTasksByContactFilteredParams{
-		ContactID: uuidToPgUUID(contactID),
-		State:     stringToPgText(state),
-		Kind:      stringToPgText(kind),
-		Lifecycle: stringToPgText(lifecycle),
+		ContactID: contactID,
+		State:     state,
+		Kind:      kind,
+		Lifecycle: lifecycle,
 	})
 	if err != nil {
 		return nil, err
@@ -350,7 +329,7 @@ func (r *ContactTaskRepository) CreateContactTask(ctx context.Context, req Creat
 	}
 
 	dbTask, err := r.queries.CreateContactTask(ctx, db.CreateContactTaskParams{
-		ContactID:      uuidToPgUUID(req.ContactID),
+		ContactID:      req.ContactID,
 		Provider:       req.Provider,
 		Kind:           req.Kind,
 		Lifecycle:      req.Lifecycle,
@@ -386,14 +365,14 @@ func (r *ContactTaskRepository) CreateContactTaskAtTime(ctx context.Context, req
 	}
 
 	dbTask, err := r.queries.CreateContactTaskAtTime(ctx, db.CreateContactTaskAtTimeParams{
-		ContactID:      uuidToPgUUID(req.ContactID),
+		ContactID:      req.ContactID,
 		Provider:       req.Provider,
 		Kind:           req.Kind,
 		Lifecycle:      req.Lifecycle,
 		ExternalTaskID: req.ExternalTaskID,
 		State:          state,
 		Metadata:       metadataBytes,
-		CreatedAt:      timeToPgTimestamptz(&createdAt),
+		CreatedAt:      &createdAt,
 	})
 	if err != nil {
 		return nil, err
@@ -420,7 +399,7 @@ func (r *ContactTaskRepository) UpsertContactTask(ctx context.Context, req Creat
 	}
 
 	dbTask, err := r.queries.UpsertContactTask(ctx, db.UpsertContactTaskParams{
-		ContactID:      uuidToPgUUID(req.ContactID),
+		ContactID:      req.ContactID,
 		Provider:       req.Provider,
 		Kind:           req.Kind,
 		Lifecycle:      req.Lifecycle,
@@ -439,7 +418,7 @@ func (r *ContactTaskRepository) UpsertContactTask(ctx context.Context, req Creat
 // UpdateContactTaskState updates the state of a contact task
 func (r *ContactTaskRepository) UpdateContactTaskState(ctx context.Context, id uuid.UUID, state ContactTaskState) (*ContactTask, error) {
 	dbTask, err := r.queries.UpdateContactTaskState(ctx, db.UpdateContactTaskStateParams{
-		ID:    uuidToPgUUID(id),
+		ID:    id,
 		State: string(state),
 	})
 	if err != nil {
@@ -456,7 +435,7 @@ func (r *ContactTaskRepository) UpdateContactTaskState(ctx context.Context, id u
 // UpdateContactTaskExternalID updates the external task ID of a contact task
 func (r *ContactTaskRepository) UpdateContactTaskExternalID(ctx context.Context, id uuid.UUID, externalTaskID string) (*ContactTask, error) {
 	dbTask, err := r.queries.UpdateContactTaskExternalID(ctx, db.UpdateContactTaskExternalIDParams{
-		ID:             uuidToPgUUID(id),
+		ID:             id,
 		ExternalTaskID: externalTaskID,
 	})
 	if err != nil {
@@ -482,7 +461,7 @@ func (r *ContactTaskRepository) UpdateContactTaskMetadata(ctx context.Context, i
 	}
 
 	dbTask, err := r.queries.UpdateContactTaskMetadata(ctx, db.UpdateContactTaskMetadataParams{
-		ID:       uuidToPgUUID(id),
+		ID:       id,
 		Metadata: metadataBytes,
 	})
 	if err != nil {
@@ -498,7 +477,7 @@ func (r *ContactTaskRepository) UpdateContactTaskMetadata(ctx context.Context, i
 
 // DeleteContactTask deletes a contact task by ID
 func (r *ContactTaskRepository) DeleteContactTask(ctx context.Context, id uuid.UUID) error {
-	return r.queries.DeleteContactTask(ctx, uuidToPgUUID(id))
+	return r.queries.DeleteContactTask(ctx, id)
 }
 
 // DeleteContactTaskByContactCadenceDue removes the cadence-due task link
@@ -507,7 +486,7 @@ func (r *ContactTaskRepository) DeleteContactTask(ctx context.Context, id uuid.U
 // (contact_id, provider).
 func (r *ContactTaskRepository) DeleteContactTaskByContactCadenceDue(ctx context.Context, contactID uuid.UUID, provider string) error {
 	return r.queries.DeleteContactTaskByContactCadenceDue(ctx, db.DeleteContactTaskByContactCadenceDueParams{
-		ContactID: uuidToPgUUID(contactID),
+		ContactID: contactID,
 		Provider:  provider,
 	})
 }
@@ -544,7 +523,7 @@ func (r *ContactTaskRepository) GetContactTaskByPendingTempID(ctx context.Contex
 
 // FindPendingFollowUp finds a pending follow-up task for a contact
 func (r *ContactTaskRepository) FindPendingFollowUp(ctx context.Context, contactID uuid.UUID) (*ContactTask, error) {
-	dbTask, err := r.queries.FindPendingFollowUp(ctx, uuidToPgUUID(contactID))
+	dbTask, err := r.queries.FindPendingFollowUp(ctx, contactID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -558,7 +537,7 @@ func (r *ContactTaskRepository) FindPendingFollowUp(ctx context.Context, contact
 
 // CompleteFollowUpForContact marks all pending follow-up tasks as completed for a contact
 func (r *ContactTaskRepository) CompleteFollowUpForContact(ctx context.Context, contactID uuid.UUID) ([]ContactTask, error) {
-	dbTasks, err := r.queries.CompleteFollowUpForContact(ctx, uuidToPgUUID(contactID))
+	dbTasks, err := r.queries.CompleteFollowUpForContact(ctx, contactID)
 	if err != nil {
 		return nil, err
 	}
@@ -580,7 +559,7 @@ func (r *ContactTaskRepository) FindPendingFollowUpTx(ctx context.Context, tx pg
 	if tx != nil {
 		q = db.New(tx)
 	}
-	dbTask, err := q.FindPendingFollowUpTx(ctx, uuidToPgUUID(contactID))
+	dbTask, err := q.FindPendingFollowUpTx(ctx, contactID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -600,8 +579,8 @@ func (r *ContactTaskRepository) FindPendingFollowUpTx(ctx context.Context, tx pg
 // keyed (reach_out, manual) row will not collide.
 func (r *ContactTaskRepository) GetContactTaskByIdempotencyKey(ctx context.Context, contactID uuid.UUID, key string) (*ContactTask, error) {
 	dbTask, err := r.queries.GetContactTaskByIdempotencyKey(ctx, db.GetContactTaskByIdempotencyKeyParams{
-		ContactID:      uuidToPgUUID(contactID),
-		IdempotencyKey: pgtype.Text{String: key, Valid: true},
+		ContactID:      contactID,
+		IdempotencyKey: &key,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -622,8 +601,8 @@ func (r *ContactTaskRepository) GetContactTaskByIdempotencyKeyTx(ctx context.Con
 		q = db.New(tx)
 	}
 	dbTask, err := q.GetContactTaskByIdempotencyKey(ctx, db.GetContactTaskByIdempotencyKeyParams{
-		ContactID:      uuidToPgUUID(contactID),
-		IdempotencyKey: pgtype.Text{String: key, Valid: true},
+		ContactID:      contactID,
+		IdempotencyKey: &key,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -665,7 +644,7 @@ func (r *ContactTaskRepository) GetContactTaskTx(ctx context.Context, tx pgx.Tx,
 	if tx != nil {
 		q = db.New(tx)
 	}
-	dbTask, err := q.GetContactTask(ctx, uuidToPgUUID(id))
+	dbTask, err := q.GetContactTask(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -698,19 +677,15 @@ func (r *ContactTaskRepository) CreateContactTaskTx(ctx context.Context, tx pgx.
 			return nil, err
 		}
 	}
-	key := pgtype.Text{Valid: false}
-	if idempotencyKey != nil {
-		key = pgtype.Text{String: *idempotencyKey, Valid: true}
-	}
 	dbTask, err := q.CreateContactTaskWithIdempotencyKey(ctx, db.CreateContactTaskWithIdempotencyKeyParams{
-		ContactID:      uuidToPgUUID(req.ContactID),
+		ContactID:      req.ContactID,
 		Provider:       req.Provider,
 		Kind:           req.Kind,
 		Lifecycle:      req.Lifecycle,
 		ExternalTaskID: req.ExternalTaskID,
 		State:          state,
 		Metadata:       metadataBytes,
-		IdempotencyKey: key,
+		IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
 		return nil, err
@@ -726,7 +701,7 @@ func (r *ContactTaskRepository) UpdateContactTaskStateTx(ctx context.Context, tx
 		q = db.New(tx)
 	}
 	dbTask, err := q.UpdateContactTaskState(ctx, db.UpdateContactTaskStateParams{
-		ID:    uuidToPgUUID(id),
+		ID:    id,
 		State: string(state),
 	})
 	if err != nil {
@@ -755,7 +730,7 @@ func (r *ContactTaskRepository) UpdateContactTaskMetadataTx(ctx context.Context,
 		}
 	}
 	dbTask, err := q.UpdateContactTaskMetadata(ctx, db.UpdateContactTaskMetadataParams{
-		ID:       uuidToPgUUID(id),
+		ID:       id,
 		Metadata: metadataBytes,
 	})
 	if err != nil {
@@ -779,7 +754,7 @@ func (r *ContactTaskRepository) UpdateContactTaskExternalIDTx(ctx context.Contex
 		q = db.New(tx)
 	}
 	dbTask, err := q.UpdateContactTaskExternalID(ctx, db.UpdateContactTaskExternalIDParams{
-		ID:             uuidToPgUUID(id),
+		ID:             id,
 		ExternalTaskID: externalTaskID,
 	})
 	if err != nil {
@@ -820,7 +795,7 @@ func (r *ContactTaskRepository) CompleteLiveTasksForContactTx(ctx context.Contex
 		q = db.New(tx)
 	}
 	rows, err := q.CompleteLiveContactTasksForContact(ctx, db.CompleteLiveContactTasksForContactParams{
-		ContactID:        uuidToPgUUID(contactID),
+		ContactID:        contactID,
 		PendingTempIDKey: pendingTempIDKey,
 	})
 	if err != nil {
@@ -829,12 +804,10 @@ func (r *ContactTaskRepository) CompleteLiveTasksForContactTx(ctx context.Contex
 	refs := make([]CompletedTaskRef, 0, len(rows))
 	for _, row := range rows {
 		ref := CompletedTaskRef{
+			ID:             row.ID,
 			ExternalTaskID: row.ExternalTaskID,
 			Provider:       row.Provider,
 			PendingTempID:  row.PendingTempID,
-		}
-		if row.ID.Valid {
-			ref.ID = uuid.UUID(row.ID.Bytes)
 		}
 		refs = append(refs, ref)
 	}
@@ -888,8 +861,8 @@ func (r *ContactTaskRepository) TransferAutomatedTasksForMergeTx(
 	}
 
 	rows, err := db.New(sp).TransferAutomatedContactTasksToContact(ctx, db.TransferAutomatedContactTasksToContactParams{
-		SourceContactID: uuidToPgUUID(sourceID),
-		TargetContactID: uuidToPgUUID(targetID),
+		SourceContactID: sourceID,
+		TargetContactID: targetID,
 	})
 	if err != nil {
 		pgErr, recoverable := classifyTransferConflict(err)
@@ -916,10 +889,7 @@ func (r *ContactTaskRepository) TransferAutomatedTasksForMergeTx(
 
 	refs := make([]TransferredTaskRef, 0, len(rows))
 	for _, row := range rows {
-		ref := TransferredTaskRef{Lifecycle: row.Lifecycle}
-		if row.ID.Valid {
-			ref.ID = uuid.UUID(row.ID.Bytes)
-		}
+		ref := TransferredTaskRef{ID: row.ID, Lifecycle: row.Lifecycle}
 		refs = append(refs, ref)
 	}
 	return refs, nil
@@ -936,10 +906,7 @@ func (r *ContactTaskRepository) SetContactTaskExternalIDOnlyTx(ctx context.Conte
 		q = db.New(tx)
 	}
 	return q.SetContactTaskExternalIDOnly(ctx, db.SetContactTaskExternalIDOnlyParams{
-		ID:             uuidToPgUUID(id),
+		ID:             id,
 		ExternalTaskID: externalTaskID,
 	})
 }
-
-// Note: Helper functions (stringToPgText, uuidToPgUUID, timeToPgTimestamptz)
-// are defined in conversions.go

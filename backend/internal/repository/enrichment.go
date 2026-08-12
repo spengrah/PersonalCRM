@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // ContactEnrichment represents a record of enrichment applied to a CRM contact
@@ -52,28 +51,17 @@ func convertDbEnrichment(dbEnrichment *db.ContactEnrichment) *ContactEnrichment 
 	}
 
 	// Convert UUID
-	if dbEnrichment.ID.Valid {
-		enrichment.ID = uuid.UUID(dbEnrichment.ID.Bytes)
-	}
-	if dbEnrichment.ContactID.Valid {
-		enrichment.ContactID = uuid.UUID(dbEnrichment.ContactID.Bytes)
-	}
-	if dbEnrichment.ExternalContactID.Valid {
-		id := uuid.UUID(dbEnrichment.ExternalContactID.Bytes)
-		enrichment.ExternalContactID = &id
-	}
+	enrichment.ID = dbEnrichment.ID
+	enrichment.ContactID = dbEnrichment.ContactID
+	enrichment.ExternalContactID = dbEnrichment.ExternalContactID
 
 	// Convert optional strings
-	if dbEnrichment.AccountID.Valid {
-		enrichment.AccountID = &dbEnrichment.AccountID.String
-	}
-	if dbEnrichment.OriginalValue.Valid {
-		enrichment.OriginalValue = &dbEnrichment.OriginalValue.String
-	}
+	enrichment.AccountID = dbEnrichment.AccountID
+	enrichment.OriginalValue = dbEnrichment.OriginalValue
 
 	// Convert timestamp
-	if dbEnrichment.EnrichedAt.Valid {
-		enrichment.EnrichedAt = dbEnrichment.EnrichedAt.Time
+	if dbEnrichment.EnrichedAt != nil {
+		enrichment.EnrichedAt = *dbEnrichment.EnrichedAt
 	}
 
 	return enrichment
@@ -82,19 +70,12 @@ func convertDbEnrichment(dbEnrichment *db.ContactEnrichment) *ContactEnrichment 
 // Create records a new enrichment or updates an existing one
 func (r *EnrichmentRepository) Create(ctx context.Context, req CreateEnrichmentRequest) (*ContactEnrichment, error) {
 	params := db.CreateEnrichmentParams{
-		ContactID: pgtype.UUID{Bytes: req.ContactID, Valid: true},
-		Source:    req.Source,
-		Field:     req.Field,
-	}
-
-	if req.AccountID != nil {
-		params.AccountID = pgtype.Text{String: *req.AccountID, Valid: true}
-	}
-	if req.ExternalContactID != nil {
-		params.ExternalContactID = pgtype.UUID{Bytes: *req.ExternalContactID, Valid: true}
-	}
-	if req.OriginalValue != nil {
-		params.OriginalValue = pgtype.Text{String: *req.OriginalValue, Valid: true}
+		ContactID:         req.ContactID,
+		Source:            req.Source,
+		Field:             req.Field,
+		AccountID:         req.AccountID,
+		ExternalContactID: req.ExternalContactID,
+		OriginalValue:     req.OriginalValue,
 	}
 
 	dbEnrichment, err := r.queries.CreateEnrichment(ctx, params)
@@ -107,7 +88,7 @@ func (r *EnrichmentRepository) Create(ctx context.Context, req CreateEnrichmentR
 // HasEnrichment checks if a field has already been enriched for a contact
 func (r *EnrichmentRepository) HasEnrichment(ctx context.Context, contactID uuid.UUID, field string) (bool, error) {
 	return r.queries.HasEnrichmentForField(ctx, db.HasEnrichmentForFieldParams{
-		ContactID: pgtype.UUID{Bytes: contactID, Valid: true},
+		ContactID: contactID,
 		Field:     field,
 	})
 }
@@ -115,7 +96,7 @@ func (r *EnrichmentRepository) HasEnrichment(ctx context.Context, contactID uuid
 // GetByField retrieves an enrichment by contact ID and field
 func (r *EnrichmentRepository) GetByField(ctx context.Context, contactID uuid.UUID, field string) (*ContactEnrichment, error) {
 	dbEnrichment, err := r.queries.GetEnrichmentByField(ctx, db.GetEnrichmentByFieldParams{
-		ContactID: pgtype.UUID{Bytes: contactID, Valid: true},
+		ContactID: contactID,
 		Field:     field,
 	})
 	if err != nil {
@@ -129,7 +110,7 @@ func (r *EnrichmentRepository) GetByField(ctx context.Context, contactID uuid.UU
 
 // ListForContact retrieves all enrichments for a contact
 func (r *EnrichmentRepository) ListForContact(ctx context.Context, contactID uuid.UUID) ([]ContactEnrichment, error) {
-	dbEnrichments, err := r.queries.GetEnrichmentsForContact(ctx, pgtype.UUID{Bytes: contactID, Valid: true})
+	dbEnrichments, err := r.queries.GetEnrichmentsForContact(ctx, contactID)
 	if err != nil {
 		return nil, err
 	}
@@ -161,10 +142,10 @@ func (r *EnrichmentRepository) ListBySource(ctx context.Context, source string, 
 
 // DeleteForContact removes all enrichments for a contact
 func (r *EnrichmentRepository) DeleteForContact(ctx context.Context, contactID uuid.UUID) error {
-	return r.queries.DeleteEnrichmentsForContact(ctx, pgtype.UUID{Bytes: contactID, Valid: true})
+	return r.queries.DeleteEnrichmentsForContact(ctx, contactID)
 }
 
 // Delete removes an enrichment by ID
 func (r *EnrichmentRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	return r.queries.DeleteEnrichment(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	return r.queries.DeleteEnrichment(ctx, id)
 }

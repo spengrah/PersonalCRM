@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const BumpMacHostCursorEpoch = `-- name: BumpMacHostCursorEpoch :one
@@ -21,7 +22,7 @@ RETURNING cursor_epoch
 // Admin operation. Bumps cursor_epoch so the daemon discards its
 // local cursor cache on next heartbeat. Currently used only by the
 // repository layer; no admin endpoint is wired to it yet.
-func (q *Queries) BumpMacHostCursorEpoch(ctx context.Context, id pgtype.UUID) (int64, error) {
+func (q *Queries) BumpMacHostCursorEpoch(ctx context.Context, id uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, BumpMacHostCursorEpoch, id)
 	var cursor_epoch int64
 	err := row.Scan(&cursor_epoch)
@@ -86,8 +87,8 @@ RETURNING id, token_hash, expires_at, consumed_at, consumed_host_id, created_at
 `
 
 type CreatePairingTokenParams struct {
-	TokenHash string             `json:"token_hash"`
-	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	TokenHash string    `json:"token_hash"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // mac_host_pairing_token queries.
@@ -125,7 +126,7 @@ WHERE id = $1 AND api_key_revoked_at IS NULL
 
 // Used by MacHostAuthMiddleware. Filters revoked hosts so a revoked
 // daemon's bearer key cannot authenticate.
-func (q *Queries) GetActiveMacHostByID(ctx context.Context, id pgtype.UUID) (*MacHost, error) {
+func (q *Queries) GetActiveMacHostByID(ctx context.Context, id uuid.UUID) (*MacHost, error) {
 	row := q.db.QueryRow(ctx, GetActiveMacHostByID, id)
 	var i MacHost
 	err := row.Scan(
@@ -158,7 +159,7 @@ FOR UPDATE
 // a revoke that tries to UPDATE this row blocks until the ingest
 // batch commits or rolls back. Matches the cursor-commit precedent
 // in GetMacHostCursorEpoch below.
-func (q *Queries) GetActiveMacHostByIDForUpdate(ctx context.Context, id pgtype.UUID) (*MacHost, error) {
+func (q *Queries) GetActiveMacHostByIDForUpdate(ctx context.Context, id uuid.UUID) (*MacHost, error) {
 	row := q.db.QueryRow(ctx, GetActiveMacHostByIDForUpdate, id)
 	var i MacHost
 	err := row.Scan(
@@ -183,7 +184,7 @@ const GetMacHost = `-- name: GetMacHost :one
 SELECT id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at FROM mac_host WHERE id = $1
 `
 
-func (q *Queries) GetMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error) {
+func (q *Queries) GetMacHost(ctx context.Context, id uuid.UUID) (*MacHost, error) {
 	row := q.db.QueryRow(ctx, GetMacHost, id)
 	var i MacHost
 	err := row.Scan(
@@ -212,15 +213,15 @@ FOR UPDATE
 `
 
 type GetMacHostCursorEpochRow struct {
-	ID              pgtype.UUID        `json:"id"`
-	CursorEpoch     int64              `json:"cursor_epoch"`
-	ApiKeyRevokedAt pgtype.Timestamptz `json:"api_key_revoked_at"`
+	ID              uuid.UUID  `json:"id"`
+	CursorEpoch     int64      `json:"cursor_epoch"`
+	ApiKeyRevokedAt *time.Time `json:"api_key_revoked_at"`
 }
 
 // Reads the host's cursor_epoch with a row lock. Used by the cursor
 // commit path to serialize concurrent commits per host and to bind
 // the epoch read against the cursor read in the same tx.
-func (q *Queries) GetMacHostCursorEpoch(ctx context.Context, id pgtype.UUID) (*GetMacHostCursorEpochRow, error) {
+func (q *Queries) GetMacHostCursorEpoch(ctx context.Context, id uuid.UUID) (*GetMacHostCursorEpochRow, error) {
 	row := q.db.QueryRow(ctx, GetMacHostCursorEpoch, id)
 	var i GetMacHostCursorEpochRow
 	err := row.Scan(&i.ID, &i.CursorEpoch, &i.ApiKeyRevokedAt)
@@ -337,8 +338,8 @@ RETURNING id, token_hash, expires_at, consumed_at, consumed_host_id, created_at
 `
 
 type MarkPairingTokenConsumedParams struct {
-	ConsumedHostID pgtype.UUID `json:"consumed_host_id"`
-	ID             pgtype.UUID `json:"id"`
+	ConsumedHostID *uuid.UUID `json:"consumed_host_id"`
+	ID             uuid.UUID  `json:"id"`
 }
 
 func (q *Queries) MarkPairingTokenConsumed(ctx context.Context, arg MarkPairingTokenConsumedParams) (*MacHostPairingToken, error) {
@@ -362,7 +363,7 @@ WHERE id = $1 AND api_key_revoked_at IS NULL
 RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, permissions, source_health, cursor_epoch, api_key_hash, api_key_revoked_at, created_at, updated_at, api_key_rotated_at
 `
 
-func (q *Queries) RevokeMacHost(ctx context.Context, id pgtype.UUID) (*MacHost, error) {
+func (q *Queries) RevokeMacHost(ctx context.Context, id uuid.UUID) (*MacHost, error) {
 	row := q.db.QueryRow(ctx, RevokeMacHost, id)
 	var i MacHost
 	err := row.Scan(
@@ -392,8 +393,8 @@ RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, per
 `
 
 type RotateMacHostAPIKeyParams struct {
-	ApiKeyHash string      `json:"api_key_hash"`
-	ID         pgtype.UUID `json:"id"`
+	ApiKeyHash string    `json:"api_key_hash"`
+	ID         uuid.UUID `json:"id"`
 }
 
 // Atomically replaces api_key_hash and bumps api_key_rotated_at. Used
@@ -427,8 +428,8 @@ WHERE id = $2
 `
 
 type SetMacHostHeartbeatAtForTestParams struct {
-	LastHeartbeatAt pgtype.Timestamptz `json:"last_heartbeat_at"`
-	ID              pgtype.UUID        `json:"id"`
+	LastHeartbeatAt *time.Time `json:"last_heartbeat_at"`
+	ID              uuid.UUID  `json:"id"`
 }
 
 // Test-only: stamps last_heartbeat_at to a caller-supplied (typically past)
@@ -454,11 +455,11 @@ RETURNING id, hostname, daemon_version, protocol_version, last_heartbeat_at, per
 `
 
 type UpdateMacHostHeartbeatParams struct {
-	DaemonVersion   string      `json:"daemon_version"`
-	ProtocolVersion int32       `json:"protocol_version"`
-	Permissions     []byte      `json:"permissions"`
-	SourceHealth    []byte      `json:"source_health"`
-	ID              pgtype.UUID `json:"id"`
+	DaemonVersion   string    `json:"daemon_version"`
+	ProtocolVersion int32     `json:"protocol_version"`
+	Permissions     []byte    `json:"permissions"`
+	SourceHealth    []byte    `json:"source_health"`
+	ID              uuid.UUID `json:"id"`
 }
 
 func (q *Queries) UpdateMacHostHeartbeat(ctx context.Context, arg UpdateMacHostHeartbeatParams) (*MacHost, error) {

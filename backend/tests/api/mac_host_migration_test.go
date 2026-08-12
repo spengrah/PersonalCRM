@@ -16,7 +16,6 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -95,11 +94,11 @@ func TestMacHostMigrations(t *testing.T) {
 	pushSource := "mig-push-" + fmt.Sprint(accelerated.GetCurrentTime().UnixNano())
 	_, err = database.Queries.SeedExternalSyncState(ctx, db.SeedExternalSyncStateParams{
 		Source:     pushSource,
-		AccountID:  pgtype.Text{Valid: false},
+		AccountID:  nil,
 		Enabled:    true,
 		Status:     "idle",
 		Strategy:   "push",
-		NextSyncAt: pgtype.Timestamptz{Valid: false},
+		NextSyncAt: nil,
 	})
 	require.NoError(t, err, "push strategy must be accepted after 048 up")
 
@@ -130,11 +129,11 @@ func TestMacHostMigrations(t *testing.T) {
 	// Inserting a push row must now be rejected.
 	_, err = database.Queries.SeedExternalSyncState(ctx, db.SeedExternalSyncStateParams{
 		Source:     "mig-push-after-down",
-		AccountID:  pgtype.Text{Valid: false},
+		AccountID:  nil,
 		Enabled:    true,
 		Status:     "idle",
 		Strategy:   "push",
-		NextSyncAt: pgtype.Timestamptz{Valid: false},
+		NextSyncAt: nil,
 	})
 	require.Error(t, err, "push strategy must be rejected after 048 down")
 

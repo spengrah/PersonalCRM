@@ -49,12 +49,9 @@ func (r *TagRepository) ListTags(ctx context.Context) ([]Tag, error) {
 	tags := make([]Tag, 0, len(dbTags))
 	for _, t := range dbTags {
 		tag := Tag{
-			ID:   uuid.UUID(t.ID.Bytes),
-			Name: t.Name,
-		}
-		if t.Color.Valid {
-			color := t.Color.String
-			tag.Color = &color
+			ID:    t.ID,
+			Name:  t.Name,
+			Color: t.Color,
 		}
 		tags = append(tags, tag)
 	}
@@ -79,15 +76,11 @@ func (r *TagRepository) ListContactTagsWithLiveContact(ctx context.Context) ([]C
 	links := make([]ContactTagLink, 0, len(dbLinks))
 	for _, l := range dbLinks {
 		link := ContactTagLink{
-			ContactID: uuid.UUID(l.ContactID.Bytes),
-			TagID:     uuid.UUID(l.TagID.Bytes),
+			ContactID: l.ContactID,
+			TagID:     l.TagID,
 		}
-		// created_at is nullable; only carry it when present (an invalid
-		// pgtype.Timestamptz would otherwise read as Go zero time).
-		if l.CreatedAt.Valid {
-			t := l.CreatedAt.Time.UTC()
-			link.CreatedAt = &t
-		}
+		// created_at is nullable; utcPtr carries it through as nil when absent.
+		link.CreatedAt = utcPtr(l.CreatedAt)
 		links = append(links, link)
 	}
 	return links, nil

@@ -3,11 +3,11 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"personal-crm/backend/internal/db"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/pgvector/pgvector-go"
 )
 
@@ -128,21 +128,21 @@ type predicateRow struct {
 	Key                 string
 	Kind                string
 	SubjectType         string
-	ObjectType          pgtype.Text
-	ValueType           pgtype.Text
+	ObjectType          *string
+	ValueType           *string
 	Cardinality         string
 	Symmetric           bool
-	InversePredicate    pgtype.Text
+	InversePredicate    *string
 	TemporalProfile     string
-	BaseRateDays        pgtype.Int4
-	TypicalDurationDays pgtype.Int4
+	BaseRateDays        *int32
+	TypicalDurationDays *int32
 	DefaultSalience     int16
 	DefaultReviewPolicy string
 	PropositionBucket   string
 	Status              string
 	Description         string
 	Synonyms            []string
-	CreatedAt           pgtype.Timestamptz
+	CreatedAt           time.Time
 }
 
 func predicateRowFromGet(r *db.GetPredicateRow) predicateRow {
@@ -169,30 +169,20 @@ func convertPredicateRow(row predicateRow) Predicate {
 		Key:                 row.Key,
 		Kind:                row.Kind,
 		SubjectType:         row.SubjectType,
+		ObjectType:          row.ObjectType,
+		ValueType:           row.ValueType,
 		Cardinality:         row.Cardinality,
 		Symmetric:           row.Symmetric,
+		InversePredicate:    row.InversePredicate,
 		TemporalProfile:     row.TemporalProfile,
+		BaseRateDays:        row.BaseRateDays,
+		TypicalDurationDays: row.TypicalDurationDays,
 		DefaultSalience:     row.DefaultSalience,
 		DefaultReviewPolicy: row.DefaultReviewPolicy,
 		PropositionBucket:   row.PropositionBucket,
 		Status:              row.Status,
 		Description:         row.Description,
 		Synonyms:            row.Synonyms,
-	}
-	if row.ObjectType.Valid {
-		predicate.ObjectType = &row.ObjectType.String
-	}
-	if row.ValueType.Valid {
-		predicate.ValueType = &row.ValueType.String
-	}
-	if row.InversePredicate.Valid {
-		predicate.InversePredicate = &row.InversePredicate.String
-	}
-	if row.BaseRateDays.Valid {
-		predicate.BaseRateDays = &row.BaseRateDays.Int32
-	}
-	if row.TypicalDurationDays.Valid {
-		predicate.TypicalDurationDays = &row.TypicalDurationDays.Int32
 	}
 	return predicate
 }
@@ -250,14 +240,14 @@ func (r *PredicateRepository) CreateProvisional(ctx context.Context, req CreateP
 		Key:                 req.Key,
 		Kind:                req.Kind,
 		SubjectType:         req.SubjectType,
-		ObjectType:          stringToPgText(req.ObjectType),
-		ValueType:           stringToPgText(req.ValueType),
+		ObjectType:          req.ObjectType,
+		ValueType:           req.ValueType,
 		Cardinality:         req.Cardinality,
 		Symmetric:           req.Symmetric,
-		InversePredicate:    stringToPgText(req.InversePredicate),
+		InversePredicate:    req.InversePredicate,
 		TemporalProfile:     req.TemporalProfile,
-		BaseRateDays:        int32ToPgInt4(req.BaseRateDays),
-		TypicalDurationDays: int32ToPgInt4(req.TypicalDurationDays),
+		BaseRateDays:        req.BaseRateDays,
+		TypicalDurationDays: req.TypicalDurationDays,
 		DefaultSalience:     req.DefaultSalience,
 		DefaultReviewPolicy: req.DefaultReviewPolicy,
 		PropositionBucket:   req.PropositionBucket,

@@ -24,7 +24,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/stretchr/testify/require"
@@ -199,7 +198,7 @@ func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 		_ = messagesRepo.HardDeleteByMacHost(cleanCtx, pair.HostID)
 		_, _ = database.Queries.DeleteExternalIdentitiesBySource(cleanCtx, "messages")
 		_, _ = database.Queries.DeleteInteractionsByContactAndSource(cleanCtx, db.DeleteInteractionsByContactAndSourceParams{
-			ContactID: pgUUID(contactID),
+			ContactID: contactID,
 			Source:    "messages",
 		})
 		_ = contactMethodRepo.DeleteContactMethodsByContact(cleanCtx, contactID)
@@ -329,8 +328,8 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 	interactionCount, err := env.database.Queries.CountInteractionsByIDContactAndSource(
 		context.Background(),
 		db.CountInteractionsByIDContactAndSourceParams{
-			ID:        pgUUID(*msg.InteractionID),
-			ContactID: pgUUID(env.contactID),
+			ID:        *msg.InteractionID,
+			ContactID: env.contactID,
 			Source:    "messages",
 		},
 	)
@@ -428,11 +427,4 @@ type noopFollowUpManagerWorker struct {
 
 func (w *noopFollowUpManagerWorker) Work(_ context.Context, _ *river.Job[consumerjobs.FollowUpManagerJobArgs]) error {
 	return nil
-}
-
-// pgUUID is a thin pgtype.UUID constructor for sqlc-generated query
-// params that take pgtype.UUID. Kept local to this file rather than
-// importing the (private) repository helper.
-func pgUUID(id uuid.UUID) pgtype.UUID {
-	return pgtype.UUID{Bytes: id, Valid: true}
 }

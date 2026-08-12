@@ -60,7 +60,7 @@ WHERE status = 'accepted'
   AND subject_node_id = sqlc.arg(subject_node_id)
   AND predicate_key = sqlc.arg(predicate_key)
   AND tstzrange(valid_from, valid_to, '[)')
-   && tstzrange(sqlc.arg(effective_from)::timestamptz, sqlc.arg(new_valid_to)::timestamptz, '[)')
+   && tstzrange(sqlc.arg(effective_from)::timestamptz, sqlc.narg(new_valid_to)::timestamptz, '[)')
 ORDER BY valid_from ASC NULLS FIRST, id ASC
 FOR UPDATE;
 
@@ -79,7 +79,7 @@ WHERE status = 'accepted'
      OR sqlc.arg(participant_b) IN (subject_node_id, object_node_id)
       )
   AND tstzrange(valid_from, valid_to, '[)')
-   && tstzrange(sqlc.arg(effective_from)::timestamptz, sqlc.arg(new_valid_to)::timestamptz, '[)')
+   && tstzrange(sqlc.arg(effective_from)::timestamptz, sqlc.narg(new_valid_to)::timestamptz, '[)')
 ORDER BY valid_from ASC NULLS FIRST, id ASC
 FOR UPDATE;
 

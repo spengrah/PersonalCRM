@@ -7,8 +7,7 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"time"
 )
 
 const CountDiscardedRiverJobs = `-- name: CountDiscardedRiverJobs :one
@@ -33,7 +32,7 @@ func (q *Queries) CountDiscardedRiverJobs(ctx context.Context) (int64, error) {
 }
 
 const LatestCompletedRiverJobByKind = `-- name: LatestCompletedRiverJobByKind :one
-SELECT MAX(finalized_at)::timestamptz AS latest_finalized_at FROM river_job
+SELECT MAX(finalized_at) AS latest_finalized_at FROM river_job
 WHERE kind = $1 AND state = 'completed'
 `
 
@@ -44,16 +43,16 @@ WHERE kind = $1 AND state = 'completed'
 // enqueue-trail check would stay fresh while a persistently-FAILING watchdog
 // worker froze the breach table; the completion trail proves the watchdog
 // actually RAN successfully. MAX(...) over zero rows returns NULL → nil
-// *time.Time ("watchdog not running"); the ::timestamptz cast pins the type.
-func (q *Queries) LatestCompletedRiverJobByKind(ctx context.Context, kind string) (pgtype.Timestamptz, error) {
+// *time.Time ("watchdog not running"); generated as interface{} (see above).
+func (q *Queries) LatestCompletedRiverJobByKind(ctx context.Context, kind string) (interface{}, error) {
 	row := q.db.QueryRow(ctx, LatestCompletedRiverJobByKind, kind)
-	var latest_finalized_at pgtype.Timestamptz
+	var latest_finalized_at interface{}
 	err := row.Scan(&latest_finalized_at)
 	return latest_finalized_at, err
 }
 
 const OldestDueRiverJobScheduledAt = `-- name: OldestDueRiverJobScheduledAt :one
-SELECT MIN(scheduled_at)::timestamptz AS oldest_scheduled_at FROM river_job
+SELECT MIN(scheduled_at) AS oldest_scheduled_at FROM river_job
 WHERE state IN ('available', 'retryable') AND scheduled_at <= $1::timestamptz
 `
 
@@ -72,12 +71,13 @@ WHERE state IN ('available', 'retryable') AND scheduled_at <= $1::timestamptz
 // on the scheduler's next pass — neither is "a due job the workers are failing
 // to pick up", which is what this query measures.
 //
-// MIN(...) over zero rows returns NULL; the ::timestamptz cast pins the
-// aggregate's generated type. The repository maps NULL to a nil *time.Time
-// ("no due jobs").
-func (q *Queries) OldestDueRiverJobScheduledAt(ctx context.Context, now pgtype.Timestamptz) (pgtype.Timestamptz, error) {
+// MIN(...) over zero rows returns NULL. sqlc's static analyzer cannot type an
+// aggregate output (a cast would force NOT NULL and break NULL scans), so the
+// generated return is interface{}; the repository type-asserts time.Time and
+// maps NULL/nil to a nil *time.Time ("no due jobs").
+func (q *Queries) OldestDueRiverJobScheduledAt(ctx context.Context, now time.Time) (interface{}, error) {
 	row := q.db.QueryRow(ctx, OldestDueRiverJobScheduledAt, now)
-	var oldest_scheduled_at pgtype.Timestamptz
+	var oldest_scheduled_at interface{}
 	err := row.Scan(&oldest_scheduled_at)
 	return oldest_scheduled_at, err
 }
