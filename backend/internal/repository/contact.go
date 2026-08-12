@@ -331,7 +331,11 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 		}
 	}
 
-	dbContact, err := r.queries.CreateContact(ctx, db.CreateContactParams{
+	// The person node and the contact are inserted by one statement (the
+	// CreateContactWithNode CTE), so the id must be generated here rather than
+	// left to the contact table's DEFAULT — the node insert needs it first.
+	dbContact, err := r.queries.CreateContactWithNode(ctx, db.CreateContactWithNodeParams{
+		ID:            uuidToPgUUID(uuid.New()),
 		FullName:      req.FullName,
 		Cadence:       stringToPgText(req.Cadence),
 		LastContacted: timeToPgTimestamptz(req.LastContacted),
@@ -557,9 +561,11 @@ func (r *ContactRepository) SoftDeleteContactTx(ctx context.Context, tx pgx.Tx, 
 	return db.New(tx).SoftDeleteContact(ctx, uuidToPgUUID(id))
 }
 
-// HardDeleteContact permanently deletes a contact
+// HardDeleteContact permanently deletes a contact and, in the same statement,
+// its person node (guarded: a node an assertion still references survives).
+// Test-cleanup only — zero production callers.
 func (r *ContactRepository) HardDeleteContact(ctx context.Context, id uuid.UUID) error {
-	return r.queries.HardDeleteContact(ctx, uuidToPgUUID(id))
+	return r.queries.TestHardDeleteContactWithNode(ctx, uuidToPgUUID(id))
 }
 
 // CountContacts returns the total number of active contacts matching the

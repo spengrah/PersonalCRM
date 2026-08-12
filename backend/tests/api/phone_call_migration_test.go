@@ -144,10 +144,15 @@ func TestPhoneCallMigration055(t *testing.T) {
 	// Case 3: an interaction with source='phone_calls' blocks the down
 	// migration.
 	t.Run("DownRefusesPhoneCallsInteraction", func(t *testing.T) {
-		contact, err := contactRepo.CreateContact(ctx,
-			repository.CreateContactRequest{FullName: "Mig PC Contact " + suffix})
+		// Raw insert (the clone is positioned at v55, which predates the node
+		// table (064) that ContactRepository.CreateContact now depends on via
+		// contact_id_node_fk (077); the migration is the subject, so a
+		// v55-shaped raw insert is the right scaffolding here).
+		var contactID uuid.UUID
+		err := database.Pool.QueryRow(ctx,
+			`INSERT INTO contact (full_name) VALUES ($1) RETURNING id`, "Mig PC Contact "+suffix).Scan(&contactID)
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = contactRepo.SoftDeleteContact(ctx, contact.ID) })
+		t.Cleanup(func() { _ = contactRepo.SoftDeleteContact(ctx, contactID) })
 
 		ref := "mig-pc-ix-" + suffix
 		// Raw insert (the clone is positioned at v55, which predates the
@@ -156,7 +161,7 @@ func TestPhoneCallMigration055(t *testing.T) {
 		// scaffolding here).
 		_, err = database.Pool.Exec(ctx,
 			`INSERT INTO interaction (contact_id, source, source_ref, occurred_at, direction) VALUES ($1, $2, $3, $4, $5)`,
-			contact.ID, "phone_calls", ref, accelerated.GetCurrentTime().Truncate(time.Microsecond), repository.InteractionDirectionInbound)
+			contactID, "phone_calls", ref, accelerated.GetCurrentTime().Truncate(time.Microsecond), repository.InteractionDirectionInbound)
 		require.NoError(t, err)
 
 		// Down must refuse on the CHECK-revert guard.
@@ -185,7 +190,7 @@ func TestPhoneCallMigration055(t *testing.T) {
 		ref2 := "mig-pc-ix-post-" + suffix
 		_, err = database.Pool.Exec(ctx,
 			`INSERT INTO interaction (contact_id, source, source_ref, occurred_at, direction) VALUES ($1, $2, $3, $4, $5)`,
-			contact.ID, "phone_calls", ref2, accelerated.GetCurrentTime().Truncate(time.Microsecond), repository.InteractionDirectionInbound)
+			contactID, "phone_calls", ref2, accelerated.GetCurrentTime().Truncate(time.Microsecond), repository.InteractionDirectionInbound)
 		require.Error(t, err, "phone_calls source must be rejected after 055 down")
 		assert.True(t, strings.Contains(err.Error(), "interaction_source_check") ||
 			strings.Contains(err.Error(), "check constraint"),

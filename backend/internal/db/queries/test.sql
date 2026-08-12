@@ -951,6 +951,35 @@ WHERE c.contact_id = ANY(ce.matched_contact_ids);
 -- one is deferred per spec, so this is the test-only mechanic.
 INSERT INTO contact (id, full_name) VALUES ($1, $2);
 
+-- name: TestGetContactDeletedAtIncludingDeleted :one
+-- Contact→node identity FK migration test support: read a contact's deleted_at
+-- with NO liveness filter, so a migration round-trip test can assert the
+-- backfilled node's deleted_at mirrors the contact's exactly (not just "is
+-- non-nil"). GetContact/SoftDeleteContact deliberately never expose this because
+-- production code has no reason to read a soft-deleted contact's own tombstone.
+SELECT deleted_at FROM contact WHERE id = $1;
+
+-- name: TestHardDeleteContactWithNode :exec
+-- Test-cleanup only, zero production callers. Hard-deletes the contact and, in
+-- the same statement, its person node — otherwise every one of the ~170
+-- HardDeleteContact cleanup sites leaks a latent node now that the repository
+-- creates one per contact, and the test database accumulates them across runs.
+-- The node delete is guarded because assertion.subject_node_id is a RESTRICT FK
+-- (backend/migrations/067_assertion_store.up.sql:32): a contact created through
+-- ContactService has assertions pinning its node, and those are the synthetic
+-- teardown's to remove, not this query's. The guard makes that case a no-op on
+-- the node rather than an error.
+WITH deleted_contact AS (
+    DELETE FROM contact WHERE id = sqlc.arg(id) RETURNING id
+)
+DELETE FROM node
+WHERE id = (SELECT id FROM deleted_contact)
+  AND type = 'person'
+  AND NOT EXISTS (
+      SELECT 1 FROM assertion
+      WHERE subject_node_id = sqlc.arg(id) OR object_node_id = sqlc.arg(id)
+  );
+
 -- name: SyntheticDeleteEntityTypesByKeyPrefix :execrows
 -- Graph identity cleanup: entity_type is a catalog table with no canonical_label,
 -- so a test that seeds its own ns-prefixed entity_type rows clears them by key
@@ -1504,3 +1533,17 @@ SELECT state::text AS state,
        (finalized_at IS NOT NULL)::bool AS finalized,
        attempt::int AS attempt
 FROM river_job WHERE id = @id;
+
+-- name: GetContactIdNodeFkCatalog :one
+-- Test assertion — reads contact_id_node_fk's live pg_constraint properties:
+-- convalidated (must be true — a NOT VALID FK enforces new writes but would
+-- silently let a pre-existing orphan row through, unlike this migration's
+-- backfill-then-constrain shape) and confdeltype (must be 'a', NO ACTION — a
+-- CASCADE delete would silently take the contact with its node). Existence
+-- alone (constraintExists) does not distinguish either property from its
+-- unsafe alternative. Read-only catalog access; production code never calls
+-- this.
+SELECT c.convalidated, c.confdeltype::text AS confdeltype
+FROM pg_constraint c
+WHERE c.conrelid = 'contact'::regclass
+  AND c.conname = 'contact_id_node_fk';

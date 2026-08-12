@@ -299,19 +299,13 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 	txQueries := db.New(tx)
 	contactRepo := repository.NewContactRepository(txQueries)
 	contactMethodRepo := repository.NewContactMethodRepository(txQueries)
-	nodeRepo := repository.NewNodeRepository(txQueries)
 
+	// ContactRepository.CreateContact inserts the person node and the contact
+	// in one statement (node.id == contact.id), so the pair commits or rolls
+	// back together in this tx with no separate node insert here.
 	contact, err = contactRepo.CreateContact(ctx, req)
 	if err != nil {
 		return nil, uuid.Nil, err
-	}
-
-	// Dual-write the person node at the contact's own id (node.id ==
-	// contact.id) inside the same tx so the node registry stays in lockstep
-	// with contact creation — both commit or both roll back. Node creation is
-	// silent graph infra (no event); assertion events are the graph's signal.
-	if _, err = nodeRepo.CreateNodeTx(ctx, tx, contact.ID, repository.NodeTypePerson, contact.FullName); err != nil {
-		return nil, uuid.Nil, fmt.Errorf("create person node: %w", err)
 	}
 
 	// Authority flip: persist location/birthday/how_met as user assertions in
