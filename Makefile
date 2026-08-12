@@ -694,7 +694,7 @@ check-sqlc-select-lists:
 # Code generation
 sqlc:
 	@echo "Generating sqlc code from SQL queries..."
-	@cd backend && "$$(go env GOPATH)/bin/sqlc" generate
+	@cd backend && go tool sqlc generate
 	@echo "✅ sqlc code generated"
 
 # API specific commands
