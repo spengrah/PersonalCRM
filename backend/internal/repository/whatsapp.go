@@ -101,23 +101,14 @@ func convertDbHistoryNotification(n *db.WhatsappHistoryNotification) HistoryNoti
 		Phase:         n.Phase,
 		Attempts:      n.Attempts,
 		Checkpoint:    n.Checkpoint,
-		OldestMsgTS:   pgTimestamptzToTimePtr(n.OldestMsgTs),
-		ClaimedAt:     pgTimestamptzToTimePtr(n.ClaimedAt),
-		ProcessedAt:   pgTimestamptzToTimePtr(n.ProcessedAt),
+		OldestMsgTS:   utcPtr(n.OldestMsgTs),
+		ClaimedAt:     utcPtr(n.ClaimedAt),
+		ProcessedAt:   utcPtr(n.ProcessedAt),
 	}
-	if n.ID.Valid {
-		out.ID = uuid.UUID(n.ID.Bytes)
-	}
-	if n.ClaimToken.Valid {
-		token := uuid.UUID(n.ClaimToken.Bytes)
-		out.ClaimToken = &token
-	}
-	if n.LastError.Valid {
-		out.LastError = &n.LastError.String
-	}
-	if n.ReceivedAt.Valid {
-		out.ReceivedAt = n.ReceivedAt.Time.UTC()
-	}
+	out.ID = n.ID
+	out.ClaimToken = n.ClaimToken
+	out.LastError = n.LastError
+	out.ReceivedAt = n.ReceivedAt.UTC()
 	return out
 }
 
@@ -126,15 +117,10 @@ func convertDbWhatsAppChatConfig(c *db.WhatsappChatConfig) WhatsAppChatConfig {
 		ChatJID:      c.ChatJid,
 		ChatType:     c.ChatType,
 		Status:       c.Status,
-		LastLookupAt: pgTimestamptzToTimePtr(c.LastLookupAt),
+		LastLookupAt: utcPtr(c.LastLookupAt),
 	}
-	if c.ChatTitle.Valid {
-		out.ChatTitle = &c.ChatTitle.String
-	}
-	if c.MemberCount.Valid {
-		count := c.MemberCount.Int32
-		out.MemberCount = &count
-	}
+	out.ChatTitle = c.ChatTitle
+	out.MemberCount = c.MemberCount
 	return out
 }
 
@@ -149,16 +135,16 @@ func (r *WhatsAppRepository) RecordNotification(ctx context.Context, protocolMsg
 		Notification:  notification,
 		SyncType:      syncType,
 		ChunkOrder:    chunkOrder,
-		OldestMsgTs:   timeToPgTimestamptz(oldestMsgTS),
+		OldestMsgTs:   oldestMsgTS,
 		Disposition:   disposition,
 	})
 	if err != nil {
 		return uuid.Nil, err
 	}
-	if !id.Valid {
+	if id == uuid.Nil {
 		return uuid.Nil, errors.New("record whatsapp history notification: no id returned")
 	}
-	return uuid.UUID(id.Bytes), nil
+	return id, nil
 }
 
 // ClaimNextNotification takes the next pending chunk (or reclaims one whose
@@ -181,8 +167,8 @@ func (r *WhatsAppRepository) ClaimNextNotification(ctx context.Context) (*Histor
 // without writing further state.
 func (r *WhatsAppRepository) SaveCheckpoint(ctx context.Context, id uuid.UUID, token uuid.UUID, checkpoint []byte) (bool, error) {
 	rows, err := r.queries.SaveWhatsAppHistoryCheckpoint(ctx, db.SaveWhatsAppHistoryCheckpointParams{
-		ID:         uuidToPgUUID(id),
-		ClaimToken: uuidToPgUUID(token),
+		ID:         id,
+		ClaimToken: &token,
 		Checkpoint: jsonbOrEmpty(checkpoint),
 	})
 	if err != nil {
@@ -217,8 +203,8 @@ func (r *WhatsAppRepository) AdvancePhase(ctx context.Context, id, token uuid.UU
 		return false, fmt.Errorf("%w: %s -> %s", ErrIllegalPhaseEdge, from, to)
 	}
 	rows, err := r.queries.AdvanceWhatsAppHistoryPhase(ctx, db.AdvanceWhatsAppHistoryPhaseParams{
-		ID:         uuidToPgUUID(id),
-		ClaimToken: uuidToPgUUID(token),
+		ID:         id,
+		ClaimToken: &token,
 		FromPhase:  from,
 		ToPhase:    to,
 	})
@@ -235,8 +221,8 @@ func (r *WhatsAppRepository) AdvancePhase(ctx context.Context, id, token uuid.UU
 // is not at the end of the phase machine; in both cases nothing changed.
 func (r *WhatsAppRepository) MarkNotificationDone(ctx context.Context, id uuid.UUID, token uuid.UUID) (bool, error) {
 	rows, err := r.queries.MarkWhatsAppHistoryNotificationDone(ctx, db.MarkWhatsAppHistoryNotificationDoneParams{
-		ID:         uuidToPgUUID(id),
-		ClaimToken: uuidToPgUUID(token),
+		ID:         id,
+		ClaimToken: &token,
 	})
 	if err != nil {
 		return false, err
@@ -248,9 +234,9 @@ func (r *WhatsAppRepository) MarkNotificationDone(ctx context.Context, id uuid.U
 // only through RequeueFailedNotification.
 func (r *WhatsAppRepository) MarkNotificationFailed(ctx context.Context, id uuid.UUID, token uuid.UUID, errMsg string) (bool, error) {
 	rows, err := r.queries.MarkWhatsAppHistoryNotificationFailed(ctx, db.MarkWhatsAppHistoryNotificationFailedParams{
-		ID:         uuidToPgUUID(id),
-		ClaimToken: uuidToPgUUID(token),
-		LastError:  stringToPgText(&errMsg),
+		ID:         id,
+		ClaimToken: &token,
+		LastError:  &errMsg,
 	})
 	if err != nil {
 		return false, err
@@ -262,7 +248,7 @@ func (r *WhatsAppRepository) MarkNotificationFailed(ctx context.Context, id uuid
 // pending and clears its lease. Returns db.ErrNotFound when the row does not
 // exist or is not failed.
 func (r *WhatsAppRepository) RequeueFailedNotification(ctx context.Context, id uuid.UUID) error {
-	rows, err := r.queries.RequeueFailedWhatsAppHistoryNotification(ctx, uuidToPgUUID(id))
+	rows, err := r.queries.RequeueFailedWhatsAppHistoryNotification(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -303,13 +289,20 @@ func (r *WhatsAppRepository) CountByStateAndDisposition(ctx context.Context) (ma
 
 // ObservedFloor reports the oldest staged WhatsApp message timestamp — the
 // empirical answer to how deep the one-shot history actually reached. nil when
-// nothing is staged yet.
+// nothing is staged yet. sqlc cannot type an untyped MIN(...) aggregate, so
+// the generated query returns interface{}; pgx scans a NULL MIN(sent_at) into
+// that as nil, and a non-NULL one as time.Time — the type assertion below is
+// the boundary that restores the documented nil-when-nothing-staged contract.
 func (r *WhatsAppRepository) ObservedFloor(ctx context.Context) (*time.Time, error) {
-	oldest, err := r.queries.GetOldestCommsMessageSentAtForSource(ctx, InteractionSourceWhatsApp)
+	v, err := r.queries.GetOldestCommsMessageSentAtForSource(ctx, InteractionSourceWhatsApp)
 	if err != nil {
 		return nil, err
 	}
-	return pgTimestamptzToTimePtr(oldest), nil
+	oldest, ok := v.(time.Time)
+	if !ok {
+		return nil, nil
+	}
+	return utcPtr(&oldest), nil
 }
 
 // GetChatConfig reads one chat's gate state. Returns db.ErrNotFound when the
@@ -337,11 +330,11 @@ func (r *WhatsAppRepository) UpsertChatConfig(ctx context.Context, cfg WhatsAppC
 	}
 	row, err := r.queries.UpsertWhatsAppChatConfig(ctx, db.UpsertWhatsAppChatConfigParams{
 		ChatJid:      cfg.ChatJID,
-		ChatTitle:    stringToPgText(cfg.ChatTitle),
+		ChatTitle:    cfg.ChatTitle,
 		ChatType:     cfg.ChatType,
-		MemberCount:  int32ToPgInt4(cfg.MemberCount),
+		MemberCount:  cfg.MemberCount,
 		Status:       status,
-		LastLookupAt: timeToPgTimestamptz(cfg.LastLookupAt),
+		LastLookupAt: cfg.LastLookupAt,
 	})
 	if err != nil {
 		return nil, err
@@ -387,5 +380,5 @@ func (r *WhatsAppRepository) SetChatStatus(ctx context.Context, chatJID, status 
 // 15-minute lease so a fresh claim reclaims it — the "worker died mid-chunk"
 // case. Production code MUST NOT call this.
 func (r *WhatsAppRepository) BackdateClaimForTest(ctx context.Context, id uuid.UUID) error {
-	return r.queries.BackdateWhatsAppHistoryClaim(ctx, uuidToPgUUID(id))
+	return r.queries.BackdateWhatsAppHistoryClaim(ctx, id)
 }

@@ -8,7 +8,7 @@ package db
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CountMergeCalendarEvents = `-- name: CountMergeCalendarEvents :one
@@ -17,7 +17,7 @@ WHERE $1::uuid = ANY(matched_contact_ids)
 `
 
 // Count calendar events involving a contact (for merge preview)
-func (q *Queries) CountMergeCalendarEvents(ctx context.Context, dollar_1 pgtype.UUID) (int64, error) {
+func (q *Queries) CountMergeCalendarEvents(ctx context.Context, dollar_1 uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, CountMergeCalendarEvents, dollar_1)
 	var count int64
 	err := row.Scan(&count)
@@ -30,7 +30,7 @@ WHERE contact_id = $1
 `
 
 // Count contact methods for a contact (for merge preview)
-func (q *Queries) CountMergeContactMethods(ctx context.Context, contactID pgtype.UUID) (int64, error) {
+func (q *Queries) CountMergeContactMethods(ctx context.Context, contactID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, CountMergeContactMethods, contactID)
 	var count int64
 	err := row.Scan(&count)
@@ -43,7 +43,7 @@ WHERE contact_id = $1
 `
 
 // Count interactions for a contact (for merge preview)
-func (q *Queries) CountMergeInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error) {
+func (q *Queries) CountMergeInteractions(ctx context.Context, contactID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, CountMergeInteractions, contactID)
 	var count int64
 	err := row.Scan(&count)
@@ -56,7 +56,7 @@ WHERE contact_id = $1
 `
 
 // Count notes for a contact (for merge preview)
-func (q *Queries) CountMergeNotes(ctx context.Context, contactID pgtype.UUID) (int64, error) {
+func (q *Queries) CountMergeNotes(ctx context.Context, contactID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, CountMergeNotes, contactID)
 	var count int64
 	err := row.Scan(&count)
@@ -78,7 +78,7 @@ WHERE $1::uuid = ANY(matched_contact_ids)
 
 // Remove duplicate contact IDs that may result from merge
 // Uses subquery with DISTINCT to rebuild the array without duplicates
-func (q *Queries) DeduplicateCalendarEventContacts(ctx context.Context, targetContactID pgtype.UUID) error {
+func (q *Queries) DeduplicateCalendarEventContacts(ctx context.Context, targetContactID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeduplicateCalendarEventContacts, targetContactID)
 	return err
 }
@@ -95,8 +95,8 @@ WHERE cm_source.contact_id = $1
 `
 
 type DeleteDuplicateContactMethodsParams struct {
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID uuid.UUID `json:"source_contact_id"`
+	TargetContactID uuid.UUID `json:"target_contact_id"`
 }
 
 // Delete contact methods from source that already exist in target (by normalized value and type)
@@ -119,8 +119,8 @@ WHERE cm_source.contact_id = $1
 `
 
 type DemoteSourcePrimaryMethodsParams struct {
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID uuid.UUID `json:"source_contact_id"`
+	TargetContactID uuid.UUID `json:"target_contact_id"`
 }
 
 // Demote source's primary contact methods when the target already has a primary.
@@ -144,8 +144,8 @@ WHERE cm_source.contact_id = $1
 `
 
 type FindDuplicateContactMethodsParams struct {
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID uuid.UUID `json:"source_contact_id"`
+	TargetContactID uuid.UUID `json:"target_contact_id"`
 }
 
 type FindDuplicateContactMethodsRow struct {
@@ -183,8 +183,8 @@ WHERE $1::uuid = ANY(matched_contact_ids)
 `
 
 type ReplaceContactInCalendarEventsParams struct {
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
+	SourceContactID uuid.UUID `json:"source_contact_id"`
+	TargetContactID uuid.UUID `json:"target_contact_id"`
 }
 
 // Replace source contact ID with target contact ID in calendar event matched_contact_ids array
@@ -202,8 +202,8 @@ WHERE crm_contact_id = $2
 `
 
 type RepointExternalContactsToContactParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID *uuid.UUID `json:"target_contact_id"`
+	SourceContactID *uuid.UUID `json:"source_contact_id"`
 }
 
 // Re-point import links from the merge source to the target. Both
@@ -223,8 +223,8 @@ WHERE contact_id = $2
 `
 
 type RepointIdentitiesToContactParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID *uuid.UUID `json:"target_contact_id"`
+	SourceContactID *uuid.UUID `json:"source_contact_id"`
 }
 
 // Re-point identity-cache rows from the merge source (loser) to the target
@@ -244,8 +244,8 @@ WHERE matched_contact_id = $2
 `
 
 type RepointMessagesMessageContactParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID *uuid.UUID `json:"target_contact_id"`
+	SourceContactID *uuid.UUID `json:"source_contact_id"`
 }
 
 // Re-point iMessage staging rows (committed pre-merge, incl. unprocessed)
@@ -264,8 +264,8 @@ WHERE matched_contact_id = $2
 `
 
 type RepointPhoneCallContactParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID *uuid.UUID `json:"target_contact_id"`
+	SourceContactID *uuid.UUID `json:"source_contact_id"`
 }
 
 // Re-point call staging rows from the merge source to the target.
@@ -283,8 +283,8 @@ WHERE matched_contact_id = $2
 `
 
 type RepointTelegramMessageContactParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID *uuid.UUID `json:"target_contact_id"`
+	SourceContactID *uuid.UUID `json:"source_contact_id"`
 }
 
 // Re-point Telegram staging rows from the merge source to the target.
@@ -304,8 +304,8 @@ WHERE contact_id = $2
 `
 
 type TransferContactMethodsParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID uuid.UUID `json:"target_contact_id"`
+	SourceContactID uuid.UUID `json:"source_contact_id"`
 }
 
 // Contact merge queries
@@ -323,8 +323,8 @@ WHERE contact_id = $2
 `
 
 type TransferInteractionsParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID uuid.UUID `json:"target_contact_id"`
+	SourceContactID uuid.UUID `json:"source_contact_id"`
 }
 
 // Transfer interactions from source to target contact (includes soft-deleted for audit trail)
@@ -341,8 +341,8 @@ WHERE contact_id = $2
 `
 
 type TransferNotesParams struct {
-	TargetContactID pgtype.UUID `json:"target_contact_id"`
-	SourceContactID pgtype.UUID `json:"source_contact_id"`
+	TargetContactID uuid.UUID `json:"target_contact_id"`
+	SourceContactID uuid.UUID `json:"source_contact_id"`
 }
 
 // Transfer notes from source to target contact

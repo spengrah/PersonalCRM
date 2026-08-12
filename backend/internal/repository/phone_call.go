@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Phone call service enum constants. Frozen per spec §`phone_calls` source.
@@ -86,62 +85,32 @@ func convertDbPhoneCall(c *db.PhoneCall) PhoneCall {
 		HasVoicemail:    c.HasVoicemail,
 		DurationSeconds: c.DurationSeconds,
 	}
-	if c.ID.Valid {
-		pc.ID = uuid.UUID(c.ID.Bytes)
-	}
-	if c.Answered.Valid {
-		v := c.Answered.Bool
-		pc.Answered = &v
-	}
-	if c.StartedAt.Valid {
-		pc.StartedAt = c.StartedAt.Time
-	}
-	if c.MatchedContactID.Valid {
-		id := uuid.UUID(c.MatchedContactID.Bytes)
-		pc.MatchedContactID = &id
-	}
-	if c.InteractionID.Valid {
-		id := uuid.UUID(c.InteractionID.Bytes)
-		pc.InteractionID = &id
-	}
-	if c.MacHostID.Valid {
-		id := uuid.UUID(c.MacHostID.Bytes)
-		pc.MacHostID = &id
-	}
-	if c.ProcessedAt.Valid {
-		pc.ProcessedAt = &c.ProcessedAt.Time
-	}
-	if c.CreatedAt.Valid {
-		pc.CreatedAt = c.CreatedAt.Time
+	pc.ID = c.ID
+	pc.Answered = c.Answered
+	pc.StartedAt = c.StartedAt
+	pc.MatchedContactID = c.MatchedContactID
+	pc.InteractionID = c.InteractionID
+	pc.MacHostID = c.MacHostID
+	pc.ProcessedAt = c.ProcessedAt
+	if c.CreatedAt != nil {
+		pc.CreatedAt = *c.CreatedAt
 	}
 	return pc
 }
 
 func buildUpsertPhoneCallParams(params UpsertPhoneCallParams) db.UpsertPhoneCallParams {
-	var matchedContactID pgtype.UUID
-	if params.MatchedContactID != nil {
-		matchedContactID = uuidToPgUUID(*params.MatchedContactID)
-	}
-	var macHostID pgtype.UUID
-	if params.MacHostID != nil {
-		macHostID = uuidToPgUUID(*params.MacHostID)
-	}
-	var answered pgtype.Bool
-	if params.Answered != nil {
-		answered = pgtype.Bool{Bool: *params.Answered, Valid: true}
-	}
 	return db.UpsertPhoneCallParams{
 		CallUniqueID:     params.CallUniqueID,
 		PeerHandle:       params.PeerHandle,
 		PeerNormalized:   params.PeerNormalized,
 		Service:          params.Service,
 		Direction:        params.Direction,
-		Answered:         answered,
+		Answered:         params.Answered,
 		HasVoicemail:     params.HasVoicemail,
 		DurationSeconds:  params.DurationSeconds,
-		StartedAt:        pgtype.Timestamptz{Time: params.StartedAt, Valid: true},
-		MatchedContactID: matchedContactID,
-		MacHostID:        macHostID,
+		StartedAt:        params.StartedAt,
+		MatchedContactID: params.MatchedContactID,
+		MacHostID:        params.MacHostID,
 	}
 }
 
@@ -187,7 +156,7 @@ func (r *PhoneCallRepository) GetCallByUniqueID(ctx context.Context, callUniqueI
 // db.ErrNotFound on miss. Non-tx variant for handler/service flows that
 // don't need a long-running transaction.
 func (r *PhoneCallRepository) GetCallByID(ctx context.Context, id uuid.UUID) (*PhoneCall, error) {
-	dbCall, err := r.queries.GetPhoneCallByID(ctx, uuidToPgUUID(id))
+	dbCall, err := r.queries.GetPhoneCallByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -200,7 +169,7 @@ func (r *PhoneCallRepository) GetCallByID(ctx context.Context, id uuid.UUID) (*P
 
 // GetCallByIDTx is the tx-bound variant of GetCallByID.
 func (r *PhoneCallRepository) GetCallByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*PhoneCall, error) {
-	dbCall, err := db.New(tx).GetPhoneCallByID(ctx, uuidToPgUUID(id))
+	dbCall, err := db.New(tx).GetPhoneCallByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -218,8 +187,8 @@ func (r *PhoneCallRepository) GetCallByIDTx(ctx context.Context, tx pgx.Tx, id u
 // math covers both candidate dimensions per spec §Step 1.
 func (r *PhoneCallRepository) FindLinkageCandidatesTx(ctx context.Context, tx pgx.Tx, windowStart, windowEnd time.Time) ([]LinkageCandidate, error) {
 	rows, err := db.New(tx).FindPhoneCallsInWindow(ctx, db.FindPhoneCallsInWindowParams{
-		WindowStart: pgtype.Timestamptz{Time: windowStart, Valid: true},
-		WindowEnd:   pgtype.Timestamptz{Time: windowEnd, Valid: true},
+		WindowStart: windowStart,
+		WindowEnd:   windowEnd,
 	})
 	if err != nil {
 		return nil, err
@@ -257,25 +226,17 @@ type MarkProcessedParams struct {
 // MarkProcessed sets processed_at = NOW() and optionally links the staging
 // row to its derived interaction. Non-tx variant; used by tests.
 func (r *PhoneCallRepository) MarkProcessed(ctx context.Context, params MarkProcessedParams) error {
-	var interactionID pgtype.UUID
-	if params.InteractionID != nil {
-		interactionID = uuidToPgUUID(*params.InteractionID)
-	}
 	return r.queries.MarkPhoneCallProcessed(ctx, db.MarkPhoneCallProcessedParams{
-		ID:            uuidToPgUUID(params.ID),
-		InteractionID: interactionID,
+		ID:            params.ID,
+		InteractionID: params.InteractionID,
 	})
 }
 
 // MarkProcessedTx is the tx-bound variant of MarkProcessed.
 func (r *PhoneCallRepository) MarkProcessedTx(ctx context.Context, tx pgx.Tx, params MarkProcessedParams) error {
-	var interactionID pgtype.UUID
-	if params.InteractionID != nil {
-		interactionID = uuidToPgUUID(*params.InteractionID)
-	}
 	return db.New(tx).MarkPhoneCallProcessed(ctx, db.MarkPhoneCallProcessedParams{
-		ID:            uuidToPgUUID(params.ID),
-		InteractionID: interactionID,
+		ID:            params.ID,
+		InteractionID: params.InteractionID,
 	})
 }
 
@@ -283,7 +244,7 @@ func (r *PhoneCallRepository) MarkProcessedTx(ctx context.Context, tx pgx.Tx, pa
 // rows by mac_host_id. Used by integration tests for per-run cleanup;
 // soft-delete is not available on this table (no deleted_at column).
 func (r *PhoneCallRepository) HardDeleteByMacHost(ctx context.Context, macHostID uuid.UUID) error {
-	return r.queries.HardDeletePhoneCallsByMacHost(ctx, uuidToPgUUID(macHostID))
+	return r.queries.HardDeletePhoneCallsByMacHost(ctx, &macHostID)
 }
 
 // HardDeleteByUniqueID is a test-only helper that hard-deletes a single

@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TelegramMessage represents a stored Telegram message.
@@ -83,61 +82,25 @@ func convertDbTelegramMessage(m *db.TelegramMessage) TelegramMessage {
 		MessageType:       m.MessageType,
 		IsOutgoing:        m.IsOutgoing,
 	}
-	if m.ID.Valid {
-		msg.ID = uuid.UUID(m.ID.Bytes)
-	}
-	if m.ChatTitle.Valid {
-		msg.ChatTitle = &m.ChatTitle.String
-	}
-	if m.MessageText.Valid {
-		msg.MessageText = &m.MessageText.String
-	}
-	if m.SentAt.Valid {
-		msg.SentAt = m.SentAt.Time
-	}
-	if m.EditedAt.Valid {
-		msg.EditedAt = &m.EditedAt.Time
-	}
-	if m.ReplyToMsgID.Valid {
-		msg.ReplyToMsgID = &m.ReplyToMsgID.Int32
-	}
-	if m.PeerUserID.Valid {
-		msg.PeerUserID = &m.PeerUserID.Int64
-	}
-	if m.PeerUsername.Valid {
-		msg.PeerUsername = &m.PeerUsername.String
-	}
-	if m.PeerFirstName.Valid {
-		msg.PeerFirstName = &m.PeerFirstName.String
-	}
-	if m.PeerLastName.Valid {
-		msg.PeerLastName = &m.PeerLastName.String
-	}
-	if m.PeerPhone.Valid {
-		msg.PeerPhone = &m.PeerPhone.String
-	}
-	if m.MatchedContactID.Valid {
-		id := uuid.UUID(m.MatchedContactID.Bytes)
-		msg.MatchedContactID = &id
-	}
-	if m.InteractionID.Valid {
-		id := uuid.UUID(m.InteractionID.Bytes)
-		msg.InteractionID = &id
-	}
-	if m.ProcessedAt.Valid {
-		msg.ProcessedAt = &m.ProcessedAt.Time
-	}
-	if m.ClaimedAt.Valid {
-		msg.ClaimedAt = &m.ClaimedAt.Time
-	}
-	if m.ClaimedSessionRef.Valid {
-		msg.ClaimedSessionRef = &m.ClaimedSessionRef.String
-	}
-	if m.DeletedAt.Valid {
-		msg.DeletedAt = &m.DeletedAt.Time
-	}
-	if m.CreatedAt.Valid {
-		msg.CreatedAt = m.CreatedAt.Time
+	msg.ID = m.ID
+	msg.ChatTitle = m.ChatTitle
+	msg.MessageText = m.MessageText
+	msg.SentAt = m.SentAt
+	msg.EditedAt = m.EditedAt
+	msg.ReplyToMsgID = m.ReplyToMsgID
+	msg.PeerUserID = m.PeerUserID
+	msg.PeerUsername = m.PeerUsername
+	msg.PeerFirstName = m.PeerFirstName
+	msg.PeerLastName = m.PeerLastName
+	msg.PeerPhone = m.PeerPhone
+	msg.MatchedContactID = m.MatchedContactID
+	msg.InteractionID = m.InteractionID
+	msg.ProcessedAt = m.ProcessedAt
+	msg.ClaimedAt = m.ClaimedAt
+	msg.ClaimedSessionRef = m.ClaimedSessionRef
+	msg.DeletedAt = m.DeletedAt
+	if m.CreatedAt != nil {
+		msg.CreatedAt = *m.CreatedAt
 	}
 	return msg
 }
@@ -148,18 +111,18 @@ func (r *TelegramMessageRepository) UpsertMessage(ctx context.Context, params Up
 		TelegramMessageID:  params.TelegramMessageID,
 		TelegramChatID:     params.TelegramChatID,
 		ChatType:           params.ChatType,
-		ChatTitle:          stringToPgText(params.ChatTitle),
-		MessageText:        stringToPgText(params.MessageText),
+		ChatTitle:          params.ChatTitle,
+		MessageText:        params.MessageText,
 		MessageType:        params.MessageType,
-		SentAt:             timeToPgTimestamptz(&params.SentAt),
-		EditedAt:           timeToPgTimestamptz(params.EditedAt),
+		SentAt:             params.SentAt,
+		EditedAt:           params.EditedAt,
 		IsOutgoing:         params.IsOutgoing,
-		ReplyToMsgID:       int32ToPgInt4(params.ReplyToMsgID),
-		PeerUserID:         int64ToPgInt8(params.PeerUserID),
-		PeerUsername:       stringToPgText(params.PeerUsername),
-		PeerFirstName:      stringToPgText(params.PeerFirstName),
-		PeerLastName:       stringToPgText(params.PeerLastName),
-		PeerPhone:          stringToPgText(params.PeerPhone),
+		ReplyToMsgID:       params.ReplyToMsgID,
+		PeerUserID:         params.PeerUserID,
+		PeerUsername:       params.PeerUsername,
+		PeerFirstName:      params.PeerFirstName,
+		PeerLastName:       params.PeerLastName,
+		PeerPhone:          params.PeerPhone,
 		PeerEntityResolved: params.PeerEntityResolved,
 	})
 	if err != nil {
@@ -258,7 +221,7 @@ type PeerMessageCount struct {
 // ListUnprocessedByContactAndChat returns unprocessed messages for a contact+chat.
 func (r *TelegramMessageRepository) ListUnprocessedByContactAndChat(ctx context.Context, contactID uuid.UUID, chatID int64) ([]TelegramMessage, error) {
 	dbMsgs, err := r.queries.ListUnprocessedTelegramMessagesByContactAndChat(ctx, db.ListUnprocessedTelegramMessagesByContactAndChatParams{
-		MatchedContactID: uuidToPgUUID(contactID),
+		MatchedContactID: &contactID,
 		TelegramChatID:   chatID,
 	})
 	if err != nil {
@@ -273,7 +236,7 @@ func (r *TelegramMessageRepository) ListUnprocessedByContactAndChat(ctx context.
 
 // ListUnprocessedByContact returns all unprocessed messages for a contact.
 func (r *TelegramMessageRepository) ListUnprocessedByContact(ctx context.Context, contactID uuid.UUID) ([]TelegramMessage, error) {
-	dbMsgs, err := r.queries.ListUnprocessedTelegramMessagesByContact(ctx, uuidToPgUUID(contactID))
+	dbMsgs, err := r.queries.ListUnprocessedTelegramMessagesByContact(ctx, &contactID)
 	if err != nil {
 		return nil, err
 	}
@@ -292,22 +255,13 @@ func (r *TelegramMessageRepository) ListDistinctUnmatchedPeers(ctx context.Conte
 	}
 	peers := make([]UnmatchedPeer, len(rows))
 	for i, row := range rows {
-		p := UnmatchedPeer{
-			PeerUserID: row.PeerUserID.Int64,
+		peers[i] = UnmatchedPeer{
+			PeerUserID:    deref(row.PeerUserID),
+			PeerUsername:  row.PeerUsername,
+			PeerFirstName: row.PeerFirstName,
+			PeerLastName:  row.PeerLastName,
+			PeerPhone:     row.PeerPhone,
 		}
-		if row.PeerUsername.Valid {
-			p.PeerUsername = &row.PeerUsername.String
-		}
-		if row.PeerFirstName.Valid {
-			p.PeerFirstName = &row.PeerFirstName.String
-		}
-		if row.PeerLastName.Valid {
-			p.PeerLastName = &row.PeerLastName.String
-		}
-		if row.PeerPhone.Valid {
-			p.PeerPhone = &row.PeerPhone.String
-		}
-		peers[i] = p
 	}
 	return peers, nil
 }
@@ -315,8 +269,8 @@ func (r *TelegramMessageRepository) ListDistinctUnmatchedPeers(ctx context.Conte
 // UpdateMessageContact sets matched_contact_id on all messages for a peer.
 func (r *TelegramMessageRepository) UpdateMessageContact(ctx context.Context, peerUserID int64, contactID uuid.UUID) error {
 	return r.queries.UpdateTelegramMessageContact(ctx, db.UpdateTelegramMessageContactParams{
-		MatchedContactID: uuidToPgUUID(contactID),
-		PeerUserID:       int64ToPgInt8(&peerUserID),
+		MatchedContactID: &contactID,
+		PeerUserID:       &peerUserID,
 	})
 }
 
@@ -325,13 +279,9 @@ func (r *TelegramMessageRepository) UpdateMessageContact(ctx context.Context, pe
 // bridge paths only (those paths do not claim rows or publish events,
 // so no session-scope predicate is needed).
 func (r *TelegramMessageRepository) MarkMessagesProcessed(ctx context.Context, messageIDs []uuid.UUID, interactionID uuid.UUID) error {
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
 	return r.queries.MarkTelegramMessagesProcessed(ctx, db.MarkTelegramMessagesProcessedParams{
-		InteractionID: uuidToPgUUID(interactionID),
-		MessageIds:    pgIDs,
+		InteractionID: &interactionID,
+		MessageIds:    messageIDs,
 	})
 }
 
@@ -357,14 +307,10 @@ func (r *TelegramMessageRepository) MarkMessagesProcessedTx(ctx context.Context,
 	if len(messageIDs) == 0 {
 		return 0, nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
 	return db.New(tx).MarkTelegramMessagesProcessedForSession(ctx, db.MarkTelegramMessagesProcessedForSessionParams{
-		InteractionID: uuidToPgUUID(interactionID),
-		MessageIds:    pgIDs,
-		SessionRef:    pgtype.Text{String: sessionRef, Valid: true},
+		InteractionID: &interactionID,
+		MessageIds:    messageIDs,
+		SessionRef:    &sessionRef,
 	})
 }
 
@@ -375,24 +321,10 @@ func (r *TelegramMessageRepository) ClaimMessages(ctx context.Context, messageID
 	if len(messageIDs) == 0 {
 		return nil, nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
-	claimed, err := r.queries.ClaimTelegramMessages(ctx, db.ClaimTelegramMessagesParams{
-		SessionRef: pgtype.Text{String: sessionRef, Valid: true},
-		MessageIds: pgIDs,
+	return r.queries.ClaimTelegramMessages(ctx, db.ClaimTelegramMessagesParams{
+		SessionRef: &sessionRef,
+		MessageIds: messageIDs,
 	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]uuid.UUID, 0, len(claimed))
-	for _, id := range claimed {
-		if id.Valid {
-			out = append(out, uuid.UUID(id.Bytes))
-		}
-	}
-	return out, nil
 }
 
 // ClaimMessagesTx is the tx-bound variant of ClaimMessages. Used by the
@@ -402,24 +334,10 @@ func (r *TelegramMessageRepository) ClaimMessagesTx(ctx context.Context, tx pgx.
 	if len(messageIDs) == 0 {
 		return nil, nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
-	claimed, err := db.New(tx).ClaimTelegramMessages(ctx, db.ClaimTelegramMessagesParams{
-		SessionRef: pgtype.Text{String: sessionRef, Valid: true},
-		MessageIds: pgIDs,
+	return db.New(tx).ClaimTelegramMessages(ctx, db.ClaimTelegramMessagesParams{
+		SessionRef: &sessionRef,
+		MessageIds: messageIDs,
 	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]uuid.UUID, 0, len(claimed))
-	for _, id := range claimed {
-		if id.Valid {
-			out = append(out, uuid.UUID(id.Bytes))
-		}
-	}
-	return out, nil
 }
 
 // ClearStaleClaimTx clears claim columns for rows still carrying the
@@ -429,13 +347,9 @@ func (r *TelegramMessageRepository) ClearStaleClaimTx(ctx context.Context, tx pg
 	if len(messageIDs) == 0 {
 		return nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
 	return db.New(tx).ClearTelegramMessageStaleClaim(ctx, db.ClearTelegramMessageStaleClaimParams{
-		MessageIds:         pgIDs,
-		ExpectedSessionRef: pgtype.Text{String: expectedSessionRef, Valid: true},
+		MessageIds:         messageIDs,
+		ExpectedSessionRef: &expectedSessionRef,
 	})
 }
 
@@ -445,11 +359,7 @@ func (r *TelegramMessageRepository) BackdateClaim(ctx context.Context, messageID
 	if len(messageIDs) == 0 {
 		return nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
-	return r.queries.BackdateTelegramMessageClaim(ctx, pgIDs)
+	return r.queries.BackdateTelegramMessageClaim(ctx, messageIDs)
 }
 
 // TelegramStagingProcessor adapts *TelegramMessageRepository to the
@@ -476,8 +386,8 @@ func (r *TelegramMessageRepository) ListUnprocessedContactIDs(ctx context.Contex
 	}
 	ids := make([]uuid.UUID, 0, len(pgIDs))
 	for _, pgID := range pgIDs {
-		if pgID.Valid {
-			ids = append(ids, uuid.UUID(pgID.Bytes))
+		if pgID != nil {
+			ids = append(ids, *pgID)
 		}
 	}
 	return ids, nil
@@ -492,14 +402,12 @@ func (r *TelegramMessageRepository) CountMessagesByPeer(ctx context.Context) ([]
 	counts := make([]PeerMessageCount, len(rows))
 	for i, row := range rows {
 		counts[i] = PeerMessageCount{
-			PeerUserID:    row.PeerUserID.Int64,
+			PeerUserID:    deref(row.PeerUserID),
 			TotalCount:    row.TotalCount,
 			OutboundCount: row.OutboundCount,
 			InboundCount:  row.InboundCount,
 		}
-		if ts, ok := row.LastMessageAt.(pgtype.Timestamptz); ok && ts.Valid {
-			counts[i].LastMessageAt = ts.Time
-		} else if t, ok := row.LastMessageAt.(time.Time); ok {
+		if t, ok := row.LastMessageAt.(time.Time); ok {
 			counts[i].LastMessageAt = t
 		}
 	}
@@ -516,12 +424,10 @@ func (r *TelegramMessageRepository) FindDistinctUnmatchedPeerUserIDsByUsername(c
 	}
 	peers := make([]UnmatchedPeer, 0, len(rows))
 	for _, row := range rows {
-		p := UnmatchedPeer{PeerUserID: row.PeerUserID.Int64}
-		if row.PeerUsername.Valid {
-			val := row.PeerUsername.String
-			p.PeerUsername = &val
-		}
-		peers = append(peers, p)
+		peers = append(peers, UnmatchedPeer{
+			PeerUserID:   deref(row.PeerUserID),
+			PeerUsername: row.PeerUsername,
+		})
 	}
 	return peers, nil
 }
@@ -535,12 +441,10 @@ func (r *TelegramMessageRepository) FindDistinctUnmatchedPeerUserIDsByPhone(ctx 
 	}
 	peers := make([]UnmatchedPeer, 0, len(rows))
 	for _, row := range rows {
-		p := UnmatchedPeer{PeerUserID: row.PeerUserID.Int64}
-		if row.PeerUsername.Valid {
-			val := row.PeerUsername.String
-			p.PeerUsername = &val
-		}
-		peers = append(peers, p)
+		peers = append(peers, UnmatchedPeer{
+			PeerUserID:   deref(row.PeerUserID),
+			PeerUsername: row.PeerUsername,
+		})
 	}
 	return peers, nil
 }
@@ -549,7 +453,7 @@ func (r *TelegramMessageRepository) FindDistinctUnmatchedPeerUserIDsByPhone(ctx 
 // are not yet linked to a contact. Read this BEFORE OnPeerLinked so the
 // rematch handler reports a meaningful pre-link count.
 func (r *TelegramMessageRepository) CountUnmatchedMessagesByPeer(ctx context.Context, peerUserID int64) (int64, error) {
-	return r.queries.CountUnmatchedMessagesByPeer(ctx, int64ToPgInt8(&peerUserID))
+	return r.queries.CountUnmatchedMessagesByPeer(ctx, &peerUserID)
 }
 
 // GetPeerEntityByUserID returns the best-known entity data for a Telegram
@@ -558,7 +462,7 @@ func (r *TelegramMessageRepository) CountUnmatchedMessagesByPeer(ctx context.Con
 // exist for the peer — the caller should treat this as "no cached data".
 // Blank ("") fields are promoted to nil to match the matcher's convention.
 func (r *TelegramMessageRepository) GetPeerEntityByUserID(ctx context.Context, peerUserID int64) (*PeerEntity, error) {
-	row, err := r.queries.GetPeerEntityByUserID(ctx, int64ToPgInt8(&peerUserID))
+	row, err := r.queries.GetPeerEntityByUserID(ctx, &peerUserID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -566,20 +470,20 @@ func (r *TelegramMessageRepository) GetPeerEntityByUserID(ctx context.Context, p
 		return nil, err
 	}
 	entity := &PeerEntity{PeerUserID: peerUserID}
-	if row.PeerUsername.Valid && row.PeerUsername.String != "" {
-		v := row.PeerUsername.String
+	if row.PeerUsername != nil && *row.PeerUsername != "" {
+		v := *row.PeerUsername
 		entity.PeerUsername = &v
 	}
-	if row.PeerFirstName.Valid && row.PeerFirstName.String != "" {
-		v := row.PeerFirstName.String
+	if row.PeerFirstName != nil && *row.PeerFirstName != "" {
+		v := *row.PeerFirstName
 		entity.PeerFirstName = &v
 	}
-	if row.PeerLastName.Valid && row.PeerLastName.String != "" {
-		v := row.PeerLastName.String
+	if row.PeerLastName != nil && *row.PeerLastName != "" {
+		v := *row.PeerLastName
 		entity.PeerLastName = &v
 	}
-	if row.PeerPhone.Valid && row.PeerPhone.String != "" {
-		v := row.PeerPhone.String
+	if row.PeerPhone != nil && *row.PeerPhone != "" {
+		v := *row.PeerPhone
 		entity.PeerPhone = &v
 	}
 	return entity, nil
@@ -587,7 +491,7 @@ func (r *TelegramMessageRepository) GetPeerEntityByUserID(ctx context.Context, p
 
 // CountMessagesByPeerID returns message counts for a single peer.
 func (r *TelegramMessageRepository) CountMessagesByPeerID(ctx context.Context, peerUserID int64) (*PeerMessageCount, error) {
-	row, err := r.queries.CountTelegramMessagesByPeerID(ctx, int64ToPgInt8(&peerUserID))
+	row, err := r.queries.CountTelegramMessagesByPeerID(ctx, &peerUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -597,9 +501,7 @@ func (r *TelegramMessageRepository) CountMessagesByPeerID(ctx context.Context, p
 		OutboundCount: row.OutboundCount,
 		InboundCount:  row.InboundCount,
 	}
-	if ts, ok := row.LastMessageAt.(pgtype.Timestamptz); ok && ts.Valid {
-		count.LastMessageAt = ts.Time
-	} else if t, ok := row.LastMessageAt.(time.Time); ok {
+	if t, ok := row.LastMessageAt.(time.Time); ok {
 		count.LastMessageAt = t
 	}
 	return count, nil
@@ -616,5 +518,3 @@ func (r *TelegramMessageRepository) HardDeleteByChatIDRange(ctx context.Context,
 		Hi: hi,
 	})
 }
-
-// int32ToPgInt4 already defined in telegram_chat_config.go

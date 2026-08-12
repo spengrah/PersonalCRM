@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // CalendarEventRepository handles calendar event persistence
@@ -86,59 +85,41 @@ func convertDbCalendarEvent(dbEvent *db.CalendarEvent) CalendarEvent {
 	}
 
 	// Convert UUID
-	if dbEvent.ID.Valid {
-		event.ID = uuid.UUID(dbEvent.ID.Bytes)
-	}
+	event.ID = dbEvent.ID
 
 	// Convert nullable strings
-	if dbEvent.Title.Valid {
-		event.Title = &dbEvent.Title.String
+	event.Title = dbEvent.Title
+	event.Description = dbEvent.Description
+	event.Location = dbEvent.Location
+	if dbEvent.Status != nil {
+		event.Status = *dbEvent.Status
 	}
-	if dbEvent.Description.Valid {
-		event.Description = &dbEvent.Description.String
-	}
-	if dbEvent.Location.Valid {
-		event.Location = &dbEvent.Location.String
-	}
-	if dbEvent.Status.Valid {
-		event.Status = dbEvent.Status.String
-	}
-	if dbEvent.UserResponse.Valid {
-		event.UserResponse = &dbEvent.UserResponse.String
-	}
-	if dbEvent.OrganizerEmail.Valid {
-		event.OrganizerEmail = &dbEvent.OrganizerEmail.String
-	}
+	event.UserResponse = dbEvent.UserResponse
+	event.OrganizerEmail = dbEvent.OrganizerEmail
 
 	// Convert timestamps
-	if dbEvent.StartTime.Valid {
-		event.StartTime = dbEvent.StartTime.Time
+	event.StartTime = dbEvent.StartTime
+	event.EndTime = dbEvent.EndTime
+	if dbEvent.SyncedAt != nil {
+		event.SyncedAt = *dbEvent.SyncedAt
 	}
-	if dbEvent.EndTime.Valid {
-		event.EndTime = dbEvent.EndTime.Time
+	if dbEvent.CreatedAt != nil {
+		event.CreatedAt = *dbEvent.CreatedAt
 	}
-	if dbEvent.SyncedAt.Valid {
-		event.SyncedAt = dbEvent.SyncedAt.Time
-	}
-	if dbEvent.CreatedAt.Valid {
-		event.CreatedAt = dbEvent.CreatedAt.Time
-	}
-	if dbEvent.UpdatedAt.Valid {
-		event.UpdatedAt = dbEvent.UpdatedAt.Time
+	if dbEvent.UpdatedAt != nil {
+		event.UpdatedAt = *dbEvent.UpdatedAt
 	}
 
 	// Convert booleans
-	if dbEvent.AllDay.Valid {
-		event.AllDay = dbEvent.AllDay.Bool
+	if dbEvent.AllDay != nil {
+		event.AllDay = *dbEvent.AllDay
 	}
-	if dbEvent.LastContactedUpdated.Valid {
-		event.LastContactedUpdated = dbEvent.LastContactedUpdated.Bool
+	if dbEvent.LastContactedUpdated != nil {
+		event.LastContactedUpdated = *dbEvent.LastContactedUpdated
 	}
 
 	// Convert html_link
-	if dbEvent.HtmlLink.Valid {
-		event.HtmlLink = &dbEvent.HtmlLink.String
-	}
+	event.HtmlLink = dbEvent.HtmlLink
 
 	// Convert attendees JSONB
 	if len(dbEvent.Attendees) > 0 {
@@ -151,15 +132,31 @@ func convertDbCalendarEvent(dbEvent *db.CalendarEvent) CalendarEvent {
 		event.Attendees = []Attendee{}
 	}
 
-	// Convert matched contact IDs
+	// Convert matched contact IDs. A NULL array element decodes to
+	// uuid.Nil rather than being rejected (repo-shrink plan §1.5/§5.6),
+	// so filter those out here on the read side, preserving order.
 	event.MatchedContactIDs = make([]uuid.UUID, 0, len(dbEvent.MatchedContactIds))
-	for _, pgUUID := range dbEvent.MatchedContactIds {
-		if pgUUID.Valid {
-			event.MatchedContactIDs = append(event.MatchedContactIDs, uuid.UUID(pgUUID.Bytes))
+	for _, id := range dbEvent.MatchedContactIds {
+		if id != uuid.Nil {
+			event.MatchedContactIDs = append(event.MatchedContactIDs, id)
 		}
 	}
 
 	return event
+}
+
+// filterNilUUIDs drops any uuid.Nil element from ids, preserving the order
+// of the survivors, and always returns a non-nil slice so an empty result
+// still encodes as '{}' rather than SQL NULL. Applied on the write side by
+// every exported writer of matched_contact_ids (repo-shrink plan §5.6).
+func filterNilUUIDs(ids []uuid.UUID) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id != uuid.Nil {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // Upsert inserts or updates a calendar event
@@ -170,30 +167,24 @@ func (r *CalendarEventRepository) Upsert(ctx context.Context, req UpsertCalendar
 		return nil, err
 	}
 
-	// Convert matched contact IDs
-	matchedContactIDs := make([]pgtype.UUID, len(req.MatchedContactIDs))
-	for i, id := range req.MatchedContactIDs {
-		matchedContactIDs[i] = uuidToPgUUID(id)
-	}
-
 	dbEvent, err := r.queries.UpsertCalendarEvent(ctx, db.UpsertCalendarEventParams{
 		GcalEventID:          req.GcalEventID,
 		GcalCalendarID:       req.GcalCalendarID,
 		GoogleAccountID:      req.GoogleAccountID,
-		Title:                stringToPgText(req.Title),
-		Description:          stringToPgText(req.Description),
-		Location:             stringToPgText(req.Location),
-		StartTime:            pgtype.Timestamptz{Time: req.StartTime, Valid: true},
-		EndTime:              pgtype.Timestamptz{Time: req.EndTime, Valid: true},
-		AllDay:               pgtype.Bool{Bool: req.AllDay, Valid: true},
-		Status:               stringToPgText(&req.Status),
-		UserResponse:         stringToPgText(req.UserResponse),
-		OrganizerEmail:       stringToPgText(req.OrganizerEmail),
+		Title:                req.Title,
+		Description:          req.Description,
+		Location:             req.Location,
+		StartTime:            req.StartTime,
+		EndTime:              req.EndTime,
+		AllDay:               &req.AllDay,
+		Status:               &req.Status,
+		UserResponse:         req.UserResponse,
+		OrganizerEmail:       req.OrganizerEmail,
 		Attendees:            attendeesJSON,
-		MatchedContactIds:    matchedContactIDs,
-		SyncedAt:             pgtype.Timestamptz{Time: req.SyncedAt, Valid: true},
-		LastContactedUpdated: pgtype.Bool{Bool: req.LastContactedUpdated, Valid: true},
-		HtmlLink:             stringToPgText(req.HtmlLink),
+		MatchedContactIds:    filterNilUUIDs(req.MatchedContactIDs),
+		SyncedAt:             &req.SyncedAt,
+		LastContactedUpdated: &req.LastContactedUpdated,
+		HtmlLink:             req.HtmlLink,
 	})
 	if err != nil {
 		return nil, err
@@ -205,7 +196,7 @@ func (r *CalendarEventRepository) Upsert(ctx context.Context, req UpsertCalendar
 
 // GetByID retrieves a calendar event by its UUID
 func (r *CalendarEventRepository) GetByID(ctx context.Context, id uuid.UUID) (*CalendarEvent, error) {
-	dbEvent, err := r.queries.GetCalendarEventByID(ctx, uuidToPgUUID(id))
+	dbEvent, err := r.queries.GetCalendarEventByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -220,14 +211,14 @@ func (r *CalendarEventRepository) GetByID(ctx context.Context, id uuid.UUID) (*C
 // TestHardDeleteByID is a test-only helper that hard-deletes a single
 // calendar_event row by primary key. Production code must NOT call this.
 func (r *CalendarEventRepository) TestHardDeleteByID(ctx context.Context, id uuid.UUID) error {
-	return r.queries.TestHardDeleteCalendarEventByID(ctx, uuidToPgUUID(id))
+	return r.queries.TestHardDeleteCalendarEventByID(ctx, id)
 }
 
 // GetByIDTx is the tx-bound variant of GetByID. Used by callers that
 // need the read to participate in the same tx as a subsequent write
 // (e.g. the meeting_note resolve-link flow's target-existence check).
 func (r *CalendarEventRepository) GetByIDTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*CalendarEvent, error) {
-	dbEvent, err := db.New(tx).GetCalendarEventByID(ctx, uuidToPgUUID(id))
+	dbEvent, err := db.New(tx).GetCalendarEventByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -260,7 +251,7 @@ func (r *CalendarEventRepository) GetByGcalID(ctx context.Context, gcalEventID, 
 // ListEventsForContact retrieves calendar events involving a specific contact
 func (r *CalendarEventRepository) ListEventsForContact(ctx context.Context, contactID uuid.UUID, limit, offset int32) ([]CalendarEvent, error) {
 	dbEvents, err := r.queries.ListEventsForContact(ctx, db.ListEventsForContactParams{
-		ContactID:   uuidToPgUUID(contactID),
+		ContactID:   contactID,
 		EventLimit:  limit,
 		EventOffset: offset,
 	})
@@ -279,8 +270,8 @@ func (r *CalendarEventRepository) ListEventsForContact(ctx context.Context, cont
 // ListUpcomingEventsForContact retrieves upcoming calendar events for a specific contact
 func (r *CalendarEventRepository) ListUpcomingEventsForContact(ctx context.Context, contactID uuid.UUID, after time.Time, limit int32) ([]CalendarEvent, error) {
 	dbEvents, err := r.queries.ListUpcomingEventsForContact(ctx, db.ListUpcomingEventsForContactParams{
-		ContactID:  uuidToPgUUID(contactID),
-		AfterTime:  pgtype.Timestamptz{Time: after, Valid: true},
+		ContactID:  contactID,
+		AfterTime:  after,
 		EventLimit: limit,
 	})
 	if err != nil {
@@ -298,7 +289,7 @@ func (r *CalendarEventRepository) ListUpcomingEventsForContact(ctx context.Conte
 // ListUpcomingEventsWithContacts retrieves upcoming events that have matched CRM contacts
 func (r *CalendarEventRepository) ListUpcomingEventsWithContacts(ctx context.Context, after time.Time, limit, offset int32) ([]CalendarEvent, error) {
 	dbEvents, err := r.queries.ListUpcomingEventsWithContacts(ctx, db.ListUpcomingEventsWithContactsParams{
-		StartTime: pgtype.Timestamptz{Time: after, Valid: true},
+		StartTime: after,
 		Limit:     limit,
 		Offset:    offset,
 	})
@@ -317,7 +308,7 @@ func (r *CalendarEventRepository) ListUpcomingEventsWithContacts(ctx context.Con
 // ListPastEventsNeedingUpdate retrieves past events that haven't updated last_contacted yet
 func (r *CalendarEventRepository) ListPastEventsNeedingUpdate(ctx context.Context, before time.Time, limit int32) ([]CalendarEvent, error) {
 	dbEvents, err := r.queries.ListPastEventsNeedingUpdate(ctx, db.ListPastEventsNeedingUpdateParams{
-		EndTime: pgtype.Timestamptz{Time: before, Valid: true},
+		EndTime: before,
 		Limit:   limit,
 	})
 	if err != nil {
@@ -350,8 +341,8 @@ func (r *CalendarEventRepository) ListPastEventsNeedingUpdateByPrefixForTest(
 	limit int32,
 ) ([]CalendarEvent, error) {
 	dbEvents, err := r.queries.SyntheticListPastEventsNeedingUpdateByPrefix(ctx, db.SyntheticListPastEventsNeedingUpdateByPrefixParams{
-		Before:            pgtype.Timestamptz{Time: before, Valid: true},
-		GcalEventIDPrefix: pgtype.Text{String: prefix, Valid: true},
+		Before:            before,
+		GcalEventIDPrefix: &prefix,
 		RowLimit:          limit,
 	})
 	if err != nil {
@@ -366,19 +357,14 @@ func (r *CalendarEventRepository) ListPastEventsNeedingUpdateByPrefixForTest(
 
 // MarkLastContactedUpdated marks an event as having updated last_contacted for its contacts
 func (r *CalendarEventRepository) MarkLastContactedUpdated(ctx context.Context, id uuid.UUID) error {
-	return r.queries.MarkLastContactedUpdated(ctx, uuidToPgUUID(id))
+	return r.queries.MarkLastContactedUpdated(ctx, id)
 }
 
 // UpdateMatchedContacts updates the matched contact IDs for an event
 func (r *CalendarEventRepository) UpdateMatchedContacts(ctx context.Context, id uuid.UUID, contactIDs []uuid.UUID) (*CalendarEvent, error) {
-	matchedContactIDs := make([]pgtype.UUID, len(contactIDs))
-	for i, cid := range contactIDs {
-		matchedContactIDs[i] = uuidToPgUUID(cid)
-	}
-
 	dbEvent, err := r.queries.UpdateMatchedContacts(ctx, db.UpdateMatchedContactsParams{
-		ID:                uuidToPgUUID(id),
-		MatchedContactIds: matchedContactIDs,
+		ID:                id,
+		MatchedContactIds: filterNilUUIDs(contactIDs),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -393,7 +379,7 @@ func (r *CalendarEventRepository) UpdateMatchedContacts(ctx context.Context, id 
 
 // CountEventsForContact counts events for a specific contact
 func (r *CalendarEventRepository) CountEventsForContact(ctx context.Context, contactID uuid.UUID) (int64, error) {
-	return r.queries.CountEventsForContact(ctx, uuidToPgUUID(contactID))
+	return r.queries.CountEventsForContact(ctx, contactID)
 }
 
 // FindEventsByAttendeeEmailUnmatchedForContact returns events whose attendees JSONB
@@ -402,7 +388,7 @@ func (r *CalendarEventRepository) CountEventsForContact(ctx context.Context, con
 func (r *CalendarEventRepository) FindEventsByAttendeeEmailUnmatchedForContact(ctx context.Context, email string, contactID uuid.UUID) ([]CalendarEvent, error) {
 	dbEvents, err := r.queries.FindEventsByAttendeeEmailUnmatchedForContact(ctx, db.FindEventsByAttendeeEmailUnmatchedForContactParams{
 		Email:     email,
-		ContactID: uuidToPgUUID(contactID),
+		ContactID: contactID,
 	})
 	if err != nil {
 		return nil, err
@@ -417,11 +403,16 @@ func (r *CalendarEventRepository) FindEventsByAttendeeEmailUnmatchedForContact(c
 }
 
 // AppendMatchedContact appends contactID to an event's matched_contact_ids array
-// iff it isn't already present. Does NOT reset last_contacted_updated.
+// iff it isn't already present. Does NOT reset last_contacted_updated. A
+// uuid.Nil contactID is a no-op (repo-shrink plan §5.6 — the array must
+// never accumulate a nil element).
 func (r *CalendarEventRepository) AppendMatchedContact(ctx context.Context, eventID, contactID uuid.UUID) error {
+	if contactID == uuid.Nil {
+		return nil
+	}
 	return r.queries.AppendMatchedContact(ctx, db.AppendMatchedContactParams{
-		ContactID: uuidToPgUUID(contactID),
-		EventID:   uuidToPgUUID(eventID),
+		ContactID: contactID,
+		EventID:   eventID,
 	})
 }
 
@@ -475,7 +466,7 @@ func (r *CalendarEventRepository) MarkCancelledByGcalID(ctx context.Context, gca
 // inserts first) or has already committed (this returns db.ErrNotFound and
 // the attended insert is skipped). Returns db.ErrNotFound when no row.
 func (r *CalendarEventRepository) GetByIDForShareTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*CalendarEvent, error) {
-	dbEvent, err := db.New(tx).GetCalendarEventByIDForShare(ctx, uuidToPgUUID(id))
+	dbEvent, err := db.New(tx).GetCalendarEventByIDForShare(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -493,7 +484,7 @@ func (r *CalendarEventRepository) GetByIDForShareTx(ctx context.Context, tx pgx.
 // by the attended-vs-decline lock-serialization integration test. Production
 // code must NOT call this. Returns db.ErrNotFound when no row.
 func (r *CalendarEventRepository) TestGetByIDForUpdateNoWaitTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*CalendarEvent, error) {
-	dbEvent, err := db.New(tx).TestGetCalendarEventByIDForUpdateNoWait(ctx, uuidToPgUUID(id))
+	dbEvent, err := db.New(tx).TestGetCalendarEventByIDForUpdateNoWait(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -530,8 +521,8 @@ func (r *CalendarEventRepository) LockExistsByIDTx(ctx context.Context, tx pgx.T
 // and dedupe in the service layer. Caller owns the tx lifecycle.
 func (r *CalendarEventRepository) FindLinkageCandidatesTx(ctx context.Context, tx pgx.Tx, windowStart, windowEnd time.Time) ([]LinkageCandidate, error) {
 	rows, err := db.New(tx).FindCalendarEventsInWindow(ctx, db.FindCalendarEventsInWindowParams{
-		WindowStart: pgtype.Timestamptz{Time: windowStart, Valid: true},
-		WindowEnd:   pgtype.Timestamptz{Time: windowEnd, Valid: true},
+		WindowStart: windowStart,
+		WindowEnd:   windowEnd,
 	})
 	if err != nil {
 		return nil, err

@@ -18,7 +18,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
 )
 
@@ -1098,31 +1097,31 @@ func (s *ContactService) GetMergePreview(ctx context.Context, sourceID, targetID
 	}
 
 	// Get counts for preview
-	sourceMethods, err := s.database.Queries.CountMergeContactMethods(ctx, uuidToPgUUID(sourceID))
+	sourceMethods, err := s.database.Queries.CountMergeContactMethods(ctx, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("count source methods: %w", err)
 	}
 
 	// Find duplicate methods
 	duplicates, err := s.database.Queries.FindDuplicateContactMethods(ctx, db.FindDuplicateContactMethodsParams{
-		SourceContactID: uuidToPgUUID(sourceID),
-		TargetContactID: uuidToPgUUID(targetID),
+		SourceContactID: sourceID,
+		TargetContactID: targetID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("find duplicate methods: %w", err)
 	}
 
-	sourceNotes, err := s.database.Queries.CountMergeNotes(ctx, uuidToPgUUID(sourceID))
+	sourceNotes, err := s.database.Queries.CountMergeNotes(ctx, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("count source notes: %w", err)
 	}
 
-	sourceInteractions, err := s.database.Queries.CountMergeInteractions(ctx, uuidToPgUUID(sourceID))
+	sourceInteractions, err := s.database.Queries.CountMergeInteractions(ctx, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("count source interactions: %w", err)
 	}
 
-	sourceCalendarEvents, err := s.database.Queries.CountMergeCalendarEvents(ctx, uuidToPgUUID(sourceID))
+	sourceCalendarEvents, err := s.database.Queries.CountMergeCalendarEvents(ctx, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("count source calendar events: %w", err)
 	}
@@ -1171,8 +1170,8 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	}()
 
 	txQueries := db.New(tx)
-	sourceUUID := uuidToPgUUID(req.SourceContactID)
-	targetUUID := uuidToPgUUID(req.TargetContactID)
+	sourceUUID := req.SourceContactID
+	targetUUID := req.TargetContactID
 
 	// 1. Delete duplicate contact methods (same normalized value and type)
 	if err := txQueries.DeleteDuplicateContactMethods(ctx, db.DeleteDuplicateContactMethodsParams{
@@ -1202,10 +1201,10 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	}
 
 	// 3. Merge notepad notes (combine content if both exist)
-	notepadCategory := pgtype.Text{String: string(repository.NoteCategoryNotepad), Valid: true}
+	notepadCategory := string(repository.NoteCategoryNotepad)
 	sourceNotepad, err := txQueries.GetContactNoteByCategory(ctx, db.GetContactNoteByCategoryParams{
 		ContactID: sourceUUID,
-		Category:  notepadCategory,
+		Category:  &notepadCategory,
 	})
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
@@ -1222,7 +1221,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		// one-notepad-per-contact unique index when the target has one too.
 		if err := txQueries.DeleteContactNoteByCategory(ctx, db.DeleteContactNoteByCategoryParams{
 			ContactID: sourceUUID,
-			Category:  notepadCategory,
+			Category:  &notepadCategory,
 		}); err != nil {
 			return nil, fmt.Errorf("delete source notepad: %w", err)
 		}
@@ -1232,7 +1231,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 		if sourceNotepad.Body != "" {
 			targetNotepad, err := txQueries.GetContactNoteByCategory(ctx, db.GetContactNoteByCategoryParams{
 				ContactID: targetUUID,
-				Category:  notepadCategory,
+				Category:  &notepadCategory,
 			})
 			if err != nil {
 				if !errors.Is(err, pgx.ErrNoRows) {
@@ -1255,7 +1254,7 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 			if _, err := txQueries.UpsertContactNoteByCategory(ctx, db.UpsertContactNoteByCategoryParams{
 				ContactID: targetUUID,
 				Body:      combinedBody,
-				Category:  notepadCategory,
+				Category:  &notepadCategory,
 			}); err != nil {
 				return nil, fmt.Errorf("upsert merged notepad: %w", err)
 			}
@@ -1298,32 +1297,32 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 	// handles to the dead contact, and already-committed staging rows
 	// (including unprocessed ones) would strand against it.
 	if err := txQueries.RepointIdentitiesToContact(ctx, db.RepointIdentitiesToContactParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
+		SourceContactID: &sourceUUID,
+		TargetContactID: &targetUUID,
 	}); err != nil {
 		return nil, fmt.Errorf("repoint external identities: %w", err)
 	}
 	if err := txQueries.RepointExternalContactsToContact(ctx, db.RepointExternalContactsToContactParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
+		SourceContactID: &sourceUUID,
+		TargetContactID: &targetUUID,
 	}); err != nil {
 		return nil, fmt.Errorf("repoint external contacts: %w", err)
 	}
 	if err := txQueries.RepointMessagesMessageContact(ctx, db.RepointMessagesMessageContactParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
+		SourceContactID: &sourceUUID,
+		TargetContactID: &targetUUID,
 	}); err != nil {
 		return nil, fmt.Errorf("repoint messages_message staging rows: %w", err)
 	}
 	if err := txQueries.RepointTelegramMessageContact(ctx, db.RepointTelegramMessageContactParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
+		SourceContactID: &sourceUUID,
+		TargetContactID: &targetUUID,
 	}); err != nil {
 		return nil, fmt.Errorf("repoint telegram_message staging rows: %w", err)
 	}
 	if err := txQueries.RepointPhoneCallContact(ctx, db.RepointPhoneCallContactParams{
-		SourceContactID: sourceUUID,
-		TargetContactID: targetUUID,
+		SourceContactID: &sourceUUID,
+		TargetContactID: &targetUUID,
 	}); err != nil {
 		return nil, fmt.Errorf("repoint phone_call staging rows: %w", err)
 	}
@@ -1515,8 +1514,6 @@ func (s *ContactService) MergeContacts(ctx context.Context, req MergeContactsReq
 // a short transaction. Errors are logged at ERROR and swallowed — see the
 // call site in MergeContacts.
 func (s *ContactService) repointMergedAttributionSecondPass(ctx context.Context, sourceID, targetID uuid.UUID) {
-	sourceUUID := uuidToPgUUID(sourceID)
-	targetUUID := uuidToPgUUID(targetID)
 	q := s.database.Queries
 
 	logSecondPassErr := func(step string, err error) {
@@ -1528,27 +1525,27 @@ func (s *ContactService) repointMergedAttributionSecondPass(ctx context.Context,
 	}
 
 	if err := q.RepointIdentitiesToContact(ctx, db.RepointIdentitiesToContactParams{
-		SourceContactID: sourceUUID, TargetContactID: targetUUID,
+		SourceContactID: &sourceID, TargetContactID: &targetID,
 	}); err != nil {
 		logSecondPassErr("external_identity", err)
 	}
 	if err := q.RepointExternalContactsToContact(ctx, db.RepointExternalContactsToContactParams{
-		SourceContactID: sourceUUID, TargetContactID: targetUUID,
+		SourceContactID: &sourceID, TargetContactID: &targetID,
 	}); err != nil {
 		logSecondPassErr("external_contact", err)
 	}
 	if err := q.RepointMessagesMessageContact(ctx, db.RepointMessagesMessageContactParams{
-		SourceContactID: sourceUUID, TargetContactID: targetUUID,
+		SourceContactID: &sourceID, TargetContactID: &targetID,
 	}); err != nil {
 		logSecondPassErr("messages_message", err)
 	}
 	if err := q.RepointTelegramMessageContact(ctx, db.RepointTelegramMessageContactParams{
-		SourceContactID: sourceUUID, TargetContactID: targetUUID,
+		SourceContactID: &sourceID, TargetContactID: &targetID,
 	}); err != nil {
 		logSecondPassErr("telegram_message", err)
 	}
 	if err := q.RepointPhoneCallContact(ctx, db.RepointPhoneCallContactParams{
-		SourceContactID: sourceUUID, TargetContactID: targetUUID,
+		SourceContactID: &sourceID, TargetContactID: &targetID,
 	}); err != nil {
 		logSecondPassErr("phone_call", err)
 	}
@@ -1643,9 +1640,4 @@ func maxTimePtr(a, b *time.Time) *time.Time {
 	default:
 		return a
 	}
-}
-
-// Helper to convert uuid to pgtype.UUID (used in merge operations)
-func uuidToPgUUID(id uuid.UUID) pgtype.UUID {
-	return pgtype.UUID{Bytes: id, Valid: true}
 }

@@ -7,8 +7,6 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const DeleteTelegramChatConfig = `-- name: DeleteTelegramChatConfig :exec
@@ -143,8 +141,8 @@ WHERE telegram_chat_id = $2
 `
 
 type UpdateTelegramChatConfigBackfillCursorParams struct {
-	BackfillCursor pgtype.Int4 `json:"backfill_cursor"`
-	TelegramChatID int64       `json:"telegram_chat_id"`
+	BackfillCursor *int32 `json:"backfill_cursor"`
+	TelegramChatID int64  `json:"telegram_chat_id"`
 }
 
 func (q *Queries) UpdateTelegramChatConfigBackfillCursor(ctx context.Context, arg UpdateTelegramChatConfigBackfillCursorParams) error {
@@ -159,8 +157,8 @@ WHERE telegram_chat_id = $2
 `
 
 type UpdateTelegramChatConfigMemberCountParams struct {
-	MemberCount    pgtype.Int4 `json:"member_count"`
-	TelegramChatID int64       `json:"telegram_chat_id"`
+	MemberCount    *int32 `json:"member_count"`
+	TelegramChatID int64  `json:"telegram_chat_id"`
 }
 
 func (q *Queries) UpdateTelegramChatConfigMemberCount(ctx context.Context, arg UpdateTelegramChatConfigMemberCountParams) error {
@@ -213,11 +211,11 @@ RETURNING id, telegram_chat_id, chat_title, chat_type, member_count, status, bac
 `
 
 type UpsertTelegramChatConfigParams struct {
-	TelegramChatID int64       `json:"telegram_chat_id"`
-	ChatTitle      pgtype.Text `json:"chat_title"`
-	ChatType       string      `json:"chat_type"`
-	MemberCount    pgtype.Int4 `json:"member_count"`
-	Status         string      `json:"status"`
+	TelegramChatID int64   `json:"telegram_chat_id"`
+	ChatTitle      *string `json:"chat_title"`
+	ChatType       string  `json:"chat_type"`
+	MemberCount    *int32  `json:"member_count"`
+	Status         string  `json:"status"`
 }
 
 func (q *Queries) UpsertTelegramChatConfig(ctx context.Context, arg UpsertTelegramChatConfigParams) (*TelegramChatConfig, error) {

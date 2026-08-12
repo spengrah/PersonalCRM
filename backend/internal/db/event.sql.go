@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CountEventsBySource = `-- name: CountEventsBySource :one
@@ -74,8 +75,8 @@ LIMIT 1
 `
 
 type FindEventBySourceParams struct {
-	Source   string      `json:"source"`
-	SourceID pgtype.Text `json:"source_id"`
+	Source   string  `json:"source"`
+	SourceID *string `json:"source_id"`
 }
 
 // Primary use: publisher-side dedup lookup BEFORE attempting insert (e.g.,
@@ -106,7 +107,7 @@ const GetEvent = `-- name: GetEvent :one
 SELECT id, source, source_id, kind, payload, observed_at, received_at, created_at FROM event WHERE id = $1
 `
 
-func (q *Queries) GetEvent(ctx context.Context, id pgtype.UUID) (*Event, error) {
+func (q *Queries) GetEvent(ctx context.Context, id uuid.UUID) (*Event, error) {
 	row := q.db.QueryRow(ctx, GetEvent, id)
 	var i Event
 	err := row.Scan(
@@ -129,8 +130,8 @@ WHERE source = $1
 `
 
 type HardDeleteEventsBySourceAndSourceIDPrefixParams struct {
-	Source         string      `json:"source"`
-	SourceIDPrefix pgtype.Text `json:"source_id_prefix"`
+	Source         string  `json:"source"`
+	SourceIDPrefix *string `json:"source_id_prefix"`
 }
 
 // Test-only: hard-deletes event rows whose (source, source_id) match the
@@ -159,12 +160,12 @@ RETURNING id, source, source_id, kind, payload, observed_at, received_at, create
 `
 
 type InsertEventParams struct {
-	ID         pgtype.UUID        `json:"id"`
-	Source     string             `json:"source"`
-	SourceID   pgtype.Text        `json:"source_id"`
-	Kind       string             `json:"kind"`
-	Payload    []byte             `json:"payload"`
-	ObservedAt pgtype.Timestamptz `json:"observed_at"`
+	ID         *uuid.UUID `json:"id"`
+	Source     string     `json:"source"`
+	SourceID   *string    `json:"source_id"`
+	Kind       string     `json:"kind"`
+	Payload    []byte     `json:"payload"`
+	ObservedAt time.Time  `json:"observed_at"`
 }
 
 // Event queries (spec §3.1, §3.3). Raw append-only event log.

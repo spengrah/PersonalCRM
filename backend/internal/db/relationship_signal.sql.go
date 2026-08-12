@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const DeleteSignalsForSubject = `-- name: DeleteSignalsForSubject :exec
@@ -18,7 +19,7 @@ WHERE subject_node_id = $1
 
 // Wipe every signal for one node (e.g. when the node's inputs change and all
 // signals must be rebuilt).
-func (q *Queries) DeleteSignalsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) error {
+func (q *Queries) DeleteSignalsForSubject(ctx context.Context, subjectNodeID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteSignalsForSubject, subjectNodeID)
 	return err
 }
@@ -29,8 +30,8 @@ WHERE subject_node_id = $1 AND signal_key = $2
 `
 
 type GetRelationshipSignalParams struct {
-	SubjectNodeID pgtype.UUID `json:"subject_node_id"`
-	SignalKey     string      `json:"signal_key"`
+	SubjectNodeID uuid.UUID `json:"subject_node_id"`
+	SignalKey     string    `json:"signal_key"`
 }
 
 func (q *Queries) GetRelationshipSignal(ctx context.Context, arg GetRelationshipSignalParams) (*RelationshipSignal, error) {
@@ -53,7 +54,7 @@ WHERE subject_node_id = $1
 ORDER BY signal_key
 `
 
-func (q *Queries) ListSignalsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) ([]*RelationshipSignal, error) {
+func (q *Queries) ListSignalsForSubject(ctx context.Context, subjectNodeID uuid.UUID) ([]*RelationshipSignal, error) {
 	rows, err := q.db.Query(ctx, ListSignalsForSubject, subjectNodeID)
 	if err != nil {
 		return nil, err
@@ -94,11 +95,11 @@ DO UPDATE SET
 `
 
 type UpsertRelationshipSignalParams struct {
-	SubjectNodeID pgtype.UUID        `json:"subject_node_id"`
-	SignalKey     string             `json:"signal_key"`
-	Value         float64            `json:"value"`
-	AsOf          pgtype.Timestamptz `json:"as_of"`
-	MethodVersion string             `json:"method_version"`
+	SubjectNodeID uuid.UUID `json:"subject_node_id"`
+	SignalKey     string    `json:"signal_key"`
+	Value         float64   `json:"value"`
+	AsOf          time.Time `json:"as_of"`
+	MethodVersion string    `json:"method_version"`
 }
 
 // Relationship signal storage queries (graph foundation, derived storage).

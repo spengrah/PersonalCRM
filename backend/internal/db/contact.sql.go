@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const ComputeContactDatesAfterDelete = `-- name: ComputeContactDatesAfterDelete :one
@@ -17,41 +18,38 @@ WITH agg AS (
     MAX(occurred_at) FILTER (WHERE direction IN ('inbound','mutual'))  AS new_non_outbound,
     MAX(occurred_at) FILTER (WHERE direction IN ('outbound','mutual')) AS new_outreach
   FROM interaction
-  WHERE contact_id = $2 AND deleted_at IS NULL
+  WHERE contact_id = $1 AND deleted_at IS NULL
 ),
 locked AS (
   SELECT id, last_contacted, last_interaction_at, last_response_at,
          last_outreach_at, contact_by, cadence, created_at
   FROM contact
-  WHERE id = $2 AND deleted_at IS NULL
+  WHERE id = $1 AND deleted_at IS NULL
   FOR UPDATE
 )
 SELECT
-  (CASE WHEN c.last_contacted      = $1::timestamptz THEN agg.new_non_outbound ELSE c.last_contacted      END)::timestamptz AS new_last_contacted,
-  (CASE WHEN c.last_interaction_at = $1::timestamptz THEN agg.new_non_outbound ELSE c.last_interaction_at END)::timestamptz AS new_last_interaction_at,
-  (CASE WHEN c.last_response_at    = $1::timestamptz THEN agg.new_non_outbound ELSE c.last_response_at    END)::timestamptz AS new_last_response_at,
-  (CASE WHEN c.last_outreach_at    = $1::timestamptz THEN agg.new_outreach     ELSE c.last_outreach_at    END)::timestamptz AS new_last_outreach_at,
-  c.last_contacted AS old_last_contacted,
+  agg.new_non_outbound AS new_non_outbound,
+  agg.new_outreach     AS new_outreach,
+  c.last_contacted     AS old_last_contacted,
+  c.last_interaction_at AS old_last_interaction_at,
+  c.last_response_at   AS old_last_response_at,
+  c.last_outreach_at   AS old_last_outreach_at,
   c.contact_by     AS old_contact_by,
   c.cadence        AS cadence,
   c.created_at     AS created_at
 FROM locked c, agg
 `
 
-type ComputeContactDatesAfterDeleteParams struct {
-	DeletedAtTs pgtype.Timestamptz `json:"deleted_at_ts"`
-	ID          pgtype.UUID        `json:"id"`
-}
-
 type ComputeContactDatesAfterDeleteRow struct {
-	NewLastContacted     pgtype.Timestamptz `json:"new_last_contacted"`
-	NewLastInteractionAt pgtype.Timestamptz `json:"new_last_interaction_at"`
-	NewLastResponseAt    pgtype.Timestamptz `json:"new_last_response_at"`
-	NewLastOutreachAt    pgtype.Timestamptz `json:"new_last_outreach_at"`
-	OldLastContacted     pgtype.Timestamptz `json:"old_last_contacted"`
-	OldContactBy         pgtype.Date        `json:"old_contact_by"`
-	Cadence              pgtype.Text        `json:"cadence"`
-	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	NewNonOutbound       interface{} `json:"new_non_outbound"`
+	NewOutreach          interface{} `json:"new_outreach"`
+	OldLastContacted     *time.Time  `json:"old_last_contacted"`
+	OldLastInteractionAt *time.Time  `json:"old_last_interaction_at"`
+	OldLastResponseAt    *time.Time  `json:"old_last_response_at"`
+	OldLastOutreachAt    *time.Time  `json:"old_last_outreach_at"`
+	OldContactBy         *time.Time  `json:"old_contact_by"`
+	Cadence              *string     `json:"cadence"`
+	CreatedAt            *time.Time  `json:"created_at"`
 }
 
 // Returns the surgically-recomputed timestamp columns (each touched ONLY
@@ -67,15 +65,16 @@ type ComputeContactDatesAfterDeleteRow struct {
 // concurrent writer that committed while waiting for the contact lock (the
 // FOR UPDATE retained below re-takes the held lock; the load-bearing
 // serialization is the prior LockContactForDateRecompute statement).
-func (q *Queries) ComputeContactDatesAfterDelete(ctx context.Context, arg ComputeContactDatesAfterDeleteParams) (*ComputeContactDatesAfterDeleteRow, error) {
-	row := q.db.QueryRow(ctx, ComputeContactDatesAfterDelete, arg.DeletedAtTs, arg.ID)
+func (q *Queries) ComputeContactDatesAfterDelete(ctx context.Context, id uuid.UUID) (*ComputeContactDatesAfterDeleteRow, error) {
+	row := q.db.QueryRow(ctx, ComputeContactDatesAfterDelete, id)
 	var i ComputeContactDatesAfterDeleteRow
 	err := row.Scan(
-		&i.NewLastContacted,
-		&i.NewLastInteractionAt,
-		&i.NewLastResponseAt,
-		&i.NewLastOutreachAt,
+		&i.NewNonOutbound,
+		&i.NewOutreach,
 		&i.OldLastContacted,
+		&i.OldLastInteractionAt,
+		&i.OldLastResponseAt,
+		&i.OldLastOutreachAt,
 		&i.OldContactBy,
 		&i.Cadence,
 		&i.CreatedAt,
@@ -93,7 +92,7 @@ SELECT EXISTS(
 // Liveness probe for the identity-match guard: a cached
 // external_identity.contact_id pointing at a soft-deleted (e.g. merged-away)
 // contact must not short-circuit the discovery path.
-func (q *Queries) ContactIsLive(ctx context.Context, id pgtype.UUID) (bool, error) {
+func (q *Queries) ContactIsLive(ctx context.Context, id uuid.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, ContactIsLive, id)
 	var is_live bool
 	err := row.Scan(&is_live)
@@ -114,13 +113,13 @@ RETURNING contact.id, contact.full_name, contact.location, contact.birthday, con
 `
 
 type CreateContactWithNodeParams struct {
-	FullName      string             `json:"full_name"`
-	Cadence       pgtype.Text        `json:"cadence"`
-	LastContacted pgtype.Timestamptz `json:"last_contacted"`
-	ProfilePhoto  pgtype.Text        `json:"profile_photo"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	ContactBy     pgtype.Date        `json:"contact_by"`
-	ID            pgtype.UUID        `json:"id"`
+	FullName      string     `json:"full_name"`
+	Cadence       *string    `json:"cadence"`
+	LastContacted *time.Time `json:"last_contacted"`
+	ProfilePhoto  *string    `json:"profile_photo"`
+	CreatedAt     *time.Time `json:"created_at"`
+	ContactBy     *time.Time `json:"contact_by"`
+	ID            uuid.UUID  `json:"id"`
 }
 
 // The person node and the contact are inserted by ONE statement, so the pair is
@@ -196,10 +195,10 @@ type FindSimilarContactsParams struct {
 }
 
 type FindSimilarContactsRow struct {
-	ID             pgtype.UUID `json:"id"`
-	FullName       string      `json:"full_name"`
-	NameSimilarity float32     `json:"name_similarity"`
-	MethodsJson    []byte      `json:"methods_json"`
+	ID             uuid.UUID `json:"id"`
+	FullName       string    `json:"full_name"`
+	NameSimilarity float32   `json:"name_similarity"`
+	MethodsJson    []byte    `json:"methods_json"`
 }
 
 func (q *Queries) FindSimilarContacts(ctx context.Context, arg FindSimilarContactsParams) ([]*FindSimilarContactsRow, error) {
@@ -270,12 +269,12 @@ type FindSimilarContactsBatchParams struct {
 }
 
 type FindSimilarContactsBatchRow struct {
-	CandidateID    string      `json:"candidate_id"`
-	CandidateName  string      `json:"candidate_name"`
-	ContactID      pgtype.UUID `json:"contact_id"`
-	ContactName    string      `json:"contact_name"`
-	NameSimilarity float32     `json:"name_similarity"`
-	MethodsJson    []byte      `json:"methods_json"`
+	CandidateID    string    `json:"candidate_id"`
+	CandidateName  string    `json:"candidate_name"`
+	ContactID      uuid.UUID `json:"contact_id"`
+	ContactName    string    `json:"contact_name"`
+	NameSimilarity float32   `json:"name_similarity"`
+	MethodsJson    []byte    `json:"methods_json"`
 }
 
 // Finds similar contacts for multiple candidate names in a single batch query.
@@ -320,7 +319,7 @@ WHERE id = $1 AND deleted_at IS NULL
 `
 
 // Contact queries
-func (q *Queries) GetContact(ctx context.Context, id pgtype.UUID) (*Contact, error) {
+func (q *Queries) GetContact(ctx context.Context, id uuid.UUID) (*Contact, error) {
 	row := q.db.QueryRow(ctx, GetContact, id)
 	var i Contact
 	err := row.Scan(
@@ -448,11 +447,11 @@ ORDER BY created_at ASC, id ASC
 `
 
 type ListContactsWithKnowledgeColumnsRow struct {
-	ID        pgtype.UUID        `json:"id"`
-	Location  pgtype.Text        `json:"location"`
-	Birthday  pgtype.Date        `json:"birthday"`
-	HowMet    pgtype.Text        `json:"how_met"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID        uuid.UUID  `json:"id"`
+	Location  *string    `json:"location"`
+	Birthday  *time.Time `json:"birthday"`
+	HowMet    *string    `json:"how_met"`
+	CreatedAt *time.Time `json:"created_at"`
 }
 
 // Backfill source for --migrate-contact-knowledge-columns: every non-deleted
@@ -497,8 +496,8 @@ LIMIT $2
 `
 
 type ListOverdueContactsParams struct {
-	Today      pgtype.Date `json:"today"`
-	LimitCount int32       `json:"limit_count"`
+	Today      time.Time `json:"today"`
+	LimitCount int32     `json:"limit_count"`
 }
 
 // Lists contacts whose contact_by date is before today (overdue).
@@ -558,7 +557,7 @@ FOR UPDATE
 // statement still sees the statement's original snapshot, so a concurrently
 // committed interaction would be missed. Returns db.ErrNotFound (pgx.ErrNoRows)
 // when the contact was soft-deleted.
-func (q *Queries) LockContactForDateRecompute(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+func (q *Queries) LockContactForDateRecompute(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, LockContactForDateRecompute, id)
 	err := row.Scan(&id)
 	return id, err
@@ -591,17 +590,17 @@ WHERE id = $1 AND deleted_at IS NULL
 `
 
 type SnapshotContactCadenceFieldsRow struct {
-	LastContacted  pgtype.Timestamptz `json:"last_contacted"`
-	LastOutreachAt pgtype.Timestamptz `json:"last_outreach_at"`
-	LastResponseAt pgtype.Timestamptz `json:"last_response_at"`
-	ContactBy      pgtype.Date        `json:"contact_by"`
+	LastContacted  *time.Time `json:"last_contacted"`
+	LastOutreachAt *time.Time `json:"last_outreach_at"`
+	LastResponseAt *time.Time `json:"last_response_at"`
+	ContactBy      *time.Time `json:"contact_by"`
 }
 
 // Returns only the four spec-listed cadence columns. Used by PR 7's
 // direct-path post-commit closure to capture the post-image inside its
 // own short-lived tx (plan Decision 5). Consumer does NOT call this —
 // consumer reads prev from the event payload (plan Decision 2a).
-func (q *Queries) SnapshotContactCadenceFields(ctx context.Context, id pgtype.UUID) (*SnapshotContactCadenceFieldsRow, error) {
+func (q *Queries) SnapshotContactCadenceFields(ctx context.Context, id uuid.UUID) (*SnapshotContactCadenceFieldsRow, error) {
 	row := q.db.QueryRow(ctx, SnapshotContactCadenceFields, id)
 	var i SnapshotContactCadenceFieldsRow
 	err := row.Scan(
@@ -620,7 +619,7 @@ UPDATE contact SET
 WHERE id = $1 AND deleted_at IS NULL
 `
 
-func (q *Queries) SoftDeleteContact(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) SoftDeleteContact(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, SoftDeleteContact, id)
 	return err
 }
@@ -636,7 +635,7 @@ FOR UPDATE NOWAIT
 // Used by the recompute lock-ordering regression test to prove (without a
 // sleep) that LockContactForDateRecompute is acquired as a blocking statement.
 // Production code must NOT call this.
-func (q *Queries) TestLockContactForUpdateNoWait(ctx context.Context, id pgtype.UUID) (pgtype.UUID, error) {
+func (q *Queries) TestLockContactForUpdateNoWait(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, TestLockContactForUpdateNoWait, id)
 	err := row.Scan(&id)
 	return id, err
@@ -653,10 +652,10 @@ RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, p
 `
 
 type UpdateContactParams struct {
-	ID           pgtype.UUID `json:"id"`
-	FullName     string      `json:"full_name"`
-	Cadence      pgtype.Text `json:"cadence"`
-	ProfilePhoto pgtype.Text `json:"profile_photo"`
+	ID           uuid.UUID `json:"id"`
+	FullName     string    `json:"full_name"`
+	Cadence      *string   `json:"cadence"`
+	ProfilePhoto *string   `json:"profile_photo"`
 }
 
 // Profile-only update path. Writes name, cadence, profile_photo — NEVER
@@ -702,8 +701,8 @@ UPDATE contact SET birthday = $2 WHERE id = $1 AND deleted_at IS NULL
 `
 
 type UpdateContactBirthdayCacheParams struct {
-	ID       pgtype.UUID `json:"id"`
-	Birthday pgtype.Date `json:"birthday"`
+	ID       uuid.UUID  `json:"id"`
+	Birthday *time.Time `json:"birthday"`
 }
 
 // Knowledge-cache sole-writer: refreshes the derived birthday cache column
@@ -751,17 +750,17 @@ WHERE id = $11 AND deleted_at IS NULL
 `
 
 type UpdateContactCadenceForwardParams struct {
-	ApplyLastContacted     bool               `json:"apply_last_contacted"`
-	LastContacted          pgtype.Timestamptz `json:"last_contacted"`
-	ApplyLastInteractionAt bool               `json:"apply_last_interaction_at"`
-	LastInteractionAt      pgtype.Timestamptz `json:"last_interaction_at"`
-	ApplyLastOutreachAt    bool               `json:"apply_last_outreach_at"`
-	LastOutreachAt         pgtype.Timestamptz `json:"last_outreach_at"`
-	ApplyLastResponseAt    bool               `json:"apply_last_response_at"`
-	LastResponseAt         pgtype.Timestamptz `json:"last_response_at"`
-	ApplyContactBy         bool               `json:"apply_contact_by"`
-	ContactBy              pgtype.Date        `json:"contact_by"`
-	ID                     pgtype.UUID        `json:"id"`
+	ApplyLastContacted     bool       `json:"apply_last_contacted"`
+	LastContacted          *time.Time `json:"last_contacted"`
+	ApplyLastInteractionAt bool       `json:"apply_last_interaction_at"`
+	LastInteractionAt      *time.Time `json:"last_interaction_at"`
+	ApplyLastOutreachAt    bool       `json:"apply_last_outreach_at"`
+	LastOutreachAt         *time.Time `json:"last_outreach_at"`
+	ApplyLastResponseAt    bool       `json:"apply_last_response_at"`
+	LastResponseAt         *time.Time `json:"last_response_at"`
+	ApplyContactBy         bool       `json:"apply_contact_by"`
+	ContactBy              *time.Time `json:"contact_by"`
+	ID                     uuid.UUID  `json:"id"`
 }
 
 // Forward-only cadence write (spec §3.4.2). Each of the cadence columns
@@ -821,17 +820,17 @@ WHERE id = $11 AND deleted_at IS NULL
 `
 
 type UpdateContactCadenceUnconditionalParams struct {
-	ApplyLastContacted     bool               `json:"apply_last_contacted"`
-	LastContacted          pgtype.Timestamptz `json:"last_contacted"`
-	ApplyLastInteractionAt bool               `json:"apply_last_interaction_at"`
-	LastInteractionAt      pgtype.Timestamptz `json:"last_interaction_at"`
-	ApplyLastOutreachAt    bool               `json:"apply_last_outreach_at"`
-	LastOutreachAt         pgtype.Timestamptz `json:"last_outreach_at"`
-	ApplyLastResponseAt    bool               `json:"apply_last_response_at"`
-	LastResponseAt         pgtype.Timestamptz `json:"last_response_at"`
-	ApplyContactBy         bool               `json:"apply_contact_by"`
-	ContactBy              pgtype.Date        `json:"contact_by"`
-	ID                     pgtype.UUID        `json:"id"`
+	ApplyLastContacted     bool       `json:"apply_last_contacted"`
+	LastContacted          *time.Time `json:"last_contacted"`
+	ApplyLastInteractionAt bool       `json:"apply_last_interaction_at"`
+	LastInteractionAt      *time.Time `json:"last_interaction_at"`
+	ApplyLastOutreachAt    bool       `json:"apply_last_outreach_at"`
+	LastOutreachAt         *time.Time `json:"last_outreach_at"`
+	ApplyLastResponseAt    bool       `json:"apply_last_response_at"`
+	LastResponseAt         *time.Time `json:"last_response_at"`
+	ApplyContactBy         bool       `json:"apply_contact_by"`
+	ContactBy              *time.Time `json:"contact_by"`
+	ID                     uuid.UUID  `json:"id"`
 }
 
 // Manual-source branch (spec §3.4.2 "manual-source exception"): user
@@ -865,8 +864,8 @@ UPDATE contact SET how_met = $2 WHERE id = $1 AND deleted_at IS NULL
 `
 
 type UpdateContactHowMetCacheParams struct {
-	ID     pgtype.UUID `json:"id"`
-	HowMet pgtype.Text `json:"how_met"`
+	ID     uuid.UUID `json:"id"`
+	HowMet *string   `json:"how_met"`
 }
 
 // Knowledge-cache sole-writer: refreshes the derived how_met cache column
@@ -881,8 +880,8 @@ UPDATE contact SET location = $2 WHERE id = $1 AND deleted_at IS NULL
 `
 
 type UpdateContactLocationCacheParams struct {
-	ID       pgtype.UUID `json:"id"`
-	Location pgtype.Text `json:"location"`
+	ID       uuid.UUID `json:"id"`
+	Location *string   `json:"location"`
 }
 
 // Knowledge-cache sole-writer: refreshes the derived location cache column
@@ -906,12 +905,12 @@ WHERE id = $6 AND deleted_at IS NULL
 `
 
 type WriteContactDatesAfterDeleteParams struct {
-	NewLastContacted     pgtype.Timestamptz `json:"new_last_contacted"`
-	NewLastInteractionAt pgtype.Timestamptz `json:"new_last_interaction_at"`
-	NewLastResponseAt    pgtype.Timestamptz `json:"new_last_response_at"`
-	NewLastOutreachAt    pgtype.Timestamptz `json:"new_last_outreach_at"`
-	NewContactBy         pgtype.Date        `json:"new_contact_by"`
-	ID                   pgtype.UUID        `json:"id"`
+	NewLastContacted     *time.Time `json:"new_last_contacted"`
+	NewLastInteractionAt *time.Time `json:"new_last_interaction_at"`
+	NewLastResponseAt    *time.Time `json:"new_last_response_at"`
+	NewLastOutreachAt    *time.Time `json:"new_last_outreach_at"`
+	NewContactBy         *time.Time `json:"new_contact_by"`
+	ID                   uuid.UUID  `json:"id"`
 }
 
 // Writes the recomputed date columns. contact_by is passed pre-computed by

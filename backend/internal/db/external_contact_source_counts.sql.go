@@ -8,7 +8,7 @@ package db
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CountExternalContactsByHostAndSource = `-- name: CountExternalContactsByHostAndSource :many
@@ -32,7 +32,7 @@ type CountExternalContactsByHostAndSourceRow struct {
 //   - deleted_at IS NULL: excludes tombstoned rows.
 //   - duplicate_of_id IS NULL: excludes merge-dupe rows that the import
 //     UI doesn't surface.
-func (q *Queries) CountExternalContactsByHostAndSource(ctx context.Context, hostID pgtype.UUID) ([]*CountExternalContactsByHostAndSourceRow, error) {
+func (q *Queries) CountExternalContactsByHostAndSource(ctx context.Context, hostID *uuid.UUID) ([]*CountExternalContactsByHostAndSourceRow, error) {
 	rows, err := q.db.Query(ctx, CountExternalContactsByHostAndSource, hostID)
 	if err != nil {
 		return nil, err

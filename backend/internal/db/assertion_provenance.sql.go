@@ -8,7 +8,7 @@ package db
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const DeleteProvenanceLocator = `-- name: DeleteProvenanceLocator :exec
@@ -17,8 +17,8 @@ WHERE assertion_id = $1 AND locator_hash = $2
 `
 
 type DeleteProvenanceLocatorParams struct {
-	AssertionID pgtype.UUID `json:"assertion_id"`
-	LocatorHash string      `json:"locator_hash"`
+	AssertionID uuid.UUID `json:"assertion_id"`
+	LocatorHash string    `json:"locator_hash"`
 }
 
 // Re-extraction retirement (a later layer): drop a single locator. When the last
@@ -32,7 +32,7 @@ const ExistsCalendarEvent = `-- name: ExistsCalendarEvent :one
 SELECT EXISTS(SELECT 1 FROM calendar_event WHERE id = $1)
 `
 
-func (q *Queries) ExistsCalendarEvent(ctx context.Context, id pgtype.UUID) (bool, error) {
+func (q *Queries) ExistsCalendarEvent(ctx context.Context, id uuid.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, ExistsCalendarEvent, id)
 	var exists bool
 	err := row.Scan(&exists)
@@ -50,7 +50,7 @@ SELECT EXISTS(SELECT 1 FROM comms_message WHERE id = $1 AND deleted_at IS NULL)
 // pass write-time validation (a NEW assertion may not be grounded in a dead
 // source; a source deleted AFTER the assertion degrades gracefully via the
 // preserved quote/input_hash). calendar_event/phone_call have no deleted_at.
-func (q *Queries) ExistsCommsMessage(ctx context.Context, id pgtype.UUID) (bool, error) {
+func (q *Queries) ExistsCommsMessage(ctx context.Context, id uuid.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, ExistsCommsMessage, id)
 	var exists bool
 	err := row.Scan(&exists)
@@ -61,7 +61,7 @@ const ExistsMeetingNote = `-- name: ExistsMeetingNote :one
 SELECT EXISTS(SELECT 1 FROM meeting_note WHERE id = $1 AND deleted_at IS NULL)
 `
 
-func (q *Queries) ExistsMeetingNote(ctx context.Context, id pgtype.UUID) (bool, error) {
+func (q *Queries) ExistsMeetingNote(ctx context.Context, id uuid.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, ExistsMeetingNote, id)
 	var exists bool
 	err := row.Scan(&exists)
@@ -72,7 +72,7 @@ const ExistsMessagesMessage = `-- name: ExistsMessagesMessage :one
 SELECT EXISTS(SELECT 1 FROM messages_message WHERE id = $1 AND deleted_at IS NULL)
 `
 
-func (q *Queries) ExistsMessagesMessage(ctx context.Context, id pgtype.UUID) (bool, error) {
+func (q *Queries) ExistsMessagesMessage(ctx context.Context, id uuid.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, ExistsMessagesMessage, id)
 	var exists bool
 	err := row.Scan(&exists)
@@ -83,7 +83,7 @@ const ExistsPhoneCall = `-- name: ExistsPhoneCall :one
 SELECT EXISTS(SELECT 1 FROM phone_call WHERE id = $1)
 `
 
-func (q *Queries) ExistsPhoneCall(ctx context.Context, id pgtype.UUID) (bool, error) {
+func (q *Queries) ExistsPhoneCall(ctx context.Context, id uuid.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, ExistsPhoneCall, id)
 	var exists bool
 	err := row.Scan(&exists)
@@ -94,7 +94,7 @@ const ExistsTelegramMessage = `-- name: ExistsTelegramMessage :one
 SELECT EXISTS(SELECT 1 FROM telegram_message WHERE id = $1 AND deleted_at IS NULL)
 `
 
-func (q *Queries) ExistsTelegramMessage(ctx context.Context, id pgtype.UUID) (bool, error) {
+func (q *Queries) ExistsTelegramMessage(ctx context.Context, id uuid.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, ExistsTelegramMessage, id)
 	var exists bool
 	err := row.Scan(&exists)
@@ -114,18 +114,18 @@ ON CONFLICT (assertion_id, locator_hash) DO NOTHING
 `
 
 type InsertProvenanceParams struct {
-	AssertionID     pgtype.UUID `json:"assertion_id"`
-	LocatorHash     string      `json:"locator_hash"`
-	SourceKind      string      `json:"source_kind"`
-	SourceID        string      `json:"source_id"`
-	ProducerKind    string      `json:"producer_kind"`
-	ProducerVersion string      `json:"producer_version"`
-	Field           pgtype.Text `json:"field"`
-	StartOffset     pgtype.Int4 `json:"start_offset"`
-	EndOffset       pgtype.Int4 `json:"end_offset"`
-	ChunkID         pgtype.Text `json:"chunk_id"`
-	InputHash       string      `json:"input_hash"`
-	Quote           pgtype.Text `json:"quote"`
+	AssertionID     uuid.UUID `json:"assertion_id"`
+	LocatorHash     string    `json:"locator_hash"`
+	SourceKind      string    `json:"source_kind"`
+	SourceID        string    `json:"source_id"`
+	ProducerKind    string    `json:"producer_kind"`
+	ProducerVersion string    `json:"producer_version"`
+	Field           *string   `json:"field"`
+	StartOffset     *int32    `json:"start_offset"`
+	EndOffset       *int32    `json:"end_offset"`
+	ChunkID         *string   `json:"chunk_id"`
+	InputHash       string    `json:"input_hash"`
+	Quote           *string   `json:"quote"`
 }
 
 // Assertion provenance queries (graph foundation).
@@ -166,7 +166,7 @@ ORDER BY created_at
 `
 
 // All locators for an assertion, oldest first.
-func (q *Queries) ListProvenance(ctx context.Context, assertionID pgtype.UUID) ([]*AssertionProvenance, error) {
+func (q *Queries) ListProvenance(ctx context.Context, assertionID uuid.UUID) ([]*AssertionProvenance, error) {
 	rows, err := q.db.Query(ctx, ListProvenance, assertionID)
 	if err != nil {
 		return nil, err

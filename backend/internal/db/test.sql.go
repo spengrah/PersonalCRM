@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CountActiveRiverJobsBySourceArgForTest = `-- name: CountActiveRiverJobsBySourceArgForTest :one
@@ -75,7 +76,7 @@ WHERE display_name LIKE $1 || '%'
   AND deleted_at IS NULL
 `
 
-func (q *Queries) CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error) {
+func (q *Queries) CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 *string) (int64, error) {
 	row := q.db.QueryRow(ctx, CountExternalContactsByDisplayNamePrefix, dollar_1)
 	var count int64
 	err := row.Scan(&count)
@@ -88,9 +89,9 @@ WHERE id = $1 AND contact_id = $2 AND source = $3
 `
 
 type CountInteractionsByIDContactAndSourceParams struct {
-	ID        pgtype.UUID `json:"id"`
-	ContactID pgtype.UUID `json:"contact_id"`
-	Source    string      `json:"source"`
+	ID        uuid.UUID `json:"id"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Source    string    `json:"source"`
 }
 
 // Test assertion — confirms exactly the expected interaction row exists
@@ -129,6 +130,22 @@ SELECT COUNT(*) FROM river_job WHERE finalized_at IS NULL
 // populate river_client, so no sound DB liveness signal exists).
 func (q *Queries) CountNonFinalRiverJobs(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, CountNonFinalRiverJobs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const CountOAuthCredentialWithNullTokenType = `-- name: CountOAuthCredentialWithNullTokenType :one
+SELECT count(*) FROM oauth_credential WHERE id = $1 AND token_type IS NULL
+`
+
+// Id-scoped NULL probe for the token_type column: the repository's
+// OAuthCredential struct flattens NULL and ” to the same Go value, so the
+// discriminating assertion must read the stored column. Scoped to one id
+// because a global count is vacuous under t.Parallel() — any sibling's NULL
+// row satisfies it.
+func (q *Queries) CountOAuthCredentialWithNullTokenType(ctx context.Context, id uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, CountOAuthCredentialWithNullTokenType, id)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -244,7 +261,7 @@ const DeleteCalendarEventsByGcalEventIdPrefix = `-- name: DeleteCalendarEventsBy
 DELETE FROM calendar_event WHERE gcal_event_id LIKE $1 || '%'
 `
 
-func (q *Queries) DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error) {
+func (q *Queries) DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 *string) (int64, error) {
 	result, err := q.db.Exec(ctx, DeleteCalendarEventsByGcalEventIdPrefix, dollar_1)
 	if err != nil {
 		return 0, err
@@ -259,7 +276,7 @@ DELETE FROM contact WHERE full_name LIKE $1 || '%'
 
 // Test data management queries
 // These queries are used by the test API endpoints to seed and cleanup test data
-func (q *Queries) DeleteContactsByNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error) {
+func (q *Queries) DeleteContactsByNamePrefix(ctx context.Context, dollar_1 *string) (int64, error) {
 	result, err := q.db.Exec(ctx, DeleteContactsByNamePrefix, dollar_1)
 	if err != nil {
 		return 0, err
@@ -285,7 +302,7 @@ const DeleteExternalContactsByDisplayNamePrefix = `-- name: DeleteExternalContac
 DELETE FROM external_contact WHERE display_name LIKE $1 || '%'
 `
 
-func (q *Queries) DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error) {
+func (q *Queries) DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 *string) (int64, error) {
 	result, err := q.db.Exec(ctx, DeleteExternalContactsByDisplayNamePrefix, dollar_1)
 	if err != nil {
 		return 0, err
@@ -315,7 +332,7 @@ const DeleteExternalContactsBySourceIDPrefix = `-- name: DeleteExternalContactsB
 DELETE FROM external_contact WHERE source_id LIKE $1 || '%'
 `
 
-func (q *Queries) DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 pgtype.Text) (int64, error) {
+func (q *Queries) DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 *string) (int64, error) {
 	result, err := q.db.Exec(ctx, DeleteExternalContactsBySourceIDPrefix, dollar_1)
 	if err != nil {
 		return 0, err
@@ -343,7 +360,7 @@ const DeleteExternalIdentitiesBySourceID = `-- name: DeleteExternalIdentitiesByS
 DELETE FROM external_identity WHERE source_id = $1
 `
 
-func (q *Queries) DeleteExternalIdentitiesBySourceID(ctx context.Context, sourceID pgtype.Text) (int64, error) {
+func (q *Queries) DeleteExternalIdentitiesBySourceID(ctx context.Context, sourceID *string) (int64, error) {
 	result, err := q.db.Exec(ctx, DeleteExternalIdentitiesBySourceID, sourceID)
 	if err != nil {
 		return 0, err
@@ -356,8 +373,8 @@ DELETE FROM interaction WHERE contact_id = $1 AND source = $2
 `
 
 type DeleteInteractionsByContactAndSourceParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Source    string      `json:"source"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Source    string    `json:"source"`
 }
 
 // Test teardown — drops interactions seeded by a test under the given
@@ -472,7 +489,7 @@ const DeleteTelegramMessagesByPeerUserID = `-- name: DeleteTelegramMessagesByPee
 DELETE FROM telegram_message WHERE peer_user_id = $1
 `
 
-func (q *Queries) DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID pgtype.Int8) (int64, error) {
+func (q *Queries) DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID *int64) (int64, error) {
 	result, err := q.db.Exec(ctx, DeleteTelegramMessagesByPeerUserID, peerUserID)
 	if err != nil {
 		return 0, err
@@ -649,12 +666,12 @@ RETURNING id, source, account_id, enabled, status, strategy, last_sync_at, last_
 `
 
 type SeedExternalSyncStateParams struct {
-	Source     string             `json:"source"`
-	AccountID  pgtype.Text        `json:"account_id"`
-	Enabled    bool               `json:"enabled"`
-	Status     string             `json:"status"`
-	Strategy   string             `json:"strategy"`
-	NextSyncAt pgtype.Timestamptz `json:"next_sync_at"`
+	Source     string     `json:"source"`
+	AccountID  *string    `json:"account_id"`
+	Enabled    bool       `json:"enabled"`
+	Status     string     `json:"status"`
+	Strategy   string     `json:"strategy"`
+	NextSyncAt *time.Time `json:"next_sync_at"`
 }
 
 // Seeds an external_sync_state row at caller-supplied next_sync_at.
@@ -711,14 +728,14 @@ type SeedMacHostParams struct {
 // RETURNING is the minimal id-only set so step-by-step migration tests
 // that run this against earlier schemas (before columns added in later
 // migrations exist) don't trip on the column expansion of RETURNING *.
-func (q *Queries) SeedMacHost(ctx context.Context, arg SeedMacHostParams) (pgtype.UUID, error) {
+func (q *Queries) SeedMacHost(ctx context.Context, arg SeedMacHostParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, SeedMacHost,
 		arg.Hostname,
 		arg.DaemonVersion,
 		arg.ProtocolVersion,
 		arg.ApiKeyHash,
 	)
-	var id pgtype.UUID
+	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
 }
@@ -730,8 +747,8 @@ RETURNING id, token_hash, expires_at, consumed_at, consumed_host_id, created_at
 `
 
 type SeedPairingTokenParams struct {
-	TokenHash string             `json:"token_hash"`
-	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	TokenHash string    `json:"token_hash"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // Inserts a pairing token with caller-supplied hash + expiry. Tests use
@@ -857,7 +874,7 @@ SELECT COUNT(*) FROM assertion WHERE subject_node_id = $1
 // Assertion-store test support: count the assertions whose subject is a given
 // node, so a test scopes its assertions to its own namespace's subject node on
 // the shared test DB.
-func (q *Queries) SyntheticCountAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticCountAssertionsForSubject(ctx context.Context, subjectNodeID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountAssertionsForSubject, subjectNodeID)
 	var count int64
 	err := row.Scan(&count)
@@ -918,7 +935,7 @@ WHERE cm.value_normalized LIKE $1 || '%'
 // collision actually originates. Counts live (non-deleted-contact) contact_method
 // rows whose normalized value shares the namespace's phone prefix. Caller passes
 // a BARE prefix; '%' is appended here.
-func (q *Queries) SyntheticCountContactMethodsByValueNormalizedPrefix(ctx context.Context, valueNormalizedPrefix pgtype.Text) (int64, error) {
+func (q *Queries) SyntheticCountContactMethodsByValueNormalizedPrefix(ctx context.Context, valueNormalizedPrefix *string) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountContactMethodsByValueNormalizedPrefix, valueNormalizedPrefix)
 	var count int64
 	err := row.Scan(&count)
@@ -944,7 +961,7 @@ SELECT COUNT(*) FROM contact WHERE id = ANY($1::uuid[])
 `
 
 // Cleanup assertion — count surviving contact rows for the given ids.
-func (q *Queries) SyntheticCountContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticCountContactsByIds(ctx context.Context, contactIds []uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountContactsByIds, contactIds)
 	var count int64
 	err := row.Scan(&count)
@@ -960,7 +977,7 @@ SELECT COUNT(*) FROM event_consumer_claim WHERE event_id = ANY($1::uuid[])
 // sweep that dropped the events while its claim delete failed would leave rows
 // that no later cleanup can even name (the event ids are derived FROM the events).
 // The ids must therefore be captured before the sweep and asserted against after.
-func (q *Queries) SyntheticCountEventConsumerClaimsByEventIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticCountEventConsumerClaimsByEventIds(ctx context.Context, eventIds []uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountEventConsumerClaimsByEventIds, eventIds)
 	var count int64
 	err := row.Scan(&count)
@@ -1008,7 +1025,7 @@ WHERE identifier LIKE $1 || '%'
 // normalized identifier shares the namespace's phone-digit prefix. Non-zero means
 // another namespace already occupies this phone sub-block, so NewHarness re-salts.
 // Caller passes a BARE prefix; '%' is appended here.
-func (q *Queries) SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error) {
+func (q *Queries) SyntheticCountExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix *string) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountExternalIdentitiesByIdentifierPrefix, identifierPrefix)
 	var count int64
 	err := row.Scan(&count)
@@ -1025,8 +1042,8 @@ WHERE c.contact_id = ANY(ce.matched_contact_ids)
 `
 
 type SyntheticCountLinkedCalendarEventsByGcalIdsParams struct {
-	GcalEventIds []string      `json:"gcal_event_ids"`
-	ContactIds   []pgtype.UUID `json:"contact_ids"`
+	GcalEventIds []string    `json:"gcal_event_ids"`
+	ContactIds   []uuid.UUID `json:"contact_ids"`
 }
 
 // gcal UPCOMING: how many of these (gcal_event_id, contact_id) PAIRS have a
@@ -1096,8 +1113,8 @@ WHERE peer_user_id = $1
 `
 
 type SyntheticCountLinkedTelegramMessageByMessageIdParams struct {
-	PeerUserID        pgtype.Int8 `json:"peer_user_id"`
-	TelegramMessageID int32       `json:"telegram_message_id"`
+	PeerUserID        *int64 `json:"peer_user_id"`
+	TelegramMessageID int32  `json:"telegram_message_id"`
 }
 
 // telegram: the message row for (peer_user_id, telegram_message_id) has an
@@ -1120,7 +1137,7 @@ SELECT COUNT(*) FROM node WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
 // among the given ids, scoped to THIS run's tracked node ids. Used to assert a merge
 // winner node stays live (== id count) while soft-deleted + merge-loser nodes are
 // tombstoned (== 0).
-func (q *Queries) SyntheticCountLiveNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticCountLiveNodesByIds(ctx context.Context, nodeIds []uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountLiveNodesByIds, nodeIds)
 	var count int64
 	err := row.Scan(&count)
@@ -1138,8 +1155,8 @@ WHERE c.contact_id = ANY(ce.matched_contact_ids)
 `
 
 type SyntheticCountMatchedCalendarEventsByGcalIdsParams struct {
-	GcalEventIds []string      `json:"gcal_event_ids"`
-	ContactIds   []pgtype.UUID `json:"contact_ids"`
+	GcalEventIds []string    `json:"gcal_event_ids"`
+	ContactIds   []uuid.UUID `json:"contact_ids"`
 }
 
 // gcal batch: how many of these (gcal_event_id, contact_id) PAIRS have a
@@ -1179,7 +1196,7 @@ SELECT COUNT(*) FROM node WHERE canonical_label LIKE $1 || '%'
 // Graph identity test support: count nodes whose canonical_label is ns-prefixed,
 // so a test can scope assertions to its own namespace's nodes on the shared test
 // DB. Caller passes a BARE prefix; '%' is appended here.
-func (q *Queries) SyntheticCountNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error) {
+func (q *Queries) SyntheticCountNodesByLabelPrefix(ctx context.Context, labelPrefix *string) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountNodesByLabelPrefix, labelPrefix)
 	var count int64
 	err := row.Scan(&count)
@@ -1223,8 +1240,8 @@ WHERE gcal_event_id = $1
 `
 
 type SyntheticCountProcessedCalendarEventByGcalIdParams struct {
-	GcalEventID string      `json:"gcal_event_id"`
-	ContactID   pgtype.UUID `json:"contact_id"`
+	GcalEventID string    `json:"gcal_event_id"`
+	ContactID   uuid.UUID `json:"contact_id"`
 }
 
 // gcal seeded: the calendar_event for the gcal id has the contact in
@@ -1245,7 +1262,7 @@ SELECT COUNT(*) FROM relationship_signal WHERE subject_node_id = ANY($1::uuid[])
 // nodes (scoped to THIS run's tracked node ids, so it is immune to parallel tests
 // seeding their own signals on the shared DB). Used to assert ≥1 signal exists for
 // the seeded nodes (coverage) and that 0 remain after teardown.
-func (q *Queries) SyntheticCountRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticCountRelationshipSignalsForNodes(ctx context.Context, nodeIds []uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountRelationshipSignalsForNodes, nodeIds)
 	var count int64
 	err := row.Scan(&count)
@@ -1363,7 +1380,7 @@ WHERE peer_user_id = $1
 
 // Settle Gate A (telegram unknown-sender): a message row exists for the peer
 // with matched_contact_id IS NULL (the stranded/discovery-candidate state).
-func (q *Queries) SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID pgtype.Int8) (int64, error) {
+func (q *Queries) SyntheticCountStrandedTelegramMessagesByPeer(ctx context.Context, peerUserID *int64) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountStrandedTelegramMessagesByPeer, peerUserID)
 	var count int64
 	err := row.Scan(&count)
@@ -1469,8 +1486,8 @@ WHERE peer_user_id >= $1
 `
 
 type SyntheticCountTelegramMessagesInPeerBandParams struct {
-	BandStart pgtype.Int8 `json:"band_start"`
-	BandEnd   pgtype.Int8 `json:"band_end"`
+	BandStart *int64 `json:"band_start"`
+	BandEnd   *int64 `json:"band_end"`
 }
 
 // Harness setup collision detection (D5): count live telegram_message rows whose
@@ -1569,7 +1586,7 @@ WHERE source = 'gcal_attendee'
 // synthetic unknown attendee carries the 'synth-<ns>-' prefix. Counts those
 // unmatched candidates for this namespace. Caller passes a BARE prefix; '%'
 // appended here.
-func (q *Queries) SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error) {
+func (q *Queries) SyntheticCountUnmatchedExternalContactByEmailPrefix(ctx context.Context, sourceIDPrefix *string) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountUnmatchedExternalContactByEmailPrefix, sourceIDPrefix)
 	var count int64
 	err := row.Scan(&count)
@@ -1599,7 +1616,7 @@ SELECT COUNT(*) FROM node WHERE id = ANY($1::uuid[]) AND type = 'venue'
 // Cleanup assertion — count surviving venue nodes among the given ids (scoped to
 // THIS run's tracked venue node ids, so it is immune to parallel tests creating
 // their own venue nodes on the shared DB, unlike a global venue-node count).
-func (q *Queries) SyntheticCountVenueNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticCountVenueNodesByIds(ctx context.Context, nodeIds []uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, SyntheticCountVenueNodesByIds, nodeIds)
 	var count int64
 	err := row.Scan(&count)
@@ -1615,7 +1632,7 @@ DELETE FROM assertion WHERE subject_node_id = $1 OR object_node_id = $1
 // ACTION), so a test MUST clear its assertions before deleting its nodes; this
 // targeted delete is the cleanup primitive for that. superseded_by is a nullable
 // self-FK, so a single multi-row DELETE clears a closed-pair set in one shot.
-func (q *Queries) SyntheticDeleteAssertionsForNode(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteAssertionsForNode(ctx context.Context, subjectNodeID uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteAssertionsForNode, subjectNodeID)
 	if err != nil {
 		return 0, err
@@ -1629,7 +1646,7 @@ DELETE FROM comms_message WHERE external_id LIKE $1 || '%'
 
 // Cleanup step 4: comms_message rows whose external_id is ns-prefixed.
 // Caller passes a BARE prefix; '%' is appended here.
-func (q *Queries) SyntheticDeleteCommsMessagesByExternalIdPrefix(ctx context.Context, externalIDPrefix pgtype.Text) (int64, error) {
+func (q *Queries) SyntheticDeleteCommsMessagesByExternalIdPrefix(ctx context.Context, externalIDPrefix *string) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteCommsMessagesByExternalIdPrefix, externalIDPrefix)
 	if err != nil {
 		return 0, err
@@ -1642,7 +1659,7 @@ DELETE FROM contact_method WHERE contact_id = ANY($1::uuid[])
 `
 
 // Cleanup step 11: contact_method by contact.
-func (q *Queries) SyntheticDeleteContactMethodsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteContactMethodsByContactIds(ctx context.Context, contactIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteContactMethodsByContactIds, contactIds)
 	if err != nil {
 		return 0, err
@@ -1655,7 +1672,7 @@ DELETE FROM contact_task WHERE contact_id = ANY($1::uuid[])
 `
 
 // Cleanup step 10: contact_task has no deleted_at; hard delete by contact.
-func (q *Queries) SyntheticDeleteContactTasksByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteContactTasksByContactIds(ctx context.Context, contactIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteContactTasksByContactIds, contactIds)
 	if err != nil {
 		return 0, err
@@ -1669,7 +1686,7 @@ DELETE FROM contact_task WHERE id = ANY($1::uuid[])
 
 // Todoist replay cleanup: delete the contact_task rows the replay's reconcile
 // created (the before/after diff from SyntheticListContactTaskIdsByProvider).
-func (q *Queries) SyntheticDeleteContactTasksByIds(ctx context.Context, taskIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteContactTasksByIds(ctx context.Context, taskIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteContactTasksByIds, taskIds)
 	if err != nil {
 		return 0, err
@@ -1683,7 +1700,7 @@ DELETE FROM contact WHERE id = ANY($1::uuid[])
 
 // Cleanup step 13: contact by tracked id. A true DELETE (not soft) so
 // ON DELETE CASCADE fires for contact_enrichment (and any cascade FK).
-func (q *Queries) SyntheticDeleteContactsByIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteContactsByIds(ctx context.Context, contactIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteContactsByIds, contactIds)
 	if err != nil {
 		return 0, err
@@ -1699,7 +1716,7 @@ DELETE FROM entity_type WHERE key LIKE $1 || '%'
 // so a test that seeds its own ns-prefixed entity_type rows clears them by key
 // prefix (the curated catalog seed rows use bare keys and are never
 // prefix-matched). Caller passes a BARE prefix; '%' is appended here.
-func (q *Queries) SyntheticDeleteEntityTypesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error) {
+func (q *Queries) SyntheticDeleteEntityTypesByKeyPrefix(ctx context.Context, keyPrefix *string) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteEntityTypesByKeyPrefix, keyPrefix)
 	if err != nil {
 		return 0, err
@@ -1712,7 +1729,7 @@ DELETE FROM event_consumer_claim WHERE event_id = ANY($1::uuid[])
 `
 
 // Cleanup step 1: claims for this replay's events (by tracked event id).
-func (q *Queries) SyntheticDeleteEventConsumerClaimsByEventIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteEventConsumerClaimsByEventIds(ctx context.Context, eventIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteEventConsumerClaimsByEventIds, eventIds)
 	if err != nil {
 		return 0, err
@@ -1726,7 +1743,7 @@ DELETE FROM event WHERE id = ANY($1::uuid[])
 
 // Cleanup step 3: events by tracked id (NOT by source — that would wipe
 // other tests' rows sharing the source value on the shared DB).
-func (q *Queries) SyntheticDeleteEventsByIds(ctx context.Context, eventIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteEventsByIds(ctx context.Context, eventIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteEventsByIds, eventIds)
 	if err != nil {
 		return 0, err
@@ -1745,7 +1762,7 @@ DELETE FROM external_contact WHERE id = ANY($1::uuid[])
 // anarlog_title on a SHA-256 (token || session) digest — so the prefix sweep has
 // nothing to match for them and this is the only delete that reaches those rows.
 // A hard DELETE, like every other cleanup step.
-func (q *Queries) SyntheticDeleteExternalContactsByIds(ctx context.Context, externalContactIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteExternalContactsByIds(ctx context.Context, externalContactIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteExternalContactsByIds, externalContactIds)
 	if err != nil {
 		return 0, err
@@ -1769,7 +1786,7 @@ DELETE FROM external_identity WHERE identifier LIKE $1 || '%'
 // ('+1<area>55501...') — synthetic phones are now ns-scoped via the per-namespace
 // area code (factory.phoneFor), so phone identities no longer leak. Caller passes
 // a BARE prefix; '%' appended.
-func (q *Queries) SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix pgtype.Text) (int64, error) {
+func (q *Queries) SyntheticDeleteExternalIdentitiesByIdentifierPrefix(ctx context.Context, identifierPrefix *string) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteExternalIdentitiesByIdentifierPrefix, identifierPrefix)
 	if err != nil {
 		return 0, err
@@ -1783,7 +1800,7 @@ DELETE FROM external_identity WHERE source_id LIKE $1 || '%'
 
 // Cleanup step 8 (backstop): catches any ns-prefixed source_id rows the
 // identifier-prefix delete missed. Caller passes a BARE prefix; '%' appended.
-func (q *Queries) SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx context.Context, sourceIDPrefix pgtype.Text) (int64, error) {
+func (q *Queries) SyntheticDeleteExternalIdentitiesBySourceIdPrefix(ctx context.Context, sourceIDPrefix *string) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteExternalIdentitiesBySourceIdPrefix, sourceIDPrefix)
 	if err != nil {
 		return 0, err
@@ -1815,7 +1832,7 @@ WHERE EXISTS (
 // reaches any identity a post-import hook keys to the candidate it came from and
 // nothing else. MUST run before the owned-candidate external_contact delete,
 // which removes the rows this reads.
-func (q *Queries) SyntheticDeleteIdentitiesForOwnedCandidates(ctx context.Context, externalContactIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteIdentitiesForOwnedCandidates(ctx context.Context, externalContactIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteIdentitiesForOwnedCandidates, externalContactIds)
 	if err != nil {
 		return 0, err
@@ -1829,7 +1846,7 @@ DELETE FROM interaction WHERE contact_id = ANY($1::uuid[])
 
 // Cleanup ladder: interactions by contact (hard delete — the ledger's by-id
 // variant is unavailable cross-request). Soft-deleted rows included.
-func (q *Queries) SyntheticDeleteInteractionsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteInteractionsByContactIds(ctx context.Context, contactIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteInteractionsByContactIds, contactIds)
 	if err != nil {
 		return 0, err
@@ -1842,7 +1859,7 @@ DELETE FROM interaction WHERE id = ANY($1::uuid[])
 `
 
 // Cleanup step 2: interactions by tracked id.
-func (q *Queries) SyntheticDeleteInteractionsByIds(ctx context.Context, interactionIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteInteractionsByIds(ctx context.Context, interactionIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteInteractionsByIds, interactionIds)
 	if err != nil {
 		return 0, err
@@ -1855,7 +1872,7 @@ DELETE FROM mac_host WHERE id = $1
 `
 
 // Cleanup step 14: the seeded revoked synthetic mac_host by id.
-func (q *Queries) SyntheticDeleteMacHostById(ctx context.Context, id pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteMacHostById(ctx context.Context, id uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteMacHostById, id)
 	if err != nil {
 		return 0, err
@@ -1869,7 +1886,7 @@ DELETE FROM messages_message WHERE guid LIKE $1 || '%'
 
 // Cleanup step 5: messages_message rows whose guid is ns-prefixed.
 // Caller passes a BARE prefix; '%' is appended here.
-func (q *Queries) SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix pgtype.Text) (int64, error) {
+func (q *Queries) SyntheticDeleteMessagesMessageByGuidPrefix(ctx context.Context, guidPrefix *string) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteMessagesMessageByGuidPrefix, guidPrefix)
 	if err != nil {
 		return 0, err
@@ -1899,7 +1916,7 @@ DELETE FROM node WHERE id = ANY($1::uuid[])
 // Cleanup: the person node a seeded contact owns (node.id == contact.id), so
 // the harness teardown removes the nodes its dual-writing SeedContact created
 // alongside the contacts. Hard delete, keyed by the tracked contact ids.
-func (q *Queries) SyntheticDeleteNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteNodesByIds(ctx context.Context, nodeIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteNodesByIds, nodeIds)
 	if err != nil {
 		return 0, err
@@ -1915,7 +1932,7 @@ DELETE FROM node WHERE canonical_label LIKE $1 || '%'
 // entity and venue cascade via their ON DELETE CASCADE FK to node, so this one
 // delete removes a namespace's node+entity+venue rows. Caller passes a BARE
 // prefix; '%' is appended here.
-func (q *Queries) SyntheticDeleteNodesByLabelPrefix(ctx context.Context, labelPrefix pgtype.Text) (int64, error) {
+func (q *Queries) SyntheticDeleteNodesByLabelPrefix(ctx context.Context, labelPrefix *string) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteNodesByLabelPrefix, labelPrefix)
 	if err != nil {
 		return 0, err
@@ -1928,7 +1945,7 @@ DELETE FROM note WHERE contact_id = ANY($1::uuid[])
 `
 
 // Cleanup step 12: note by contact.
-func (q *Queries) SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteNotesByContactIds(ctx context.Context, contactIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteNotesByContactIds, contactIds)
 	if err != nil {
 		return 0, err
@@ -1949,7 +1966,7 @@ DELETE FROM mac_host_pairing_token WHERE consumed_host_id = $1
 // The production janitor cannot stand in: it deletes only UNCONSUMED expired
 // tokens. Deliberately by id rather than the whole-table DeleteAllPairingTokens,
 // which would destroy a concurrent world's token.
-func (q *Queries) SyntheticDeletePairingTokensByConsumedHostId(ctx context.Context, consumedHostID pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeletePairingTokensByConsumedHostId(ctx context.Context, consumedHostID *uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeletePairingTokensByConsumedHostId, consumedHostID)
 	if err != nil {
 		return 0, err
@@ -1964,7 +1981,7 @@ DELETE FROM predicate WHERE key LIKE $1 || '%'
 // Predicate-catalog cleanup: a test that mints its own ns-prefixed provisional
 // predicates clears them by key prefix (the curated seed rows use bare keys and
 // are never prefix-matched). Caller passes a BARE prefix; '%' is appended here.
-func (q *Queries) SyntheticDeletePredicatesByKeyPrefix(ctx context.Context, keyPrefix pgtype.Text) (int64, error) {
+func (q *Queries) SyntheticDeletePredicatesByKeyPrefix(ctx context.Context, keyPrefix *string) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeletePredicatesByKeyPrefix, keyPrefix)
 	if err != nil {
 		return 0, err
@@ -1981,7 +1998,7 @@ DELETE FROM relationship_signal WHERE subject_node_id = ANY($1::uuid[])
 // is a real FK→node (NO ACTION, no soft delete), so these rows MUST be cleared
 // BEFORE their subject nodes — the teardown runs this before the person/entity node
 // deletes.
-func (q *Queries) SyntheticDeleteRelationshipSignalsForNodes(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteRelationshipSignalsForNodes(ctx context.Context, nodeIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteRelationshipSignalsForNodes, nodeIds)
 	if err != nil {
 		return 0, err
@@ -2116,7 +2133,7 @@ WHERE source = 'anarlog_title'
 // discovery surface groups anarlog_title rows by normalized token DB-WIDE, so it
 // keeps inflating that token's group for every later run. Runs BEFORE the
 // meeting_note delete, which removes the rows this reads.
-func (q *Queries) SyntheticDeleteTitleCandidatesForHostSessions(ctx context.Context, macHostID pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteTitleCandidatesForHostSessions(ctx context.Context, macHostID *uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteTitleCandidatesForHostSessions, macHostID)
 	if err != nil {
 		return 0, err
@@ -2171,7 +2188,7 @@ WHERE id = ANY($1::uuid[])
 // NOT EXISTS any interaction still referencing it — so a venue shared with an
 // interaction this run did not clean up (e.g. a group container another
 // namespace also used) is left intact rather than raising the restrict FK.
-func (q *Queries) SyntheticDeleteVenueNodesByIds(ctx context.Context, nodeIds []pgtype.UUID) (int64, error) {
+func (q *Queries) SyntheticDeleteVenueNodesByIds(ctx context.Context, nodeIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, SyntheticDeleteVenueNodesByIds, nodeIds)
 	if err != nil {
 		return 0, err
@@ -2186,7 +2203,7 @@ SELECT id, type, canonical_label, created_at, deleted_at, merged_into FROM node 
 // Contact→node dual-write test support: fetch the person node a contact owns
 // (node.id == contact.id). Returns the live (non-soft-deleted) node row so a
 // test can assert the dual-write created it with the expected type/label.
-func (q *Queries) SyntheticGetNodeForContact(ctx context.Context, id pgtype.UUID) (*Node, error) {
+func (q *Queries) SyntheticGetNodeForContact(ctx context.Context, id uuid.UUID) (*Node, error) {
 	row := q.db.QueryRow(ctx, SyntheticGetNodeForContact, id)
 	var i Node
 	err := row.Scan(
@@ -2209,15 +2226,15 @@ SELECT id FROM contact_task WHERE provider = $1
 // rows it created — even for cadence-bearing contacts it did not seed — so
 // cleanup removes exactly those rows and never strands a task on an unrelated
 // contact in the shared test DB.
-func (q *Queries) SyntheticListContactTaskIdsByProvider(ctx context.Context, provider string) ([]pgtype.UUID, error) {
+func (q *Queries) SyntheticListContactTaskIdsByProvider(ctx context.Context, provider string) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, SyntheticListContactTaskIdsByProvider, provider)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []uuid.UUID{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
@@ -2236,8 +2253,8 @@ WHERE source = $1::text
 `
 
 type SyntheticListEventIdsBySourceAndSourceIdPrefixParams struct {
-	Source         string      `json:"source"`
-	SourceIDPrefix pgtype.Text `json:"source_id_prefix"`
+	Source         string  `json:"source"`
+	SourceIDPrefix *string `json:"source_id_prefix"`
 }
 
 // Cleanup event-id capture (part 2): adapter-direct root events that carry NO
@@ -2249,15 +2266,15 @@ type SyntheticListEventIdsBySourceAndSourceIdPrefixParams struct {
 // (source, source_id) unique and skip inline ingest (idempotency break).
 // Caller passes a BARE prefix; the '%' is appended here (matches the existing
 // Delete*ByPrefix conventions).
-func (q *Queries) SyntheticListEventIdsBySourceAndSourceIdPrefix(ctx context.Context, arg SyntheticListEventIdsBySourceAndSourceIdPrefixParams) ([]pgtype.UUID, error) {
+func (q *Queries) SyntheticListEventIdsBySourceAndSourceIdPrefix(ctx context.Context, arg SyntheticListEventIdsBySourceAndSourceIdPrefixParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, SyntheticListEventIdsBySourceAndSourceIdPrefix, arg.Source, arg.SourceIDPrefix)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []uuid.UUID{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
@@ -2278,15 +2295,15 @@ WHERE (payload->>'contact_id') = ANY($1::text[])
 // one of this replay's contacts. Covers the full non-prefixed cascade
 // (interaction.recorded uses interaction.ID as source_id, calendar.attended
 // uses an internal ref, etc.) generically via payload->>'contact_id'.
-func (q *Queries) SyntheticListEventIdsForContacts(ctx context.Context, contactIds []string) ([]pgtype.UUID, error) {
+func (q *Queries) SyntheticListEventIdsForContacts(ctx context.Context, contactIds []string) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, SyntheticListEventIdsForContacts, contactIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []uuid.UUID{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
@@ -2310,9 +2327,9 @@ LIMIT $3
 `
 
 type SyntheticListPastEventsNeedingUpdateByPrefixParams struct {
-	Before            pgtype.Timestamptz `json:"before"`
-	GcalEventIDPrefix pgtype.Text        `json:"gcal_event_id_prefix"`
-	RowLimit          int32              `json:"row_limit"`
+	Before            time.Time `json:"before"`
+	GcalEventIDPrefix *string   `json:"gcal_event_id_prefix"`
+	RowLimit          int32     `json:"row_limit"`
 }
 
 // The namespace-scoped form of ListPastEventsNeedingUpdate, for the GCal replay
@@ -2375,9 +2392,9 @@ ON CONFLICT (namespace, entity_kind, entity_id) DO NOTHING
 `
 
 type SyntheticRecordNamespaceEntityParams struct {
-	Namespace  string      `json:"namespace"`
-	EntityKind string      `json:"entity_kind"`
-	EntityID   pgtype.UUID `json:"entity_id"`
+	Namespace  string    `json:"namespace"`
+	EntityKind string    `json:"entity_kind"`
+	EntityID   uuid.UUID `json:"entity_id"`
 }
 
 // Namespace ownership, written at seed time. The declared-seed endpoint seeds
@@ -2403,15 +2420,15 @@ ORDER BY id
 // prefix, INCLUDING soft-deleted rows (see the soft-delete exception above).
 // Caller passes a BARE prefix; '%' is appended here. The namespace charset
 // excludes the LIKE metacharacters, so the prefix can never over-match.
-func (q *Queries) SyntheticSelectContactIdsByFullNamePrefix(ctx context.Context, namePrefix pgtype.Text) ([]pgtype.UUID, error) {
+func (q *Queries) SyntheticSelectContactIdsByFullNamePrefix(ctx context.Context, namePrefix *string) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, SyntheticSelectContactIdsByFullNamePrefix, namePrefix)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []uuid.UUID{}
 	for rows.Next() {
-		var id pgtype.UUID
+		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
@@ -2445,8 +2462,8 @@ WHERE ec.id = ANY($1::uuid[])
 `
 
 type SyntheticSelectLinkedContactIdsByExternalContactIdsParams struct {
-	ExternalContactIds []pgtype.UUID `json:"external_contact_ids"`
-	Namespace          string        `json:"namespace"`
+	ExternalContactIds []uuid.UUID `json:"external_contact_ids"`
+	Namespace          string      `json:"namespace"`
 }
 
 // Cleanup id-set: the CRM contacts the product linked to this namespace's own
@@ -2487,15 +2504,15 @@ type SyntheticSelectLinkedContactIdsByExternalContactIdsParams struct {
 // Cross-namespace stamping is not hypothetical: the anarlog_title resolve marks
 // siblings by normalized token DB-WIDE, so one world's resolve can write its own
 // contact id onto a candidate THIS namespace owns.
-func (q *Queries) SyntheticSelectLinkedContactIdsByExternalContactIds(ctx context.Context, arg SyntheticSelectLinkedContactIdsByExternalContactIdsParams) ([]pgtype.UUID, error) {
+func (q *Queries) SyntheticSelectLinkedContactIdsByExternalContactIds(ctx context.Context, arg SyntheticSelectLinkedContactIdsByExternalContactIdsParams) ([]*uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, SyntheticSelectLinkedContactIdsByExternalContactIds, arg.ExternalContactIds, arg.Namespace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []*uuid.UUID{}
 	for rows.Next() {
-		var crm_contact_id pgtype.UUID
+		var crm_contact_id *uuid.UUID
 		if err := rows.Scan(&crm_contact_id); err != nil {
 			return nil, err
 		}
@@ -2558,15 +2575,15 @@ type SyntheticSelectLinkedContactIdsForHostSessionTitleCandidatesParams struct {
 // NEIGHBOUR's owned candidate to reach the same contact its declared token would
 // have to collide with a meeting-note title token, which the namespace-hashed
 // declared token makes unreachable.
-func (q *Queries) SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates(ctx context.Context, arg SyntheticSelectLinkedContactIdsForHostSessionTitleCandidatesParams) ([]pgtype.UUID, error) {
+func (q *Queries) SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates(ctx context.Context, arg SyntheticSelectLinkedContactIdsForHostSessionTitleCandidatesParams) ([]*uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, SyntheticSelectLinkedContactIdsForHostSessionTitleCandidates, arg.Hostname, arg.Namespace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []*uuid.UUID{}
 	for rows.Next() {
-		var crm_contact_id pgtype.UUID
+		var crm_contact_id *uuid.UUID
 		if err := rows.Scan(&crm_contact_id); err != nil {
 			return nil, err
 		}
@@ -2590,7 +2607,7 @@ ORDER BY hostname
 // 'synth-<ns>-host' itself does not match this pattern; the namespace's own
 // salt variants do and are filtered out by the caller (they are expansion
 // members, not descendants).
-func (q *Queries) SyntheticSelectLiveDescendantHostnames(ctx context.Context, namespacePrefix pgtype.Text) ([]string, error) {
+func (q *Queries) SyntheticSelectLiveDescendantHostnames(ctx context.Context, namespacePrefix *string) ([]string, error) {
 	rows, err := q.db.Query(ctx, SyntheticSelectLiveDescendantHostnames, namespacePrefix)
 	if err != nil {
 		return nil, err
@@ -2618,9 +2635,9 @@ SELECT id FROM mac_host WHERE hostname = $1
 // up by EXACT hostname. Deliberately not a prefix match: 'synth-foo-host' used
 // as a LIKE prefix would also match namespace 'foo-hostile”s
 // 'synth-foo-hostile-host' and delete another world's marker.
-func (q *Queries) SyntheticSelectMacHostIdByHostname(ctx context.Context, hostname string) (pgtype.UUID, error) {
+func (q *Queries) SyntheticSelectMacHostIdByHostname(ctx context.Context, hostname string) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, SyntheticSelectMacHostIdByHostname, hostname)
-	var id pgtype.UUID
+	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
 }
@@ -2639,15 +2656,15 @@ type SyntheticSelectNamespaceEntityIdsParams struct {
 // Cleanup id-set: the entity ids this namespace recorded ownership of. Unioned
 // with the prefix sweep rather than replacing it — the prefix still finds rows
 // a pre-ownership run seeded, and ownership still finds rows the prefix lost.
-func (q *Queries) SyntheticSelectNamespaceEntityIds(ctx context.Context, arg SyntheticSelectNamespaceEntityIdsParams) ([]pgtype.UUID, error) {
+func (q *Queries) SyntheticSelectNamespaceEntityIds(ctx context.Context, arg SyntheticSelectNamespaceEntityIdsParams) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, SyntheticSelectNamespaceEntityIds, arg.Namespace, arg.EntityKind)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []uuid.UUID{}
 	for rows.Next() {
-		var entity_id pgtype.UUID
+		var entity_id uuid.UUID
 		if err := rows.Scan(&entity_id); err != nil {
 			return nil, err
 		}
@@ -2670,15 +2687,15 @@ WHERE contact_id = ANY($1::uuid[])
 // canonical_label, so neither the person-node delete nor the label-prefix sweep
 // finds them — they must be captured BEFORE the interaction delete removes the
 // only link. Includes soft-deleted interactions for the same reason as above.
-func (q *Queries) SyntheticSelectVenueNodeIdsForContacts(ctx context.Context, contactIds []pgtype.UUID) ([]pgtype.UUID, error) {
+func (q *Queries) SyntheticSelectVenueNodeIdsForContacts(ctx context.Context, contactIds []uuid.UUID) ([]*uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, SyntheticSelectVenueNodeIdsForContacts, contactIds)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []pgtype.UUID{}
+	items := []*uuid.UUID{}
 	for rows.Next() {
-		var venue_id pgtype.UUID
+		var venue_id *uuid.UUID
 		if err := rows.Scan(&venue_id); err != nil {
 			return nil, err
 		}
@@ -2781,7 +2798,7 @@ WHERE subject_node_id = $1
 // Tag-migration test only: count the LIVE accepted `tagged_as` assertions whose
 // subject is a given node, so a test asserts exactly one per migrated contact_tag
 // and that an idempotent re-run creates no duplicates.
-func (q *Queries) TestCountTaggedAsAssertionsForSubject(ctx context.Context, subjectNodeID pgtype.UUID) (int64, error) {
+func (q *Queries) TestCountTaggedAsAssertionsForSubject(ctx context.Context, subjectNodeID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, TestCountTaggedAsAssertionsForSubject, subjectNodeID)
 	var count int64
 	err := row.Scan(&count)
@@ -2817,7 +2834,7 @@ DELETE FROM contact_tag WHERE contact_id = ANY($1::uuid[])
 
 // Tag-migration cleanup: hard-delete the contact_tag rows a test seeded, keyed by
 // the tracked contact ids (scoped to the test's own contacts on the shared DB).
-func (q *Queries) TestDeleteContactTagsByContactIds(ctx context.Context, contactIds []pgtype.UUID) (int64, error) {
+func (q *Queries) TestDeleteContactTagsByContactIds(ctx context.Context, contactIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, TestDeleteContactTagsByContactIds, contactIds)
 	if err != nil {
 		return 0, err
@@ -2831,7 +2848,7 @@ DELETE FROM tag WHERE id = ANY($1::uuid[])
 
 // Tag-migration cleanup: hard-delete the legacy tag rows a test seeded, keyed by
 // the tracked tag ids (scoped to the test's own tags on the shared DB).
-func (q *Queries) TestDeleteTagsByIds(ctx context.Context, tagIds []pgtype.UUID) (int64, error) {
+func (q *Queries) TestDeleteTagsByIds(ctx context.Context, tagIds []uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, TestDeleteTagsByIds, tagIds)
 	if err != nil {
 		return 0, err
@@ -2882,9 +2899,9 @@ SELECT deleted_at FROM contact WHERE id = $1
 // backfilled node's deleted_at mirrors the contact's exactly (not just "is
 // non-nil"). GetContact/SoftDeleteContact deliberately never expose this because
 // production code has no reason to read a soft-deleted contact's own tombstone.
-func (q *Queries) TestGetContactDeletedAtIncludingDeleted(ctx context.Context, id pgtype.UUID) (pgtype.Timestamptz, error) {
+func (q *Queries) TestGetContactDeletedAtIncludingDeleted(ctx context.Context, id uuid.UUID) (*time.Time, error) {
 	row := q.db.QueryRow(ctx, TestGetContactDeletedAtIncludingDeleted, id)
-	var deleted_at pgtype.Timestamptz
+	var deleted_at *time.Time
 	err := row.Scan(&deleted_at)
 	return deleted_at, err
 }
@@ -2965,7 +2982,7 @@ WHERE id = (SELECT id FROM deleted_contact)
 // ContactService has assertions pinning its node, and those are the synthetic
 // teardown's to remove, not this query's. The guard makes that case a no-op on
 // the node rather than an error.
-func (q *Queries) TestHardDeleteContactWithNode(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) TestHardDeleteContactWithNode(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, TestHardDeleteContactWithNode, id)
 	return err
 }
@@ -3004,8 +3021,8 @@ INSERT INTO contact (id, full_name) VALUES ($1, $2)
 `
 
 type TestInsertContactAtIDParams struct {
-	ID       pgtype.UUID `json:"id"`
-	FullName string      `json:"full_name"`
+	ID       uuid.UUID `json:"id"`
+	FullName string    `json:"full_name"`
 }
 
 // Latent-person promotion test support: insert a contact row AT a caller-supplied
@@ -3024,9 +3041,9 @@ VALUES ($1, $2, $3)
 `
 
 type TestInsertContactTagAtTimeParams struct {
-	ContactID pgtype.UUID        `json:"contact_id"`
-	TagID     pgtype.UUID        `json:"tag_id"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ContactID uuid.UUID  `json:"contact_id"`
+	TagID     uuid.UUID  `json:"tag_id"`
+	CreatedAt *time.Time `json:"created_at"`
 }
 
 // Tag-migration test only: seed a contact_tag row with an explicit created_at so
@@ -3044,8 +3061,8 @@ VALUES ($1, $2, NULL)
 `
 
 type TestInsertContactTagNullCreatedAtParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	TagID     pgtype.UUID `json:"tag_id"`
+	ContactID uuid.UUID `json:"contact_id"`
+	TagID     uuid.UUID `json:"tag_id"`
 }
 
 // Tag-migration test only: seed a contact_tag row with a NULL created_at (the
@@ -3146,11 +3163,11 @@ VALUES ($1, 'default', $2::river_job_state, '{}'::jsonb, '{}'::jsonb, 1, 1, $3, 
 `
 
 type TestInsertRiverJobFullTimingForTestParams struct {
-	Kind        string             `json:"kind"`
-	State       RiverJobState      `json:"state"`
-	ScheduledAt pgtype.Timestamptz `json:"scheduled_at"`
-	AttemptedAt pgtype.Timestamptz `json:"attempted_at"`
-	FinalizedAt pgtype.Timestamptz `json:"finalized_at"`
+	Kind        string        `json:"kind"`
+	State       RiverJobState `json:"state"`
+	ScheduledAt time.Time     `json:"scheduled_at"`
+	AttemptedAt *time.Time    `json:"attempted_at"`
+	FinalizedAt *time.Time    `json:"finalized_at"`
 }
 
 // Tier-0 integration test only: plant one FINISHED river_job with explicit
@@ -3177,10 +3194,10 @@ VALUES ($1, 'default', $2::river_job_state, '{}'::jsonb, '{}'::jsonb, 1, 1, $3, 
 `
 
 type TestInsertRiverJobWithStateForTestParams struct {
-	Kind        string             `json:"kind"`
-	State       RiverJobState      `json:"state"`
-	ScheduledAt pgtype.Timestamptz `json:"scheduled_at"`
-	FinalizedAt pgtype.Timestamptz `json:"finalized_at"`
+	Kind        string        `json:"kind"`
+	State       RiverJobState `json:"state"`
+	ScheduledAt time.Time     `json:"scheduled_at"`
+	FinalizedAt *time.Time    `json:"finalized_at"`
 }
 
 // /health river-component integration test only: plant one river_job with an
@@ -3207,16 +3224,16 @@ INSERT INTO tag (name, color) VALUES ($1, $2) RETURNING id
 `
 
 type TestInsertTagForMigrationParams struct {
-	Name  string      `json:"name"`
-	Color pgtype.Text `json:"color"`
+	Name  string  `json:"name"`
+	Color *string `json:"color"`
 }
 
 // Tag-migration test only: seed a legacy tag row with an explicit name + color
 // so a test can run `--migrate-tags` over it and assert the color survives into
 // the tag entity node's detail JSONB. Returns the generated id.
-func (q *Queries) TestInsertTagForMigration(ctx context.Context, arg TestInsertTagForMigrationParams) (pgtype.UUID, error) {
+func (q *Queries) TestInsertTagForMigration(ctx context.Context, arg TestInsertTagForMigrationParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, TestInsertTagForMigration, arg.Name, arg.Color)
-	var id pgtype.UUID
+	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
 }

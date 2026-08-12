@@ -6,15 +6,13 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/db"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // JobSampleRepository reads and writes job_exec_sample (the River
 // job-execution sampling table) and runs the Tier-0 read over live river_job.
-// It mirrors HealthRepository: it takes only a db.Querier, converts
-// pgtype↔Go at the boundary, and owns no cross-cutting logic. Every write is a
-// plain per-event insert, so there is no *pgxpool.Pool field.
+// It mirrors HealthRepository: it takes only a db.Querier and owns no
+// cross-cutting logic. Every write is a plain per-event insert, so there is
+// no *pgxpool.Pool field.
 type JobSampleRepository struct {
 	queries db.Querier
 }
@@ -84,12 +82,12 @@ func (r *JobSampleRepository) InsertJobExecSample(ctx context.Context, s JobExec
 		RiverJobID:  s.RiverJobID,
 		Kind:        s.Kind,
 		Queue:       s.Queue,
-		AttemptedAt: pgtype.Timestamptz{Time: s.AttemptedAt, Valid: true},
-		FinalizedAt: pgtype.Timestamptz{Time: s.FinalizedAt, Valid: true},
+		AttemptedAt: s.AttemptedAt,
+		FinalizedAt: s.FinalizedAt,
 		Attempt:     int32(s.Attempt),
 		State:       s.State,
 		QueueWaitMs: s.QueueWaitMs,
-		CreatedAt:   pgtype.Timestamptz{Time: s.CreatedAt, Valid: true},
+		CreatedAt:   s.CreatedAt,
 	}); err != nil {
 		return fmt.Errorf("insert job exec sample: %w", err)
 	}
@@ -99,7 +97,7 @@ func (r *JobSampleRepository) InsertJobExecSample(ctx context.Context, s JobExec
 // TrimJobExecSamples deletes rows older than cutoff (accelerated-now minus the
 // retention window, computed by the caller). Returns the number of rows deleted.
 func (r *JobSampleRepository) TrimJobExecSamples(ctx context.Context, cutoff time.Time) (int64, error) {
-	n, err := r.queries.TrimJobExecSamples(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
+	n, err := r.queries.TrimJobExecSamples(ctx, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("trim job exec samples: %w", err)
 	}
@@ -109,8 +107,8 @@ func (r *JobSampleRepository) TrimJobExecSamples(ctx context.Context, cutoff tim
 // MaxConcurrency returns the peak concurrent-slot count over [from,to].
 func (r *JobSampleRepository) MaxConcurrency(ctx context.Context, from, to time.Time) (int, error) {
 	n, err := r.queries.JobExecMaxConcurrency(ctx, db.JobExecMaxConcurrencyParams{
-		WindowStart: pgtype.Timestamptz{Time: from, Valid: true},
-		WindowEnd:   pgtype.Timestamptz{Time: to, Valid: true},
+		WindowStart: from,
+		WindowEnd:   to,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("job exec max concurrency: %w", err)
@@ -123,8 +121,8 @@ func (r *JobSampleRepository) MaxConcurrency(ctx context.Context, from, to time.
 func (r *JobSampleRepository) SaturatedSeconds(ctx context.Context, from, to time.Time, threshold int) (float64, error) {
 	s, err := r.queries.JobExecSaturatedSeconds(ctx, db.JobExecSaturatedSecondsParams{
 		Threshold:   int32(threshold),
-		WindowStart: pgtype.Timestamptz{Time: from, Valid: true},
-		WindowEnd:   pgtype.Timestamptz{Time: to, Valid: true},
+		WindowStart: from,
+		WindowEnd:   to,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("job exec saturated seconds: %w", err)
@@ -135,8 +133,8 @@ func (r *JobSampleRepository) SaturatedSeconds(ctx context.Context, from, to tim
 // RunDurationByKind returns per-kind run-duration percentiles over [from,to].
 func (r *JobSampleRepository) RunDurationByKind(ctx context.Context, from, to time.Time) ([]KindDurationStats, error) {
 	rows, err := r.queries.JobExecRunDurationByKind(ctx, db.JobExecRunDurationByKindParams{
-		WindowStart: pgtype.Timestamptz{Time: from, Valid: true},
-		WindowEnd:   pgtype.Timestamptz{Time: to, Valid: true},
+		WindowStart: from,
+		WindowEnd:   to,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("job exec run duration by kind: %w", err)
@@ -158,8 +156,8 @@ func (r *JobSampleRepository) RunDurationByKind(ctx context.Context, from, to ti
 // stored queue_wait_ms.
 func (r *JobSampleRepository) WaitByKind(ctx context.Context, from, to time.Time) ([]KindDurationStats, error) {
 	rows, err := r.queries.JobExecWaitByKind(ctx, db.JobExecWaitByKindParams{
-		WindowStart: pgtype.Timestamptz{Time: from, Valid: true},
-		WindowEnd:   pgtype.Timestamptz{Time: to, Valid: true},
+		WindowStart: from,
+		WindowEnd:   to,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("job exec wait by kind: %w", err)
@@ -181,8 +179,8 @@ func (r *JobSampleRepository) WaitByKind(ctx context.Context, from, to time.Time
 // the given saturation threshold.
 func (r *JobSampleRepository) WaitDuringSaturationByKind(ctx context.Context, from, to time.Time, threshold int) ([]WaitSaturationRow, error) {
 	rows, err := r.queries.JobExecWaitDuringSaturationByKind(ctx, db.JobExecWaitDuringSaturationByKindParams{
-		WindowStart: pgtype.Timestamptz{Time: from, Valid: true},
-		WindowEnd:   pgtype.Timestamptz{Time: to, Valid: true},
+		WindowStart: from,
+		WindowEnd:   to,
 		Threshold:   int32(threshold),
 	})
 	if err != nil {
@@ -206,8 +204,8 @@ func (r *JobSampleRepository) WaitDuringSaturationByKind(ctx context.Context, fr
 // (wait_kind, running_kind, blame_slot_s) over [from,to] at the given threshold.
 func (r *JobSampleRepository) WaitSlotBlameByKind(ctx context.Context, from, to time.Time, threshold int) ([]WaitBlameRow, error) {
 	rows, err := r.queries.JobExecWaitSlotBlameByKind(ctx, db.JobExecWaitSlotBlameByKindParams{
-		WindowStart: pgtype.Timestamptz{Time: from, Valid: true},
-		WindowEnd:   pgtype.Timestamptz{Time: to, Valid: true},
+		WindowStart: from,
+		WindowEnd:   to,
 		Threshold:   int32(threshold),
 	})
 	if err != nil {
@@ -227,7 +225,7 @@ func (r *JobSampleRepository) WaitSlotBlameByKind(ctx context.Context, from, to 
 // Tier0StatsByKind runs the Tier-0 one-shot wait/run-by-kind read over live
 // river_job rows finalized since cutoff (accelerated-now minus the window).
 func (r *JobSampleRepository) Tier0StatsByKind(ctx context.Context, cutoff time.Time) ([]Tier0Row, error) {
-	rows, err := r.queries.Tier0RiverJobStatsByKind(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true})
+	rows, err := r.queries.Tier0RiverJobStatsByKind(ctx, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("tier0 river job stats by kind: %w", err)
 	}
@@ -253,9 +251,9 @@ func (r *JobSampleRepository) InsertRiverJobFullTimingForTest(ctx context.Contex
 	if err := r.queries.TestInsertRiverJobFullTimingForTest(ctx, db.TestInsertRiverJobFullTimingForTestParams{
 		Kind:        kind,
 		State:       state,
-		ScheduledAt: pgtype.Timestamptz{Time: scheduledAt, Valid: true},
-		AttemptedAt: pgtype.Timestamptz{Time: attemptedAt, Valid: true},
-		FinalizedAt: pgtype.Timestamptz{Time: finalizedAt, Valid: true},
+		ScheduledAt: scheduledAt,
+		AttemptedAt: &attemptedAt,
+		FinalizedAt: &finalizedAt,
 	}); err != nil {
 		return fmt.Errorf("insert river job full timing for test: %w", err)
 	}
@@ -276,12 +274,12 @@ func (r *JobSampleRepository) ListJobExecSamplesByRiverJobIDForTest(ctx context.
 			RiverJobID:  row.RiverJobID,
 			Kind:        row.Kind,
 			Queue:       row.Queue,
-			AttemptedAt: row.AttemptedAt.Time,
-			FinalizedAt: row.FinalizedAt.Time,
+			AttemptedAt: row.AttemptedAt,
+			FinalizedAt: row.FinalizedAt,
 			Attempt:     int(row.Attempt),
 			State:       row.State,
 			QueueWaitMs: row.QueueWaitMs,
-			CreatedAt:   row.CreatedAt.Time,
+			CreatedAt:   row.CreatedAt,
 		})
 	}
 	return out, nil

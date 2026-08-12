@@ -24,7 +24,6 @@ import (
 	migrate "github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -208,8 +207,8 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	require.NoError(t, err)
 	_, err = database.Queries.TestInsertMessagesMessageLinked(ctx, db.TestInsertMessagesMessageLinkedParams{
 		Guid: "imsg-guid-1", ChatGuid: messagesContainer, PeerHandle: "+15551110000",
-		SentAt: pgtype.Timestamptz{Time: now, Valid: true}, IsOutgoing: false, IsGroupChat: true,
-		InteractionID: pgtype.UUID{Bytes: messagesID, Valid: true},
+		SentAt: now, IsOutgoing: false, IsGroupChat: true,
+		InteractionID: &messagesID,
 	})
 	require.NoError(t, err)
 
@@ -221,10 +220,10 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	require.NoError(t, err)
 	_, err = database.Queries.TestInsertCommsMessageLinked(ctx, db.TestInsertCommsMessageLinkedParams{
 		Source: repository.InteractionSourceEmail, ExternalID: "msgid-backfill-1",
-		ThreadID: pgtype.Text{String: emailContainer, Valid: true}, Direction: "inbound",
-		SentAt:           pgtype.Timestamptz{Time: now, Valid: true},
-		MatchedContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
-		InteractionID:    pgtype.UUID{Bytes: emailID, Valid: true},
+		ThreadID: &emailContainer, Direction: "inbound",
+		SentAt:           now,
+		MatchedContactID: &contact.ID,
+		InteractionID:    &emailID,
 	})
 	require.NoError(t, err)
 
@@ -236,10 +235,10 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	require.NoError(t, err)
 	_, err = database.Queries.TestInsertCommsMessageLinked(ctx, db.TestInsertCommsMessageLinkedParams{
 		Source: repository.InteractionSourceGChat, ExternalID: "gcmsg-backfill-1",
-		ThreadID: pgtype.Text{String: gchatContainer, Valid: true}, Direction: "inbound",
-		SentAt:           pgtype.Timestamptz{Time: now, Valid: true},
-		MatchedContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
-		InteractionID:    pgtype.UUID{Bytes: gchatID, Valid: true},
+		ThreadID: &gchatContainer, Direction: "inbound",
+		SentAt:           now,
+		MatchedContactID: &contact.ID,
+		InteractionID:    &gchatID,
 	})
 	require.NoError(t, err)
 
@@ -252,9 +251,9 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	_, err = database.Queries.TestInsertPhoneCallLinked(ctx, db.TestInsertPhoneCallLinkedParams{
 		CallUniqueID: phoneContainer, PeerHandle: "+15551110000", PeerNormalized: "+15551110000",
 		Service: "voice", Direction: "inbound", DurationSeconds: 60,
-		StartedAt:        pgtype.Timestamptz{Time: now, Valid: true},
-		MatchedContactID: pgtype.UUID{Bytes: contact.ID, Valid: true},
-		InteractionID:    pgtype.UUID{Bytes: phoneID, Valid: true},
+		StartedAt:        now,
+		MatchedContactID: &contact.ID,
+		InteractionID:    &phoneID,
 	})
 	require.NoError(t, err)
 
@@ -656,17 +655,17 @@ func seedTelegramInteraction(
 	ref := fmt.Sprintf("tg:%d:%d", chatID, messageID)
 	_, err := interactionRepo.TestInsertInteraction(ctx, interactionID, contactID, repository.InteractionSourceTelegram, &ref, occurredAt, repository.InteractionDirectionInbound)
 	require.NoError(t, err)
-	ts := pgtype.Timestamptz{Time: occurredAt, Valid: true}
+	chatTitle := "DM with Subject"
 	_, err = queries.InsertFullTelegramMessageForTest(ctx, db.InsertFullTelegramMessageForTestParams{
 		TelegramMessageID: messageID,
 		TelegramChatID:    chatID,
 		ChatType:          "private",
-		ChatTitle:         pgtype.Text{String: "DM with Subject", Valid: true},
+		ChatTitle:         &chatTitle,
 		MessageType:       "text",
-		SentAt:            ts,
+		SentAt:            occurredAt,
 		IsOutgoing:        false,
-		MatchedContactID:  pgtype.UUID{Bytes: contactID, Valid: true},
-		InteractionID:     pgtype.UUID{Bytes: interactionID, Valid: true},
+		MatchedContactID:  &contactID,
+		InteractionID:     &interactionID,
 	})
 	require.NoError(t, err)
 }

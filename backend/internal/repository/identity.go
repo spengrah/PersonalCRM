@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // MatchType represents how an identity was matched to a contact
@@ -90,45 +89,28 @@ func convertDbIdentity(dbIdentity *db.ExternalIdentity) ExternalIdentity {
 		Identifier:     dbIdentity.Identifier,
 		IdentifierType: identity.IdentifierType(dbIdentity.IdentifierType),
 		Source:         dbIdentity.Source,
-		MessageCount:   dbIdentity.MessageCount.Int32,
+		MessageCount:   deref(dbIdentity.MessageCount),
 	}
 
 	// Convert UUID
-	if dbIdentity.ID.Valid {
-		ident.ID = uuid.UUID(dbIdentity.ID.Bytes)
-	}
+	ident.ID = dbIdentity.ID
 
 	// Convert timestamps
-	if dbIdentity.CreatedAt.Valid {
-		ident.CreatedAt = dbIdentity.CreatedAt.Time
+	if dbIdentity.CreatedAt != nil {
+		ident.CreatedAt = *dbIdentity.CreatedAt
 	}
-	if dbIdentity.UpdatedAt.Valid {
-		ident.UpdatedAt = dbIdentity.UpdatedAt.Time
+	if dbIdentity.UpdatedAt != nil {
+		ident.UpdatedAt = *dbIdentity.UpdatedAt
 	}
-	if dbIdentity.LastSeenAt.Valid {
-		ident.LastSeenAt = &dbIdentity.LastSeenAt.Time
-	}
+	ident.LastSeenAt = dbIdentity.LastSeenAt
 
 	// Convert nullable fields
-	if dbIdentity.RawIdentifier.Valid {
-		ident.RawIdentifier = &dbIdentity.RawIdentifier.String
-	}
-	if dbIdentity.SourceID.Valid {
-		ident.SourceID = &dbIdentity.SourceID.String
-	}
-	if dbIdentity.ContactID.Valid {
-		contactID := uuid.UUID(dbIdentity.ContactID.Bytes)
-		ident.ContactID = &contactID
-	}
-	if dbIdentity.MatchType.Valid {
-		ident.MatchType = MatchType(dbIdentity.MatchType.String)
-	}
-	if dbIdentity.MatchConfidence.Valid {
-		ident.MatchConfidence = &dbIdentity.MatchConfidence.Float64
-	}
-	if dbIdentity.DisplayName.Valid {
-		ident.DisplayName = &dbIdentity.DisplayName.String
-	}
+	ident.RawIdentifier = dbIdentity.RawIdentifier
+	ident.SourceID = dbIdentity.SourceID
+	ident.ContactID = dbIdentity.ContactID
+	ident.MatchType = MatchType(deref(dbIdentity.MatchType))
+	ident.MatchConfidence = dbIdentity.MatchConfidence
+	ident.DisplayName = dbIdentity.DisplayName
 
 	return ident
 }
@@ -141,14 +123,10 @@ func convertDbContactMethodMatch(row *db.FindMethodsByNormalizedValueRow) Contac
 		ContactName: row.ContactName,
 	}
 
-	if row.ID.Valid {
-		match.ID = uuid.UUID(row.ID.Bytes)
-	}
-	if row.ContactID.Valid {
-		match.ContactID = uuid.UUID(row.ContactID.Bytes)
-	}
-	if row.IsPrimary.Valid {
-		match.IsPrimary = row.IsPrimary.Bool
+	match.ID = row.ID
+	match.ContactID = row.ContactID
+	if row.IsPrimary != nil {
+		match.IsPrimary = *row.IsPrimary
 	}
 
 	return match
@@ -156,7 +134,7 @@ func convertDbContactMethodMatch(row *db.FindMethodsByNormalizedValueRow) Contac
 
 // GetByID retrieves an identity by ID
 func (r *IdentityRepository) GetByID(ctx context.Context, id uuid.UUID) (*ExternalIdentity, error) {
-	dbIdentity, err := r.queries.GetIdentityByID(ctx, uuidToPgUUID(id))
+	dbIdentity, err := r.queries.GetIdentityByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -247,7 +225,7 @@ func (r *IdentityRepository) UpsertTx(ctx context.Context, tx pgx.Tx, req Upsert
 	return &ident, nil
 }
 
-// buildUpsertIdentityParams centralizes the pgtype conversion shared
+// buildUpsertIdentityParams centralizes the param conversion shared
 // between the tx and non-tx upsert paths. Keeping this in one place
 // ensures both variants stay in lockstep.
 func buildUpsertIdentityParams(req UpsertIdentityRequest) db.UpsertIdentityParams {
@@ -257,29 +235,19 @@ func buildUpsertIdentityParams(req UpsertIdentityRequest) db.UpsertIdentityParam
 		Source:         req.Source,
 	}
 
-	if req.RawIdentifier != nil {
-		params.RawIdentifier = pgtype.Text{String: *req.RawIdentifier, Valid: true}
-	}
-	if req.SourceID != nil {
-		params.SourceID = pgtype.Text{String: *req.SourceID, Valid: true}
-	}
-	if req.ContactID != nil {
-		params.ContactID = uuidToPgUUID(*req.ContactID)
-	}
+	params.RawIdentifier = req.RawIdentifier
+	params.SourceID = req.SourceID
+	params.ContactID = req.ContactID
 	if req.MatchType != "" {
-		params.MatchType = pgtype.Text{String: string(req.MatchType), Valid: true}
+		matchType := string(req.MatchType)
+		params.MatchType = &matchType
 	}
-	if req.MatchConfidence != nil {
-		params.MatchConfidence = pgtype.Float8{Float64: *req.MatchConfidence, Valid: true}
-	}
-	if req.DisplayName != nil {
-		params.DisplayName = pgtype.Text{String: *req.DisplayName, Valid: true}
-	}
-	if req.LastSeenAt != nil {
-		params.LastSeenAt = pgtype.Timestamptz{Time: *req.LastSeenAt, Valid: true}
-	}
+	params.MatchConfidence = req.MatchConfidence
+	params.DisplayName = req.DisplayName
+	params.LastSeenAt = req.LastSeenAt
 	if req.MessageCount > 0 {
-		params.MessageCount = pgtype.Int4{Int32: req.MessageCount, Valid: true}
+		messageCount := req.MessageCount
+		params.MessageCount = &messageCount
 	}
 
 	return params
@@ -287,14 +255,12 @@ func buildUpsertIdentityParams(req UpsertIdentityRequest) db.UpsertIdentityParam
 
 // LinkToContact links an identity to a contact
 func (r *IdentityRepository) LinkToContact(ctx context.Context, req LinkIdentityRequest) (*ExternalIdentity, error) {
+	matchType := string(req.MatchType)
 	params := db.LinkIdentityToContactParams{
-		ID:        uuidToPgUUID(req.IdentityID),
-		ContactID: uuidToPgUUID(req.ContactID),
-		MatchType: pgtype.Text{String: string(req.MatchType), Valid: true},
-	}
-
-	if req.MatchConfidence != nil {
-		params.MatchConfidence = pgtype.Float8{Float64: *req.MatchConfidence, Valid: true}
+		ID:              req.IdentityID,
+		ContactID:       &req.ContactID,
+		MatchType:       &matchType,
+		MatchConfidence: req.MatchConfidence,
 	}
 
 	dbIdentity, err := r.queries.LinkIdentityToContact(ctx, params)
@@ -311,7 +277,7 @@ func (r *IdentityRepository) LinkToContact(ctx context.Context, req LinkIdentity
 
 // UnlinkFromContact unlinks an identity from its contact
 func (r *IdentityRepository) UnlinkFromContact(ctx context.Context, id uuid.UUID) (*ExternalIdentity, error) {
-	dbIdentity, err := r.queries.UnlinkIdentityFromContact(ctx, uuidToPgUUID(id))
+	dbIdentity, err := r.queries.UnlinkIdentityFromContact(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -329,7 +295,7 @@ func (r *IdentityRepository) UnlinkFromContact(ctx context.Context, id uuid.UUID
 // surfaces the identity in the unmatched queue instead of leaving it pinned
 // to a dead contact (the upsert's COALESCE would preserve the stale link).
 func (r *IdentityRepository) UnlinkFromContactTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (*ExternalIdentity, error) {
-	dbIdentity, err := db.New(tx).UnlinkIdentityFromContact(ctx, uuidToPgUUID(id))
+	dbIdentity, err := db.New(tx).UnlinkIdentityFromContact(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -346,12 +312,12 @@ func (r *IdentityRepository) UnlinkFromContactTx(ctx context.Context, tx pgx.Tx,
 // discovery path. Lives on IdentityRepository because the guard's caller is
 // the identity service (which already joins contact in discovery).
 func (r *IdentityRepository) ContactIsLive(ctx context.Context, id uuid.UUID) (bool, error) {
-	return r.queries.ContactIsLive(ctx, uuidToPgUUID(id))
+	return r.queries.ContactIsLive(ctx, id)
 }
 
 // ContactIsLiveTx is the tx-bound variant of ContactIsLive.
 func (r *IdentityRepository) ContactIsLiveTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) (bool, error) {
-	return db.New(tx).ContactIsLive(ctx, uuidToPgUUID(id))
+	return db.New(tx).ContactIsLive(ctx, id)
 }
 
 // ListUnmatched lists unmatched identities with pagination
@@ -379,7 +345,7 @@ func (r *IdentityRepository) CountUnmatched(ctx context.Context) (int64, error) 
 
 // ListForContact lists all identities for a contact
 func (r *IdentityRepository) ListForContact(ctx context.Context, contactID uuid.UUID) ([]ExternalIdentity, error) {
-	dbIdentities, err := r.queries.ListIdentitiesForContact(ctx, uuidToPgUUID(contactID))
+	dbIdentities, err := r.queries.ListIdentitiesForContact(ctx, &contactID)
 	if err != nil {
 		return nil, err
 	}
@@ -418,12 +384,12 @@ func (r *IdentityRepository) CountBySource(ctx context.Context, source string) (
 
 // Delete removes an identity
 func (r *IdentityRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	return r.queries.DeleteIdentity(ctx, uuidToPgUUID(id))
+	return r.queries.DeleteIdentity(ctx, id)
 }
 
 // DeleteForContact removes all identities for a contact
 func (r *IdentityRepository) DeleteForContact(ctx context.Context, contactID uuid.UUID) error {
-	return r.queries.DeleteIdentitiesForContact(ctx, uuidToPgUUID(contactID))
+	return r.queries.DeleteIdentitiesForContact(ctx, &contactID)
 }
 
 // FindContactMethodsByValue finds contact methods matching the given value and types
@@ -464,19 +430,12 @@ func (r *IdentityRepository) FindContactMethodsByValueTx(ctx context.Context, tx
 
 // BulkLinkToContact links multiple identities to a contact
 func (r *IdentityRepository) BulkLinkToContact(ctx context.Context, identityIDs []uuid.UUID, contactID uuid.UUID, matchType MatchType, confidence *float64) error {
-	pgUUIDs := make([]pgtype.UUID, len(identityIDs))
-	for i, id := range identityIDs {
-		pgUUIDs[i] = uuidToPgUUID(id)
-	}
-
+	matchTypeStr := string(matchType)
 	params := db.BulkLinkIdentitiesToContactParams{
-		Column1:   pgUUIDs,
-		ContactID: uuidToPgUUID(contactID),
-		MatchType: pgtype.Text{String: string(matchType), Valid: true},
-	}
-
-	if confidence != nil {
-		params.MatchConfidence = pgtype.Float8{Float64: *confidence, Valid: true}
+		Column1:         identityIDs,
+		ContactID:       &contactID,
+		MatchType:       &matchTypeStr,
+		MatchConfidence: confidence,
 	}
 
 	return r.queries.BulkLinkIdentitiesToContact(ctx, params)
@@ -485,9 +444,9 @@ func (r *IdentityRepository) BulkLinkToContact(ctx context.Context, identityIDs 
 // UpdateMessageCount updates the message count for an identity
 func (r *IdentityRepository) UpdateMessageCount(ctx context.Context, id uuid.UUID, deltaCount int32, lastSeenAt time.Time) (*ExternalIdentity, error) {
 	dbIdentity, err := r.queries.UpdateIdentityMessageCount(ctx, db.UpdateIdentityMessageCountParams{
-		ID:           uuidToPgUUID(id),
-		MessageCount: pgtype.Int4{Int32: deltaCount, Valid: true},
-		LastSeenAt:   pgtype.Timestamptz{Time: lastSeenAt, Valid: true},
+		ID:           id,
+		MessageCount: &deltaCount,
+		LastSeenAt:   &lastSeenAt,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -505,13 +464,12 @@ func (r *IdentityRepository) UpdateMessageCount(ctx context.Context, id uuid.UUI
 // registration path so the contact-id link commits atomically with the
 // external_contact upsert. Caller owns the tx lifecycle.
 func (r *IdentityRepository) LinkIdentityToContactTx(ctx context.Context, tx pgx.Tx, req LinkIdentityRequest) (*ExternalIdentity, error) {
+	matchType := string(req.MatchType)
 	params := db.LinkIdentityToContactParams{
-		ID:        uuidToPgUUID(req.IdentityID),
-		ContactID: uuidToPgUUID(req.ContactID),
-		MatchType: pgtype.Text{String: string(req.MatchType), Valid: true},
-	}
-	if req.MatchConfidence != nil {
-		params.MatchConfidence = pgtype.Float8{Float64: *req.MatchConfidence, Valid: true}
+		ID:              req.IdentityID,
+		ContactID:       &req.ContactID,
+		MatchType:       &matchType,
+		MatchConfidence: req.MatchConfidence,
 	}
 	dbIdentity, err := db.New(tx).LinkIdentityToContact(ctx, params)
 	if err != nil {
@@ -537,11 +495,10 @@ func (r *IdentityRepository) FindContactIDByAnarlogHumanIDTx(ctx context.Context
 		}
 		return nil, err
 	}
-	if !dbIdentity.ContactID.Valid {
+	if dbIdentity.ContactID == nil {
 		return nil, nil
 	}
-	id := uuid.UUID(dbIdentity.ContactID.Bytes)
-	return &id, nil
+	return dbIdentity.ContactID, nil
 }
 
 // FindIdentitiesByAnarlogHumanID returns 0 or 1 external_identity rows

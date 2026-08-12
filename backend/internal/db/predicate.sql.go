@@ -7,8 +7,7 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
+	"time"
 )
 
 const CreatePredicate = `-- name: CreatePredicate :one
@@ -28,44 +27,44 @@ RETURNING
 `
 
 type CreatePredicateParams struct {
-	Key                 string      `json:"key"`
-	Kind                string      `json:"kind"`
-	SubjectType         string      `json:"subject_type"`
-	ObjectType          pgtype.Text `json:"object_type"`
-	ValueType           pgtype.Text `json:"value_type"`
-	Cardinality         string      `json:"cardinality"`
-	Symmetric           bool        `json:"symmetric"`
-	InversePredicate    pgtype.Text `json:"inverse_predicate"`
-	TemporalProfile     string      `json:"temporal_profile"`
-	BaseRateDays        pgtype.Int4 `json:"base_rate_days"`
-	TypicalDurationDays pgtype.Int4 `json:"typical_duration_days"`
-	DefaultSalience     int16       `json:"default_salience"`
-	DefaultReviewPolicy string      `json:"default_review_policy"`
-	PropositionBucket   string      `json:"proposition_bucket"`
-	Status              string      `json:"status"`
-	Description         string      `json:"description"`
-	Synonyms            []string    `json:"synonyms"`
+	Key                 string   `json:"key"`
+	Kind                string   `json:"kind"`
+	SubjectType         string   `json:"subject_type"`
+	ObjectType          *string  `json:"object_type"`
+	ValueType           *string  `json:"value_type"`
+	Cardinality         string   `json:"cardinality"`
+	Symmetric           bool     `json:"symmetric"`
+	InversePredicate    *string  `json:"inverse_predicate"`
+	TemporalProfile     string   `json:"temporal_profile"`
+	BaseRateDays        *int32   `json:"base_rate_days"`
+	TypicalDurationDays *int32   `json:"typical_duration_days"`
+	DefaultSalience     int16    `json:"default_salience"`
+	DefaultReviewPolicy string   `json:"default_review_policy"`
+	PropositionBucket   string   `json:"proposition_bucket"`
+	Status              string   `json:"status"`
+	Description         string   `json:"description"`
+	Synonyms            []string `json:"synonyms"`
 }
 
 type CreatePredicateRow struct {
-	Key                 string             `json:"key"`
-	Kind                string             `json:"kind"`
-	SubjectType         string             `json:"subject_type"`
-	ObjectType          pgtype.Text        `json:"object_type"`
-	ValueType           pgtype.Text        `json:"value_type"`
-	Cardinality         string             `json:"cardinality"`
-	Symmetric           bool               `json:"symmetric"`
-	InversePredicate    pgtype.Text        `json:"inverse_predicate"`
-	TemporalProfile     string             `json:"temporal_profile"`
-	BaseRateDays        pgtype.Int4        `json:"base_rate_days"`
-	TypicalDurationDays pgtype.Int4        `json:"typical_duration_days"`
-	DefaultSalience     int16              `json:"default_salience"`
-	DefaultReviewPolicy string             `json:"default_review_policy"`
-	PropositionBucket   string             `json:"proposition_bucket"`
-	Status              string             `json:"status"`
-	Description         string             `json:"description"`
-	Synonyms            []string           `json:"synonyms"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	Key                 string    `json:"key"`
+	Kind                string    `json:"kind"`
+	SubjectType         string    `json:"subject_type"`
+	ObjectType          *string   `json:"object_type"`
+	ValueType           *string   `json:"value_type"`
+	Cardinality         string    `json:"cardinality"`
+	Symmetric           bool      `json:"symmetric"`
+	InversePredicate    *string   `json:"inverse_predicate"`
+	TemporalProfile     string    `json:"temporal_profile"`
+	BaseRateDays        *int32    `json:"base_rate_days"`
+	TypicalDurationDays *int32    `json:"typical_duration_days"`
+	DefaultSalience     int16     `json:"default_salience"`
+	DefaultReviewPolicy string    `json:"default_review_policy"`
+	PropositionBucket   string    `json:"proposition_bucket"`
+	Status              string    `json:"status"`
+	Description         string    `json:"description"`
+	Synonyms            []string  `json:"synonyms"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 // Mints a (typically provisional) predicate at runtime. The embedding column is
@@ -127,24 +126,24 @@ FROM predicate WHERE key = $1
 `
 
 type GetPredicateRow struct {
-	Key                 string             `json:"key"`
-	Kind                string             `json:"kind"`
-	SubjectType         string             `json:"subject_type"`
-	ObjectType          pgtype.Text        `json:"object_type"`
-	ValueType           pgtype.Text        `json:"value_type"`
-	Cardinality         string             `json:"cardinality"`
-	Symmetric           bool               `json:"symmetric"`
-	InversePredicate    pgtype.Text        `json:"inverse_predicate"`
-	TemporalProfile     string             `json:"temporal_profile"`
-	BaseRateDays        pgtype.Int4        `json:"base_rate_days"`
-	TypicalDurationDays pgtype.Int4        `json:"typical_duration_days"`
-	DefaultSalience     int16              `json:"default_salience"`
-	DefaultReviewPolicy string             `json:"default_review_policy"`
-	PropositionBucket   string             `json:"proposition_bucket"`
-	Status              string             `json:"status"`
-	Description         string             `json:"description"`
-	Synonyms            []string           `json:"synonyms"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	Key                 string    `json:"key"`
+	Kind                string    `json:"kind"`
+	SubjectType         string    `json:"subject_type"`
+	ObjectType          *string   `json:"object_type"`
+	ValueType           *string   `json:"value_type"`
+	Cardinality         string    `json:"cardinality"`
+	Symmetric           bool      `json:"symmetric"`
+	InversePredicate    *string   `json:"inverse_predicate"`
+	TemporalProfile     string    `json:"temporal_profile"`
+	BaseRateDays        *int32    `json:"base_rate_days"`
+	TypicalDurationDays *int32    `json:"typical_duration_days"`
+	DefaultSalience     int16     `json:"default_salience"`
+	DefaultReviewPolicy string    `json:"default_review_policy"`
+	PropositionBucket   string    `json:"proposition_bucket"`
+	Status              string    `json:"status"`
+	Description         string    `json:"description"`
+	Synonyms            []string  `json:"synonyms"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 // Predicate catalog queries (graph foundation).
@@ -189,24 +188,24 @@ FROM predicate WHERE status = 'curated' ORDER BY key
 `
 
 type ListCuratedPredicatesRow struct {
-	Key                 string             `json:"key"`
-	Kind                string             `json:"kind"`
-	SubjectType         string             `json:"subject_type"`
-	ObjectType          pgtype.Text        `json:"object_type"`
-	ValueType           pgtype.Text        `json:"value_type"`
-	Cardinality         string             `json:"cardinality"`
-	Symmetric           bool               `json:"symmetric"`
-	InversePredicate    pgtype.Text        `json:"inverse_predicate"`
-	TemporalProfile     string             `json:"temporal_profile"`
-	BaseRateDays        pgtype.Int4        `json:"base_rate_days"`
-	TypicalDurationDays pgtype.Int4        `json:"typical_duration_days"`
-	DefaultSalience     int16              `json:"default_salience"`
-	DefaultReviewPolicy string             `json:"default_review_policy"`
-	PropositionBucket   string             `json:"proposition_bucket"`
-	Status              string             `json:"status"`
-	Description         string             `json:"description"`
-	Synonyms            []string           `json:"synonyms"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	Key                 string    `json:"key"`
+	Kind                string    `json:"kind"`
+	SubjectType         string    `json:"subject_type"`
+	ObjectType          *string   `json:"object_type"`
+	ValueType           *string   `json:"value_type"`
+	Cardinality         string    `json:"cardinality"`
+	Symmetric           bool      `json:"symmetric"`
+	InversePredicate    *string   `json:"inverse_predicate"`
+	TemporalProfile     string    `json:"temporal_profile"`
+	BaseRateDays        *int32    `json:"base_rate_days"`
+	TypicalDurationDays *int32    `json:"typical_duration_days"`
+	DefaultSalience     int16     `json:"default_salience"`
+	DefaultReviewPolicy string    `json:"default_review_policy"`
+	PropositionBucket   string    `json:"proposition_bucket"`
+	Status              string    `json:"status"`
+	Description         string    `json:"description"`
+	Synonyms            []string  `json:"synonyms"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 func (q *Queries) ListCuratedPredicates(ctx context.Context) ([]*ListCuratedPredicatesRow, error) {
@@ -258,24 +257,24 @@ FROM predicate WHERE status = $1 ORDER BY key
 `
 
 type ListPredicatesByStatusRow struct {
-	Key                 string             `json:"key"`
-	Kind                string             `json:"kind"`
-	SubjectType         string             `json:"subject_type"`
-	ObjectType          pgtype.Text        `json:"object_type"`
-	ValueType           pgtype.Text        `json:"value_type"`
-	Cardinality         string             `json:"cardinality"`
-	Symmetric           bool               `json:"symmetric"`
-	InversePredicate    pgtype.Text        `json:"inverse_predicate"`
-	TemporalProfile     string             `json:"temporal_profile"`
-	BaseRateDays        pgtype.Int4        `json:"base_rate_days"`
-	TypicalDurationDays pgtype.Int4        `json:"typical_duration_days"`
-	DefaultSalience     int16              `json:"default_salience"`
-	DefaultReviewPolicy string             `json:"default_review_policy"`
-	PropositionBucket   string             `json:"proposition_bucket"`
-	Status              string             `json:"status"`
-	Description         string             `json:"description"`
-	Synonyms            []string           `json:"synonyms"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	Key                 string    `json:"key"`
+	Kind                string    `json:"kind"`
+	SubjectType         string    `json:"subject_type"`
+	ObjectType          *string   `json:"object_type"`
+	ValueType           *string   `json:"value_type"`
+	Cardinality         string    `json:"cardinality"`
+	Symmetric           bool      `json:"symmetric"`
+	InversePredicate    *string   `json:"inverse_predicate"`
+	TemporalProfile     string    `json:"temporal_profile"`
+	BaseRateDays        *int32    `json:"base_rate_days"`
+	TypicalDurationDays *int32    `json:"typical_duration_days"`
+	DefaultSalience     int16     `json:"default_salience"`
+	DefaultReviewPolicy string    `json:"default_review_policy"`
+	PropositionBucket   string    `json:"proposition_bucket"`
+	Status              string    `json:"status"`
+	Description         string    `json:"description"`
+	Synonyms            []string  `json:"synonyms"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 func (q *Queries) ListPredicatesByStatus(ctx context.Context, status string) ([]*ListPredicatesByStatusRow, error) {

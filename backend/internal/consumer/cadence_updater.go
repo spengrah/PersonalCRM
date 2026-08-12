@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 )
@@ -356,59 +355,34 @@ func (h *CadenceUpdater) applyTx(ctx context.Context, tx pgx.Tx, req cadenceWrit
 	case repository.CadenceBranchForward:
 		return q.UpdateContactCadenceForward(ctx, db.UpdateContactCadenceForwardParams{
 			ApplyLastContacted:     req.ApplyLastContacted,
-			LastContacted:          timePtrToPgTimestamptz(req.LastContacted),
+			LastContacted:          req.LastContacted,
 			ApplyLastInteractionAt: req.ApplyLastInteractionAt,
-			LastInteractionAt:      timePtrToPgTimestamptz(req.LastInteractionAt),
+			LastInteractionAt:      req.LastInteractionAt,
 			ApplyLastOutreachAt:    req.ApplyLastOutreachAt,
-			LastOutreachAt:         timePtrToPgTimestamptz(req.LastOutreachAt),
+			LastOutreachAt:         req.LastOutreachAt,
 			ApplyLastResponseAt:    req.ApplyLastResponseAt,
-			LastResponseAt:         timePtrToPgTimestamptz(req.LastResponseAt),
+			LastResponseAt:         req.LastResponseAt,
 			ApplyContactBy:         req.ApplyContactBy,
-			ContactBy:              timePtrToPgDate(req.ContactBy),
-			ID:                     uuidToPgUUID(req.ContactID),
+			ContactBy:              req.ContactBy,
+			ID:                     req.ContactID,
 		})
 	case repository.CadenceBranchUnconditional:
 		return q.UpdateContactCadenceUnconditional(ctx, db.UpdateContactCadenceUnconditionalParams{
 			ApplyLastContacted:     req.ApplyLastContacted,
-			LastContacted:          timePtrToPgTimestamptz(req.LastContacted),
+			LastContacted:          req.LastContacted,
 			ApplyLastInteractionAt: req.ApplyLastInteractionAt,
-			LastInteractionAt:      timePtrToPgTimestamptz(req.LastInteractionAt),
+			LastInteractionAt:      req.LastInteractionAt,
 			ApplyLastOutreachAt:    req.ApplyLastOutreachAt,
-			LastOutreachAt:         timePtrToPgTimestamptz(req.LastOutreachAt),
+			LastOutreachAt:         req.LastOutreachAt,
 			ApplyLastResponseAt:    req.ApplyLastResponseAt,
-			LastResponseAt:         timePtrToPgTimestamptz(req.LastResponseAt),
+			LastResponseAt:         req.LastResponseAt,
 			ApplyContactBy:         req.ApplyContactBy,
-			ContactBy:              timePtrToPgDate(req.ContactBy),
-			ID:                     uuidToPgUUID(req.ContactID),
+			ContactBy:              req.ContactBy,
+			ID:                     req.ContactID,
 		})
 	default:
 		return fmt.Errorf("cadence_updater: unknown branch %q", req.Branch)
 	}
-}
-
-// --------------------------------------------------------------------------
-// pgtype helpers. Small local duplicates of repository/conversions.go — the
-// consumer package must not depend on the repository's private helpers and
-// these paths are hot enough that an inline conversion beats a new
-// repository-level wrapper.
-// --------------------------------------------------------------------------
-
-func uuidToPgUUID(id uuid.UUID) pgtype.UUID {
-	return pgtype.UUID{Bytes: id, Valid: true}
-}
-
-func timePtrToPgTimestamptz(t *time.Time) pgtype.Timestamptz {
-	if t == nil {
-		return pgtype.Timestamptz{Valid: false}
-	}
-	return pgtype.Timestamptz{Time: *t, Valid: true}
-}
-
-func timePtrToPgDate(t *time.Time) pgtype.Date {
-	if t == nil {
-		return pgtype.Date{Valid: false}
-	}
-	return pgtype.Date{Time: *t, Valid: true}
 }
 
 // --------------------------------------------------------------------------

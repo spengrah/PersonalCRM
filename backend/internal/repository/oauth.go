@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // OAuthCredential represents stored OAuth credentials (domain model)
@@ -88,27 +87,21 @@ func convertDbOAuthCredential(dbCred *db.OauthCredential) OAuthCredential {
 	}
 
 	// Convert UUID
-	if dbCred.ID.Valid {
-		cred.ID = uuid.UUID(dbCred.ID.Bytes)
-	}
+	cred.ID = dbCred.ID
 
 	// Convert nullable fields
-	if dbCred.AccountName.Valid {
-		cred.AccountName = &dbCred.AccountName.String
-	}
-	if dbCred.TokenType.Valid {
-		cred.TokenType = dbCred.TokenType.String
+	cred.AccountName = dbCred.AccountName
+	if dbCred.TokenType != nil {
+		cred.TokenType = *dbCred.TokenType
 	}
 
 	// Convert timestamps
-	if dbCred.ExpiresAt.Valid {
-		cred.ExpiresAt = &dbCred.ExpiresAt.Time
+	cred.ExpiresAt = dbCred.ExpiresAt
+	if dbCred.CreatedAt != nil {
+		cred.CreatedAt = *dbCred.CreatedAt
 	}
-	if dbCred.CreatedAt.Valid {
-		cred.CreatedAt = dbCred.CreatedAt.Time
-	}
-	if dbCred.UpdatedAt.Valid {
-		cred.UpdatedAt = dbCred.UpdatedAt.Time
+	if dbCred.UpdatedAt != nil {
+		cred.UpdatedAt = *dbCred.UpdatedAt
 	}
 
 	return cred
@@ -123,24 +116,18 @@ func convertDbOAuthCredentialStatus(dbRow *db.ListOAuthCredentialStatusesRow) OA
 	}
 
 	// Convert UUID
-	if dbRow.ID.Valid {
-		status.ID = uuid.UUID(dbRow.ID.Bytes)
-	}
+	status.ID = dbRow.ID
 
 	// Convert nullable fields
-	if dbRow.AccountName.Valid {
-		status.AccountName = &dbRow.AccountName.String
-	}
+	status.AccountName = dbRow.AccountName
 
 	// Convert timestamps
-	if dbRow.ExpiresAt.Valid {
-		status.ExpiresAt = &dbRow.ExpiresAt.Time
+	status.ExpiresAt = dbRow.ExpiresAt
+	if dbRow.CreatedAt != nil {
+		status.CreatedAt = *dbRow.CreatedAt
 	}
-	if dbRow.CreatedAt.Valid {
-		status.CreatedAt = dbRow.CreatedAt.Time
-	}
-	if dbRow.UpdatedAt.Valid {
-		status.UpdatedAt = dbRow.UpdatedAt.Time
+	if dbRow.UpdatedAt != nil {
+		status.UpdatedAt = *dbRow.UpdatedAt
 	}
 
 	return status
@@ -155,24 +142,18 @@ func convertDbOAuthCredentialStatusFromGet(dbRow *db.GetOAuthCredentialStatusRow
 	}
 
 	// Convert UUID
-	if dbRow.ID.Valid {
-		status.ID = uuid.UUID(dbRow.ID.Bytes)
-	}
+	status.ID = dbRow.ID
 
 	// Convert nullable fields
-	if dbRow.AccountName.Valid {
-		status.AccountName = &dbRow.AccountName.String
-	}
+	status.AccountName = dbRow.AccountName
 
 	// Convert timestamps
-	if dbRow.ExpiresAt.Valid {
-		status.ExpiresAt = &dbRow.ExpiresAt.Time
+	status.ExpiresAt = dbRow.ExpiresAt
+	if dbRow.CreatedAt != nil {
+		status.CreatedAt = *dbRow.CreatedAt
 	}
-	if dbRow.CreatedAt.Valid {
-		status.CreatedAt = dbRow.CreatedAt.Time
-	}
-	if dbRow.UpdatedAt.Valid {
-		status.UpdatedAt = dbRow.UpdatedAt.Time
+	if dbRow.UpdatedAt != nil {
+		status.UpdatedAt = *dbRow.UpdatedAt
 	}
 
 	return status
@@ -197,7 +178,7 @@ func (r *OAuthRepository) GetByProviderAndAccount(ctx context.Context, provider,
 
 // GetByID retrieves a credential by UUID
 func (r *OAuthRepository) GetByID(ctx context.Context, id uuid.UUID) (*OAuthCredential, error) {
-	dbCred, err := r.queries.GetOAuthCredentialByID(ctx, uuidToPgUUID(id))
+	dbCred, err := r.queries.GetOAuthCredentialByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -241,7 +222,7 @@ func (r *OAuthRepository) ListStatusesByProvider(ctx context.Context, provider s
 
 // GetStatus retrieves non-sensitive info for a specific credential
 func (r *OAuthRepository) GetStatus(ctx context.Context, id uuid.UUID) (*OAuthCredentialStatus, error) {
-	dbRow, err := r.queries.GetOAuthCredentialStatus(ctx, uuidToPgUUID(id))
+	dbRow, err := r.queries.GetOAuthCredentialStatus(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -258,13 +239,13 @@ func (r *OAuthRepository) Upsert(ctx context.Context, req UpsertOAuthCredentialR
 	dbCred, err := r.queries.UpsertOAuthCredential(ctx, db.UpsertOAuthCredentialParams{
 		Provider:              req.Provider,
 		AccountID:             req.AccountID,
-		AccountName:           stringToPgText(req.AccountName),
+		AccountName:           req.AccountName,
 		AccessTokenEncrypted:  req.AccessTokenEncrypted,
 		RefreshTokenEncrypted: req.RefreshTokenEncrypted,
 		RefreshTokenNonce:     req.RefreshTokenNonce,
 		EncryptionNonce:       req.EncryptionNonce,
-		TokenType:             pgtype.Text{String: req.TokenType, Valid: req.TokenType != ""},
-		ExpiresAt:             timeToPgTimestamptz(req.ExpiresAt),
+		TokenType:             nilIfEmpty(req.TokenType),
+		ExpiresAt:             req.ExpiresAt,
 		Scopes:                req.Scopes,
 	})
 	if err != nil {
@@ -278,12 +259,12 @@ func (r *OAuthRepository) Upsert(ctx context.Context, req UpsertOAuthCredentialR
 // UpdateTokens updates only the token data for a credential
 func (r *OAuthRepository) UpdateTokens(ctx context.Context, id uuid.UUID, req UpdateOAuthTokensRequest) (*OAuthCredential, error) {
 	dbCred, err := r.queries.UpdateOAuthCredentialTokens(ctx, db.UpdateOAuthCredentialTokensParams{
-		ID:                    uuidToPgUUID(id),
+		ID:                    id,
 		AccessTokenEncrypted:  req.AccessTokenEncrypted,
 		RefreshTokenEncrypted: req.RefreshTokenEncrypted,
 		RefreshTokenNonce:     req.RefreshTokenNonce,
 		EncryptionNonce:       req.EncryptionNonce,
-		ExpiresAt:             timeToPgTimestamptz(req.ExpiresAt),
+		ExpiresAt:             req.ExpiresAt,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -298,7 +279,7 @@ func (r *OAuthRepository) UpdateTokens(ctx context.Context, id uuid.UUID, req Up
 
 // Delete removes a credential by ID
 func (r *OAuthRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	return r.queries.DeleteOAuthCredential(ctx, uuidToPgUUID(id))
+	return r.queries.DeleteOAuthCredential(ctx, id)
 }
 
 // DeleteByProvider removes all credentials for a provider

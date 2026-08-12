@@ -8,7 +8,6 @@ import (
 	"personal-crm/backend/internal/db"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TelegramSession represents a Telegram MTProto session
@@ -62,20 +61,14 @@ func convertDbTelegramSession(s *db.TelegramSession) TelegramSession {
 		EncryptionNonce:      s.EncryptionNonce,
 		AuthState:            s.AuthState,
 	}
-	if s.PhoneNumber.Valid {
-		sess.PhoneNumber = &s.PhoneNumber.String
+	sess.PhoneNumber = s.PhoneNumber
+	sess.TelegramUserID = s.TelegramUserID
+	sess.Username = s.Username
+	if s.CreatedAt != nil {
+		sess.CreatedAt = *s.CreatedAt
 	}
-	if s.TelegramUserID.Valid {
-		sess.TelegramUserID = &s.TelegramUserID.Int64
-	}
-	if s.Username.Valid {
-		sess.Username = &s.Username.String
-	}
-	if s.CreatedAt.Valid {
-		sess.CreatedAt = s.CreatedAt.Time
-	}
-	if s.UpdatedAt.Valid {
-		sess.UpdatedAt = s.UpdatedAt.Time
+	if s.UpdatedAt != nil {
+		sess.UpdatedAt = *s.UpdatedAt
 	}
 	return sess
 }
@@ -98,9 +91,9 @@ func (r *TelegramSessionRepository) UpsertSession(ctx context.Context, params Up
 	dbSess, err := r.queries.UpsertTelegramSession(ctx, db.UpsertTelegramSessionParams{
 		SessionDataEncrypted: params.SessionDataEncrypted,
 		EncryptionNonce:      params.EncryptionNonce,
-		PhoneNumber:          stringToPgText(params.PhoneNumber),
-		TelegramUserID:       int64ToPgInt8(params.TelegramUserID),
-		Username:             stringToPgText(params.Username),
+		PhoneNumber:          params.PhoneNumber,
+		TelegramUserID:       params.TelegramUserID,
+		Username:             params.Username,
 		AuthState:            params.AuthState,
 	})
 	if err != nil {
@@ -140,9 +133,9 @@ func (r *TelegramSessionRepository) UpdateAuthState(ctx context.Context, authSta
 // UpdateUserInfo updates user info fields on the telegram session
 func (r *TelegramSessionRepository) UpdateUserInfo(ctx context.Context, params UpdateTelegramUserInfoParams) (*TelegramSession, error) {
 	dbSess, err := r.queries.UpdateTelegramSessionUserInfo(ctx, db.UpdateTelegramSessionUserInfoParams{
-		TelegramUserID: int64ToPgInt8(params.TelegramUserID),
-		Username:       stringToPgText(params.Username),
-		PhoneNumber:    stringToPgText(params.PhoneNumber),
+		TelegramUserID: params.TelegramUserID,
+		Username:       params.Username,
+		PhoneNumber:    params.PhoneNumber,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -157,12 +150,4 @@ func (r *TelegramSessionRepository) UpdateUserInfo(ctx context.Context, params U
 // DeleteSession deletes the telegram session
 func (r *TelegramSessionRepository) DeleteSession(ctx context.Context) error {
 	return r.queries.DeleteTelegramSession(ctx)
-}
-
-// int64ToPgInt8 converts an *int64 to pgtype.Int8
-func int64ToPgInt8(v *int64) pgtype.Int8 {
-	if v == nil {
-		return pgtype.Int8{Valid: false}
-	}
-	return pgtype.Int8{Int64: *v, Valid: true}
 }

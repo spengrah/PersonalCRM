@@ -7,8 +7,6 @@ package db
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const DeleteTelegramSession = `-- name: DeleteTelegramSession :exec
@@ -76,9 +74,9 @@ RETURNING id, session_data_encrypted, encryption_nonce, phone_number, telegram_u
 `
 
 type UpdateTelegramSessionUserInfoParams struct {
-	TelegramUserID pgtype.Int8 `json:"telegram_user_id"`
-	Username       pgtype.Text `json:"username"`
-	PhoneNumber    pgtype.Text `json:"phone_number"`
+	TelegramUserID *int64  `json:"telegram_user_id"`
+	Username       *string `json:"username"`
+	PhoneNumber    *string `json:"phone_number"`
 }
 
 func (q *Queries) UpdateTelegramSessionUserInfo(ctx context.Context, arg UpdateTelegramSessionUserInfoParams) (*TelegramSession, error) {
@@ -118,12 +116,12 @@ RETURNING id, session_data_encrypted, encryption_nonce, phone_number, telegram_u
 `
 
 type UpsertTelegramSessionParams struct {
-	SessionDataEncrypted []byte      `json:"session_data_encrypted"`
-	EncryptionNonce      []byte      `json:"encryption_nonce"`
-	PhoneNumber          pgtype.Text `json:"phone_number"`
-	TelegramUserID       pgtype.Int8 `json:"telegram_user_id"`
-	Username             pgtype.Text `json:"username"`
-	AuthState            string      `json:"auth_state"`
+	SessionDataEncrypted []byte  `json:"session_data_encrypted"`
+	EncryptionNonce      []byte  `json:"encryption_nonce"`
+	PhoneNumber          *string `json:"phone_number"`
+	TelegramUserID       *int64  `json:"telegram_user_id"`
+	Username             *string `json:"username"`
+	AuthState            string  `json:"auth_state"`
 }
 
 func (q *Queries) UpsertTelegramSession(ctx context.Context, arg UpsertTelegramSessionParams) (*TelegramSession, error) {

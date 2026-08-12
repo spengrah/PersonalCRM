@@ -26,7 +26,6 @@ import (
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -98,31 +97,40 @@ func TestTelegramMessage_AllFieldsPopulatedOnRead(t *testing.T) {
 
 	// A non-zero time distinct from createdAt's default, used for every
 	// nullable timestamp column.
-	ts := pgtype.Timestamptz{Time: occurredAt, Valid: true}
+	ts := occurredAt
+	chatTitle := "Probe Chat"
+	messageText := "probe message text"
+	replyToMsgID := int32(919999)
+	peerUserID := int64(778899)
+	peerUsername := "probe_user"
+	peerFirstName := "Probe"
+	peerLastName := "User"
+	peerPhone := "15555550100"
+	claimedSessionRef := "probe-session-ref"
 
 	inserted, err := database.Queries.InsertFullTelegramMessageForTest(ctx, db.InsertFullTelegramMessageForTestParams{
 		TelegramMessageID:  920001,
 		TelegramChatID:     chatID,
 		ChatType:           "private",
-		ChatTitle:          pgtype.Text{String: "Probe Chat", Valid: true},
-		MessageText:        pgtype.Text{String: "probe message text", Valid: true},
+		ChatTitle:          &chatTitle,
+		MessageText:        &messageText,
 		MessageType:        "text",
 		SentAt:             ts,
-		EditedAt:           ts,
+		EditedAt:           &ts,
 		IsOutgoing:         true,
-		ReplyToMsgID:       pgtype.Int4{Int32: 919999, Valid: true},
-		PeerUserID:         pgtype.Int8{Int64: 778899, Valid: true},
-		PeerUsername:       pgtype.Text{String: "probe_user", Valid: true},
-		PeerFirstName:      pgtype.Text{String: "Probe", Valid: true},
-		PeerLastName:       pgtype.Text{String: "User", Valid: true},
-		PeerPhone:          pgtype.Text{String: "15555550100", Valid: true},
-		MatchedContactID:   pgtype.UUID{Bytes: contact.ID, Valid: true},
-		InteractionID:      pgtype.UUID{Bytes: interaction.ID, Valid: true},
-		ProcessedAt:        ts,
-		DeletedAt:          ts,
+		ReplyToMsgID:       &replyToMsgID,
+		PeerUserID:         &peerUserID,
+		PeerUsername:       &peerUsername,
+		PeerFirstName:      &peerFirstName,
+		PeerLastName:       &peerLastName,
+		PeerPhone:          &peerPhone,
+		MatchedContactID:   &contact.ID,
+		InteractionID:      &interaction.ID,
+		ProcessedAt:        &ts,
+		DeletedAt:          &ts,
 		PeerEntityResolved: true,
-		ClaimedAt:          ts,
-		ClaimedSessionRef:  pgtype.Text{String: "probe-session-ref", Valid: true},
+		ClaimedAt:          &ts,
+		ClaimedSessionRef:  &claimedSessionRef,
 	})
 	require.NoError(t, err)
 
@@ -143,40 +151,25 @@ func TestTelegramMessage_AllFieldsPopulatedOnRead(t *testing.T) {
 	}
 }
 
-// assertFieldPopulated fails the test if v is at its zero value. pgtype.*
-// wrapper types (which all carry a Valid bool plus an inner value field) are
-// checked by asserting Valid is true AND at least one non-Valid field is
-// non-zero; plain scalars are checked directly. The field name is included in
-// the failure so a dropped SELECT column is named.
+// assertFieldPopulated fails the test if v is at its zero value. Nullable
+// columns are plain Go pointers post-flip: a nil pointer means the column
+// scanned as SQL NULL (the dropped-column failure mode this test exists to
+// catch), and a non-nil pointer must point to a genuinely non-zero value —
+// otherwise the fixture above seeded a zero, not a populated one, and the
+// test would pass vacuously. Non-nullable columns are checked directly. The
+// field name is included in the failure so a dropped SELECT column is named.
 func assertFieldPopulated(t *testing.T, name string, v reflect.Value) {
 	t.Helper()
 
-	// pgtype wrappers are structs with a bool field named "Valid". Detect that
-	// shape generically rather than enumerating every pgtype.* type.
-	if v.Kind() == reflect.Struct {
-		if valid := v.FieldByName("Valid"); valid.IsValid() && valid.Kind() == reflect.Bool {
-			if !valid.Bool() {
-				t.Errorf("field %s: pgtype value is not Valid (column likely missing from the SELECT list)", name)
-				return
-			}
-			// At least one non-Valid field must be non-zero, otherwise the
-			// inner value was never scanned.
-			vt := v.Type()
-			innerPopulated := false
-			for i := 0; i < vt.NumField(); i++ {
-				if vt.Field(i).Name == "Valid" {
-					continue
-				}
-				if !v.Field(i).IsZero() {
-					innerPopulated = true
-					break
-				}
-			}
-			if !innerPopulated {
-				t.Errorf("field %s: pgtype value is Valid but its inner value is zero (column likely missing from the SELECT list)", name)
-			}
+	if v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			t.Errorf("field %s: nil pointer (column likely missing from the SELECT list)", name)
 			return
 		}
+		if v.Elem().IsZero() {
+			t.Errorf("field %s: pointer is non-nil but points to a zero value (fixture likely seeded a zero, not a populated value)", name)
+		}
+		return
 	}
 
 	if v.IsZero() {

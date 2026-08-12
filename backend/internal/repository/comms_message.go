@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -233,8 +232,8 @@ func (r *CommsMessageRepository) RepointContactForMergeTx(ctx context.Context, t
 		}
 		q := db.New(sp)
 		if err := q.SoftDeleteDuplicateCommsMessagesForMerge(ctx, db.SoftDeleteDuplicateCommsMessagesForMergeParams{
-			SourceContactID: uuidToPgUUID(sourceContactID),
-			TargetContactID: uuidToPgUUID(targetContactID),
+			SourceContactID: &sourceContactID,
+			TargetContactID: &targetContactID,
 		}); err != nil {
 			if rbErr := sp.Rollback(ctx); rbErr != nil {
 				return fmt.Errorf("rollback comms repoint savepoint: %w (dedup: %w)", rbErr, err)
@@ -245,8 +244,8 @@ func (r *CommsMessageRepository) RepointContactForMergeTx(ctx context.Context, t
 			r.repointBarrierForTest()
 		}
 		if err := q.RepointCommsMessageContact(ctx, db.RepointCommsMessageContactParams{
-			SourceContactID: uuidToPgUUID(sourceContactID),
-			TargetContactID: uuidToPgUUID(targetContactID),
+			SourceContactID: &sourceContactID,
+			TargetContactID: &targetContactID,
 		}); err != nil {
 			if rbErr := sp.Rollback(ctx); rbErr != nil {
 				return fmt.Errorf("rollback comms repoint savepoint: %w (repoint: %w)", rbErr, err)
@@ -282,60 +281,26 @@ func convertDbCommsMessage(m *db.CommsMessage) CommsMessage {
 		Direction:      m.Direction,
 		SourceMetadata: m.SourceMetadata,
 	}
-	if m.ID.Valid {
-		msg.ID = uuid.UUID(m.ID.Bytes)
-	}
-	if m.ThreadID.Valid {
-		msg.ThreadID = &m.ThreadID.String
-	}
-	if m.Subject.Valid {
-		msg.Subject = &m.Subject.String
-	}
-	if m.Body.Valid {
-		msg.Body = &m.Body.String
-	}
-	if m.Snippet.Valid {
-		msg.Snippet = &m.Snippet.String
-	}
-	if m.PeerHandle.Valid {
-		msg.PeerHandle = &m.PeerHandle.String
-	}
-	if m.PeerNormalized.Valid {
-		msg.PeerNormalized = &m.PeerNormalized.String
-	}
-	if m.SentAt.Valid {
-		msg.SentAt = m.SentAt.Time
-	}
-	if m.AccountID.Valid {
-		msg.AccountID = &m.AccountID.String
-	}
-	if m.MatchedContactID.Valid {
-		id := uuid.UUID(m.MatchedContactID.Bytes)
-		msg.MatchedContactID = &id
-	}
-	if m.InteractionID.Valid {
-		id := uuid.UUID(m.InteractionID.Bytes)
-		msg.InteractionID = &id
-	}
-	if m.ClaimedAt.Valid {
-		msg.ClaimedAt = &m.ClaimedAt.Time
-	}
-	if m.ClaimedSessionRef.Valid {
-		msg.ClaimedSessionRef = &m.ClaimedSessionRef.String
-	}
-	if m.ProcessedAt.Valid {
-		msg.ProcessedAt = &m.ProcessedAt.Time
-	}
-	if m.DeletedAt.Valid {
-		msg.DeletedAt = &m.DeletedAt.Time
-	}
-	if m.CreatedAt.Valid {
-		msg.CreatedAt = m.CreatedAt.Time
-	}
+	msg.ID = m.ID
+	msg.ThreadID = m.ThreadID
+	msg.Subject = m.Subject
+	msg.Body = m.Body
+	msg.Snippet = m.Snippet
+	msg.PeerHandle = m.PeerHandle
+	msg.PeerNormalized = m.PeerNormalized
+	msg.SentAt = m.SentAt
+	msg.AccountID = m.AccountID
+	msg.MatchedContactID = m.MatchedContactID
+	msg.InteractionID = m.InteractionID
+	msg.ClaimedAt = m.ClaimedAt
+	msg.ClaimedSessionRef = m.ClaimedSessionRef
+	msg.ProcessedAt = m.ProcessedAt
+	msg.DeletedAt = m.DeletedAt
+	msg.CreatedAt = m.CreatedAt
 	return msg
 }
 
-// buildUpsertCommsMessageParams centralizes the pgtype conversion shared
+// buildUpsertCommsMessageParams centralizes the field mapping shared
 // between the tx and non-tx upsert paths, so both variants stay in lockstep.
 // GmailMessageID is a plain text param in the generated query (non-nullable
 // cast); a nil pointer maps to the empty string. SourceMetadata defaults to an
@@ -350,20 +315,21 @@ func buildUpsertCommsMessageParams(params UpsertCommsMessageParams) db.UpsertCom
 	if len(sourceMetadata) == 0 {
 		sourceMetadata = []byte("{}")
 	}
+	matchedContactID := params.MatchedContactID
 	return db.UpsertCommsMessageParams{
 		Source:           params.Source,
 		ExternalID:       params.ExternalID,
-		ThreadID:         stringToPgText(params.ThreadID),
-		Subject:          stringToPgText(params.Subject),
-		Body:             stringToPgText(params.Body),
-		Snippet:          stringToPgText(params.Snippet),
-		PeerHandle:       stringToPgText(params.PeerHandle),
-		PeerNormalized:   stringToPgText(params.PeerNormalized),
+		ThreadID:         params.ThreadID,
+		Subject:          params.Subject,
+		Body:             params.Body,
+		Snippet:          params.Snippet,
+		PeerHandle:       params.PeerHandle,
+		PeerNormalized:   params.PeerNormalized,
 		Direction:        params.Direction,
-		SentAt:           timeToPgTimestamptz(&params.SentAt),
-		AccountID:        stringToPgText(params.AccountID),
+		SentAt:           params.SentAt,
+		AccountID:        params.AccountID,
 		SourceMetadata:   sourceMetadata,
-		MatchedContactID: uuidToPgUUID(params.MatchedContactID),
+		MatchedContactID: &matchedContactID,
 		GmailMessageID:   gmailMessageID,
 	}
 }
@@ -398,7 +364,7 @@ func (r *CommsMessageRepository) GetMessage(ctx context.Context, source, externa
 	dbMsg, err := r.queries.GetCommsMessage(ctx, db.GetCommsMessageParams{
 		Source:           source,
 		ExternalID:       externalID,
-		MatchedContactID: uuidToPgUUID(contactID),
+		MatchedContactID: &contactID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -419,7 +385,7 @@ func (r *CommsMessageRepository) GetMessageTx(ctx context.Context, tx pgx.Tx, so
 	dbMsg, err := db.New(tx).GetCommsMessage(ctx, db.GetCommsMessageParams{
 		Source:           source,
 		ExternalID:       externalID,
-		MatchedContactID: uuidToPgUUID(contactID),
+		MatchedContactID: &contactID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -433,7 +399,7 @@ func (r *CommsMessageRepository) GetMessageTx(ctx context.Context, tx pgx.Tx, so
 
 // GetByID retrieves a content row by id. Returns db.ErrNotFound on miss.
 func (r *CommsMessageRepository) GetByID(ctx context.Context, id uuid.UUID) (*CommsMessage, error) {
-	dbMsg, err := r.queries.GetCommsMessageByID(ctx, uuidToPgUUID(id))
+	dbMsg, err := r.queries.GetCommsMessageByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -446,7 +412,7 @@ func (r *CommsMessageRepository) GetByID(ctx context.Context, id uuid.UUID) (*Co
 
 // ListByContact returns a contact's content rows, newest first.
 func (r *CommsMessageRepository) ListByContact(ctx context.Context, contactID uuid.UUID) ([]CommsMessage, error) {
-	dbMsgs, err := r.queries.ListCommsMessagesByContact(ctx, uuidToPgUUID(contactID))
+	dbMsgs, err := r.queries.ListCommsMessagesByContact(ctx, &contactID)
 	if err != nil {
 		return nil, err
 	}
@@ -468,13 +434,9 @@ func (r *CommsMessageRepository) MarkProcessedTx(ctx context.Context, tx pgx.Tx,
 	if len(messageIDs) == 0 {
 		return 0, nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
 	return db.New(tx).MarkCommsMessagesProcessed(ctx, db.MarkCommsMessagesProcessedParams{
-		InteractionID: uuidToPgUUID(interactionID),
-		MessageIds:    pgIDs,
+		InteractionID: &interactionID,
+		MessageIds:    messageIDs,
 	})
 }
 
@@ -489,12 +451,9 @@ func (r *CommsMessageRepository) ListEmailIdentitiesForSync(ctx context.Context)
 	}
 	out := make([]EmailIdentity, 0, len(rows))
 	for _, row := range rows {
-		if !row.ContactID.Valid {
-			continue
-		}
 		out = append(out, EmailIdentity{
 			ValueNormalized: row.ValueNormalized,
-			ContactID:       uuid.UUID(row.ContactID.Bytes),
+			ContactID:       row.ContactID,
 		})
 	}
 	return out, nil
@@ -504,7 +463,7 @@ func (r *CommsMessageRepository) ListEmailIdentitiesForSync(ctx context.Context)
 // source_type) triple for non-deleted contacts whose contact_method type is
 // 'gchat' or 'email'. The mapping is many-to-one (shared address → multiple
 // contacts). The GChat provider builds its dual-source known-contact map from
-// this. Rows with an invalid contact_id are skipped defensively.
+// this. contact_id is guaranteed non-null: the query INNER JOINs live_contact.
 func (r *CommsMessageRepository) ListGChatIdentitiesForSync(ctx context.Context) ([]GChatIdentity, error) {
 	rows, err := r.queries.ListGChatIdentitiesForSync(ctx)
 	if err != nil {
@@ -512,12 +471,9 @@ func (r *CommsMessageRepository) ListGChatIdentitiesForSync(ctx context.Context)
 	}
 	out := make([]GChatIdentity, 0, len(rows))
 	for _, row := range rows {
-		if !row.ContactID.Valid {
-			continue
-		}
 		out = append(out, GChatIdentity{
 			ValueNormalized: row.ValueNormalized,
-			ContactID:       uuid.UUID(row.ContactID.Bytes),
+			ContactID:       row.ContactID,
 			SourceType:      row.SourceType,
 		})
 	}
@@ -530,7 +486,7 @@ func (r *CommsMessageRepository) ListGChatIdentitiesForSync(ctx context.Context)
 // conflict, so soft-deleted rows would resurrect across runs. Production code
 // MUST NOT call this.
 func (r *CommsMessageRepository) HardDeleteByContact(ctx context.Context, contactID uuid.UUID) error {
-	return r.queries.HardDeleteCommsMessagesByContact(ctx, uuidToPgUUID(contactID))
+	return r.queries.HardDeleteCommsMessagesByContact(ctx, &contactID)
 }
 
 // MissingParticipantNamesRow is one keyset-paged row the historical
@@ -549,8 +505,8 @@ type MissingParticipantNamesRow struct {
 // per-row outcome, so a skipped/failed row never blocks later rows.
 func (r *CommsMessageRepository) ListMissingParticipantNames(ctx context.Context, since time.Time, afterID uuid.UUID, batchSize int32) ([]MissingParticipantNamesRow, error) {
 	rows, err := r.queries.ListCommsMessagesMissingParticipantNames(ctx, db.ListCommsMessagesMissingParticipantNamesParams{
-		Since:     timeToPgTimestamptz(&since),
-		AfterID:   uuidToPgUUID(afterID),
+		Since:     since,
+		AfterID:   afterID,
 		BatchSize: batchSize,
 	})
 	if err != nil {
@@ -558,14 +514,11 @@ func (r *CommsMessageRepository) ListMissingParticipantNames(ctx context.Context
 	}
 	out := make([]MissingParticipantNamesRow, 0, len(rows))
 	for _, row := range rows {
-		mr := MissingParticipantNamesRow{SourceMetadata: row.SourceMetadata}
-		if row.ID.Valid {
-			mr.ID = uuid.UUID(row.ID.Bytes)
-		}
-		if row.AccountID.Valid {
-			mr.AccountID = &row.AccountID.String
-		}
-		out = append(out, mr)
+		out = append(out, MissingParticipantNamesRow{
+			ID:             row.ID,
+			AccountID:      row.AccountID,
+			SourceMetadata: row.SourceMetadata,
+		})
 	}
 	return out, nil
 }
@@ -596,7 +549,7 @@ func (r *CommsMessageRepository) BackfillParticipantNames(ctx context.Context, i
 		return b
 	}
 	return r.queries.BackfillCommsMessageParticipantNames(ctx, db.BackfillCommsMessageParticipantNamesParams{
-		ID:       uuidToPgUUID(id),
+		ID:       id,
 		FromName: names.FromName,
 		ToNames:  toJSON(names.ToNames),
 		CcNames:  toJSON(names.CcNames),
@@ -628,7 +581,7 @@ func (p *CommsStagingProcessor) MarkProcessedTx(ctx context.Context, tx pgx.Tx, 
 // `source` and erases the ForSource suffix. The comms_message table is
 // multi-source, so the source is an explicit param here (unlike the
 // single-source messages_message / telegram_message repos). Reuse the
-// conversions.go helpers (uuidToPgUUID, stringToPgText, etc.).
+// conversions.go helpers (deref, utcPtr, etc.).
 // =====================================================================
 
 // ListUnprocessedContactIDsForSource returns distinct contact IDs with at
@@ -640,8 +593,8 @@ func (r *CommsMessageRepository) ListUnprocessedContactIDsForSource(ctx context.
 	}
 	ids := make([]uuid.UUID, 0, len(pgIDs))
 	for _, pgID := range pgIDs {
-		if pgID.Valid {
-			ids = append(ids, uuid.UUID(pgID.Bytes))
+		if pgID != nil {
+			ids = append(ids, *pgID)
 		}
 	}
 	return ids, nil
@@ -652,7 +605,7 @@ func (r *CommsMessageRepository) ListUnprocessedContactIDsForSource(ctx context.
 func (r *CommsMessageRepository) ListUnprocessedByContactForSource(ctx context.Context, source string, contactID uuid.UUID) ([]CommsMessage, error) {
 	dbMsgs, err := r.queries.ListUnprocessedCommsByContact(ctx, db.ListUnprocessedCommsByContactParams{
 		Source:           source,
-		MatchedContactID: uuidToPgUUID(contactID),
+		MatchedContactID: &contactID,
 	})
 	if err != nil {
 		return nil, err
@@ -669,8 +622,8 @@ func (r *CommsMessageRepository) ListUnprocessedByContactForSource(ctx context.C
 func (r *CommsMessageRepository) ListUnprocessedByContactAndChatForSource(ctx context.Context, source string, contactID uuid.UUID, chatID string) ([]CommsMessage, error) {
 	dbMsgs, err := r.queries.ListUnprocessedCommsByContactAndChat(ctx, db.ListUnprocessedCommsByContactAndChatParams{
 		Source:           source,
-		MatchedContactID: uuidToPgUUID(contactID),
-		ThreadID:         pgtype.Text{String: chatID, Valid: true},
+		MatchedContactID: &contactID,
+		ThreadID:         &chatID,
 	})
 	if err != nil {
 		return nil, err
@@ -690,15 +643,15 @@ func (r *CommsMessageRepository) ListUnprocessedByContactAndChatForSource(ctx co
 func (r *CommsMessageRepository) ListUnprocessedChatsByContactForSource(ctx context.Context, source string, contactID uuid.UUID) ([]string, error) {
 	rows, err := r.queries.ListUnprocessedCommsChatsByContact(ctx, db.ListUnprocessedCommsChatsByContactParams{
 		Source:           source,
-		MatchedContactID: uuidToPgUUID(contactID),
+		MatchedContactID: &contactID,
 	})
 	if err != nil {
 		return nil, err
 	}
 	out := make([]string, 0, len(rows))
 	for _, t := range rows {
-		if t.Valid && t.String != "" {
-			out = append(out, t.String)
+		if t != nil && *t != "" {
+			out = append(out, *t)
 		}
 	}
 	return out, nil
@@ -712,8 +665,8 @@ func (r *CommsMessageRepository) ListUnprocessedChatsByContactForSource(ctx cont
 func (r *CommsMessageRepository) GetMessageByReplyTargetForSource(ctx context.Context, source string, contactID uuid.UUID, chatID, replyTargetID string) (*CommsMessage, error) {
 	dbMsg, err := r.queries.GetCommsMessageByReplyTarget(ctx, db.GetCommsMessageByReplyTargetParams{
 		Source:           source,
-		MatchedContactID: uuidToPgUUID(contactID),
-		ThreadID:         pgtype.Text{String: chatID, Valid: true},
+		MatchedContactID: &contactID,
+		ThreadID:         &chatID,
 		ReplyTargetID:    replyTargetID,
 	})
 	if err != nil {
@@ -735,13 +688,9 @@ func (r *CommsMessageRepository) MarkMessagesProcessed(ctx context.Context, mess
 	if len(messageIDs) == 0 {
 		return nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
 	_, err := r.queries.MarkCommsMessagesProcessed(ctx, db.MarkCommsMessagesProcessedParams{
-		InteractionID: uuidToPgUUID(interactionID),
-		MessageIds:    pgIDs,
+		InteractionID: &interactionID,
+		MessageIds:    messageIDs,
 	})
 	return err
 }
@@ -757,14 +706,10 @@ func (r *CommsMessageRepository) MarkProcessedForSessionTx(ctx context.Context, 
 	if len(messageIDs) == 0 {
 		return 0, nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
 	return db.New(tx).MarkCommsMessagesProcessedForSession(ctx, db.MarkCommsMessagesProcessedForSessionParams{
-		InteractionID: uuidToPgUUID(interactionID),
-		MessageIds:    pgIDs,
-		SessionRef:    pgtype.Text{String: sessionRef, Valid: true},
+		InteractionID: &interactionID,
+		MessageIds:    messageIDs,
+		SessionRef:    &sessionRef,
 	})
 }
 
@@ -776,24 +721,10 @@ func (r *CommsMessageRepository) ClaimMessagesTx(ctx context.Context, tx pgx.Tx,
 	if len(messageIDs) == 0 {
 		return nil, nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
-	claimed, err := db.New(tx).ClaimCommsMessages(ctx, db.ClaimCommsMessagesParams{
-		SessionRef: pgtype.Text{String: sessionRef, Valid: true},
-		MessageIds: pgIDs,
+	return db.New(tx).ClaimCommsMessages(ctx, db.ClaimCommsMessagesParams{
+		SessionRef: &sessionRef,
+		MessageIds: messageIDs,
 	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]uuid.UUID, 0, len(claimed))
-	for _, id := range claimed {
-		if id.Valid {
-			out = append(out, uuid.UUID(id.Bytes))
-		}
-	}
-	return out, nil
 }
 
 // ClearStaleClaimTx clears claim columns for rows still carrying the expected
@@ -804,13 +735,9 @@ func (r *CommsMessageRepository) ClearStaleClaimTx(ctx context.Context, tx pgx.T
 	if len(messageIDs) == 0 {
 		return nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
 	return db.New(tx).ClearStaleCommsClaim(ctx, db.ClearStaleCommsClaimParams{
-		MessageIds:         pgIDs,
-		ExpectedSessionRef: pgtype.Text{String: expectedSessionRef, Valid: true},
+		MessageIds:         messageIDs,
+		ExpectedSessionRef: &expectedSessionRef,
 	})
 }
 
@@ -821,18 +748,14 @@ func (r *CommsMessageRepository) BackdateClaim(ctx context.Context, messageIDs [
 	if len(messageIDs) == 0 {
 		return nil
 	}
-	pgIDs := make([]pgtype.UUID, len(messageIDs))
-	for i, id := range messageIDs {
-		pgIDs[i] = uuidToPgUUID(id)
-	}
-	return r.queries.BackdateCommsMessageClaim(ctx, pgIDs)
+	return r.queries.BackdateCommsMessageClaim(ctx, messageIDs)
 }
 
 // SoftDeleteByID is a test-only helper that soft-deletes a single
 // comms_message row by id (simulating an upstream provider delete). Used by the
 // delete-no-op aggregation test. There is no production chat delete path yet.
 func (r *CommsMessageRepository) SoftDeleteByID(ctx context.Context, id uuid.UUID) error {
-	return r.queries.SoftDeleteCommsMessageByID(ctx, uuidToPgUUID(id))
+	return r.queries.SoftDeleteCommsMessageByID(ctx, id)
 }
 
 // ApplyEditByExternalID applies an upstream edit to every stored row for
@@ -849,8 +772,8 @@ func (r *CommsMessageRepository) ApplyEditByExternalID(ctx context.Context, sour
 	return r.queries.ApplyCommsMessageEditByExternalID(ctx, db.ApplyCommsMessageEditByExternalIDParams{
 		Source:         source,
 		ExternalID:     externalID,
-		Body:           stringToPgText(body),
-		Snippet:        stringToPgText(snippet),
+		Body:           body,
+		Snippet:        snippet,
 		EditedAt:       editedAt,
 		LastUpdateTime: lastUpdateTime,
 	})
@@ -863,7 +786,7 @@ func (r *CommsMessageRepository) SoftDeleteByExternalID(ctx context.Context, sou
 	return r.queries.SoftDeleteCommsMessagesByExternalID(ctx, db.SoftDeleteCommsMessagesByExternalIDParams{
 		Source:     source,
 		ExternalID: externalID,
-		Now:        timeToPgTimestamptz(&now),
+		Now:        &now,
 	})
 }
 
@@ -927,20 +850,20 @@ func (r *CommsMessageRepository) UpsertChatMessage(ctx context.Context, params U
 	if params.ThreadID == "" {
 		return nil, ErrChatMessageMissingThread
 	}
-	threadID := pgtype.Text{String: params.ThreadID, Valid: true}
+	threadID := params.ThreadID
 	sourceMetadata := jsonbOrEmpty(params.SourceMetadata)
 	if params.MatchedContactID == nil {
 		dbMsg, err := r.queries.UpsertChatCommsMessageUnmatched(ctx, db.UpsertChatCommsMessageUnmatchedParams{
 			Source:         params.Source,
 			ExternalID:     params.ExternalID,
-			ThreadID:       threadID,
-			Body:           stringToPgText(params.Body),
-			Snippet:        stringToPgText(params.Snippet),
-			PeerHandle:     stringToPgText(params.PeerHandle),
-			PeerNormalized: stringToPgText(params.PeerNormalized),
+			ThreadID:       &threadID,
+			Body:           params.Body,
+			Snippet:        params.Snippet,
+			PeerHandle:     params.PeerHandle,
+			PeerNormalized: params.PeerNormalized,
 			Direction:      params.Direction,
-			SentAt:         timeToPgTimestamptz(&params.SentAt),
-			AccountID:      stringToPgText(params.AccountID),
+			SentAt:         params.SentAt,
+			AccountID:      params.AccountID,
 			SourceMetadata: sourceMetadata,
 		})
 		if err != nil {
@@ -952,16 +875,16 @@ func (r *CommsMessageRepository) UpsertChatMessage(ctx context.Context, params U
 	dbMsg, err := r.queries.UpsertChatCommsMessageMatched(ctx, db.UpsertChatCommsMessageMatchedParams{
 		Source:           params.Source,
 		ExternalID:       params.ExternalID,
-		ThreadID:         threadID,
-		Body:             stringToPgText(params.Body),
-		Snippet:          stringToPgText(params.Snippet),
-		PeerHandle:       stringToPgText(params.PeerHandle),
-		PeerNormalized:   stringToPgText(params.PeerNormalized),
+		ThreadID:         &threadID,
+		Body:             params.Body,
+		Snippet:          params.Snippet,
+		PeerHandle:       params.PeerHandle,
+		PeerNormalized:   params.PeerNormalized,
 		Direction:        params.Direction,
-		SentAt:           timeToPgTimestamptz(&params.SentAt),
-		AccountID:        stringToPgText(params.AccountID),
+		SentAt:           params.SentAt,
+		AccountID:        params.AccountID,
 		SourceMetadata:   sourceMetadata,
-		MatchedContactID: uuidPtrToPgUUID(params.MatchedContactID),
+		MatchedContactID: params.MatchedContactID,
 	})
 	if err != nil {
 		return nil, err
@@ -1031,9 +954,9 @@ func (r *CommsMessageRepository) attachUnmatchedOnce(ctx context.Context, source
 	q := db.New(tx)
 	deduped, err := q.SoftDeleteDuplicateUnmatchedCommsMessages(ctx, db.SoftDeleteDuplicateUnmatchedCommsMessagesParams{
 		Source:         source,
-		PeerHandle:     stringToPgText(peerHandle),
-		PeerNormalized: stringToPgText(peerNormalized),
-		ContactID:      uuidToPgUUID(contactID),
+		PeerHandle:     peerHandle,
+		PeerNormalized: peerNormalized,
+		ContactID:      &contactID,
 	})
 	if err != nil {
 		return 0, 0, fmt.Errorf("soft-delete duplicate unmatched comms messages: %w", err)
@@ -1044,10 +967,10 @@ func (r *CommsMessageRepository) attachUnmatchedOnce(ctx context.Context, source
 		}
 	}
 	attached, err := q.AttachUnmatchedCommsMessagesByPeer(ctx, db.AttachUnmatchedCommsMessagesByPeerParams{
-		ContactID:      uuidToPgUUID(contactID),
+		ContactID:      &contactID,
 		Source:         source,
-		PeerHandle:     stringToPgText(peerHandle),
-		PeerNormalized: stringToPgText(peerNormalized),
+		PeerHandle:     peerHandle,
+		PeerNormalized: peerNormalized,
 	})
 	if err != nil {
 		return 0, 0, fmt.Errorf("attach unmatched comms messages: %w", err)
@@ -1064,7 +987,7 @@ func (r *CommsMessageRepository) attachUnmatchedOnce(ctx context.Context, source
 func (r *CommsMessageRepository) ListUnmatchedPeerCounts(ctx context.Context, source string, peerHandle *string, minMessages int) ([]UnmatchedPeerCount, error) {
 	rows, err := r.queries.ListUnmatchedCommsPeerCounts(ctx, db.ListUnmatchedCommsPeerCountsParams{
 		Source:      source,
-		PeerHandle:  stringToPgText(peerHandle),
+		PeerHandle:  peerHandle,
 		MinMessages: int64(minMessages),
 	})
 	if err != nil {
@@ -1077,8 +1000,8 @@ func (r *CommsMessageRepository) ListUnmatchedPeerCounts(ctx context.Context, so
 			InboundCount:  row.InboundCount,
 			OutboundCount: row.OutboundCount,
 		}
-		if row.PeerHandle.Valid {
-			c.PeerHandle = row.PeerHandle.String
+		if row.PeerHandle != nil {
+			c.PeerHandle = *row.PeerHandle
 		}
 		// The query COALESCEs both optional text columns to '' so sqlc can
 		// type them concretely; neither is ever legitimately empty.
@@ -1090,9 +1013,7 @@ func (r *CommsMessageRepository) ListUnmatchedPeerCounts(ctx context.Context, so
 			v := row.LastPushName
 			c.LastPushName = &v
 		}
-		if row.LastMessageAt.Valid {
-			c.LastMessageAt = row.LastMessageAt.Time.UTC()
-		}
+		c.LastMessageAt = row.LastMessageAt.UTC()
 		out = append(out, c)
 	}
 	return out, nil

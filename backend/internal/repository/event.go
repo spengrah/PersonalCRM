@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // EventRepository persists raw events for the event-bus pipeline (spec §3.1).
@@ -32,15 +31,11 @@ func convertDbEvent(row *db.Event) *events.Envelope {
 		Kind:    events.Kind(row.Kind),
 		Payload: row.Payload, // []byte from sqlc — json.RawMessage compatible
 	}
-	if row.ID.Valid {
-		env.ID = uuid.UUID(row.ID.Bytes)
+	env.ID = row.ID
+	if row.SourceID != nil {
+		env.SourceID = *row.SourceID
 	}
-	if row.SourceID.Valid {
-		env.SourceID = row.SourceID.String
-	}
-	if row.ObservedAt.Valid {
-		env.ObservedAt = row.ObservedAt.Time.UTC()
-	}
+	env.ObservedAt = row.ObservedAt.UTC()
 	return env
 }
 
@@ -60,13 +55,13 @@ func (r *EventRepository) InsertEvent(ctx context.Context, tx pgx.Tx, env *event
 
 	// Build params. source_id → NULL when empty string. id → NULL (let DB
 	// default via gen_random_uuid) when env.ID is uuid.Nil.
-	var idParam pgtype.UUID
+	var idParam *uuid.UUID
 	if env.ID != uuid.Nil {
-		idParam = pgtype.UUID{Bytes: env.ID, Valid: true}
+		idParam = &env.ID
 	}
-	var sourceIDParam pgtype.Text
+	var sourceIDParam *string
 	if env.SourceID != "" {
-		sourceIDParam = pgtype.Text{String: env.SourceID, Valid: true}
+		sourceIDParam = &env.SourceID
 	}
 
 	params := db.InsertEventParams{
@@ -75,7 +70,7 @@ func (r *EventRepository) InsertEvent(ctx context.Context, tx pgx.Tx, env *event
 		SourceID:   sourceIDParam,
 		Kind:       string(env.Kind),
 		Payload:    []byte(env.Payload),
-		ObservedAt: pgtype.Timestamptz{Time: env.ObservedAt, Valid: true},
+		ObservedAt: env.ObservedAt,
 	}
 
 	// Build a tx-scoped Querier so the INSERT runs inside the caller's tx.
@@ -96,7 +91,7 @@ func (r *EventRepository) InsertEvent(ctx context.Context, tx pgx.Tx, env *event
 
 // GetEvent fetches a single event by id. Returns db.ErrNotFound if absent.
 func (r *EventRepository) GetEvent(ctx context.Context, id uuid.UUID) (*events.Envelope, error) {
-	row, err := r.queries.GetEvent(ctx, uuidToPgUUID(id))
+	row, err := r.queries.GetEvent(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -127,7 +122,7 @@ func (r *EventRepository) FindEventBySource(ctx context.Context, source, sourceI
 	}
 	row, err := r.queries.FindEventBySource(ctx, db.FindEventBySourceParams{
 		Source:   source,
-		SourceID: pgtype.Text{String: sourceID, Valid: true},
+		SourceID: &sourceID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -147,7 +142,7 @@ func (r *EventRepository) FindEventBySource(ctx context.Context, source, sourceI
 func (r *EventRepository) HardDeleteEventsBySourceAndSourceIDPrefix(ctx context.Context, source, sourceIDPrefix string) error {
 	return r.queries.HardDeleteEventsBySourceAndSourceIDPrefix(ctx, db.HardDeleteEventsBySourceAndSourceIDPrefixParams{
 		Source:         source,
-		SourceIDPrefix: pgtype.Text{String: sourceIDPrefix, Valid: true},
+		SourceIDPrefix: &sourceIDPrefix,
 	})
 }
 

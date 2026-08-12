@@ -32,7 +32,7 @@ WITH new_node AS (
     RETURNING id
 )
 INSERT INTO contact (id, full_name, cadence, last_contacted, profile_photo, created_at, contact_by)
-SELECT new_node.id, sqlc.arg(full_name), sqlc.arg(cadence), sqlc.arg(last_contacted),
+SELECT new_node.id, sqlc.arg(full_name), sqlc.arg(cadence), sqlc.narg(last_contacted),
        sqlc.arg(profile_photo), sqlc.arg(created_at), sqlc.arg(contact_by)
 FROM new_node
 RETURNING contact.*;
@@ -90,26 +90,26 @@ UPDATE contact SET how_met = $2 WHERE id = $1 AND deleted_at IS NULL;
 UPDATE contact SET
     last_contacted = CASE
         WHEN sqlc.arg(apply_last_contacted)::boolean
-          AND (last_contacted IS NULL OR sqlc.arg(last_contacted)::timestamptz > last_contacted)
-        THEN sqlc.arg(last_contacted)::timestamptz
+          AND (last_contacted IS NULL OR sqlc.narg(last_contacted)::timestamptz > last_contacted)
+        THEN sqlc.narg(last_contacted)::timestamptz
         ELSE last_contacted
     END,
     last_interaction_at = CASE
         WHEN sqlc.arg(apply_last_interaction_at)::boolean
-          AND (last_interaction_at IS NULL OR sqlc.arg(last_interaction_at)::timestamptz > last_interaction_at)
-        THEN sqlc.arg(last_interaction_at)::timestamptz
+          AND (last_interaction_at IS NULL OR sqlc.narg(last_interaction_at)::timestamptz > last_interaction_at)
+        THEN sqlc.narg(last_interaction_at)::timestamptz
         ELSE last_interaction_at
     END,
     last_outreach_at = CASE
         WHEN sqlc.arg(apply_last_outreach_at)::boolean
-          AND (last_outreach_at IS NULL OR sqlc.arg(last_outreach_at)::timestamptz > last_outreach_at)
-        THEN sqlc.arg(last_outreach_at)::timestamptz
+          AND (last_outreach_at IS NULL OR sqlc.narg(last_outreach_at)::timestamptz > last_outreach_at)
+        THEN sqlc.narg(last_outreach_at)::timestamptz
         ELSE last_outreach_at
     END,
     last_response_at = CASE
         WHEN sqlc.arg(apply_last_response_at)::boolean
-          AND (last_response_at IS NULL OR sqlc.arg(last_response_at)::timestamptz > last_response_at)
-        THEN sqlc.arg(last_response_at)::timestamptz
+          AND (last_response_at IS NULL OR sqlc.narg(last_response_at)::timestamptz > last_response_at)
+        THEN sqlc.narg(last_response_at)::timestamptz
         ELSE last_response_at
     END,
     contact_by = CASE
@@ -134,19 +134,19 @@ WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 -- for the rationale.
 UPDATE contact SET
     last_contacted = CASE
-        WHEN sqlc.arg(apply_last_contacted)::boolean THEN sqlc.arg(last_contacted)::timestamptz
+        WHEN sqlc.arg(apply_last_contacted)::boolean THEN sqlc.narg(last_contacted)::timestamptz
         ELSE last_contacted
     END,
     last_interaction_at = CASE
-        WHEN sqlc.arg(apply_last_interaction_at)::boolean THEN sqlc.arg(last_interaction_at)::timestamptz
+        WHEN sqlc.arg(apply_last_interaction_at)::boolean THEN sqlc.narg(last_interaction_at)::timestamptz
         ELSE last_interaction_at
     END,
     last_outreach_at = CASE
-        WHEN sqlc.arg(apply_last_outreach_at)::boolean THEN sqlc.arg(last_outreach_at)::timestamptz
+        WHEN sqlc.arg(apply_last_outreach_at)::boolean THEN sqlc.narg(last_outreach_at)::timestamptz
         ELSE last_outreach_at
     END,
     last_response_at = CASE
-        WHEN sqlc.arg(apply_last_response_at)::boolean THEN sqlc.arg(last_response_at)::timestamptz
+        WHEN sqlc.arg(apply_last_response_at)::boolean THEN sqlc.narg(last_response_at)::timestamptz
         ELSE last_response_at
     END,
     contact_by = CASE
@@ -315,11 +315,12 @@ locked AS (
   FOR UPDATE
 )
 SELECT
-  (CASE WHEN c.last_contacted      = sqlc.arg(deleted_at_ts)::timestamptz THEN agg.new_non_outbound ELSE c.last_contacted      END)::timestamptz AS new_last_contacted,
-  (CASE WHEN c.last_interaction_at = sqlc.arg(deleted_at_ts)::timestamptz THEN agg.new_non_outbound ELSE c.last_interaction_at END)::timestamptz AS new_last_interaction_at,
-  (CASE WHEN c.last_response_at    = sqlc.arg(deleted_at_ts)::timestamptz THEN agg.new_non_outbound ELSE c.last_response_at    END)::timestamptz AS new_last_response_at,
-  (CASE WHEN c.last_outreach_at    = sqlc.arg(deleted_at_ts)::timestamptz THEN agg.new_outreach     ELSE c.last_outreach_at    END)::timestamptz AS new_last_outreach_at,
-  c.last_contacted AS old_last_contacted,
+  agg.new_non_outbound AS new_non_outbound,
+  agg.new_outreach     AS new_outreach,
+  c.last_contacted     AS old_last_contacted,
+  c.last_interaction_at AS old_last_interaction_at,
+  c.last_response_at   AS old_last_response_at,
+  c.last_outreach_at   AS old_last_outreach_at,
   c.contact_by     AS old_contact_by,
   c.cadence        AS cadence,
   c.created_at     AS created_at

@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // MatchStatus represents the match status of an external contact
@@ -307,57 +306,30 @@ func convertDbExternalContact(dbContact *db.ExternalContact) (*ExternalContact, 
 	contact := &ExternalContact{
 		Source:      dbContact.Source,
 		SourceID:    dbContact.SourceID,
-		MatchStatus: MatchStatus(dbContact.MatchStatus.String),
+		MatchStatus: MatchStatus(deref(dbContact.MatchStatus)),
 	}
 
 	// Convert UUID
-	if dbContact.ID.Valid {
-		contact.ID = uuid.UUID(dbContact.ID.Bytes)
-	}
+	contact.ID = dbContact.ID
 
 	// Convert optional strings
-	if dbContact.AccountID.Valid {
-		contact.AccountID = &dbContact.AccountID.String
-	}
-	if dbContact.DisplayName.Valid {
-		contact.DisplayName = &dbContact.DisplayName.String
-	}
-	if dbContact.FirstName.Valid {
-		contact.FirstName = &dbContact.FirstName.String
-	}
-	if dbContact.LastName.Valid {
-		contact.LastName = &dbContact.LastName.String
-	}
-	if dbContact.Organization.Valid {
-		contact.Organization = &dbContact.Organization.String
-	}
-	if dbContact.JobTitle.Valid {
-		contact.JobTitle = &dbContact.JobTitle.String
-	}
-	if dbContact.PhotoUrl.Valid {
-		contact.PhotoURL = &dbContact.PhotoUrl.String
-	}
-	if dbContact.Etag.Valid {
-		contact.Etag = &dbContact.Etag.String
-	}
+	contact.AccountID = dbContact.AccountID
+	contact.DisplayName = dbContact.DisplayName
+	contact.FirstName = dbContact.FirstName
+	contact.LastName = dbContact.LastName
+	contact.Organization = dbContact.Organization
+	contact.JobTitle = dbContact.JobTitle
+	contact.PhotoURL = dbContact.PhotoUrl
+	contact.Etag = dbContact.Etag
 
 	// Convert birthday
-	if dbContact.Birthday.Valid {
-		t := dbContact.Birthday.Time
-		contact.Birthday = &t
-	}
+	contact.Birthday = dbContact.Birthday
 
 	// Convert CRM contact ID
-	if dbContact.CrmContactID.Valid {
-		id := uuid.UUID(dbContact.CrmContactID.Bytes)
-		contact.CRMContactID = &id
-	}
+	contact.CRMContactID = dbContact.CrmContactID
 
 	// Convert duplicate of ID
-	if dbContact.DuplicateOfID.Valid {
-		id := uuid.UUID(dbContact.DuplicateOfID.Bytes)
-		contact.DuplicateOfID = &id
-	}
+	contact.DuplicateOfID = dbContact.DuplicateOfID
 
 	// Parse JSONB fields
 	if len(dbContact.Emails) > 0 {
@@ -401,33 +373,23 @@ func convertDbExternalContact(dbContact *db.ExternalContact) (*ExternalContact, 
 	contact.DismissedMethodSuggestions = parseMethodSuggestions(dbContact.DismissedMethodSuggestions)
 
 	// Convert timestamps
-	if dbContact.SyncedAt.Valid {
-		contact.SyncedAt = &dbContact.SyncedAt.Time
+	contact.SyncedAt = dbContact.SyncedAt
+	if dbContact.CreatedAt != nil {
+		contact.CreatedAt = *dbContact.CreatedAt
 	}
-	if dbContact.CreatedAt.Valid {
-		contact.CreatedAt = dbContact.CreatedAt.Time
+	if dbContact.UpdatedAt != nil {
+		contact.UpdatedAt = *dbContact.UpdatedAt
 	}
-	if dbContact.UpdatedAt.Valid {
-		contact.UpdatedAt = dbContact.UpdatedAt.Time
-	}
-	if dbContact.DeletedAt.Valid {
-		t := dbContact.DeletedAt.Time
-		contact.DeletedAt = &t
-	}
-	if dbContact.HostID.Valid {
-		id := uuid.UUID(dbContact.HostID.Bytes)
-		contact.HostID = &id
-	}
-	if dbContact.LastContentHash.Valid {
-		contact.LastContentHash = &dbContact.LastContentHash.String
-	}
+	contact.DeletedAt = dbContact.DeletedAt
+	contact.HostID = dbContact.HostID
+	contact.LastContentHash = dbContact.LastContentHash
 
 	return contact, nil
 }
 
 // GetByID retrieves an external contact by ID
 func (r *ExternalContactRepository) GetByID(ctx context.Context, id uuid.UUID) (*ExternalContact, error) {
-	dbContact, err := r.queries.GetExternalContact(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	dbContact, err := r.queries.GetExternalContact(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
@@ -439,15 +401,10 @@ func (r *ExternalContactRepository) GetByID(ctx context.Context, id uuid.UUID) (
 
 // GetBySource retrieves an external contact by source and source_id
 func (r *ExternalContactRepository) GetBySource(ctx context.Context, source, sourceID string, accountID *string) (*ExternalContact, error) {
-	var accountIDText pgtype.Text
-	if accountID != nil {
-		accountIDText = pgtype.Text{String: *accountID, Valid: true}
-	}
-
 	dbContact, err := r.queries.GetExternalContactBySource(ctx, db.GetExternalContactBySourceParams{
 		Source:    source,
 		SourceID:  sourceID,
-		AccountID: accountIDText,
+		AccountID: accountID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -467,7 +424,7 @@ func (r *ExternalContactRepository) Upsert(ctx context.Context, req UpsertExtern
 	return convertDbExternalContact(dbContact)
 }
 
-// buildUpsertExternalContactParams centralizes the pgtype + JSONB
+// buildUpsertExternalContactParams centralizes the param + JSONB
 // conversion shared between Upsert (non-tx) and UpsertTx. Keeping it in
 // one place ensures both variants stay in lockstep — drift would
 // silently produce different on-disk shapes depending on caller.
@@ -489,53 +446,28 @@ func buildUpsertExternalContactParams(req UpsertExternalContactRequest) db.Upser
 		metadataJSON = []byte("{}")
 	}
 
-	params := db.UpsertExternalContactParams{
-		Source:      req.Source,
-		SourceID:    req.SourceID,
-		Emails:      emailsJSON,
-		Phones:      phonesJSON,
-		Addresses:   addressesJSON,
-		Metadata:    metadataJSON,
-		MatchStatus: pgtype.Text{String: string(MatchStatusUnmatched), Valid: true},
+	matchStatus := string(MatchStatusUnmatched)
+	return db.UpsertExternalContactParams{
+		Source:          req.Source,
+		SourceID:        req.SourceID,
+		Emails:          emailsJSON,
+		Phones:          phonesJSON,
+		Addresses:       addressesJSON,
+		Metadata:        metadataJSON,
+		MatchStatus:     &matchStatus,
+		AccountID:       req.AccountID,
+		DisplayName:     req.DisplayName,
+		FirstName:       req.FirstName,
+		LastName:        req.LastName,
+		Organization:    req.Organization,
+		JobTitle:        req.JobTitle,
+		PhotoUrl:        req.PhotoURL,
+		Etag:            req.Etag,
+		Birthday:        req.Birthday,
+		SyncedAt:        req.SyncedAt,
+		HostID:          req.HostID,
+		LastContentHash: req.LastContentHash,
 	}
-
-	if req.AccountID != nil {
-		params.AccountID = pgtype.Text{String: *req.AccountID, Valid: true}
-	}
-	if req.DisplayName != nil {
-		params.DisplayName = pgtype.Text{String: *req.DisplayName, Valid: true}
-	}
-	if req.FirstName != nil {
-		params.FirstName = pgtype.Text{String: *req.FirstName, Valid: true}
-	}
-	if req.LastName != nil {
-		params.LastName = pgtype.Text{String: *req.LastName, Valid: true}
-	}
-	if req.Organization != nil {
-		params.Organization = pgtype.Text{String: *req.Organization, Valid: true}
-	}
-	if req.JobTitle != nil {
-		params.JobTitle = pgtype.Text{String: *req.JobTitle, Valid: true}
-	}
-	if req.PhotoURL != nil {
-		params.PhotoUrl = pgtype.Text{String: *req.PhotoURL, Valid: true}
-	}
-	if req.Etag != nil {
-		params.Etag = pgtype.Text{String: *req.Etag, Valid: true}
-	}
-	if req.Birthday != nil {
-		params.Birthday = pgtype.Date{Time: *req.Birthday, Valid: true}
-	}
-	if req.SyncedAt != nil {
-		params.SyncedAt = pgtype.Timestamptz{Time: *req.SyncedAt, Valid: true}
-	}
-	if req.HostID != nil {
-		params.HostID = pgtype.UUID{Bytes: *req.HostID, Valid: true}
-	}
-	if req.LastContentHash != nil {
-		params.LastContentHash = pgtype.Text{String: *req.LastContentHash, Valid: true}
-	}
-	return params
 }
 
 // UpsertDiscoveryCandidate inserts or updates a discovery candidate via the
@@ -563,11 +495,11 @@ func (r *ExternalContactRepository) UpsertDiscoveryCandidate(
 	params := db.UpsertDiscoveryCandidateParams{
 		Source:      req.Source,
 		SourceID:    req.SourceID,
-		DisplayName: stringToPgText(req.DisplayName),
-		FirstName:   stringToPgText(req.FirstName),
-		LastName:    stringToPgText(req.LastName),
+		DisplayName: req.DisplayName,
+		FirstName:   req.FirstName,
+		LastName:    req.LastName,
 		Metadata:    metadataBytes,
-		SyncedAt:    timeToPgTimestamptz(req.SyncedAt),
+		SyncedAt:    req.SyncedAt,
 	}
 	dbContact, err := r.queries.UpsertDiscoveryCandidate(ctx, params)
 	if err != nil {
@@ -670,15 +602,11 @@ func (r *ExternalContactRepository) CountHiddenUnresolvedTelegram(ctx context.Co
 // db.ErrNotFound when the target row is tombstoned (the underlying
 // query filters `deleted_at IS NULL`) or has been hard-deleted.
 func (r *ExternalContactRepository) UpdateMatch(ctx context.Context, id uuid.UUID, crmContactID *uuid.UUID, status MatchStatus) (*ExternalContact, error) {
-	var crmContactIDPg pgtype.UUID
-	if crmContactID != nil {
-		crmContactIDPg = pgtype.UUID{Bytes: *crmContactID, Valid: true}
-	}
-
+	matchStatus := string(status)
 	dbContact, err := r.queries.UpdateExternalContactMatch(ctx, db.UpdateExternalContactMatchParams{
-		ID:           pgtype.UUID{Bytes: id, Valid: true},
-		CrmContactID: crmContactIDPg,
-		MatchStatus:  pgtype.Text{String: string(status), Valid: true},
+		ID:           id,
+		CrmContactID: crmContactID,
+		MatchStatus:  &matchStatus,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -692,14 +620,14 @@ func (r *ExternalContactRepository) UpdateMatch(ctx context.Context, id uuid.UUI
 // MarkAsDuplicate marks an external contact as a duplicate of another
 func (r *ExternalContactRepository) MarkAsDuplicate(ctx context.Context, id, duplicateOfID uuid.UUID) error {
 	return r.queries.UpdateExternalContactDuplicate(ctx, db.UpdateExternalContactDuplicateParams{
-		ID:            pgtype.UUID{Bytes: id, Valid: true},
-		DuplicateOfID: pgtype.UUID{Bytes: duplicateOfID, Valid: true},
+		ID:            id,
+		DuplicateOfID: &duplicateOfID,
 	})
 }
 
 // Ignore marks an external contact as ignored
 func (r *ExternalContactRepository) Ignore(ctx context.Context, id uuid.UUID) error {
-	return r.queries.IgnoreExternalContact(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	return r.queries.IgnoreExternalContact(ctx, id)
 }
 
 // FindBySourceAndSourceID finds all unmatched external_contact rows for a
@@ -745,7 +673,7 @@ func (r *ExternalContactRepository) FindByNormalizedEmail(ctx context.Context, e
 
 // ListForCRMContact returns external contacts linked to a CRM contact
 func (r *ExternalContactRepository) ListForCRMContact(ctx context.Context, crmContactID uuid.UUID) ([]ExternalContact, error) {
-	dbContacts, err := r.queries.ListExternalContactsForCRMContact(ctx, pgtype.UUID{Bytes: crmContactID, Valid: true})
+	dbContacts, err := r.queries.ListExternalContactsForCRMContact(ctx, &crmContactID)
 	if err != nil {
 		return nil, err
 	}
@@ -816,15 +744,8 @@ func (r *ExternalContactRepository) ListLinkedAddressBookExternalContactsForReco
 
 		// Resolve the canonical's contact + status (a duplicate row joins
 		// to its canonical; a self-linked row has no canonical).
-		var canonContactID *uuid.UUID
-		if row.CanonCrmContactID.Valid {
-			id := uuid.UUID(row.CanonCrmContactID.Bytes)
-			canonContactID = &id
-		}
-		canonStatus := MatchStatus("")
-		if row.CanonMatchStatus.Valid {
-			canonStatus = MatchStatus(row.CanonMatchStatus.String)
-		}
+		canonContactID := row.CanonCrmContactID
+		canonStatus := MatchStatus(deref(row.CanonMatchStatus))
 
 		effectiveContactID, effectiveStatus, ok := resolveEffectiveReconcileState(
 			contact.CRMContactID, contact.MatchStatus, canonContactID, canonStatus,
@@ -952,7 +873,7 @@ func (r *ExternalContactRepository) SetMethodSuggestions(
 		return nil, fmt.Errorf("marshal pending method suggestions: %w", err)
 	}
 	dbContact, err := r.queries.SetExternalContactMethodSuggestions(ctx, db.SetExternalContactMethodSuggestionsParams{
-		ID:      pgtype.UUID{Bytes: id, Valid: true},
+		ID:      id,
 		Pending: pendingJSON,
 	})
 	if err != nil {
@@ -974,7 +895,7 @@ func (r *ExternalContactRepository) GetForUpdateTx(
 	tx pgx.Tx,
 	id uuid.UUID,
 ) (*ExternalContact, error) {
-	dbContact, err := db.New(tx).GetExternalContactForUpdate(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	dbContact, err := db.New(tx).GetExternalContactForUpdate(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -1005,7 +926,7 @@ func (r *ExternalContactRepository) SetMethodSuggestionSetsTx(
 		return nil, fmt.Errorf("marshal dismissed method suggestions: %w", err)
 	}
 	dbContact, err := db.New(tx).SetExternalContactPendingAndDismissed(ctx, db.SetExternalContactPendingAndDismissedParams{
-		ID:        pgtype.UUID{Bytes: id, Valid: true},
+		ID:        id,
 		Pending:   pendingJSON,
 		Dismissed: dismissedJSON,
 	})
@@ -1045,15 +966,8 @@ func (r *ExternalContactRepository) ListPendingMethodSuggestionRows(
 			continue
 		}
 
-		var canonContactID *uuid.UUID
-		if row.CanonCrmContactID.Valid {
-			id := uuid.UUID(row.CanonCrmContactID.Bytes)
-			canonContactID = &id
-		}
-		canonStatus := MatchStatus("")
-		if row.CanonMatchStatus.Valid {
-			canonStatus = MatchStatus(row.CanonMatchStatus.String)
-		}
+		canonContactID := row.CanonCrmContactID
+		canonStatus := MatchStatus(deref(row.CanonMatchStatus))
 
 		effectiveContactID, _, ok := resolveEffectiveReconcileState(
 			contact.CRMContactID, contact.MatchStatus, canonContactID, canonStatus,
@@ -1065,7 +979,7 @@ func (r *ExternalContactRepository) ListPendingMethodSuggestionRows(
 		// The effective contact's name for the card label. GetContact
 		// filters deleted_at IS NULL, so a soft-deleted effective contact
 		// drops the row here (liveness guard).
-		dbContact, nameErr := r.queries.GetContact(ctx, pgtype.UUID{Bytes: effectiveContactID, Valid: true})
+		dbContact, nameErr := r.queries.GetContact(ctx, effectiveContactID)
 		if nameErr != nil {
 			if errors.Is(nameErr, pgx.ErrNoRows) {
 				continue
@@ -1101,7 +1015,7 @@ func (r *ExternalContactRepository) SetDismissedMethodSuggestionsForTest(
 		dismissedJSON = marshalled
 	}
 	dbContact, err := r.queries.SetDismissedMethodSuggestionsForTest(ctx, db.SetDismissedMethodSuggestionsForTestParams{
-		ID:        pgtype.UUID{Bytes: id, Valid: true},
+		ID:        id,
 		Dismissed: dismissedJSON,
 	})
 	if err != nil {
@@ -1115,7 +1029,7 @@ func (r *ExternalContactRepository) SetDismissedMethodSuggestionsForTest(
 
 // Delete removes an external contact
 func (r *ExternalContactRepository) Delete(ctx context.Context, id uuid.UUID) error {
-	return r.queries.DeleteExternalContact(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	return r.queries.DeleteExternalContact(ctx, id)
 }
 
 // GetBySourceTx retrieves an external contact by (source, source_id,
@@ -1131,14 +1045,10 @@ func (r *ExternalContactRepository) GetBySourceTx(
 	source, sourceID string,
 	accountID *string,
 ) (*ExternalContact, error) {
-	var accountIDText pgtype.Text
-	if accountID != nil {
-		accountIDText = pgtype.Text{String: *accountID, Valid: true}
-	}
 	dbContact, err := db.New(tx).GetExternalContactBySource(ctx, db.GetExternalContactBySourceParams{
 		Source:    source,
 		SourceID:  sourceID,
-		AccountID: accountIDText,
+		AccountID: accountID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1180,14 +1090,11 @@ func (r *ExternalContactRepository) UpdateMatchTx(
 	crmContactID *uuid.UUID,
 	status MatchStatus,
 ) (*ExternalContact, error) {
-	var crmContactIDPg pgtype.UUID
-	if crmContactID != nil {
-		crmContactIDPg = pgtype.UUID{Bytes: *crmContactID, Valid: true}
-	}
+	matchStatus := string(status)
 	dbContact, err := db.New(tx).UpdateExternalContactMatch(ctx, db.UpdateExternalContactMatchParams{
-		ID:           pgtype.UUID{Bytes: id, Valid: true},
-		CrmContactID: crmContactIDPg,
-		MatchStatus:  pgtype.Text{String: string(status), Valid: true},
+		ID:           id,
+		CrmContactID: crmContactID,
+		MatchStatus:  &matchStatus,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1209,7 +1116,7 @@ func (r *ExternalContactRepository) ReviveTx(
 	tx pgx.Tx,
 	id uuid.UUID,
 ) (*ExternalContact, error) {
-	dbContact, err := db.New(tx).ReviveExternalContact(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	dbContact, err := db.New(tx).ReviveExternalContact(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -1229,7 +1136,7 @@ func (r *ExternalContactRepository) SoftDeleteTx(
 	tx pgx.Tx,
 	id uuid.UUID,
 ) error {
-	return db.New(tx).SoftDeleteExternalContact(ctx, pgtype.UUID{Bytes: id, Valid: true})
+	return db.New(tx).SoftDeleteExternalContact(ctx, id)
 }
 
 // ListKnownIDsByHostAndSource returns (source_id, last_content_hash)
@@ -1244,7 +1151,7 @@ func (r *ExternalContactRepository) ListKnownIDsByHostAndSource(
 	source string,
 ) ([]KnownExternalContactID, error) {
 	rows, err := r.queries.ListKnownExternalContactIDsByHostAndSource(ctx, db.ListKnownExternalContactIDsByHostAndSourceParams{
-		HostID: pgtype.UUID{Bytes: hostID, Valid: true},
+		HostID: &hostID,
 		Source: source,
 	})
 	if err != nil {
@@ -1252,12 +1159,10 @@ func (r *ExternalContactRepository) ListKnownIDsByHostAndSource(
 	}
 	out := make([]KnownExternalContactID, 0, len(rows))
 	for _, row := range rows {
-		entry := KnownExternalContactID{SourceID: row.SourceID}
-		if row.LastContentHash.Valid {
-			h := row.LastContentHash.String
-			entry.LastContentHash = &h
-		}
-		out = append(out, entry)
+		out = append(out, KnownExternalContactID{
+			SourceID:        row.SourceID,
+			LastContentHash: row.LastContentHash,
+		})
 	}
 	return out, nil
 }
@@ -1271,7 +1176,7 @@ func (r *ExternalContactRepository) CountByHostAndSource(
 	ctx context.Context,
 	hostID uuid.UUID,
 ) (map[string]int, error) {
-	rows, err := r.queries.CountExternalContactsByHostAndSource(ctx, pgtype.UUID{Bytes: hostID, Valid: true})
+	rows, err := r.queries.CountExternalContactsByHostAndSource(ctx, &hostID)
 	if err != nil {
 		return nil, fmt.Errorf("count external_contact by host+source: %w", err)
 	}
@@ -1308,8 +1213,8 @@ func (r *ExternalContactRepository) ListAnarlogTitleGroups(ctx context.Context) 
 	for _, row := range rows {
 		memberIDs := make([]uuid.UUID, 0, len(row.MemberIds))
 		for _, mid := range row.MemberIds {
-			if mid.Valid {
-				memberIDs = append(memberIDs, uuid.UUID(mid.Bytes))
+			if mid != uuid.Nil {
+				memberIDs = append(memberIDs, mid)
 			}
 		}
 		titles := row.SessionTitles
@@ -1354,7 +1259,7 @@ func (r *ExternalContactRepository) FindAnarlogTitleSiblingsByToken(ctx context.
 // marked so the caller can detect a concurrent resolve (zero rows).
 func (r *ExternalContactRepository) MarkAnarlogTitleSiblingsImportedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) (int64, error) {
 	rows, err := r.queries.MarkAnarlogTitleSiblingsImportedByToken(ctx, db.MarkAnarlogTitleSiblingsImportedByTokenParams{
-		CrmContactID:    uuidToPgUUID(contactID),
+		CrmContactID:    &contactID,
 		NormalizedToken: normalizedToken,
 	})
 	if err != nil {
@@ -1369,7 +1274,7 @@ func (r *ExternalContactRepository) MarkAnarlogTitleSiblingsImportedByToken(ctx 
 // marked so the caller can detect a concurrent resolve (zero rows).
 func (r *ExternalContactRepository) MarkAnarlogTitleSiblingsMatchedByToken(ctx context.Context, normalizedToken string, contactID uuid.UUID) (int64, error) {
 	rows, err := r.queries.MarkAnarlogTitleSiblingsMatchedByToken(ctx, db.MarkAnarlogTitleSiblingsMatchedByTokenParams{
-		CrmContactID:    uuidToPgUUID(contactID),
+		CrmContactID:    &contactID,
 		NormalizedToken: normalizedToken,
 	})
 	if err != nil {

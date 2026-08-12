@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Interaction source constants
@@ -131,35 +130,35 @@ func convertDbInteraction(dbInteraction *db.Interaction) Interaction {
 		Direction: dbInteraction.Direction,
 	}
 
-	if dbInteraction.ID.Valid {
-		interaction.ID = uuid.UUID(dbInteraction.ID.Bytes)
+	interaction.ID = dbInteraction.ID
+	interaction.ContactID = dbInteraction.ContactID
+	interaction.OccurredAt = dbInteraction.OccurredAt.UTC()
+	if dbInteraction.CreatedAt != nil {
+		interaction.CreatedAt = *dbInteraction.CreatedAt
 	}
-	if dbInteraction.ContactID.Valid {
-		interaction.ContactID = uuid.UUID(dbInteraction.ContactID.Bytes)
-	}
-	if dbInteraction.OccurredAt.Valid {
-		interaction.OccurredAt = dbInteraction.OccurredAt.Time.UTC()
-	}
-	if dbInteraction.CreatedAt.Valid {
-		interaction.CreatedAt = dbInteraction.CreatedAt.Time.UTC()
-	}
-	if dbInteraction.SourceRef.Valid {
-		interaction.SourceRef = &dbInteraction.SourceRef.String
-	}
-	if dbInteraction.Description.Valid {
-		interaction.Description = &dbInteraction.Description.String
-	}
-	if dbInteraction.VenueID.Valid {
-		v := uuid.UUID(dbInteraction.VenueID.Bytes)
-		interaction.VenueID = &v
-	}
+	interaction.SourceRef = dbInteraction.SourceRef
+	interaction.Description = dbInteraction.Description
+	interaction.VenueID = dbInteraction.VenueID
 
 	return interaction
 }
 
+// interactionDirectionArg returns nil for an empty direction so
+// CreateInteraction's `COALESCE($6, 'mutual')` default fires; a non-empty
+// value passes through unchanged. CreateInteractionParams.Direction is
+// interface{} (sqlc could not resolve a concrete type for the COALESCE
+// expression), so assigning req.Direction directly would bind an empty
+// string literal instead of SQL NULL and silently defeat the default.
+func interactionDirectionArg(direction string) interface{} {
+	if direction == "" {
+		return nil
+	}
+	return direction
+}
+
 // GetInteraction retrieves an interaction by ID
 func (r *InteractionRepository) GetInteraction(ctx context.Context, id uuid.UUID) (*Interaction, error) {
-	dbInteraction, err := r.queries.GetInteraction(ctx, uuidToPgUUID(id))
+	dbInteraction, err := r.queries.GetInteraction(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -174,7 +173,7 @@ func (r *InteractionRepository) GetInteraction(ctx context.Context, id uuid.UUID
 // ListContactInteractions retrieves paginated interactions for a contact
 func (r *InteractionRepository) ListContactInteractions(ctx context.Context, contactID uuid.UUID, limit, offset int32) ([]Interaction, error) {
 	dbInteractions, err := r.queries.ListContactInteractions(ctx, db.ListContactInteractionsParams{
-		ContactID: uuidToPgUUID(contactID),
+		ContactID: contactID,
 		Limit:     limit,
 		Offset:    offset,
 	})
@@ -192,19 +191,19 @@ func (r *InteractionRepository) ListContactInteractions(ctx context.Context, con
 
 // CountContactInteractions returns the total number of interactions for a contact
 func (r *InteractionRepository) CountContactInteractions(ctx context.Context, contactID uuid.UUID) (int64, error) {
-	return r.queries.CountContactInteractions(ctx, uuidToPgUUID(contactID))
+	return r.queries.CountContactInteractions(ctx, contactID)
 }
 
 // CreateInteraction creates a new interaction record
 func (r *InteractionRepository) CreateInteraction(ctx context.Context, req CreateInteractionRequest) (*Interaction, error) {
 	dbInteraction, err := r.queries.CreateInteraction(ctx, db.CreateInteractionParams{
-		ContactID:   uuidToPgUUID(req.ContactID),
+		ContactID:   req.ContactID,
 		Source:      req.Source,
-		SourceRef:   stringToPgText(req.SourceRef),
-		OccurredAt:  pgtype.Timestamptz{Time: req.OccurredAt, Valid: true},
-		Description: stringToPgText(req.Description),
-		Direction:   stringToPgText(&req.Direction),
-		VenueID:     uuidPtrToPgUUID(req.VenueID),
+		SourceRef:   req.SourceRef,
+		OccurredAt:  req.OccurredAt,
+		Description: req.Description,
+		Direction:   interactionDirectionArg(req.Direction),
+		VenueID:     req.VenueID,
 	})
 	if err != nil {
 		return nil, err
@@ -216,7 +215,7 @@ func (r *InteractionRepository) CreateInteraction(ctx context.Context, req Creat
 
 // SoftDeleteInteraction soft-deletes an interaction
 func (r *InteractionRepository) SoftDeleteInteraction(ctx context.Context, id uuid.UUID) error {
-	return r.queries.SoftDeleteInteraction(ctx, uuidToPgUUID(id))
+	return r.queries.SoftDeleteInteraction(ctx, id)
 }
 
 // SoftDeleteInteractionTx is the tx-bound variant of SoftDeleteInteraction.
@@ -224,7 +223,7 @@ func (r *InteractionRepository) SoftDeleteInteraction(ctx context.Context, id uu
 // meeting_note.deleted cascade so the soft-delete commits atomically
 // with the meeting_note row update.
 func (r *InteractionRepository) SoftDeleteInteractionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
-	return db.New(tx).SoftDeleteInteraction(ctx, uuidToPgUUID(id))
+	return db.New(tx).SoftDeleteInteraction(ctx, id)
 }
 
 // ListSessionAttributedInteractionsTx returns all live interactions
@@ -233,7 +232,7 @@ func (r *InteractionRepository) SoftDeleteInteractionTx(ctx context.Context, tx 
 // compute the (existing - desired) set that needs soft-deleting and by
 // the meeting_note.deleted cascade. Caller owns the tx lifecycle.
 func (r *InteractionRepository) ListSessionAttributedInteractionsTx(ctx context.Context, tx pgx.Tx, sourceRefPrefix string) ([]Interaction, error) {
-	dbInteractions, err := db.New(tx).ListSessionAttributedInteractions(ctx, pgtype.Text{String: sourceRefPrefix, Valid: true})
+	dbInteractions, err := db.New(tx).ListSessionAttributedInteractions(ctx, &sourceRefPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -247,9 +246,9 @@ func (r *InteractionRepository) ListSessionAttributedInteractionsTx(ctx context.
 // FindBySourceRef finds an existing interaction by contact, source, and source_ref
 func (r *InteractionRepository) FindBySourceRef(ctx context.Context, contactID uuid.UUID, source string, sourceRef string) (*Interaction, error) {
 	dbInteraction, err := r.queries.FindInteractionBySourceRef(ctx, db.FindInteractionBySourceRefParams{
-		ContactID: uuidToPgUUID(contactID),
+		ContactID: contactID,
 		Source:    source,
-		SourceRef: pgtype.Text{String: sourceRef, Valid: true},
+		SourceRef: &sourceRef,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -272,11 +271,11 @@ func (r *InteractionRepository) FindInWindow(ctx context.Context, contactID uuid
 	windowEnd := occurredAt.Add(window)
 
 	dbInteraction, err := r.queries.FindInteractionInWindow(ctx, db.FindInteractionInWindowParams{
-		ContactID:   uuidToPgUUID(contactID),
+		ContactID:   contactID,
 		Source:      source,
 		Direction:   direction,
-		WindowStart: pgtype.Timestamptz{Time: windowStart, Valid: true},
-		WindowEnd:   pgtype.Timestamptz{Time: windowEnd, Valid: true},
+		WindowStart: windowStart,
+		WindowEnd:   windowEnd,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -293,10 +292,10 @@ func (r *InteractionRepository) FindInWindow(ctx context.Context, contactID uuid
 // for a contact in a specific chat within a time window.
 func (r *InteractionRepository) FindRecentOutboundTelegramInteraction(ctx context.Context, contactID uuid.UUID, sourceRefPrefix string, windowStart, windowEnd time.Time) (*Interaction, error) {
 	dbInteraction, err := r.queries.FindRecentOutboundTelegramInteraction(ctx, db.FindRecentOutboundTelegramInteractionParams{
-		ContactID:       uuidToPgUUID(contactID),
-		SourceRefPrefix: pgtype.Text{String: sourceRefPrefix, Valid: true},
-		WindowStart:     pgtype.Timestamptz{Time: windowStart, Valid: true},
-		WindowEnd:       pgtype.Timestamptz{Time: windowEnd, Valid: true},
+		ContactID:       contactID,
+		SourceRefPrefix: &sourceRefPrefix,
+		WindowStart:     windowStart,
+		WindowEnd:       windowEnd,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -312,11 +311,11 @@ func (r *InteractionRepository) FindRecentOutboundTelegramInteraction(ctx contex
 // in a specific chat with a given direction. Used for incremental coalescing.
 func (r *InteractionRepository) FindRecentTelegramInteraction(ctx context.Context, contactID uuid.UUID, direction, sourceRefPrefix string, windowStart, windowEnd time.Time) (*Interaction, error) {
 	dbInteraction, err := r.queries.FindRecentTelegramInteraction(ctx, db.FindRecentTelegramInteractionParams{
-		ContactID:       uuidToPgUUID(contactID),
+		ContactID:       contactID,
 		Direction:       direction,
-		SourceRefPrefix: pgtype.Text{String: sourceRefPrefix, Valid: true},
-		WindowStart:     pgtype.Timestamptz{Time: windowStart, Valid: true},
-		WindowEnd:       pgtype.Timestamptz{Time: windowEnd, Valid: true},
+		SourceRefPrefix: &sourceRefPrefix,
+		WindowStart:     windowStart,
+		WindowEnd:       windowEnd,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -339,12 +338,12 @@ func (r *InteractionRepository) FindRecentInteractionBySourceAndDirection(
 	windowStart, windowEnd time.Time,
 ) (*Interaction, error) {
 	dbInteraction, err := r.queries.FindRecentInteractionBySourceAndDirection(ctx, db.FindRecentInteractionBySourceAndDirectionParams{
-		ContactID:       uuidToPgUUID(contactID),
+		ContactID:       contactID,
 		Source:          source,
 		Direction:       direction,
 		SourceRefPrefix: sourceRefPrefix,
-		WindowStart:     pgtype.Timestamptz{Time: windowStart, Valid: true},
-		WindowEnd:       pgtype.Timestamptz{Time: windowEnd, Valid: true},
+		WindowStart:     windowStart,
+		WindowEnd:       windowEnd,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -366,11 +365,11 @@ func (r *InteractionRepository) FindRecentOutboundInteractionBySource(
 	windowStart, windowEnd time.Time,
 ) (*Interaction, error) {
 	dbInteraction, err := r.queries.FindRecentOutboundInteractionBySource(ctx, db.FindRecentOutboundInteractionBySourceParams{
-		ContactID:       uuidToPgUUID(contactID),
+		ContactID:       contactID,
 		Source:          source,
 		SourceRefPrefix: sourceRefPrefix,
-		WindowStart:     pgtype.Timestamptz{Time: windowStart, Valid: true},
-		WindowEnd:       pgtype.Timestamptz{Time: windowEnd, Valid: true},
+		WindowStart:     windowStart,
+		WindowEnd:       windowEnd,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -390,7 +389,7 @@ func (r *InteractionRepository) FindRecentOutboundInteractionBySource(
 func (r *InteractionRepository) HardDeleteInteractionsBySourceRefPrefix(ctx context.Context, source, sourceRefPrefix string) error {
 	return r.queries.HardDeleteInteractionsBySourceRefPrefix(ctx, db.HardDeleteInteractionsBySourceRefPrefixParams{
 		Source:          source,
-		SourceRefPrefix: pgtype.Text{String: sourceRefPrefix, Valid: true},
+		SourceRefPrefix: &sourceRefPrefix,
 	})
 }
 
@@ -407,9 +406,9 @@ func (r *InteractionRepository) GetInteractionSourceCheckDef(ctx context.Context
 // UpdateInteractionTimestamp extends an existing interaction's occurred_at and description.
 func (r *InteractionRepository) UpdateInteractionTimestamp(ctx context.Context, id uuid.UUID, occurredAt time.Time, description *string) (*Interaction, error) {
 	dbInteraction, err := r.queries.UpdateInteractionTimestamp(ctx, db.UpdateInteractionTimestampParams{
-		ID:          uuidToPgUUID(id),
-		OccurredAt:  pgtype.Timestamptz{Time: occurredAt, Valid: true},
-		Description: stringToPgText(description),
+		ID:          id,
+		OccurredAt:  occurredAt,
+		Description: description,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -427,11 +426,11 @@ func (r *InteractionRepository) UpdateInteractionTimestamp(ctx context.Context, 
 // code MUST NOT call this.
 func (r *InteractionRepository) TestInsertInteraction(ctx context.Context, id, contactID uuid.UUID, source string, sourceRef *string, occurredAt time.Time, direction string) (*Interaction, error) {
 	dbInteraction, err := r.queries.TestInsertInteraction(ctx, db.TestInsertInteractionParams{
-		ID:         uuidToPgUUID(id),
-		ContactID:  uuidToPgUUID(contactID),
+		ID:         id,
+		ContactID:  contactID,
 		Source:     source,
-		SourceRef:  stringToPgText(sourceRef),
-		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
+		SourceRef:  sourceRef,
+		OccurredAt: occurredAt,
 		Direction:  direction,
 	})
 	if err != nil {
@@ -446,8 +445,8 @@ func (r *InteractionRepository) TestInsertInteraction(ctx context.Context, id, c
 // session was re-linked moves to the correct venue node. nil venueID clears it.
 func (r *InteractionRepository) UpdateInteractionVenueTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, venueID *uuid.UUID) error {
 	return db.New(tx).UpdateInteractionVenue(ctx, db.UpdateInteractionVenueParams{
-		ID:      uuidToPgUUID(id),
-		VenueID: uuidPtrToPgUUID(venueID),
+		ID:      id,
+		VenueID: venueID,
 	})
 }
 
@@ -456,13 +455,13 @@ func (r *InteractionRepository) UpdateInteractionVenueTx(ctx context.Context, tx
 // with the interaction.recorded event row (spec §3.4.1).
 func (r *InteractionRepository) CreateInteractionTx(ctx context.Context, tx pgx.Tx, req CreateInteractionRequest) (*Interaction, error) {
 	dbInteraction, err := db.New(tx).CreateInteraction(ctx, db.CreateInteractionParams{
-		ContactID:   uuidToPgUUID(req.ContactID),
+		ContactID:   req.ContactID,
 		Source:      req.Source,
-		SourceRef:   stringToPgText(req.SourceRef),
-		OccurredAt:  pgtype.Timestamptz{Time: req.OccurredAt, Valid: true},
-		Description: stringToPgText(req.Description),
-		Direction:   stringToPgText(&req.Direction),
-		VenueID:     uuidPtrToPgUUID(req.VenueID),
+		SourceRef:   req.SourceRef,
+		OccurredAt:  req.OccurredAt,
+		Description: req.Description,
+		Direction:   interactionDirectionArg(req.Direction),
+		VenueID:     req.VenueID,
 	})
 	if err != nil {
 		return nil, err
@@ -487,9 +486,9 @@ func (r *InteractionRepository) AcquireSourceRefLockTx(ctx context.Context, tx p
 // the consumer's HandleEvent to dedup inside the caller's tx.
 func (r *InteractionRepository) FindBySourceRefTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, source string, sourceRef string) (*Interaction, error) {
 	dbInteraction, err := db.New(tx).FindInteractionBySourceRef(ctx, db.FindInteractionBySourceRefParams{
-		ContactID: uuidToPgUUID(contactID),
+		ContactID: contactID,
 		Source:    source,
-		SourceRef: pgtype.Text{String: sourceRef, Valid: true},
+		SourceRef: &sourceRef,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -508,11 +507,11 @@ func (r *InteractionRepository) FindInWindowTx(ctx context.Context, tx pgx.Tx, c
 	windowEnd := occurredAt.Add(window)
 
 	dbInteraction, err := db.New(tx).FindInteractionInWindow(ctx, db.FindInteractionInWindowParams{
-		ContactID:   uuidToPgUUID(contactID),
+		ContactID:   contactID,
 		Source:      source,
 		Direction:   direction,
-		WindowStart: pgtype.Timestamptz{Time: windowStart, Valid: true},
-		WindowEnd:   pgtype.Timestamptz{Time: windowEnd, Valid: true},
+		WindowStart: windowStart,
+		WindowEnd:   windowEnd,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -527,9 +526,9 @@ func (r *InteractionRepository) FindInWindowTx(ctx context.Context, tx pgx.Tx, c
 // UpdateInteractionDirection updates the direction and occurred_at of an interaction (for reply bridging)
 func (r *InteractionRepository) UpdateInteractionDirection(ctx context.Context, id uuid.UUID, direction string, occurredAt time.Time) (*Interaction, error) {
 	dbInteraction, err := r.queries.UpdateInteractionDirection(ctx, db.UpdateInteractionDirectionParams{
-		ID:         uuidToPgUUID(id),
+		ID:         id,
 		Direction:  direction,
-		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
+		OccurredAt: occurredAt,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -545,9 +544,9 @@ func (r *InteractionRepository) UpdateInteractionDirection(ctx context.Context, 
 // UpdateInteractionDirectionTx is the tx-threaded variant.
 func (r *InteractionRepository) UpdateInteractionDirectionTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, direction string, occurredAt time.Time) (*Interaction, error) {
 	dbInteraction, err := db.New(tx).UpdateInteractionDirection(ctx, db.UpdateInteractionDirectionParams{
-		ID:         uuidToPgUUID(id),
+		ID:         id,
 		Direction:  direction,
-		OccurredAt: pgtype.Timestamptz{Time: occurredAt, Valid: true},
+		OccurredAt: occurredAt,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -563,9 +562,9 @@ func (r *InteractionRepository) UpdateInteractionDirectionTx(ctx context.Context
 // UpdateInteractionTimestamp (same-direction coalescing).
 func (r *InteractionRepository) UpdateInteractionTimestampTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, occurredAt time.Time, description *string) (*Interaction, error) {
 	dbInteraction, err := db.New(tx).UpdateInteractionTimestamp(ctx, db.UpdateInteractionTimestampParams{
-		ID:          uuidToPgUUID(id),
-		OccurredAt:  pgtype.Timestamptz{Time: occurredAt, Valid: true},
-		Description: stringToPgText(description),
+		ID:          id,
+		OccurredAt:  occurredAt,
+		Description: description,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -584,8 +583,8 @@ func (r *InteractionRepository) UpdateInteractionTimestampTx(ctx context.Context
 // does not produce a stale follow-up.
 func (r *InteractionRepository) HasResponseAfter(ctx context.Context, contactID uuid.UUID, outreachAt time.Time) (bool, error) {
 	hasResp, err := r.queries.HasResponseAfter(ctx, db.HasResponseAfterParams{
-		ContactID:  uuidToPgUUID(contactID),
-		OutreachAt: pgtype.Timestamptz{Time: outreachAt, Valid: true},
+		ContactID:  contactID,
+		OutreachAt: outreachAt,
 	})
 	if err != nil {
 		return false, err
@@ -602,8 +601,8 @@ func (r *InteractionRepository) HasResponseAfterTx(ctx context.Context, tx pgx.T
 		q = db.New(tx)
 	}
 	hasResp, err := q.HasResponseAfter(ctx, db.HasResponseAfterParams{
-		ContactID:  uuidToPgUUID(contactID),
-		OutreachAt: pgtype.Timestamptz{Time: outreachAt, Valid: true},
+		ContactID:  contactID,
+		OutreachAt: outreachAt,
 	})
 	if err != nil {
 		return false, err

@@ -25,7 +25,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -438,9 +437,9 @@ func TestMacHost_Heartbeat_PersistsFieldsAndEchoesProtocolState(t *testing.T) {
 	// epoch mechanism the daemon-cache-invalidation flow uses; its
 	// RETURNING value is the independent read the epoch assertion
 	// compares against.
-	_, err = env.database.Queries.BumpMacHostCursorEpoch(ctx, pgtype.UUID{Bytes: res.HostID, Valid: true})
+	_, err = env.database.Queries.BumpMacHostCursorEpoch(ctx, res.HostID)
 	require.NoError(t, err)
-	bumpedEpoch, err := env.database.Queries.BumpMacHostCursorEpoch(ctx, pgtype.UUID{Bytes: res.HostID, Valid: true})
+	bumpedEpoch, err := env.database.Queries.BumpMacHostCursorEpoch(ctx, res.HostID)
 	require.NoError(t, err)
 	require.NotEqual(t, int64(mac.ProtocolVersion), bumpedEpoch, "fixture sanity: epoch must differ from protocol_version")
 	require.NotEqual(t, int64(mac.MinProtocolVersion), bumpedEpoch, "fixture sanity: epoch must differ from min_protocol_version")
@@ -709,7 +708,7 @@ func TestMacHost_Pair_TokenStateFailures_Opaque410(t *testing.T) {
 	hash := sha256.Sum256([]byte(expiredPlain))
 	_, err := env.database.Queries.SeedPairingToken(ctx, db.SeedPairingTokenParams{
 		TokenHash: hex.EncodeToString(hash[:]),
-		ExpiresAt: pgtype.Timestamptz{Time: accelerated.GetCurrentTime().Add(-1 * time.Hour), Valid: true},
+		ExpiresAt: accelerated.GetCurrentTime().Add(-1 * time.Hour),
 	})
 	require.NoError(t, err)
 	wExpired := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, pairBody(expiredPlain))

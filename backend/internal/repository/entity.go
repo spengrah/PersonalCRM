@@ -81,12 +81,8 @@ func convertDbEntity(dbEntity *db.Entity) Entity {
 		NormalizedName: dbEntity.NormalizedName,
 		Detail:         dbEntity.Detail,
 	}
-	if dbEntity.NodeID.Valid {
-		entity.NodeID = uuid.UUID(dbEntity.NodeID.Bytes)
-	}
-	if dbEntity.ExternalRef.Valid {
-		entity.ExternalRef = &dbEntity.ExternalRef.String
-	}
+	entity.NodeID = dbEntity.NodeID
+	entity.ExternalRef = dbEntity.ExternalRef
 	return entity
 }
 
@@ -102,10 +98,10 @@ func (r *EntityRepository) CreateEntityTx(ctx context.Context, tx pgx.Tx, req Cr
 
 func createEntity(ctx context.Context, q db.Querier, req CreateEntityRequest) (*Entity, error) {
 	dbEntity, err := q.CreateEntity(ctx, db.CreateEntityParams{
-		NodeID:         uuidToPgUUID(req.NodeID),
+		NodeID:         req.NodeID,
 		Subtype:        req.Subtype,
 		NormalizedName: req.NormalizedName,
-		ExternalRef:    stringToPgText(req.ExternalRef),
+		ExternalRef:    req.ExternalRef,
 		Detail:         jsonbOrEmpty(req.Detail),
 	})
 	if err != nil {
@@ -128,7 +124,7 @@ func (r *EntityRepository) GetEntityTx(ctx context.Context, tx pgx.Tx, nodeID uu
 }
 
 func getEntity(ctx context.Context, q db.Querier, nodeID uuid.UUID) (*Entity, error) {
-	dbEntity, err := q.GetEntity(ctx, uuidToPgUUID(nodeID))
+	dbEntity, err := q.GetEntity(ctx, nodeID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -172,7 +168,7 @@ func findEntityBySubtypeName(ctx context.Context, q db.Querier, subtype, normali
 // not in the patch are preserved via the || operator).
 func (r *EntityRepository) UpdateEntityDetail(ctx context.Context, nodeID uuid.UUID, patch []byte) error {
 	return r.queries.UpdateEntityDetail(ctx, db.UpdateEntityDetailParams{
-		NodeID: uuidToPgUUID(nodeID),
+		NodeID: nodeID,
 		// A nil patch would make `detail || NULL` evaluate to NULL (violating the
 		// NOT NULL); '{}' makes it a no-op merge that preserves existing keys.
 		Detail: jsonbOrEmpty(patch),

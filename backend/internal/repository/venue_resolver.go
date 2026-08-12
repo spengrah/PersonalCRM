@@ -154,7 +154,7 @@ func NewTelegramVenueContainerReader() *TelegramVenueContainerReader {
 
 // ContainerForMessageTx implements VenueContainerReader for telegram.
 func (r *TelegramVenueContainerReader) ContainerForMessageTx(ctx context.Context, tx pgx.Tx, messageID uuid.UUID) (VenueContainer, error) {
-	row, err := db.New(tx).GetTelegramMessageContainer(ctx, uuidToPgUUID(messageID))
+	row, err := db.New(tx).GetTelegramMessageContainer(ctx, messageID)
 	if err != nil {
 		return VenueContainer{}, err
 	}
@@ -162,10 +162,7 @@ func (r *TelegramVenueContainerReader) ContainerForMessageTx(ctx context.Context
 	if row.ChatType == "private" {
 		kind = VenueKindDM
 	}
-	var title string
-	if row.ChatTitle.Valid {
-		title = row.ChatTitle.String
-	}
+	title := deref(row.ChatTitle)
 	return VenueContainer{
 		Kind:        kind,
 		ContainerID: strconv.FormatInt(row.TelegramChatID, 10),
@@ -184,7 +181,7 @@ func NewMessagesVenueContainerReader() *MessagesVenueContainerReader {
 
 // ContainerForMessageTx implements VenueContainerReader for messages.
 func (r *MessagesVenueContainerReader) ContainerForMessageTx(ctx context.Context, tx pgx.Tx, messageID uuid.UUID) (VenueContainer, error) {
-	row, err := db.New(tx).GetMessagesMessageContainer(ctx, uuidToPgUUID(messageID))
+	row, err := db.New(tx).GetMessagesMessageContainer(ctx, messageID)
 	if err != nil {
 		return VenueContainer{}, err
 	}
@@ -209,14 +206,11 @@ func NewGChatVenueContainerReader() *GChatVenueContainerReader {
 
 // ContainerForMessageTx implements VenueContainerReader for gchat.
 func (r *GChatVenueContainerReader) ContainerForMessageTx(ctx context.Context, tx pgx.Tx, messageID uuid.UUID) (VenueContainer, error) {
-	row, err := db.New(tx).GetCommsMessageContainer(ctx, uuidToPgUUID(messageID))
+	row, err := db.New(tx).GetCommsMessageContainer(ctx, messageID)
 	if err != nil {
 		return VenueContainer{}, err
 	}
-	var containerID string
-	if row.ThreadID.Valid {
-		containerID = row.ThreadID.String
-	}
+	containerID := deref(row.ThreadID)
 	return VenueContainer{
 		Kind:        VenueKindGroupChat,
 		ContainerID: containerID,
@@ -243,14 +237,11 @@ func NewWhatsAppVenueContainerReader() *WhatsAppVenueContainerReader {
 
 // ContainerForMessageTx implements VenueContainerReader for whatsapp.
 func (r *WhatsAppVenueContainerReader) ContainerForMessageTx(ctx context.Context, tx pgx.Tx, messageID uuid.UUID) (VenueContainer, error) {
-	row, err := db.New(tx).GetCommsMessageContainer(ctx, uuidToPgUUID(messageID))
+	row, err := db.New(tx).GetCommsMessageContainer(ctx, messageID)
 	if err != nil {
 		return VenueContainer{}, err
 	}
-	var containerID string
-	if row.ThreadID.Valid {
-		containerID = row.ThreadID.String
-	}
+	containerID := deref(row.ThreadID)
 	kind := VenueKindDM
 	if strings.HasSuffix(containerID, whatsappGroupJIDSuffix) {
 		kind = VenueKindGroupChat

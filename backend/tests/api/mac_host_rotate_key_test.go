@@ -17,7 +17,6 @@ import (
 	"personal-crm/backend/internal/service"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -195,7 +194,7 @@ func TestMacHostRotateKey_TokenExpired(t *testing.T) {
 	hash := sha256.Sum256([]byte(plaintext))
 	_, err := env.database.Queries.SeedPairingToken(context.Background(), db.SeedPairingTokenParams{
 		TokenHash: hex.EncodeToString(hash[:]),
-		ExpiresAt: pgtype.Timestamptz{Time: accelerated.GetCurrentTime().Add(-1 * time.Hour), Valid: true},
+		ExpiresAt: accelerated.GetCurrentTime().Add(-1 * time.Hour),
 	})
 	require.NoError(t, err)
 

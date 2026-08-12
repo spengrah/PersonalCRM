@@ -7,14 +7,13 @@ import (
 	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // Pure unit coverage of the graph-identity converters: they translate generated
-// db.* rows (pgtype-wrapped) into the domain structs, handling NULL/invalid
-// fields. DB-backed round-trips live in the integration suite.
+// db.* rows into the domain structs, handling NULL nullable fields. DB-backed
+// round-trips live in the integration suite.
 
 func TestConvertDbNode(t *testing.T) {
 	id := uuid.New()
@@ -24,10 +23,10 @@ func TestConvertDbNode(t *testing.T) {
 
 	t.Run("live node, no merge", func(t *testing.T) {
 		got := convertDbNode(&db.Node{
-			ID:             pgtype.UUID{Bytes: id, Valid: true},
+			ID:             id,
 			Type:           NodeTypePerson,
 			CanonicalLabel: "Person A",
-			CreatedAt:      pgtype.Timestamptz{Time: created, Valid: true},
+			CreatedAt:      created,
 		})
 		assert.Equal(t, id, got.ID)
 		assert.Equal(t, NodeTypePerson, got.Type)
@@ -39,12 +38,12 @@ func TestConvertDbNode(t *testing.T) {
 
 	t.Run("merged + soft-deleted node", func(t *testing.T) {
 		got := convertDbNode(&db.Node{
-			ID:             pgtype.UUID{Bytes: id, Valid: true},
+			ID:             id,
 			Type:           NodeTypeEntity,
 			CanonicalLabel: "Entity B",
-			CreatedAt:      pgtype.Timestamptz{Time: created, Valid: true},
-			DeletedAt:      pgtype.Timestamptz{Time: deleted, Valid: true},
-			MergedInto:     pgtype.UUID{Bytes: merged, Valid: true},
+			CreatedAt:      created,
+			DeletedAt:      &deleted,
+			MergedInto:     &merged,
 		})
 		require.NotNil(t, got.DeletedAt)
 		assert.Equal(t, deleted, *got.DeletedAt)
@@ -59,10 +58,10 @@ func TestConvertDbEntity(t *testing.T) {
 
 	t.Run("with external_ref + detail", func(t *testing.T) {
 		got := convertDbEntity(&db.Entity{
-			NodeID:         pgtype.UUID{Bytes: id, Valid: true},
+			NodeID:         id,
 			Subtype:        EntitySubtypeTag,
 			NormalizedName: "friend",
-			ExternalRef:    pgtype.Text{String: ref, Valid: true},
+			ExternalRef:    &ref,
 			Detail:         []byte(`{"color":"#fff"}`),
 		})
 		assert.Equal(t, id, got.NodeID)
@@ -75,10 +74,10 @@ func TestConvertDbEntity(t *testing.T) {
 
 	t.Run("null external_ref", func(t *testing.T) {
 		got := convertDbEntity(&db.Entity{
-			NodeID:         pgtype.UUID{Bytes: id, Valid: true},
+			NodeID:         id,
 			Subtype:        EntitySubtypePlace,
 			NormalizedName: "nyc",
-			ExternalRef:    pgtype.Text{Valid: false},
+			ExternalRef:    nil,
 			Detail:         []byte(`{}`),
 		})
 		assert.Nil(t, got.ExternalRef)
@@ -89,12 +88,13 @@ func TestConvertDbVenue(t *testing.T) {
 	id := uuid.New()
 
 	t.Run("with title", func(t *testing.T) {
+		title := "Subject"
 		got := convertDbVenue(&db.Venue{
-			NodeID:            pgtype.UUID{Bytes: id, Valid: true},
+			NodeID:            id,
 			Kind:              VenueKindEmailThread,
 			Source:            "email",
 			SourceContainerID: "thread-1",
-			Title:             pgtype.Text{String: "Subject", Valid: true},
+			Title:             &title,
 		})
 		assert.Equal(t, id, got.NodeID)
 		assert.Equal(t, VenueKindEmailThread, got.Kind)
@@ -106,11 +106,11 @@ func TestConvertDbVenue(t *testing.T) {
 
 	t.Run("null title", func(t *testing.T) {
 		got := convertDbVenue(&db.Venue{
-			NodeID:            pgtype.UUID{Bytes: id, Valid: true},
+			NodeID:            id,
 			Kind:              VenueKindCall,
 			Source:            "phone_calls",
 			SourceContainerID: "call-1",
-			Title:             pgtype.Text{Valid: false},
+			Title:             nil,
 		})
 		assert.Nil(t, got.Title)
 	})

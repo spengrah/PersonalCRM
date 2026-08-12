@@ -18,7 +18,6 @@ import (
 	tgpkg "personal-crm/backend/internal/telegram"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -113,8 +112,8 @@ func uniqueTestIDs(t *testing.T, ns string) (int64, string) {
 func registerCleanupBySource(t *testing.T, env *matcherEnrichTestEnv, ctx context.Context, contactCleanup func(), peerIDStr string) {
 	t.Helper()
 	t.Cleanup(func() {
-		_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, pgtype.Text{String: peerIDStr, Valid: true})
-		_, _ = env.database.Queries.DeleteExternalIdentitiesBySourceID(ctx, pgtype.Text{String: peerIDStr, Valid: true})
+		_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, &peerIDStr)
+		_, _ = env.database.Queries.DeleteExternalIdentitiesBySourceID(ctx, &peerIDStr)
 		contactCleanup()
 	})
 }
@@ -482,7 +481,7 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 
 	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen, factory.WithNoMethods())
 	t.Cleanup(func() {
-		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(ctx, pgtype.Text{String: peerIDStr, Valid: true})
+		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(ctx, &peerIDStr)
 		contactCleanup()
 	})
 

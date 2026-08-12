@@ -8,7 +8,7 @@ package db
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CreateEntity = `-- name: CreateEntity :one
@@ -19,11 +19,11 @@ RETURNING node_id, subtype, normalized_name, external_ref, detail
 `
 
 type CreateEntityParams struct {
-	NodeID         pgtype.UUID `json:"node_id"`
-	Subtype        string      `json:"subtype"`
-	NormalizedName string      `json:"normalized_name"`
-	ExternalRef    pgtype.Text `json:"external_ref"`
-	Detail         []byte      `json:"detail"`
+	NodeID         uuid.UUID `json:"node_id"`
+	Subtype        string    `json:"subtype"`
+	NormalizedName string    `json:"normalized_name"`
+	ExternalRef    *string   `json:"external_ref"`
+	Detail         []byte    `json:"detail"`
 }
 
 // Entity subtype queries (graph foundation).
@@ -83,7 +83,7 @@ JOIN node ON node.id = entity.node_id
 WHERE entity.node_id = $1 AND node.deleted_at IS NULL
 `
 
-func (q *Queries) GetEntity(ctx context.Context, nodeID pgtype.UUID) (*Entity, error) {
+func (q *Queries) GetEntity(ctx context.Context, nodeID uuid.UUID) (*Entity, error) {
 	row := q.db.QueryRow(ctx, GetEntity, nodeID)
 	var i Entity
 	err := row.Scan(
@@ -101,8 +101,8 @@ UPDATE entity SET detail = detail || $2 WHERE node_id = $1
 `
 
 type UpdateEntityDetailParams struct {
-	NodeID pgtype.UUID `json:"node_id"`
-	Detail []byte      `json:"detail"`
+	NodeID uuid.UUID `json:"node_id"`
+	Detail []byte    `json:"detail"`
 }
 
 // Merge-patches the per-instance detail JSONB (e.g. a tag color edit) using the

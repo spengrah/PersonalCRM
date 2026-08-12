@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const FindPhoneCallsInWindow = `-- name: FindPhoneCallsInWindow :many
@@ -18,8 +19,8 @@ ORDER BY started_at ASC
 `
 
 type FindPhoneCallsInWindowParams struct {
-	WindowStart pgtype.Timestamptz `json:"window_start"`
-	WindowEnd   pgtype.Timestamptz `json:"window_end"`
+	WindowStart time.Time `json:"window_start"`
+	WindowEnd   time.Time `json:"window_end"`
 }
 
 // Returns phone_call rows whose started_at falls inside the linkage
@@ -70,7 +71,7 @@ WHERE id = $1
 // Lookup by primary-key UUID. Used by the meeting_note resolve-link
 // handler to verify a phone_call target exists before linking. Returns
 // ErrNoRows on miss.
-func (q *Queries) GetPhoneCallByID(ctx context.Context, id pgtype.UUID) (*PhoneCall, error) {
+func (q *Queries) GetPhoneCallByID(ctx context.Context, id uuid.UUID) (*PhoneCall, error) {
 	row := q.db.QueryRow(ctx, GetPhoneCallByID, id)
 	var i PhoneCall
 	err := row.Scan(
@@ -145,7 +146,7 @@ WHERE mac_host_id = $1
 // staging rows have no aggregator-driven lifecycle). Scoped by mac_host_id
 // so tests can pass a fresh mac_host UUID per run and clean only their own
 // rows.
-func (q *Queries) HardDeletePhoneCallsByMacHost(ctx context.Context, macHostID pgtype.UUID) error {
+func (q *Queries) HardDeletePhoneCallsByMacHost(ctx context.Context, macHostID *uuid.UUID) error {
 	_, err := q.db.Exec(ctx, HardDeletePhoneCallsByMacHost, macHostID)
 	return err
 }
@@ -158,8 +159,8 @@ WHERE id = $2
 `
 
 type MarkPhoneCallProcessedParams struct {
-	InteractionID pgtype.UUID `json:"interaction_id"`
-	ID            pgtype.UUID `json:"id"`
+	InteractionID *uuid.UUID `json:"interaction_id"`
+	ID            uuid.UUID  `json:"id"`
 }
 
 // Marks the staging row as processed and links it to the resulting
@@ -183,15 +184,15 @@ RETURNING id, call_unique_id, peer_handle, peer_normalized, service, direction, 
 `
 
 type TestInsertPhoneCallLinkedParams struct {
-	CallUniqueID     string             `json:"call_unique_id"`
-	PeerHandle       string             `json:"peer_handle"`
-	PeerNormalized   string             `json:"peer_normalized"`
-	Service          string             `json:"service"`
-	Direction        string             `json:"direction"`
-	DurationSeconds  int32              `json:"duration_seconds"`
-	StartedAt        pgtype.Timestamptz `json:"started_at"`
-	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
-	InteractionID    pgtype.UUID        `json:"interaction_id"`
+	CallUniqueID     string     `json:"call_unique_id"`
+	PeerHandle       string     `json:"peer_handle"`
+	PeerNormalized   string     `json:"peer_normalized"`
+	Service          string     `json:"service"`
+	Direction        string     `json:"direction"`
+	DurationSeconds  int32      `json:"duration_seconds"`
+	StartedAt        time.Time  `json:"started_at"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
+	InteractionID    *uuid.UUID `json:"interaction_id"`
 }
 
 // Test-only: inserts a phone_call already linked to an interaction. Used by the
@@ -249,17 +250,17 @@ RETURNING id, call_unique_id, peer_handle, peer_normalized, service, direction, 
 `
 
 type UpsertPhoneCallParams struct {
-	CallUniqueID     string             `json:"call_unique_id"`
-	PeerHandle       string             `json:"peer_handle"`
-	PeerNormalized   string             `json:"peer_normalized"`
-	Service          string             `json:"service"`
-	Direction        string             `json:"direction"`
-	Answered         pgtype.Bool        `json:"answered"`
-	HasVoicemail     bool               `json:"has_voicemail"`
-	DurationSeconds  int32              `json:"duration_seconds"`
-	StartedAt        pgtype.Timestamptz `json:"started_at"`
-	MatchedContactID pgtype.UUID        `json:"matched_contact_id"`
-	MacHostID        pgtype.UUID        `json:"mac_host_id"`
+	CallUniqueID     string     `json:"call_unique_id"`
+	PeerHandle       string     `json:"peer_handle"`
+	PeerNormalized   string     `json:"peer_normalized"`
+	Service          string     `json:"service"`
+	Direction        string     `json:"direction"`
+	Answered         *bool      `json:"answered"`
+	HasVoicemail     bool       `json:"has_voicemail"`
+	DurationSeconds  int32      `json:"duration_seconds"`
+	StartedAt        time.Time  `json:"started_at"`
+	MatchedContactID *uuid.UUID `json:"matched_contact_id"`
+	MacHostID        *uuid.UUID `json:"mac_host_id"`
 }
 
 // Insert with no-op on call_unique_id conflict. peer_normalized comes from

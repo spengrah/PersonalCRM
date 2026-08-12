@@ -639,8 +639,10 @@ ORDER BY total_count DESC, peer_handle ASC;
 -- Oldest staged sent_at for one source, over live rows (matched or not). Backs
 -- the WhatsApp status endpoint's observed backfill floor — the empirical answer
 -- to "how deep did the one-shot history actually reach". Returns NULL when the
--- source has staged nothing yet.
-SELECT MIN(sent_at)::timestamptz AS oldest_sent_at
+-- source has staged nothing yet — which is why the aggregate carries no cast:
+-- sqlc's static analyzer marks any cast NOT NULL, and NULL must stay scannable.
+-- Generated as interface{}; the repository type-asserts (nil = no floor).
+SELECT MIN(sent_at) AS oldest_sent_at
 FROM comms_message
 WHERE source = @source
   AND deleted_at IS NULL;

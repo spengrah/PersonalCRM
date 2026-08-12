@@ -45,17 +45,10 @@ func convertDbNode(dbNode *db.Node) Node {
 		Type:           dbNode.Type,
 		CanonicalLabel: dbNode.CanonicalLabel,
 	}
-	if dbNode.ID.Valid {
-		node.ID = uuid.UUID(dbNode.ID.Bytes)
-	}
-	if dbNode.CreatedAt.Valid {
-		node.CreatedAt = dbNode.CreatedAt.Time.UTC()
-	}
-	node.DeletedAt = pgTimestamptzToTimePtr(dbNode.DeletedAt)
-	if dbNode.MergedInto.Valid {
-		id := uuid.UUID(dbNode.MergedInto.Bytes)
-		node.MergedInto = &id
-	}
+	node.ID = dbNode.ID
+	node.CreatedAt = dbNode.CreatedAt.UTC()
+	node.DeletedAt = utcPtr(dbNode.DeletedAt)
+	node.MergedInto = dbNode.MergedInto
 	return node
 }
 
@@ -73,7 +66,7 @@ func (r *NodeRepository) CreateNodeTx(ctx context.Context, tx pgx.Tx, id uuid.UU
 
 func createNode(ctx context.Context, q db.Querier, id uuid.UUID, nodeType, canonicalLabel string) (*Node, error) {
 	dbNode, err := q.CreateNode(ctx, db.CreateNodeParams{
-		ID:             uuidToPgUUID(id),
+		ID:             id,
 		Type:           nodeType,
 		CanonicalLabel: canonicalLabel,
 	})
@@ -97,7 +90,7 @@ func (r *NodeRepository) GetNodeTx(ctx context.Context, tx pgx.Tx, id uuid.UUID)
 }
 
 func getNode(ctx context.Context, q db.Querier, id uuid.UUID) (*Node, error) {
-	dbNode, err := q.GetNode(ctx, uuidToPgUUID(id))
+	dbNode, err := q.GetNode(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -111,7 +104,7 @@ func getNode(ctx context.Context, q db.Querier, id uuid.UUID) (*Node, error) {
 // GetNodeIncludingDeleted retrieves a node by id regardless of soft-delete
 // state (e.g. to resolve a merged-away node).
 func (r *NodeRepository) GetNodeIncludingDeleted(ctx context.Context, id uuid.UUID) (*Node, error) {
-	dbNode, err := r.queries.GetNodeIncludingDeleted(ctx, uuidToPgUUID(id))
+	dbNode, err := r.queries.GetNodeIncludingDeleted(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -124,28 +117,28 @@ func (r *NodeRepository) GetNodeIncludingDeleted(ctx context.Context, id uuid.UU
 
 // SoftDeleteNode soft-deletes a node (sets deleted_at).
 func (r *NodeRepository) SoftDeleteNode(ctx context.Context, id uuid.UUID) error {
-	return r.queries.SoftDeleteNode(ctx, uuidToPgUUID(id))
+	return r.queries.SoftDeleteNode(ctx, id)
 }
 
 // SoftDeleteNodeTx is the tx-bound variant of SoftDeleteNode.
 func (r *NodeRepository) SoftDeleteNodeTx(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
-	return db.New(tx).SoftDeleteNode(ctx, uuidToPgUUID(id))
+	return db.New(tx).SoftDeleteNode(ctx, id)
 }
 
 // SetNodeMergedInto records the merge alias (loser → winner) and tombstones the
 // loser node in one statement.
 func (r *NodeRepository) SetNodeMergedInto(ctx context.Context, loserID, winnerID uuid.UUID) error {
 	return r.queries.SetNodeMergedInto(ctx, db.SetNodeMergedIntoParams{
-		ID:         uuidToPgUUID(loserID),
-		MergedInto: uuidToPgUUID(winnerID),
+		ID:         loserID,
+		MergedInto: &winnerID,
 	})
 }
 
 // SetNodeMergedIntoTx is the tx-bound variant of SetNodeMergedInto.
 func (r *NodeRepository) SetNodeMergedIntoTx(ctx context.Context, tx pgx.Tx, loserID, winnerID uuid.UUID) error {
 	return db.New(tx).SetNodeMergedInto(ctx, db.SetNodeMergedIntoParams{
-		ID:         uuidToPgUUID(loserID),
-		MergedInto: uuidToPgUUID(winnerID),
+		ID:         loserID,
+		MergedInto: &winnerID,
 	})
 }
 
@@ -170,7 +163,7 @@ func (r *NodeRepository) TestCountOrphanVenueNodes(ctx context.Context) (int64, 
 // against a non-existent node is harmlessly idempotent rather than an error.
 func (r *NodeRepository) UpdateNodeCanonicalLabel(ctx context.Context, id uuid.UUID, canonicalLabel string) error {
 	return r.queries.UpdateNodeCanonicalLabel(ctx, db.UpdateNodeCanonicalLabelParams{
-		ID:             uuidToPgUUID(id),
+		ID:             id,
 		CanonicalLabel: canonicalLabel,
 	})
 }
@@ -179,7 +172,7 @@ func (r *NodeRepository) UpdateNodeCanonicalLabel(ctx context.Context, id uuid.U
 // UpdateNodeCanonicalLabel.
 func (r *NodeRepository) UpdateNodeCanonicalLabelTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, canonicalLabel string) error {
 	return db.New(tx).UpdateNodeCanonicalLabel(ctx, db.UpdateNodeCanonicalLabelParams{
-		ID:             uuidToPgUUID(id),
+		ID:             id,
 		CanonicalLabel: canonicalLabel,
 	})
 }

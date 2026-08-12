@@ -27,10 +27,11 @@ SELECT COUNT(*) FROM river_job WHERE state = 'discarded';
 -- on the scheduler's next pass — neither is "a due job the workers are failing
 -- to pick up", which is what this query measures.
 --
--- MIN(...) over zero rows returns NULL; the ::timestamptz cast pins the
--- aggregate's generated type. The repository maps NULL to a nil *time.Time
--- ("no due jobs").
-SELECT MIN(scheduled_at)::timestamptz AS oldest_scheduled_at FROM river_job
+-- MIN(...) over zero rows returns NULL. sqlc's static analyzer cannot type an
+-- aggregate output (a cast would force NOT NULL and break NULL scans), so the
+-- generated return is interface{}; the repository type-asserts time.Time and
+-- maps NULL/nil to a nil *time.Time ("no due jobs").
+SELECT MIN(scheduled_at) AS oldest_scheduled_at FROM river_job
 WHERE state IN ('available', 'retryable') AND scheduled_at <= @now::timestamptz;
 
 -- name: LatestCompletedRiverJobByKind :one
@@ -41,6 +42,6 @@ WHERE state IN ('available', 'retryable') AND scheduled_at <= @now::timestamptz;
 -- enqueue-trail check would stay fresh while a persistently-FAILING watchdog
 -- worker froze the breach table; the completion trail proves the watchdog
 -- actually RAN successfully. MAX(...) over zero rows returns NULL → nil
--- *time.Time ("watchdog not running"); the ::timestamptz cast pins the type.
-SELECT MAX(finalized_at)::timestamptz AS latest_finalized_at FROM river_job
+-- *time.Time ("watchdog not running"); generated as interface{} (see above).
+SELECT MAX(finalized_at) AS latest_finalized_at FROM river_job
 WHERE kind = @kind AND state = 'completed';

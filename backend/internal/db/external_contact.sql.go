@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const CountAllUnmatchedExternalContacts = `-- name: CountAllUnmatchedExternalContacts :one
@@ -108,12 +109,12 @@ RETURNING id, contact_id, source, account_id, field, external_contact_id, origin
 `
 
 type CreateEnrichmentParams struct {
-	ContactID         pgtype.UUID `json:"contact_id"`
-	Source            string      `json:"source"`
-	AccountID         pgtype.Text `json:"account_id"`
-	Field             string      `json:"field"`
-	ExternalContactID pgtype.UUID `json:"external_contact_id"`
-	OriginalValue     pgtype.Text `json:"original_value"`
+	ContactID         uuid.UUID  `json:"contact_id"`
+	Source            string     `json:"source"`
+	AccountID         *string    `json:"account_id"`
+	Field             string     `json:"field"`
+	ExternalContactID *uuid.UUID `json:"external_contact_id"`
+	OriginalValue     *string    `json:"original_value"`
 }
 
 func (q *Queries) CreateEnrichment(ctx context.Context, arg CreateEnrichmentParams) (*ContactEnrichment, error) {
@@ -143,7 +144,7 @@ const DeleteEnrichment = `-- name: DeleteEnrichment :exec
 DELETE FROM contact_enrichment WHERE id = $1
 `
 
-func (q *Queries) DeleteEnrichment(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) DeleteEnrichment(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteEnrichment, id)
 	return err
 }
@@ -152,7 +153,7 @@ const DeleteEnrichmentsForContact = `-- name: DeleteEnrichmentsForContact :exec
 DELETE FROM contact_enrichment WHERE contact_id = $1
 `
 
-func (q *Queries) DeleteEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) error {
+func (q *Queries) DeleteEnrichmentsForContact(ctx context.Context, contactID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteEnrichmentsForContact, contactID)
 	return err
 }
@@ -161,7 +162,7 @@ const DeleteExternalContact = `-- name: DeleteExternalContact :exec
 DELETE FROM external_contact WHERE id = $1
 `
 
-func (q *Queries) DeleteExternalContact(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) DeleteExternalContact(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteExternalContact, id)
 	return err
 }
@@ -172,8 +173,8 @@ WHERE source = $1 AND COALESCE(account_id, '') = COALESCE($2, '')
 `
 
 type DeleteExternalContactsBySourceAccountParams struct {
-	Source    string      `json:"source"`
-	AccountID pgtype.Text `json:"account_id"`
+	Source    string  `json:"source"`
+	AccountID *string `json:"account_id"`
 }
 
 func (q *Queries) DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error {
@@ -432,8 +433,8 @@ LIMIT 1
 `
 
 type GetEnrichmentByFieldParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Field     string      `json:"field"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Field     string    `json:"field"`
 }
 
 func (q *Queries) GetEnrichmentByField(ctx context.Context, arg GetEnrichmentByFieldParams) (*ContactEnrichment, error) {
@@ -460,7 +461,7 @@ ORDER BY enriched_at DESC
 `
 
 // Contact Enrichment queries
-func (q *Queries) GetEnrichmentsForContact(ctx context.Context, contactID pgtype.UUID) ([]*ContactEnrichment, error) {
+func (q *Queries) GetEnrichmentsForContact(ctx context.Context, contactID uuid.UUID) ([]*ContactEnrichment, error) {
 	rows, err := q.db.Query(ctx, GetEnrichmentsForContact, contactID)
 	if err != nil {
 		return nil, err
@@ -498,7 +499,7 @@ WHERE id = $1
 
 // External Contact queries
 // Tombstoned rows are not retrievable by ID through normal flows.
-func (q *Queries) GetExternalContact(ctx context.Context, id pgtype.UUID) (*ExternalContact, error) {
+func (q *Queries) GetExternalContact(ctx context.Context, id uuid.UUID) (*ExternalContact, error) {
 	row := q.db.QueryRow(ctx, GetExternalContact, id)
 	var i ExternalContact
 	err := row.Scan(
@@ -539,9 +540,9 @@ WHERE source = $1 AND source_id = $2 AND COALESCE(account_id, '') = COALESCE($3,
 `
 
 type GetExternalContactBySourceParams struct {
-	Source    string      `json:"source"`
-	SourceID  string      `json:"source_id"`
-	AccountID pgtype.Text `json:"account_id"`
+	Source    string  `json:"source"`
+	SourceID  string  `json:"source_id"`
+	AccountID *string `json:"account_id"`
 }
 
 // Tombstone-aware: returns tombstoned rows too. The mac-daemon ingest path
@@ -595,7 +596,7 @@ FOR UPDATE
 // The caller runs this + SetExternalContactPendingAndDismissed in ONE
 // pgx.Tx so each action's own read-modify-write is atomic (a single
 // action cannot half-clobber its own suggestion columns).
-func (q *Queries) GetExternalContactForUpdate(ctx context.Context, id pgtype.UUID) (*ExternalContact, error) {
+func (q *Queries) GetExternalContactForUpdate(ctx context.Context, id uuid.UUID) (*ExternalContact, error) {
 	row := q.db.QueryRow(ctx, GetExternalContactForUpdate, id)
 	var i ExternalContact
 	err := row.Scan(
@@ -638,8 +639,8 @@ SELECT EXISTS(
 `
 
 type HasEnrichmentForFieldParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Field     string      `json:"field"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Field     string    `json:"field"`
 }
 
 func (q *Queries) HasEnrichmentForField(ctx context.Context, arg HasEnrichmentForFieldParams) (bool, error) {
@@ -657,7 +658,7 @@ WHERE id = $1
   AND deleted_at IS NULL
 `
 
-func (q *Queries) IgnoreExternalContact(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) IgnoreExternalContact(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, IgnoreExternalContact, id)
 	return err
 }
@@ -760,11 +761,11 @@ ORDER BY evidence_count DESC, normalized_token ASC
 `
 
 type ListAnarlogTitleGroupsRow struct {
-	NormalizedToken string        `json:"normalized_token"`
-	TokenDisplay    string        `json:"token_display"`
-	EvidenceCount   int64         `json:"evidence_count"`
-	MemberIds       []pgtype.UUID `json:"member_ids"`
-	SessionTitles   []string      `json:"session_titles"`
+	NormalizedToken string      `json:"normalized_token"`
+	TokenDisplay    string      `json:"token_display"`
+	EvidenceCount   int64       `json:"evidence_count"`
+	MemberIds       []uuid.UUID `json:"member_ids"`
+	SessionTitles   []string    `json:"session_titles"`
 }
 
 // Groups unmatched anarlog_title weak candidates by normalized token,
@@ -921,7 +922,7 @@ WHERE crm_contact_id = $1
 ORDER BY source, account_id
 `
 
-func (q *Queries) ListExternalContactsForCRMContact(ctx context.Context, crmContactID pgtype.UUID) ([]*ExternalContact, error) {
+func (q *Queries) ListExternalContactsForCRMContact(ctx context.Context, crmContactID *uuid.UUID) ([]*ExternalContact, error) {
 	rows, err := q.db.Query(ctx, ListExternalContactsForCRMContact, crmContactID)
 	if err != nil {
 		return nil, err
@@ -992,35 +993,35 @@ type ListExternalContactsWithPendingMethodSuggestionsParams struct {
 }
 
 type ListExternalContactsWithPendingMethodSuggestionsRow struct {
-	ID                         pgtype.UUID        `json:"id"`
-	Source                     string             `json:"source"`
-	SourceID                   string             `json:"source_id"`
-	AccountID                  pgtype.Text        `json:"account_id"`
-	DisplayName                pgtype.Text        `json:"display_name"`
-	FirstName                  pgtype.Text        `json:"first_name"`
-	LastName                   pgtype.Text        `json:"last_name"`
-	Emails                     []byte             `json:"emails"`
-	Phones                     []byte             `json:"phones"`
-	Addresses                  []byte             `json:"addresses"`
-	Organization               pgtype.Text        `json:"organization"`
-	JobTitle                   pgtype.Text        `json:"job_title"`
-	Birthday                   pgtype.Date        `json:"birthday"`
-	PhotoUrl                   pgtype.Text        `json:"photo_url"`
-	CrmContactID               pgtype.UUID        `json:"crm_contact_id"`
-	MatchStatus                pgtype.Text        `json:"match_status"`
-	DuplicateOfID              pgtype.UUID        `json:"duplicate_of_id"`
-	Etag                       pgtype.Text        `json:"etag"`
-	Metadata                   []byte             `json:"metadata"`
-	SyncedAt                   pgtype.Timestamptz `json:"synced_at"`
-	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt                  pgtype.Timestamptz `json:"deleted_at"`
-	HostID                     pgtype.UUID        `json:"host_id"`
-	LastContentHash            pgtype.Text        `json:"last_content_hash"`
-	PendingMethodSuggestions   []byte             `json:"pending_method_suggestions"`
-	DismissedMethodSuggestions []byte             `json:"dismissed_method_suggestions"`
-	CanonCrmContactID          pgtype.UUID        `json:"canon_crm_contact_id"`
-	CanonMatchStatus           pgtype.Text        `json:"canon_match_status"`
+	ID                         uuid.UUID  `json:"id"`
+	Source                     string     `json:"source"`
+	SourceID                   string     `json:"source_id"`
+	AccountID                  *string    `json:"account_id"`
+	DisplayName                *string    `json:"display_name"`
+	FirstName                  *string    `json:"first_name"`
+	LastName                   *string    `json:"last_name"`
+	Emails                     []byte     `json:"emails"`
+	Phones                     []byte     `json:"phones"`
+	Addresses                  []byte     `json:"addresses"`
+	Organization               *string    `json:"organization"`
+	JobTitle                   *string    `json:"job_title"`
+	Birthday                   *time.Time `json:"birthday"`
+	PhotoUrl                   *string    `json:"photo_url"`
+	CrmContactID               *uuid.UUID `json:"crm_contact_id"`
+	MatchStatus                *string    `json:"match_status"`
+	DuplicateOfID              *uuid.UUID `json:"duplicate_of_id"`
+	Etag                       *string    `json:"etag"`
+	Metadata                   []byte     `json:"metadata"`
+	SyncedAt                   *time.Time `json:"synced_at"`
+	CreatedAt                  *time.Time `json:"created_at"`
+	UpdatedAt                  *time.Time `json:"updated_at"`
+	DeletedAt                  *time.Time `json:"deleted_at"`
+	HostID                     *uuid.UUID `json:"host_id"`
+	LastContentHash            *string    `json:"last_content_hash"`
+	PendingMethodSuggestions   []byte     `json:"pending_method_suggestions"`
+	DismissedMethodSuggestions []byte     `json:"dismissed_method_suggestions"`
+	CanonCrmContactID          *uuid.UUID `json:"canon_crm_contact_id"`
+	CanonMatchStatus           *string    `json:"canon_match_status"`
 }
 
 // Address-book rows carrying non-empty pending_method_suggestions, joined
@@ -1089,13 +1090,13 @@ ORDER BY source_id
 `
 
 type ListKnownExternalContactIDsByHostAndSourceParams struct {
-	HostID pgtype.UUID `json:"host_id"`
-	Source string      `json:"source"`
+	HostID *uuid.UUID `json:"host_id"`
+	Source string     `json:"source"`
 }
 
 type ListKnownExternalContactIDsByHostAndSourceRow struct {
-	SourceID        string      `json:"source_id"`
-	LastContentHash pgtype.Text `json:"last_content_hash"`
+	SourceID        string  `json:"source_id"`
+	LastContentHash *string `json:"last_content_hash"`
 }
 
 // Returns (source_id, last_content_hash) for every live
@@ -1147,35 +1148,35 @@ ORDER BY ec.id
 `
 
 type ListLinkedAddressBookExternalContactsForReconcileRow struct {
-	ID                         pgtype.UUID        `json:"id"`
-	Source                     string             `json:"source"`
-	SourceID                   string             `json:"source_id"`
-	AccountID                  pgtype.Text        `json:"account_id"`
-	DisplayName                pgtype.Text        `json:"display_name"`
-	FirstName                  pgtype.Text        `json:"first_name"`
-	LastName                   pgtype.Text        `json:"last_name"`
-	Emails                     []byte             `json:"emails"`
-	Phones                     []byte             `json:"phones"`
-	Addresses                  []byte             `json:"addresses"`
-	Organization               pgtype.Text        `json:"organization"`
-	JobTitle                   pgtype.Text        `json:"job_title"`
-	Birthday                   pgtype.Date        `json:"birthday"`
-	PhotoUrl                   pgtype.Text        `json:"photo_url"`
-	CrmContactID               pgtype.UUID        `json:"crm_contact_id"`
-	MatchStatus                pgtype.Text        `json:"match_status"`
-	DuplicateOfID              pgtype.UUID        `json:"duplicate_of_id"`
-	Etag                       pgtype.Text        `json:"etag"`
-	Metadata                   []byte             `json:"metadata"`
-	SyncedAt                   pgtype.Timestamptz `json:"synced_at"`
-	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt                  pgtype.Timestamptz `json:"deleted_at"`
-	HostID                     pgtype.UUID        `json:"host_id"`
-	LastContentHash            pgtype.Text        `json:"last_content_hash"`
-	PendingMethodSuggestions   []byte             `json:"pending_method_suggestions"`
-	DismissedMethodSuggestions []byte             `json:"dismissed_method_suggestions"`
-	CanonCrmContactID          pgtype.UUID        `json:"canon_crm_contact_id"`
-	CanonMatchStatus           pgtype.Text        `json:"canon_match_status"`
+	ID                         uuid.UUID  `json:"id"`
+	Source                     string     `json:"source"`
+	SourceID                   string     `json:"source_id"`
+	AccountID                  *string    `json:"account_id"`
+	DisplayName                *string    `json:"display_name"`
+	FirstName                  *string    `json:"first_name"`
+	LastName                   *string    `json:"last_name"`
+	Emails                     []byte     `json:"emails"`
+	Phones                     []byte     `json:"phones"`
+	Addresses                  []byte     `json:"addresses"`
+	Organization               *string    `json:"organization"`
+	JobTitle                   *string    `json:"job_title"`
+	Birthday                   *time.Time `json:"birthday"`
+	PhotoUrl                   *string    `json:"photo_url"`
+	CrmContactID               *uuid.UUID `json:"crm_contact_id"`
+	MatchStatus                *string    `json:"match_status"`
+	DuplicateOfID              *uuid.UUID `json:"duplicate_of_id"`
+	Etag                       *string    `json:"etag"`
+	Metadata                   []byte     `json:"metadata"`
+	SyncedAt                   *time.Time `json:"synced_at"`
+	CreatedAt                  *time.Time `json:"created_at"`
+	UpdatedAt                  *time.Time `json:"updated_at"`
+	DeletedAt                  *time.Time `json:"deleted_at"`
+	HostID                     *uuid.UUID `json:"host_id"`
+	LastContentHash            *string    `json:"last_content_hash"`
+	PendingMethodSuggestions   []byte     `json:"pending_method_suggestions"`
+	DismissedMethodSuggestions []byte     `json:"dismissed_method_suggestions"`
+	CanonCrmContactID          *uuid.UUID `json:"canon_crm_contact_id"`
+	CanonMatchStatus           *string    `json:"canon_match_status"`
 }
 
 // Driver query for the address-book method reconcile (forward hooks +
@@ -1450,8 +1451,8 @@ WHERE source = 'anarlog_title'
 `
 
 type MarkAnarlogTitleSiblingsImportedByTokenParams struct {
-	CrmContactID    pgtype.UUID `json:"crm_contact_id"`
-	NormalizedToken string      `json:"normalized_token"`
+	CrmContactID    *uuid.UUID `json:"crm_contact_id"`
+	NormalizedToken string     `json:"normalized_token"`
 }
 
 // Single-statement batch mark for the action=import resolve path: every
@@ -1482,8 +1483,8 @@ WHERE source = 'anarlog_title'
 `
 
 type MarkAnarlogTitleSiblingsMatchedByTokenParams struct {
-	CrmContactID    pgtype.UUID `json:"crm_contact_id"`
-	NormalizedToken string      `json:"normalized_token"`
+	CrmContactID    *uuid.UUID `json:"crm_contact_id"`
+	NormalizedToken string     `json:"normalized_token"`
 }
 
 // Single-statement batch mark for the action=link resolve path: every
@@ -1512,7 +1513,7 @@ RETURNING id, source, source_id, account_id, display_name, first_name, last_name
 // Clears deleted_at on a tombstoned row. Defensive WHERE deleted_at IS NOT
 // NULL keeps the statement idempotent across concurrent revive races.
 // Preserves crm_contact_id, match_status, and all content columns.
-func (q *Queries) ReviveExternalContact(ctx context.Context, id pgtype.UUID) (*ExternalContact, error) {
+func (q *Queries) ReviveExternalContact(ctx context.Context, id uuid.UUID) (*ExternalContact, error) {
 	row := q.db.QueryRow(ctx, ReviveExternalContact, id)
 	var i ExternalContact
 	err := row.Scan(
@@ -1557,8 +1558,8 @@ RETURNING id, source, source_id, account_id, display_name, first_name, last_name
 `
 
 type SetDismissedMethodSuggestionsForTestParams struct {
-	ID        pgtype.UUID `json:"id"`
-	Dismissed []byte      `json:"dismissed"`
+	ID        uuid.UUID `json:"id"`
+	Dismissed []byte    `json:"dismissed"`
 }
 
 // TEST ONLY: pre-seeds the dismissed_method_suggestions column so the
@@ -1611,8 +1612,8 @@ RETURNING id, source, source_id, account_id, display_name, first_name, last_name
 `
 
 type SetExternalContactMethodSuggestionsParams struct {
-	ID      pgtype.UUID `json:"id"`
-	Pending []byte      `json:"pending"`
+	ID      uuid.UUID `json:"id"`
+	Pending []byte    `json:"pending"`
 }
 
 // Overwrite-not-append write of the pending suggestion set for a linked
@@ -1666,9 +1667,9 @@ RETURNING id, source, source_id, account_id, display_name, first_name, last_name
 `
 
 type SetExternalContactPendingAndDismissedParams struct {
-	Pending   []byte      `json:"pending"`
-	Dismissed []byte      `json:"dismissed"`
-	ID        pgtype.UUID `json:"id"`
+	Pending   []byte    `json:"pending"`
+	Dismissed []byte    `json:"dismissed"`
+	ID        uuid.UUID `json:"id"`
 }
 
 // Atomically rewrite BOTH suggestion columns. Resolve passes the
@@ -1724,7 +1725,7 @@ WHERE id = $1
 // statement idempotent against a concurrent delete. crm_contact_id,
 // match_status, and duplicate_of_id are preserved per the external_contact
 // soft-delete contract.
-func (q *Queries) SoftDeleteExternalContact(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) SoftDeleteExternalContact(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, SoftDeleteExternalContact, id)
 	return err
 }
@@ -1738,8 +1739,8 @@ WHERE id = $1
 `
 
 type UpdateExternalContactDuplicateParams struct {
-	ID            pgtype.UUID `json:"id"`
-	DuplicateOfID pgtype.UUID `json:"duplicate_of_id"`
+	ID            uuid.UUID  `json:"id"`
+	DuplicateOfID *uuid.UUID `json:"duplicate_of_id"`
 }
 
 func (q *Queries) UpdateExternalContactDuplicate(ctx context.Context, arg UpdateExternalContactDuplicateParams) error {
@@ -1758,9 +1759,9 @@ RETURNING id, source, source_id, account_id, display_name, first_name, last_name
 `
 
 type UpdateExternalContactMatchParams struct {
-	ID           pgtype.UUID `json:"id"`
-	CrmContactID pgtype.UUID `json:"crm_contact_id"`
-	MatchStatus  pgtype.Text `json:"match_status"`
+	ID           uuid.UUID  `json:"id"`
+	CrmContactID *uuid.UUID `json:"crm_contact_id"`
+	MatchStatus  *string    `json:"match_status"`
 }
 
 // Filter `deleted_at IS NULL` so a tombstoned row cannot have its
@@ -1816,13 +1817,13 @@ RETURNING id, source, source_id, account_id, display_name, first_name, last_name
 `
 
 type UpsertDiscoveryCandidateParams struct {
-	Source      string             `json:"source"`
-	SourceID    string             `json:"source_id"`
-	DisplayName pgtype.Text        `json:"display_name"`
-	FirstName   pgtype.Text        `json:"first_name"`
-	LastName    pgtype.Text        `json:"last_name"`
-	Metadata    []byte             `json:"metadata"`
-	SyncedAt    pgtype.Timestamptz `json:"synced_at"`
+	Source      string     `json:"source"`
+	SourceID    string     `json:"source_id"`
+	DisplayName *string    `json:"display_name"`
+	FirstName   *string    `json:"first_name"`
+	LastName    *string    `json:"last_name"`
+	Metadata    []byte     `json:"metadata"`
+	SyncedAt    *time.Time `json:"synced_at"`
 }
 
 // Source-parameterized discovery upsert that preserves populated peer fields
@@ -1925,27 +1926,27 @@ RETURNING id, source, source_id, account_id, display_name, first_name, last_name
 `
 
 type UpsertExternalContactParams struct {
-	Source          string             `json:"source"`
-	SourceID        string             `json:"source_id"`
-	AccountID       pgtype.Text        `json:"account_id"`
-	HostID          pgtype.UUID        `json:"host_id"`
-	DisplayName     pgtype.Text        `json:"display_name"`
-	FirstName       pgtype.Text        `json:"first_name"`
-	LastName        pgtype.Text        `json:"last_name"`
-	Emails          []byte             `json:"emails"`
-	Phones          []byte             `json:"phones"`
-	Addresses       []byte             `json:"addresses"`
-	Organization    pgtype.Text        `json:"organization"`
-	JobTitle        pgtype.Text        `json:"job_title"`
-	Birthday        pgtype.Date        `json:"birthday"`
-	PhotoUrl        pgtype.Text        `json:"photo_url"`
-	CrmContactID    pgtype.UUID        `json:"crm_contact_id"`
-	MatchStatus     pgtype.Text        `json:"match_status"`
-	DuplicateOfID   pgtype.UUID        `json:"duplicate_of_id"`
-	Etag            pgtype.Text        `json:"etag"`
-	Metadata        []byte             `json:"metadata"`
-	SyncedAt        pgtype.Timestamptz `json:"synced_at"`
-	LastContentHash pgtype.Text        `json:"last_content_hash"`
+	Source          string     `json:"source"`
+	SourceID        string     `json:"source_id"`
+	AccountID       *string    `json:"account_id"`
+	HostID          *uuid.UUID `json:"host_id"`
+	DisplayName     *string    `json:"display_name"`
+	FirstName       *string    `json:"first_name"`
+	LastName        *string    `json:"last_name"`
+	Emails          []byte     `json:"emails"`
+	Phones          []byte     `json:"phones"`
+	Addresses       []byte     `json:"addresses"`
+	Organization    *string    `json:"organization"`
+	JobTitle        *string    `json:"job_title"`
+	Birthday        *time.Time `json:"birthday"`
+	PhotoUrl        *string    `json:"photo_url"`
+	CrmContactID    *uuid.UUID `json:"crm_contact_id"`
+	MatchStatus     *string    `json:"match_status"`
+	DuplicateOfID   *uuid.UUID `json:"duplicate_of_id"`
+	Etag            *string    `json:"etag"`
+	Metadata        []byte     `json:"metadata"`
+	SyncedAt        *time.Time `json:"synced_at"`
+	LastContentHash *string    `json:"last_content_hash"`
 }
 
 // Named-param variant. host_id follows claim-on-first-non-NULL-emit:

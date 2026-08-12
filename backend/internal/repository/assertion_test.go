@@ -7,15 +7,14 @@ import (
 	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // Pure unit coverage of the assertion-store converters: they translate generated
-// db.* rows (pgtype-wrapped) into the domain structs, handling the nullable
-// payload / temporal / supersession fields. DB-backed round-trips + the CHECK
-// constraints live in the integration suite.
+// db.* rows into the domain structs, handling the nullable payload / temporal /
+// supersession fields. DB-backed round-trips + the CHECK constraints live in the
+// integration suite.
 
 func TestConvertDbAssertion(t *testing.T) {
 	id := uuid.New()
@@ -28,16 +27,16 @@ func TestConvertDbAssertion(t *testing.T) {
 
 	t.Run("edge assertion, open-ended, accepted", func(t *testing.T) {
 		got := convertDbAssertion(&db.Assertion{
-			ID:             pgtype.UUID{Bytes: id, Valid: true},
-			SubjectNodeID:  pgtype.UUID{Bytes: subject, Valid: true},
+			ID:             id,
+			SubjectNodeID:  subject,
 			PredicateKey:   "partner_of",
-			ObjectNodeID:   pgtype.UUID{Bytes: object, Valid: true},
-			KnowledgeFrom:  pgtype.Timestamptz{Time: knowledgeFrom, Valid: true},
+			ObjectNodeID:   &object,
+			KnowledgeFrom:  knowledgeFrom,
 			Confidence:     90,
 			Salience:       85,
 			Status:         AssertionStatusAccepted,
 			PropositionKey: "key-1",
-			CreatedAt:      pgtype.Timestamptz{Time: created, Valid: true},
+			CreatedAt:      created,
 		})
 		assert.Equal(t, id, got.ID)
 		assert.Equal(t, subject, got.SubjectNodeID)
@@ -58,27 +57,28 @@ func TestConvertDbAssertion(t *testing.T) {
 	})
 
 	t.Run("fact assertion with all nullable fields set, superseded", func(t *testing.T) {
+		valueText := "123 Main St"
 		validTo := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 		knowledgeTo := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
 		closure := ClosureReasonSuperseded
 		trust := "user"
 		got := convertDbAssertion(&db.Assertion{
-			ID:             pgtype.UUID{Bytes: id, Valid: true},
-			SubjectNodeID:  pgtype.UUID{Bytes: subject, Valid: true},
+			ID:             id,
+			SubjectNodeID:  subject,
 			PredicateKey:   "home_address",
-			ValueText:      pgtype.Text{String: "123 Main St", Valid: true},
-			ValidFrom:      pgtype.Timestamptz{Time: validFrom, Valid: true},
-			ValidTo:        pgtype.Timestamptz{Time: validTo, Valid: true},
-			KnowledgeFrom:  pgtype.Timestamptz{Time: knowledgeFrom, Valid: true},
-			KnowledgeTo:    pgtype.Timestamptz{Time: knowledgeTo, Valid: true},
+			ValueText:      &valueText,
+			ValidFrom:      &validFrom,
+			ValidTo:        &validTo,
+			KnowledgeFrom:  knowledgeFrom,
+			KnowledgeTo:    &knowledgeTo,
 			Confidence:     70,
 			Salience:       45,
 			Status:         AssertionStatusSuperseded,
-			ClosureReason:  pgtype.Text{String: closure, Valid: true},
-			SupersededBy:   pgtype.UUID{Bytes: successor, Valid: true},
-			TrustTier:      pgtype.Text{String: trust, Valid: true},
+			ClosureReason:  &closure,
+			SupersededBy:   &successor,
+			TrustTier:      &trust,
 			PropositionKey: "key-2",
-			CreatedAt:      pgtype.Timestamptz{Time: created, Valid: true},
+			CreatedAt:      created,
 		})
 		require.NotNil(t, got.ValueText)
 		assert.Equal(t, "123 Main St", *got.ValueText)
@@ -98,17 +98,19 @@ func TestConvertDbAssertion(t *testing.T) {
 	})
 
 	t.Run("numeric + bool + date payloads convert", func(t *testing.T) {
+		numVal := 42.5
 		num := convertDbAssertion(&db.Assertion{
-			ValueNum:      pgtype.Float8{Float64: 42.5, Valid: true},
-			KnowledgeFrom: pgtype.Timestamptz{Time: knowledgeFrom, Valid: true},
+			ValueNum:      &numVal,
+			KnowledgeFrom: knowledgeFrom,
 			Status:        AssertionStatusProposed,
 		})
 		require.NotNil(t, num.ValueNum)
 		assert.Equal(t, 42.5, *num.ValueNum)
 
+		boolVal := true
 		b := convertDbAssertion(&db.Assertion{
-			ValueBool:     pgtype.Bool{Bool: true, Valid: true},
-			KnowledgeFrom: pgtype.Timestamptz{Time: knowledgeFrom, Valid: true},
+			ValueBool:     &boolVal,
+			KnowledgeFrom: knowledgeFrom,
 			Status:        AssertionStatusProposed,
 		})
 		require.NotNil(t, b.ValueBool)
@@ -116,8 +118,8 @@ func TestConvertDbAssertion(t *testing.T) {
 
 		d := time.Date(1990, 3, 14, 0, 0, 0, 0, time.UTC)
 		dateAsrt := convertDbAssertion(&db.Assertion{
-			ValueDate:     pgtype.Date{Time: d, Valid: true},
-			KnowledgeFrom: pgtype.Timestamptz{Time: knowledgeFrom, Valid: true},
+			ValueDate:     &d,
+			KnowledgeFrom: knowledgeFrom,
 			Status:        AssertionStatusProposed,
 		})
 		require.NotNil(t, dateAsrt.ValueDate)
@@ -132,19 +134,21 @@ func TestConvertDbProvenance(t *testing.T) {
 	quote := "we live in Brooklyn now"
 
 	t.Run("full locator with span + quote", func(t *testing.T) {
+		startOffset := int32(10)
+		endOffset := int32(30)
 		got := convertDbProvenance(&db.AssertionProvenance{
-			AssertionID:     pgtype.UUID{Bytes: assertionID, Valid: true},
+			AssertionID:     assertionID,
 			LocatorHash:     "hash-abc",
 			SourceKind:      SourceKindCommsMessage,
 			SourceID:        "msg-1",
 			ProducerKind:    ProducerKindExtractor,
 			ProducerVersion: "v2",
-			Field:           pgtype.Text{String: field, Valid: true},
-			StartOffset:     pgtype.Int4{Int32: 10, Valid: true},
-			EndOffset:       pgtype.Int4{Int32: 30, Valid: true},
-			ChunkID:         pgtype.Text{String: chunk, Valid: true},
+			Field:           &field,
+			StartOffset:     &startOffset,
+			EndOffset:       &endOffset,
+			ChunkID:         &chunk,
 			InputHash:       "input-hash-1",
-			Quote:           pgtype.Text{String: quote, Valid: true},
+			Quote:           &quote,
 		})
 		assert.Equal(t, assertionID, got.AssertionID)
 		assert.Equal(t, "hash-abc", got.LocatorHash)
@@ -166,7 +170,7 @@ func TestConvertDbProvenance(t *testing.T) {
 
 	t.Run("user locator with no span/chunk/quote", func(t *testing.T) {
 		got := convertDbProvenance(&db.AssertionProvenance{
-			AssertionID:  pgtype.UUID{Bytes: assertionID, Valid: true},
+			AssertionID:  assertionID,
 			LocatorHash:  "hash-user",
 			SourceKind:   SourceKindUser,
 			SourceID:     "edit:contact-1:home_address",

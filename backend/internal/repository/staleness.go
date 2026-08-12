@@ -8,7 +8,6 @@ import (
 	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Breach-type constants for sync_staleness_breach.breach_type. Mirror the
@@ -68,19 +67,11 @@ func convertDbStalenessBreach(row *db.SyncStalenessBreach) StalenessBreach {
 		ThresholdSeconds: row.ThresholdSeconds,
 		Details:          row.Details,
 	}
-	if row.ID.Valid {
-		b.ID = uuid.UUID(row.ID.Bytes)
-	}
-	if row.StaleSince.Valid {
-		b.StaleSince = row.StaleSince.Time.UTC()
-	}
-	if row.DetectedAt.Valid {
-		b.DetectedAt = row.DetectedAt.Time.UTC()
-	}
-	if row.LastObservedAt.Valid {
-		b.LastObservedAt = row.LastObservedAt.Time.UTC()
-	}
-	b.ResolvedAt = pgTimestamptzToTimePtr(row.ResolvedAt)
+	b.ID = row.ID
+	b.StaleSince = row.StaleSince.UTC()
+	b.DetectedAt = row.DetectedAt.UTC()
+	b.LastObservedAt = row.LastObservedAt.UTC()
+	b.ResolvedAt = utcPtr(row.ResolvedAt)
 	return b
 }
 
@@ -93,10 +84,10 @@ func (r *StalenessRepository) UpsertOpenBreach(ctx context.Context, params Upser
 		Source:           params.Source,
 		AccountID:        params.AccountID,
 		BreachType:       params.BreachType,
-		StaleSince:       pgtype.Timestamptz{Time: params.StaleSince, Valid: true},
+		StaleSince:       params.StaleSince,
 		ThresholdSeconds: params.ThresholdSeconds,
 		Details:          params.Details,
-		ObservedAt:       pgtype.Timestamptz{Time: params.ObservedAt, Valid: true},
+		ObservedAt:       params.ObservedAt,
 	})
 	if err != nil {
 		return StalenessBreach{}, fmt.Errorf("upsert open staleness breach: %w", err)
@@ -123,8 +114,8 @@ func (r *StalenessRepository) ListOpenBreaches(ctx context.Context) ([]Staleness
 // affected (0 when the breach was already resolved by a concurrent tick).
 func (r *StalenessRepository) ResolveBreach(ctx context.Context, id uuid.UUID, resolvedAt time.Time) (int64, error) {
 	n, err := r.queries.ResolveStalenessBreach(ctx, db.ResolveStalenessBreachParams{
-		ID:         uuidToPgUUID(id),
-		ResolvedAt: pgtype.Timestamptz{Time: resolvedAt, Valid: true},
+		ID:         id,
+		ResolvedAt: &resolvedAt,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("resolve staleness breach: %w", err)
@@ -135,7 +126,7 @@ func (r *StalenessRepository) ResolveBreach(ctx context.Context, id uuid.UUID, r
 // DeleteResolvedBefore prunes resolved breaches whose resolved_at predates
 // the cutoff. Open breaches are never touched.
 func (r *StalenessRepository) DeleteResolvedBefore(ctx context.Context, cutoff time.Time) error {
-	if err := r.queries.DeleteResolvedStalenessBreachesBefore(ctx, pgtype.Timestamptz{Time: cutoff, Valid: true}); err != nil {
+	if err := r.queries.DeleteResolvedStalenessBreachesBefore(ctx, &cutoff); err != nil {
 		return fmt.Errorf("delete resolved staleness breaches: %w", err)
 	}
 	return nil

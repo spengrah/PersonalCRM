@@ -13,7 +13,6 @@ import (
 	"personal-crm/backend/internal/db"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // TestJSONBFixturesRepository wraps the test-only sqlc bindings for
@@ -44,10 +43,7 @@ func (r *TestJSONBFixturesRepository) InsertExternalContactRawEmails(ctx context
 	if err != nil {
 		return uuid.Nil, err
 	}
-	if !row.ID.Valid {
-		return uuid.Nil, db.ErrNotFound
-	}
-	return uuid.UUID(row.ID.Bytes), nil
+	return row.ID, nil
 }
 
 // InsertCalendarEventRawAttendees inserts a calendar_event with a literal
@@ -61,27 +57,23 @@ func (r *TestJSONBFixturesRepository) InsertCalendarEventRawAttendees(
 	attendees []byte,
 	matchedContactIDs []uuid.UUID,
 ) (uuid.UUID, error) {
-	pgIDs := make([]pgtype.UUID, len(matchedContactIDs))
-	for i, id := range matchedContactIDs {
-		pgIDs[i] = uuidToPgUUID(id)
+	if matchedContactIDs == nil {
+		matchedContactIDs = []uuid.UUID{}
 	}
 	row, err := r.queries.TestInsertCalendarEventRawAttendees(ctx, db.TestInsertCalendarEventRawAttendeesParams{
 		GcalEventID:       gcalEventID,
 		GcalCalendarID:    gcalCalendarID,
 		GoogleAccountID:   googleAccountID,
-		StartTime:         pgtype.Timestamptz{Time: startTime, Valid: true},
-		EndTime:           pgtype.Timestamptz{Time: endTime, Valid: true},
+		StartTime:         startTime,
+		EndTime:           endTime,
 		Status:            status,
 		Attendees:         attendees,
-		MatchedContactIds: pgIDs,
+		MatchedContactIds: matchedContactIDs,
 	})
 	if err != nil {
 		return uuid.Nil, err
 	}
-	if !row.ID.Valid {
-		return uuid.Nil, db.ErrNotFound
-	}
-	return uuid.UUID(row.ID.Bytes), nil
+	return row.ID, nil
 }
 
 // DeleteExternalContactsBySourceIDPrefix hard-deletes fixture rows by
@@ -122,11 +114,8 @@ func (r *TestJSONBFixturesRepository) FindExternalContactsByNormalizedEmailLegac
 	}
 	out := make([]LegacyExternalContactFinding, 0, len(rows))
 	for _, row := range rows {
-		if row == nil || !row.ID.Valid {
-			continue
-		}
 		out = append(out, LegacyExternalContactFinding{
-			ID:       uuid.UUID(row.ID.Bytes),
+			ID:       row.ID,
 			SourceID: row.SourceID,
 		})
 	}
@@ -139,18 +128,15 @@ func (r *TestJSONBFixturesRepository) FindExternalContactsByNormalizedEmailLegac
 func (r *TestJSONBFixturesRepository) FindEventsByAttendeeEmailUnmatchedForContactLegacy(ctx context.Context, email string, contactID uuid.UUID) ([]LegacyCalendarEventFinding, error) {
 	rows, err := r.queries.TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacy(ctx, db.TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacyParams{
 		Email:     email,
-		ContactID: uuidToPgUUID(contactID),
+		ContactID: contactID,
 	})
 	if err != nil {
 		return nil, err
 	}
 	out := make([]LegacyCalendarEventFinding, 0, len(rows))
 	for _, row := range rows {
-		if row == nil || !row.ID.Valid {
-			continue
-		}
 		out = append(out, LegacyCalendarEventFinding{
-			ID:          uuid.UUID(row.ID.Bytes),
+			ID:          row.ID,
 			GcalEventID: row.GcalEventID,
 		})
 	}

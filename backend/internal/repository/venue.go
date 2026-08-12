@@ -84,12 +84,8 @@ func convertDbVenue(dbVenue *db.Venue) Venue {
 		Source:            dbVenue.Source,
 		SourceContainerID: dbVenue.SourceContainerID,
 	}
-	if dbVenue.NodeID.Valid {
-		venue.NodeID = uuid.UUID(dbVenue.NodeID.Bytes)
-	}
-	if dbVenue.Title.Valid {
-		venue.Title = &dbVenue.Title.String
-	}
+	venue.NodeID = dbVenue.NodeID
+	venue.Title = dbVenue.Title
 	return venue
 }
 
@@ -105,11 +101,11 @@ func (r *VenueRepository) CreateVenueTx(ctx context.Context, tx pgx.Tx, req Crea
 
 func createVenue(ctx context.Context, q db.Querier, req CreateVenueRequest) (*Venue, error) {
 	dbVenue, err := q.CreateVenue(ctx, db.CreateVenueParams{
-		NodeID:            uuidToPgUUID(req.NodeID),
+		NodeID:            req.NodeID,
 		Kind:              req.Kind,
 		Source:            req.Source,
 		SourceContainerID: req.SourceContainerID,
-		Title:             stringToPgText(req.Title),
+		Title:             req.Title,
 	})
 	if err != nil {
 		return nil, err
@@ -120,7 +116,7 @@ func createVenue(ctx context.Context, q db.Querier, req CreateVenueRequest) (*Ve
 
 // GetVenue retrieves a venue by its node id.
 func (r *VenueRepository) GetVenue(ctx context.Context, nodeID uuid.UUID) (*Venue, error) {
-	dbVenue, err := r.queries.GetVenue(ctx, uuidToPgUUID(nodeID))
+	dbVenue, err := r.queries.GetVenue(ctx, nodeID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -163,11 +159,11 @@ func (r *VenueRepository) UpsertVenueTx(ctx context.Context, tx pgx.Tx, req Crea
 
 func upsertVenue(ctx context.Context, q db.Querier, req CreateVenueRequest) (*Venue, error) {
 	dbVenue, err := q.UpsertVenue(ctx, db.UpsertVenueParams{
-		NodeID:            uuidToPgUUID(req.NodeID),
+		NodeID:            req.NodeID,
 		Kind:              req.Kind,
 		Source:            req.Source,
 		SourceContainerID: req.SourceContainerID,
-		Title:             stringToPgText(req.Title),
+		Title:             req.Title,
 	})
 	if err != nil {
 		return nil, err
@@ -199,7 +195,7 @@ func (r *VenueRepository) ResolveVenueForInteraction(
 		Kind:              kind,
 		SourceContainerID: containerKey,
 	}); err == nil {
-		return uuid.UUID(existing.NodeID.Bytes), nil
+		return existing.NodeID, nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, fmt.Errorf("find venue by container: %w", err)
 	}
@@ -218,7 +214,7 @@ func (r *VenueRepository) ResolveVenueForInteraction(
 		Kind:              kind,
 		SourceContainerID: containerKey,
 	}); err == nil {
-		return uuid.UUID(existing.NodeID.Bytes), nil
+		return existing.NodeID, nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, fmt.Errorf("re-check venue by container: %w", err)
 	}
@@ -228,11 +224,11 @@ func (r *VenueRepository) ResolveVenueForInteraction(
 	// node insert safe (no orphan) even if a writer slipped in.
 	nodeID := VenueNodeID(source, kind, containerKey)
 	if _, err := q.CreateVenueNode(ctx, db.CreateVenueNodeParams{
-		NodeID:            uuidToPgUUID(nodeID),
+		NodeID:            nodeID,
 		Kind:              kind,
 		Source:            source,
 		SourceContainerID: containerKey,
-		Title:             stringToPgText(nilIfEmpty(title)),
+		Title:             nilIfEmpty(title),
 		// Node canonical_label is kept empty for venue nodes (the human label
 		// lives on venue.title); this matches the 069 migration backfill so a
 		// venue created live and one created by the backfill are identical.
@@ -241,13 +237,4 @@ func (r *VenueRepository) ResolveVenueForInteraction(
 		return uuid.Nil, fmt.Errorf("create venue node: %w", err)
 	}
 	return nodeID, nil
-}
-
-// nilIfEmpty maps an empty string to a nil *string (SQL NULL title) and a
-// non-empty string to its pointer.
-func nilIfEmpty(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }

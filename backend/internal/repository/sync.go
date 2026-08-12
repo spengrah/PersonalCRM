@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
@@ -172,37 +171,23 @@ func convertDbSyncState(dbState *db.ExternalSyncState) SyncState {
 	}
 
 	// Convert UUID
-	if dbState.ID.Valid {
-		state.ID = uuid.UUID(dbState.ID.Bytes)
-	}
+	state.ID = dbState.ID
 
 	// Convert timestamps
-	if dbState.CreatedAt.Valid {
-		state.CreatedAt = dbState.CreatedAt.Time
+	if dbState.CreatedAt != nil {
+		state.CreatedAt = *dbState.CreatedAt
 	}
-	if dbState.UpdatedAt.Valid {
-		state.UpdatedAt = dbState.UpdatedAt.Time
+	if dbState.UpdatedAt != nil {
+		state.UpdatedAt = *dbState.UpdatedAt
 	}
-	if dbState.LastSyncAt.Valid {
-		state.LastSyncAt = &dbState.LastSyncAt.Time
-	}
-	if dbState.LastSuccessfulSyncAt.Valid {
-		state.LastSuccessfulSyncAt = &dbState.LastSuccessfulSyncAt.Time
-	}
-	if dbState.NextSyncAt.Valid {
-		state.NextSyncAt = &dbState.NextSyncAt.Time
-	}
+	state.LastSyncAt = dbState.LastSyncAt
+	state.LastSuccessfulSyncAt = dbState.LastSuccessfulSyncAt
+	state.NextSyncAt = dbState.NextSyncAt
 
 	// Convert nullable fields
-	if dbState.AccountID.Valid {
-		state.AccountID = &dbState.AccountID.String
-	}
-	if dbState.SyncCursor.Valid {
-		state.SyncCursor = &dbState.SyncCursor.String
-	}
-	if dbState.ErrorMessage.Valid {
-		state.ErrorMessage = &dbState.ErrorMessage.String
-	}
+	state.AccountID = dbState.AccountID
+	state.SyncCursor = dbState.SyncCursor
+	state.ErrorMessage = dbState.ErrorMessage
 
 	// Convert JSONB metadata
 	if len(dbState.Metadata) > 0 {
@@ -223,42 +208,30 @@ func convertDbSyncLog(dbLog *db.ExternalSyncLog) SyncLog {
 	}
 
 	// Convert UUIDs
-	if dbLog.ID.Valid {
-		log.ID = uuid.UUID(dbLog.ID.Bytes)
-	}
-	if dbLog.SyncStateID.Valid {
-		log.SyncStateID = uuid.UUID(dbLog.SyncStateID.Bytes)
-	}
+	log.ID = dbLog.ID
+	log.SyncStateID = dbLog.SyncStateID
 
 	// Convert timestamps
-	if dbLog.StartedAt.Valid {
-		log.StartedAt = dbLog.StartedAt.Time
-	}
-	if dbLog.CompletedAt.Valid {
-		log.CompletedAt = &dbLog.CompletedAt.Time
-	}
-	if dbLog.CreatedAt.Valid {
-		log.CreatedAt = dbLog.CreatedAt.Time
+	log.StartedAt = dbLog.StartedAt
+	log.CompletedAt = dbLog.CompletedAt
+	if dbLog.CreatedAt != nil {
+		log.CreatedAt = *dbLog.CreatedAt
 	}
 
 	// Convert nullable int fields
-	if dbLog.ItemsProcessed.Valid {
-		log.ItemsProcessed = dbLog.ItemsProcessed.Int32
+	if dbLog.ItemsProcessed != nil {
+		log.ItemsProcessed = *dbLog.ItemsProcessed
 	}
-	if dbLog.ItemsMatched.Valid {
-		log.ItemsMatched = dbLog.ItemsMatched.Int32
+	if dbLog.ItemsMatched != nil {
+		log.ItemsMatched = *dbLog.ItemsMatched
 	}
-	if dbLog.ItemsCreated.Valid {
-		log.ItemsCreated = dbLog.ItemsCreated.Int32
+	if dbLog.ItemsCreated != nil {
+		log.ItemsCreated = *dbLog.ItemsCreated
 	}
 
 	// Convert nullable fields
-	if dbLog.AccountID.Valid {
-		log.AccountID = &dbLog.AccountID.String
-	}
-	if dbLog.ErrorMessage.Valid {
-		log.ErrorMessage = &dbLog.ErrorMessage.String
-	}
+	log.AccountID = dbLog.AccountID
+	log.ErrorMessage = dbLog.ErrorMessage
 
 	// Convert JSONB metadata
 	if len(dbLog.Metadata) > 0 {
@@ -273,7 +246,7 @@ func convertDbSyncLog(dbLog *db.ExternalSyncLog) SyncLog {
 
 // GetSyncState retrieves a sync state by ID
 func (r *SyncRepository) GetSyncState(ctx context.Context, id uuid.UUID) (*SyncState, error) {
-	dbState, err := r.queries.GetSyncState(ctx, uuidToPgUUID(id))
+	dbState, err := r.queries.GetSyncState(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -289,7 +262,7 @@ func (r *SyncRepository) GetSyncState(ctx context.Context, id uuid.UUID) (*SyncS
 func (r *SyncRepository) GetSyncStateBySource(ctx context.Context, source string, accountID *string) (*SyncState, error) {
 	dbState, err := r.queries.GetSyncStateBySource(ctx, db.GetSyncStateBySourceParams{
 		Source:    source,
-		AccountID: stringToPgText(accountID),
+		AccountID: accountID,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -349,7 +322,7 @@ func (r *SyncRepository) ListEnabledSyncStatesBySource(ctx context.Context, sour
 
 // ListDueSyncStates retrieves sync states that are due for syncing
 func (r *SyncRepository) ListDueSyncStates(ctx context.Context, now time.Time) ([]SyncState, error) {
-	dbStates, err := r.queries.ListDueSyncStates(ctx, pgtype.Timestamptz{Time: now, Valid: true})
+	dbStates, err := r.queries.ListDueSyncStates(ctx, &now)
 	if err != nil {
 		return nil, err
 	}
@@ -386,11 +359,11 @@ func (r *SyncRepository) CreateSyncState(ctx context.Context, req CreateSyncStat
 
 	dbState, err := r.queries.CreateSyncState(ctx, db.CreateSyncStateParams{
 		Source:     req.Source,
-		AccountID:  stringToPgText(req.AccountID),
+		AccountID:  req.AccountID,
 		Enabled:    req.Enabled,
 		Status:     string(status),
 		Strategy:   string(strategy),
-		NextSyncAt: timeToPgTimestamptz(req.NextSyncAt),
+		NextSyncAt: req.NextSyncAt,
 		Metadata:   metadataBytes,
 	})
 	if err != nil {
@@ -404,9 +377,9 @@ func (r *SyncRepository) CreateSyncState(ctx context.Context, req CreateSyncStat
 // UpdateSyncStateStatus updates the status of a sync state
 func (r *SyncRepository) UpdateSyncStateStatus(ctx context.Context, id uuid.UUID, status SyncStatus, errorMessage *string) (*SyncState, error) {
 	dbState, err := r.queries.UpdateSyncStateStatus(ctx, db.UpdateSyncStateStatusParams{
-		ID:           uuidToPgUUID(id),
+		ID:           id,
 		Status:       string(status),
-		ErrorMessage: stringToPgText(errorMessage),
+		ErrorMessage: errorMessage,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -422,9 +395,9 @@ func (r *SyncRepository) UpdateSyncStateStatus(ctx context.Context, id uuid.UUID
 // UpdateSyncStateSuccess updates a sync state after a successful sync
 func (r *SyncRepository) UpdateSyncStateSuccess(ctx context.Context, id uuid.UUID, nextSyncAt time.Time, cursor *string) (*SyncState, error) {
 	dbState, err := r.queries.UpdateSyncStateSuccess(ctx, db.UpdateSyncStateSuccessParams{
-		ID:         uuidToPgUUID(id),
-		NextSyncAt: pgtype.Timestamptz{Time: nextSyncAt, Valid: true},
-		SyncCursor: stringToPgText(cursor),
+		ID:         id,
+		NextSyncAt: &nextSyncAt,
+		SyncCursor: cursor,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -440,12 +413,9 @@ func (r *SyncRepository) UpdateSyncStateSuccess(ctx context.Context, id uuid.UUI
 // ResetSyncStateBackfillCursor rewinds a sync state's cursor and marks it due.
 func (r *SyncRepository) ResetSyncStateBackfillCursor(ctx context.Context, id uuid.UUID, cursor string, nextSyncAt time.Time) (*SyncState, error) {
 	dbState, err := r.queries.ResetSyncStateBackfillCursor(ctx, db.ResetSyncStateBackfillCursorParams{
-		ID:         uuidToPgUUID(id),
-		SyncCursor: pgtype.Text{String: cursor, Valid: true},
-		NextSyncAt: pgtype.Timestamptz{
-			Time:  nextSyncAt,
-			Valid: true,
-		},
+		ID:         id,
+		SyncCursor: &cursor,
+		NextSyncAt: &nextSyncAt,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -461,7 +431,7 @@ func (r *SyncRepository) ResetSyncStateBackfillCursor(ctx context.Context, id uu
 // UpdateSyncStateEnabled enables or disables a sync state
 func (r *SyncRepository) UpdateSyncStateEnabled(ctx context.Context, id uuid.UUID, enabled bool) (*SyncState, error) {
 	dbState, err := r.queries.UpdateSyncStateEnabled(ctx, db.UpdateSyncStateEnabledParams{
-		ID:      uuidToPgUUID(id),
+		ID:      id,
 		Enabled: enabled,
 	})
 	if err != nil {
@@ -477,12 +447,12 @@ func (r *SyncRepository) UpdateSyncStateEnabled(ctx context.Context, id uuid.UUI
 
 // DeleteSyncState deletes a sync state
 func (r *SyncRepository) DeleteSyncState(ctx context.Context, id uuid.UUID) error {
-	return r.queries.DeleteSyncState(ctx, uuidToPgUUID(id))
+	return r.queries.DeleteSyncState(ctx, id)
 }
 
 // DeleteSyncStatesByAccountID deletes all sync states for a specific account
 func (r *SyncRepository) DeleteSyncStatesByAccountID(ctx context.Context, accountID string) error {
-	return r.queries.DeleteSyncStatesByAccountID(ctx, pgtype.Text{String: accountID, Valid: true})
+	return r.queries.DeleteSyncStatesByAccountID(ctx, &accountID)
 }
 
 // UpdateSyncStateMetadata updates just the metadata field of a sync state
@@ -497,7 +467,7 @@ func (r *SyncRepository) UpdateSyncStateMetadata(ctx context.Context, id uuid.UU
 	}
 
 	dbState, err := r.queries.UpdateSyncStateMetadata(ctx, db.UpdateSyncStateMetadataParams{
-		ID:       uuidToPgUUID(id),
+		ID:       id,
 		Metadata: metadataBytes,
 	})
 	if err != nil {
@@ -530,8 +500,8 @@ func (r *SyncRepository) MarkSyncStateTerminal(ctx context.Context, id uuid.UUID
 	}
 
 	dbState, err := r.queries.MarkSyncStateTerminal(ctx, db.MarkSyncStateTerminalParams{
-		ID:           uuidToPgUUID(id),
-		ErrorMessage: stringToPgText(&reason),
+		ID:           id,
+		ErrorMessage: &reason,
 		Metadata:     metadataBytes,
 	})
 	if err != nil {
@@ -558,9 +528,9 @@ func (r *SyncRepository) CreateSyncLog(ctx context.Context, state *SyncState) (*
 	}
 
 	dbLog, err := r.queries.CreateSyncLog(ctx, db.CreateSyncLogParams{
-		SyncStateID: uuidToPgUUID(state.ID),
+		SyncStateID: state.ID,
 		Source:      state.Source,
-		AccountID:   stringToPgText(state.AccountID),
+		AccountID:   state.AccountID,
 		Metadata:    metadataBytes,
 	})
 	if err != nil {
@@ -583,12 +553,12 @@ type CompleteSyncLogResult struct {
 // CompleteSyncLog completes a sync log entry
 func (r *SyncRepository) CompleteSyncLog(ctx context.Context, logID uuid.UUID, result CompleteSyncLogResult) (*SyncLog, error) {
 	dbLog, err := r.queries.CompleteSyncLog(ctx, db.CompleteSyncLogParams{
-		ID:             uuidToPgUUID(logID),
+		ID:             logID,
 		Status:         result.Status,
-		ItemsProcessed: pgtype.Int4{Int32: result.ItemsProcessed, Valid: true},
-		ItemsMatched:   pgtype.Int4{Int32: result.ItemsMatched, Valid: true},
-		ItemsCreated:   pgtype.Int4{Int32: result.ItemsCreated, Valid: true},
-		ErrorMessage:   stringToPgText(result.ErrorMessage),
+		ItemsProcessed: &result.ItemsProcessed,
+		ItemsMatched:   &result.ItemsMatched,
+		ItemsCreated:   &result.ItemsCreated,
+		ErrorMessage:   result.ErrorMessage,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -603,7 +573,7 @@ func (r *SyncRepository) CompleteSyncLog(ctx context.Context, logID uuid.UUID, r
 
 // GetSyncLog retrieves a sync log by ID
 func (r *SyncRepository) GetSyncLog(ctx context.Context, id uuid.UUID) (*SyncLog, error) {
-	dbLog, err := r.queries.GetSyncLog(ctx, uuidToPgUUID(id))
+	dbLog, err := r.queries.GetSyncLog(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
@@ -618,7 +588,7 @@ func (r *SyncRepository) GetSyncLog(ctx context.Context, id uuid.UUID) (*SyncLog
 // ListSyncLogsByState retrieves sync logs for a specific state
 func (r *SyncRepository) ListSyncLogsByState(ctx context.Context, stateID uuid.UUID, limit, offset int32) ([]SyncLog, error) {
 	dbLogs, err := r.queries.ListSyncLogsByState(ctx, db.ListSyncLogsByStateParams{
-		SyncStateID: uuidToPgUUID(stateID),
+		SyncStateID: stateID,
 		Limit:       limit,
 		Offset:      offset,
 	})
@@ -651,12 +621,12 @@ func (r *SyncRepository) ListRecentSyncLogs(ctx context.Context, limit int32) ([
 
 // CountSyncLogsByState returns the count of sync logs for a specific state
 func (r *SyncRepository) CountSyncLogsByState(ctx context.Context, stateID uuid.UUID) (int64, error) {
-	return r.queries.CountSyncLogsByState(ctx, uuidToPgUUID(stateID))
+	return r.queries.CountSyncLogsByState(ctx, stateID)
 }
 
 // DeleteOldSyncLogs deletes sync logs older than the given time
 func (r *SyncRepository) DeleteOldSyncLogs(ctx context.Context, before time.Time) error {
-	return r.queries.DeleteOldSyncLogs(ctx, pgtype.Timestamptz{Time: before, Valid: true})
+	return r.queries.DeleteOldSyncLogs(ctx, &before)
 }
 
 // ListDueAccounts returns the (source, account_id) pairs of sync states
@@ -682,7 +652,7 @@ func (r *SyncRepository) ListDueAccounts(ctx context.Context, now time.Time) ([]
 // Called at the start of a retry attempt so that orphan rows from a prior
 // crashed run don't accumulate. Requires migration 037.
 func (r *SyncRepository) AbandonRunningLogsForState(ctx context.Context, stateID uuid.UUID) error {
-	return r.queries.AbandonRunningLogsForState(ctx, uuidToPgUUID(stateID))
+	return r.queries.AbandonRunningLogsForState(ctx, stateID)
 }
 
 // EnqueueAccountSyncIfNotInFlight atomically claims-and-enqueues the
@@ -760,7 +730,7 @@ func (r *SyncRepository) EnqueueAccountSyncIfNotInFlight(
 	// as a sqlc Queries so the check runs inside the enqueue tx.
 	cnt, err := db.New(tx).CountInFlightSyncJobs(ctx, db.CountInFlightSyncJobsParams{
 		Source:    source,
-		AccountID: stringToPgText(accountID),
+		AccountID: accountID,
 	})
 	if err != nil {
 		return false, fmt.Errorf("count in-flight sync jobs: %w", err)
@@ -848,8 +818,8 @@ func (r *SyncRepository) GetMacHostSyncCursor(ctx context.Context, source string
 	out := &MacHostCursor{
 		BackfillComplete: extractBackfillComplete(row.Metadata),
 	}
-	if row.SyncCursor.Valid {
-		out.Cursor = row.SyncCursor.String
+	if row.SyncCursor != nil {
+		out.Cursor = *row.SyncCursor
 	}
 	return out, nil
 }
@@ -916,14 +886,14 @@ func (r *SyncRepository) CommitMacHostCursor(ctx context.Context, params CommitM
 	q := db.New(tx)
 
 	// Stage A: lock host + read epoch.
-	epochRow, err := q.GetMacHostCursorEpoch(ctx, uuidToPgUUID(params.HostID))
+	epochRow, err := q.GetMacHostCursorEpoch(ctx, params.HostID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return db.ErrNotFound
 		}
 		return fmt.Errorf("read host cursor_epoch: %w", err)
 	}
-	if epochRow.ApiKeyRevokedAt.Valid {
+	if epochRow.ApiKeyRevokedAt != nil {
 		// Revoked between auth check and commit. The middleware would
 		// have caught this at the next request, but defending in depth
 		// inside the tx prevents committing a cursor for a revoked host.
@@ -943,8 +913,8 @@ func (r *SyncRepository) CommitMacHostCursor(ctx context.Context, params CommitM
 	}
 	currentCursor := ""
 	cursorRowFound := err == nil
-	if cursorRowFound && existing.SyncCursor.Valid {
-		currentCursor = existing.SyncCursor.String
+	if cursorRowFound && existing.SyncCursor != nil {
+		currentCursor = *existing.SyncCursor
 	}
 
 	// Epoch check AFTER the cursor read so the 409 body can include both.
@@ -967,10 +937,11 @@ func (r *SyncRepository) CommitMacHostCursor(ctx context.Context, params CommitM
 		// Stage B: INSERT path. ON CONFLICT DO NOTHING handles the
 		// concurrent-first-write race without aborting the tx (no
 		// 23505 raised).
+		hostIDStr := params.HostID.String()
 		inserted, insErr := q.InsertMacHostSyncCursor(ctx, db.InsertMacHostSyncCursorParams{
 			Source:           params.Source,
-			AccountID:        pgtype.Text{String: params.HostID.String(), Valid: true},
-			NewCursor:        pgtype.Text{String: params.NewCursor, Valid: true},
+			AccountID:        &hostIDStr,
+			NewCursor:        &params.NewCursor,
 			BackfillComplete: params.BackfillComplete,
 		})
 		if insErr != nil && !errors.Is(insErr, pgx.ErrNoRows) {
@@ -1002,7 +973,7 @@ func (r *SyncRepository) CommitMacHostCursor(ctx context.Context, params CommitM
 	}
 
 	updated, err := q.UpdateMacHostSyncCursor(ctx, db.UpdateMacHostSyncCursorParams{
-		NewCursor:        pgtype.Text{String: params.NewCursor, Valid: true},
+		NewCursor:        &params.NewCursor,
 		ID:               existing.ID,
 		BaseCursor:       params.BaseCursor,
 		BackfillComplete: params.BackfillComplete,
@@ -1039,10 +1010,10 @@ func readCursorForConflict(ctx context.Context, q db.Querier, params CommitMacHo
 		}
 		return "", fmt.Errorf("re-read mac_host cursor after CAS miss: %w", err)
 	}
-	if !latest.SyncCursor.Valid {
+	if latest.SyncCursor == nil {
 		return "", nil
 	}
-	return latest.SyncCursor.String, nil
+	return *latest.SyncCursor, nil
 }
 
 // DeleteMacHostSyncStatesTx removes all push-strategy external_sync_state
@@ -1162,11 +1133,11 @@ type SetSyncStateFreshnessForTestParams struct {
 // timestamps the watchdog evaluates against.
 func (r *SyncRepository) SetSyncStateFreshnessForTest(ctx context.Context, params SetSyncStateFreshnessForTestParams) error {
 	return r.queries.SetSyncStateFreshnessForTest(ctx, db.SetSyncStateFreshnessForTestParams{
-		ID:                   uuidToPgUUID(params.ID),
+		ID:                   params.ID,
 		Status:               string(params.Status),
-		LastSyncAt:           timeToPgTimestamptz(params.LastSyncAt),
-		LastSuccessfulSyncAt: timeToPgTimestamptz(params.LastSuccessfulSyncAt),
+		LastSyncAt:           params.LastSyncAt,
+		LastSuccessfulSyncAt: params.LastSuccessfulSyncAt,
 		ErrorCount:           params.ErrorCount,
-		ErrorMessage:         stringToPgText(params.ErrorMessage),
+		ErrorMessage:         params.ErrorMessage,
 	})
 }

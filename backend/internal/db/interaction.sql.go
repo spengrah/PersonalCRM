@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const AcquireSourceRefAggregateLock = `-- name: AcquireSourceRefAggregateLock :exec
@@ -35,7 +36,7 @@ SELECT COUNT(*) FROM interaction
 WHERE contact_id = $1 AND deleted_at IS NULL
 `
 
-func (q *Queries) CountContactInteractions(ctx context.Context, contactID pgtype.UUID) (int64, error) {
+func (q *Queries) CountContactInteractions(ctx context.Context, contactID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, CountContactInteractions, contactID)
 	var count int64
 	err := row.Scan(&count)
@@ -57,13 +58,13 @@ RETURNING id, contact_id, source, source_ref, occurred_at, description, created_
 `
 
 type CreateInteractionParams struct {
-	ContactID   pgtype.UUID        `json:"contact_id"`
-	Source      string             `json:"source"`
-	SourceRef   pgtype.Text        `json:"source_ref"`
-	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
-	Description pgtype.Text        `json:"description"`
-	Direction   interface{}        `json:"direction"`
-	VenueID     pgtype.UUID        `json:"venue_id"`
+	ContactID   uuid.UUID   `json:"contact_id"`
+	Source      string      `json:"source"`
+	SourceRef   *string     `json:"source_ref"`
+	OccurredAt  time.Time   `json:"occurred_at"`
+	Description *string     `json:"description"`
+	Direction   interface{} `json:"direction"`
+	VenueID     *uuid.UUID  `json:"venue_id"`
 }
 
 func (q *Queries) CreateInteraction(ctx context.Context, arg CreateInteractionParams) (*Interaction, error) {
@@ -99,9 +100,9 @@ LIMIT 1
 `
 
 type FindInteractionBySourceRefParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Source    string      `json:"source"`
-	SourceRef pgtype.Text `json:"source_ref"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Source    string    `json:"source"`
+	SourceRef *string   `json:"source_ref"`
 }
 
 // Find an existing interaction by contact, source, and source_ref (for deduplication)
@@ -135,11 +136,11 @@ LIMIT 1
 `
 
 type FindInteractionInWindowParams struct {
-	ContactID   pgtype.UUID        `json:"contact_id"`
-	Source      string             `json:"source"`
-	Direction   string             `json:"direction"`
-	WindowStart pgtype.Timestamptz `json:"window_start"`
-	WindowEnd   pgtype.Timestamptz `json:"window_end"`
+	ContactID   uuid.UUID `json:"contact_id"`
+	Source      string    `json:"source"`
+	Direction   string    `json:"direction"`
+	WindowStart time.Time `json:"window_start"`
+	WindowEnd   time.Time `json:"window_end"`
 }
 
 // Find an existing manual interaction within a time window for a given
@@ -184,12 +185,12 @@ LIMIT 1
 `
 
 type FindRecentInteractionBySourceAndDirectionParams struct {
-	ContactID       pgtype.UUID        `json:"contact_id"`
-	Source          string             `json:"source"`
-	Direction       string             `json:"direction"`
-	SourceRefPrefix string             `json:"source_ref_prefix"`
-	WindowStart     pgtype.Timestamptz `json:"window_start"`
-	WindowEnd       pgtype.Timestamptz `json:"window_end"`
+	ContactID       uuid.UUID `json:"contact_id"`
+	Source          string    `json:"source"`
+	Direction       string    `json:"direction"`
+	SourceRefPrefix string    `json:"source_ref_prefix"`
+	WindowStart     time.Time `json:"window_start"`
+	WindowEnd       time.Time `json:"window_end"`
 }
 
 // Source-neutral generalization of FindRecentTelegramInteraction.
@@ -248,11 +249,11 @@ LIMIT 1
 `
 
 type FindRecentOutboundInteractionBySourceParams struct {
-	ContactID       pgtype.UUID        `json:"contact_id"`
-	Source          string             `json:"source"`
-	SourceRefPrefix string             `json:"source_ref_prefix"`
-	WindowStart     pgtype.Timestamptz `json:"window_start"`
-	WindowEnd       pgtype.Timestamptz `json:"window_end"`
+	ContactID       uuid.UUID `json:"contact_id"`
+	Source          string    `json:"source"`
+	SourceRefPrefix string    `json:"source_ref_prefix"`
+	WindowStart     time.Time `json:"window_start"`
+	WindowEnd       time.Time `json:"window_end"`
 }
 
 // Source-neutral generalization of FindRecentOutboundTelegramInteraction.
@@ -299,10 +300,10 @@ LIMIT 1
 `
 
 type FindRecentOutboundTelegramInteractionParams struct {
-	ContactID       pgtype.UUID        `json:"contact_id"`
-	SourceRefPrefix pgtype.Text        `json:"source_ref_prefix"`
-	WindowStart     pgtype.Timestamptz `json:"window_start"`
-	WindowEnd       pgtype.Timestamptz `json:"window_end"`
+	ContactID       uuid.UUID `json:"contact_id"`
+	SourceRefPrefix *string   `json:"source_ref_prefix"`
+	WindowStart     time.Time `json:"window_start"`
+	WindowEnd       time.Time `json:"window_end"`
 }
 
 // Find the most recent outbound telegram interaction for a contact in a specific chat
@@ -344,11 +345,11 @@ LIMIT 1
 `
 
 type FindRecentTelegramInteractionParams struct {
-	ContactID       pgtype.UUID        `json:"contact_id"`
-	Direction       string             `json:"direction"`
-	SourceRefPrefix pgtype.Text        `json:"source_ref_prefix"`
-	WindowStart     pgtype.Timestamptz `json:"window_start"`
-	WindowEnd       pgtype.Timestamptz `json:"window_end"`
+	ContactID       uuid.UUID `json:"contact_id"`
+	Direction       string    `json:"direction"`
+	SourceRefPrefix *string   `json:"source_ref_prefix"`
+	WindowStart     time.Time `json:"window_start"`
+	WindowEnd       time.Time `json:"window_end"`
 }
 
 // Find the most recent telegram interaction for a contact in a specific chat
@@ -383,7 +384,7 @@ SELECT id, contact_id, source, source_ref, occurred_at, description, created_at,
 `
 
 // Interaction queries
-func (q *Queries) GetInteraction(ctx context.Context, id pgtype.UUID) (*Interaction, error) {
+func (q *Queries) GetInteraction(ctx context.Context, id uuid.UUID) (*Interaction, error) {
 	row := q.db.QueryRow(ctx, GetInteraction, id)
 	var i Interaction
 	err := row.Scan(
@@ -408,8 +409,8 @@ WHERE source = $1
 `
 
 type HardDeleteInteractionsBySourceRefPrefixParams struct {
-	Source          string      `json:"source"`
-	SourceRefPrefix pgtype.Text `json:"source_ref_prefix"`
+	Source          string  `json:"source"`
+	SourceRefPrefix *string `json:"source_ref_prefix"`
 }
 
 // Test-only: hard-deletes interactions whose source matches and source_ref
@@ -434,8 +435,8 @@ SELECT EXISTS (
 `
 
 type HasResponseAfterParams struct {
-	ContactID  pgtype.UUID        `json:"contact_id"`
-	OutreachAt pgtype.Timestamptz `json:"outreach_at"`
+	ContactID  uuid.UUID `json:"contact_id"`
+	OutreachAt time.Time `json:"outreach_at"`
 }
 
 // Returns TRUE if any later inbound/mutual interaction exists for the
@@ -457,9 +458,9 @@ LIMIT $2 OFFSET $3
 `
 
 type ListContactInteractionsParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	Limit     int32       `json:"limit"`
-	Offset    int32       `json:"offset"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Limit     int32     `json:"limit"`
+	Offset    int32     `json:"offset"`
 }
 
 func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error) {
@@ -506,7 +507,7 @@ ORDER BY source_ref
 // Used by the re-sync diff path in the meeting_note.recorded inline
 // handler to compute the (existing - desired) set that needs
 // soft-deleting.
-func (q *Queries) ListSessionAttributedInteractions(ctx context.Context, sourceRefPrefix pgtype.Text) ([]*Interaction, error) {
+func (q *Queries) ListSessionAttributedInteractions(ctx context.Context, sourceRefPrefix *string) ([]*Interaction, error) {
 	rows, err := q.db.Query(ctx, ListSessionAttributedInteractions, sourceRefPrefix)
 	if err != nil {
 		return nil, err
@@ -542,7 +543,7 @@ UPDATE interaction SET deleted_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
 `
 
-func (q *Queries) SoftDeleteInteraction(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) SoftDeleteInteraction(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, SoftDeleteInteraction, id)
 	return err
 }
@@ -561,12 +562,12 @@ RETURNING id, contact_id, source, source_ref, occurred_at, description, created_
 `
 
 type TestInsertInteractionParams struct {
-	ID         pgtype.UUID        `json:"id"`
-	ContactID  pgtype.UUID        `json:"contact_id"`
-	Source     string             `json:"source"`
-	SourceRef  pgtype.Text        `json:"source_ref"`
-	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
-	Direction  string             `json:"direction"`
+	ID         uuid.UUID `json:"id"`
+	ContactID  uuid.UUID `json:"contact_id"`
+	Source     string    `json:"source"`
+	SourceRef  *string   `json:"source_ref"`
+	OccurredAt time.Time `json:"occurred_at"`
+	Direction  string    `json:"direction"`
 }
 
 // Test-only: inserts an interaction with a caller-supplied id, source, and
@@ -608,9 +609,9 @@ RETURNING id, contact_id, source, source_ref, occurred_at, description, created_
 `
 
 type UpdateInteractionDirectionParams struct {
-	Direction  string             `json:"direction"`
-	OccurredAt pgtype.Timestamptz `json:"occurred_at"`
-	ID         pgtype.UUID        `json:"id"`
+	Direction  string    `json:"direction"`
+	OccurredAt time.Time `json:"occurred_at"`
+	ID         uuid.UUID `json:"id"`
 }
 
 // Promote an outbound interaction to mutual when a reply arrives (in-place update)
@@ -642,9 +643,9 @@ RETURNING id, contact_id, source, source_ref, occurred_at, description, created_
 `
 
 type UpdateInteractionTimestampParams struct {
-	OccurredAt  pgtype.Timestamptz `json:"occurred_at"`
-	Description pgtype.Text        `json:"description"`
-	ID          pgtype.UUID        `json:"id"`
+	OccurredAt  time.Time `json:"occurred_at"`
+	Description *string   `json:"description"`
+	ID          uuid.UUID `json:"id"`
 }
 
 // Extend an existing interaction's occurred_at and description (incremental coalescing)
@@ -674,8 +675,8 @@ WHERE id = $2
 `
 
 type UpdateInteractionVenueParams struct {
-	VenueID pgtype.UUID `json:"venue_id"`
-	ID      pgtype.UUID `json:"id"`
+	VenueID *uuid.UUID `json:"venue_id"`
+	ID      uuid.UUID  `json:"id"`
 }
 
 // Sets venue_id on an existing interaction. Used by the anarlog re-sync path so

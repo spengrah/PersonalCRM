@@ -13,7 +13,6 @@ import (
 	"personal-crm/backend/internal/service"
 	tgpkg "personal-crm/backend/internal/telegram"
 
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -55,7 +54,7 @@ func setupDiscoveryUpsertTest(t *testing.T) (
 		// (also used by the /test/cleanup handler) rather than raw SQL.
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
 			context.Background(),
-			pgtype.Text{String: prefix, Valid: true},
+			&prefix,
 		)
 		database.Close()
 	}
@@ -466,16 +465,16 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 	t.Cleanup(func() {
 		_, _ = database.Queries.DeleteTelegramMessagesByPeerUserID(
 			ctx,
-			pgtype.Int8{Int64: testPeerID, Valid: true},
+			ptrInt64(testPeerID),
 		)
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
 			ctx,
-			pgtype.Text{String: peerStr, Valid: true},
+			&peerStr,
 		)
 		// External_identity row created by MatchOrCreate — also keyed by source_id.
 		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(
 			ctx,
-			pgtype.Text{String: peerStr, Valid: true},
+			&peerStr,
 		)
 	})
 

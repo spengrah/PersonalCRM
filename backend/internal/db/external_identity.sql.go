@@ -7,8 +7,9 @@ package db
 
 import (
 	"context"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const BulkLinkIdentitiesToContact = `-- name: BulkLinkIdentitiesToContact :exec
@@ -21,10 +22,10 @@ WHERE id = ANY($1::uuid[])
 `
 
 type BulkLinkIdentitiesToContactParams struct {
-	Column1         []pgtype.UUID `json:"column_1"`
-	ContactID       pgtype.UUID   `json:"contact_id"`
-	MatchType       pgtype.Text   `json:"match_type"`
-	MatchConfidence pgtype.Float8 `json:"match_confidence"`
+	Column1         []uuid.UUID `json:"column_1"`
+	ContactID       *uuid.UUID  `json:"contact_id"`
+	MatchType       *string     `json:"match_type"`
+	MatchConfidence *float64    `json:"match_confidence"`
 }
 
 func (q *Queries) BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error {
@@ -63,7 +64,7 @@ const DeleteIdentitiesForContact = `-- name: DeleteIdentitiesForContact :exec
 DELETE FROM external_identity WHERE contact_id = $1
 `
 
-func (q *Queries) DeleteIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) error {
+func (q *Queries) DeleteIdentitiesForContact(ctx context.Context, contactID *uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteIdentitiesForContact, contactID)
 	return err
 }
@@ -72,7 +73,7 @@ const DeleteIdentity = `-- name: DeleteIdentity :exec
 DELETE FROM external_identity WHERE id = $1
 `
 
-func (q *Queries) DeleteIdentity(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) DeleteIdentity(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteIdentity, id)
 	return err
 }
@@ -213,7 +214,7 @@ WHERE id = $1
 `
 
 // External identity queries for cross-platform contact identity matching
-func (q *Queries) GetIdentityByID(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error) {
+func (q *Queries) GetIdentityByID(ctx context.Context, id uuid.UUID) (*ExternalIdentity, error) {
 	row := q.db.QueryRow(ctx, GetIdentityByID, id)
 	var i ExternalIdentity
 	err := row.Scan(
@@ -279,10 +280,10 @@ RETURNING id, identifier, identifier_type, raw_identifier, source, source_id, co
 `
 
 type LinkIdentityToContactParams struct {
-	ID              pgtype.UUID   `json:"id"`
-	ContactID       pgtype.UUID   `json:"contact_id"`
-	MatchType       pgtype.Text   `json:"match_type"`
-	MatchConfidence pgtype.Float8 `json:"match_confidence"`
+	ID              uuid.UUID  `json:"id"`
+	ContactID       *uuid.UUID `json:"contact_id"`
+	MatchType       *string    `json:"match_type"`
+	MatchConfidence *float64   `json:"match_confidence"`
 }
 
 func (q *Queries) LinkIdentityToContact(ctx context.Context, arg LinkIdentityToContactParams) (*ExternalIdentity, error) {
@@ -366,7 +367,7 @@ WHERE contact_id = $1
 ORDER BY source, identifier_type
 `
 
-func (q *Queries) ListIdentitiesForContact(ctx context.Context, contactID pgtype.UUID) ([]*ExternalIdentity, error) {
+func (q *Queries) ListIdentitiesForContact(ctx context.Context, contactID *uuid.UUID) ([]*ExternalIdentity, error) {
 	rows, err := q.db.Query(ctx, ListIdentitiesForContact, contactID)
 	if err != nil {
 		return nil, err
@@ -458,7 +459,7 @@ WHERE id = $1
 RETURNING id, identifier, identifier_type, raw_identifier, source, source_id, contact_id, match_type, match_confidence, display_name, last_seen_at, message_count, created_at, updated_at
 `
 
-func (q *Queries) UnlinkIdentityFromContact(ctx context.Context, id pgtype.UUID) (*ExternalIdentity, error) {
+func (q *Queries) UnlinkIdentityFromContact(ctx context.Context, id uuid.UUID) (*ExternalIdentity, error) {
 	row := q.db.QueryRow(ctx, UnlinkIdentityFromContact, id)
 	var i ExternalIdentity
 	err := row.Scan(
@@ -490,9 +491,9 @@ RETURNING id, identifier, identifier_type, raw_identifier, source, source_id, co
 `
 
 type UpdateIdentityMessageCountParams struct {
-	ID           pgtype.UUID        `json:"id"`
-	MessageCount pgtype.Int4        `json:"message_count"`
-	LastSeenAt   pgtype.Timestamptz `json:"last_seen_at"`
+	ID           uuid.UUID  `json:"id"`
+	MessageCount *int32     `json:"message_count"`
+	LastSeenAt   *time.Time `json:"last_seen_at"`
 }
 
 func (q *Queries) UpdateIdentityMessageCount(ctx context.Context, arg UpdateIdentityMessageCountParams) (*ExternalIdentity, error) {
@@ -536,17 +537,17 @@ RETURNING id, identifier, identifier_type, raw_identifier, source, source_id, co
 `
 
 type UpsertIdentityParams struct {
-	Identifier      string             `json:"identifier"`
-	IdentifierType  string             `json:"identifier_type"`
-	RawIdentifier   pgtype.Text        `json:"raw_identifier"`
-	Source          string             `json:"source"`
-	SourceID        pgtype.Text        `json:"source_id"`
-	ContactID       pgtype.UUID        `json:"contact_id"`
-	MatchType       pgtype.Text        `json:"match_type"`
-	MatchConfidence pgtype.Float8      `json:"match_confidence"`
-	DisplayName     pgtype.Text        `json:"display_name"`
-	LastSeenAt      pgtype.Timestamptz `json:"last_seen_at"`
-	MessageCount    pgtype.Int4        `json:"message_count"`
+	Identifier      string     `json:"identifier"`
+	IdentifierType  string     `json:"identifier_type"`
+	RawIdentifier   *string    `json:"raw_identifier"`
+	Source          string     `json:"source"`
+	SourceID        *string    `json:"source_id"`
+	ContactID       *uuid.UUID `json:"contact_id"`
+	MatchType       *string    `json:"match_type"`
+	MatchConfidence *float64   `json:"match_confidence"`
+	DisplayName     *string    `json:"display_name"`
+	LastSeenAt      *time.Time `json:"last_seen_at"`
+	MessageCount    *int32     `json:"message_count"`
 }
 
 func (q *Queries) UpsertIdentity(ctx context.Context, arg UpsertIdentityParams) (*ExternalIdentity, error) {

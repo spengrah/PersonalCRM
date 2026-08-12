@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,14 +25,15 @@ func TestConvertDbEvent_FullRow(t *testing.T) {
 	id := uuid.New()
 	observed := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 	payload := []byte(`{"version":1}`)
+	sourceID := "tg:1:2:42"
 
 	row := &db.Event{
-		ID:         pgtype.UUID{Bytes: id, Valid: true},
+		ID:         id,
 		Source:     "telegram",
-		SourceID:   pgtype.Text{String: "tg:1:2:42", Valid: true},
+		SourceID:   &sourceID,
 		Kind:       "message.received",
 		Payload:    payload,
-		ObservedAt: pgtype.Timestamptz{Time: observed, Valid: true},
+		ObservedAt: observed,
 	}
 
 	env := convertDbEvent(row)
@@ -49,44 +49,46 @@ func TestConvertDbEvent_FullRow(t *testing.T) {
 // to an empty string on the envelope.
 func TestConvertDbEvent_NullSourceID(t *testing.T) {
 	row := &db.Event{
-		ID:         pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		ID:         uuid.New(),
 		Source:     "manual",
-		SourceID:   pgtype.Text{Valid: false},
+		SourceID:   nil,
 		Kind:       "interaction.manual",
 		Payload:    []byte(`{"version":1}`),
-		ObservedAt: pgtype.Timestamptz{Time: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Valid: true},
+		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
 	env := convertDbEvent(row)
 	require.Equal(t, "", env.SourceID)
 }
 
-// TestConvertDbEvent_InvalidTimestamp asserts that an invalid observed_at
-// column (Valid=false) yields a zero-value time.Time on the envelope.
-// Safety net: the DB column is NOT NULL in the migration, so this should
-// never happen in practice, but covering the path prevents a nil panic if
-// sqlc semantics ever shift.
+// TestConvertDbEvent_InvalidTimestamp asserts that an omitted observed_at
+// column yields a zero-value time.Time on the envelope. The sqlc type
+// override maps NOT NULL timestamptz to plain time.Time, so there is no
+// more Valid=false state to construct — the zero time.Time is now the
+// direct representation of "no value set" and this test covers that the
+// conversion doesn't panic on it.
 func TestConvertDbEvent_InvalidTimestamp(t *testing.T) {
 	row := &db.Event{
-		ID:         pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		Source:     "telegram",
-		Kind:       "message.received",
-		Payload:    []byte(`{"version":1}`),
-		ObservedAt: pgtype.Timestamptz{Valid: false},
+		ID:      uuid.New(),
+		Source:  "telegram",
+		Kind:    "message.received",
+		Payload: []byte(`{"version":1}`),
+		// ObservedAt intentionally omitted (zero time.Time).
 	}
 	env := convertDbEvent(row)
 	require.True(t, env.ObservedAt.IsZero())
 }
 
-// TestConvertDbEvent_InvalidID asserts that an invalid id column yields
-// uuid.Nil on the envelope. Same defensive-only rationale as the timestamp
-// test above.
+// TestConvertDbEvent_InvalidID asserts that an omitted id column yields
+// uuid.Nil on the envelope. Same rationale as the timestamp test above —
+// the override maps NOT NULL uuid to plain uuid.UUID, so uuid.Nil is now
+// the direct representation of "no value set".
 func TestConvertDbEvent_InvalidID(t *testing.T) {
 	row := &db.Event{
-		ID:         pgtype.UUID{Valid: false},
+		// ID intentionally omitted (uuid.Nil).
 		Source:     "telegram",
 		Kind:       "message.received",
 		Payload:    []byte(`{"version":1}`),
-		ObservedAt: pgtype.Timestamptz{Time: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC), Valid: true},
+		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
 	env := convertDbEvent(row)
 	require.Equal(t, uuid.Nil, env.ID)

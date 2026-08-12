@@ -8,7 +8,7 @@ package db
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
 )
 
 const AddContactTag = `-- name: AddContactTag :exec
@@ -17,8 +17,8 @@ ON CONFLICT (contact_id, tag_id) DO NOTHING
 `
 
 type AddContactTagParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	TagID     pgtype.UUID `json:"tag_id"`
+	ContactID uuid.UUID `json:"contact_id"`
+	TagID     uuid.UUID `json:"tag_id"`
 }
 
 func (q *Queries) AddContactTag(ctx context.Context, arg AddContactTagParams) error {
@@ -49,8 +49,8 @@ INSERT INTO tag (name, color) VALUES ($1, $2) RETURNING id, name, color, created
 `
 
 type CreateTagParams struct {
-	Name  string      `json:"name"`
-	Color pgtype.Text `json:"color"`
+	Name  string  `json:"name"`
+	Color *string `json:"color"`
 }
 
 func (q *Queries) CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error) {
@@ -69,7 +69,7 @@ const DeleteTag = `-- name: DeleteTag :exec
 DELETE FROM tag WHERE id = $1
 `
 
-func (q *Queries) DeleteTag(ctx context.Context, id pgtype.UUID) error {
+func (q *Queries) DeleteTag(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, DeleteTag, id)
 	return err
 }
@@ -81,7 +81,7 @@ WHERE ct.contact_id = $1
 ORDER BY t.name ASC
 `
 
-func (q *Queries) GetContactTags(ctx context.Context, contactID pgtype.UUID) ([]*Tag, error) {
+func (q *Queries) GetContactTags(ctx context.Context, contactID uuid.UUID) ([]*Tag, error) {
 	rows, err := q.db.Query(ctx, GetContactTags, contactID)
 	if err != nil {
 		return nil, err
@@ -112,7 +112,7 @@ SELECT id, name, color, created_at FROM tag WHERE id = $1
 `
 
 // Tag queries
-func (q *Queries) GetTag(ctx context.Context, id pgtype.UUID) (*Tag, error) {
+func (q *Queries) GetTag(ctx context.Context, id uuid.UUID) (*Tag, error) {
 	row := q.db.QueryRow(ctx, GetTag, id)
 	var i Tag
 	err := row.Scan(
@@ -207,8 +207,8 @@ WHERE contact_id = $1 AND tag_id = $2
 `
 
 type RemoveContactTagParams struct {
-	ContactID pgtype.UUID `json:"contact_id"`
-	TagID     pgtype.UUID `json:"tag_id"`
+	ContactID uuid.UUID `json:"contact_id"`
+	TagID     uuid.UUID `json:"tag_id"`
 }
 
 func (q *Queries) RemoveContactTag(ctx context.Context, arg RemoveContactTagParams) error {
@@ -225,9 +225,9 @@ RETURNING id, name, color, created_at
 `
 
 type UpdateTagParams struct {
-	ID    pgtype.UUID `json:"id"`
-	Name  string      `json:"name"`
-	Color pgtype.Text `json:"color"`
+	ID    uuid.UUID `json:"id"`
+	Name  string    `json:"name"`
+	Color *string   `json:"color"`
 }
 
 func (q *Queries) UpdateTag(ctx context.Context, arg UpdateTagParams) (*Tag, error) {
