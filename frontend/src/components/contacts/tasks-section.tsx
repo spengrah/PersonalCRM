@@ -32,6 +32,10 @@ interface TasksSectionProps {
   completedTasks: ContactTask[]
   loadingActive: boolean
   loadingCompleted: boolean
+  // Controlled by the parent page so its page-level keyboard handler can gate
+  // on whether this modal is open too (see the contact detail page's isModalOpen).
+  isAddModalOpen: boolean
+  onAddModalOpenChange: (open: boolean) => void
 }
 
 export function TasksSection({
@@ -41,8 +45,9 @@ export function TasksSection({
   completedTasks,
   loadingActive,
   loadingCompleted,
+  isAddModalOpen,
+  onAddModalOpenChange,
 }: TasksSectionProps) {
-  const [showAddModal, setShowAddModal] = useState(false)
   const [showCompleted, setShowCompleted] = useState(false)
 
   const isLoading = loadingActive || (showCompleted && loadingCompleted)
@@ -56,7 +61,7 @@ export function TasksSection({
           <ListTodo className="w-5 h-5 text-gray-400" />
           <h3 className="text-lg leading-6 font-medium text-gray-900">Tasks</h3>
         </div>
-        <Button variant="outline" size="sm" onClick={() => setShowAddModal(true)}>
+        <Button variant="outline" size="sm" onClick={() => onAddModalOpenChange(true)}>
           <Plus className="w-4 h-4 mr-1" />
           Add
         </Button>
@@ -106,11 +111,11 @@ export function TasksSection({
       </div>
 
       {/* Add Task Modal */}
-      {showAddModal && (
+      {isAddModalOpen && (
         <AddTaskModal
           contactId={contactId}
           contactName={contactName}
-          onClose={() => setShowAddModal(false)}
+          onClose={() => onAddModalOpenChange(false)}
         />
       )}
     </section>

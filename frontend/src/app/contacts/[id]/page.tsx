@@ -115,6 +115,7 @@ export default function ContactDetailPage() {
   const [notesOverflowing, setNotesOverflowing] = useState(false)
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(action === 'merge')
   const [isLogModalOpen, setIsLogModalOpen] = useState(false)
+  const [isAddTaskModalOpen, setIsAddTaskModalOpen] = useState(false)
 
   // Clear the action param from URL after consuming it (prevents re-triggering on refresh)
   useEffect(() => {
@@ -252,8 +253,14 @@ export default function ContactDetailPage() {
     }
   }, [navigationIds, currentIndex, prefetchContact])
 
-  // Handle Enter key (toggle edit mode) and Escape key (discard/return to list)
-  const isModalOpen = isMergeModalOpen || isLogModalOpen
+  // Handle Enter key (toggle edit mode) and Escape key (discard/return to list).
+  // Gated on whether a modal is actually MOUNTED, not just requested: merge and
+  // log-interaction only render their modal once `contact` has loaded (matching
+  // their own render conditions below), so a stale `isMergeModalOpen` from a
+  // `?action=merge` URL on a not-found/loading contact must not suppress Escape
+  // on that page — nothing would be there to dismiss it.
+  const isModalOpen =
+    (Boolean(contact) && (isMergeModalOpen || isLogModalOpen)) || isAddTaskModalOpen
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       // An open modal owns the keyboard: it registers its own window-level
@@ -770,6 +777,8 @@ export default function ContactDetailPage() {
             completedTasks={completedTasks}
             loadingActive={loadingActiveTasks}
             loadingCompleted={loadingCompletedTasks}
+            isAddModalOpen={isAddTaskModalOpen}
+            onAddModalOpenChange={setIsAddTaskModalOpen}
           />
         </div>
 

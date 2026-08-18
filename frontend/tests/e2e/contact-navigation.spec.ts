@@ -430,6 +430,33 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     expect((await stored.json()).data.full_name).toBe(fullName)
   })
 
+  test('Escape closes the Add Task modal in place without navigating away', async ({ page }) => {
+    // spec: CON-040.escape-discards-edit-mode
+    // Focus a non-input control (a kind toggle button) before Escape, so this
+    // is NOT covered by the input-focus guard — it isolates the modal-open gate.
+    const seeded = await testApi.seedBehavior('CON-040')
+    const contactId = seeded.entities['a'].id
+    const fullName = seeded.entities['a'].name
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    const detailUrl = page.url()
+
+    await page.getByRole('button', { name: 'Add' }).click()
+    await expect(page.getByRole('heading', { name: /Add Task for/ })).toBeVisible({
+      timeout: 10000,
+    })
+    await page.getByRole('button', { name: 'Reach out' }).click()
+
+    await page.keyboard.press('Escape')
+
+    // Modal closes; the page stays put — no back-to-list navigation.
+    await expect(page.getByRole('heading', { name: /Add Task for/ })).not.toBeVisible()
+    await expect(page).toHaveURL(detailUrl)
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
+  })
+
   test('arrows are inert while focus is in an input outside edit mode', async ({ page }) => {
     // spec: CON-040.arrows-inert-while-editing
     // The Log Interaction modal keeps keyboard nav ENABLED (it is not edit
