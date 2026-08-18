@@ -246,7 +246,7 @@ dev-stop:
 	@# Kill backend by port. `go run ./cmd/crm-api` names the child binary
 	@# 'crm-api' (so `pkill -f crm-api` reaches it), but port-kill is the
 	@# reliable mechanism regardless of process name.
-	@lsof -ti:8080 | xargs kill -9 2>/dev/null || true
+	@$(REPO_ROOT)/scripts/port-pids.sh 8080 | xargs kill -9 2>/dev/null || true
 	@pkill -f "next dev" || true
 	@pkill -f "node.*next" || true
 	@if [ -f logs/frontend-dev.pid ]; then kill $$(cat logs/frontend-dev.pid) 2>/dev/null || true; fi
@@ -266,9 +266,9 @@ dev-api-stop:
 	@# pkill above reaches it. Kill by listening port 8080 too, then wait for
 	@# the port to be released — `make dev-seed` + the seed CLI rely on the
 	@# backend's River workers being genuinely gone.
-	@lsof -ti tcp:8080 | xargs kill -9 2>/dev/null || true
+	@$(REPO_ROOT)/scripts/port-pids.sh 8080 | xargs kill -9 2>/dev/null || true
 	@for i in 1 2 3 4 5; do \
-	  if lsof -ti tcp:8080 >/dev/null 2>&1; then \
+	  if $(REPO_ROOT)/scripts/port-pids.sh 8080 >/dev/null 2>&1; then \
 	    sleep 0.4; \
 	  else \
 	    break; \
@@ -277,7 +277,7 @@ dev-api-stop:
 	@# Fail loudly if the port is still bound — make dev-seed relies on the
 	@# backend being genuinely gone before it seeds (a live backend would race
 	@# the seed's River client). A misleading "freed" message would hide that.
-	@if lsof -ti tcp:8080 >/dev/null 2>&1; then \
+	@if $(REPO_ROOT)/scripts/port-pids.sh 8080 >/dev/null 2>&1; then \
 	  echo "❌ Backend dev server still bound on port 8080 after kill — refusing to report stopped"; \
 	  exit 1; \
 	fi
@@ -409,12 +409,12 @@ test-e2e-diff: e2e-db
 # the E2E database, so the script's reconnect guard would refuse the run
 # instead of this cleanup silently fixing it. Only a foreign API on some OTHER
 # port — another worktree's stack — should trip that refusal.
-# lsof is absent in some dev containers; there these kills are no-ops and a
-# stale backend has to be stopped by hand (the guard then says which process).
+# port-pids.sh falls back to ss/fuser//proc/net/tcp where lsof is absent
+# (e.g. minimal ARM dev containers), so these kills work everywhere.
 e2e-ports-free:
 	@echo "Cleaning up any conflicting processes..."
-	@-lsof -ti:$(E2E_FRONTEND_PORT) | xargs kill -9 2>/dev/null || true
-	@-lsof -ti:$(E2E_BACKEND_PORT) | xargs kill -9 2>/dev/null || true
+	@-$(REPO_ROOT)/scripts/port-pids.sh $(E2E_FRONTEND_PORT) | xargs kill -9 2>/dev/null || true
+	@-$(REPO_ROOT)/scripts/port-pids.sh $(E2E_BACKEND_PORT) | xargs kill -9 2>/dev/null || true
 	@sleep 1
 
 e2e-db: e2e-ports-free
@@ -953,10 +953,10 @@ start-local:
 stop:
 	@echo "🛑 Stopping Personal CRM..."
 	@# Kill backend by port and name (prod uses compiled crm-api binary)
-	@lsof -ti:8080 | xargs kill -9 2>/dev/null || true
+	@$(REPO_ROOT)/scripts/port-pids.sh 8080 | xargs kill -9 2>/dev/null || true
 	@pkill -f crm-api || true
 	@# Kill frontend by port (process is 'next-server', not 'next start')
-	@lsof -ti:3001 | xargs kill -9 2>/dev/null || true
+	@$(REPO_ROOT)/scripts/port-pids.sh 3001 | xargs kill -9 2>/dev/null || true
 	@make docker-down
 	@echo "✅ Personal CRM stopped"
 
