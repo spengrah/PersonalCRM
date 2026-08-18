@@ -71,12 +71,12 @@ export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalPr
 
   return (
     <div
-      className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-start justify-center pt-20 px-4"
+      className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-start justify-center overflow-y-auto pt-4 sm:pt-20 px-4"
       onClick={e => {
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className="bg-white rounded-lg shadow-xl max-w-lg w-full">
+      <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mb-4">
         {/* Header */}
         <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
           <h2 className="text-lg font-medium text-gray-900">Add Task for {contactName}</h2>

@@ -64,9 +64,9 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
         getUrgencyColor(contact.days_overdue)
       )}
     >
-      <div className="flex items-start justify-between">
-        <div className="flex-1">
-          <div className="flex items-center space-x-3 mb-3">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-3">
             <div
               role="img"
               aria-label={urgency.label}
@@ -121,7 +121,7 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
           </div>
         </div>
 
-        <div className="flex items-center space-x-3 ml-6">
+        <div className="flex items-center mt-2 sm:mt-0 sm:ml-6">
           <Button
             size="sm"
             onClick={handleMarkContacted}
@@ -146,7 +146,7 @@ function EmptyState() {
         You don&apos;t have any overdue contacts right now. You&apos;re doing a great job staying
         connected with your network!
       </p>
-      <div className="flex items-center justify-center space-x-4">
+      <div className="flex flex-wrap items-center justify-center gap-4">
         <Link href="/contacts">
           <Button variant="outline">
             <User className="w-4 h-4 mr-2" />
@@ -187,7 +187,7 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-gray-50">
       <Navigation />
 
-      <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="md:flex md:items-center md:justify-between mb-8">
           <div className="flex-1 min-w-0">
@@ -212,7 +212,7 @@ export default function DashboardPage() {
 
         {/* Sort Controls */}
         {overdueContacts && overdueContacts.length > 0 && (
-          <div className="mb-6 flex items-center space-x-4">
+          <div className="mb-6 flex flex-wrap items-center gap-x-4 gap-y-2">
             <span className="text-sm font-medium text-gray-700">Sort by:</span>
             <div className="flex space-x-2">
               <button

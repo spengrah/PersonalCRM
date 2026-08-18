@@ -69,7 +69,7 @@ function CandidateTable({
   onPick: (c: NeedsAttentionCandidate) => void
 }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-gray-200">
+    <div className="overflow-x-auto rounded-lg border border-gray-200">
       <table className="w-full text-[0.8125rem]">
         <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
           <tr>

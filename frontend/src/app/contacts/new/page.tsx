@@ -34,7 +34,7 @@ export default function NewContactPage() {
     <div className="min-h-screen bg-gray-50">
       <Navigation />
 
-      <div className="max-w-3xl mx-auto py-6 sm:px-6 lg:px-8">
+      <div className="max-w-3xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
         <div className="md:flex md:items-center md:justify-between mb-6">
           <div className="flex-1 min-w-0">
             <h2 className="text-2xl font-bold leading-normal text-gray-900 sm:text-3xl sm:truncate">

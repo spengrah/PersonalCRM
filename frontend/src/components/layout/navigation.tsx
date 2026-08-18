@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useIsMutating } from '@tanstack/react-query'
@@ -19,6 +20,7 @@ const navigation = [
 
 export function Navigation() {
   const pathname = usePathname()
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const { data: syncStates } = useSyncStates()
   const isSyncMutating = useIsMutating({ mutationKey: syncMutationKey })
 
@@ -74,9 +76,13 @@ export function Navigation() {
             <div className="sm:hidden">
               <button
                 type="button"
+                aria-expanded={isMobileMenuOpen}
+                aria-controls="mobile-menu"
+                onClick={() => setIsMobileMenuOpen(open => !open)}
                 className="inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100"
               >
-                <span className="sr-only">Open main menu</span>
+                {/* Constant name per the ARIA disclosure pattern; aria-expanded conveys state */}
+                <span className="sr-only">Main menu</span>
                 <svg
                   className="block h-6 w-6"
                   fill="none"
@@ -87,7 +93,7 @@ export function Navigation() {
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     strokeWidth={2}
-                    d="M4 6h16M4 12h16M4 18h16"
+                    d={isMobileMenuOpen ? 'M6 18L18 6M6 6l12 12' : 'M4 6h16M4 12h16M4 18h16'}
                   />
                 </svg>
               </button>
@@ -95,6 +101,41 @@ export function Navigation() {
           </div>
         </div>
       </div>
+
+      {/* Mobile menu panel */}
+      {isMobileMenuOpen && (
+        <div id="mobile-menu" className="sm:hidden border-t border-gray-200">
+          <div className="space-y-1 pb-3 pt-2">
+            {navigation.map(item => {
+              const isActive = pathname.startsWith(item.href)
+              const Icon = item.icon
+
+              return (
+                <Link
+                  key={item.name}
+                  href={item.href}
+                  aria-current={isActive ? 'page' : undefined}
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className={clsx(
+                    'flex items-center border-l-4 py-2 pl-3 pr-4 text-base font-medium',
+                    isActive
+                      ? 'border-blue-500 bg-blue-50 text-blue-700'
+                      : 'border-transparent text-gray-500 hover:border-gray-300 hover:bg-gray-50 hover:text-gray-700'
+                  )}
+                >
+                  <Icon
+                    className={clsx(
+                      'w-5 h-5 mr-3',
+                      item.name === 'Imports' && getSyncIconClasses(syncStatus)
+                    )}
+                  />
+                  {item.name}
+                </Link>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </nav>
   )
 }

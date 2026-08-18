@@ -68,7 +68,7 @@ export function MethodSelector({
   return (
     <div
       className={clsx(
-        'flex items-center gap-3 p-3 rounded-lg border transition-colors',
+        'flex flex-wrap items-center gap-3 p-3 rounded-lg border transition-colors',
         stateClasses,
         !selected && 'opacity-60'
       )}
@@ -102,8 +102,9 @@ export function MethodSelector({
         )}
       </div>
 
-      {/* Value */}
-      <div className="flex-1 min-w-0">
+      {/* Value — min width keeps it legible; narrower rows wrap the
+          type/star/badge group onto a second line instead. */}
+      <div className="flex-1 min-w-[8rem]">
         <span className="text-sm text-gray-900 truncate block">{value}</span>
       </div>
 

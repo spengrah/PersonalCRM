@@ -31,8 +31,10 @@ behaviors:
         text: the link matching the current section is visually marked active
       - key: navigation-bar-stays-visible
         text: the navigation bar stays visible while the page scrolls (sticky)
-    provenance: [components/layout/navigation.tsx, dashboard.spec.ts]
-    notes: The bar also hosts a time-acceleration control and an aggregate sync-status indicator on the imports link — those belong to the settings and imports domains respectively. The birthdays surface itself is CON-045. App-shell nav renders on every primary surface, not only the dashboard; it is captured here because no dedicated navigation domain exists. Scoped to wide (>= sm) viewports deliberately — at narrow (below-sm) widths the link list is hidden (`hidden sm:flex`) and collapses to a menu button that is currently non-functional (no open/close state, no menu panel rendered), so navigation is not reachable on mobile. That mobile gap is a known bug, not claimed as working here.
+      - key: narrow-viewport-menu
+        text: at narrow (below-sm) viewports, a menu button opens a disclosure panel with the same five section links; choosing one navigates to that section and closes the panel
+    provenance: [components/layout/navigation.tsx, dashboard.spec.ts, navigation-mobile.spec.ts]
+    notes: The bar also hosts a time-acceleration control and an aggregate sync-status indicator on the imports link — those belong to the settings and imports domains respectively. The birthdays surface itself is CON-045. App-shell nav renders on every primary surface, not only the dashboard; it is captured here because no dedicated navigation domain exists. At narrow (below-sm) widths the inline link list is hidden (`hidden sm:flex`) and navigation happens through the hamburger disclosure panel instead.
 
   - id: DSH-003
     title: The dashboard always offers a path to add or browse contacts

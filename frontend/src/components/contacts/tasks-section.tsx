@@ -204,7 +204,7 @@ function TaskRow({ task, contactId, completed }: TaskRowProps) {
         href={todoistUrl}
         target="_blank"
         rel="noopener noreferrer"
-        className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-gray-600"
+        className="flex-shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity text-gray-400 hover:text-gray-600"
         title="Open in Todoist"
       >
         <ExternalLink className="w-4 h-4" />
@@ -214,7 +214,7 @@ function TaskRow({ task, contactId, completed }: TaskRowProps) {
       <button
         onClick={handleUnlink}
         disabled={deleteTaskLink.isPending}
-        className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 disabled:opacity-50"
+        className="flex-shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity text-gray-400 hover:text-red-500 disabled:opacity-50"
         title="Remove from CRM (keeps in Todoist)"
       >
         <X className="w-4 h-4" />

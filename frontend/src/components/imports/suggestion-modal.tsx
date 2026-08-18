@@ -805,7 +805,7 @@ function ContactCandidateResolver({
         role="dialog"
         aria-modal="true"
         aria-label="Resolve import candidate"
-        className="relative top-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white overflow-hidden"
+        className="relative my-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white overflow-hidden"
       >
         {/* Navigation header */}
         <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b">
@@ -897,7 +897,7 @@ function ContactCandidateResolver({
                     >
                       <span className="truncate">{editedName || displayName}</span>
                       <svg
-                        className="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                        className="w-4 h-4 text-gray-400 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -1128,7 +1128,7 @@ function ContactCandidateResolver({
         </div>
 
         {/* Footer actions */}
-        <div className="px-6 py-4 bg-gray-50 border-t flex items-center justify-between">
+        <div className="px-6 py-4 bg-gray-50 border-t flex flex-wrap items-center justify-between gap-2">
           <Button
             variant="ghost"
             onClick={handleIgnore}
