@@ -2,6 +2,7 @@ import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 import { importsApi } from '@/lib/imports-api'
 import { importKeys, invalidateFor } from '@/lib/query-invalidation'
 import { useRegisterRematchJob } from '@/components/providers/rematch-jobs-provider'
+import { staleTime } from '@/lib/query-client'
 import type {
   SuggestionsListParams,
   ResolveMethodSuggestionsRequest,
@@ -15,7 +16,7 @@ export function useSuggestions(params: SuggestionsListParams = {}) {
     queryKey: importKeys.suggestions(params),
     queryFn: () => importsApi.getSuggestions(params),
     placeholderData: keepPreviousData,
-    staleTime: 1000 * 60 * 2, // 2 minutes
+    staleTime: staleTime(1000 * 60 * 2), // 2 minutes
   })
 }
 

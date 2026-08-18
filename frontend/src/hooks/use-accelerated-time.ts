@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { systemApi } from '@/lib/system-api'
 import { systemKeys } from '@/lib/query-keys'
 import type { SetAccelerationRequest } from '@/types/system'
+import { staleTime } from '@/lib/query-client'
 
 // Re-export systemKeys for backward compatibility
 export { systemKeys }
@@ -27,7 +28,7 @@ export function useAcceleratedTime() {
   } = useQuery({
     queryKey: systemKeys.time(),
     queryFn: systemApi.getSystemTime,
-    staleTime: 1000 * 60 * 5, // 5 minutes when not accelerated
+    staleTime: staleTime(1000 * 60 * 5), // 5 minutes when not accelerated
     // Only poll when time is accelerated (for dev/testing)
     // In production on Pi, time won't be accelerated, so no polling
     refetchInterval: query => {

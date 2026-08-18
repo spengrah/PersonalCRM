@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { importsApi } from '@/lib/imports-api'
 import { contactKeys, importKeys, invalidateFor } from '@/lib/query-invalidation'
 import { useRegisterRematchJob } from '@/components/providers/rematch-jobs-provider'
+import { staleTime } from '@/lib/query-client'
 import type {
   ImportCandidatesListParams,
   ImportContactRequest,
@@ -16,7 +17,7 @@ export function useImportCandidates(params: ImportCandidatesListParams = {}) {
   return useQuery({
     queryKey: importKeys.list(params),
     queryFn: () => importsApi.getCandidates(params),
-    staleTime: 1000 * 60 * 2, // 2 minutes
+    staleTime: staleTime(1000 * 60 * 2), // 2 minutes
   })
 }
 

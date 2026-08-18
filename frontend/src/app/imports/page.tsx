@@ -45,6 +45,7 @@ import { sourceAllowsImport } from '@/lib/candidate-actions'
 import { candidateEvidenceLabel } from '@/lib/candidate-evidence'
 import { importsApi } from '@/lib/imports-api'
 import { importKeys } from '@/lib/query-invalidation'
+import { staleTime } from '@/lib/query-client'
 import type {
   ImportCandidate,
   SuggestionItem,
@@ -659,7 +660,7 @@ function ImportsPageInner() {
     queryClient.prefetchQuery({
       queryKey: importKeys.suggestions(nextParams),
       queryFn: () => importsApi.getSuggestions(nextParams),
-      staleTime: 1000 * 60 * 2,
+      staleTime: staleTime(1000 * 60 * 2),
     })
   }, [activeTab, data?.hidden_unresolved_telegram_count, error, isLoading, params, queryClient])
 

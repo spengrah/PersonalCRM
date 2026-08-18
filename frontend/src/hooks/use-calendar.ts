@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { calendarApi } from '@/lib/calendar-api'
 import { calendarKeys } from '@/lib/query-keys'
+import { staleTime } from '@/lib/query-client'
 
 // Re-export for backward compatibility (key was previously defined here).
 export { calendarKeys }
@@ -14,7 +15,7 @@ export function useEventsForContact(
     queryKey: calendarKeys.forContact(contactId),
     queryFn: () => calendarApi.getEventsForContact(contactId, params),
     enabled: !!contactId,
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: staleTime(1000 * 60 * 5), // 5 minutes
   })
 }
 
@@ -24,7 +25,7 @@ export function useUpcomingEventsForContact(contactId: string, limit?: number) {
     queryKey: calendarKeys.upcomingForContact(contactId),
     queryFn: () => calendarApi.getUpcomingEventsForContact(contactId, limit),
     enabled: !!contactId,
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: staleTime(1000 * 60 * 5), // 5 minutes
   })
 }
 
@@ -33,6 +34,6 @@ export function useUpcomingEvents(params?: { limit?: number; offset?: number }) 
   return useQuery({
     queryKey: calendarKeys.upcoming(),
     queryFn: () => calendarApi.getUpcomingEvents(params),
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: staleTime(1000 * 60 * 5), // 5 minutes
   })
 }
