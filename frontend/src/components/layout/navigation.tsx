@@ -81,7 +81,8 @@ export function Navigation() {
                 onClick={() => setIsMobileMenuOpen(open => !open)}
                 className="inline-flex items-center justify-center p-2 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100"
               >
-                <span className="sr-only">Open main menu</span>
+                {/* Constant name per the ARIA disclosure pattern; aria-expanded conveys state */}
+                <span className="sr-only">Main menu</span>
                 <svg
                   className="block h-6 w-6"
                   fill="none"

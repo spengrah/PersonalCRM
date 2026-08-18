@@ -21,7 +21,7 @@ test.describe('Mobile navigation @area:navigation', () => {
     await page.goto('/dashboard')
     await page.waitForLoadState('domcontentloaded')
 
-    const menuButton = page.getByRole('button', { name: 'Open main menu' })
+    const menuButton = page.getByRole('button', { name: 'Main menu' })
     await expect(menuButton).toBeVisible()
     await expect(menuButton).toHaveAttribute('aria-expanded', 'false')
 
