@@ -143,7 +143,9 @@ export default defineConfig({
       command: frontendCommand,
       url: frontendURL,
       reuseExistingServer: !process.env.CI,
-      timeout: 120000,
+      // 120s is marginal when a cold `next dev` compile runs alongside a cold
+      // `go run` build of the backend below (the two start sequentially).
+      timeout: 240000,
       stdout: 'pipe',
       env: {
         ...process.env,
@@ -161,7 +163,9 @@ export default defineConfig({
       command: 'cd ../backend && go run ./cmd/crm-api',
       url: `${backendURL}/health`,
       reuseExistingServer: !process.env.CI,
-      timeout: 120000,
+      // Cold-start headroom: a first `go run` in a fresh worktree compiles the
+      // whole backend before the health endpoint can answer.
+      timeout: 240000,
       stdout: 'pipe',
       env: {
         ...process.env,

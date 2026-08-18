@@ -65,8 +65,30 @@ run_backend() {
 
 seed_crm_env() { sed -n 's/^go CRM_ENV=\([^ ]*\) .*/\1/p' "$CALL_LOG" | head -1; }
 
+# start-backend.sh launches the stub `go` DETACHED (nohup env ... go run), so
+# the call log may not have its line yet when the assertion runs — under
+# concurrent load the child can lose the race for seconds. Poll until the log
+# has an entry, bounded so a child that never writes still fails, with a
+# message distinct from a wrong recorded value: a timeout is a harness race, a
+# wrong value is a real CRM_ENV propagation bug. The synchronous dev-seed.sh
+# cases have their line before the first poll and pass straight through.
+CALL_LOG_TIMEOUT_S="${CALL_LOG_TIMEOUT_S:-10}"
+
+wait_for_call_log() {
+    local tries=$((CALL_LOG_TIMEOUT_S * 10))
+    while [ -z "$(seed_crm_env)" ]; do
+        tries=$((tries - 1))
+        [ "$tries" -gt 0 ] || return 1
+        sleep 0.1
+    done
+}
+
 assert_seed_env() {
     local want="$1" got
+    if ! wait_for_call_log; then
+        fail "$2: timed out after ${CALL_LOG_TIMEOUT_S}s waiting for the detached child to write the call log (harness race, not a CRM_ENV bug)"
+        return
+    fi
     got="$(seed_crm_env)"
     if [ "$got" = "$want" ]; then ok; else fail "$2: seed ran under CRM_ENV=$got, want $want"; fi
 }
