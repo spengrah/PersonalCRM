@@ -253,8 +253,16 @@ export default function ContactDetailPage() {
   }, [navigationIds, currentIndex, prefetchContact])
 
   // Handle Enter key (toggle edit mode) and Escape key (discard/return to list)
+  const isModalOpen = isMergeModalOpen || isLogModalOpen
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      // An open modal owns the keyboard: it registers its own window-level
+      // Escape listener, so acting here too would dismiss the modal AND
+      // navigate/toggle edit on the same keypress.
+      if (isModalOpen) {
+        return
+      }
+
       // Don't handle if typing in an input
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
         return
@@ -284,7 +292,7 @@ export default function ContactDetailPage() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isEditing, router, buildBackToListUrl])
+  }, [isEditing, isModalOpen, router, buildBackToListUrl])
 
   // Detect if notes content overflows the 4-line clamp. ResizeObserver
   // re-measures whenever the container's box changes — the initial
