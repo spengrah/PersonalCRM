@@ -457,12 +457,18 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
   })
 
-  test('Escape on a not-found contact does not crash and stays put', async ({ page }) => {
+  test('Escape on a not-found contact reaches the normal back-to-list handler', async ({
+    page,
+  }) => {
     // spec: CON-040.escape-discards-edit-mode
     // A ?action=merge URL sets isMergeModalOpen=true from the query param
     // before the contact ever loads. On a nonexistent id the page takes its
-    // error/not-found return with no modal mounted — Escape here must not be
-    // swallowed by a stale isModalOpen reading the unmounted merge modal's flag.
+    // error/not-found return with no modal mounted, so isModalOpen must read
+    // false here — meaning Escape reaches the SAME normal handler as any other
+    // non-modal view and navigates back to the list. (A stale isModalOpen that
+    // wrongly reads true from the unmounted merge modal's flag would swallow
+    // this Escape and leave the page on "Contact not found" instead — the
+    // opposite of what this test asserts.)
     const missingId = '00000000-0000-0000-0000-000000000000'
 
     await page.goto(`/contacts/${missingId}?action=merge`)
@@ -470,15 +476,13 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await expect(page.getByRole('heading', { name: 'Contact not found' })).toBeVisible({
       timeout: 15000,
     })
-    const notFoundUrl = page.url()
 
     await page.keyboard.press('Escape')
 
-    // No crash, and no modal to have swallowed the press — the page is inert
-    // either way (there is nothing this page's own Escape route does here
-    // beyond not throwing), so the only thing to prove is it stayed put.
-    await expect(page.getByRole('heading', { name: 'Contact not found' })).toBeVisible()
-    await expect(page).toHaveURL(notFoundUrl)
+    await page.waitForURL(u => new URL(u).pathname === '/contacts')
+    await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible({
+      timeout: 10000,
+    })
   })
 
   test('Escape closes the Log Interaction modal in place without navigating away', async ({

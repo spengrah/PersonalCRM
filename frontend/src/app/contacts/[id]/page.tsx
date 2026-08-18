@@ -56,6 +56,20 @@ import { MergeContactModal } from '@/components/contacts/merge-contact-modal'
 import { TasksSection } from '@/components/contacts/tasks-section'
 import { LogInteractionModal } from '@/components/contacts/log-interaction-modal'
 
+// Whether the page's main body — and therefore every modal it hosts — is
+// actually rendered. TanStack Query keeps the previous successful `data`
+// around during a background refetch that then errors, so `contact` alone can
+// stay truthy after the page has already taken its loading/not-found early
+// return. Exported so this exact race (contact truthy, error also set) is
+// unit-testable without reproducing a live refetch in E2E.
+export function isContactMainRendered(state: {
+  isLoading: boolean
+  error: unknown
+  contact: unknown
+}): boolean {
+  return !state.isLoading && !state.error && Boolean(state.contact)
+}
+
 type SaveStep = 'contact' | 'methods' | 'notes'
 
 const SAVE_STEP_LABELS: Record<SaveStep, string> = {
@@ -254,15 +268,17 @@ export default function ContactDetailPage() {
   }, [navigationIds, currentIndex, prefetchContact])
 
   // Handle Enter key (toggle edit mode) and Escape key (discard/return to list).
-  // Gated on whether a modal is actually MOUNTED, not just requested: merge and
-  // log-interaction only render once the main body below renders — i.e. the
-  // SAME `!isLoading && !error && contact` predicate as the early returns
-  // above, not just `Boolean(contact)`. TanStack Query keeps the previous
-  // `contact` around while a background refetch is erroring, so `contact` can
-  // be truthy even while `error` is set and the page has already taken its
-  // not-found return with no modal mounted — swallowing Escape there too.
-  const isMainRendered = !isLoading && !error && Boolean(contact)
-  const isModalOpen = (isMainRendered && (isMergeModalOpen || isLogModalOpen)) || isAddTaskModalOpen
+  // Gated on whether a modal is actually MOUNTED, not just requested: every
+  // modal on this page (merge, log-interaction, add-task) only renders once
+  // the main body below renders, so the gate must match the SAME predicate
+  // the early returns above use — not just `Boolean(contact)`. TanStack Query
+  // keeps the previous `contact` around while a background refetch is
+  // erroring, so `contact` can be truthy even while `error` is set and the
+  // page has already taken its not-found return with nothing mounted,
+  // swallowing Escape there too. isMainRendered() is exported and unit-tested
+  // directly rather than exercised via a live refetch race in E2E.
+  const isMainRendered = isContactMainRendered({ isLoading, error, contact })
+  const isModalOpen = isMainRendered && (isMergeModalOpen || isLogModalOpen || isAddTaskModalOpen)
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       // An open modal owns the keyboard: it registers its own window-level
