@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isAnyDetailModalOpen, isContactMainRendered } from '../page'
+import { isAnyDetailModalOpen, isContactMainRendered } from '../modal-gate'
 
 describe('isContactMainRendered', () => {
   it('is false while loading', () => {
