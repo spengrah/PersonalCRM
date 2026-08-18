@@ -255,12 +255,14 @@ export default function ContactDetailPage() {
 
   // Handle Enter key (toggle edit mode) and Escape key (discard/return to list).
   // Gated on whether a modal is actually MOUNTED, not just requested: merge and
-  // log-interaction only render their modal once `contact` has loaded (matching
-  // their own render conditions below), so a stale `isMergeModalOpen` from a
-  // `?action=merge` URL on a not-found/loading contact must not suppress Escape
-  // on that page — nothing would be there to dismiss it.
-  const isModalOpen =
-    (Boolean(contact) && (isMergeModalOpen || isLogModalOpen)) || isAddTaskModalOpen
+  // log-interaction only render once the main body below renders — i.e. the
+  // SAME `!isLoading && !error && contact` predicate as the early returns
+  // above, not just `Boolean(contact)`. TanStack Query keeps the previous
+  // `contact` around while a background refetch is erroring, so `contact` can
+  // be truthy even while `error` is set and the page has already taken its
+  // not-found return with no modal mounted — swallowing Escape there too.
+  const isMainRendered = !isLoading && !error && Boolean(contact)
+  const isModalOpen = (isMainRendered && (isMergeModalOpen || isLogModalOpen)) || isAddTaskModalOpen
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       // An open modal owns the keyboard: it registers its own window-level

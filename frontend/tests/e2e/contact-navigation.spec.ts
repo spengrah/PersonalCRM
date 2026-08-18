@@ -457,6 +457,57 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
   })
 
+  test('Escape on a not-found contact does not crash and stays put', async ({ page }) => {
+    // spec: CON-040.escape-discards-edit-mode
+    // A ?action=merge URL sets isMergeModalOpen=true from the query param
+    // before the contact ever loads. On a nonexistent id the page takes its
+    // error/not-found return with no modal mounted — Escape here must not be
+    // swallowed by a stale isModalOpen reading the unmounted merge modal's flag.
+    const missingId = '00000000-0000-0000-0000-000000000000'
+
+    await page.goto(`/contacts/${missingId}?action=merge`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Contact not found' })).toBeVisible({
+      timeout: 15000,
+    })
+    const notFoundUrl = page.url()
+
+    await page.keyboard.press('Escape')
+
+    // No crash, and no modal to have swallowed the press — the page is inert
+    // either way (there is nothing this page's own Escape route does here
+    // beyond not throwing), so the only thing to prove is it stayed put.
+    await expect(page.getByRole('heading', { name: 'Contact not found' })).toBeVisible()
+    await expect(page).toHaveURL(notFoundUrl)
+  })
+
+  test('Escape closes the Log Interaction modal in place without navigating away', async ({
+    page,
+  }) => {
+    // spec: CON-040.escape-discards-edit-mode
+    // Focus a non-input control (the Mutual direction toggle) before Escape —
+    // the existing input-focus test below only ever focuses the date input, so
+    // it cannot catch a regression that drops isLogModalOpen from the gate.
+    const seeded = await testApi.seedBehavior('CON-040')
+    const contactId = seeded.entities['a'].id
+    const fullName = seeded.entities['a'].name
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    const detailUrl = page.url()
+
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await page.getByRole('button', { name: 'Mutual' }).click()
+
+    await page.keyboard.press('Escape')
+
+    await expect(page.getByRole('dialog')).not.toBeVisible()
+    await expect(page).toHaveURL(detailUrl)
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
+  })
+
   test('arrows are inert while focus is in an input outside edit mode', async ({ page }) => {
     // spec: CON-040.arrows-inert-while-editing
     // The Log Interaction modal keeps keyboard nav ENABLED (it is not edit
