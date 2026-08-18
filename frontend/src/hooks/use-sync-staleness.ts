@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { syncApi } from '@/lib/sync-api'
 import { syncKeys } from '@/lib/query-keys'
+import { staleTime } from '@/lib/query-client'
 
 // useSyncStaleness polls the sync-staleness watchdog's active-breach endpoint.
 // The producer runs every 5 minutes on the Pi, so a 60s poll is plenty
@@ -10,7 +11,7 @@ export function useSyncStaleness() {
   return useQuery({
     queryKey: syncKeys.staleness(),
     queryFn: () => syncApi.getStalenessBreaches(),
-    staleTime: 30_000,
+    staleTime: staleTime(30_000),
     refetchInterval: 60_000,
   })
 }

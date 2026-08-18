@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { syncApi } from '@/lib/sync-api'
 import { syncKeys } from '@/lib/query-keys'
 import type { SyncState } from '@/types/sync'
+import { staleTime } from '@/lib/query-client'
 
 // Re-export for backwards compatibility
 export { syncKeys }
@@ -15,7 +16,7 @@ export function useSyncStates() {
   return useQuery({
     queryKey: syncKeys.states(),
     queryFn: () => syncApi.getSyncStates(),
-    staleTime: 1000 * 5, // 5 seconds
+    staleTime: staleTime(1000 * 5), // 5 seconds
     refetchInterval: query => {
       // Poll faster (3s) when any sync is in progress, slower (30s) when idle
       const states = query.state.data as SyncState[] | undefined

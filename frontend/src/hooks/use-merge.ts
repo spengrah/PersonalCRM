@@ -3,6 +3,7 @@ import { apiClient } from '@/lib/api-client'
 import { contactKeys, invalidateFor } from '@/lib/query-invalidation'
 import { noteKeys } from '@/hooks/use-contact-note'
 import type { Contact } from '@/types/contact'
+import { staleTime } from '@/lib/query-client'
 
 // Merge preview response from API
 export interface MergePreview {
@@ -55,7 +56,7 @@ export function useMergePreview(targetId: string, sourceId: string) {
     queryKey: mergeKeys.preview(targetId, sourceId),
     queryFn: () => mergeApi.getMergePreview(targetId, sourceId),
     enabled: !!targetId && !!sourceId && targetId !== sourceId,
-    staleTime: 1000 * 30, // 30 seconds - preview data can change
+    staleTime: staleTime(1000 * 30), // 30 seconds - preview data can change
   })
 }
 

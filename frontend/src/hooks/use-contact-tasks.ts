@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { contactTasksApi } from '@/lib/contact-tasks-api'
 import { contactTaskKeys, invalidateFor } from '@/lib/query-invalidation'
 import type { ContactTaskListParams, CreateManualTaskRequest } from '@/types/contact-task'
+import { staleTime } from '@/lib/query-client'
 
 // List tasks for a contact
 export function useContactTasks(
@@ -14,7 +15,7 @@ export function useContactTasks(
     queryKey: contactTaskKeys.list(contactId, params),
     queryFn: () => contactTasksApi.listTasks(contactId, params),
     enabled: !!contactId && enabled,
-    staleTime: 1000 * 60 * 2, // 2 minutes
+    staleTime: staleTime(1000 * 60 * 2), // 2 minutes
   })
 }
 

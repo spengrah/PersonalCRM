@@ -9,6 +9,7 @@ import type {
   ContactListParams,
 } from '@/types/contact'
 import type { ContactMethodOperation } from '@/types/generated/contact'
+import { staleTime } from '@/lib/query-client'
 
 // Re-export contactKeys for backward compatibility
 export { contactKeys }
@@ -18,7 +19,7 @@ export function useContacts(params: ContactListParams = {}) {
   return useQuery({
     queryKey: contactKeys.list(params),
     queryFn: () => contactsApi.getContacts(params),
-    staleTime: 1000 * 60 * 2, // 2 minutes
+    staleTime: staleTime(1000 * 60 * 2), // 2 minutes
   })
 }
 
@@ -40,7 +41,7 @@ export function usePrefetchContact() {
     queryClient.prefetchQuery({
       queryKey: contactKeys.detail(id),
       queryFn: () => contactsApi.getContact(id),
-      staleTime: 1000 * 60 * 2, // 2 minutes
+      staleTime: staleTime(1000 * 60 * 2), // 2 minutes
     })
   }
 }
@@ -50,7 +51,7 @@ export function useOverdueContacts() {
   return useQuery({
     queryKey: contactKeys.overdue(),
     queryFn: () => contactsApi.getOverdueContacts(),
-    staleTime: 1000 * 60 * 5, // 5 minutes
+    staleTime: staleTime(1000 * 60 * 5), // 5 minutes
     refetchOnWindowFocus: true,
     // No refetchInterval needed - invalidation handles updates after mutations
   })
@@ -61,7 +62,7 @@ export function useContactIDs(params: ContactIDsParams = {}) {
   return useQuery({
     queryKey: [...contactKeys.lists(), 'navigation-ids', params],
     queryFn: () => contactsApi.getContactIDs(params),
-    staleTime: 1000 * 60 * 5, // 5 minutes - navigation list doesn't need to be super fresh
+    staleTime: staleTime(1000 * 60 * 5), // 5 minutes - navigation list doesn't need to be super fresh
   })
 }
 

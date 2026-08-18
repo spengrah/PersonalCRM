@@ -2,13 +2,14 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { importsApi } from '@/lib/imports-api'
 import { importKeys, invalidateFor } from '@/lib/query-invalidation'
 import type { ResolveLinkRequest, ResolveNameCandidateRequest } from '@/types/import'
+import { staleTime } from '@/lib/query-client'
 
 // Interactions tab: the conflict + orphan queue (all hosts).
 export function useInteractionsQueue() {
   return useQuery({
     queryKey: importKeys.needsAttention(),
     queryFn: () => importsApi.getNeedsAttention(),
-    staleTime: 1000 * 60 * 2, // 2 minutes
+    staleTime: staleTime(1000 * 60 * 2), // 2 minutes
   })
 }
 
@@ -39,7 +40,7 @@ export function useAnarlogTitleCandidates() {
   return useQuery({
     queryKey: importKeys.anarlogTitle(),
     queryFn: () => importsApi.getAnarlogTitleGroups(),
-    staleTime: 1000 * 60 * 2, // 2 minutes
+    staleTime: staleTime(1000 * 60 * 2), // 2 minutes
   })
 }
 

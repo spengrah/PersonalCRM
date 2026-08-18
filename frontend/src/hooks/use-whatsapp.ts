@@ -34,8 +34,9 @@ export function useWhatsAppStatus() {
     // by the shared client, but a 500 would otherwise retry three times before
     // the section could say anything at all.
     retry: false,
-    // No staleTime: pinning one would override the query-client's Playwright
-    // escape hatch.
+    // No staleTime pin: the query-client default applies. To pin one, use the
+    // staleTime() helper from lib/query-client so the Playwright escape hatch
+    // still reaches this query.
     refetchInterval: query => {
       const data = query.state.data
       if (!data) return false
