@@ -70,6 +70,25 @@ export function isContactMainRendered(state: {
   return !state.isLoading && !state.error && Boolean(state.contact)
 }
 
+// Whether the page-level keyboard handler should stand down because some
+// modal it hosts is (or would be) open. Every flag here means nothing unless
+// isMainRendered is also true — none of these modals can be mounted
+// otherwise — so this is deliberately `mainRendered && (a || b || c)`, never
+// `(mainRendered && a) || b`: that shape lets one flag bypass the gate on its
+// own, which is exactly the regression this function's own unit test exists
+// to catch by exercising the composition, not just isContactMainRendered.
+export function isAnyDetailModalOpen(state: {
+  isMainRendered: boolean
+  isMergeModalOpen: boolean
+  isLogModalOpen: boolean
+  isAddTaskModalOpen: boolean
+}): boolean {
+  return (
+    state.isMainRendered &&
+    (state.isMergeModalOpen || state.isLogModalOpen || state.isAddTaskModalOpen)
+  )
+}
+
 type SaveStep = 'contact' | 'methods' | 'notes'
 
 const SAVE_STEP_LABELS: Record<SaveStep, string> = {
@@ -278,7 +297,12 @@ export default function ContactDetailPage() {
   // swallowing Escape there too. isMainRendered() is exported and unit-tested
   // directly rather than exercised via a live refetch race in E2E.
   const isMainRendered = isContactMainRendered({ isLoading, error, contact })
-  const isModalOpen = isMainRendered && (isMergeModalOpen || isLogModalOpen || isAddTaskModalOpen)
+  const isModalOpen = isAnyDetailModalOpen({
+    isMainRendered,
+    isMergeModalOpen,
+    isLogModalOpen,
+    isAddTaskModalOpen,
+  })
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       // An open modal owns the keyboard: it registers its own window-level
