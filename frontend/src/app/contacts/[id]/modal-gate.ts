@@ -4,18 +4,23 @@
 // (metadata, generateStaticParams, ...) — a build-time-only check that
 // neither `tsc --noEmit` nor `next lint` catches.
 
-// Whether the page's main body — and therefore every modal it hosts — is
-// actually rendered. TanStack Query keeps the previous successful `data`
-// around during a background refetch that then errors, so `contact` alone can
-// stay truthy after the page has already taken its loading/not-found early
-// return. Unit-tested directly so this exact race (contact truthy, error also
-// set) doesn't need reproducing live in E2E.
+// Whether the page's main (non-editing) body — and therefore every modal it
+// hosts — is actually rendered. Three things independently unmount it, each
+// with its own early return above this predicate's call site: still loading,
+// no contact (TanStack Query keeps the previous successful `data` around
+// during a background refetch that then errors, so `contact` alone can stay
+// truthy after the page has already taken this branch), and edit mode (its
+// own top-level return, entered via the underlying Edit button if a modal
+// that doesn't trap focus lets Tab/Shift+Tab reach it — the modal's open
+// flag then survives into a view that no longer renders it). Unit-tested
+// directly so none of these races need reproducing live in E2E.
 export function isContactMainRendered(state: {
   isLoading: boolean
   error: unknown
   contact: unknown
+  isEditing: boolean
 }): boolean {
-  return !state.isLoading && !state.error && Boolean(state.contact)
+  return !state.isLoading && !state.error && Boolean(state.contact) && !state.isEditing
 }
 
 // Whether the page-level keyboard handler should stand down because some

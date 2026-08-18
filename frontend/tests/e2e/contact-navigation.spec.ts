@@ -460,7 +460,9 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
   test('Escape on a not-found contact reaches the normal back-to-list handler', async ({
     page,
   }) => {
-    // spec: CON-040.escape-discards-edit-mode
+    // Regression coverage only — this is the "Contact not found" error view,
+    // not a detail page opened from a list, so it does not verify CON-040's
+    // given/when and carries no spec citation.
     // A ?action=merge URL sets isMergeModalOpen=true from the query param
     // before the contact ever loads. On a nonexistent id the page takes its
     // error/not-found return with no modal mounted, so isModalOpen must read

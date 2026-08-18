@@ -264,7 +264,7 @@ export default function ContactDetailPage() {
   // page has already taken its not-found return with nothing mounted,
   // swallowing Escape there too. isMainRendered() is exported and unit-tested
   // directly rather than exercised via a live refetch race in E2E.
-  const isMainRendered = isContactMainRendered({ isLoading, error, contact })
+  const isMainRendered = isContactMainRendered({ isLoading, error, contact, isEditing })
   const isModalOpen = isAnyDetailModalOpen({
     isMainRendered,
     isMergeModalOpen,

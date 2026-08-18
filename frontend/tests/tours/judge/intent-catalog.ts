@@ -74,10 +74,12 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
     status: 'current',
     servedBy: ['CON-038', 'CON-040', 'CON-041', 'CON-057', 'CON-059', 'CON-060', 'CON-065'],
     // Contacts-tour evidence, in seq order: CON-038×3, CON-065×2, CON-041×2,
-    // then CON-040×10. Cap 8 kept 038×3 + 041×2 + the first 040×3 before CON-065
-    // existed; inserting CON-065×2 needs cap 10 to keep that SAME retained set
-    // (038×3 + 065×2 + 041×2 + 040×3) rather than evicting the keyboard-nav tail.
-    captureCap: 10,
+    // then CON-040×11. Cap 8 kept 038×3 + 041×2 + the first 040×3 before CON-065
+    // existed; cap 10 (added for CON-065×2) still truncated the back half of the
+    // CON-040 keyboard-nav sequence, including its own Escape-to-list capture.
+    // Cap 18 keeps the full retained set (038×3 + 065×2 + 041×2 + 040×11) so the
+    // judge sees every current-behavior capture this tour records for CON-051.
+    captureCap: 18,
   },
   'CON-052': {
     id: 'CON-052',

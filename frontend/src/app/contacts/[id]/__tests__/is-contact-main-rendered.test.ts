@@ -3,13 +3,20 @@ import { isAnyDetailModalOpen, isContactMainRendered } from '../modal-gate'
 
 describe('isContactMainRendered', () => {
   it('is false while loading', () => {
-    expect(isContactMainRendered({ isLoading: true, error: null, contact: { id: 'a' } })).toBe(
-      false
-    )
+    expect(
+      isContactMainRendered({
+        isLoading: true,
+        error: null,
+        contact: { id: 'a' },
+        isEditing: false,
+      })
+    ).toBe(false)
   })
 
   it('is false with no contact and no error (should not happen, but must not crash)', () => {
-    expect(isContactMainRendered({ isLoading: false, error: null, contact: null })).toBe(false)
+    expect(
+      isContactMainRendered({ isLoading: false, error: null, contact: null, isEditing: false })
+    ).toBe(false)
   })
 
   it('is false when a background refetch errors but a stale contact is still cached', () => {
@@ -22,14 +29,37 @@ describe('isContactMainRendered', () => {
         isLoading: false,
         error: new Error('refetch failed'),
         contact: { id: 'a' },
+        isEditing: false,
       })
     ).toBe(false)
   })
 
-  it('is true once loaded cleanly', () => {
-    expect(isContactMainRendered({ isLoading: false, error: null, contact: { id: 'a' } })).toBe(
-      true
-    )
+  it('is false while editing, even with a loaded contact — a modal flag that leaked into edit mode has nothing left to dismiss it', () => {
+    // A modal that doesn't trap focus (e.g. MergeContactModal) can leave Tab
+    // able to reach the underlying Edit button; activating it flips isEditing
+    // via a native click, bypassing this page's own keydown handler entirely.
+    // The edit-mode early return then unmounts the modal, but its own open
+    // flag survives — so the mounted-modal predicate must exclude edit mode
+    // too, or a stale flag would swallow Escape in the edit view.
+    expect(
+      isContactMainRendered({
+        isLoading: false,
+        error: null,
+        contact: { id: 'a' },
+        isEditing: true,
+      })
+    ).toBe(false)
+  })
+
+  it('is true once loaded cleanly, outside edit mode', () => {
+    expect(
+      isContactMainRendered({
+        isLoading: false,
+        error: null,
+        contact: { id: 'a' },
+        isEditing: false,
+      })
+    ).toBe(true)
   })
 })
 
