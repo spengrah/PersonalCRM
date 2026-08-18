@@ -104,6 +104,10 @@
     "tags": ["@area:navigation"]
   },
   {
+    "pattern": "^frontend/tests/e2e/navigation-mobile\\.spec\\.ts$",
+    "tags": ["@area:navigation"]
+  },
+  {
     "pattern": "^frontend/tests/e2e/error-boundary\\.spec\\.ts$",
     "tags": ["@area:error-boundary"]
   },

@@ -61,8 +61,10 @@ export function TimeAccelerationWidget({
     })
   }
 
+  // On phone widths the top corners belong to the nav bar (title / hamburger),
+  // so the "top" positions anchor to the bottom corner until `sm`.
   const positionClasses = {
-    'top-right': 'top-4 right-4',
+    'top-right': 'bottom-4 right-4 sm:bottom-auto sm:top-4',
     'bottom-right': 'bottom-4 right-4',
     'bottom-left': 'bottom-4 left-4',
     'top-left': 'top-4 left-4',
