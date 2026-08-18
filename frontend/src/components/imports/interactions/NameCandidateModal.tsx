@@ -131,7 +131,7 @@ export function NameCandidateModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-gray-900/35 p-12 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-auto bg-gray-900/35 p-4 sm:p-12 backdrop-blur-sm"
       onClick={e => {
         if (e.target === e.currentTarget) onClose()
       }}
@@ -269,7 +269,7 @@ export function NameCandidateModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between gap-2 px-6 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-6 py-4">
           <Button
             variant="ghost"
             size="sm"

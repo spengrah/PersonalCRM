@@ -416,7 +416,7 @@ export default function ContactDetailPage() {
     return (
       <div className="min-h-screen bg-gray-50">
         <Navigation />
-        <div className="max-w-4xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div className="max-w-4xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
           <div className="animate-pulse space-y-6">
             <div className="h-8 bg-gray-200 rounded w-1/3"></div>
             <div className="bg-white shadow sm:rounded-lg p-6 space-y-4">
@@ -434,7 +434,7 @@ export default function ContactDetailPage() {
     return (
       <div className="min-h-screen bg-gray-50">
         <Navigation />
-        <div className="max-w-4xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div className="max-w-4xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
           <div className="bg-red-50 border border-red-200 rounded-md p-4">
             <h3 className="text-lg font-medium text-red-800">Contact not found</h3>
             <p className="mt-1 text-sm text-red-700">
@@ -470,7 +470,7 @@ export default function ContactDetailPage() {
           isLoading={isLoadingIDs}
         />
 
-        <div className="max-w-3xl mx-auto py-6 sm:px-6 lg:px-8">
+        <div className="max-w-3xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
           <div className="md:flex md:items-center md:justify-between mb-6">
             <div className="flex-1 min-w-0">
               <h2 className="text-2xl font-bold leading-normal text-gray-900 sm:text-3xl sm:truncate">
@@ -558,7 +558,7 @@ export default function ContactDetailPage() {
         isLoading={isLoadingIDs}
       />
 
-      <div className="max-w-4xl mx-auto py-6 sm:px-6 lg:px-8">
+      <div className="max-w-4xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="md:flex md:items-center md:justify-between mb-6">
           <div className="flex-1 min-w-0">
@@ -566,7 +566,7 @@ export default function ContactDetailPage() {
               {contact.full_name}
             </h2>
           </div>
-          <div className="mt-4 flex space-x-3 md:mt-0 md:ml-4">
+          <div className="mt-4 flex flex-wrap gap-3 md:mt-0 md:ml-4">
             <Button variant="outline" size="sm" onClick={handleOpenLogModal}>
               <MessageCircle className="w-4 h-4 mr-2" />
               Log Interaction

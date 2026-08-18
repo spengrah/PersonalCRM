@@ -177,7 +177,7 @@ export function Meetings({ contactId }: MeetingsProps) {
   return (
     <section aria-label="Meetings" className="bg-white shadow overflow-hidden sm:rounded-lg">
       <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h3 className="text-lg leading-6 font-medium text-gray-900 flex items-center">
               <Calendar className="w-5 h-5 mr-2 text-gray-400" />

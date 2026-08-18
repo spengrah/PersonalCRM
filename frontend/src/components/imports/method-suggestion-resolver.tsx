@@ -169,7 +169,7 @@ export function MethodSuggestionResolver({
         role="dialog"
         aria-modal="true"
         aria-label="Review method suggestions"
-        className="relative top-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white overflow-hidden"
+        className="relative my-10 mx-auto p-0 border w-full max-w-xl shadow-lg rounded-lg bg-white overflow-hidden"
       >
         {/* Header — fixed contact, no selector */}
         <div className="px-6 py-4 border-b">
@@ -215,7 +215,7 @@ export function MethodSuggestionResolver({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 bg-gray-50 border-t flex items-center justify-between">
+        <div className="px-6 py-4 bg-gray-50 border-t flex flex-wrap items-center justify-between gap-2">
           <Button
             variant="ghost"
             onClick={handleDismissAll}

@@ -126,7 +126,7 @@ export default function MacSettingsPage() {
     <div className="min-h-screen bg-gray-50">
       <Navigation />
 
-      <div className="max-w-4xl mx-auto py-6 sm:px-6 lg:px-8">
+      <div className="max-w-4xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
         <div className="mb-6">
           <Link
             href="/settings"
@@ -137,7 +137,7 @@ export default function MacSettingsPage() {
           </Link>
         </div>
 
-        <div className="mb-8 flex items-start justify-between">
+        <div className="mb-8 flex flex-wrap items-start justify-between gap-3">
           <div>
             <div className="flex items-center space-x-3 mb-2">
               <Cpu className="w-8 h-8 text-blue-600" />
@@ -177,7 +177,7 @@ export default function MacSettingsPage() {
                       className="py-4 first:pt-0 last:pb-0"
                       data-testid="mac-host-row"
                     >
-                      <div className="flex items-start justify-between">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center space-x-3 mb-1">
                             <h3 className="text-lg font-semibold text-gray-900 truncate">
@@ -443,43 +443,45 @@ function SourceHealthTable({ health, hostId }: SourceHealthTableProps) {
   return (
     <div className="mt-3" data-testid="source-health">
       <p className="text-xs font-medium text-gray-700 mb-1">Source health</p>
-      <table className="w-full text-xs border border-gray-200 rounded">
-        <thead className="bg-gray-50 text-gray-700">
-          <tr>
-            <th className="text-left px-2 py-1 font-medium">Source</th>
-            <th className="text-left px-2 py-1 font-medium">Last pushed</th>
-            <th className="text-left px-2 py-1 font-medium">Cursor</th>
-            <th className="text-left px-2 py-1 font-medium">Error</th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map(([source, raw]) => {
-            const entry =
-              typeof raw === 'object' && raw !== null
-                ? (raw as SourceHealthEntry)
-                : ({} as SourceHealthEntry)
-            const label = SOURCE_LABELS[source] ?? source
-            return (
-              <tr key={source} className="border-t border-gray-100">
-                <td className="px-2 py-1">{label}</td>
-                <td className="px-2 py-1 text-gray-700">
-                  {entry.last_pushed_at ? new Date(entry.last_pushed_at).toLocaleString() : '—'}
-                </td>
-                <td
-                  className="px-2 py-1 font-mono text-gray-700 truncate max-w-xs"
-                  data-testid="cursor-cell"
-                  data-state={cursorCellState(source, entry, counts)}
-                >
-                  {renderCursorCell(source, entry, counts)}
-                </td>
-                <td className="px-2 py-1 text-red-700">
-                  {entry.last_error && entry.last_error !== '' ? entry.last_error : ''}
-                </td>
-              </tr>
-            )
-          })}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs border border-gray-200 rounded">
+          <thead className="bg-gray-50 text-gray-700">
+            <tr>
+              <th className="text-left px-2 py-1 font-medium">Source</th>
+              <th className="text-left px-2 py-1 font-medium">Last pushed</th>
+              <th className="text-left px-2 py-1 font-medium">Cursor</th>
+              <th className="text-left px-2 py-1 font-medium">Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map(([source, raw]) => {
+              const entry =
+                typeof raw === 'object' && raw !== null
+                  ? (raw as SourceHealthEntry)
+                  : ({} as SourceHealthEntry)
+              const label = SOURCE_LABELS[source] ?? source
+              return (
+                <tr key={source} className="border-t border-gray-100">
+                  <td className="px-2 py-1">{label}</td>
+                  <td className="px-2 py-1 text-gray-700">
+                    {entry.last_pushed_at ? new Date(entry.last_pushed_at).toLocaleString() : '—'}
+                  </td>
+                  <td
+                    className="px-2 py-1 font-mono text-gray-700 truncate max-w-xs"
+                    data-testid="cursor-cell"
+                    data-state={cursorCellState(source, entry, counts)}
+                  >
+                    {renderCursorCell(source, entry, counts)}
+                  </td>
+                  <td className="px-2 py-1 text-red-700">
+                    {entry.last_error && entry.last_error !== '' ? entry.last_error : ''}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

@@ -230,7 +230,7 @@ export function MergeContactModal({
                     >
                       <span className="truncate">{editedName}</span>
                       <svg
-                        className="w-4 h-4 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                        className="w-4 h-4 text-gray-400 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex-shrink-0"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -415,7 +415,7 @@ function FieldToggle({
   onToggle: () => void
 }) {
   return (
-    <div className="flex items-center justify-between">
+    <div className="flex flex-wrap items-center justify-between gap-y-1">
       <span className="text-sm text-gray-600 w-24">{label}</span>
       <div className="flex rounded-lg border border-gray-200 overflow-hidden">
         <button

@@ -382,7 +382,7 @@ export function ContactForm({
                       type="button"
                       onClick={() => handleRemoveMethod(index)}
                       disabled={isLoading || fields.length === 1}
-                      className="p-1.5 text-gray-300 opacity-0 group-hover:opacity-100 hover:text-red-500 transition-all disabled:opacity-0"
+                      className="p-1.5 text-gray-300 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 hover:text-red-500 transition-all disabled:opacity-0"
                       title="Remove"
                     >
                       <svg

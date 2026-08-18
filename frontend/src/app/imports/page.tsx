@@ -185,9 +185,9 @@ function CandidateCard({
 
   return (
     <div className="p-4 bg-white border border-gray-200 rounded-lg hover:shadow-sm transition-shadow">
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         {/* Left side: Avatar and info */}
-        <div className="flex items-start space-x-4">
+        <div className="flex items-start space-x-4 min-w-0">
           {/* Avatar */}
           {candidate.photo_url && isPhotoUrlTrusted(candidate.photo_url) ? (
             <img
@@ -271,7 +271,7 @@ function CandidateCard({
                   key={idx}
                   href={`mailto:${encodeURIComponent(email)}`}
                   title={email}
-                  className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors max-w-[300px]"
+                  className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors max-w-full sm:max-w-[300px]"
                 >
                   <Mail className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 text-gray-400" />
                   <span className="truncate">{email}</span>
@@ -281,10 +281,10 @@ function CandidateCard({
                 <a
                   key={idx}
                   href={`tel:${encodeURIComponent(phone)}`}
-                  className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                  className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors max-w-full"
                 >
-                  <Phone className="w-3.5 h-3.5 mr-1.5 text-gray-400" />
-                  {phone}
+                  <Phone className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 text-gray-400" />
+                  <span className="truncate">{phone}</span>
                 </a>
               ))}
               {candidate.source === 'telegram' &&
@@ -294,10 +294,10 @@ function CandidateCard({
                     href={`https://t.me/${encodeURIComponent(candidate.metadata.username.replace(/^@/, ''))}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                    className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-600 transition-colors max-w-full"
                   >
-                    <Send className="w-3.5 h-3.5 mr-1.5 text-gray-400" />
-                    {candidate.metadata.username}
+                    <Send className="w-3.5 h-3.5 mr-1.5 flex-shrink-0 text-gray-400" />
+                    <span className="truncate">{candidate.metadata.username}</span>
                   </a>
                 )}
             </div>
@@ -305,7 +305,7 @@ function CandidateCard({
         </div>
 
         {/* Right side: Actions */}
-        <div className="flex items-center space-x-2 ml-4">
+        <div className="flex flex-wrap items-center gap-2 sm:ml-4">
           {/* Import is hidden for link-only sources (server policy mirror —
               gated on the source, not a response field). */}
           {sourceAllowsImport(candidate.source) && (
@@ -320,10 +320,12 @@ function CandidateCard({
             onClick={onLink}
             disabled={importLoading || ignoreLoading}
           >
-            <Link2 className="w-4 h-4 mr-1" />
-            {candidate.suggested_match
-              ? `Link to ${candidate.suggested_match.contact_name} (${Math.round(candidate.suggested_match.confidence * 100)}%)`
-              : 'Link (select)'}
+            <Link2 className="w-4 h-4 mr-1 flex-shrink-0" />
+            <span className="truncate max-w-[14rem]">
+              {candidate.suggested_match
+                ? `Link to ${candidate.suggested_match.contact_name} (${Math.round(candidate.suggested_match.confidence * 100)}%)`
+                : 'Link (select)'}
+            </span>
           </Button>
           <Button
             size="sm"
@@ -355,7 +357,7 @@ function ImportsPageFallback() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
-      <div className="max-w-6xl mx-auto py-6 sm:px-6 lg:px-8">
+      <div className="max-w-6xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
         <div className="space-y-4">
           {[...Array(5)].map((_, i) => (
             <div key={i} className="h-24 bg-gray-200 rounded-lg animate-pulse"></div>
@@ -729,7 +731,7 @@ function ImportsPageInner() {
     <div className="min-h-screen bg-gray-50">
       <Navigation />
 
-      <div className="max-w-6xl mx-auto py-6 sm:px-6 lg:px-8">
+      <div className="max-w-6xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
         {/* Header */}
         <div className="mb-6">
           <div className="flex-1 min-w-0">

@@ -35,12 +35,12 @@ export function Pagination({ page, pages, total, onPageChange, noun = 'items' }:
     <nav
       data-testid="pagination"
       aria-label="Pagination"
-      className="flex items-center justify-between"
+      className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
     >
       <div className="text-sm text-gray-700">
         Page {page} of {pages} ({total} total {noun})
       </div>
-      <div className="flex items-center space-x-1">
+      <div className="flex flex-wrap items-center gap-1">
         <Button
           variant="outline"
           size="sm"
