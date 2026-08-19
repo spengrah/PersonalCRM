@@ -430,6 +430,90 @@ test.describe('Contact Keyboard Navigation @area:contact-navigation', () => {
     expect((await stored.json()).data.full_name).toBe(fullName)
   })
 
+  test('Escape closes the Add Task modal in place without navigating away', async ({ page }) => {
+    // spec: CON-040.escape-discards-edit-mode
+    // Focus a non-input control (a kind toggle button) before Escape, so this
+    // is NOT covered by the input-focus guard — it isolates the modal-open gate.
+    const seeded = await testApi.seedBehavior('CON-040')
+    const contactId = seeded.entities['a'].id
+    const fullName = seeded.entities['a'].name
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    const detailUrl = page.url()
+
+    await page.getByRole('button', { name: 'Add' }).click()
+    await expect(page.getByRole('heading', { name: /Add Task for/ })).toBeVisible({
+      timeout: 10000,
+    })
+    await page.getByRole('button', { name: 'Reach out' }).click()
+
+    await page.keyboard.press('Escape')
+
+    // Modal closes; the page stays put — no back-to-list navigation.
+    await expect(page.getByRole('heading', { name: /Add Task for/ })).not.toBeVisible()
+    await expect(page).toHaveURL(detailUrl)
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
+  })
+
+  test('Escape on a not-found contact reaches the normal back-to-list handler', async ({
+    page,
+  }) => {
+    // Regression coverage only — this is the "Contact not found" error view,
+    // not a detail page opened from a list, so it does not verify CON-040's
+    // given/when and carries no spec citation.
+    // A ?action=merge URL sets isMergeModalOpen=true from the query param
+    // before the contact ever loads. On a nonexistent id the page takes its
+    // error/not-found return with no modal mounted, so isModalOpen must read
+    // false here — meaning Escape reaches the SAME normal handler as any other
+    // non-modal view and navigates back to the list. (A stale isModalOpen that
+    // wrongly reads true from the unmounted merge modal's flag would swallow
+    // this Escape and leave the page on "Contact not found" instead — the
+    // opposite of what this test asserts.)
+    const missingId = '00000000-0000-0000-0000-000000000000'
+
+    await page.goto(`/contacts/${missingId}?action=merge`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: 'Contact not found' })).toBeVisible({
+      timeout: 15000,
+    })
+
+    await page.keyboard.press('Escape')
+
+    await page.waitForURL(u => new URL(u).pathname === '/contacts')
+    await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible({
+      timeout: 10000,
+    })
+  })
+
+  test('Escape closes the Log Interaction modal in place without navigating away', async ({
+    page,
+  }) => {
+    // spec: CON-040.escape-discards-edit-mode
+    // Focus a non-input control (the Mutual direction toggle) before Escape —
+    // the existing input-focus test below only ever focuses the date input, so
+    // it cannot catch a regression that drops isLogModalOpen from the gate.
+    const seeded = await testApi.seedBehavior('CON-040')
+    const contactId = seeded.entities['a'].id
+    const fullName = seeded.entities['a'].name
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    const detailUrl = page.url()
+
+    await page.getByRole('button', { name: 'Log Interaction' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    await page.getByRole('button', { name: 'Mutual' }).click()
+
+    await page.keyboard.press('Escape')
+
+    await expect(page.getByRole('dialog')).not.toBeVisible()
+    await expect(page).toHaveURL(detailUrl)
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
+  })
+
   test('arrows are inert while focus is in an input outside edit mode', async ({ page }) => {
     // spec: CON-040.arrows-inert-while-editing
     // The Log Interaction modal keeps keyboard nav ENABLED (it is not edit

@@ -281,11 +281,8 @@ test.describe('Contact Merge @area:contact-merge', () => {
   test('should dismiss the modal without merging via backdrop click', async ({ page }) => {
     // spec: CON-043.modal-dismissed-without-merging
     // Backdrop click dismisses the modal IN PLACE: no merge fires, the modal
-    // closes, and the user stays on the detail page. The Escape path is NOT
-    // asserted here: the detail page's window-level Escape handler is not
-    // gated on an open modal, so Escape today closes the modal AND navigates
-    // back to the list in the same press — a double-action to fix before an
-    // Escape-dismisses-in-place assertion can hold.
+    // closes, and the user stays on the detail page. The Escape path has its
+    // own test below.
     const seeded = await testApi.seedBehavior('CON-043')
     const contactId = seeded.entities['target'].id
     const fullName = seeded.entities['target'].name
@@ -317,6 +314,47 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
     page.off('request', watchMerge)
     expect(mergeFired).toBe(false)
+  })
+
+  test('should dismiss the modal in place with Escape', async ({ page }) => {
+    // spec: CON-043.modal-dismissed-without-merging
+    // spec: CON-040.escape-discards-edit-mode
+    // With the modal open, the detail page's window-level Escape handler is
+    // inert: one press dismisses the modal only, staying on the detail page.
+    // The next press (modal closed) returns to the list.
+    const seeded = await testApi.seedBehavior('CON-043')
+    const contactId = seeded.entities['target'].id
+    const fullName = seeded.entities['target'].name
+
+    await page.goto(`/contacts/${contactId}`)
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    const detailUrl = page.url()
+
+    // No merge may fire during the dismissal.
+    let mergeFired = false
+    const watchMerge = (req: import('@playwright/test').Request) => {
+      if (req.method() === 'POST' && req.url().endsWith('/merge')) {
+        mergeFired = true
+      }
+    }
+    page.on('request', watchMerge)
+
+    await page.getByRole('button', { name: /Merge/i }).click()
+    await expect(mergeModal(page)).toBeVisible()
+
+    // First Escape: the modal closes and nothing else happens — no
+    // navigation, no edit-mode toggle, no merge.
+    await page.keyboard.press('Escape')
+    await expect(mergeModal(page)).not.toBeVisible()
+    await expect(page).toHaveURL(detailUrl)
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible()
+    page.off('request', watchMerge)
+    expect(mergeFired).toBe(false)
+
+    // Second Escape (no modal open): back to the list.
+    await page.keyboard.press('Escape')
+    await expect(page).toHaveURL(/\/contacts(\?|$)/)
   })
 
   test('should successfully merge contacts', async ({ page, request }) => {

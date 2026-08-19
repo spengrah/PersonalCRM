@@ -55,6 +55,7 @@ import {
 import { MergeContactModal } from '@/components/contacts/merge-contact-modal'
 import { TasksSection } from '@/components/contacts/tasks-section'
 import { LogInteractionModal } from '@/components/contacts/log-interaction-modal'
+import { isAnyDetailModalOpen, isContactMainRendered } from './modal-gate'
 
 type SaveStep = 'contact' | 'methods' | 'notes'
 
@@ -115,6 +116,7 @@ export default function ContactDetailPage() {
   const [notesOverflowing, setNotesOverflowing] = useState(false)
   const [isMergeModalOpen, setIsMergeModalOpen] = useState(action === 'merge')
   const [isLogModalOpen, setIsLogModalOpen] = useState(false)
+  const [isAddTaskModalOpen, setIsAddTaskModalOpen] = useState(false)
 
   // Clear the action param from URL after consuming it (prevents re-triggering on refresh)
   useEffect(() => {
@@ -252,9 +254,48 @@ export default function ContactDetailPage() {
     }
   }, [navigationIds, currentIndex, prefetchContact])
 
-  // Handle Enter key (toggle edit mode) and Escape key (discard/return to list)
+  // Handle Enter key (toggle edit mode) and Escape key (discard/return to list).
+  // Gated on whether a modal is actually MOUNTED, not just requested: every
+  // modal on this page (merge, log-interaction, add-task) only renders once
+  // the main body below renders, so the gate must match the SAME predicate
+  // the early returns above use — not just `Boolean(contact)`. TanStack Query
+  // keeps the previous `contact` around while a background refetch is
+  // erroring, so `contact` can be truthy even while `error` is set and the
+  // page has already taken its not-found return with nothing mounted,
+  // swallowing Escape there too. isMainRendered() is exported and unit-tested
+  // directly rather than exercised via a live refetch race in E2E.
+  const isMainRendered = isContactMainRendered({ isLoading, error, contact, isEditing })
+  const isModalOpen = isAnyDetailModalOpen({
+    isMainRendered,
+    isMergeModalOpen,
+    isLogModalOpen,
+    isAddTaskModalOpen,
+  })
+
+  // Before this was lifted here, AddTaskModal's open state was local to
+  // TasksSection, so React destroyed it whenever the main body unmounted that
+  // subtree — closing the modal for free, whatever the reason (edit mode,
+  // loading, a not-found/refetch-error early return). Lifting it to
+  // page-level state removed that free reset for ALL of them, not just edit
+  // mode: e.g. a background refetch error unmounts TasksSection while the
+  // modal is open, and once the query recovers a fresh AddTaskModal would
+  // reopen unprompted — reset on any isMainRendered transition to false,
+  // matching what local state would have done regardless of the cause.
+  useEffect(() => {
+    if (!isMainRendered) {
+      setIsAddTaskModalOpen(false)
+    }
+  }, [isMainRendered])
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      // An open modal owns the keyboard: it registers its own window-level
+      // Escape listener, so acting here too would dismiss the modal AND
+      // navigate/toggle edit on the same keypress.
+      if (isModalOpen) {
+        return
+      }
+
       // Don't handle if typing in an input
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
         return
@@ -284,7 +325,7 @@ export default function ContactDetailPage() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isEditing, router, buildBackToListUrl])
+  }, [isEditing, isModalOpen, router, buildBackToListUrl])
 
   // Detect if notes content overflows the 4-line clamp. ResizeObserver
   // re-measures whenever the container's box changes — the initial
@@ -762,6 +803,8 @@ export default function ContactDetailPage() {
             completedTasks={completedTasks}
             loadingActive={loadingActiveTasks}
             loadingCompleted={loadingCompletedTasks}
+            isAddModalOpen={isAddTaskModalOpen}
+            onAddModalOpenChange={setIsAddTaskModalOpen}
           />
         </div>
 

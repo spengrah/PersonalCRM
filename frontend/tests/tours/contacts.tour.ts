@@ -399,6 +399,23 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   await page.keyboard.press('Escape')
   await page.getByRole('heading', { name: /Add Task for/ }).waitFor({ state: 'hidden' })
 
+  // Modal-open gate, NOT the input-focus guard: focus a non-input control
+  // inside the Add-Task modal (a kind button) before Escape, so this proves
+  // the page-level handler's isModalOpen check — the input-focus-inert
+  // capture above passes even without it, since focus never left an input.
+  // The pass/fail assertion for this path lives in contact-navigation.spec.ts
+  // (CON-040) — tours stay assertion-free and only capture evidence.
+  await page.getByRole('button', { name: 'Add' }).click()
+  await page.getByRole('heading', { name: /Add Task for/ }).waitFor({ state: 'visible' })
+  await page.getByRole('button', { name: 'Reach out' }).click()
+  await page.keyboard.press('Escape')
+  await page.getByRole('heading', { name: /Add Task for/ }).waitFor({ state: 'hidden' })
+  await tour.capture(page, {
+    behaviors: ['CON-040'],
+    note: 'Escape with focus on a non-input Add-Task control (kind button) closes the modal only — detail URL unchanged',
+    pair: { id: navPair, role: 'add-task-modal-escape' },
+  })
+
   // Boundary: last contact → Next nav disabled (the other half of CON-040.left-right-arrows-move).
   // Placed after the input-focus capture so it does not move the page off the
   // first contact that input-focus-inert's url is diffed against.

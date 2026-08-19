@@ -562,7 +562,7 @@ behaviors:
       - key: enter-opens-edit-mode
         text: Enter opens edit mode
       - key: escape-discards-edit-mode
-        text: Escape discards edit mode, or returns to the list (context preserved) when not editing
+        text: Escape discards edit mode, or returns to the list (context preserved) when not editing; while a modal is open the page-level handler is inert, so Escape only dismisses the modal
     serves: [CON-051]
     provenance: [ContactNavigationBar, use-keyboard-navigation.ts, contact-navigation.spec.ts]
 
