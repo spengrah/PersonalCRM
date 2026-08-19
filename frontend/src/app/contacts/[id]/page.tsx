@@ -118,18 +118,6 @@ export default function ContactDetailPage() {
   const [isLogModalOpen, setIsLogModalOpen] = useState(false)
   const [isAddTaskModalOpen, setIsAddTaskModalOpen] = useState(false)
 
-  // Before this was lifted here, AddTaskModal's open state was local to
-  // TasksSection, so React destroyed it whenever edit mode unmounted that
-  // subtree — closing the modal for free. Lifting it to page-level state
-  // removed that: without this reset, a modal left open when edit mode is
-  // entered (e.g. via the same unmounted-modal focus leak isMainRendered
-  // guards against) would reopen unprompted when edit mode ends.
-  useEffect(() => {
-    if (isEditing) {
-      setIsAddTaskModalOpen(false)
-    }
-  }, [isEditing])
-
   // Clear the action param from URL after consuming it (prevents re-triggering on refresh)
   useEffect(() => {
     if (action) {
@@ -283,6 +271,22 @@ export default function ContactDetailPage() {
     isLogModalOpen,
     isAddTaskModalOpen,
   })
+
+  // Before this was lifted here, AddTaskModal's open state was local to
+  // TasksSection, so React destroyed it whenever the main body unmounted that
+  // subtree — closing the modal for free, whatever the reason (edit mode,
+  // loading, a not-found/refetch-error early return). Lifting it to
+  // page-level state removed that free reset for ALL of them, not just edit
+  // mode: e.g. a background refetch error unmounts TasksSection while the
+  // modal is open, and once the query recovers a fresh AddTaskModal would
+  // reopen unprompted — reset on any isMainRendered transition to false,
+  // matching what local state would have done regardless of the cause.
+  useEffect(() => {
+    if (!isMainRendered) {
+      setIsAddTaskModalOpen(false)
+    }
+  }, [isMainRendered])
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       // An open modal owns the keyboard: it registers its own window-level
