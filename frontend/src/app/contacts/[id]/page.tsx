@@ -118,6 +118,18 @@ export default function ContactDetailPage() {
   const [isLogModalOpen, setIsLogModalOpen] = useState(false)
   const [isAddTaskModalOpen, setIsAddTaskModalOpen] = useState(false)
 
+  // Before this was lifted here, AddTaskModal's open state was local to
+  // TasksSection, so React destroyed it whenever edit mode unmounted that
+  // subtree — closing the modal for free. Lifting it to page-level state
+  // removed that: without this reset, a modal left open when edit mode is
+  // entered (e.g. via the same unmounted-modal focus leak isMainRendered
+  // guards against) would reopen unprompted when edit mode ends.
+  useEffect(() => {
+    if (isEditing) {
+      setIsAddTaskModalOpen(false)
+    }
+  }, [isEditing])
+
   // Clear the action param from URL after consuming it (prevents re-triggering on refresh)
   useEffect(() => {
     if (action) {
