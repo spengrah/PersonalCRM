@@ -40,12 +40,13 @@ DELETE FROM calendar_event WHERE gcal_event_id LIKE @prefix::text || '%';
 -- name: TestParityFindExternalContactsByNormalizedEmailLegacy :many
 -- TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
 -- FindExternalContactsByNormalizedEmail. Permanent regression guard against
--- semantic drift in the rewritten query. Callers must restrict input fixtures
--- to well-formed JSONB arrays (jsonb_array_elements raises on scalar/object
--- input). Do NOT call from production code.
+-- semantic drift in the rewritten query. The CASE guard maps non-array JSONB
+-- to no-match instead of letting jsonb_array_elements raise — the table is
+-- shared with concurrently-running tests whose rows this query cannot
+-- restrict. Do NOT call from production code.
 SELECT * FROM external_contact
 WHERE EXISTS (
-    SELECT 1 FROM jsonb_array_elements(emails) AS e
+    SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(emails) = 'array' THEN emails ELSE '[]'::jsonb END) AS e
     WHERE LOWER(e->>'value') = LOWER($1)
 )
   AND duplicate_of_id IS NULL
@@ -54,12 +55,13 @@ ORDER BY created_at;
 -- name: TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacy :many
 -- TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
 -- FindEventsByAttendeeEmailUnmatchedForContact. Permanent regression guard.
--- Callers must restrict input fixtures to well-formed JSONB arrays
--- (jsonb_array_elements raises on scalar/object input). Do NOT call from
--- production code.
+-- The CASE guard maps non-array JSONB to no-match instead of letting
+-- jsonb_array_elements raise — the table is shared with concurrently-running
+-- tests whose rows this query cannot restrict. Do NOT call from production
+-- code.
 SELECT * FROM calendar_event
 WHERE EXISTS (
-    SELECT 1 FROM jsonb_array_elements(attendees) AS a
+    SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(attendees) = 'array' THEN attendees ELSE '[]'::jsonb END) AS a
     WHERE LOWER(a->>'email') = LOWER(@email::text)
 )
   AND NOT (@contact_id::uuid = ANY(matched_contact_ids))

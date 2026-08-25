@@ -2845,15 +2845,17 @@ type Querier interface {
 	TestLockContactForUpdateNoWait(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	// TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
 	// FindEventsByAttendeeEmailUnmatchedForContact. Permanent regression guard.
-	// Callers must restrict input fixtures to well-formed JSONB arrays
-	// (jsonb_array_elements raises on scalar/object input). Do NOT call from
-	// production code.
+	// The CASE guard maps non-array JSONB to no-match instead of letting
+	// jsonb_array_elements raise — the table is shared with concurrently-running
+	// tests whose rows this query cannot restrict. Do NOT call from production
+	// code.
 	TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacy(ctx context.Context, arg TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacyParams) ([]*CalendarEvent, error)
 	// TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
 	// FindExternalContactsByNormalizedEmail. Permanent regression guard against
-	// semantic drift in the rewritten query. Callers must restrict input fixtures
-	// to well-formed JSONB arrays (jsonb_array_elements raises on scalar/object
-	// input). Do NOT call from production code.
+	// semantic drift in the rewritten query. The CASE guard maps non-array JSONB
+	// to no-match instead of letting jsonb_array_elements raise — the table is
+	// shared with concurrently-running tests whose rows this query cannot
+	// restrict. Do NOT call from production code.
 	TestParityFindExternalContactsByNormalizedEmailLegacy(ctx context.Context, lower string) ([]*ExternalContact, error)
 	// Migration round-trip test only: does a function with the given signature
 	// exist? to_regprocedure returns NULL rather than raising for an unknown

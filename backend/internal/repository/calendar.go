@@ -173,10 +173,15 @@ func filterNilUUIDs(ids []uuid.UUID) []uuid.UUID {
 
 // Upsert inserts or updates a calendar event
 func (r *CalendarEventRepository) Upsert(ctx context.Context, req UpsertCalendarEventRequest) (*CalendarEvent, error) {
-	// Convert attendees to JSON
+	// Convert attendees to JSON. json.Marshal(nil) yields JSONB null (a scalar),
+	// so substitute '[]' to keep the column array-shaped, matching
+	// buildUpsertExternalContactParams.
 	attendeesJSON, err := json.Marshal(req.Attendees)
 	if err != nil {
 		return nil, err
+	}
+	if req.Attendees == nil {
+		attendeesJSON = []byte("[]")
 	}
 
 	dbEvent, err := r.queries.UpsertCalendarEvent(ctx, db.UpsertCalendarEventParams{
