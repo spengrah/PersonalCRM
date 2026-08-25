@@ -192,8 +192,8 @@ func TestInteractionContentService_GroupThreadWindow(t *testing.T) {
 		require.Equal(t, expected[i].id, content.Messages[i].ID)
 	}
 	for _, row := range content.Messages {
-		require.NotEqual(t, "before", row.Body)
-		require.NotEqual(t, "after", row.Body)
+		require.NotEqual(t, "before-body", row.Body)
+		require.NotEqual(t, "after-body", row.Body)
 	}
 	for _, row := range content.Messages {
 		if row.ID == containerless.ID {
@@ -607,6 +607,10 @@ func TestInteractionContentFilteredList(t *testing.T) {
 			filterRows = append(filterRows, row)
 		}
 	}
+	fromRow := seedInteraction(t, e, e.contact.ID, repository.InteractionSourceGChat, base, nil)
+	seedComms(t, e, fromRow.ID, e.contact.ID, repository.InteractionSourceGChat, "filter-container", "filter-from", base, "", "body")
+	ids = append(ids, fromRow.ID)
+	filterRows = append(filterRows, fromRow)
 	differentContainer := seedInteraction(t, e, e.contact.ID, repository.InteractionSourceGChat, base.Add(2*time.Second), nil)
 	seedComms(t, e, differentContainer.ID, e.contact.ID, repository.InteractionSourceGChat, "other-container", "other", differentContainer.OccurredAt, "", "body")
 	tomb := seedInteraction(t, e, e.contact.ID, repository.InteractionSourceGChat, base.Add(3*time.Second), nil)
@@ -619,7 +623,7 @@ func TestInteractionContentFilteredList(t *testing.T) {
 	page2, err := e.ir.ListContactInteractionsFiltered(e.ctx, p)
 	require.NoError(t, err)
 	require.Len(t, page1, 2)
-	require.Len(t, page2, 1)
+	require.Len(t, page2, 2)
 	got := append(pageIDs(page1), pageIDs(page2)...)
 	for _, id := range got {
 		require.Contains(t, ids, id)
@@ -628,19 +632,20 @@ func TestInteractionContentFilteredList(t *testing.T) {
 	require.NotContains(t, got, differentContainer.ID)
 	count, err := e.ir.CountContactInteractionsFiltered(e.ctx, p)
 	require.NoError(t, err)
-	require.Equal(t, int64(3), count)
+	require.Equal(t, int64(4), count)
 	sort.Slice(filterRows, func(i, j int) bool {
 		if filterRows[i].OccurredAt.Equal(filterRows[j].OccurredAt) {
 			return bytes.Compare(filterRows[i].ID[:], filterRows[j].ID[:]) > 0
 		}
 		return filterRows[i].OccurredAt.After(filterRows[j].OccurredAt)
 	})
-	require.Equal(t, []uuid.UUID{filterRows[0].ID, filterRows[1].ID, filterRows[2].ID}, got)
+	require.Equal(t, []uuid.UUID{filterRows[0].ID, filterRows[1].ID, filterRows[2].ID, filterRows[3].ID}, got)
 	p.Offset = 0
 	p.Limit = 20
 	rows, err := e.ir.ListContactInteractionsFiltered(e.ctx, p)
 	require.NoError(t, err)
 	require.Contains(t, pageIDs(rows), ids[0])
+	require.Contains(t, pageIDs(rows), fromRow.ID)
 	require.NotContains(t, pageIDs(rows), differentContainer.ID)
 }
 func pageIDs(rows []repository.Interaction) []uuid.UUID {
