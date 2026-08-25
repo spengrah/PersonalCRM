@@ -387,6 +387,102 @@ func (q *Queries) ListKnownMeetingNoteIDsByHost(ctx context.Context, macHostID *
 	return items, nil
 }
 
+const ListMeetingNotesByLinkedRefs = `-- name: ListMeetingNotesByLinkedRefs :many
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
+WHERE linked_kind = $1
+  AND linked_id = ANY($2::uuid[])
+  AND deleted_at IS NULL
+ORDER BY created_at ASC, id ASC
+`
+
+type ListMeetingNotesByLinkedRefsParams struct {
+	LinkedKind *string     `json:"linked_kind"`
+	LinkedIds  []uuid.UUID `json:"linked_ids"`
+}
+
+func (q *Queries) ListMeetingNotesByLinkedRefs(ctx context.Context, arg ListMeetingNotesByLinkedRefsParams) ([]*MeetingNote, error) {
+	rows, err := q.db.Query(ctx, ListMeetingNotesByLinkedRefs, arg.LinkedKind, arg.LinkedIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*MeetingNote{}
+	for rows.Next() {
+		var i MeetingNote
+		if err := rows.Scan(
+			&i.ID,
+			&i.AnarlogSessionID,
+			&i.Title,
+			&i.Summary,
+			&i.Memo,
+			&i.Participants,
+			&i.MacHostID,
+			&i.LinkedKind,
+			&i.LinkedID,
+			&i.LinkageState,
+			&i.DeletedAt,
+			&i.CreatedAt,
+			&i.InputHash,
+			&i.ResolvedSetHash,
+			&i.LastContentHash,
+			&i.MeetingAt,
+			&i.ConflictCandidates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListMeetingNotesBySessionIDs = `-- name: ListMeetingNotesBySessionIDs :many
+SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
+WHERE anarlog_session_id = ANY($1::uuid[])
+  AND deleted_at IS NULL
+ORDER BY created_at ASC, id ASC
+`
+
+func (q *Queries) ListMeetingNotesBySessionIDs(ctx context.Context, sessionIds []uuid.UUID) ([]*MeetingNote, error) {
+	rows, err := q.db.Query(ctx, ListMeetingNotesBySessionIDs, sessionIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*MeetingNote{}
+	for rows.Next() {
+		var i MeetingNote
+		if err := rows.Scan(
+			&i.ID,
+			&i.AnarlogSessionID,
+			&i.Title,
+			&i.Summary,
+			&i.Memo,
+			&i.Participants,
+			&i.MacHostID,
+			&i.LinkedKind,
+			&i.LinkedID,
+			&i.LinkageState,
+			&i.DeletedAt,
+			&i.CreatedAt,
+			&i.InputHash,
+			&i.ResolvedSetHash,
+			&i.LastContentHash,
+			&i.MeetingAt,
+			&i.ConflictCandidates,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListMeetingNotesNeedingAttention = `-- name: ListMeetingNotesNeedingAttention :many
 SELECT id, anarlog_session_id, title, summary, memo, participants, mac_host_id, linked_kind, linked_id, linkage_state, deleted_at, created_at, input_hash, resolved_set_hash, last_content_hash, meeting_at, conflict_candidates FROM meeting_note
 WHERE deleted_at IS NULL

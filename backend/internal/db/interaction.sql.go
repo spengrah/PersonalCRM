@@ -43,6 +43,53 @@ func (q *Queries) CountContactInteractions(ctx context.Context, contactID uuid.U
 	return count, err
 }
 
+const CountContactInteractionsFiltered = `-- name: CountContactInteractionsFiltered :one
+SELECT COUNT(*) FROM interaction
+WHERE contact_id = $1
+  AND deleted_at IS NULL
+  AND ($2::timestamptz IS NULL OR occurred_at >= $2)
+  AND ($3::timestamptz IS NULL OR occurred_at < $3)
+  AND (
+    ($4::text IS NULL AND $5::text IS NULL)
+    OR (
+      $4::text IS NOT NULL AND $5::text IS NOT NULL
+      AND CASE
+        WHEN $4::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
+          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
+            AND cm.source = $4::text AND cm.thread_id = $5::text)
+        WHEN $4::text = 'telegram' THEN EXISTS (
+          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
+            AND tm.telegram_chat_id::text = $5::text)
+        WHEN $4::text = 'messages' THEN EXISTS (
+          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
+            AND mm.chat_guid = $5::text)
+        ELSE FALSE
+      END
+    )
+  )
+`
+
+type CountContactInteractionsFilteredParams struct {
+	ContactID      uuid.UUID  `json:"contact_id"`
+	FromTime       *time.Time `json:"from_time"`
+	ToTime         *time.Time `json:"to_time"`
+	VenueSource    *string    `json:"venue_source"`
+	VenueContainer *string    `json:"venue_container"`
+}
+
+func (q *Queries) CountContactInteractionsFiltered(ctx context.Context, arg CountContactInteractionsFilteredParams) (int64, error) {
+	row := q.db.QueryRow(ctx, CountContactInteractionsFiltered,
+		arg.ContactID,
+		arg.FromTime,
+		arg.ToTime,
+		arg.VenueSource,
+		arg.VenueContainer,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const CreateInteraction = `-- name: CreateInteraction :one
 INSERT INTO interaction (contact_id, source, source_ref, occurred_at, description, direction, venue_id)
 VALUES (
@@ -465,6 +512,83 @@ type ListContactInteractionsParams struct {
 
 func (q *Queries) ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error) {
 	rows, err := q.db.Query(ctx, ListContactInteractions, arg.ContactID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*Interaction{}
+	for rows.Next() {
+		var i Interaction
+		if err := rows.Scan(
+			&i.ID,
+			&i.ContactID,
+			&i.Source,
+			&i.SourceRef,
+			&i.OccurredAt,
+			&i.Description,
+			&i.CreatedAt,
+			&i.DeletedAt,
+			&i.Direction,
+			&i.VenueID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListContactInteractionsFiltered = `-- name: ListContactInteractionsFiltered :many
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+WHERE contact_id = $1
+  AND deleted_at IS NULL
+  AND ($2::timestamptz IS NULL OR occurred_at >= $2)
+  AND ($3::timestamptz IS NULL OR occurred_at < $3)
+  AND (
+    ($4::text IS NULL AND $5::text IS NULL)
+    OR (
+      $4::text IS NOT NULL AND $5::text IS NOT NULL
+      AND CASE
+        WHEN $4::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
+          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
+            AND cm.source = $4::text AND cm.thread_id = $5::text)
+        WHEN $4::text = 'telegram' THEN EXISTS (
+          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
+            AND tm.telegram_chat_id::text = $5::text)
+        WHEN $4::text = 'messages' THEN EXISTS (
+          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
+            AND mm.chat_guid = $5::text)
+        ELSE FALSE
+      END
+    )
+  )
+ORDER BY occurred_at DESC, id DESC
+LIMIT $7 OFFSET $6
+`
+
+type ListContactInteractionsFilteredParams struct {
+	ContactID      uuid.UUID  `json:"contact_id"`
+	FromTime       *time.Time `json:"from_time"`
+	ToTime         *time.Time `json:"to_time"`
+	VenueSource    *string    `json:"venue_source"`
+	VenueContainer *string    `json:"venue_container"`
+	OffsetCount    int32      `json:"offset_count"`
+	LimitCount     int32      `json:"limit_count"`
+}
+
+func (q *Queries) ListContactInteractionsFiltered(ctx context.Context, arg ListContactInteractionsFilteredParams) ([]*Interaction, error) {
+	rows, err := q.db.Query(ctx, ListContactInteractionsFiltered,
+		arg.ContactID,
+		arg.FromTime,
+		arg.ToTime,
+		arg.VenueSource,
+		arg.VenueContainer,
+		arg.OffsetCount,
+		arg.LimitCount,
+	)
 	if err != nil {
 		return nil, err
 	}

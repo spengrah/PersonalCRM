@@ -70,6 +70,18 @@ type PhoneCallRepository struct {
 	queries db.Querier
 }
 
+func (r *PhoneCallRepository) ListByInteractionIDs(ctx context.Context, ids []uuid.UUID) ([]PhoneCall, error) {
+	rows, err := r.queries.ListPhoneCallsByInteractionIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PhoneCall, len(rows))
+	for i, row := range rows {
+		out[i] = convertDbPhoneCall(row)
+	}
+	return out, nil
+}
+
 // NewPhoneCallRepository creates a new phone_call repository.
 func NewPhoneCallRepository(queries db.Querier) *PhoneCallRepository {
 	return &PhoneCallRepository{queries: queries}

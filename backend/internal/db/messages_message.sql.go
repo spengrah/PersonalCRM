@@ -201,6 +201,138 @@ func (q *Queries) HardDeleteMessagesMessagesByMacHost(ctx context.Context, macHo
 	return err
 }
 
+const ListMessagesContainersForContact = `-- name: ListMessagesContainersForContact :many
+SELECT chat_guid, BOOL_OR(is_group_chat)::boolean AS is_group_chat
+FROM messages_message
+WHERE matched_contact_id = $1 AND deleted_at IS NULL
+GROUP BY chat_guid
+ORDER BY chat_guid
+`
+
+type ListMessagesContainersForContactRow struct {
+	ChatGuid    string `json:"chat_guid"`
+	IsGroupChat bool   `json:"is_group_chat"`
+}
+
+func (q *Queries) ListMessagesContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListMessagesContainersForContactRow, error) {
+	rows, err := q.db.Query(ctx, ListMessagesContainersForContact, contactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListMessagesContainersForContactRow{}
+	for rows.Next() {
+		var i ListMessagesContainersForContactRow
+		if err := rows.Scan(&i.ChatGuid, &i.IsGroupChat); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListMessagesMessagesByChatWindow = `-- name: ListMessagesMessagesByChatWindow :many
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
+WHERE chat_guid = $1
+  AND sent_at >= $2 AND sent_at <= $3
+  AND deleted_at IS NULL
+ORDER BY sent_at ASC, id ASC
+`
+
+type ListMessagesMessagesByChatWindowParams struct {
+	ChatGuid string    `json:"chat_guid"`
+	FromTime time.Time `json:"from_time"`
+	ToTime   time.Time `json:"to_time"`
+}
+
+func (q *Queries) ListMessagesMessagesByChatWindow(ctx context.Context, arg ListMessagesMessagesByChatWindowParams) ([]*MessagesMessage, error) {
+	rows, err := q.db.Query(ctx, ListMessagesMessagesByChatWindow, arg.ChatGuid, arg.FromTime, arg.ToTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*MessagesMessage{}
+	for rows.Next() {
+		var i MessagesMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.Guid,
+			&i.ChatGuid,
+			&i.PeerHandle,
+			&i.PeerNormalized,
+			&i.Text,
+			&i.MessageType,
+			&i.SentAt,
+			&i.IsOutgoing,
+			&i.IsGroupChat,
+			&i.ReplyToGuid,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.MacHostID,
+			&i.ProcessedAt,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
+			&i.DeletedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListMessagesMessagesByInteractionIDs = `-- name: ListMessagesMessagesByInteractionIDs :many
+SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
+WHERE interaction_id = ANY($1::uuid[]) AND deleted_at IS NULL
+`
+
+func (q *Queries) ListMessagesMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*MessagesMessage, error) {
+	rows, err := q.db.Query(ctx, ListMessagesMessagesByInteractionIDs, interactionIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*MessagesMessage{}
+	for rows.Next() {
+		var i MessagesMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.Guid,
+			&i.ChatGuid,
+			&i.PeerHandle,
+			&i.PeerNormalized,
+			&i.Text,
+			&i.MessageType,
+			&i.SentAt,
+			&i.IsOutgoing,
+			&i.IsGroupChat,
+			&i.ReplyToGuid,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.MacHostID,
+			&i.ProcessedAt,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
+			&i.DeletedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListStrandedMessagesMessages = `-- name: ListStrandedMessagesMessages :many
 SELECT id, guid, chat_guid, peer_handle, peer_normalized, text, message_type, sent_at, is_outgoing, is_group_chat, reply_to_guid, matched_contact_id, interaction_id, mac_host_id, processed_at, claimed_at, claimed_session_ref, deleted_at, created_at FROM messages_message
 WHERE matched_contact_id IS NULL
@@ -487,6 +619,46 @@ func (q *Queries) MarkMessagesMessagesProcessedForSession(ctx context.Context, a
 	return result.RowsAffected(), nil
 }
 
+const SummarizeMessagesByInteractionIDs = `-- name: SummarizeMessagesByInteractionIDs :many
+SELECT interaction_id, chat_guid, is_group_chat, COUNT(*)::bigint AS message_count
+FROM messages_message
+WHERE interaction_id = ANY($1::uuid[]) AND deleted_at IS NULL
+GROUP BY interaction_id, chat_guid, is_group_chat
+ORDER BY interaction_id, chat_guid
+`
+
+type SummarizeMessagesByInteractionIDsRow struct {
+	InteractionID *uuid.UUID `json:"interaction_id"`
+	ChatGuid      string     `json:"chat_guid"`
+	IsGroupChat   bool       `json:"is_group_chat"`
+	MessageCount  int64      `json:"message_count"`
+}
+
+func (q *Queries) SummarizeMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*SummarizeMessagesByInteractionIDsRow, error) {
+	rows, err := q.db.Query(ctx, SummarizeMessagesByInteractionIDs, interactionIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*SummarizeMessagesByInteractionIDsRow{}
+	for rows.Next() {
+		var i SummarizeMessagesByInteractionIDsRow
+		if err := rows.Scan(
+			&i.InteractionID,
+			&i.ChatGuid,
+			&i.IsGroupChat,
+			&i.MessageCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const TestInsertMessagesMessageLinked = `-- name: TestInsertMessagesMessageLinked :one
 INSERT INTO messages_message (
     guid, chat_guid, peer_handle, sent_at, is_outgoing, is_group_chat, interaction_id
@@ -542,6 +714,18 @@ func (q *Queries) TestInsertMessagesMessageLinked(ctx context.Context, arg TestI
 		&i.CreatedAt,
 	)
 	return &i, err
+}
+
+const TestSoftDeleteMessagesMessage = `-- name: TestSoftDeleteMessagesMessage :exec
+UPDATE messages_message SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL
+`
+
+// Test-only: soft-deletes a single messages_message row by id, simulating an
+// upstream tombstone. There is no production messages delete path. Production
+// code MUST NOT call this.
+func (q *Queries) TestSoftDeleteMessagesMessage(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, TestSoftDeleteMessagesMessage, id)
+	return err
 }
 
 const UpdateMatchedContactForStrandedMessage = `-- name: UpdateMatchedContactForStrandedMessage :exec

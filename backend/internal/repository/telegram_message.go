@@ -69,9 +69,73 @@ type TelegramMessageRepository struct {
 	queries db.Querier
 }
 
+type TelegramInteractionSummary struct {
+	InteractionID uuid.UUID
+	ChatID        int64
+	ChatType      string
+	ChatTitle     *string
+	MessageCount  int64
+}
+
+type TelegramContainer struct {
+	ChatID    int64
+	ChatType  string
+	ChatTitle *string
+}
+
 // NewTelegramMessageRepository creates a new telegram message repository.
 func NewTelegramMessageRepository(queries db.Querier) *TelegramMessageRepository {
 	return &TelegramMessageRepository{queries: queries}
+}
+
+func (r *TelegramMessageRepository) SummarizeByInteractionIDs(ctx context.Context, ids []uuid.UUID) ([]TelegramInteractionSummary, error) {
+	rows, err := r.queries.SummarizeTelegramByInteractionIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TelegramInteractionSummary, 0, len(rows))
+	for _, row := range rows {
+		if row.InteractionID != nil {
+			out = append(out, TelegramInteractionSummary{InteractionID: *row.InteractionID, ChatID: row.TelegramChatID, ChatType: row.ChatType, ChatTitle: row.ChatTitle, MessageCount: row.MessageCount})
+		}
+	}
+	return out, nil
+}
+
+func (r *TelegramMessageRepository) ListByInteractionIDs(ctx context.Context, ids []uuid.UUID) ([]TelegramMessage, error) {
+	rows, err := r.queries.ListTelegramMessagesByInteractionIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TelegramMessage, len(rows))
+	for i, row := range rows {
+		out[i] = convertDbTelegramMessage(row)
+	}
+	return out, nil
+}
+
+func (r *TelegramMessageRepository) ListByChatWindow(ctx context.Context, chatID int64, from, to time.Time) ([]TelegramMessage, error) {
+	rows, err := r.queries.ListTelegramMessagesByChatWindow(ctx, db.ListTelegramMessagesByChatWindowParams{TelegramChatID: chatID, FromTime: from, ToTime: to})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TelegramMessage, len(rows))
+	for i, row := range rows {
+		out[i] = convertDbTelegramMessage(row)
+	}
+	return out, nil
+}
+
+func (r *TelegramMessageRepository) ListContainersForContact(ctx context.Context, contactID uuid.UUID) ([]TelegramContainer, error) {
+	rows, err := r.queries.ListTelegramContainersForContact(ctx, &contactID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TelegramContainer, len(rows))
+	for i, row := range rows {
+		out[i] = TelegramContainer{ChatID: row.TelegramChatID, ChatType: row.ChatType, ChatTitle: row.ChatTitle}
+	}
+	return out, nil
 }
 
 func convertDbTelegramMessage(m *db.TelegramMessage) TelegramMessage {

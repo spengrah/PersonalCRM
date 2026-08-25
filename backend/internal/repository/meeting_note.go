@@ -127,6 +127,43 @@ type MeetingNoteRepository struct {
 	queries db.Querier
 }
 
+func (r *MeetingNoteRepository) ListByLinkedRefs(ctx context.Context, linkedKind string, linkedIDs []uuid.UUID) ([]MeetingNote, error) {
+	kind := linkedKind
+	rows, err := r.queries.ListMeetingNotesByLinkedRefs(ctx, db.ListMeetingNotesByLinkedRefsParams{LinkedKind: &kind, LinkedIds: linkedIDs})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MeetingNote, 0, len(rows))
+	for _, row := range rows {
+		note, err := convertDbMeetingNote(row)
+		if err != nil {
+			return nil, err
+		}
+		if note != nil {
+			out = append(out, *note)
+		}
+	}
+	return out, nil
+}
+
+func (r *MeetingNoteRepository) ListBySessionIDs(ctx context.Context, sessionIDs []uuid.UUID) ([]MeetingNote, error) {
+	rows, err := r.queries.ListMeetingNotesBySessionIDs(ctx, sessionIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MeetingNote, 0, len(rows))
+	for _, row := range rows {
+		note, err := convertDbMeetingNote(row)
+		if err != nil {
+			return nil, err
+		}
+		if note != nil {
+			out = append(out, *note)
+		}
+	}
+	return out, nil
+}
+
 // NewMeetingNoteRepository builds a MeetingNoteRepository over the
 // given querier.
 func NewMeetingNoteRepository(queries db.Querier) *MeetingNoteRepository {

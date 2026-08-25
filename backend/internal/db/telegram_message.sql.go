@@ -641,6 +641,39 @@ func (q *Queries) ListDistinctUnmatchedPeers(ctx context.Context) ([]*ListDistin
 	return items, nil
 }
 
+const ListTelegramContainersForContact = `-- name: ListTelegramContainersForContact :many
+SELECT DISTINCT ON (telegram_chat_id) telegram_chat_id, chat_type, chat_title
+FROM telegram_message
+WHERE matched_contact_id = $1 AND deleted_at IS NULL
+ORDER BY telegram_chat_id, sent_at DESC, id DESC
+`
+
+type ListTelegramContainersForContactRow struct {
+	TelegramChatID int64   `json:"telegram_chat_id"`
+	ChatType       string  `json:"chat_type"`
+	ChatTitle      *string `json:"chat_title"`
+}
+
+func (q *Queries) ListTelegramContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListTelegramContainersForContactRow, error) {
+	rows, err := q.db.Query(ctx, ListTelegramContainersForContact, contactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListTelegramContainersForContactRow{}
+	for rows.Next() {
+		var i ListTelegramContainersForContactRow
+		if err := rows.Scan(&i.TelegramChatID, &i.ChatType, &i.ChatTitle); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListTelegramMessagesByChatUnprocessed = `-- name: ListTelegramMessagesByChatUnprocessed :many
 SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved, claimed_at, claimed_session_ref FROM telegram_message
 WHERE telegram_chat_id = $1
@@ -651,6 +684,115 @@ ORDER BY sent_at
 
 func (q *Queries) ListTelegramMessagesByChatUnprocessed(ctx context.Context, telegramChatID int64) ([]*TelegramMessage, error) {
 	rows, err := q.db.Query(ctx, ListTelegramMessagesByChatUnprocessed, telegramChatID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TelegramMessage{}
+	for rows.Next() {
+		var i TelegramMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.TelegramMessageID,
+			&i.TelegramChatID,
+			&i.ChatType,
+			&i.ChatTitle,
+			&i.MessageText,
+			&i.MessageType,
+			&i.SentAt,
+			&i.EditedAt,
+			&i.IsOutgoing,
+			&i.ReplyToMsgID,
+			&i.PeerUserID,
+			&i.PeerUsername,
+			&i.PeerFirstName,
+			&i.PeerLastName,
+			&i.PeerPhone,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.ProcessedAt,
+			&i.DeletedAt,
+			&i.CreatedAt,
+			&i.PeerEntityResolved,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListTelegramMessagesByChatWindow = `-- name: ListTelegramMessagesByChatWindow :many
+SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved, claimed_at, claimed_session_ref FROM telegram_message
+WHERE telegram_chat_id = $1
+  AND sent_at >= $2 AND sent_at <= $3
+  AND deleted_at IS NULL
+ORDER BY sent_at ASC, id ASC
+`
+
+type ListTelegramMessagesByChatWindowParams struct {
+	TelegramChatID int64     `json:"telegram_chat_id"`
+	FromTime       time.Time `json:"from_time"`
+	ToTime         time.Time `json:"to_time"`
+}
+
+func (q *Queries) ListTelegramMessagesByChatWindow(ctx context.Context, arg ListTelegramMessagesByChatWindowParams) ([]*TelegramMessage, error) {
+	rows, err := q.db.Query(ctx, ListTelegramMessagesByChatWindow, arg.TelegramChatID, arg.FromTime, arg.ToTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*TelegramMessage{}
+	for rows.Next() {
+		var i TelegramMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.TelegramMessageID,
+			&i.TelegramChatID,
+			&i.ChatType,
+			&i.ChatTitle,
+			&i.MessageText,
+			&i.MessageType,
+			&i.SentAt,
+			&i.EditedAt,
+			&i.IsOutgoing,
+			&i.ReplyToMsgID,
+			&i.PeerUserID,
+			&i.PeerUsername,
+			&i.PeerFirstName,
+			&i.PeerLastName,
+			&i.PeerPhone,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.ProcessedAt,
+			&i.DeletedAt,
+			&i.CreatedAt,
+			&i.PeerEntityResolved,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListTelegramMessagesByInteractionIDs = `-- name: ListTelegramMessagesByInteractionIDs :many
+SELECT id, telegram_message_id, telegram_chat_id, chat_type, chat_title, message_text, message_type, sent_at, edited_at, is_outgoing, reply_to_msg_id, peer_user_id, peer_username, peer_first_name, peer_last_name, peer_phone, matched_contact_id, interaction_id, processed_at, deleted_at, created_at, peer_entity_resolved, claimed_at, claimed_session_ref FROM telegram_message
+WHERE interaction_id = ANY($1::uuid[]) AND deleted_at IS NULL
+`
+
+func (q *Queries) ListTelegramMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*TelegramMessage, error) {
+	rows, err := q.db.Query(ctx, ListTelegramMessagesByInteractionIDs, interactionIds)
 	if err != nil {
 		return nil, err
 	}
@@ -943,6 +1085,58 @@ WHERE telegram_message_id = ANY($1::int[])
 func (q *Queries) SoftDeleteTelegramMessages(ctx context.Context, messageIds []int32) error {
 	_, err := q.db.Exec(ctx, SoftDeleteTelegramMessages, messageIds)
 	return err
+}
+
+const SummarizeTelegramByInteractionIDs = `-- name: SummarizeTelegramByInteractionIDs :many
+WITH counts AS (
+  SELECT interaction_id, telegram_chat_id, COUNT(*)::bigint AS message_count
+  FROM telegram_message
+  WHERE interaction_id = ANY($1::uuid[]) AND deleted_at IS NULL
+  GROUP BY interaction_id, telegram_chat_id
+), latest AS (
+  SELECT DISTINCT ON (interaction_id, telegram_chat_id)
+         interaction_id, telegram_chat_id, chat_type, chat_title
+  FROM telegram_message
+  WHERE interaction_id = ANY($1::uuid[]) AND deleted_at IS NULL
+  ORDER BY interaction_id, telegram_chat_id, sent_at DESC, id DESC
+)
+SELECT counts.interaction_id, counts.telegram_chat_id, latest.chat_type, latest.chat_title, counts.message_count
+FROM counts JOIN latest USING (interaction_id, telegram_chat_id)
+ORDER BY counts.interaction_id, counts.telegram_chat_id
+`
+
+type SummarizeTelegramByInteractionIDsRow struct {
+	InteractionID  *uuid.UUID `json:"interaction_id"`
+	TelegramChatID int64      `json:"telegram_chat_id"`
+	ChatType       string     `json:"chat_type"`
+	ChatTitle      *string    `json:"chat_title"`
+	MessageCount   int64      `json:"message_count"`
+}
+
+func (q *Queries) SummarizeTelegramByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*SummarizeTelegramByInteractionIDsRow, error) {
+	rows, err := q.db.Query(ctx, SummarizeTelegramByInteractionIDs, interactionIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*SummarizeTelegramByInteractionIDsRow{}
+	for rows.Next() {
+		var i SummarizeTelegramByInteractionIDsRow
+		if err := rows.Scan(
+			&i.InteractionID,
+			&i.TelegramChatID,
+			&i.ChatType,
+			&i.ChatTitle,
+			&i.MessageCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const UpdateTelegramMessageContact = `-- name: UpdateTelegramMessageContact :exec

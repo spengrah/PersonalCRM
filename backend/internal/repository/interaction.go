@@ -92,6 +92,16 @@ type InteractionRepository struct {
 	queries db.Querier
 }
 
+type InteractionListFilterParams struct {
+	ContactID      uuid.UUID
+	VenueSource    *string
+	VenueContainer *string
+	From           *time.Time
+	To             *time.Time
+	Limit          int32
+	Offset         int32
+}
+
 // NewInteractionRepository creates a new InteractionRepository
 func NewInteractionRepository(queries db.Querier) *InteractionRepository {
 	return &InteractionRepository{queries: queries}
@@ -192,6 +202,28 @@ func (r *InteractionRepository) ListContactInteractions(ctx context.Context, con
 // CountContactInteractions returns the total number of interactions for a contact
 func (r *InteractionRepository) CountContactInteractions(ctx context.Context, contactID uuid.UUID) (int64, error) {
 	return r.queries.CountContactInteractions(ctx, contactID)
+}
+
+func (r *InteractionRepository) ListContactInteractionsFiltered(ctx context.Context, p InteractionListFilterParams) ([]Interaction, error) {
+	rows, err := r.queries.ListContactInteractionsFiltered(ctx, db.ListContactInteractionsFilteredParams{
+		ContactID: p.ContactID, VenueSource: p.VenueSource, VenueContainer: p.VenueContainer,
+		FromTime: p.From, ToTime: p.To, LimitCount: p.Limit, OffsetCount: p.Offset,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Interaction, len(rows))
+	for i, row := range rows {
+		out[i] = convertDbInteraction(row)
+	}
+	return out, nil
+}
+
+func (r *InteractionRepository) CountContactInteractionsFiltered(ctx context.Context, p InteractionListFilterParams) (int64, error) {
+	return r.queries.CountContactInteractionsFiltered(ctx, db.CountContactInteractionsFilteredParams{
+		ContactID: p.ContactID, VenueSource: p.VenueSource, VenueContainer: p.VenueContainer,
+		FromTime: p.From, ToTime: p.To,
+	})
 }
 
 // CreateInteraction creates a new interaction record

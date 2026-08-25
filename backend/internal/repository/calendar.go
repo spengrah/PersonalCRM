@@ -17,6 +17,18 @@ type CalendarEventRepository struct {
 	queries db.Querier
 }
 
+func (r *CalendarEventRepository) ListByIDs(ctx context.Context, ids []uuid.UUID) ([]CalendarEvent, error) {
+	rows, err := r.queries.ListCalendarEventsByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CalendarEvent, len(rows))
+	for i, row := range rows {
+		out[i] = convertDbCalendarEvent(row)
+	}
+	return out, nil
+}
+
 // NewCalendarEventRepository creates a new calendar event repository
 func NewCalendarEventRepository(queries db.Querier) *CalendarEventRepository {
 	return &CalendarEventRepository{queries: queries}

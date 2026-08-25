@@ -316,6 +316,52 @@ func (q *Queries) GetCalendarEventByIDForShare(ctx context.Context, id uuid.UUID
 	return &i, err
 }
 
+const ListCalendarEventsByIDs = `-- name: ListCalendarEventsByIDs :many
+SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
+WHERE id = ANY($1::uuid[])
+`
+
+func (q *Queries) ListCalendarEventsByIDs(ctx context.Context, ids []uuid.UUID) ([]*CalendarEvent, error) {
+	rows, err := q.db.Query(ctx, ListCalendarEventsByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*CalendarEvent{}
+	for rows.Next() {
+		var i CalendarEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.GcalEventID,
+			&i.GcalCalendarID,
+			&i.GoogleAccountID,
+			&i.Title,
+			&i.Description,
+			&i.Location,
+			&i.StartTime,
+			&i.EndTime,
+			&i.AllDay,
+			&i.Status,
+			&i.UserResponse,
+			&i.OrganizerEmail,
+			&i.Attendees,
+			&i.MatchedContactIds,
+			&i.SyncedAt,
+			&i.LastContactedUpdated,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.HtmlLink,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListEventsByAccountAndDateRange = `-- name: ListEventsByAccountAndDateRange :many
 SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
 WHERE google_account_id = $1

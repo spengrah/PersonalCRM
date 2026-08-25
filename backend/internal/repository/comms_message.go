@@ -162,9 +162,76 @@ type CommsMessageRepository struct {
 	repointBarrierForTest func()
 }
 
+type CommsInteractionSummary struct {
+	InteractionID uuid.UUID
+	Source        string
+	ThreadID      *string
+	MessageCount  int64
+	LatestSubject *string
+}
+
+type CommsContainer struct {
+	Source        string
+	ThreadID      string
+	LatestSubject *string
+}
+
 // NewCommsMessageRepository creates a new comms_message repository.
 func NewCommsMessageRepository(queries db.Querier) *CommsMessageRepository {
 	return &CommsMessageRepository{queries: queries}
+}
+
+func (r *CommsMessageRepository) SummarizeByInteractionIDs(ctx context.Context, ids []uuid.UUID) ([]CommsInteractionSummary, error) {
+	rows, err := r.queries.SummarizeCommsByInteractionIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CommsInteractionSummary, 0, len(rows))
+	for _, row := range rows {
+		if row.InteractionID == nil {
+			continue
+		}
+		out = append(out, CommsInteractionSummary{InteractionID: *row.InteractionID, Source: row.Source, ThreadID: row.ThreadID, MessageCount: row.MessageCount, LatestSubject: row.LatestSubject})
+	}
+	return out, nil
+}
+
+func (r *CommsMessageRepository) ListByInteractionIDs(ctx context.Context, ids []uuid.UUID) ([]CommsMessage, error) {
+	rows, err := r.queries.ListCommsMessagesByInteractionIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CommsMessage, len(rows))
+	for i, row := range rows {
+		out[i] = convertDbCommsMessage(row)
+	}
+	return out, nil
+}
+
+func (r *CommsMessageRepository) ListByThreadWindow(ctx context.Context, source, threadID string, from, to time.Time) ([]CommsMessage, error) {
+	rows, err := r.queries.ListCommsMessagesByThreadWindow(ctx, db.ListCommsMessagesByThreadWindowParams{Source: source, ThreadID: &threadID, FromTime: from, ToTime: to})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CommsMessage, len(rows))
+	for i, row := range rows {
+		out[i] = convertDbCommsMessage(row)
+	}
+	return out, nil
+}
+
+func (r *CommsMessageRepository) ListContainersForContact(ctx context.Context, contactID uuid.UUID) ([]CommsContainer, error) {
+	rows, err := r.queries.ListCommsContainersForContact(ctx, &contactID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CommsContainer, len(rows))
+	for i, row := range rows {
+		if row.ThreadID != nil {
+			out[i] = CommsContainer{Source: row.Source, ThreadID: *row.ThreadID, LatestSubject: row.LatestSubject}
+		}
+	}
+	return out, nil
 }
 
 // commsMessageDedupIndex is the partial unique index

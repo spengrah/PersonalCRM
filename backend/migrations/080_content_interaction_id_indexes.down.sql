@@ -1,0 +1,4 @@
+DROP INDEX idx_comms_message_interaction_id;
+DROP INDEX idx_telegram_message_interaction_id;
+DROP INDEX idx_messages_message_interaction_id;
+DROP INDEX idx_phone_call_interaction_id;

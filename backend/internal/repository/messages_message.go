@@ -66,9 +66,76 @@ type MessagesMessageRepository struct {
 	queries db.Querier
 }
 
+type MessagesInteractionSummary struct {
+	InteractionID uuid.UUID
+	ChatGuid      string
+	IsGroupChat   bool
+	MessageCount  int64
+}
+
+type MessagesContainer struct {
+	ChatGuid    string
+	IsGroupChat bool
+}
+
 // NewMessagesMessageRepository creates a new messages_message repository.
 func NewMessagesMessageRepository(queries db.Querier) *MessagesMessageRepository {
 	return &MessagesMessageRepository{queries: queries}
+}
+
+func (r *MessagesMessageRepository) SummarizeByInteractionIDs(ctx context.Context, ids []uuid.UUID) ([]MessagesInteractionSummary, error) {
+	rows, err := r.queries.SummarizeMessagesByInteractionIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MessagesInteractionSummary, 0, len(rows))
+	for _, row := range rows {
+		if row.InteractionID != nil {
+			out = append(out, MessagesInteractionSummary{InteractionID: *row.InteractionID, ChatGuid: row.ChatGuid, IsGroupChat: row.IsGroupChat, MessageCount: row.MessageCount})
+		}
+	}
+	return out, nil
+}
+
+func (r *MessagesMessageRepository) ListByInteractionIDs(ctx context.Context, ids []uuid.UUID) ([]MessagesMessage, error) {
+	rows, err := r.queries.ListMessagesMessagesByInteractionIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MessagesMessage, len(rows))
+	for i, row := range rows {
+		out[i] = convertDbMessagesMessage(row)
+	}
+	return out, nil
+}
+
+func (r *MessagesMessageRepository) ListByChatWindow(ctx context.Context, chatGUID string, from, to time.Time) ([]MessagesMessage, error) {
+	rows, err := r.queries.ListMessagesMessagesByChatWindow(ctx, db.ListMessagesMessagesByChatWindowParams{ChatGuid: chatGUID, FromTime: from, ToTime: to})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MessagesMessage, len(rows))
+	for i, row := range rows {
+		out[i] = convertDbMessagesMessage(row)
+	}
+	return out, nil
+}
+
+func (r *MessagesMessageRepository) ListContainersForContact(ctx context.Context, contactID uuid.UUID) ([]MessagesContainer, error) {
+	rows, err := r.queries.ListMessagesContainersForContact(ctx, &contactID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]MessagesContainer, len(rows))
+	for i, row := range rows {
+		out[i] = MessagesContainer{ChatGuid: row.ChatGuid, IsGroupChat: row.IsGroupChat}
+	}
+	return out, nil
+}
+
+// TestSoftDeleteMessage is test-only; production code MUST NOT call this.
+func (r *MessagesMessageRepository) TestSoftDeleteMessage(ctx context.Context, id uuid.UUID) error {
+	return r.queries.TestSoftDeleteMessagesMessage(ctx, id)
 }
 
 func convertDbMessagesMessage(m *db.MessagesMessage) MessagesMessage {
