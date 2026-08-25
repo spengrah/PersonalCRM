@@ -179,7 +179,7 @@ func (q *Queries) TestInsertExternalContactRawEmails(ctx context.Context, arg Te
 const TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacy = `-- name: TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacy :many
 SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
 WHERE EXISTS (
-    SELECT 1 FROM jsonb_array_elements(attendees) AS a
+    SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(attendees) = 'array' THEN attendees ELSE '[]'::jsonb END) AS a
     WHERE LOWER(a->>'email') = LOWER($1::text)
 )
   AND NOT ($2::uuid = ANY(matched_contact_ids))
@@ -193,9 +193,10 @@ type TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacyParams struct {
 
 // TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
 // FindEventsByAttendeeEmailUnmatchedForContact. Permanent regression guard.
-// Callers must restrict input fixtures to well-formed JSONB arrays
-// (jsonb_array_elements raises on scalar/object input). Do NOT call from
-// production code.
+// The CASE guard maps non-array JSONB to no-match instead of letting
+// jsonb_array_elements raise — the table is shared with concurrently-running
+// tests whose rows this query cannot restrict. Do NOT call from production
+// code.
 func (q *Queries) TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacy(ctx context.Context, arg TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacyParams) ([]*CalendarEvent, error) {
 	rows, err := q.db.Query(ctx, TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacy, arg.Email, arg.ContactID)
 	if err != nil {
@@ -240,7 +241,7 @@ func (q *Queries) TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacy(c
 const TestParityFindExternalContactsByNormalizedEmailLegacy = `-- name: TestParityFindExternalContactsByNormalizedEmailLegacy :many
 SELECT id, source, source_id, account_id, display_name, first_name, last_name, emails, phones, addresses, organization, job_title, birthday, photo_url, crm_contact_id, match_status, duplicate_of_id, etag, metadata, synced_at, created_at, updated_at, deleted_at, host_id, last_content_hash, pending_method_suggestions, dismissed_method_suggestions FROM external_contact
 WHERE EXISTS (
-    SELECT 1 FROM jsonb_array_elements(emails) AS e
+    SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(emails) = 'array' THEN emails ELSE '[]'::jsonb END) AS e
     WHERE LOWER(e->>'value') = LOWER($1)
 )
   AND duplicate_of_id IS NULL
@@ -249,9 +250,10 @@ ORDER BY created_at
 
 // TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
 // FindExternalContactsByNormalizedEmail. Permanent regression guard against
-// semantic drift in the rewritten query. Callers must restrict input fixtures
-// to well-formed JSONB arrays (jsonb_array_elements raises on scalar/object
-// input). Do NOT call from production code.
+// semantic drift in the rewritten query. The CASE guard maps non-array JSONB
+// to no-match instead of letting jsonb_array_elements raise — the table is
+// shared with concurrently-running tests whose rows this query cannot
+// restrict. Do NOT call from production code.
 func (q *Queries) TestParityFindExternalContactsByNormalizedEmailLegacy(ctx context.Context, lower string) ([]*ExternalContact, error) {
 	rows, err := q.db.Query(ctx, TestParityFindExternalContactsByNormalizedEmailLegacy, lower)
 	if err != nil {

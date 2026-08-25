@@ -571,6 +571,39 @@ func (q *Queries) HardDeleteCommsMessagesBySourceAndExternalIDPrefix(ctx context
 	return err
 }
 
+const ListCommsContainersForContact = `-- name: ListCommsContainersForContact :many
+SELECT DISTINCT ON (source, thread_id) source, thread_id, subject AS latest_subject
+FROM comms_message
+WHERE matched_contact_id = $1 AND thread_id IS NOT NULL AND deleted_at IS NULL
+ORDER BY source, thread_id, sent_at DESC, id DESC
+`
+
+type ListCommsContainersForContactRow struct {
+	Source        string  `json:"source"`
+	ThreadID      *string `json:"thread_id"`
+	LatestSubject *string `json:"latest_subject"`
+}
+
+func (q *Queries) ListCommsContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListCommsContainersForContactRow, error) {
+	rows, err := q.db.Query(ctx, ListCommsContainersForContact, contactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListCommsContainersForContactRow{}
+	for rows.Next() {
+		var i ListCommsContainersForContactRow
+		if err := rows.Scan(&i.Source, &i.ThreadID, &i.LatestSubject); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListCommsMessagesByContact = `-- name: ListCommsMessagesByContact :many
 SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
 WHERE matched_contact_id = $1
@@ -581,6 +614,113 @@ ORDER BY sent_at DESC, id
 // Per-contact content, newest first (backs idx_comms_message_contact_sent).
 func (q *Queries) ListCommsMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]*CommsMessage, error) {
 	rows, err := q.db.Query(ctx, ListCommsMessagesByContact, matchedContactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*CommsMessage{}
+	for rows.Next() {
+		var i CommsMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.ExternalID,
+			&i.ThreadID,
+			&i.Subject,
+			&i.Body,
+			&i.Snippet,
+			&i.PeerHandle,
+			&i.PeerNormalized,
+			&i.Direction,
+			&i.SentAt,
+			&i.AccountID,
+			&i.SourceMetadata,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
+			&i.ProcessedAt,
+			&i.DeletedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListCommsMessagesByInteractionIDs = `-- name: ListCommsMessagesByInteractionIDs :many
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+WHERE interaction_id = ANY($1::uuid[]) AND deleted_at IS NULL
+`
+
+func (q *Queries) ListCommsMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*CommsMessage, error) {
+	rows, err := q.db.Query(ctx, ListCommsMessagesByInteractionIDs, interactionIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*CommsMessage{}
+	for rows.Next() {
+		var i CommsMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.ExternalID,
+			&i.ThreadID,
+			&i.Subject,
+			&i.Body,
+			&i.Snippet,
+			&i.PeerHandle,
+			&i.PeerNormalized,
+			&i.Direction,
+			&i.SentAt,
+			&i.AccountID,
+			&i.SourceMetadata,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.ClaimedAt,
+			&i.ClaimedSessionRef,
+			&i.ProcessedAt,
+			&i.DeletedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const ListCommsMessagesByThreadWindow = `-- name: ListCommsMessagesByThreadWindow :many
+SELECT id, source, external_id, thread_id, subject, body, snippet, peer_handle, peer_normalized, direction, sent_at, account_id, source_metadata, matched_contact_id, interaction_id, claimed_at, claimed_session_ref, processed_at, deleted_at, created_at FROM comms_message
+WHERE source = $1 AND thread_id = $2
+  AND sent_at >= $3 AND sent_at <= $4
+  AND deleted_at IS NULL
+ORDER BY sent_at ASC, id ASC
+`
+
+type ListCommsMessagesByThreadWindowParams struct {
+	Source   string    `json:"source"`
+	ThreadID *string   `json:"thread_id"`
+	FromTime time.Time `json:"from_time"`
+	ToTime   time.Time `json:"to_time"`
+}
+
+func (q *Queries) ListCommsMessagesByThreadWindow(ctx context.Context, arg ListCommsMessagesByThreadWindowParams) ([]*CommsMessage, error) {
+	rows, err := q.db.Query(ctx, ListCommsMessagesByThreadWindow,
+		arg.Source,
+		arg.ThreadID,
+		arg.FromTime,
+		arg.ToTime,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1207,6 +1347,62 @@ func (q *Queries) SoftDeleteUnmatchedChatMessageTwin(ctx context.Context, arg So
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const SummarizeCommsByInteractionIDs = `-- name: SummarizeCommsByInteractionIDs :many
+WITH counts AS (
+  SELECT interaction_id, source, thread_id, COUNT(DISTINCT external_id)::bigint AS message_count
+  FROM comms_message
+  WHERE interaction_id = ANY($1::uuid[]) AND deleted_at IS NULL
+  GROUP BY interaction_id, source, thread_id
+), latest AS (
+  SELECT DISTINCT ON (interaction_id, source, thread_id)
+         interaction_id, source, thread_id, subject AS latest_subject
+  FROM comms_message
+  WHERE interaction_id = ANY($1::uuid[]) AND deleted_at IS NULL
+  ORDER BY interaction_id, source, thread_id, sent_at DESC, id DESC
+)
+SELECT counts.interaction_id, counts.source, counts.thread_id, counts.message_count, latest.latest_subject
+FROM counts
+LEFT JOIN latest
+  ON latest.interaction_id = counts.interaction_id
+ AND latest.source = counts.source
+ AND latest.thread_id IS NOT DISTINCT FROM counts.thread_id
+ORDER BY counts.interaction_id, counts.source, counts.thread_id
+`
+
+type SummarizeCommsByInteractionIDsRow struct {
+	InteractionID *uuid.UUID `json:"interaction_id"`
+	Source        string     `json:"source"`
+	ThreadID      *string    `json:"thread_id"`
+	MessageCount  int64      `json:"message_count"`
+	LatestSubject *string    `json:"latest_subject"`
+}
+
+func (q *Queries) SummarizeCommsByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*SummarizeCommsByInteractionIDsRow, error) {
+	rows, err := q.db.Query(ctx, SummarizeCommsByInteractionIDs, interactionIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*SummarizeCommsByInteractionIDsRow{}
+	for rows.Next() {
+		var i SummarizeCommsByInteractionIDsRow
+		if err := rows.Scan(
+			&i.InteractionID,
+			&i.Source,
+			&i.ThreadID,
+			&i.MessageCount,
+			&i.LatestSubject,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const TestInsertCommsMessageLinked = `-- name: TestInsertCommsMessageLinked :one

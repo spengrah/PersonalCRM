@@ -216,3 +216,55 @@ RETURNING *;
 -- under-serializes (a correctness cost). Mirrors the per-account
 -- sync-enqueue lock in external_sync.sql.
 SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg('lock_key')::text, 0));
+
+-- name: ListContactInteractionsFiltered :many
+SELECT * FROM interaction
+WHERE contact_id = sqlc.arg('contact_id')
+  AND deleted_at IS NULL
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR occurred_at >= sqlc.narg('from_time'))
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR occurred_at < sqlc.narg('to_time'))
+  AND (
+    (sqlc.narg('venue_source')::text IS NULL AND sqlc.narg('venue_container')::text IS NULL)
+    OR (
+      sqlc.narg('venue_source')::text IS NOT NULL AND sqlc.narg('venue_container')::text IS NOT NULL
+      AND CASE
+        WHEN sqlc.narg('venue_source')::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
+          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
+            AND cm.source = sqlc.narg('venue_source')::text AND cm.thread_id = sqlc.narg('venue_container')::text)
+        WHEN sqlc.narg('venue_source')::text = 'telegram' THEN EXISTS (
+          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
+            AND tm.telegram_chat_id::text = sqlc.narg('venue_container')::text)
+        WHEN sqlc.narg('venue_source')::text = 'messages' THEN EXISTS (
+          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
+            AND mm.chat_guid = sqlc.narg('venue_container')::text)
+        ELSE FALSE
+      END
+    )
+  )
+ORDER BY occurred_at DESC, id DESC
+LIMIT sqlc.arg('limit_count') OFFSET sqlc.arg('offset_count');
+
+-- name: CountContactInteractionsFiltered :one
+SELECT COUNT(*) FROM interaction
+WHERE contact_id = sqlc.arg('contact_id')
+  AND deleted_at IS NULL
+  AND (sqlc.narg('from_time')::timestamptz IS NULL OR occurred_at >= sqlc.narg('from_time'))
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR occurred_at < sqlc.narg('to_time'))
+  AND (
+    (sqlc.narg('venue_source')::text IS NULL AND sqlc.narg('venue_container')::text IS NULL)
+    OR (
+      sqlc.narg('venue_source')::text IS NOT NULL AND sqlc.narg('venue_container')::text IS NOT NULL
+      AND CASE
+        WHEN sqlc.narg('venue_source')::text IN ('email', 'gchat', 'whatsapp') THEN EXISTS (
+          SELECT 1 FROM comms_message cm WHERE cm.interaction_id = interaction.id AND cm.deleted_at IS NULL
+            AND cm.source = sqlc.narg('venue_source')::text AND cm.thread_id = sqlc.narg('venue_container')::text)
+        WHEN sqlc.narg('venue_source')::text = 'telegram' THEN EXISTS (
+          SELECT 1 FROM telegram_message tm WHERE tm.interaction_id = interaction.id AND tm.deleted_at IS NULL
+            AND tm.telegram_chat_id::text = sqlc.narg('venue_container')::text)
+        WHEN sqlc.narg('venue_source')::text = 'messages' THEN EXISTS (
+          SELECT 1 FROM messages_message mm WHERE mm.interaction_id = interaction.id AND mm.deleted_at IS NULL
+            AND mm.chat_guid = sqlc.narg('venue_container')::text)
+        ELSE FALSE
+      END
+    )
+  );

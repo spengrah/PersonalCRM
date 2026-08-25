@@ -336,3 +336,37 @@ RETURNING *;
 -- all-fields-populated test can read back a row whose deleted_at is set.
 -- Production code MUST NOT call this (it would return soft-deleted rows).
 SELECT * FROM telegram_message WHERE id = @id;
+
+-- name: SummarizeTelegramByInteractionIDs :many
+WITH counts AS (
+  SELECT interaction_id, telegram_chat_id, COUNT(*)::bigint AS message_count
+  FROM telegram_message
+  WHERE interaction_id = ANY(@interaction_ids::uuid[]) AND deleted_at IS NULL
+  GROUP BY interaction_id, telegram_chat_id
+), latest AS (
+  SELECT DISTINCT ON (interaction_id, telegram_chat_id)
+         interaction_id, telegram_chat_id, chat_type, chat_title
+  FROM telegram_message
+  WHERE interaction_id = ANY(@interaction_ids::uuid[]) AND deleted_at IS NULL
+  ORDER BY interaction_id, telegram_chat_id, sent_at DESC, id DESC
+)
+SELECT counts.interaction_id, counts.telegram_chat_id, latest.chat_type, latest.chat_title, counts.message_count
+FROM counts JOIN latest USING (interaction_id, telegram_chat_id)
+ORDER BY counts.interaction_id, counts.telegram_chat_id;
+
+-- name: ListTelegramMessagesByInteractionIDs :many
+SELECT * FROM telegram_message
+WHERE interaction_id = ANY(@interaction_ids::uuid[]) AND deleted_at IS NULL;
+
+-- name: ListTelegramMessagesByChatWindow :many
+SELECT * FROM telegram_message
+WHERE telegram_chat_id = @telegram_chat_id
+  AND sent_at >= @from_time AND sent_at <= @to_time
+  AND deleted_at IS NULL
+ORDER BY sent_at ASC, id ASC;
+
+-- name: ListTelegramContainersForContact :many
+SELECT DISTINCT ON (telegram_chat_id) telegram_chat_id, chat_type, chat_title
+FROM telegram_message
+WHERE matched_contact_id = @contact_id AND deleted_at IS NULL
+ORDER BY telegram_chat_id, sent_at DESC, id DESC;

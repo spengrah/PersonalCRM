@@ -1,0 +1,254 @@
+domain: interactions
+prefix: IXN
+maturity: reviewed
+settled: [ui, api]
+behaviors:
+  - id: IXN-001
+    title: A contact has one complete, paginated interaction history
+    type: ux
+    status: proposed
+    surface: ui
+    given: a contact has recorded interactions from one or more sources
+    when: their interaction history is viewed and additional pages are requested
+    then:
+      - key: every-source-rendered
+        text: every recorded interaction is represented regardless of its source
+      - key: reverse-chron-order
+        text: interactions are ordered newest first with a deterministic tie-breaker
+      - key: load-more-pages
+        text: additional pages extend the history without gaps or duplicate rows
+      - key: section-replaces-meetings
+        text: the unified interaction history takes the place of the separate meetings history
+    provenance: [.ai/spec/contact-interactions-surface.md]
+
+  - id: IXN-002
+    title: Every interaction row communicates its source and content shape
+    type: ux
+    status: proposed
+    surface: ui
+    given: an interaction is present in a contact's history
+    when: its row is rendered
+    then:
+      - key: source-badge
+        text: the row identifies the interaction source
+      - key: direction-shown
+        text: the row communicates whether the interaction was inbound or outbound when direction applies
+      - key: timestamp-shown
+        text: the row shows when the interaction occurred
+      - key: row-label
+        text: the row has a meaningful label derived from available interaction or content metadata
+      - key: content-indicator
+        text: the row indicates the kind and amount of content available, including when none exists
+      - key: group-marker
+        text: the row visibly distinguishes group interactions from direct interactions
+      - key: overflow-affordance-reserved
+        text: the row reserves an action affordance for later interaction workflows without enabling writes
+      - key: calendar-row-event-details
+        text: a calendar row summarizes its event time, place, attendee size, and link when available
+      - key: call-row-details
+        text: a call row summarizes its service, answer state, voicemail state, and duration
+    provenance: [.ai/spec/contact-interactions-surface.md]
+
+  - id: IXN-003
+    title: Venue tags follow constituent content rather than graph pointers
+    type: invariant
+    status: current
+    surface: none
+    statement: an interaction's venue tags are derived from the distinct containers of its live constituent content and never from interaction.venue_id, which remains only the graph's primary-container pointer.
+    provenance: [.ai/spec/contact-interactions-surface.md, InteractionContentService]
+
+  - id: IXN-004
+    title: Message evidence expands in place as a complete plaintext thread window
+    type: ux
+    status: proposed
+    surface: ui
+    given: an interaction contains message content
+    when: the interaction is expanded
+    then:
+      - key: full-plaintext-bodies
+        text: every message in the interaction's bounded thread evidence is shown in full as plaintext
+      - key: sender-and-timestamp
+        text: each message identifies its sender and timestamp
+      - key: all-speakers-in-group
+        text: group evidence includes every speaker represented inside the interaction's thread window
+      - key: expand-in-place-no-nav
+        text: the evidence opens within the interaction history without navigating away
+    provenance: [.ai/spec/contact-interactions-surface.md]
+
+  - id: IXN-005
+    title: Meeting-note evidence preserves the linked notes and their provenance
+    type: ux
+    status: proposed
+    surface: ui
+    given: an interaction has one or more live linked meeting notes
+    when: its meeting-note evidence is expanded
+    then:
+      - key: summary-and-memo-shown
+        text: each note exposes its stored summary and memo without inferred rewriting
+      - key: all-linked-notes-shown
+        text: every live note linked to the interaction is represented
+      - key: provenance-footnote
+        text: the evidence includes its on-device processing provenance
+    provenance: [.ai/spec/contact-interactions-surface.md]
+
+  - id: IXN-006
+    title: Upcoming calendar events share the history without becoming interactions
+    type: ux
+    status: proposed
+    surface: ui
+    given: a contact has current or future calendar events
+    when: the unified interaction history is viewed
+    then:
+      - key: upcoming-badge-at-top
+        text: upcoming events carry an upcoming-state badge and appear ahead of past interactions on the shared time axis
+      - key: no-interaction-row-for-future
+        text: a future event is represented directly and does not create an interaction before it is recorded as one
+      - key: event-link-preserved
+        text: the event's external link remains available when present
+      - key: event-time-place-size
+        text: the event communicates its time, place, and attendee size
+      - key: all-upcoming-reachable
+        text: every event returned by the bounded upcoming read remains reachable
+      - key: in-progress-still-upcoming
+        text: an event that has started but not ended remains in the upcoming set
+    provenance: [.ai/spec/contact-interactions-surface.md]
+
+  - id: IXN-007
+    title: Venue filtering follows content-container membership
+    type: ux
+    status: proposed
+    surface: ui
+    given: a contact has interactions across multiple message venues
+    when: a venue filter is applied
+    then:
+      - key: venue-narrows-list
+        text: the history contains only interactions with live constituent content in the selected venue
+      - key: expanded-shows-venue-messages
+        text: expanded evidence shows the messages relevant to the selected venue
+    provenance: [.ai/spec/contact-interactions-surface.md]
+
+  - id: IXN-008
+    title: Date filters bound the history while preserving an all-time view
+    type: ux
+    status: proposed
+    surface: ui
+    given: a contact's unified history spans multiple dates
+    when: a date filter is selected
+    then:
+      - key: preset-30-days
+        text: a preset can limit the history to the most recent 30-day window
+      - key: preset-90-days
+        text: a preset can limit the history to the most recent 90-day window
+      - key: custom-range
+        text: a custom start and end can bound the history
+      - key: all-includes-upcoming
+        text: the unbounded view includes upcoming events as well as past interactions
+      - key: custom-range-bounds-upcoming
+        text: custom bounds apply consistently to upcoming events on the shared time axis
+    provenance: [.ai/spec/contact-interactions-surface.md]
+
+  - id: IXN-009
+    title: The interaction history renders recorded state honestly
+    type: ux
+    status: proposed
+    surface: ui
+    given: recorded interaction state may be sparse, duplicated, or absent
+    when: the contact's interaction history is rendered
+    then:
+      - key: contentless-says-none
+        text: an interaction without content remains visible and explicitly communicates that no content is available
+      - key: duplicates-render-distinct
+        text: separately recorded interactions remain distinct even when they appear duplicative
+      - key: empty-state-explicit
+        text: a contact with no recorded interactions receives an explicit empty state
+    provenance: [.ai/spec/contact-interactions-surface.md]
+
+  - id: IXN-010
+    title: The contact interactions surface is read-only end to end
+    type: invariant
+    status: proposed
+    surface: api
+    statement: the contact interactions surface exposes only reads, adds no mutation endpoint or interaction writer, and leaves interaction creation to the existing recording paths.
+    provenance: [.ai/spec/contact-interactions-surface.md]
+
+  - id: IXN-011
+    title: Content assembly is reusable outside HTTP delivery
+    type: invariant
+    status: current
+    surface: none
+    statement: interaction content assembly is an independently invocable service seam rather than logic embedded in an HTTP handler.
+    provenance: [.ai/spec/contact-interactions-surface.md, InteractionContentService]
+
+  - id: IXN-012
+    title: List enrichment performs no per-row content fan-out
+    type: invariant
+    status: current
+    surface: none
+    statement: enriching an interaction page uses batched content reads whose statement count stays constant as the number of rows grows for the same source-family mix.
+    provenance: [.ai/spec/contact-interactions-surface.md, InteractionContentService]
+
+  - id: IXN-013
+    title: The contact interaction list API returns a stable enriched page
+    type: api
+    status: proposed
+    surface: api
+    given: a client requests a contact's interactions with optional venue and date filters
+    when: the list request is evaluated
+    then:
+      - key: enriched-row-fields
+        text: every interaction row includes its derived label, content kind, message count, group state, and venue tags
+      - key: calendar-event-summary
+        text: a resolved calendar interaction includes its title, location, attendee count, times, and external link
+      - key: call-summary
+        text: a resolved phone-call interaction includes its service, answer state, voicemail state, and duration
+      - key: venue-filter-matches-content
+        text: a venue filter matches interactions through their live constituent content containers
+      - key: date-range-half-open
+        text: date filtering includes the lower bound and excludes the upper bound
+      - key: filtered-pagination-totals
+        text: pagination totals use the same filters as the returned page
+      - key: invalid-params-400
+        text: invalid pagination, venue, or date parameters receive an HTTP 400 response
+      - key: unknown-venue-empty
+        text: an unknown venue returns an HTTP 200 response with an empty page
+      - key: venue-options-unfiltered
+        text: venue options describe all live content containers for the contact independently of active list filters
+      - key: stable-order-tiebreaker
+        text: rows order by occurrence time descending and interaction id descending
+      - key: soft-deleted-excluded
+        text: soft-deleted interactions and content do not contribute rows, enrichment, totals, or venue options
+    provenance: [.ai/spec/contact-interactions-surface.md, InteractionContentService]
+
+  - id: IXN-014
+    title: The per-interaction content API returns bounded, deterministic evidence
+    type: api
+    status: proposed
+    surface: api
+    given: a client requests content by interaction id
+    when: the content request is evaluated
+    then:
+      - key: kind-per-source
+        text: message sources return messages; calendar events return meeting_note only with a live linked note and otherwise none; session interactions return meeting_note even without a live note; phone calls return call; and manual or task interactions return none
+      - key: full-thread-window
+        text: message evidence includes all senders within each constituent container's interaction-bounded thread window
+      - key: window-boundary-closed
+        text: each message window includes rows exactly at both its minimum and maximum timestamps
+      - key: message-order-deterministic
+        text: messages order by sent time ascending and message id ascending
+      - key: one-row-per-source-message
+        text: replicated storage rows for one source message produce exactly one evidence row
+      - key: message-field-shape
+        text: each message exposes its id, sender, direction, sent time, plaintext body, and venue key
+      - key: sender-fallback-precedence
+        text: sender labels follow the source-specific metadata precedence and identify outgoing messages as the user
+      - key: nullable-body-empty-string
+        text: a stored null message body is represented as an empty string without dropping the message
+      - key: note-fields-verbatim
+        text: meeting-note title, summary, and memo values are returned without inferred rewriting
+      - key: not-found-404
+        text: an unknown interaction receives an HTTP 404 response
+      - key: soft-deleted-404
+        text: a soft-deleted interaction receives an HTTP 404 response and its content is inaccessible
+      - key: empty-arrays-not-null
+        text: absent messages or meeting notes are represented by empty arrays rather than null
+    provenance: [.ai/spec/contact-interactions-surface.md, InteractionContentService]

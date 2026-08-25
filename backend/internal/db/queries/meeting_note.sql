@@ -224,3 +224,16 @@ RETURNING *;
 -- tombstoned rows.
 DELETE FROM meeting_note
 WHERE mac_host_id = sqlc.arg('mac_host_id');
+
+-- name: ListMeetingNotesByLinkedRefs :many
+SELECT * FROM meeting_note
+WHERE linked_kind = @linked_kind
+  AND linked_id = ANY(@linked_ids::uuid[])
+  AND deleted_at IS NULL
+ORDER BY created_at ASC, id ASC;
+
+-- name: ListMeetingNotesBySessionIDs :many
+SELECT * FROM meeting_note
+WHERE anarlog_session_id = ANY(@session_ids::uuid[])
+  AND deleted_at IS NULL
+ORDER BY created_at ASC, id ASC;

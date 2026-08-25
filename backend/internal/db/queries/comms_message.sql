@@ -678,3 +678,41 @@ WHERE source = @source
   AND external_id = @external_id
   AND matched_contact_id IS NOT NULL
   AND deleted_at IS NULL;
+
+-- name: SummarizeCommsByInteractionIDs :many
+WITH counts AS (
+  SELECT interaction_id, source, thread_id, COUNT(DISTINCT external_id)::bigint AS message_count
+  FROM comms_message
+  WHERE interaction_id = ANY(@interaction_ids::uuid[]) AND deleted_at IS NULL
+  GROUP BY interaction_id, source, thread_id
+), latest AS (
+  SELECT DISTINCT ON (interaction_id, source, thread_id)
+         interaction_id, source, thread_id, subject AS latest_subject
+  FROM comms_message
+  WHERE interaction_id = ANY(@interaction_ids::uuid[]) AND deleted_at IS NULL
+  ORDER BY interaction_id, source, thread_id, sent_at DESC, id DESC
+)
+SELECT counts.interaction_id, counts.source, counts.thread_id, counts.message_count, latest.latest_subject
+FROM counts
+LEFT JOIN latest
+  ON latest.interaction_id = counts.interaction_id
+ AND latest.source = counts.source
+ AND latest.thread_id IS NOT DISTINCT FROM counts.thread_id
+ORDER BY counts.interaction_id, counts.source, counts.thread_id;
+
+-- name: ListCommsMessagesByInteractionIDs :many
+SELECT * FROM comms_message
+WHERE interaction_id = ANY(@interaction_ids::uuid[]) AND deleted_at IS NULL;
+
+-- name: ListCommsMessagesByThreadWindow :many
+SELECT * FROM comms_message
+WHERE source = @source AND thread_id = @thread_id
+  AND sent_at >= @from_time AND sent_at <= @to_time
+  AND deleted_at IS NULL
+ORDER BY sent_at ASC, id ASC;
+
+-- name: ListCommsContainersForContact :many
+SELECT DISTINCT ON (source, thread_id) source, thread_id, subject AS latest_subject
+FROM comms_message
+WHERE matched_contact_id = @contact_id AND thread_id IS NOT NULL AND deleted_at IS NULL
+ORDER BY source, thread_id, sent_at DESC, id DESC;

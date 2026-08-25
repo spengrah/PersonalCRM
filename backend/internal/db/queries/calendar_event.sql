@@ -218,3 +218,7 @@ FOR SHARE;
 SELECT * FROM calendar_event
 WHERE id = $1
 FOR UPDATE NOWAIT;
+
+-- name: ListCalendarEventsByIDs :many
+SELECT * FROM calendar_event
+WHERE id = ANY(@ids::uuid[]);

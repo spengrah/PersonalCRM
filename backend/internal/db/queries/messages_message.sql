@@ -199,3 +199,34 @@ WHERE id = @id
 -- per run and clean only their own rows.
 DELETE FROM messages_message
 WHERE mac_host_id = @mac_host_id;
+
+-- name: SummarizeMessagesByInteractionIDs :many
+SELECT interaction_id, chat_guid, is_group_chat, COUNT(*)::bigint AS message_count
+FROM messages_message
+WHERE interaction_id = ANY(@interaction_ids::uuid[]) AND deleted_at IS NULL
+GROUP BY interaction_id, chat_guid, is_group_chat
+ORDER BY interaction_id, chat_guid;
+
+-- name: ListMessagesMessagesByInteractionIDs :many
+SELECT * FROM messages_message
+WHERE interaction_id = ANY(@interaction_ids::uuid[]) AND deleted_at IS NULL;
+
+-- name: ListMessagesMessagesByChatWindow :many
+SELECT * FROM messages_message
+WHERE chat_guid = @chat_guid
+  AND sent_at >= @from_time AND sent_at <= @to_time
+  AND deleted_at IS NULL
+ORDER BY sent_at ASC, id ASC;
+
+-- name: ListMessagesContainersForContact :many
+SELECT chat_guid, BOOL_OR(is_group_chat)::boolean AS is_group_chat
+FROM messages_message
+WHERE matched_contact_id = @contact_id AND deleted_at IS NULL
+GROUP BY chat_guid
+ORDER BY chat_guid;
+
+-- name: TestSoftDeleteMessagesMessage :exec
+-- Test-only: soft-deletes a single messages_message row by id, simulating an
+-- upstream tombstone. There is no production messages delete path. Production
+-- code MUST NOT call this.
+UPDATE messages_message SET deleted_at = NOW() WHERE id = @id AND deleted_at IS NULL;

@@ -94,3 +94,7 @@ WHERE mac_host_id = @mac_host_id;
 -- down migration's row-bearing guard runs.
 DELETE FROM phone_call
 WHERE call_unique_id = @call_unique_id;
+
+-- name: ListPhoneCallsByInteractionIDs :many
+SELECT * FROM phone_call
+WHERE interaction_id = ANY(@interaction_ids::uuid[]);

@@ -226,6 +226,7 @@ type Querier interface {
 	CountActiveRiverJobsByStateBySourceForTest(ctx context.Context, source string) ([]*CountActiveRiverJobsByStateBySourceForTestRow, error)
 	CountAllUnmatchedExternalContacts(ctx context.Context, includeUnresolvedTelegram bool) (int64, error)
 	CountContactInteractions(ctx context.Context, contactID uuid.UUID) (int64, error)
+	CountContactInteractionsFiltered(ctx context.Context, arg CountContactInteractionsFilteredParams) (int64, error)
 	CountContactNotes(ctx context.Context, contactID uuid.UUID) (int64, error)
 	// CountContactTagsWithDeletedContact counts the contact_tag rows the migration
 	// SKIPS because their contact is soft-deleted, so the `--migrate-tags` summary can
@@ -1231,6 +1232,7 @@ type Querier interface {
 	// rewrites loser→winner on each row; oldest-first is a stable, deterministic
 	// order so the live-row collision/supersession steps run reproducibly.
 	ListAssertionsTouchingNode(ctx context.Context, subjectNodeID uuid.UUID) ([]*Assertion, error)
+	ListCalendarEventsByIDs(ctx context.Context, ids []uuid.UUID) ([]*CalendarEvent, error)
 	// Returns the deduplicated canonicalized value set for the given
 	// contact_method types, scoped to non-deleted contacts. Ordered
 	// alphabetically by value_normalized for deterministic daemon-side diff.
@@ -1238,8 +1240,11 @@ type Querier interface {
 	// SET of canonical phones/emails, not the contact mapping, so DISTINCT
 	// collapses the same value across multiple contacts.
 	ListCanonicalIdentifiersByType(ctx context.Context, dollar_1 []string) ([]string, error)
+	ListCommsContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListCommsContainersForContactRow, error)
 	// Per-contact content, newest first (backs idx_comms_message_contact_sent).
 	ListCommsMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]*CommsMessage, error)
+	ListCommsMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*CommsMessage, error)
+	ListCommsMessagesByThreadWindow(ctx context.Context, arg ListCommsMessagesByThreadWindowParams) ([]*CommsMessage, error)
 	// Keyset-paged rows for the one-time historical display-name re-derivation
 	// (crm-admin --rederive-correspondence-names). Returns email rows at/after
 	// @since that lack the from_name key (i.e. ingested before display-name
@@ -1255,6 +1260,7 @@ type Querier interface {
 	// same WHERE + ORDER BY shape as ListContacts.
 	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]uuid.UUID, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
+	ListContactInteractionsFiltered(ctx context.Context, arg ListContactInteractionsFilteredParams) ([]*Interaction, error)
 	// Contact method queries
 	ListContactMethodsByContact(ctx context.Context, contactID uuid.UUID) ([]*ContactMethod, error)
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
@@ -1393,6 +1399,8 @@ type Querier interface {
 	ListMacHosts(ctx context.Context) ([]*MacHost, error)
 	// List all managed tasks for a provider (for reconciliation)
 	ListManagedContactTasks(ctx context.Context, provider string) ([]*ListManagedContactTasksRow, error)
+	ListMeetingNotesByLinkedRefs(ctx context.Context, arg ListMeetingNotesByLinkedRefsParams) ([]*MeetingNote, error)
+	ListMeetingNotesBySessionIDs(ctx context.Context, sessionIds []uuid.UUID) ([]*MeetingNote, error)
 	// Returns every live meeting_note row whose linkage_state is one of
 	// ('conflict_pending', 'orphan_needs_review'). Optional host_id filter
 	// via sqlc.narg — when NULL, returns all hosts; when set, filters to a
@@ -1401,6 +1409,9 @@ type Querier interface {
 	// idx_meeting_note_linkage_state from migration 053; the in-memory sort
 	// on the small filtered set is cheap.
 	ListMeetingNotesNeedingAttention(ctx context.Context, hostID *uuid.UUID) ([]*MeetingNote, error)
+	ListMessagesContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListMessagesContainersForContactRow, error)
+	ListMessagesMessagesByChatWindow(ctx context.Context, arg ListMessagesMessagesByChatWindowParams) ([]*MessagesMessage, error)
+	ListMessagesMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*MessagesMessage, error)
 	// List non-sensitive credential info for all credentials of a provider
 	ListOAuthCredentialStatuses(ctx context.Context, provider string) ([]*ListOAuthCredentialStatusesRow, error)
 	// List all OAuth credentials for a provider
@@ -1414,6 +1425,7 @@ type Querier interface {
 	ListOverdueContacts(ctx context.Context, arg ListOverdueContactsParams) ([]*Contact, error)
 	// List past events that haven't updated last_contacted yet
 	ListPastEventsNeedingUpdate(ctx context.Context, arg ListPastEventsNeedingUpdateParams) ([]*CalendarEvent, error)
+	ListPhoneCallsByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*PhoneCall, error)
 	ListPredicatesByStatus(ctx context.Context, status string) ([]*ListPredicatesByStatusRow, error)
 	// All locators for an assertion, oldest first.
 	ListProvenance(ctx context.Context, assertionID uuid.UUID) ([]*AssertionProvenance, error)
@@ -1442,7 +1454,10 @@ type Querier interface {
 	ListTelegramChannelStates(ctx context.Context) ([]*TelegramChannelState, error)
 	ListTelegramChatConfigs(ctx context.Context) ([]*TelegramChatConfig, error)
 	ListTelegramChatConfigsForBackfill(ctx context.Context) ([]*TelegramChatConfig, error)
+	ListTelegramContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListTelegramContainersForContactRow, error)
 	ListTelegramMessagesByChatUnprocessed(ctx context.Context, telegramChatID int64) ([]*TelegramMessage, error)
+	ListTelegramMessagesByChatWindow(ctx context.Context, arg ListTelegramMessagesByChatWindowParams) ([]*TelegramMessage, error)
+	ListTelegramMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*TelegramMessage, error)
 	// Discovery counts over unmatched rows for one source, grouped by peer.
 	// One query serves both the batch sweep and the single-peer live check
 	// (@peer_handle NULL = all peers) — a separate single-peer twin would trip
@@ -1995,6 +2010,9 @@ type Querier interface {
 	// targets, so both rows can exist for one message; the matched row is the
 	// survivor. O(1) on idx_comms_message_dedup_unmatched.
 	SoftDeleteUnmatchedChatMessageTwin(ctx context.Context, arg SoftDeleteUnmatchedChatMessageTwinParams) (int64, error)
+	SummarizeCommsByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*SummarizeCommsByInteractionIDsRow, error)
+	SummarizeMessagesByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*SummarizeMessagesByInteractionIDsRow, error)
+	SummarizeTelegramByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*SummarizeTelegramByInteractionIDsRow, error)
 	// Test setup — drop ALL river_job rows, but ONLY when connected to a
 	// per-package clone DB (current_database() matching the clone-name prefix).
 	// The rescue-on-crash test calls this to clear foreign-kind leftovers (e.g.
@@ -2827,15 +2845,17 @@ type Querier interface {
 	TestLockContactForUpdateNoWait(ctx context.Context, id uuid.UUID) (uuid.UUID, error)
 	// TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
 	// FindEventsByAttendeeEmailUnmatchedForContact. Permanent regression guard.
-	// Callers must restrict input fixtures to well-formed JSONB arrays
-	// (jsonb_array_elements raises on scalar/object input). Do NOT call from
-	// production code.
+	// The CASE guard maps non-array JSONB to no-match instead of letting
+	// jsonb_array_elements raise — the table is shared with concurrently-running
+	// tests whose rows this query cannot restrict. Do NOT call from production
+	// code.
 	TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacy(ctx context.Context, arg TestParityFindEventsByAttendeeEmailUnmatchedForContactLegacyParams) ([]*CalendarEvent, error)
 	// TEST ONLY. Mirrors the legacy EXISTS / jsonb_array_elements form of
 	// FindExternalContactsByNormalizedEmail. Permanent regression guard against
-	// semantic drift in the rewritten query. Callers must restrict input fixtures
-	// to well-formed JSONB arrays (jsonb_array_elements raises on scalar/object
-	// input). Do NOT call from production code.
+	// semantic drift in the rewritten query. The CASE guard maps non-array JSONB
+	// to no-match instead of letting jsonb_array_elements raise — the table is
+	// shared with concurrently-running tests whose rows this query cannot
+	// restrict. Do NOT call from production code.
 	TestParityFindExternalContactsByNormalizedEmailLegacy(ctx context.Context, lower string) ([]*ExternalContact, error)
 	// Migration round-trip test only: does a function with the given signature
 	// exist? to_regprocedure returns NULL rather than raising for an unknown
@@ -2844,6 +2864,10 @@ type Querier interface {
 	// dropped only the trigger would leave the function behind, and every
 	// behavioral assertion would still pass because the reapply overwrites it.
 	TestRegprocedureExists(ctx context.Context, signature string) (bool, error)
+	// Test-only: soft-deletes a single messages_message row by id, simulating an
+	// upstream tombstone. There is no production messages delete path. Production
+	// code MUST NOT call this.
+	TestSoftDeleteMessagesMessage(ctx context.Context, id uuid.UUID) error
 	// One-shot wait/run-by-kind read over river_job rows finalized since @cutoff,
 	// before job_exec_sample has accrued. finalized_at is authoritative here (only
 	// finished rows have it); this reads the live River table, not our sample table.

@@ -377,6 +377,10 @@
     "tags": ["@area:contacts", "@area:contact-navigation", "@area:contact-merge", "@area:overdue"]
   },
   {
+    "pattern": "^backend/internal/service/interaction_content\\.go$",
+    "tags": ["@area:contacts", "@area:overdue"]
+  },
+  {
     "pattern": "^backend/internal/service/import_matching\\.go$",
     "tags": ["@area:imports"]
   },

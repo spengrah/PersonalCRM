@@ -151,6 +151,47 @@ func (q *Queries) HardDeletePhoneCallsByMacHost(ctx context.Context, macHostID *
 	return err
 }
 
+const ListPhoneCallsByInteractionIDs = `-- name: ListPhoneCallsByInteractionIDs :many
+SELECT id, call_unique_id, peer_handle, peer_normalized, service, direction, answered, has_voicemail, duration_seconds, started_at, matched_contact_id, interaction_id, mac_host_id, processed_at, created_at FROM phone_call
+WHERE interaction_id = ANY($1::uuid[])
+`
+
+func (q *Queries) ListPhoneCallsByInteractionIDs(ctx context.Context, interactionIds []uuid.UUID) ([]*PhoneCall, error) {
+	rows, err := q.db.Query(ctx, ListPhoneCallsByInteractionIDs, interactionIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*PhoneCall{}
+	for rows.Next() {
+		var i PhoneCall
+		if err := rows.Scan(
+			&i.ID,
+			&i.CallUniqueID,
+			&i.PeerHandle,
+			&i.PeerNormalized,
+			&i.Service,
+			&i.Direction,
+			&i.Answered,
+			&i.HasVoicemail,
+			&i.DurationSeconds,
+			&i.StartedAt,
+			&i.MatchedContactID,
+			&i.InteractionID,
+			&i.MacHostID,
+			&i.ProcessedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const MarkPhoneCallProcessed = `-- name: MarkPhoneCallProcessed :exec
 UPDATE phone_call
 SET processed_at = NOW(),
