@@ -225,10 +225,10 @@ func (r *CommsMessageRepository) ListContainersForContact(ctx context.Context, c
 	if err != nil {
 		return nil, err
 	}
-	out := make([]CommsContainer, len(rows))
-	for i, row := range rows {
+	out := make([]CommsContainer, 0, len(rows))
+	for _, row := range rows {
 		if row.ThreadID != nil {
-			out[i] = CommsContainer{Source: row.Source, ThreadID: *row.ThreadID, LatestSubject: row.LatestSubject}
+			out = append(out, CommsContainer{Source: row.Source, ThreadID: *row.ThreadID, LatestSubject: row.LatestSubject})
 		}
 	}
 	return out, nil

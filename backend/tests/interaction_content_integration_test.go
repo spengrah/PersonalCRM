@@ -153,9 +153,11 @@ func TestInteractionContentService_GroupThreadWindow(t *testing.T) {
 	first := seedComms(t, e, interaction.ID, e.contact.ID, repository.InteractionSourceGChat, thread, "first", base, "", "first")
 	second := seedComms(t, e, interaction.ID, e.contact.ID, repository.InteractionSourceGChat, thread, "second", base, "", "second")
 	middle := seedComms(t, e, interaction.ID, e.contact.ID, repository.InteractionSourceGChat, thread, "middle", base.Add(time.Second), "", "middle")
-	_, err = e.db.Queries.TestInsertCommsMessageLinked(e.ctx, db.TestInsertCommsMessageLinkedParams{Source: repository.InteractionSourceGChat, ExternalID: "before", ThreadID: &thread, Direction: repository.InteractionDirectionInbound, SentAt: base.Add(-time.Second), MatchedContactID: &e.contact.ID})
+	beforeSubject, beforeBody, beforePeer := "", "before-body", "peer-before"
+	_, err = e.cr.UpsertMessage(e.ctx, repository.UpsertCommsMessageParams{Source: repository.InteractionSourceGChat, ExternalID: "before", ThreadID: &thread, Subject: &beforeSubject, Body: &beforeBody, PeerHandle: &beforePeer, Direction: repository.InteractionDirectionInbound, SentAt: base.Add(-time.Second), MatchedContactID: e.contact.ID})
 	require.NoError(t, err)
-	_, err = e.db.Queries.TestInsertCommsMessageLinked(e.ctx, db.TestInsertCommsMessageLinkedParams{Source: repository.InteractionSourceGChat, ExternalID: "after", ThreadID: &thread, Direction: repository.InteractionDirectionInbound, SentAt: base.Add(2 * time.Second), MatchedContactID: &e.contact.ID})
+	afterSubject, afterBody, afterPeer := "", "after-body", "peer-after"
+	_, err = e.cr.UpsertMessage(e.ctx, repository.UpsertCommsMessageParams{Source: repository.InteractionSourceGChat, ExternalID: "after", ThreadID: &thread, Subject: &afterSubject, Body: &afterBody, PeerHandle: &afterPeer, Direction: repository.InteractionDirectionInbound, SentAt: base.Add(2 * time.Second), MatchedContactID: e.contact.ID})
 	require.NoError(t, err)
 	other, err := e.db.Queries.TestInsertCommsMessageLinked(e.ctx, db.TestInsertCommsMessageLinkedParams{Source: repository.InteractionSourceGChat, ExternalID: "speaker-other", ThreadID: &thread, Direction: repository.InteractionDirectionInbound, SentAt: base.Add(time.Second), MatchedContactID: &speaker.ID})
 	require.NoError(t, err)
@@ -260,7 +262,8 @@ func TestInteractionContentService_ReadOnlyEnforced(t *testing.T) {
 	seedTelegram(t, e, tg.ID, e.contact.ID, chatID(tg.ID), 1, when, "group", "RO", "tg", nil, ptrString("Peer"), ptrString("One"), nil)
 	msgs := seedInteraction(t, e, e.contact.ID, repository.InteractionSourceMessages, when, nil)
 	seedMessages(t, e, msgs.ID, e.contact.ID, "ro-chat", "ro-msg", when, true)
-	event, err := e.er.Upsert(e.ctx, repository.UpsertCalendarEventRequest{GcalEventID: "ro-event", GcalCalendarID: "ro-calendar", GoogleAccountID: "ro-account", Title: ptrString("RO event"), StartTime: when, EndTime: when.Add(time.Hour), Status: "confirmed", SyncedAt: when, MatchedContactIDs: []uuid.UUID{e.contact.ID}})
+	eventStart, eventEnd := when.Add(10*time.Minute), when.Add(70*time.Minute)
+	event, err := e.er.Upsert(e.ctx, repository.UpsertCalendarEventRequest{GcalEventID: "ro-event", GcalCalendarID: "ro-calendar", GoogleAccountID: "ro-account", Title: ptrString("RO event"), Location: ptrString("RO location"), Attendees: []repository.Attendee{{Email: "attendee-a@example.test"}, {Email: "attendee-b@example.test"}}, HtmlLink: ptrString("https://calendar.example.test/event"), StartTime: eventStart, EndTime: eventEnd, Status: "confirmed", SyncedAt: when, MatchedContactIDs: []uuid.UUID{e.contact.ID}})
 	require.NoError(t, err)
 	gcalRef := event.ID.String()
 	gcal := seedInteraction(t, e, e.contact.ID, repository.InteractionSourceGCal, when, &gcalRef)
@@ -289,6 +292,18 @@ func TestInteractionContentService_ReadOnlyEnforced(t *testing.T) {
 	require.Equal(t, "none", enriched[gcalWithoutNote.ID].ContentKind)
 	require.Equal(t, "meeting_note", enriched[anarlog.ID].ContentKind)
 	require.Equal(t, "call", enriched[call.ID].ContentKind)
+	require.NotNil(t, enriched[gcal.ID].Event)
+	require.Equal(t, "RO event", *enriched[gcal.ID].Event.Title)
+	require.Equal(t, "RO location", *enriched[gcal.ID].Event.Location)
+	require.Equal(t, 2, enriched[gcal.ID].Event.AttendeeCount)
+	require.True(t, eventStart.Equal(enriched[gcal.ID].Event.StartTime))
+	require.True(t, eventEnd.Equal(enriched[gcal.ID].Event.EndTime))
+	require.Equal(t, "https://calendar.example.test/event", *enriched[gcal.ID].Event.HTMLLink)
+	require.NotNil(t, enriched[call.ID].Call)
+	require.Equal(t, repository.PhoneCallServiceVoice, enriched[call.ID].Call.Service)
+	require.True(t, *enriched[call.ID].Call.Answered)
+	require.True(t, enriched[call.ID].Call.HasVoicemail)
+	require.Equal(t, 31, enriched[call.ID].Call.DurationSeconds)
 	for _, tc := range []struct {
 		id        uuid.UUID
 		kind      string
@@ -306,14 +321,25 @@ func TestInteractionContentService_ReadOnlyEnforced(t *testing.T) {
 		require.Equal(t, tc.kind, content.Kind)
 		require.Len(t, content.Messages, tc.msgCount)
 		require.Len(t, content.MeetingNotes, tc.noteCount)
+		if tc.id == gcal.ID {
+			require.Equal(t, "Note title", *content.MeetingNotes[0].Title)
+			require.Equal(t, "Note summary", *content.MeetingNotes[0].Summary)
+			require.Equal(t, "Note memo", *content.MeetingNotes[0].Memo)
+		}
 	}
 	venues, err := ro.ListContactVenues(e.ctx, e.contact.ID)
 	require.NoError(t, err)
-	require.Len(t, venues, 3)
+	venueKeys := make([]string, len(venues))
+	for i, venue := range venues {
+		venueKeys[i] = venue.Key
+	}
+	require.Equal(t, []string{"email:ro-thread", "messages:ro-chat", fmt.Sprintf("telegram:%d", chatID(tg.ID))}, venueKeys)
 	listRepo := repository.NewInteractionRepository(db.New(tx))
 	list, err := listRepo.ListContactInteractionsFiltered(e.ctx, repository.InteractionListFilterParams{ContactID: e.contact.ID, Limit: 100})
 	require.NoError(t, err)
-	require.Len(t, list, len(rows))
+	wantIDs := pageIDs(rows)
+	sort.Slice(wantIDs, func(i, j int) bool { return bytes.Compare(wantIDs[i][:], wantIDs[j][:]) > 0 })
+	require.Equal(t, wantIDs, pageIDs(list))
 	count, err := listRepo.CountContactInteractionsFiltered(e.ctx, repository.InteractionListFilterParams{ContactID: e.contact.ID})
 	require.NoError(t, err)
 	require.Equal(t, int64(len(rows)), count)
@@ -416,6 +442,9 @@ func TestInteractionContentService_SoftDeleteFourFamilies(t *testing.T) {
 	miLive := seedMessages(t, e, mi.ID, e.contact.ID, "soft-messages", "live", base, false)
 	deadMsg := seedMessages(t, e, mi.ID, e.contact.ID, "soft-messages", "dead", base.Add(time.Minute), false)
 	require.NoError(t, e.mr.TestSoftDeleteMessage(e.ctx, deadMsg.ID))
+	deadOnlyMessages := seedInteraction(t, e, e.contact.ID, repository.InteractionSourceMessages, base, nil)
+	deadOnlyMessagesRow := seedMessages(t, e, deadOnlyMessages.ID, e.contact.ID, "dead-only-messages", "dead-only", base, false)
+	require.NoError(t, e.mr.TestSoftDeleteMessage(e.ctx, deadOnlyMessagesRow.ID))
 	_, err = e.db.Queries.TestInsertMessagesMessageLinked(e.ctx, db.TestInsertMessagesMessageLinkedParams{Guid: "messages-window-live", ChatGuid: "soft-messages", PeerHandle: "window-peer", SentAt: base.Add(30 * time.Second), InteractionID: nil})
 	require.NoError(t, err)
 	deadOnly := seedInteraction(t, e, e.contact.ID, repository.InteractionSourceGChat, base, nil)
@@ -475,6 +504,7 @@ func TestInteractionContentService_SoftDeleteFourFamilies(t *testing.T) {
 	require.NoError(t, err)
 	for _, venue := range venues {
 		require.NotEqual(t, "gchat:dead-only", venue.Key)
+		require.NotEqual(t, "messages:dead-only-messages", venue.Key)
 	}
 	deadInteraction := seedInteraction(t, e, e.contact.ID, repository.InteractionSourceManual, base, nil)
 	require.NoError(t, e.ir.SoftDeleteInteraction(e.ctx, deadInteraction.ID))
@@ -563,10 +593,11 @@ func TestInteractionContentFilteredList(t *testing.T) {
 	var filterRows []repository.Interaction
 	for i := 0; i < 5; i++ {
 		at := base.Add(time.Duration(i) * time.Second)
-		if i == 2 {
-			at = base.Add(time.Second)
-		}
-		if i == 3 {
+		if i == 0 {
+			at = base.Add(3 * time.Second)
+		} else if i == 1 || i == 2 {
+			at = base.Add(2 * time.Second)
+		} else {
 			at = to
 		}
 		row := seedInteraction(t, e, e.contact.ID, repository.InteractionSourceGChat, at, nil)
@@ -635,21 +666,21 @@ func TestInteractionContentReads_HeavyContact(t *testing.T) {
 		rows = append(rows, row)
 	}
 	require.Len(t, rows, 1000)
-	started := time.Unix(0, accelerated.GetCurrentTime().UnixNano())
+	started := accelerated.GetCurrentTime()
 	page, err := e.ir.ListContactInteractionsFiltered(e.ctx, repository.InteractionListFilterParams{ContactID: e.contact.ID, Limit: 100})
 	require.NoError(t, err)
 	require.Len(t, page, 100)
-	require.Less(t, time.Since(started), 2*time.Second)
-	started = time.Unix(0, accelerated.GetCurrentTime().UnixNano())
+	require.Less(t, accelerated.GetCurrentTime().Sub(started), 2*time.Second)
+	started = accelerated.GetCurrentTime()
 	content, err := e.svc(e.db.Queries).GetContent(e.ctx, rows[0].ID)
 	require.NoError(t, err)
 	require.Len(t, content.Messages, 3)
-	require.Less(t, time.Since(started), 2*time.Second)
-	started = time.Unix(0, accelerated.GetCurrentTime().UnixNano())
+	require.Less(t, accelerated.GetCurrentTime().Sub(started), 2*time.Second)
+	started = accelerated.GetCurrentTime()
 	venues, err := e.svc(e.db.Queries).ListContactVenues(e.ctx, e.contact.ID)
 	require.NoError(t, err)
 	require.Len(t, venues, 1000)
-	require.Less(t, time.Since(started), 2*time.Second)
+	require.Less(t, accelerated.GetCurrentTime().Sub(started), 2*time.Second)
 	require.Equal(t, measureEnrich(t, e, rows[:9]), measureEnrich(t, e, rows[:100]))
 }
 

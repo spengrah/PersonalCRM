@@ -15,6 +15,7 @@ func TestInteractionContentDerivation_LabelPrecedence(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "Written label", deriveLabel(repository.Interaction{Source: "gcal", Description: ptr("Written label")}, ptr("Event title"), []weightedVenue{{tag: VenueTag{Key: "email:z", Label: "Venue"}, count: 3}}))
 	assert.Equal(t, "Event title", deriveLabel(repository.Interaction{Source: "gcal"}, ptr("Event title"), nil))
+	assert.Equal(t, "Zulu", deriveLabel(repository.Interaction{Source: "email"}, nil, []weightedVenue{{tag: VenueTag{Key: "email:a", Label: "Alpha"}, count: 1}, {tag: VenueTag{Key: "email:z", Label: "Zulu"}, count: 3}}))
 	assert.Equal(t, "Alpha", deriveLabel(repository.Interaction{Source: "email", Description: ptr("")}, nil, []weightedVenue{{tag: VenueTag{Key: "email:z", Label: "Zulu"}, count: 2}, {tag: VenueTag{Key: "email:a", Label: "Alpha"}, count: 2}}))
 	for source, want := range map[string]string{"phone_calls": "Phone call", "gcal": "Meeting", "anarlog_sessions": "Meeting", "manual": "Logged interaction", "todoist": "Todoist task", "telegram": "Messages"} {
 		assert.Equal(t, want, deriveLabel(repository.Interaction{Source: source}, nil, nil), source)

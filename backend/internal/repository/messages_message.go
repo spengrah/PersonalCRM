@@ -126,6 +126,7 @@ func (r *MessagesMessageRepository) ListContainersForContact(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
+	// The BOOL_OR container read assumes is_group_chat is consistent per chat_guid, as enforced by the ingest writer.
 	out := make([]MessagesContainer, len(rows))
 	for i, row := range rows {
 		out[i] = MessagesContainer{ChatGuid: row.ChatGuid, IsGroupChat: row.IsGroupChat}
