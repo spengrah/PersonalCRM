@@ -112,14 +112,20 @@ describe('selection helpers', () => {
       now,
       false,
     ],
-    [
-      selection({ preset: 'custom', customStart: '2031-05-10', customEnd: '2031-05-10' }),
-      new Date(customRangeToParams('2031-05-10', '2031-05-10').to),
-      false,
-    ],
     [selection({ preset: 'custom', customStart: '2031-05-01' }), now, false],
   ])('computes upcoming visibility for %o', (value, clock, expected) => {
     expect(upcomingVisible(value, clock)).toBe(expected)
+  })
+
+  it('hides a custom range when the clock equals its exclusive end', () => {
+    const value = selection({
+      preset: 'custom',
+      customStart: '2031-05-10',
+      customEnd: '2031-05-10',
+    })
+    const clock = new Date(customRangeToParams(value.customStart, value.customEnd).to)
+
+    expect(upcomingVisible(value, clock)).toBe(false)
   })
 
   it('bounds custom upcoming events with a half-open interval and passes other selections through', () => {
