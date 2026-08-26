@@ -6,7 +6,7 @@ behaviors:
   - id: IXN-001
     title: A contact has one complete, paginated interaction history
     type: ux
-    status: proposed
+    status: current
     surface: ui
     given: a contact has recorded interactions from one or more sources
     when: their interaction history is viewed and additional pages are requested
@@ -24,7 +24,7 @@ behaviors:
   - id: IXN-002
     title: Every interaction row communicates its source and content shape
     type: ux
-    status: proposed
+    status: current
     surface: ui
     given: an interaction is present in a contact's history
     when: its row is rendered
@@ -94,7 +94,7 @@ behaviors:
   - id: IXN-006
     title: Upcoming calendar events share the history without becoming interactions
     type: ux
-    status: proposed
+    status: current
     surface: ui
     given: a contact has current or future calendar events
     when: the unified interaction history is viewed
@@ -150,7 +150,7 @@ behaviors:
   - id: IXN-009
     title: The interaction history renders recorded state honestly
     type: ux
-    status: proposed
+    status: current
     surface: ui
     given: recorded interaction state may be sparse, duplicated, or absent
     when: the contact's interaction history is rendered

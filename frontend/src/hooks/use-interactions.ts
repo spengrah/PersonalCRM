@@ -1,6 +1,12 @@
-import { useMutation } from '@tanstack/react-query'
-import { interactionsApi, type CreateInteractionRequest } from '@/lib/interactions-api'
+import { useInfiniteQuery, useMutation } from '@tanstack/react-query'
+import {
+  interactionsApi,
+  type CreateInteractionRequest,
+  type InteractionListFilters,
+} from '@/lib/interactions-api'
 import { invalidateFor } from '@/lib/query-invalidation'
+import { interactionKeys } from '@/lib/query-keys'
+import { staleTime } from '@/lib/query-client'
 
 // useCreateInteraction posts a manual interaction for a contact and
 // invalidates the caches that depend on cadence-column state. Used by
@@ -16,5 +22,19 @@ export function useCreateInteraction() {
     onSuccess: (_resp, vars) => {
       invalidateFor('interaction:created', vars.contactId)
     },
+  })
+}
+
+export function useContactInteractions(contactId: string, filters: InteractionListFilters = {}) {
+  return useInfiniteQuery({
+    queryKey: interactionKeys.list(contactId, filters),
+    queryFn: ({ pageParam }) => interactionsApi.list(contactId, { ...filters, page: pageParam }),
+    initialPageParam: 1,
+    getNextPageParam: last => {
+      const p = last.meta?.pagination
+      return p && p.page < p.pages ? p.page + 1 : undefined
+    },
+    enabled: !!contactId,
+    staleTime: staleTime(1000 * 60 * 5),
   })
 }

@@ -2,7 +2,7 @@
 
 **Last Updated**: January 2026
 
-This document describes the Google Calendar sync feature that allows PersonalCRM to sync calendar events from Google Calendar, update `last_contacted` timestamps automatically after meetings, and display upcoming meetings on contact detail pages.
+This document describes the Google Calendar sync feature that allows PersonalCRM to sync calendar events from Google Calendar, update `last_contacted` timestamps automatically after meetings, and display upcoming calendar events in the contact detail page's unified Interactions section.
 
 ---
 
@@ -26,7 +26,7 @@ The Google Calendar sync feature integrates with Google Calendar to:
 - **Sync calendar events** from the user's primary Google Calendar
 - **Match attendees** to CRM contacts automatically using email addresses
 - **Update `last_contacted`** timestamps after meetings occur
-- **Display upcoming meetings** on contact detail pages
+- **Display upcoming calendar events** in the unified Interactions section on contact detail pages
 
 This feature requires Google OAuth2 authentication and the `https://www.googleapis.com/auth/calendar.readonly` scope.
 
@@ -53,11 +53,11 @@ This feature requires Google OAuth2 authentication and the `https://www.googleap
 - Runs as part of the sync process
 - Only updates for confirmed (not cancelled or declined) events
 
-### Upcoming Meetings Display
+### Upcoming calendar events
 
-- Shows upcoming meetings on the contact detail page
-- Displays meeting title, time, location, and attendee count
-- Hides automatically when no upcoming meetings exist
+- Shows upcoming calendar events in the contact detail page's Interactions section
+- Displays event title, time, location, and attendee count
+- Omits the upcoming block when no upcoming events exist
 
 ---
 
@@ -73,7 +73,7 @@ This feature requires Google OAuth2 authentication and the `https://www.googleap
 | Sync Provider | `backend/internal/google/calendar.go` | Google Calendar sync implementation |
 | HTTP Handler | `backend/internal/api/handlers/calendar.go` | REST API endpoints |
 | Frontend Hook | `frontend/src/hooks/use-calendar.ts` | React Query hooks for calendar data |
-| Frontend Component | `frontend/src/components/contacts/upcoming-meetings.tsx` | Upcoming meetings UI |
+| Frontend Component | `frontend/src/components/contacts/interactions.tsx` | Unified interactions and upcoming-events UI |
 
 ### Sync Flow
 
@@ -224,18 +224,11 @@ function MyComponent({ contactId }: { contactId: string }) {
 }
 ```
 
-### UpcomingMeetings Component
+### Interactions section
 
-The `UpcomingMeetings` component is designed to be dropped into any contact page:
-
-```tsx
-import { UpcomingMeetings } from '@/components/contacts/upcoming-meetings'
-
-<UpcomingMeetings contactId={contactId} />
-```
-
-The component:
-- Shows a loading skeleton while fetching
-- Hides automatically if no upcoming meetings exist
-- Displays up to 5 upcoming meetings by default
-- Shows meeting title, time, location, and attendee count
+Calendar events for a contact are displayed by the unified `Interactions` section
+on the contact detail page. The section fetches upcoming events separately from
+recorded interactions, marks them as Upcoming, and preserves each event's title,
+time range, location, attendee count, and source link when available. It initially
+shows the three soonest events and can reveal the full bounded upcoming set; events
+are not minted as recorded interactions until the calendar sync records them.

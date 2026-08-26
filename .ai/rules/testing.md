@@ -135,7 +135,7 @@ test.describe('Navigation @area:navigation', () => {
 })
 ```
 
-Available tags: `@area:dashboard`, `@area:contacts`, `@area:imports`, `@area:navigation`, `@area:settings`, `@area:meetings`, `@area:overdue`, `@area:contact-merge`, `@area:contact-navigation`, `@area:error-boundary`
+Available tags: `@area:dashboard`, `@area:contacts`, `@area:imports`, `@area:navigation`, `@area:settings`, `@area:interactions`, `@area:overdue`, `@area:contact-merge`, `@area:contact-navigation`, `@area:error-boundary`
 
 ### test-map.json Structure
 

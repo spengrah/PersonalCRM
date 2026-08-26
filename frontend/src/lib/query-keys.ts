@@ -11,6 +11,7 @@
 
 import type { ContactListParams } from '@/types/contact'
 import type { ImportCandidatesListParams, SuggestionsListParams } from '@/types/import'
+import type { InteractionListFilters } from './interactions-api'
 
 // Contact query keys
 export const contactKeys = {
@@ -91,6 +92,14 @@ export const calendarKeys = {
   upcomingForContact: (contactId: string) =>
     [...calendarKeys.all, 'upcoming', 'contact', contactId] as const,
   upcoming: () => [...calendarKeys.all, 'upcoming'] as const,
+}
+
+export const interactionKeys = {
+  all: ['interactions'] as const,
+  forContact: (contactId: string) => [...interactionKeys.all, 'contact', contactId] as const,
+  list: (contactId: string, filters: InteractionListFilters) =>
+    [...interactionKeys.forContact(contactId), 'list', filters] as const,
+  content: (interactionId: string) => [...interactionKeys.all, 'content', interactionId] as const,
 }
 
 // Rematch job query keys

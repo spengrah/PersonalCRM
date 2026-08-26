@@ -17,7 +17,7 @@ vi.mock('../query-client', () => ({
 
 // Import after mocking
 import { invalidateFor, type DomainEvent } from '../query-invalidation'
-import { contactKeys, importKeys, syncKeys } from '../query-keys'
+import { contactKeys, importKeys, syncKeys, interactionKeys } from '../query-keys'
 
 describe('query-invalidation', () => {
   beforeEach(() => {
@@ -79,6 +79,14 @@ describe('query-invalidation', () => {
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: contactKeys.overdue(),
         })
+      })
+    })
+
+    it('invalidates the contact interaction list on interaction:created', () => {
+      invalidateFor('interaction:created', 'contact-1')
+
+      expect(mockInvalidateQueries).toHaveBeenCalledWith({
+        queryKey: interactionKeys.forContact('contact-1'),
       })
     })
 
