@@ -47,6 +47,20 @@ func init() {
 		Contact("future-only", Methods(MethodEmail)),
 		CalendarEvent("future-only-event", "future-only", StartsInDays(2)),
 	}})
+
+	Register(Declaration{Behavior: "IXN-004", Entities: []Entity{
+		Contact("subject", Methods(MethodEmail)),
+		Contact("speaker", Methods(MethodEmail)),
+		MessageInteraction("group-thread", "subject", "gchat", AgoDays(1), GroupThread("speaker")),
+	}})
+
+	Register(Declaration{Behavior: "IXN-005", Entities: []Entity{
+		Contact("subject", Methods(MethodEmail)),
+		CalendarEvent("noted-meeting", "subject", StartedDaysAgo(4)),
+		LinkedMeetingNote("note-a", "noted-meeting"),
+		LinkedMeetingNote("note-b", "noted-meeting"),
+	}})
+
 }
 
 func pagingInteractionEntities() []Entity {

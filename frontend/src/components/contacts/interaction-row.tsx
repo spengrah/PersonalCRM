@@ -1,4 +1,7 @@
+import { useState } from 'react'
 import type { InteractionListItemResponse } from '@/types/generated/contact'
+import { useInteractionContent } from '@/hooks/use-interactions'
+import { InteractionContent } from './interaction-content'
 
 const SOURCE_LABELS: Record<string, string> = {
   manual: 'Manual',
@@ -13,7 +16,7 @@ const SOURCE_LABELS: Record<string, string> = {
   whatsapp: 'WhatsApp',
 }
 
-function formatDateTime(iso: string): string {
+export function formatDateTime(iso: string): string {
   return new Intl.DateTimeFormat('en-US', {
     weekday: 'short',
     month: 'short',
@@ -111,7 +114,17 @@ function CallDetails({ item }: { item: InteractionListItemResponse }) {
   )
 }
 
-export function InteractionRow({ item }: { item: InteractionListItemResponse }) {
+export function InteractionRow({
+  item,
+  venueFilter,
+}: {
+  item: InteractionListItemResponse
+  venueFilter?: string
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const expandable = item.content_kind === 'messages' || item.content_kind === 'meeting_note'
+  const content = useInteractionContent(item.id, { enabled: expanded && expandable })
+
   return (
     <article
       role="listitem"
@@ -133,6 +146,16 @@ export function InteractionRow({ item }: { item: InteractionListItemResponse }) 
               {formatDateTime(item.occurred_at)}
             </time>
             <ContentIndicator item={item} />
+            {expandable && (
+              <button
+                type="button"
+                aria-expanded={expanded}
+                onClick={() => setExpanded(value => !value)}
+                className="rounded border border-gray-300 px-2 py-0.5 text-sm text-gray-700"
+              >
+                {expanded ? 'Collapse content' : 'Expand content'}
+              </button>
+            )}
             {item.venue_tags.map(tag => (
               <span
                 key={tag.key}
@@ -161,6 +184,14 @@ export function InteractionRow({ item }: { item: InteractionListItemResponse }) 
           ⋯
         </button>
       </div>
+      {expanded && (
+        <InteractionContent
+          isPending={content.isPending}
+          isError={content.isError}
+          content={content.data}
+          venueFilter={venueFilter}
+        />
+      )}
     </article>
   )
 }

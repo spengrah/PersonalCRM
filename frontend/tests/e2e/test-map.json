@@ -870,5 +870,9 @@
   {
     "pattern": "^frontend/src/lib/interactions-api\\.ts$",
     "tags": ["@area:contacts", "@area:overdue", "@area:interactions"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/interactions-drilldown\\.spec\\.ts$",
+    "tags": ["@area:interactions"]
   }
 ]

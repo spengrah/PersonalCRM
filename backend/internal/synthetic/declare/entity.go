@@ -1395,9 +1395,13 @@ func sortedKeys(set map[string]bool) []string {
 	return out
 }
 
-// validateEntityOrder checks that every entity's refs name a CONTACT declared
-// EARLIER in the same list, and that no handle repeats. Register and RegisterEdge
-// share it so the two cannot disagree about what a well-formed entity list is.
+// refKindDeclarer lets an entity name the entity kind one of its refs must
+// target. Entities that do not implement it keep the contact-only default.
+type refKindDeclarer interface{ refKind(ref string) string }
+
+// validateEntityOrder checks that every entity's refs name the required kind
+// declared EARLIER in the same list, and that no handle repeats. Register and
+// RegisterEdge share it so the two cannot disagree about well-formed lists.
 func validateEntityOrder(entities []Entity) error {
 	if err := validateIngestCandidatesFollowHost(entities); err != nil {
 		return err
@@ -1427,8 +1431,12 @@ func validateEntityOrder(entities []Entity) error {
 			if !ok {
 				return fmt.Errorf("entity %q references handle %q, which is not declared EARLIER in the same list", e.handle(), ref)
 			}
-			if target.kind() != "contact" {
-				return fmt.Errorf("entity %q references handle %q, which is a %s — only a contact can be referenced", e.handle(), ref, target.kind())
+			wantKind := "contact"
+			if d, ok := e.(refKindDeclarer); ok {
+				wantKind = d.refKind(ref)
+			}
+			if target.kind() != wantKind {
+				return fmt.Errorf("entity %q references handle %q, which is a %s — a %s is required", e.handle(), ref, target.kind(), wantKind)
 			}
 			// SameEmailAs copies the referenced contact's PRIMARY email, so a
 			// contact that carries none would silently leave the candidate with its

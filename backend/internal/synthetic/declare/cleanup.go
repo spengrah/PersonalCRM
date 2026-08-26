@@ -443,6 +443,14 @@ func namespaceEventIDs(
 		}
 		add(roots)
 	}
+	// Meeting-note ingest roots use a production-required UUID-shaped source_id,
+	// so their namespace ownership is the derived session UUID prefix rather
+	// than the generator prefix used by the other declared root events.
+	anarlogRoots, err := support.ListEventIdsBySourceAndSourceIDPrefix(ctx, repository.InteractionSourceAnarlogSessions, anarlogSessionEventPrefix(prefix))
+	if err != nil {
+		return nil, fmt.Errorf("capture anarlog session root event ids: %w", err)
+	}
+	add(anarlogRoots)
 	return union, nil
 }
 

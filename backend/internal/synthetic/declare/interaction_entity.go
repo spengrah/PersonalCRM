@@ -2,6 +2,7 @@ package declare
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"personal-crm/backend/internal/synthetic/replay"
 
 	"github.com/google/uuid"
+	chat "google.golang.org/api/chat/v1"
 )
 
 var messageInteractionSources = map[string]bool{
@@ -25,8 +27,10 @@ var loggedInteractionSources = map[string]bool{
 }
 
 type interactionPlanProps struct {
-	agoDays *int
-	burst   *int
+	agoDays       *int
+	burst         *int
+	speakerHandle string
+	groupThread   bool
 }
 
 type InteractionProp func(*interactionPlanProps)
@@ -39,6 +43,16 @@ func Burst(n int) InteractionProp {
 	return func(p *interactionPlanProps) { p.burst = &n }
 }
 
+// GroupThread turns a gchat MessageInteraction into a three-message group
+// burst with a second speaker. The subject speaks at target-2m and target,
+// while the named speaker contact speaks at target-1m in the same space.
+func GroupThread(speakerHandle string) InteractionProp {
+	return func(p *interactionPlanProps) {
+		p.speakerHandle = speakerHandle
+		p.groupThread = true
+	}
+}
+
 type messageInteractionPlan struct {
 	name, contact, source string
 	props                 interactionPlanProps
@@ -46,7 +60,13 @@ type messageInteractionPlan struct {
 
 func (p *messageInteractionPlan) handle() string { return p.name }
 func (p *messageInteractionPlan) kind() string   { return "interaction" }
-func (p *messageInteractionPlan) refs() []string { return []string{p.contact} }
+func (p *messageInteractionPlan) refs() []string {
+	refs := []string{p.contact}
+	if p.props.speakerHandle != "" {
+		refs = append(refs, p.props.speakerHandle)
+	}
+	return refs
+}
 func (p *messageInteractionPlan) validate() error {
 	if strings.TrimSpace(p.name) == "" {
 		return fmt.Errorf("message interaction handle must be non-empty")
@@ -59,6 +79,12 @@ func (p *messageInteractionPlan) validate() error {
 	}
 	if p.props.burst != nil && p.source != "messages" {
 		return fmt.Errorf("message interaction %q: Burst is only valid for messages", p.name)
+	}
+	if p.props.groupThread && p.source != "gchat" {
+		return fmt.Errorf("message interaction %q: GroupThread is only valid for gchat", p.name)
+	}
+	if p.props.groupThread && strings.TrimSpace(p.props.speakerHandle) == "" {
+		return fmt.Errorf("message interaction %q: GroupThread speaker handle must be non-empty", p.name)
 	}
 	return nil
 }
@@ -81,12 +107,38 @@ func (p *phoneCallInteractionPlan) validate() error {
 	if p.props.burst != nil {
 		return fmt.Errorf("phone call interaction %q: Burst is not valid", p.name)
 	}
+	if p.props.groupThread {
+		return fmt.Errorf("phone call interaction %q: GroupThread is not valid", p.name)
+	}
 	return nil
 }
 
 type loggedInteractionPlan struct {
 	name, contact, source string
 	props                 interactionPlanProps
+}
+
+type linkedMeetingNotePlan struct {
+	name, eventHandle string
+}
+
+func (p *linkedMeetingNotePlan) handle() string { return p.name }
+func (p *linkedMeetingNotePlan) kind() string   { return "meeting_note" }
+func (p *linkedMeetingNotePlan) refs() []string { return []string{p.eventHandle} }
+func (p *linkedMeetingNotePlan) refKind(ref string) string {
+	if ref == p.eventHandle {
+		return "calendar_event"
+	}
+	return "contact"
+}
+func (p *linkedMeetingNotePlan) validate() error {
+	if strings.TrimSpace(p.name) == "" {
+		return fmt.Errorf("linked meeting note handle must be non-empty")
+	}
+	if strings.TrimSpace(p.eventHandle) == "" {
+		return fmt.Errorf("linked meeting note %q: event handle must be non-empty", p.name)
+	}
+	return nil
 }
 
 func (p *loggedInteractionPlan) handle() string { return p.name }
@@ -104,6 +156,9 @@ func (p *loggedInteractionPlan) validate() error {
 	}
 	if p.props.burst != nil {
 		return fmt.Errorf("logged interaction %q: Burst is not valid", p.name)
+	}
+	if p.props.groupThread {
+		return fmt.Errorf("logged interaction %q: GroupThread is not valid", p.name)
 	}
 	return nil
 }
@@ -143,6 +198,12 @@ func LoggedInteraction(handle, contactHandle, source string, props ...Interactio
 		prop(&p.props)
 	}
 	return p
+}
+
+// LinkedMeetingNote declares one live meeting note linked to an earlier
+// CalendarEvent. It is lowered through the production meeting-note ingest path.
+func LinkedMeetingNote(handle, eventHandle string) Entity {
+	return &linkedMeetingNotePlan{name: handle, eventHandle: eventHandle}
 }
 
 func interactionTarget(anchor time.Time, n int) time.Time {
@@ -185,6 +246,9 @@ func runMessageInteraction(ctx context.Context, h *replay.Harness, p *messageInt
 			return Seeded{}, fmt.Errorf("replay email interaction %q: %w", p.name, err)
 		}
 	case "gchat":
+		if p.props.groupThread {
+			return runGroupThread(ctx, h, p, st, contactID, targetSpec, target)
+		}
 		msg := gen.GChatMessage(targetSpec, factory.MatchSeeded, factory.WithMessageAge(age))
 		if _, err := h.ReplayGChat(ctx, contactID, msg); err != nil {
 			return Seeded{}, fmt.Errorf("replay gchat interaction %q: %w", p.name, err)
@@ -228,6 +292,118 @@ func runMessageInteraction(ctx context.Context, h *replay.Harness, p *messageInt
 		return Seeded{}, fmt.Errorf("read back message interaction %q: %w", p.name, err)
 	}
 	return Seeded{Kind: "interaction", ID: interaction.ID.String(), Name: p.name}, nil
+}
+
+func runGroupThread(ctx context.Context, h *replay.Harness, p *messageInteractionPlan, st *runState, subjectID uuid.UUID, subjectSpec factory.ContactSpec, target time.Time) (Seeded, error) {
+	speakerID, err := st.contactID(p.props.speakerHandle)
+	if err != nil {
+		return Seeded{}, err
+	}
+	speakerSpec, ok := st.specs[p.props.speakerHandle]
+	if !ok {
+		return Seeded{}, fmt.Errorf("group thread %q: no contact spec for %q", p.name, p.props.speakerHandle)
+	}
+	gen := h.Generator()
+	age := interactionMessageAge(gen.Anchor(), target, "gchat")
+	base := gen.GChatMessage(subjectSpec, factory.MatchSeeded, factory.WithMessageAge(age+2*time.Minute))
+	speakerUser := base.Message.Sender.Name + "-speaker"
+	base.Members = append(base.Members, &chat.Membership{State: "JOINED", Member: &chat.User{Name: speakerUser, Type: "HUMAN"}})
+	base.EmailByUser[speakerUser] = speakerSpec.Email
+	base.Message.Text = fmt.Sprintf("%sgroup-msg-1", gen.Prefix())
+	base.Message.CreateTime = target.Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano)
+	clone2 := cloneDeclaredGChatMessage(base, "-t2", speakerUser, fmt.Sprintf("%sgroup-msg-2 <b>not-markup</b>", gen.Prefix()), target.Add(-time.Minute))
+	clone3 := cloneDeclaredGChatMessage(base, "-t3", base.Message.Sender.Name, fmt.Sprintf("%sgroup-msg-3", gen.Prefix()), target)
+	if _, err := h.ReplayGChatBatch(ctx, []replay.GChatBatchItem{
+		{ContactID: subjectID, Spec: base},
+		{ContactID: speakerID, Spec: clone2},
+		{ContactID: subjectID, Spec: clone3},
+	}); err != nil {
+		return Seeded{}, fmt.Errorf("replay group thread %q: %w", p.name, err)
+	}
+	rows, err := h.InteractionRepo().ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subjectID, Limit: 100})
+	if err != nil {
+		return Seeded{}, fmt.Errorf("read back group thread %q: %w", p.name, err)
+	}
+	min, max := target.Add(-2*time.Minute), target
+	var matches []repository.Interaction
+	for i := range rows {
+		if rows[i].Source == repository.InteractionSourceGChat && !rows[i].OccurredAt.Before(min) && !rows[i].OccurredAt.After(max) {
+			matches = append(matches, rows[i])
+		}
+	}
+	if len(matches) != 1 {
+		return Seeded{}, fmt.Errorf("group thread %q: expected exactly one gchat interaction in [%s,%s], found %d", p.name, min.Format(time.RFC3339), max.Format(time.RFC3339), len(matches))
+	}
+	return Seeded{Kind: "interaction", ID: matches[0].ID.String(), Name: p.name}, nil
+}
+
+func cloneDeclaredGChatMessage(base factory.GChatMessageSpec, suffix, sender, text string, createTime time.Time) factory.GChatMessageSpec {
+	name := base.ExternalID + suffix
+	clone := base
+	clone.Message = &chat.Message{
+		Name:       name,
+		Sender:     &chat.User{Name: sender, Type: "HUMAN"},
+		Text:       text,
+		CreateTime: createTime.UTC().Format(time.RFC3339Nano),
+	}
+	clone.ExternalID = name
+	return clone
+}
+
+func anarlogSessionUUID(factoryPrefix, handle string) uuid.UUID {
+	var id uuid.UUID
+	prefix := sha256.Sum256([]byte("anarlog:" + factoryPrefix))
+	tail := sha256.Sum256([]byte("anarlog-tail:" + factoryPrefix + ":" + handle))
+	copy(id[:12], prefix[:12])
+	copy(id[12:], tail[:4])
+	return id
+}
+
+func anarlogSessionEventPrefix(factoryPrefix string) string {
+	hash := sha256.Sum256([]byte("anarlog:" + factoryPrefix))
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%04x", hash[0:4], hash[4:6], hash[6:8], hash[8:10], hash[10:12])
+}
+
+func runLinkedMeetingNote(ctx context.Context, h *replay.Harness, p *linkedMeetingNotePlan, st *runState) (Seeded, error) {
+	seededEvent, ok := st.seeded[p.eventHandle]
+	if !ok {
+		return Seeded{}, fmt.Errorf("linked meeting note %q: event handle %q has not been created", p.name, p.eventHandle)
+	}
+	eventID, err := uuid.Parse(seededEvent.ID)
+	if err != nil {
+		return Seeded{}, fmt.Errorf("linked meeting note %q: parse event id: %w", p.name, err)
+	}
+	events, err := h.CalendarEventRepo().ListByIDs(ctx, []uuid.UUID{eventID})
+	if err != nil {
+		return Seeded{}, fmt.Errorf("linked meeting note %q: read event: %w", p.name, err)
+	}
+	if len(events) != 1 {
+		return Seeded{}, fmt.Errorf("linked meeting note %q: expected one calendar event, found %d", p.name, len(events))
+	}
+	gen := h.Generator()
+	prefix := gen.Prefix()
+	title := strings.ToLower(fmt.Sprintf("%s%s note", prefix, p.name))
+	summary := fmt.Sprintf("Summary for %s%s", prefix, p.name)
+	memo := fmt.Sprintf("Memo for %s%s <i>not-markup</i>", prefix, p.name)
+	sessionID := anarlogSessionUUID(prefix, p.name)
+	if err := h.ReplayMeetingNoteRecorded(ctx, replay.MeetingNoteRecordedSpec{
+		SessionID: sessionID, Title: &title, Summary: &summary, Memo: &memo,
+		MeetingAt: events[0].StartTime,
+	}); err != nil {
+		return Seeded{}, fmt.Errorf("linked meeting note %q: %w", p.name, err)
+	}
+	notes, err := repository.NewMeetingNoteRepository(h.Database().Queries).ListBySessionIDs(ctx, []uuid.UUID{sessionID})
+	if err != nil {
+		return Seeded{}, fmt.Errorf("linked meeting note %q: read back note: %w", p.name, err)
+	}
+	if len(notes) != 1 {
+		return Seeded{}, fmt.Errorf("linked meeting note %q: expected one note for session, found %d", p.name, len(notes))
+	}
+	note := notes[0]
+	if note.LinkageState != repository.LinkageStateLinked || note.LinkedKind == nil || *note.LinkedKind != repository.LinkedKindEvent || note.LinkedID == nil || *note.LinkedID != eventID {
+		return Seeded{}, fmt.Errorf("linked meeting note %q: unexpected linkage state=%q kind=%v id=%v", p.name, note.LinkageState, note.LinkedKind, note.LinkedID)
+	}
+	return Seeded{Kind: "meeting_note", ID: note.ID.String(), Name: title}, nil
 }
 
 func setIMessageChatID(envelope *events.Envelope, chatID string) error {
