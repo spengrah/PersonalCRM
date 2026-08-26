@@ -874,5 +874,9 @@
   {
     "pattern": "^frontend/tests/e2e/interactions-drilldown\\.spec\\.ts$",
     "tags": ["@area:interactions"]
+  },
+  {
+    "pattern": "^frontend/tests/e2e/interactions-filters\\.spec\\.ts$",
+    "tags": ["@area:interactions"]
   }
 ]
