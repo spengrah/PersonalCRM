@@ -75,7 +75,7 @@ LIMIT sqlc.arg(event_limit) OFFSET sqlc.arg(event_offset);
 SELECT * FROM calendar_event
 WHERE sqlc.arg(contact_id)::uuid = ANY(matched_contact_ids)
   AND status != 'cancelled'
-  AND start_time > sqlc.arg(after_time)
+  AND end_time >= sqlc.arg(after_time)
 ORDER BY start_time ASC
 LIMIT sqlc.arg(event_limit);
 

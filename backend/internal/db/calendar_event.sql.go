@@ -536,7 +536,7 @@ const ListUpcomingEventsForContact = `-- name: ListUpcomingEventsForContact :man
 SELECT id, gcal_event_id, gcal_calendar_id, google_account_id, title, description, location, start_time, end_time, all_day, status, user_response, organizer_email, attendees, matched_contact_ids, synced_at, last_contacted_updated, created_at, updated_at, html_link FROM calendar_event
 WHERE $1::uuid = ANY(matched_contact_ids)
   AND status != 'cancelled'
-  AND start_time > $2
+  AND end_time >= $2
 ORDER BY start_time ASC
 LIMIT $3
 `

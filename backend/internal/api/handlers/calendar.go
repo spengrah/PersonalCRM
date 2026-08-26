@@ -27,6 +27,10 @@ func NewCalendarHandler(calendarRepo *repository.CalendarEventRepository) *Calen
 const (
 	maxLimit     = 100
 	defaultLimit = 20
+
+	// upcomingMaxLimit bounds the contact-scoped upcoming feed only; every
+	// other calendar endpoint keeps the shared maxLimit cap.
+	upcomingMaxLimit = 250
 )
 
 // parsePagination parses and validates pagination parameters
@@ -142,11 +146,23 @@ func (h *CalendarHandler) ListUpcomingEventsForContact(c *gin.Context) {
 	}
 
 	// Parse and validate limit (no offset for upcoming)
-	limit, _ := parsePagination(c, 10)
+	limit := 10
+	if limitParam := c.Query("limit"); limitParam != "" {
+		parsedLimit, err := strconv.Atoi(limitParam)
+		if err != nil || parsedLimit < 0 {
+			limit = 10
+		} else {
+			limit = parsedLimit
+			if limit > upcomingMaxLimit {
+				limit = upcomingMaxLimit
+			}
+		}
+	}
+	limit32 := int32(limit)
 
 	// Fetch upcoming events
 	now := accelerated.GetCurrentTime()
-	events, err := h.calendarRepo.ListUpcomingEventsForContact(c.Request.Context(), contactID, now, limit)
+	events, err := h.calendarRepo.ListUpcomingEventsForContact(c.Request.Context(), contactID, now, limit32)
 	if err != nil {
 		api.RespondInternal(c, err)
 		return
