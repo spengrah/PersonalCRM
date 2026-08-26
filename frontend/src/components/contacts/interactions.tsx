@@ -3,8 +3,18 @@
 import { useState } from 'react'
 import { useContactInteractions } from '@/hooks/use-interactions'
 import { useUpcomingEventsForContact } from '@/hooks/use-calendar'
+import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import type { CalendarEvent } from '@/types/calendar'
 import { InteractionRow } from './interaction-row'
+import {
+  InteractionFilters,
+  DEFAULT_FILTER_SELECTION,
+  boundUpcomingEvents,
+  selectionToFilters,
+  upcomingVisible,
+  type InteractionFilterSelection,
+} from './interaction-filters'
+import type { InteractionListFilters } from '@/lib/interactions-api'
 
 const dateTimeFormatter = new Intl.DateTimeFormat('en-US', {
   weekday: 'short',
@@ -56,32 +66,47 @@ function UpcomingCard({ event }: { event: CalendarEvent }) {
 
 export function Interactions({ contactId }: { contactId: string }) {
   const [showAllUpcoming, setShowAllUpcoming] = useState(false)
-  const interactions = useContactInteractions(contactId, {})
+  const [selection, setSelection] = useState(DEFAULT_FILTER_SELECTION)
+  const [filters, setFilters] = useState<InteractionListFilters>({})
+  const { currentTime } = useAcceleratedTime()
+  const applySelection = (next: InteractionFilterSelection) => {
+    setSelection(next)
+    setFilters(selectionToFilters(next, currentTime))
+  }
+  const interactions = useContactInteractions(contactId, filters)
   const upcoming = useUpcomingEventsForContact(contactId, 250)
   const items = interactions.data?.pages.flatMap(page => page.data?.items ?? []) ?? []
   const events = upcoming.data ?? []
-  const displayedEvents = showAllUpcoming ? events : events.slice(0, 3)
+  const venueOptions = interactions.data?.pages[0]?.data?.venue_options ?? []
+  const showUpcoming = upcomingVisible(selection, currentTime)
+  const boundedEvents = showUpcoming ? boundUpcomingEvents(events, selection) : []
+  const displayedEvents = showAllUpcoming ? boundedEvents : boundedEvents.slice(0, 3)
 
   return (
     <section aria-label="Interactions" className="bg-white shadow overflow-hidden sm:rounded-lg">
       <div className="border-b border-gray-200 px-4 py-5 sm:px-6">
         <h3 className="text-lg font-medium leading-6 text-gray-900">Interactions</h3>
       </div>
-      {events.length > 0 && (
+      <InteractionFilters
+        venueOptions={venueOptions}
+        selection={selection}
+        onChange={applySelection}
+      />
+      {boundedEvents.length > 0 && (
         <div>
           <div role="list" aria-label="Upcoming events" className="divide-y divide-gray-200">
             {displayedEvents.map(event => (
               <UpcomingCard key={event.id} event={event} />
             ))}
           </div>
-          {!showAllUpcoming && events.length > 3 && (
+          {!showAllUpcoming && boundedEvents.length > 3 && (
             <div className="border-t border-gray-200 px-4 py-4 sm:px-6">
               <button
                 type="button"
                 onClick={() => setShowAllUpcoming(true)}
                 className="w-full rounded border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700"
               >
-                Show all {events.length} upcoming
+                Show all {boundedEvents.length} upcoming
               </button>
             </div>
           )}
@@ -95,7 +120,7 @@ export function Interactions({ contactId }: { contactId: string }) {
         !interactions.isLoading &&
         !upcoming.isLoading &&
         !upcoming.error &&
-        events.length === 0 ? (
+        boundedEvents.length === 0 ? (
         <p className="border-t border-gray-200 p-6 text-sm text-gray-500">
           No interactions recorded for this contact.
         </p>
@@ -104,7 +129,11 @@ export function Interactions({ contactId }: { contactId: string }) {
           {items.length > 0 && (
             <div role="list" aria-label="Interaction history" className="divide-y divide-gray-200">
               {items.map(item => (
-                <InteractionRow key={item.id} item={item} />
+                <InteractionRow
+                  key={item.id}
+                  item={item}
+                  venueFilter={selection.venue || undefined}
+                />
               ))}
             </div>
           )}

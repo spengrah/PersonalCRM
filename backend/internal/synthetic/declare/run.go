@@ -929,7 +929,7 @@ func meetingNoteTitle(gen *factory.Generator, handle string) string {
 func runCalendarEvent(ctx context.Context, h *replay.Harness, p *calendarEventPlan, st *runState) (Seeded, error) {
 	gen := h.Generator()
 
-	shape := factory.GCalEventShape{StartOffset: calendarStartOffset(p)}
+	shape := factory.GCalEventShape{StartOffset: calendarStartOffset(p, gen.Anchor())}
 	if p.inProgress {
 		shape.Duration = inProgressEventDuration
 	}
@@ -997,10 +997,13 @@ const inProgressEventDuration = 2 * time.Hour
 // A past meeting keeps the factory's own two-hour lead-in so a "started n days
 // ago" meeting also ENDED n days ago, which is what the day count on the card
 // reads.
-func calendarStartOffset(p *calendarEventPlan) time.Duration {
+func calendarStartOffset(p *calendarEventPlan, anchor time.Time) time.Duration {
 	switch {
 	case p.startsInDays != nil:
 		return time.Duration(*p.startsInDays) * 24 * time.Hour
+	case p.startsAtUTCMidnightDays != nil:
+		y, m, d := anchor.UTC().Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC).AddDate(0, 0, *p.startsAtUTCMidnightDays).Sub(anchor)
 	case p.startedDaysAgo != nil:
 		return -(time.Duration(*p.startedDaysAgo)*24*time.Hour + 2*time.Hour)
 	default:

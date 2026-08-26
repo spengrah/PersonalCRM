@@ -116,7 +116,7 @@ behaviors:
   - id: IXN-007
     title: Venue filtering follows content-container membership
     type: ux
-    status: proposed
+    status: current
     surface: ui
     given: a contact has interactions across multiple message venues
     when: a venue filter is applied
@@ -130,7 +130,7 @@ behaviors:
   - id: IXN-008
     title: Date filters bound the history while preserving an all-time view
     type: ux
-    status: proposed
+    status: current
     surface: ui
     given: a contact's unified history spans multiple dates
     when: a date filter is selected

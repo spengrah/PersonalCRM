@@ -169,3 +169,32 @@ func TestInteractionVocabulary_SessionUUIDDeterminism(t *testing.T) {
 		assert.Equal(t, wantTail[i], first[12+i])
 	}
 }
+
+func TestInteractionVocabulary_FilterValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		entity  Entity
+		wantErr string
+	}{
+		{name: "message synced ceiling", entity: MessageInteraction("message", "subject", "email", AgoDays(61)), wantErr: "1..60"},
+		{name: "phone synced ceiling", entity: PhoneCallInteraction("phone", "subject", AgoDays(61)), wantErr: "1..60"},
+		{name: "logged ceiling", entity: LoggedInteraction("logged", "subject", "manual", AgoDays(101)), wantErr: "1..100"},
+		{name: "logged floor", entity: LoggedInteraction("logged", "subject", "manual", AgoDays(0)), wantErr: "1..100"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.entity.validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+
+	accepted := []Entity{
+		MessageInteraction("message", "subject", "email", AgoDays(60)),
+		LoggedInteraction("logged-91", "subject", "manual", AgoDays(91)),
+		LoggedInteraction("logged-100", "subject", "manual", AgoDays(100)),
+	}
+	for _, entity := range accepted {
+		assert.NoError(t, entity.validate())
+	}
+}
