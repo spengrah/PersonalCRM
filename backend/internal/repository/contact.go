@@ -274,6 +274,24 @@ func (r *ContactRepository) ListContacts(ctx context.Context, params ListContact
 	return contacts, nil
 }
 
+// ListContactNamesByIDs resolves a set of contact IDs to display names in one
+// round trip. IDs with no live contact are simply absent from the map, so a
+// caller renders its own fallback rather than an empty name.
+func (r *ContactRepository) ListContactNamesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]string, error) {
+	names := map[uuid.UUID]string{}
+	if len(ids) == 0 {
+		return names, nil
+	}
+	rows, err := r.queries.ListContactNamesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		names[row.ID] = row.FullName
+	}
+	return names, nil
+}
+
 // CreateContact creates a new contact
 func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContactRequest) (*Contact, error) {
 	// Use accelerated time for created_at to ensure consistency with time acceleration

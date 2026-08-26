@@ -369,3 +369,12 @@ WHERE deleted_at IS NULL
     OR (how_met IS NOT NULL AND how_met != '')
   )
 ORDER BY created_at ASC, id ASC;
+
+-- name: ListContactNamesByIDs :many
+-- Display-name lookup for a set of contacts, used to render message senders as
+-- the contact's name instead of the raw peer handle. Soft-deleted contacts are
+-- excluded so a deleted contact's messages fall back to the handle rather than
+-- resurrecting a name the rest of the app no longer shows.
+SELECT id, full_name
+FROM contact
+WHERE id = ANY(@ids::uuid[]) AND deleted_at IS NULL;

@@ -212,6 +212,7 @@ export function InteractionRow({
           isError={content.isError}
           content={content.data}
           venueFilter={venueFilter}
+          recordedCount={item.message_count}
         />
       )}
     </article>

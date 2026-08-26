@@ -56,7 +56,7 @@ func newContentEnv(t *testing.T) *contentEnv {
 }
 
 func (e *contentEnv) svc(q db.Querier) *service.InteractionContentService {
-	return service.NewInteractionContentService(repository.NewInteractionRepository(q), repository.NewCommsMessageRepository(q), repository.NewTelegramMessageRepository(q), repository.NewMessagesMessageRepository(q), repository.NewMeetingNoteRepository(q), repository.NewCalendarEventRepository(q), repository.NewPhoneCallRepository(q))
+	return service.NewInteractionContentService(repository.NewInteractionRepository(q), repository.NewCommsMessageRepository(q), repository.NewTelegramMessageRepository(q), repository.NewMessagesMessageRepository(q), repository.NewMeetingNoteRepository(q), repository.NewCalendarEventRepository(q), repository.NewPhoneCallRepository(q), repository.NewContactRepository(q))
 }
 
 func requireContentIntegration(t *testing.T) {

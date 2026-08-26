@@ -62,6 +62,48 @@ func TestInteractionContentDerivation_Sender(t *testing.T) {
 	assert.Equal(t, "Unknown", deriveSender("email", false, nil, nil, nil, nil, nil))
 }
 
+// The `named` flag decides whether a matched contact's name may replace the
+// derived sender, so it — not just the string — has to be pinned: a name the
+// source supplied is authoritative, a raw identifier or a missing one is not.
+func TestInteractionContentDerivation_SenderNamedFlag(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		called func() (string, bool)
+		want   bool
+	}{
+		{"outgoing", func() (string, bool) {
+			return deriveSenderDetail("messages", true, ptr("peer"), nil, nil, nil, nil)
+		}, true},
+		{"telegram profile name", func() (string, bool) {
+			return deriveSenderDetail("telegram", false, nil, nil, ptr("First"), ptr("Last"), nil)
+		}, true},
+		{"telegram username", func() (string, bool) {
+			return deriveSenderDetail("telegram", false, nil, nil, nil, nil, ptr("user"))
+		}, true},
+		{"telegram nothing", func() (string, bool) {
+			return deriveSenderDetail("telegram", false, nil, nil, nil, nil, nil)
+		}, false},
+		{"whatsapp push name", func() (string, bool) {
+			return deriveSenderDetail("whatsapp", false, ptr("peer"), []byte(`{"push_name":"Push"}`), nil, nil, nil)
+		}, true},
+		{"whatsapp bare handle", func() (string, bool) {
+			return deriveSenderDetail("whatsapp", false, ptr("peer"), nil, nil, nil, nil)
+		}, false},
+		{"imessage handle", func() (string, bool) {
+			return deriveSenderDetail("messages", false, ptr("+15550000001"), nil, nil, nil, nil)
+		}, false},
+		{"no identifier at all", func() (string, bool) {
+			return deriveSenderDetail("email", false, nil, nil, nil, nil, nil)
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, named := tc.called()
+			assert.Equal(t, tc.want, named)
+		})
+	}
+}
+
 func TestInteractionContentDerivation_SessionRefShape(t *testing.T) {
 	t.Parallel()
 	sessionID := uuid.New()

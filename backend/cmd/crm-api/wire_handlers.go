@@ -49,6 +49,7 @@ func buildCoreHandlers(
 		repository.NewMeetingNoteRepository(database.Queries),
 		repository.NewCalendarEventRepository(database.Queries),
 		repository.NewPhoneCallRepository(database.Queries),
+		contactRepo,
 	)
 
 	return coreHandlers{

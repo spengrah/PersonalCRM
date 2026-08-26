@@ -42,6 +42,7 @@ func interactionContentService(database *db.Database) *service.InteractionConten
 		repository.NewMeetingNoteRepository(database.Queries),
 		repository.NewCalendarEventRepository(database.Queries),
 		repository.NewPhoneCallRepository(database.Queries),
+		repository.NewContactRepository(database.Queries),
 	)
 }
 
