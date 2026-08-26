@@ -42,7 +42,7 @@ func newContactSearchAPITest(t *testing.T) (*gin.Engine, *repository.ContactRepo
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contentService := service.NewInteractionContentService(interactionRepo, repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries), repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries), repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries))
+	contentService := service.NewInteractionContentService(interactionRepo, repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries), repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries), repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries), repository.NewContactRepository(database.Queries))
 
 	// List-only wiring (contact_ids_test.go pattern): nil bus/rematch/followUp
 	// plus the light cadence/knowledge deps. This deliberately avoids

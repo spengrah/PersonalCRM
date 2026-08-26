@@ -62,10 +62,48 @@ type InteractionContentService struct {
 	meetingNotes   *repository.MeetingNoteRepository
 	calendarEvents *repository.CalendarEventRepository
 	phoneCalls     *repository.PhoneCallRepository
+	contacts       *repository.ContactRepository
 }
 
-func NewInteractionContentService(interactions *repository.InteractionRepository, comms *repository.CommsMessageRepository, telegram *repository.TelegramMessageRepository, messages *repository.MessagesMessageRepository, meetingNotes *repository.MeetingNoteRepository, calendarEvents *repository.CalendarEventRepository, phoneCalls *repository.PhoneCallRepository) *InteractionContentService {
-	return &InteractionContentService{interactions: interactions, comms: comms, telegram: telegram, messages: messages, meetingNotes: meetingNotes, calendarEvents: calendarEvents, phoneCalls: phoneCalls}
+func NewInteractionContentService(interactions *repository.InteractionRepository, comms *repository.CommsMessageRepository, telegram *repository.TelegramMessageRepository, messages *repository.MessagesMessageRepository, meetingNotes *repository.MeetingNoteRepository, calendarEvents *repository.CalendarEventRepository, phoneCalls *repository.PhoneCallRepository, contacts *repository.ContactRepository) *InteractionContentService {
+	return &InteractionContentService{interactions: interactions, comms: comms, telegram: telegram, messages: messages, meetingNotes: meetingNotes, calendarEvents: calendarEvents, phoneCalls: phoneCalls, contacts: contacts}
+}
+
+// applySenderNames rewrites Sender to the matched contact's display name for
+// the rows the caller marked eligible — those whose sender resolved to a raw
+// peer identifier rather than a name the source itself supplied. The raw value
+// stays as the fallback for a sender with no matched contact, a contact since
+// soft-deleted, or a contact with an empty name. Outbound rows keep "Me": their
+// matched contact is the RECIPIENT, not the sender.
+func (s *InteractionContentService) applySenderNames(ctx context.Context, rows []ContentMessage, matched map[uuid.UUID]uuid.UUID) error {
+	if len(matched) == 0 {
+		return nil
+	}
+	seen := map[uuid.UUID]bool{}
+	ids := make([]uuid.UUID, 0, len(matched))
+	for _, contactID := range matched {
+		if !seen[contactID] {
+			seen[contactID] = true
+			ids = append(ids, contactID)
+		}
+	}
+	names, err := s.contacts.ListContactNamesByIDs(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for i := range rows {
+		if rows[i].IsOutgoing {
+			continue
+		}
+		contactID, ok := matched[rows[i].ID]
+		if !ok {
+			continue
+		}
+		if name, ok := names[contactID]; ok && name != "" {
+			rows[i].Sender = name
+		}
+	}
+	return nil
 }
 
 func (s *InteractionContentService) EnrichPage(ctx context.Context, interactions []repository.Interaction) (map[uuid.UUID]InteractionEnrichment, error) {
@@ -378,30 +416,40 @@ func deriveVenue(source, container, chatType string, title, subject *string, isG
 	return tag
 }
 func deriveSender(source string, outgoing bool, peer *string, metadata []byte, first, last, username *string) string {
+	name, _ := deriveSenderDetail(source, outgoing, peer, metadata, first, last, username)
+	return name
+}
+
+// deriveSenderDetail is deriveSender plus whether the name it returned came
+// from a display name the SOURCE supplied (a Telegram profile name or handle, a
+// WhatsApp push name). False means the result is a raw peer identifier or the
+// "Unknown" placeholder — the only cases a matched contact's name may replace,
+// so a source's own naming of a person always wins over the CRM's.
+func deriveSenderDetail(source string, outgoing bool, peer *string, metadata []byte, first, last, username *string) (string, bool) {
 	if outgoing {
-		return "Me"
+		return "Me", true
 	}
 	if source == repository.InteractionSourceTelegram {
 		if name := joinNames(first, last); name != "" {
-			return name
+			return name, true
 		}
 		if username != nil && *username != "" {
-			return *username
+			return *username, true
 		}
-		return "Unknown"
+		return "Unknown", false
 	}
 	if source == repository.InteractionSourceWhatsApp {
 		values := map[string]any{}
 		if json.Unmarshal(metadata, &values) == nil {
 			if name, ok := values["push_name"].(string); ok && name != "" {
-				return name
+				return name, true
 			}
 		}
 	}
 	if peer != nil && *peer != "" {
-		return *peer
+		return *peer, false
 	}
-	return "Unknown"
+	return "Unknown", false
 }
 
 func (s *InteractionContentService) expandComms(ctx context.Context, interactionID uuid.UUID, linked []repository.CommsMessage) ([]ContentMessage, error) {
@@ -448,12 +496,21 @@ func (s *InteractionContentService) expandComms(ctx context.Context, interaction
 		}
 	}
 	out := []ContentMessage{}
+	matched := map[uuid.UUID]uuid.UUID{}
 	for _, row := range chosen {
 		venueKey := ""
 		if row.ThreadID != nil {
 			venueKey = row.Source + ":" + *row.ThreadID
 		}
-		out = append(out, ContentMessage{ID: row.ID, Sender: deriveSender(row.Source, row.Direction == repository.InteractionDirectionOutbound, row.PeerHandle, row.SourceMetadata, nil, nil, nil), IsOutgoing: row.Direction == repository.InteractionDirectionOutbound, SentAt: row.SentAt, Body: stringValue(row.Body), VenueKey: venueKey})
+		outgoing := row.Direction == repository.InteractionDirectionOutbound
+		sender, named := deriveSenderDetail(row.Source, outgoing, row.PeerHandle, row.SourceMetadata, nil, nil, nil)
+		if !named && row.MatchedContactID != nil {
+			matched[row.ID] = *row.MatchedContactID
+		}
+		out = append(out, ContentMessage{ID: row.ID, Sender: sender, IsOutgoing: outgoing, SentAt: row.SentAt, Body: stringValue(row.Body), VenueKey: venueKey})
+	}
+	if err := s.applySenderNames(ctx, out, matched); err != nil {
+		return nil, err
 	}
 	sortContentMessages(out)
 	return out, nil
@@ -471,14 +528,22 @@ func (s *InteractionContentService) expandTelegram(ctx context.Context, linked [
 		windows[row.TelegramChatID] = value
 	}
 	out := []ContentMessage{}
+	matched := map[uuid.UUID]uuid.UUID{}
 	for chat, window := range windows {
 		rows, err := s.telegram.ListByChatWindow(ctx, chat, window[0], window[1])
 		if err != nil {
 			return nil, err
 		}
 		for _, row := range rows {
-			out = append(out, ContentMessage{ID: row.ID, Sender: deriveSender("telegram", row.IsOutgoing, nil, nil, row.PeerFirstName, row.PeerLastName, row.PeerUsername), IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.MessageText), VenueKey: "telegram:" + strconv.FormatInt(row.TelegramChatID, 10)})
+			sender, named := deriveSenderDetail("telegram", row.IsOutgoing, nil, nil, row.PeerFirstName, row.PeerLastName, row.PeerUsername)
+			if !named && row.MatchedContactID != nil {
+				matched[row.ID] = *row.MatchedContactID
+			}
+			out = append(out, ContentMessage{ID: row.ID, Sender: sender, IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.MessageText), VenueKey: "telegram:" + strconv.FormatInt(row.TelegramChatID, 10)})
 		}
+	}
+	if err := s.applySenderNames(ctx, out, matched); err != nil {
+		return nil, err
 	}
 	sortContentMessages(out)
 	return out, nil
@@ -496,6 +561,7 @@ func (s *InteractionContentService) expandMessages(ctx context.Context, linked [
 		windows[row.ChatGuid] = value
 	}
 	out := []ContentMessage{}
+	matched := map[uuid.UUID]uuid.UUID{}
 	for chat, window := range windows {
 		rows, err := s.messages.ListByChatWindow(ctx, chat, window[0], window[1])
 		if err != nil {
@@ -503,8 +569,15 @@ func (s *InteractionContentService) expandMessages(ctx context.Context, linked [
 		}
 		for _, row := range rows {
 			peer := row.PeerHandle
-			out = append(out, ContentMessage{ID: row.ID, Sender: deriveSender("messages", row.IsOutgoing, &peer, nil, nil, nil, nil), IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.Text), VenueKey: "messages:" + row.ChatGuid})
+			sender, named := deriveSenderDetail("messages", row.IsOutgoing, &peer, nil, nil, nil, nil)
+			if !named && row.MatchedContactID != nil {
+				matched[row.ID] = *row.MatchedContactID
+			}
+			out = append(out, ContentMessage{ID: row.ID, Sender: sender, IsOutgoing: row.IsOutgoing, SentAt: row.SentAt, Body: stringValue(row.Text), VenueKey: "messages:" + row.ChatGuid})
 		}
+	}
+	if err := s.applySenderNames(ctx, out, matched); err != nil {
+		return nil, err
 	}
 	sortContentMessages(out)
 	return out, nil

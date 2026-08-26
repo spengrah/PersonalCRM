@@ -52,7 +52,7 @@ func newInteractionAPITest(t *testing.T) *interactionAPIDB {
 	eventRepo := repository.NewCalendarEventRepository(database.Queries)
 	phoneRepo := repository.NewPhoneCallRepository(database.Queries)
 	noteRepo := repository.NewMeetingNoteRepository(database.Queries)
-	content := service.NewInteractionContentService(interactionRepo, commsRepo, telegramRepo, messagesRepo, noteRepo, eventRepo, phoneRepo)
+	content := service.NewInteractionContentService(interactionRepo, commsRepo, telegramRepo, messagesRepo, noteRepo, eventRepo, phoneRepo, repository.NewContactRepository(database.Queries))
 	handler := handlers.NewInteractionHandler(interactionRepo, nil, content)
 	router := gin.New()
 	handlers.RegisterContactRoutes(router.Group("/api/v1"), handlers.ContactRouteDeps{

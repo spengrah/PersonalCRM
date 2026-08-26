@@ -51,7 +51,7 @@ func setupDirectionAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactTask
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	contentService := service.NewInteractionContentService(interactionRepo, repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries), repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries), repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries))
+	contentService := service.NewInteractionContentService(interactionRepo, repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries), repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries), repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries), repository.NewContactRepository(database.Queries))
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 
 	cfg2 := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}

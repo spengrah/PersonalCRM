@@ -291,6 +291,47 @@ describe('InteractionContent', () => {
     expect(document.querySelectorAll('[data-message-id]')).toHaveLength(2)
   })
 
+  it('discloses the evidence scope only when it differs from the recorded count', () => {
+    const content = messagesContent([
+      message('message-a', 'Sender A', '2026-01-02T03:04:00Z', 'A', 'venue-a'),
+      message('message-b', 'Sender B', '2026-01-02T03:05:00Z', 'B', 'venue-b'),
+      message('message-c', 'Sender C', '2026-01-02T03:06:00Z', 'C', 'venue-b'),
+    ])
+    const scope = () => document.querySelector('[data-evidence-scope]')
+
+    // Window wider than the interaction: the common case behind "header says 6,
+    // thread shows 10".
+    const { rerender } = render(
+      <InteractionContent isPending={false} isError={false} content={content} recordedCount={2} />
+    )
+    expect(scope()).toHaveTextContent('Showing 3 messages from this conversation')
+    expect(scope()).toHaveTextContent('2 recorded for this interaction')
+
+    // A venue filter narrows BELOW the recorded count — also a mismatch, and
+    // also disclosed, so the row's count never over-promises either way.
+    rerender(
+      <InteractionContent
+        isPending={false}
+        isError={false}
+        content={content}
+        venueFilter="venue-a"
+        recordedCount={2}
+      />
+    )
+    expect(scope()).toHaveTextContent('Showing 1 message from this conversation')
+
+    // Agreement is silent: no note when the counts already match.
+    rerender(
+      <InteractionContent isPending={false} isError={false} content={content} recordedCount={3} />
+    )
+    expect(scope()).not.toBeInTheDocument()
+
+    // No recorded count supplied (a caller that cannot know it) stays silent
+    // rather than inventing a comparison.
+    rerender(<InteractionContent isPending={false} isError={false} content={content} />)
+    expect(scope()).not.toBeInTheDocument()
+  })
+
   it('renders notes in API order, preserves null fields, and shows provenance once', () => {
     const content: InteractionContentResponse = {
       interaction_id: 'ixn-notes',

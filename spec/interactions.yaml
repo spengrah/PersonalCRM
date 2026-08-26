@@ -68,7 +68,9 @@ behaviors:
       - key: full-plaintext-bodies
         text: every message in the interaction's bounded thread evidence is shown in full as plaintext
       - key: sender-and-timestamp
-        text: each message identifies its sender and timestamp
+        text: each message identifies its sender and timestamp, naming the sender's contact where the message is matched to one
+      - key: evidence-scope-disclosed
+        text: when the evidence shown differs in size from the count recorded against the interaction, both counts are disclosed
       - key: all-speakers-in-group
         text: group evidence includes every speaker represented inside the interaction's thread window
       - key: expand-in-place-no-nav

@@ -52,6 +52,16 @@ async function fetchContent(
   return (await response.json()).data as InteractionContent
 }
 
+async function fetchContactName(request: APIRequestContext, contactId: string): Promise<string> {
+  const response = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
+    headers: API_HEADERS,
+  })
+  expect(response.ok()).toBe(true)
+  const name = (await response.json()).data.full_name as string
+  expect(name, 'seeded contact should have a name to resolve senders against').toBeTruthy()
+  return name
+}
+
 function expectedDateTime(iso: string): string {
   return new Intl.DateTimeFormat('en-US', {
     weekday: 'short',
@@ -73,13 +83,14 @@ test.describe('Interactions Drill-down @area:interactions', () => {
     await testApi.cleanup()
   })
 
-  // spec: IXN-004.full-plaintext-bodies, IXN-004.sender-and-timestamp, IXN-004.all-speakers-in-group, IXN-004.expand-in-place-no-nav
+  // spec: IXN-004.full-plaintext-bodies, IXN-004.sender-and-timestamp, IXN-004.all-speakers-in-group, IXN-004.expand-in-place-no-nav, IXN-004.evidence-scope-disclosed
   test('expands a group thread to the full multi-speaker plaintext evidence', async ({
     page,
     request,
   }) => {
     const seeded = await testApi.seedBehavior('IXN-004')
     const contactId = handleId(seeded, 'subject')
+    const speakerId = handleId(seeded, 'speaker')
     const interactionId = handleId(seeded, 'group-thread')
     await page.goto(`/contacts/${contactId}`)
 
@@ -116,7 +127,27 @@ test.describe('Interactions Drill-down @area:interactions', () => {
       }
     }
 
-    const senders = new Set(await region.locator('[data-message-sender]').allTextContents())
+    // Senders resolve to the CRM's own contact names, not to the raw peer
+    // identifiers gchat carries. Pinned against the contacts fetched by id, so
+    // a regression to handles fails here rather than silently rendering them.
+    const [subjectName, speakerName] = await Promise.all([
+      fetchContactName(request, contactId),
+      fetchContactName(request, speakerId),
+    ])
+    const renderedSenders = await region.locator('[data-message-sender]').allTextContents()
+    expect(new Set(renderedSenders)).toEqual(new Set([subjectName, speakerName]))
+
+    // The row's count and the evidence on screen are drawn from different
+    // sets — recorded-against-the-interaction vs the surrounding thread
+    // window — so when they differ the drill-down states both.
+    const scope = region.locator('[data-evidence-scope]')
+    await expect(scope).toHaveCount(1, { timeout: 15000 })
+    await expect(scope).toContainText(`Showing ${content.messages.length} messages`, {
+      timeout: 15000,
+    })
+    await expect(scope).toContainText('2 recorded for this interaction', { timeout: 15000 })
+
+    const senders = new Set(renderedSenders)
     expect(senders.size).toBe(2)
     const senderCounts = new Map<string, number>()
     for (const message of content.messages) {

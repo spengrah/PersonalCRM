@@ -342,6 +342,41 @@ func (q *Queries) GetContact(ctx context.Context, id uuid.UUID) (*Contact, error
 	return &i, err
 }
 
+const ListContactNamesByIDs = `-- name: ListContactNamesByIDs :many
+SELECT id, full_name
+FROM contact
+WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
+`
+
+type ListContactNamesByIDsRow struct {
+	ID       uuid.UUID `json:"id"`
+	FullName string    `json:"full_name"`
+}
+
+// Display-name lookup for a set of contacts, used to render message senders as
+// the contact's name instead of the raw peer handle. Soft-deleted contacts are
+// excluded so a deleted contact's messages fall back to the handle rather than
+// resurrecting a name the rest of the app no longer shows.
+func (q *Queries) ListContactNamesByIDs(ctx context.Context, ids []uuid.UUID) ([]*ListContactNamesByIDsRow, error) {
+	rows, err := q.db.Query(ctx, ListContactNamesByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []*ListContactNamesByIDsRow{}
+	for rows.Next() {
+		var i ListContactNamesByIDsRow
+		if err := rows.Scan(&i.ID, &i.FullName); err != nil {
+			return nil, err
+		}
+		items = append(items, &i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListContactsWithCadence = `-- name: ListContactsWithCadence :many
 SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at FROM contact
 WHERE deleted_at IS NULL

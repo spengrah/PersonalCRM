@@ -225,8 +225,13 @@ func TestInteractionContentAPI_MessageShape(t *testing.T) {
 		interaction uuid.UUID
 		id, sender  string
 	}{
+		// A name the SOURCE supplied always wins over the CRM's own: the first
+		// three keep their Telegram/WhatsApp identities even though every
+		// seeded row carries the same matched contact. Only a sender that
+		// resolved to a raw identifier ("Peer Handle") or to no identifier at
+		// all ("Unknown") is replaced by the matched contact's name.
 		{telegram.ID, "", "tg-user"}, {telegramNamed.ID, "", "First Last"}, {whatsappPush.ID, push.ID.String(), "Push Name"},
-		{whatsappPeer.ID, peer.ID.String(), "Peer Handle"}, {whatsappUnknown.ID, unknown.ID.String(), "Unknown"},
+		{whatsappPeer.ID, peer.ID.String(), e.contact.FullName}, {whatsappUnknown.ID, unknown.ID.String(), e.contact.FullName},
 	} {
 		status, body = getInteractionContent(t, e, tc.interaction.String())
 		require.Equal(t, http.StatusOK, status)
@@ -237,6 +242,23 @@ func TestInteractionContentAPI_MessageShape(t *testing.T) {
 		if tc.id != "" {
 			assert.Equal(t, tc.id, message["id"])
 		}
+	}
+
+	// Soft-deleting the contact withdraws the name: the lookup filters
+	// deleted_at, so each sender falls back to what it resolved to before,
+	// rather than resurrecting a name the rest of the app no longer shows.
+	require.NoError(t, repository.NewContactRepository(e.database.Queries).SoftDeleteContact(e.ctx, e.contact.ID))
+	for _, tc := range []struct {
+		interaction uuid.UUID
+		sender      string
+	}{
+		{whatsappPeer.ID, "Peer Handle"}, {whatsappUnknown.ID, "Unknown"}, {whatsappPush.ID, "Push Name"},
+	} {
+		status, body = getInteractionContent(t, e, tc.interaction.String())
+		require.Equal(t, http.StatusOK, status)
+		messages := contentData(t, body)["messages"].([]any)
+		require.Len(t, messages, 1)
+		assert.Equal(t, tc.sender, messages[0].(map[string]any)["sender"])
 	}
 }
 

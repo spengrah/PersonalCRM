@@ -1263,6 +1263,11 @@ type Querier interface {
 	ListContactInteractionsFiltered(ctx context.Context, arg ListContactInteractionsFilteredParams) ([]*Interaction, error)
 	// Contact method queries
 	ListContactMethodsByContact(ctx context.Context, contactID uuid.UUID) ([]*ContactMethod, error)
+	// Display-name lookup for a set of contacts, used to render message senders as
+	// the contact's name instead of the raw peer handle. Soft-deleted contacts are
+	// excluded so a deleted contact's messages fall back to the handle rather than
+	// resurrecting a name the rest of the app no longer shows.
+	ListContactNamesByIDs(ctx context.Context, ids []uuid.UUID) ([]*ListContactNamesByIDsRow, error)
 	ListContactNotes(ctx context.Context, arg ListContactNotesParams) ([]*Note, error)
 	// ListContactTagsWithLiveContact returns every contact_tag whose contact is NOT
 	// soft-deleted (the `crm-admin --migrate-tags` source set). Deleted contacts are
