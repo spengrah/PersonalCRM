@@ -315,8 +315,9 @@ func TestInteraction_SoftDelete(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify the deleted interaction is not in the list
-		data := listResp.Data.([]interface{})
-		for _, item := range data {
+		data := listResp.Data.(map[string]interface{})
+		items := data["items"].([]interface{})
+		for _, item := range items {
 			interaction := item.(map[string]interface{})
 			assert.NotEqual(t, interactionID, interaction["id"], "soft-deleted interaction should not appear in list")
 		}
@@ -544,8 +545,10 @@ func listInteractionPage(t *testing.T, router *gin.Engine, contactID string, lim
 	require.NotNil(t, response.Meta, "the interaction list must carry meta")
 	require.NotNil(t, response.Meta.Pagination, "the interaction list must carry pagination meta")
 
-	rows, ok := response.Data.([]interface{})
-	require.True(t, ok, "data must be an array: %s", w.Body.String())
+	data, ok := response.Data.(map[string]interface{})
+	require.True(t, ok, "data must be an object: %s", w.Body.String())
+	rows, ok := data["items"].([]interface{})
+	require.True(t, ok, "data.items must be an array: %s", w.Body.String())
 	ids := make([]string, 0, len(rows))
 	for _, item := range rows {
 		row, isObject := item.(map[string]interface{})

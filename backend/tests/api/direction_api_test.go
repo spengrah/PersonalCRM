@@ -168,7 +168,8 @@ func TestInteractionAPI_DirectionInResponse(t *testing.T) {
 
 		var resp api.APIResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		items := resp.Data.([]interface{})
+		listData := resp.Data.(map[string]interface{})
+		items := listData["items"].([]interface{})
 		require.Greater(t, len(items), 0)
 		first := items[0].(map[string]interface{})
 		assert.Contains(t, first, "direction", "list response should include direction field")
