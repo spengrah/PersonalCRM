@@ -485,10 +485,10 @@ func TestCalendarEvent_UTCMidnightPlacement(t *testing.T) {
 		})
 	}
 
-	msg := registerPanics(Declaration{Behavior: "ZZZ-PR4-accepted", Entities: []Entity{
-		Contact("subject"), CalendarEvent("event", "subject", StartsAtUTCMidnight(2)),
-	}})
-	assert.Nil(t, msg)
+	// Validate directly rather than registering: a successful Register would
+	// leave this behavior in the package-global declarations map that the
+	// completeness tests read, making them pass or fail by file-sort order.
+	assert.NoError(t, CalendarEvent("event", "subject", StartsAtUTCMidnight(2)).validate())
 
 	anchors := []struct {
 		name   string
