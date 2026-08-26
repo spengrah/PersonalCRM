@@ -322,7 +322,7 @@ behaviors:
   - id: CAL-024
     title: The Meetings section appears only when a contact has events
     type: ux
-    status: current
+    status: retired
     surface: ui
     given: a contact detail page
     when: the page renders
@@ -332,11 +332,12 @@ behaviors:
       - key: nothing-shown-without-events
         text: nothing is shown when the contact has no events or the events fail to load
     provenance: [contacts detail page, components/contacts/meetings.tsx]
+    notes: 'Retired into IXN-001 and IXN-009: the unified Interactions section always renders and uses an honest empty state where Meetings rendered nothing.'
 
   - id: CAL-025
     title: Meetings can be filtered into all, upcoming, and past with live counts
     type: ux
-    status: current
+    status: retired
     surface: ui
     given: a contact with a mix of upcoming and past meetings
     when: the Meetings section is used
@@ -350,11 +351,12 @@ behaviors:
       - key: past-meetings-ordered-most
         text: past meetings are ordered most-recent-first
     provenance: [components/contacts/meetings.tsx, useAcceleratedTime]
+    notes: 'Retired into IXN-001 and IXN-008 for filters and counts, plus IXN-006 for carrying the end-time in-progress classification forward.'
 
   - id: CAL-026
     title: A meeting card summarizes its time, place, and size
     type: ux
-    status: current
+    status: retired
     surface: ui
     given: a meeting in the Meetings section
     when: its card renders
@@ -368,12 +370,12 @@ behaviors:
       - key: past-meeting-carries-past
         text: a past meeting carries a past marker
     provenance: [components/contacts/meetings.tsx MeetingCard]
-    notes: The visual de-emphasis of past cards (reduced opacity) is presentation quality owned by the agentic judge, deliberately not pinned as a then-item.
+    notes: 'The visual de-emphasis of past cards (reduced opacity) is presentation quality owned by the agentic judge, deliberately not pinned as a then-item. Retired into IXN-002 for calendar row details and IXN-006 for event time, place, and attendee size.'
 
   - id: CAL-027
     title: A meeting with a source link opens it externally
     type: ux
-    status: current
+    status: retired
     surface: ui
     given: a meeting card
     when: the meeting carries a source link
@@ -383,11 +385,12 @@ behaviors:
       - key: meeting-without-link-renders
         text: a meeting without a link renders as plain text
     provenance: [components/contacts/meetings.tsx html_link branch]
+    notes: 'Retired into IXN-006 for event links and IXN-002 for links on past calendar rows.'
 
   - id: CAL-028
     title: A long meeting list reveals progressively
     type: ux
-    status: current
+    status: retired
     surface: ui
     given: a filtered meeting list longer than the initial page
     when: the user asks for more
@@ -399,6 +402,7 @@ behaviors:
       - key: switching-filters-resets-reveal
         text: switching filters resets the reveal back to the initial page
     provenance: [components/contacts/meetings.tsx displayLimit]
+    notes: 'Retired into IXN-001 for paging and IXN-006 for reachability of all upcoming events.'
 
   - id: CAL-029
     title: Each calendar-enabled account offers a manual sync with visible state
