@@ -159,7 +159,9 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 		assert.Equal(t, ev.ID.String(), envelope.Data[0].ID)
 	})
 
-	t.Run("UpcomingForContact_FiltersToFuture", func(t *testing.T) {
+	t.Run("UpcomingForContact_IncludedUntilEnded", func(t *testing.T) {
+		// spec: CAL-031.included-until-ended
+		// spec: CAL-031.ended-excluded
 		ctx := context.Background()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
@@ -167,10 +169,7 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 		contactID := seedContact("Calendar Upcoming Test Contact " + ns)
 		now := accelerated.GetCurrentTime()
 		seedEvent(t, ctx, calendarRepo, ns, "past", now.Add(-48*time.Hour), now.Add(-47*time.Hour), []uuid.UUID{contactID}, nil)
-		// Started-but-not-ended: excluded because the contract keys on start
-		// time — a regression filtering on end_time > now would wrongly
-		// include this in-progress event.
-		seedEvent(t, ctx, calendarRepo, ns, "inprogress", now.Add(-30*time.Minute), now.Add(time.Hour), []uuid.UUID{contactID}, nil)
+		inProgress := seedEvent(t, ctx, calendarRepo, ns, "inprogress", now.Add(-30*time.Minute), now.Add(time.Hour), []uuid.UUID{contactID}, nil)
 		future := seedEvent(t, ctx, calendarRepo, ns, "future", now.Add(48*time.Hour), now.Add(49*time.Hour), []uuid.UUID{contactID}, nil)
 
 		w := doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events/upcoming")
@@ -179,8 +178,48 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 		var envelope calendarEventsEnvelope
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 		require.True(t, envelope.Success)
-		require.Len(t, envelope.Data, 1, "only the future event should be returned; past and in-progress events must be excluded")
-		assert.Equal(t, future.ID.String(), envelope.Data[0].ID)
+		// The contract keys on end time: an in-progress event stays upcoming
+		// until it ends, while the ended event is excluded.
+		require.Len(t, envelope.Data, 2, "in-progress and future events should be returned; ended events must be excluded")
+		assert.Equal(t, []string{inProgress.ID.String(), future.ID.String()}, []string{envelope.Data[0].ID, envelope.Data[1].ID})
+	})
+
+	t.Run("UpcomingForContact_LimitCap", func(t *testing.T) {
+		// spec: CAL-031.limit-cap-250
+		ctx := context.Background()
+		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
+
+		ns := "cal-upcoming-limit-" + uuid.NewString()[:8]
+		contactID := seedContact("Calendar Upcoming Limit Test Contact " + ns)
+		now := accelerated.GetCurrentTime()
+		for i := 0; i < 251; i++ {
+			start := now.Add(time.Duration(i+1) * time.Hour)
+			seedEvent(t, ctx, calendarRepo, ns, fmt.Sprintf("future-%d", i), start, start.Add(time.Hour), []uuid.UUID{contactID}, nil)
+		}
+
+		w := doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events/upcoming")
+		require.Equal(t, http.StatusOK, w.Code)
+		var defaulted calendarEventsEnvelope
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &defaulted))
+		assert.Len(t, defaulted.Data, 10, "an omitted limit must default to 10")
+
+		w = doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events/upcoming?limit=7")
+		require.Equal(t, http.StatusOK, w.Code)
+		var limited calendarEventsEnvelope
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &limited))
+		assert.Len(t, limited.Data, 7, "an explicit limit under the cap must be honored")
+
+		w = doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events/upcoming?limit=250")
+		require.Equal(t, http.StatusOK, w.Code)
+		var capped calendarEventsEnvelope
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &capped))
+		assert.Len(t, capped.Data, 250, "the endpoint must honor its 250-event maximum")
+
+		w = doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events/upcoming?limit=1000")
+		require.Equal(t, http.StatusOK, w.Code)
+		var clamped calendarEventsEnvelope
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &clamped))
+		assert.Len(t, clamped.Data, 250, "a limit above the endpoint maximum must clamp to 250")
 	})
 
 	t.Run("GlobalUpcoming_ReturnsFutureEvents", func(t *testing.T) {
@@ -260,6 +299,31 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 			assert.Equal(t, http.MethodGet, route.Method, "calendar route %s %s must be GET-only — no endpoint creates, updates, or deletes an event", route.Method, route.Path)
 		}
 	})
+}
+
+// spec: CAL-031.included-until-ended
+//
+// TestUpcomingForContact_EndTimeBoundary proves that an event ending exactly
+// at the current time remains in the contact-scoped upcoming feed, while one
+// ending one second earlier is excluded.
+func TestUpcomingForContact_EndTimeBoundary(t *testing.T) {
+	ctx := context.Background()
+	frozen := accelerated.GetCurrentTime().Truncate(time.Second)
+	restore := accelerated.SetNowForTest(func() time.Time { return frozen })
+	t.Cleanup(restore)
+
+	router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
+	ns := "cal-upcoming-boundary-" + uuid.NewString()[:8]
+	contactID := seedContact("Calendar Upcoming Boundary Test Contact " + ns)
+	boundary := seedEvent(t, ctx, calendarRepo, ns, "boundary", frozen.Add(-time.Hour), frozen, []uuid.UUID{contactID}, nil)
+	seedEvent(t, ctx, calendarRepo, ns, "ended", frozen.Add(-2*time.Hour), frozen.Add(-time.Second), []uuid.UUID{contactID}, nil)
+
+	w := doCalendarGet(router, "/api/v1/contacts/"+contactID.String()+"/events/upcoming")
+	require.Equal(t, http.StatusOK, w.Code)
+	var envelope calendarRawEnvelope
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+	require.True(t, envelope.Success)
+	assert.Equal(t, []string{boundary.ID.String()}, rawEventIDs(t, envelope.Data))
 }
 
 // spec: CAL-023

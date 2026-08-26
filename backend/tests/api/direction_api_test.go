@@ -51,12 +51,13 @@ func setupDirectionAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactTask
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contentService := service.NewInteractionContentService(interactionRepo, repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries), repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries), repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries))
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 
 	cfg2 := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg2)
 	contactHandler := handlers.NewContactHandler(contactService)
-	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
+	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler, contentService)
 
 	// Create a minimal contact task service for the handler (no real Todoist)
 	contactTaskService := service.NewContactTaskServiceForTest(contactTaskRepo, contactRepo, nil, "http://localhost:3000")
@@ -167,7 +168,8 @@ func TestInteractionAPI_DirectionInResponse(t *testing.T) {
 
 		var resp api.APIResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		items := resp.Data.([]interface{})
+		listData := resp.Data.(map[string]interface{})
+		items := listData["items"].([]interface{})
 		require.Greater(t, len(items), 0)
 		first := items[0].(map[string]interface{})
 		assert.Contains(t, first, "direction", "list response should include direction field")

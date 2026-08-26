@@ -5,6 +5,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
+	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 )
 
@@ -40,11 +41,20 @@ func buildCoreHandlers(
 	// desired set, so absence in the payload expresses nothing and a client
 	// cannot destroy a method it never saw.
 	contactMethodService := service.NewContactMethodService(database, eventBus, rematchService)
+	contentService := service.NewInteractionContentService(
+		interactionRepo,
+		repository.NewCommsMessageRepository(database.Queries),
+		repository.NewTelegramMessageRepository(database.Queries),
+		repository.NewMessagesMessageRepository(database.Queries),
+		repository.NewMeetingNoteRepository(database.Queries),
+		repository.NewCalendarEventRepository(database.Queries),
+		repository.NewPhoneCallRepository(database.Queries),
+	)
 
 	return coreHandlers{
 		Contact:       handlers.NewContactHandler(contactService),
 		Note:          handlers.NewNoteHandler(noteService),
-		Interaction:   handlers.NewInteractionHandler(interactionRepo, manualHandler),
+		Interaction:   handlers.NewInteractionHandler(interactionRepo, manualHandler, contentService),
 		System:        handlers.NewSystemHandler(contactRepo, cfg.Runtime),
 		Rematch:       handlers.NewRematchHandler(rematchService, contactService),
 		ContactMethod: handlers.NewContactMethodHandler(contactMethodService),

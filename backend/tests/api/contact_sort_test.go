@@ -15,7 +15,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
-	_ "personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -49,7 +49,8 @@ func setupContactSortTestRouter(t *testing.T) (*gin.Engine, func()) {
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
 	contactHandler := handlers.NewContactHandler(contactService)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
-	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
+	contentService := service.NewInteractionContentService(interactionRepo, repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries), repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries), repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries))
+	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler, contentService)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())

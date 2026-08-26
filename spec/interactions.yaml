@@ -166,7 +166,7 @@ behaviors:
   - id: IXN-010
     title: The contact interactions surface is read-only end to end
     type: invariant
-    status: proposed
+    status: current
     surface: api
     statement: the contact interactions surface exposes only reads, adds no mutation endpoint or interaction writer, and leaves interaction creation to the existing recording paths.
     provenance: [.ai/spec/contact-interactions-surface.md]
@@ -190,7 +190,7 @@ behaviors:
   - id: IXN-013
     title: The contact interaction list API returns a stable enriched page
     type: api
-    status: proposed
+    status: current
     surface: api
     given: a client requests a contact's interactions with optional venue and date filters
     when: the list request is evaluated
@@ -222,7 +222,7 @@ behaviors:
   - id: IXN-014
     title: The per-interaction content API returns bounded, deterministic evidence
     type: api
-    status: proposed
+    status: current
     surface: api
     given: a client requests content by interaction id
     when: the content request is evaluated

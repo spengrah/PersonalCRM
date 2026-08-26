@@ -1522,6 +1522,26 @@
                         "description": "Items per page",
                         "name": "limit",
                         "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Venue key",
+                        "name": "venue",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "Occurred-at lower bound",
+                        "name": "from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "Occurred-at upper bound",
+                        "name": "to",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1536,10 +1556,7 @@
                                     "type": "object",
                                     "properties": {
                                         "data": {
-                                            "type": "array",
-                                            "items": {
-                                                "$ref": "#/definitions/handlers.InteractionResponse"
-                                            }
+                                            "$ref": "#/definitions/handlers.InteractionListResponse"
                                         }
                                     }
                                 }
@@ -3568,6 +3585,53 @@
                 }
             }
         },
+        "/interactions/{id}/content": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interactions"
+                ],
+                "summary": "Get interaction content",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "Interaction ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.InteractionContentResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/api.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/rematch/contacts/{id}/rescan": {
             "post": {
                 "description": "Re-runs rematch handlers for every method currently on the contact.",
@@ -5433,6 +5497,23 @@
                 }
             }
         },
+        "handlers.CallSummaryResponse": {
+            "type": "object",
+            "properties": {
+                "answered": {
+                    "type": "boolean"
+                },
+                "duration_seconds": {
+                    "type": "integer"
+                },
+                "has_voicemail": {
+                    "type": "boolean"
+                },
+                "service": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.CandidateSuggestionResponse": {
             "type": "object",
             "properties": {
@@ -5809,6 +5890,29 @@
                 }
             }
         },
+        "handlers.ContentMessageResponse": {
+            "type": "object",
+            "properties": {
+                "body": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_outgoing": {
+                    "type": "boolean"
+                },
+                "sender": {
+                    "type": "string"
+                },
+                "sent_at": {
+                    "type": "string"
+                },
+                "venue_key": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.CreateContactRequest": {
             "type": "object"
         },
@@ -5878,6 +5982,29 @@
                     "type": "integer"
                 },
                 "external_contact_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.EventSummaryResponse": {
+            "type": "object",
+            "properties": {
+                "attendee_count": {
+                    "type": "integer"
+                },
+                "end_time": {
+                    "type": "string"
+                },
+                "html_link": {
+                    "type": "string"
+                },
+                "location": {
+                    "type": "string"
+                },
+                "start_time": {
+                    "type": "string"
+                },
+                "title": {
                     "type": "string"
                 }
             }
@@ -6020,6 +6147,99 @@
                 }
             }
         },
+        "handlers.InteractionContentResponse": {
+            "type": "object",
+            "properties": {
+                "interaction_id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "meeting_notes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.MeetingNoteContentResponse"
+                    }
+                },
+                "messages": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.ContentMessageResponse"
+                    }
+                }
+            }
+        },
+        "handlers.InteractionListItemResponse": {
+            "type": "object",
+            "properties": {
+                "call": {
+                    "$ref": "#/definitions/handlers.CallSummaryResponse"
+                },
+                "contact_id": {
+                    "type": "string"
+                },
+                "content_kind": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "direction": {
+                    "type": "string"
+                },
+                "event": {
+                    "$ref": "#/definitions/handlers.EventSummaryResponse"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "is_group": {
+                    "type": "boolean"
+                },
+                "label": {
+                    "type": "string"
+                },
+                "message_count": {
+                    "type": "integer"
+                },
+                "occurred_at": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "source_ref": {
+                    "type": "string"
+                },
+                "venue_tags": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.VenueTagResponse"
+                    }
+                }
+            }
+        },
+        "handlers.InteractionListResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.InteractionListItemResponse"
+                    }
+                },
+                "venue_options": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.VenueTagResponse"
+                    }
+                }
+            }
+        },
         "handlers.InteractionResponse": {
             "type": "object",
             "properties": {
@@ -6099,6 +6319,20 @@
                     "items": {
                         "$ref": "#/definitions/handlers.SelectedMethodInput"
                     }
+                }
+            }
+        },
+        "handlers.MeetingNoteContentResponse": {
+            "type": "object",
+            "properties": {
+                "memo": {
+                    "type": "string"
+                },
+                "summary": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
                 }
             }
         },
@@ -6674,6 +6908,23 @@
         },
         "handlers.UpdateContactRequest": {
             "type": "object"
+        },
+        "handlers.VenueTagResponse": {
+            "type": "object",
+            "properties": {
+                "is_group": {
+                    "type": "boolean"
+                },
+                "key": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string"
+                },
+                "label": {
+                    "type": "string"
+                }
+            }
         },
         "handlers.WhatsAppBackfillResponse": {
             "type": "object",

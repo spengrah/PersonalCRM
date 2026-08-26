@@ -23,6 +23,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -54,8 +55,9 @@ func setupLastContactedTestRouter(t *testing.T) (*gin.Engine, func()) {
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contentService := service.NewInteractionContentService(interactionRepo, repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries), repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries), repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries))
 	contactHandler := handlers.NewContactHandler(contactService)
-	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
+	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler, contentService)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())

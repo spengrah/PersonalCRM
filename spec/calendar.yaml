@@ -298,11 +298,12 @@ behaviors:
     when: a client requests events
     then:
       - a contact's events, a contact's upcoming events, and a global upcoming-events feed are readable
-      - the upcoming feeds exclude events that have already started
+      - the global upcoming-events feed excludes events that have already started
       - page size is clamped to a bounded maximum with a sensible default
       - a malformed contact id is rejected with a validation error (400)
       - no endpoint creates, updates, or deletes an event — all writes flow through sync
     provenance: [RegisterCalendarRoutes, handlers/calendar.go, parsePagination]
+    notes: The original claim also covered start-time classification for the contact-scoped upcoming feed; that half was deliberately reversed because the feed now keeps events until they end, serves the interactions surface's upcoming side-fetch, and is re-minted as CAL-031. The global feed (ListUpcomingEventsWithContacts) retains start-time semantics.
 
   - id: CAL-023
     title: Event responses expose an attendee count, never attendee addresses
@@ -428,3 +429,20 @@ behaviors:
         text: the banner stays quiet while loading or when nothing is stalled
     provenance: [components/sync-staleness-banner.tsx]
     notes: The watchdog that detects staleness is settings/ingest scope; this behavior covers only the calendar labeling on the banner.
+
+  - id: CAL-031
+    title: The contact-scoped upcoming feed includes events until they end
+    type: api
+    status: current
+    surface: api
+    given: a contact with current and future calendar events
+    when: a client requests the contact's upcoming events
+    then:
+      - key: included-until-ended
+        text: an event whose end time has not yet passed is included, including one already started and one ending exactly at the current time
+      - key: ended-excluded
+        text: an event whose end time has passed is excluded
+      - key: limit-cap-250
+        text: the feed honors a requested limit up to a 250-event maximum (default 10)
+    provenance: [ListUpcomingEventsForContact, handlers/calendar.go upcomingMaxLimit]
+    notes: This contact-scoped behavior is the narrowed complement to CAL-022's surviving global-feed claim.

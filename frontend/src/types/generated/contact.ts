@@ -11,6 +11,10 @@ export type ContactMethodType =
   | 'twitter'
   | 'gchat'
   | 'whatsapp'
+export type InteractionDirection = 'outbound' | 'inbound' | 'mutual';
+export type InteractionContentKind = 'messages' | 'meeting_note' | 'call' | 'none';
+export type InteractionVenueKind = 'group_chat' | 'dm' | 'email_thread';
+export type CallService = 'voice' | 'facetime_audio' | 'facetime_video';
 
 //////////
 // source: contact_dto.go
@@ -196,4 +200,89 @@ export interface ContactMethodOperationsResponse {
   methods: ContactMethodResponse[];
   rematch_job_id?: string;
   results: ContactMethodOperationResult[];
+}
+
+//////////
+// source: interaction_dto.go
+
+/**
+ * InteractionResponse represents an interaction in API responses.
+ */
+export interface InteractionResponse {
+  id: string;
+  contact_id: string;
+  source: string;
+  source_ref?: string;
+  occurred_at: string;
+  description?: string;
+  direction: InteractionDirection;
+  created_at: string;
+}
+/**
+ * CreateInteractionRequest represents the request to create an interaction.
+ */
+export interface CreateInteractionRequest {
+  occurred_at?: string;
+  description?: string;
+  direction?: InteractionDirection;
+}
+export interface VenueTagResponse {
+  key: string;
+  label: string;
+  kind: InteractionVenueKind;
+  is_group: boolean;
+}
+export interface EventSummaryResponse {
+  title?: string;
+  location?: string;
+  attendee_count: number /* int */;
+  start_time: string;
+  end_time: string;
+  html_link?: string;
+}
+export interface CallSummaryResponse {
+  service: CallService;
+  answered?: boolean;
+  has_voicemail: boolean;
+  duration_seconds: number /* int */;
+}
+export interface InteractionListItemResponse {
+  id: string;
+  contact_id: string;
+  source: string;
+  source_ref?: string;
+  occurred_at: string;
+  description?: string;
+  direction: InteractionDirection;
+  created_at: string;
+  label: string;
+  content_kind: InteractionContentKind;
+  message_count: number /* int */;
+  is_group: boolean;
+  venue_tags: VenueTagResponse[];
+  event?: EventSummaryResponse;
+  call?: CallSummaryResponse;
+}
+export interface InteractionListResponse {
+  items: InteractionListItemResponse[];
+  venue_options: VenueTagResponse[];
+}
+export interface InteractionContentResponse {
+  interaction_id: string;
+  kind: InteractionContentKind;
+  messages: ContentMessageResponse[];
+  meeting_notes: MeetingNoteContentResponse[];
+}
+export interface ContentMessageResponse {
+  id: string;
+  sender: string;
+  is_outgoing: boolean;
+  sent_at: string;
+  body: string;
+  venue_key: string;
+}
+export interface MeetingNoteContentResponse {
+  title?: string;
+  summary?: string;
+  memo?: string;
 }

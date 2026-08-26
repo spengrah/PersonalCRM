@@ -17,6 +17,7 @@ import (
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic/factory"
 
 	"github.com/gin-gonic/gin"
@@ -50,8 +51,9 @@ func setupInteractionTestRouter(t *testing.T) (*gin.Engine, func()) {
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
+	contentService := service.NewInteractionContentService(interactionRepo, repository.NewCommsMessageRepository(database.Queries), repository.NewTelegramMessageRepository(database.Queries), repository.NewMessagesMessageRepository(database.Queries), repository.NewMeetingNoteRepository(database.Queries), repository.NewCalendarEventRepository(database.Queries), repository.NewPhoneCallRepository(database.Queries))
 	contactHandler := handlers.NewContactHandler(contactService)
-	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler)
+	interactionHandler := handlers.NewInteractionHandler(interactionRepo, manualHandler, contentService)
 
 	router := gin.New()
 	router.Use(api.RequestIDMiddleware())
@@ -70,6 +72,7 @@ func setupInteractionTestRouter(t *testing.T) (*gin.Engine, func()) {
 		}
 		interactions := v1.Group("/interactions")
 		{
+			interactions.GET("/:id/content", interactionHandler.GetInteractionContent)
 			interactions.DELETE("/:id", interactionHandler.DeleteInteraction)
 		}
 	}
@@ -179,15 +182,16 @@ func TestInteraction_CreateAndList(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response.Success)
 
-		data := response.Data.([]interface{})
-		assert.GreaterOrEqual(t, len(data), 2) // At least 2 from the creates above
+		data := response.Data.(map[string]interface{})
+		items := data["items"].([]interface{})
+		assert.GreaterOrEqual(t, len(items), 2) // At least 2 from the creates above
 
 		// LIST rows carry the same wire shape as the create echo —
 		// description, direction, and source. Today both paths share
 		// interactionToResponse, so this pins the contract against the
 		// mapping ever forking.
 		var coffeeRow map[string]interface{}
-		for _, item := range data {
+		for _, item := range items {
 			row := item.(map[string]interface{})
 			assert.NotEmpty(t, row["source"], "list row should carry source")
 			assert.Contains(t, []interface{}{"outbound", "inbound", "mutual"}, row["direction"],
@@ -311,8 +315,9 @@ func TestInteraction_SoftDelete(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify the deleted interaction is not in the list
-		data := listResp.Data.([]interface{})
-		for _, item := range data {
+		data := listResp.Data.(map[string]interface{})
+		items := data["items"].([]interface{})
+		for _, item := range items {
 			interaction := item.(map[string]interface{})
 			assert.NotEqual(t, interactionID, interaction["id"], "soft-deleted interaction should not appear in list")
 		}
@@ -540,8 +545,10 @@ func listInteractionPage(t *testing.T, router *gin.Engine, contactID string, lim
 	require.NotNil(t, response.Meta, "the interaction list must carry meta")
 	require.NotNil(t, response.Meta.Pagination, "the interaction list must carry pagination meta")
 
-	rows, ok := response.Data.([]interface{})
-	require.True(t, ok, "data must be an array: %s", w.Body.String())
+	data, ok := response.Data.(map[string]interface{})
+	require.True(t, ok, "data must be an object: %s", w.Body.String())
+	rows, ok := data["items"].([]interface{})
+	require.True(t, ok, "data.items must be an array: %s", w.Body.String())
 	ids := make([]string, 0, len(rows))
 	for _, item := range rows {
 		row, isObject := item.(map[string]interface{})
