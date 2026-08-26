@@ -68,6 +68,25 @@ function ContentIndicator({ item }: { item: InteractionListItemResponse }) {
   )
 }
 
+function Caret({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`transition-transform ${expanded ? 'rotate-180' : ''}`}
+    >
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  )
+}
+
 function EventDetails({ item }: { item: InteractionListItemResponse }) {
   if (!item.event) return null
   const { event } = item
@@ -146,16 +165,6 @@ export function InteractionRow({
               {formatDateTime(item.occurred_at)}
             </time>
             <ContentIndicator item={item} />
-            {expandable && (
-              <button
-                type="button"
-                aria-expanded={expanded}
-                onClick={() => setExpanded(value => !value)}
-                className="rounded border border-gray-300 px-2 py-0.5 text-sm text-gray-700"
-              >
-                {expanded ? 'Collapse content' : 'Expand content'}
-              </button>
-            )}
             {item.venue_tags.map(tag => (
               <span
                 key={tag.key}
@@ -175,14 +184,27 @@ export function InteractionRow({
           <EventDetails item={item} />
           <CallDetails item={item} />
         </div>
-        <button
-          type="button"
-          aria-label="More actions"
-          disabled
-          className="rounded p-1 text-gray-400 disabled:cursor-not-allowed"
-        >
-          ⋯
-        </button>
+        <div data-row-actions className="flex flex-shrink-0 items-center gap-1">
+          {expandable && (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              aria-label={expanded ? 'Collapse content' : 'Expand content'}
+              onClick={() => setExpanded(value => !value)}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            >
+              <Caret expanded={expanded} />
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label="More actions"
+            disabled
+            className="flex h-8 w-8 items-center justify-center rounded-md text-gray-400 disabled:cursor-not-allowed"
+          >
+            ⋯
+          </button>
+        </div>
       </div>
       {expanded && (
         <InteractionContent

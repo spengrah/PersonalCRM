@@ -177,6 +177,19 @@ describe('InteractionRow', () => {
     }
   )
 
+  it('offers the expand affordance as an icon-only caret in the row action cluster', () => {
+    renderItem({ content_kind: 'messages' })
+    const button = screen.getByRole('button', { name: 'Expand content' })
+    // Named by aria-label only: a visible text label would put a button in the
+    // metadata chip row, which is the affordance the design canvas rejected.
+    expect(button.textContent).toBe('')
+    const actions = button.closest('[data-row-actions]')
+    expect(actions).not.toBeNull()
+    expect(
+      within(actions as HTMLElement).getByRole('button', { name: 'More actions' })
+    ).toBeVisible()
+  })
+
   it('toggles the content region in place and unmounts it on collapse', () => {
     renderItem({ content_kind: 'messages' })
     const button = screen.getByRole('button', { name: 'Expand content' })
