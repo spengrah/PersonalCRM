@@ -1,0 +1,327 @@
+//go:build integration_testdb
+
+package tests
+
+import (
+	"fmt"
+	"os"
+	"sort"
+	"testing"
+	"time"
+
+	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/db"
+	"personal-crm/backend/internal/repository"
+	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/synthetic/declare"
+	"personal-crm/backend/internal/synthetic/factory"
+
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func requireInteractionsDeclareIntegration(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("DATABASE_URL") == "" {
+		t.Skip("DATABASE_URL not set")
+	}
+}
+
+func interactionContentService(database *db.Database) *service.InteractionContentService {
+	return service.NewInteractionContentService(
+		repository.NewInteractionRepository(database.Queries),
+		repository.NewCommsMessageRepository(database.Queries),
+		repository.NewTelegramMessageRepository(database.Queries),
+		repository.NewMessagesMessageRepository(database.Queries),
+		repository.NewMeetingNoteRepository(database.Queries),
+		repository.NewCalendarEventRepository(database.Queries),
+		repository.NewPhoneCallRepository(database.Queries),
+	)
+}
+
+func TestInteractionsDeclare_RowWorld(t *testing.T) {
+	requireInteractionsDeclareIntegration(t)
+	database, ctx := newSyntheticDB(t)
+	seeded, err := declare.Run(ctx, database, "IXN-002", syntheticNS(t), factory.DefaultSeed)
+	require.NoError(t, err)
+	require.Len(t, seeded.Entities, 11)
+	expectedKinds := map[string]string{
+		"subject": "contact", "email-row": "interaction", "gchat-row": "interaction",
+		"whatsapp-row": "interaction", "telegram-row": "interaction", "messages-row": "interaction",
+		"gcal-row": "calendar_event", "call-row": "interaction", "manual-row": "interaction",
+		"todoist-row": "interaction", "anarlog-row": "interaction",
+	}
+	for handle, kind := range expectedKinds {
+		entity, ok := seeded.Entities[handle]
+		require.True(t, ok, "manifest missing %s", handle)
+		assert.Equal(t, kind, entity.Kind, handle)
+		_, err := uuid.Parse(entity.ID)
+		require.NoError(t, err, handle)
+	}
+
+	subject := uuid.MustParse(seeded.Entities["subject"].ID)
+	rows, err := repository.NewInteractionRepository(database.Queries).ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, rows, 10)
+	sources := map[string]bool{}
+	for _, row := range rows {
+		sources[row.Source] = true
+	}
+	assert.Equal(t, map[string]bool{
+		"email": true, "gchat": true, "whatsapp": true, "telegram": true,
+		"messages": true, "gcal": true, "phone_calls": true, "manual": true,
+		"todoist": true, "anarlog_sessions": true,
+	}, sources)
+	for handle, days := range map[string]int{"email-row": 1, "gchat-row": 2, "whatsapp-row": 3, "telegram-row": 4, "messages-row": 5, "call-row": 7, "manual-row": 8, "todoist-row": 9, "anarlog-row": 10} {
+		row := findDeclaredRow(t, rows, seeded.Entities[handle].ID)
+		assert.Equal(t, seeded.Anchor.Truncate(time.Second).Add(-time.Duration(days)*24*time.Hour).UTC(), row.OccurredAt)
+	}
+	enriched, err := interactionContentService(database).EnrichPage(ctx, rows)
+	require.NoError(t, err)
+
+	messageTarget := func(handle string, days int) time.Time {
+		return seeded.Anchor.Truncate(time.Second).Add(-time.Duration(days) * 24 * time.Hour).UTC()
+	}
+	commsRepo := repository.NewCommsMessageRepository(database.Queries)
+	for _, tc := range []struct {
+		handle string
+		days   int
+	}{
+		{"email-row", 1}, {"gchat-row", 2}, {"whatsapp-row", 3},
+	} {
+		interactionID := uuid.MustParse(seeded.Entities[tc.handle].ID)
+		messages, err := commsRepo.ListByInteractionIDs(ctx, []uuid.UUID{interactionID})
+		require.NoError(t, err)
+		require.Len(t, messages, 1, tc.handle)
+		assert.Equal(t, messageTarget(tc.handle, tc.days), messages[0].SentAt.UTC(), tc.handle)
+	}
+	telegramMessages, err := repository.NewTelegramMessageRepository(database.Queries).ListByInteractionIDs(ctx, []uuid.UUID{uuid.MustParse(seeded.Entities["telegram-row"].ID)})
+	require.NoError(t, err)
+	require.Len(t, telegramMessages, 1)
+	assert.Equal(t, messageTarget("telegram-row", 4), telegramMessages[0].SentAt.UTC())
+	messagesMessages, err := repository.NewMessagesMessageRepository(database.Queries).ListByInteractionIDs(ctx, []uuid.UUID{uuid.MustParse(seeded.Entities["messages-row"].ID)})
+	require.NoError(t, err)
+	require.Len(t, messagesMessages, 3)
+	newestMessage := messagesMessages[0]
+	for _, message := range messagesMessages[1:] {
+		if message.SentAt.After(newestMessage.SentAt) {
+			newestMessage = message
+		}
+	}
+	assert.Equal(t, messageTarget("messages-row", 5), newestMessage.SentAt.UTC())
+
+	messagesRow := enriched[uuid.MustParse(seeded.Entities["messages-row"].ID)]
+	assert.Equal(t, 3, messagesRow.MessageCount)
+	gchat := enriched[uuid.MustParse(seeded.Entities["gchat-row"].ID)]
+	require.NotEmpty(t, gchat.VenueTags)
+	assert.Equal(t, "group_chat", gchat.VenueTags[0].Kind)
+	assert.True(t, gchat.VenueTags[0].IsGroup)
+	whatsapp := enriched[uuid.MustParse(seeded.Entities["whatsapp-row"].ID)]
+	require.NotEmpty(t, whatsapp.VenueTags)
+	assert.Equal(t, "dm", whatsapp.VenueTags[0].Kind)
+	assert.Equal(t, "DM", whatsapp.VenueTags[0].Label)
+	assert.False(t, whatsapp.VenueTags[0].IsGroup)
+	email := enriched[uuid.MustParse(seeded.Entities["email-row"].ID)]
+	require.NotEmpty(t, email.VenueTags)
+	assert.Equal(t, "email_thread", email.VenueTags[0].Kind)
+	assert.NotEmpty(t, email.VenueTags[0].Label)
+	commsMessages, err := commsRepo.ListByInteractionIDs(ctx, []uuid.UUID{uuid.MustParse(seeded.Entities["email-row"].ID)})
+	require.NoError(t, err)
+	require.Len(t, commsMessages, 1)
+	require.NotNil(t, commsMessages[0].Subject)
+	assert.NotEmpty(t, *commsMessages[0].Subject)
+	assert.Equal(t, *commsMessages[0].Subject, email.VenueTags[0].Label)
+	assert.Equal(t, *commsMessages[0].Subject, email.Label)
+
+	var gcalRow repository.Interaction
+	for _, row := range rows {
+		if row.Source == repository.InteractionSourceGCal {
+			gcalRow = row
+			break
+		}
+	}
+	require.NotEqual(t, uuid.Nil, gcalRow.ID)
+	gcal := enriched[gcalRow.ID]
+	require.NotNil(t, gcal.Event)
+	assert.NotNil(t, gcal.Event.Location)
+	assert.NotEmpty(t, *gcal.Event.Location)
+	assert.NotNil(t, gcal.Event.HTMLLink)
+	assert.NotEmpty(t, *gcal.Event.HTMLLink)
+
+	callRow := findDeclaredRow(t, rows, seeded.Entities["call-row"].ID)
+	assert.Equal(t, repository.InteractionDirectionInbound, callRow.Direction)
+	for _, handle := range []string{"email-row", "gchat-row", "whatsapp-row", "telegram-row", "messages-row"} {
+		assert.Equal(t, repository.InteractionDirectionInbound, findDeclaredRow(t, rows, seeded.Entities[handle].ID).Direction, handle)
+	}
+	for _, handle := range []string{"manual-row", "todoist-row", "anarlog-row"} {
+		assert.Equal(t, repository.InteractionDirectionOutbound, findDeclaredRow(t, rows, seeded.Entities[handle].ID).Direction, handle)
+	}
+	assert.Equal(t, repository.InteractionDirectionMutual, gcalRow.Direction)
+	call := enriched[callRow.ID].Call
+	require.NotNil(t, call)
+	assert.Equal(t, repository.PhoneCallServiceVoice, call.Service)
+	require.NotNil(t, call.Answered)
+	assert.True(t, *call.Answered)
+	assert.Equal(t, 372, call.DurationSeconds)
+	for _, handle := range []string{"manual-row", "todoist-row"} {
+		row := enriched[uuid.MustParse(seeded.Entities[handle].ID)]
+		assert.Equal(t, "none", row.ContentKind, handle)
+		assert.Empty(t, row.VenueTags, handle)
+	}
+	assert.Equal(t, "meeting_note", enriched[uuid.MustParse(seeded.Entities["anarlog-row"].ID)].ContentKind)
+}
+
+func TestInteractionsDeclare_PagingWorld(t *testing.T) {
+	requireInteractionsDeclareIntegration(t)
+	database, ctx := newSyntheticDB(t)
+	seeded, err := declare.Run(ctx, database, "IXN-001", syntheticNS(t), factory.DefaultSeed)
+	require.NoError(t, err)
+	subject := uuid.MustParse(seeded.Entities["subject"].ID)
+	rows, err := repository.NewInteractionRepository(database.Queries).ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, rows, 25)
+	tieA := findDeclaredRow(t, rows, seeded.Entities["tie-a"].ID)
+	tieB := findDeclaredRow(t, rows, seeded.Entities["tie-b"].ID)
+	assert.Equal(t, tieA.OccurredAt, tieB.OccurredAt)
+	tieIDs := []string{seeded.Entities["tie-a"].ID, seeded.Entities["tie-b"].ID}
+	sort.Sort(sort.Reverse(sort.StringSlice(tieIDs)))
+	expected := make([]string, 0, 25)
+	for i := 1; i <= 19; i++ {
+		expected = append(expected, seeded.Entities[fmt.Sprintf("recent-%02d", i)].ID)
+	}
+	expected = append(expected, tieIDs...)
+	for i := 1; i <= 4; i++ {
+		expected = append(expected, seeded.Entities[fmt.Sprintf("old-%d", i)].ID)
+	}
+	actual := make([]string, len(rows))
+	for i, row := range rows {
+		actual[i] = row.ID.String()
+	}
+	assert.Equal(t, expected, actual)
+}
+
+func TestInteractionsDeclare_UpcomingWorld(t *testing.T) {
+	requireInteractionsDeclareIntegration(t)
+	database, ctx := newSyntheticDB(t)
+	seeded, err := declare.Run(ctx, database, "IXN-006", syntheticNS(t), factory.DefaultSeed)
+	require.NoError(t, err)
+	subject := uuid.MustParse(seeded.Entities["subject"].ID)
+	events, err := repository.NewCalendarEventRepository(database.Queries).ListUpcomingEventsForContact(ctx, subject, accelerated.GetCurrentTime(), 250)
+	require.NoError(t, err)
+	assert.Len(t, events, 13)
+	expectedEventIDs := make([]string, 0, 13)
+	for _, handle := range []string{"underway", "future-01", "future-02", "future-03", "future-04", "future-05", "future-06", "future-07", "future-08", "future-09", "future-10", "future-11", "future-12"} {
+		expectedEventIDs = append(expectedEventIDs, seeded.Entities[handle].ID)
+	}
+	actualEventIDs := make([]string, len(events))
+	upcomingIDs := make(map[string]struct{}, len(events))
+	for i, event := range events {
+		actualEventIDs[i] = event.ID.String()
+		upcomingIDs[event.ID.String()] = struct{}{}
+	}
+	assert.Equal(t, expectedEventIDs, actualEventIDs)
+	rows, err := repository.NewInteractionRepository(database.Queries).ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, seeded.Entities["past-row"].ID, rows[0].ID.String())
+	for _, row := range rows {
+		if row.SourceRef == nil {
+			continue
+		}
+		_, isUpcomingEvent := upcomingIDs[*row.SourceRef]
+		assert.False(t, isUpcomingEvent, "interaction source_ref must not reference an upcoming event")
+	}
+}
+
+func TestInteractionsDeclare_HonestWorld(t *testing.T) {
+	requireInteractionsDeclareIntegration(t)
+	database, ctx := newSyntheticDB(t)
+	seeded, err := declare.Run(ctx, database, "IXN-009", syntheticNS(t), factory.DefaultSeed)
+	require.NoError(t, err)
+	ir := repository.NewInteractionRepository(database.Queries)
+	silent := uuid.MustParse(seeded.Entities["silent"].ID)
+	rows, err := ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: silent, Limit: 100})
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+	count, err := ir.CountContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: silent})
+	require.NoError(t, err)
+	assert.Zero(t, count)
+	events, err := repository.NewCalendarEventRepository(database.Queries).ListUpcomingEventsForContact(ctx, silent, accelerated.GetCurrentTime(), 250)
+	require.NoError(t, err)
+	assert.Empty(t, events)
+	dup := uuid.MustParse(seeded.Entities["dup-host"].ID)
+	rows, err = ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: dup, Limit: 100})
+	require.NoError(t, err)
+	assert.Len(t, rows, 4)
+	count, err = ir.CountContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: dup})
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), count)
+	events, err = repository.NewCalendarEventRepository(database.Queries).ListUpcomingEventsForContact(ctx, dup, accelerated.GetCurrentTime(), 250)
+	require.NoError(t, err)
+	assert.Empty(t, events)
+	findGCalRow := func(eventHandle string) repository.Interaction {
+		for _, row := range rows {
+			if row.Source == repository.InteractionSourceGCal && row.SourceRef != nil && *row.SourceRef == seeded.Entities[eventHandle].ID {
+				return row
+			}
+		}
+		require.FailNow(t, "declared calendar interaction missing", eventHandle)
+		return repository.Interaction{}
+	}
+	gcalA := findGCalRow("gcal-dup-a")
+	gcalB := findGCalRow("gcal-dup-b")
+	assert.Equal(t, gcalA.OccurredAt, gcalB.OccurredAt)
+	assert.NotEqual(t, gcalA.ID, gcalB.ID)
+	manualA := findDeclaredRow(t, rows, seeded.Entities["manual-dup-a"].ID)
+	manualB := findDeclaredRow(t, rows, seeded.Entities["manual-dup-b"].ID)
+	assert.Equal(t, manualA.OccurredAt, manualB.OccurredAt)
+	assert.NotEqual(t, manualA.ID, manualB.ID)
+	enriched, err := interactionContentService(database).EnrichPage(ctx, []repository.Interaction{manualA, manualB})
+	require.NoError(t, err)
+	assert.Equal(t, "Logged interaction", enriched[manualA.ID].Label)
+	assert.Equal(t, "Logged interaction", enriched[manualB.ID].Label)
+	future := uuid.MustParse(seeded.Entities["future-only"].ID)
+	rows, err = ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: future, Limit: 100})
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+	count, err = ir.CountContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: future})
+	require.NoError(t, err)
+	assert.Zero(t, count)
+	events, err = repository.NewCalendarEventRepository(database.Queries).ListUpcomingEventsForContact(ctx, future, accelerated.GetCurrentTime(), 250)
+	require.NoError(t, err)
+	assert.Len(t, events, 1)
+}
+
+func TestInteractionsDeclare_CleanupEmptiesNamespace(t *testing.T) {
+	requireInteractionsDeclareIntegration(t)
+	database, ctx := newSyntheticDB(t)
+	seeded, err := declare.Run(ctx, database, "IXN-002", syntheticNS(t), factory.DefaultSeed)
+	require.NoError(t, err)
+	res, err := declare.CleanupNamespaces(ctx, database, []string{seeded.Namespace}, factory.DefaultSeed)
+	require.NoError(t, err)
+	require.Equal(t, declare.StatusCleaned, res.Results[seeded.Namespace].Status)
+	subject := uuid.MustParse(seeded.Entities["subject"].ID)
+	rows, err := repository.NewInteractionRepository(database.Queries).ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+	callUniqueID := factory.SyntheticSourcePrefix + seeded.Namespace + "-call-call-row"
+	call, err := repository.NewPhoneCallRepository(database.Queries).GetCallByUniqueID(ctx, callUniqueID)
+	assert.ErrorIs(t, err, db.ErrNotFound)
+	assert.Nil(t, call)
+}
+
+func findDeclaredRow(t *testing.T, rows []repository.Interaction, id string) repository.Interaction {
+	t.Helper()
+	wanted := uuid.MustParse(id)
+	for _, row := range rows {
+		if row.ID == wanted {
+			return row
+		}
+	}
+	require.FailNow(t, "declared interaction missing", id)
+	return repository.Interaction{}
+}

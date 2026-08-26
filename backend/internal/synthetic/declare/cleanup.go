@@ -541,10 +541,23 @@ func runLadder(
 	if err != nil {
 		return NamespaceCleanup{Status: StatusError, Err: fmt.Sprintf("select owned import candidates: %v", err)}
 	}
+	// Harvest the revoked synthetic host BEFORE deleting interactions: phone_call
+	// rows reference interactions, while their host-scoped cleanup needs this id.
+	var hostID uuid.UUID
+	var hostExists bool
+	if hostID, hostExists, err = support.SelectMacHostIDByHostname(ctx, prefix+"host"); err != nil {
+		return NamespaceCleanup{Status: StatusError, Err: fmt.Sprintf("cleanup host lookup: %v", err)}
+	}
 
 	step("event_consumer_claims", func() (int64, error) {
 		return support.DeleteEventConsumerClaimsByEventIds(ctx, eventIDs)
 	})
+	if hostExists {
+		step("phone_calls", func() (int64, error) {
+			err := repository.NewPhoneCallRepository(database.Queries.WithTx(tx)).HardDeleteByMacHost(ctx, hostID)
+			return 0, err
+		})
+	}
 	step("interactions", func() (int64, error) {
 		return support.DeleteInteractionsByContactIds(ctx, contactIDs)
 	})
@@ -685,14 +698,6 @@ func runLadder(
 		})
 	}
 
-	var hostID uuid.UUID
-	var hostExists bool
-	if firstErr == nil {
-		hostID, hostExists, err = support.SelectMacHostIDByHostname(ctx, prefix+"host")
-		if err != nil {
-			firstErr = fmt.Errorf("cleanup host lookup: %w", err)
-		}
-	}
 	if hostExists {
 		// The anarlog_title candidates the PRODUCT derived from those notes.
 		// Resolving an orphan session upserts one per unmatched title token, with

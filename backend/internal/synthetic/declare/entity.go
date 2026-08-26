@@ -1033,7 +1033,8 @@ func (p *calendarEventPlan) validate() error {
 			p.name, *n, maxCalendarDaysAgo, google.CalendarPastSyncDays)
 	}
 	if p.untitled && p.sourceLink {
-		// The title IS the link (meetings.tsx renders the anchor around it), so an
+		// The title IS the link (the unified Interactions surface renders the anchor
+		// around it), so an
 		// untitled event with a link renders the fallback label as the link text —
 		// a state whose two declared intents contradict each other at the surface
 		// they both name.
@@ -1046,8 +1047,8 @@ func (p *calendarEventPlan) validate() error {
 // with an EARLIER contact handle, stored by the real calendar sync provider.
 //
 // Placement is mandatory and singular: exactly one of StartsInDays,
-// StartedDaysAgo or InProgress. That is not decoration — the Meetings section
-// classifies a meeting by comparing its END time against the app's accelerated
+// StartedDaysAgo or InProgress. That is not decoration — the unified Interactions
+// surface classifies a calendar event by comparing its END time against the app's accelerated
 // clock, and the three placements are the three sides of that comparison.
 //
 // The offsets resolve to REAL days (n × 24h), deliberately NOT through the

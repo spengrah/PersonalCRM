@@ -30,7 +30,8 @@ func TestDeclareCompleteness(t *testing.T) {
 	}
 }
 
-// The universe should be the 82 ui-surface behaviors the arc counted; a drift
+// The universe should be the 77 ui-surface behaviors after the five retired CAL
+// rows; a drift
 // here means behaviors landed or retired upstream and the resolution tables
 // need a conscious reconciliation (which the test above already forces — this
 // one just names the cause).

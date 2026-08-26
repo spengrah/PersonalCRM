@@ -10,7 +10,7 @@
  */
 
 import { queryClient } from './query-client'
-import { contactKeys, importKeys, syncKeys, contactTaskKeys } from './query-keys'
+import { contactKeys, importKeys, syncKeys, contactTaskKeys, interactionKeys } from './query-keys'
 
 /**
  * Domain events that trigger query invalidations.
@@ -80,6 +80,7 @@ const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
     contactKeys.overdue(),
     (contactId: string) => contactKeys.detail(contactId),
     (contactId: string) => contactTaskKeys.forContact(contactId),
+    (contactId: string) => interactionKeys.forContact(contactId),
   ],
 
   // Import events
@@ -178,4 +179,11 @@ export function invalidateFor(event: DomainEvent, contactId?: string): void {
 }
 
 // Re-export keys for convenience (avoids needing two imports)
-export { contactKeys, importKeys, systemKeys, syncKeys, contactTaskKeys } from './query-keys'
+export {
+  contactKeys,
+  importKeys,
+  systemKeys,
+  syncKeys,
+  contactTaskKeys,
+  interactionKeys,
+} from './query-keys'

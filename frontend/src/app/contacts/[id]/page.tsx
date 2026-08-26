@@ -29,7 +29,7 @@ import {
   X,
 } from 'lucide-react'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
-import { Meetings } from '@/components/contacts/meetings'
+import { Interactions } from '@/components/contacts/interactions'
 import {
   formatContactMethodValue,
   getContactMethodHref,
@@ -808,9 +808,9 @@ export default function ContactDetailPage() {
           />
         </div>
 
-        {/* Meetings Section */}
+        {/* Interactions Section */}
         <div className="mt-8">
-          <Meetings contactId={contactId} />
+          <Interactions contactId={contactId} />
         </div>
 
         {/* Merge success/error message */}

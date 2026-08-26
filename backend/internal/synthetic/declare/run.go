@@ -617,6 +617,12 @@ func runEntity(
 		return runExternalCandidate(ctx, h, support, p, st)
 	case *calendarEventPlan:
 		return runCalendarEvent(ctx, h, p, st)
+	case *messageInteractionPlan:
+		return runMessageInteraction(ctx, h, p, st)
+	case *phoneCallInteractionPlan:
+		return runPhoneCallInteraction(ctx, h, p, st)
+	case *loggedInteractionPlan:
+		return runLoggedInteraction(ctx, h, p, st)
 	case *macHostPlan:
 		return runMacHost(ctx, h, p, st)
 	case *methodSuggestionPlan:

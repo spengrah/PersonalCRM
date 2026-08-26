@@ -20,7 +20,7 @@ vi.mock('@/hooks/use-contact-note', () => ({
 vi.mock('@/hooks/use-contact-tasks', () => ({ useContactTasks: vi.fn() }))
 vi.mock('@/hooks/use-keyboard-navigation', () => ({ useKeyboardNavigation: vi.fn() }))
 vi.mock('@/components/layout/navigation', () => ({ Navigation: () => <div /> }))
-vi.mock('@/components/contacts/meetings', () => ({ Meetings: () => <div /> }))
+vi.mock('@/components/contacts/interactions', () => ({ Interactions: () => <div /> }))
 vi.mock('@/components/contacts/tasks-section', () => ({ TasksSection: () => <div /> }))
 vi.mock('@/components/contacts/merge-contact-modal', () => ({ MergeContactModal: () => <div /> }))
 vi.mock('@/components/contacts/log-interaction-modal', () => ({
