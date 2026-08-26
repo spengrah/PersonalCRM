@@ -3,7 +3,9 @@ package replay
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/identity"
 	"personal-crm/backend/internal/repository"
@@ -12,6 +14,54 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// MeetingNoteRecordedSpec is the production-shaped input for one linked
+// meeting note replay. The adapter wraps it in a meeting_note.recorded
+// envelope and sends it through IngestService, preserving the same writer and
+// linkage decisions as the daemon path.
+type MeetingNoteRecordedSpec struct {
+	SessionID            uuid.UUID
+	Title, Summary, Memo *string
+	MeetingAt            time.Time
+}
+
+// ReplayMeetingNoteRecorded feeds a meeting_note.recorded envelope through the
+// real ingest service. The event source id includes the production content
+// hash, while the event row id is tracked explicitly because the source id is
+// uuid-shaped and cannot be found by the generator namespace prefix.
+func (h *Harness) ReplayMeetingNoteRecorded(ctx context.Context, spec MeetingNoteRecordedSpec) error {
+	payload := events.MeetingNoteRecordedPayload{
+		Version: 1, HostID: h.macHostID, Source: "anarlog_sessions",
+		SourceID: spec.SessionID.String(), Title: spec.Title, Summary: spec.Summary,
+		Memo: spec.Memo, MeetingAt: spec.MeetingAt,
+	}
+	raw, err := events.Marshal(events.KindMeetingNoteRecorded, payload)
+	if err != nil {
+		return fmt.Errorf("marshal meeting note: %w", err)
+	}
+	hash, err := service.ComputeContentHash(raw)
+	if err != nil {
+		return fmt.Errorf("compute meeting note content hash: %w", err)
+	}
+	env := &events.Envelope{
+		Source: "anarlog_sessions", SourceID: spec.SessionID.String() + "@" + hash,
+		Kind: events.KindMeetingNoteRecorded, Payload: raw,
+		ObservedAt: accelerated.GetCurrentTime(),
+	}
+	accepted, _, rejections, _, err := h.ingestService.IngestBatch(ctx, []*events.Envelope{env}, []int{0}, &h.macHostID)
+	if err != nil {
+		return fmt.Errorf("ingest meeting note: %w", err)
+	}
+	if accepted != 1 {
+		return fmt.Errorf("ingest meeting note: %d accepted (rejections=%v)", accepted, rejections)
+	}
+	root, err := repository.NewEventRepository(h.database.Queries).FindEventBySource(ctx, env.Source, env.SourceID)
+	if err != nil {
+		return fmt.Errorf("find meeting note root event: %w", err)
+	}
+	h.track(func(c *created) { c.eventIDs = append(c.eventIDs, root.ID) })
+	return nil
+}
 
 // MacContactResult is the settled outcome of a Mac-contact replay.
 type MacContactResult struct {

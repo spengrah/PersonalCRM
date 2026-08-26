@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/anarlog"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
@@ -152,6 +153,8 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	calendarEventRepo := repository.NewCalendarEventRepository(database.Queries)
+	meetingNoteRepo := repository.NewMeetingNoteRepository(database.Queries)
+	phoneCallRepo := repository.NewPhoneCallRepository(database.Queries)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
 	// Setup-time peer-band collision detection (D5): derive the generator and
@@ -367,10 +370,14 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		}
 		return nil, nil, cause
 	}
+	titleMatcher := anarlog.NewTitleMatcher(contactRepo)
+	discovery := anarlog.NewDiscoveryWriter(externalRepo)
 	ingestService := service.NewIngestService(
 		database, bus, identityService, messagesRepo, client, externalRepo,
 		nil, // hostLiveness = nil: skips the active-host re-check + dodges the singleton
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		meetingNoteRepo, calendarEventRepo, interactionRepo, identityRepo,
+		contactService, phoneCallRepo, contactService, cadenceUpdater, followUpManager,
+		titleMatcher, discovery, phoneCallRepo,
 	)
 
 	// Telegram peer matcher + aggregation engine for the telegram adapter.

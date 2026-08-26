@@ -60,7 +60,7 @@ behaviors:
   - id: IXN-004
     title: Message evidence expands in place as a complete plaintext thread window
     type: ux
-    status: proposed
+    status: current
     surface: ui
     given: an interaction contains message content
     when: the interaction is expanded
@@ -78,7 +78,7 @@ behaviors:
   - id: IXN-005
     title: Meeting-note evidence preserves the linked notes and their provenance
     type: ux
-    status: proposed
+    status: current
     surface: ui
     given: an interaction has one or more live linked meeting notes
     when: its meeting-note evidence is expanded
