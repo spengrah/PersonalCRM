@@ -31,6 +31,7 @@ type ContactRouteDeps struct {
 //   - GET    /api/v1/contacts/:id/merge/preview
 //   - POST   /api/v1/contacts/:id/merge
 //   - DELETE /api/v1/interactions/:id
+//   - GET    /api/v1/interactions/:id/content
 //
 // Caller must pass the same /api/v1 group it has applied
 // auth.APIKeyMiddleware on; this helper does NOT add the middleware.
@@ -59,6 +60,7 @@ func RegisterContactRoutes(v1 *gin.RouterGroup, deps ContactRouteDeps) {
 	// Interaction routes (non-contact-scoped)
 	interactions := v1.Group("/interactions")
 	{
+		interactions.GET("/:id/content", deps.Interaction.GetInteractionContent)
 		interactions.DELETE("/:id", deps.Interaction.DeleteInteraction)
 	}
 }

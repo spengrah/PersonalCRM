@@ -74,6 +74,17 @@ definitions:
       title:
         type: string
     type: object
+  handlers.CallSummaryResponse:
+    properties:
+      answered:
+        type: boolean
+      duration_seconds:
+        type: integer
+      has_voicemail:
+        type: boolean
+      service:
+        type: string
+    type: object
   handlers.CandidateSuggestionResponse:
     properties:
       account_id:
@@ -357,6 +368,21 @@ definitions:
       state:
         type: string
     type: object
+  handlers.ContentMessageResponse:
+    properties:
+      body:
+        type: string
+      id:
+        type: string
+      is_outgoing:
+        type: boolean
+      sender:
+        type: string
+      sent_at:
+        type: string
+      venue_key:
+        type: string
+    type: object
   handlers.CreateContactRequest:
     type: object
   handlers.CreateInteractionRequest:
@@ -404,6 +430,21 @@ definitions:
       dismissed_count:
         type: integer
       external_contact_id:
+        type: string
+    type: object
+  handlers.EventSummaryResponse:
+    properties:
+      attendee_count:
+        type: integer
+      end_time:
+        type: string
+      html_link:
+        type: string
+      location:
+        type: string
+      start_time:
+        type: string
+      title:
         type: string
     type: object
   handlers.GetGoogleAuthURLResponse:
@@ -498,6 +539,67 @@ definitions:
           $ref: '#/definitions/handlers.SelectedMethodInput'
         type: array
     type: object
+  handlers.InteractionContentResponse:
+    properties:
+      interaction_id:
+        type: string
+      kind:
+        type: string
+      meeting_notes:
+        items:
+          $ref: '#/definitions/handlers.MeetingNoteContentResponse'
+        type: array
+      messages:
+        items:
+          $ref: '#/definitions/handlers.ContentMessageResponse'
+        type: array
+    type: object
+  handlers.InteractionListItemResponse:
+    properties:
+      call:
+        $ref: '#/definitions/handlers.CallSummaryResponse'
+      contact_id:
+        type: string
+      content_kind:
+        type: string
+      created_at:
+        type: string
+      description:
+        type: string
+      direction:
+        type: string
+      event:
+        $ref: '#/definitions/handlers.EventSummaryResponse'
+      id:
+        type: string
+      is_group:
+        type: boolean
+      label:
+        type: string
+      message_count:
+        type: integer
+      occurred_at:
+        type: string
+      source:
+        type: string
+      source_ref:
+        type: string
+      venue_tags:
+        items:
+          $ref: '#/definitions/handlers.VenueTagResponse'
+        type: array
+    type: object
+  handlers.InteractionListResponse:
+    properties:
+      items:
+        items:
+          $ref: '#/definitions/handlers.InteractionListItemResponse'
+        type: array
+      venue_options:
+        items:
+          $ref: '#/definitions/handlers.VenueTagResponse'
+        type: array
+    type: object
   handlers.InteractionResponse:
     properties:
       contact_id:
@@ -562,6 +664,15 @@ definitions:
         type: array
     required:
     - crm_contact_id
+    type: object
+  handlers.MeetingNoteContentResponse:
+    properties:
+      memo:
+        type: string
+      summary:
+        type: string
+      title:
+        type: string
     type: object
   handlers.MergeContactsRequest:
     description: Merge contacts request
@@ -967,6 +1078,17 @@ definitions:
         type: string
     type: object
   handlers.UpdateContactRequest:
+    type: object
+  handlers.VenueTagResponse:
+    properties:
+      is_group:
+        type: boolean
+      key:
+        type: string
+      kind:
+        type: string
+      label:
+        type: string
     type: object
   handlers.WhatsAppBackfillResponse:
     properties:
@@ -2308,6 +2430,20 @@ paths:
         in: query
         name: limit
         type: integer
+      - description: Venue key
+        in: query
+        name: venue
+        type: string
+      - description: Occurred-at lower bound
+        format: date-time
+        in: query
+        name: from
+        type: string
+      - description: Occurred-at upper bound
+        format: date-time
+        in: query
+        name: to
+        type: string
       produces:
       - application/json
       responses:
@@ -2318,9 +2454,7 @@ paths:
             - $ref: '#/definitions/api.APIResponse'
             - properties:
                 data:
-                  items:
-                    $ref: '#/definitions/handlers.InteractionResponse'
-                  type: array
+                  $ref: '#/definitions/handlers.InteractionListResponse'
               type: object
       summary: List contact interactions
       tags:
@@ -3491,6 +3625,34 @@ paths:
         "204":
           description: Interaction deleted
       summary: Delete interaction
+      tags:
+      - interactions
+  /interactions/{id}/content:
+    get:
+      parameters:
+      - description: Interaction ID
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.InteractionContentResponse'
+              type: object
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.APIResponse'
+      summary: Get interaction content
       tags:
       - interactions
   /rematch/contacts/{id}/rescan:

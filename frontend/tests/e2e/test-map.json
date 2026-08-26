@@ -333,6 +333,18 @@
     "tags": ["@area:contacts", "@area:contact-navigation", "@area:contact-merge", "@area:overdue"]
   },
   {
+    "pattern": "^backend/internal/api/handlers/interaction(_dto)?\\.go$",
+    "tags": ["@area:contacts", "@area:overdue"]
+  },
+  {
+    "pattern": "^backend/internal/api/handlers/contact_routes\\.go$",
+    "tags": ["@area:contacts"]
+  },
+  {
+    "pattern": "^backend/internal/db/calendar_event\\.sql\\.go$",
+    "tags": ["@area:meetings"]
+  },
+  {
     "pattern": "^backend/internal/api/handlers/contact_method\\.go$",
     "tags": ["@area:contacts"]
   },

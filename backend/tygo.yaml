@@ -19,6 +19,7 @@ packages:
     output_path: '../frontend/src/types/generated/contact.ts'
     include_files:
       - 'contact_dto.go'
+      - 'interaction_dto.go'
     type_mappings:
       time.Time: 'string'
     frontmatter: |
@@ -34,3 +35,7 @@ packages:
         | 'twitter'
         | 'gchat'
         | 'whatsapp'
+      export type InteractionDirection = 'outbound' | 'inbound' | 'mutual';
+      export type InteractionContentKind = 'messages' | 'meeting_note' | 'call' | 'none';
+      export type InteractionVenueKind = 'group_chat' | 'dm' | 'email_thread';
+      export type CallService = 'voice' | 'facetime_audio' | 'facetime_video';
