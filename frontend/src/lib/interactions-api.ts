@@ -4,6 +4,7 @@ import type {
   InteractionDirection,
   InteractionResponse,
   InteractionListResponse,
+  InteractionContentResponse,
 } from '@/types/generated/contact'
 
 export type { InteractionDirection, InteractionResponse }
@@ -42,6 +43,12 @@ export const interactionsApi = {
     return apiClient.getWithMeta<InteractionListResponse>(
       `/api/v1/contacts/${contactId}/interactions`,
       params as Record<string, unknown>
+    )
+  },
+
+  async getContent(interactionId: string): Promise<InteractionContentResponse> {
+    return apiClient.get<InteractionContentResponse>(
+      `/api/v1/interactions/${interactionId}/content`
     )
   },
 }

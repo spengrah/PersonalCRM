@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type {
   InteractionListItemResponse,
   InteractionContentKind,
   CallService,
+  InteractionContentResponse,
 } from '@/types/generated/contact'
-import { InteractionRow } from '../interaction-row'
+import { formatDateTime, InteractionRow } from '../interaction-row'
+import { InteractionContent } from '../interaction-content'
 
 const baseItem = (
   overrides: Partial<InteractionListItemResponse> = {}
@@ -26,7 +29,12 @@ const baseItem = (
 })
 
 function renderItem(overrides: Partial<InteractionListItemResponse> = {}) {
-  return render(<InteractionRow item={baseItem(overrides)} />)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <InteractionRow item={baseItem(overrides)} />
+    </QueryClientProvider>
+  )
 }
 
 describe('InteractionRow', () => {
@@ -158,5 +166,157 @@ describe('InteractionRow', () => {
       within(row).queryByRole('link', { name: 'Synthetic plain event' })
     ).not.toBeInTheDocument()
     expect(within(row).getByText('Synthetic plain event')).toBeVisible()
+  })
+
+  it.each(['messages', 'meeting_note'] as const)(
+    'renders an expand affordance for %s content',
+    content_kind => {
+      renderItem({ content_kind })
+      const button = screen.getByRole('button', { name: 'Expand content' })
+      expect(button).toHaveAttribute('aria-expanded', 'false')
+    }
+  )
+
+  it('toggles the content region in place and unmounts it on collapse', () => {
+    renderItem({ content_kind: 'messages' })
+    const button = screen.getByRole('button', { name: 'Expand content' })
+    fireEvent.click(button)
+    expect(screen.getByRole('button', { name: 'Collapse content' })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+    expect(document.querySelector('[data-content-region]')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse content' }))
+    expect(document.querySelector('[data-content-region]')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Expand content' })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    )
+  })
+
+  it.each(['call', 'none'] as const)(
+    'does not render an expand affordance for %s content',
+    content_kind => {
+      renderItem({ content_kind })
+      expect(screen.queryByRole('button', { name: /expand/i })).not.toBeInTheDocument()
+    }
+  )
+})
+
+const message = (
+  id: string,
+  sender: string,
+  sent_at: string,
+  body: string,
+  venue_key = 'venue-a'
+) => ({ id, sender, is_outgoing: false, sent_at, body, venue_key })
+
+const messagesContent = (
+  messages: InteractionContentResponse['messages']
+): InteractionContentResponse => ({
+  interaction_id: 'ixn-content',
+  kind: 'messages',
+  messages,
+  meeting_notes: [],
+})
+
+describe('InteractionContent', () => {
+  it('renders messages in API order with exact child text, including empty bodies', () => {
+    const content = messagesContent([
+      message('message-3', 'Sender C', '2026-01-02T03:06:00Z', ''),
+      message('message-1', 'Sender A', '2026-01-02T03:04:00Z', 'First body'),
+      message('message-2', 'Sender B', '2026-01-02T03:05:00Z', 'Second body'),
+    ])
+    render(<InteractionContent isPending={false} isError={false} content={content} />)
+    const nodes = Array.from(document.querySelectorAll('[data-message-id]'))
+    expect(nodes.map(node => node.getAttribute('data-message-id'))).toEqual([
+      'message-3',
+      'message-1',
+      'message-2',
+    ])
+    content.messages.forEach((expectedMessage, index) => {
+      const node = nodes[index]
+      expect(node.querySelector('[data-message-sender]')?.textContent).toBe(expectedMessage.sender)
+      expect(node.querySelector('[data-message-timestamp]')?.textContent).toBe(
+        formatDateTime(expectedMessage.sent_at)
+      )
+      expect(node.querySelector('[data-message-body]')?.textContent).toBe(expectedMessage.body)
+    })
+    expect(nodes[0].querySelector('[data-message-body]')?.textContent).toBe('')
+  })
+
+  it('renders HTML-looking message bodies as literal text without elements', () => {
+    const content = messagesContent([
+      message('message-html', 'Sender', '2026-01-02T03:04:00Z', '<b>not bold</b>'),
+    ])
+    render(<InteractionContent isPending={false} isError={false} content={content} />)
+    const region = document.querySelector('[data-content-region]') as HTMLElement
+    expect(region.querySelector('[data-message-body]')).toHaveTextContent('<b>not bold</b>')
+    expect(region.querySelector('b')).not.toBeInTheDocument()
+  })
+
+  it('filters messages by venue and renders all messages when the filter is absent', () => {
+    const content = messagesContent([
+      message('message-a', 'Sender A', '2026-01-02T03:04:00Z', 'A', 'venue-a'),
+      message('message-b', 'Sender B', '2026-01-02T03:05:00Z', 'B', 'venue-b'),
+    ])
+    const { rerender } = render(
+      <InteractionContent
+        isPending={false}
+        isError={false}
+        content={content}
+        venueFilter="venue-b"
+      />
+    )
+    expect(document.querySelectorAll('[data-message-id]')).toHaveLength(1)
+    expect(document.querySelector('[data-message-id]')).toHaveAttribute(
+      'data-message-id',
+      'message-b'
+    )
+    rerender(<InteractionContent isPending={false} isError={false} content={content} />)
+    expect(document.querySelectorAll('[data-message-id]')).toHaveLength(2)
+  })
+
+  it('renders notes in API order, preserves null fields, and shows provenance once', () => {
+    const content: InteractionContentResponse = {
+      interaction_id: 'ixn-notes',
+      kind: 'meeting_note',
+      messages: [],
+      meeting_notes: [
+        { title: undefined, summary: 'Summary A', memo: '<i>memo A</i>' },
+        { title: 'Title B', summary: 'Summary B', memo: 'Memo B' },
+      ],
+    }
+    render(<InteractionContent isPending={false} isError={false} content={content} />)
+    const notes = Array.from(document.querySelectorAll('[data-meeting-note]'))
+    expect(notes).toHaveLength(2)
+    expect(notes[0].querySelector('[data-note-title]')).not.toBeInTheDocument()
+    const expectedNotes = [
+      { summary: 'Summary A', memo: '<i>memo A</i>' },
+      { title: 'Title B', summary: 'Summary B', memo: 'Memo B' },
+    ]
+    expectedNotes.forEach((expectedNote, index) => {
+      const node = notes[index]
+      if (expectedNote.title !== undefined) {
+        expect(node.querySelector('[data-note-title]')?.textContent).toBe(expectedNote.title)
+      }
+      expect(node.querySelector('[data-note-summary]')?.textContent).toBe(expectedNote.summary)
+      expect(node.querySelector('[data-note-memo]')?.textContent).toBe(expectedNote.memo)
+    })
+    expect(screen.getByText('Meeting notes are processed on-device.')).toBeInTheDocument()
+    expect(screen.getAllByText('Meeting notes are processed on-device.')).toHaveLength(1)
+    expect(document.querySelector('[data-content-region] i')).not.toBeInTheDocument()
+  })
+
+  it('renders loading and error states with exact copy', () => {
+    const { rerender } = render(
+      <InteractionContent isPending={true} isError={false} content={undefined} />
+    )
+    expect(document.querySelector('[data-content-region]')).toHaveTextContent('Loading content…')
+    rerender(<InteractionContent isPending={false} isError={true} content={undefined} />)
+    expect(document.querySelector('[data-content-region]')).toHaveTextContent(
+      'Failed to load content.'
+    )
   })
 })

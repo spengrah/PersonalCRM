@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query'
 import {
   interactionsApi,
   type CreateInteractionRequest,
@@ -35,6 +35,15 @@ export function useContactInteractions(contactId: string, filters: InteractionLi
       return p && p.page < p.pages ? p.page + 1 : undefined
     },
     enabled: !!contactId,
+    staleTime: staleTime(1000 * 60 * 5),
+  })
+}
+
+export function useInteractionContent(interactionId: string, opts: { enabled: boolean }) {
+  return useQuery({
+    queryKey: interactionKeys.content(interactionId),
+    queryFn: () => interactionsApi.getContent(interactionId),
+    enabled: opts.enabled && !!interactionId,
     staleTime: staleTime(1000 * 60 * 5),
   })
 }
