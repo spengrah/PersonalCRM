@@ -26,6 +26,13 @@ var loggedInteractionSources = map[string]bool{
 	repository.InteractionSourceAnarlogSessions: true,
 }
 
+const maxSyncedInteractionAgoDays = 60
+
+// maxLoggedInteractionAgoDays covers date-preset boundary fixtures for manual,
+// Todoist, and Anarlog rows, which are inserted directly at their target without
+// a provider backfill horizon.
+const maxLoggedInteractionAgoDays = 100
+
 type interactionPlanProps struct {
 	agoDays       *int
 	burst         *int
@@ -74,7 +81,7 @@ func (p *messageInteractionPlan) validate() error {
 	if !messageInteractionSources[p.source] {
 		return fmt.Errorf("message interaction %q: unknown source %q", p.name, p.source)
 	}
-	if err := validateInteractionProps(p.name, &p.props); err != nil {
+	if err := validateInteractionProps(p.name, &p.props, maxSyncedInteractionAgoDays); err != nil {
 		return err
 	}
 	if p.props.burst != nil && p.source != "messages" {
@@ -101,7 +108,7 @@ func (p *phoneCallInteractionPlan) validate() error {
 	if strings.TrimSpace(p.name) == "" {
 		return fmt.Errorf("phone call interaction handle must be non-empty")
 	}
-	if err := validateInteractionProps(p.name, &p.props); err != nil {
+	if err := validateInteractionProps(p.name, &p.props, maxSyncedInteractionAgoDays); err != nil {
 		return err
 	}
 	if p.props.burst != nil {
@@ -151,7 +158,7 @@ func (p *loggedInteractionPlan) validate() error {
 	if !loggedInteractionSources[p.source] {
 		return fmt.Errorf("logged interaction %q: unknown source %q", p.name, p.source)
 	}
-	if err := validateInteractionProps(p.name, &p.props); err != nil {
+	if err := validateInteractionProps(p.name, &p.props, maxLoggedInteractionAgoDays); err != nil {
 		return err
 	}
 	if p.props.burst != nil {
@@ -163,12 +170,12 @@ func (p *loggedInteractionPlan) validate() error {
 	return nil
 }
 
-func validateInteractionProps(name string, props *interactionPlanProps) error {
+func validateInteractionProps(name string, props *interactionPlanProps, maxAgoDays int) error {
 	if props.agoDays == nil {
 		return fmt.Errorf("interaction %q: AgoDays is required", name)
 	}
-	if *props.agoDays < 1 || *props.agoDays > 60 {
-		return fmt.Errorf("interaction %q: AgoDays(%d) is outside 1..60", name, *props.agoDays)
+	if *props.agoDays < 1 || *props.agoDays > maxAgoDays {
+		return fmt.Errorf("interaction %q: AgoDays(%d) is outside 1..%d", name, *props.agoDays, maxAgoDays)
 	}
 	if props.burst != nil && (*props.burst < 1 || *props.burst > 3) {
 		return fmt.Errorf("interaction %q: Burst(%d) is outside 1..3", name, *props.burst)

@@ -21,6 +21,4 @@ var Waivers = map[string]string{
 	"CON-046": "proposed — a failed mark-contacted is console-only and a failed delete is swallowed, so there is no surface to assert and no citing test",
 
 	// spec/interactions.yaml
-	"IXN-007": "proposed — lands with the filters (arc PR4) with its citing tests and seeding",
-	"IXN-008": "proposed — lands with the filters (arc PR4) with its citing tests and seeding",
 }

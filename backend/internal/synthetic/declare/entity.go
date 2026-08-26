@@ -979,14 +979,15 @@ type calendarEventPlan struct {
 	// unmatched marks the UnmatchedCalendarEvent form: the only non-self attendee
 	// is an address no contact owns, so the row lands with an empty matched set
 	// plus a gcal_attendee import candidate.
-	unmatched      bool
-	startsInDays   *int
-	startedDaysAgo *int
-	inProgress     bool
-	untitled       bool
-	location       bool
-	sourceLink     bool
-	soleAttendee   bool
+	unmatched               bool
+	startsInDays            *int
+	startsAtUTCMidnightDays *int
+	startedDaysAgo          *int
+	inProgress              bool
+	untitled                bool
+	location                bool
+	sourceLink              bool
+	soleAttendee            bool
 }
 
 func (p *calendarEventPlan) handle() string { return p.name }
@@ -1014,6 +1015,9 @@ func (p *calendarEventPlan) validate() error {
 	if p.startsInDays != nil {
 		offsets++
 	}
+	if p.startsAtUTCMidnightDays != nil {
+		offsets++
+	}
 	if p.startedDaysAgo != nil {
 		offsets++
 	}
@@ -1021,11 +1025,15 @@ func (p *calendarEventPlan) validate() error {
 		offsets++
 	}
 	if offsets != 1 {
-		return fmt.Errorf("calendar event %q: declare exactly ONE of StartsInDays, StartedDaysAgo or InProgress (got %d) — the three are mutually exclusive placements of the same meeting",
+		return fmt.Errorf("calendar event %q: declare exactly ONE of StartsInDays, StartsAtUTCMidnight, StartedDaysAgo or InProgress (got %d) — the four are mutually exclusive placements of the same meeting",
 			p.name, offsets)
 	}
 	if n := p.startsInDays; n != nil && (*n < 1 || *n > maxCalendarDaysAhead) {
 		return fmt.Errorf("calendar event %q: StartsInDays(%d) is outside 1..%d — the calendar provider's initial fetch reaches %d days ahead, so a later event is a row no sync could produce",
+			p.name, *n, maxCalendarDaysAhead, google.CalendarFutureSyncDays)
+	}
+	if n := p.startsAtUTCMidnightDays; n != nil && (*n < 2 || *n > maxCalendarDaysAhead) {
+		return fmt.Errorf("calendar event %q: StartsAtUTCMidnight(%d) is outside 2..%d — the floor is 2 because n=1 can start less than an hour ahead of a near-midnight anchor and pass into the past mid-test; the calendar provider's initial fetch reaches %d days ahead, so a later event is a row no sync could produce",
 			p.name, *n, maxCalendarDaysAhead, google.CalendarFutureSyncDays)
 	}
 	if n := p.startedDaysAgo; n != nil && (*n < 1 || *n > maxCalendarDaysAgo) {
@@ -1100,6 +1108,19 @@ type CalendarEventProp func(*calendarEventPlan)
 // event, no interaction, no venue node.
 func StartsInDays(n int) CalendarEventProp {
 	return func(p *calendarEventPlan) { p.startsInDays = &n }
+}
+
+// StartsAtUTCMidnight places the meeting at 00:00:00 UTC on the calendar date
+// n days after the run anchor's UTC date. Upcoming (n >= 2 keeps the start at
+// least a full day ahead of the anchor regardless of its time of day), so like
+// StartsInDays it publishes nothing: no attended event, no interaction.
+//
+// It exists for boundary-equality fixtures: a date-only filter input resolves
+// to a start-of-day instant, and only a midnight-aligned event can sit exactly
+// on that bound. The three anchor-relative placements land at the anchor's own
+// time of day and can never do so.
+func StartsAtUTCMidnight(n int) CalendarEventProp {
+	return func(p *calendarEventPlan) { p.startsAtUTCMidnightDays = &n }
 }
 
 // StartedDaysAgo places the meeting n real days before the run anchor. Past, so

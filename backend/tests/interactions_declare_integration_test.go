@@ -574,3 +574,137 @@ func TestInteractionsDeclare_NotesCleanup(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, count)
 }
+
+func TestInteractionsDeclare_VenueFilterWorld(t *testing.T) {
+	t.Parallel()
+	requireInteractionsDeclareIntegration(t)
+	ctx := context.Background()
+	database, _ := newIsolatedRiverTestDB(t, ctx)
+	seeded, err := declare.Run(ctx, database, "IXN-007", syntheticNS(t), factory.DefaultSeed)
+	require.NoError(t, err)
+	for handle, kind := range map[string]string{
+		"subject": "contact", "gchat-thread": "interaction", "email-thread": "interaction", "future-noise": "calendar_event",
+	} {
+		entity, ok := seeded.Entities[handle]
+		require.True(t, ok, "manifest missing %s", handle)
+		assert.Equal(t, kind, entity.Kind, handle)
+		_, err := uuid.Parse(entity.ID)
+		require.NoError(t, err, handle)
+	}
+
+	subject := uuid.MustParse(seeded.Entities["subject"].ID)
+	ir := repository.NewInteractionRepository(database.Queries)
+	rows, err := ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, rows, 2, "the future event must not mint an interaction")
+
+	contentSvc := interactionContentService(database)
+	venues, err := contentSvc.ListContactVenues(ctx, subject)
+	require.NoError(t, err)
+	require.Len(t, venues, 2)
+	byKind := make(map[string]service.VenueTag, len(venues))
+	for _, venue := range venues {
+		byKind[venue.Kind] = venue
+	}
+	group, ok := byKind["group_chat"]
+	require.True(t, ok)
+	assert.True(t, group.IsGroup)
+	email, ok := byKind["email_thread"]
+	require.True(t, ok)
+	assert.False(t, email.IsGroup)
+	assert.NotEqual(t, group.Key, email.Key)
+
+	for handle, venue := range map[string]service.VenueTag{"gchat-thread": group, "email-thread": email} {
+		row := findDeclaredRow(t, rows, seeded.Entities[handle].ID)
+		content, err := contentSvc.GetContent(ctx, row.ID)
+		require.NoError(t, err, handle)
+		require.NotEmpty(t, content.Messages, handle)
+		for _, message := range content.Messages {
+			assert.Equal(t, venue.Key, message.VenueKey, handle)
+		}
+	}
+	assert.NotEqual(t,
+		findDeclaredRow(t, rows, seeded.Entities["gchat-thread"].ID).ID,
+		findDeclaredRow(t, rows, seeded.Entities["email-thread"].ID).ID,
+	)
+}
+
+func TestInteractionsDeclare_DateSpreadWorld(t *testing.T) {
+	t.Parallel()
+	requireInteractionsDeclareIntegration(t)
+	ctx := context.Background()
+	database, _ := newIsolatedRiverTestDB(t, ctx)
+	seeded, err := declare.Run(ctx, database, "IXN-008", syntheticNS(t), factory.DefaultSeed)
+	require.NoError(t, err)
+
+	interactionAgeByHandle := make(map[string]int, 24)
+	for i := 1; i <= 20; i++ {
+		interactionAgeByHandle[fmt.Sprintf("recent-%02d", i)] = i
+	}
+	for _, n := range []int{29, 31, 89, 91} {
+		interactionAgeByHandle[fmt.Sprintf("edge-%d", n)] = n
+	}
+	for handle := range interactionAgeByHandle {
+		entity, ok := seeded.Entities[handle]
+		require.True(t, ok, "manifest missing %s", handle)
+		assert.Equal(t, "interaction", entity.Kind, handle)
+	}
+	for _, handle := range []string{"bound-a", "bound-b", "bound-c"} {
+		entity, ok := seeded.Entities[handle]
+		require.True(t, ok, "manifest missing %s", handle)
+		assert.Equal(t, "calendar_event", entity.Kind, handle)
+	}
+
+	subject := uuid.MustParse(seeded.Entities["subject"].ID)
+	ir := repository.NewInteractionRepository(database.Queries)
+	rows, err := ir.ListContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, Limit: 100})
+	require.NoError(t, err)
+	require.Len(t, rows, 24, "upcoming events must not mint interactions")
+	for handle, age := range interactionAgeByHandle {
+		row := findDeclaredRow(t, rows, seeded.Entities[handle].ID)
+		want := seeded.Anchor.Truncate(time.Second).Add(-time.Duration(age) * 24 * time.Hour).UTC()
+		assert.Equal(t, want, row.OccurredAt.UTC(), handle)
+	}
+	from30 := seeded.Anchor.Add(-720 * time.Hour)
+	count, err := ir.CountContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, From: &from30})
+	require.NoError(t, err)
+	assert.Equal(t, int64(21), count)
+	from90 := seeded.Anchor.Add(-2160 * time.Hour)
+	count, err = ir.CountContactInteractionsFiltered(ctx, repository.InteractionListFilterParams{ContactID: subject, From: &from90})
+	require.NoError(t, err)
+	assert.Equal(t, int64(23), count)
+
+	eventIDs := make([]uuid.UUID, 0, 3)
+	for _, handle := range []string{"bound-a", "bound-b", "bound-c"} {
+		eventIDs = append(eventIDs, uuid.MustParse(seeded.Entities[handle].ID))
+	}
+	events, err := repository.NewCalendarEventRepository(database.Queries).ListByIDs(ctx, eventIDs)
+	require.NoError(t, err)
+	require.Len(t, events, 3)
+	byID := make(map[uuid.UUID]repository.CalendarEvent, len(events))
+	for _, event := range events {
+		byID[event.ID] = event
+	}
+	for i, handle := range []string{"bound-a", "bound-b", "bound-c"} {
+		event := byID[uuid.MustParse(seeded.Entities[handle].ID)]
+		require.NotEqual(t, uuid.Nil, event.ID, handle)
+		assert.Equal(t, 0, event.StartTime.UTC().Hour(), handle)
+		assert.Equal(t, 0, event.StartTime.UTC().Minute(), handle)
+		assert.Equal(t, 0, event.StartTime.UTC().Second(), handle)
+		assert.Equal(t, 0, event.StartTime.UTC().Nanosecond(), handle)
+		assert.Equal(t, seeded.Anchor.UTC().Truncate(24*time.Hour).AddDate(0, 0, []int{2, 5, 9}[i]), event.StartTime.UTC(), handle)
+		assert.True(t, event.StartTime.After(seeded.Anchor), handle)
+		assert.Equal(t, event.StartTime.Add(time.Hour), event.EndTime, handle)
+	}
+
+	upcomingIDs := make(map[string]struct{}, len(eventIDs))
+	for _, id := range eventIDs {
+		upcomingIDs[id.String()] = struct{}{}
+	}
+	for _, row := range rows {
+		if row.SourceRef != nil {
+			_, isUpcomingEvent := upcomingIDs[*row.SourceRef]
+			assert.False(t, isUpcomingEvent, "interaction source_ref must not reference an upcoming event")
+		}
+	}
+}

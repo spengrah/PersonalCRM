@@ -461,6 +461,62 @@ func TestBirthdayPlaceholderToday_UsesTheAnchorsOwnDayOtherwise(t *testing.T) {
 	assert.Equal(t, "1900-06-15", plan.resolvePlaceholder(anchor).Format("2006-01-02"))
 }
 
+func TestCalendarEvent_UTCMidnightPlacement(t *testing.T) {
+	validationCases := []struct {
+		name string
+		prop CalendarEventProp
+		want string
+	}{
+		{name: "below floor", prop: StartsAtUTCMidnight(1), want: "floor is 2"},
+		{name: "zero", prop: StartsAtUTCMidnight(0), want: "outside 2.."},
+		{name: "beyond provider bound", prop: StartsAtUTCMidnight(maxCalendarDaysAhead + 1), want: "outside 2.."},
+		{name: "mutually exclusive", prop: func(p *calendarEventPlan) {
+			StartsAtUTCMidnight(2)(p)
+			StartsInDays(1)(p)
+		}, want: "exactly ONE of StartsInDays, StartsAtUTCMidnight, StartedDaysAgo or InProgress"},
+	}
+	for _, tc := range validationCases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := registerPanics(Declaration{Behavior: "ZZZ-PR4-" + tc.name, Entities: []Entity{
+				Contact("subject"), CalendarEvent("event", "subject", tc.prop),
+			}})
+			require.NotNil(t, msg)
+			assert.Contains(t, msg, tc.want)
+		})
+	}
+
+	msg := registerPanics(Declaration{Behavior: "ZZZ-PR4-accepted", Entities: []Entity{
+		Contact("subject"), CalendarEvent("event", "subject", StartsAtUTCMidnight(2)),
+	}})
+	assert.Nil(t, msg)
+
+	anchors := []struct {
+		name   string
+		anchor time.Time
+		n      int
+	}{
+		{name: "midday", anchor: time.Date(2026, 8, 25, 13, 14, 15, 987654321, time.UTC), n: 2},
+		{name: "rollover", anchor: time.Date(2026, 8, 25, 23, 59, 30, 0, time.UTC), n: 2},
+		{name: "midnight", anchor: time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC), n: 9},
+	}
+	for _, tc := range anchors {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := &calendarEventPlan{startsAtUTCMidnightDays: &tc.n}
+			start := tc.anchor.Add(calendarStartOffset(plan, tc.anchor)).UTC()
+			y, m, d := tc.anchor.UTC().Date()
+			wantDate := time.Date(y, m, d, 0, 0, 0, 0, time.UTC).AddDate(0, 0, tc.n)
+			assert.Equal(t, wantDate, start)
+			assert.Equal(t, 0, start.Hour())
+			assert.Equal(t, 0, start.Minute())
+			assert.Equal(t, 0, start.Second())
+			assert.Equal(t, 0, start.Nanosecond())
+			if tc.name == "rollover" {
+				assert.Greater(t, start, tc.anchor.Add(24*time.Hour))
+			}
+		})
+	}
+}
+
 // The declared month/day bounds check must not reject the placeholder's
 // zero-valued month/day struct fields: they are never read for it.
 func TestBirthdayPlaceholderToday_PassesValidation(t *testing.T) {

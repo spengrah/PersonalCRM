@@ -61,6 +61,14 @@ func init() {
 		LinkedMeetingNote("note-b", "noted-meeting"),
 	}})
 
+	Register(Declaration{Behavior: "IXN-007", Entities: []Entity{
+		Contact("subject", Methods(MethodEmail)),
+		MessageInteraction("gchat-thread", "subject", "gchat", AgoDays(1)),
+		MessageInteraction("email-thread", "subject", "email", AgoDays(2)),
+		CalendarEvent("future-noise", "subject", StartsInDays(1)),
+	}})
+
+	Register(Declaration{Behavior: "IXN-008", Entities: dateSpreadEntities()})
 }
 
 func pagingInteractionEntities() []Entity {
@@ -75,5 +83,22 @@ func pagingInteractionEntities() []Entity {
 	for i := 1; i <= 4; i++ {
 		entities = append(entities, LoggedInteraction(fmt.Sprintf("old-%d", i), "subject", "manual", AgoDays(20+i)))
 	}
+	return entities
+}
+
+func dateSpreadEntities() []Entity {
+	entities := []Entity{Contact("subject", Methods(MethodEmail))}
+	for i := 1; i <= 20; i++ {
+		entities = append(entities, LoggedInteraction(fmt.Sprintf("recent-%02d", i), "subject", "manual", AgoDays(i)))
+	}
+	entities = append(entities,
+		LoggedInteraction("edge-29", "subject", "manual", AgoDays(29)),
+		LoggedInteraction("edge-31", "subject", "manual", AgoDays(31)),
+		LoggedInteraction("edge-89", "subject", "manual", AgoDays(89)),
+		LoggedInteraction("edge-91", "subject", "manual", AgoDays(91)),
+		CalendarEvent("bound-a", "subject", StartsAtUTCMidnight(2)),
+		CalendarEvent("bound-b", "subject", StartsAtUTCMidnight(5)),
+		CalendarEvent("bound-c", "subject", StartsAtUTCMidnight(9)),
+	)
 	return entities
 }
