@@ -386,15 +386,9 @@ sudo systemctl restart personalcrm.target
 
 ### Backup
 
-**Backup database**:
-```bash
-docker exec crm-postgres pg_dump -U crm_user personal_crm > backup.sql
-```
+Nightly off-device encrypted backups are configured with the [backup runbook](infra/backup/README.md).
 
-**Restore database**:
-```bash
-cat backup.sql | docker exec -i crm-postgres psql -U crm_user personal_crm
-```
+The `scripts/backup-db.sh` and `scripts/restore-db.sh` scripts remain the pre-deploy cold snapshot and rollback path.
 
 ### Security
 

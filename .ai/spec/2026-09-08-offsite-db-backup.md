@@ -1,7 +1,7 @@
 # Off-device encrypted database backups
 
 Date: 2026-09-08
-Status: PROPOSED
+Status: IMPLEMENTED
 Implements: [#15](https://github.com/spengrah/PersonalCRM/issues/15).
 
 ## Context & problem

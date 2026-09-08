@@ -1,0 +1,7 @@
+[Unit]
+Description=Verify the newest PersonalCRM offsite backup
+
+[Service]
+Type=oneshot
+EnvironmentFile=/srv/personalcrm/backup.env
+ExecStart=/srv/personalcrm/bin/verify-offsite-backup.sh

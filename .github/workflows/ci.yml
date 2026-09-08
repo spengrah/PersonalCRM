@@ -302,11 +302,14 @@ jobs:
         working-directory: backend
         run: go test -short ./...
 
+      - name: Install backup pipeline tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age rclone zstd
+
       - name: Run deploy-script shell tests
-        # Pure-bash mocked suites (PATH-shadow stubs for git/gh/podman/plutil/
-        # crm-mac/curl/launchctl) — no DB, no podman, no network, no macOS-only
-        # binary reached outside a stub — so they run on the standard Ubuntu
-        # runner. Gated by the same backend path-filter (scripts/**, Makefile).
+        # The backup round-trip test reaches real age/rclone/zstd installed above.
+        # The suites still use no DB and no network, and no macOS-only binary is
+        # reached outside a stub, so they run on the standard Ubuntu runner.
+        # Gated by the same backend path-filter (scripts/**, Makefile).
         run: make test-deploy-scripts
 
       - name: Wait for PostgreSQL
