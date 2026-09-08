@@ -29,6 +29,14 @@ type Config struct {
 	River     RiverConfig
 	EventBus  EventBusConfig
 	Health    HealthConfig
+	Sync      SyncConfig
+}
+
+// SyncConfig holds external-sync housekeeping settings.
+type SyncConfig struct {
+	// LogRetentionDays is how many days of external_sync_log rows the
+	// sync_log_trim periodic worker keeps. Default 30; validated 1–365.
+	LogRetentionDays int
 }
 
 // DatabaseConfig holds database connection settings
@@ -349,6 +357,9 @@ const (
 	// DefaultRiverJobSampleRetentionDays is the default retention window for
 	// job_exec_sample rows (the River job-execution sampling table).
 	DefaultRiverJobSampleRetentionDays = 14
+	// DefaultSyncLogRetentionDays is the default retention window for
+	// external_sync_log rows (one row per sync run).
+	DefaultSyncLogRetentionDays = 30
 	// Sync-staleness watchdog defaults. See the StalenessConfig doc
 	// comment for the full rationale: 15m heartbeat (~15 missed ~60s
 	// beats), 24h pull (5m–15m intervals for everything but gcontacts),
@@ -542,6 +553,9 @@ func Load() (*Config, error) {
 			JobTimeout:             getEnvAsDuration("RIVER_JOB_TIMEOUT", DefaultRiverJobTimeout),
 			JobSampleRetentionDays: getEnvAsInt("RIVER_JOB_SAMPLE_RETENTION_DAYS", DefaultRiverJobSampleRetentionDays),
 		},
+		Sync: SyncConfig{
+			LogRetentionDays: getEnvAsInt("SYNC_LOG_RETENTION_DAYS", DefaultSyncLogRetentionDays),
+		},
 		EventBus: EventBusConfig{
 			InteractionMode:        getEnv("EVENT_BUS_INTERACTION_MODE", EventBusInteractionModeCutover),
 			CadenceMode:            getEnv("EVENT_BUS_CADENCE_MODE", EventBusCadenceModeCutover),
@@ -713,6 +727,14 @@ func (c *Config) Validate() error {
 		errors = append(errors, ValidationError{
 			Field:   "RIVER_JOB_SAMPLE_RETENTION_DAYS",
 			Message: fmt.Sprintf("must be between 1 and 365, got %d", c.River.JobSampleRetentionDays),
+		})
+	}
+
+	// Sync-log retention range.
+	if c.Sync.LogRetentionDays < 1 || c.Sync.LogRetentionDays > 365 {
+		errors = append(errors, ValidationError{
+			Field:   "SYNC_LOG_RETENTION_DAYS",
+			Message: fmt.Sprintf("must be between 1 and 365, got %d", c.Sync.LogRetentionDays),
 		})
 	}
 
@@ -1076,6 +1098,9 @@ func TestConfig() *Config {
 			WorkerConcurrency:      4,
 			JobTimeout:             DefaultRiverJobTimeout,
 			JobSampleRetentionDays: DefaultRiverJobSampleRetentionDays,
+		},
+		Sync: SyncConfig{
+			LogRetentionDays: DefaultSyncLogRetentionDays,
 		},
 		EventBus: EventBusConfig{
 			InteractionMode: EventBusInteractionModeCutover,

@@ -76,6 +76,7 @@ var baseWorkerKinds = sortedCopy([]string{
 	"sync_staleness_watchdog",
 	"assertion_rollover",
 	"job_sample_trim",
+	"sync_log_trim",
 })
 
 // syncWorkerKinds adds the two external-sync-gated workers (shapes 3 & 6).
@@ -84,13 +85,14 @@ var syncWorkerKinds = sortedCopy(append([]string{
 	"sync_provider_account",
 }, baseWorkerKinds...))
 
-// basePeriodicKinds is the 5 unconditionally-registered periodic jobs.
+// basePeriodicKinds is the 6 unconditionally-registered periodic jobs.
 var basePeriodicKinds = sortedCopy([]string{
 	"messaging_aggregate_sweeper",
 	"pairing_token_janitor",
 	"sync_staleness_watchdog",
 	"assertion_rollover",
 	"job_sample_trim",
+	"sync_log_trim",
 })
 
 // syncPeriodicKinds adds the external-sync-gated scheduler tick.
@@ -306,6 +308,7 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 	// is neither a worker nor a periodic job); only the trim worker/periodic is
 	// pinned by the golden lists.
 	registerJobSampleWorkers(reg, repository.NewJobSampleRepository(database.Queries), cfg)
+	registerSyncLogTrim(reg, repository.NewSyncRepository(database.Queries), cfg)
 
 	return wireChain{
 		reg:       reg,

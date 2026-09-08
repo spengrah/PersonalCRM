@@ -237,14 +237,20 @@ func (q *Queries) DeleteMacHostSyncStates(ctx context.Context, accountID string)
 	return result.RowsAffected(), nil
 }
 
-const DeleteOldSyncLogs = `-- name: DeleteOldSyncLogs :exec
+const DeleteOldSyncLogs = `-- name: DeleteOldSyncLogs :execrows
 DELETE FROM external_sync_log
-WHERE created_at < $1
+WHERE started_at < $1::timestamptz
 `
 
-func (q *Queries) DeleteOldSyncLogs(ctx context.Context, createdAt *time.Time) error {
-	_, err := q.db.Exec(ctx, DeleteOldSyncLogs, createdAt)
-	return err
+// Housekeeping DELETE run by the sync_log_trim periodic worker. Cutoff is
+// accelerated-now minus the retention window, computed by the caller (NOT SQL
+// NOW()). Filters on started_at, which is indexed (idx_external_sync_log_started_at).
+func (q *Queries) DeleteOldSyncLogs(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteOldSyncLogs, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const DeleteSyncState = `-- name: DeleteSyncState :exec
@@ -788,6 +794,25 @@ func (q *Queries) ResetSyncStateBackfillCursor(ctx context.Context, arg ResetSyn
 		&i.UpdatedAt,
 	)
 	return &i, err
+}
+
+const SetSyncLogStartedAtForTest = `-- name: SetSyncLogStartedAtForTest :exec
+UPDATE external_sync_log
+SET started_at = $1
+WHERE id = $2
+`
+
+type SetSyncLogStartedAtForTestParams struct {
+	StartedAt time.Time `json:"started_at"`
+	ID        uuid.UUID `json:"id"`
+}
+
+// Test-only: backdates a log row's started_at so retention tests can plant rows
+// older than the cutoff without driving the real write path (which always uses
+// NOW()). Production code must never call this.
+func (q *Queries) SetSyncLogStartedAtForTest(ctx context.Context, arg SetSyncLogStartedAtForTestParams) error {
+	_, err := q.db.Exec(ctx, SetSyncLogStartedAtForTest, arg.StartedAt, arg.ID)
+	return err
 }
 
 const SetSyncStateFreshnessForTest = `-- name: SetSyncStateFreshnessForTest :exec

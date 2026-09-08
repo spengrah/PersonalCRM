@@ -605,9 +605,24 @@ func (r *SyncRepository) CountSyncLogsByState(ctx context.Context, stateID uuid.
 	return r.queries.CountSyncLogsByState(ctx, stateID)
 }
 
-// DeleteOldSyncLogs deletes sync logs older than the given time
-func (r *SyncRepository) DeleteOldSyncLogs(ctx context.Context, before time.Time) error {
-	return r.queries.DeleteOldSyncLogs(ctx, &before)
+// DeleteOldSyncLogs deletes sync log rows whose started_at is before cutoff and
+// returns how many were removed. Called by scheduler.SyncLogTrimWorker.
+func (r *SyncRepository) DeleteOldSyncLogs(ctx context.Context, cutoff time.Time) (int64, error) {
+	n, err := r.queries.DeleteOldSyncLogs(ctx, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete old sync logs: %w", err)
+	}
+	return n, nil
+}
+
+// SetSyncLogStartedAtForTest backdates a log row's started_at. Test-only: lets
+// retention tests plant rows older than the trim cutoff. Production code must
+// never call this.
+func (r *SyncRepository) SetSyncLogStartedAtForTest(ctx context.Context, id uuid.UUID, startedAt time.Time) error {
+	return r.queries.SetSyncLogStartedAtForTest(ctx, db.SetSyncLogStartedAtForTestParams{
+		ID:        id,
+		StartedAt: startedAt,
+	})
 }
 
 // ListDueAccounts returns the (source, account_id) pairs of sync states

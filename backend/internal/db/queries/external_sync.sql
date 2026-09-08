@@ -269,9 +269,20 @@ LIMIT $1;
 SELECT COUNT(*) FROM external_sync_log
 WHERE sync_state_id = $1;
 
--- name: DeleteOldSyncLogs :exec
+-- name: DeleteOldSyncLogs :execrows
+-- Housekeeping DELETE run by the sync_log_trim periodic worker. Cutoff is
+-- accelerated-now minus the retention window, computed by the caller (NOT SQL
+-- NOW()). Filters on started_at, which is indexed (idx_external_sync_log_started_at).
 DELETE FROM external_sync_log
-WHERE created_at < $1;
+WHERE started_at < @cutoff::timestamptz;
+
+-- name: SetSyncLogStartedAtForTest :exec
+-- Test-only: backdates a log row's started_at so retention tests can plant rows
+-- older than the cutoff without driving the real write path (which always uses
+-- NOW()). Production code must never call this.
+UPDATE external_sync_log
+SET started_at = @started_at
+WHERE id = @id;
 
 -- name: SetSyncStateFreshnessForTest :exec
 -- Test-only: stamps the freshness/error columns of an external_sync_state

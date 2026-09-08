@@ -164,7 +164,7 @@ sequenceDiagram
 | `tag` | Contact categorization. Mirrored into the graph by `crm-admin --migrate-tags` (each tag → a `tag` entity node carrying its color in `entity.detail`; each `contact_tag` of a non-deleted contact → an accepted `tagged_as` assertion with user provenance). The legacy `tag`/`contact_tag` tables are retained as a rollback anchor (dropped in a later migration) | ↔ contact (via contact_tag) |
 | **Sync & Identity** | | |
 | `external_sync_state` | Sync status per provider/account | |
-| `external_sync_log` | Audit log of sync runs | → external_sync_state |
+| `external_sync_log` | Audit log of sync runs: one row per run with status, counters, and error text. Carries NO provider metadata — that lives only on `external_sync_state.metadata` (a per-run copy of it once grew to 79% of the prod DB). Trimmed by the `sync_log_trim` daily periodic worker (`SYNC_LOG_RETENTION_DAYS`, default 30) on `started_at` | → external_sync_state |
 | `external_identity` | Maps external IDs to contacts | → contact |
 | `external_contact` | Import candidates from Google/iCloud | → contact (optional) |
 | `contact_enrichment` | Tracks field enrichment sources | → contact, external_contact |
@@ -260,6 +260,7 @@ scheduler runs on top of `github.com/riverqueue/river` periodic jobs.
 | `sync_staleness_watchdog` | Every 5 min (`RunOnStart: true`) | StalenessWatchdogWorker compares per-source freshness timestamps (`external_sync_state` last-success/error + `mac_host.source_health` last-pushed + `mac_host.last_heartbeat_at`) against config-backed `SYNC_STALENESS_*` thresholds and reconciles breaches into `sync_staleness_breach`. Registered unconditionally (independent of `ENABLE_EXTERNAL_SYNC`). Read via `GET /api/v1/sync/staleness`. |
 | `whatsapp_history_drain` | Every 1 min (`RunOnStart: true`), gated on `ENABLE_WHATSAPP_SYNC` | HistoryDrainWorker drains the durable `whatsapp_history_notification` inbox: for each claimable chunk it downloads the payload, decides group tracking for the whole chunk, projects the post-horizon messages through `Ingestor.IngestMessage`, acknowledges the chunk, deletes the server-side media and marks it done. One run drains the whole backlog; each step is fenced by phase + claim token, so an interruption resumes at the phase it reached. |
 | `assertion_rollover` | Daily | AssertionRolloverWorker (SP1 graph) terminalizes bounded-with-pending-successor assertions whose `valid_to` has passed: rows matching `status='accepted' AND knowledge_to IS NULL AND superseded_by IS NOT NULL AND valid_to <= now` flip to `status='superseded'`, `closure_reason='superseded'`, `knowledge_to=now`, emitting `assertion.superseded` per row. Stateless catch-up sweep; never touches successor-less bounded-past facts. |
+| `sync_log_trim` | Daily (`RunOnStart: true`) | SyncLogTrimWorker deletes `external_sync_log` rows whose `started_at` is older than `SYNC_LOG_RETENTION_DAYS` (default 30). Registered unconditionally (log rows outlive the sync feature flag). Cutoff computed from accelerated time, not SQL `NOW()`. |
 
 Dedup is done in a repository helper
 (`EnqueueAccountSyncIfNotInFlight`) that wraps

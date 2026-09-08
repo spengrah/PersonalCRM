@@ -515,7 +515,10 @@ type Querier interface {
 	DeleteOAuthCredential(ctx context.Context, id uuid.UUID) error
 	// Delete all OAuth credentials for a provider
 	DeleteOAuthCredentialByProvider(ctx context.Context, provider string) error
-	DeleteOldSyncLogs(ctx context.Context, createdAt *time.Time) error
+	// Housekeeping DELETE run by the sync_log_trim periodic worker. Cutoff is
+	// accelerated-now minus the retention window, computed by the caller (NOT SQL
+	// NOW()). Filters on started_at, which is indexed (idx_external_sync_log_started_at).
+	DeleteOldSyncLogs(ctx context.Context, cutoff time.Time) (int64, error)
 	// Re-extraction retirement (a later layer): drop a single locator. When the last
 	// locator is removed the write API retracts the assertion.
 	DeleteProvenanceLocator(ctx context.Context, arg DeleteProvenanceLocatorParams) error
@@ -1951,6 +1954,10 @@ type Querier interface {
 	SetMacHostHeartbeatAtForTest(ctx context.Context, arg SetMacHostHeartbeatAtForTestParams) error
 	// Records the merge alias (loser → winner) and tombstones the loser node.
 	SetNodeMergedInto(ctx context.Context, arg SetNodeMergedIntoParams) error
+	// Test-only: backdates a log row's started_at so retention tests can plant rows
+	// older than the cutoff without driving the real write path (which always uses
+	// NOW()). Production code must never call this.
+	SetSyncLogStartedAtForTest(ctx context.Context, arg SetSyncLogStartedAtForTestParams) error
 	// Test-only: stamps the freshness/error columns of an external_sync_state
 	// row directly so staleness-watchdog tests can plant past
 	// last_successful_sync_at / error_count values without driving the real

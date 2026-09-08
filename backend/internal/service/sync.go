@@ -408,12 +408,6 @@ func (s *SyncService) GetAvailableProviders() []sync.SourceConfig {
 	return s.registry.List()
 }
 
-// DeleteOldSyncLogs removes sync logs older than the specified duration
-func (s *SyncService) DeleteOldSyncLogs(ctx context.Context, olderThan time.Duration) error {
-	before := accelerated.GetCurrentTime().Add(-olderThan)
-	return s.syncRepo.DeleteOldSyncLogs(ctx, before)
-}
-
 // Helper function to create a string pointer
 func ptrString(s string) *string {
 	return &s

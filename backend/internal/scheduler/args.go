@@ -38,6 +38,14 @@ type PairingTokenJanitorArgs struct{}
 // Kind implements river.JobArgs.
 func (PairingTokenJanitorArgs) Kind() string { return "pairing_token_janitor" }
 
+// SyncLogTrimArgs are the args for the periodic SyncLogTrimWorker. Stateless
+// like the janitor; the retention window is worker configuration, not a job
+// argument, so the args type is intentionally empty.
+type SyncLogTrimArgs struct{}
+
+// Kind implements river.JobArgs.
+func (SyncLogTrimArgs) Kind() string { return "sync_log_trim" }
+
 // StalenessWatchdogArgs are the args for the periodic
 // StalenessWatchdogWorker. Stateless like the janitor — the worker computes
 // the whole breach set from current DB state each tick, so no per-tick
