@@ -415,10 +415,11 @@ type Querier interface {
 	// RETURNING projection so the NULL vector is never scanned back.
 	CreatePredicate(ctx context.Context, arg CreatePredicateParams) (*CreatePredicateRow, error)
 	// External Sync Log Queries
-	// Timestamps on this table are stamped by the caller from the app clock
+	// started_at and completed_at are stamped by the caller from the app clock
 	// (accelerated.GetCurrentTime()), never SQL NOW(): the sync_log_trim cutoff is
 	// computed on the app clock, and under time acceleration a NOW()-stamped row
-	// would look weeks old the moment it was written.
+	// would look weeks old the moment it was written. created_at keeps its
+	// database default; nothing reads it against the app clock.
 	CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error)
 	CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error)
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)
@@ -1959,8 +1960,8 @@ type Querier interface {
 	// Records the merge alias (loser → winner) and tombstones the loser node.
 	SetNodeMergedInto(ctx context.Context, arg SetNodeMergedIntoParams) error
 	// Test-only: backdates a log row's started_at so retention tests can plant rows
-	// older than the cutoff without driving the real write path (which always uses
-	// NOW()). Production code must never call this.
+	// older than the cutoff without driving the real write path (which always
+	// stamps the current app-clock time). Production code must never call this.
 	SetSyncLogStartedAtForTest(ctx context.Context, arg SetSyncLogStartedAtForTestParams) error
 	// Test-only: stamps the freshness/error columns of an external_sync_state
 	// row directly so staleness-watchdog tests can plant past

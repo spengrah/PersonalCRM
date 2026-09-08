@@ -47,7 +47,7 @@ func TestSyncLogTrim_Isolated(t *testing.T) {
 	// it was written.
 	frozen := accelerated.GetCurrentTime().AddDate(0, 0, 100).Truncate(time.Microsecond)
 	restore := accelerated.SetNowForTest(func() time.Time { return frozen })
-	t.Cleanup(restore)
+	t.Cleanup(func() { restore() }) // closure: restore is reassigned when the clock advances below
 
 	state, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
 		Source:   "log_trim_isolated",
@@ -73,8 +73,9 @@ func TestSyncLogTrim_Isolated(t *testing.T) {
 	require.True(t, completed.CompletedAt.Equal(frozen), "completed_at %v, want app clock %v", *completed.CompletedAt, frozen)
 
 	// 3. Retention boundaries around cutoff = app-now - 30d. started_at is
-	//    backdated through the test-only setter; created_at stays at insert
-	//    time so a query trimming the wrong column would delete nothing.
+	//    backdated through the test-only setter; created_at keeps its DB
+	//    default, so a query trimming that column would ignore the planted
+	//    dates and the exact-count assertion below would not hold.
 	cutoff := frozen.AddDate(0, 0, -30)
 	dayBefore := cutoff.AddDate(0, 0, -1)
 	dayAfter := cutoff.AddDate(0, 0, 1)
@@ -115,12 +116,25 @@ func TestSyncLogTrim_Isolated(t *testing.T) {
 		recent.ID.String():   true,
 	}, survivors)
 
-	// 4. A second sweep at the same cutoff finds nothing.
+	// 4. Abandonment stamps completed_at from the app clock too. Advance the
+	//    frozen clock so the stamp is distinguishable from the insert time.
+	orphan := newLog()
+	later := frozen.Add(time.Hour)
+	restore()
+	restore = accelerated.SetNowForTest(func() time.Time { return later })
+	require.NoError(t, repo.AbandonRunningLogsForState(ctx, state.ID))
+	abandoned, err := repo.GetSyncLog(ctx, orphan.ID)
+	require.NoError(t, err)
+	require.Equal(t, "abandoned", abandoned.Status)
+	require.NotNil(t, abandoned.CompletedAt)
+	require.True(t, abandoned.CompletedAt.Equal(later), "abandoned completed_at %v, want app clock %v", *abandoned.CompletedAt, later)
+
+	// 5. A second sweep at the same cutoff finds nothing.
 	deleted, err = repo.DeleteOldSyncLogs(ctx, cutoff)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), deleted)
 
-	// 5. Error path: the repository wraps the query error with its own context.
+	// 6. Error path: the repository wraps the query error with its own context.
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	_, err = repo.DeleteOldSyncLogs(cancelled, cutoff)

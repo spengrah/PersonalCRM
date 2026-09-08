@@ -227,10 +227,11 @@ WHERE strategy = 'push' AND COALESCE(account_id, '') = @account_id::text;
 -- External Sync Log Queries
 
 -- name: CreateSyncLog :one
--- Timestamps on this table are stamped by the caller from the app clock
+-- started_at and completed_at are stamped by the caller from the app clock
 -- (accelerated.GetCurrentTime()), never SQL NOW(): the sync_log_trim cutoff is
 -- computed on the app clock, and under time acceleration a NOW()-stamped row
--- would look weeks old the moment it was written.
+-- would look weeks old the moment it was written. created_at keeps its
+-- database default; nothing reads it against the app clock.
 INSERT INTO external_sync_log (
     sync_state_id,
     source,
@@ -284,8 +285,8 @@ WHERE started_at < @cutoff::timestamptz;
 
 -- name: SetSyncLogStartedAtForTest :exec
 -- Test-only: backdates a log row's started_at so retention tests can plant rows
--- older than the cutoff without driving the real write path (which always uses
--- NOW()). Production code must never call this.
+-- older than the cutoff without driving the real write path (which always
+-- stamps the current app-clock time). Production code must never call this.
 UPDATE external_sync_log
 SET started_at = @started_at
 WHERE id = @id;

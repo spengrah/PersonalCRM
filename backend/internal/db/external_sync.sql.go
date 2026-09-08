@@ -147,10 +147,11 @@ type CreateSyncLogParams struct {
 }
 
 // External Sync Log Queries
-// Timestamps on this table are stamped by the caller from the app clock
+// started_at and completed_at are stamped by the caller from the app clock
 // (accelerated.GetCurrentTime()), never SQL NOW(): the sync_log_trim cutoff is
 // computed on the app clock, and under time acceleration a NOW()-stamped row
-// would look weeks old the moment it was written.
+// would look weeks old the moment it was written. created_at keeps its
+// database default; nothing reads it against the app clock.
 func (q *Queries) CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error) {
 	row := q.db.QueryRow(ctx, CreateSyncLog,
 		arg.SyncStateID,
@@ -827,8 +828,8 @@ type SetSyncLogStartedAtForTestParams struct {
 }
 
 // Test-only: backdates a log row's started_at so retention tests can plant rows
-// older than the cutoff without driving the real write path (which always uses
-// NOW()). Production code must never call this.
+// older than the cutoff without driving the real write path (which always
+// stamps the current app-clock time). Production code must never call this.
 func (q *Queries) SetSyncLogStartedAtForTest(ctx context.Context, arg SetSyncLogStartedAtForTestParams) error {
 	_, err := q.db.Exec(ctx, SetSyncLogStartedAtForTest, arg.StartedAt, arg.ID)
 	return err
