@@ -231,14 +231,12 @@ INSERT INTO external_sync_log (
     sync_state_id,
     source,
     account_id,
-    status,
-    metadata
+    status
 ) VALUES (
     @sync_state_id,
     @source,
     @account_id,
-    'running',
-    COALESCE(@metadata::jsonb, '{}'::jsonb)
+    'running'
 ) RETURNING *;
 
 -- name: CompleteSyncLog :one

@@ -38,7 +38,7 @@ SET completed_at = NOW(),
     items_created = $5,
     error_message = $6
 WHERE id = $1
-RETURNING id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at
+RETURNING id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, created_at
 `
 
 type CompleteSyncLogParams struct {
@@ -72,7 +72,6 @@ func (q *Queries) CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams
 		&i.ItemsMatched,
 		&i.ItemsCreated,
 		&i.ErrorMessage,
-		&i.Metadata,
 		&i.CreatedAt,
 	)
 	return &i, err
@@ -122,32 +121,24 @@ INSERT INTO external_sync_log (
     sync_state_id,
     source,
     account_id,
-    status,
-    metadata
+    status
 ) VALUES (
     $1,
     $2,
     $3,
-    'running',
-    COALESCE($4::jsonb, '{}'::jsonb)
-) RETURNING id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at
+    'running'
+) RETURNING id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, created_at
 `
 
 type CreateSyncLogParams struct {
 	SyncStateID uuid.UUID `json:"sync_state_id"`
 	Source      string    `json:"source"`
 	AccountID   *string   `json:"account_id"`
-	Metadata    []byte    `json:"metadata"`
 }
 
 // External Sync Log Queries
 func (q *Queries) CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error) {
-	row := q.db.QueryRow(ctx, CreateSyncLog,
-		arg.SyncStateID,
-		arg.Source,
-		arg.AccountID,
-		arg.Metadata,
-	)
+	row := q.db.QueryRow(ctx, CreateSyncLog, arg.SyncStateID, arg.Source, arg.AccountID)
 	var i ExternalSyncLog
 	err := row.Scan(
 		&i.ID,
@@ -161,7 +152,6 @@ func (q *Queries) CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*
 		&i.ItemsMatched,
 		&i.ItemsCreated,
 		&i.ErrorMessage,
-		&i.Metadata,
 		&i.CreatedAt,
 	)
 	return &i, err
@@ -322,7 +312,7 @@ func (q *Queries) GetMacHostSyncState(ctx context.Context, arg GetMacHostSyncSta
 }
 
 const GetSyncLog = `-- name: GetSyncLog :one
-SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at FROM external_sync_log
+SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, created_at FROM external_sync_log
 WHERE id = $1
 `
 
@@ -341,7 +331,6 @@ func (q *Queries) GetSyncLog(ctx context.Context, id uuid.UUID) (*ExternalSyncLo
 		&i.ItemsMatched,
 		&i.ItemsCreated,
 		&i.ErrorMessage,
-		&i.Metadata,
 		&i.CreatedAt,
 	)
 	return &i, err
@@ -587,7 +576,7 @@ func (q *Queries) ListEnabledSyncStatesBySource(ctx context.Context, source stri
 }
 
 const ListRecentSyncLogs = `-- name: ListRecentSyncLogs :many
-SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at FROM external_sync_log
+SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, created_at FROM external_sync_log
 ORDER BY started_at DESC
 LIMIT $1
 `
@@ -613,7 +602,6 @@ func (q *Queries) ListRecentSyncLogs(ctx context.Context, limit int32) ([]*Exter
 			&i.ItemsMatched,
 			&i.ItemsCreated,
 			&i.ErrorMessage,
-			&i.Metadata,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -627,7 +615,7 @@ func (q *Queries) ListRecentSyncLogs(ctx context.Context, limit int32) ([]*Exter
 }
 
 const ListSyncLogsByState = `-- name: ListSyncLogsByState :many
-SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at FROM external_sync_log
+SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, created_at FROM external_sync_log
 WHERE sync_state_id = $1
 ORDER BY started_at DESC
 LIMIT $2 OFFSET $3
@@ -660,7 +648,6 @@ func (q *Queries) ListSyncLogsByState(ctx context.Context, arg ListSyncLogsBySta
 			&i.ItemsMatched,
 			&i.ItemsCreated,
 			&i.ErrorMessage,
-			&i.Metadata,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

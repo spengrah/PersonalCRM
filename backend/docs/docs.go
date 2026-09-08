@@ -7418,10 +7418,6 @@ const docTemplate = `{
                 "items_processed": {
                     "type": "integer"
                 },
-                "metadata": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
                 "source": {
                     "type": "string"
                 },

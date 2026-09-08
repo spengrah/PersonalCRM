@@ -110,19 +110,18 @@ type SyncState struct {
 
 // SyncLog represents a sync run audit log entry
 type SyncLog struct {
-	ID             uuid.UUID      `json:"id"`
-	SyncStateID    uuid.UUID      `json:"sync_state_id"`
-	Source         string         `json:"source"`
-	AccountID      *string        `json:"account_id,omitempty"`
-	StartedAt      time.Time      `json:"started_at"`
-	CompletedAt    *time.Time     `json:"completed_at,omitempty"`
-	Status         string         `json:"status"`
-	ItemsProcessed int32          `json:"items_processed"`
-	ItemsMatched   int32          `json:"items_matched"`
-	ItemsCreated   int32          `json:"items_created"`
-	ErrorMessage   *string        `json:"error_message,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
-	CreatedAt      time.Time      `json:"created_at"`
+	ID             uuid.UUID  `json:"id"`
+	SyncStateID    uuid.UUID  `json:"sync_state_id"`
+	Source         string     `json:"source"`
+	AccountID      *string    `json:"account_id,omitempty"`
+	StartedAt      time.Time  `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	Status         string     `json:"status"`
+	ItemsProcessed int32      `json:"items_processed"`
+	ItemsMatched   int32      `json:"items_matched"`
+	ItemsCreated   int32      `json:"items_created"`
+	ErrorMessage   *string    `json:"error_message,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 // CreateSyncStateRequest holds parameters for creating a sync state
@@ -232,14 +231,6 @@ func convertDbSyncLog(dbLog *db.ExternalSyncLog) SyncLog {
 	// Convert nullable fields
 	log.AccountID = dbLog.AccountID
 	log.ErrorMessage = dbLog.ErrorMessage
-
-	// Convert JSONB metadata
-	if len(dbLog.Metadata) > 0 {
-		var metadata map[string]any
-		if err := json.Unmarshal(dbLog.Metadata, &metadata); err == nil {
-			log.Metadata = metadata
-		}
-	}
 
 	return log
 }
@@ -515,23 +506,13 @@ func (r *SyncRepository) MarkSyncStateTerminal(ctx context.Context, id uuid.UUID
 	return &state, nil
 }
 
-// CreateSyncLog creates a new sync log entry
+// CreateSyncLog opens a 'running' log row for a sync run. The row carries only
+// per-run counters and status; provider metadata lives solely on the state row.
 func (r *SyncRepository) CreateSyncLog(ctx context.Context, state *SyncState) (*SyncLog, error) {
-	// Convert metadata to JSON
-	var metadataBytes []byte
-	if state.Metadata != nil {
-		var err error
-		metadataBytes, err = json.Marshal(state.Metadata)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	dbLog, err := r.queries.CreateSyncLog(ctx, db.CreateSyncLogParams{
 		SyncStateID: state.ID,
 		Source:      state.Source,
 		AccountID:   state.AccountID,
-		Metadata:    metadataBytes,
 	})
 	if err != nil {
 		return nil, err

@@ -1499,9 +1499,6 @@ definitions:
         type: integer
       items_processed:
         type: integer
-      metadata:
-        additionalProperties: {}
-        type: object
       source:
         type: string
       started_at:
