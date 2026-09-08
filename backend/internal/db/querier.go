@@ -16,7 +16,7 @@ type Querier interface {
 	// log row for this sync_state as 'abandoned' so that the new retry attempt
 	// can insert a fresh log row without leaving orphan 'running' rows behind.
 	// Requires migration 037 (widens the status CHECK).
-	AbandonRunningLogsForState(ctx context.Context, syncStateID uuid.UUID) error
+	AbandonRunningLogsForState(ctx context.Context, arg AbandonRunningLogsForStateParams) error
 	// The transaction-scoped advisory lock guarding the single-cardinality conflict
 	// check. The caller passes the Go-computed int64 slot key (e.g.
 	// hashtextextended of the slot identity); the lock auto-releases at tx end. This
@@ -415,6 +415,10 @@ type Querier interface {
 	// RETURNING projection so the NULL vector is never scanned back.
 	CreatePredicate(ctx context.Context, arg CreatePredicateParams) (*CreatePredicateRow, error)
 	// External Sync Log Queries
+	// Timestamps on this table are stamped by the caller from the app clock
+	// (accelerated.GetCurrentTime()), never SQL NOW(): the sync_log_trim cutoff is
+	// computed on the app clock, and under time acceleration a NOW()-stamped row
+	// would look weeks old the moment it was written.
 	CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error)
 	CreateSyncState(ctx context.Context, arg CreateSyncStateParams) (*ExternalSyncState, error)
 	CreateTag(ctx context.Context, arg CreateTagParams) (*Tag, error)

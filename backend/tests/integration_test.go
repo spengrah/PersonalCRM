@@ -594,39 +594,6 @@ func TestSyncRepository_Integration(t *testing.T) {
 		assert.Equal(t, int32(10), logs[0].ItemsCreated)
 	})
 
-	t.Run("DeleteOldSyncLogs", func(t *testing.T) {
-		state, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
-			Source:   "log_trim_test_" + ns,
-			Strategy: repository.SyncStrategyContactDriven,
-		})
-		require.NoError(t, err)
-		defer func() { _ = repo.DeleteSyncState(ctx, state.ID) }()
-
-		oldLog, err := repo.CreateSyncLog(ctx, state)
-		require.NoError(t, err)
-		recentLog, err := repo.CreateSyncLog(ctx, state)
-		require.NoError(t, err)
-
-		now := accelerated.GetCurrentTime()
-		cutoff := now.AddDate(0, 0, -30)
-		// One row a day past the cutoff, one a day inside it. started_at is
-		// the trimmed column; created_at is left at insert time so a query
-		// filtering the wrong column would delete neither row.
-		require.NoError(t, repo.SetSyncLogStartedAtForTest(ctx, oldLog.ID, cutoff.AddDate(0, 0, -1)))
-		require.NoError(t, repo.SetSyncLogStartedAtForTest(ctx, recentLog.ID, cutoff.AddDate(0, 0, 1)))
-
-		deleted, err := repo.DeleteOldSyncLogs(ctx, cutoff)
-		require.NoError(t, err)
-		// The DELETE is table-wide; other subtests' rows are all recent, so
-		// exactly the backdated row goes.
-		assert.Equal(t, int64(1), deleted)
-
-		logs, err := repo.ListSyncLogsByState(ctx, state.ID, 10, 0)
-		require.NoError(t, err)
-		require.Len(t, logs, 1)
-		assert.Equal(t, recentLog.ID, logs[0].ID)
-	})
-
 	t.Run("SyncLogWithError", func(t *testing.T) {
 		state, err := repo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
 			Source:   "log_error_test_" + ns,

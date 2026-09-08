@@ -42,10 +42,10 @@ ORDER BY next_sync_at ASC NULLS FIRST;
 -- can insert a fresh log row without leaving orphan 'running' rows behind.
 -- Requires migration 037 (widens the status CHECK).
 UPDATE external_sync_log
-SET completed_at = NOW(),
+SET completed_at = @completed_at::timestamptz,
     status = 'abandoned',
     error_message = 'abandoned by retry; worker did not finish'
-WHERE sync_state_id = $1 AND status = 'running';
+WHERE sync_state_id = @sync_state_id AND status = 'running';
 
 -- name: CountInFlightSyncJobs :one
 -- Counts river_job rows that represent an in-flight SyncProviderAccountJob
@@ -227,27 +227,33 @@ WHERE strategy = 'push' AND COALESCE(account_id, '') = @account_id::text;
 -- External Sync Log Queries
 
 -- name: CreateSyncLog :one
+-- Timestamps on this table are stamped by the caller from the app clock
+-- (accelerated.GetCurrentTime()), never SQL NOW(): the sync_log_trim cutoff is
+-- computed on the app clock, and under time acceleration a NOW()-stamped row
+-- would look weeks old the moment it was written.
 INSERT INTO external_sync_log (
     sync_state_id,
     source,
     account_id,
-    status
+    status,
+    started_at
 ) VALUES (
     @sync_state_id,
     @source,
     @account_id,
-    'running'
+    'running',
+    @started_at::timestamptz
 ) RETURNING *;
 
 -- name: CompleteSyncLog :one
 UPDATE external_sync_log
-SET completed_at = NOW(),
-    status = $2,
-    items_processed = $3,
-    items_matched = $4,
-    items_created = $5,
-    error_message = $6
-WHERE id = $1
+SET completed_at = @completed_at::timestamptz,
+    status = @status,
+    items_processed = @items_processed,
+    items_matched = @items_matched,
+    items_created = @items_created,
+    error_message = @error_message
+WHERE id = @id
 RETURNING *;
 
 -- name: GetSyncLog :one

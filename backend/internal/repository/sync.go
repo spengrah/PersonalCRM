@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"personal-crm/backend/internal/accelerated"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -513,6 +514,7 @@ func (r *SyncRepository) CreateSyncLog(ctx context.Context, state *SyncState) (*
 		SyncStateID: state.ID,
 		Source:      state.Source,
 		AccountID:   state.AccountID,
+		StartedAt:   accelerated.GetCurrentTime(),
 	})
 	if err != nil {
 		return nil, err
@@ -535,6 +537,7 @@ type CompleteSyncLogResult struct {
 func (r *SyncRepository) CompleteSyncLog(ctx context.Context, logID uuid.UUID, result CompleteSyncLogResult) (*SyncLog, error) {
 	dbLog, err := r.queries.CompleteSyncLog(ctx, db.CompleteSyncLogParams{
 		ID:             logID,
+		CompletedAt:    accelerated.GetCurrentTime(),
 		Status:         result.Status,
 		ItemsProcessed: &result.ItemsProcessed,
 		ItemsMatched:   &result.ItemsMatched,
@@ -648,7 +651,10 @@ func (r *SyncRepository) ListDueAccounts(ctx context.Context, now time.Time) ([]
 // Called at the start of a retry attempt so that orphan rows from a prior
 // crashed run don't accumulate. Requires migration 037.
 func (r *SyncRepository) AbandonRunningLogsForState(ctx context.Context, stateID uuid.UUID) error {
-	return r.queries.AbandonRunningLogsForState(ctx, stateID)
+	return r.queries.AbandonRunningLogsForState(ctx, db.AbandonRunningLogsForStateParams{
+		SyncStateID: stateID,
+		CompletedAt: accelerated.GetCurrentTime(),
+	})
 }
 
 // EnqueueAccountSyncIfNotInFlight atomically claims-and-enqueues the

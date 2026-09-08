@@ -25,21 +25,23 @@ func (s *stubSyncLogTrimmer) DeleteOldSyncLogs(_ context.Context, cutoff time.Ti
 	return s.deleted, s.err
 }
 
-// TestSyncLogTrimWorker_CutoffIsRetentionDaysBeforeNow pins the cutoff to
-// accelerated-now minus the configured window: a worker that used SQL NOW() or
-// the wrong sign would drift or delete everything.
-func TestSyncLogTrimWorker_CutoffIsRetentionDaysBeforeNow(t *testing.T) {
-	stub := &stubSyncLogTrimmer{deleted: 3}
-	worker := NewSyncLogTrimWorker(stub, 30)
+// TestSyncLogTrimWorker_CutoffIsRetentionDaysBeforeAppClock freezes the app
+// clock and uses a non-default window, so the cutoff is pinned exactly: a
+// worker reading wall time instead of the app clock, hardcoding 30, or getting
+// the sign wrong all miss the frozen value.
+func TestSyncLogTrimWorker_CutoffIsRetentionDaysBeforeAppClock(t *testing.T) {
+	frozen := time.Date(2030, time.March, 15, 12, 0, 0, 0, time.UTC)
+	restore := accelerated.SetNowForTest(func() time.Time { return frozen })
+	t.Cleanup(restore)
 
-	before := accelerated.GetCurrentTime()
+	stub := &stubSyncLogTrimmer{deleted: 3}
+	worker := NewSyncLogTrimWorker(stub, 7)
+
 	err := worker.Work(context.Background(), &river.Job[SyncLogTrimArgs]{})
-	after := accelerated.GetCurrentTime()
 	require.NoError(t, err)
 
 	require.Equal(t, 1, stub.calls)
-	require.False(t, stub.cutoff.Before(before.AddDate(0, 0, -30)), "cutoff earlier than now-30d")
-	require.False(t, stub.cutoff.After(after.AddDate(0, 0, -30)), "cutoff later than now-30d")
+	require.True(t, stub.cutoff.Equal(frozen.AddDate(0, 0, -7)), "cutoff %v, want %v", stub.cutoff, frozen.AddDate(0, 0, -7))
 }
 
 func TestSyncLogTrimWorker_WrapsRepositoryError(t *testing.T) {
@@ -47,5 +49,13 @@ func TestSyncLogTrimWorker_WrapsRepositoryError(t *testing.T) {
 	worker := NewSyncLogTrimWorker(&stubSyncLogTrimmer{err: boom}, 30)
 
 	err := worker.Work(context.Background(), &river.Job[SyncLogTrimArgs]{})
+	require.EqualError(t, err, "trim sync logs: boom")
 	require.ErrorIs(t, err, boom)
+}
+
+// TestSyncLogTrimWorker_Timeout pins the generous first-sweep budget; see the
+// Timeout doc comment for why it exceeds the sibling workers' 30s.
+func TestSyncLogTrimWorker_Timeout(t *testing.T) {
+	worker := NewSyncLogTrimWorker(&stubSyncLogTrimmer{}, 30)
+	require.Equal(t, 2*time.Minute, worker.Timeout(nil))
 }
