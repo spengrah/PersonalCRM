@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"personal-crm/backend/internal/accelerated"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -110,19 +111,18 @@ type SyncState struct {
 
 // SyncLog represents a sync run audit log entry
 type SyncLog struct {
-	ID             uuid.UUID      `json:"id"`
-	SyncStateID    uuid.UUID      `json:"sync_state_id"`
-	Source         string         `json:"source"`
-	AccountID      *string        `json:"account_id,omitempty"`
-	StartedAt      time.Time      `json:"started_at"`
-	CompletedAt    *time.Time     `json:"completed_at,omitempty"`
-	Status         string         `json:"status"`
-	ItemsProcessed int32          `json:"items_processed"`
-	ItemsMatched   int32          `json:"items_matched"`
-	ItemsCreated   int32          `json:"items_created"`
-	ErrorMessage   *string        `json:"error_message,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
-	CreatedAt      time.Time      `json:"created_at"`
+	ID             uuid.UUID  `json:"id"`
+	SyncStateID    uuid.UUID  `json:"sync_state_id"`
+	Source         string     `json:"source"`
+	AccountID      *string    `json:"account_id,omitempty"`
+	StartedAt      time.Time  `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	Status         string     `json:"status"`
+	ItemsProcessed int32      `json:"items_processed"`
+	ItemsMatched   int32      `json:"items_matched"`
+	ItemsCreated   int32      `json:"items_created"`
+	ErrorMessage   *string    `json:"error_message,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 // CreateSyncStateRequest holds parameters for creating a sync state
@@ -232,14 +232,6 @@ func convertDbSyncLog(dbLog *db.ExternalSyncLog) SyncLog {
 	// Convert nullable fields
 	log.AccountID = dbLog.AccountID
 	log.ErrorMessage = dbLog.ErrorMessage
-
-	// Convert JSONB metadata
-	if len(dbLog.Metadata) > 0 {
-		var metadata map[string]any
-		if err := json.Unmarshal(dbLog.Metadata, &metadata); err == nil {
-			log.Metadata = metadata
-		}
-	}
 
 	return log
 }
@@ -515,23 +507,14 @@ func (r *SyncRepository) MarkSyncStateTerminal(ctx context.Context, id uuid.UUID
 	return &state, nil
 }
 
-// CreateSyncLog creates a new sync log entry
+// CreateSyncLog opens a 'running' log row for a sync run. The row carries only
+// per-run counters and status; provider metadata lives solely on the state row.
 func (r *SyncRepository) CreateSyncLog(ctx context.Context, state *SyncState) (*SyncLog, error) {
-	// Convert metadata to JSON
-	var metadataBytes []byte
-	if state.Metadata != nil {
-		var err error
-		metadataBytes, err = json.Marshal(state.Metadata)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	dbLog, err := r.queries.CreateSyncLog(ctx, db.CreateSyncLogParams{
 		SyncStateID: state.ID,
 		Source:      state.Source,
 		AccountID:   state.AccountID,
-		Metadata:    metadataBytes,
+		StartedAt:   accelerated.GetCurrentTime(),
 	})
 	if err != nil {
 		return nil, err
@@ -554,6 +537,7 @@ type CompleteSyncLogResult struct {
 func (r *SyncRepository) CompleteSyncLog(ctx context.Context, logID uuid.UUID, result CompleteSyncLogResult) (*SyncLog, error) {
 	dbLog, err := r.queries.CompleteSyncLog(ctx, db.CompleteSyncLogParams{
 		ID:             logID,
+		CompletedAt:    accelerated.GetCurrentTime(),
 		Status:         result.Status,
 		ItemsProcessed: &result.ItemsProcessed,
 		ItemsMatched:   &result.ItemsMatched,
@@ -624,9 +608,24 @@ func (r *SyncRepository) CountSyncLogsByState(ctx context.Context, stateID uuid.
 	return r.queries.CountSyncLogsByState(ctx, stateID)
 }
 
-// DeleteOldSyncLogs deletes sync logs older than the given time
-func (r *SyncRepository) DeleteOldSyncLogs(ctx context.Context, before time.Time) error {
-	return r.queries.DeleteOldSyncLogs(ctx, &before)
+// DeleteOldSyncLogs deletes sync log rows whose started_at is before cutoff and
+// returns how many were removed. Called by scheduler.SyncLogTrimWorker.
+func (r *SyncRepository) DeleteOldSyncLogs(ctx context.Context, cutoff time.Time) (int64, error) {
+	n, err := r.queries.DeleteOldSyncLogs(ctx, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete old sync logs: %w", err)
+	}
+	return n, nil
+}
+
+// SetSyncLogStartedAtForTest backdates a log row's started_at. Test-only: lets
+// retention tests plant rows older than the trim cutoff. Production code must
+// never call this.
+func (r *SyncRepository) SetSyncLogStartedAtForTest(ctx context.Context, id uuid.UUID, startedAt time.Time) error {
+	return r.queries.SetSyncLogStartedAtForTest(ctx, db.SetSyncLogStartedAtForTestParams{
+		ID:        id,
+		StartedAt: startedAt,
+	})
 }
 
 // ListDueAccounts returns the (source, account_id) pairs of sync states
@@ -652,7 +651,10 @@ func (r *SyncRepository) ListDueAccounts(ctx context.Context, now time.Time) ([]
 // Called at the start of a retry attempt so that orphan rows from a prior
 // crashed run don't accumulate. Requires migration 037.
 func (r *SyncRepository) AbandonRunningLogsForState(ctx context.Context, stateID uuid.UUID) error {
-	return r.queries.AbandonRunningLogsForState(ctx, stateID)
+	return r.queries.AbandonRunningLogsForState(ctx, db.AbandonRunningLogsForStateParams{
+		SyncStateID: stateID,
+		CompletedAt: accelerated.GetCurrentTime(),
+	})
 }
 
 // EnqueueAccountSyncIfNotInFlight atomically claims-and-enqueues the

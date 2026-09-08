@@ -708,6 +708,90 @@ func TestConfig_River_JobSampleRetentionDays_FromEnv(t *testing.T) {
 	}
 }
 
+// TestConfig_Sync_LogRetentionDays_Default asserts the sync-log retention
+// window defaults when SYNC_LOG_RETENTION_DAYS is unset.
+func TestConfig_Sync_LogRetentionDays_Default(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	// Empty reads as unset (getEnvAsInt falls back on ""), so this pins the
+	// default even when the developer's shell exports the variable.
+	WithEnv(t, "SYNC_LOG_RETENTION_DAYS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	// Literal 30, not the constant: the default is a documented contract
+	// (.env.example, architecture.md), so a changed constant must fail here.
+	if cfg.Sync.LogRetentionDays != 30 {
+		t.Errorf("Expected default LogRetentionDays=30, got %d", cfg.Sync.LogRetentionDays)
+	}
+}
+
+// TestConfig_Sync_LogRetentionDays_FromEnv asserts SYNC_LOG_RETENTION_DAYS is
+// parsed from the environment.
+func TestConfig_Sync_LogRetentionDays_FromEnv(t *testing.T) {
+	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
+	WithEnv(t, "NODE_ENV", "development")
+	WithEnv(t, "SYNC_LOG_RETENTION_DAYS", "90")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if cfg.Sync.LogRetentionDays != 90 {
+		t.Errorf("Expected LogRetentionDays=90, got %d", cfg.Sync.LogRetentionDays)
+	}
+}
+
+// TestConfig_Validate_SyncLogRetentionDays exercises the [1, 365] range.
+func TestConfig_Validate_SyncLogRetentionDays(t *testing.T) {
+	tests := []struct {
+		name    string
+		days    int
+		wantErr bool
+	}{
+		{"zero", 0, true},
+		{"negative", -1, true},
+		{"at_min", 1, false},
+		{"default", DefaultSyncLogRetentionDays, false},
+		{"at_max", 365, false},
+		{"above_max", 366, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := TestConfig()
+			cfg.Sync.LogRetentionDays = tt.days
+
+			err := cfg.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Expected validation error for days=%d", tt.days)
+				}
+				verr, ok := err.(ValidationErrors)
+				if !ok {
+					t.Fatalf("Expected ValidationErrors, got %T", err)
+				}
+				found := false
+				for _, e := range verr {
+					if e.Field == "SYNC_LOG_RETENTION_DAYS" {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected SYNC_LOG_RETENTION_DAYS validation error, got %v", err)
+				}
+			} else if err != nil {
+				t.Errorf("Unexpected validation error for days=%d: %v", tt.days, err)
+			}
+		})
+	}
+}
+
 // TestConfig_Validate_RiverJobSampleRetentionDays exercises the [1, 365] range.
 func TestConfig_Validate_RiverJobSampleRetentionDays(t *testing.T) {
 	tests := []struct {

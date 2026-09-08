@@ -308,7 +308,6 @@ type ExternalSyncLog struct {
 	ItemsMatched   *int32     `json:"items_matched"`
 	ItemsCreated   *int32     `json:"items_created"`
 	ErrorMessage   *string    `json:"error_message"`
-	Metadata       []byte     `json:"metadata"`
 	CreatedAt      *time.Time `json:"created_at"`
 }
 

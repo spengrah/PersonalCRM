@@ -14,50 +14,57 @@ import (
 
 const AbandonRunningLogsForState = `-- name: AbandonRunningLogsForState :exec
 UPDATE external_sync_log
-SET completed_at = NOW(),
+SET completed_at = $1::timestamptz,
     status = 'abandoned',
     error_message = 'abandoned by retry; worker did not finish'
-WHERE sync_state_id = $1 AND status = 'running'
+WHERE sync_state_id = $2 AND status = 'running'
 `
+
+type AbandonRunningLogsForStateParams struct {
+	CompletedAt time.Time `json:"completed_at"`
+	SyncStateID uuid.UUID `json:"sync_state_id"`
+}
 
 // Called at the start of a retry attempt: marks any pre-existing 'running'
 // log row for this sync_state as 'abandoned' so that the new retry attempt
 // can insert a fresh log row without leaving orphan 'running' rows behind.
 // Requires migration 037 (widens the status CHECK).
-func (q *Queries) AbandonRunningLogsForState(ctx context.Context, syncStateID uuid.UUID) error {
-	_, err := q.db.Exec(ctx, AbandonRunningLogsForState, syncStateID)
+func (q *Queries) AbandonRunningLogsForState(ctx context.Context, arg AbandonRunningLogsForStateParams) error {
+	_, err := q.db.Exec(ctx, AbandonRunningLogsForState, arg.CompletedAt, arg.SyncStateID)
 	return err
 }
 
 const CompleteSyncLog = `-- name: CompleteSyncLog :one
 UPDATE external_sync_log
-SET completed_at = NOW(),
+SET completed_at = $1::timestamptz,
     status = $2,
     items_processed = $3,
     items_matched = $4,
     items_created = $5,
     error_message = $6
-WHERE id = $1
-RETURNING id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at
+WHERE id = $7
+RETURNING id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, created_at
 `
 
 type CompleteSyncLogParams struct {
-	ID             uuid.UUID `json:"id"`
+	CompletedAt    time.Time `json:"completed_at"`
 	Status         string    `json:"status"`
 	ItemsProcessed *int32    `json:"items_processed"`
 	ItemsMatched   *int32    `json:"items_matched"`
 	ItemsCreated   *int32    `json:"items_created"`
 	ErrorMessage   *string   `json:"error_message"`
+	ID             uuid.UUID `json:"id"`
 }
 
 func (q *Queries) CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams) (*ExternalSyncLog, error) {
 	row := q.db.QueryRow(ctx, CompleteSyncLog,
-		arg.ID,
+		arg.CompletedAt,
 		arg.Status,
 		arg.ItemsProcessed,
 		arg.ItemsMatched,
 		arg.ItemsCreated,
 		arg.ErrorMessage,
+		arg.ID,
 	)
 	var i ExternalSyncLog
 	err := row.Scan(
@@ -72,7 +79,6 @@ func (q *Queries) CompleteSyncLog(ctx context.Context, arg CompleteSyncLogParams
 		&i.ItemsMatched,
 		&i.ItemsCreated,
 		&i.ErrorMessage,
-		&i.Metadata,
 		&i.CreatedAt,
 	)
 	return &i, err
@@ -123,30 +129,35 @@ INSERT INTO external_sync_log (
     source,
     account_id,
     status,
-    metadata
+    started_at
 ) VALUES (
     $1,
     $2,
     $3,
     'running',
-    COALESCE($4::jsonb, '{}'::jsonb)
-) RETURNING id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at
+    $4::timestamptz
+) RETURNING id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, created_at
 `
 
 type CreateSyncLogParams struct {
 	SyncStateID uuid.UUID `json:"sync_state_id"`
 	Source      string    `json:"source"`
 	AccountID   *string   `json:"account_id"`
-	Metadata    []byte    `json:"metadata"`
+	StartedAt   time.Time `json:"started_at"`
 }
 
 // External Sync Log Queries
+// started_at and completed_at are stamped by the caller from the app clock
+// (accelerated.GetCurrentTime()), never SQL NOW(): the sync_log_trim cutoff is
+// computed on the app clock, and under time acceleration a NOW()-stamped row
+// would look weeks old the moment it was written. created_at keeps its
+// database default; nothing reads it against the app clock.
 func (q *Queries) CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*ExternalSyncLog, error) {
 	row := q.db.QueryRow(ctx, CreateSyncLog,
 		arg.SyncStateID,
 		arg.Source,
 		arg.AccountID,
-		arg.Metadata,
+		arg.StartedAt,
 	)
 	var i ExternalSyncLog
 	err := row.Scan(
@@ -161,7 +172,6 @@ func (q *Queries) CreateSyncLog(ctx context.Context, arg CreateSyncLogParams) (*
 		&i.ItemsMatched,
 		&i.ItemsCreated,
 		&i.ErrorMessage,
-		&i.Metadata,
 		&i.CreatedAt,
 	)
 	return &i, err
@@ -247,14 +257,20 @@ func (q *Queries) DeleteMacHostSyncStates(ctx context.Context, accountID string)
 	return result.RowsAffected(), nil
 }
 
-const DeleteOldSyncLogs = `-- name: DeleteOldSyncLogs :exec
+const DeleteOldSyncLogs = `-- name: DeleteOldSyncLogs :execrows
 DELETE FROM external_sync_log
-WHERE created_at < $1
+WHERE started_at < $1::timestamptz
 `
 
-func (q *Queries) DeleteOldSyncLogs(ctx context.Context, createdAt *time.Time) error {
-	_, err := q.db.Exec(ctx, DeleteOldSyncLogs, createdAt)
-	return err
+// Housekeeping DELETE run by the sync_log_trim periodic worker. Cutoff is
+// accelerated-now minus the retention window, computed by the caller (NOT SQL
+// NOW()). Filters on started_at, which is indexed (idx_external_sync_log_started_at).
+func (q *Queries) DeleteOldSyncLogs(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteOldSyncLogs, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const DeleteSyncState = `-- name: DeleteSyncState :exec
@@ -322,7 +338,7 @@ func (q *Queries) GetMacHostSyncState(ctx context.Context, arg GetMacHostSyncSta
 }
 
 const GetSyncLog = `-- name: GetSyncLog :one
-SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at FROM external_sync_log
+SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, created_at FROM external_sync_log
 WHERE id = $1
 `
 
@@ -341,7 +357,6 @@ func (q *Queries) GetSyncLog(ctx context.Context, id uuid.UUID) (*ExternalSyncLo
 		&i.ItemsMatched,
 		&i.ItemsCreated,
 		&i.ErrorMessage,
-		&i.Metadata,
 		&i.CreatedAt,
 	)
 	return &i, err
@@ -587,7 +602,7 @@ func (q *Queries) ListEnabledSyncStatesBySource(ctx context.Context, source stri
 }
 
 const ListRecentSyncLogs = `-- name: ListRecentSyncLogs :many
-SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at FROM external_sync_log
+SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, created_at FROM external_sync_log
 ORDER BY started_at DESC
 LIMIT $1
 `
@@ -613,7 +628,6 @@ func (q *Queries) ListRecentSyncLogs(ctx context.Context, limit int32) ([]*Exter
 			&i.ItemsMatched,
 			&i.ItemsCreated,
 			&i.ErrorMessage,
-			&i.Metadata,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -627,7 +641,7 @@ func (q *Queries) ListRecentSyncLogs(ctx context.Context, limit int32) ([]*Exter
 }
 
 const ListSyncLogsByState = `-- name: ListSyncLogsByState :many
-SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, metadata, created_at FROM external_sync_log
+SELECT id, sync_state_id, source, account_id, started_at, completed_at, status, items_processed, items_matched, items_created, error_message, created_at FROM external_sync_log
 WHERE sync_state_id = $1
 ORDER BY started_at DESC
 LIMIT $2 OFFSET $3
@@ -660,7 +674,6 @@ func (q *Queries) ListSyncLogsByState(ctx context.Context, arg ListSyncLogsBySta
 			&i.ItemsMatched,
 			&i.ItemsCreated,
 			&i.ErrorMessage,
-			&i.Metadata,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -801,6 +814,25 @@ func (q *Queries) ResetSyncStateBackfillCursor(ctx context.Context, arg ResetSyn
 		&i.UpdatedAt,
 	)
 	return &i, err
+}
+
+const SetSyncLogStartedAtForTest = `-- name: SetSyncLogStartedAtForTest :exec
+UPDATE external_sync_log
+SET started_at = $1
+WHERE id = $2
+`
+
+type SetSyncLogStartedAtForTestParams struct {
+	StartedAt time.Time `json:"started_at"`
+	ID        uuid.UUID `json:"id"`
+}
+
+// Test-only: backdates a log row's started_at so retention tests can plant rows
+// older than the cutoff without driving the real write path (which always
+// stamps the current app-clock time). Production code must never call this.
+func (q *Queries) SetSyncLogStartedAtForTest(ctx context.Context, arg SetSyncLogStartedAtForTestParams) error {
+	_, err := q.db.Exec(ctx, SetSyncLogStartedAtForTest, arg.StartedAt, arg.ID)
+	return err
 }
 
 const SetSyncStateFreshnessForTest = `-- name: SetSyncStateFreshnessForTest :exec

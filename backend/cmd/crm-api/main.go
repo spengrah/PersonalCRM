@@ -375,6 +375,9 @@ func run() int {
 	registerJobSampleWorkers(reg, jobSampleRepo, cfg)
 	jobSampleWait := startJobSampleRecorder(ctx, riverClient, jobSampleRepo)
 
+	// external_sync_log retention (daily trim periodic job).
+	registerSyncLogTrim(reg, repository.NewSyncRepository(database.Queries), cfg)
+
 	if err := riverClient.Start(ctx); err != nil {
 		logger.Fatal().Err(err).Msg("failed to start river client")
 	}

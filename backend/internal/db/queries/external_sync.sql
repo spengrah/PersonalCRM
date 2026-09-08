@@ -42,10 +42,10 @@ ORDER BY next_sync_at ASC NULLS FIRST;
 -- can insert a fresh log row without leaving orphan 'running' rows behind.
 -- Requires migration 037 (widens the status CHECK).
 UPDATE external_sync_log
-SET completed_at = NOW(),
+SET completed_at = @completed_at::timestamptz,
     status = 'abandoned',
     error_message = 'abandoned by retry; worker did not finish'
-WHERE sync_state_id = $1 AND status = 'running';
+WHERE sync_state_id = @sync_state_id AND status = 'running';
 
 -- name: CountInFlightSyncJobs :one
 -- Counts river_job rows that represent an in-flight SyncProviderAccountJob
@@ -227,29 +227,34 @@ WHERE strategy = 'push' AND COALESCE(account_id, '') = @account_id::text;
 -- External Sync Log Queries
 
 -- name: CreateSyncLog :one
+-- started_at and completed_at are stamped by the caller from the app clock
+-- (accelerated.GetCurrentTime()), never SQL NOW(): the sync_log_trim cutoff is
+-- computed on the app clock, and under time acceleration a NOW()-stamped row
+-- would look weeks old the moment it was written. created_at keeps its
+-- database default; nothing reads it against the app clock.
 INSERT INTO external_sync_log (
     sync_state_id,
     source,
     account_id,
     status,
-    metadata
+    started_at
 ) VALUES (
     @sync_state_id,
     @source,
     @account_id,
     'running',
-    COALESCE(@metadata::jsonb, '{}'::jsonb)
+    @started_at::timestamptz
 ) RETURNING *;
 
 -- name: CompleteSyncLog :one
 UPDATE external_sync_log
-SET completed_at = NOW(),
-    status = $2,
-    items_processed = $3,
-    items_matched = $4,
-    items_created = $5,
-    error_message = $6
-WHERE id = $1
+SET completed_at = @completed_at::timestamptz,
+    status = @status,
+    items_processed = @items_processed,
+    items_matched = @items_matched,
+    items_created = @items_created,
+    error_message = @error_message
+WHERE id = @id
 RETURNING *;
 
 -- name: GetSyncLog :one
@@ -271,9 +276,20 @@ LIMIT $1;
 SELECT COUNT(*) FROM external_sync_log
 WHERE sync_state_id = $1;
 
--- name: DeleteOldSyncLogs :exec
+-- name: DeleteOldSyncLogs :execrows
+-- Housekeeping DELETE run by the sync_log_trim periodic worker. Cutoff is
+-- accelerated-now minus the retention window, computed by the caller (NOT SQL
+-- NOW()). Filters on started_at, which is indexed (idx_external_sync_log_started_at).
 DELETE FROM external_sync_log
-WHERE created_at < $1;
+WHERE started_at < @cutoff::timestamptz;
+
+-- name: SetSyncLogStartedAtForTest :exec
+-- Test-only: backdates a log row's started_at so retention tests can plant rows
+-- older than the cutoff without driving the real write path (which always
+-- stamps the current app-clock time). Production code must never call this.
+UPDATE external_sync_log
+SET started_at = @started_at
+WHERE id = @id;
 
 -- name: SetSyncStateFreshnessForTest :exec
 -- Test-only: stamps the freshness/error columns of an external_sync_state
