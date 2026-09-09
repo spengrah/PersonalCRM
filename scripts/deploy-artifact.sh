@@ -78,7 +78,9 @@ ntfy() {
     if [ "$NTFY_ENABLED" != true ]; then
         return 0
     fi
-    if ! curl -fsS \
+    # Bounded: an ntfy server that accepts the connection and then stalls would
+    # otherwise hang the deploy at whichever notification point it reached.
+    if ! curl -fsS --connect-timeout 5 --max-time 15 \
         -H "Title: $title" -H "Priority: $priority" -H "Tags: $tags" \
         -d "$body" "$NTFY_URL/$NTFY_TOPIC" >/dev/null 2>&1; then
         echo "warning: ntfy POST failed (deploy outcome unchanged)" >&2
