@@ -30,6 +30,7 @@ A single-user, local-first customer relationship management system with AI-power
 - Go 1.25+
 - Bun 1.0+ (for frontend)
 - Make
+- `age`, `rclone`, `zstd` (`brew install age rclone zstd`): the offsite backup round-trip test in `make test-deploy-scripts` uses the real tools and runs in the pre-push hook
 
 ## Environment Variables
 
@@ -386,15 +387,9 @@ sudo systemctl restart personalcrm.target
 
 ### Backup
 
-**Backup database**:
-```bash
-docker exec crm-postgres pg_dump -U crm_user personal_crm > backup.sql
-```
+Nightly off-device encrypted backups are configured with the [backup runbook](infra/backup/README.md).
 
-**Restore database**:
-```bash
-cat backup.sql | docker exec -i crm-postgres psql -U crm_user personal_crm
-```
+The `scripts/backup-db.sh` and `scripts/restore-db.sh` scripts remain the pre-deploy cold snapshot and rollback path.
 
 ### Security
 

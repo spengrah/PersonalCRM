@@ -1,0 +1,7 @@
+[Unit]
+Description=PersonalCRM offsite encrypted database backup
+
+[Service]
+Type=oneshot
+EnvironmentFile=/srv/personalcrm/backup.env
+ExecStart=/srv/personalcrm/bin/backup-offsite.sh

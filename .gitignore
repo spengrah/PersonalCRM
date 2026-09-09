@@ -273,6 +273,8 @@ known_hosts
 *.tmp
 backup/
 backups/
+# The offsite backup units and runbook are source, not backup output.
+!infra/backup/
 
 # Temporary files
 temp/
