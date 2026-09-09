@@ -25,12 +25,12 @@ Create one Backblaze B2 bucket with these settings:
 | Prefix | Hide after upload | Delete after hiding |
 | --- | ---: | ---: |
 | `personal_crm-` | 30 days | 1 day |
-| `personal_crm_predeploy-` | 90 days | 1 day |
+| `personal_crm_predeploy-` | 30 days | 1 day |
 | `personalcrm-env-` | 30 days | 1 day |
 
 B2 buckets default to keeping all versions. Replace that default with the three lifecycle rules, or the bucket will grow without the intended retention limit.
 
-Apply the rules with an administrator credential through the B2 console or the `b2_update_bucket` API. The request must use the named bucket's id and include all three prefixes with `daysFromHidingToDeleting: 1`; use `daysFromUploadingToHiding: 30` for the nightly and environment prefixes and `90` for the pre-deploy prefix. Keep object lock disabled and the bucket default encryption mode set to `none`.
+Apply the rules with an administrator credential through the B2 console or the `b2_update_bucket` API. The request must use the named bucket's id and include all three prefixes, `daysFromUploadingToHiding: 30`, and `daysFromHidingToDeleting: 1`. Keep object lock disabled and the bucket default encryption mode set to `none`.
 
 ## Create the restricted application key
 
@@ -192,7 +192,7 @@ Install PostgreSQL, `age`, `rclone`, and `zstd` on the replacement machine. Reco
 
 Both units declare `OnFailure=personalcrm-ntfy-failure@%n.service`, so a failed backup or verify posts the unit name and host to ntfy at high priority. The message deliberately carries no database facts: verify's error text quotes row counts, and an ntfy topic is readable by anyone holding it. Read the detail from the journal on the host instead.
 
-The topic comes from `/etc/personalcrm/ntfy.env`, the same file `deploy-artifact.sh` uses, so rotating the topic is a one-file change. That file is root-owned; the installer adds `crm` group read access because the notifier runs as the tenant. If the file is missing, the installer warns and failures go unreported, which is why it says so loudly rather than continuing in silence.
+The topic comes from `/etc/personalcrm/ntfy.env`, the same file `deploy-artifact.sh` uses, so rotating the topic is a one-file change. That file and its directory are root-owned; the installer adds `crm` group read access to the file and traversal on the directory because the notifier runs as the tenant, then proves the read as `crm` and fails if it cannot. If the file is missing, the installer warns and failures go unreported, which is why it says so loudly rather than continuing in silence.
 
 Notifications cover runs that happened and failed. A run that never happens sends nothing, since a push relay cannot report silence. That is an accepted limitation: the timers share a tenant with the CRM containers, so anything that silently stops them also stops the CRM, which you notice. The weekly verify is the backstop, because it fails when the newest object is more than 36 hours old, and that failure does notify.
 
