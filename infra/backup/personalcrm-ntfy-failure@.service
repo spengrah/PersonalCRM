@@ -1,8 +1,12 @@
 [Unit]
-Description=Report %I failure to ntfy
+Description=Report %i failure to ntfy
 # No OnFailure= here on purpose: a notifier that notifies about its own failure
 # is a loop. Its own errors land in the journal.
 
 [Service]
 Type=oneshot
-ExecStart=/srv/personalcrm/bin/notify-unit-failure.sh %I
+# %i, not %I: OnFailure passes the unit name verbatim as the instance, and %I
+# would unescape it, turning personalcrm-backup.service into
+# personalcrm/backup.service, a unit that does not exist and whose journal
+# query returns nothing.
+ExecStart=/srv/personalcrm/bin/notify-unit-failure.sh %i

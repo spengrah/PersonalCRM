@@ -535,9 +535,9 @@ test_units_reference_the_notifier() {
         if grep -q '^OnFailure=personalcrm-ntfy-failure@%n\.service$' "$REPO_ROOT/infra/backup/$u"; then ok
         else fail "$u does not declare the OnFailure notifier"; fi
     done
-    if grep -q '^ExecStart=/srv/personalcrm/bin/notify-unit-failure\.sh %I$' \
+    if grep -q '^ExecStart=/srv/personalcrm/bin/notify-unit-failure\.sh %i$' \
         "$REPO_ROOT/infra/backup/personalcrm-ntfy-failure@.service"; then ok
-    else fail "the notifier template does not invoke the installed script with the instance name"; fi
+    else fail "the notifier template must pass the verbatim instance name with %i, not the unescaped %I"; fi
     # A notifier that can fail its way into its own OnFailure loops forever.
     if grep -q '^OnFailure=' "$REPO_ROOT/infra/backup/personalcrm-ntfy-failure@.service"; then
         fail "the notifier template declares its own OnFailure handler"
