@@ -23,10 +23,11 @@ fi
 
 CRM_UID="$(id -u "$CRM_USER")"
 install -d -o "$CRM_USER" -g "$CRM_USER" -m 0755 "$INSTALL_BIN_DIR"
-# install -d only chowns the leaf, so create each level under the tenant home
-# explicitly or a missing .config/systemd ends up root-owned.
+# install -d only chowns the leaf and rewrites owner and mode on directories
+# that already exist, so create each missing level under the tenant home and
+# leave existing ones alone (a 0700 .config stays 0700).
 for dir in "$CRM_HOME/.config" "$CRM_HOME/.config/systemd" "$INSTALL_UNIT_DIR"; do
-    install -d -o "$CRM_USER" -g "$CRM_USER" -m 0755 "$dir"
+    [ -d "$dir" ] || install -d -o "$CRM_USER" -g "$CRM_USER" -m 0755 "$dir"
 done
 
 for script in backup-offsite.sh verify-offsite-backup.sh restore-offsite.sh; do

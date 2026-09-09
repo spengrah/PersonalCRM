@@ -6,6 +6,7 @@ BACKUP_SCRIPT="$REPO_ROOT/scripts/backup-offsite.sh"
 VERIFY_SCRIPT="$REPO_ROOT/scripts/verify-offsite-backup.sh"
 RESTORE_SCRIPT="$REPO_ROOT/scripts/restore-offsite.sh"
 ORIGINAL_PATH="$PATH"
+REAL_RCLONE="$(command -v rclone || true)"
 
 PASS=0
 FAIL=0
@@ -125,6 +126,19 @@ esac
 EOF
     chmod +x "$SANDBOX/bin/pgstub"
 
+    # rclone wrapper: real rclone, except `lsf` fails on demand so the
+    # post-upload confirmation path can be exercised without a broken remote.
+    cat > "$SANDBOX/bin/rclone" <<EOF
+#!/bin/bash
+if [ "\${STUB_RCLONE_LSF_FAIL:-}" = 1 ] && [ "\${1:-}" = lsf ]; then
+    echo "stub: listing unavailable" >&2
+    exit 1
+fi
+exec "$REAL_RCLONE" "\$@"
+EOF
+    chmod +x "$SANDBOX/bin/rclone"
+
+    STUB_RCLONE_LSF_FAIL=""
     STUB_PG_DUMP_EXIT=""
     STUB_DB_EXISTS=""
     STUB_MIGRATION_VERSION_personal_crm=81
@@ -145,6 +159,7 @@ run_backup() {
         AGE_RECIPIENT="$AGE_RECIPIENT" CRM_ENV_FILE="$FIXTURE_ENV" \
         PG_EXEC="$SANDBOX/bin/pgstub" TMPDIR="$SANDBOX/tmp" \
         STUB_PG_DUMP_EXIT="${STUB_PG_DUMP_EXIT:-}" \
+        STUB_RCLONE_LSF_FAIL="${STUB_RCLONE_LSF_FAIL:-}" \
         bash "$BACKUP_SCRIPT" 2>"$SANDBOX/stderr"
     )"
     RC=$?
@@ -263,6 +278,18 @@ test_backup_dump_failure_cleans_partial() {
     if [ -z "$(list_db_objects)" ]; then ok; else fail "partial database object remained"; fi
     if [ -z "$(list_env_objects)" ]; then ok; else fail "environment object was uploaded after database failure"; fi
     assert_tmp_empty
+    cleanup_sandbox
+}
+
+test_backup_confirm_failure_keeps_object() {
+    echo "test: a listing failure after upload exits non-zero but leaves the object in place"
+    make_sandbox
+    STUB_RCLONE_LSF_FAIL=1
+    run_backup
+    if [ "$RC" -ne 0 ]; then ok; else fail "confirm failure should make backup exit non-zero"; fi
+    if grep -q 'missing or empty' "$SANDBOX/stderr"; then ok
+    else fail "backup stderr did not report the failed confirmation"; fi
+    if [ -n "$(list_db_objects)" ]; then ok; else fail "unconfirmed database object was hidden or deleted"; fi
     cleanup_sandbox
 }
 
@@ -435,6 +462,7 @@ test_identifier_guards_reject_before_any_database_call() {
 main() {
     test_backup_happy_path
     test_backup_dump_failure_cleans_partial
+    test_backup_confirm_failure_keeps_object
     test_verify_happy_path
     test_verify_stale_before_database
     test_verify_migration_mismatch
