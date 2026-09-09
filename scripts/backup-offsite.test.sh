@@ -155,11 +155,13 @@ cleanup_sandbox() {
 }
 
 run_backup() {
+    local backup_kind="${1:-}"
     OUT="$(
         PATH="$SANDBOX/bin:$ORIGINAL_PATH" \
         RCLONE_CONFIG="$RCLONE_CONFIG" \
         BACKUP_REMOTE=local BACKUP_BUCKET="$SANDBOX/remote" \
         AGE_RECIPIENT="$AGE_RECIPIENT" CRM_ENV_FILE="$FIXTURE_ENV" \
+        BACKUP_KIND="$backup_kind" \
         PG_EXEC="$SANDBOX/bin/pgstub" TMPDIR="$SANDBOX/tmp" \
         STUB_PG_DUMP_EXIT="${STUB_PG_DUMP_EXIT:-}" \
         STUB_RCLONE_LSF_FAIL="${STUB_RCLONE_LSF_FAIL:-}" \
@@ -207,6 +209,10 @@ list_db_objects() {
 
 list_env_objects() {
     RCLONE_CONFIG="$RCLONE_CONFIG" rclone lsf "$REMOTE_PATH" --files-only --include 'personalcrm-env-*.age'
+}
+
+list_all_objects() {
+    RCLONE_CONFIG="$RCLONE_CONFIG" rclone lsf "$REMOTE_PATH" --files-only
 }
 
 newest_db_object() {
@@ -270,6 +276,28 @@ test_backup_happy_path() {
     cleanup_sandbox
 }
 
+test_backup_kinds() {
+    echo "test: backup kind selects the database object prefix and rejects unknown kinds"
+    make_sandbox
+    run_backup predeploy
+    if [ "$RC" -eq 0 ]; then ok; else fail "predeploy backup should exit 0, got $RC"; fi
+    predeploy_db_objects="$(RCLONE_CONFIG="$RCLONE_CONFIG" rclone lsf "$REMOTE_PATH" \
+        --files-only --include 'personal_crm_predeploy-*.sql.zst.age')"
+    if [[ "$predeploy_db_objects" =~ ^personal_crm_predeploy-[0-9]{8}T[0-9]{6}Z\.sql\.zst\.age$ ]]; then ok
+    else fail "predeploy database object name has the wrong pattern: $predeploy_db_objects"; fi
+    if [[ "$(list_env_objects)" =~ ^personalcrm-env-[0-9]{8}T[0-9]{6}Z\.age$ ]]; then ok
+    else fail "predeploy environment object name has the wrong pattern: $(list_env_objects)"; fi
+    remote_before="$(list_all_objects)"
+    run_backup bogus
+    if [ "$RC" -ne 0 ]; then ok; else fail "unknown backup kind should exit non-zero"; fi
+    if grep -q 'backup error:' "$SANDBOX/stderr"; then ok
+    else fail "unknown backup kind did not print a backup error"; fi
+    remote_after="$(list_all_objects)"
+    if [ "$remote_after" = "$remote_before" ]; then ok
+    else fail "unknown backup kind uploaded new objects"; fi
+    cleanup_sandbox
+}
+
 test_backup_dump_failure_cleans_partial() {
     echo "test: pg_dump failure removes the partial database object and skips env upload"
     make_sandbox
@@ -330,6 +358,9 @@ test_verify_stale_before_database() {
     old_ts="$(date -u -d '48 hours ago' +%Y%m%dT%H%M%SZ 2>/dev/null || date -u -v-48H +%Y%m%dT%H%M%SZ)"
     old_object="personal_crm-$old_ts.sql.zst.age"
     write_db_object "$old_object"
+    fresh_ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    fresh_object="personal_crm_predeploy-$fresh_ts.sql.zst.age"
+    write_db_object "$fresh_object"
     run_verify
     if [ "$RC" -ne 0 ]; then ok; else fail "stale backup should make verify exit non-zero"; fi
     if grep -qi stale "$SANDBOX/stderr"; then ok; else fail "stale verify failure did not say stale"; fi
@@ -431,6 +462,30 @@ test_restore_explicit_live_name_never_drops() {
         if grep -qi 'DROP' "$CALL_LOG"; then fail "restore must never issue a DROP"; else ok; fi
     fi
     assert_tmp_empty
+    cleanup_sandbox
+}
+
+test_restore_object_name_shapes() {
+    echo "test: restore accepts predeploy database objects and rejects near-miss names"
+    make_sandbox
+    predeploy_object="personal_crm_predeploy-20260101T000000Z.sql.zst.age"
+    write_db_object "$predeploy_object"
+    : > "$CALL_LOG"
+    run_restore "$predeploy_object"
+    if [ "$RC" -eq 0 ]; then ok; else fail "predeploy restore should exit 0, got $RC"; fi
+    if grep -q '\[-d\] \[personal_crm_restore\]' "$CALL_LOG"; then ok
+    else fail "predeploy restore did not target personal_crm_restore"; fi
+
+    for invalid_object in \
+        "personal_crm_predeployX-20260101T000000Z.sql.zst.age" \
+        "personal_crm-predeploy-20260101T000000Z.sql.zst.age"; do
+        : > "$CALL_LOG"
+        run_restore "$invalid_object"
+        if [ "$RC" -eq 2 ]; then ok
+        else fail "restore accepted invalid object name '$invalid_object'"; fi
+        if [ ! -s "$CALL_LOG" ]; then ok
+        else fail "restore called rclone or psql for invalid object '$invalid_object'"; fi
+    done
     cleanup_sandbox
 }
 
@@ -559,8 +614,33 @@ test_units_reference_the_notifier() {
     else fail "install.sh does not install the notifier script and unit"; fi
 }
 
+test_predeploy_unit_wiring() {
+    echo "test: predeploy unit wiring and installer inclusion"
+    local predeploy_unit="$REPO_ROOT/infra/backup/personalcrm-backup-predeploy.service"
+    local nightly_exec predeploy_exec kind_line env_file_line
+    if [ -f "$predeploy_unit" ]; then ok
+    else fail "predeploy backup unit is missing"; fi
+    kind_line="$(grep -n '^Environment=BACKUP_KIND=predeploy$' "$predeploy_unit" | head -1 | cut -d: -f1 || true)"
+    env_file_line="$(grep -n '^EnvironmentFile=' "$predeploy_unit" | head -1 | cut -d: -f1 || true)"
+    if [ -n "$kind_line" ] && [ -n "$env_file_line" ] && [ "$kind_line" -lt "$env_file_line" ]; then ok
+    else fail "predeploy BACKUP_KIND must precede EnvironmentFile"; fi
+    if grep -q '^TimeoutStartSec=' "$predeploy_unit"; then ok
+    else fail "predeploy unit has no startup timeout"; fi
+    if grep -q '^OnFailure=' "$predeploy_unit"; then fail "predeploy unit must not declare OnFailure"; else ok; fi
+    nightly_exec="$(sed -n 's/^ExecStart=//p' "$REPO_ROOT/infra/backup/personalcrm-backup.service")"
+    predeploy_exec="$(sed -n 's/^ExecStart=//p' "$predeploy_unit")"
+    if [ -n "$nightly_exec" ] && [ "$predeploy_exec" = "$nightly_exec" ]; then ok
+    else fail "predeploy unit ExecStart differs from nightly unit"; fi
+    if grep -q 'personalcrm-backup-predeploy.service' "$REPO_ROOT/infra/backup/install.sh"; then ok
+    else fail "install.sh does not install the predeploy unit"; fi
+    if grep -q 'BACKUP_KIND' "$REPO_ROOT/infra/backup/backup.env.example"; then
+        fail "backup.env.example must not set BACKUP_KIND"
+    else ok; fi
+}
+
 main() {
     test_backup_happy_path
+    test_backup_kinds
     test_backup_dump_failure_cleans_partial
     test_backup_confirm_failure_keeps_object
     test_verify_happy_path
@@ -570,10 +650,12 @@ main() {
     test_verify_corruption
     test_restore_targets
     test_restore_explicit_live_name_never_drops
+    test_restore_object_name_shapes
     test_identifier_guards_reject_before_any_database_call
     test_notify_posts_without_leaking_the_topic
     test_notify_degrades_open
     test_units_reference_the_notifier
+    test_predeploy_unit_wiring
 
     echo ""
     echo "===================="

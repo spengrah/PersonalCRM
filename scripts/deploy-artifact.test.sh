@@ -268,6 +268,8 @@ test_sha_validation() {
         if [ "$RC" -ne 2 ]; then fail "bad SHA '$bad' should exit 2, got $RC"; else ok; fi
         # No DB / image op may run on a bad arg.
         if log_has "podman pull"; then fail "bad SHA '$bad' pulled an image"; else ok; fi
+        if log_lacks "personalcrm-backup-predeploy.service"; then ok
+        else fail "bad SHA '$bad' started the predeploy backup"; fi
         cleanup_sandbox
     done
 
@@ -361,6 +363,69 @@ test_rootless_env_on_every_call() {
     else fail "bare podman calls ($n_podman) != sudo-wrapped ($n_sudo_podman)"; fi
     if [ "$n_systemctl" -ge 1 ] && [ "$n_systemctl" -eq "$n_sudo_systemctl" ]; then ok
     else fail "bare systemctl calls ($n_systemctl) != sudo-wrapped ($n_sudo_systemctl)"; fi
+    cleanup_sandbox
+}
+
+test_predeploy_backup_ordering() {
+    echo "test: predeploy backup runs after pulls and before migrate-check"
+    make_sandbox
+    STUB_MIGRATE_CHECK_RC=0 run_deploy "$VALID_SHA"
+    local i_backend_pull i_frontend_pull i_backup i_migrate i_stop
+    i_backend_pull="$(log_idx "podman pull ghcr.io/spengrah/personalcrm-backend:$NEW_SHA")"
+    i_frontend_pull="$(log_idx "podman pull ghcr.io/spengrah/personalcrm-frontend:$NEW_SHA")"
+    i_backup="$(log_idx 'systemctl --user start personalcrm-backup-predeploy.service')"
+    i_migrate="$(grep -nF 'podman run' "$CALL_LOG" | grep -F -- '--migrate-check' | head -1 | cut -d: -f1)"
+    if [ -n "$i_backend_pull" ] && [ -n "$i_frontend_pull" ] && [ -n "$i_backup" ] && \
+        [ -n "$i_migrate" ] && [ "$i_backend_pull" -lt "$i_backup" ] && \
+        [ "$i_frontend_pull" -lt "$i_backup" ] && [ "$i_backup" -lt "$i_migrate" ]; then ok
+    else fail "up-to-date predeploy backup ordering is incorrect"; fi
+    cleanup_sandbox
+
+    make_sandbox
+    STUB_MIGRATE_CHECK_RC=2 run_deploy "$VALID_SHA"
+    i_backend_pull="$(log_idx "podman pull ghcr.io/spengrah/personalcrm-backend:$NEW_SHA")"
+    i_frontend_pull="$(log_idx "podman pull ghcr.io/spengrah/personalcrm-frontend:$NEW_SHA")"
+    i_backup="$(log_idx 'systemctl --user start personalcrm-backup-predeploy.service')"
+    i_migrate="$(grep -nF 'podman run' "$CALL_LOG" | grep -F -- '--migrate-check' | head -1 | cut -d: -f1)"
+    i_stop="$(log_idx 'systemctl --user stop personalcrm-backend.service personalcrm-frontend.service')"
+    if [ -n "$i_backend_pull" ] && [ -n "$i_frontend_pull" ] && [ -n "$i_backup" ] && \
+        [ -n "$i_migrate" ] && [ -n "$i_stop" ] && [ "$i_backend_pull" -lt "$i_backup" ] && \
+        [ "$i_frontend_pull" -lt "$i_backup" ] && [ "$i_backup" -lt "$i_migrate" ] && \
+        [ "$i_backup" -lt "$i_stop" ]; then ok
+    else fail "pending predeploy backup ordering is incorrect"; fi
+    cleanup_sandbox
+}
+
+test_predeploy_backup_failure_degrades_open() {
+    echo "test: predeploy backup failure notifies and does not block deploy"
+    make_sandbox
+    printf 'NTFY_URL=https://ntfy.example\nNTFY_TOPIC=tok\n' > "$SANDBOX/ntfy.env"
+    NTFY_ENV_FILE_OVERRIDE="$SANDBOX/ntfy.env" \
+        STUB_SYSTEMCTL_FAIL=personalcrm-backup-predeploy.service STUB_MIGRATE_CHECK_RC=0 \
+        run_deploy "$VALID_SHA"
+    if [ "$RC" -eq 0 ]; then ok; else fail "predeploy backup failure should still deploy successfully (rc=$RC)"; fi
+    if grep -q "Image=ghcr.io/spengrah/personalcrm-backend:$NEW_SHA" "$BACKEND_UNIT"; then ok
+    else fail "deploy did not pin the new backend image after backup failure"; fi
+    local failure_line failure_body failure_idx success_idx
+    failure_line="$(grep -F 'Title: Pre-deploy backup failed' "$CALL_LOG" | head -1 || true)"
+    if [ -n "$failure_line" ]; then ok; else fail "predeploy backup failure did not send its ntfy notification"; fi
+    failure_body="$(sed -n 's/.* -d \(.*\) https:\/\/ntfy\.example\/tok$/\1/p' <<< "$failure_line")"
+    if [ -n "$failure_body" ] && [[ "$failure_body" != *tok* ]]; then ok
+    else fail "predeploy failure notification body contains the topic"; fi
+    failure_idx="$(grep -nF 'Title: Pre-deploy backup failed' "$CALL_LOG" | head -1 | cut -d: -f1)"
+    success_idx="$(grep -nF 'Title: Deploy OK' "$CALL_LOG" | head -1 | cut -d: -f1)"
+    if [ -n "$failure_idx" ] && [ -n "$success_idx" ] && [ "$failure_idx" -lt "$success_idx" ]; then ok
+    else fail "Deploy OK notification did not follow the predeploy failure notification"; fi
+    cleanup_sandbox
+}
+
+test_pull_failure_aborts_before_predeploy_backup() {
+    echo "test: image pull failure aborts before predeploy backup"
+    make_sandbox
+    STUB_PULL_RC=1 run_deploy "$VALID_SHA"
+    if [ "$RC" -eq 1 ]; then ok; else fail "pull failure should exit 1, got $RC"; fi
+    if log_lacks "personalcrm-backup-predeploy.service"; then ok
+    else fail "pull failure started the predeploy backup"; fi
     cleanup_sandbox
 }
 
@@ -699,6 +764,9 @@ main() {
     test_rollback_ref_latest_digest
     test_migrate_command_line
     test_rootless_env_on_every_call
+    test_predeploy_backup_ordering
+    test_predeploy_backup_failure_degrades_open
+    test_pull_failure_aborts_before_predeploy_backup
     test_health_gate_matches_real_payload
     test_health_gate_commit_mismatch_fails
     test_health_gate_unknown_warns_and_passes

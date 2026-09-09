@@ -28,6 +28,16 @@ require_value BACKUP_REMOTE
 require_value BACKUP_BUCKET
 require_value AGE_RECIPIENT
 
+BACKUP_KIND="${BACKUP_KIND:-nightly}"
+case "$BACKUP_KIND" in
+    nightly) DB_OBJECT_PREFIX=personal_crm- ;;
+    predeploy) DB_OBJECT_PREFIX=personal_crm_predeploy- ;;
+    *)
+        echo "backup error: BACKUP_KIND must be nightly or predeploy" >&2
+        exit 2
+        ;;
+esac
+
 BACKUP_REMOTE_PATH="$BACKUP_REMOTE:$BACKUP_BUCKET"
 ZSTD_LEVEL_VALUE="${ZSTD_LEVEL:-3}"
 PG_USER="${PG_USER:-crm_user}"
@@ -44,7 +54,7 @@ if ! [[ "$ZSTD_LEVEL_VALUE" =~ ^[0-9]+$ ]] || [ "$ZSTD_LEVEL_VALUE" -lt 1 ] || [
 fi
 
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
-DB_OBJECT="personal_crm-$TS.sql.zst.age"
+DB_OBJECT="$DB_OBJECT_PREFIX$TS.sql.zst.age"
 ENV_OBJECT="personalcrm-env-$TS.age"
 
 delete_partial() {
