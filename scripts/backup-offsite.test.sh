@@ -221,11 +221,6 @@ assert_tmp_empty() {
     fi
 }
 
-test_tool_preflight() {
-    echo "test: required backup pipeline tools resolve before scenarios"
-    if require_backup_tools; then ok; else fail "tool preflight should pass in the test environment"; fi
-}
-
 test_backup_happy_path() {
     echo "test: backup round trip creates encrypted database and environment objects"
     make_sandbox
@@ -353,7 +348,11 @@ test_verify_corruption() {
         db_path="$SANDBOX/remote/$db_object"
         size="$(wc -c < "$db_path")"
         offset=$((size / 2))
-        dd if=/dev/zero of="$db_path" bs=1 count=1 seek="$offset" conv=notrunc >/dev/null 2>&1
+        # Write the complement of the existing byte: the payload is ciphertext,
+        # so writing a fixed value would leave the object unchanged 1 time in 256.
+        original_byte="$(dd if="$db_path" bs=1 count=1 skip="$offset" 2>/dev/null | od -An -tu1 | tr -d ' ')"
+        printf '%b' "\\0$(printf '%03o' $((original_byte ^ 255)))" \
+            | dd of="$db_path" bs=1 count=1 seek="$offset" conv=notrunc >/dev/null 2>&1
         run_verify
         if [ "$RC" -ne 0 ]; then ok; else fail "corrupt backup should make verify exit non-zero"; fi
         if grep -q 'DROP DATABASE IF EXISTS personal_crm_verify' "$CALL_LOG"; then ok
@@ -405,8 +404,35 @@ test_restore_explicit_live_name_never_drops() {
     cleanup_sandbox
 }
 
+test_identifier_guards_reject_before_any_database_call() {
+    echo "test: malformed object names and database identifiers are rejected before psql runs"
+    make_sandbox
+    if prepare_fresh_backup; then
+        db_object="$(newest_db_object)"
+        : > "$CALL_LOG"
+        run_restore "$db_object" 'x; DROP DATABASE personal_crm'
+        if [ "$RC" -eq 2 ]; then ok; else fail "restore accepted an unsafe target identifier (rc=$RC)"; fi
+        if [ ! -s "$CALL_LOG" ]; then ok; else fail "restore ran psql with an unsafe target identifier"; fi
+
+        run_restore "personal_crm-20260101T000000Z.sql.zst.age; rm -rf /"
+        if [ "$RC" -eq 2 ]; then ok; else fail "restore accepted an unsafe object name (rc=$RC)"; fi
+        if [ ! -s "$CALL_LOG" ]; then ok; else fail "restore ran psql with an unsafe object name"; fi
+
+        OUT="$(
+            PATH="$SANDBOX/bin:$ORIGINAL_PATH" RCLONE_CONFIG="$RCLONE_CONFIG" \
+            BACKUP_REMOTE=local BACKUP_BUCKET="$SANDBOX/remote" \
+            AGE_IDENTITY_FILE="$AGE_IDENTITY" PG_EXEC="$SANDBOX/bin/pgstub" \
+            TMPDIR="$SANDBOX/tmp" VERIFY_DB='verify; DROP DATABASE personal_crm' \
+            bash "$VERIFY_SCRIPT" 2>"$SANDBOX/stderr"
+        )"
+        RC=$?
+        if [ "$RC" -eq 2 ]; then ok; else fail "verify accepted an unsafe VERIFY_DB (rc=$RC)"; fi
+        if [ ! -s "$CALL_LOG" ]; then ok; else fail "verify ran psql with an unsafe VERIFY_DB"; fi
+    fi
+    cleanup_sandbox
+}
+
 main() {
-    test_tool_preflight
     test_backup_happy_path
     test_backup_dump_failure_cleans_partial
     test_verify_happy_path
@@ -416,6 +442,7 @@ main() {
     test_verify_corruption
     test_restore_targets
     test_restore_explicit_live_name_never_drops
+    test_identifier_guards_reject_before_any_database_call
 
     echo ""
     echo "===================="

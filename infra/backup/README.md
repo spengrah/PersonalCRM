@@ -42,19 +42,19 @@ B2_ACCOUNT_ID="$(sed -n 1p "$B2_MASTER_KEY_FILE")"
 B2_APPLICATION_KEY="$(sed -n 2p "$B2_MASTER_KEY_FILE")"
 B2_BUCKET_NAME='<bucket>'
 
-B2_AUTH_JSON="$(curl -fsS https://api.backblazeb2.com/b2api/v2/b2_authorize_account \
+B2_AUTH_JSON="$(curl -fsS https://api.backblazeb2.com/b2api/v3/b2_authorize_account \
   -u "$B2_ACCOUNT_ID:$B2_APPLICATION_KEY")"
 B2_AUTH_TOKEN="$(printf '%s' "$B2_AUTH_JSON" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["authorizationToken"])')"
 B2_API_URL="$(printf '%s' "$B2_AUTH_JSON" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["apiInfo"]["storageApi"]["apiUrl"])')"
-B2_BUCKET_JSON="$(curl -fsS "$B2_API_URL/b2api/v2/b2_list_buckets" \
+B2_BUCKET_JSON="$(curl -fsS "$B2_API_URL/b2api/v3/b2_list_buckets" \
   -H "Authorization: $B2_AUTH_TOKEN" \
   --data "{\"accountId\":\"$B2_ACCOUNT_ID\",\"bucketName\":\"$B2_BUCKET_NAME\"}")"
 B2_BUCKET_ID="$(printf '%s' "$B2_BUCKET_JSON" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["buckets"][0]["bucketId"])')"
 
-curl -fsS "$B2_API_URL/b2api/v2/b2_create_key" \
+curl -fsS "$B2_API_URL/b2api/v3/b2_create_key" \
   -H "Authorization: $B2_AUTH_TOKEN" \
   --data "{\"accountId\":\"$B2_ACCOUNT_ID\",\"keyName\":\"personalcrm-backup\",\"capabilities\":[\"listBuckets\",\"listFiles\",\"readFiles\",\"writeFiles\"],\"bucketId\":\"$B2_BUCKET_ID\"}" \
   > /secure/path/restricted-backup-key.json
@@ -128,7 +128,7 @@ umask 077
 B2_KEY_ID="$(sed -n 's/^account = //p' /var/lib/personalcrm/.config/rclone/rclone.conf)"
 B2_APPLICATION_KEY="$(sed -n 's/^key = //p' /var/lib/personalcrm/.config/rclone/rclone.conf)"
 B2_BUCKET_NAME='<bucket>'
-B2_AUTH_JSON="$(curl -fsS https://api.backblazeb2.com/b2api/v2/b2_authorize_account \
+B2_AUTH_JSON="$(curl -fsS https://api.backblazeb2.com/b2api/v3/b2_authorize_account \
   -u "$B2_KEY_ID:$B2_APPLICATION_KEY")"
 B2_AUTH_TOKEN="$(printf '%s' "$B2_AUTH_JSON" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["authorizationToken"])')"
@@ -136,7 +136,7 @@ B2_ACCOUNT_ID="$(printf '%s' "$B2_AUTH_JSON" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["accountId"])')"
 B2_API_URL="$(printf '%s' "$B2_AUTH_JSON" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["apiInfo"]["storageApi"]["apiUrl"])')"
-curl -fsS "$B2_API_URL/b2api/v2/b2_list_buckets" \
+curl -fsS "$B2_API_URL/b2api/v3/b2_list_buckets" \
   -H "Authorization: $B2_AUTH_TOKEN" \
   --data "{\"accountId\":\"$B2_ACCOUNT_ID\",\"bucketName\":\"$B2_BUCKET_NAME\"}"
 ```
