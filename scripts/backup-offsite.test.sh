@@ -5,6 +5,9 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP_SCRIPT="$REPO_ROOT/scripts/backup-offsite.sh"
 VERIFY_SCRIPT="$REPO_ROOT/scripts/verify-offsite-backup.sh"
 RESTORE_SCRIPT="$REPO_ROOT/scripts/restore-offsite.sh"
+NOTIFY_SCRIPT="$REPO_ROOT/scripts/notify-unit-failure.sh"
+# Stands in for the real capability token; assertions prove it never reaches logs.
+SECRET_TOPIC="topic-must-not-appear-in-logs"
 ORIGINAL_PATH="$PATH"
 REAL_RCLONE="$(command -v rclone || true)"
 
@@ -459,6 +462,91 @@ test_identifier_guards_reject_before_any_database_call() {
     cleanup_sandbox
 }
 
+run_notify() {
+    local unit="$1" envfile="$2"
+    OUT="$(
+        PATH="$SANDBOX/bin:$ORIGINAL_PATH" NTFY_ENV_FILE="$envfile" \
+        bash "$NOTIFY_SCRIPT" "$unit" 2>"$SANDBOX/stderr"
+    )"
+    RC=$?
+}
+
+test_notify_posts_without_leaking_the_topic() {
+    echo "test: unit-failure notifier posts to ntfy and never prints the topic"
+    make_sandbox
+    # curl stub: record argv and the body, succeed.
+    cat > "$SANDBOX/bin/curl" <<EOF
+#!/bin/bash
+{
+    printf 'curl'
+    for arg in "\$@"; do printf ' [%s]' "\$arg"; done
+    printf '\\n'
+} >> "$CALL_LOG"
+exit 0
+EOF
+    chmod +x "$SANDBOX/bin/curl"
+    printf 'NTFY_URL=https://ntfy.example\nNTFY_TOPIC=%s\n' "$SECRET_TOPIC" > "$SANDBOX/ntfy.env"
+
+    run_notify personalcrm-backup.service "$SANDBOX/ntfy.env"
+    if [ "$RC" -eq 0 ]; then ok; else fail "notifier should exit 0 on a successful post (rc=$RC)"; fi
+    if grep -q "https://ntfy.example/$SECRET_TOPIC" "$CALL_LOG"; then ok
+    else fail "notifier did not POST to the configured topic URL"; fi
+    if grep -q 'personalcrm-backup.service failed on' "$CALL_LOG"; then ok
+    else fail "notification body did not name the failed unit"; fi
+    # The topic is a capability token: it may reach curl, never the logs.
+    if grep -q "$SECRET_TOPIC" <<< "$OUT$(cat "$SANDBOX/stderr")"; then
+        fail "notifier leaked the ntfy topic to its own output"
+    else ok; fi
+    cleanup_sandbox
+}
+
+test_notify_degrades_open() {
+    echo "test: notifier exits 0 when ntfy is unconfigured, and non-zero when the post fails"
+    make_sandbox
+    cat > "$SANDBOX/bin/curl" <<EOF
+#!/bin/bash
+echo "curl \$*" >> "$CALL_LOG"
+exit 7
+EOF
+    chmod +x "$SANDBOX/bin/curl"
+
+    run_notify personalcrm-backup.service "$SANDBOX/absent.env"
+    if [ "$RC" -eq 0 ]; then ok; else fail "missing ntfy env should exit 0, got $RC"; fi
+    if [ ! -s "$CALL_LOG" ]; then ok; else fail "missing ntfy env still called curl"; fi
+
+    printf 'NTFY_URL=https://ntfy.example\n' > "$SANDBOX/partial.env"
+    run_notify personalcrm-backup.service "$SANDBOX/partial.env"
+    if [ "$RC" -eq 0 ]; then ok; else fail "incomplete ntfy env should exit 0, got $RC"; fi
+    if [ ! -s "$CALL_LOG" ]; then ok; else fail "incomplete ntfy env still called curl"; fi
+
+    printf 'NTFY_URL=https://ntfy.example\nNTFY_TOPIC=%s\n' "$SECRET_TOPIC" > "$SANDBOX/full.env"
+    run_notify personalcrm-backup.service "$SANDBOX/full.env"
+    if [ "$RC" -ne 0 ]; then ok; else fail "a failing POST should exit non-zero"; fi
+
+    run_notify "" "$SANDBOX/full.env"
+    if [ "$RC" -eq 2 ]; then ok; else fail "missing unit name should exit 2, got $RC"; fi
+    cleanup_sandbox
+}
+
+test_units_reference_the_notifier() {
+    echo "test: both backup units declare the OnFailure notifier and the template exists"
+    local u
+    for u in personalcrm-backup.service personalcrm-backup-verify.service; do
+        if grep -q '^OnFailure=personalcrm-ntfy-failure@%n\.service$' "$REPO_ROOT/infra/backup/$u"; then ok
+        else fail "$u does not declare the OnFailure notifier"; fi
+    done
+    if grep -q '^ExecStart=/srv/personalcrm/bin/notify-unit-failure\.sh %I$' \
+        "$REPO_ROOT/infra/backup/personalcrm-ntfy-failure@.service"; then ok
+    else fail "the notifier template does not invoke the installed script with the instance name"; fi
+    # A notifier that can fail its way into its own OnFailure loops forever.
+    if grep -q '^OnFailure=' "$REPO_ROOT/infra/backup/personalcrm-ntfy-failure@.service"; then
+        fail "the notifier template declares its own OnFailure handler"
+    else ok; fi
+    if grep -q 'notify-unit-failure.sh' "$REPO_ROOT/infra/backup/install.sh" &&
+        grep -q 'personalcrm-ntfy-failure@.service' "$REPO_ROOT/infra/backup/install.sh"; then ok
+    else fail "install.sh does not install the notifier script and unit"; fi
+}
+
 main() {
     test_backup_happy_path
     test_backup_dump_failure_cleans_partial
@@ -471,6 +559,9 @@ main() {
     test_restore_targets
     test_restore_explicit_live_name_never_drops
     test_identifier_guards_reject_before_any_database_call
+    test_notify_posts_without_leaking_the_topic
+    test_notify_degrades_open
+    test_units_reference_the_notifier
 
     echo ""
     echo "===================="

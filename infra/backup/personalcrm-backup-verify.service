@@ -1,6 +1,8 @@
 [Unit]
 Description=Verify the newest PersonalCRM offsite backup
 
+OnFailure=personalcrm-ntfy-failure@%n.service
+
 [Service]
 Type=oneshot
 EnvironmentFile=/srv/personalcrm/backup.env

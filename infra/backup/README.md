@@ -179,6 +179,22 @@ The restore script reads from the bucket only, so re-upload the recovered file w
 
 Install PostgreSQL, `age`, `rclone`, and `zstd` on the replacement machine. Recover the age identity from the password manager, configure an rclone remote that can read the bucket, and copy `scripts/restore-offsite.sh` to the machine. Set `AGE_IDENTITY_FILE`, `BACKUP_REMOTE`, and `BACKUP_BUCKET` in the environment. Set `PG_EXEC=env` when the replacement uses a local `psql` command rather than Podman, then set `PG_USER` to the local PostgreSQL role. Run the script with a timestamped database object and a new target database name.
 
+## Failure notifications
+
+Both units declare `OnFailure=personalcrm-ntfy-failure@%n.service`, so a failed backup or verify posts the unit name and host to ntfy at high priority. The message deliberately carries no database facts: verify's error text quotes row counts, and an ntfy topic is readable by anyone holding it. Read the detail from the journal on the host instead.
+
+The topic comes from `/etc/personalcrm/ntfy.env`, the same file `deploy-artifact.sh` uses, so rotating the topic is a one-file change. That file is root-owned; the installer adds `crm` group read access because the notifier runs as the tenant. If the file is missing, the installer warns and failures go unreported, which is why it says so loudly rather than continuing in silence.
+
+Notifications cover runs that happened and failed. A run that never happens sends nothing, since a push relay cannot report silence. That is an accepted limitation: the timers share a tenant with the CRM containers, so anything that silently stops them also stops the CRM, which you notice. The weekly verify is the backstop, because it fails when the newest object is more than 36 hours old, and that failure does notify.
+
+Two drills, in increasing order of what they prove. The first changes no state and confirms the tenant can read the topic and reach ntfy:
+
+```bash
+cd /tmp && sudo -u crm /srv/personalcrm/bin/notify-unit-failure.sh personalcrm-backup.service
+```
+
+The second proves the `OnFailure` wiring actually fires. Point `BACKUP_BUCKET` in `/srv/personalcrm/backup.env` at a bucket that does not exist, start `personalcrm-backup.service`, confirm both that the unit fails and that a push arrives, then restore the file and start the service again to leave a good backup behind.
+
 ## Check failed timer units
 
 Unit state is read as the `crm` user; unit logs are read as root, because the crm user has no journal access and journald on the Pi is volatile (logs do not survive a reboot):

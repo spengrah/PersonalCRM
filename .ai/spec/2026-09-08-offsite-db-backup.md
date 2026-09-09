@@ -119,7 +119,8 @@ Mapped to #15's checklist:
 - 30-day retention: the lifecycle rule is set and confirmed via `b2_list_buckets`.
 - Privacy: the bucket contains only `.age` objects; a fresh-machine restore has been performed once from the bucket plus the password-manager key.
 
-## Open decisions
+## Settled decisions
 
-- **Dead-man's switch.** Whether the backup unit pings a healthchecks.io URL on success so a silent failure is noticed without checking the Pi. The ping carries no data. Default if undecided: no ping; the weekly verify job's freshness check is the detector.
-- **Nightly window.** Default 03:30 local, after the sync jobs' quiet period.
+- **Failure notification: ntfy, on failure only.** Both units declare `OnFailure=personalcrm-ntfy-failure@%n.service`, which posts the unit name and host to the same ntfy topic the deploy script uses. The topic has one writer, `/etc/personalcrm/ntfy.env`, which the installer makes readable by the tenant rather than copying the value into a second file. Bodies carry no database facts, because verify's error text quotes row counts and an ntfy topic is a bearer token; the reader is pointed at the journal instead.
+- **No dead-man's switch.** A push relay reports events and cannot report silence, so a run that never happens sends nothing. Accepted deliberately: the timers live in the same user tenant as the CRM containers, so the failure modes that would stop them silently (the tenant down, the Pi down, lingering off) take the CRM down too and announce themselves. What remains is deliberate action, and at that point a missed backup is not the problem. The weekly verify's 36-hour freshness check still converts a quiet run of missed backups into a real failure, which does notify.
+- **Nightly window.** 03:30 local with up to 10 minutes of jitter, after the sync jobs' quiet period. Verify runs Sundays at 05:00.
