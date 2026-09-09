@@ -5,6 +5,9 @@ Description=Report %i failure to ntfy
 
 [Service]
 Type=oneshot
+# oneshot startup timeouts default to off, so bound it: a wedged notifier would
+# otherwise hold this instance name and suppress every later alert for the unit.
+TimeoutStartSec=60
 # %i, not %I: OnFailure passes the unit name verbatim as the instance, and %I
 # would unescape it, turning personalcrm-backup.service into
 # personalcrm/backup.service, a unit that does not exist and whose journal

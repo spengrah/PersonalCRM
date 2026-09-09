@@ -542,6 +542,11 @@ test_units_reference_the_notifier() {
     if grep -q '^OnFailure=' "$REPO_ROOT/infra/backup/personalcrm-ntfy-failure@.service"; then
         fail "the notifier template declares its own OnFailure handler"
     else ok; fi
+    # A hung POST would pin this instance name and mute later alerts for the unit.
+    if grep -q -- '--max-time' "$NOTIFY_SCRIPT" && grep -q -- '--connect-timeout' "$NOTIFY_SCRIPT"; then ok
+    else fail "the notifier does not bound its ntfy request duration"; fi
+    if grep -q '^TimeoutStartSec=' "$REPO_ROOT/infra/backup/personalcrm-ntfy-failure@.service"; then ok
+    else fail "the notifier template has no startup timeout"; fi
     if grep -q 'notify-unit-failure.sh' "$REPO_ROOT/infra/backup/install.sh" &&
         grep -q 'personalcrm-ntfy-failure@.service' "$REPO_ROOT/infra/backup/install.sh"; then ok
     else fail "install.sh does not install the notifier script and unit"; fi

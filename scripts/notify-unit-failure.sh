@@ -38,7 +38,10 @@ fi
 
 BODY="$UNIT failed on $(uname -n). Read the journal on the host: sudo journalctl _SYSTEMD_USER_UNIT=$UNIT -n 50"
 
-if ! curl -fsS \
+# Bounded on purpose: this runs as a Type=oneshot instance keyed on the failing
+# unit name, so a request that hangs leaves that instance activating forever and
+# every later failure of the same unit is silently dropped.
+if ! curl -fsS --connect-timeout 5 --max-time 15 \
     -H "Title: PersonalCRM backup failed" \
     -H "Priority: high" \
     -H "Tags: warning,floppy_disk" \
