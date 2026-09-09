@@ -600,6 +600,13 @@ test_repin_failure_is_rollback_failed() {
     cleanup_sandbox
 }
 
+test_ntfy_post_is_time_bounded() {
+    echo "test: ntfy POSTs carry connect and total timeouts"
+    # An ntfy server that accepts then stalls would hang the deploy mid-run.
+    if grep -q -- '--connect-timeout' "$SCRIPT" && grep -q -- '--max-time' "$SCRIPT"; then ok
+    else fail "ntfy() does not bound its POST duration"; fi
+}
+
 test_ntfy_degrade_open() {
     echo "test: ntfy absent env file -> skip + still deploy (degrade-open)"
     make_sandbox
@@ -708,6 +715,7 @@ main() {
     test_rollback_restore_ordering
     test_restore_failure_is_rollback_failed
     test_repin_failure_is_rollback_failed
+    test_ntfy_post_is_time_bounded
     test_ntfy_degrade_open
     test_ntfy_present_outcomes
     test_ntfy_post_failure_does_not_change_outcome

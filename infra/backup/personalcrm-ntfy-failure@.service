@@ -1,0 +1,15 @@
+[Unit]
+Description=Report %i failure to ntfy
+# No OnFailure= here on purpose: a notifier that notifies about its own failure
+# is a loop. Its own errors land in the journal.
+
+[Service]
+Type=oneshot
+# oneshot startup timeouts default to off, so bound it: a wedged notifier would
+# otherwise hold this instance name and suppress every later alert for the unit.
+TimeoutStartSec=60
+# %i, not %I: OnFailure passes the unit name verbatim as the instance, and %I
+# would unescape it, turning personalcrm-backup.service into
+# personalcrm/backup.service, a unit that does not exist and whose journal
+# query returns nothing.
+ExecStart=/srv/personalcrm/bin/notify-unit-failure.sh %i

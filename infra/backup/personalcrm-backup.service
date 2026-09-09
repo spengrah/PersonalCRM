@@ -1,6 +1,8 @@
 [Unit]
 Description=PersonalCRM offsite encrypted database backup
 
+OnFailure=personalcrm-ntfy-failure@%n.service
+
 [Service]
 Type=oneshot
 EnvironmentFile=/srv/personalcrm/backup.env
