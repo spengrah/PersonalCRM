@@ -39,7 +39,7 @@ for command_name in age rclone zstd; do
     require_command "$command_name"
 done
 
-if ! [[ "$OBJECT_NAME" =~ ^personal_crm-[0-9]{8}T[0-9]{6}Z\.sql\.zst\.age$ ]]; then
+if ! [[ "$OBJECT_NAME" =~ ^personal_crm(_predeploy)?-[0-9]{8}T[0-9]{6}Z\.sql\.zst\.age$ ]]; then
     echo "restore error: object name must be a timestamped database backup" >&2
     exit 2
 fi

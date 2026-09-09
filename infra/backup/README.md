@@ -20,16 +20,17 @@ Create one Backblaze B2 bucket with these settings:
 - Bucket type: private.
 - Object lock: disabled.
 - Default encryption: off.
-- Lifecycle rules: exactly the two rules below.
+- Lifecycle rules: exactly the three rules below.
 
 | Prefix | Hide after upload | Delete after hiding |
 | --- | ---: | ---: |
 | `personal_crm-` | 30 days | 1 day |
+| `personal_crm_predeploy-` | 90 days | 1 day |
 | `personalcrm-env-` | 30 days | 1 day |
 
-B2 buckets default to keeping all versions. Replace that default with the two lifecycle rules, or the bucket will grow without the intended retention limit.
+B2 buckets default to keeping all versions. Replace that default with the three lifecycle rules, or the bucket will grow without the intended retention limit.
 
-Apply the rules with an administrator credential through the B2 console or the `b2_update_bucket` API. The request must use the named bucket's id and include both prefixes, `daysFromUploadingToHiding: 30`, and `daysFromHidingToDeleting: 1`. Keep object lock disabled and the bucket default encryption mode set to `none`.
+Apply the rules with an administrator credential through the B2 console or the `b2_update_bucket` API. The request must use the named bucket's id and include all three prefixes with `daysFromHidingToDeleting: 1`; use `daysFromUploadingToHiding: 30` for the nightly and environment prefixes and `90` for the pre-deploy prefix. Keep object lock disabled and the bucket default encryption mode set to `none`.
 
 ## Create the restricted application key
 
@@ -119,6 +120,14 @@ sudo -u crm HOME=/var/lib/personalcrm bash -c 'cd /tmp; set -a; . /srv/personalc
 
 The backup command prints one line for each non-empty object. The verify command prints the selected object, its age, the migration version, and both contact counts. Confirm that the service and verify timers remain enabled after this first run.
 
+## Pre-deploy backups
+
+Before each prod deploy changes the application, it starts `personalcrm-backup-predeploy.service` to upload an encrypted database dump. The unit is a oneshot with no timer; the deploy waits for it to finish but continues if it fails. A failure is reported by ntfy from the deploy script. A pre-deploy object restores with the same command as a nightly object:
+
+```bash
+sudo -u crm HOME=/var/lib/personalcrm bash -c 'cd /tmp; set -a; . /srv/personalcrm/backup.env; set +a; /srv/personalcrm/bin/restore-offsite.sh personal_crm_predeploy-<timestamp>.sql.zst.age'
+```
+
 ## Read back the lifecycle rules
 
 rclone 1.60.1 does not provide `rclone backend lifecycle`. Read the bucket rules with `b2_list_buckets` while authenticated as the restricted key:
@@ -142,7 +151,7 @@ curl -fsS "$B2_API_URL/b2api/v3/b2_list_buckets" \
 unset B2_KEY_ID B2_APPLICATION_KEY B2_AUTH_JSON B2_AUTH_TOKEN B2_ACCOUNT_ID B2_API_URL
 ```
 
-Check that the response names the bucket and shows exactly the `personal_crm-` and `personalcrm-env-` rules with the intended hide and delete delays. This confirms the lifecycle policy without granting the Pi credential any lifecycle-management capability.
+Check that the response names the bucket and shows exactly the three `personal_crm-`, `personal_crm_predeploy-`, and `personalcrm-env-` rules with the intended hide and delete delays. This confirms the lifecycle policy without granting the Pi credential any lifecycle-management capability.
 
 ## Restore to the Pi
 

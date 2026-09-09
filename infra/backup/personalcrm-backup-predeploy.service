@@ -1,0 +1,12 @@
+[Unit]
+Description=PersonalCRM pre-deploy offsite encrypted database backup
+# The deploy is the only caller and reports a failure itself, so an OnFailure
+# handler would duplicate the notification.
+
+[Service]
+Type=oneshot
+Environment=BACKUP_KIND=predeploy
+EnvironmentFile=/srv/personalcrm/backup.env
+# A stalled B2 upload must not hold the deploy indefinitely.
+TimeoutStartSec=600
+ExecStart=/srv/personalcrm/bin/backup-offsite.sh

@@ -39,7 +39,8 @@ for script in backup-offsite.sh verify-offsite-backup.sh restore-offsite.sh noti
         "$REPO_ROOT/scripts/$script" "$INSTALL_BIN_DIR/$script"
 done
 
-for unit in personalcrm-backup.service personalcrm-backup.timer \
+for unit in personalcrm-backup.service personalcrm-backup-predeploy.service \
+    personalcrm-backup.timer \
     personalcrm-backup-verify.service personalcrm-backup-verify.timer \
     'personalcrm-ntfy-failure@.service'; do
     install -o "$CRM_USER" -g "$CRM_USER" -m 0644 \
