@@ -125,8 +125,8 @@ rclone 1.60.1 does not provide `rclone backend lifecycle`. Read the bucket rules
 
 ```bash
 umask 077
-B2_KEY_ID="$(sed -n 's/^account = //p' /var/lib/personalcrm/.config/rclone/rclone.conf)"
-B2_APPLICATION_KEY="$(sed -n 's/^key = //p' /var/lib/personalcrm/.config/rclone/rclone.conf)"
+B2_KEY_ID="$(sudo sed -n 's/^account = //p' /var/lib/personalcrm/.config/rclone/rclone.conf)"
+B2_APPLICATION_KEY="$(sudo sed -n 's/^key = //p' /var/lib/personalcrm/.config/rclone/rclone.conf)"
 B2_BUCKET_NAME='<bucket>'
 B2_AUTH_JSON="$(curl -fsS https://api.backblazeb2.com/b2api/v3/b2_authorize_account \
   -u "$B2_KEY_ID:$B2_APPLICATION_KEY")"
@@ -139,6 +139,7 @@ B2_API_URL="$(printf '%s' "$B2_AUTH_JSON" | python3 -c \
 curl -fsS "$B2_API_URL/b2api/v3/b2_list_buckets" \
   -H "Authorization: $B2_AUTH_TOKEN" \
   --data "{\"accountId\":\"$B2_ACCOUNT_ID\",\"bucketName\":\"$B2_BUCKET_NAME\"}"
+unset B2_KEY_ID B2_APPLICATION_KEY B2_AUTH_JSON B2_AUTH_TOKEN B2_ACCOUNT_ID B2_API_URL
 ```
 
 Check that the response names the bucket and shows exactly the `personal_crm-` and `personalcrm-env-` rules with the intended hide and delete delays. This confirms the lifecycle policy without granting the Pi credential any lifecycle-management capability.

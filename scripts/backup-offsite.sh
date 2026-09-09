@@ -87,10 +87,10 @@ upload_database() {
         echo "backup error: database backup pipeline failed" >&2
         return 1
     fi
-    if ! confirm_object "$DB_OBJECT"; then
-        delete_partial "$DB_OBJECT"
-        return 1
-    fi
+    # A failed listing after a successful upload is not evidence the object is
+    # bad, and hiding it could remove the night's only copy; leave it for the
+    # verify job to judge.
+    confirm_object "$DB_OBJECT"
 }
 
 upload_environment() {
@@ -106,10 +106,7 @@ upload_environment() {
         echo "backup error: environment backup pipeline failed" >&2
         return 1
     fi
-    if ! confirm_object "$ENV_OBJECT"; then
-        delete_partial "$ENV_OBJECT"
-        return 1
-    fi
+    confirm_object "$ENV_OBJECT"
 }
 
 upload_database

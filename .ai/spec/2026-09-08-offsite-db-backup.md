@@ -1,7 +1,7 @@
 # Off-device encrypted database backups
 
 Date: 2026-09-08
-Status: IMPLEMENTED
+Status: BUILT (PR #846). Rollout on the Pi follows `infra/backup/README.md`; [#15](https://github.com/spengrah/PersonalCRM/issues/15) tracks it and closes when the acceptance criteria below are met.
 Implements: [#15](https://github.com/spengrah/PersonalCRM/issues/15).
 
 ## Context & problem
