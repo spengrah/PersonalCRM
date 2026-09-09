@@ -8,6 +8,7 @@
 #
 # Flow:
 #   validate SHA -> read rollback anchor from the live units -> pull :<sha> ->
+#   pre-deploy offsite backup ->
 #   migrate-check via the NEW image:
 #     exit 0 (up-to-date): swap Image=, restart app, health-gate (no DB touched).
 #     exit 2 (pending):    stop app -> snapshot -> start DB -> migrate -> swap ->
@@ -374,6 +375,12 @@ if ! crm_podman pull "$BACKEND_REPO:$SHA" || ! crm_podman pull "$FRONTEND_REPO:$
     log "image pull failed; aborting before touching the DB"
     DONE=1
     exit 1
+fi
+
+log "pre-deploy offsite backup"
+if ! crm_ctl start personalcrm-backup-predeploy.service; then
+    ntfy "Pre-deploy backup failed" "high" "warning" "$SHA: pre-deploy offsite backup failed; deploying anyway"
+    log "warning: pre-deploy offsite backup failed; continuing with the deploy"
 fi
 
 # MIGRATE-CHECK via the NEW image. Branch on its exit code.
