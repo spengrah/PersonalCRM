@@ -547,6 +547,13 @@ test_units_reference_the_notifier() {
     else fail "the notifier does not bound its ntfy request duration"; fi
     if grep -q '^TimeoutStartSec=' "$REPO_ROOT/infra/backup/personalcrm-ntfy-failure@.service"; then ok
     else fail "the notifier template has no startup timeout"; fi
+    # Install-time and run-time resolve this path in separate processes, so they
+    # must agree by construction, not by the operator setting the same override twice.
+    installer_path="$(sed -n 's/^NTFY_ENV_FILE=//p' "$REPO_ROOT/infra/backup/install.sh")"
+    # shellcheck disable=SC2016  # the $ is a sed anchor, not a shell expansion
+    notifier_path="$(sed -n 's/^NTFY_ENV_FILE="\${NTFY_ENV_FILE:-\(.*\)}"$/\1/p' "$NOTIFY_SCRIPT")"
+    if [ -n "$installer_path" ] && [ "$installer_path" = "$notifier_path" ]; then ok
+    else fail "installer ($installer_path) and notifier ($notifier_path) disagree on the ntfy env path"; fi
     if grep -q 'notify-unit-failure.sh' "$REPO_ROOT/infra/backup/install.sh" &&
         grep -q 'personalcrm-ntfy-failure@.service' "$REPO_ROOT/infra/backup/install.sh"; then ok
     else fail "install.sh does not install the notifier script and unit"; fi

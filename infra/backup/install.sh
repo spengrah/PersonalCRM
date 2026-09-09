@@ -12,7 +12,10 @@ fi
 CRM_USER="${CRM_USER:-crm}"
 CRM_HOME="${CRM_HOME:-/var/lib/personalcrm}"
 BACKUP_ENV_FILE=/srv/personalcrm/backup.env
-NTFY_ENV_FILE="${NTFY_ENV_FILE:-/etc/personalcrm/ntfy.env}"
+# Deliberately not overridable: the notifier resolves this path itself at run
+# time, in a different process, so an install-time override would grant access
+# to one file while the notifier read another. Keep the two in lockstep.
+NTFY_ENV_FILE=/etc/personalcrm/ntfy.env
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 INSTALL_BIN_DIR=/srv/personalcrm/bin
 INSTALL_UNIT_DIR="$CRM_HOME/.config/systemd/user"
