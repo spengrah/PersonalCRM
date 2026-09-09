@@ -62,9 +62,20 @@ run_user_systemctl() {
 # rather than copying the topic into a second file, and say so out loud when the
 # file is missing: silent notifications are indistinguishable from none.
 if [ -f "$NTFY_ENV_FILE" ]; then
-    chgrp "$CRM_USER" "$NTFY_ENV_FILE"
+    # The file's mode alone is not enough: the tenant also has to traverse the
+    # directory, which is root-only on this host.
+    ntfy_env_dir="$(dirname "$NTFY_ENV_FILE")"
+    chgrp "$CRM_USER" "$ntfy_env_dir" "$NTFY_ENV_FILE"
+    chmod g+rx "$ntfy_env_dir"
     chmod 0640 "$NTFY_ENV_FILE"
-    echo "Granted $CRM_USER read access to $NTFY_ENV_FILE for failure notifications."
+    # Prove it as the tenant instead of trusting the modes above: the notifier
+    # degrades open, so an unreadable file would fail silently at 03:30.
+    if sudo -u "$CRM_USER" test -r "$NTFY_ENV_FILE"; then
+        echo "Granted $CRM_USER read access to $NTFY_ENV_FILE for failure notifications."
+    else
+        echo "ERROR: $CRM_USER cannot read $NTFY_ENV_FILE, so backup failures would NOT notify. Fix the path's permissions and run this installer again." >&2
+        exit 1
+    fi
 else
     echo "WARNING: $NTFY_ENV_FILE is missing, so backup failures will NOT notify." >&2
     echo "         Create it with NTFY_URL and NTFY_TOPIC, then re-run this installer." >&2
