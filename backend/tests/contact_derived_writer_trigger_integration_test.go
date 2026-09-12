@@ -2,8 +2,7 @@
 
 // The derived-writer trigger's behavioral coverage (arc GI-4 / PR7). Migration
 // 079 pushes the eight-derived-column sole-writer rule from Go convention
-// (backend/tests/sole_writer_static_test.go, scripts/check-cadence-sole-writer.sh)
-// into the schema itself: a BEFORE UPDATE trigger on contact that rejects any
+// (backend/tests/sole_writer_static_test.go) into the schema itself: a BEFORE UPDATE trigger on contact that rejects any
 // change to a derived column unless the transaction has declared its owner via
 // repository.SetDerivedWriterTx.
 //

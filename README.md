@@ -88,7 +88,7 @@ make build              # Build without restart (⚠️ won't update running ser
 # Run tests
 make test               # Unit and integration tests
 make test-e2e           # Full E2E test suite
-make test-e2e-diff      # Diff-selected E2E tests (recommendated for local)
+make test-e2e-local     # Focused E2E (PLAYWRIGHT_GREP='@area:...')
 
 # Docker operations
 make docker-up          # Start database
@@ -601,7 +601,7 @@ make test-api
 cd frontend && bun run test
 
 # E2E tests
-make test-e2e-diff # diff-selected E2E (core + impacted)
+make test-e2e-local PLAYWRIGHT_GREP='@area:contacts'   # focused E2E by area tag
 make test-e2e      # full E2E suite; uses .env (fallback: .env.example.testing)
 ```
 

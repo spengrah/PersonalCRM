@@ -15,8 +15,7 @@
 #
 # This is the reviewer-visible CI signal; the authoritative check is the Go
 # test backend/tests/sqlc_select_list_static_test.go (it parses SQL more
-# robustly). Mirrors scripts/ci/crm-marker-construction-guard.sh and
-# scripts/ci/followup-sole-writer-guard.sh.
+# robustly).
 
 set -euo pipefail
 

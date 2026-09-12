@@ -2,15 +2,7 @@
 
 ## Registered Sync Providers
 
-| Provider | Source Name | Strategy | File |
-|----------|-------------|----------|------|
-| Google Contacts | `gcontacts` | `contact_driven` | `backend/internal/google/contacts.go` |
-| Google Calendar | `gcal` | `contact_driven` | `backend/internal/google/calendar.go` |
-| Google Chat | `gchat` | `contact_driven` | `backend/internal/google/gchat.go` |
-| Todoist | `todoist` | `fetch_all` | `backend/internal/todoist/provider.go` |
-| Messages | `messages` | `push` | `backend/internal/messages/provider.go` |
-| iCloud Contacts | `icloud_contacts` | `push` | `backend/internal/icloudcontacts/provider.go` |
-| Phone & FaceTime | `phone_calls` | `push` | `backend/internal/phonecalls/provider.go` |
+The registry is code, not a table here: every poll provider calls `providerRegistry.Register()` from a `backend/cmd/crm-api/wire_*.go` file, and the push providers register through `push.RegisterPushProviders`. Grep `providerRegistry.Register` for the current set; each provider's `Source()` and `Strategy()` are on its type.
 
 ### Manager-driven sources (NOT in the provider registry)
 

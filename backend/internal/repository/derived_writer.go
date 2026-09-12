@@ -45,10 +45,9 @@ const (
 //
 // This function is the Go-side authorization door. It does not and cannot
 // constrain which Go code opens it — that remains the job of the AST guard in
-// backend/tests/sole_writer_static_test.go and the grep guard in
-// scripts/check-cadence-sole-writer.sh. What the trigger adds is enforcement
-// against writers those two cannot see: psql sessions, admin SQL, and any
-// future non-Go client.
+// backend/tests/sole_writer_static_test.go. What the trigger adds is
+// enforcement against writers the AST guard cannot see: psql sessions, admin
+// SQL, and any future non-Go client.
 func SetDerivedWriterTx(ctx context.Context, tx pgx.Tx, owner DerivedWriter) error {
 	// Owner first, tx second: the owner check needs no transaction, so both
 	// guard clauses stay reachable from a DB-free unit test.

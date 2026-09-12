@@ -321,61 +321,7 @@ handlers.RegisterNewTableRoutes(v1, handlers.NewTableRouteDeps{
 
 ### Current API Routes
 
-| Group | Endpoint | Method | Handler | Description |
-|-------|----------|--------|---------|-------------|
-| **Contacts** | `/contacts` | POST | ContactHandler | Create contact |
-| | `/contacts` | GET | ContactHandler | List contacts |
-| | `/contacts/overdue` | GET | ContactHandler | List overdue contacts |
-| | `/contacts/:id` | GET/PUT/DELETE | ContactHandler | CRUD by ID |
-| | `/contacts/:id/last-contacted` | PATCH | ContactHandler | Mark as contacted |
-| | `/contacts/:id/notes` | GET/PUT | NoteHandler | Contact notepad |
-| | `/contacts/:id/merge/preview` | GET | ContactHandler | Merge preview |
-| | `/contacts/:id/merge` | POST | ContactHandler | Execute merge |
-| | `/contacts/:id/events` | GET | CalendarHandler | Contact's events |
-| | `/contacts/:id/identities` | GET | IdentityHandler | Contact's identities |
-| **Auth** | `/auth/google` | GET | OAuthHandler | Google auth URL |
-| | `/auth/google/accounts` | GET | OAuthHandler | List Google accounts |
-| | `/auth/google/accounts/:id/revoke` | POST | OAuthHandler | Revoke account |
-| | `/auth/todoist` | GET | OAuthHandler | Todoist auth URL |
-| | `/auth/todoist/accounts` | GET | OAuthHandler | List Todoist accounts |
-| **Sync** | `/sync/status` | GET | SyncHandler | All sync states |
-| | `/sync/providers` | GET | SyncHandler | Available providers |
-| | `/sync/:source/trigger` | POST | SyncHandler | Trigger sync |
-| | `/sync/states/:id/enable` | PATCH | SyncHandler | Enable/disable sync |
-| | `/sync/staleness` | GET | StalenessHandler | Active sync-staleness breaches (registered unconditionally, independent of `ENABLE_EXTERNAL_SYNC`) |
-| **Identities** | `/identities/unmatched` | GET | IdentityHandler | Unmatched identities |
-| | `/identities/:id/link` | POST | IdentityHandler | Link to contact |
-| **Imports** | `/imports/candidates` | GET | ImportHandler | Import candidates |
-| | `/imports/:id/import` | POST | ImportHandler | Import as new contact |
-| | `/imports/:id/link` | POST | ImportHandler | Link to existing |
-| | `/imports/anarlog-title` | GET | AnarlogDiscoveryHandler | List grouped `anarlog_title` name candidates (People tab), ranked by evidence count, with distinct session-title evidence. |
-| | `/imports/anarlog-title/resolve` | POST | AnarlogDiscoveryHandler | Resolve a whole token group. Body `{"normalized_token","action":"import"\|"link"\|"ignore",...}`; server re-derives all sibling rows. Response carries `contact_id` for import/link. |
-| **Meeting Notes** | `/meeting-notes/needs-attention` | GET | MeetingNoteHandler | List meeting_note rows in `conflict_pending` or `orphan_needs_review` (Interactions tab). Optional `?host_id=<uuid>` to scope by mac_host. Each conflict candidate carries `attendees [{name, matched}]`. Co-gated with `/ingest/events` by `EVENT_BUS_INGEST_ENABLED`. |
-| | `/meeting-notes/:id/resolve-link` | POST | MeetingNoteHandler | Resolve a `conflict_pending` row. Body is a discriminated union: `{"action":"link","kind":"event"\|"phone_call","id":"<uuid>"}` or `{"action":"none_of_these"}`. |
-| **Todoist** | `/todoist/settings` | GET/PATCH | TodoistHandler | Todoist settings |
-| | `/todoist/projects` | GET | TodoistHandler | List projects |
-| | `/todoist/labels` | GET | TodoistHandler | List labels |
-| **WhatsApp** | `/whatsapp/auth/start` | POST | WhatsAppHandler | Start pairing (`{"method":"qr"\|"phone","phone":"+E164"}`). 202 with the first code; 409 `ingest_not_wired` while the readiness gate is unsatisfied; 504 `qr_code_timeout`. Gated by `ENABLE_WHATSAPP_SYNC` |
-| | `/whatsapp/auth/cancel` | POST | WhatsAppHandler | Cancel an in-flight pairing (204, idempotent) |
-| | `/whatsapp/auth` | DELETE | WhatsAppHandler | Unlink the device. 200 with a body; 502 when the remote unlink fails and local credentials were KEPT; `?force=true` clears locally with a manual-unlink warning |
-| | `/whatsapp/auth/status` | GET | WhatsAppHandler | Connection state, linked identity, live pairing code, backfill counts. Absent (404) when the feature is off |
-| | `/whatsapp/chats` | GET | WhatsAppHandler | Every observed group chat with its stored tracking override and the decision the ingest gate would take for it |
-| | `/whatsapp/chats/{chat_jid}` | PATCH | WhatsAppHandler | Set one chat's override (`auto`\|`tracked`\|`ignored`). 404 for a chat never observed — an override never mints a row. No backfill is triggered: WhatsApp history is one-shot |
-| **System** | `/system/time` | GET | SystemHandler | Current time |
-| | `/export` | POST | SystemHandler | Export data |
-| | `/import` | POST | SystemHandler | Import data |
-| **Ingest** | `/ingest/events` | POST | IngestHandler | Batched event ingestion (gated by `EVENT_BUS_INGEST_ENABLED`). Composite auth: `X-Mac-Host-ID` header → host-auth path (Mac daemon raw_message.\* only); absent → global API-key path (internal Pi publishers). Service enforces per-path kind allowlist. |
-| **Mac Daemon (public)** | `/host` | POST | MacHostHandler | Daemon pairs with a token — rate-limited per source IP, no auth |
-| **Mac Daemon (host auth)** | `/host/:id/heartbeat` | POST | MacHostHandler | Periodic daemon heartbeat — `Authorization: Bearer <host-key>` + `X-Mac-Host-ID` |
-| | `/host/:id/rotate-key` | POST | MacHostHandler | In-place pair-key rotation — caller proves CURRENT key control AND provides a fresh pairing token; preserves host_id, cursor_epoch, launchd, TCC |
-| | `/host/:id/sync/:source/cursor` | GET | MacHostHandler | Read push-cursor for (host, source) |
-| | `/host/:id/sync/:source/cursor` | POST | MacHostHandler | Commit push-cursor (three-stage CAS) |
-| | `/host/:id/sync/:source/known-ids` | GET | MacHostHandler | Per-(host, source) live external_contact `{source_id, last_content_hash}` set for daemon tombstone reconciliation |
-| **Mac Daemon (admin)** | `/host` | GET | MacHostHandler | List paired hosts |
-| | `/host/:id` | GET/DELETE | MacHostHandler | Get / revoke host (delete cascades push-cursor rows) |
-| | `/host/pairing-token` | POST | MacHostHandler | Mint single-use pairing token (10-min TTL) |
-
-Routes defined in per-domain `RegisterXRoutes` helpers under `backend/internal/api/handlers/*_routes.go`; their gated call sites live in `registerRoutes` in `backend/cmd/crm-api/routes.go`.
+The generated Swagger spec (`backend/docs/swagger.yaml`, regenerated by `make api-docs`) is the route inventory. Routes are registered in per-domain `RegisterXRoutes` helpers under `backend/internal/api/handlers/*_routes.go`; their gated call sites live in `registerRoutes` in `backend/cmd/crm-api/routes.go`.
 
 ---
 
@@ -393,7 +339,7 @@ Run focused tests for the affected behavior; the commands below are available fo
 ```bash
 make test-unit         # Backend unit tests
 make test-integration  # Backend DB tests
-make test-e2e-diff     # Diff-selected Playwright E2E tests (core + impacted)
+make test-e2e-local PLAYWRIGHT_GREP='@area:contacts'   # Focused Playwright E2E by area tag
 ```
 
 **New features write their own seeding.** When your feature adds an entity, a sync source, or a downstream record, add the matching coverage to the synthetic-seed toolkit so staging, `make dev-seed`, and the QA harness all carry the new data — and so new tests can build it through the factories rather than hand-rolled fixtures:
