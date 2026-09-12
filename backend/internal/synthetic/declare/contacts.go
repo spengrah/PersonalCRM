@@ -103,10 +103,14 @@ func init() {
 		},
 	})
 
-	// One contact to log interactions against.
+	// One bare contact for the detail-page modal tests, plus one overdue contact
+	// so the dashboard card variant renders.
 	Register(Declaration{
 		Behavior: "CON-053",
-		Entities: []Entity{Contact("target")},
+		Entities: []Entity{
+			Contact("target"),
+			Contact("overdue-target", Cadence("weekly"), OverdueBy(Days(3))),
+		},
 	})
 
 	// One cadence-bearing contact. Neither sort test reads row order or

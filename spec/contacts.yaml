@@ -739,7 +739,7 @@ behaviors:
     type: ux
     status: current
     surface: ui
-    given: a contact detail page
+    given: a contact detail page, or an overdue card on the dashboard
     when: the user logs an interaction through the Log Interaction modal
     then:
       - key: direction-chosen-outbound-inbound
@@ -748,7 +748,9 @@ behaviors:
         text: an optional backdated date can be set for the interaction
       - key: interaction-posted-chosen-direction
         text: the interaction is posted with the chosen direction and the modal closes on success
-    provenance: [log-interaction-modal.tsx, contacts.spec.ts Log Interaction tests]
+      - key: dashboard-card-offers-log-interaction
+        text: an overdue card on the dashboard offers Log Interaction, opening the same modal for that contact
+    provenance: [log-interaction-modal.tsx, contacts.spec.ts Log Interaction tests, dashboard/page.tsx, dashboard.spec.ts Log Interaction test]
     notes: Direction-aware cadence timestamp math (which columns each direction bumps) is CAD-006, backend-owned.
 
   - id: CON-054

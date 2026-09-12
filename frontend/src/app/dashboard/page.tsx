@@ -2,10 +2,11 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { CheckCircle, Clock, AlertCircle, User, Plus } from 'lucide-react'
+import { CheckCircle, Clock, AlertCircle, User, Plus, MessageSquare } from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
+import { LogInteractionModal } from '@/components/contacts/log-interaction-modal'
 import { useOverdueContacts } from '@/hooks/use-contacts'
 import { useCreateInteraction } from '@/hooks/use-interactions'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
@@ -19,7 +20,13 @@ import { cadenceBaseDate, formatOverdueRecency } from '@/lib/contact-recency'
 import type { ContactMethod, OverdueContact } from '@/types/contact'
 import { clsx } from 'clsx'
 
-function OverdueContactCard({ contact }: { contact: OverdueContact }) {
+function OverdueContactCard({
+  contact,
+  onLogInteraction,
+}: {
+  contact: OverdueContact
+  onLogInteraction: (contact: OverdueContact) => void
+}) {
   const createInteraction = useCreateInteraction()
   const { currentTime } = useAcceleratedTime()
   const { primary, secondary } = getPrimaryAndSecondaryMethods(
@@ -121,7 +128,16 @@ function OverdueContactCard({ contact }: { contact: OverdueContact }) {
           </div>
         </div>
 
-        <div className="flex items-center mt-2 sm:mt-0 sm:ml-6">
+        <div className="flex flex-col gap-2 mt-2 sm:mt-0 sm:ml-6 sm:items-end">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onLogInteraction(contact)}
+            className="whitespace-nowrap"
+          >
+            <MessageSquare className="w-4 h-4 mr-2" />
+            Log Interaction
+          </Button>
           <Button
             size="sm"
             onClick={handleMarkContacted}
@@ -168,6 +184,7 @@ export default function DashboardPage() {
   const { data: overdueContacts, isLoading, error } = useOverdueContacts()
 
   const [sortBy, setSortBy] = useState<'urgency' | 'name' | 'lastContacted'>('urgency')
+  const [logTarget, setLogTarget] = useState<{ id: string; name: string } | null>(null)
 
   const sortedContacts =
     overdueContacts?.slice().sort((a, b) => {
@@ -186,6 +203,14 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Navigation />
+
+      {logTarget && (
+        <LogInteractionModal
+          contactId={logTarget.id}
+          contactName={logTarget.name}
+          onClose={() => setLogTarget(null)}
+        />
+      )}
 
       <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
         {/* Header */}
@@ -290,7 +315,13 @@ export default function DashboardPage() {
           {!isLoading && !error && sortedContacts.length > 0 && (
             <div role="list" aria-label="Overdue contacts" className="space-y-6">
               {sortedContacts.map(contact => (
-                <OverdueContactCard key={contact.id} contact={contact} />
+                <OverdueContactCard
+                  key={contact.id}
+                  contact={contact}
+                  onLogInteraction={selectedContact =>
+                    setLogTarget({ id: selectedContact.id, name: selectedContact.full_name })
+                  }
+                />
               ))}
             </div>
           )}
