@@ -11,8 +11,8 @@
 // the awk region extractor (e.g. mis-delimiting and scanning an empty
 // body) could let the guard silently pass on everything.
 //
-// Models scripts/ci/crm-marker-construction-guard.sh's companion test
-// TestCRMMarkerGrepGuard_CatchesIndexAssignment.
+// The guard exists only as a script (its awk region extraction has no Go
+// equivalent), so this test drives the script itself.
 package tests
 
 import (

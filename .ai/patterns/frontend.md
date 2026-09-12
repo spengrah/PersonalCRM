@@ -2,27 +2,9 @@
 
 Reusable React/TypeScript patterns for consistency across the frontend codebase.
 
-## React Query Hooks Inventory
+## React Query Hooks
 
-| Hook | Domain | File |
-|------|--------|------|
-| `useContacts`, `useContact`, `useCreateContact`, etc. | Contacts | `use-contacts.ts` |
-| `useContactNote`, `useCreateNote`, etc. | Notes | `use-contact-note.ts` |
-| `useCalendarEvents`, `useCreateCalendarEvent` | Calendar | `use-calendar.ts` |
-| `useImportCandidates`, `useImportContact` | Imports | `use-imports.ts` |
-| `useInteractionsQueue`, `useResolveLink`, `useAnarlogTitleCandidates`, `useResolveNameCandidate` | Imports — Interactions tab + Anarlog name candidates | `use-interactions-queue.ts` |
-| `useMergeContacts` | Contact merge | `use-merge.ts` |
-| `useSyncStates`, `useTriggerSync` | Sync status | `use-sync-states.ts` |
-| `useSyncStaleness` | Sync-staleness watchdog breaches (read-only poll) | `use-sync-staleness.ts` |
-| `useGoogleAccounts`, `useConnectGoogle` | Google OAuth | `use-google-accounts.ts` |
-| `useTodoistAccounts`, `useConnectTodoist` | Todoist OAuth | `use-todoist-accounts.ts` |
-| `useTodoistSettings`, `useUpdateTodoistSettings` | Todoist config | `use-todoist-settings.ts` |
-| `useAcceleratedTime` | Time acceleration | `use-accelerated-time.ts` |
-| `useKeyboardNavigation` | Keyboard nav | `use-keyboard-navigation.ts` |
-| `useContactTasks`, `useCreateActionTask`, `useDeleteTaskLink` | Contact tasks | `use-contact-tasks.ts` |
-| `useWhatsAppStatus`, `useStartWhatsAppPairing`, `useWhatsAppChats`, `useUpdateWhatsAppChatStatus` | WhatsApp pairing + group tracking | `use-whatsapp.ts` |
-
-All hooks are in `frontend/src/hooks/`.
+Hooks live in `frontend/src/hooks/`, one file per domain (`use-contacts.ts`, `use-imports.ts`, `use-whatsapp.ts`, …). Grep `export function use` there for the current set; query keys are in `frontend/src/lib/query-keys.ts`.
 
 ---
 

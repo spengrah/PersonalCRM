@@ -153,34 +153,16 @@ sequenceDiagram
 - Atomic transactions across relational + vector data
 - Good enough performance for single-user use
 
-**Database Tables:**
+**Table design notes.** Not an inventory: the schema is `backend/migrations/`, and a table appears here only when it carries an invariant the DDL alone does not explain.
 
-| Table | Purpose | Key Relations |
+| Table | Design note | Key Relations |
 |-------|---------|---------------|
-| **Core** | | |
 | `contact` | People in CRM. ContactService dual-writes a `node(type='person')` at the contact's own id in the same tx on create — the `contact.id == node.id` invariant — and syncs `node.canonical_label` on rename | Parent of most entities; 1:1 person `node` (shared id) |
-| `contact_method` | Email, phone, social handles | → contact |
-| `note` | Freeform notes | → contact |
 | `tag` | Contact categorization. Mirrored into the graph by `crm-admin --migrate-tags` (each tag → a `tag` entity node carrying its color in `entity.detail`; each `contact_tag` of a non-deleted contact → an accepted `tagged_as` assertion with user provenance). The legacy `tag`/`contact_tag` tables are retained as a rollback anchor (dropped in a later migration) | ↔ contact (via contact_tag) |
-| **Sync & Identity** | | |
-| `external_sync_state` | Sync status per provider/account | |
 | `external_sync_log` | Audit log of sync runs: one row per run with status, counters, and error text. Carries NO provider metadata — that lives only on `external_sync_state.metadata` (a per-run copy of it once grew to 79% of the prod DB). Trimmed by the `sync_log_trim` daily periodic worker (`SYNC_LOG_RETENTION_DAYS`, default 30) on `started_at` | → external_sync_state |
-| `external_identity` | Maps external IDs to contacts | → contact |
-| `external_contact` | Import candidates from Google/iCloud | → contact (optional) |
-| `contact_enrichment` | Tracks field enrichment sources | → contact, external_contact |
-| `oauth_credential` | OAuth tokens for Google/Todoist | |
-| **Calendar** | | |
-| `calendar_event` | Synced calendar events | |
-| `calendar_event_attendee` | Event attendees | → calendar_event, contact |
-| **Tasks** | | |
-| `contact_task` | Todoist tasks linked to contacts | → contact |
-| **Messaging** | | |
 | `comms_message` | Shared cross-source message-content store (email, gchat, and the chat sources that migrate onto it). One row = one message × one qualifying contact. `matched_contact_id` is **nullable**: NULL means the message was staged before its peer was resolved to a contact (WhatsApp only — `comms_message_contact_source_check` restricts NULL to `source='whatsapp'`), and the row is attached later by import/rematch. Every eligible/aggregation query excludes NULL rows, so an unattached row never reaches the recorder | → contact (nullable), → interaction (optional) |
-| **Event Bus** | | |
 | `event` | Append-only raw event log feeding the worker queue (spec §3.1) | (append-only; no FKs) |
-| **Graph (SP1)** | | |
 | `node` | Uniform registry every graph entity attaches to (person/entity/venue); caller-supplied id (person id == contact id, maintained by the ContactService dual-write + the `068_backfill_person_nodes` backfill); CHECK-enum `type`; `merged_into` self-FK merge alias; single `deleted_at` tombstone. On a contact merge `MergeContacts` tombstones the loser node (`merged_into`+`deleted_at`) and re-points its assertions onto the winner via `AssertService.MergeAssertionsTx` (re-canonicalize + recompute `proposition_key`, lock every implied slot, collision-merge vs repoint vs valid-time supersession); on a contact soft-delete `DeleteContact` propagates `node.deleted_at` so the contact's assertions drop from node-filtered graph reads (retained in the table) | self-FK (`merged_into`); person node shares the contact's id |
-| `entity_type` | Per-TYPE entity-subtype catalog (`resolution_config` JSONB; curated/provisional status) | (catalog; no FKs) |
 | `entity` | Structural subtype rows for organizations/places/topics/tags; per-instance `detail` JSONB; unique `(subtype, normalized_name)` | → node (PK/FK, ON DELETE CASCADE), → entity_type |
 | `venue` | Structural subtype rows for shared interaction containers (email threads, group chats, DMs, meetings, calls, sessions); unique `(source, kind, source_container_id)`; the venue node id is a deterministic `uuid_generate_v5` of `(source, kind, container)` so the live `ResolveVenueForInteraction` helper and the `069_interaction_venue` backfill converge on one node per container; referenced by `interaction.venue_id` | → node (PK/FK, ON DELETE CASCADE) |
 | `predicate` | Catalog of edge/fact types (subject/object/value typing, cardinality, symmetry, inverse pairing, temporal profile, review policy, valid-time dedup bucket); curated-core rows seeded, provisional minted at runtime; nullable `embedding vector(1536)` | self-FK (`inverse_predicate`) |
@@ -188,12 +170,9 @@ sequenceDiagram
 | `assertion_provenance` | Corroborating source locators for an assertion; PK `(assertion_id, locator_hash)`; closed `source_kind` enum; polymorphic no-FK `source_id`; `(source_kind, source_id)` reverse-lookup index | → assertion (ON DELETE CASCADE); `source_id` polymorphic (no FK) |
 | `embedding` | Disposable derived storage: a `vector(1536)` keyed by a polymorphic no-FK `(target_kind, target_id)` (the closed CHECK enum names the source table: node/assertion/interaction/meeting_note/comms_message/telegram_message/messages_message) + `model_version`; PK `(target_kind, target_id, model_version)`; no envelope, no `deleted_at`, no vector index in SP1 (HNSW/IVFFlat deferred to SP3); replaced the dormant `note_embedding` table (dropped in migration 072). Storage-only in SP1 (no generators yet) | `target_id` polymorphic (no FK) |
 | `relationship_signal` | Disposable derived storage: per-node scalar signals (`closeness`/`real_cadence_days`/`trend`, free-text `signal_key` — no catalog in SP1) keyed by `(subject_node_id, signal_key)`; PK on that pair; `as_of`/`computed_at`/`method_version` watermarks; no envelope, no `deleted_at`. Storage-only in SP1 (no generators yet) | → node (`subject_node_id`, restrict) |
-| **Observability** | | |
 | `sync_staleness_breach` | Open/resolved sync-staleness breaches recorded by the watchdog (partial unique index on open rows; no `updated_at`/`deleted_at`) | (system-derived; no FKs) |
 | `job_exec_sample` | One append-only row per River job *execution*, written by the `internal/jobsample` `Client.Subscribe` recorder on all four per-execution kinds (completed, failed, snoozed, cancelled) — snoozed/cancelled matter because `todoist_task_op` re-snoozes the same job while waiting on mode/prereqs. Captures `attempted_at`/`finalized_at` (slot occupancy), `queue_wait_ms` (River's `QueueWaitDuration`), `attempt`, `state`, `kind` for the queue-split decision metrics (saturation, consumer wait during saturation, run-duration by kind) over a multi-week window — completed rows prune from `river_job` after ~24h. `UNIQUE(river_job_id, attempt, attempted_at)` dedups re-delivered events while keeping distinct occupancy rows (River reuses the decremented `attempt` across snooze re-executions, so `attempted_at` is the disambiguator); trimmed by the `job_sample_trim` daily periodic worker (`RIVER_JOB_SAMPLE_RETENTION_DAYS`, default 14). No FK to `river_job` (River owns/prunes that table); no `updated_at`/`deleted_at` | `river_job_id` correlation (no FK) |
-| **Test support** | | |
 | `synthetic_namespace_entity` | `(namespace, entity_kind, entity_id)` written by `synthetic/declare` when it seeds a row, so the CROSS-REQUEST declared-seed cleanup can find that row again by ID. Every other id set is recovered from a generator-derived token the row carries, but `contact.full_name` is user-editable (and the update rewrites `node.canonical_label` with it), so a renamed seeded contact would be invisible to name-derived sweeps. Deliberately no FK — the record must survive whatever happens to the row it names, including cleanup's own hard delete. Empty outside `CRM_ENV=testing`/seeded environments; no `updated_at`/`deleted_at` | `entity_id` polymorphic (no FK) |
-| **Future/Unused** | | |
 | `interaction` | Interaction logging (the recorder pipeline's core row); nullable `venue_id` links each interaction to the shared-container venue node it happened in (set by the live recorders + the `069` backfill; never a dedup/cadence-partition dimension) | → contact; → node (`venue_id`, restrict) |
 
 Schema in `backend/migrations/`. Run `make sqlc` after SQL changes.

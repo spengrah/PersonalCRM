@@ -2,11 +2,10 @@
 //
 // Enforces that the Todoist CRM-marker wire format is constructed in exactly
 // one place: contacttask.EncodeMarker (and its CRMMarker type), in
-// backend/internal/contacttask/marker.go. This is the function-level
-// companion (the suspenders) to the grep guard at
-// scripts/ci/crm-marker-construction-guard.sh (the belt).
+// backend/internal/contacttask/marker.go. This test is the sole mechanical
+// enforcer of that rule.
 //
-// Three construction shapes are detected:
+// Four construction shapes are detected:
 //
 //	(a) a map composite literal containing a "crm" string-literal key whose
 //	    value is the bool literal true — the form every inline encoder used.
@@ -16,10 +15,12 @@
 //	    (*ast.AssignStmt whose LHS is an *ast.IndexExpr with a "crm"
 //	    string-literal index and a bool-true RHS) — an incrementally-built
 //	    marker map.
+//	(d) a Go string literal whose value contains `"crm":true` (whitespace
+//	    tolerated) — a hand-built JSON marker.
 //
-// Shape (a) is detected inside function bodies AND in top-level var/const
-// initializers (so a package-level `var x = map[string]any{"crm":true}` is not
-// a hole); shape (c) is detected inside function bodies (the only place
+// Shapes (a) and (d) are detected inside function bodies AND in top-level
+// var/const initializers (so a package-level `var x = map[string]any{"crm":true}`
+// is not a hole); shape (c) is detected inside function bodies (the only place
 // statements live).
 //
 // All must live ONLY in internal/contacttask/marker.go, and within that file
@@ -33,9 +34,9 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,6 +69,8 @@ type markerViolation struct {
 //     var/const initializers
 //   - index assignments `m["crm"] = true`, in function bodies
 //   - struct type declarations with a json:"crm" field tag
+//   - string literals containing "crm":true, in function bodies AND top-level
+//     var/const initializers
 //
 // Both the real-tree test and the negative self-test call this, so the two can
 // never drift apart.
@@ -98,6 +101,8 @@ func findCRMMarkerConstructions(relSlash string, file *ast.File, fset *token.Fil
 					record(d.Name.Name, n.Pos(), `map literal "crm":true`)
 				case isCRMMarkerIndexAssign(n):
 					record(d.Name.Name, n.Pos(), `index assignment ["crm"] = true`)
+				case isCRMMarkerStringLiteral(n):
+					record(d.Name.Name, n.Pos(), `string literal containing "crm":true`)
 				}
 				return true
 			})
@@ -134,8 +139,11 @@ func findCRMMarkerConstructions(relSlash string, file *ast.File, fset *token.Fil
 					}
 					for _, val := range vs.Values {
 						ast.Inspect(val, func(n ast.Node) bool {
-							if isCRMMarkerMapLiteral(n) {
+							switch {
+							case isCRMMarkerMapLiteral(n):
 								record(declName, n.Pos(), `map literal "crm":true`)
+							case isCRMMarkerStringLiteral(n):
+								record(declName, n.Pos(), `string literal containing "crm":true`)
 							}
 							return true
 						})
@@ -150,8 +158,8 @@ func findCRMMarkerConstructions(relSlash string, file *ast.File, fset *token.Fil
 // TestCRMMarkerConstruction_OnlyAllowedSites walks the Go AST of
 // backend/internal + backend/cmd/crm-api and asserts every CRM-marker
 // construction (map literal with "crm":true, an index assignment
-// `m["crm"] = true`, or a struct with a json:"crm" tag) lives in
-// allowedConstructionSites. Generated sqlc files and test files are skipped.
+// `m["crm"] = true`, a struct with a json:"crm" tag, or a string literal
+// containing "crm":true) lives in allowedConstructionSites. Generated sqlc files and test files are skipped.
 func TestCRMMarkerConstruction_OnlyAllowedSites(t *testing.T) {
 	moduleRoot, err := backendModuleRoot()
 	if err != nil {
@@ -292,6 +300,25 @@ func isCRMMarkerIndexAssign(n ast.Node) bool {
 	return false
 }
 
+// crmMarkerLiteralRE matches a hand-built JSON marker inside a string value.
+var crmMarkerLiteralRE = regexp.MustCompile(`"crm"\s*:\s*true`)
+
+// isCRMMarkerStringLiteral reports whether n is a Go string literal (quoted or
+// raw) whose value contains `"crm":true` — a marker assembled as text rather
+// than through the encoder. A bare "crm" map key does not match: the regexp
+// requires the `:true` that only a serialized marker carries.
+func isCRMMarkerStringLiteral(n ast.Node) bool {
+	lit, ok := n.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return false
+	}
+	unq, err := strconv.Unquote(lit.Value)
+	if err != nil {
+		return false
+	}
+	return crmMarkerLiteralRE.MatchString(unq)
+}
+
 // structHasCRMJSONTag reports whether the struct has any field tagged
 // `json:"crm"` (with or without options like `json:"crm,omitempty"`).
 func structHasCRMJSONTag(st *ast.StructType) bool {
@@ -322,8 +349,9 @@ func structHasCRMJSONTag(st *ast.StructType) bool {
 // snippets with a stray marker construction outside the allowlist, runs the
 // SAME findCRMMarkerConstructions walk the real test uses, and asserts a
 // violation is reported. Covers the map-literal form (in a function and in a
-// top-level var), the incremental index-assignment form, and the struct-tag
-// form, so a future loosening of any detector fails loudly.
+// top-level var), the incremental index-assignment form, the struct-tag form,
+// and the hand-built JSON string form (in a function and in a top-level
+// const), so a future loosening of any detector fails loudly.
 func TestCRMMarkerConstruction_NegativeGuardCatchesStray(t *testing.T) {
 	cases := []struct {
 		name string
@@ -366,6 +394,19 @@ type strayMarkerStruct struct {
 }
 `,
 		},
+		{
+			name: "escaped JSON string in func",
+			src: `package poc
+
+func strayEncoder() string {
+	return "{\"contact_id\":\"x\",\"crm\":true}"
+}
+`,
+		},
+		{
+			name: "raw JSON string in top-level const",
+			src:  "package poc\n\nconst strayMarker = `{\"crm\": true, \"contact_id\": \"x\"}`\n",
+		},
 	}
 
 	// Use a relSlash NOT present in allowedConstructionSites so any detected
@@ -384,48 +425,5 @@ type strayMarkerStruct struct {
 				t.Fatalf("negative guard did not detect the stray %s — the real guard would let a new construction through", tc.name)
 			}
 		})
-	}
-}
-
-// TestCRMMarkerGrepGuard_CatchesIndexAssignment runs the actual grep guard
-// script against a temporary stray file built with the incremental
-// `m["crm"] = true` form, and asserts the script exits non-zero. This proves
-// the belt (grep) layer covers pattern (d), complementing the AST suspenders
-// above. The stray file is written under backend/internal and removed after.
-func TestCRMMarkerGrepGuard_CatchesIndexAssignment(t *testing.T) {
-	moduleRoot, err := backendModuleRoot()
-	if err != nil {
-		t.Fatalf("locate backend module root: %v", err)
-	}
-	repoRoot := filepath.Dir(moduleRoot)
-	guard := filepath.Join(repoRoot, "scripts", "ci", "crm-marker-construction-guard.sh")
-	if _, statErr := os.Stat(guard); statErr != nil {
-		t.Fatalf("guard script not found at %s: %v", guard, statErr)
-	}
-
-	// Sanity: the guard must currently pass on the real tree (no false
-	// positives) before we inject the stray.
-	if out, runErr := exec.Command(guard).CombinedOutput(); runErr != nil {
-		t.Fatalf("guard unexpectedly failed on clean tree: %v\n%s", runErr, out)
-	}
-
-	strayDir := filepath.Join(moduleRoot, "internal", "todoist")
-	strayPath := filepath.Join(strayDir, "zz_crm_marker_grep_probe.go")
-	content := "package todoist\n\nfunc crmMarkerGrepProbe() map[string]any {\n\tm := map[string]any{}\n\tm[\"crm\"] = true\n\treturn m\n}\n"
-	if writeErr := os.WriteFile(strayPath, []byte(content), 0o644); writeErr != nil {
-		t.Fatalf("write stray probe: %v", writeErr)
-	}
-	defer func() {
-		if rmErr := os.Remove(strayPath); rmErr != nil {
-			t.Errorf("remove stray probe %s: %v", strayPath, rmErr)
-		}
-	}()
-
-	out, runErr := exec.Command(guard).CombinedOutput()
-	if runErr == nil {
-		t.Fatalf("grep guard did NOT flag the stray index-assignment marker; output:\n%s", out)
-	}
-	if !strings.Contains(string(out), "zz_crm_marker_grep_probe.go") {
-		t.Errorf("grep guard failed but did not name the stray file; output:\n%s", out)
 	}
 }

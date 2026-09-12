@@ -61,7 +61,7 @@ A gate whose self-test needs its own falsification is the wrong tool.
 - Run focused tests appropriate to the changed behavior and available environment; broaden for shared or high-risk changes. Report verification deferred to CI. Required CI suites gate merging.
 - Do not rerun successful checks unless relevant source, test, configuration, dependency, or environment inputs changed, or new evidence warrants it. Reuse relevant results already obtained in the session; this does not waive required CI checks for the revision being merged.
 - Run `make test-e2e` only for the full suite (CI or when explicitly requested)
-- Agents may choose focused E2E runs with `make test-e2e-local PLAYWRIGHT_GREP='...'` for the affected behavior; no user-supplied grep is required. Use `make test-e2e-diff` when broader diff-selected coverage is useful.
+- Agents may choose focused E2E runs with `make test-e2e-local PLAYWRIGHT_GREP='...'` for the affected behavior; no user-supplied grep is required.
 - Unit tests for business logic, integration tests for DB operations, E2E for user flows
 
 ## Pre-push Hooks

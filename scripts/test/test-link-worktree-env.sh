@@ -20,7 +20,7 @@ REPO="$PWD"
 # `git -C "$tmp" ...` below at the REAL repo with work-tree=$tmp: `add -A` wipes
 # the real index down to the temp fixture files, `commit -m init` strands fixture
 # commits on the pushed branch, and `worktree add` mutates the real repo — which
-# corrupts a worktree push (test-map coverage then sees zero specs). Unsetting
+# corrupts a worktree push (tracked files vanish from the pushed tree). Unsetting
 # here restores cwd/-C-based discovery so the throwaway repos are isolated.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 

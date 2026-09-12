@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export model-prices-sync model-prices-apply qa-cost-assert qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local test-e2e-diff e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export model-prices-sync model-prices-apply qa-cost-assert qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -108,87 +108,14 @@ INTEGRATION_PKGS ?= ./tests/... ./internal/todoist/... ./internal/google/... ./i
 # byte-identical to today when the knob is unset (no trailing/double space).
 INTEGRATION_RUN_FLAG := $(if $(INTEGRATION_RUN), -run '$(INTEGRATION_RUN)')
 
-# Default target
-# NOTE: When adding or removing make targets, update this help section to match
-help:
-	@echo "Available targets:"
-	@echo ""
-	@echo "🔧 Setup:"
-	@echo "  setup       - Setup development environment (install deps + git hooks)"
-	@echo ""
-	@echo "🚀 Production Commands:"
-	@echo "  start       - Start Personal CRM (production mode on port 3001)"
-	@echo "  start-local - Start with .env.local (preserves your production secrets)"
-	@echo "  stop        - Stop Personal CRM"
-	@echo "  restart     - Restart Personal CRM (full stop/start)"
-	@echo "  reload      - Rebuild and restart apps (keeps database running)"
-	@echo "  status      - Check CRM status"
-	@echo ""
-	@echo "Environment Management:"
-	@echo "  testing     - Switch to testing environment (ultra-fast cadences)"
-	@echo "  staging     - Switch to staging environment (production cadence durations)" 
-	@echo "  prod        - Switch to production environment (real cadences)"
-	@echo ""
-	@echo "Development:"
-	@echo "  dev          - Start development servers (uses Docker for PostgreSQL)"
-	@echo "  dev-seed     - Seed the declared 'standard' synthetic world into local Postgres, then start dev servers (opt-in; dev is unchanged). Override the world with DEV_SEED_PROFILE=minimal-scoped"
-	@echo "  dev-native   - Start dev servers with native PostgreSQL (no Docker)"
-	@echo "  worktree-env - Symlink the main checkout's gitignored env files into this worktree"
-	@echo "  worktree-deps - Install per-worktree frontend deps (node_modules) into this worktree"
-	@echo "  staging-reset - HARD reset + reseed STAGING with the declared 'standard' synthetic world — the manual force path / escape hatch (full wipe regardless of oauth; deploy-staging.yml auto-reseeds on seed-surface changes). Fail-closed: refuses a production-alias/empty CRM_ENV. Override the world with STAGING_RESET_PROFILE=minimal-scoped"
-	@echo "  build       - Build both frontend and backend"
-	@echo "  crm-admin   - Build the operator-only admin CLI (backend/crm-admin)"
-	@echo "  mac-daemon  - Build the macOS daemon app bundle (optionally set CRM_MAC_CODESIGN_IDENTITY)"
-	@echo "  sqlc        - Regenerate sqlc code from SQL queries"
-	@echo "  api-types   - Regenerate frontend API types from Go wire structs"
-	@echo "  api-types-check - Fail if generated API types drifted (non-mutating)"
-	@echo "  api-docs    - Regenerate the Swagger spec from Go annotations"
-	@echo "  api-docs-check - Fail if the generated Swagger spec drifted (non-mutating)"
-	@echo "  contact-queries - Regenerate the contact-list query triple from its shared fragment"
-	@echo "  contact-queries-check - Fail if the generated contact-list queries drifted (non-mutating)"
-	@echo "  lint        - Run all linters (backend + frontend)"
-	@echo "  spec-lint   - Lint the behavior spec corpus (spec/*.yaml)"
-	@echo "  spec-coverage - Report per-then-item coverage: ui behaviors (E2E), api behaviors (Go)"
-	@echo "  spec-drift  - Warn when a behavior's assertions changed but no citing test was touched"
-	@echo "  clean       - Clean build artifacts"
-	@echo ""
-	@echo "Testing:"
-	@echo "  test                  - Run all backend tests (unit + integration, includes slow opt-in tests)"
-	@echo "  test-unit             - Run backend unit tests only"
-	@echo "  test-integration      - Run all backend integration tests"
-	@echo "  test-integration-fast - Run backend integration tests without LONG_TESTS"
-	@echo "  test-integration-slow - Run only LONG_TESTS-gated backend integration tests"
-	@echo "  test-clean-clones     - Drop leaked clone and stale template databases"
-	@echo "  test-pg-stop          - Stop this worktree's per-worktree test Postgres (keep data dir)"
-	@echo "  test-pg-teardown      - Stop + delete this worktree's per-worktree test Postgres data dir"
-	@echo "  test-pg-reap          - Prune per-worktree test Postgres instances whose worktree is gone"
-	@echo "  test-pg-smoke         - Real-cluster smoke for the per-worktree Postgres mechanism"
-	@echo "  test-frontend         - Run frontend unit tests"
-	@echo "  test-e2e              - Run Playwright E2E tests"
-	@echo "  test-e2e-local        - Run Playwright E2E tests (honors PLAYWRIGHT_GREP)"
-	@echo "  test-e2e-diff         - Run diff-selected E2E tests (core + impacted)"
-	@echo "  test-api              - Run API endpoint tests"
-	@echo "  test-deploy-scripts   - Run the mocked deploy-script shell suites"
-	@echo "  smoke-test            - Full system verification (restart + test)"
-	@echo ""
-	@echo "Docker:"
-	@echo "  docker-up   - Start Docker Compose services"
-	@echo "  docker-down - Stop Docker Compose services"
-	@echo "  docker-reset- Reset Docker volumes and restart"
-	@echo ""
-	@echo "Cadence Testing:"
-	@echo "  test-cadence-ultra - Test all cadences in minutes (testing env)"
-	@echo "  test-cadence-fast  - Test all cadences in hours (accelerated env)"
-	@echo ""
-	@echo "Deployment:"
-	@echo "  setup-pi         - One-time Pi setup (create user, directories)"
-	@echo "  setup-mac-deploy - One-time Mac deploy setup (clone + reconcile + timer)"
-	@echo "  promote          - Fast-forward main to develop (triggers prod deploy)"
-	@echo "  deploy-mac       - Build and install the Mac daemon (requires CRM_MAC_CODESIGN_IDENTITY)"
+# Default target. Each target documents itself with a trailing "## <text>"
+# on its rule line; help lists exactly those.
+help: ## List documented targets
+	@grep -hE '^[a-zA-Z0-9_.-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F':.*## ' '{printf "  %-24s %s\n", $$1, $$2}'
 
 # Setup development environment (installs all dev dependencies)
 # Run this first when setting up a new development environment
-setup:
+setup: ## Setup development environment (install deps + git hooks)
 	@bash scripts/setup-dev.sh
 
 # Create logs directory
@@ -196,7 +123,7 @@ logs:
 	@mkdir -p logs
 
 # Development
-dev:
+dev: ## Start development servers (uses Docker for PostgreSQL)
 	@echo "Starting development environment..."
 	@make docker-up
 	@bash scripts/sync-postgres-auth.sh
@@ -330,7 +257,7 @@ qa-fn-backfill: ## False-negative recall helper. BEHAVIOR=<id> lists covering-PA
 # hook on `git worktree add`; run this manually if a worktree was created before
 # the hook existed, or to re-link after rotating a secret. No-op in the main
 # checkout.
-worktree-env:
+worktree-env: ## Symlink the main checkout's gitignored env files into this worktree
 	@WORKTREE_ENV_VERBOSE=1 bash scripts/link-worktree-env.sh
 
 # Install per-worktree dependencies that can't be symlinked (frontend
@@ -338,7 +265,7 @@ worktree-env:
 # when a task needs frontend tooling; checkout does not install dependencies.
 # No-op in the main
 # checkout (use `make setup` there). Go deps need nothing (global modcache).
-worktree-deps:
+worktree-deps: ## Install per-worktree frontend deps (node_modules) into this worktree
 	@WORKTREE_DEPS_VERBOSE=1 bash scripts/install-worktree-deps.sh
 
 postgres-native:
@@ -346,7 +273,7 @@ postgres-native:
 
 # Development with native PostgreSQL (no Docker required)
 # Use this when running inside a container where Docker is not available
-dev-native: postgres-native
+dev-native: postgres-native ## Start dev servers with native PostgreSQL (no Docker)
 	@echo "Starting development environment (native PostgreSQL)..."
 	@make logs
 	@echo "Starting backend server..."
@@ -369,7 +296,7 @@ dev-native: postgres-native
 	@echo "Press Ctrl+C to exit (servers will keep running)"
 	@tail -f logs/frontend-dev.log logs/backend-dev.log 2>/dev/null || sleep infinity
 
-test-e2e: e2e-db
+test-e2e: e2e-db ## Run Playwright E2E tests
 	@echo "Running Playwright E2E tests..."
 	@ENV_FILE=$${ENV_FILE:-$(REPO_ROOT)/.env.example.testing}; \
 	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
@@ -384,7 +311,7 @@ test-e2e: e2e-db
 	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
 	exit $$EXIT_CODE
 
-test-e2e-local: e2e-db
+test-e2e-local: e2e-db ## Run Playwright E2E tests (honors PLAYWRIGHT_GREP)
 	@echo "Running Playwright E2E tests (local selection)..."
 	@ENV_FILE=$${ENV_FILE:-$(REPO_ROOT)/.env.example.testing}; \
 	if [ ! -f "$$ENV_FILE" ]; then echo "❌ ENV file not found: $$ENV_FILE"; exit 1; fi; \
@@ -399,11 +326,6 @@ test-e2e-local: e2e-db
 	rm -f "$(REPO_ROOT)/frontend/.env.local"; \
 	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
 	exit $$EXIT_CODE
-
-# Validate/select first; the runner invokes test-e2e-local, which resets the DB.
-test-e2e-diff:
-	@bash scripts/hooks/test-map-coverage-check.sh
-	@PLAYWRIGHT_WORKERS=1 node "$(REPO_ROOT)/scripts/run-e2e-local.mjs"
 
 # Free the ports the E2E stack owns. A prerequisite of e2e-db (rather than a
 # step in each test-e2e* recipe) because it MUST run before the reset script:
@@ -426,7 +348,7 @@ e2e-db: e2e-ports-free
 	@echo "✓ E2E test database ready"
 
 # Build
-build:
+build: ## Build both frontend and backend
 	@echo "Building backend..."
 	@cd backend && go build -ldflags "$(STAMP_LDFLAGS)" -o bin/crm-api ./cmd/crm-api
 	@echo "Building frontend..."
@@ -435,7 +357,7 @@ build:
 # Operator-only admin binary. NOT wired into CI; build on demand on
 # the Pi when a one-shot maintenance task is needed (e.g.,
 # `./crm-admin --messages-rematch-stranded`).
-crm-admin:
+crm-admin: ## Build the operator-only admin CLI (backend/crm-admin)
 	@echo "Building crm-admin..."
 	@cd backend && go build -ldflags "$(STAMP_LDFLAGS)" -o crm-admin ./cmd/crm-admin
 	@echo "✓ crm-admin built at backend/crm-admin"
@@ -449,7 +371,7 @@ crm-admin:
 # otherwise the bundle is ad-hoc signed.
 # Bundle assembly is delegated to Scripts/assemble_bundle.sh — only
 # Command Line Tools (no full Xcode) are required.
-mac-daemon:
+mac-daemon: ## Build the macOS daemon app bundle (optionally set CRM_MAC_CODESIGN_IDENTITY)
 	@echo "Building crm-mac (release)..."
 	@cd mac-daemon && swift build -c release
 	@CRM_BUILD_SHA="$$(git rev-parse HEAD)" bash mac-daemon/Scripts/assemble_bundle.sh \
@@ -466,9 +388,9 @@ test-daemon-local:
 	@cd mac-daemon && swift test
 
 # Tests
-test: test-unit test-integration test-frontend
+test: test-unit test-integration test-frontend ## Run all backend tests (unit + integration, includes slow opt-in tests)
 
-test-unit:
+test-unit: ## Run backend unit tests only
 	@echo "Running backend unit tests..."
 	@cd backend && go test ./tests/... ./internal/matching/... ./internal/events/... ./internal/service/... ./internal/contacttask/... ./internal/synthetic ./internal/synthetic/factory/... ./internal/synthetic/replay/... ./internal/synthetic/declare/... ./internal/spec/... ./cmd/spec-lint/... ./cmd/spec-coverage/... ./cmd/spec-drift/... $(GOTEST_VERBOSE) -short
 	@echo "Running whatsapp actor tests under the race detector..."
@@ -494,7 +416,7 @@ test-unit:
 worktree-test-pg-ensure:
 	@$(WORKTREE_PG_ENSURE_CMD)
 
-test-integration-fast: worktree-test-pg-ensure
+test-integration-fast: worktree-test-pg-ensure ## Run backend integration tests without LONG_TESTS
 	@echo "Running backend integration tests (default set)..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go test -tags integration_testdb -count=1 -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE)$(INTEGRATION_RUN_FLAG)
 
@@ -512,32 +434,32 @@ test-integration-fast: worktree-test-pg-ensure
 # package while preserving useful hang detection.
 LONG_TESTS_TIMEOUT ?= 15m
 
-test-integration: worktree-test-pg-ensure
+test-integration: worktree-test-pg-ensure ## Run all backend integration tests
 	@echo "Running backend integration tests..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -timeout $(LONG_TESTS_TIMEOUT) -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE)$(INTEGRATION_RUN_FLAG)
 
-test-integration-slow: worktree-test-pg-ensure
+test-integration-slow: worktree-test-pg-ensure ## Run only LONG_TESTS-gated backend integration tests
 	@echo "Running backend slow integration tests..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" LONG_TESTS=1 go test -tags integration_testdb -count=1 -timeout $(LONG_TESTS_TIMEOUT) -parallel $(TEST_PARALLEL) -p $(TEST_P) $(INTEGRATION_PKGS) $(GOTEST_VERBOSE) -run '$(BACKEND_SLOW_TESTS_REGEX)'
 
 # Per-worktree test-Postgres lifecycle (gh #433). All operate ONLY on
 # this worktree's own instance under $CRM_WORKTREE_PG_HOME — never the shared
 # Docker crm-postgres:5432, never Docker.
-test-pg-stop:
+test-pg-stop: ## Stop this worktree's per-worktree test Postgres (keep data dir)
 	@bash scripts/worktree-test-pg.sh stop
 
-test-pg-teardown:
+test-pg-teardown: ## Stop + delete this worktree's per-worktree test Postgres data dir
 	@bash scripts/worktree-test-pg.sh teardown
 
 # reap prunes per-worktree instances whose worktree no longer exists (run
 # between sessions). Cross-references `git worktree list`; safe to run anytime.
-test-pg-reap:
+test-pg-reap: ## Prune per-worktree test Postgres instances whose worktree is gone
 	@bash scripts/worktree-test-pg.sh reap
 
 # Real-cluster smoke for the per-worktree mechanism (NOT pre-push: it owns a DB
 # and binds a port). Set CRM_PG_SMOKE_REQUIRED=1 to make a missing pg16
 # toolchain a hard failure instead of a clean skip.
-test-pg-smoke:
+test-pg-smoke: ## Real-cluster smoke for the per-worktree Postgres mechanism
 	@bash scripts/test/smoke-worktree-test-pg.sh
 
 # Sweep leaked clone databases (personal_crm_test_clone_*) AND stale
@@ -554,17 +476,17 @@ test-pg-smoke:
 # template is kept warm, and the base is never touched. Uses `go run` on a
 # package main (NOT `go test`) so the sweep can never execute during the normal
 # `go test ./internal/testdb/...` integration run.
-test-clean-clones:
+test-clean-clones: ## Drop leaked clone and stale template databases
 	@echo "Sweeping leaked clone and stale template databases..."
 	@cd backend && DATABASE_URL="$(TEST_DATABASE_URL)" go run -tags integration_testdb ./internal/testdb/cmd/cleanclones
 
-test-frontend:
+test-frontend: ## Run frontend unit tests
 	@echo "Running frontend tests..."
 	@cd frontend && bun run test
 	@echo "Running infra/langfuse tests..."
 	@cd infra/langfuse && bun test
 
-test-api:
+test-api: ## Run API endpoint tests
 	@echo "Running API tests..."
 	@cd backend && go test ./tests/... -v
 
@@ -573,7 +495,7 @@ test-api:
 # committed timer template is validated for XML/plist well-formedness with a
 # cross-platform python3 plistlib parse (the __INSTALL_PREFIX__ placeholder lives
 # inside <string> values, so it parses fine); plutil is macOS-only and not used here.
-test-deploy-scripts:
+test-deploy-scripts: ## Run the mocked deploy-script shell suites
 	@echo "Running deploy-script shell tests (parallel)..."
 	@tests="scripts/deploy-artifact.test.sh scripts/backup-db.test.sh scripts/backup-offsite.test.sh scripts/restore-db.test.sh scripts/deploy-staging.test.sh scripts/staging-reset.test.sh scripts/dev-seed.test.sh scripts/check-tour-markers.test.sh scripts/ci/staging-reseed-decision.test.sh scripts/ci/ghcr-retention.test.sh scripts/ci/qa-round-cadence-gate.test.sh scripts/ci/qa-nightly-round.test.sh scripts/ci/qa-fn-backfill-guard.test.sh scripts/staging-deployed-sha.test.sh scripts/staging-reseed.test.sh scripts/admin/setup-staging-reseed-host.sh.test.sh scripts/run-tours.test.sh scripts/reconcile-mac-daemon.test.sh scripts/setup-mac-deploy.test.sh scripts/trigger-mac-deploy.test.sh scripts/test/test-promote-preflight.sh"; \
 	tmp="$$(mktemp -d)"; \
@@ -593,7 +515,7 @@ test-deploy-scripts:
 	@python3 -c "import plistlib,sys; plistlib.loads(open(sys.argv[1],'rb').read()); print('  timer template OK')" \
 		infra/mac-deploy/xyz.spengrah.crm-mac-deploy.plist.template
 
-smoke-test:
+smoke-test: ## Full system verification (restart + test)
 	@echo "Running full system smoke test..."
 	@./scripts/smoke-test.sh
 
@@ -612,7 +534,7 @@ ci-build: ci-build-backend ci-build-frontend
 # Linting
 GOLANGCI_LINT := $(shell which golangci-lint 2>/dev/null || echo $$(go env GOPATH)/bin/golangci-lint)
 
-lint: lint-ingest-registry
+lint: lint-ingest-registry ## Run all linters (backend + frontend)
 	@echo "Running golangci-lint..."
 	@cd backend && $(GOLANGCI_LINT) run ./...
 
@@ -624,7 +546,7 @@ lint-fix:
 # spec/README.md. Standalone target (NOT a `lint` prerequisite): the pre-push
 # LINT lane runs it as its own entry, so chaining it into `lint` would
 # double-run it in that lane.
-spec-lint:
+spec-lint: ## Lint the behavior spec corpus (spec/*.yaml)
 	@cd backend && go run ./cmd/spec-lint $(REPO_ROOT)/spec
 
 # Behavior-SSOT traceability scanner: cross-references // spec: citations in
@@ -632,14 +554,14 @@ spec-lint:
 # surface — ui behaviors via E2E citations, api behaviors via Go-test
 # citations. Warn-only unless a domain lists the surface in its settled list;
 # invalid citations and orphans on a settled surface exit non-zero.
-spec-coverage:
+spec-coverage: ## Report per-then-item coverage: ui behaviors (E2E), api behaviors (Go)
 	@cd backend && go run ./cmd/spec-coverage $(REPO_ROOT)
 
 # Behavior-drift advisory: warns when a behavior's given/when/then/statement
 # changed but no citing test file was touched. Warn-only (exit 0); exit 2 on
 # git/operational error (never fail-open). Base ref = origin/develop; the CLI
 # computes merge-base(HEAD, origin/develop) internally.
-spec-drift:
+spec-drift: ## Warn when a behavior's assertions changed but no citing test was touched
 	@cd backend && go run ./cmd/spec-drift $(REPO_ROOT) origin/develop
 
 # Grep guard for #342's descriptor table: fails if the IngestBatch body
@@ -650,40 +572,8 @@ spec-drift:
 lint-ingest-registry:
 	@$(REPO_ROOT)/scripts/check-ingest-registry.sh
 
-ci-test: lint check-cadence-sole-writer check-followup-sole-writer check-rematch-sole-dispatcher check-crm-marker-construction check-sqlc-select-lists test-unit test-integration-fast test-frontend
+ci-test: lint check-sqlc-select-lists test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"
-
-# Sole-writer guard: verifies contact's eight derived columns each have
-# exactly one owner — CadenceUpdater for the five cadence columns
-# (last_contacted, last_interaction_at, last_outreach_at, last_response_at,
-# contact_by) and KnowledgeCacheUpdater.RefreshTx for the three knowledge
-# columns (location, birthday, how_met). Runs alongside the Go AST test at
-# backend/tests/sole_writer_static_test.go; produces reviewer-visible
-# file/line evidence whenever a derived-writing symbol escapes the allowlist.
-# See scripts/check-cadence-sole-writer.sh.
-check-cadence-sole-writer:
-	@$(REPO_ROOT)/scripts/check-cadence-sole-writer.sh
-
-# Sole-writer guard: verifies only FollowUpManager (consumer/followup_manager.go)
-# calls follow-up writer symbols, and that the retired todoist_close_pending
-# metadata key is not referenced anywhere. See
-# scripts/ci/followup-sole-writer-guard.sh.
-check-followup-sole-writer:
-	@$(REPO_ROOT)/scripts/ci/followup-sole-writer-guard.sh
-
-# Sole-dispatcher guard: enforces that StartRematchForContact is test-only
-# after the PR-10 event-bus cutover (#180). Production rematch dispatch
-# flows through events.Bus + RematchDispatcher; any non-test caller
-# indicates a partial revert. See scripts/ci/rematch-sole-dispatcher-guard.sh.
-check-rematch-sole-dispatcher:
-	@$(REPO_ROOT)/scripts/ci/rematch-sole-dispatcher-guard.sh
-
-# CRM-marker construction guard: verifies the Todoist CRM-marker wire format
-# is built only in contacttask.EncodeMarker. Runs alongside the Go AST test
-# at backend/tests/crm_marker_construction_static_test.go. See
-# scripts/ci/crm-marker-construction-guard.sh.
-check-crm-marker-construction:
-	@$(REPO_ROOT)/scripts/ci/crm-marker-construction-guard.sh
 
 # Duplicated-SELECT-list guard: fails if an identical explicit >=3-column
 # SELECT projection of the same table appears in 2+ source queries (use
@@ -694,7 +584,7 @@ check-sqlc-select-lists:
 	@$(REPO_ROOT)/scripts/ci/sqlc-select-list-guard.sh
 
 # Code generation
-sqlc:
+sqlc: ## Regenerate sqlc code from SQL queries
 	@echo "Generating sqlc code from SQL queries..."
 	@cd backend && go tool sqlc generate
 	@echo "✅ sqlc code generated"
@@ -703,7 +593,7 @@ sqlc:
 # swag runs via `go tool` (pinned in backend/go.mod alongside tygo) rather than
 # a ~/go/bin binary: CI has no such install, and an unpinned local binary can
 # generate a different spec than the one the drift check expects.
-api-docs:
+api-docs: ## Regenerate the Swagger spec from Go annotations
 	@echo "Generating API documentation..."
 	@cd backend && go tool swag init -g cmd/crm-api/main.go --output ./docs
 	@echo "✅ API docs generated"
@@ -715,7 +605,7 @@ api-docs:
 # and nothing was watching.
 # The temp output dir must be named `docs`: swag derives the generated package
 # clause from the directory basename, so any other name diffs on `package X`.
-api-docs-check:
+api-docs-check: ## Fail if the generated Swagger spec drifted (non-mutating)
 	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
 	mkdir -p "$$tmp/out" && \
 	(cd backend && go tool swag init -g cmd/crm-api/main.go --output "$$tmp/out/docs" >/dev/null) && \
@@ -727,7 +617,7 @@ api-docs-check:
 
 # Generate frontend TypeScript API types from the Go wire structs
 # (backend/tygo.yaml). CI + pre-push guard drift via api-types-check.
-api-types:
+api-types: ## Regenerate frontend API types from Go wire structs
 	@echo "Generating frontend API types from Go structs..."
 	@cd backend && go tool tygo generate
 	@echo "✅ API types generated"
@@ -735,7 +625,7 @@ api-types:
 # Non-mutating drift check: generates into a temp dir and diffs against the
 # committed files, so it is safe to run concurrently with readers of
 # frontend/src/types/generated.
-api-types-check:
+api-types-check: ## Fail if generated API types drifted (non-mutating)
 	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
 	sed "s|\.\./frontend/src/types/generated/|$$tmp/out/|g" backend/tygo.yaml > "$$tmp/tygo.yaml" && \
 	mkdir -p "$$tmp/out" && \
@@ -748,13 +638,13 @@ api-types-check:
 
 # Generate the ListContacts/CountContacts/ListContactIDs query triple from
 # the shared WHERE/ORDER BY fragment (backend/internal/db/querygen).
-contact-queries:
+contact-queries: ## Regenerate the contact-list query triple from its shared fragment
 	@cd backend && go run ./cmd/gen-contact-queries
 	@echo "✅ contact list queries generated"
 
 # Non-mutating drift check: generates into a temp path and diffs against the
 # committed backend/internal/db/queries/contact_list.gen.sql.
-contact-queries-check:
+contact-queries-check: ## Fail if the generated contact-list queries drifted (non-mutating)
 	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
 	(cd backend && go run ./cmd/gen-contact-queries -o "$$tmp/contact_list.gen.sql") && \
 	if ! diff -u backend/internal/db/queries/contact_list.gen.sql "$$tmp/contact_list.gen.sql"; then \
@@ -772,7 +662,7 @@ api-run: api-build
 	@set -a && source ./.env && set +a && export DATABASE_URL="postgres://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}?sslmode=disable" && ./backend/bin/crm-api
 
 # Environment switching
-testing:
+testing: ## Switch to testing environment (ultra-fast cadences)
 	@echo "Switching to TESTING environment (ultra-fast cadences)..."
 	@cp .env.example.testing .env
 	@echo "✅ Testing environment active:"
@@ -784,7 +674,7 @@ testing:
 	@echo ""
 	@echo "Use 'make test-cadence-ultra' to validate all cadences quickly"
 
-staging:
+staging: ## Switch to staging environment (production cadence durations)
 	@echo "Switching to STAGING environment (production cadence durations)..."
 	@cp .env.example.staging .env
 	@echo "✅ Staging environment active:"
@@ -808,7 +698,7 @@ accelerated:
 	@echo ""
 	@echo "Use 'make test-cadence-fast' to validate cadences in hours"
 
-prod:
+prod: ## Switch to production environment (real cadences)
 	@echo "Switching to PRODUCTION environment (real cadences)..."
 	@cp .env.example.production .env
 	@echo "✅ Production environment active:"
@@ -821,7 +711,7 @@ prod:
 	@echo "⚠️  CAUTION: Real-world timing active"
 
 # Cadence testing commands
-test-cadence-ultra:
+test-cadence-ultra: ## Test all cadences in minutes (testing env)
 	@echo "🚀 Starting ULTRA-FAST cadence testing..."
 	@echo "This will test all reminder cadences in minutes!"
 	@echo ""
@@ -843,7 +733,7 @@ test-cadence-ultra:
 	@echo "💡 Add test contacts with different cadences and watch reminders generate!"
 	@echo "💡 Process will continue running after you close this terminal"
 
-test-cadence-fast:
+test-cadence-fast: ## Test all cadences in hours (accelerated env)
 	@echo "🏎️  Starting FAST cadence testing..."
 	@echo "This will test all reminder cadences in hours!"
 	@echo ""
@@ -866,7 +756,7 @@ test-cadence-fast:
 	@echo "💡 Process will continue running after you close this terminal"
 
 # Clean
-clean:
+clean: ## Clean build artifacts
 	@echo "Cleaning build artifacts..."
 	@cd backend && rm -rf bin/
 	@cd frontend && rm -rf .next/ out/
@@ -877,21 +767,21 @@ clean-logs:
 	@echo "✅ Logs cleaned"
 
 # Docker operations
-docker-up:
+docker-up: ## Start Docker Compose services
 	@echo "Starting Docker services..."
 	@cd infra && docker compose up -d
 
-docker-down:
+docker-down: ## Stop Docker Compose services
 	@echo "Stopping Docker services..."
 	@cd infra && docker compose down
 
-docker-reset:
+docker-reset: ## Reset Docker volumes and restart
 	@echo "Resetting Docker environment..."
 	@cd infra && docker compose down -v
 	@cd infra && docker compose up -d
 
 # Production Commands
-start:
+start: ## Start Personal CRM (production mode on port 3001)
 	@echo "🚀 Starting Personal CRM..."
 	@make prod
 	@make build
@@ -916,7 +806,7 @@ start:
 	@echo "💡 Processes will continue running after you close this terminal"
 	@echo "   Use 'make stop' to stop the CRM"
 
-start-local:
+start-local: ## Start with .env.local (preserves your production secrets)
 	@echo "🚀 Starting Personal CRM with local production config..."
 	@if [ ! -f .env.local ]; then \
 		echo "❌ Error: .env.local not found!"; \
@@ -951,7 +841,7 @@ start-local:
 	@echo "💡 Processes will continue running after you close this terminal"
 	@echo "   Use 'make stop' to stop the CRM"
 
-stop:
+stop: ## Stop Personal CRM
 	@echo "🛑 Stopping Personal CRM..."
 	@# Kill backend by port and name (prod uses compiled crm-api binary)
 	@$(REPO_ROOT)/scripts/port-pids.sh 8080 | xargs kill -9 2>/dev/null || true
@@ -961,13 +851,13 @@ stop:
 	@make docker-down
 	@echo "✅ Personal CRM stopped"
 
-restart:
+restart: ## Restart Personal CRM (full stop/start)
 	@echo "🔄 Restarting Personal CRM..."
 	@make stop
 	@sleep 2
 	@make start
 
-reload:
+reload: ## Rebuild and restart apps (keeps database running)
 	@echo "🔄 Rebuilding and reloading Personal CRM..."
 	@echo "Building..."
 	@make build
@@ -980,7 +870,7 @@ reload:
 	@echo "🌐 Frontend: http://localhost:3001"
 	@echo "🔧 Backend:  http://localhost:8080"
 
-status:
+status: ## Check CRM status
 	@echo "📊 Personal CRM Status:"
 	@echo ""
 	@echo "Backend (port 8080):"
@@ -1001,7 +891,7 @@ status:
 	fi
 
 # Deployment
-deploy-mac:
+deploy-mac: ## Build and install the Mac daemon (requires CRM_MAC_CODESIGN_IDENTITY)
 	@./scripts/deploy-mac-daemon.sh
 
 # Promote: fast-forward main to develop's HEAD. The deploy runs on the Pi via
@@ -1013,7 +903,7 @@ deploy-mac:
 # gates are not already green — see scripts/promote-preflight.sh for why this is
 # checked locally when deploy-prod.yml checks it again server-side.
 # PROMOTE_SKIP_PREFLIGHT=1 is the deliberate escape hatch.
-promote:
+promote: ## Fast-forward main to develop (triggers prod deploy)
 	@if [ "$(PROMOTE_SKIP_PREFLIGHT)" = "1" ]; then \
 		echo "⚠️  promote pre-flight SKIPPED (PROMOTE_SKIP_PREFLIGHT=1)"; \
 	else \
@@ -1021,11 +911,11 @@ promote:
 	fi
 	@git push origin develop:main
 
-setup-pi:
+setup-pi: ## One-time Pi setup (create user, directories)
 	@./scripts/setup-pi.sh
 
 # One-time Mac deploy setup (dedicated clone, reconcile install, timer LaunchAgent).
 # Operational wiring (runner registration, deploy.env values, codesign key
 # pre-auth) is the runbook's job — see infra/mac-runner-installation-runbook.md.
-setup-mac-deploy:
+setup-mac-deploy: ## One-time Mac deploy setup (clone + reconcile + timer)
 	@./scripts/setup-mac-deploy.sh

@@ -24,8 +24,18 @@ linters:
       forbid:
         - pattern: 'time\.Now'
           msg: 'use accelerated.GetCurrentTime() instead of time.Now() for time acceleration support'
-      # Legitimate exceptions use inline //nolint:forbidigo comments:
+        # Sole-dispatcher invariant: production rematch dispatch flows through
+        # events.Bus.PublishTx -> RematchDispatcher -> RematchService.Run. The
+        # direct entry point is kept for tests only (exclusion below).
+        - pattern: '\.StartRematchForContact$'
+          msg: 'StartRematchForContact is test-only; production rematch dispatch goes through events.Bus + RematchDispatcher'
+      # Legitimate time.Now exceptions use inline //nolint:forbidigo comments:
       # - backend/internal/accelerated/time.go (wrapper implementation)
       # - backend/internal/api/middleware.go (latency measurement)
       # - backend/internal/synthetic/replay/replay.go (Stopwatch: seed/settle
       #   duration measurement — infrastructure timing, not domain time)
+  exclusions:
+    rules:
+      - path: '_test\.go$'
+        linters: [forbidigo]
+        text: 'StartRematchForContact'

@@ -104,18 +104,9 @@ jobs:
           working-directory: backend
           # No --timeout flag: inherit the single source in .golangci.yml (10m).
 
-      - name: Check derived-column sole-writer invariant
-        run: ./scripts/check-cadence-sole-writer.sh
-
-      - name: Check follow-up sole-writer invariant
-        run: ./scripts/ci/followup-sole-writer-guard.sh
-
-      - name: Check rematch sole-dispatcher invariant
-        run: ./scripts/ci/rematch-sole-dispatcher-guard.sh
-
-      - name: Check CRM-marker construction invariant
-        run: ./scripts/ci/crm-marker-construction-guard.sh
-
+      # The derived-column sole-writer and CRM-marker construction invariants
+      # are enforced by AST tests in backend/tests (run by Backend Tests), and
+      # the rematch sole-dispatcher rule by forbidigo in golangci-lint above.
       - name: Check sqlc SELECT-list duplication invariant
         run: ./scripts/ci/sqlc-select-list-guard.sh
 

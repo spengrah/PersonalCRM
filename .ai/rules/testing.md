@@ -9,7 +9,7 @@ Report any verification deferred to CI; do not provision unrelated runtimes just
 to push a branch.
 
 Pre-push runs path-selected static checks, including spec drift. Required CI
-suites gate merging. Use `make test` and `make test-e2e-diff` explicitly when
+suites gate merging. Use `make test` and `make test-e2e-local` explicitly when
 broader local verification is useful; neither is mandatory for every push.
 
 Agents may select focused E2E tests with
@@ -120,64 +120,12 @@ make test-integration  # Backend integration tests (needs DB)
 make test-frontend     # Frontend unit tests
 make test-e2e          # Full Playwright E2E tests
 make test-e2e-local    # Playwright E2E tests (honors PLAYWRIGHT_GREP)
-make test-e2e-diff     # Diff-selected E2E tests (core + impacted)
 make test              # All backend tests
 ```
 
-## E2E Diff Selection
+## E2E Area Tags
 
-Local E2E runs use tags and a path-to-tag map to run only tests affected by code changes.
-
-### How It Works
-
-1. `scripts/run-e2e-local.mjs` detects changed files via `git diff`
-2. Matches changed paths against patterns in `frontend/tests/e2e/test-map.json`
-3. Collects tags from matched entries (e.g., `@area:navigation`)
-4. Runs tests whose titles contain those tags
-
-### Test Tags
-
-Tags appear in test `describe` blocks:
-
-```typescript
-test.describe('Navigation @area:navigation', () => {
-  // All tests here run when @area:navigation is triggered
-})
-```
-
-Available tags: `@area:dashboard`, `@area:contacts`, `@area:imports`, `@area:navigation`, `@area:settings`, `@area:interactions`, `@area:overdue`, `@area:contact-merge`, `@area:contact-navigation`, `@area:error-boundary`
-
-### test-map.json Structure
-
-Each entry maps a file pattern to tags that should run when that file changes:
-
-```json
-{
-  "pattern": "^frontend/src/components/layout/",
-  "tags": ["@area:navigation", "@area:dashboard"]
-}
-```
-
-### Adding/Updating Tags
-
-**New tests in existing area:** Add the appropriate `@area:` tag to your `describe` block. No map changes needed.
-
-**New source file in existing area:** Check if an existing pattern covers it. If not, add a pattern entry.
-
-**New feature area:**
-1. Create a new `@area:yourfeature` tag
-2. Add it to relevant test `describe` blocks
-3. Add map entries for source files that affect those tests
-
-### Choosing Tags
-
-Tag tests based on what user-facing functionality they verify, not implementation details. A source file may map to multiple tags if it affects multiple areas.
-
-### Rules
-
-- Always keep a small `@smoke` set for core flows
-- Add area tags to new specs
-- Update the map when adding new pages/areas
+Specs tag their `describe` blocks with an `@area:` tag naming the user-facing surface they verify (`test.describe('Navigation @area:navigation', …)`), plus `@smoke` on the core flows. A focused local run selects by tag: `make test-e2e-local PLAYWRIGHT_GREP='@area:navigation'`. Tag new specs by the functionality they verify, not the implementation they touch.
 
 ## E2E Test Parallelism
 
