@@ -1,29 +1,41 @@
 # Shared path groups for CI, local static checks, and staging reseed decisions.
 # Keep flat named groups of quoted globs: the shell consumers use file_in_group
-# from scripts/hooks/pre-push. No anchors, aliases, or negation.
+# from scripts/hooks/pre-push. No anchors, aliases, or negation (dorny only
+# honors negation under predicate-quantifier: every, which breaks multi-glob
+# groups, so a markdown file under backend/ still counts as backend).
 #
 # Local check selection is configured in .ai/pre-push.json. Backend and frontend
 # checks are independent; spec checks use backend, frontend, and spec groups.
-# mac_daemon tests run in CI. seed and migrations drive staging reseed decisions.
+# scripts gates the shell-test job (deploy-script + hook suites); the few scripts
+# the backend lanes execute are listed in backend as well. mac_daemon tests run
+# in CI. seed and migrations drive staging reseed decisions.
 # infra/langfuse/*.ts triggers frontend CI, but model-prices.json does not.
 
 backend:
-  - '.ai/pre-push.json'
   - 'backend/**'
-  - 'tests/**'
   - 'go.mod'
   - 'go.sum'
-  - 'scripts/**'
   - 'Makefile'
   - '.golangci.yml'
   - '.github/workflows/ci.yml'
   - '.github/workflows/deploy-staging.yml'
   - 'path-filters.yml'
+  - 'scripts/check-*.sh'
+  - 'scripts/ci/*-guard.sh'
+  - 'scripts/test-parallelism.sh'
+  - 'scripts/worktree-test-pg.sh'
 frontend:
   - 'frontend/**'
   - 'infra/langfuse/*.ts'
 mac_daemon:
   - 'mac-daemon/**'
+  - '.github/workflows/ci.yml'
+scripts:
+  - 'scripts/**'
+  - 'infra/**'
+  - 'Makefile'
+  - 'path-filters.yml'
+  - '.ai/pre-push.json'
   - '.github/workflows/ci.yml'
 seed:
   - 'backend/internal/synthetic/**'

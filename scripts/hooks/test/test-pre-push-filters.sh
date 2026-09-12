@@ -52,8 +52,24 @@ assert_in_group     "frontend/src/app/page.tsx" frontend
 assert_not_in_group "frontend/src/app/page.tsx" mac_daemon
 # go.sum re-added-line regression guard.
 assert_in_group     "go.sum" backend
-# Gained scripts/** trigger.
-assert_in_group     "scripts/hooks/pre-push" backend
+# scripts/** gates the shell-test job, not the backend lanes.
+assert_in_group     "scripts/hooks/pre-push" scripts
+assert_not_in_group "scripts/hooks/pre-push" backend
+assert_in_group     "scripts/backup-db.sh" scripts
+assert_not_in_group "scripts/backup-db.sh" backend
+assert_in_group     "infra/backup/install.sh" scripts
+assert_not_in_group "infra/backup/install.sh" backend
+assert_in_group     ".ai/pre-push.json" scripts
+assert_not_in_group ".ai/pre-push.json" backend
+# Scripts the backend lanes execute stay in backend (and in scripts).
+assert_in_group     "scripts/ci/sqlc-select-list-guard.sh" backend
+assert_in_group     "scripts/ci/sqlc-select-list-guard.sh" scripts
+assert_in_group     "scripts/check-ingest-registry.sh" backend
+assert_in_group     "scripts/test-parallelism.sh" backend
+assert_not_in_group "scripts/ci/staging-reseed-decision.sh" backend
+# Makefile drives both the Go recipes and the hook render guard.
+assert_in_group     "Makefile" backend
+assert_in_group     "Makefile" scripts
 # ci.yml is intentionally in BOTH backend and mac_daemon.
 assert_in_group     ".github/workflows/ci.yml" backend
 assert_in_group     ".github/workflows/ci.yml" mac_daemon
