@@ -1,6 +1,6 @@
 # Agent Instructions
 
-Read and follow: `.ai/rules/core.md`
+Read and follow `.ai/rules/core.md`. If its contents are already loaded into the session, use that context rather than reading it again.
 
 ## About This Repo
 

@@ -35,7 +35,8 @@ A second-order test that does not gate a merge is deleted — unless it qualifie
 
 ### Ephemeral second-order verification
 
-Prove your first-order verification works, then delete the proof.
+When adding or changing a gate or guard, prove it rejects bad input, then delete
+the temporary proof. This does not require mutation testing for every application change.
 
 Write the second-order test — the injected defect, the mutation, the probe — run it, confirm it turns red, discard it. Keep mutants outside the repository (`/tmp`, `go test -overlay`) so nothing is committed by accident.
 
@@ -75,22 +76,8 @@ Git pre-push hooks run automatically and may block push:
 
 ## Code Review Approval Criteria
 
-Approve when no concrete blocking findings remain. Evaluate:
-
-- Correctness and relevant edge cases, with a plausible failure path for any reported defect
-- Credible security, privacy, data-loss, compatibility, and material performance risks
-- Test coverage appropriate to changed behavior and meaningful regression risks
-- Follows repository conventions (this file)
-- Proper error handling and validation
-- No unmet requirements or unfinished work needed for the change to function correctly
-
-Each blocker must identify its trigger, impact or unmet requirement, and relevant
-code. Request the smallest sufficient fix. Preferences and optional improvements
-are nonblocking and may accompany `RESULT=PASS`; a TODO or acknowledged limitation
-alone does not require changes. Subsequent reviews focus on fixes and their
-consequences, revisiting unchanged code when new evidence warrants it.
-
-See `.ai/rules/code-review.md` for details
+Use [code-review.md](code-review.md) as the authoritative review policy, including
+blocking criteria, proportional fixes, follow-up reviews, and verdict format.
 
 ## Git Practices
 
@@ -122,8 +109,8 @@ tooling. Domain entry files link their troubleshooting guides; load them for the
 affected area rather than reading every guide upfront.
 
 When changing product behavior, read `spec/README.md` and the relevant domain spec.
-Update behavior definitions and their citing tests or justified waivers in the
-same PR; the change checklist explains citation and coverage requirements.
+Follow the [maintenance rule](../../spec/README.md#maintenance-rule) and
+[test citation rules](../../spec/README.md#test--behavior-citations) there.
 
 ## Error Handling
 

@@ -127,6 +127,10 @@ assert_false "any_file_in_groups empty range -> no Go run" \
 
 echo "--- pre-push selection and failure propagation ---"
 bash scripts/hooks/test/test-pre-push-phases.sh || fail=1
+echo "--- pre-commit staging boundaries ---"
+bash scripts/hooks/test/test-pre-commit.sh || fail=1
+echo "--- push dry-run policy ---"
+bash scripts/hooks/test/test-block-no-verify.sh || fail=1
 echo "--- Makefile adaptive -p / CI-pin render guard ---"
 bash scripts/ci/test-parallelism-render-guard.sh || fail=1
 echo "--- per-worktree test-pg resolver unit (shim-only, DB/port-free) ---"
@@ -141,5 +145,7 @@ echo "--- e2e test-map coverage guard ---"
 bash scripts/hooks/test/test-test-map-coverage-check.sh || fail=1
 echo "--- run-e2e-local warning behavior ---"
 bash scripts/hooks/test/test-run-e2e-warning.sh || fail=1
+echo "--- diff-selected E2E setup ---"
+bash scripts/hooks/test/test-e2e-diff.sh || fail=1
 
 [[ "$fail" -eq 0 ]] && { echo "ALL PASS"; exit 0; } || { echo "FAILURES"; exit 1; }

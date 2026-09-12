@@ -12,5 +12,6 @@ git config core.hooksPath scripts/hooks
 
 echo "Git hooks configured."
 echo "  hooks path: scripts/hooks/"
-echo "  pre-commit: auto-formats Go and frontend files"
-echo "  pre-push: lint, swift (mac-daemon), tests"
+echo "  pre-commit: formats fully staged files; checks partially staged content"
+echo "  pre-push: path-selected static checks"
+echo "  post-checkout: links env files; frontend dependencies install on demand"

@@ -400,7 +400,8 @@ test-e2e-local: e2e-db
 	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
 	exit $$EXIT_CODE
 
-test-e2e-diff: e2e-db
+# Validate/select first; the runner invokes test-e2e-local, which resets the DB.
+test-e2e-diff:
 	@bash scripts/hooks/test-map-coverage-check.sh
 	@PLAYWRIGHT_WORKERS=1 node "$(REPO_ROOT)/scripts/run-e2e-local.mjs"
 
