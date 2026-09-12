@@ -201,11 +201,13 @@ test.describe('Dashboard - Log Interaction @area:dashboard @area:overdue', () =>
         response.url().includes(`/api/v1/contacts/${overdueId}/interactions`) &&
         response.request().method() === 'POST'
     )
+    const overdueRefetch = waitForOverdueListSettled(page, { presentIds: [overdueId] })
     await dialog.getByRole('button', { name: 'Log', exact: true }).click()
     const response = await responsePromise
     expect(response.status()).toBe(201)
     expect(response.request().postDataJSON()?.direction).toBe('outbound')
 
+    await overdueRefetch
     await expect(dialog).not.toBeVisible({ timeout: 5000 })
     await expect(card).toBeVisible()
   })

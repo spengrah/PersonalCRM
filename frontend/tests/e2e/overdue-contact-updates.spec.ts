@@ -53,8 +53,9 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
 
   // Both tests in this describe need an overdue contact plus a sentinel that
   // STAYS overdue, which is exactly CAD-028's declared fixture. The first test
-  // cites CON-053 and rides it: CON-053's own declaration is a cadence-less
-  // plain contact, and this variant is about a SEEDED-OVERDUE subject.
+  // cites CON-053 and rides it: CON-053's declaration includes both a cadence-less
+  // plain contact and an overdue contact, while this variant exercises the same
+  // SEEDED-OVERDUE state from CAD-028, so this describe rides CAD-028.
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
 
