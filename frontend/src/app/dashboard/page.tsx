@@ -17,6 +17,7 @@ import {
   getPrimaryAndSecondaryMethods,
 } from '@/lib/contact-methods'
 import { cadenceBaseDate, formatOverdueRecency } from '@/lib/contact-recency'
+import { formatRelativeTime } from '@/lib/utils'
 import type { ContactMethod, OverdueContact } from '@/types/contact'
 import { clsx } from 'clsx'
 
@@ -29,6 +30,7 @@ function OverdueContactCard({
 }) {
   const createInteraction = useCreateInteraction()
   const { currentTime } = useAcceleratedTime()
+  const awaiting = contact.has_pending_followup
   const { primary, secondary } = getPrimaryAndSecondaryMethods(
     contact.methods,
     contact.primary_method
@@ -61,14 +63,17 @@ function OverdueContactCard({
     if (daysOverdue <= 7) return { dotClass: 'bg-orange-500', label: 'Medium urgency' }
     return { dotClass: 'bg-red-500', label: 'High urgency' }
   }
-  const urgency = getUrgencyIndicator(contact.days_overdue)
+  const urgency = awaiting
+    ? { dotClass: 'bg-gray-400', label: 'Awaiting reply' }
+    : getUrgencyIndicator(contact.days_overdue)
+  const outreachRelativeTime = formatRelativeTime(contact.last_outreach_at, currentTime)
 
   return (
     <div
       role="listitem"
       className={clsx(
         'bg-white rounded-lg shadow-sm border p-6 hover:shadow-md transition-shadow',
-        getUrgencyColor(contact.days_overdue)
+        awaiting ? 'border-gray-200 bg-gray-50' : getUrgencyColor(contact.days_overdue)
       )}
     >
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between">
@@ -92,6 +97,16 @@ function OverdueContactCard({
                 {formatOverdueRecency(contact, currentTime)}
               </span>
             </div>
+
+            {awaiting && (
+              <div
+                data-testid="awaiting-reply-note"
+                className="text-sm text-gray-500 md:col-span-2"
+              >
+                Awaiting reply
+                {outreachRelativeTime ? ` · you reached out ${outreachRelativeTime}` : ''}
+              </div>
+            )}
 
             {methods.map((method, index) => {
               const value = formatContactMethodValue(method.type, method.value)
@@ -123,9 +138,15 @@ function OverdueContactCard({
             </div>
           </div>
 
-          <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4">
-            <p className="text-sm font-medium text-blue-800">💡 {contact.suggested_action}</p>
-          </div>
+          {awaiting ? (
+            <p className="text-sm text-gray-500 mb-4">
+              Waiting on their reply — nothing to do yet.
+            </p>
+          ) : (
+            <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4">
+              <p className="text-sm font-medium text-blue-800">💡 {contact.suggested_action}</p>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col gap-2 mt-2 sm:mt-0 sm:ml-6 sm:items-end">
@@ -186,10 +207,24 @@ export default function DashboardPage() {
   const [sortBy, setSortBy] = useState<'urgency' | 'name' | 'lastContacted'>('urgency')
   const [logTarget, setLogTarget] = useState<{ id: string; name: string } | null>(null)
 
+  const attention = overdueContacts?.filter(contact => !contact.has_pending_followup).length || 0
+  const awaiting = overdueContacts?.filter(contact => contact.has_pending_followup).length || 0
+  const headerText =
+    overdueContacts?.length === 0
+      ? "You're all caught up! No contacts need attention right now."
+      : awaiting === 0
+        ? `${attention} contacts need your attention`
+        : attention > 0
+          ? `${attention} contacts need your attention · ${awaiting} awaiting reply`
+          : `No contacts need your attention · ${awaiting} awaiting reply`
+
   const sortedContacts =
     overdueContacts?.slice().sort((a, b) => {
       switch (sortBy) {
         case 'urgency':
+          if (a.has_pending_followup !== b.has_pending_followup) {
+            return a.has_pending_followup ? 1 : -1
+          }
           return b.days_overdue - a.days_overdue
         case 'name':
           return a.full_name.localeCompare(b.full_name)
@@ -219,11 +254,7 @@ export default function DashboardPage() {
             <h2 className="text-3xl font-bold leading-normal text-gray-900 sm:text-4xl">
               Action Required
             </h2>
-            <p className="mt-2 text-lg text-gray-600">
-              {overdueContacts?.length === 0
-                ? "You're all caught up! No contacts need attention right now."
-                : `${overdueContacts?.length || 0} contacts need your attention`}
-            </p>
+            <p className="mt-2 text-lg text-gray-600">{headerText}</p>
           </div>
           <div className="mt-6 flex space-x-3 md:mt-0 md:ml-4">
             <Link href="/contacts/new">

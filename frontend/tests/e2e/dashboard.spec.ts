@@ -3,6 +3,13 @@ import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-
 import { expectAddContactHeader, waitForOverdueListSettled } from './helpers/dashboard'
 import type { OverdueContactResponse } from '../../src/types/generated/contact'
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+const API_HEADERS = {
+  'X-API-Key': API_KEY,
+  'Content-Type': 'application/json',
+}
+
 // Full-envelope overdue-entry builder for route-mocked dashboard tests,
 // typed against the real wire DTO so fixture drift fails tsc. The real
 // response OMITS empty optional fields (json omitempty) rather than sending
@@ -13,6 +20,7 @@ function overdueEntry(over: {
   lastContacted?: string
   createdAt?: string
   email?: string
+  hasPendingFollowup?: boolean
 }): OverdueContactResponse {
   const slug = over.name.toLowerCase().replace(/ /g, '-')
   return {
@@ -24,7 +32,7 @@ function overdueEntry(over: {
     cadence: 'weekly',
     ...(over.lastContacted ? { last_contacted: over.lastContacted } : {}),
     contact_by: '2026-07-01T00:00:00Z',
-    has_pending_followup: false,
+    has_pending_followup: over.hasPendingFollowup ?? false,
     created_at: over.createdAt ?? '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     days_overdue: over.days,
@@ -145,8 +153,8 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
           )
           if (!header) return 'no numeric header'
           const headerCount = Number(/(\d+)/.exec(header.textContent ?? '')?.[1])
-          const cardCount = Array.from(document.querySelectorAll('button')).filter(b =>
-            (b.textContent ?? '').includes('Mark as Contacted')
+          const cardCount = Array.from(document.querySelectorAll('[role="listitem"]')).filter(
+            card => !card.querySelector('[role="img"][aria-label="Awaiting reply"]')
           ).length
           if (headerCount !== cardCount) return `${headerCount} !== ${cardCount}`
           if (headerCount < minimum) return `${headerCount} < seeded ${minimum}`
@@ -154,6 +162,77 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
         }, cardNames.length)
       )
       .toBe('header equals cards')
+  })
+
+  test('demotes a contact that is awaiting a reply below every needs-attention card', async ({
+    page,
+    request,
+  }) => {
+    // spec: CAD-026.awaiting-reply-cards-demoted
+    // spec: CAD-023.each-entry-carries-pending-followup
+    const seededIds = ['card-a', 'card-b', 'card-c', 'awaiting'].map(
+      handle => seeded.entities[handle].id
+    )
+    const overdueSettled = waitForOverdueListSettled(page, { presentIds: seededIds })
+    await page.goto('/dashboard')
+    await overdueSettled
+
+    const awaitingName = seeded.entities['awaiting'].name
+    const awaitingCard = page
+      .getByRole('listitem')
+      .filter({ has: page.getByRole('heading', { name: awaitingName, exact: true }) })
+    await expect(awaitingCard.getByRole('img', { name: 'Awaiting reply' })).toBeVisible()
+    await expect(awaitingCard.getByTestId('awaiting-reply-note')).toBeVisible()
+    await expect(awaitingCard.getByText('Waiting on their reply')).toBeVisible()
+    await expect(awaitingCard).toHaveClass(/bg-gray-50/)
+    await expect(awaitingCard.getByTestId('awaiting-reply-note')).toContainText(/you reached out/)
+    await expect(awaitingCard.getByText('💡')).toHaveCount(0)
+
+    const attentionNames = ['card-a', 'card-b', 'card-c'].map(
+      handle => seeded.entities[handle].name
+    )
+    for (const name of attentionNames) {
+      const card = page
+        .getByRole('listitem')
+        .filter({ has: page.getByRole('heading', { name, exact: true }) })
+      await expect(card.getByRole('img', { name: 'Awaiting reply' })).toHaveCount(0)
+    }
+
+    const names = [...attentionNames, awaitingName]
+    const indexes = await page
+      .getByRole('list', { name: 'Overdue contacts' })
+      .getByRole('listitem')
+      .evaluateAll(
+        (items, expectedNames) =>
+          (expectedNames as string[]).map(name =>
+            Array.from(items).findIndex(item => item.querySelector('h3')?.textContent === name)
+          ),
+        names
+      )
+    const awaitingIndex = indexes[indexes.length - 1]
+    expect(awaitingIndex).toBeGreaterThan(Math.max(...indexes.slice(0, -1)))
+
+    const header = page
+      .locator('p')
+      .filter({ hasText: /\d+ awaiting reply/ })
+      .first()
+    await expect(header).toBeVisible()
+    const headerText = (await header.textContent()) ?? ''
+    const awaitingCount = Number(/(\d+) awaiting reply/.exec(headerText)?.[1])
+    expect(awaitingCount).toBeGreaterThanOrEqual(1)
+
+    const overdueRes = await request.get(`${API_BASE_URL}/api/v1/contacts/overdue`, {
+      headers: API_HEADERS,
+    })
+    expect(overdueRes.ok()).toBe(true)
+    const overdueBody = await overdueRes.json()
+    const entries: Array<{ id: string; has_pending_followup: boolean }> = overdueBody?.data ?? []
+    expect(
+      entries.find(entry => entry.id === seeded.entities['awaiting'].id)?.has_pending_followup
+    ).toBe(true)
+    expect(
+      entries.find(entry => entry.id === seeded.entities['card-a'].id)?.has_pending_followup
+    ).toBe(false)
   })
 })
 
@@ -298,9 +377,9 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
   // never-connected record (last_contacted OMITTED, like the real omitempty
   // response) proves it is ranked by its created_at rather than dropped.
   const fixtureSuffix = 'Sortfix'
-  // urgency (days desc):      Zulu(30), Mike(12), Alpha(3), Bravo(1)
-  // name (alphabetical):      Alpha, Bravo, Mike, Zulu
-  // recency (longest wait→):  Alpha(lc 01-10), Mike(added 02-01), Bravo(lc 03-01), Zulu(lc 05-01)
+  // urgency (days desc):      Zulu(30), Mike(12), Alpha(3), Bravo(1), Zygote(45, awaiting)
+  // name (alphabetical):      Alpha, Bravo, Mike, Zulu, Zygote
+  // recency (longest wait→):  Zygote(lc 12-01), Alpha(lc 01-10), Mike(added 02-01), Bravo(lc 03-01), Zulu(lc 05-01)
   //   Mike (never-connected) is deliberately placed BETWEEN two connected
   //   contacts by its created_at — a regression that pinned null-last_contacted
   //   rows to an edge would reorder Mike and fail, distinguishing "ranked by
@@ -321,6 +400,12 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
       name: `Bravo ${fixtureSuffix}`,
       days: 1,
       lastContacted: '2026-03-01T12:00:00Z',
+    }),
+    overdueEntry({
+      name: `Zygote ${fixtureSuffix}`,
+      days: 45,
+      lastContacted: '2025-12-01T12:00:00Z',
+      hasPendingFollowup: true,
     }),
   ]
 
@@ -347,6 +432,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
       `Mike ${fixtureSuffix}`,
       `Alpha ${fixtureSuffix}`,
       `Bravo ${fixtureSuffix}`,
+      `Zygote ${fixtureSuffix}`,
     ])
   })
 
@@ -361,6 +447,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
         `Bravo ${fixtureSuffix}`,
         `Mike ${fixtureSuffix}`,
         `Zulu ${fixtureSuffix}`,
+        `Zygote ${fixtureSuffix}`,
       ])
   })
 
@@ -376,6 +463,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
     await expect
       .poll(() => cardOrder(page))
       .toEqual([
+        `Zygote ${fixtureSuffix}`,
         `Alpha ${fixtureSuffix}`,
         `Mike ${fixtureSuffix}`,
         `Bravo ${fixtureSuffix}`,
@@ -578,8 +666,8 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
           )
           if (!header) return 'no numeric header'
           const headerCount = Number(/(\d+)/.exec(header.textContent ?? '')?.[1])
-          const cardCount = Array.from(document.querySelectorAll('button')).filter(b =>
-            (b.textContent ?? '').includes('Mark as Contacted')
+          const cardCount = Array.from(document.querySelectorAll('[role="listitem"]')).filter(
+            card => !card.querySelector('[role="img"][aria-label="Awaiting reply"]')
           ).length
           return headerCount === cardCount
             ? 'header equals cards'

@@ -696,6 +696,35 @@ func (q *Queries) GetLegacyActionTaskByContact(ctx context.Context, arg GetLegac
 	return &i, err
 }
 
+const ListContactIDsWithLiveFollowUp = `-- name: ListContactIDsWithLiveFollowUp :many
+SELECT DISTINCT contact_id FROM contact_task
+WHERE contact_id = ANY($1::uuid[])
+  AND lifecycle = 'followup_loop'
+  AND state IN ('managed', 'pending_remote_create')
+`
+
+// The subset of the given contact ids that carry a live follow-up. Same
+// live-state set as FindPendingFollowUp, batched for list payloads.
+func (q *Queries) ListContactIDsWithLiveFollowUp(ctx context.Context, contactIds []uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, ListContactIDsWithLiveFollowUp, contactIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var contact_id uuid.UUID
+		if err := rows.Scan(&contact_id); err != nil {
+			return nil, err
+		}
+		items = append(items, contact_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const ListContactTasksByContact = `-- name: ListContactTasksByContact :many
 SELECT id, contact_id, provider, kind, external_task_id, state, metadata, created_at, updated_at, idempotency_key, lifecycle FROM contact_task
 WHERE contact_id = $1

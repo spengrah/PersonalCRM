@@ -24,8 +24,9 @@ interface ActivityContact {
   full_name: string
   last_outreach_at: string | null
   last_response_at: string | null
-  // No has_pending_followup: the list payload always ships it false (only the
-  // detail handler computes it), so a field here would invite reading it.
+  // The list and overdue payloads compute has_pending_followup too; this tour
+  // still probes the detail endpoint because that is the surface its assertion
+  // is about.
 }
 
 const CONTACT_ID_PATH = /\/api\/v1\/contacts\/[0-9a-f-]{36}$/
@@ -88,12 +89,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
   }
   claim(responseContact.id, 'the response fixture')
 
-  // has_pending_followup is ONLY computed by the DETAIL handler. The list (and overdue)
-  // payloads carry the field as a non-pointer bool with no omitempty, so they ship
-  // `has_pending_followup: false` for every contact unconditionally — present, always
-  // false, and therefore meaningless. Verifying it means one detail probe on the
-  // resolved fixture, where the old selection swept the detail endpoint across the
-  // whole population looking for a hit.
+  // See the ActivityContact comment above for payload coverage context.
   const pendingContact = await resolveFixture<ActivityContact>(
     tour.apiCtx,
     FIXTURE_PENDING,

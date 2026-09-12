@@ -69,21 +69,23 @@ behaviors:
     notes: Enforced both by code wiring (services hard-error if the knowledge writer is unset) and, from migration 079, by a database trigger that rejects any UPDATE changing location, birthday, or how_met without crm.derived_writer='knowledge_cache'. How the knowledge domain derives and refreshes these cache columns is knowledge-domain scope.
 
   - id: CON-005
-    title: Fetching a contact reports liveness and follow-up state
+    title: Fetching contacts reports liveness and follow-up state
     type: api
     status: current
     surface: api
-    given: a GET for a single contact by id
+    given: a GET for a single contact by id, the contact list, or the overdue list
     when: the contact is fetched
     then:
       - key: live-contact-flag
         text: a live contact is returned with a has_pending_followup flag
+      - key: list-entries-carry-flag
+        text: contact list entries carry the same has_pending_followup flag as the detail payload, true exactly when the contact has a live follow-up (managed or pending_remote_create); the overdue list's copy of the flag is CAD-023
       - key: unknown-soft-deleted-contact
         text: an unknown or soft-deleted contact returns not-found (404)
       - key: malformed-id-returns-validation
         text: a malformed id returns a validation error (400)
-    provenance: [ContactHandler.GetContact, ContactTaskRepository.HasPendingFollowUp]
-    notes: has_pending_followup is best-effort — a failure computing it logs and reports false rather than failing the read.
+    provenance: [ContactHandler.GetContact, ContactHandler.ListContacts, ContactHandler.ListOverdueContacts, ContactTaskRepository.HasPendingFollowUp, ContactTaskRepository.ListContactIDsWithLiveFollowUp]
+    notes: has_pending_followup is best-effort on every payload — a failure computing it (single or batched) logs and reports false rather than failing the read.
 
   - id: CON-006
     title: Contact update is full-replace for managed profile fields

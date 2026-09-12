@@ -228,6 +228,70 @@ func TestContactAPI_HasPendingFollowup(t *testing.T) {
 	})
 }
 
+func TestContactAPI_ListReportsPendingFollowup(t *testing.T) {
+	// spec: CON-005.list-entries-carry-flag
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+
+	router, contactTaskRepo, cleanup := setupDirectionAPIRouter(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	prefix := "Pending Followup List " + uuid.NewString()[:8]
+	withFollowupID := createDirectionTestContact(t, router, prefix+" With Followup")
+	withoutFollowupID := createDirectionTestContact(t, router, prefix+" Without Followup")
+	pendingRemoteCreateID := createDirectionTestContact(t, router, prefix+" Pending Remote Create")
+
+	id, err := uuid.Parse(withFollowupID)
+	require.NoError(t, err)
+	pendingRemoteCreateUUID, err := uuid.Parse(pendingRemoteCreateID)
+	require.NoError(t, err)
+	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		ContactID:      pendingRemoteCreateUUID,
+		Provider:       "todoist",
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
+		ExternalTaskID: "",
+		State:          string(repository.ContactTaskStatePendingRemoteCreate),
+	})
+	require.NoError(t, err)
+	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		ContactID:      id,
+		Provider:       "todoist",
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
+		ExternalTaskID: "test-followup-list-api-" + withFollowupID,
+		State:          "managed",
+	})
+	require.NoError(t, err)
+
+	req, err := http.NewRequest("GET", "/api/v1/contacts?search="+url.QueryEscape(prefix)+"&limit=50", nil)
+	require.NoError(t, err)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp api.APIResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	items := resp.Data.([]interface{})
+	flagsByID := make(map[string]bool, len(items))
+	for _, item := range items {
+		contact := item.(map[string]interface{})
+		flagsByID[contact["id"].(string)] = contact["has_pending_followup"].(bool)
+	}
+	_, withFollowupFound := flagsByID[withFollowupID]
+	_, withoutFollowupFound := flagsByID[withoutFollowupID]
+	_, pendingRemoteCreateFound := flagsByID[pendingRemoteCreateID]
+	require.True(t, withFollowupFound)
+	require.True(t, withoutFollowupFound)
+	require.True(t, pendingRemoteCreateFound)
+	assert.Equal(t, true, flagsByID[withFollowupID])
+	assert.Equal(t, false, flagsByID[withoutFollowupID])
+	assert.Equal(t, true, flagsByID[pendingRemoteCreateID])
+}
+
 func TestContactAPI_DirectionTimestamps(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")

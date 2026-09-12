@@ -116,8 +116,8 @@ func TestRegisteredIsSortedAndLookupWorks(t *testing.T) {
 
 	d, ok := Lookup("CAD-026")
 	require.True(t, ok)
-	assert.Len(t, d.Entities, 3)
-	assert.Equal(t, []string{"card-a", "card-b", "card-c"}, handlesOf(d))
+	assert.Len(t, d.Entities, 4)
+	assert.Equal(t, []string{"card-a", "card-b", "card-c", "awaiting"}, handlesOf(d))
 
 	_, ok = Lookup("DSH-001")
 	assert.False(t, ok, "a RegisterNone behavior must not resolve as a declaration")

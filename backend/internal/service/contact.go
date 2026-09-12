@@ -236,6 +236,11 @@ func (s *ContactService) HasPendingFollowUp(ctx context.Context, contactID uuid.
 	return true, nil
 }
 
+// PendingFollowUpSet returns the contact IDs that have a live follow-up task.
+func (s *ContactService) PendingFollowUpSet(ctx context.Context, contactIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	return s.contactTaskRepo.ListContactIDsWithLiveFollowUp(ctx, contactIDs)
+}
+
 func (s *ContactService) GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error) {
 	contact, err := s.contactRepo.GetContact(ctx, id)
 	if err != nil {
