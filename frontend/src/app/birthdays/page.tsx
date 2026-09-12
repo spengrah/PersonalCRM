@@ -1,6 +1,7 @@
 'use client'
 
 import { Calendar, Cake, Gift, Users } from 'lucide-react'
+import Link from 'next/link'
 import { Navigation } from '@/components/layout/navigation'
 import { useContacts } from '@/hooks/use-contacts'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
@@ -188,7 +189,14 @@ function BirthdayCard({ birthdayInfo }: { birthdayInfo: BirthdayInfo }) {
           </div>
 
           <div>
-            <h3 className="font-medium text-gray-900">{contact.full_name}</h3>
+            <h3 className="font-medium text-gray-900">
+              <Link
+                href={`/contacts/${contact.id}`}
+                className="hover:text-blue-600 hover:underline"
+              >
+                {contact.full_name}
+              </Link>
+            </h3>
             <p className="text-sm text-gray-600">
               {dayOfWeek}, {monthDay}
             </p>

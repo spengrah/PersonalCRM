@@ -655,6 +655,8 @@ behaviors:
         text: the page follows the app's accelerated time
       - key: leap-day-next-occurrence
         text: a February 29 birthday is observed on February 29 in a leap year and on March 1 in a common year
+      - key: card-links-to-contact-detail
+        text: each birthday card's name links to that contact's detail page
     serves: [CON-052]
     provenance: [birthdays/page.tsx, birthdays.spec.ts, isPlaceholderBirthday]
     notes: >-

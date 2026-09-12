@@ -188,6 +188,26 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     await expect(celebratedSection.getByText(celebratedName, { exact: true })).toBeVisible()
   })
 
+  test('a birthday card links to the contact detail page', async ({ page }) => {
+    // spec: CON-045.card-links-to-contact-detail
+    await mockFrozenSystemTime(page, '2026-06-15T12:00:00Z')
+    const seeded = await testApi.seedBehavior('CON-045')
+    const contact = seeded.entities['mocked-today']
+
+    await page.goto('/birthdays')
+    await page.waitForLoadState('domcontentloaded')
+
+    const card = page.getByTestId('birthday-card').filter({
+      has: page.getByRole('heading', { name: contact.name, exact: true }),
+    })
+    await expect(card).toBeVisible({ timeout: 15000 })
+    await card.getByRole('link', { name: contact.name, exact: true }).click()
+    await expect(page).toHaveURL(new RegExp(`/contacts/${contact.id}$`), { timeout: 15000 })
+    await expect(page.getByRole('heading', { name: contact.name, exact: true })).toBeVisible({
+      timeout: 15000,
+    })
+  })
+
   test('sorts upcoming birthdays soonest-first and sinks celebrated to the end', async ({
     page,
   }) => {
