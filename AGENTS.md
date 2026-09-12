@@ -1,6 +1,6 @@
 # Agent Instructions
 
-Read and follow: `.ai/rules/core.md`
+Read and follow `.ai/rules/core.md`. If its contents are already loaded into the session, use that context rather than reading it again.
 
 ## About This Repo
 
@@ -21,6 +21,8 @@ Load as needed, not upfront:
 - Testing rules: `.ai/rules/testing.md`
 - Code review standards: `.ai/rules/code-review.md`
 - Behavior specs (intended-behavior SSOT): `spec/README.md`
+- Cross-layer change checklist and troubleshooting: `.ai/guides/change-checklist.md`
+- Domain troubleshooting: `.ai/guides/backend-troubleshooting.md`, `.ai/guides/frontend-troubleshooting.md` (read relevant entries only)
 
 ## Quick Symbol Searches
 
@@ -44,10 +46,11 @@ Find all instances of a layer:
 
 ## Session Hints
 
-- Run `make test && make test-e2e-diff` to verify changes work (also runs automatically on push)
+- Run focused tests appropriate to the change; pre-push runs static checks, and required CI suites gate merging.
 - Read repository code before using methods (names vary, e.g., `SoftDeleteContact` not `DeleteContact`)
 - Prefer integration tests over heavy mocking
 - Use `accelerated.GetCurrentTime()` not `time.Now()`
+- New worktrees link env files but do not install dependencies. For frontend work, run `make worktree-deps` when needed (main checkout: `cd frontend && bun install --frozen-lockfile`). Backend/docs-only work needs no frontend install.
 
 ## Where Knowledge Goes
 

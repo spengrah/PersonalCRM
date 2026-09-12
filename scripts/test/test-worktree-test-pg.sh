@@ -3,11 +3,16 @@
 #
 # DB-FREE + PORT-FREE: every external dependency (git, initdb, pg_ctl, postgres,
 # psql, pg_isready, pg_config, locale) is a PATH-shimmed fake. No real initdb,
-# no pg_ctl start, no port bind. Safe for the pre-push FILTER lane.
+# no pg_ctl start, no port bind. Runs in CI.
 #
 # Invoked from scripts/hooks/test/test-pre-push-filters.sh (like the render
 # guard), not as a top-level pre-push command.
 set -u
+# The script under test is a deliberate no-op when GITHUB_ACTIONS=true (CI uses
+# a shared Postgres), which would turn every provisioning case below into a
+# failure and leave the lock-holder cases blocked. This suite runs in CI, so
+# clear the inherited flag; case 3 sets it explicitly to prove the no-op path.
+unset GITHUB_ACTIONS
 cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit 1   # repo root
 SCRIPT="$PWD/scripts/worktree-test-pg.sh"
 

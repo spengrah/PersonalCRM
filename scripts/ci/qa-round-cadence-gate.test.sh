@@ -36,6 +36,7 @@ REAL_CADENCE="$REPO_ROOT/scripts/ci/qa-round-cadence-gate.sh"
 REAL_ASSERT="$REPO_ROOT/scripts/ci/qa-round-deployed-sha-assert.sh"
 REAL_PREPUSH="$REPO_ROOT/scripts/hooks/pre-push"
 REAL_FILTERS="$REPO_ROOT/path-filters.yml"
+REAL_ASSETS_BEFORE="$(git -C "$REPO_ROOT" hash-object "$REAL_PREPUSH" "$REAL_FILTERS")"
 REAL_GIT="$(command -v git)"
 ABSENT_SHA40="0123456789abcdef0123456789abcdef01234567"  # 40-hex, not in any fixture
 
@@ -563,16 +564,16 @@ test_source_guard_isolation() {
     assert_exit0
     # A clean four-line emit proves the source-guard returned before the hook body.
     assert_tuple true true true frontend
-    # The hook body (had it executed) would emit its phase/lint/review markers.
-    if grep -Eq '\[lint\]|\[review\]|\[test\]|phase|Running (deploy|lint|tests)' "$OUT" "$ERR"; then
+    # Sourcing the shared matcher must not execute static checks.
+    if grep -Eq 'Pre-push:|executed:|Running static checks' "$OUT" "$ERR"; then
         fail "hook body appears to have executed (found phase/lint markers)"
     else
         ok
     fi
     # The real repo's copied assets must be byte-unchanged (tests only touch copies).
-    local dirty
-    dirty="$(git -C "$REPO_ROOT" status --porcelain -- path-filters.yml scripts/hooks/pre-push 2>/dev/null)"
-    if [ -z "$dirty" ]; then ok; else fail "real repo assets modified by tests: $dirty"; fi
+    local after
+    after="$(git -C "$REPO_ROOT" hash-object "$REAL_PREPUSH" "$REAL_FILTERS")"
+    if [ "$after" = "$REAL_ASSETS_BEFORE" ]; then ok; else fail "real repo assets modified by tests"; fi
     cleanup_fixture
 }
 

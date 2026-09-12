@@ -1,22 +1,7 @@
 #!/usr/bin/env bash
-# post-checkout — provision a freshly-created linked worktree with the main
-# checkout's gitignored env files (.env, frontend/.env.local, ...) AND the
-# per-worktree frontend deps (frontend/node_modules).
-#
-# Env files are gitignored and node_modules is gitignored + branch-specific, so
-# a new worktree (Orca workspace, VPS dev sandbox, or a plain `git worktree add`)
-# starts WITHOUT either and the dev stack can't run / pre-push fails late with a
-# cryptic `next: command not found`. This rides the git post-checkout hook —
-# which fires wherever a worktree is born — so the provisioning is environment-
-# agnostic. The actual work lives in scripts/link-worktree-env.sh (symlink env
-# files) and scripts/install-worktree-deps.sh (install deps); this is just the
-# trigger + gate.
-#
-# Active automatically under the project's core.hooksPath=scripts/hooks
-# (set by scripts/install-git-hooks.sh); no per-worktree wiring needed.
-#
-# Sourceable: when sourced (BASH_SOURCE != $0) it only defines functions, so the
-# gate logic can be unit-tested (see scripts/test/test-link-worktree-env.sh).
+# Link environment files on fresh worktree creation. Dependencies are installed
+# explicitly with make worktree-deps when a task needs frontend tooling.
+# This file is sourceable for tests; checkout always remains nonblocking.
 set -uo pipefail
 
 # worktree_env_should_provision <prev_head> <branch_flag> returns 0 only for a
@@ -34,18 +19,11 @@ worktree_env_should_provision() {
 # Always returns 0 — a hook must never abort the checkout it observes.
 worktree_env_post_checkout() {
   worktree_env_should_provision "${1:-}" "${3:-}" || return 0
-  local repo_root env_script deps_script
+  local repo_root env_script
   repo_root="$(git rev-parse --show-toplevel 2>/dev/null)" || return 0
   env_script="$repo_root/scripts/link-worktree-env.sh"
-  deps_script="$repo_root/scripts/install-worktree-deps.sh"
-  # Env-link first (fast symlinks), deps second (slower install). Order is
-  # irrelevant for correctness; this just surfaces the env files quickly. Each
-  # script's exit code is intentionally swallowed by the unconditional return 0
-  # below — a hook must never abort the checkout it observes (a failed install
-  # still leaves a usable worktree, and the pre-push frontend-deps gate is the
-  # durable backstop that catches missing deps before a push).
+  # Checkout must remain usable even when env linking fails.
   [ -f "$env_script" ] && bash "$env_script"
-  [ -f "$deps_script" ] && bash "$deps_script"
   return 0
 }
 

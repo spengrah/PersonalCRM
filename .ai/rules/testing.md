@@ -2,14 +2,24 @@
 
 ## Before Pushing
 
-**Always run the required test suite locally before pushing:**
+Run focused verification appropriate to the changed behavior: affected unit tests
+for logic, integration tests for database changes, and E2E tests for user flows
+when the environment supports them. Broaden testing for shared or high-risk changes.
+Report any verification deferred to CI; do not provision unrelated runtimes just
+to push a branch.
 
-```bash
-make test         # All backend tests (unit + integration)
-make test-e2e-diff # Diff-selected Playwright E2E tests (core + impacted)
-```
+Pre-push runs path-selected static checks, including spec drift. Required CI
+suites gate merging. Use `make test` and `make test-e2e-diff` explicitly when
+broader local verification is useful; neither is mandatory for every push.
 
-CI runs the full E2E suite; local runs use diff selection for speed.
+Agents may select focused E2E tests with
+`make test-e2e-local PLAYWRIGHT_GREP='...'` without waiting for the user to
+provide a grep. Match the selection to the affected behavior.
+
+Reuse successful verification from the session when its relevant inputs have
+not changed. Rerun when source, tests, configuration, dependencies, environment,
+or new evidence make the previous result insufficient. Required CI checks must
+still pass for the revision being merged.
 
 ## Test Pyramid
 
@@ -86,7 +96,7 @@ New backend integration tests run with `t.Parallel()` by default. The suite was 
 
 **Connection budget.** Concurrent clones/pools share one Postgres (`max_connections=200` on CI and recreated-local; 100 on a stock/un-recreated local container). Each shared-DB pool ≈ 8 conns; each isolated-river clone ≈ 7 (pool 6 + River's LISTEN conn). `-p`/`-parallel` are computed by `scripts/test-parallelism.sh` against the live ceiling — don't raise a test pool's `MaxConns` without reason, and if a new file mints many concurrent clones, sample `pg_stat_activity` during a run to confirm headroom.
 
-**Prove parallel-safety before claiming done:** run the changed package under `-race -count=10 -shuffle=on` at the local `-p`/`-parallel` with a confirmed non-empty `TEST_DATABASE_URL` (an empty DSN makes the package self-skip into a false green). Fixed-ID collisions surface only under `-count>=2`. See [`.ai/patterns/test-parallelism.md`](../patterns/test-parallelism.md) for the clone recipe, gotchas, and the full validation matrix.
+**For changes to shared-state concurrency, test parallelism, or database isolation:** verify the affected package under `-race -count=10 -shuffle=on` at the local `-p`/`-parallel` with a confirmed non-empty `TEST_DATABASE_URL` (an empty DSN makes the package self-skip into a false green). Fixed-ID collisions surface only under `-count>=2`. See [`.ai/patterns/test-parallelism.md`](../patterns/test-parallelism.md) for the clone recipe, gotchas, and the full validation matrix.
 
 ## Test File Locations
 
@@ -100,7 +110,7 @@ backend/internal/<pkg>/*_test.go  # Same-package tests (access unexported symbol
 frontend/tests/e2e/               # Playwright browser tests
 ```
 
-**Same-package vs external-package tests:** Tests for unexported methods/functions (lowercase names like `tryRecoverPendingTempID`) must live in `*_test.go` files within the same package directory (e.g., `backend/internal/todoist/provider_test.go` with `package todoist`). Tests in `backend/tests/unit/` use external package naming (`package unit`) and can only access exported symbols. When testing unexported logic from an external package, mirror the logic in the test (see `TestIsPendingTempIDLogic` pattern in `backend/tests/unit/todoist_test.go`).
+**Same-package vs external-package tests:** Exercise production code, not a copy of its implementation. Test unexported functions in the same package, or cover their behavior through an exported entry point. External-package tests can only access exported symbols; do not duplicate unexported logic to work around that boundary.
 
 ## Running Tests
 
@@ -233,8 +243,7 @@ test.describe.configure({ mode: 'serial' })
 import { test, expect } from './fixtures'
 
 // Then just navigate and wait - React Query fetches fresh data automatically
-await page.goto('/imports')
-await page.waitForLoadState('networkidle')
+await page.goto('/imports', { waitUntil: 'domcontentloaded' })
 await findCandidateByName(page, displayName)  // waits + paginates
 ```
 
@@ -262,60 +271,25 @@ await candidateCard.getByRole('button', { name: /Import/i }).click()
 
 ## Citing behaviors in tests
 
-New and deliberately-relaxed tests **on a scanned harness** cite the `spec/*.yaml` behaviors they prove with a line comment. The scanned harnesses are exactly two — Go (`backend/**/*_test.go`) and Playwright E2E (`frontend/tests/e2e/**/*.spec.ts`). A marker in any other test (Vitest unit/component tests especially) is read by no gate and validated by nothing, so reference the behavior in **prose** there instead. Two reference forms:
-
-- `// spec: <ID>.<then-item-key>` — claims **one then-item**, by its permanent key. **This is the norm on both harnesses**: E2E citations are 291 keyed / 0 bare, and Go citations of `surface: api` behaviors are 298 keyed / 46 bare (6% bare inside `backend/tests/api/`).
-- `// spec: <ID>` — claims the **whole behavior**, every then-item at once. Legal and sometimes right: use it when the test genuinely proves every item, and for a statement behavior, which has no then list to key. Otherwise prefer keyed — a bare cite marks items covered that your test may not prove, and silences the orphan signal that would have asked for them.
-
-The positional `<ID>[n]` form is **retired** and blocks: `spec-coverage` rejects it with a targeted *cite the then-item by key* message. A key binds to the item's identity, so reordering, inserting, or deleting sibling items cannot silently re-point a citation.
-
-Put the marker next to the assertions that prove the behavior — function-level (immediately preceding the `func TestXxx` / `test(...)` / `test.describe(...)`) or subtest-level (first line inside the `t.Run` / `test(...)` body). Cite only `status: current` behaviors the test actually asserts green; generic contracts that no behavior owns carry no marker.
-
-```go
-t.Run("rescan with an eligible method returns a pollable job", func(t *testing.T) {
-    // spec: IMP-021
-    ...
-})
-```
-
-```ts
-// spec: CAL-019.contact-appended-each-matching
-test('adding a matching email links a past event', async ({ page, request }) => { ... })
-```
-
-**Minting a key.** A then-item carries a key only once something first cites it **by key** or waives it (a bare `<ID>` cite covers every item without keying any), so the first keyed reference to an item takes one extra step:
-
-- **To cite one** — convert the plain string in `spec/<domain>.yaml` to a `{key, text}` mapping, minting a permanent lowercase-kebab key that describes the claim (negations included), then cite `<ID>.<key>`.
-- **To waive one** — the same conversion first. A waiver addresses its item by key (`- then: <key>`), so a plain-string item cannot be waived at all.
-- **To cite a statement behavior** (`invariant`/`intent`-shaped) — **bare only**. `<ID>.<key>` is rejected, and the reserved `then: statement` token is for waivers, never citations.
-
-Check the coverage report before minting anything: a key is never withdrawn, so an item whose citation was deleted or left dangling is orphaned **while keeping its key**, and its line reads `ORPHAN <ID>.some-key: …`. Cite that reference as printed — do not convert the item again or rename its key.
-
-Full grammar, the worked authoring recipe, placement rules, and cite-on-write policy: `spec/README.md` → [Test → behavior citations](../../spec/README.md#test--behavior-citations) and [Citing an item that has no key yet](../../spec/README.md#citing-an-item-that-has-no-key-yet).
+Follow the canonical [test-to-behavior citation rules](../../spec/README.md#test--behavior-citations)
+and [maintenance rule](../../spec/README.md#maintenance-rule). They define citation
+placement, stable keys, key minting, coverage, waivers, and same-PR obligations.
+Cite the behavior actually exercised by the assertions.
 
 ## Writing Good Tests
 
 ### Integration Test Template
 
-```go
-func TestNewTableRepository_Integration(t *testing.T) {
-    if testing.Short() {
-        t.Skip("Skipping integration test")
-    }
+Use `//go:build integration_testdb` for database-backed test files. Reuse the
+package's existing fixture and choose the shared or cloned DB model described
+[above](#backend-integration-test-parallelism); do not add per-test migrations to
+an already migrated fixture. Build test data with the synthetic harness/factories.
 
-    ctx := context.Background()
-    db := setupTestDB(t)
-    defer cleanupTestDB(t, db)
-
-    repo := repository.NewRepository(db.Queries)
-
-    t.Run("Create", func(t *testing.T) {
-        item, err := repo.Create(ctx, request)
-        require.NoError(t, err)
-        assert.NotEmpty(t, item.ID)
-    })
-}
-```
+For a real pipeline test with namespace isolation, see
+[TestInteractionVenue_LivePath](../../backend/tests/interaction_venue_integration_test.go).
+It is a long-running replay example; ordinary repository tests should use the
+lighter existing fixture appropriate to their package. Keep migration-subject
+tests separate, since their purpose is to exercise migrations themselves.
 
 ### Frontend Unit Test Pattern (Vitest)
 

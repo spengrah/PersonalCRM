@@ -10,13 +10,8 @@
 # link-worktree-env.sh) but deps get a real per-worktree install. Go deps need
 # nothing here: the global $GOMODCACHE resolves them in any worktree.
 #
-# Install command: `bun install --frozen-lockfile`. Frozen so the install never
-# rewrites the committed frontend/bun.lock (a fresh worktree must not sprout a
-# spurious lockfile diff) and so it is reproducible. Genuine package.json /
-# bun.lock drift makes a frozen install fail loudly — that is desirable, and
-# build-images.yml already installs frozen too. (ci.yml's test jobs use a plain
-# `bun install`; the no-lockfile-mutation property matters most at worktree
-# birth, so the divergence is deliberate, not an oversight.)
+# Install command: `bun install --frozen-lockfile`. Installation must not rewrite
+# the committed lockfile; package/lockfile drift fails visibly.
 #
 # No-op in the main checkout: its deps are owned by `make setup`
 # (scripts/setup-dev.sh runs bun install). This script only provisions LINKED
@@ -52,8 +47,7 @@ worktree_deps_should_install() {
 # distinction is "could it do the job it exists to do?"):
 #   0  = succeeded, OR legitimately nothing to do (main checkout, no frontend).
 #   !0 = it was supposed to install but could not (bun missing, install failed).
-# The hook swallows a non-zero (the worktree is still born, a loud warning is
-# shown); `make worktree-deps` surfaces it so recovery never lies about success.
+# Invoked explicitly by make worktree-deps; installation failures are returned.
 run_worktree_deps() {
   local main_root this_root rc
   main_root="$(resolve_main_root)" || return 0   # not a git repo -> skip quietly
@@ -78,7 +72,7 @@ run_worktree_deps() {
     echo "worktree-deps: frontend deps installed" >&2
     return 0
   fi
-  echo "worktree-deps: frontend dep install FAILED — run 'cd frontend && bun install' before pushing" >&2
+  echo "worktree-deps: frontend dep install FAILED — rerun 'make worktree-deps' before using frontend tooling" >&2
   return "$rc"
 }
 

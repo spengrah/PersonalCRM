@@ -1,107 +1,75 @@
 # Code Review Standards
 
-**Philosophy:** "If Claude Code can fix it, request changes."
+Review whether the change fulfills its requirements and is fit to merge.
+Block on concrete defects and material risks relevant to the change.
+Optional improvements may accompany a passing review.
 
-Since implementation cost is low with AI coding tools (Claude Code, Codex, etc.), maintain a HIGH bar for approval. Request changes for anything that could be improved.
+## Blocking Findings
 
----
+Request changes for:
 
-## Approval Criteria (ALL must be true)
+- Correctness bugs, race conditions, or relevant edge cases with a plausible failure path.
+- Credible security issues, privacy violations, exposed secrets, or data-loss risks.
+- Broken compatibility or incomplete migrations that prevent safe operation.
+- Unmet requirements or unfinished work needed for the change to function correctly.
+- Missing coverage for changed behavior or meaningful regression risks.
+- Material performance or resource-use regressions under plausible workloads.
+- Violations of explicit repository requirements, including required checks.
 
-AUTO-APPROVE only if the code meets ALL of these criteria:
+For each blocker, identify the triggering condition, resulting failure or unmet
+requirement, and relevant file and line. Explain the evidence and any assumptions.
+Investigate uncertainty where practical; a hypothetical concern without a plausible
+failure path is a question, not an automatic blocker.
 
-- **No security concerns** (SQL injection, XSS, auth issues, secrets in code, etc.)
-- **No bugs or unhandled edge cases**
-- **Comprehensive test coverage** for new/changed code
-- **Clear, well-documented code** (comments where needed)
-- **Follows repository conventions** (check `.ai/rules/core.md`)
-- **Proper error handling and validation**
-- **Good performance** (no obvious inefficiencies)
-- **No TODOs or technical debt introduced**
-- **No code style inconsistencies**
+Ask for the smallest sufficient correction. Do not turn a narrow fix into an
+architectural rewrite unless that is necessary to resolve the identified problem.
 
----
+## Nonblocking Suggestions
 
-## Request Changes (DEFAULT)
+Label stylistic preferences, alternative abstractions, optional optimizations,
+extra comments, and unrelated cleanup as nonblocking. A TODO or acknowledged
+limitation is not itself a blocker; explain what required behavior remains
+unfinished if it prevents approval.
 
-REQUEST CHANGES if ANY of these apply:
-
-**Security:**
-- Security concerns (even potential or minor ones)
-- Secrets or sensitive data in code
-- Missing authentication or authorization checks
-- Vulnerable dependencies
-
-**Code Quality:**
-- Bugs, race conditions, or edge cases not handled
-- Unclear code needing comments or documentation
-- Opportunities for refactoring or simplification
-- Code style inconsistencies
-- Doesn't follow repository best practices
-
-**Testing:**
-- Missing or insufficient test coverage
-- Tests don't cover edge cases
-- No integration tests for cross-component changes
-- **Exception:** Integration tests are acceptable in place of unit tests when unit tests would require creating heavy mock infrastructure (e.g., mock interfaces for repositories that don't exist in the codebase). Integration tests that exercise real code paths provide higher confidence than mock-based tests.
-
-**Performance:**
-- Performance concerns or inefficiencies
-- N+1 queries or excessive database calls
-- Memory leaks or resource exhaustion risks
-
-**Architecture:**
-- Poor error handling or validation
-- Missing logging for critical operations
-- Breaks architectural patterns (see `.ai/guides/architecture.md`)
-- Violates conventions in `.ai/rules/core.md`
-
-**Completeness:**
-- TODOs or unfinished work
-- Missing documentation for new features
-- Incomplete migrations or rollback paths
-
----
+Do not require new tests for documentation, formatting, or mechanical edits
+without a meaningful regression risk. Integration tests may replace unit tests
+when they exercise the real behavior and avoid heavy mock infrastructure.
+See `.ai/rules/testing.md` for proportional verification guidance.
 
 ## Review Process
 
-1. **Read conventions:** Review `.ai/rules/core.md` for project-specific patterns
-2. **Check ALL criteria:** Go through each approval criterion
-3. **Default to request changes:** When in doubt, request improvements
-4. **Be specific:** Point to exact files and line numbers
-5. **Explain why:** Help developers understand the reasoning
-
----
+1. Read the requirements, diff, relevant code, and applicable repository conventions.
+2. Identify concrete defects and material risks; consider existing tests and verification evidence.
+3. Present blockers first, ordered by severity, with file/line references and the triggering condition and impact.
+4. Separate nonblocking suggestions and open questions from blockers. State verification gaps without treating every gap as a defect.
+5. On subsequent reviews, verify fixes and inspect their consequences. Reopen unchanged code when new evidence warrants it; do not require fresh findings each round.
+6. Approve when no blocking findings remain. Review approval does not replace required CI checks or production approval.
 
 ## Review Output Format
 
-**All AI reviewers MUST include this at the end of their review:**
+All AI reviewers MUST end their review with one of these verdicts:
 
 ```
 ## Final Recommendation
 RESULT=PASS
 ```
 
-Or if issues are found:
+When blocking findings remain:
 
 ```
 ## Final Recommendation
 RESULT=FAIL
 ```
 
-**Requirements:**
-- The `RESULT=` line must appear exactly as shown (no spaces around `=`)
-- Use `PASS` if code meets ALL approval criteria
-- Use `FAIL` if ANY issue warrants changes
-- This enables automated status check integration
-
----
+- Preserve the exact `RESULT=` line (no spaces around `=`) for automated integration.
+- Use `PASS` when no blocking findings remain, even if nonblocking suggestions are present.
+- Use `FAIL` when at least one finding meets the blocking criteria above.
+- A passing review means no blockers were found in the review's scope; it does not claim the code cannot be improved.
 
 ## Convention Reference
 
-For detailed development conventions, see:
-- **`.ai/rules/core.md`** - Critical rules and patterns
-- **`.ai/rules/testing.md`** - Testing requirements
-- **`.ai/guides/feature-development.md`** - Feature development guide
-- **`.ai/guides/architecture.md`** - Architecture context
-- **`.ai/patterns/`** - Common code patterns
+- `.ai/rules/core.md` - Critical rules and patterns
+- `.ai/rules/testing.md` - Testing requirements
+- `.ai/guides/feature-development.md` - Feature development guide
+- `.ai/guides/architecture.md` - Architecture context
+- `.ai/patterns/` - Common code patterns

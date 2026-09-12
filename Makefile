@@ -334,9 +334,9 @@ worktree-env:
 	@WORKTREE_ENV_VERBOSE=1 bash scripts/link-worktree-env.sh
 
 # Install per-worktree dependencies that can't be symlinked (frontend
-# node_modules is branch-specific, tied to this branch's lockfile). Normally
-# automatic via the post-checkout git hook on `git worktree add`; run this
-# manually if a worktree was created before the hook existed. No-op in the main
+# node_modules is branch-specific, tied to this branch's lockfile). Run this
+# when a task needs frontend tooling; checkout does not install dependencies.
+# No-op in the main
 # checkout (use `make setup` there). Go deps need nothing (global modcache).
 worktree-deps:
 	@WORKTREE_DEPS_VERBOSE=1 bash scripts/install-worktree-deps.sh
@@ -400,7 +400,9 @@ test-e2e-local: e2e-db
 	if [ -f "$(REPO_ROOT)/frontend/.env.local.bak" ]; then mv "$(REPO_ROOT)/frontend/.env.local.bak" "$(REPO_ROOT)/frontend/.env.local"; fi; \
 	exit $$EXIT_CODE
 
-test-e2e-diff: e2e-db
+# Validate/select first; the runner invokes test-e2e-local, which resets the DB.
+test-e2e-diff:
+	@bash scripts/hooks/test-map-coverage-check.sh
 	@PLAYWRIGHT_WORKERS=1 node "$(REPO_ROOT)/scripts/run-e2e-local.mjs"
 
 # Free the ports the E2E stack owns. A prerequisite of e2e-db (rather than a
@@ -732,8 +734,7 @@ api-types:
 
 # Non-mutating drift check: generates into a temp dir and diffs against the
 # committed files, so it is safe to run concurrently with readers of
-# frontend/src/types/generated (the pre-push LINT lane runs alongside the
-# FRONTEND test lane).
+# frontend/src/types/generated.
 api-types-check:
 	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT && \
 	sed "s|\.\./frontend/src/types/generated/|$$tmp/out/|g" backend/tygo.yaml > "$$tmp/tygo.yaml" && \
