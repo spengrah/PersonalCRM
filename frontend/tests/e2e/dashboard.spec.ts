@@ -157,6 +157,60 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
   })
 })
 
+test.describe('Dashboard - Log Interaction @area:dashboard @area:overdue', () => {
+  let testApi: TestAPI
+  let seeded: SeedBehaviorResult
+
+  test.beforeEach(async ({ request }, testInfo) => {
+    testApi = createTestAPI(request, testInfo)
+    seeded = await testApi.seedBehavior('CON-053')
+  })
+
+  test.afterEach(async () => {
+    await testApi.cleanup()
+  })
+
+  test('logs an outbound interaction from an overdue card through the Log Interaction modal', async ({
+    page,
+  }) => {
+    // spec: CON-053.dashboard-card-offers-log-interaction
+    // spec: CON-053.interaction-posted-chosen-direction
+    const overdueId = seeded.entities['overdue-target'].id
+    const overdueName = seeded.entities['overdue-target'].name
+    const overdueListSettled = waitForOverdueListSettled(page, { presentIds: [overdueId] })
+
+    await page.goto('/dashboard')
+    await overdueListSettled
+
+    const card = page.getByRole('listitem').filter({
+      has: page.getByRole('heading', { name: overdueName, exact: true }),
+    })
+    await expect(card).toBeVisible()
+    await card.getByRole('button', { name: 'Log Interaction' }).click()
+
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('heading')).toContainText(overdueName)
+
+    const outboundButton = dialog.getByRole('button', { name: 'Outbound' })
+    await outboundButton.click()
+    await expect(outboundButton).toHaveAttribute('aria-pressed', 'true')
+
+    const responsePromise = page.waitForResponse(
+      response =>
+        response.url().includes(`/api/v1/contacts/${overdueId}/interactions`) &&
+        response.request().method() === 'POST'
+    )
+    await dialog.getByRole('button', { name: 'Log', exact: true }).click()
+    const response = await responsePromise
+    expect(response.status()).toBe(201)
+    expect(response.request().postDataJSON()?.direction).toBe('outbound')
+
+    await expect(dialog).not.toBeVisible({ timeout: 5000 })
+    await expect(card).toBeVisible()
+  })
+})
+
 test.describe('Dashboard - All Caught Up (mocked) @area:dashboard', () => {
   test('shows the all-caught-up state when nothing is overdue', async ({ page }) => {
     // spec: CAD-026.nothing-overdue-all-caught
