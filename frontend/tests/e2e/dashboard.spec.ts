@@ -20,6 +20,7 @@ function overdueEntry(over: {
   lastContacted?: string
   createdAt?: string
   email?: string
+  hasPendingFollowup?: boolean
 }): OverdueContactResponse {
   const slug = over.name.toLowerCase().replace(/ /g, '-')
   return {
@@ -31,7 +32,7 @@ function overdueEntry(over: {
     cadence: 'weekly',
     ...(over.lastContacted ? { last_contacted: over.lastContacted } : {}),
     contact_by: '2026-07-01T00:00:00Z',
-    has_pending_followup: false,
+    has_pending_followup: over.hasPendingFollowup ?? false,
     created_at: over.createdAt ?? '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     days_overdue: over.days,
@@ -182,6 +183,7 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
       .filter({ has: page.getByRole('heading', { name: awaitingName, exact: true }) })
     await expect(awaitingCard.getByRole('img', { name: 'Awaiting reply' })).toBeVisible()
     await expect(awaitingCard.getByTestId('awaiting-reply-note')).toBeVisible()
+    await expect(awaitingCard.getByTestId('awaiting-reply-note')).toContainText(/you reached out/)
     await expect(awaitingCard.getByText('💡')).toHaveCount(0)
 
     const attentionNames = ['card-a', 'card-b', 'card-c'].map(
@@ -373,9 +375,9 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
   // never-connected record (last_contacted OMITTED, like the real omitempty
   // response) proves it is ranked by its created_at rather than dropped.
   const fixtureSuffix = 'Sortfix'
-  // urgency (days desc):      Zulu(30), Mike(12), Alpha(3), Bravo(1)
-  // name (alphabetical):      Alpha, Bravo, Mike, Zulu
-  // recency (longest wait→):  Alpha(lc 01-10), Mike(added 02-01), Bravo(lc 03-01), Zulu(lc 05-01)
+  // urgency (days desc):      Zulu(30), Mike(12), Alpha(3), Bravo(1), Zygote(45, awaiting)
+  // name (alphabetical):      Alpha, Bravo, Mike, Zulu, Zygote
+  // recency (longest wait→):  Zygote(lc 12-01), Alpha(lc 01-10), Mike(added 02-01), Bravo(lc 03-01), Zulu(lc 05-01)
   //   Mike (never-connected) is deliberately placed BETWEEN two connected
   //   contacts by its created_at — a regression that pinned null-last_contacted
   //   rows to an edge would reorder Mike and fail, distinguishing "ranked by
@@ -396,6 +398,12 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
       name: `Bravo ${fixtureSuffix}`,
       days: 1,
       lastContacted: '2026-03-01T12:00:00Z',
+    }),
+    overdueEntry({
+      name: `Zygote ${fixtureSuffix}`,
+      days: 45,
+      lastContacted: '2025-12-01T12:00:00Z',
+      hasPendingFollowup: true,
     }),
   ]
 
@@ -422,6 +430,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
       `Mike ${fixtureSuffix}`,
       `Alpha ${fixtureSuffix}`,
       `Bravo ${fixtureSuffix}`,
+      `Zygote ${fixtureSuffix}`,
     ])
   })
 
@@ -436,6 +445,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
         `Bravo ${fixtureSuffix}`,
         `Mike ${fixtureSuffix}`,
         `Zulu ${fixtureSuffix}`,
+        `Zygote ${fixtureSuffix}`,
       ])
   })
 
@@ -451,6 +461,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
     await expect
       .poll(() => cardOrder(page))
       .toEqual([
+        `Zygote ${fixtureSuffix}`,
         `Alpha ${fixtureSuffix}`,
         `Mike ${fixtureSuffix}`,
         `Bravo ${fixtureSuffix}`,
@@ -653,8 +664,8 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
           )
           if (!header) return 'no numeric header'
           const headerCount = Number(/(\d+)/.exec(header.textContent ?? '')?.[1])
-          const cardCount = Array.from(document.querySelectorAll('button')).filter(b =>
-            (b.textContent ?? '').includes('Mark as Contacted')
+          const cardCount = Array.from(document.querySelectorAll('[role="listitem"]')).filter(
+            card => !card.querySelector('[role="img"][aria-label="Awaiting reply"]')
           ).length
           return headerCount === cardCount
             ? 'header equals cards'

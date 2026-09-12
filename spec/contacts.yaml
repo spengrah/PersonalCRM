@@ -79,7 +79,7 @@ behaviors:
       - key: live-contact-flag
         text: a live contact is returned with a has_pending_followup flag
       - key: list-entries-carry-flag
-        text: contact list and overdue entries carry the same has_pending_followup flag, true exactly when the contact has a live follow-up (managed or pending_remote_create)
+        text: contact list entries carry the same has_pending_followup flag as the detail payload, true exactly when the contact has a live follow-up (managed or pending_remote_create); the overdue list's copy of the flag is CAD-023
       - key: unknown-soft-deleted-contact
         text: an unknown or soft-deleted contact returns not-found (404)
       - key: malformed-id-returns-validation

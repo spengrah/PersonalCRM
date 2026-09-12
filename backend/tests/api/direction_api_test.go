@@ -242,8 +242,20 @@ func TestContactAPI_ListReportsPendingFollowup(t *testing.T) {
 	prefix := "Pending Followup List " + uuid.NewString()[:8]
 	withFollowupID := createDirectionTestContact(t, router, prefix+" With Followup")
 	withoutFollowupID := createDirectionTestContact(t, router, prefix+" Without Followup")
+	pendingRemoteCreateID := createDirectionTestContact(t, router, prefix+" Pending Remote Create")
 
 	id, err := uuid.Parse(withFollowupID)
+	require.NoError(t, err)
+	pendingRemoteCreateUUID, err := uuid.Parse(pendingRemoteCreateID)
+	require.NoError(t, err)
+	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
+		ContactID:      pendingRemoteCreateUUID,
+		Provider:       "todoist",
+		Kind:           contacttask.KindReachOut,
+		Lifecycle:      contacttask.LifecycleFollowUpLoop,
+		ExternalTaskID: "",
+		State:          string(repository.ContactTaskStatePendingRemoteCreate),
+	})
 	require.NoError(t, err)
 	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 		ContactID:      id,
@@ -271,10 +283,13 @@ func TestContactAPI_ListReportsPendingFollowup(t *testing.T) {
 	}
 	_, withFollowupFound := flagsByID[withFollowupID]
 	_, withoutFollowupFound := flagsByID[withoutFollowupID]
+	_, pendingRemoteCreateFound := flagsByID[pendingRemoteCreateID]
 	require.True(t, withFollowupFound)
 	require.True(t, withoutFollowupFound)
+	require.True(t, pendingRemoteCreateFound)
 	assert.Equal(t, true, flagsByID[withFollowupID])
 	assert.Equal(t, false, flagsByID[withoutFollowupID])
+	assert.Equal(t, true, flagsByID[pendingRemoteCreateID])
 }
 
 func TestContactAPI_DirectionTimestamps(t *testing.T) {

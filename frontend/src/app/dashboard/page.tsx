@@ -66,7 +66,7 @@ function OverdueContactCard({
   const urgency = awaiting
     ? { dotClass: 'bg-gray-400', label: 'Awaiting reply' }
     : getUrgencyIndicator(contact.days_overdue)
-  const outreachRelativeTime = formatRelativeTime(contact.last_outreach_at)
+  const outreachRelativeTime = formatRelativeTime(contact.last_outreach_at, currentTime)
 
   return (
     <div
@@ -139,7 +139,9 @@ function OverdueContactCard({
           </div>
 
           {awaiting ? (
-            <p className="text-sm text-gray-500">Waiting on their reply — nothing to do yet.</p>
+            <p className="text-sm text-gray-500 mb-4">
+              Waiting on their reply — nothing to do yet.
+            </p>
           ) : (
             <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-4">
               <p className="text-sm font-medium text-blue-800">💡 {contact.suggested_action}</p>
@@ -221,7 +223,7 @@ export default function DashboardPage() {
       switch (sortBy) {
         case 'urgency':
           if (a.has_pending_followup !== b.has_pending_followup) {
-            return Number(a.has_pending_followup) - Number(b.has_pending_followup)
+            return a.has_pending_followup ? 1 : -1
           }
           return b.days_overdue - a.days_overdue
         case 'name':
