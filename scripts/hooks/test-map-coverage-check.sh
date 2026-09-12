@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# test-map-coverage-check.sh — guards E2E test-map spec self-coverage in the
-# pre-push LINT phase (which runs unconditionally, NOT gated by should_skip_tests
-# — so the gate fires even on a frontend-test-only push, which is exactly when a
-# spec self-entry can drift). Converts the hand-patched core.md gotcha ("Adding
-# settings hooks without test-map entry") into a mechanical gate.
+# test-map-coverage-check.sh - validates the map before diff-selected E2E.
 #
 # Invariant: every tracked frontend/tests/e2e/*.spec.ts (top-level, excluding
 # helpers/) is matched by at least one `pattern` in test-map.json. A spec with no
@@ -16,10 +12,10 @@
 # distinguishes exit 0 (all matched), 1 (offenders on stdout), 2 (internal error).
 #
 # Fail-closed: this wrapper captures the module's exit code explicitly and treats
-# ANY non-zero rc as push-blocking. It never infers pass/fail from whether stdout
+# ANY non-zero rc as test-selection-blocking. It never infers pass/fail from whether stdout
 # was empty (an empty stdout under rc=2 is an error, not a pass) — so a malformed
 # test-map.json, an invalid regex, a missing spec list, or a missing `node` all
-# block the push instead of silently passing.
+# stop test selection instead of silently passing.
 #
 # Sourceable: when sourced (BASH_SOURCE != $0) it only defines functions, so the
 # logic can be unit-tested with injected input (see test/test-test-map-coverage-check.sh).
@@ -27,7 +23,7 @@ set -uo pipefail
 
 run_test_map_coverage() {
   # Optional $1 overrides the map path. Production callers pass nothing (the guard
-  # body and the pre-push command both invoke it with no args); only the self-test
+  # body and the Makefile both invoke it with no args); only the self-test
   # passes an injected map so it can drive this real wrapper (incl. its
   # command-substitution rc-capture below) against a malformed map. Using a function
   # parameter rather than an env var avoids an exported-in-a-dev-shell footgun.

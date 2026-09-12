@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# repo-hygiene-check.sh — lightweight repo-hygiene gate run in the pre-push LINT
-# phase (which runs unconditionally, NOT gated by should_skip_tests — so the gate
-# fires even on a docs/HTML-only push, which is exactly when its checks matter).
+# repo-hygiene-check.sh - always-on, lightweight pre-push check.
 # A home for cheap "don't commit X" checks that catch mistakes deterministically
 # but don't warrant a CI job.
 #

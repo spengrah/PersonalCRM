@@ -302,6 +302,13 @@ jobs:
         working-directory: backend
         run: go test -short ./...
 
+      - name: Run WhatsApp actor race tests
+        working-directory: backend
+        run: go test -race -short ./internal/whatsapp/...
+
+      - name: Run hook and worktree tests
+        run: bash scripts/hooks/test/test-pre-push-filters.sh
+
       - name: Install backup pipeline tools
         run: sudo apt-get update -qq && sudo apt-get install -y -qq age rclone zstd
 

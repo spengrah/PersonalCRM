@@ -769,12 +769,12 @@ Interaction, cadence, and follow-up consumers each have an `EVENT_BUS_*_MODE` fl
          E2E (Playwright)
         - Full workflows
        - Slow, brittle
-      - Run pre-push (diff-selected) and in CI (full)
+      - Run explicitly during local verification (diff-selected) and in CI (full)
 
        Integration Tests
       - DB + Repository
      - Postgres required
-    - Run pre-push and in CI
+    - Run explicitly during local verification and in CI
 
       Unit Tests
      - Fast, isolated

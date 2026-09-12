@@ -1,42 +1,14 @@
-# Single source of truth for path → which-tests-run mapping.
-# Read by BOTH:
-#   - CI: .github/workflows/ci.yml `changes` job (dorny/paths-filter@v3, filters: ./path-filters.yml)
-#   - Local: scripts/hooks/pre-push (group-aware bash parser, file_in_group)
+# Shared path groups for CI, local static checks, and staging reseed decisions.
+# Keep flat named groups of quoted globs: the shell consumers use file_in_group
+# from scripts/hooks/pre-push. No anchors, aliases, or negation.
 #
-# LCD constraint: flat named groups, each a plain list of glob strings — almost
-# always 'dir/**', with a single deliberate exception: 'infra/langfuse/*.ts'
-# (single-star, one directory deep, no recursion) so that infra/langfuse/'s
-# checked-in price file (model-prices.json) stays OUT of the frontend group while
-# its tooling stays in it — see that group's comment below.
-# NO YAML anchors/aliases, NO negation patterns — the bash parser is a dumb
-# line-scanner and dorny is the other consumer; keep it lowest-common-denominator.
-#
-# Group → consumer mapping:
-#   backend     → CI backend-tests + e2e-tests; local Go/frontend test suite (∪ frontend)
-#   frontend    → CI frontend-tests + e2e-tests; local Go/frontend test suite (∪ backend).
-#                 ALSO gates infra/langfuse/'s TypeScript tooling (bun test folded into
-#                 `make test-frontend` + a CI frontend-tests step) — but NOT
-#                 model-prices.json, which stays in NO group, so a price-only diff
-#                 (including every PR the scheduled sync workflow opens) triggers only
-#                 the always-on `changes`/lint jobs, never a test lane.
-#   mac_daemon  → CI mac-daemon-tests. NOTE: the local Swift gate (check_swift) does NOT
-#                 use this group; it uses a stricter literal 'mac-daemon/' prefix test, so a
-#                 ci.yml-only push runs mac-daemon-tests in CI but NOT swift test locally.
-#   seed        → deploy-staging.yml reseed decision (scripts/ci/staging-reseed-decision.sh,
-#                 via file_in_group). ORTHOGONAL: synthetic stays in `backend` too, so this
-#                 group changes NO CI/pre-push test selection — it only flags the seed surface
-#                 the staging auto-reseed diffs against. No CI/pre-push consumer reads it.
-#   migrations  → deploy-staging.yml reseed decision (scripts/ci/staging-reseed-decision.sh,
-#                 via file_in_group). ORTHOGONAL: backend/migrations/** is also in the `backend`
-#                 group, so this group changes NO CI/pre-push test selection — it only flags a
-#                 schema change so the reseed decision emits a migration nudge. No CI/pre-push
-#                 consumer reads it.
-#   spec        → CI spec-lint job (unlike seed/migrations this IS a CI-selection group: the
-#                 changes job exposes outputs.spec and the spec-lint job gates on it). No local
-#                 consumer reads the group — the pre-push side runs `make spec-lint`
-#                 unconditionally in the LINT lane.
+# Local check selection is configured in .ai/pre-push.json. Backend and frontend
+# checks are independent; spec checks use backend, frontend, and spec groups.
+# mac_daemon tests run in CI. seed and migrations drive staging reseed decisions.
+# infra/langfuse/*.ts triggers frontend CI, but model-prices.json does not.
 
 backend:
+  - '.ai/pre-push.json'
   - 'backend/**'
   - 'tests/**'
   - 'go.mod'

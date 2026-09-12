@@ -1,132 +1,13 @@
 #!/bin/bash
-# Unified pre-push hook: review-log + swift gate (precede), then a PARALLEL block.
-#
-# Reads configuration from .ai/pre-push.json. Runs enabled checks; blocks push
-# if any required check fails.
-#
-# Execution model (L3): review-log (advisory warn only — the code-review
-# verdict is enforced at merge time, not push time) and the Swift gate run first
-# (cheap / path-gated fast-fail). Then four independent phases run CONCURRENTLY — LINT,
-# GO (test-unit && test-integration, the DB-owning long pole), FRONTEND, and
-# FILTER (pre-push filter unit tests) — each buffered to its own log. Once all
-# four pass, E2E runs EXCLUSIVELY and last, because make test-e2e-diff DROPs the
-# personal_crm_test database (the Go base/clone source) and binds ports
-# 3000/8080 — it must never overlap the Go integration lane.
-#
-# LINT is no longer a hard fast-fail gate BEFORE tests: it runs concurrent with
-# the Go pole and feeds the unified aggregate. Unlike the test phases, LINT is
-# NOT gated by should_skip_tests — it runs whenever lint is enabled (matching the
-# prior always-run-lint behavior).
-#
-# A promotion push to main (git push origin develop:main / make promote) skips all
-# of these checks: every pushed ref targets refs/heads/main, whose content was
-# already reviewed + CI-green on develop, and deploy-prod.yml re-verifies CI for the
-# SHA before deploying.
-#
-# To bypass (not recommended): git push --no-verify
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Git invokes hooks with cwd = the top of the PUSHING work tree (and GIT_DIR set
-# to that worktree's git dir), so the repo root to gate must come from git, not
-# from this file's location. core.hooksPath can point at a DIFFERENT checkout
-# (e.g. a hooks install shared across linked worktrees) whose tree is not
-# the content being pushed — deriving PROJECT_ROOT from SCRIPT_DIR would gate
-# that other checkout instead of the pushed one. Fall back to the hook-checkout
-# root only when invoked outside any repo (manual runs, e.g. sourcing this file
-# from an empty directory for testing).
-if PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-  PROJECT_ROOT_FROM_GIT=true
-else
-  PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-  PROJECT_ROOT_FROM_GIT=false
-fi
-
+# Fast, path-selected static checks. Required test suites run in PR CI.
+# Resolve the pushing worktree even when core.hooksPath points elsewhere.
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "Pre-push: cannot resolve pushing worktree" >&2
+  exit 1
+}
 CONFIG_FILE=".ai/pre-push.json"
-
-# path-filters.yml is the single source of truth (shared with CI's dorny filter).
 FILTERS_FILE="path-filters.yml"
 
-# Check the code-review verdict for HEAD — ADVISORY ONLY (merge-gated model).
-#
-# The merge gate has ONE review signal: the local native Codex review, whose
-# verdict is .ai/log/review/<HEAD-sha>.codex.md. It is enforced at MERGE time
-# (monitor-pr / plan-and-ship Phase 2.5 barrier: that verdict PASS + CI green),
-# NOT at push time — pushing first lets the review and CI run concurrently. The
-# deterministic gates below (lint + tests + E2E) still block the push.
-#
-# review-head's .ai/log/review/<sha>.md is NOT read here any more: it was retired
-# as a gate signal (dev-workflow v0.12.0) and is now a standalone on-demand
-# review. Historical .md files predate that and are left alone.
-#
-# The gate review is launched the moment HEAD is frozen, which is typically
-# seconds before this hook runs, so the common state at push time is a pending
-# marker (SOURCE: pending, deliberately carrying no RESULT= line). That is
-# healthy, not a failure — report it as in-flight rather than as a non-PASS.
-check_review_log() {
-  local enabled
-  enabled=$(jq -r '.review.enabled // false' "$CONFIG_FILE")
-  if [[ "$enabled" != "true" ]]; then
-    return 0
-  fi
-
-  local head_sha
-  head_sha=$(git rev-parse HEAD)
-  local review_file=".ai/log/review/${head_sha}.codex.md"
-
-  if [[ ! -f "$review_file" ]]; then
-    echo "  [review] WARN no codex review for HEAD (${head_sha:0:12}) — required at MERGE time; launch it now so it runs alongside CI" >&2
-    return 0
-  fi
-
-  if grep -q '^SOURCE: pending$' "$review_file"; then
-    echo "  [review] OK codex review in flight for ${head_sha:0:12} (pending marker)" >&2
-    return 0
-  fi
-
-  if ! grep -q '^RESULT=PASS$' "$review_file"; then
-    echo "  [review] WARN codex review for HEAD (${head_sha:0:12}) is not PASS — the merge gate will block until a passing review exists for this SHA" >&2
-    return 0
-  fi
-
-  echo "  [review] OK codex review of ${head_sha:0:12}" >&2
-}
-
-# Run the lint commands and RETURN a real exit code (non-zero on a required
-# failure). Unlike the old run_lint, this does NOT write a result file and does
-# NOT swallow output: stdout/stderr flow through so the LINT phase log captures
-# diagnostics, and the non-zero return becomes the phase rc. Invoked as the LINT
-# phase command string (eval'd in run_phase's subshell, which inherits this
-# function). Caller checks .lint.enabled / command count before launching.
-run_lint_inner() {
-  local count
-  count=$(jq '.lint.commands | length' "$CONFIG_FILE")
-  local failed=0
-  for i in $(seq 0 $((count - 1))); do
-    local name cmd optional
-    name=$(jq -r ".lint.commands[$i].name" "$CONFIG_FILE")
-    cmd=$(jq -r ".lint.commands[$i].command" "$CONFIG_FILE")
-    optional=$(jq -r ".lint.commands[$i].optional // false" "$CONFIG_FILE")
-
-    echo "  [lint] -> $name"
-    if ( eval "$cmd" ); then
-      echo "  [lint] OK $name"
-    else
-      if [[ "$optional" == "true" ]]; then
-        echo "  [lint] WARN $name (optional)"
-      else
-        echo "  [lint] FAIL $name"
-        failed=1
-      fi
-    fi
-  done
-  return $failed
-}
-
-# file_in_group <file> <group>: true (0) if <file> matches any glob under the
-# <group:> top-level key in path-filters.yml. Group-aware: only patterns inside
-# the requested group are considered. Returns 1 (no match) when the filters file
-# is absent — "always run" is meaningless per-group; the absent-file fail-safe
-# lives in any_file_in_groups instead.
 file_in_group() {
   local file="$1" group="$2"
   [[ ! -f "$FILTERS_FILE" ]] && return 1
@@ -156,8 +37,7 @@ file_in_group() {
 }
 
 # any_file_in_groups <newline-file-list> <group...>: 0 if any file is in any group.
-# Fail-safe: if the filters file is missing, return 0 (run tests) — matches the
-# old "no config = always run tests" posture, but only for the Go/frontend gate.
+# If the filters file is missing, conservatively select all groups.
 any_file_in_groups() {
   local changed_files="$1"; shift
   [[ -z "$changed_files" ]] && return 1
@@ -171,456 +51,114 @@ any_file_in_groups() {
   return 1
 }
 
-# any_file_under_macdaemon <newline-file-list>: 0 if any line starts with "mac-daemon/".
-# The local Swift gate uses this stricter literal prefix test (NOT the mac_daemon
-# group) so a ci.yml-only push — which IS in the mac_daemon group for CI's sake —
-# does not run `swift test` locally, and the absent-filters-file fail-safe in
-# any_file_in_groups can never make the Swift gate over-fire on a non-daemon push.
-any_file_under_macdaemon() {
-  local files="$1"
-  [[ -z "$files" ]] && return 1
-  grep -q '^mac-daemon/' <<< "$files"
-}
 
-# Check if tests can be skipped
-should_skip_tests() {
-  # Case 1: No pushed files trigger tests
-  local remote_branch
-  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/develop"
-  local pushed_files
-  pushed_files=$(git diff --name-only "$remote_branch"...HEAD 2>/dev/null)
-
-  if ! any_file_in_groups "$pushed_files" backend frontend; then
-    return 0  # No Go/frontend changes, skip tests
-  fi
-
-  # Case 2: Tests already passed, no new trigger files since
-  local marker=".ai/log/.tests-passed.json"
-  if [[ -f "$marker" ]]; then
-    local last_tested_commit
-    last_tested_commit=$(jq -r '.commit' "$marker" 2>/dev/null)
-    if [[ -n "$last_tested_commit" ]] && git rev-parse --verify "$last_tested_commit" >/dev/null 2>&1; then
-      local files_since_test
-      files_since_test=$(git diff --name-only "$last_tested_commit" HEAD 2>/dev/null)
-      if ! any_file_in_groups "$files_since_test" backend frontend; then
-        return 0  # Only non-trigger files changed since tests passed
-      fi
-    fi
-  fi
-
-  return 1  # Must run tests
-}
-
-# Save test pass marker
-save_test_marker() {
-  local marker=".ai/log/.tests-passed.json"
-  local commit=$(git rev-parse HEAD)
-  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  mkdir -p "$(dirname "$marker")"
-  echo "{\"commit\": \"$commit\", \"timestamp\": \"$timestamp\"}" > "$marker"
-}
-
-# Swift (mac-daemon) gate: runs `CI=true make test-daemon-local` when the push
-# range touches mac-daemon/**. CI marker set so real-Keychain/notification tests
-# skip. Blocks push on failure; skips with a warning (exit 0) if Xcode/XCTest is
-# unavailable — the intended escape hatch, not a push bypass.
-check_swift() {
-  cd "$PROJECT_ROOT"  # run_lint's eval'd "cd frontend" leaks into this shell; restore root
-  local enabled
-  enabled=$(jq -r '.swift.enabled // false' "$CONFIG_FILE")
-  if [[ "$enabled" != "true" ]]; then
-    return 0
-  fi
-
-  local remote_branch changed
-  remote_branch=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null) || remote_branch="origin/develop"
-  changed=$(git diff --name-only "$remote_branch"...HEAD 2>/dev/null) || changed=""
-
-  if ! any_file_under_macdaemon "$changed"; then
-    echo "  [swift] OK Skipped (no mac-daemon changes)" >&2
-    return 0
-  fi
-
-  if ! xcrun --find xctest >/dev/null 2>&1; then
-    echo "  [swift] WARN Skipping Swift tests (Xcode/XCTest not found — install full Xcode to gate locally)" >&2
-    return 0
-  fi
-
-  echo "  [swift] -> mac-daemon swift test (CI=true)" >&2
-  if CI=true make test-daemon-local >/dev/null 2>&1; then
-    echo "  [swift] OK mac-daemon swift test" >&2
-  else
-    echo "" >&2
-    echo "==============================================================" >&2
-    echo "FAILED: mac-daemon Swift tests failed. Fix before pushing." >&2
-    echo "  Re-run locally: CI=true make test-daemon-local" >&2
-    echo "==============================================================" >&2
-    exit 1
-  fi
-}
-
-# check_frontend_deps: fast-fail GATE that runs BEFORE the parallel block so a
-# missing/partial frontend/node_modules produces a clear, actionable message
-# instead of the concurrent LINT/FRONTEND phases' cryptic `next`/`vitest:
-# command not found` (exit 127). Modeled on check_swift. It must be a hook gate,
-# NOT a .ai/pre-push.json lint.commands[] entry: LINT does not short-circuit on
-# the first failure and runs concurrently with FRONTEND, so a config-command
-# preflight would print its message ALONGSIDE the cryptic errors, not instead of
-# them. Only the fast-fail here (under the hook's set -e, before run_phases_parallel)
-# prevents the frontend commands from running at all.
-check_frontend_deps() {
-  # Only enforce when frontend tooling will actually run (lint and/or tests on).
-  # LINT (incl. Frontend lint) runs on every push regardless of should_skip_tests,
-  # so deps are required whenever lint is enabled — even a backend-only push.
-  local lint_on test_on
-  lint_on=$(jq -r '.lint.enabled // false' "$CONFIG_FILE")
-  test_on=$(jq -r '.test.enabled // false' "$CONFIG_FILE")
-  [[ "$lint_on" == "true" || "$test_on" == "true" ]] || return 0
-  bash "$PROJECT_ROOT/scripts/hooks/check-frontend-deps.sh" || exit 1   # set -e fast-fail
-}
-
-# run_phase <log> <rcfile> <shell-command-string>
-# Runs the command string FOREGROUND in an isolating subshell, buffering all
-# output to <log> and writing the exit code to <rcfile>. The subshell isolates
-# any `cd` (e.g. "cd frontend && bun run lint") so it can never leak into a
-# sibling phase or the parent. The caller backgrounds it with a single `&`; the
-# helper does NOT self-background (double-backgrounding would orphan the rc-file
-# from `wait`). The rc-file is the single source of truth for pass/fail — the
-# aggregate never trusts `wait`'s multiplexed status.
-run_phase() {
-  local log="$1" rc="$2" cmd="$3"
-  # `set +e` inside the subshell so a failing command does NOT abort before the
-  # rc-file is written (the parent hook runs under `set -e`, which the subshell
-  # would otherwise inherit). The rc-file is the single source of truth.
-  ( set +e; eval "$cmd" >"$log" 2>&1; echo $? >"$rc" )
-}
-
-# classify_command <command-string>: echo the lane for a .test.commands[] entry.
-#   E2E        — matches "test-e2e"           (DROPs the DB + binds ports: EXCLUSIVE, last)
-#   CONCURRENT — matches "test-frontend" OR "test-pre-push-filters" OR
-#                "test-deploy-scripts" (commands KNOWN to be DB-free AND port-free:
-#                the deploy-script suites are pure bash with PATH-shadow stubs)
-#   GO         — matches "test-unit" OR "test-integration" (DB-owning serial lane)
-#   GO (default) — anything UNRECOGNIZED falls to the GO serial lane.
-# Contract: a new known-safe (DB-free, port-free) command MUST be added to the
-# CONCURRENT allowlist explicitly. Anything not on the allowlist is treated as
-# DB-owning and serialized — NEVER silently run concurrently (no DB collision).
-classify_command() {
-  local cmd="$1"
-  case "$cmd" in
-    *test-e2e*)                                                    echo "E2E" ;;
-    *test-frontend*|*test-pre-push-filters*|*test-deploy-scripts*) echo "CONCURRENT" ;;
-    *test-unit*|*test-integration*)                                echo "GO" ;;
-    *)                                                             echo "GO" ;;
-  esac
-}
-
-# run_lane <cmd optional cmd optional ...>: run a lane's commands sequentially,
-# preserving each entry's `optional` flag and fast-fail-on-required semantics.
-# A compound `a && b` cannot express per-command optionality, so the lane runs
-# each command in order: optional ones tolerate failure (logged WARN, rc stays
-# 0); required ones fast-fail the lane (`|| return $?`). Used by ALL lanes (GO,
-# FRONTEND, FILTER, E2E) so every .test.commands[] entry in a lane runs and its
-# `optional` flag is honored — matching the prior hook, which ran every command.
-# For today's two required GO commands this reduces to
-# `make test-unit && make test-integration-fast`.
-run_lane() {
-  # $@ alternates: cmd optional cmd optional ...
-  local cmd optional
-  while [[ $# -ge 2 ]]; do
-    cmd="$1"; optional="$2"; shift 2
-    echo "  -> $cmd"
-    if [[ "$optional" == "true" ]]; then
-      ( eval "$cmd" ) || echo "  WARN command failed (optional): $cmd"
-    else
-      ( eval "$cmd" ) || return $?
-    fi
-  done
-  return 0
-}
-
-# Print a phase's buffered log under a labeled banner.
-print_phase_log() {
-  local name="$1" log="$2"
-  echo "" >&2
-  echo "=== [phase] $name ===" >&2
-  [[ -f "$log" ]] && cat "$log" >&2
-}
-
-# run_phases_parallel: the L3 orchestrator. Replaces the old sequential
-# run_lint; <lint-gate>; run_tests flow. Launches LINT (if enabled) + GO +
-# FRONTEND + FILTER concurrently (the test phases only when tests are active),
-# waits, aggregates rc-files, then runs E2E EXCLUSIVELY last (only if all prior
-# phases passed and tests are active). Writes PASS/FAIL/SKIP to TEST_RESULT and
-# PASS/FAIL/SKIP to LINT_RESULT (for the Results summary). save_test_marker on a
-# full test pass.
-run_phases_parallel() {
-  cd "$PROJECT_ROOT"
-
-  # ---- Compute gating ONCE up front ----
-  local lint_enabled
-  lint_enabled=$(jq -r '.lint.enabled // false' "$CONFIG_FILE")
-  [[ "$lint_enabled" == "true" ]] && [[ "$(jq '.lint.commands | length' "$CONFIG_FILE")" -gt 0 ]] || lint_enabled="false"
-
-  local test_enabled
-  test_enabled=$(jq -r '.test.enabled // false' "$CONFIG_FILE")
-  local test_count
-  test_count=$(jq '.test.commands | length' "$CONFIG_FILE")
-
-  # tests_active = test.enabled AND commands present AND NOT should_skip_tests.
-  # (Mirrors the old run_tests: SKIP when disabled/empty; PASS-without-running
-  # when should_skip_tests.)
-  local tests_active="true"
-  if [[ "$test_enabled" != "true" ]] || [[ "$test_count" -eq 0 ]]; then
-    tests_active="false"
-    echo "SKIP" > "$TEST_RESULT"
-  elif should_skip_tests; then
-    tests_active="false"
-    echo "  [test] OK Skipped (no trigger files changed since last pass)" >&2
-    echo "PASS" > "$TEST_RESULT"
-  fi
-
-  # ---- Buffered phase logs / rc-files ----
-  local LINT_LOG GO_LOG FE_LOG FILTER_LOG E2E_LOG
-  local LINT_RC GO_RC FE_RC FILTER_RC E2E_RC
-  LINT_LOG=$(mktemp); GO_LOG=$(mktemp); FE_LOG=$(mktemp); FILTER_LOG=$(mktemp); E2E_LOG=$(mktemp)
-  LINT_RC=$(mktemp); GO_RC=$(mktemp); FE_RC=$(mktemp); FILTER_RC=$(mktemp); E2E_RC=$(mktemp)
-  PHASE_TMPFILES="$LINT_LOG $GO_LOG $FE_LOG $FILTER_LOG $E2E_LOG $LINT_RC $GO_RC $FE_RC $FILTER_RC $E2E_RC"
-
-  # ---- Classify the test commands into lanes (each lane is an alternating
-  #      cmd/optional list so EVERY command runs and its optional flag is
-  #      honored — matching the prior hook). The FRONTEND/FILTER split is by
-  #      command substring; both are concurrent. ----
-  local go_args=() fe_args=() filter_args=() e2e_args=()
-  if [[ "$tests_active" == "true" ]]; then
-    local i name cmd optional lane
-    for i in $(seq 0 $((test_count - 1))); do
-      name=$(jq -r ".test.commands[$i].name" "$CONFIG_FILE")
-      cmd=$(jq -r ".test.commands[$i].command" "$CONFIG_FILE")
-      optional=$(jq -r ".test.commands[$i].optional // false" "$CONFIG_FILE")
-      lane=$(classify_command "$cmd")
-      case "$lane" in
-        E2E)        e2e_args+=("$cmd" "$optional") ;;
-        CONCURRENT)
-          if [[ "$cmd" == *test-frontend* ]]; then fe_args+=("$cmd" "$optional"); else filter_args+=("$cmd" "$optional"); fi ;;
-        GO)         go_args+=("$cmd" "$optional") ;;
-      esac
-    done
-  fi
-
-  # ---- Launch concurrent phases (set +e fence: a non-zero background child
-  #      must never abort the parent before rc-files are read) ----
-  local launched_rcs=() launched_names=() launched_logs=()
-  set +e
-
-  if [[ "$lint_enabled" == "true" ]]; then
-    echo "  [test] -> LINT (running, logs buffered)" >&2
-    run_phase "$LINT_LOG" "$LINT_RC" "run_lint_inner" &
-    launched_rcs+=("$LINT_RC"); launched_names+=("LINT"); launched_logs+=("$LINT_LOG")
-  fi
-
-  if [[ "$tests_active" == "true" ]]; then
-    if [[ ${#go_args[@]} -gt 0 ]]; then
-      echo "  [test] -> GO (unit+integration, running, logs buffered)" >&2
-      # Pass the alternating cmd/optional list to run_lane via a quoted call.
-      run_phase "$GO_LOG" "$GO_RC" "run_lane $(printf '%q ' "${go_args[@]}")" &
-      launched_rcs+=("$GO_RC"); launched_names+=("GO"); launched_logs+=("$GO_LOG")
-    fi
-    if [[ ${#fe_args[@]} -gt 0 ]]; then
-      echo "  [test] -> FRONTEND (running, logs buffered)" >&2
-      run_phase "$FE_LOG" "$FE_RC" "run_lane $(printf '%q ' "${fe_args[@]}")" &
-      launched_rcs+=("$FE_RC"); launched_names+=("FRONTEND"); launched_logs+=("$FE_LOG")
-    fi
-    if [[ ${#filter_args[@]} -gt 0 ]]; then
-      echo "  [test] -> FILTER (running, logs buffered)" >&2
-      run_phase "$FILTER_LOG" "$FILTER_RC" "run_lane $(printf '%q ' "${filter_args[@]}")" &
-      launched_rcs+=("$FILTER_RC"); launched_names+=("FILTER"); launched_logs+=("$FILTER_LOG")
-    fi
-  fi
-
-  wait
-  set -e
-
-  # ---- Aggregate the launched phases' rc-files ----
-  local failed=0 lint_failed=0 idx
-  for idx in "${!launched_rcs[@]}"; do
-    local rcfile="${launched_rcs[$idx]}" pname="${launched_names[$idx]}" plog="${launched_logs[$idx]}"
-    local rcval
-    rcval=$(cat "$rcfile" 2>/dev/null || echo 1)   # missing rc => failure
-    [[ "$rcval" =~ ^[0-9]+$ ]] || rcval=1
-    if [[ "$rcval" -ne 0 ]]; then
-      failed=1
-      [[ "$pname" == "LINT" ]] && lint_failed=1
-      echo "  [test] FAIL $pname" >&2
-      print_phase_log "$pname" "$plog"
-    else
-      echo "  [test] OK $pname" >&2
-    fi
-  done
-
-  # ---- E2E: exclusive, last, only if all prior passed AND tests are active ----
-  if [[ "$tests_active" == "true" ]] && [[ ${#e2e_args[@]} -gt 0 ]]; then
-    if [[ "$failed" -eq 0 ]]; then
-      echo "  [test] -> E2E (exclusive, running, logs buffered)" >&2
-      set +e
-      run_phase "$E2E_LOG" "$E2E_RC" "run_lane $(printf '%q ' "${e2e_args[@]}")"
-      set -e
-      local e2e_rc
-      e2e_rc=$(cat "$E2E_RC" 2>/dev/null || echo 1)
-      [[ "$e2e_rc" =~ ^[0-9]+$ ]] || e2e_rc=1
-      if [[ "$e2e_rc" -ne 0 ]]; then
-        failed=1
-        echo "  [test] FAIL E2E" >&2
-        print_phase_log "E2E" "$E2E_LOG"
-      else
-        echo "  [test] OK E2E" >&2
-      fi
-    else
-      echo "  [test] SKIP E2E (a prior phase failed)" >&2
-    fi
-  fi
-
-  # ---- Lint result line (for the Results summary) ----
-  if [[ "$lint_enabled" != "true" ]]; then
-    echo "SKIP" > "$LINT_RESULT"
-  elif [[ "$lint_failed" -eq 1 ]]; then
-    echo "FAIL" > "$LINT_RESULT"
-  else
-    echo "PASS" > "$LINT_RESULT"
-  fi
-
-  # ---- Test result + marker ----
-  if [[ "$tests_active" == "true" ]]; then
-    if [[ "$failed" -eq 1 ]]; then
-      # Distinguish a lint-only failure from a real test failure for TEST_RESULT.
-      local test_only_failed=0 jdx
-      for jdx in "${!launched_rcs[@]}"; do
-        [[ "${launched_names[$jdx]}" == "LINT" ]] && continue
-        local rv; rv=$(cat "${launched_rcs[$jdx]}" 2>/dev/null || echo 1)
-        [[ "$rv" =~ ^[0-9]+$ ]] || rv=1
-        [[ "$rv" -ne 0 ]] && test_only_failed=1
-      done
-      local e2erv; e2erv=$(cat "$E2E_RC" 2>/dev/null || echo 0)
-      [[ "$e2erv" =~ ^[0-9]+$ ]] || e2erv=1
-      [[ "$e2erv" -ne 0 ]] && test_only_failed=1
-      if [[ "$test_only_failed" -eq 1 ]]; then
-        echo "FAIL" > "$TEST_RESULT"
-      else
-        # Only lint failed; tests all passed. Tests pass, lint gates separately.
-        save_test_marker
-        echo "PASS" > "$TEST_RESULT"
-      fi
-    else
-      save_test_marker
-      echo "PASS" > "$TEST_RESULT"
-    fi
-  fi
-  # (When tests_active=false, TEST_RESULT was already written above: SKIP if
-  #  disabled/empty, PASS if should_skip_tests.)
-
-  # shellcheck disable=SC2086  # PHASE_TMPFILES is a space-separated path list.
-  rm -f $PHASE_TMPFILES
-}
-
-# refs_all_target_main <git-stdin-block>: 0 (true) if the block is non-empty AND
-# EVERY pushed ref's remote_ref (3rd field of `<local_ref> <local_sha>
-# <remote_ref> <remote_sha>`) is refs/heads/main. Empty input -> 1 (false): an
-# empty stdin must NOT skip. A mixed push that includes any non-main remote_ref
-# -> 1 (false): only a pure promotion to main qualifies. Pure (no git/FS calls)
-# so the phase-guard test can source the hook and assert it directly.
 refs_all_target_main() {
-  local refs="$1"
-  [[ -n "$refs" ]] || return 1
-  awk 'NF{print $3}' <<<"$refs" | grep -qv '^refs/heads/main$' && return 1
-  return 0
+  [[ -n "$1" ]] || return 1
+  awk 'NF { if (NF != 4 || $3 != "refs/heads/main") bad=1; count++ }
+       END { exit (!count || bad) }' <<< "$1"
 }
 
-# Allow tests to source this file for unit-testing the pure functions
-# (file_in_group / any_file_in_groups / refs_all_target_main) without running the
-# hook body.
+# Existing refs use the actual remote SHA, including force-push reversions.
+# Disable rename detection so both the old and new paths select checks.
+# New branches compare with the locally available development base; no fetch.
+pushed_files() {
+  local refs="$1" remote="${2:-origin}" local_ref local_sha remote_ref remote_sha base
+  local zero="0000000000000000000000000000000000000000"
+  if [[ -z "$refs" ]]; then
+    base=$(git merge-base HEAD "$remote/develop") || return 1
+    git diff --name-only --no-renames "$base" HEAD
+    return
+  fi
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    [[ -n "$local_ref" ]] || continue
+    [[ "$local_sha" == "$zero" ]] && continue
+    base="$remote_sha"
+    if [[ "$base" == "$zero" ]]; then
+      base=$(git merge-base "$local_sha" "$remote/develop") || return 1
+    fi
+    git diff --name-only --no-renames "$base" "$local_sha" || return 1
+  done <<< "$refs"
+}
+
+check_selected() {
+  local files="$1"; shift
+  # Changes to check configuration exercise every retained check.
+  if grep -qxF -e '.ai/pre-push.json' -e 'scripts/hooks/pre-push' -e 'path-filters.yml' <<< "$files"; then
+    return 0
+  fi
+  [[ "$#" -eq 0 ]] || any_file_in_groups "$files" "$@"
+}
+
+check_frontend_format() {
+  local file full=false
+  local paths=()
+  while IFS= read -r file; do
+    case "$file" in
+      frontend/.prettier*|frontend/prettier.config.*|frontend/package.json|frontend/bun.lock*)
+        full=true ;;
+    esac
+    # Prefixing with ./ also keeps filenames from being interpreted as options.
+    if [[ "$file" == frontend/* && -f "$file" && ! -L "$file" ]]; then
+      paths+=("./${file#frontend/}")
+    fi
+  done <<< "$1"
+  if [[ "$full" == true ]]; then
+    (cd frontend && ./node_modules/.bin/prettier --check .)
+  elif [[ "${#paths[@]}" -gt 0 ]]; then
+    (cd frontend && ./node_modules/.bin/prettier --check --ignore-unknown "${paths[@]}")
+  else
+    echo "No changed frontend files to format-check."
+  fi
+}
+
+run_checks() {
+  local files="$1" entry name command started group failed=0
+  local groups=()
+  jq -e '.checks | type == "array" and length > 0' "$CONFIG_FILE" >/dev/null || return 1
+  while IFS= read -r entry; do
+    name=$(jq -er '.name' <<< "$entry") || return 1
+    command=$(jq -er '.command' <<< "$entry") || return 1
+    groups=()
+    while IFS= read -r group; do
+      [[ -n "$group" ]] && groups+=("$group")
+    done < <(jq -r '.groups[]?' <<< "$entry")
+    if ! check_selected "$files" "${groups[@]}"; then
+      echo "  SKIP $name (no relevant changes)"
+      continue
+    fi
+    started=$SECONDS
+    echo "  -> $name"
+    if ( eval "$command" ); then
+      echo "  OK $name ($((SECONDS - started))s)"
+    else
+      echo "  FAIL $name ($((SECONDS - started))s)" >&2
+      failed=1
+    fi
+  done < <(jq -c '.checks[]' "$CONFIG_FILE")
+  return "$failed"
+}
+
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
-  return 0 2>/dev/null || true
+  return 0
 fi
 
 set -e
 cd "$PROJECT_ROOT"
-
 if [[ ! -f "$CONFIG_FILE" ]]; then
-  # PROJECT_ROOT resolved via git but has no config: fail CLOSED, not open — a
-  # wrong cwd/GIT_DIR resolution must never silently skip checks (fail-open) nor
-  # silently re-root to the hook checkout (gating a different
-  # checkout's tree again). The script-derived fallback below is only reachable when
-  # git resolution itself failed (manual invocation outside any repo).
-  if [[ "$PROJECT_ROOT_FROM_GIT" == "true" ]]; then
-    echo "" >&2
-    echo "==============================================================" >&2
-    echo "FAILED: resolved project root $PROJECT_ROOT has no $CONFIG_FILE" >&2
-    echo "Refusing to gate a tree that is not the pushed content." >&2
-    echo "Check cwd/GIT_DIR, or bypass with --no-verify." >&2
-    echo "==============================================================" >&2
-    exit 1
-  fi
-  echo "Warning: No $CONFIG_FILE found, skipping pre-push checks" >&2
+  echo "Refusing to gate a worktree without $CONFIG_FILE" >&2
+  exit 1
+fi
+refs=""
+[[ -t 0 ]] || refs="$(cat)"
+if refs_all_target_main "$refs"; then
+  echo "Pre-push: promotion to main -> skipping local checks (content gated on develop CI)."
   exit 0
 fi
-
-# A promotion to main (git push origin develop:main / make promote) only carries
-# content already reviewed + CI-green on develop, and deploy-prod.yml re-verifies
-# CI for the SHA before deploying — so the local pre-push checks are redundant for
-# it. If EVERY pushed ref targets refs/heads/main, skip. Guard on [ -t 0 ] so a
-# manual/terminal invocation (no git stdin) never blocks on the read.
-if [ ! -t 0 ]; then
-  _pp_refs="$(cat)"
-  if refs_all_target_main "$_pp_refs"; then
-    echo "Pre-push: promotion to main -> skipping local checks (content gated on develop CI; deploy-prod.yml re-verifies CI for the SHA)." >&2
-    exit 0
-  fi
-fi
-
-# Temp files for parallel execution results
-LINT_RESULT=$(mktemp)
-TEST_RESULT=$(mktemp)
-trap "rm -f $LINT_RESULT $TEST_RESULT" EXIT
-
-echo "==============================================================" >&2
-echo "Pre-push: Running checks..." >&2
-echo "==============================================================" >&2
-
-check_review_log
-
-# Swift gate (path-filtered, fast-fail before the heavy parallel block)
-check_swift
-
-# Frontend-deps gate: clear message for missing deps before the parallel block.
-check_frontend_deps
-
-# L3: LINT + GO + FRONTEND + FILTER run concurrently; E2E runs exclusively last.
-# Lint is one of the aggregated phases (no longer a separate fast-fail gate).
-run_phases_parallel
-LINT_STATUS=$(cat "$LINT_RESULT")
-TEST_STATUS=$(cat "$TEST_RESULT")
-
-echo "" >&2
-echo "==============================================================" >&2
-echo "Results:" >&2
-echo "  Lint:   $LINT_STATUS" >&2
-echo "  Tests:  $TEST_STATUS" >&2
-echo "==============================================================" >&2
-
-if [[ "$LINT_STATUS" == "FAIL" ]]; then
-  echo "" >&2
-  echo "FAILED: Linting failed. Fix issues before pushing." >&2
-  echo "" >&2
+files=$(pushed_files "$refs" "${1:-origin}") || {
+  echo "Pre-push: cannot resolve pushed changes; ensure the remote SHAs and development base are available locally." >&2
   exit 1
-fi
-
-if [[ "$TEST_STATUS" == "FAIL" ]]; then
-  echo "" >&2
-  echo "FAILED: Tests failed. Fix issues before pushing." >&2
-  echo "" >&2
-  exit 1
-fi
-
-echo "" >&2
-echo "OK: All pre-push checks passed." >&2
-exit 0
+}
+echo "Pre-push: Running static checks..."
+started=$SECONDS
+run_checks "$files"
+echo "OK: Pre-push checks passed ($((SECONDS - started))s)."

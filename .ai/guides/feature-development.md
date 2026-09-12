@@ -387,6 +387,8 @@ Add tests for new features. See [`.ai/rules/testing.md`](../rules/testing.md) fo
 - E2E parallelism with TestAPI
 - Running test commands
 
+Run focused tests for the affected behavior; the commands below are available for broader local verification. Required suites run in CI, while pre-push runs static checks.
+
 **Quick reference:**
 ```bash
 make test-unit         # Backend unit tests
@@ -406,56 +408,16 @@ See [`.ai/patterns/synthetic-seed-toolkit.md`](../patterns/synthetic-seed-toolki
 
 ## 8. Add Frontend Components
 
-### UI Design Preview (Before Implementation)
+### UI Design Preview (Optional)
 
-**When creating new UI elements**, generate a standalone HTML preview file to explore design options before writing React code. This allows rapid iteration on visual design without build cycles.
+Implement routine UI changes directly in the existing React components and design
+system. A separate HTML prototype is useful when visual direction is uncertain,
+meaningfully different designs need comparison, or the user requests a preview.
+New UI elements do not automatically require a prototype or an approval round.
 
-**When to use this approach:**
-- New form layouts or complex input patterns
-- Dashboard widgets or data displays
-- Any UI where multiple design approaches are valid
-- When the user needs to approve visual direction
-
-**How to create a preview:**
-1. Create a standalone HTML file in `/temp` (e.g., `temp/contact-form-preview.html`) - this directory is gitignored
-2. Use Tailwind CSS via CDN for styling
-3. Match the app's existing visual style (colors, spacing, borders)
-4. Show multiple design options side-by-side with labels
-5. Include interactive elements (dropdowns, buttons) so UX can be evaluated
-6. Add a recommendation section explaining trade-offs
-
-**Example structure:**
-```html
-<!DOCTYPE html>
-<html>
-<head>
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-100 p-8">
-  <h1>Component Name - Design Options</h1>
-
-  <!-- Option 1 -->
-  <section class="bg-white rounded-lg shadow p-6 mb-8">
-    <span class="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded">Option 1</span>
-    <h2>Option Name</h2>
-    <p class="text-gray-500">Description of this approach</p>
-    <!-- Interactive mockup -->
-  </section>
-
-  <!-- Option 2, 3, etc. -->
-
-  <!-- Recommendation -->
-  <div class="bg-blue-50 rounded-lg p-4">
-    <h3>Recommendation</h3>
-    <p>Explain which option works best and why</p>
-  </div>
-</body>
-</html>
-```
-
-**After approval:**
-- Implement the chosen design in React
-- Preview files in `/temp` are already gitignored, so no cleanup needed
+When a preview helps, put it in the repo's gitignored `temp/` directory, match the
+existing app, and explore only the alternatives needed to resolve the decision.
+Then implement the chosen direction in React.
 
 ---
 

@@ -2,7 +2,7 @@
 # Tests for scripts/link-worktree-env.sh + scripts/hooks/post-checkout.
 #
 # DB-FREE + PORT-FREE + NETWORK-FREE: pure filesystem + local `git` only (temp
-# repos under mktemp). Safe for the pre-push FILTER lane; runs on any CI runner.
+# repos under mktemp). Runs on any CI runner.
 #
 # Invoked from scripts/hooks/test/test-pre-push-filters.sh (like the per-worktree
 # test-pg resolver unit), not as a top-level pre-push command.

@@ -1,23 +1,19 @@
 #!/usr/bin/env bash
-# Tests for scripts/install-worktree-deps.sh + scripts/hooks/check-frontend-deps.sh
-# + the post-checkout deps wiring + the pre-push check_frontend_deps gate wiring.
+# Tests for scripts/install-worktree-deps.sh and post-checkout deps wiring.
 #
 # DB-FREE + PORT-FREE + NETWORK-FREE: pure filesystem + local `git` only (temp
 # repos under mktemp), and a STUBBED `bun` (a PATH shim that records argv/cwd and
-# honors $FAKE_BUN_EXIT) — never a real install. Safe for the pre-push FILTER
-# lane; runs on any CI runner.
+# honors $FAKE_BUN_EXIT) — never a real install. Runs in CI.
 #
 # Invoked from scripts/hooks/test/test-pre-push-filters.sh (like the sibling
-# env-link unit), not as a top-level pre-push command.
+# env-link unit) in CI.
 #
 # Layers:
 #   1. worktree_deps_should_install   — pure gate predicate
 #   2. run_worktree_deps              — entry point (success / no-op / no-frontend
 #                                       / bun-missing / install-fail), bun stubbed
-#   3. end-to-end `git worktree add`  — hook installs deps + env-link not regressed
-#                                       + hook never aborts on install failure
-#   4. check-frontend-deps.sh         — the 3-bin preflight (present/missing/partial)
-#   5. pre-push gate wiring           — gate is called before run_phases_parallel
+#   3. end-to-end git worktree add — env-link only; explicit install succeeds
+#                                       or returns its failure
 set -u
 cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit 1   # repo root
 REPO="$PWD"
@@ -31,7 +27,6 @@ REPO="$PWD"
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 
 source scripts/install-worktree-deps.sh    # source-guard prevents the entry point
-source scripts/hooks/check-frontend-deps.sh # source-guard prevents the check body
 
 fail=0
 ok()  { echo "ok: $1"; }
@@ -165,7 +160,7 @@ fi
 # ============================================================================
 # 7 + 8. End-to-end: a real `git worktree add` fires the hook
 # ============================================================================
-echo "--- end-to-end: git worktree add (hook installs deps + env-link intact) ---"
+echo "--- end-to-end: env-only checkout and explicit dependency install ---"
 
 # setup_hooked_main <dir> — temp "main" checkout with the REAL scripts, the
 # canonical relative core.hooksPath, an env-file .gitignore + a tracked
@@ -190,7 +185,7 @@ setup_hooked_main() {
   git -C "$m" -c commit.gpgsign=false commit -q -m init
 }
 
-# --- 7. Success: stub bun (exit 0) -> deps installed, env files still linked ---
+# --- 7. Checkout skips bun; explicit installation uses the worktree lockfile ---
 e2e=$(mk_tmp); main="$e2e/main"; setup_hooked_main "$main"
 printf 'ROOT=1\n' > "$main/.env"
 printf 'FE=1\n'   > "$main/frontend/.env.local"
@@ -205,13 +200,20 @@ else
   addrc=$?
 fi
 assert_true "worktree add succeeds (exit 0)" test "$addrc" -eq 0
-# (a) deps stub ran in the new worktree's frontend/
+assert_false "worktree add does not invoke bun" test -s "$log"
+if ( export PATH="$FAKE_BIN:/usr/bin:/bin" FAKE_BUN_LOG="$log" FAKE_BUN_EXIT=0
+     cd "$wt" && bash scripts/install-worktree-deps.sh ) >/dev/null 2>&1; then
+  ok "explicit dependency install succeeds"
+else
+  bad "explicit dependency install failed"
+fi
+# (a) explicit install ran in the new worktree's frontend/
 e2e_cwd=$(grep '^cwd=' "$log" | head -1 | cut -d= -f2-)
 if grep -q '^argv=install --frozen-lockfile$' "$log" \
    && [ -n "$e2e_cwd" ] && [ "$e2e_cwd" -ef "$wt/frontend" ]; then
-  ok "hook ran the deps install in the new worktree's frontend/"
+  ok "explicit install used the new worktree's frontend/"
 else
-  bad "hook deps install: argv/cwd wrong (cwd='$e2e_cwd', log=$(cat "$log"))"
+  bad "explicit install: argv/cwd wrong (cwd='$e2e_cwd', log=$(cat "$log"))"
 fi
 # (b) env-link not regressed
 if [ -L "$wt/.env" ] && [ "$wt/.env" -ef "$main/.env" ] \
@@ -221,7 +223,7 @@ else
   bad "env-link regressed: .env / frontend/.env.local not symlinked"
 fi
 
-# --- 8. Hook never aborts the checkout on install failure (stub bun exit 1) ---
+# --- 8. Checkout is independent of bun failures; explicit install reports them ---
 mainf="$e2e/mainf"; setup_hooked_main "$mainf"
 printf 'ROOT=1\n' > "$mainf/.env"
 logf="$e2e/bunf.log"; : > "$logf"
@@ -235,78 +237,21 @@ else
   addrcf=$?
 fi
 if [ "$addrcf" -eq 0 ] && [ -d "$wtf" ] && [ -f "$wtf/frontend/package.json" ]; then
-  ok "install failure: worktree add still exits 0 and the worktree exists"
+  ok "failing bun does not affect worktree creation"
 else
   bad "install failure: worktree add should still succeed (rc=$addrcf)"
+fi
+assert_false "checkout does not attempt the failing install" test -s "$logf"
+if ( export PATH="$FAKE_BIN:/usr/bin:/bin" FAKE_BUN_LOG="$logf" FAKE_BUN_EXIT=1
+     cd "$wtf" && bash scripts/install-worktree-deps.sh ) >"$errf" 2>&1; then
+  bad "explicit install should return the bun failure"
+else
+  ok "explicit install returns the bun failure"
 fi
 if grep -q "install FAILED" "$errf"; then
   ok "install failure: the FAILED message reached stderr"
 else
   bad "install failure: expected FAILED message on stderr (got: $(cat "$errf"))"
-fi
-
-# ============================================================================
-# 9. check-frontend-deps.sh — the 3-bin preflight
-# ============================================================================
-echo "--- check-frontend-deps.sh (preflight) ---"
-
-# mk_bins <node_modules_dir> <bin...>: create executable .bin/<bin> stubs.
-mk_bins() {
-  local nm="$1"; shift; mkdir -p "$nm/.bin"
-  local b; for b in "$@"; do printf '#!/bin/sh\n' > "$nm/.bin/$b"; chmod +x "$nm/.bin/$b"; done
-}
-
-# Pure predicate matrix (no git needed).
-r=$(mk_tmp); mkdir -p "$r/frontend"; printf '{"name":"fe"}\n' > "$r/frontend/package.json"
-mk_bins "$r/frontend/node_modules" next prettier vitest
-assert_true  "frontend_deps_ok: all three bins present" frontend_deps_ok "$r"
-r=$(mk_tmp); mkdir -p "$r/frontend"; printf '{"name":"fe"}\n' > "$r/frontend/package.json"
-assert_false "frontend_deps_ok: node_modules missing" frontend_deps_ok "$r"
-r=$(mk_tmp); mkdir -p "$r/frontend"; printf '{"name":"fe"}\n' > "$r/frontend/package.json"
-mk_bins "$r/frontend/node_modules" next   # partial: missing prettier + vitest
-assert_false "frontend_deps_ok: partial install (only next)" frontend_deps_ok "$r"
-r=$(mk_tmp)   # no frontend/package.json at all
-assert_true  "frontend_deps_ok: no frontend/package.json -> nothing to check" frontend_deps_ok "$r"
-
-# Executed script (resolves the repo root via git) — exit code + message.
-mk_fe_repo() {  # mk_fe_repo <dir> ; caller populates node_modules afterward
-  local g="$1"; mkdir -p "$g/frontend"; printf '{"name":"fe"}\n' > "$g/frontend/package.json"
-  git -C "$g" init -q -b main
-  git -C "$g" config user.email test@example.com
-  git -C "$g" config user.name "Test"
-}
-g=$(mk_tmp); mk_fe_repo "$g"; mk_bins "$g/frontend/node_modules" next prettier vitest
-out=$( cd "$g" && bash "$REPO/scripts/hooks/check-frontend-deps.sh" 2>&1 ); rc=$?
-if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
-  ok "check script: all bins present -> exit 0, silent"
-else
-  bad "check script: present -> expected exit 0 + silence (rc=$rc, out=$out)"
-fi
-g=$(mk_tmp); mk_fe_repo "$g"   # no node_modules
-out=$( cd "$g" && bash "$REPO/scripts/hooks/check-frontend-deps.sh" 2>&1 ); rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "frontend dependencies are not installed"; then
-  ok "check script: deps missing -> exit 1 + actionable message"
-else
-  bad "check script: missing -> expected exit 1 + message (rc=$rc, out=$out)"
-fi
-
-# ============================================================================
-# 10. pre-push GATE wiring (the gate must run BEFORE the parallel block)
-# ============================================================================
-echo "--- pre-push check_frontend_deps gate wiring ---"
-gate_line=$(grep -nE '^check_frontend_deps([[:space:]]|$)' "$REPO/scripts/hooks/pre-push" | head -1 | cut -d: -f1)
-rpp_line=$(grep -nE '^run_phases_parallel([[:space:]]|$)' "$REPO/scripts/hooks/pre-push" | head -1 | cut -d: -f1)
-if [ -n "$gate_line" ] && [ -n "$rpp_line" ] && [ "$gate_line" -lt "$rpp_line" ]; then
-  ok "gate is called before run_phases_parallel (lines $gate_line < $rpp_line)"
-else
-  bad "gate call ordering wrong (gate=$gate_line, run_phases_parallel=$rpp_line)"
-fi
-if ( source "$REPO/scripts/hooks/pre-push" >/dev/null 2>&1
-     declare -f check_frontend_deps >/dev/null \
-       && declare -f check_frontend_deps | grep -q 'check-frontend-deps.sh' ); then
-  ok "sourced hook defines check_frontend_deps invoking check-frontend-deps.sh"
-else
-  bad "hook must define check_frontend_deps that invokes check-frontend-deps.sh"
 fi
 
 [[ "$fail" -eq 0 ]] && { echo "ALL PASS"; exit 0; } || { echo "FAILURES"; exit 1; }

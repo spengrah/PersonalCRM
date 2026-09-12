@@ -39,11 +39,11 @@ assert_grep_count() {
 }
 
 # --- file_in_group: group membership ---
-# Daemon-only file triggers Swift gate, NOT Go suite.
+# Daemon-only file triggers CI Swift job, NOT backend/frontend checks.
 assert_in_group     "mac-daemon/Sources/foo.swift" mac_daemon
 assert_not_in_group "mac-daemon/Sources/foo.swift" backend
 assert_not_in_group "mac-daemon/Sources/foo.swift" frontend
-# Backend-only file triggers Go suite, NOT Swift.
+# Backend-only file triggers backend/frontend checks, NOT Swift.
 assert_in_group     "backend/internal/x.go" backend
 assert_not_in_group "backend/internal/x.go" mac_daemon
 assert_not_in_group "backend/internal/x.go" frontend
@@ -110,45 +110,22 @@ assert_in_group     "infra/langfuse/sync.test.ts" frontend
 assert_not_in_group "infra/langfuse/model-prices.json" frontend
 assert_not_in_group "infra/langfuse/model-prices.json" backend
 
-# --- any_file_in_groups: the Go/frontend gate's decision boundary ---
-# Daemon-only push does NOT run Go suite (headline invariant).
-assert_false "any_file_in_groups daemon-only -> Go suite NOT run" \
+# --- any_file_in_groups: the backend/frontend selection's decision boundary ---
+# Daemon-only push does NOT run backend/frontend checks (headline invariant).
+assert_false "any_file_in_groups daemon-only -> backend/frontend checks NOT run" \
   any_file_in_groups "mac-daemon/x.swift" backend frontend
-# Mixed push runs Go suite.
-assert_true "any_file_in_groups mixed -> Go suite run" \
+# Mixed push runs backend/frontend checks.
+assert_true "any_file_in_groups mixed -> backend/frontend checks run" \
   any_file_in_groups $'backend/x.go\nmac-daemon/y.swift' backend frontend
-# Composed-helper assertions mirroring should_skip_tests' two call sites.
-assert_true  "any_file_in_groups backend-only -> Go suite run" \
+# Combined-group selection.
+assert_true  "any_file_in_groups backend-only -> backend/frontend checks run" \
   any_file_in_groups "backend/x.go" backend frontend
-assert_true  "any_file_in_groups frontend-only -> Go suite run" \
+assert_true  "any_file_in_groups frontend-only -> backend/frontend checks run" \
   any_file_in_groups "frontend/src/x.tsx" backend frontend
 assert_false "any_file_in_groups empty range -> no Go run" \
   any_file_in_groups "" backend frontend
 
-# --- any_file_under_macdaemon: the stricter local Swift predicate ---
-# Daemon source fires the Swift gate.
-assert_true  "any_file_under_macdaemon daemon source -> fires" \
-  any_file_under_macdaemon "mac-daemon/Sources/x.swift"
-# ci.yml-only push is in the mac_daemon GROUP but must NOT fire the LOCAL gate.
-assert_false "any_file_under_macdaemon ci.yml-only -> does NOT fire (ci.yml is in the mac_daemon group, but the local predicate is literal mac-daemon/)" \
-  any_file_under_macdaemon ".github/workflows/ci.yml"
-# Backend-only and empty range do not fire.
-assert_false "any_file_under_macdaemon backend-only -> does NOT fire" \
-  any_file_under_macdaemon "backend/x.go"
-assert_false "any_file_under_macdaemon empty range -> does NOT fire" \
-  any_file_under_macdaemon ""
-# Mixed push fires Swift gate.
-assert_true  "any_file_under_macdaemon mixed -> fires" \
-  any_file_under_macdaemon $'backend/x.go\nmac-daemon/y.swift'
-
-# --- structural guard: both should_skip_tests call sites repointed to "backend frontend" ---
-assert_grep_count 1 'any_file_in_groups "$pushed_files" backend frontend' scripts/hooks/pre-push
-assert_grep_count 1 'any_file_in_groups "$files_since_test" backend frontend' scripts/hooks/pre-push
-
-# --- Chain the sibling guard suites so the FILTER phase covers them all in one
-# command (the pre-push classifier routes this single test-pre-push-filters
-# command to the CONCURRENT lane). ---
-echo "--- pre-push phase classifier / failure-propagation guard ---"
+echo "--- pre-push selection and failure propagation ---"
 bash scripts/hooks/test/test-pre-push-phases.sh || fail=1
 echo "--- Makefile adaptive -p / CI-pin render guard ---"
 bash scripts/ci/test-parallelism-render-guard.sh || fail=1
@@ -156,7 +133,7 @@ echo "--- per-worktree test-pg resolver unit (shim-only, DB/port-free) ---"
 bash scripts/test/test-worktree-test-pg.sh || fail=1
 echo "--- worktree env-link resolver + post-checkout gate (fs/git-only) ---"
 bash scripts/test/test-link-worktree-env.sh || fail=1
-echo "--- worktree dep-install + preflight + post-checkout/pre-push wiring (stubbed bun, fs/git-only) ---"
+echo "--- worktree dep-install and post-checkout wiring (stubbed bun, fs/git-only) ---"
 bash scripts/test/test-install-worktree-deps.sh || fail=1
 echo "--- repo-hygiene check guard ---"
 bash scripts/hooks/test/test-repo-hygiene-check.sh || fail=1

@@ -35,9 +35,7 @@
 #
 # TESTING: this guard has no committed shell test, deliberately. It cannot be
 # exercised at all without a live PostgreSQL, no CI job invokes `make e2e-db`,
-# and giving it one would mean adding a pre-push phase — `.ai/pre-push.json`,
-# the hook's lane classifier, and the phase-guard test — for a script that only
-# ever runs locally. It is covered instead by empirical falsification on every
+# so it is covered by empirical falsification on every
 # change: each leg is proven to FAIL on the bad input (a foreign consumer → exit
 # 1, database intact) and to pass on the good one (a stale holder → exit 0, with
 # a planted canary table gone, which is what proves the reset was real and not a
@@ -164,9 +162,9 @@ psql_admin -tAc \
 # a prerequisite of the test-e2e* targets, so Playwright has not started the
 # backend yet; the `e2e-ports-free` prerequisite ordered ahead of this script
 # has already killed anything holding the E2E frontend/backend ports, so a
-# leftover from an interrupted run on those ports is gone rather than reported;
-# and the pre-push hook runs E2E exclusively after every other lane has
-# finished. What is left to catch is a crm-api on some OTHER port — another
+# leftover from an interrupted run on those ports is gone rather than reported.
+# Run local E2E separately from integration tests that share this database.
+# What is left to catch is a crm-api on some OTHER port — another
 # worktree's stack, or a hand-started one — which no port cleanup can find.
 #
 # What the window buys, and what it does not: a live pgxpool came back in

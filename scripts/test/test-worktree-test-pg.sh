@@ -3,7 +3,7 @@
 #
 # DB-FREE + PORT-FREE: every external dependency (git, initdb, pg_ctl, postgres,
 # psql, pg_isready, pg_config, locale) is a PATH-shimmed fake. No real initdb,
-# no pg_ctl start, no port bind. Safe for the pre-push FILTER lane.
+# no pg_ctl start, no port bind. Runs in CI.
 #
 # Invoked from scripts/hooks/test/test-pre-push-filters.sh (like the render
 # guard), not as a top-level pre-push command.

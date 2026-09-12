@@ -2,14 +2,24 @@
 
 ## Before Pushing
 
-**Always run the required test suite locally before pushing:**
+Run focused verification appropriate to the changed behavior: affected unit tests
+for logic, integration tests for database changes, and E2E tests for user flows
+when the environment supports them. Broaden testing for shared or high-risk changes.
+Report any verification deferred to CI; do not provision unrelated runtimes just
+to push a branch.
 
-```bash
-make test         # All backend tests (unit + integration)
-make test-e2e-diff # Diff-selected Playwright E2E tests (core + impacted)
-```
+Pre-push runs path-selected static checks, including spec drift. Required CI
+suites gate merging. Use `make test` and `make test-e2e-diff` explicitly when
+broader local verification is useful; neither is mandatory for every push.
 
-CI runs the full E2E suite; local runs use diff selection for speed.
+Agents may select focused E2E tests with
+`make test-e2e-local PLAYWRIGHT_GREP='...'` without waiting for the user to
+provide a grep. Match the selection to the affected behavior.
+
+Reuse successful verification from the session when its relevant inputs have
+not changed. Rerun when source, tests, configuration, dependencies, environment,
+or new evidence make the previous result insufficient. Required CI checks must
+still pass for the revision being merged.
 
 ## Test Pyramid
 

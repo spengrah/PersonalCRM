@@ -30,7 +30,7 @@ A single-user, local-first customer relationship management system with AI-power
 - Go 1.25+
 - Bun 1.0+ (for frontend)
 - Make
-- `age`, `rclone`, `zstd` (`brew install age rclone zstd`): the offsite backup round-trip test in `make test-deploy-scripts` uses the real tools and runs in the pre-push hook
+- `age`, `rclone`, `zstd` (`brew install age rclone zstd`): needed for explicit local runs of the offsite backup round-trip test in `make test-deploy-scripts`; CI supplies these tools
 
 ## Environment Variables
 
