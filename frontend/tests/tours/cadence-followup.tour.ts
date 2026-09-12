@@ -89,9 +89,7 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
   }
   claim(responseContact.id, 'the response fixture')
 
-  // has_pending_followup is computed on the DETAIL, list, and overdue payloads.
-  // This tour still probes the detail endpoint because that is the surface its
-  // assertion is about.
+  // See the ActivityContact comment above for payload coverage context.
   const pendingContact = await resolveFixture<ActivityContact>(
     tour.apiCtx,
     FIXTURE_PENDING,

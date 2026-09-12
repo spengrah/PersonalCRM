@@ -183,6 +183,8 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
       .filter({ has: page.getByRole('heading', { name: awaitingName, exact: true }) })
     await expect(awaitingCard.getByRole('img', { name: 'Awaiting reply' })).toBeVisible()
     await expect(awaitingCard.getByTestId('awaiting-reply-note')).toBeVisible()
+    await expect(awaitingCard.getByText('Waiting on their reply')).toBeVisible()
+    await expect(awaitingCard).toHaveClass(/bg-gray-50/)
     await expect(awaitingCard.getByTestId('awaiting-reply-note')).toContainText(/you reached out/)
     await expect(awaitingCard.getByText('💡')).toHaveCount(0)
 
@@ -198,7 +200,7 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
 
     const names = [...attentionNames, awaitingName]
     const indexes = await page
-      .getByRole('list')
+      .getByRole('list', { name: 'Overdue contacts' })
       .getByRole('listitem')
       .evaluateAll(
         (items, expectedNames) =>
