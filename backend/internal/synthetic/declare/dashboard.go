@@ -33,6 +33,10 @@ func init() {
 			Contact("card-a", Cadence("weekly"), OverdueBy(Days(3))),
 			Contact("card-b", Cadence("weekly"), OverdueBy(Days(4))),
 			Contact("card-c", Cadence("weekly"), OverdueBy(Days(5))),
+			// Created more than one cadence period ago with no inbound, so it is
+			// overdue by creation age; the outbound plus the live follow-up make
+			// it the awaiting-reply card.
+			Contact("awaiting", Cadence("weekly"), CreatedAgo(Periods(1).Plus(Days(3))), Outreach(Days(1)), AwaitingReply()),
 		},
 	})
 }

@@ -297,6 +297,8 @@ behaviors:
     then:
       - key: each-entry-carries-contact
         text: each entry carries the contact plus days overdue, the next due date, and a suggested action
+      - key: each-entry-carries-pending-followup
+        text: each entry's has_pending_followup is true exactly when the contact has a live follow-up, so the dashboard can tell awaited replies from neglected contacts
       - key: entries-ordered-most-overdue
         text: entries are ordered most-overdue first
       - key: list-bounded-1000-truncation
@@ -334,6 +336,8 @@ behaviors:
         text: overdue contacts appear as cards with the count in the header
       - key: each-card-shows-urgency
         text: each card shows urgency (tiers at up to 2, up to 7, and more days overdue), cadence, how long since the last connection — or how long since the contact was added, when there has never been one — reachable contact methods, and the suggested action
+      - key: awaiting-reply-cards-demoted
+        text: "a contact with a live follow-up (the user reached out and is awaiting a reply) renders as a demoted awaiting-reply card: muted, marked Awaiting reply, showing when the user reached out, placed after every needs-attention card under the urgency ordering, and counted separately in the header"
       - key: nothing-overdue-all-caught
         text: with nothing overdue, an all-caught-up state is shown instead
     serves: [DSH-010, DSH-011]
@@ -348,7 +352,7 @@ behaviors:
     when: the user switches the sort
     then:
       - key: urgency-default-orders-most
-        text: urgency (default) orders most-overdue first
+        text: urgency (default) orders needs-attention cards before awaiting-reply cards, most-overdue first within each group
       - key: name-orders-alphabetically
         text: name orders alphabetically
       - key: recency-orders-longest-waiting

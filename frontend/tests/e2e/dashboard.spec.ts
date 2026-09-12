@@ -3,6 +3,13 @@ import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-
 import { expectAddContactHeader, waitForOverdueListSettled } from './helpers/dashboard'
 import type { OverdueContactResponse } from '../../src/types/generated/contact'
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
+const API_HEADERS = {
+  'X-API-Key': API_KEY,
+  'Content-Type': 'application/json',
+}
+
 // Full-envelope overdue-entry builder for route-mocked dashboard tests,
 // typed against the real wire DTO so fixture drift fails tsc. The real
 // response OMITS empty optional fields (json omitempty) rather than sending
@@ -145,8 +152,8 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
           )
           if (!header) return 'no numeric header'
           const headerCount = Number(/(\d+)/.exec(header.textContent ?? '')?.[1])
-          const cardCount = Array.from(document.querySelectorAll('button')).filter(b =>
-            (b.textContent ?? '').includes('Mark as Contacted')
+          const cardCount = Array.from(document.querySelectorAll('[role="listitem"]')).filter(
+            card => !card.querySelector('[role="img"][aria-label="Awaiting reply"]')
           ).length
           if (headerCount !== cardCount) return `${headerCount} !== ${cardCount}`
           if (headerCount < minimum) return `${headerCount} < seeded ${minimum}`
@@ -154,6 +161,74 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
         }, cardNames.length)
       )
       .toBe('header equals cards')
+  })
+
+  test('demotes a contact that is awaiting a reply below every needs-attention card', async ({
+    page,
+    request,
+  }) => {
+    // spec: CAD-026.awaiting-reply-cards-demoted
+    // spec: CAD-023.each-entry-carries-pending-followup
+    const seededIds = ['card-a', 'card-b', 'card-c', 'awaiting'].map(
+      handle => seeded.entities[handle].id
+    )
+    const overdueSettled = waitForOverdueListSettled(page, { presentIds: seededIds })
+    await page.goto('/dashboard')
+    await overdueSettled
+
+    const awaitingName = seeded.entities['awaiting'].name
+    const awaitingCard = page
+      .getByRole('listitem')
+      .filter({ has: page.getByRole('heading', { name: awaitingName, exact: true }) })
+    await expect(awaitingCard.getByRole('img', { name: 'Awaiting reply' })).toBeVisible()
+    await expect(awaitingCard.getByTestId('awaiting-reply-note')).toBeVisible()
+    await expect(awaitingCard.getByText('💡')).toHaveCount(0)
+
+    const attentionNames = ['card-a', 'card-b', 'card-c'].map(
+      handle => seeded.entities[handle].name
+    )
+    for (const name of attentionNames) {
+      const card = page
+        .getByRole('listitem')
+        .filter({ has: page.getByRole('heading', { name, exact: true }) })
+      await expect(card.getByRole('img', { name: 'Awaiting reply' })).toHaveCount(0)
+    }
+
+    const names = [...attentionNames, awaitingName]
+    const indexes = await page
+      .getByRole('list')
+      .getByRole('listitem')
+      .evaluateAll(
+        (items, expectedNames) =>
+          (expectedNames as string[]).map(name =>
+            Array.from(items).findIndex(item => item.querySelector('h3')?.textContent === name)
+          ),
+        names
+      )
+    const awaitingIndex = indexes[indexes.length - 1]
+    expect(awaitingIndex).toBeGreaterThan(Math.max(...indexes.slice(0, -1)))
+
+    const header = page
+      .locator('p')
+      .filter({ hasText: /\d+ awaiting reply/ })
+      .first()
+    await expect(header).toBeVisible()
+    const headerText = (await header.textContent()) ?? ''
+    const awaitingCount = Number(/(\d+) awaiting reply/.exec(headerText)?.[1])
+    expect(awaitingCount).toBeGreaterThanOrEqual(1)
+
+    const overdueRes = await request.get(`${API_BASE_URL}/api/v1/contacts/overdue`, {
+      headers: API_HEADERS,
+    })
+    expect(overdueRes.ok()).toBe(true)
+    const overdueBody = await overdueRes.json()
+    const entries: Array<{ id: string; has_pending_followup: boolean }> = overdueBody?.data ?? []
+    expect(
+      entries.find(entry => entry.id === seeded.entities['awaiting'].id)?.has_pending_followup
+    ).toBe(true)
+    expect(
+      entries.find(entry => entry.id === seeded.entities['card-a'].id)?.has_pending_followup
+    ).toBe(false)
   })
 })
 

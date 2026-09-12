@@ -1267,6 +1267,9 @@ type Querier interface {
 	// Lightweight IDs-only variant of ListContacts for navigation (no pagination);
 	// same WHERE + ORDER BY shape as ListContacts.
 	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]uuid.UUID, error)
+	// The subset of the given contact ids that carry a live follow-up. Same
+	// live-state set as FindPendingFollowUp, batched for list payloads.
+	ListContactIDsWithLiveFollowUp(ctx context.Context, contactIds []uuid.UUID) ([]uuid.UUID, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
 	ListContactInteractionsFiltered(ctx context.Context, arg ListContactInteractionsFilteredParams) ([]*Interaction, error)
 	// Contact method queries

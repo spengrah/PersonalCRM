@@ -130,7 +130,8 @@ func TestSeedDeclaredEndpoint_CreatesManifest(t *testing.T) {
 	manifest := decodeDeclaredSeed(t, w)
 	assert.Equal(t, namespace, manifest.Namespace)
 	assert.False(t, manifest.Anchor.IsZero())
-	require.Len(t, manifest.Entities, 3)
+	require.Len(t, manifest.Entities, 4)
+	require.Contains(t, manifest.Entities, "awaiting")
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	for handle, entity := range manifest.Entities {

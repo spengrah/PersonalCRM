@@ -238,6 +238,14 @@ WHERE contact_id = $1
   AND state IN ('managed', 'pending_remote_create')
 LIMIT 1;
 
+-- name: ListContactIDsWithLiveFollowUp :many
+-- The subset of the given contact ids that carry a live follow-up. Same
+-- live-state set as FindPendingFollowUp, batched for list payloads.
+SELECT DISTINCT contact_id FROM contact_task
+WHERE contact_id = ANY(@contact_ids::uuid[])
+  AND lifecycle = 'followup_loop'
+  AND state IN ('managed', 'pending_remote_create');
+
 -- name: CompleteFollowUpForContact :many
 -- Mark all pending follow-up tasks as completed for a contact (when a
 -- response arrives). Matches the same live-state set as FindPendingFollowUp

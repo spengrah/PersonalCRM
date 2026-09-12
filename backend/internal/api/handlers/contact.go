@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -264,6 +265,15 @@ func (h *ContactHandler) GetContact(c *gin.Context) {
 	api.SendSuccess(c, http.StatusOK, response, nil)
 }
 
+func (h *ContactHandler) pendingFollowUpSet(ctx context.Context, contactIDs []uuid.UUID) map[uuid.UUID]bool {
+	pending, err := h.contactService.PendingFollowUpSet(ctx, contactIDs)
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to check pending follow-up")
+		return map[uuid.UUID]bool{}
+	}
+	return pending
+}
+
 // ListContacts retrieves a paginated list of contacts
 // @Summary List contacts
 // @Description Get a paginated list of contacts with optional search and sorting. Use ids_only=true to get just IDs for navigation.
@@ -348,9 +358,15 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 	}
 
 	// Convert to response format
+	contactIDs := make([]uuid.UUID, len(contacts))
+	for i := range contacts {
+		contactIDs[i] = contacts[i].ID
+	}
+	pendingFollowups := h.pendingFollowUpSet(c.Request.Context(), contactIDs)
 	responses := make([]ContactResponse, len(contacts))
 	for i, contact := range contacts {
 		responses[i] = contactToResponse(&contact)
+		responses[i].HasPendingFollowup = pendingFollowups[contact.ID]
 	}
 
 	meta := &api.Meta{
@@ -472,6 +488,11 @@ func (h *ContactHandler) ListOverdueContacts(c *gin.Context) {
 		return
 	}
 
+	contactIDs := make([]uuid.UUID, len(overdueContacts))
+	for i := range overdueContacts {
+		contactIDs[i] = overdueContacts[i].Contact.ID
+	}
+	pendingFollowups := h.pendingFollowUpSet(c.Request.Context(), contactIDs)
 	responses := make([]OverdueContactResponse, len(overdueContacts))
 	for i, contact := range overdueContacts {
 		responses[i] = OverdueContactResponse{
@@ -480,6 +501,7 @@ func (h *ContactHandler) ListOverdueContacts(c *gin.Context) {
 			NextDueDate:     contact.NextDueDate,
 			SuggestedAction: contact.SuggestedAction,
 		}
+		responses[i].HasPendingFollowup = pendingFollowups[contact.Contact.ID]
 	}
 
 	api.SendSuccess(c, http.StatusOK, responses, nil)

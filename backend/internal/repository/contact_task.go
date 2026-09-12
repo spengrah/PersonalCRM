@@ -535,6 +535,24 @@ func (r *ContactTaskRepository) FindPendingFollowUp(ctx context.Context, contact
 	return &task, nil
 }
 
+// ListContactIDsWithLiveFollowUp returns the given contact IDs with a live
+// follow-up task.
+func (r *ContactTaskRepository) ListContactIDsWithLiveFollowUp(ctx context.Context, contactIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+	liveContactIDs := make(map[uuid.UUID]bool)
+	if len(contactIDs) == 0 {
+		return liveContactIDs, nil
+	}
+
+	ids, err := r.queries.ListContactIDsWithLiveFollowUp(ctx, contactIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list contact ids with live follow-up: %w", err)
+	}
+	for _, id := range ids {
+		liveContactIDs[id] = true
+	}
+	return liveContactIDs, nil
+}
+
 // CompleteFollowUpForContact marks all pending follow-up tasks as completed for a contact
 func (r *ContactTaskRepository) CompleteFollowUpForContact(ctx context.Context, contactID uuid.UUID) ([]ContactTask, error) {
 	dbTasks, err := r.queries.CompleteFollowUpForContact(ctx, contactID)
