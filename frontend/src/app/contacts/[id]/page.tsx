@@ -739,13 +739,13 @@ export default function ContactDetailPage() {
                         &#8601;
                       </span>
                       <span>Last response: {formatRelativeTime(contact.last_response_at)}</span>
-                      {contact.has_pending_followup && (
+                      {contact.awaiting_reply && (
                         <span className="ml-2 text-amber-600" title="Awaiting reply">
                           &#9888; Awaiting reply
                         </span>
                       )}
                     </div>
-                  ) : contact.has_pending_followup ? (
+                  ) : contact.awaiting_reply ? (
                     <div className="flex items-center gap-1.5 text-amber-600">
                       <span title="Awaiting reply">&#9888;</span>
                       <span>Awaiting reply</span>
@@ -753,7 +753,7 @@ export default function ContactDetailPage() {
                   ) : null}
                   {!contact.last_outreach_at &&
                     !contact.last_response_at &&
-                    !contact.has_pending_followup && (
+                    !contact.awaiting_reply && (
                       <span className="text-gray-500">No recent activity</span>
                     )}
                 </dd>
