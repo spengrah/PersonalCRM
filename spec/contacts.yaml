@@ -85,7 +85,7 @@ behaviors:
       - key: malformed-id-returns-validation
         text: a malformed id returns a validation error (400)
     provenance: [ContactHandler.contactToResponse, cadence.IsAwaitingReply, ContactHandler.ListOverdueContacts]
-    notes: awaiting_reply is a projection of the contact's cadence columns evaluated at the app clock; it cannot fail separately from the read.
+    notes: awaiting_reply is a projection of the contact's cadence columns (last_outreach_at, last_response_at, awaiting_reply_until) evaluated at the app clock; it cannot fail separately from the read.
 
   - id: CON-006
     title: Contact update is full-replace for managed profile fields
