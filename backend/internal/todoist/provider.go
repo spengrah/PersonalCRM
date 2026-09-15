@@ -47,9 +47,12 @@ const (
 	// before the real ID is returned from the API.
 	MetadataKeyPendingTempID = "pending_temp_id"
 	// MetadataKeySyncedDeadline stores the deadline (YYYY-MM-DD) that was last synced
-	// to Todoist. Used to detect when contact_by changes in the CRM and the Todoist
-	// task needs to be updated.
+	// to Todoist, which may be clamped to today. Drift is keyed on
+	// synced_contact_by so a clamped deadline does not look like contact_by moved.
 	MetadataKeySyncedDeadline = "synced_deadline"
+	// MetadataKeySyncedContactBy stores the CRM contact_by date last used to
+	// reconcile the task, independently of the pushed (possibly clamped) deadline.
+	MetadataKeySyncedContactBy = "synced_contact_by"
 	// MetadataKeySyncedLastContacted stores the last_contacted timestamp (RFC3339) at the
 	// time the task was created or last synced. Used to detect when a contact is marked
 	// as contacted from a non-Todoist source (e.g., calendar sync), even when contact_by
@@ -64,6 +67,15 @@ const (
 
 // DateFormat is the date format used for Todoist deadlines and synced_deadline metadata (YYYY-MM-DD)
 const DateFormat = "2006-01-02"
+
+func cadenceTaskDeadline(contactBy, today time.Time) string {
+	contactByDate := cadence.CalendarDate(contactBy)
+	todayDate := cadence.CalendarDate(today)
+	if contactByDate.Before(todayDate) {
+		contactByDate = todayDate
+	}
+	return contactByDate.Format(DateFormat)
+}
 
 // eventPublisher is the subset of *events.Bus used by the provider. Defined
 // consumer-side so tests can stub without importing the bus.
@@ -588,6 +600,7 @@ func (p *CadenceSyncProvider) processItem(
 						metadata = make(map[string]any)
 					}
 					metadata[MetadataKeySyncedDeadline] = newDeadlineStr
+					metadata[MetadataKeySyncedContactBy] = newDeadlineStr
 
 					txErr := pgx.BeginTxFunc(ctx, p.pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 						if err := p.cadenceUpdater.ApplyContactByOverride(ctx, tx, contact.ID, &todoistDeadline); err != nil {
@@ -873,7 +886,7 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 	// Update metadata. Preserve existing keys — pre-skip synced_deadline is
 	// consulted by the reconciler's skip-drift branch to close+recreate on
 	// HTTP failure.
-	metadata := setPendingCreateState(task.Metadata, replacementCmd.TempID, deadlineStr, contact)
+	metadata := setPendingCreateState(task.Metadata, replacementCmd.TempID, deadlineStr, deadlineStr, contact)
 	if _, err := p.contactTaskRepo.UpdateContactTaskMetadataTx(ctx, tx, task.ID, metadata); err != nil {
 		return processItemResult{Err: fmt.Errorf("update task metadata: %w", err)}
 	}
@@ -1052,24 +1065,26 @@ func setSyncedLastOutreachAt(metadata map[string]any, contact *repository.Contac
 	return metadata
 }
 
-// setPendingCreateState writes the pending-create key set: pending_temp_id +
-// synced_deadline (always), then BOTH synced_* keys (each gated on its own
-// contact field being non-nil). Used by the branches that queue a new Todoist
-// task, which all write this identical shape. Allocates the map if nil and
-// returns it, preserving sibling keys.
-func setPendingCreateState(metadata map[string]any, tempID, deadline string, contact *repository.Contact) map[string]any {
+// setPendingCreateState writes the pending-create key set: pending_temp_id,
+// synced_deadline and synced_contact_by, then both synced_* timestamp keys
+// (each gated on its own contact field being non-nil). Allocates the map if nil
+// and returns it, preserving sibling keys.
+func setPendingCreateState(metadata map[string]any, tempID, deadline, contactBy string, contact *repository.Contact) map[string]any {
 	if metadata == nil {
 		metadata = make(map[string]any)
 	}
 	metadata[MetadataKeyPendingTempID] = tempID
 	metadata[MetadataKeySyncedDeadline] = deadline
+	metadata[MetadataKeySyncedContactBy] = contactBy
 	metadata = setSyncedLastContacted(metadata, contact)
 	metadata = setSyncedLastOutreachAt(metadata, contact)
 	return metadata
 }
 
 // reconcileContactTasks ensures all contacts with cadence have managed tasks
-// and that existing tasks have deadlines matching the contact's contact_by.
+// and that existing tasks have deadlines matching contact_by, clamped to today.
+// An open awaiting-reply window blocks cadence tasks; after it lapses, a live
+// follow-up reminder is the remaining deferral.
 //
 // deferSkipDrift suppresses the skip-drift recovery branch in
 // reconcileExistingTask for this invocation. Set when processTempIDMappings
@@ -1095,6 +1110,8 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 		logger.Warn().Err(err).Msg("failed to list contacts for reconciliation")
 		return nil
 	}
+	now := accelerated.GetCurrentTime()
+	today := cadence.Today(now)
 
 	for _, contact := range contacts {
 		// Skip contacts without cadence
@@ -1133,7 +1150,12 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 			}
 		}
 
-		// Skip contacts with pending follow-up (grace period — waiting for response)
+		// An open waiting window blocks cadence tasks regardless of Todoist state.
+		if cadence.IsAwaitingReply(contact.LastOutreachAt, contact.LastResponseAt, contact.AwaitingReplyUntil, now) {
+			continue
+		}
+
+		// After the waiting window lapses, a live follow-up reminder still covers the contact.
 		_, followUpErr := p.contactTaskRepo.FindPendingFollowUp(ctx, contact.ID)
 		if followUpErr == nil {
 			logger.Debug().
@@ -1147,17 +1169,18 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 		}
 
 		currentDeadline := contact.ContactBy.Format(DateFormat)
+		pushDeadline := cadenceTaskDeadline(*contact.ContactBy, today)
 
 		if err != nil {
 			if !errors.Is(err, db.ErrNotFound) {
 				continue
 			}
 			// No task exists - create one
-			cmd := p.createTaskCommand(&contact, settings, &currentDeadline)
+			cmd := p.createTaskCommand(&contact, settings, &pushDeadline)
 			commands = append(commands, cmd)
 
 			// Create task link (with temp_id, synced_deadline, and both synced_* keys)
-			taskMetadata := setPendingCreateState(make(map[string]any), cmd.TempID, currentDeadline, &contact)
+			taskMetadata := setPendingCreateState(make(map[string]any), cmd.TempID, pushDeadline, currentDeadline, &contact)
 			_, createErr := p.contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
 				ContactID:      contact.ID,
 				Provider:       SourceName,
@@ -1179,7 +1202,7 @@ func (p *CadenceSyncProvider) reconcileContactTasks(
 		}
 
 		// Task exists and is managed - check if deadline needs updating
-		cmds := p.reconcileExistingTask(ctx, task, &contact, settings, currentDeadline, deferSkipDrift)
+		cmds := p.reconcileExistingTask(ctx, task, &contact, settings, currentDeadline, pushDeadline, deferSkipDrift)
 		commands = append(commands, cmds...)
 	}
 
@@ -1268,6 +1291,7 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 	contact *repository.Contact,
 	settings Settings,
 	currentDeadline string,
+	pushDeadline string,
 	deferSkipDrift bool,
 ) []SyncCommand {
 	var commands []SyncCommand
@@ -1295,7 +1319,7 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 			Str("pendingTempId", pendingTemp).
 			Msg("skip-drift recovery: re-emitting close+create for replacement cadence task")
 
-		cmd := p.createTaskCommand(contact, settings, &currentDeadline)
+		cmd := p.createTaskCommand(contact, settings, &pushDeadline)
 
 		// Persist new pending_temp_id BEFORE emitting commands. If the
 		// metadata write fails, do NOT return the commands — the new
@@ -1303,7 +1327,7 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 		// batch's temp_id_mapping response couldn't be applied via
 		// processTempIDMappings. Emitting the commands anyway would
 		// create a Todoist task with no way to map back to the contact_task.
-		metadata := setPendingCreateState(task.Metadata, cmd.TempID, currentDeadline, contact)
+		metadata := setPendingCreateState(task.Metadata, cmd.TempID, pushDeadline, currentDeadline, contact)
 		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 			logger.Warn().Err(err).
 				Str("contactId", contact.ID.String()).
@@ -1337,12 +1361,17 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 			metadata = make(map[string]any)
 		}
 		metadata[MetadataKeySyncedDeadline] = currentDeadline
+		metadata[MetadataKeySyncedContactBy] = currentDeadline
 		metadata = setSyncedLastContacted(metadata, contact)
 		metadata = setSyncedLastOutreachAt(metadata, contact)
 		if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 			logger.Warn().Err(err).Str("contactId", contact.ID.String()).Msg("failed to backfill synced_deadline")
 		}
 		return commands
+	}
+	syncedContactBy, hasSyncedContactBy := task.Metadata[MetadataKeySyncedContactBy].(string)
+	if !hasSyncedContactBy {
+		syncedContactBy = syncedDeadline
 	}
 
 	// Backfill synced_last_contacted if missing (legacy tasks created before this feature).
@@ -1374,7 +1403,7 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 	}
 
 	// Check if deadline has drifted
-	if syncedDeadline == currentDeadline {
+	if syncedContactBy == currentDeadline {
 		// Deadlines match - but check if the contact was contacted from a non-Todoist
 		// source (e.g., calendar sync). This handles the case where last_contacted was
 		// updated and contact_by was recalculated to the same date (same cadence period).
@@ -1397,15 +1426,12 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 			// instead of re-computing + re-writing. Removing the write
 			// keeps CadenceUpdater as the sole writer of contact_by.
 			if contact.Cadence != nil && *contact.Cadence != "" && contact.ContactBy != nil {
-				nextContactBy := *contact.ContactBy
-
 				// Create new task with updated deadline
-				deadlineStr := nextContactBy.Format(DateFormat)
-				cmd := p.createTaskCommand(contact, settings, &deadlineStr)
+				cmd := p.createTaskCommand(contact, settings, &pushDeadline)
 				commands = append(commands, cmd)
 
 				// Update metadata
-				metadata := setPendingCreateState(task.Metadata, cmd.TempID, deadlineStr, contact)
+				metadata := setPendingCreateState(task.Metadata, cmd.TempID, pushDeadline, currentDeadline, contact)
 				if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 					logger.Warn().Err(err).Msg("failed to update metadata after non-Todoist contact")
 				}
@@ -1430,7 +1456,7 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 	}
 
 	// Create new task with updated deadline
-	cmd := p.createTaskCommand(contact, settings, &currentDeadline)
+	cmd := p.createTaskCommand(contact, settings, &pushDeadline)
 	commands = append(commands, cmd)
 
 	// Update task record with new temp_id and synced_deadline.
@@ -1438,7 +1464,7 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 	// we'll have an orphaned task (no pending_temp_id to map). This is logged but not fatal
 	// because the sync is async - we can't roll back Todoist commands. The orphaned task
 	// will be cleaned up on the next full sync when it appears in items without a linked contact.
-	metadata := setPendingCreateState(task.Metadata, cmd.TempID, currentDeadline, contact)
+	metadata := setPendingCreateState(task.Metadata, cmd.TempID, pushDeadline, currentDeadline, contact)
 	if _, err := p.contactTaskRepo.UpdateContactTaskMetadata(ctx, task.ID, metadata); err != nil {
 		logger.Error().
 			Err(err).

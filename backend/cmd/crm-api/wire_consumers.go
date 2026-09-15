@@ -24,6 +24,7 @@ import (
 type eventConsumers struct {
 	AggregatorReenqueuerHolder *deferredAggregatorReenqueuer
 	CadenceUpdater             *consumer.CadenceUpdater
+	CalendarDeclineHandler     *consumer.CalendarDeclineHandler
 	KnowledgeCacheUpdater      *consumer.KnowledgeCacheUpdater
 	TodoistClientFactory       todoist.ClientFactory
 	FollowUpMode               string
@@ -81,7 +82,9 @@ func buildDomainConsumers(
 		database.Queries,
 		consumer.CadenceModeFromConfig(cfg.EventBus.CadenceMode),
 		cfg.EventBus.UnsafeAllowOffMode,
+		cfg.Watchdog,
 	)
+	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, cfg.Watchdog)
 
 	// Knowledge-cache consumer (the location/birthday/how_met authority flip):
 	// the sole writer of those three derived cache columns. ContactService emits
@@ -143,6 +146,7 @@ func buildDomainConsumers(
 	return eventConsumers{
 		AggregatorReenqueuerHolder: aggregatorReenqueuerHolder,
 		CadenceUpdater:             cadenceUpdater,
+		CalendarDeclineHandler:     calendarDeclineHandler,
 		KnowledgeCacheUpdater:      knowledgeCacheUpdater,
 		TodoistClientFactory:       todoistClientFactory,
 		FollowUpMode:               followUpMode,
@@ -203,7 +207,6 @@ func registerCoreConsumerWorkers(
 	eventBus *events.Bus,
 ) {
 	interactionRepo := core.Interaction
-	contactRepo := core.Contact
 	commsMessageRepo := messaging.CommsMessageRepo
 	venueRepo := messaging.VenueRepo
 	aggregatorReenqueuerHolder := consumers.AggregatorReenqueuerHolder
@@ -222,8 +225,7 @@ func registerCoreConsumerWorkers(
 	// soft-deletes the derived gcal interaction and recomputes the contact's
 	// date columns. Registered unconditionally — no events route to it when
 	// the publisher (CalendarSyncProvider) is in off mode.
-	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo)
-	addWorker(reg, consumer.NewCalendarDeclineHandlerWorker(eventBus, database.Pool, calendarDeclineHandler))
+	addWorker(reg, consumer.NewCalendarDeclineHandlerWorker(eventBus, database.Pool, consumers.CalendarDeclineHandler))
 
 	// Email-interaction consumer: derives a per-(contact, thread, local-day)
 	// aggregated interaction from email.received / email.sent events + their

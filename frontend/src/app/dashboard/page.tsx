@@ -30,7 +30,7 @@ function OverdueContactCard({
 }) {
   const createInteraction = useCreateInteraction()
   const { currentTime } = useAcceleratedTime()
-  const awaiting = contact.has_pending_followup
+  const awaiting = contact.awaiting_reply
   const { primary, secondary } = getPrimaryAndSecondaryMethods(
     contact.methods,
     contact.primary_method
@@ -207,8 +207,8 @@ export default function DashboardPage() {
   const [sortBy, setSortBy] = useState<'urgency' | 'name' | 'lastContacted'>('urgency')
   const [logTarget, setLogTarget] = useState<{ id: string; name: string } | null>(null)
 
-  const attention = overdueContacts?.filter(contact => !contact.has_pending_followup).length || 0
-  const awaiting = overdueContacts?.filter(contact => contact.has_pending_followup).length || 0
+  const attention = overdueContacts?.filter(contact => !contact.awaiting_reply).length || 0
+  const awaiting = overdueContacts?.filter(contact => contact.awaiting_reply).length || 0
   const headerText =
     overdueContacts?.length === 0
       ? "You're all caught up! No contacts need attention right now."
@@ -222,8 +222,8 @@ export default function DashboardPage() {
     overdueContacts?.slice().sort((a, b) => {
       switch (sortBy) {
         case 'urgency':
-          if (a.has_pending_followup !== b.has_pending_followup) {
-            return a.has_pending_followup ? 1 : -1
+          if (a.awaiting_reply !== b.awaiting_reply) {
+            return a.awaiting_reply ? 1 : -1
           }
           return b.days_overdue - a.days_overdue
         case 'name':

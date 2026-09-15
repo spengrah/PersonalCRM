@@ -9,6 +9,7 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/cadence"
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/logger"
 
@@ -38,17 +39,18 @@ func (r *ContactRepository) SetPool(pool *pgxpool.Pool) {
 	r.pool = pool
 }
 
-// ContactCadenceFields is the four-cadence-column snapshot carried on
+// ContactCadenceFields is the five-cadence-column snapshot carried on
 // the interaction.recorded V2 payload (spec §3.4.2). It captures the
 // pre-image of the cadence columns so CadenceUpdater can replay
 // forward-only math against a deterministic prev state.
 //
 // Timestamps are UTC; ContactBy is day-precision (DATE column).
 type ContactCadenceFields struct {
-	LastContacted  *time.Time
-	LastOutreachAt *time.Time
-	LastResponseAt *time.Time
-	ContactBy      *time.Time
+	LastContacted      *time.Time
+	LastOutreachAt     *time.Time
+	LastResponseAt     *time.Time
+	ContactBy          *time.Time
+	AwaitingReplyUntil *time.Time
 }
 
 // CadenceApplyFlagsByDirection returns the four per-column apply flags
@@ -121,31 +123,33 @@ func ContactCadenceFieldsFromContact(c *Contact) ContactCadenceFields {
 		return ContactCadenceFields{}
 	}
 	return ContactCadenceFields{
-		LastContacted:  c.LastContacted,
-		LastOutreachAt: c.LastOutreachAt,
-		LastResponseAt: c.LastResponseAt,
-		ContactBy:      c.ContactBy,
+		LastContacted:      c.LastContacted,
+		LastOutreachAt:     c.LastOutreachAt,
+		LastResponseAt:     c.LastResponseAt,
+		ContactBy:          c.ContactBy,
+		AwaitingReplyUntil: c.AwaitingReplyUntil,
 	}
 }
 
 // Contact represents a contact entity
 type Contact struct {
-	ID                uuid.UUID       `json:"id"`
-	FullName          string          `json:"full_name"`
-	Methods           []ContactMethod `json:"methods,omitempty"`
-	PrimaryMethod     *ContactMethod  `json:"primary_method,omitempty"`
-	Location          *string         `json:"location,omitempty"`
-	Birthday          *time.Time      `json:"birthday,omitempty"`
-	HowMet            *string         `json:"how_met,omitempty"`
-	Cadence           *string         `json:"cadence,omitempty"`
-	LastContacted     *time.Time      `json:"last_contacted,omitempty"`
-	ContactBy         *time.Time      `json:"contact_by,omitempty"`
-	LastInteractionAt *time.Time      `json:"last_interaction_at,omitempty"`
-	LastOutreachAt    *time.Time      `json:"last_outreach_at,omitempty"`
-	LastResponseAt    *time.Time      `json:"last_response_at,omitempty"`
-	ProfilePhoto      *string         `json:"profile_photo,omitempty"`
-	CreatedAt         time.Time       `json:"created_at"`
-	UpdatedAt         time.Time       `json:"updated_at"`
+	ID                 uuid.UUID       `json:"id"`
+	FullName           string          `json:"full_name"`
+	Methods            []ContactMethod `json:"methods,omitempty"`
+	PrimaryMethod      *ContactMethod  `json:"primary_method,omitempty"`
+	Location           *string         `json:"location,omitempty"`
+	Birthday           *time.Time      `json:"birthday,omitempty"`
+	HowMet             *string         `json:"how_met,omitempty"`
+	Cadence            *string         `json:"cadence,omitempty"`
+	LastContacted      *time.Time      `json:"last_contacted,omitempty"`
+	ContactBy          *time.Time      `json:"contact_by,omitempty"`
+	LastInteractionAt  *time.Time      `json:"last_interaction_at,omitempty"`
+	LastOutreachAt     *time.Time      `json:"last_outreach_at,omitempty"`
+	LastResponseAt     *time.Time      `json:"last_response_at,omitempty"`
+	AwaitingReplyUntil *time.Time      `json:"awaiting_reply_until,omitempty"`
+	ProfilePhoto       *string         `json:"profile_photo,omitempty"`
+	CreatedAt          time.Time       `json:"created_at"`
+	UpdatedAt          time.Time       `json:"updated_at"`
 }
 
 // CreateContactRequest represents the request to create a contact
@@ -178,13 +182,14 @@ type UpdateContactRequest struct {
 // optional full-text search over full_name + contact-method values; empty
 // means no search.
 type ListContactsParams struct {
-	Query          string `json:"query,omitempty"`
-	Limit          int32  `json:"limit"`
-	Offset         int32  `json:"offset"`
-	Sort           string `json:"sort,omitempty"`
-	Order          string `json:"order,omitempty"`
-	CadenceFilter  string `json:"cadence_filter,omitempty"`
-	FollowupFilter string `json:"followup_filter,omitempty"`
+	Query          string    `json:"query,omitempty"`
+	AsOfDate       time.Time `json:"as_of_date,omitempty"`
+	Limit          int32     `json:"limit"`
+	Offset         int32     `json:"offset"`
+	Sort           string    `json:"sort,omitempty"`
+	Order          string    `json:"order,omitempty"`
+	CadenceFilter  string    `json:"cadence_filter,omitempty"`
+	FollowupFilter string    `json:"followup_filter,omitempty"`
 }
 
 // convertDbContact converts a database contact to a repository contact
@@ -215,6 +220,7 @@ func convertDbContact(dbContact *db.Contact) Contact {
 	contact.LastInteractionAt = utcPtr(dbContact.LastInteractionAt)
 	contact.LastOutreachAt = utcPtr(dbContact.LastOutreachAt)
 	contact.LastResponseAt = utcPtr(dbContact.LastResponseAt)
+	contact.AwaitingReplyUntil = utcPtr(dbContact.AwaitingReplyUntil)
 
 	return contact
 }
@@ -261,6 +267,7 @@ func (r *ContactRepository) ListContacts(ctx context.Context, params ListContact
 		SortOrder:      params.Order,
 		PageOffset:     params.Offset,
 		PageLimit:      params.Limit,
+		AsOfDate:       asOfDate(params.AsOfDate),
 	})
 	if err != nil {
 		return nil, err
@@ -434,10 +441,11 @@ func (r *ContactRepository) SnapshotContactCadenceFields(
 		return nil, fmt.Errorf("snapshot cadence fields: %w", err)
 	}
 	return &ContactCadenceFields{
-		LastContacted:  utcPtr(row.LastContacted),
-		LastOutreachAt: utcPtr(row.LastOutreachAt),
-		LastResponseAt: utcPtr(row.LastResponseAt),
-		ContactBy:      utcPtr(row.ContactBy),
+		LastContacted:      utcPtr(row.LastContacted),
+		LastOutreachAt:     utcPtr(row.LastOutreachAt),
+		LastResponseAt:     utcPtr(row.LastResponseAt),
+		ContactBy:          utcPtr(row.ContactBy),
+		AwaitingReplyUntil: utcPtr(row.AwaitingReplyUntil),
 	}, nil
 }
 
@@ -468,16 +476,25 @@ func (r *ContactRepository) CountContacts(ctx context.Context, params ListContac
 		CadenceFilter:  params.CadenceFilter,
 		FollowupFilter: params.FollowupFilter,
 		SearchQuery:    nilIfEmpty(params.Query),
+		AsOfDate:       asOfDate(params.AsOfDate),
 	})
+}
+
+func asOfDate(t time.Time) time.Time {
+	if t.IsZero() {
+		return cadence.Today(accelerated.GetCurrentTime())
+	}
+	return t
 }
 
 // ListContactIDsParams represents parameters for listing contact IDs
 type ListContactIDsParams struct {
-	Sort           string `json:"sort,omitempty"`
-	Order          string `json:"order,omitempty"`
-	Search         string `json:"search,omitempty"`
-	CadenceFilter  string `json:"cadence_filter,omitempty"`
-	FollowupFilter string `json:"followup_filter,omitempty"`
+	Sort           string    `json:"sort,omitempty"`
+	Order          string    `json:"order,omitempty"`
+	Search         string    `json:"search,omitempty"`
+	CadenceFilter  string    `json:"cadence_filter,omitempty"`
+	FollowupFilter string    `json:"followup_filter,omitempty"`
+	AsOfDate       time.Time `json:"as_of_date,omitempty"`
 }
 
 // ListContactIDs retrieves a list of contact IDs with optional sorting and search.
@@ -489,6 +506,7 @@ func (r *ContactRepository) ListContactIDs(ctx context.Context, params ListConta
 		SearchQuery:    nilIfEmpty(params.Search),
 		SortField:      params.Sort,
 		SortOrder:      params.Order,
+		AsOfDate:       asOfDate(params.AsOfDate),
 	})
 	if err != nil {
 		return nil, err
@@ -747,8 +765,8 @@ func (r *ContactRepository) ListContactsWithKnowledgeColumns(ctx context.Context
 // decline publish and consume (the read filters deleted_at IS NULL); the
 // caller treats that as a benign no-op (the interaction is already
 // soft-deleted; a deleted contact needs no recompute).
-func (r *ContactRepository) RecomputeContactDatesAfterDeleteTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, deletedAt time.Time) error {
-	return recomputeContactDatesAfterDelete(ctx, tx, contactID, deletedAt)
+func (r *ContactRepository) RecomputeContactDatesAfterDeleteTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, deletedAt time.Time, watchdog config.WatchdogConfig) error {
+	return recomputeContactDatesAfterDelete(ctx, tx, contactID, deletedAt, watchdog)
 }
 
 // LockContactForDateRecomputeTx acquires the contact-row FOR UPDATE lock
@@ -786,11 +804,12 @@ func (r *ContactRepository) TestLockContactForUpdateNoWaitTx(ctx context.Context
 // one would mean distinguishing "absent" from "explicitly null" in a struct
 // whose whole job is brevity at 20 call sites.
 type TestCadenceSeed struct {
-	LastContacted     *time.Time
-	LastInteractionAt *time.Time
-	LastOutreachAt    *time.Time
-	LastResponseAt    *time.Time
-	ContactBy         *time.Time
+	LastContacted      *time.Time
+	LastInteractionAt  *time.Time
+	LastOutreachAt     *time.Time
+	LastResponseAt     *time.Time
+	ContactBy          *time.Time
+	AwaitingReplyUntil *time.Time
 }
 
 // params maps the seed onto the PRODUCTION unconditional cadence query. The
@@ -799,17 +818,19 @@ type TestCadenceSeed struct {
 // writer whose behavior they stand in for.
 func (s TestCadenceSeed) params(id uuid.UUID) db.UpdateContactCadenceUnconditionalParams {
 	return db.UpdateContactCadenceUnconditionalParams{
-		ApplyLastContacted:     s.LastContacted != nil,
-		LastContacted:          s.LastContacted,
-		ApplyLastInteractionAt: s.LastInteractionAt != nil,
-		LastInteractionAt:      s.LastInteractionAt,
-		ApplyLastOutreachAt:    s.LastOutreachAt != nil,
-		LastOutreachAt:         s.LastOutreachAt,
-		ApplyLastResponseAt:    s.LastResponseAt != nil,
-		LastResponseAt:         s.LastResponseAt,
-		ApplyContactBy:         s.ContactBy != nil,
-		ContactBy:              s.ContactBy,
-		ID:                     id,
+		ApplyLastContacted:      s.LastContacted != nil,
+		LastContacted:           s.LastContacted,
+		ApplyLastInteractionAt:  s.LastInteractionAt != nil,
+		LastInteractionAt:       s.LastInteractionAt,
+		ApplyLastOutreachAt:     s.LastOutreachAt != nil,
+		LastOutreachAt:          s.LastOutreachAt,
+		ApplyLastResponseAt:     s.LastResponseAt != nil,
+		LastResponseAt:          s.LastResponseAt,
+		ApplyContactBy:          s.ContactBy != nil,
+		ContactBy:               s.ContactBy,
+		ApplyAwaitingReplyUntil: s.AwaitingReplyUntil != nil,
+		AwaitingReplyUntil:      s.AwaitingReplyUntil,
+		ID:                      id,
 	}
 }
 
@@ -901,7 +922,7 @@ func (r *ContactRepository) TestWriteKnowledgeColumnsWithoutGUCTx(ctx context.Co
 // decision needs, decides contact_by in Go, then writes — all inside the
 // caller's tx, which is what lets the lock-then-aggregate serialization and
 // the derived-writer declaration share one transaction.
-func recomputeContactDatesAfterDelete(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, deletedAt time.Time) error {
+func recomputeContactDatesAfterDelete(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, deletedAt time.Time, watchdog config.WatchdogConfig) error {
 	if err := SetDerivedWriterTx(ctx, tx, DerivedWriterCadence); err != nil {
 		return err
 	}
@@ -942,14 +963,22 @@ func recomputeContactDatesAfterDelete(ctx context.Context, tx pgx.Tx, contactID 
 	newLastOutreachAt := recomputeColumn(row.OldLastOutreachAt, deletedAt, outreach)
 
 	newContactBy := decideContactByAfterDelete(row, newLastContacted)
+	var newAwaitingReplyUntil *time.Time
+	if newLastOutreachAt != nil && row.Cadence != nil && *row.Cadence != "" {
+		if days := watchdog.DaysForCadence(*row.Cadence); days > 0 {
+			deadline := cadence.AwaitingReplyUntil(*newLastOutreachAt, days)
+			newAwaitingReplyUntil = &deadline
+		}
+	}
 
 	return q.WriteContactDatesAfterDelete(ctx, db.WriteContactDatesAfterDeleteParams{
-		NewLastContacted:     newLastContacted,
-		NewLastInteractionAt: newLastInteractionAt,
-		NewLastResponseAt:    newLastResponseAt,
-		NewLastOutreachAt:    newLastOutreachAt,
-		NewContactBy:         newContactBy,
-		ID:                   contactID,
+		NewLastContacted:      newLastContacted,
+		NewLastInteractionAt:  newLastInteractionAt,
+		NewLastResponseAt:     newLastResponseAt,
+		NewLastOutreachAt:     newLastOutreachAt,
+		NewContactBy:          newContactBy,
+		NewAwaitingReplyUntil: newAwaitingReplyUntil,
+		ID:                    contactID,
 	})
 }
 

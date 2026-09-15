@@ -343,23 +343,24 @@ func MutualMeeting(a Amount) ContactProp {
 	}
 }
 
-// AwaitingReply declares a LIVE follow-up loop on the contact — the state
-// has_pending_followup reports and the "awaiting reply" indicator renders.
+// AwaitingReply declares a contact whose outbound is within the cadence's
+// watchdog window. That derived state renders as `awaiting_reply`; this prop
+// adds the accompanying Todoist follow-up reminder row.
 //
 // It lowers to the harness's follow-up primitive, whose row is key-for-key the
 // shape FollowUpManager writes in production, in the `managed` state a promoted
-// remote create settles on. has_pending_followup is computed LIVE from that row's
-// (lifecycle, state) pair, so the state is genuinely reachable by seeding even
-// though the seed harness runs the follow-up consumer off.
+// remote create settles on. The state itself is derived from the contact's
+// outreach and expiry, which the declared Outreach establishes.
 //
-// A follow-up loop is opened BY an outbound and by nothing else, so it requires a
-// Cadence and Outreach: hung on a contact with no outbound it renders as awaiting a
-// reply to nothing, which production cannot reach.
+// A follow-up reminder accompanies an outbound and by nothing else, so it requires
+// a Cadence and Outreach: without an outbound in the watchdog window, the derived
+// state is false and no reminder belongs on the contact.
 //
 // It is mutually exclusive with every prop that replays an inbound or a mutual
-// interaction (MutualMeeting, OverdueBy, History), because a reply COMPLETES a live
-// follow-up. A fixture pairing them would compose a live loop beside the reply that
-// closes it — a state no ordering of production writes produces.
+// interaction (MutualMeeting, OverdueBy, History), because a reply ends the
+// awaiting-reply window and completes its reminder. A fixture pairing them would
+// compose an open window beside the reply that closes it — a state no ordering of
+// production writes produces.
 func AwaitingReply() ContactProp {
 	return func(p *contactPlan) { p.awaitingReply = true }
 }

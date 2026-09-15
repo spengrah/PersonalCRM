@@ -42,13 +42,12 @@ const liveContactViewVersion = 78
 var liveContactColumnOrder = []string{
 	"id", "full_name", "location", "birthday", "how_met", "cadence",
 	"last_contacted", "profile_photo", "deleted_at", "created_at", "updated_at",
-	"contact_by", "last_interaction_at", "last_outreach_at", "last_response_at",
+	"contact_by", "last_interaction_at", "last_outreach_at", "last_response_at", "awaiting_reply_until",
 }
 
-// TestLiveContactView_MigrationUpDown proves the migration round-trips: 078
-// applies (the view exists and its row count already excludes a soft-deleted
-// contact), the down migration drops the view, and the down migration leaves
-// contact's own rows untouched.
+// TestLiveContactView_MigrationUpDown proves the view shape survives stepping
+// below migration 082 and returning to head without issuing expanded contact
+// queries against the historical schemas.
 func TestLiveContactView_MigrationUpDown(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -71,12 +70,6 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = m.Close() })
 
-	// Position the clone at 078 explicitly (liveContactViewVersion), robust to
-	// later migrations landing above it — PR7's 079 is exactly that case.
-	if err := m.Migrate(liveContactViewVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		require.NoError(t, err, "position the clone at the live_contact view tip")
-	}
-
 	contactRepo := repository.NewContactRepository(database.Queries)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -84,7 +77,15 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 	require.NoError(t, err)
 	deleted, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "LiveContactView Migration Deleted"})
 	require.NoError(t, err)
+	_, err = contactRepo.GetContact(ctx, live.ID)
+	require.NoError(t, err)
+	_, err = contactRepo.GetContact(ctx, deleted.ID)
+	require.NoError(t, err)
 	require.NoError(t, contactRepo.SoftDeleteContact(ctx, deleted.ID))
+
+	if err := m.Migrate(liveContactViewVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err, "position the clone at the 078 live_contact view tip")
+	}
 
 	// The clone is positioned at 078: the view exists as a plain view and its
 	// row count already excludes the soft-deleted contact (this clone is a
@@ -100,9 +101,9 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, totalContacts-1, liveContacts, "live_contact must return only the non-deleted contact")
 
-	liveFromDB, err := contactRepo.GetContact(ctx, live.ID)
+	cols, err := database.Queries.TestListViewColumns(ctx, "live_contact")
 	require.NoError(t, err)
-	assert.Equal(t, "LiveContactView Migration Live", liveFromDB.FullName)
+	require.Len(t, cols, 15)
 
 	// Roll 078 down.
 	require.NoError(t, m.Steps(-1))
@@ -114,7 +115,6 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 	afterDownContacts, err := support.CountAllRows(ctx, "contact")
 	require.NoError(t, err)
 	assert.Equal(t, totalContacts, afterDownContacts, "the down migration must not touch contact's own rows")
-
 	// Re-apply: the view returns, restored to the same shape.
 	require.NoError(t, m.Steps(1))
 
@@ -122,9 +122,15 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), kindCount, "the up migration restores the view")
 
-	cols, err := database.Queries.TestListViewColumns(ctx, "live_contact")
+	cols, err = database.Queries.TestListViewColumns(ctx, "live_contact")
 	require.NoError(t, err)
-	assert.Len(t, cols, len(liveContactColumnOrder), "the restored view keeps its full column list")
+	assert.Len(t, cols, 15, "the restored 078 view keeps its historical column list")
+
+	require.NoError(t, m.Up())
+	cols, err = database.Queries.TestListViewColumns(ctx, "live_contact")
+	require.NoError(t, err)
+	assert.Len(t, cols, 16, "migration 082 appends the new derived column")
+	assert.Equal(t, "awaiting_reply_until", cols[len(cols)-1].ColumnName)
 }
 
 // TestLiveContactView_Shape asserts live_contact's KIND (plain, not

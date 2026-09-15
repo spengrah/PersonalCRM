@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
@@ -230,20 +231,21 @@ func cancelledContext() context.Context {
 // populated date fields, and returns both the contact and a snapshot of the
 // date fields so tests can assert they remain unchanged after dismissal.
 type dateSnapshot struct {
-	LastContacted     *time.Time
-	LastInteractionAt *time.Time
-	LastResponseAt    *time.Time
-	LastOutreachAt    *time.Time
-	ContactBy         *time.Time
+	LastContacted      *time.Time
+	LastInteractionAt  *time.Time
+	LastResponseAt     *time.Time
+	LastOutreachAt     *time.Time
+	ContactBy          *time.Time
+	AwaitingReplyUntil *time.Time
 }
 
 func createDismissalContact(t *testing.T, env *dismissalTestEnv, nameSuffix string) (*repository.Contact, dateSnapshot) {
 	t.Helper()
 
-	cadence := "monthly"
+	cadenceName := "monthly"
 	contact, err := env.contactRepo.CreateContact(env.ctx, repository.CreateContactRequest{
 		FullName: "Dismissal " + nameSuffix + " " + uuid.New().String()[:8],
-		Cadence:  &cadence,
+		Cadence:  &cadenceName,
 	})
 	require.NoError(t, err)
 
@@ -253,28 +255,35 @@ func createDismissalContact(t *testing.T, env *dismissalTestEnv, nameSuffix stri
 	now := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
 	mutualAt := now.AddDate(0, 0, -5)
 	contactBy := mutualAt.AddDate(0, 1, 0)
+	awaitingReplyUntil := cadence.AwaitingReplyUntil(mutualAt, 7)
 	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{
-		LastContacted:     &mutualAt,
-		LastInteractionAt: &mutualAt,
-		LastOutreachAt:    &mutualAt,
-		LastResponseAt:    &mutualAt,
-		ContactBy:         &contactBy,
+		LastContacted:      &mutualAt,
+		LastInteractionAt:  &mutualAt,
+		LastOutreachAt:     &mutualAt,
+		LastResponseAt:     &mutualAt,
+		ContactBy:          &contactBy,
+		AwaitingReplyUntil: &awaitingReplyUntil,
 	}))
 
-	// Seed last_outreach_at separately — outbound updates only that field.
+	// Seed last_outreach_at separately with its derived waiting-window expiry.
 	outreachAt := now.AddDate(0, 0, -1)
-	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{LastOutreachAt: &outreachAt}))
+	awaitingReplyUntil = cadence.AwaitingReplyUntil(outreachAt, 7)
+	require.NoError(t, env.contactRepo.TestSeedContactCadenceFields(env.ctx, contact.ID, repository.TestCadenceSeed{
+		LastOutreachAt:     &outreachAt,
+		AwaitingReplyUntil: &awaitingReplyUntil,
+	}))
 
 	// Reload to capture persisted values.
 	reloaded, err := env.contactRepo.GetContact(env.ctx, contact.ID)
 	require.NoError(t, err)
 
 	snapshot := dateSnapshot{
-		LastContacted:     copyTimePtr(reloaded.LastContacted),
-		LastInteractionAt: copyTimePtr(reloaded.LastInteractionAt),
-		LastResponseAt:    copyTimePtr(reloaded.LastResponseAt),
-		LastOutreachAt:    copyTimePtr(reloaded.LastOutreachAt),
-		ContactBy:         copyTimePtr(reloaded.ContactBy),
+		LastContacted:      copyTimePtr(reloaded.LastContacted),
+		LastInteractionAt:  copyTimePtr(reloaded.LastInteractionAt),
+		LastResponseAt:     copyTimePtr(reloaded.LastResponseAt),
+		LastOutreachAt:     copyTimePtr(reloaded.LastOutreachAt),
+		ContactBy:          copyTimePtr(reloaded.ContactBy),
+		AwaitingReplyUntil: copyTimePtr(reloaded.AwaitingReplyUntil),
 	}
 
 	return reloaded, snapshot
@@ -316,6 +325,7 @@ func assertDatesUnchanged(t *testing.T, env *dismissalTestEnv, contactID uuid.UU
 	assertTimePtrEqual(t, snap.LastResponseAt, c.LastResponseAt, "last_response_at")
 	assertTimePtrEqual(t, snap.LastOutreachAt, c.LastOutreachAt, "last_outreach_at")
 	assertTimePtrEqual(t, snap.ContactBy, c.ContactBy, "contact_by")
+	assertTimePtrEqual(t, snap.AwaitingReplyUntil, c.AwaitingReplyUntil, "awaiting_reply_until")
 }
 
 func assertTimePtrEqual(t *testing.T, want, got *time.Time, field string) {
@@ -509,15 +519,13 @@ func TestFollowUpDismissal_FindPendingFollowUpIgnoresDismissed(t *testing.T) {
 	assert.True(t, errors.Is(err, db.ErrNotFound), "FindPendingFollowUp must treat dismissed as absent")
 }
 
-// Case 7: has_followup / no_followup contact filters must ignore dismissed rows.
-func TestFollowUpDismissal_ContactFollowUpFiltersIgnoreDismissed(t *testing.T) {
+// Case 7: has_followup / no_followup filters read the contact's awaiting-reply columns, not the reminder row.
+func TestFollowUpDismissal_ContactFollowUpFiltersReadContactColumns(t *testing.T) {
 	env, cleanup := setupDismissalTest(t)
 	defer cleanup()
 
 	contact, _ := createDismissalContact(t, env, "Filters")
 	task := createFollowUpTask(t, env, contact.ID, "td-"+uuid.New().String()[:8])
-	_, err := env.contactTaskRepo.UpdateContactTaskState(env.ctx, task.ID, repository.ContactTaskStateDismissed)
-	require.NoError(t, err)
 
 	// Helper to check whether this contact is in a filter result.
 	contactInFilter := func(filter string) bool {
@@ -534,8 +542,13 @@ func TestFollowUpDismissal_ContactFollowUpFiltersIgnoreDismissed(t *testing.T) {
 		return false
 	}
 
-	assert.False(t, contactInFilter("has_followup"), "dismissed row must not count as pending follow-up")
-	assert.True(t, contactInFilter("no_followup"), "contact with only a dismissed follow-up should appear in no_followup")
+	assert.True(t, contactInFilter("has_followup"), "open contact window matches has_followup")
+	assert.False(t, contactInFilter("no_followup"), "open contact window is excluded from no_followup")
+
+	_, err := env.contactTaskRepo.UpdateContactTaskState(env.ctx, task.ID, repository.ContactTaskStateDismissed)
+	require.NoError(t, err)
+	assert.True(t, contactInFilter("has_followup"), "dismissal does not change the contact-column filter result")
+	assert.False(t, contactInFilter("no_followup"), "dismissal does not change the contact-column filter result")
 }
 
 // Case 8a: dispatch for cadence is unchanged — a cadence task hit with any
@@ -1215,7 +1228,7 @@ func TestReconcileExistingTask_SkipDriftRecovery(t *testing.T) {
 	require.NoError(t, err)
 
 	currentDeadline := "2027-04-15"
-	cmds := env.provider.reconcileExistingTask(env.ctx, task, contact, env.settings, currentDeadline, false)
+	cmds := env.provider.reconcileExistingTask(env.ctx, task, contact, env.settings, currentDeadline, currentDeadline, false)
 
 	require.Len(t, cmds, 2, "skip-drift branch must emit item_close + item_add")
 	assert.Equal(t, "item_close", cmds[0].Type)
@@ -1260,7 +1273,7 @@ func TestReconcileExistingTask_SkipDrift_DeferralSuppressesBranch(t *testing.T) 
 	})
 	require.NoError(t, err)
 
-	cmds := env.provider.reconcileExistingTask(env.ctx, task, contact, env.settings, syncedDeadline, true)
+	cmds := env.provider.reconcileExistingTask(env.ctx, task, contact, env.settings, syncedDeadline, syncedDeadline, true)
 
 	// With deferSkipDrift=true the skip-drift branch is suppressed. Since
 	// synced_deadline == currentDeadline the non-drift happy path also

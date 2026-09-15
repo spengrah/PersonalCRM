@@ -71,9 +71,9 @@ func newDeclineTestEnv(t *testing.T, ctx context.Context) *declineTestEnv {
 	calendarRepo := repository.NewCalendarEventRepository(database.Queries)
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 	cadenceUpdater := consumer.NewCadenceUpdater(
-		claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false,
+		claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false, config.TestConfig().Watchdog,
 	)
-	declineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo)
+	declineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, config.TestConfig().Watchdog)
 
 	gen, _ := migrationGenerator(t)
 	return &declineTestEnv{
@@ -210,7 +210,7 @@ func TestIntegration_CalendarDecline_NullOutWithCadenceFallback(t *testing.T) {
 
 	require.NoError(t, e.interactionRepo.SoftDeleteInteraction(ctx, mustFindInteraction(t, e, contact.ID, sourceRef).ID))
 	applyInTx(t, e.database, func(tx pgx.Tx) error {
-		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, occurredAt)
+		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, occurredAt, config.TestConfig().Watchdog)
 	})
 
 	got, err := e.contactRepo.GetContact(ctx, contact.ID)
@@ -238,7 +238,7 @@ func TestIntegration_CalendarDecline_NoCadence_ContactByStaysNil(t *testing.T) {
 
 	require.NoError(t, e.interactionRepo.SoftDeleteInteraction(ctx, mustFindInteraction(t, e, contact.ID, sourceRef).ID))
 	applyInTx(t, e.database, func(tx pgx.Tx) error {
-		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, occurredAt)
+		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, occurredAt, config.TestConfig().Watchdog)
 	})
 
 	got, err := e.contactRepo.GetContact(ctx, contact.ID)
@@ -289,7 +289,7 @@ func TestIntegration_CalendarDecline_PerDirectionRollback(t *testing.T) {
 	// Remove the mutual (it sourced last_contacted = mutual).
 	require.NoError(t, e.interactionRepo.SoftDeleteInteraction(ctx, mustFindInteraction(t, e, contact.ID, mutualRef).ID))
 	applyInTx(t, e.database, func(tx pgx.Tx) error {
-		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, mutual)
+		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, mutual, config.TestConfig().Watchdog)
 	})
 
 	got, err := e.contactRepo.GetContact(ctx, contact.ID)
@@ -336,7 +336,7 @@ func TestIntegration_CalendarDecline_PreservesCreationValue(t *testing.T) {
 
 	require.NoError(t, e.interactionRepo.SoftDeleteInteraction(ctx, created.ID))
 	applyInTx(t, e.database, func(tx pgx.Tx) error {
-		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, gcalOccurredAt)
+		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, gcalOccurredAt, config.TestConfig().Watchdog)
 	})
 
 	got, err := e.contactRepo.GetContact(ctx, contact.ID)
@@ -372,7 +372,7 @@ func TestIntegration_CalendarDecline_PreservesContactByOverride(t *testing.T) {
 
 	require.NoError(t, e.interactionRepo.SoftDeleteInteraction(ctx, mustFindInteraction(t, e, contact.ID, sourceRef).ID))
 	applyInTx(t, e.database, func(tx pgx.Tx) error {
-		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, occurredAt)
+		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, occurredAt, config.TestConfig().Watchdog)
 	})
 
 	got, err := e.contactRepo.GetContact(ctx, contact.ID)
@@ -408,7 +408,7 @@ func TestIntegration_CalendarDecline_RollsBackContactByWhenNoOverride(t *testing
 
 	require.NoError(t, e.interactionRepo.SoftDeleteInteraction(ctx, mustFindInteraction(t, e, contact.ID, sourceRef).ID))
 	applyInTx(t, e.database, func(tx pgx.Tx) error {
-		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, occurredAt)
+		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, occurredAt, config.TestConfig().Watchdog)
 	})
 
 	got, err := e.contactRepo.GetContact(ctx, contact.ID)
@@ -437,7 +437,7 @@ func TestIntegration_CalendarDecline_ContactByForwardWriterParity(t *testing.T) 
 
 	require.NoError(t, e.interactionRepo.SoftDeleteInteraction(ctx, mustFindInteraction(t, e, contact.ID, sourceRef).ID))
 	applyInTx(t, e.database, func(tx pgx.Tx) error {
-		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, occurredAt)
+		return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, occurredAt, config.TestConfig().Watchdog)
 	})
 
 	got, err := e.contactRepo.GetContact(ctx, contact.ID)
@@ -662,7 +662,7 @@ func TestIntegration_CalendarDecline_RecomputeSeesConcurrentInteraction(t *testi
 	recomputeDone := make(chan error, 1)
 	go func() {
 		recomputeDone <- pgx.BeginTxFunc(ctx, e.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
-			return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, mutualAt)
+			return e.contactRepo.RecomputeContactDatesAfterDeleteTx(ctx, tx, contact.ID, mutualAt, config.TestConfig().Watchdog)
 		})
 	}()
 

@@ -52,7 +52,8 @@ type contactCadenceReader interface {
 
 // CadenceUpdater is the cutover consumer — the sole writer of
 // contact.last_contacted, contact.last_outreach_at,
-// contact.last_response_at, and contact.contact_by.
+// contact.last_response_at, contact.contact_by, and
+// contact.awaiting_reply_until.
 //
 // Entry points (all funnel into applyTx):
 //   - HandleEvent:       envelope-driven (from InteractionRecorder inline
@@ -70,6 +71,7 @@ type CadenceUpdater struct {
 	queries   db.Querier
 	mode      string // config.EventBusCadenceMode*
 	unsafeOff bool   // mirrors config.EventBus.UnsafeAllowOffMode for self-reported diagnostics
+	watchdog  config.WatchdogConfig
 }
 
 // NewCadenceUpdater constructs the consumer. `queries` must be a
@@ -83,6 +85,7 @@ func NewCadenceUpdater(
 	queries db.Querier,
 	mode string,
 	unsafeOff bool,
+	watchdog config.WatchdogConfig,
 ) *CadenceUpdater {
 	return &CadenceUpdater{
 		claims:    claims,
@@ -90,6 +93,7 @@ func NewCadenceUpdater(
 		queries:   queries,
 		mode:      mode,
 		unsafeOff: unsafeOff,
+		watchdog:  watchdog,
 	}
 }
 
@@ -107,16 +111,18 @@ type cadenceWriteRequest struct {
 	ContactID uuid.UUID
 	Branch    string // CadenceBranchForward or CadenceBranchUnconditional
 
-	ApplyLastContacted     bool
-	LastContacted          *time.Time
-	ApplyLastInteractionAt bool
-	LastInteractionAt      *time.Time
-	ApplyLastOutreachAt    bool
-	LastOutreachAt         *time.Time
-	ApplyLastResponseAt    bool
-	LastResponseAt         *time.Time
-	ApplyContactBy         bool
-	ContactBy              *time.Time // nil means "clear contact_by" on the unconditional branch
+	ApplyLastContacted      bool
+	LastContacted           *time.Time
+	ApplyLastInteractionAt  bool
+	LastInteractionAt       *time.Time
+	ApplyLastOutreachAt     bool
+	LastOutreachAt          *time.Time
+	ApplyLastResponseAt     bool
+	LastResponseAt          *time.Time
+	ApplyContactBy          bool
+	ContactBy               *time.Time // nil means "clear contact_by" on the unconditional branch
+	ApplyAwaitingReplyUntil bool
+	AwaitingReplyUntil      *time.Time
 }
 
 // --------------------------------------------------------------------------
@@ -239,16 +245,18 @@ func (h *CadenceUpdater) BulkApply(ctx context.Context, tx pgx.Tx, contactID uui
 		return nil
 	}
 	req := cadenceWriteRequest{
-		ContactID:           contactID,
-		Branch:              repository.CadenceBranchForward,
-		ApplyLastContacted:  fields.LastContacted != nil,
-		LastContacted:       fields.LastContacted,
-		ApplyLastOutreachAt: fields.LastOutreachAt != nil,
-		LastOutreachAt:      fields.LastOutreachAt,
-		ApplyLastResponseAt: fields.LastResponseAt != nil,
-		LastResponseAt:      fields.LastResponseAt,
-		ApplyContactBy:      fields.ContactBy != nil,
-		ContactBy:           fields.ContactBy,
+		ContactID:               contactID,
+		Branch:                  repository.CadenceBranchForward,
+		ApplyLastContacted:      fields.LastContacted != nil,
+		LastContacted:           fields.LastContacted,
+		ApplyLastOutreachAt:     fields.LastOutreachAt != nil,
+		LastOutreachAt:          fields.LastOutreachAt,
+		ApplyLastResponseAt:     fields.LastResponseAt != nil,
+		LastResponseAt:          fields.LastResponseAt,
+		ApplyContactBy:          fields.ContactBy != nil,
+		ContactBy:               fields.ContactBy,
+		ApplyAwaitingReplyUntil: fields.AwaitingReplyUntil != nil,
+		AwaitingReplyUntil:      fields.AwaitingReplyUntil,
 		// BulkApply is the merge path and MUST NOT bump last_interaction_at;
 		// merge is not an interaction. Leave ApplyLastInteractionAt false.
 	}
@@ -294,6 +302,8 @@ func (h *CadenceUpdater) buildInteractionWrite(
 
 	applyLastContacted, applyLastOutreachAt, applyLastResponseAt, directionAllowsContactBy := repository.CadenceApplyFlagsByDirection(direction)
 	applyContactBy := directionAllowsContactBy && repository.ShouldApplyContactBy(prev.LastContacted, occurredAt, isManual, hasCadence)
+	days := h.watchdog.DaysForCadence(cadenceStr)
+	applyAwaitingReplyUntil := direction == repository.InteractionDirectionOutbound && days > 0
 
 	branch := repository.CadenceBranchForward
 	if isManual {
@@ -306,13 +316,14 @@ func (h *CadenceUpdater) buildInteractionWrite(
 	// semantic (UpdateContactResponseFields/UpdateContactMutualFields both
 	// wrote last_interaction_at; UpdateContactOutreachAt did not).
 	req := cadenceWriteRequest{
-		ContactID:              contactID,
-		Branch:                 branch,
-		ApplyLastContacted:     applyLastContacted,
-		ApplyLastInteractionAt: applyLastContacted,
-		ApplyLastOutreachAt:    applyLastOutreachAt,
-		ApplyLastResponseAt:    applyLastResponseAt,
-		ApplyContactBy:         applyContactBy,
+		ContactID:               contactID,
+		Branch:                  branch,
+		ApplyLastContacted:      applyLastContacted,
+		ApplyLastInteractionAt:  applyLastContacted,
+		ApplyLastOutreachAt:     applyLastOutreachAt,
+		ApplyLastResponseAt:     applyLastResponseAt,
+		ApplyContactBy:          applyContactBy,
+		ApplyAwaitingReplyUntil: applyAwaitingReplyUntil,
 	}
 	if applyLastContacted {
 		t := occurredAt
@@ -336,6 +347,10 @@ func (h *CadenceUpdater) buildInteractionWrite(
 			req.ContactBy = &t
 		}
 	}
+	if applyAwaitingReplyUntil {
+		deadline := cadence.AwaitingReplyUntil(occurredAt, days)
+		req.AwaitingReplyUntil = &deadline
+	}
 	return req
 }
 
@@ -344,7 +359,7 @@ func (h *CadenceUpdater) buildInteractionWrite(
 // request (every apply flag false) short-circuits to avoid issuing
 // an UPDATE that would bump updated_at for nothing.
 func (h *CadenceUpdater) applyTx(ctx context.Context, tx pgx.Tx, req cadenceWriteRequest) error {
-	if !req.ApplyLastContacted && !req.ApplyLastInteractionAt && !req.ApplyLastOutreachAt && !req.ApplyLastResponseAt && !req.ApplyContactBy {
+	if !req.ApplyLastContacted && !req.ApplyLastInteractionAt && !req.ApplyLastOutreachAt && !req.ApplyLastResponseAt && !req.ApplyContactBy && !req.ApplyAwaitingReplyUntil {
 		return nil
 	}
 	if err := repository.SetDerivedWriterTx(ctx, tx, repository.DerivedWriterCadence); err != nil {
@@ -354,31 +369,35 @@ func (h *CadenceUpdater) applyTx(ctx context.Context, tx pgx.Tx, req cadenceWrit
 	switch req.Branch {
 	case repository.CadenceBranchForward:
 		return q.UpdateContactCadenceForward(ctx, db.UpdateContactCadenceForwardParams{
-			ApplyLastContacted:     req.ApplyLastContacted,
-			LastContacted:          req.LastContacted,
-			ApplyLastInteractionAt: req.ApplyLastInteractionAt,
-			LastInteractionAt:      req.LastInteractionAt,
-			ApplyLastOutreachAt:    req.ApplyLastOutreachAt,
-			LastOutreachAt:         req.LastOutreachAt,
-			ApplyLastResponseAt:    req.ApplyLastResponseAt,
-			LastResponseAt:         req.LastResponseAt,
-			ApplyContactBy:         req.ApplyContactBy,
-			ContactBy:              req.ContactBy,
-			ID:                     req.ContactID,
+			ApplyLastContacted:      req.ApplyLastContacted,
+			LastContacted:           req.LastContacted,
+			ApplyLastInteractionAt:  req.ApplyLastInteractionAt,
+			LastInteractionAt:       req.LastInteractionAt,
+			ApplyLastOutreachAt:     req.ApplyLastOutreachAt,
+			LastOutreachAt:          req.LastOutreachAt,
+			ApplyLastResponseAt:     req.ApplyLastResponseAt,
+			LastResponseAt:          req.LastResponseAt,
+			ApplyContactBy:          req.ApplyContactBy,
+			ContactBy:               req.ContactBy,
+			ApplyAwaitingReplyUntil: req.ApplyAwaitingReplyUntil,
+			AwaitingReplyUntil:      req.AwaitingReplyUntil,
+			ID:                      req.ContactID,
 		})
 	case repository.CadenceBranchUnconditional:
 		return q.UpdateContactCadenceUnconditional(ctx, db.UpdateContactCadenceUnconditionalParams{
-			ApplyLastContacted:     req.ApplyLastContacted,
-			LastContacted:          req.LastContacted,
-			ApplyLastInteractionAt: req.ApplyLastInteractionAt,
-			LastInteractionAt:      req.LastInteractionAt,
-			ApplyLastOutreachAt:    req.ApplyLastOutreachAt,
-			LastOutreachAt:         req.LastOutreachAt,
-			ApplyLastResponseAt:    req.ApplyLastResponseAt,
-			LastResponseAt:         req.LastResponseAt,
-			ApplyContactBy:         req.ApplyContactBy,
-			ContactBy:              req.ContactBy,
-			ID:                     req.ContactID,
+			ApplyLastContacted:      req.ApplyLastContacted,
+			LastContacted:           req.LastContacted,
+			ApplyLastInteractionAt:  req.ApplyLastInteractionAt,
+			LastInteractionAt:       req.LastInteractionAt,
+			ApplyLastOutreachAt:     req.ApplyLastOutreachAt,
+			LastOutreachAt:          req.LastOutreachAt,
+			ApplyLastResponseAt:     req.ApplyLastResponseAt,
+			LastResponseAt:          req.LastResponseAt,
+			ApplyContactBy:          req.ApplyContactBy,
+			ContactBy:               req.ContactBy,
+			ApplyAwaitingReplyUntil: req.ApplyAwaitingReplyUntil,
+			AwaitingReplyUntil:      req.AwaitingReplyUntil,
+			ID:                      req.ContactID,
 		})
 	default:
 		return fmt.Errorf("cadence_updater: unknown branch %q", req.Branch)

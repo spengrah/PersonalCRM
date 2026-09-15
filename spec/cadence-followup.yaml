@@ -145,7 +145,7 @@ behaviors:
     then:
       - a follow-up task is created to track the awaited reply
       - its deadline is the interaction day plus a cadence-scaled window (defaults weekly 3, biweekly 5, monthly 7, quarterly 14, biannual 21, annual 21 days; environment-configurable)
-    provenance: [FollowUpManager, watchdogDaysForCadenceStr, config.WatchdogConfig]
+    provenance: [FollowUpManager, config.WatchdogConfig.DaysForCadence]
 
   - id: CAD-012
     title: Follow-up creation is guarded so only genuinely awaited replies open loops
@@ -208,6 +208,7 @@ behaviors:
       - the follow-up state becomes dismissed
       - no interaction is recorded
       - no successor follow-up is created
+      - no cadence-family column on the contact changes, and whether the contact is awaiting a reply (CAD-040) does not change
     provenance: [handleFollowUpDismissal, task-direction-taxonomy.md]
 
   - id: CAD-017
@@ -238,7 +239,7 @@ behaviors:
       - at most one cadence-due task row exists per contact and provider regardless of state; completed rows are removed to make room for the next cycle
       - while a live follow-up exists, cadence-due creation is deferred (the follow-up already covers the contact)
     provenance: [CadenceSyncProvider.reconcileContactTasks, unique_contact_provider_cadence]
-    notes: Reconciliation rides the provider sync tick; there is no dedicated cron job. Provider mechanics are todoist-domain scope.
+    notes: Reconciliation rides the provider sync tick; there is no dedicated cron job. Provider mechanics are todoist-domain scope. The follow-up deferral item is one of two deferral rules; CAD-042 states the awaiting-reply window, which is checked first.
 
   - id: CAD-019
     title: Skipping a cadence task advances the schedule without recording contact
@@ -298,7 +299,7 @@ behaviors:
       - key: each-entry-carries-contact
         text: each entry carries the contact plus days overdue, the next due date, and a suggested action
       - key: each-entry-carries-pending-followup
-        text: each entry's has_pending_followup is true exactly when the contact has a live follow-up, so the dashboard can tell awaited replies from neglected contacts
+        text: "each entry's awaiting_reply is true exactly when the contact is awaiting a reply (CAD-040: last outreach strictly later than last response and the waiting period not yet expired), so the dashboard can tell awaited replies from neglected contacts"
       - key: entries-ordered-most-overdue
         text: entries are ordered most-overdue first
       - key: list-bounded-1000-truncation
@@ -337,7 +338,7 @@ behaviors:
       - key: each-card-shows-urgency
         text: each card shows urgency (tiers at up to 2, up to 7, and more days overdue), cadence, how long since the last connection — or how long since the contact was added, when there has never been one — reachable contact methods, and the suggested action
       - key: awaiting-reply-cards-demoted
-        text: "a contact with a live follow-up (the user reached out and is awaiting a reply) renders as a demoted awaiting-reply card: muted, marked Awaiting reply, showing when the user reached out, placed after every needs-attention card under the urgency ordering, and counted separately in the header"
+        text: "a contact that is awaiting a reply (CAD-040: the user reached out and the waiting period is open) renders as a demoted awaiting-reply card: muted, marked Awaiting reply, showing when the user reached out, placed after every needs-attention card under the urgency ordering, and counted separately in the header"
       - key: nothing-overdue-all-caught
         text: with nothing overdue, an all-caught-up state is shown instead
     serves: [DSH-010, DSH-011]
@@ -391,7 +392,7 @@ behaviors:
       - key: last-response-time-shown
         text: the last response time is shown when one exists
       - key: awaiting-reply-indicator-shown
-        text: an awaiting-reply indicator is shown while a follow-up is pending
+        text: an awaiting-reply indicator is shown while the contact is awaiting a reply (CAD-040)
       - key: explicit-no-recent-activity
         text: with none of these, an explicit no-recent-activity state is shown
     serves: [CAD-036]
@@ -529,3 +530,60 @@ behaviors:
     statement: a user who opens the app to find out who they are losing touch with can go from that signal to having acted, in one continuous pass — the contact they are sent to answers where the relationship stands, the action they take is acknowledged where they take it, and the surface that sent them reflects it when they come back; at no point do they lose their place, have to re-derive context the app already showed them, or have to guess whether the action landed
     notes: The app's core value loop, judged end to end as one journey rather than as three independent surfaces. Evidence comes from relationship-loop.tour.ts, which walks dashboard → contact detail → log-interaction → back in a SINGLE tour (entity identity is only coherent within one tour, so a journey split across tours would show the judge the same contact under two pseudonyms). This intent carries NO serving behaviors on purpose — a journey binds its evidence by direct capture tag, because serves edges would also pull in the per-surface tours' captures and evict the journey's own under the capture cap. Frontend-surface scope only; the integration/sync half of the loop is deliberately out of scope.
     provenance: ['.ai/spec/2026-07-12-qa-architecture-restructuring.md']
+
+  - id: CAD-040
+    title: Awaiting a reply is derived from the contact's own interaction timestamps
+    type: business-logic
+    status: current
+    surface: none
+    given: a contact with a cadence
+    when: awaiting-reply is evaluated (contact payloads, the contact-list filter, cadence-task reconciliation)
+    then:
+      - key: awaiting-when-outreach-after-response
+        text: the contact is awaiting a reply when last_outreach_at is strictly later than last_response_at and the waiting period has not expired
+      - key: equal-instants-not-awaiting
+        text: an outreach and a response at the same instant are not awaiting
+      - key: window-expires-at-outreach-date-plus-watchdog
+        text: the waiting period expires at the outreach's calendar date plus the watchdog days for the contact's cadence — the same window that sets the follow-up reminder's deadline
+      - key: expiry-day-inside-window
+        text: the expiry date itself is still inside the window; the comparison is calendar-date, never instant
+      - key: no-todoist-action-changes-state
+        text: no Todoist-side action — deleting, dismissing, or completing a reminder — changes whether the contact is awaiting a reply
+    provenance: [cadence.IsAwaitingReply, contact_list.sql.tmpl awaiting fragment, awaiting_reply_derivation_integration_test.go]
+
+  - id: CAD-041
+    title: The awaiting-reply expiry is a cadence-owned derived column
+    type: data
+    status: current
+    surface: none
+    given: a cadence-bearing contact
+    when: its interaction timestamps change
+    then:
+      - key: set-by-outbound-forward-only
+        text: an outbound interaction sets awaiting_reply_until to the outbound's calendar date plus the cadence's watchdog days, forward-only — a later-ingested older outbound leaves it alone
+      - key: never-touched-by-response
+        text: an inbound or mutual interaction never writes it
+      - key: recomputed-on-interaction-delete
+        text: deleting an interaction re-derives it from the recomputed last_outreach_at, NULL when no outreach remains
+      - key: merge-takes-forward-max
+        text: a contact merge keeps the later of the two contacts' values
+      - key: written-only-under-cadence-owner
+        text: "it is a cadence-owned derived column: written only by CadenceUpdater and the delete-rollback recompute under crm.derived_writer=cadence, and rejected by the derived-writer trigger otherwise"
+    provenance: [CadenceUpdater.buildInteractionWrite, UpdateContactCadenceForward, WriteContactDatesAfterDelete, migration 082]
+    notes: PR 2 adds the skip, the one CRM action that ends the window without a reply.
+
+  - id: CAD-042
+    title: Cadence-task creation waits out the awaiting-reply window
+    type: business-logic
+    status: current
+    surface: none
+    given: a cadence-bearing contact with a next-contact date
+    when: task reconciliation runs
+    then:
+      - key: open-window-blocks-cadence-task
+        text: while the contact is awaiting a reply (CAD-040), no cadence-due task is created, whatever exists in the remote task app
+      - key: lapsed-window-creates-only-without-live-followup
+        text: once the waiting period has lapsed, a cadence-due task is created only if no live follow-up reminder already covers the contact
+      - key: resurrected-deadline-today-or-later
+        text: a cadence-due task created or re-dated by reconciliation carries a deadline of today or later, never a stale past date
+    provenance: [CadenceSyncProvider.reconcileContactTasks, cadenceTaskDeadline, provider_dismissal_no_crm_state_test.go]

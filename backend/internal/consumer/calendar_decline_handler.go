@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -31,7 +32,7 @@ type declineInteractionRepo interface {
 // decline handler depends on: surgically recompute the contact's date
 // columns after the derived interaction is soft-deleted.
 type declineContactRepo interface {
-	RecomputeContactDatesAfterDeleteTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, deletedAt time.Time) error
+	RecomputeContactDatesAfterDeleteTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, deletedAt time.Time, watchdog config.WatchdogConfig) error
 }
 
 // CalendarDeclineHandler is the event-bus consumer for calendar.declined.
@@ -48,13 +49,14 @@ type declineContactRepo interface {
 type CalendarDeclineHandler struct {
 	interactions declineInteractionRepo
 	contacts     declineContactRepo
+	watchdog     config.WatchdogConfig
 }
 
 // NewCalendarDeclineHandler builds the consumer with narrow repository
 // interfaces so unit tests can stub them. Production wires the concrete
 // interaction + contact repositories.
-func NewCalendarDeclineHandler(interactions declineInteractionRepo, contacts declineContactRepo) *CalendarDeclineHandler {
-	return &CalendarDeclineHandler{interactions: interactions, contacts: contacts}
+func NewCalendarDeclineHandler(interactions declineInteractionRepo, contacts declineContactRepo, watchdog config.WatchdogConfig) *CalendarDeclineHandler {
+	return &CalendarDeclineHandler{interactions: interactions, contacts: contacts, watchdog: watchdog}
 }
 
 // HandleEvent processes a calendar.declined envelope inside the caller's tx.
@@ -106,7 +108,7 @@ func (h *CalendarDeclineHandler) HandleEvent(ctx context.Context, tx pgx.Tx, env
 		return fmt.Errorf("soft-delete gcal interaction: %w", err)
 	}
 
-	if err := h.contacts.RecomputeContactDatesAfterDeleteTx(ctx, tx, p.ContactID, deletedOccurredAt); err != nil {
+	if err := h.contacts.RecomputeContactDatesAfterDeleteTx(ctx, tx, p.ContactID, deletedOccurredAt, h.watchdog); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			// Contact soft-deleted between publish and consume. The
 			// interaction is already soft-deleted; a deleted contact needs

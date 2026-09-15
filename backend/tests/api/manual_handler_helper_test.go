@@ -74,6 +74,7 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 		claimRepo, contactRepo, database.Queries,
 		consumer.CadenceModeCutover, // API tests exercise the cutover writer
 		false,
+		config.TestConfig().Watchdog,
 	)
 	// Build the knowledge writer deps + construct the contact service with
 	// cadence + knowledge as ctor args (the setters are gone) so direct-invoke
@@ -140,6 +141,7 @@ func buildCadenceUpdaterForAPITest(t *testing.T, database *db.Database) *consume
 		claimRepo, contactRepo, database.Queries,
 		consumer.CadenceModeCutover,
 		false,
+		config.TestConfig().Watchdog,
 	)
 }
 

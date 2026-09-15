@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
@@ -38,6 +40,7 @@ func setupDirectionTestDeps(t *testing.T) (*service.ContactService, *repository.
 	require.NoError(t, err)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
+	contactRepo.SetPool(database.Pool)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
@@ -258,51 +261,59 @@ func TestRecordInteraction_ForwardOnlyGuard_ContactByNotRegressed(t *testing.T) 
 		*contactAfterOld.ContactBy, recentContactBy)
 }
 
-func TestHasPendingFollowUp(t *testing.T) {
+func TestAwaitingReply_DerivedFromInteractionColumns(t *testing.T) {
 	t.Parallel()
-	contactService, contactRepo, contactTaskRepo, cleanup := setupDirectionTestDeps(t)
+	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
 
+	cadenceStr := "monthly"
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "Follow-Up Pending Test",
+		FullName: "Awaiting Reply Derivation Test",
+		Cadence:  &cadenceStr,
 	})
 	require.NoError(t, err)
 
-	// Initially no pending follow-up
-	hasPending, err := contactService.HasPendingFollowUp(ctx, contact.ID)
-	require.NoError(t, err)
-	assert.False(t, hasPending)
-
-	// Create a managed follow-up task
-	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
-		ContactID:      contact.ID,
-		Provider:       "todoist",
-		Kind:           contacttask.KindReachOut,
-		Lifecycle:      contacttask.LifecycleFollowUpLoop,
-		ExternalTaskID: "test-followup-" + contact.ID.String(),
-		State:          "managed",
+	outboundAt := accelerated.GetCurrentTime()
+	outboundRef := "awaiting-outbound-" + contact.ID.String()
+	_, err = contactService.RecordInteraction(ctx, repository.RecordInteractionRequest{
+		ContactID:  contact.ID,
+		Source:     repository.InteractionSourceTodoist,
+		SourceRef:  &outboundRef,
+		OccurredAt: outboundAt,
+		Direction:  repository.InteractionDirectionOutbound,
 	})
 	require.NoError(t, err)
 
-	// Now should have pending follow-up
-	hasPending, err = contactService.HasPendingFollowUp(ctx, contact.ID)
+	updated, err := contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
-	assert.True(t, hasPending)
+	days := config.TestConfig().Watchdog.DaysForCadence(cadenceStr)
+	wantUntil := cadence.AwaitingReplyUntil(outboundAt, days)
+	assert.True(t, cadence.IsAwaitingReply(updated.LastOutreachAt, updated.LastResponseAt, updated.AwaitingReplyUntil, accelerated.GetCurrentTime()))
+	require.NotNil(t, updated.AwaitingReplyUntil)
+	assert.Equal(t, cadence.CalendarDate(wantUntil), cadence.CalendarDate(*updated.AwaitingReplyUntil))
+	expiry := *updated.AwaitingReplyUntil
 
-	// Complete the follow-up
-	_, err = contactTaskRepo.CompleteFollowUpForContact(ctx, contact.ID)
+	inboundAt := outboundAt.Add(time.Hour)
+	inboundRef := "awaiting-inbound-" + contact.ID.String()
+	_, err = contactService.RecordInteraction(ctx, repository.RecordInteractionRequest{
+		ContactID:  contact.ID,
+		Source:     repository.InteractionSourceTodoist,
+		SourceRef:  &inboundRef,
+		OccurredAt: inboundAt,
+		Direction:  repository.InteractionDirectionInbound,
+	})
 	require.NoError(t, err)
-
-	// No longer pending
-	hasPending, err = contactService.HasPendingFollowUp(ctx, contact.ID)
+	updated, err = contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
-	assert.False(t, hasPending)
+	assert.False(t, cadence.IsAwaitingReply(updated.LastOutreachAt, updated.LastResponseAt, updated.AwaitingReplyUntil, accelerated.GetCurrentTime()))
+	require.NotNil(t, updated.AwaitingReplyUntil)
+	assert.Equal(t, cadence.CalendarDate(expiry), cadence.CalendarDate(*updated.AwaitingReplyUntil), "inbound response does not rewrite outreach expiry")
 }
 
 func TestFollowupFilter(t *testing.T) {
 	t.Parallel()
-	_, contactRepo, contactTaskRepo, cleanup := setupDirectionTestDeps(t)
+	_, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
 	ctx := context.Background()
 
@@ -311,8 +322,10 @@ func TestFollowupFilter(t *testing.T) {
 	// parallel copy. Assertions key on contact.ID, so the name only needs to be
 	// unique.
 	ns := syntheticNS(t)
+	cadenceStr := "monthly"
 	contactWithFollowup, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 		FullName: "Has Followup Filter Test " + ns,
+		Cadence:  &cadenceStr,
 	})
 	require.NoError(t, err)
 
@@ -321,16 +334,13 @@ func TestFollowupFilter(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Give one a pending follow-up
-	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
-		ContactID:      contactWithFollowup.ID,
-		Provider:       "todoist",
-		Kind:           contacttask.KindReachOut,
-		Lifecycle:      contacttask.LifecycleFollowUpLoop,
-		ExternalTaskID: "test-filter-" + contactWithFollowup.ID.String(),
-		State:          "managed",
-	})
-	require.NoError(t, err)
+	// Give one contact an open outbound window.
+	outreachAt := accelerated.GetCurrentTime().AddDate(0, 0, -1)
+	until := cadence.AwaitingReplyUntil(outreachAt, config.TestConfig().Watchdog.DaysForCadence(cadenceStr))
+	require.NoError(t, contactRepo.TestSeedContactCadenceFields(ctx, contactWithFollowup.ID, repository.TestCadenceSeed{
+		LastOutreachAt:     &outreachAt,
+		AwaitingReplyUntil: &until,
+	}))
 
 	// Filter: has_followup
 	contactsWithFollowup, err := contactRepo.ListContacts(ctx, repository.ListContactsParams{

@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,8 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
-	"personal-crm/backend/internal/logger"
+	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -100,22 +100,24 @@ func contactToResponse(contact *repository.Contact) ContactResponse {
 	}
 
 	return ContactResponse{
-		ID:                contact.ID.String(),
-		FullName:          contact.FullName,
-		Methods:           methods,
-		PrimaryMethod:     primaryMethod,
-		Location:          contact.Location,
-		Birthday:          contact.Birthday,
-		HowMet:            contact.HowMet,
-		Cadence:           contact.Cadence,
-		LastContacted:     contact.LastContacted,
-		ContactBy:         contact.ContactBy,
-		LastInteractionAt: contact.LastInteractionAt,
-		LastOutreachAt:    contact.LastOutreachAt,
-		LastResponseAt:    contact.LastResponseAt,
-		ProfilePhoto:      contact.ProfilePhoto,
-		CreatedAt:         contact.CreatedAt,
-		UpdatedAt:         contact.UpdatedAt,
+		ID:                 contact.ID.String(),
+		FullName:           contact.FullName,
+		Methods:            methods,
+		PrimaryMethod:      primaryMethod,
+		Location:           contact.Location,
+		Birthday:           contact.Birthday,
+		HowMet:             contact.HowMet,
+		Cadence:            contact.Cadence,
+		LastContacted:      contact.LastContacted,
+		ContactBy:          contact.ContactBy,
+		LastInteractionAt:  contact.LastInteractionAt,
+		LastOutreachAt:     contact.LastOutreachAt,
+		LastResponseAt:     contact.LastResponseAt,
+		AwaitingReply:      cadence.IsAwaitingReply(contact.LastOutreachAt, contact.LastResponseAt, contact.AwaitingReplyUntil, accelerated.GetCurrentTime()),
+		AwaitingReplyUntil: contact.AwaitingReplyUntil,
+		ProfilePhoto:       contact.ProfilePhoto,
+		CreatedAt:          contact.CreatedAt,
+		UpdatedAt:          contact.UpdatedAt,
 	}
 }
 
@@ -254,24 +256,7 @@ func (h *ContactHandler) GetContact(c *gin.Context) {
 	}
 
 	response := contactToResponse(contact)
-
-	// Compute has_pending_followup via service layer
-	hasPending, err := h.contactService.HasPendingFollowUp(c.Request.Context(), id)
-	if err != nil {
-		logger.Warn().Err(err).Str("contactId", id.String()).Msg("failed to check pending follow-up")
-	}
-	response.HasPendingFollowup = hasPending
-
 	api.SendSuccess(c, http.StatusOK, response, nil)
-}
-
-func (h *ContactHandler) pendingFollowUpSet(ctx context.Context, contactIDs []uuid.UUID) map[uuid.UUID]bool {
-	pending, err := h.contactService.PendingFollowUpSet(ctx, contactIDs)
-	if err != nil {
-		logger.Warn().Err(err).Msg("failed to check pending follow-up")
-		return map[uuid.UUID]bool{}
-	}
-	return pending
 }
 
 // ListContacts retrieves a paginated list of contacts
@@ -357,16 +342,10 @@ func (h *ContactHandler) ListContacts(c *gin.Context) {
 		return
 	}
 
-	// Convert to response format
-	contactIDs := make([]uuid.UUID, len(contacts))
-	for i := range contacts {
-		contactIDs[i] = contacts[i].ID
-	}
-	pendingFollowups := h.pendingFollowUpSet(c.Request.Context(), contactIDs)
+	// Convert to response format.
 	responses := make([]ContactResponse, len(contacts))
 	for i, contact := range contacts {
 		responses[i] = contactToResponse(&contact)
-		responses[i].HasPendingFollowup = pendingFollowups[contact.ID]
 	}
 
 	meta := &api.Meta{
@@ -488,11 +467,6 @@ func (h *ContactHandler) ListOverdueContacts(c *gin.Context) {
 		return
 	}
 
-	contactIDs := make([]uuid.UUID, len(overdueContacts))
-	for i := range overdueContacts {
-		contactIDs[i] = overdueContacts[i].Contact.ID
-	}
-	pendingFollowups := h.pendingFollowUpSet(c.Request.Context(), contactIDs)
 	responses := make([]OverdueContactResponse, len(overdueContacts))
 	for i, contact := range overdueContacts {
 		responses[i] = OverdueContactResponse{
@@ -501,7 +475,6 @@ func (h *ContactHandler) ListOverdueContacts(c *gin.Context) {
 			NextDueDate:     contact.NextDueDate,
 			SuggestedAction: contact.SuggestedAction,
 		}
-		responses[i].HasPendingFollowup = pendingFollowups[contact.Contact.ID]
 	}
 
 	api.SendSuccess(c, http.StatusOK, responses, nil)

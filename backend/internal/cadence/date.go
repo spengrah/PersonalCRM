@@ -25,6 +25,37 @@ func Today(now time.Time) time.Time {
 	return DateOnly(now)
 }
 
+// CalendarDate returns the date in t's own location represented at UTC midnight.
+// Date-based expiry comparisons are inclusive; a DATE decodes as UTC midnight,
+// while local midnight differs from it by the zone offset, so comparing instants
+// would misclassify the expiry date.
+func CalendarDate(t time.Time) time.Time {
+	year, month, day := t.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+}
+
+// AwaitingReplyUntil returns the local-midnight expiry date at the outreach's
+// calendar date plus watchdogDays. The expiry day is inclusive, and the date
+// must be compared by calendar date because a DATE decodes as UTC midnight while
+// local midnight differs by the zone offset.
+func AwaitingReplyUntil(occurredAt time.Time, watchdogDays int) time.Time {
+	return Today(occurredAt).AddDate(0, 0, watchdogDays)
+}
+
+// IsAwaitingReply is true only when outreach is strictly later than the last
+// response and now is on or before the stored expiry date. It compares calendar
+// dates because a DATE decodes as UTC midnight while local midnight differs by
+// the zone offset; the expiry date itself remains inside the window.
+func IsAwaitingReply(lastOutreachAt, lastResponseAt, awaitingReplyUntil *time.Time, now time.Time) bool {
+	if lastOutreachAt == nil || awaitingReplyUntil == nil {
+		return false
+	}
+	if lastResponseAt != nil && !lastOutreachAt.After(*lastResponseAt) {
+		return false
+	}
+	return !CalendarDate(Today(now)).After(CalendarDate(*awaitingReplyUntil))
+}
+
 // CadenceDays returns the number of days for a given cadence type.
 // These are fixed day counts used for contact_by calculation:
 // weekly: 7, biweekly: 14, monthly: 30, quarterly: 90, biannual: 180, annual: 365

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -115,6 +116,7 @@ func setupGChatEventBus(
 		claimRepo, contactRepo, database.Queries,
 		consumer.CadenceModeCutover,
 		false,
+		config.TestConfig().Watchdog,
 	)
 	assertSvc, cache := buildKnowledgeDeps(t, database, bus)
 	contactService := service.NewContactService(

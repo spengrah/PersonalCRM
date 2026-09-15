@@ -37,7 +37,15 @@ export interface ContactResponse {
   last_interaction_at?: string;
   last_outreach_at?: string;
   last_response_at?: string;
-  has_pending_followup: boolean;
+  awaiting_reply: boolean;
+  /**
+   * AwaitingReplyUntil is the last calendar date on which an unanswered
+   * outreach keeps this contact awaiting a reply (CAD-041), serialized as
+   * that date at UTC midnight. awaiting_reply is the derived flag; this is
+   * the stored expiry it was evaluated against. Absent when no outreach has
+   * opened a window.
+   */
+  awaiting_reply_until?: string;
   profile_photo?: string;
   created_at: string;
   updated_at: string;

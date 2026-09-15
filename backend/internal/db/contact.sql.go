@@ -109,7 +109,7 @@ INSERT INTO contact (id, full_name, cadence, last_contacted, profile_photo, crea
 SELECT new_node.id, $1, $2, $3,
        $4, $5, $6
 FROM new_node
-RETURNING contact.id, contact.full_name, contact.location, contact.birthday, contact.how_met, contact.cadence, contact.last_contacted, contact.profile_photo, contact.deleted_at, contact.created_at, contact.updated_at, contact.contact_by, contact.last_interaction_at, contact.last_outreach_at, contact.last_response_at
+RETURNING contact.id, contact.full_name, contact.location, contact.birthday, contact.how_met, contact.cadence, contact.last_contacted, contact.profile_photo, contact.deleted_at, contact.created_at, contact.updated_at, contact.contact_by, contact.last_interaction_at, contact.last_outreach_at, contact.last_response_at, contact.awaiting_reply_until
 `
 
 type CreateContactWithNodeParams struct {
@@ -161,6 +161,7 @@ func (q *Queries) CreateContactWithNode(ctx context.Context, arg CreateContactWi
 		&i.LastInteractionAt,
 		&i.LastOutreachAt,
 		&i.LastResponseAt,
+		&i.AwaitingReplyUntil,
 	)
 	return &i, err
 }
@@ -314,7 +315,7 @@ func (q *Queries) FindSimilarContactsBatch(ctx context.Context, arg FindSimilarC
 
 const GetContact = `-- name: GetContact :one
 
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until FROM contact
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -338,6 +339,7 @@ func (q *Queries) GetContact(ctx context.Context, id uuid.UUID) (*Contact, error
 		&i.LastInteractionAt,
 		&i.LastOutreachAt,
 		&i.LastResponseAt,
+		&i.AwaitingReplyUntil,
 	)
 	return &i, err
 }
@@ -378,7 +380,7 @@ func (q *Queries) ListContactNamesByIDs(ctx context.Context, ids []uuid.UUID) ([
 }
 
 const ListContactsWithCadence = `-- name: ListContactsWithCadence :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until FROM contact
 WHERE deleted_at IS NULL
   AND cadence IS NOT NULL
   AND cadence != ''
@@ -412,6 +414,7 @@ func (q *Queries) ListContactsWithCadence(ctx context.Context, limit int32) ([]*
 			&i.LastInteractionAt,
 			&i.LastOutreachAt,
 			&i.LastResponseAt,
+			&i.AwaitingReplyUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -424,7 +427,7 @@ func (q *Queries) ListContactsWithCadence(ctx context.Context, limit int32) ([]*
 }
 
 const ListContactsWithContactBy = `-- name: ListContactsWithContactBy :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until FROM contact
 WHERE deleted_at IS NULL
   AND contact_by IS NOT NULL
 ORDER BY contact_by ASC
@@ -458,6 +461,7 @@ func (q *Queries) ListContactsWithContactBy(ctx context.Context, limit int32) ([
 			&i.LastInteractionAt,
 			&i.LastOutreachAt,
 			&i.LastResponseAt,
+			&i.AwaitingReplyUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -522,7 +526,7 @@ func (q *Queries) ListContactsWithKnowledgeColumns(ctx context.Context) ([]*List
 }
 
 const ListOverdueContacts = `-- name: ListOverdueContacts :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until FROM contact
 WHERE deleted_at IS NULL
   AND contact_by IS NOT NULL
   AND contact_by < $1::date
@@ -562,6 +566,7 @@ func (q *Queries) ListOverdueContacts(ctx context.Context, arg ListOverdueContac
 			&i.LastInteractionAt,
 			&i.LastOutreachAt,
 			&i.LastResponseAt,
+			&i.AwaitingReplyUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -619,19 +624,20 @@ func (q *Queries) SetDerivedWriter(ctx context.Context, owner string) error {
 }
 
 const SnapshotContactCadenceFields = `-- name: SnapshotContactCadenceFields :one
-SELECT last_contacted, last_outreach_at, last_response_at, contact_by
+SELECT last_contacted, last_outreach_at, last_response_at, contact_by, awaiting_reply_until
 FROM contact
 WHERE id = $1 AND deleted_at IS NULL
 `
 
 type SnapshotContactCadenceFieldsRow struct {
-	LastContacted  *time.Time `json:"last_contacted"`
-	LastOutreachAt *time.Time `json:"last_outreach_at"`
-	LastResponseAt *time.Time `json:"last_response_at"`
-	ContactBy      *time.Time `json:"contact_by"`
+	LastContacted      *time.Time `json:"last_contacted"`
+	LastOutreachAt     *time.Time `json:"last_outreach_at"`
+	LastResponseAt     *time.Time `json:"last_response_at"`
+	ContactBy          *time.Time `json:"contact_by"`
+	AwaitingReplyUntil *time.Time `json:"awaiting_reply_until"`
 }
 
-// Returns only the four spec-listed cadence columns. Used by PR 7's
+// Returns the five cadence columns, including awaiting_reply_until. Used by PR 7's
 // direct-path post-commit closure to capture the post-image inside its
 // own short-lived tx (plan Decision 5). Consumer does NOT call this —
 // consumer reads prev from the event payload (plan Decision 2a).
@@ -643,6 +649,7 @@ func (q *Queries) SnapshotContactCadenceFields(ctx context.Context, id uuid.UUID
 		&i.LastOutreachAt,
 		&i.LastResponseAt,
 		&i.ContactBy,
+		&i.AwaitingReplyUntil,
 	)
 	return &i, err
 }
@@ -683,7 +690,7 @@ UPDATE contact SET
   profile_photo = $4,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at
+RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until
 `
 
 type UpdateContactParams struct {
@@ -727,6 +734,7 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 		&i.LastInteractionAt,
 		&i.LastOutreachAt,
 		&i.LastResponseAt,
+		&i.AwaitingReplyUntil,
 	)
 	return &i, err
 }
@@ -780,27 +788,35 @@ UPDATE contact SET
         THEN $10::date
         ELSE contact_by
     END,
+    awaiting_reply_until = CASE
+        WHEN $11::boolean
+          AND (awaiting_reply_until IS NULL OR $12::date > awaiting_reply_until)
+        THEN $12::date
+        ELSE awaiting_reply_until
+    END,
     updated_at = NOW()
-WHERE id = $11 AND deleted_at IS NULL
+WHERE id = $13 AND deleted_at IS NULL
 `
 
 type UpdateContactCadenceForwardParams struct {
-	ApplyLastContacted     bool       `json:"apply_last_contacted"`
-	LastContacted          *time.Time `json:"last_contacted"`
-	ApplyLastInteractionAt bool       `json:"apply_last_interaction_at"`
-	LastInteractionAt      *time.Time `json:"last_interaction_at"`
-	ApplyLastOutreachAt    bool       `json:"apply_last_outreach_at"`
-	LastOutreachAt         *time.Time `json:"last_outreach_at"`
-	ApplyLastResponseAt    bool       `json:"apply_last_response_at"`
-	LastResponseAt         *time.Time `json:"last_response_at"`
-	ApplyContactBy         bool       `json:"apply_contact_by"`
-	ContactBy              *time.Time `json:"contact_by"`
-	ID                     uuid.UUID  `json:"id"`
+	ApplyLastContacted      bool       `json:"apply_last_contacted"`
+	LastContacted           *time.Time `json:"last_contacted"`
+	ApplyLastInteractionAt  bool       `json:"apply_last_interaction_at"`
+	LastInteractionAt       *time.Time `json:"last_interaction_at"`
+	ApplyLastOutreachAt     bool       `json:"apply_last_outreach_at"`
+	LastOutreachAt          *time.Time `json:"last_outreach_at"`
+	ApplyLastResponseAt     bool       `json:"apply_last_response_at"`
+	LastResponseAt          *time.Time `json:"last_response_at"`
+	ApplyContactBy          bool       `json:"apply_contact_by"`
+	ContactBy               *time.Time `json:"contact_by"`
+	ApplyAwaitingReplyUntil bool       `json:"apply_awaiting_reply_until"`
+	AwaitingReplyUntil      *time.Time `json:"awaiting_reply_until"`
+	ID                      uuid.UUID  `json:"id"`
 }
 
-// Forward-only cadence write (spec §3.4.2). Each of the cadence columns
-// is updated only when its apply-flag is true AND the new value strictly
-// exceeds the existing one (or the existing is NULL).
+// Forward-only cadence write (spec §3.4.2). The cadence timestamps, dates,
+// contact_by and awaiting_reply_until update only when their apply-flag is
+// true AND the new value strictly exceeds the existing value (or it is NULL).
 //
 // last_interaction_at is gated by its OWN apply flag
 // (apply_last_interaction_at), independent of apply_last_contacted.
@@ -823,6 +839,8 @@ func (q *Queries) UpdateContactCadenceForward(ctx context.Context, arg UpdateCon
 		arg.LastResponseAt,
 		arg.ApplyContactBy,
 		arg.ContactBy,
+		arg.ApplyAwaitingReplyUntil,
+		arg.AwaitingReplyUntil,
 		arg.ID,
 	)
 	return err
@@ -850,29 +868,35 @@ UPDATE contact SET
         WHEN $9::boolean THEN $10::date
         ELSE contact_by
     END,
+    awaiting_reply_until = CASE
+        WHEN $11::boolean THEN $12::date
+        ELSE awaiting_reply_until
+    END,
     updated_at = NOW()
-WHERE id = $11 AND deleted_at IS NULL
+WHERE id = $13 AND deleted_at IS NULL
 `
 
 type UpdateContactCadenceUnconditionalParams struct {
-	ApplyLastContacted     bool       `json:"apply_last_contacted"`
-	LastContacted          *time.Time `json:"last_contacted"`
-	ApplyLastInteractionAt bool       `json:"apply_last_interaction_at"`
-	LastInteractionAt      *time.Time `json:"last_interaction_at"`
-	ApplyLastOutreachAt    bool       `json:"apply_last_outreach_at"`
-	LastOutreachAt         *time.Time `json:"last_outreach_at"`
-	ApplyLastResponseAt    bool       `json:"apply_last_response_at"`
-	LastResponseAt         *time.Time `json:"last_response_at"`
-	ApplyContactBy         bool       `json:"apply_contact_by"`
-	ContactBy              *time.Time `json:"contact_by"`
-	ID                     uuid.UUID  `json:"id"`
+	ApplyLastContacted      bool       `json:"apply_last_contacted"`
+	LastContacted           *time.Time `json:"last_contacted"`
+	ApplyLastInteractionAt  bool       `json:"apply_last_interaction_at"`
+	LastInteractionAt       *time.Time `json:"last_interaction_at"`
+	ApplyLastOutreachAt     bool       `json:"apply_last_outreach_at"`
+	LastOutreachAt          *time.Time `json:"last_outreach_at"`
+	ApplyLastResponseAt     bool       `json:"apply_last_response_at"`
+	LastResponseAt          *time.Time `json:"last_response_at"`
+	ApplyContactBy          bool       `json:"apply_contact_by"`
+	ContactBy               *time.Time `json:"contact_by"`
+	ApplyAwaitingReplyUntil bool       `json:"apply_awaiting_reply_until"`
+	AwaitingReplyUntil      *time.Time `json:"awaiting_reply_until"`
+	ID                      uuid.UUID  `json:"id"`
 }
 
 // Manual-source branch (spec §3.4.2 "manual-source exception"): user
 // correction — any passed-in value replaces the existing one
 // unconditionally. Apply-flags still gate which columns are touched
 // (e.g., a manual outbound still shouldn't bump last_contacted per
-// direction rules).
+// direction rules, and awaiting_reply_until is assigned only when its flag is set).
 //
 // last_interaction_at is gated by its OWN apply flag
 // (apply_last_interaction_at); see UpdateContactCadenceForward above
@@ -889,6 +913,8 @@ func (q *Queries) UpdateContactCadenceUnconditional(ctx context.Context, arg Upd
 		arg.LastResponseAt,
 		arg.ApplyContactBy,
 		arg.ContactBy,
+		arg.ApplyAwaitingReplyUntil,
+		arg.AwaitingReplyUntil,
 		arg.ID,
 	)
 	return err
@@ -935,20 +961,22 @@ UPDATE contact SET
   last_response_at    = $3::timestamptz,
   last_outreach_at    = $4::timestamptz,
   contact_by          = $5::date,
+  awaiting_reply_until = $6::date,
   updated_at = NOW()
-WHERE id = $6 AND deleted_at IS NULL
+WHERE id = $7 AND deleted_at IS NULL
 `
 
 type WriteContactDatesAfterDeleteParams struct {
-	NewLastContacted     *time.Time `json:"new_last_contacted"`
-	NewLastInteractionAt *time.Time `json:"new_last_interaction_at"`
-	NewLastResponseAt    *time.Time `json:"new_last_response_at"`
-	NewLastOutreachAt    *time.Time `json:"new_last_outreach_at"`
-	NewContactBy         *time.Time `json:"new_contact_by"`
-	ID                   uuid.UUID  `json:"id"`
+	NewLastContacted      *time.Time `json:"new_last_contacted"`
+	NewLastInteractionAt  *time.Time `json:"new_last_interaction_at"`
+	NewLastResponseAt     *time.Time `json:"new_last_response_at"`
+	NewLastOutreachAt     *time.Time `json:"new_last_outreach_at"`
+	NewContactBy          *time.Time `json:"new_contact_by"`
+	NewAwaitingReplyUntil *time.Time `json:"new_awaiting_reply_until"`
+	ID                    uuid.UUID  `json:"id"`
 }
 
-// Writes the recomputed date columns. contact_by is passed pre-computed by
+// Writes the recomputed date columns, including awaiting_reply_until; both are passed pre-computed by
 // the Go caller (cadence.CalculateContactBy, environment-aware) so the value
 // matches the forward writer exactly; this query does no cadence arithmetic.
 func (q *Queries) WriteContactDatesAfterDelete(ctx context.Context, arg WriteContactDatesAfterDeleteParams) error {
@@ -958,6 +986,7 @@ func (q *Queries) WriteContactDatesAfterDelete(ctx context.Context, arg WriteCon
 		arg.NewLastResponseAt,
 		arg.NewLastOutreachAt,
 		arg.NewContactBy,
+		arg.NewAwaitingReplyUntil,
 		arg.ID,
 	)
 	return err

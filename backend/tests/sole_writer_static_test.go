@@ -1,8 +1,8 @@
 // Package tests — derived-column sole-writer AST guard.
 //
-// This test enforces the rule that contact's eight derived columns each have
+// This test enforces the rule that contact's nine derived columns each have
 // exactly one owner: CadenceUpdater (last_contacted, last_interaction_at,
-// last_outreach_at, last_response_at, contact_by) and
+// last_outreach_at, last_response_at, contact_by, awaiting_reply_until) and
 // KnowledgeCacheUpdater.RefreshTx (location, birthday, how_met). It walks
 // every .go file under backend/internal and backend/cmd/crm-api, flags any
 // call to one of the derived-writing sqlc-generated queries or repository
@@ -59,8 +59,8 @@ import (
 )
 
 // derivedWritingSymbols enumerates the sqlc query + repository wrapper
-// selector names that mutate one or more of contact's eight derived columns
-// (five cadence + three knowledge-cache). Matching is by call-expression
+// selector names that mutate one or more of contact's nine derived columns
+// (six cadence + three knowledge-cache). Matching is by call-expression
 // selector name only, with a receiver-scope refinement for
 // CreateContactWithNode/UpdateContact (see scopedToSqlcQuerier below).
 //
@@ -132,7 +132,7 @@ type allowedCallSite struct {
 // entry's symbols list. Keys use forward slashes relative to the backend
 // module root.
 //
-// Two owners, twelve entries: CadenceUpdater.applyTx for the five cadence
+// Two owners, twelve entries: CadenceUpdater.applyTx for the six cadence
 // columns; KnowledgeCacheUpdater.RefreshTx — the SOLE permitted caller of the
 // three knowledge Tx wrappers — for the three knowledge columns. Every other
 // entry is a narrow, documented carve-out.
@@ -332,7 +332,7 @@ func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
 		})
 		var msg strings.Builder
 		msg.WriteString("derived-column sole-writer guard: writes to a derived contact column found outside the per-symbol allowlist.\n")
-		msg.WriteString("Cadence columns (last_contacted, last_interaction_at, last_outreach_at, last_response_at, contact_by) route through CadenceUpdater; ")
+		msg.WriteString("Cadence columns (last_contacted, last_interaction_at, last_outreach_at, last_response_at, contact_by, awaiting_reply_until) route through CadenceUpdater; ")
 		msg.WriteString("knowledge-cache columns (location, birthday, how_met) route through KnowledgeCacheUpdater.RefreshTx. ")
 		msg.WriteString("Otherwise add a justified allowedCallSites entry naming the specific symbol.\n\n")
 		for _, v := range violations {

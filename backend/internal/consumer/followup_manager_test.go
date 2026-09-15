@@ -530,32 +530,6 @@ func TestBuildFollowUpIdempotencyKey_Distinctness(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
-// watchdogDaysForCadenceStr helper.
-// -----------------------------------------------------------------------------
-
-func TestWatchdogDaysForCadenceStr(t *testing.T) {
-	cfg := testWatchdog()
-	cases := []struct {
-		cadence string
-		want    int
-	}{
-		{"weekly", 3},
-		{"biweekly", 5},
-		{"monthly", 7},
-		{"quarterly", 14},
-		{"biannual", 21},
-		{"annual", 21},
-		{"", 0},
-		{"gibberish", 0},
-	}
-	for _, tc := range cases {
-		t.Run(tc.cadence, func(t *testing.T) {
-			require.Equal(t, tc.want, watchdogDaysForCadenceStr(tc.cadence, cfg))
-		})
-	}
-}
-
-// -----------------------------------------------------------------------------
 // FollowUpModeFromConfig mapping.
 // -----------------------------------------------------------------------------
 

@@ -74,9 +74,9 @@ UPDATE contact SET birthday = $2 WHERE id = $1 AND deleted_at IS NULL;
 UPDATE contact SET how_met = $2 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: UpdateContactCadenceForward :exec
--- Forward-only cadence write (spec §3.4.2). Each of the cadence columns
--- is updated only when its apply-flag is true AND the new value strictly
--- exceeds the existing one (or the existing is NULL).
+-- Forward-only cadence write (spec §3.4.2). The cadence timestamps, dates,
+-- contact_by and awaiting_reply_until update only when their apply-flag is
+-- true AND the new value strictly exceeds the existing value (or it is NULL).
 --
 -- last_interaction_at is gated by its OWN apply flag
 -- (apply_last_interaction_at), independent of apply_last_contacted.
@@ -119,6 +119,12 @@ UPDATE contact SET
         THEN sqlc.narg('contact_by')::date
         ELSE contact_by
     END,
+    awaiting_reply_until = CASE
+        WHEN sqlc.arg(apply_awaiting_reply_until)::boolean
+          AND (awaiting_reply_until IS NULL OR sqlc.narg(awaiting_reply_until)::date > awaiting_reply_until)
+        THEN sqlc.narg(awaiting_reply_until)::date
+        ELSE awaiting_reply_until
+    END,
     updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 
@@ -127,7 +133,7 @@ WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 -- correction — any passed-in value replaces the existing one
 -- unconditionally. Apply-flags still gate which columns are touched
 -- (e.g., a manual outbound still shouldn't bump last_contacted per
--- direction rules).
+-- direction rules, and awaiting_reply_until is assigned only when its flag is set).
 --
 -- last_interaction_at is gated by its OWN apply flag
 -- (apply_last_interaction_at); see UpdateContactCadenceForward above
@@ -153,15 +159,19 @@ UPDATE contact SET
         WHEN sqlc.arg(apply_contact_by)::boolean THEN sqlc.narg('contact_by')::date
         ELSE contact_by
     END,
+    awaiting_reply_until = CASE
+        WHEN sqlc.arg(apply_awaiting_reply_until)::boolean THEN sqlc.narg(awaiting_reply_until)::date
+        ELSE awaiting_reply_until
+    END,
     updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 
 -- name: SnapshotContactCadenceFields :one
--- Returns only the four spec-listed cadence columns. Used by PR 7's
+-- Returns the five cadence columns, including awaiting_reply_until. Used by PR 7's
 -- direct-path post-commit closure to capture the post-image inside its
 -- own short-lived tx (plan Decision 5). Consumer does NOT call this —
 -- consumer reads prev from the event payload (plan Decision 2a).
-SELECT last_contacted, last_outreach_at, last_response_at, contact_by
+SELECT last_contacted, last_outreach_at, last_response_at, contact_by, awaiting_reply_until
 FROM contact
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 
@@ -327,7 +337,7 @@ SELECT
 FROM locked c, agg;
 
 -- name: WriteContactDatesAfterDelete :exec
--- Writes the recomputed date columns. contact_by is passed pre-computed by
+-- Writes the recomputed date columns, including awaiting_reply_until; both are passed pre-computed by
 -- the Go caller (cadence.CalculateContactBy, environment-aware) so the value
 -- matches the forward writer exactly; this query does no cadence arithmetic.
 UPDATE contact SET
@@ -336,6 +346,7 @@ UPDATE contact SET
   last_response_at    = sqlc.narg(new_last_response_at)::timestamptz,
   last_outreach_at    = sqlc.narg(new_last_outreach_at)::timestamptz,
   contact_by          = sqlc.narg(new_contact_by)::date,
+  awaiting_reply_until = sqlc.narg(new_awaiting_reply_until)::date,
   updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 

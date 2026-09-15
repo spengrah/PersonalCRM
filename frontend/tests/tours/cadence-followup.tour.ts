@@ -24,9 +24,9 @@ interface ActivityContact {
   full_name: string
   last_outreach_at: string | null
   last_response_at: string | null
-  // The list and overdue payloads compute has_pending_followup too; this tour
-  // still probes the detail endpoint because that is the surface its assertion
-  // is about.
+  awaiting_reply: boolean
+  // The list and overdue payloads expose the same state derived from the
+  // contact's outreach and watchdog expiry; this tour probes the detail endpoint.
 }
 
 const CONTACT_ID_PATH = /\/api\/v1\/contacts\/[0-9a-f-]{36}$/
@@ -93,15 +93,18 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
   const pendingContact = await resolveFixture<ActivityContact>(
     tour.apiCtx,
     FIXTURE_PENDING,
-    'CAD-029[2] has_pending_followup'
+    'CAD-029[2] awaiting_reply from outreach and expiry'
   )
   claim(pendingContact.id, 'the pending fixture')
-  // Loud, never skipped: a world with no live follow-up is a SEED bug (the standard
-  // world seeds one), and touring without this state is exactly what produced the
-  // false CAD-036 regression — the judge read the missing state as a missing feature.
-  if (!(await detailOf(pendingContact.id)).has_pending_followup) {
+  // Loud, never skipped: the replay must establish an outbound whose watchdog
+  // window is open, or the fixture does not carry this derived state.
+  const pendingDetail = await detailOf(pendingContact.id)
+  if (typeof pendingDetail.awaiting_reply !== 'boolean') {
+    throw new Error('cadence-followup tour: detail payload carries no awaiting_reply')
+  }
+  if (!pendingDetail.awaiting_reply) {
     throw new Error(
-      'cadence-followup tour: the pending fixture carries no live follow-up (CAD-029[2])'
+      'cadence-followup tour: the pending fixture has no open outreach window (CAD-029[2])'
     )
   }
 
@@ -112,11 +115,10 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
   )
   claim(noneContact.id, 'the no-activity fixture')
   const noneDetail = await detailOf(noneContact.id)
-  if (
-    noneDetail.last_outreach_at ||
-    noneDetail.last_response_at ||
-    noneDetail.has_pending_followup
-  ) {
+  if (typeof noneDetail.awaiting_reply !== 'boolean') {
+    throw new Error('cadence-followup tour: detail payload carries no awaiting_reply')
+  }
+  if (noneDetail.last_outreach_at || noneDetail.last_response_at || noneDetail.awaiting_reply) {
     throw new Error('cadence-followup tour: the no-activity fixture carries an activity signal')
   }
 
@@ -145,13 +147,9 @@ test('cadence-followup tour — contact-detail cadence surfaces', async ({ page,
   })
 
   // --- CAD-029.awaiting-reply-indicator-shown: pending-reply ("Awaiting reply") state ---
-  // The state the judge could never see. It is unreachable from a historical replay
-  // (FollowUpManager is off-mode in the seed harness, and CAD-012 suppresses follow-ups
-  // for backdated automated outbounds), so the standard world seeds one live
-  // follow-up explicitly. Without this capture the judge sees only contact pages with no
-  // "Awaiting reply" marker and concludes the FEATURE DOES NOT EXIST — a confident,
-  // well-cited, false CAD-036 regression. Absence of evidence is not evidence of absence,
-  // and the judge cannot tell the difference; only the capture can.
+  // The replayed outbound keeps the contact's awaiting-reply window open; the
+  // accompanying follow-up row is only the reminder surface. This capture records
+  // the derived state on the contact page.
   await gotoDetail(pendingContact.id)
   await page.getByText('Awaiting reply').waitFor({ state: 'visible' })
   await tour.capture(page, {

@@ -277,6 +277,7 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	}
 	require.NoError(t, m.Steps(-1), "roll the venue-model migration down")
 	require.NoError(t, m.Steps(1), "re-apply the venue model (runs the backfill over the seeded rows)")
+	require.NoError(t, m.Up(), "restore the clone to migration head before contact-returning queries")
 
 	// Cadence columns are byte-identical after the backfill (it never touches the
 	// contact row).
@@ -296,7 +297,7 @@ func TestInteractionVenue_Backfill(t *testing.T) {
 	// telegram interaction is a forward-only no-op that must leave cadence
 	// untouched — proving the recompute path is unperturbed by the new column.
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
-	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false)
+	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false, config.TestConfig().Watchdog)
 	recomputeTx, err := database.Pool.Begin(ctx)
 	require.NoError(t, err)
 	require.NoError(t, cadenceUpdater.ApplyInteraction(ctx, recomputeTx, repository.ApplyInteractionRequest{

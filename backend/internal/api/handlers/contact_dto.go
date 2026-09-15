@@ -11,23 +11,29 @@ import "time"
 // Contact response model
 // @Description Contact information
 type ContactResponse struct {
-	ID                 string                  `json:"id" example:"550e8400-e29b-41d4-a716-446655440000"`
-	FullName           string                  `json:"full_name" example:"John Doe"`
-	Methods            []ContactMethodResponse `json:"methods,omitempty"`
-	PrimaryMethod      *ContactMethodResponse  `json:"primary_method,omitempty"`
-	Location           *string                 `json:"location,omitempty" example:"San Francisco, CA"`
-	Birthday           *time.Time              `json:"birthday,omitempty" example:"1990-01-15T00:00:00Z"`
-	HowMet             *string                 `json:"how_met,omitempty" example:"Met at tech conference"`
-	Cadence            *string                 `json:"cadence,omitempty" example:"monthly" enums:"weekly,monthly,quarterly,biannual,annual"`
-	LastContacted      *time.Time              `json:"last_contacted,omitempty" example:"2024-01-15T10:30:00Z"`
-	ContactBy          *time.Time              `json:"contact_by,omitempty" example:"2024-02-15T00:00:00Z"`
-	LastInteractionAt  *time.Time              `json:"last_interaction_at,omitempty"`
-	LastOutreachAt     *time.Time              `json:"last_outreach_at,omitempty"`
-	LastResponseAt     *time.Time              `json:"last_response_at,omitempty"`
-	HasPendingFollowup bool                    `json:"has_pending_followup"`
-	ProfilePhoto       *string                 `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
-	CreatedAt          time.Time               `json:"created_at" example:"2024-01-01T00:00:00Z"`
-	UpdatedAt          time.Time               `json:"updated_at" example:"2024-01-15T10:30:00Z"`
+	ID                string                  `json:"id" example:"550e8400-e29b-41d4-a716-446655440000"`
+	FullName          string                  `json:"full_name" example:"John Doe"`
+	Methods           []ContactMethodResponse `json:"methods,omitempty"`
+	PrimaryMethod     *ContactMethodResponse  `json:"primary_method,omitempty"`
+	Location          *string                 `json:"location,omitempty" example:"San Francisco, CA"`
+	Birthday          *time.Time              `json:"birthday,omitempty" example:"1990-01-15T00:00:00Z"`
+	HowMet            *string                 `json:"how_met,omitempty" example:"Met at tech conference"`
+	Cadence           *string                 `json:"cadence,omitempty" example:"monthly" enums:"weekly,monthly,quarterly,biannual,annual"`
+	LastContacted     *time.Time              `json:"last_contacted,omitempty" example:"2024-01-15T10:30:00Z"`
+	ContactBy         *time.Time              `json:"contact_by,omitempty" example:"2024-02-15T00:00:00Z"`
+	LastInteractionAt *time.Time              `json:"last_interaction_at,omitempty"`
+	LastOutreachAt    *time.Time              `json:"last_outreach_at,omitempty"`
+	LastResponseAt    *time.Time              `json:"last_response_at,omitempty"`
+	AwaitingReply     bool                    `json:"awaiting_reply"`
+	// AwaitingReplyUntil is the last calendar date on which an unanswered
+	// outreach keeps this contact awaiting a reply (CAD-041), serialized as
+	// that date at UTC midnight. awaiting_reply is the derived flag; this is
+	// the stored expiry it was evaluated against. Absent when no outreach has
+	// opened a window.
+	AwaitingReplyUntil *time.Time `json:"awaiting_reply_until,omitempty"`
+	ProfilePhoto       *string    `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
+	CreatedAt          time.Time  `json:"created_at" example:"2024-01-01T00:00:00Z"`
+	UpdatedAt          time.Time  `json:"updated_at" example:"2024-01-15T10:30:00Z"`
 	// RematchJobID is populated by the CREATE path only. A rematch is triggered
 	// by newly-present method values, and update no longer carries methods, so
 	// it has no job to report. This type is shared by create, get, update, list,

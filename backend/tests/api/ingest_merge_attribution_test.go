@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"testing"
 
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
@@ -42,7 +43,7 @@ func newMergeCapableContactService(t *testing.T, env *ingestRawTestEnv) *service
 	cache := consumer.NewKnowledgeCacheUpdater(assertionRepo, nodeRepo, env.contactRepo)
 
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
-	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, env.contactRepo, database.Queries, consumer.CadenceModeCutover, false)
+	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, env.contactRepo, database.Queries, consumer.CadenceModeCutover, false, config.TestConfig().Watchdog)
 
 	svc := service.NewContactService(database, env.contactRepo, env.cmRepo, interactionRepo, taskRepo, nil, nil,
 		cadenceUpdater, assertSvc, cache, nil)

@@ -20,7 +20,7 @@ function overdueEntry(over: {
   lastContacted?: string
   createdAt?: string
   email?: string
-  hasPendingFollowup?: boolean
+  awaitingReply?: boolean
 }): OverdueContactResponse {
   const slug = over.name.toLowerCase().replace(/ /g, '-')
   return {
@@ -32,7 +32,7 @@ function overdueEntry(over: {
     cadence: 'weekly',
     ...(over.lastContacted ? { last_contacted: over.lastContacted } : {}),
     contact_by: '2026-07-01T00:00:00Z',
-    has_pending_followup: over.hasPendingFollowup ?? false,
+    awaiting_reply: over.awaitingReply ?? false,
     created_at: over.createdAt ?? '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     days_overdue: over.days,
@@ -226,13 +226,13 @@ test.describe('Dashboard - Overdue Cards @area:dashboard @area:overdue', () => {
     })
     expect(overdueRes.ok()).toBe(true)
     const overdueBody = await overdueRes.json()
-    const entries: Array<{ id: string; has_pending_followup: boolean }> = overdueBody?.data ?? []
-    expect(
-      entries.find(entry => entry.id === seeded.entities['awaiting'].id)?.has_pending_followup
-    ).toBe(true)
-    expect(
-      entries.find(entry => entry.id === seeded.entities['card-a'].id)?.has_pending_followup
-    ).toBe(false)
+    const entries: Array<{ id: string; awaiting_reply: boolean }> = overdueBody?.data ?? []
+    expect(entries.find(entry => entry.id === seeded.entities['awaiting'].id)?.awaiting_reply).toBe(
+      true
+    )
+    expect(entries.find(entry => entry.id === seeded.entities['card-a'].id)?.awaiting_reply).toBe(
+      false
+    )
   })
 })
 
@@ -405,7 +405,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
       name: `Zygote ${fixtureSuffix}`,
       days: 45,
       lastContacted: '2025-12-01T12:00:00Z',
-      hasPendingFollowup: true,
+      awaitingReply: true,
     }),
   ]
 

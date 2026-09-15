@@ -13,6 +13,7 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
@@ -73,7 +74,7 @@ func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 	eventRepo := repository.NewEventRepository(database.Queries)
 	rematchSvc := service.NewRematchService()
-	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false)
+	cadenceUpdater := consumer.NewCadenceUpdater(claimRepo, contactRepo, database.Queries, consumer.CadenceModeCutover, false, config.TestConfig().Watchdog)
 	assertSvc, cache := buildKnowledgeDepsForAPITest(t, database, nil)
 	contactSvc := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, rematchSvc,
 		cadenceUpdater, assertSvc, cache, nil)

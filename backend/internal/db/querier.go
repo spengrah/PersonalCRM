@@ -1267,9 +1267,6 @@ type Querier interface {
 	// Lightweight IDs-only variant of ListContacts for navigation (no pagination);
 	// same WHERE + ORDER BY shape as ListContacts.
 	ListContactIDs(ctx context.Context, arg ListContactIDsParams) ([]uuid.UUID, error)
-	// The subset of the given contact ids that carry a live follow-up. Same
-	// live-state set as FindPendingFollowUp, batched for list payloads.
-	ListContactIDsWithLiveFollowUp(ctx context.Context, contactIds []uuid.UUID) ([]uuid.UUID, error)
 	ListContactInteractions(ctx context.Context, arg ListContactInteractionsParams) ([]*Interaction, error)
 	ListContactInteractionsFiltered(ctx context.Context, arg ListContactInteractionsFilteredParams) ([]*Interaction, error)
 	// Contact method queries
@@ -1300,7 +1297,7 @@ type Querier interface {
 	//   search_query: NULL = no search; else full-text over full_name + method values
 	//   cadence_filter: '' = no filter, 'has_cadence' = non-empty cadence,
 	//     'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
-	//   followup_filter: '' = no filter, 'has_followup' = pending follow-up exists, 'no_followup' = no pending follow-up
+	//   followup_filter: '' = no filter, 'has_followup' = awaiting reply as of as_of_date, 'no_followup' = not awaiting reply
 	//   sort_field/'sort_order': '' = default order (relevance when searching, else name asc)
 	ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error)
 	// Lists contacts that have a cadence set (used for Todoist sync reconciliation).
@@ -1977,7 +1974,7 @@ type Querier interface {
 	SetTelegramPts(ctx context.Context, arg SetTelegramPtsParams) error
 	SetTelegramQts(ctx context.Context, arg SetTelegramQtsParams) error
 	SetTelegramSeq(ctx context.Context, arg SetTelegramSeqParams) error
-	// Returns only the four spec-listed cadence columns. Used by PR 7's
+	// Returns the five cadence columns, including awaiting_reply_until. Used by PR 7's
 	// direct-path post-commit closure to capture the post-image inside its
 	// own short-lived tx (plan Decision 5). Consumer does NOT call this —
 	// consumer reads prev from the event payload (plan Decision 2a).
@@ -2666,12 +2663,19 @@ type Querier interface {
 	// test to prove the attended FOR SHARE conflicts with a concurrent FOR UPDATE
 	// without a sleep/timeout. Production code must NOT call this.
 	TestGetCalendarEventByIDForUpdateNoWait(ctx context.Context, id uuid.UUID) (*CalendarEvent, error)
+	// Migration backfill test only: reads the new derived date without filtering
+	// out a soft-deleted row. Production reads use the live contact repository.
+	TestGetContactAwaitingReplyUntilIncludingDeleted(ctx context.Context, id uuid.UUID) (*time.Time, error)
 	// Contact→node identity FK migration test support: read a contact's deleted_at
 	// with NO liveness filter, so a migration round-trip test can assert the
 	// backfilled node's deleted_at mirrors the contact's exactly (not just "is
 	// non-nil"). GetContact/SoftDeleteContact deliberately never expose this because
 	// production code has no reason to read a soft-deleted contact's own tombstone.
 	TestGetContactDeletedAtIncludingDeleted(ctx context.Context, id uuid.UUID) (*time.Time, error)
+	// Migration round-trip test only: returns the installed trigger function body.
+	// This distinguishes the 079 definition from the 082 replacement after each
+	// migration position without issuing ad hoc SQL from Go.
+	TestGetFunctionDef(ctx context.Context, signature string) (string, error)
 	// Test assertion — a planted job's disposition: its state, whether it is
 	// finalized, and its attempt counter. `attempt` is the load-bearing one for
 	// queue isolation: River increments it on FETCH, so attempt = 0 says the job was
@@ -2941,9 +2945,9 @@ type Querier interface {
 	// Knowledge-cache sole-writer: refreshes the derived birthday cache column
 	// from the current-accepted birthday fact (NULL when no current value).
 	UpdateContactBirthdayCache(ctx context.Context, arg UpdateContactBirthdayCacheParams) error
-	// Forward-only cadence write (spec §3.4.2). Each of the cadence columns
-	// is updated only when its apply-flag is true AND the new value strictly
-	// exceeds the existing one (or the existing is NULL).
+	// Forward-only cadence write (spec §3.4.2). The cadence timestamps, dates,
+	// contact_by and awaiting_reply_until update only when their apply-flag is
+	// true AND the new value strictly exceeds the existing value (or it is NULL).
 	//
 	// last_interaction_at is gated by its OWN apply flag
 	// (apply_last_interaction_at), independent of apply_last_contacted.
@@ -2959,7 +2963,7 @@ type Querier interface {
 	// correction — any passed-in value replaces the existing one
 	// unconditionally. Apply-flags still gate which columns are touched
 	// (e.g., a manual outbound still shouldn't bump last_contacted per
-	// direction rules).
+	// direction rules, and awaiting_reply_until is assigned only when its flag is set).
 	//
 	// last_interaction_at is gated by its OWN apply flag
 	// (apply_last_interaction_at); see UpdateContactCadenceForward above
@@ -3229,7 +3233,7 @@ type Querier interface {
 	// cover new corroborating evidence, and recompute proposition_key from the new
 	// (widened) valid_from bucket so the key keeps representing the row's interval.
 	WidenAssertionValidity(ctx context.Context, arg WidenAssertionValidityParams) error
-	// Writes the recomputed date columns. contact_by is passed pre-computed by
+	// Writes the recomputed date columns, including awaiting_reply_until; both are passed pre-computed by
 	// the Go caller (cadence.CalculateContactBy, environment-aware) so the value
 	// matches the forward writer exactly; this query does no cadence arithmetic.
 	WriteContactDatesAfterDelete(ctx context.Context, arg WriteContactDatesAfterDeleteParams) error

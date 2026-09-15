@@ -283,6 +283,16 @@ definitions:
   handlers.ContactResponse:
     description: Contact information
     properties:
+      awaiting_reply:
+        type: boolean
+      awaiting_reply_until:
+        description: |-
+          AwaitingReplyUntil is the last calendar date on which an unanswered
+          outreach keeps this contact awaiting a reply (CAD-041), serialized as
+          that date at UTC midnight. awaiting_reply is the derived flag; this is
+          the stored expiry it was evaluated against. Absent when no outreach has
+          opened a window.
+        type: string
       birthday:
         example: "1990-01-15T00:00:00Z"
         type: string
@@ -304,8 +314,6 @@ definitions:
       full_name:
         example: John Doe
         type: string
-      has_pending_followup:
-        type: boolean
       how_met:
         example: Met at tech conference
         type: string
@@ -800,6 +808,16 @@ definitions:
   handlers.OverdueContactResponse:
     description: Overdue contact information with action metadata
     properties:
+      awaiting_reply:
+        type: boolean
+      awaiting_reply_until:
+        description: |-
+          AwaitingReplyUntil is the last calendar date on which an unanswered
+          outreach keeps this contact awaiting a reply (CAD-041), serialized as
+          that date at UTC midnight. awaiting_reply is the derived flag; this is
+          the stored expiry it was evaluated against. Absent when no outreach has
+          opened a window.
+        type: string
       birthday:
         example: "1990-01-15T00:00:00Z"
         type: string
@@ -824,8 +842,6 @@ definitions:
       full_name:
         example: John Doe
         type: string
-      has_pending_followup:
-        type: boolean
       how_met:
         example: Met at tech conference
         type: string

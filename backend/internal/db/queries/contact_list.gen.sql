@@ -8,7 +8,7 @@
 --   search_query: NULL = no search; else full-text over full_name + method values
 --   cadence_filter: '' = no filter, 'has_cadence' = non-empty cadence,
 --     'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
---   followup_filter: '' = no filter, 'has_followup' = pending follow-up exists, 'no_followup' = no pending follow-up
+--   followup_filter: '' = no filter, 'has_followup' = awaiting reply as of as_of_date, 'no_followup' = not awaiting reply
 --   sort_field/'sort_order': '' = default order (relevance when searching, else name asc)
 SELECT c.*
 FROM contact c
@@ -17,8 +17,8 @@ WHERE c.deleted_at IS NULL
        (sqlc.arg(cadence_filter)::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter)::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND (sqlc.arg(followup_filter)::text = '' OR
-       (sqlc.arg(followup_filter)::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       (sqlc.arg(followup_filter)::text = 'has_followup' AND (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= sqlc.arg(as_of_date)::date)) OR
+       (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= sqlc.arg(as_of_date)::date)))
   AND (sqlc.narg(search_query)::text IS NULL OR
        to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text))
 ORDER BY
@@ -62,8 +62,8 @@ WHERE c.deleted_at IS NULL
        (sqlc.arg(cadence_filter)::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter)::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND (sqlc.arg(followup_filter)::text = '' OR
-       (sqlc.arg(followup_filter)::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       (sqlc.arg(followup_filter)::text = 'has_followup' AND (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= sqlc.arg(as_of_date)::date)) OR
+       (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= sqlc.arg(as_of_date)::date)))
   AND (sqlc.narg(search_query)::text IS NULL OR
        to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text));
 
@@ -77,8 +77,8 @@ WHERE c.deleted_at IS NULL
        (sqlc.arg(cadence_filter)::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        (sqlc.arg(cadence_filter)::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND (sqlc.arg(followup_filter)::text = '' OR
-       (sqlc.arg(followup_filter)::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
+       (sqlc.arg(followup_filter)::text = 'has_followup' AND (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= sqlc.arg(as_of_date)::date)) OR
+       (sqlc.arg(followup_filter)::text = 'no_followup' AND NOT (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= sqlc.arg(as_of_date)::date)))
   AND (sqlc.narg(search_query)::text IS NULL OR
        to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', sqlc.narg(search_query)::text))
 ORDER BY
