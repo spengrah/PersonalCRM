@@ -192,7 +192,7 @@ func TestAwaitingReplyDerivation_BulkApplyTakesForwardMaximum(t *testing.T) {
 func TestAwaitingReplyDerivation_DeleteRollbackRecomputesExpiry(t *testing.T) {
 	e := newAwaitingReplyDerivationEnv(t)
 	contact := e.createMonthlyContact(t, "delete-recompute")
-	now := accelerated.GetCurrentTime()
+	now := accelerated.GetCurrentTime().Truncate(time.Microsecond) // Postgres stores microseconds; the recompute matches the deleted occurred_at exactly
 	t1 := now.AddDate(0, 0, -5)
 	t2 := now.AddDate(0, 0, -2)
 	one := e.applyInteraction(t, contact.ID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, t1)
