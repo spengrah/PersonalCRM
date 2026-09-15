@@ -101,7 +101,7 @@ func TestSetPendingCreateState_WritesFullShape(t *testing.T) {
 
 	t.Run("full shape with both contact fields set", func(t *testing.T) {
 		metadata := map[string]any{"marker_json": `{"crm":true}`}
-		got := setPendingCreateState(metadata, "temp-123", "2099-01-01", &repository.Contact{
+		got := setPendingCreateState(metadata, "temp-123", "2099-01-01", "2099-01-01", &repository.Contact{
 			LastContacted:  &contacted,
 			LastOutreachAt: &outreach,
 		})
@@ -113,7 +113,7 @@ func TestSetPendingCreateState_WritesFullShape(t *testing.T) {
 	})
 
 	t.Run("synced_* keys gated on nil contact fields", func(t *testing.T) {
-		got := setPendingCreateState(nil, "temp-456", "2099-02-02", &repository.Contact{
+		got := setPendingCreateState(nil, "temp-456", "2099-02-02", "2099-02-02", &repository.Contact{
 			LastContacted:  nil,
 			LastOutreachAt: nil,
 		})
@@ -165,7 +165,7 @@ func TestReconcileExistingTask_LOBackfillPreservesStaleLC(t *testing.T) {
 		// LO-only backfill inside reconcileExistingTask).
 	})
 
-	commands := env.provider.reconcileExistingTask(env.ctx, task, contact, env.settings, currentDeadline, false)
+	commands := env.provider.reconcileExistingTask(env.ctx, task, contact, env.settings, currentDeadline, currentDeadline, false)
 
 	// The close+recreate pair must be emitted: close on the old external id,
 	// plus a fresh item_add. If the LO backfill had clobbered synced_LC,

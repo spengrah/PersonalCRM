@@ -125,6 +125,27 @@ type WatchdogConfig struct {
 	AnnualDays    int // Default: 21
 }
 
+// DaysForCadence returns the configured watchdog window for a cadence string,
+// or zero when the cadence is empty or unknown.
+func (c WatchdogConfig) DaysForCadence(cadenceStr string) int {
+	switch cadenceStr {
+	case "weekly":
+		return c.WeeklyDays
+	case "biweekly":
+		return c.BiweeklyDays
+	case "monthly":
+		return c.MonthlyDays
+	case "quarterly":
+		return c.QuarterlyDays
+	case "biannual":
+		return c.BiannualDays
+	case "annual":
+		return c.AnnualDays
+	default:
+		return 0
+	}
+}
+
 // StalenessConfig holds sync-staleness watchdog thresholds. Distinct from
 // WatchdogConfig (the follow-up-task watchdog); env prefix SYNC_STALENESS_*.
 //

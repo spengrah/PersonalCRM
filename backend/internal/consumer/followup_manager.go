@@ -398,7 +398,7 @@ func (h *FollowUpManager) handleOutbound(
 
 	// Guard 0 (implicit): no cadence → no follow-up. Matches direct-path
 	// behavior (early-return when contact.Cadence is nil).
-	days := watchdogDaysForCadenceStr(cadenceStr, h.watchdog)
+	days := h.watchdog.DaysForCadence(cadenceStr)
 	if days == 0 {
 		h.emit(Decision{Action: repository.FollowUpActionSkip})
 		return nil
@@ -440,7 +440,7 @@ func (h *FollowUpManager) applyOutbound(
 	ctx context.Context, tx pgx.Tx, env *events.Envelope,
 	contact *repository.Contact, p events.InteractionRecordedPayload, cadenceStr string,
 ) error {
-	days := watchdogDaysForCadenceStr(cadenceStr, h.watchdog)
+	days := h.watchdog.DaysForCadence(cadenceStr)
 	if days == 0 {
 		// ApplyInteraction short-circuit: direct-invoke callers may get
 		// here when the contact has no cadence.
@@ -462,7 +462,7 @@ func (h *FollowUpManager) applyCreate(
 	ctx context.Context, tx pgx.Tx, env *events.Envelope,
 	contact *repository.Contact, p events.InteractionRecordedPayload, days int,
 ) error {
-	deadline := cadence.Today(p.OccurredAt).AddDate(0, 0, days)
+	deadline := cadence.AwaitingReplyUntil(p.OccurredAt, days)
 	idemKey := buildFollowUpIdempotencyKey(p.ContactID, p.OccurredAt)
 
 	// Guard against a prior step-1 insert that raced us (crash-retry of
@@ -611,7 +611,7 @@ func (h *FollowUpManager) applyRefresh(
 	ctx context.Context, tx pgx.Tx,
 	pending *repository.ContactTask, p events.InteractionRecordedPayload, days int,
 ) error {
-	deadline := cadence.Today(p.OccurredAt).AddDate(0, 0, days)
+	deadline := cadence.AwaitingReplyUntil(p.OccurredAt, days)
 
 	// Update local metadata in tx.
 	deadlineStr := deadline.Format(todoist.DateFormat)
@@ -720,29 +720,6 @@ func buildFollowUpIdempotencyKey(contactID uuid.UUID, occurredAt time.Time) stri
 	h.Write([]byte{'|'})
 	h.Write([]byte("follow_up"))
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// watchdogDaysForCadenceStr returns the follow-up watchdog window in
-// days for a cadence string. Unknown / empty returns 0 (no follow-up).
-// Mirrors service.watchdogDaysForCadence but is local to the consumer
-// package so the consumer doesn't import service.
-func watchdogDaysForCadenceStr(cadenceStr string, cfg config.WatchdogConfig) int {
-	switch cadenceStr {
-	case "weekly":
-		return cfg.WeeklyDays
-	case "biweekly":
-		return cfg.BiweeklyDays
-	case "monthly":
-		return cfg.MonthlyDays
-	case "quarterly":
-		return cfg.QuarterlyDays
-	case "biannual":
-		return cfg.BiannualDays
-	case "annual":
-		return cfg.AnnualDays
-	default:
-		return 0
-	}
 }
 
 // --------------------------------------------------------------------------

@@ -1600,6 +1600,17 @@ WHERE trigger_schema = 'public'
 -- behavioral assertion would still pass because the reapply overwrites it.
 SELECT (to_regprocedure(sqlc.arg(signature)::text) IS NOT NULL)::boolean;
 
+-- name: TestGetFunctionDef :one
+-- Migration round-trip test only: returns the installed trigger function body.
+-- This distinguishes the 079 definition from the 082 replacement after each
+-- migration position without issuing ad hoc SQL from Go.
+SELECT pg_get_functiondef(sqlc.arg(signature)::text::regprocedure)::text;
+
+-- name: TestGetContactAwaitingReplyUntilIncludingDeleted :one
+-- Migration backfill test only: reads the new derived date without filtering
+-- out a soft-deleted row. Production reads use the live contact repository.
+SELECT awaiting_reply_until FROM contact WHERE id = sqlc.arg(id);
+
 -- name: TestDerivedWriterSettingIsNull :one
 -- Rejection tests only: is crm.derived_writer genuinely UNDEFINED on THIS
 -- physical connection? A custom GUC is a placeholder: it does not exist until

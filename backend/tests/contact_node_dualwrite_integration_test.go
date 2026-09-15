@@ -393,20 +393,15 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 		require.NoError(t, err, "position the clone at the backfill tip")
 	}
 
-	// Seed a contact via the dual-write service path so a live person node
-	// exists at the contact's id (this is what 068's down must consider). It
-	// has no assertions, so the guarded down is free to delete it.
-	assertSvc, cache := buildKnowledgeDeps(t, database, nil)
-	contactSvc := service.NewContactService(database, contactRepo,
-		repository.NewContactMethodRepository(database.Queries),
-		repository.NewInteractionRepository(database.Queries),
-		repository.NewContactTaskRepository(database.Queries), nil, nil,
-		nil, assertSvc, cache, nil)
-	unreferenced, _, err := contactSvc.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "migration-unreferenced-person",
-	}, nil)
+	// Reproduce the dual-write service result with explicit-column writes: a
+	// contact and its person node share an id. It has no assertions, so the
+	// guarded down is free to delete the node.
+	unreferencedID := uuid.New()
+	unreferencedName := "migration-unreferenced-person"
+	_, err = nodeRepo.CreateNode(ctx, unreferencedID, repository.NodeTypePerson, unreferencedName)
 	require.NoError(t, err)
-	_, err = nodeRepo.GetNode(ctx, unreferenced.ID)
+	require.NoError(t, support.InsertContactAtID(ctx, unreferencedID, unreferencedName))
+	_, err = nodeRepo.GetNode(ctx, unreferencedID)
 	require.NoError(t, err, "dual-write created the person node")
 
 	// Seed a SOFT-DELETED contact whose person node is absent (simulating a
@@ -416,14 +411,15 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	// soft-delete-propagation concern, and the write API rejects a deleted
 	// subject node. Drop the node the dual-write created so the contact enters
 	// the up step node-less, exactly like a pre-068 deletion.
-	deleted, _, err := contactSvc.CreateContact(ctx, repository.CreateContactRequest{
-		FullName: "migration-deleted-person",
-	}, nil)
+	deletedID := uuid.New()
+	deletedName := "migration-deleted-person"
+	_, err = nodeRepo.CreateNode(ctx, deletedID, repository.NodeTypePerson, deletedName)
 	require.NoError(t, err)
-	require.NoError(t, contactRepo.SoftDeleteContact(ctx, deleted.ID))
-	_, err = support.DeleteNodesByIds(ctx, []uuid.UUID{deleted.ID})
+	require.NoError(t, support.InsertContactAtID(ctx, deletedID, deletedName))
+	require.NoError(t, contactRepo.SoftDeleteContact(ctx, deletedID))
+	_, err = support.DeleteNodesByIds(ctx, []uuid.UUID{deletedID})
 	require.NoError(t, err)
-	_, err = nodeRepo.GetNodeIncludingDeleted(ctx, deleted.ID)
+	_, err = nodeRepo.GetNodeIncludingDeleted(ctx, deletedID)
 	require.ErrorIs(t, err, db.ErrNotFound, "soft-deleted contact starts the up step with no person node")
 
 	// Seed a SECOND person node that an assertion references as its SUBJECT —
@@ -483,7 +479,7 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	// is removed; the assertion-referenced one is preserved.
 	require.NoError(t, m.Steps(-1), "roll the person-node backfill down one step")
 
-	_, err = nodeRepo.GetNode(ctx, unreferenced.ID)
+	_, err = nodeRepo.GetNode(ctx, unreferencedID)
 	require.ErrorIs(t, err, db.ErrNotFound, "guarded down removes the unreferenced person node")
 
 	stillThere, err := nodeRepo.GetNode(ctx, referencedID)
@@ -516,15 +512,15 @@ func TestContactNodeDualWrite_MigrationDownUp(t *testing.T) {
 	// person node.
 	require.NoError(t, m.Steps(1), "re-apply the person-node backfill")
 
-	restored, err := nodeRepo.GetNode(ctx, unreferenced.ID)
+	restored, err := nodeRepo.GetNode(ctx, unreferencedID)
 	require.NoError(t, err, "the up backfill restores the person node for the surviving contact")
 	assert.Equal(t, repository.NodeTypePerson, restored.Type)
-	assert.Equal(t, unreferenced.FullName, restored.CanonicalLabel)
+	assert.Equal(t, unreferencedName, restored.CanonicalLabel)
 
 	// The soft-deleted contact gets NO person node from the up backfill — this
 	// is the `WHERE deleted_at IS NULL` invariant. Dropping that clause from the
 	// up migration would mint a node here and fail this assertion.
-	_, err = nodeRepo.GetNodeIncludingDeleted(ctx, deleted.ID)
+	_, err = nodeRepo.GetNodeIncludingDeleted(ctx, deletedID)
 	require.ErrorIs(t, err, db.ErrNotFound, "up backfill must skip soft-deleted contacts (WHERE deleted_at IS NULL)")
 }
 

@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -19,21 +20,27 @@ WHERE c.deleted_at IS NULL
        ($1::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        ($1::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND ($2::text = '' OR
-       ($2::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND ($3::text IS NULL OR
-       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $3::text))
+       ($2::text = 'has_followup' AND (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= $3::date)) OR
+       ($2::text = 'no_followup' AND NOT (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= $3::date)))
+  AND ($4::text IS NULL OR
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $4::text))
 `
 
 type CountContactsParams struct {
-	CadenceFilter  string  `json:"cadence_filter"`
-	FollowupFilter string  `json:"followup_filter"`
-	SearchQuery    *string `json:"search_query"`
+	CadenceFilter  string    `json:"cadence_filter"`
+	FollowupFilter string    `json:"followup_filter"`
+	AsOfDate       time.Time `json:"as_of_date"`
+	SearchQuery    *string   `json:"search_query"`
 }
 
 // Count variant of ListContacts; same WHERE shape as ListContacts.
 func (q *Queries) CountContacts(ctx context.Context, arg CountContactsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, CountContacts, arg.CadenceFilter, arg.FollowupFilter, arg.SearchQuery)
+	row := q.db.QueryRow(ctx, CountContacts,
+		arg.CadenceFilter,
+		arg.FollowupFilter,
+		arg.AsOfDate,
+		arg.SearchQuery,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -47,33 +54,33 @@ WHERE c.deleted_at IS NULL
        ($1::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        ($1::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND ($2::text = '' OR
-       ($2::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND ($3::text IS NULL OR
-       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $3::text))
+       ($2::text = 'has_followup' AND (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= $3::date)) OR
+       ($2::text = 'no_followup' AND NOT (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= $3::date)))
+  AND ($4::text IS NULL OR
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $4::text))
 ORDER BY
   -- Relevance order applies only when searching without an explicit sort.
-  CASE WHEN $3::text IS NOT NULL AND $4::text = '' THEN
-    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', $3::text))
+  CASE WHEN $4::text IS NOT NULL AND $5::text = '' THEN
+    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', $4::text))
   END DESC,
-  CASE WHEN $4::text = 'name' AND $5::text = 'asc' THEN c.full_name END ASC,
-  CASE WHEN $4::text = 'name' AND $5::text = 'desc' THEN c.full_name END DESC,
-  CASE WHEN $4::text = 'location' AND $5::text = 'asc' THEN COALESCE(c.location, '') END ASC,
-  CASE WHEN $4::text = 'location' AND $5::text = 'desc' THEN COALESCE(c.location, '') END DESC,
-  CASE WHEN $4::text = 'birthday' AND $5::text = 'asc' THEN c.birthday END ASC NULLS LAST,
-  CASE WHEN $4::text = 'birthday' AND $5::text = 'desc' THEN c.birthday END DESC NULLS LAST,
-  CASE WHEN $4::text = 'last_contacted' AND $5::text = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN $4::text = 'last_contacted' AND $5::text = 'desc' THEN c.last_contacted END DESC NULLS LAST,
-  CASE WHEN $4::text = 'last_response_at' AND $5::text = 'asc' THEN c.last_response_at END ASC NULLS LAST,
-  CASE WHEN $4::text = 'last_response_at' AND $5::text = 'desc' THEN c.last_response_at END DESC NULLS LAST,
-  CASE WHEN $4::text = 'contact_by' AND $5::text = 'asc' THEN c.contact_by END ASC NULLS LAST,
-  CASE WHEN $4::text = 'contact_by' AND $5::text = 'desc' THEN c.contact_by END DESC NULLS LAST,
+  CASE WHEN $5::text = 'name' AND $6::text = 'asc' THEN c.full_name END ASC,
+  CASE WHEN $5::text = 'name' AND $6::text = 'desc' THEN c.full_name END DESC,
+  CASE WHEN $5::text = 'location' AND $6::text = 'asc' THEN COALESCE(c.location, '') END ASC,
+  CASE WHEN $5::text = 'location' AND $6::text = 'desc' THEN COALESCE(c.location, '') END DESC,
+  CASE WHEN $5::text = 'birthday' AND $6::text = 'asc' THEN c.birthday END ASC NULLS LAST,
+  CASE WHEN $5::text = 'birthday' AND $6::text = 'desc' THEN c.birthday END DESC NULLS LAST,
+  CASE WHEN $5::text = 'last_contacted' AND $6::text = 'asc' THEN c.last_contacted END ASC NULLS LAST,
+  CASE WHEN $5::text = 'last_contacted' AND $6::text = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN $5::text = 'last_response_at' AND $6::text = 'asc' THEN c.last_response_at END ASC NULLS LAST,
+  CASE WHEN $5::text = 'last_response_at' AND $6::text = 'desc' THEN c.last_response_at END DESC NULLS LAST,
+  CASE WHEN $5::text = 'contact_by' AND $6::text = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN $5::text = 'contact_by' AND $6::text = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   -- 'desc' = most frequent first (ASC on number), 'asc' = least frequent first (DESC on number)
-  CASE WHEN $4::text = 'cadence' AND $5::text = 'desc' THEN
+  CASE WHEN $5::text = 'cadence' AND $6::text = 'desc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END ASC,
-  CASE WHEN $4::text = 'cadence' AND $5::text = 'asc' THEN
+  CASE WHEN $5::text = 'cadence' AND $6::text = 'asc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END DESC,
   -- Deterministic fallback + tiebreaker: name asc then id, so the unsorted
@@ -84,11 +91,12 @@ ORDER BY
 `
 
 type ListContactIDsParams struct {
-	CadenceFilter  string  `json:"cadence_filter"`
-	FollowupFilter string  `json:"followup_filter"`
-	SearchQuery    *string `json:"search_query"`
-	SortField      string  `json:"sort_field"`
-	SortOrder      string  `json:"sort_order"`
+	CadenceFilter  string    `json:"cadence_filter"`
+	FollowupFilter string    `json:"followup_filter"`
+	AsOfDate       time.Time `json:"as_of_date"`
+	SearchQuery    *string   `json:"search_query"`
+	SortField      string    `json:"sort_field"`
+	SortOrder      string    `json:"sort_order"`
 }
 
 // Lightweight IDs-only variant of ListContacts for navigation (no pagination);
@@ -97,6 +105,7 @@ func (q *Queries) ListContactIDs(ctx context.Context, arg ListContactIDsParams) 
 	rows, err := q.db.Query(ctx, ListContactIDs,
 		arg.CadenceFilter,
 		arg.FollowupFilter,
+		arg.AsOfDate,
 		arg.SearchQuery,
 		arg.SortField,
 		arg.SortOrder,
@@ -121,40 +130,40 @@ func (q *Queries) ListContactIDs(ctx context.Context, arg ListContactIDsParams) 
 
 const ListContacts = `-- name: ListContacts :many
 
-SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.contact_by, c.last_interaction_at, c.last_outreach_at, c.last_response_at
+SELECT c.id, c.full_name, c.location, c.birthday, c.how_met, c.cadence, c.last_contacted, c.profile_photo, c.deleted_at, c.created_at, c.updated_at, c.contact_by, c.last_interaction_at, c.last_outreach_at, c.last_response_at, c.awaiting_reply_until
 FROM contact c
 WHERE c.deleted_at IS NULL
   AND ($1::text = '' OR
        ($1::text = 'has_cadence' AND c.cadence IS NOT NULL AND c.cadence != '') OR
        ($1::text = 'no_cadence' AND (c.cadence IS NULL OR c.cadence = '')))
   AND ($2::text = '' OR
-       ($2::text = 'has_followup' AND EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))) OR
-       ($2::text = 'no_followup' AND NOT EXISTS(SELECT 1 FROM contact_task WHERE contact_task.contact_id = c.id AND contact_task.lifecycle = 'followup_loop' AND contact_task.state IN ('managed', 'pending_remote_create'))))
-  AND ($3::text IS NULL OR
-       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $3::text))
+       ($2::text = 'has_followup' AND (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= $3::date)) OR
+       ($2::text = 'no_followup' AND NOT (c.last_outreach_at IS NOT NULL AND (c.last_response_at IS NULL OR c.last_outreach_at > c.last_response_at) AND c.awaiting_reply_until IS NOT NULL AND c.awaiting_reply_until >= $3::date)))
+  AND ($4::text IS NULL OR
+       to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')) @@ plainto_tsquery('english', $4::text))
 ORDER BY
   -- Relevance order applies only when searching without an explicit sort.
-  CASE WHEN $3::text IS NOT NULL AND $4::text = '' THEN
-    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', $3::text))
+  CASE WHEN $4::text IS NOT NULL AND $5::text = '' THEN
+    ts_rank(to_tsvector('english', c.full_name || ' ' || COALESCE((SELECT string_agg(cm.value, ' ') FROM contact_method cm WHERE cm.contact_id = c.id), '')), plainto_tsquery('english', $4::text))
   END DESC,
-  CASE WHEN $4::text = 'name' AND $5::text = 'asc' THEN c.full_name END ASC,
-  CASE WHEN $4::text = 'name' AND $5::text = 'desc' THEN c.full_name END DESC,
-  CASE WHEN $4::text = 'location' AND $5::text = 'asc' THEN COALESCE(c.location, '') END ASC,
-  CASE WHEN $4::text = 'location' AND $5::text = 'desc' THEN COALESCE(c.location, '') END DESC,
-  CASE WHEN $4::text = 'birthday' AND $5::text = 'asc' THEN c.birthday END ASC NULLS LAST,
-  CASE WHEN $4::text = 'birthday' AND $5::text = 'desc' THEN c.birthday END DESC NULLS LAST,
-  CASE WHEN $4::text = 'last_contacted' AND $5::text = 'asc' THEN c.last_contacted END ASC NULLS LAST,
-  CASE WHEN $4::text = 'last_contacted' AND $5::text = 'desc' THEN c.last_contacted END DESC NULLS LAST,
-  CASE WHEN $4::text = 'last_response_at' AND $5::text = 'asc' THEN c.last_response_at END ASC NULLS LAST,
-  CASE WHEN $4::text = 'last_response_at' AND $5::text = 'desc' THEN c.last_response_at END DESC NULLS LAST,
-  CASE WHEN $4::text = 'contact_by' AND $5::text = 'asc' THEN c.contact_by END ASC NULLS LAST,
-  CASE WHEN $4::text = 'contact_by' AND $5::text = 'desc' THEN c.contact_by END DESC NULLS LAST,
+  CASE WHEN $5::text = 'name' AND $6::text = 'asc' THEN c.full_name END ASC,
+  CASE WHEN $5::text = 'name' AND $6::text = 'desc' THEN c.full_name END DESC,
+  CASE WHEN $5::text = 'location' AND $6::text = 'asc' THEN COALESCE(c.location, '') END ASC,
+  CASE WHEN $5::text = 'location' AND $6::text = 'desc' THEN COALESCE(c.location, '') END DESC,
+  CASE WHEN $5::text = 'birthday' AND $6::text = 'asc' THEN c.birthday END ASC NULLS LAST,
+  CASE WHEN $5::text = 'birthday' AND $6::text = 'desc' THEN c.birthday END DESC NULLS LAST,
+  CASE WHEN $5::text = 'last_contacted' AND $6::text = 'asc' THEN c.last_contacted END ASC NULLS LAST,
+  CASE WHEN $5::text = 'last_contacted' AND $6::text = 'desc' THEN c.last_contacted END DESC NULLS LAST,
+  CASE WHEN $5::text = 'last_response_at' AND $6::text = 'asc' THEN c.last_response_at END ASC NULLS LAST,
+  CASE WHEN $5::text = 'last_response_at' AND $6::text = 'desc' THEN c.last_response_at END DESC NULLS LAST,
+  CASE WHEN $5::text = 'contact_by' AND $6::text = 'asc' THEN c.contact_by END ASC NULLS LAST,
+  CASE WHEN $5::text = 'contact_by' AND $6::text = 'desc' THEN c.contact_by END DESC NULLS LAST,
   -- Cadence sort by frequency: weekly=1 (most frequent) to annual=6 (least frequent), null=7
   -- 'desc' = most frequent first (ASC on number), 'asc' = least frequent first (DESC on number)
-  CASE WHEN $4::text = 'cadence' AND $5::text = 'desc' THEN
+  CASE WHEN $5::text = 'cadence' AND $6::text = 'desc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END ASC,
-  CASE WHEN $4::text = 'cadence' AND $5::text = 'asc' THEN
+  CASE WHEN $5::text = 'cadence' AND $6::text = 'asc' THEN
     CASE c.cadence WHEN 'weekly' THEN 1 WHEN 'biweekly' THEN 2 WHEN 'monthly' THEN 3 WHEN 'quarterly' THEN 4 WHEN 'biannual' THEN 5 WHEN 'annual' THEN 6 ELSE 7 END
   END DESC,
   -- Deterministic fallback + tiebreaker: name asc then id, so the unsorted
@@ -162,17 +171,18 @@ ORDER BY
   -- nondeterministically.
   c.full_name ASC,
   c.id ASC
-LIMIT $7 OFFSET $6
+LIMIT $8 OFFSET $7
 `
 
 type ListContactsParams struct {
-	CadenceFilter  string  `json:"cadence_filter"`
-	FollowupFilter string  `json:"followup_filter"`
-	SearchQuery    *string `json:"search_query"`
-	SortField      string  `json:"sort_field"`
-	SortOrder      string  `json:"sort_order"`
-	PageOffset     int32   `json:"page_offset"`
-	PageLimit      int32   `json:"page_limit"`
+	CadenceFilter  string    `json:"cadence_filter"`
+	FollowupFilter string    `json:"followup_filter"`
+	AsOfDate       time.Time `json:"as_of_date"`
+	SearchQuery    *string   `json:"search_query"`
+	SortField      string    `json:"sort_field"`
+	SortOrder      string    `json:"sort_order"`
+	PageOffset     int32     `json:"page_offset"`
+	PageLimit      int32     `json:"page_limit"`
 }
 
 // Code generated by cmd/gen-contact-queries. DO NOT EDIT.
@@ -184,12 +194,13 @@ type ListContactsParams struct {
 //	search_query: NULL = no search; else full-text over full_name + method values
 //	cadence_filter: '' = no filter, 'has_cadence' = non-empty cadence,
 //	  'no_cadence' = NULL or empty string (defensive; CHECK constraint prevents empty strings)
-//	followup_filter: '' = no filter, 'has_followup' = pending follow-up exists, 'no_followup' = no pending follow-up
+//	followup_filter: '' = no filter, 'has_followup' = awaiting reply as of as_of_date, 'no_followup' = not awaiting reply
 //	sort_field/'sort_order': '' = default order (relevance when searching, else name asc)
 func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*Contact, error) {
 	rows, err := q.db.Query(ctx, ListContacts,
 		arg.CadenceFilter,
 		arg.FollowupFilter,
+		arg.AsOfDate,
 		arg.SearchQuery,
 		arg.SortField,
 		arg.SortOrder,
@@ -219,6 +230,7 @@ func (q *Queries) ListContacts(ctx context.Context, arg ListContactsParams) ([]*
 			&i.LastInteractionAt,
 			&i.LastOutreachAt,
 			&i.LastResponseAt,
+			&i.AwaitingReplyUntil,
 		); err != nil {
 			return nil, err
 		}

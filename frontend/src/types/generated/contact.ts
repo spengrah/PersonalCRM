@@ -37,7 +37,7 @@ export interface ContactResponse {
   last_interaction_at?: string;
   last_outreach_at?: string;
   last_response_at?: string;
-  has_pending_followup: boolean;
+  awaiting_reply: boolean;
   profile_photo?: string;
   created_at: string;
   updated_at: string;

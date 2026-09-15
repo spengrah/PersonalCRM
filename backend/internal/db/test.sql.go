@@ -2890,6 +2890,19 @@ func (q *Queries) TestFinalizeRiverJobByID(ctx context.Context, id int64) error 
 	return err
 }
 
+const TestGetContactAwaitingReplyUntilIncludingDeleted = `-- name: TestGetContactAwaitingReplyUntilIncludingDeleted :one
+SELECT awaiting_reply_until FROM contact WHERE id = $1
+`
+
+// Migration backfill test only: reads the new derived date without filtering
+// out a soft-deleted row. Production reads use the live contact repository.
+func (q *Queries) TestGetContactAwaitingReplyUntilIncludingDeleted(ctx context.Context, id uuid.UUID) (*time.Time, error) {
+	row := q.db.QueryRow(ctx, TestGetContactAwaitingReplyUntilIncludingDeleted, id)
+	var awaiting_reply_until *time.Time
+	err := row.Scan(&awaiting_reply_until)
+	return awaiting_reply_until, err
+}
+
 const TestGetContactDeletedAtIncludingDeleted = `-- name: TestGetContactDeletedAtIncludingDeleted :one
 SELECT deleted_at FROM contact WHERE id = $1
 `
@@ -2904,6 +2917,20 @@ func (q *Queries) TestGetContactDeletedAtIncludingDeleted(ctx context.Context, i
 	var deleted_at *time.Time
 	err := row.Scan(&deleted_at)
 	return deleted_at, err
+}
+
+const TestGetFunctionDef = `-- name: TestGetFunctionDef :one
+SELECT pg_get_functiondef($1::text::regprocedure)::text
+`
+
+// Migration round-trip test only: returns the installed trigger function body.
+// This distinguishes the 079 definition from the 082 replacement after each
+// migration position without issuing ad hoc SQL from Go.
+func (q *Queries) TestGetFunctionDef(ctx context.Context, signature string) (string, error) {
+	row := q.db.QueryRow(ctx, TestGetFunctionDef, signature)
+	var column_1 string
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const TestGetRiverJobDispositionByID = `-- name: TestGetRiverJobDispositionByID :one

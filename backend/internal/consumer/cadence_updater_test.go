@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 
@@ -63,7 +64,7 @@ func (s *stubContactReader) GetContactTx(_ context.Context, _ pgx.Tx, _ uuid.UUI
 func newUnitUpdater(mode string) (*CadenceUpdater, *stubClaimer, *stubContactReader) {
 	claims := &stubClaimer{claimedResult: true}
 	contacts := &stubContactReader{}
-	h := NewCadenceUpdater(claims, contacts, nil, mode, false)
+	h := NewCadenceUpdater(claims, contacts, nil, mode, false, config.TestConfig().Watchdog)
 	return h, claims, contacts
 }
 

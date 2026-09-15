@@ -17,6 +17,7 @@ import (
 
 	migrate "github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,7 @@ type migration076Env struct {
 	migrator *migrate.Migrate
 	comms    *repository.CommsMessageRepository
 	wa       *repository.WhatsAppRepository
-	contacts *repository.ContactRepository
+	support  *repository.SyntheticSupportRepository
 	inter    *repository.InteractionRepository
 }
 
@@ -69,7 +70,7 @@ func newMigration076Env(t *testing.T) *migration076Env {
 		migrator: m,
 		comms:    repository.NewCommsMessageRepository(database.Queries),
 		wa:       repository.NewWhatsAppRepository(database.Queries),
-		contacts: repository.NewContactRepository(database.Queries),
+		support:  repository.NewSyntheticSupportRepository(database.Queries),
 		inter:    repository.NewInteractionRepository(database.Queries),
 	}
 }
@@ -90,13 +91,11 @@ func TestMigration076Down_RefusalGuards(t *testing.T) {
 
 	t.Run("RefusesWithWhatsAppInteraction", func(t *testing.T) {
 		env := newMigration076Env(t)
-		contact, err := env.contacts.CreateContact(env.ctx, repository.CreateContactRequest{
-			FullName: "Migration 076 Guard",
-		})
-		require.NoError(t, err)
+		contactID := uuid.New()
+		require.NoError(t, env.support.InsertContactAtID(env.ctx, contactID, "Migration 076 Guard"))
 		ref := "whatsapp:chat:msg-1"
-		_, err = env.inter.CreateInteraction(env.ctx, repository.CreateInteractionRequest{
-			ContactID:  contact.ID,
+		_, err := env.inter.CreateInteraction(env.ctx, repository.CreateInteractionRequest{
+			ContactID:  contactID,
 			Source:     repository.InteractionSourceWhatsApp,
 			SourceRef:  &ref,
 			OccurredAt: accelerated.GetCurrentTime(),
@@ -245,13 +244,11 @@ func TestMigration076Down_RefusalGuards(t *testing.T) {
 		// The narrowed source CHECK is back: a whatsapp interaction no longer
 		// inserts. This is what proves the CHECK was really restored rather
 		// than merely dropped.
-		contact, err := env.contacts.CreateContact(env.ctx, repository.CreateContactRequest{
-			FullName: "Migration 076 Reverted",
-		})
-		require.NoError(t, err)
+		contactID := uuid.New()
+		require.NoError(t, env.support.InsertContactAtID(env.ctx, contactID, "Migration 076 Reverted"))
 		ref := "whatsapp:chat:after-revert"
-		_, err = env.inter.CreateInteraction(env.ctx, repository.CreateInteractionRequest{
-			ContactID:  contact.ID,
+		_, err := env.inter.CreateInteraction(env.ctx, repository.CreateInteractionRequest{
+			ContactID:  contactID,
 			Source:     repository.InteractionSourceWhatsApp,
 			SourceRef:  &ref,
 			OccurredAt: accelerated.GetCurrentTime(),

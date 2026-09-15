@@ -283,6 +283,8 @@ definitions:
   handlers.ContactResponse:
     description: Contact information
     properties:
+      awaiting_reply:
+        type: boolean
       birthday:
         example: "1990-01-15T00:00:00Z"
         type: string
@@ -304,8 +306,6 @@ definitions:
       full_name:
         example: John Doe
         type: string
-      has_pending_followup:
-        type: boolean
       how_met:
         example: Met at tech conference
         type: string
@@ -800,6 +800,8 @@ definitions:
   handlers.OverdueContactResponse:
     description: Overdue contact information with action metadata
     properties:
+      awaiting_reply:
+        type: boolean
       birthday:
         example: "1990-01-15T00:00:00Z"
         type: string
@@ -824,8 +826,6 @@ definitions:
       full_name:
         example: John Doe
         type: string
-      has_pending_followup:
-        type: boolean
       how_met:
         example: Met at tech conference
         type: string

@@ -57,7 +57,7 @@ func newCadenceUpdaterForTest(t *testing.T, database *db.Database, mode string) 
 	contactRepo.SetPool(database.Pool)
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
 	return consumer.NewCadenceUpdater(
-		claimRepo, contactRepo, database.Queries, mode, false,
+		claimRepo, contactRepo, database.Queries, mode, false, config.TestConfig().Watchdog,
 	), contactRepo
 }
 

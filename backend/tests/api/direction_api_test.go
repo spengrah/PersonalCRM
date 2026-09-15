@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"testing"
+	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
@@ -87,8 +88,12 @@ func setupDirectionAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactTask
 }
 
 func createDirectionTestContact(t *testing.T, router *gin.Engine, name string) string {
+	return createDirectionTestContactWithCadence(t, router, name, nil)
+}
+
+func createDirectionTestContactWithCadence(t *testing.T, router *gin.Engine, name string, cadenceName *string) string {
 	t.Helper()
-	body, _ := json.Marshal(handlers.CreateContactRequest{FullName: name})
+	body, _ := json.Marshal(handlers.CreateContactRequest{FullName: name, Cadence: cadenceName})
 	req, _ := http.NewRequest("POST", "/api/v1/contacts", bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -99,6 +104,20 @@ func createDirectionTestContact(t *testing.T, router *gin.Engine, name string) s
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	data := resp.Data.(map[string]interface{})
 	return data["id"].(string)
+}
+
+func recordDirectionTestInteraction(t *testing.T, router *gin.Engine, contactID, direction string, occurredAt time.Time) {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{
+		"occurred_at": occurredAt.Format(time.RFC3339),
+		"direction":   direction,
+	})
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/contacts/"+contactID+"/interactions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	require.Equal(t, http.StatusCreated, response.Code)
 }
 
 func TestInteractionAPI_DirectionInResponse(t *testing.T) {
@@ -176,19 +195,19 @@ func TestInteractionAPI_DirectionInResponse(t *testing.T) {
 	})
 }
 
-func TestContactAPI_HasPendingFollowup(t *testing.T) {
+func TestContactAPI_AwaitingReply(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
 	t.Parallel()
 
-	router, contactTaskRepo, cleanup := setupDirectionAPIRouter(t)
+	router, _, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()
-	ctx := context.Background()
 
-	contactID := createDirectionTestContact(t, router, "Pending Followup API Test "+uuid.NewString()[:8])
+	cadenceName := "monthly"
+	contactID := createDirectionTestContactWithCadence(t, router, "Awaiting Reply API Test "+uuid.NewString()[:8], &cadenceName)
 
-	t.Run("NoPendingFollowup", func(t *testing.T) {
+	t.Run("NoInteractions", func(t *testing.T) {
 		// spec: CON-005.live-contact-flag
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
 		w := httptest.NewRecorder()
@@ -198,23 +217,12 @@ func TestContactAPI_HasPendingFollowup(t *testing.T) {
 		var resp api.APIResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		data := resp.Data.(map[string]interface{})
-		assert.Equal(t, false, data["has_pending_followup"])
+		assert.Equal(t, false, data["awaiting_reply"])
 	})
 
-	t.Run("WithPendingFollowup", func(t *testing.T) {
+	t.Run("RecentOutbound", func(t *testing.T) {
 		// spec: CON-005.live-contact-flag
-		// Create a managed follow-up task
-		id, err := uuid.Parse(contactID)
-		require.NoError(t, err)
-		_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
-			ContactID:      id,
-			Provider:       "todoist",
-			Kind:           contacttask.KindReachOut,
-			Lifecycle:      contacttask.LifecycleFollowUpLoop,
-			ExternalTaskID: "test-followup-api-" + contactID,
-			State:          "managed",
-		})
-		require.NoError(t, err)
+		recordDirectionTestInteraction(t, router, contactID, "outbound", accelerated.GetCurrentTime().Add(-time.Hour))
 
 		req, _ := http.NewRequest("GET", "/api/v1/contacts/"+contactID, nil)
 		w := httptest.NewRecorder()
@@ -224,48 +232,27 @@ func TestContactAPI_HasPendingFollowup(t *testing.T) {
 		var resp api.APIResponse
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		data := resp.Data.(map[string]interface{})
-		assert.Equal(t, true, data["has_pending_followup"])
+		assert.Equal(t, true, data["awaiting_reply"])
 	})
 }
 
-func TestContactAPI_ListReportsPendingFollowup(t *testing.T) {
+func TestContactAPI_ListReportsAwaitingReply(t *testing.T) {
 	// spec: CON-005.list-entries-carry-flag
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
 	t.Parallel()
 
-	router, contactTaskRepo, cleanup := setupDirectionAPIRouter(t)
+	router, _, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()
-	ctx := context.Background()
 
-	prefix := "Pending Followup List " + uuid.NewString()[:8]
-	withFollowupID := createDirectionTestContact(t, router, prefix+" With Followup")
-	withoutFollowupID := createDirectionTestContact(t, router, prefix+" Without Followup")
-	pendingRemoteCreateID := createDirectionTestContact(t, router, prefix+" Pending Remote Create")
-
-	id, err := uuid.Parse(withFollowupID)
-	require.NoError(t, err)
-	pendingRemoteCreateUUID, err := uuid.Parse(pendingRemoteCreateID)
-	require.NoError(t, err)
-	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
-		ContactID:      pendingRemoteCreateUUID,
-		Provider:       "todoist",
-		Kind:           contacttask.KindReachOut,
-		Lifecycle:      contacttask.LifecycleFollowUpLoop,
-		ExternalTaskID: "",
-		State:          string(repository.ContactTaskStatePendingRemoteCreate),
-	})
-	require.NoError(t, err)
-	_, err = contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
-		ContactID:      id,
-		Provider:       "todoist",
-		Kind:           contacttask.KindReachOut,
-		Lifecycle:      contacttask.LifecycleFollowUpLoop,
-		ExternalTaskID: "test-followup-list-api-" + withFollowupID,
-		State:          "managed",
-	})
-	require.NoError(t, err)
+	prefix := "Awaiting Reply List " + uuid.NewString()[:8]
+	cadenceName := "monthly"
+	awaitingID := createDirectionTestContactWithCadence(t, router, prefix+" Awaiting", &cadenceName)
+	noInteractionsID := createDirectionTestContactWithCadence(t, router, prefix+" No Interactions", &cadenceName)
+	expiredID := createDirectionTestContactWithCadence(t, router, prefix+" Expired", &cadenceName)
+	recordDirectionTestInteraction(t, router, awaitingID, "outbound", accelerated.GetCurrentTime().Add(-time.Hour))
+	recordDirectionTestInteraction(t, router, expiredID, "outbound", accelerated.GetCurrentTime().AddDate(0, 0, -30))
 
 	req, err := http.NewRequest("GET", "/api/v1/contacts?search="+url.QueryEscape(prefix)+"&limit=50", nil)
 	require.NoError(t, err)
@@ -279,17 +266,17 @@ func TestContactAPI_ListReportsPendingFollowup(t *testing.T) {
 	flagsByID := make(map[string]bool, len(items))
 	for _, item := range items {
 		contact := item.(map[string]interface{})
-		flagsByID[contact["id"].(string)] = contact["has_pending_followup"].(bool)
+		flagsByID[contact["id"].(string)] = contact["awaiting_reply"].(bool)
 	}
-	_, withFollowupFound := flagsByID[withFollowupID]
-	_, withoutFollowupFound := flagsByID[withoutFollowupID]
-	_, pendingRemoteCreateFound := flagsByID[pendingRemoteCreateID]
-	require.True(t, withFollowupFound)
-	require.True(t, withoutFollowupFound)
-	require.True(t, pendingRemoteCreateFound)
-	assert.Equal(t, true, flagsByID[withFollowupID])
-	assert.Equal(t, false, flagsByID[withoutFollowupID])
-	assert.Equal(t, true, flagsByID[pendingRemoteCreateID])
+	_, awaitingFound := flagsByID[awaitingID]
+	_, noInteractionsFound := flagsByID[noInteractionsID]
+	_, expiredFound := flagsByID[expiredID]
+	require.True(t, awaitingFound)
+	require.True(t, noInteractionsFound)
+	require.True(t, expiredFound)
+	assert.Equal(t, true, flagsByID[awaitingID])
+	assert.Equal(t, false, flagsByID[noInteractionsID])
+	assert.Equal(t, false, flagsByID[expiredID])
 }
 
 func TestContactAPI_DirectionTimestamps(t *testing.T) {
@@ -328,7 +315,7 @@ func TestContactAPI_DirectionTimestamps(t *testing.T) {
 	assert.Contains(t, data, "last_interaction_at", "response should include last_interaction_at")
 	assert.Contains(t, data, "last_outreach_at", "response should include last_outreach_at")
 	assert.Contains(t, data, "last_response_at", "response should include last_response_at")
-	assert.Contains(t, data, "has_pending_followup", "response should include has_pending_followup")
+	assert.Contains(t, data, "awaiting_reply", "response should include awaiting_reply")
 }
 
 func TestContactAPI_FollowupFilter(t *testing.T) {
@@ -337,27 +324,17 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 	}
 	t.Parallel()
 
-	router, contactTaskRepo, cleanup := setupDirectionAPIRouter(t)
+	router, _, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()
-	ctx := context.Background()
 
 	contactName := "Followup Filter API Test " + uuid.NewString()[:8]
-	contactID := createDirectionTestContact(t, router, contactName)
-	id, _ := uuid.Parse(contactID)
+	cadenceName := "monthly"
+	contactID := createDirectionTestContactWithCadence(t, router, contactName, &cadenceName)
 	// Scope the DB-wide ListContacts page to this contact's unique name so a
 	// concurrent sibling's followup contacts can't push it off the limited page.
 	searchQuery := url.QueryEscape(contactName)
 
-	// Create a follow-up for this contact
-	_, err := contactTaskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
-		ContactID:      id,
-		Provider:       "todoist",
-		Kind:           contacttask.KindReachOut,
-		Lifecycle:      contacttask.LifecycleFollowUpLoop,
-		ExternalTaskID: "test-filter-api-" + contactID,
-		State:          "managed",
-	})
-	require.NoError(t, err)
+	recordDirectionTestInteraction(t, router, contactID, "outbound", accelerated.GetCurrentTime().Add(-time.Hour))
 
 	t.Run("has_followup_includes_contact", func(t *testing.T) {
 		// spec: CON-018.followup-filter-closed-set

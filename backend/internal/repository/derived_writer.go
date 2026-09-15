@@ -28,7 +28,7 @@ type DerivedWriter string
 
 const (
 	// DerivedWriterCadence authorizes last_contacted, last_interaction_at,
-	// last_outreach_at, last_response_at, and contact_by. Owner:
+	// last_outreach_at, last_response_at, contact_by, and awaiting_reply_until. Owner:
 	// CadenceUpdater.applyTx and the delete-rollback recompute.
 	DerivedWriterCadence DerivedWriter = "cadence"
 

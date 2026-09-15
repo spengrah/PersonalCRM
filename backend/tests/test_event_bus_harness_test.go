@@ -103,6 +103,7 @@ func setupTestEventBus(
 		claimRepo, contactRepo, database.Queries,
 		consumer.CadenceModeCutover,
 		false,
+		config.TestConfig().Watchdog,
 	)
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
@@ -184,6 +185,7 @@ func setupTestEventBusWithRematch(
 		claimRepo, contactRepo, database.Queries,
 		consumer.CadenceModeCutover,
 		false,
+		config.TestConfig().Watchdog,
 	)
 	stagingRegistry2 := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
@@ -256,6 +258,7 @@ func setupTestEventBusForEmail(
 		claimRepo, contactRepo, database.Queries,
 		consumer.CadenceModeCutover,
 		false,
+		config.TestConfig().Watchdog,
 	)
 
 	// Off-mode FollowUpManager: cutover-only Todoist deps are nil (gated on
@@ -435,6 +438,7 @@ func buildCadenceUpdaterForTest(t *testing.T, database *db.Database) *consumer.C
 		claimRepo, contactRepo, database.Queries,
 		consumer.CadenceModeCutover,
 		false,
+		config.TestConfig().Watchdog,
 	)
 }
 

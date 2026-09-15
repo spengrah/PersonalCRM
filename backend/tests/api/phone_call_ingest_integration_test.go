@@ -14,6 +14,7 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/auth"
+	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/consumer"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
@@ -170,6 +171,7 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 		database.Queries,
 		consumer.CadenceModeCutover,
 		false,
+		config.TestConfig().Watchdog,
 	)
 	knowledgeAssertSvc, knowledgeCache := buildKnowledgeDepsForAPITest(t, database, eventBus)
 

@@ -224,23 +224,6 @@ func (s *ContactService) InjectBusForTest(bus *events.Bus) {
 	s.bus = bus
 }
 
-// HasPendingFollowUp checks if a contact has a pending follow-up task
-func (s *ContactService) HasPendingFollowUp(ctx context.Context, contactID uuid.UUID) (bool, error) {
-	_, err := s.contactTaskRepo.FindPendingFollowUp(ctx, contactID)
-	if err != nil {
-		if errors.Is(err, db.ErrNotFound) {
-			return false, nil
-		}
-		return false, err
-	}
-	return true, nil
-}
-
-// PendingFollowUpSet returns the contact IDs that have a live follow-up task.
-func (s *ContactService) PendingFollowUpSet(ctx context.Context, contactIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
-	return s.contactTaskRepo.ListContactIDsWithLiveFollowUp(ctx, contactIDs)
-}
-
 func (s *ContactService) GetContact(ctx context.Context, id uuid.UUID) (*repository.Contact, error) {
 	contact, err := s.contactRepo.GetContact(ctx, id)
 	if err != nil {
@@ -1605,9 +1588,10 @@ func buildMergeUpdateRequest(targetContact, sourceContact *repository.Contact, r
 // target state backward.
 func buildMergeCadenceFields(targetContact, sourceContact *repository.Contact, mergedCadence *string) repository.ContactCadenceFields {
 	fields := repository.ContactCadenceFields{
-		LastContacted:  maxTimePtr(targetContact.LastContacted, sourceContact.LastContacted),
-		LastOutreachAt: maxTimePtr(targetContact.LastOutreachAt, sourceContact.LastOutreachAt),
-		LastResponseAt: maxTimePtr(targetContact.LastResponseAt, sourceContact.LastResponseAt),
+		LastContacted:      maxTimePtr(targetContact.LastContacted, sourceContact.LastContacted),
+		LastOutreachAt:     maxTimePtr(targetContact.LastOutreachAt, sourceContact.LastOutreachAt),
+		LastResponseAt:     maxTimePtr(targetContact.LastResponseAt, sourceContact.LastResponseAt),
+		AwaitingReplyUntil: maxTimePtr(targetContact.AwaitingReplyUntil, sourceContact.AwaitingReplyUntil),
 	}
 	// Derive merged contact_by from the CHOSEN cadence (which may be the
 	// source's after field-selection). Base = merged last_contacted or

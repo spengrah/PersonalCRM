@@ -5779,6 +5779,9 @@ const docTemplate = `{
             "description": "Contact information",
             "type": "object",
             "properties": {
+                "awaiting_reply": {
+                    "type": "boolean"
+                },
                 "birthday": {
                     "type": "string",
                     "example": "1990-01-15T00:00:00Z"
@@ -5805,9 +5808,6 @@ const docTemplate = `{
                 "full_name": {
                     "type": "string",
                     "example": "John Doe"
-                },
-                "has_pending_followup": {
-                    "type": "boolean"
                 },
                 "how_met": {
                     "type": "string",
@@ -6521,6 +6521,9 @@ const docTemplate = `{
             "description": "Overdue contact information with action metadata",
             "type": "object",
             "properties": {
+                "awaiting_reply": {
+                    "type": "boolean"
+                },
                 "birthday": {
                     "type": "string",
                     "example": "1990-01-15T00:00:00Z"
@@ -6551,9 +6554,6 @@ const docTemplate = `{
                 "full_name": {
                     "type": "string",
                     "example": "John Doe"
-                },
-                "has_pending_followup": {
-                    "type": "boolean"
                 },
                 "how_met": {
                     "type": "string",

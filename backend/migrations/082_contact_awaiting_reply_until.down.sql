@@ -1,23 +1,28 @@
--- Push the sole-writer rule for contact's eight derived columns down from Go
--- convention into the schema. The AST walker
--- (backend/tests/sole_writer_static_test.go) also checks repository Go writes;
--- neither it nor this trigger sees a psql session, admin SQL, or a future
--- non-Go client. It stays because it catches mistakes before the database.
---
--- Authorization is per OWNER, not one truthy flag: crm.derived_writer takes
--- exactly one of two literal values and each authorizes a DISJOINT column set.
---
--- The comparison is EXACT string equality. No trim, no lower. A GUC of
--- ' cadence ' or 'CADENCE' is not 'cadence' and must be rejected; the
--- wrong-owner test table pins that in both directions.
---
--- current_setting's second argument MUST stay true. It makes an unset GUC
--- return NULL instead of raising, which is the difference between "this write
--- is unauthorized" and "this database has never seen an authorized write".
---
--- Per-column IS DISTINCT FROM, never a blanket UPDATE veto: the profile-only
--- UpdateContact path (full_name, cadence, profile_photo, updated_at) and
--- SoftDeleteContact leave all eight unchanged and must pass with no GUC set.
+BEGIN;
+
+DROP VIEW live_contact;
+
+ALTER TABLE contact DROP COLUMN awaiting_reply_until;
+
+CREATE VIEW live_contact AS
+SELECT
+    id,
+    full_name,
+    location,
+    birthday,
+    how_met,
+    cadence,
+    last_contacted,
+    profile_photo,
+    deleted_at,
+    created_at,
+    updated_at,
+    contact_by,
+    last_interaction_at,
+    last_outreach_at,
+    last_response_at
+FROM contact
+WHERE deleted_at IS NULL;
 
 CREATE OR REPLACE FUNCTION reject_unauthorized_derived_contact_write()
 RETURNS TRIGGER AS $$
@@ -59,8 +64,4 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS reject_unauthorized_derived_contact_write ON contact;
-
-CREATE TRIGGER reject_unauthorized_derived_contact_write
-BEFORE UPDATE ON contact
-FOR EACH ROW EXECUTE FUNCTION reject_unauthorized_derived_contact_write();
+COMMIT;

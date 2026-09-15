@@ -733,7 +733,7 @@ func TestTodoist_ProcessTempIDMappings_RollbackDefersSkipDriftOneTick(t *testing
 	// Same-tick reconcile with deferSkipDrift=true — skip-drift branch
 	// must NOT fire (no item_close + item_add emitted from it).
 	syncedDeadline, _ := afterMapping.Metadata[MetadataKeySyncedDeadline].(string)
-	cmds := env.provider.reconcileExistingTask(env.ctx, afterMapping, contact, env.settings, syncedDeadline, true /* deferSkipDrift */)
+	cmds := env.provider.reconcileExistingTask(env.ctx, afterMapping, contact, env.settings, syncedDeadline, syncedDeadline, true /* deferSkipDrift */)
 
 	for _, c := range cmds {
 		assert.NotEqual(t, "item_close", c.Type, "deferral must suppress duplicate item_close")
@@ -771,7 +771,7 @@ func TestTodoist_SkipDrift_ReconcileRecovery(t *testing.T) {
 	require.NoError(t, err)
 
 	// Reconcile with deferSkipDrift=false — branch must fire.
-	cmds := env.provider.reconcileExistingTask(env.ctx, afterSkip, contact, env.settings, syncedDeadline, false)
+	cmds := env.provider.reconcileExistingTask(env.ctx, afterSkip, contact, env.settings, syncedDeadline, syncedDeadline, false)
 
 	require.Len(t, cmds, 2, "skip-drift branch must emit item_close + item_add")
 	assert.Equal(t, "item_close", cmds[0].Type)
@@ -979,7 +979,7 @@ func TestReconcileExistingTask_SkipDriftRecovery_MetadataWriteFailure(t *testing
 	env.faultyTaskWriter.faultyMethod = "UpdateContactTaskMetadata"
 	env.faultyTaskWriter.mu.Unlock()
 
-	cmds := env.provider.reconcileExistingTask(env.ctx, reloaded, contact, env.settings, "2027-04-15", false)
+	cmds := env.provider.reconcileExistingTask(env.ctx, reloaded, contact, env.settings, "2027-04-15", "2027-04-15", false)
 
 	// No commands emitted because the pre-emit metadata write failed.
 	assert.Empty(t, cmds, "skip-drift branch must not emit commands when metadata write fails")

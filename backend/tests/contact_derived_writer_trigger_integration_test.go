@@ -50,7 +50,7 @@ type derivedColumnCase struct {
 	attempt func(r *repository.ContactRepository, ctx context.Context, tx pgx.Tx, id uuid.UUID) error
 }
 
-// cadenceDerivedColumnCases is the five cadence rows, each calling
+// cadenceDerivedColumnCases is the six cadence rows, each calling
 // TestWriteCadenceColumnsWithoutGUCTx with exactly one field set.
 func cadenceDerivedColumnCases() []derivedColumnCase {
 	now := accelerated.GetCurrentTime()
@@ -93,6 +93,14 @@ func cadenceDerivedColumnCases() []derivedColumnCase {
 			isNil:  func(c *repository.Contact) bool { return c.ContactBy == nil },
 			attempt: func(r *repository.ContactRepository, ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 				return r.TestWriteCadenceColumnsWithoutGUCTx(ctx, tx, id, repository.TestCadenceSeed{ContactBy: &now})
+			},
+		},
+		{
+			column: "awaiting_reply_until",
+			owner:  repository.DerivedWriterCadence,
+			isNil:  func(c *repository.Contact) bool { return c.AwaitingReplyUntil == nil },
+			attempt: func(r *repository.ContactRepository, ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
+				return r.TestWriteCadenceColumnsWithoutGUCTx(ctx, tx, id, repository.TestCadenceSeed{AwaitingReplyUntil: &now})
 			},
 		},
 	}
@@ -534,20 +542,16 @@ func TestDerivedWriterGUC_PoolSafety(t *testing.T) {
 }
 
 // contactDerivedWriterPreVersion is the golang-migrate version immediately
-// before 079. Positioning the clone here first makes Steps(1)/Steps(-1) act
-// on 079 specifically, robust to later migrations landing above it — the same
-// discipline as whatsappFoundationsVersion (migration_076_down_test.go).
+// before 079. Positioning the clone here makes the historical migration legs
+// independent of later migrations.
 const contactDerivedWriterPreVersion = 78
 
-// TestDerivedWriterTrigger_MigrationUpDown is the arc's named round-trip
-// test. Serial (migration-subject) on its own ephemeral clone, following
-// migration_076_down_test.go's clone + migrate.New + m.Migrate(N) pattern.
-//
-// This test uses the direct-repository fallback (testing.md exception (b))
-// rather than the synthetic harness: it needs only a single bare cadence-less
-// contact per attempt, never replay or matching, so standing up the full
-// harness (River client, contact service, matcher) on a short-lived ephemeral
-// clone buys nothing over repository.NewContactRepository(database.Queries).
+// awaitingReplyUntilPreVersion is the version immediately before migration
+// 082, whose down restores 079's five-column function body.
+const awaitingReplyUntilPreVersion = 81
+
+// TestDerivedWriterTrigger_MigrationUpDown proves 079 and 082 install and
+// remove the trigger rule without losing the live-contact view shape.
 func TestDerivedWriterTrigger_MigrationUpDown(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
@@ -570,10 +574,6 @@ func TestDerivedWriterTrigger_MigrationUpDown(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = m.Close() })
 
-	if err := m.Migrate(contactDerivedWriterPreVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		require.NoError(t, err, "position the clone at the pre-079 tip")
-	}
-
 	contactRepo := repository.NewContactRepository(database.Queries)
 	freshContact := func(t *testing.T) *repository.Contact {
 		t.Helper()
@@ -583,19 +583,7 @@ func TestDerivedWriterTrigger_MigrationUpDown(t *testing.T) {
 		require.NoError(t, err)
 		return c
 	}
-	attemptUnauthorized := func(t *testing.T) error {
-		t.Helper()
-		c := freshContact(t)
-		tx, err := database.Pool.Begin(ctx)
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback(ctx) }()
-		now := accelerated.GetCurrentTime()
-		writeErr := contactRepo.TestWriteCadenceColumnsWithoutGUCTx(ctx, tx, c.ID, repository.TestCadenceSeed{LastContacted: &now})
-		if writeErr == nil {
-			require.NoError(t, tx.Commit(ctx))
-		}
-		return writeErr
-	}
+	c := freshContact(t)
 	countTrigger := func(t *testing.T) int64 {
 		t.Helper()
 		n, err := database.Queries.TestCountTriggers(ctx, db.TestCountTriggersParams{
@@ -611,34 +599,87 @@ func TestDerivedWriterTrigger_MigrationUpDown(t *testing.T) {
 		require.NoError(t, err)
 		return exists
 	}
+	functionDef := func(t *testing.T) string {
+		t.Helper()
+		definition, err := database.Queries.TestGetFunctionDef(ctx, "reject_unauthorized_derived_contact_write()")
+		require.NoError(t, err)
+		return definition
+	}
+	columnNames := func(t *testing.T, relation string) []string {
+		t.Helper()
+		cols, err := database.Queries.TestListViewColumns(ctx, relation)
+		require.NoError(t, err)
+		names := make([]string, len(cols))
+		for i, col := range cols {
+			names[i] = col.ColumnName
+		}
+		return names
+	}
+	attemptAwaitingReplyWrite := func(t *testing.T, owning bool) error {
+		t.Helper()
+		tx, err := database.Pool.Begin(ctx)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback(ctx) }()
+		now := accelerated.GetCurrentTime()
+		seed := repository.TestCadenceSeed{AwaitingReplyUntil: &now}
+		if owning {
+			if err := contactRepo.TestSeedContactCadenceFieldsTx(ctx, tx, c.ID, seed); err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
+		}
+		return contactRepo.TestWriteCadenceColumnsWithoutGUCTx(ctx, tx, c.ID, seed)
+	}
+	noAwaitingColumn := func(t *testing.T) {
+		t.Helper()
+		assert.NotContains(t, columnNames(t, "contact"), "awaiting_reply_until")
+	}
+	assertViewShape := func(t *testing.T, want int, last string) {
+		t.Helper()
+		cols := columnNames(t, "live_contact")
+		require.Len(t, cols, want)
+		if last != "" {
+			assert.Equal(t, last, cols[len(cols)-1])
+		}
+	}
 
-	// 1. Up.
-	require.NoError(t, m.Steps(1))
+	// The clone starts at migration head; the fixture is created and read there.
+	loaded, err := contactRepo.GetContact(ctx, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, c.ID, loaded.ID)
 
-	// 2. Catalog: both objects present.
+	// 081 retains the 079 trigger and 15-column view, without the new column.
+	if err := m.Migrate(awaitingReplyUntilPreVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		require.NoError(t, err, "position the clone before migration 082")
+	}
+	noAwaitingColumn(t)
+	assertViewShape(t, 15, "")
 	require.EqualValues(t, 1, countTrigger(t))
 	require.True(t, funcExists(t))
+	assert.NotContains(t, functionDef(t), "awaiting_reply_until")
 
-	// 3. Behavior: unauthorized write raises.
-	assertRejected(t, attemptUnauthorized(t), "last_contacted")
-
-	// 4. Down.
-	require.NoError(t, m.Steps(-1))
-
-	// 5. Catalog: BOTH gone — this is the step that closes D7-9's vacuity.
-	// The up uses CREATE OR REPLACE FUNCTION, so a down that dropped only the
-	// trigger would leave the function behind and every behavioral assertion
-	// would still pass on reapply.
+	// 078 drops both 079 objects; this preserves the DROP FUNCTION vacuity check.
+	require.NoError(t, m.Migrate(contactDerivedWriterPreVersion))
 	require.EqualValues(t, 0, countTrigger(t))
-	require.False(t, funcExists(t),
-		"079 down must DROP FUNCTION reject_unauthorized_derived_contact_write() — "+
-			"the up uses CREATE OR REPLACE, so a leftover function is invisible to every behavioral assertion")
+	require.False(t, funcExists(t), "079 down must DROP FUNCTION reject_unauthorized_derived_contact_write()")
+	assertViewShape(t, 15, "")
 
-	// 6. Behavior: now succeeds.
-	require.NoError(t, attemptUnauthorized(t), "after the down, the same write must succeed")
+	// 079 restores the trigger and its five-column body.
+	require.NoError(t, m.Migrate(79))
+	require.EqualValues(t, 1, countTrigger(t))
+	require.True(t, funcExists(t))
+	assert.NotContains(t, functionDef(t), "awaiting_reply_until")
 
-	// 7. Reapply: rejection comes back — proves the down left the schema
-	// genuinely re-appliable rather than merely quiet.
-	require.NoError(t, m.Steps(1))
-	assertRejected(t, attemptUnauthorized(t), "last_contacted")
+	// Head adds the column, appends it to the view and extends the trigger.
+	require.NoError(t, m.Up())
+	assert.Contains(t, columnNames(t, "contact"), "awaiting_reply_until")
+	assertViewShape(t, 16, "awaiting_reply_until")
+	assert.Contains(t, functionDef(t), "awaiting_reply_until")
+	assertRejected(t, attemptAwaitingReplyWrite(t, false), "awaiting_reply_until")
+	require.NoError(t, attemptAwaitingReplyWrite(t, true))
+
+	// Rolling just 082 back restores the exact 079 function body.
+	require.NoError(t, m.Migrate(awaitingReplyUntilPreVersion))
+	noAwaitingColumn(t)
+	assert.NotContains(t, functionDef(t), "awaiting_reply_until")
 }

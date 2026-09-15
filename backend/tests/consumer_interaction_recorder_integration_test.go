@@ -146,6 +146,7 @@ func newConsumerTestEnv(t *testing.T, ctx context.Context) *consumerTestEnv {
 		claimRepo, contactRepo, database.Queries,
 		consumer.CadenceModeCutover,
 		false,
+		config.TestConfig().Watchdog,
 	)
 	assertSvc, cache := buildKnowledgeDeps(t, database, bus)
 	contactService := service.NewContactService(database, contactRepo, contactMethodRepo, interactionRepo, contactTaskRepo, nil, nil,

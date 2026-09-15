@@ -81,6 +81,7 @@ func buildDomainConsumers(
 		database.Queries,
 		consumer.CadenceModeFromConfig(cfg.EventBus.CadenceMode),
 		cfg.EventBus.UnsafeAllowOffMode,
+		cfg.Watchdog,
 	)
 
 	// Knowledge-cache consumer (the location/birthday/how_met authority flip):
@@ -222,7 +223,7 @@ func registerCoreConsumerWorkers(
 	// soft-deletes the derived gcal interaction and recomputes the contact's
 	// date columns. Registered unconditionally — no events route to it when
 	// the publisher (CalendarSyncProvider) is in off mode.
-	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo)
+	calendarDeclineHandler := consumer.NewCalendarDeclineHandler(interactionRepo, contactRepo, cfg.Watchdog)
 	addWorker(reg, consumer.NewCalendarDeclineHandlerWorker(eventBus, database.Pool, calendarDeclineHandler))
 
 	// Email-interaction consumer: derives a per-(contact, thread, local-day)
