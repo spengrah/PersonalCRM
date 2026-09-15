@@ -1,8 +1,9 @@
 -- Push the sole-writer rule for contact's eight derived columns down from Go
--- convention into the schema. The AST walker
--- (backend/tests/sole_writer_static_test.go) also checks repository Go writes;
--- neither it nor this trigger sees a psql session, admin SQL, or a future
--- non-Go client. It stays because it catches mistakes before the database.
+-- convention into the schema. Until now it was enforced only by an AST walker
+-- (backend/tests/sole_writer_static_test.go), which sees this repository's Go
+-- and nothing else: not a psql session, not admin SQL, not a future non-Go
+-- client. It stays — it fails earlier and with a better message; this trigger
+-- covers what it cannot reach.
 --
 -- Authorization is per OWNER, not one truthy flag: crm.derived_writer takes
 -- exactly one of two literal values and each authorizes a DISJOINT column set.

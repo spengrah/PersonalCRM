@@ -48,13 +48,6 @@ func TestAwaitingReplyWindow_BuildInteractionWrite(t *testing.T) {
 	}
 }
 
-func TestAwaitingReplyWindow_ApplyTxNoOpWithoutExpiry(t *testing.T) {
-	h, _, _ := newUnitUpdater(CadenceModeCutover)
-	require.NoError(t, h.applyTx(context.Background(), nil, cadenceWriteRequest{
-		Branch: repository.CadenceBranchForward,
-	}))
-}
-
 type awaitingReplyWindowCreateWriter struct {
 	*stubFollowUpTaskWriter
 }
@@ -108,6 +101,3 @@ func TestAwaitingReplyWindow_FollowUpCreateDeadline(t *testing.T) {
 	_, ok := inserter.args[0].(consumerjobs.TodoistTaskOpArgs)
 	require.True(t, ok)
 }
-
-// The settings callback's concrete return type is referenced above; importing
-// todoist here keeps this test's harness local to the consumer package.

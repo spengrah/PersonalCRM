@@ -277,22 +277,23 @@ func (h *Harness) ReplayTodoistRecurringEdit(ctx context.Context, contactID uuid
 	return nil
 }
 
-// SeedPendingFollowUp gives a contact a LIVE follow-up loop — the "awaiting reply"
-// state (`has_pending_followup`, CAD-029/CAD-036).
+// SeedPendingFollowUp seeds the Todoist follow-up reminder row that accompanies
+// an awaiting-reply state. `awaiting_reply` itself derives from the contact's
+// `last_outreach_at`, `last_response_at`, and `awaiting_reply_until` (CAD-040),
+// which the replayed outbound establishes. The row still matters for tours that
+// exercise the reminder surface.
 //
 // Why this is seeded directly instead of driven through the production path: a
 // follow-up is normally opened by the FollowUpManager consumer on an outbound
 // interaction (CAD-011), but the seed harness wires that consumer in
 // FollowUpModeOff (harness_setup.go) — and even with it on, CAD-012 suppresses
 // follow-ups for backdated automated outbounds, which is every interaction a
-// historical replay produces. So no seeded world could ever contain this state.
+// historical replay produces. So no seeded world could ever contain this reminder
+// row through the production path.
 //
-// That was not a cosmetic gap. With zero such contacts in the world, the tours
-// could not capture the state, and the judge — shown only contact pages with no
-// "Awaiting reply" marker — concluded the FEATURE DID NOT EXIST and reported a
-// confident, well-cited, false regression on CAD-036, every run. Absence of
-// evidence is indistinguishable from absence of the feature, and no judge-side
-// rigor can fix that; only the evidence can.
+// Without the row, tours cannot exercise the reminder surface, so this seed makes
+// that row reachable even though the contact's awaiting-reply state comes from the
+// replayed outbound.
 //
 // The row mirrors the production shape FollowUpManager writes (provider/kind/
 // lifecycle/due_date metadata), settling on `managed` — the steady state after a
@@ -302,15 +303,12 @@ func (h *Harness) ReplayTodoistRecurringEdit(ctx context.Context, contactID uuid
 // deterministic id sequence earlier source replays depend on.
 //
 // CALLER'S CONTRACT: `contactID` must be a contact with a cadence AND an outbound —
-// a follow-up is opened BY an outbound (CAD-011), so one on a contact with neither
-// renders as "Awaiting reply" with nothing to be awaiting a reply TO, a state
-// production cannot reach. (The judge failed the contact page for exactly that when
-// this seed first hung a follow-up on an arbitrary contact.) This is NOT asserted
-// here: the cadence engine writes last_outreach_at asynchronously from its River
-// worker (and is its sole writer — CAD-005, CI-guarded), so it is still nil at seed
-// time. The caller establishes the chain by construction (seedPendingFollowUpFixture
-// in standard.go): a follow-up loop is opened BY an outbound, so the fixture is
-// seeded with the outbound first and the follow-up hung on it.
+// the reminder accompanies an outbound, and the awaiting-reply state is derived
+// from that outbound within its watchdog window. This is NOT asserted here: the
+// cadence engine writes last_outreach_at asynchronously from its River worker (and
+// is its sole writer — CAD-005, CI-guarded), so it is still nil at seed time. The
+// caller establishes the chain by construction (seedPendingFollowUpFixture in
+// standard.go): the fixture replays the outbound before attaching its reminder.
 func (h *Harness) SeedPendingFollowUp(ctx context.Context, contactID uuid.UUID, fullName string) (uuid.UUID, error) {
 	taskRepo := repository.NewContactTaskRepository(h.database.Queries)
 	deadline := accelerated.GetCurrentTime().Add(followUpSeedWindow)

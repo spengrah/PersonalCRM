@@ -25,9 +25,15 @@ type ContactResponse struct {
 	LastOutreachAt    *time.Time              `json:"last_outreach_at,omitempty"`
 	LastResponseAt    *time.Time              `json:"last_response_at,omitempty"`
 	AwaitingReply     bool                    `json:"awaiting_reply"`
-	ProfilePhoto      *string                 `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
-	CreatedAt         time.Time               `json:"created_at" example:"2024-01-01T00:00:00Z"`
-	UpdatedAt         time.Time               `json:"updated_at" example:"2024-01-15T10:30:00Z"`
+	// AwaitingReplyUntil is the last calendar date on which an unanswered
+	// outreach keeps this contact awaiting a reply (CAD-041), serialized as
+	// that date at UTC midnight. awaiting_reply is the derived flag; this is
+	// the stored expiry it was evaluated against. Absent when no outreach has
+	// opened a window.
+	AwaitingReplyUntil *time.Time `json:"awaiting_reply_until,omitempty"`
+	ProfilePhoto       *string    `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
+	CreatedAt          time.Time  `json:"created_at" example:"2024-01-01T00:00:00Z"`
+	UpdatedAt          time.Time  `json:"updated_at" example:"2024-01-15T10:30:00Z"`
 	// RematchJobID is populated by the CREATE path only. A rematch is triggered
 	// by newly-present method values, and update no longer carries methods, so
 	// it has no job to report. This type is shared by create, get, update, list,

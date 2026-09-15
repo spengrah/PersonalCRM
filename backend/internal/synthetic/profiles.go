@@ -48,11 +48,8 @@ type ProfileResult struct {
 	SettledInteractions int
 	// SeededTasks counts every contact_task row the run seeded. Counts-only / no PII.
 	SeededTasks int
-	// SeededPendingFollowUps counts the LIVE followup_loop rows seeded — the "awaiting
-	// reply" state (has_pending_followup). A seeded world cannot reach this state through
-	// the production path (see the seeding site), so it is written directly; without it the
-	// state is absent from the world entirely, and the agentic judge reads that absence as
-	// a missing feature.
+	// SeededPendingFollowUps counts the seeded Todoist follow-up reminder rows;
+	// the awaiting-reply state comes from the outbound rider's contact cadence data.
 	SeededPendingFollowUps int
 	// OutboundOnlyContacts / MutualMessageContacts count the two-sided
 	// message-direction riders: the OUTBOUND-only contact ("I messaged them, no reply

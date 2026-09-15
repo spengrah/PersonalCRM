@@ -5,6 +5,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -292,15 +293,27 @@ func TestAwaitingReplyDerivation_ParityMatrix(t *testing.T) {
 
 	today := cadence.Today(accelerated.GetCurrentTime())
 	monthly := "monthly"
-	zeroContact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{
-		FullName: "awaiting-" + namespace + "-zero-as-of", Cadence: &monthly,
+	zeroOpenContact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{
+		FullName: "awaiting-" + namespace + "-zero-as-of-open", Cadence: &monthly,
 	})
 	require.NoError(t, err)
 	outreach := noon(today.AddDate(0, 0, -1))
-	require.NoError(t, e.contactRepo.TestSeedContactCadenceFields(e.ctx, zeroContact.ID, repository.TestCadenceSeed{
+	require.NoError(t, e.contactRepo.TestSeedContactCadenceFields(e.ctx, zeroOpenContact.ID, repository.TestCadenceSeed{
 		LastOutreachAt: &outreach, AwaitingReplyUntil: &today,
 	}))
-	zeroParams := repository.ListContactsParams{Query: zeroContact.FullName, Limit: 20, FollowupFilter: "has_followup"}
+	expiredContact, err := e.contactRepo.CreateContact(e.ctx, repository.CreateContactRequest{
+		FullName: "awaiting-" + namespace + "-zero-as-of-expired", Cadence: &monthly,
+	})
+	require.NoError(t, err)
+	expiredOutreach := noon(today.AddDate(0, 0, -8))
+	expiredUntil := today.AddDate(0, 0, -1)
+	require.NoError(t, e.contactRepo.TestSeedContactCadenceFields(e.ctx, expiredContact.ID, repository.TestCadenceSeed{
+		LastOutreachAt: &expiredOutreach, AwaitingReplyUntil: &expiredUntil,
+	}))
+	searchPrefix := strings.ReplaceAll("awaiting-"+namespace+"-zero-as-of", "-", " ")
+	zeroParams := repository.ListContactsParams{
+		Query: searchPrefix, Limit: 20, FollowupFilter: "has_followup",
+	}
 	todayParams := zeroParams
 	todayParams.AsOfDate = today
 	zeroList, err := e.contactRepo.ListContacts(e.ctx, zeroParams)
@@ -308,6 +321,13 @@ func TestAwaitingReplyDerivation_ParityMatrix(t *testing.T) {
 	todayList, err := e.contactRepo.ListContacts(e.ctx, todayParams)
 	require.NoError(t, err)
 	assert.Equal(t, contactIDs(zeroList), contactIDs(todayList), "zero AsOfDate must use the app-clock calendar date")
+	zeroParams.FollowupFilter = "no_followup"
+	noFollowupList, err := e.contactRepo.ListContacts(e.ctx, zeroParams)
+	require.NoError(t, err)
+	assert.Contains(t, contactIDs(zeroList), zeroOpenContact.ID)
+	assert.NotContains(t, contactIDs(zeroList), expiredContact.ID)
+	assert.Contains(t, contactIDs(noFollowupList), expiredContact.ID)
+	assert.NotContains(t, contactIDs(noFollowupList), zeroOpenContact.ID)
 }
 
 func boolInt(value bool) int {

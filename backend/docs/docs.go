@@ -5782,6 +5782,10 @@ const docTemplate = `{
                 "awaiting_reply": {
                     "type": "boolean"
                 },
+                "awaiting_reply_until": {
+                    "description": "AwaitingReplyUntil is the last calendar date on which an unanswered\noutreach keeps this contact awaiting a reply (CAD-041), serialized as\nthat date at UTC midnight. awaiting_reply is the derived flag; this is\nthe stored expiry it was evaluated against. Absent when no outreach has\nopened a window.",
+                    "type": "string"
+                },
                 "birthday": {
                     "type": "string",
                     "example": "1990-01-15T00:00:00Z"
@@ -6523,6 +6527,10 @@ const docTemplate = `{
             "properties": {
                 "awaiting_reply": {
                     "type": "boolean"
+                },
+                "awaiting_reply_until": {
+                    "description": "AwaitingReplyUntil is the last calendar date on which an unanswered\noutreach keeps this contact awaiting a reply (CAD-041), serialized as\nthat date at UTC midnight. awaiting_reply is the derived flag; this is\nthe stored expiry it was evaluated against. Absent when no outreach has\nopened a window.",
+                    "type": "string"
                 },
                 "birthday": {
                     "type": "string",

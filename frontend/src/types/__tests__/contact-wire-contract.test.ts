@@ -21,9 +21,9 @@ describe('contact wire contract', () => {
   })
 
   it('marks always-emitted fields as required', () => {
-    // has_pending_followup is a non-pointer bool without omitempty — the
+    // awaiting_reply is a non-pointer bool without omitempty — the
     // backend always sends it.
-    expectTypeOf<Contact['has_pending_followup']>().toEqualTypeOf<boolean>()
+    expectTypeOf<Contact['awaiting_reply']>().toEqualTypeOf<boolean>()
   })
 
   it('does not invent fields the backend never sends', () => {

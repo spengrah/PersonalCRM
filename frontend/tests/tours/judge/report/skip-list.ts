@@ -55,7 +55,7 @@ export const CLAUSE_SKIPS: SkipEntry[] = [
   {
     id: 'CAD-029[2]',
     reason:
-      'Todoist provider: the awaiting-reply indicator needs has_pending_followup (provider-driven)',
+      'Todoist provider: the awaiting-reply indicator needs an open awaiting-reply window (an outbound within the watchdog window), which the tour world seeds through replay',
   },
   {
     id: 'CAD-030[0]',
