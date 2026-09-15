@@ -63,11 +63,8 @@ test.describe('Contact Direction Signals @area:contacts', () => {
 
   test('shows awaiting-reply indicator while a follow-up pends', async ({ page }) => {
     // spec: CAD-029.awaiting-reply-indicator-shown
-    // has_pending_followup is computed LIVE from the contact's follow-up-loop
-    // task row (its lifecycle + state), so the state IS reachable by seeding:
-    // the declared fixture's awaiting contact carries a real outbound and a real
-    // live follow-up hung on it, in that order, because a follow-up loop is
-    // opened BY an outbound.
+    // `awaiting_reply` derives from the replayed outbound's expiry on the contact;
+    // the seeded follow-up row is the accompanying Todoist reminder.
     const seeded = await testApi.seedBehavior('CAD-029')
     const contactId = seeded.entities['awaiting'].id
     const fullName = seeded.entities['awaiting'].name
@@ -107,6 +104,6 @@ test.describe('Contact Direction Signals @area:contacts', () => {
   // The interaction/contact wire-shape checks (direction field on POST/list,
   // direction timestamp fields on GET) that used to live here involved no page
   // and are owned by the Go API suite: TestInteractionAPI_DirectionInResponse,
-  // TestContactAPI_DirectionTimestamps, and TestContactAPI_HasPendingFollowup
+  // TestContactAPI_DirectionTimestamps, and TestContactAPI_AwaitingReply
   // in backend/tests/api/direction_api_test.go.
 })

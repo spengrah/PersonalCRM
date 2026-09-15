@@ -67,7 +67,9 @@ func setupAwaitingReplyAPIRouter(t *testing.T) (*gin.Engine, *repository.Contact
 	router.Use(api.RequestIDMiddleware())
 	contacts := router.Group("/api/v1/contacts")
 	contacts.POST("", contactHandler.CreateContact)
+	contacts.GET("", contactHandler.ListContacts)
 	contacts.GET("/overdue", contactHandler.ListOverdueContacts)
+	contacts.GET("/:id", contactHandler.GetContact)
 	contacts.POST("/:id/interactions", interactionHandler.CreateInteraction)
 
 	return router, contactRepo, contactTaskRepo, database.Close

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"testing"
 
+	"personal-crm/backend/internal/accelerated"
+	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
@@ -144,7 +146,7 @@ func TestContactList_TripleParity(t *testing.T) {
 	ctx := context.Background()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	contactRepo := repository.NewContactRepository(database.Queries)
-	taskRepo := repository.NewContactTaskRepository(database.Queries)
+	contactRepo.SetPool(database.Pool)
 	gen, _ := migrationGenerator(t)
 
 	const searchTerm = "zqxparity"
@@ -168,14 +170,9 @@ func TestContactList_TripleParity(t *testing.T) {
 	for _, c := range cells {
 		// The cadence and search axes are ordinary ContactSpec shape, so they
 		// go through the synthetic factory (migrationGenerator/factory.Contact)
-		// like every other repo-test contact fixture. The followup axis does
-		// not: no ContactOption creates a contact_task — a followup_loop row is
-		// a downstream FollowUpManager side effect of a real outbound
-		// interaction in production, and replaying that here would trade a
-		// direct, deterministic CreateContactTask call for an async
-		// settle-gated pipeline, for a test whose subject is SQL query-shape
-		// parity, not follow-up creation. That axis stays hand-rolled through
-		// ContactTaskRepository.
+		// like every other repo-test contact fixture. The follow-up axis is the
+		// three cadence columns the CON-022 filter reads, seeded through the
+		// cadence-owner fixture because no ContactOption writes derived columns.
 		var opts []factory.ContactOption
 		if c.cadence {
 			opts = append(opts, factory.WithCadence("weekly"))
@@ -185,16 +182,19 @@ func TestContactList_TripleParity(t *testing.T) {
 		}
 		contact, _ := seedMigrationContact(ctx, t, database, gen, opts...)
 
+		now := accelerated.GetCurrentTime()
+		outreachDays, responseDays := -30, -40
 		if c.followup {
-			_, err := taskRepo.CreateContactTask(ctx, repository.CreateContactTaskRequest{
-				ContactID: contact.ID,
-				Provider:  "todoist",
-				Kind:      "reach_out",
-				Lifecycle: "followup_loop",
-				State:     "managed",
-			})
-			require.NoError(t, err)
+			outreachDays, responseDays = -1, -10
 		}
+		outreach := now.AddDate(0, 0, outreachDays)
+		response := now.AddDate(0, 0, responseDays)
+		until := cadence.AwaitingReplyUntil(outreach, 7)
+		require.NoError(t, contactRepo.TestSeedContactCadenceFields(ctx, contact.ID, repository.TestCadenceSeed{
+			LastOutreachAt:     &outreach,
+			LastResponseAt:     &response,
+			AwaitingReplyUntil: &until,
+		}))
 	}
 
 	// The tie-break trio's own fixture, folded into this matrix too: a
