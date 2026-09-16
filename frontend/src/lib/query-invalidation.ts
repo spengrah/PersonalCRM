@@ -25,6 +25,7 @@ export type DomainEvent =
   | 'contact:deleted'
   | 'contact:touched' // marked as contacted (legacy alias preserved for existing listener compatibility)
   | 'contact:merged' // merged with another contact
+  | 'contact:skipped' // a cycle was skipped or a skip undone
   // Interaction events
   | 'interaction:created' // a manual / system interaction was logged
   // Import events
@@ -67,6 +68,11 @@ const invalidationRules: Record<DomainEvent, InvalidationKey[]> = {
   'contact:deleted': [contactKeys.lists()],
   'contact:touched': [contactKeys.lists(), contactKeys.overdue()],
   'contact:merged': [contactKeys.lists(), contactKeys.overdue()],
+  'contact:skipped': [
+    contactKeys.lists(),
+    contactKeys.overdue(),
+    (contactId: string) => contactKeys.detail(contactId),
+  ],
 
   // Interaction events — a manual interaction may bump cadence columns,
   // auto-complete a pending follow-up, or shift the overdue queue.

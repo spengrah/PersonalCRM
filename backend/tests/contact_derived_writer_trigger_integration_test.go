@@ -673,7 +673,7 @@ func TestDerivedWriterTrigger_MigrationUpDown(t *testing.T) {
 	// Head adds the column, appends it to the view and extends the trigger.
 	require.NoError(t, m.Up())
 	assert.Contains(t, columnNames(t, "contact"), "awaiting_reply_until")
-	assertViewShape(t, 16, "awaiting_reply_until")
+	assertViewShape(t, 19, "last_skip_reason")
 	assert.Contains(t, functionDef(t), "awaiting_reply_until")
 	assertRejected(t, attemptAwaitingReplyWrite(t, false), "awaiting_reply_until")
 	require.NoError(t, attemptAwaitingReplyWrite(t, true))

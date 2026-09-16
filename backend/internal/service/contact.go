@@ -62,7 +62,17 @@ type cadenceWriter interface {
 	// ApplyContactByOverride applies a user-driven cadence edit. Takes
 	// the unconditional branch so cadence clears or backdates work.
 	ApplyContactByOverride(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, contactBy *time.Time) error
+	ApplySkip(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, nextContactBy, skippedAt time.Time, reason string) error
+	ApplyUndoSkip(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error
 }
+
+// SkipReasonUI is the only skip reason the CRM writes (#212).
+const SkipReasonUI = "ui"
+
+var (
+	ErrSkipRequiresCadence = errors.New("skip cycle: contact has no cadence")
+	ErrUndoSkipUnavailable = errors.New("undo skip: no skip is in effect")
+)
 
 type ContactService struct {
 	database          *db.Database
@@ -234,6 +244,127 @@ func (s *ContactService) GetContact(ctx context.Context, id uuid.UUID) (*reposit
 		return nil, err
 	}
 
+	return contact, nil
+}
+
+// planSkip is the pure decision: the skipped-to date for a contact, or
+// ErrSkipRequiresCadence / a ParseCadence error.
+func planSkip(contact *repository.Contact, now time.Time) (time.Time, error) {
+	if contact.Cadence == nil || *contact.Cadence == "" {
+		return time.Time{}, ErrSkipRequiresCadence
+	}
+	cadenceType, err := cadence.ParseCadence(*contact.Cadence)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse cadence for skip: %w", err)
+	}
+	return cadence.NextAfterSkip(contact.ContactBy, cadenceType, now), nil
+}
+
+// SkipCycle skips the contact's current cadence cycle, ends any live
+// follow-up thread, and records skip state atomically.
+func (s *ContactService) SkipCycle(ctx context.Context, id uuid.UUID) (contact *repository.Contact, err error) {
+	if s.cadence == nil {
+		return nil, errors.New("skip cycle: cadence updater not wired")
+	}
+	tx, err := s.database.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) && err == nil {
+			err = rollbackErr
+		}
+	}()
+
+	contactRepo := repository.NewContactRepository(db.New(tx))
+	contact, err = contactRepo.GetContact(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	now := accelerated.GetCurrentTime()
+	next, err := planSkip(contact, now)
+	if err != nil {
+		return nil, err
+	}
+	if err = s.cadence.ApplySkip(ctx, tx, id, next, now, SkipReasonUI); err != nil {
+		return nil, fmt.Errorf("apply contact skip: %w", err)
+	}
+
+	pending, findErr := s.contactTaskRepo.FindPendingFollowUpTx(ctx, tx, id)
+	if findErr != nil && !errors.Is(findErr, db.ErrNotFound) {
+		return nil, fmt.Errorf("find pending follow-up for skip: %w", findErr)
+	}
+	if pending != nil {
+		updated, updateErr := s.contactTaskRepo.UpdateContactTaskStateTx(ctx, tx, pending.ID, repository.ContactTaskStateCompleted)
+		if updateErr != nil {
+			return nil, fmt.Errorf("mark follow-up completed for skip: %w", updateErr)
+		}
+		if updated.ExternalTaskID != "" {
+			switch {
+			case !s.taskCloseConfigured:
+				return nil, errors.New("skip cycle: task close enqueuer not wired (call SetTaskCloseEnqueuer)")
+			case !s.taskCloseRemoteEnabled:
+				logger.Warn().Str("contact_id", id.String()).Msg("skip: remote task close disabled (follow-up mode off); task closed locally only")
+			default:
+				if _, err = s.taskCloseEnqueuer.InsertTx(ctx, tx,
+					consumerjobs.TodoistTaskOpArgs{ContactTaskID: updated.ID, Op: consumerjobs.TaskOpClose},
+					&river.InsertOpts{MaxAttempts: 10}); err != nil {
+					return nil, fmt.Errorf("enqueue todoist close for skipped task: %w", err)
+				}
+			}
+		}
+	}
+
+	contact, err = contactRepo.GetContact(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("refetch contact after skip: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	if err = s.attachMethods(ctx, contact); err != nil {
+		return nil, err
+	}
+	return contact, nil
+}
+
+// UndoSkip restores the next-contact date the last skip replaced. It does
+// not reopen the awaiting-reply window or any follow-up reminder.
+func (s *ContactService) UndoSkip(ctx context.Context, id uuid.UUID) (contact *repository.Contact, err error) {
+	if s.cadence == nil {
+		return nil, errors.New("undo skip: cadence updater not wired")
+	}
+	tx, err := s.database.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) && err == nil {
+			err = rollbackErr
+		}
+	}()
+
+	contactRepo := repository.NewContactRepository(db.New(tx))
+	contact, err = contactRepo.GetContact(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !cadence.UndoSkipAvailable(contact.LastSkippedAt, contact.ContactBy, accelerated.GetCurrentTime()) {
+		return nil, ErrUndoSkipUnavailable
+	}
+	if err = s.cadence.ApplyUndoSkip(ctx, tx, id); err != nil {
+		return nil, err
+	}
+	contact, err = contactRepo.GetContact(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("refetch contact after undo skip: %w", err)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	if err = s.attachMethods(ctx, contact); err != nil {
+		return nil, err
+	}
 	return contact, nil
 }
 

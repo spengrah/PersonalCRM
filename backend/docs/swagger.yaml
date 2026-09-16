@@ -329,6 +329,17 @@ definitions:
         type: string
       last_response_at:
         type: string
+      last_skipped_at:
+        description: |-
+          LastSkippedAt is when the user last skipped this contact's cycle from the
+          CRM (CAD-044). Absent when no skip is recorded.
+        type: string
+      last_skipped_contact_by:
+        description: |-
+          LastSkippedContactBy is the next-contact date the last skip replaced,
+          serialized as that date at UTC midnight; undo restores it (CAD-045).
+          Absent when no skip is recorded.
+        type: string
       location:
         example: San Francisco, CA
         type: string
@@ -349,6 +360,11 @@ definitions:
           merge, and overdue; the field is omitempty, so a path that leaves it unset
           simply omits the key rather than publishing an always-null contract.
         type: string
+      undo_skip_available:
+        description: |-
+          UndoSkipAvailable is true while skip state is present and today is before
+          contact_by — server-computed at the app clock.
+        type: boolean
       updated_at:
         example: "2024-01-15T10:30:00Z"
         type: string
@@ -857,6 +873,17 @@ definitions:
         type: string
       last_response_at:
         type: string
+      last_skipped_at:
+        description: |-
+          LastSkippedAt is when the user last skipped this contact's cycle from the
+          CRM (CAD-044). Absent when no skip is recorded.
+        type: string
+      last_skipped_contact_by:
+        description: |-
+          LastSkippedContactBy is the next-contact date the last skip replaced,
+          serialized as that date at UTC midnight; undo restores it (CAD-045).
+          Absent when no skip is recorded.
+        type: string
       location:
         example: San Francisco, CA
         type: string
@@ -883,6 +910,11 @@ definitions:
       suggested_action:
         example: Send a quick check-in message
         type: string
+      undo_skip_available:
+        description: |-
+          UndoSkipAvailable is true while skip state is present and today is before
+          contact_by — server-computed at the app clock.
+        type: boolean
       updated_at:
         example: "2024-01-15T10:30:00Z"
         type: string
@@ -2798,6 +2830,129 @@ paths:
       summary: Save contact notepad
       tags:
       - notes
+  /contacts/{id}/skip:
+    delete:
+      description: Restore the pre-skip next-contact date while the skip is still
+        in effect (today is before the skipped-to date). Does not reopen the follow-up
+        thread.
+      parameters:
+      - description: Contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Skip undone
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ContactResponse'
+              type: object
+        "400":
+          description: Invalid contact ID
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Contact not found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "409":
+          description: No skip is in effect
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Undo skip
+      tags:
+      - contacts
+    post:
+      description: Advance the contact's next-contact date by one cadence cycle, end
+        any live follow-up thread, and record the skip so it can be undone until the
+        skipped-to date arrives.
+      parameters:
+      - description: Contact ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Cycle skipped
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                data:
+                  $ref: '#/definitions/handlers.ContactResponse'
+              type: object
+        "400":
+          description: Invalid contact ID
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "404":
+          description: Contact not found
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "409":
+          description: Contact has no cadence
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+        "500":
+          description: Internal server error
+          schema:
+            allOf:
+            - $ref: '#/definitions/api.APIResponse'
+            - properties:
+                error:
+                  $ref: '#/definitions/api.APIError'
+              type: object
+      summary: Skip this cycle
+      tags:
+      - contacts
   /contacts/{id}/tasks:
     get:
       description: List all tasks for a contact with optional state, kind, and lifecycle

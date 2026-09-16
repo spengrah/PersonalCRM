@@ -13,7 +13,7 @@ package declare
 // citing test, its entry moves out of this map in the same PR.
 var Waivers = map[string]string{
 	// spec/dashboard.yaml
-	"DSH-006": "proposed — the failed mark-contacted path is not implemented and has no citing test",
+	"DSH-006": "proposed — the failed dashboard write path (log interaction from a card, skip this cycle) is not implemented and has no citing test",
 	"DSH-009": "proposed — the stale-flow refresh leak is documented, not implemented",
 
 	// spec/contacts.yaml

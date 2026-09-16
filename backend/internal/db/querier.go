@@ -83,6 +83,17 @@ type Querier interface {
 	// value), then keep the first 3 elements (newest-first). A NULL current body is
 	// not pushed (nothing to preserve).
 	ApplyCommsMessageEditByExternalID(ctx context.Context, arg ApplyCommsMessageEditByExternalIDParams) (int64, error)
+	// The CRM skip (CAD-044): advances contact_by to the caller-computed
+	// skipped-to date (cadence.NextAfterSkip), ends the awaiting-reply window,
+	// and records the skip state in the SAME statement — last_skipped_contact_by
+	// captures the pre-skip contact_by because SET expressions read the old row.
+	// Cadence-owned: the caller declares crm.derived_writer=cadence first.
+	ApplyContactSkip(ctx context.Context, arg ApplyContactSkipParams) error
+	// Undo (CAD-045): restores the recorded pre-skip contact_by and clears the
+	// skip state. Touches neither awaiting_reply_until nor any follow-up row —
+	// undo is not the inverse of skip. Affects zero rows when no skip state is
+	// present; the caller has already checked cadence.UndoSkipAvailable.
+	ApplyContactUndoSkip(ctx context.Context, id uuid.UUID) (int64, error)
 	// Retroactive attach: binds a source's remaining unmatched rows for one peer to
 	// a contact. Matches on peer_handle (always present) OR peer_normalized
 	// (present only when the peer's phone was resolvable) so a LID-only peer
@@ -2958,6 +2969,8 @@ type Querier interface {
 	// Merge (BulkApply) sets apply_last_interaction_at=false because a
 	// merge is not an interaction and must not mutate the "last
 	// non-outbound interaction" timestamp of the surviving contact.
+	// apply_clear_skip_state clears the three skip-state columns (CAD-045: skip
+	// state has one setter and every other writer of the clock clears it).
 	UpdateContactCadenceForward(ctx context.Context, arg UpdateContactCadenceForwardParams) error
 	// Manual-source branch (spec §3.4.2 "manual-source exception"): user
 	// correction — any passed-in value replaces the existing one
@@ -2968,6 +2981,8 @@ type Querier interface {
 	// last_interaction_at is gated by its OWN apply flag
 	// (apply_last_interaction_at); see UpdateContactCadenceForward above
 	// for the rationale.
+	// apply_clear_skip_state clears the three skip-state columns (CAD-045: skip
+	// state has one setter and every other writer of the clock clears it).
 	UpdateContactCadenceUnconditional(ctx context.Context, arg UpdateContactCadenceUnconditionalParams) error
 	// Knowledge-cache sole-writer: refreshes the derived how_met cache column
 	// from the current-accepted how_met fact (NULL when no current value).

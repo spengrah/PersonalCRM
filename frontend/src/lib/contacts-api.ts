@@ -95,6 +95,15 @@ export const contactsApi = {
     return apiClient.delete<void>(`/api/v1/contacts/${id}`)
   },
 
+  // Skip this cycle and undo the skip.
+  skipCycle: async (id: string): Promise<Contact> => {
+    return apiClient.post<Contact>(`/api/v1/contacts/${id}/skip`)
+  },
+
+  undoSkip: async (id: string): Promise<Contact> => {
+    return apiClient.delete<Contact>(`/api/v1/contacts/${id}/skip`)
+  },
+
   // Get overdue contacts
   getOverdueContacts: async (): Promise<OverdueContact[]> => {
     return apiClient.get<OverdueContact[]>('/api/v1/contacts/overdue')

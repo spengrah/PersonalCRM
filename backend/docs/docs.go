@@ -2145,6 +2145,230 @@ const docTemplate = `{
                 }
             }
         },
+        "/contacts/{id}/skip": {
+            "post": {
+                "description": "Advance the contact's next-contact date by one cadence cycle, end any live follow-up thread, and record the skip so it can be undone until the skipped-to date arrives.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "contacts"
+                ],
+                "summary": "Skip this cycle",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Contact ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Cycle skipped",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.ContactResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid contact ID",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Contact not found",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "409": {
+                        "description": "Contact has no cadence",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Restore the pre-skip next-contact date while the skip is still in effect (today is before the skipped-to date). Does not reopen the follow-up thread.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "contacts"
+                ],
+                "summary": "Undo skip",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Contact ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Skip undone",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "data": {
+                                            "$ref": "#/definitions/handlers.ContactResponse"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid contact ID",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "404": {
+                        "description": "Contact not found",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "409": {
+                        "description": "No skip is in effect",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "allOf": [
+                                {
+                                    "$ref": "#/definitions/api.APIResponse"
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "error": {
+                                            "$ref": "#/definitions/api.APIError"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
         "/contacts/{id}/tasks": {
             "get": {
                 "description": "List all tasks for a contact with optional state, kind, and lifecycle filters.",
@@ -5834,6 +6058,14 @@ const docTemplate = `{
                 "last_response_at": {
                     "type": "string"
                 },
+                "last_skipped_at": {
+                    "description": "LastSkippedAt is when the user last skipped this contact's cycle from the\nCRM (CAD-044). Absent when no skip is recorded.",
+                    "type": "string"
+                },
+                "last_skipped_contact_by": {
+                    "description": "LastSkippedContactBy is the next-contact date the last skip replaced,\nserialized as that date at UTC midnight; undo restores it (CAD-045).\nAbsent when no skip is recorded.",
+                    "type": "string"
+                },
                 "location": {
                     "type": "string",
                     "example": "San Francisco, CA"
@@ -5854,6 +6086,10 @@ const docTemplate = `{
                 "rematch_job_id": {
                     "description": "RematchJobID is populated by the CREATE path only. A rematch is triggered\nby newly-present method values, and update no longer carries methods, so\nit has no job to report. This type is shared by create, get, update, list,\nmerge, and overdue; the field is omitempty, so a path that leaves it unset\nsimply omits the key rather than publishing an always-null contract.",
                     "type": "string"
+                },
+                "undo_skip_available": {
+                    "description": "UndoSkipAvailable is true while skip state is present and today is before\ncontact_by — server-computed at the app clock.",
+                    "type": "boolean"
                 },
                 "updated_at": {
                     "type": "string",
@@ -6584,6 +6820,14 @@ const docTemplate = `{
                 "last_response_at": {
                     "type": "string"
                 },
+                "last_skipped_at": {
+                    "description": "LastSkippedAt is when the user last skipped this contact's cycle from the\nCRM (CAD-044). Absent when no skip is recorded.",
+                    "type": "string"
+                },
+                "last_skipped_contact_by": {
+                    "description": "LastSkippedContactBy is the next-contact date the last skip replaced,\nserialized as that date at UTC midnight; undo restores it (CAD-045).\nAbsent when no skip is recorded.",
+                    "type": "string"
+                },
                 "location": {
                     "type": "string",
                     "example": "San Francisco, CA"
@@ -6612,6 +6856,10 @@ const docTemplate = `{
                 "suggested_action": {
                     "type": "string",
                     "example": "Send a quick check-in message"
+                },
+                "undo_skip_available": {
+                    "description": "UndoSkipAvailable is true while skip state is present and today is before\ncontact_by — server-computed at the app clock.",
+                    "type": "boolean"
                 },
                 "updated_at": {
                     "type": "string",

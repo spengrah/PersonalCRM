@@ -46,6 +46,22 @@ export interface ContactResponse {
    * opened a window.
    */
   awaiting_reply_until?: string;
+  /**
+   * LastSkippedAt is when the user last skipped this contact's cycle from the
+   * CRM (CAD-044). Absent when no skip is recorded.
+   */
+  last_skipped_at?: string;
+  /**
+   * LastSkippedContactBy is the next-contact date the last skip replaced,
+   * serialized as that date at UTC midnight; undo restores it (CAD-045).
+   * Absent when no skip is recorded.
+   */
+  last_skipped_contact_by?: string;
+  /**
+   * UndoSkipAvailable is true while skip state is present and today is before
+   * contact_by — server-computed at the app clock.
+   */
+  undo_skip_available: boolean;
   profile_photo?: string;
   created_at: string;
   updated_at: string;

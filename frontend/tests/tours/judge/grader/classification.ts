@@ -89,9 +89,9 @@ export const CLASSIFICATION: Classification[] = [
   // CAD-027 (urgency / name / recency orderings) migrated to E2E:
   // dashboard.spec.ts (see `// spec: CAD-027`).
 
-  // CAD-028 (mark-contacted from the dashboard) migrated to E2E:
-  // dashboard.spec.ts + overdue-contact-updates.spec.ts (see
-  // `// spec: CAD-028`).
+  // CAD-028 retired 2026-09-15 (mark-contacted from the dashboard). Its successor
+  // CAD-046 (the card's two-action set) is E2E-owned: cadence-skip.spec.ts (see
+  // `// spec: CAD-046`).
 
   // CAD-029 (recent-activity summary) migrated to E2E:
   // contact-direction.spec.ts (see `// spec: CAD-029`).

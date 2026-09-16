@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -966,8 +967,9 @@ func TestContactAPI_DeleteValidation(t *testing.T) {
 			contactDeleteRoutes = append(contactDeleteRoutes, route.Path)
 		}
 
-		assert.Equal(t, []string{"/api/v1/contacts/:id"}, contactDeleteRoutes,
-			"the only DELETE route under /contacts must be the soft-delete by id; no hard/purge/force variant may be registered")
+		sort.Strings(contactDeleteRoutes)
+		assert.Equal(t, []string{"/api/v1/contacts/:id", "/api/v1/contacts/:id/skip"}, contactDeleteRoutes,
+			"/:id/skip is the undo of a skip, a subresource that deletes nothing on the contact; any other DELETE route under the prefix — a /:id/hard or /:id/purge variant included — fails this exact-set assertion and forces a deliberate edit here")
 	})
 }
 

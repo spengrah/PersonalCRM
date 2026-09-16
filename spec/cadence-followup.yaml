@@ -252,7 +252,8 @@ behaviors:
       - contact_by advances by one cadence interval from today or the old date, whichever lands later
       - no interaction is recorded
       - a replacement cadence task is created for the new date
-    provenance: [handleSkipTrigger, cadence.CadenceDays]
+    provenance: [handleSkipTrigger, cadence.NextAfterSkip]
+    notes: The CRM entry point is CAD-044, a separate behavior because its then-set is strictly larger. The interval is the shared environment-scaled duration (CAD-034), so under CRM_ENV=test a monthly skip advances ten minutes; in production, calendar-day and absolute-hour addition can differ by a day across a DST boundary, which the charter accepts.
 
   - id: CAD-020
     title: Outreach closes the open cadence task
@@ -364,7 +365,7 @@ behaviors:
   - id: CAD-028
     title: Marking contacted from the dashboard clears the contact immediately
     type: ux
-    status: current
+    status: retired
     surface: ui
     given: an overdue contact card
     when: the user marks the contact as contacted
@@ -375,9 +376,8 @@ behaviors:
         text: the contact leaves the overdue list without a page reload, and the count updates
       - key: change-consistent-across-dashboard
         text: the change is consistent across dashboard, contact list, and contact detail
-    serves: [DSH-010, DSH-012]
     provenance: [OverdueContactCard, overdue-contact-updates.spec.ts, dashboard.spec.ts]
-    notes: The list-row variant of this action is CON-044.
+    notes: 'Retired 2026-09-15: PR 2 of the awaiting-reply arc removed the one-click mark-as-contacted action from the dashboard card. The card''s action set is CAD-046 and the list-row action is CON-044.'
 
   - id: CAD-029
     title: Recent activity summarizes the direction timestamps and pending reply
@@ -468,14 +468,14 @@ behaviors:
   - id: CAD-034
     title: Cadence interval arithmetic is uniform across recompute paths
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: any path that recomputes a next-contact date
     when: the cadence interval is applied
     then:
       - every recompute path uses the same environment-scaled interval definition
-    provenance: [handleSkipTrigger, cadence.CadenceDays, cadence.GetCadenceDuration]
-    notes: 'Proposed: today the skip path advances contact_by by fixed real days even in accelerated environments, diverging from every other path; a dead calendar-month implementation also lingers in the cadence package.'
+    provenance: [cadence.NextAfterSkip, cadence.CalculateContactBy, cadence.GetCadenceDuration]
+    notes: 'Unified 2026-09-15: the skip path resolves its interval through cadence.CalculateContactBy like every other recompute path, and cadence.CadenceDays is deleted. cadence.CalculateNextDueDate and its three callers in cadence.go (calendar-month arithmetic) still exist with test-only callers; deleting them is outside this claim.'
 
   - id: CAD-035
     title: A remote deadline edit on a cadence task reschedules the contact
@@ -570,7 +570,7 @@ behaviors:
       - key: written-only-under-cadence-owner
         text: "it is a cadence-owned derived column: written only by CadenceUpdater and the delete-rollback recompute under crm.derived_writer=cadence, and rejected by the derived-writer trigger otherwise"
     provenance: [CadenceUpdater.buildInteractionWrite, UpdateContactCadenceForward, WriteContactDatesAfterDelete, migration 082]
-    notes: PR 2 adds the skip, the one CRM action that ends the window without a reply.
+    notes: The skip (CAD-044) is the one CRM action that ends the window without a reply.
 
   - id: CAD-042
     title: Cadence-task creation waits out the awaiting-reply window
@@ -587,3 +587,73 @@ behaviors:
       - key: resurrected-deadline-today-or-later
         text: a cadence-due task created or re-dated by reconciliation carries a deadline of today or later, never a stale past date
     provenance: [CadenceSyncProvider.reconcileContactTasks, cadenceTaskDeadline, provider_dismissal_no_crm_state_test.go]
+
+  - id: CAD-044
+    title: Skipping a cycle advances the schedule and ends the follow-up thread
+    type: business-logic
+    status: current
+    surface: none
+    given: a cadence-bearing contact
+    when: the user skips this cycle from the CRM
+    then:
+      - key: advances-one-cycle-later-of
+        text: contact_by advances by exactly one cadence cycle from today or from the current next-contact date, whichever lands later, through the same environment-scaled interval every other recompute path uses (CAD-034)
+      - key: ends-follow-up-thread
+        text: the awaiting-reply window is ended (awaiting_reply_until becomes NULL) and any live follow-up reminder is completed exactly once, whether or not its remote create had finished
+      - key: records-no-interaction
+        text: no interaction is recorded; last_contacted, last_interaction_at, last_outreach_at and last_response_at are untouched
+      - key: records-skip-state
+        text: the skip records when it happened, the next-contact date it replaced, and the reason ui
+      - key: cadence-task-follows
+        text: the cadence task is re-dated to the skipped-to date by reconciliation rather than suppressed (CAD-018), clamped to today or later (CAD-042)
+    provenance: [ContactService.SkipCycle, CadenceUpdater.ApplySkip, cadence.NextAfterSkip, skip_clock_integration_test.go]
+    notes: The remote-gesture skip is CAD-019; this is the CRM entry point, whose then-set is strictly larger. No Todoist-side action changes CRM state (CAD-040). Skipping a contact without a cadence is refused (409).
+
+  - id: CAD-045
+    title: Undoing a skip restores the pre-skip date while the skip is in effect
+    type: business-logic
+    status: current
+    surface: ui
+    given: a contact whose cycle was skipped from the CRM
+    when: the user views the contact or undoes the skip
+    then:
+      - key: undo-control-offered-while-skip-in-effect
+        text: while skip state is present and today is before the skipped-to date, the contact cadence row shows when the skip happened, the skipped-to date and the date it replaced, with an Undo control
+      - key: undo-restores-pre-skip-date
+        text: undo restores the recorded pre-skip next-contact date exactly, even when that date is already past; the cadence task follows to that date or today, whichever is later; the awaiting-reply window stays ended and the follow-up reminder stays closed
+      - key: undo-withdrawn-when-skip-ends
+        text: once today reaches the skipped-to date, or any other writer moves the clock (an inbound or mutual interaction, a cadence edit, a remote skip, an interaction deletion, a merge), undo is no longer offered and the page shows no trace of the skip
+    waivers:
+      - then: undo-control-offered-while-skip-in-effect
+        reason: "not observable in the accelerated E2E lane (#645): contact_by is DATE-typed and a compressed-cadence skip writes today, so today is never before the skipped-to date and the control never renders there; proven in Go under production durations by TestSkipClock_* and TestUndoSkipClock_* (backend/tests) and at the API by TestContactAPI_SkipAndUndo"
+      - then: undo-restores-pre-skip-date
+        reason: "not observable in the accelerated E2E lane (#645): undo is never offered there; the restore, the max(restored, today) task date, the window staying ended and the reminder staying closed are proven in Go by TestUndoSkipClock_* and TestReconcile_AfterUndoPastDate_ClampsToToday"
+      - then: undo-withdrawn-when-skip-ends
+        reason: "not observable in the accelerated E2E lane (#645): withdrawal by date needs a skipped-to date after today, which a compressed-cadence skip cannot write; proven in Go per clearing path by TestUndoSkipClock_* under production durations"
+    provenance: [ContactService.UndoSkip, CadenceUpdater.ApplyUndoSkip, cadence.UndoSkipAvailable, 'contacts/[id]/page.tsx cadence row', undo_skip_clock_integration_test.go]
+    notes: Overrides #212's rule that undo is suppressed once the restored date has passed (charter 2026-09-15) — restoring an overdue contact to overdue is the state they were in. Skip state has one setter (the skip) and is cleared by every other writer of the clock; undo is offered while skip state is present and today is before contact_by. #645 stays open and out of scope.
+
+  - id: CAD-046
+    title: The dashboard card offers exactly two actions in both states
+    type: ux
+    status: current
+    surface: ui
+    given: an overdue contact card, needs-attention or awaiting-reply
+    when: the dashboard renders
+    then:
+      - key: two-actions-both-states
+        text: both card states offer exactly two actions, log an interaction as the primary action and skip this cycle beneath it at equal width
+      - key: mark-as-contacted-removed
+        text: the one-click mark-as-contacted action is not offered on the card
+      - key: name-is-the-link
+        text: the contact's name is the link to the contact; there is no separate details link
+      - key: skip-ends-awaiting-reply
+        text: skipping an awaiting-reply card ends the wait — the card no longer reads Awaiting reply and the contact's awaiting_reply flag is false — without a page reload
+      - key: skipped-contact-leaves-dashboard
+        text: a skipped contact leaves the overdue list without a page reload; its cadence task is re-dated, not suppressed (CAD-044)
+    waivers:
+      - then: skipped-contact-leaves-dashboard
+        reason: "not observable in the accelerated E2E lane (#645): contact_by is DATE-typed, a compressed-cadence skip writes today, and the testing overdue path ignores contact_by by design; proven in Go under production durations by TestSkipClock_LeavesOverdueSet"
+    serves: [DSH-010, DSH-012]
+    provenance: [OverdueContactCard, cadence-skip.spec.ts, dashboard.tour.ts]
+    notes: Retires CAD-028 (mark-as-contacted from the dashboard). The list-row mark-as-contacted is CON-044 and is unchanged; the modal behind Log Interaction is CON-053.

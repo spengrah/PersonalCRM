@@ -817,20 +817,10 @@ func (p *CadenceSyncProvider) handleSkipTrigger(
 		return processItemResult{Processed: true}
 	}
 
-	// Compute nextContactBy (skip semantics: later of today+cadence or
-	// old contact_by+cadence).
-	days := cadence.CadenceDays(cadenceType)
+	// Skip semantics are defined by cadence.NextAfterSkip: use the later of
+	// today+cadence or old contact_by+cadence.
 	now := accelerated.GetCurrentTime()
-	today := cadence.Today(now)
-	fromToday := today.AddDate(0, 0, days)
-	fromSkipped := fromToday
-	if contact.ContactBy != nil {
-		fromSkipped = contact.ContactBy.AddDate(0, 0, days)
-	}
-	nextContactBy := fromToday
-	if fromSkipped.After(fromToday) {
-		nextContactBy = fromSkipped
-	}
+	nextContactBy := cadence.NextAfterSkip(contact.ContactBy, cadenceType, now)
 
 	skippedAt := accelerated.GetCurrentTime()
 	payload, err := events.Marshal(events.KindTaskSkipped, events.TaskSkippedPayload{

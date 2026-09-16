@@ -1,6 +1,6 @@
 // dashboard.tour.ts — an assertion-free walk of the dashboard `ux` behaviors
 // (DSH-001/002/003/004/005/007) plus the dashboard-hosted overdue behaviors
-// (CAD-026/027/028). DSH-006/009 are status:proposed → SKIPPED.
+// (CAD-026/027/046). DSH-006/009 are status:proposed → SKIPPED.
 //
 // Imports ONLY `test` from the fixtures — never `expect` — so the tour stays
 // assertion-free. Aria-invisible visual state (loading skeletons, active-nav
@@ -24,7 +24,7 @@ const OVERDUE_PATH = /\/contacts\/overdue$/ // for waitForApi (matches the respo
 // Read the rendered overdue cards in DOM order with the DOM/CSS-only bits the
 // aria tree cannot express: the urgency tier is a color class, and last_contacted
 // shows only as a relative-time string (enriched here from the overdue body).
-// Enrichment keys on each card's contact ID (from its View-details href) — NOT
+// Enrichment keys on each card's contact ID (from its contact-name href) — NOT
 // the name, which is not unique in the seed and would scramble last_contacted.
 async function readOverdueCards(
   page: Page,
@@ -78,7 +78,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   const overdueResp = await tour.apiCtx.get('/api/v1/contacts/overdue')
   const overdueRows = ((await overdueResp.json())?.data ?? []) as OverdueRow[]
   if (overdueRows.length === 0) {
-    throw new Error('dashboard tour: no overdue contacts in the seed — cannot tour CAD-026/027/028')
+    throw new Error('dashboard tour: no overdue contacts in the seed — cannot tour CAD-026/027/046')
   }
   assertOverdueFitsCapture(overdueRows.length, 'dashboard')
   const lastContactedById = new Map<string, string | null>(
@@ -145,10 +145,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   // --- CAD-026 / CAD-027.urgency-default-orders-most: overdue cards + urgency (default) order ---
   await page.goto('/dashboard')
   await tour.waitForApi(page, 'GET', OVERDUE_PATH)
-  await page
-    .getByRole('button', { name: 'Mark as Contacted' })
-    .first()
-    .waitFor({ state: 'visible' })
+  await page.getByRole('button', { name: 'Skip this cycle' }).first().waitFor({ state: 'visible' })
   await tour.capture(page, {
     arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['CAD-026', 'CAD-027'],
@@ -177,22 +174,44 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
     fields: { overdueCards: await readOverdueCards(page, lastContactedById) },
   })
 
-  // --- CAD-028 / DSH-005: mark-as-contacted on the dashboard (mutating) ----
+  // --- CAD-046 / DSH-005: log an interaction from the card (mutating) ----
   await page.getByRole('button', { name: 'Most Urgent' }).click() // back to default
   await tour.capture(page, {
     arrayCap: OVERDUE_CAPTURE_CAP,
-    behaviors: ['CAD-028', 'DSH-005'],
-    note: 'before mark-as-contacted (dashboard overdue list)',
-    pair: { id: 'mark', role: 'mark-before' },
+    behaviors: ['CAD-046', 'DSH-005'],
+    note: 'before log-interaction from the card (dashboard overdue list)',
+    pair: { id: 'log', role: 'log-before' },
   })
-  await page.getByRole('button', { name: 'Mark as Contacted' }).first().click()
+  await page.getByRole('button', { name: 'Log Interaction' }).first().click()
+  await page.getByRole('heading', { name: /Log Interaction with/ }).waitFor({ state: 'visible' })
+  const logModal = page
+    .locator('div.fixed.inset-0')
+    .filter({ has: page.getByRole('heading', { name: /Log Interaction with/ }) })
+  await logModal.getByRole('button', { name: 'Log', exact: true }).click()
   await tour.waitForApi(page, 'POST', /\/contacts\/[0-9a-f-]{36}\/interactions$/)
   await tour.waitForApi(page, 'GET', OVERDUE_PATH) // the invalidation refetch
   await tour.capture(page, {
     arrayCap: OVERDUE_CAPTURE_CAP,
-    behaviors: ['CAD-028', 'DSH-005'],
-    note: 'after mark-as-contacted: mutual interaction + overdue refetch (no reload)',
-    pair: { id: 'mark', role: 'mark-after' },
+    behaviors: ['CAD-046', 'DSH-005'],
+    note: 'after log-interaction from the card: mutual interaction + overdue refetch (no reload)',
+    pair: { id: 'log', role: 'log-after' },
+  })
+
+  // --- CAD-046 / DSH-005: skip this cycle from the card (mutating) ----
+  await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
+    behaviors: ['CAD-046', 'DSH-005'],
+    note: 'before skip-this-cycle (dashboard overdue list)',
+    pair: { id: 'skip', role: 'skip-before' },
+  })
+  await page.getByRole('button', { name: 'Skip this cycle' }).first().click()
+  await tour.waitForApi(page, 'POST', /\/contacts\/[0-9a-f-]{36}\/skip$/)
+  await tour.waitForApi(page, 'GET', OVERDUE_PATH)
+  await tour.capture(page, {
+    arrayCap: OVERDUE_CAPTURE_CAP,
+    behaviors: ['CAD-046', 'DSH-005'],
+    note: 'after skip-this-cycle: contact skipped one cycle, overdue refetch (no reload)',
+    pair: { id: 'skip', role: 'skip-after' },
   })
 
   // =====================================================================

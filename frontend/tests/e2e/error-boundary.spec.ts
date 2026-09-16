@@ -42,7 +42,8 @@ test.describe('Error Boundary @area:error-boundary', () => {
     // state, so this cannot vacuously pass on a fast response.
     await expect(page.getByRole('status', { name: 'Loading overdue contacts' })).toBeVisible()
     await expect(page.getByText('All caught up')).toHaveCount(0)
-    await expect(page.getByRole('button', { name: /Mark as Contacted/i })).toHaveCount(0)
+    // the overdue list container renders only when cards render, so its absence proves no card is on the page
+    await expect(page.getByRole('list', { name: 'Overdue contacts' })).toHaveCount(0)
 
     // The header add-contact CTA is available in the LOADING state too.
     await expectAddContactHeader(page)
@@ -89,7 +90,8 @@ test.describe('Error Boundary @area:error-boundary', () => {
 
     // The error state is distinct: no caught-up text, no overdue cards.
     await expect(page.getByText('All caught up')).toHaveCount(0)
-    await expect(page.getByRole('button', { name: /Mark as Contacted/i })).toHaveCount(0)
+    // the overdue list container renders only when cards render, so its absence proves no card is on the page
+    await expect(page.getByRole('list', { name: 'Overdue contacts' })).toHaveCount(0)
 
     // The header add-contact CTA is available in the ERROR state too.
     await expectAddContactHeader(page)

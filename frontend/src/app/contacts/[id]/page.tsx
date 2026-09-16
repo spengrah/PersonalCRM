@@ -12,12 +12,13 @@ import {
   useUpdateContact,
   useApplyMethodOperations,
   useDeleteContact,
+  useUndoSkip,
 } from '@/hooks/use-contacts'
 import { useContactNote, useSaveContactNote } from '@/hooks/use-contact-note'
 import { useContactTasks } from '@/hooks/use-contact-tasks'
 import { useKeyboardNavigation } from '@/hooks/use-keyboard-navigation'
 import { ContactNavigationBar } from '@/components/contacts/contact-navigation-bar'
-import { formatBirthday, formatRelativeTime } from '@/lib/utils'
+import { formatBirthday, formatDateOnly, formatRelativeTime } from '@/lib/utils'
 import {
   Edit,
   Trash2,
@@ -27,6 +28,7 @@ import {
   ChevronDown,
   GitMerge,
   X,
+  SkipForward,
 } from 'lucide-react'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import { Interactions } from '@/components/contacts/interactions'
@@ -353,6 +355,15 @@ export default function ContactDetailPage() {
     return () => observer.disconnect()
   }, [notesEl, contactNote?.body, notesExpanded])
   const deleteContactMutation = useDeleteContact()
+  const undoSkipMutation = useUndoSkip()
+
+  const handleUndoSkip = async () => {
+    try {
+      await undoSkipMutation.mutateAsync(contactId)
+    } catch (error) {
+      console.error('Error undoing skip:', error)
+    }
+  }
 
   // Three sequential requests, never Promise.all: on failure at step n, stop
   // and do not attempt n+1. Every step tolerates replay — operations fold to a
@@ -713,11 +724,43 @@ export default function ContactDetailPage() {
               {contact.cadence && (
                 <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
                   <dt className="text-sm font-medium text-gray-500">Contact cadence</dt>
-                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2 space-y-1.5">
                     <div className="flex items-center" data-testid="contact-cadence">
                       <Calendar className="w-4 h-4 mr-2 text-gray-400" />
                       {contact.cadence}
                     </div>
+                    {contact.undo_skip_available && (
+                      <div
+                        className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-gray-500"
+                        data-testid="skip-state"
+                      >
+                        <SkipForward className="w-3.5 h-3.5 text-gray-400" aria-hidden="true" />
+                        <span>
+                          Skipped{' '}
+                          {contact.last_skipped_at
+                            ? new Date(contact.last_skipped_at).toLocaleDateString(undefined, {
+                                month: 'short',
+                                day: 'numeric',
+                              })
+                            : ''}
+                          {' · next contact '}
+                          {formatDateOnly(contact.contact_by, { month: 'short', day: 'numeric' })}
+                          {', was '}
+                          {formatDateOnly(contact.last_skipped_contact_by, {
+                            month: 'short',
+                            day: 'numeric',
+                          })}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleUndoSkip}
+                          disabled={undoSkipMutation.isPending}
+                          className="text-sm font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50"
+                        >
+                          Undo
+                        </button>
+                      </div>
+                    )}
                   </dd>
                 </div>
               )}

@@ -12,6 +12,7 @@ vi.mock('@/hooks/use-contacts', () => ({
   useUpdateContact: vi.fn(),
   useApplyMethodOperations: vi.fn(),
   useDeleteContact: vi.fn(),
+  useUndoSkip: vi.fn(),
 }))
 vi.mock('@/hooks/use-contact-note', () => ({
   useContactNote: vi.fn(),
@@ -40,6 +41,7 @@ import {
   useUpdateContact,
   useApplyMethodOperations,
   useDeleteContact,
+  useUndoSkip,
 } from '@/hooks/use-contacts'
 import { useContactNote, useSaveContactNote } from '@/hooks/use-contact-note'
 import { useContactTasks } from '@/hooks/use-contact-tasks'
@@ -116,6 +118,7 @@ beforeEach(() => {
   ;(useUpdateContact as any).mockReturnValue(mutation(updateContact))
   ;(useApplyMethodOperations as any).mockReturnValue(mutation(applyMethods))
   ;(useDeleteContact as any).mockReturnValue(mutation(vi.fn()))
+  ;(useUndoSkip as any).mockReturnValue(mutation(vi.fn()))
   ;(useContactNote as any).mockReturnValue({ data: { body: '' } })
   ;(useSaveContactNote as any).mockReturnValue(mutation(saveNote))
   ;(useContactTasks as any).mockReturnValue({ data: [], isLoading: false })

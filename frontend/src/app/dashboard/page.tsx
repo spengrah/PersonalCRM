@@ -2,13 +2,20 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { CheckCircle, Clock, AlertCircle, User, Plus, MessageSquare } from 'lucide-react'
+import {
+  CheckCircle,
+  Clock,
+  AlertCircle,
+  User,
+  Plus,
+  MessageSquare,
+  SkipForward,
+} from 'lucide-react'
 import { Navigation } from '@/components/layout/navigation'
 import { Button } from '@/components/ui/button'
 import { ContactMethodIcon } from '@/components/contacts/contact-method-icon'
 import { LogInteractionModal } from '@/components/contacts/log-interaction-modal'
-import { useOverdueContacts } from '@/hooks/use-contacts'
-import { useCreateInteraction } from '@/hooks/use-interactions'
+import { useOverdueContacts, useSkipCycle } from '@/hooks/use-contacts'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import {
   formatContactMethodValue,
@@ -28,7 +35,7 @@ function OverdueContactCard({
   contact: OverdueContact
   onLogInteraction: (contact: OverdueContact) => void
 }) {
-  const createInteraction = useCreateInteraction()
+  const skipCycle = useSkipCycle()
   const { currentTime } = useAcceleratedTime()
   const awaiting = contact.awaiting_reply
   const { primary, secondary } = getPrimaryAndSecondaryMethods(
@@ -37,18 +44,11 @@ function OverdueContactCard({
   )
   const methods = [primary, secondary].filter((method): method is ContactMethod => Boolean(method))
 
-  const handleMarkContacted = async () => {
+  const handleSkip = async () => {
     try {
-      // Dashboard quick-action: mutual interaction at the current
-      // accelerated time. Omitting occurred_at lets the backend stamp
-      // the interaction with accelerated.GetCurrentTime() instead of
-      // the browser's wall-clock value.
-      await createInteraction.mutateAsync({
-        contactId: contact.id,
-        data: { direction: 'mutual' },
-      })
+      await skipCycle.mutateAsync(contact.id)
     } catch (error) {
-      console.error('Error marking as contacted:', error)
+      console.error('Error skipping cycle:', error)
     }
   }
 
@@ -85,12 +85,19 @@ function OverdueContactCard({
               title={urgency.label}
               className={clsx('w-3 h-3 rounded-full', urgency.dotClass)}
             />
-            <h3 className="text-lg font-semibold text-gray-900">{contact.full_name}</h3>
+            <h3 className="text-lg font-semibold text-gray-900">
+              <Link
+                href={`/contacts/${contact.id}`}
+                className="hover:text-blue-600 hover:underline"
+              >
+                {contact.full_name}
+              </Link>
+            </h3>
             <span className="text-sm font-medium text-gray-500">({contact.cadence} cadence)</span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
-            <div className="flex items-center space-x-2 text-sm text-gray-600">
+            <div className="flex items-center space-x-2 text-sm text-gray-600 md:col-span-2">
               <Clock className="w-4 h-4" />
               <span>
                 <strong>{contact.days_overdue} days overdue</strong> -{' '}
@@ -129,13 +136,6 @@ function OverdueContactCard({
                 </div>
               )
             })}
-
-            <div className="flex items-center space-x-2 text-sm text-gray-600">
-              <User className="w-4 h-4" />
-              <Link href={`/contacts/${contact.id}`} className="hover:text-blue-600 underline">
-                View details
-              </Link>
-            </div>
           </div>
 
           {awaiting ? (
@@ -149,24 +149,24 @@ function OverdueContactCard({
           )}
         </div>
 
-        <div className="flex flex-col gap-2 mt-2 sm:mt-0 sm:ml-6 sm:items-end">
+        <div className="flex flex-col gap-2 mt-2 sm:mt-0 sm:ml-6 w-full sm:w-44 flex-shrink-0">
           <Button
             size="sm"
-            variant="outline"
             onClick={() => onLogInteraction(contact)}
-            className="whitespace-nowrap"
+            className="w-full justify-center"
           >
             <MessageSquare className="w-4 h-4 mr-2" />
             Log Interaction
           </Button>
           <Button
             size="sm"
-            onClick={handleMarkContacted}
-            loading={createInteraction.isPending}
-            className="whitespace-nowrap"
+            variant="outline"
+            onClick={handleSkip}
+            loading={skipCycle.isPending}
+            className="w-full justify-center"
           >
-            <CheckCircle className="w-4 h-4 mr-2" />
-            Mark as Contacted
+            <SkipForward className="w-4 h-4 mr-2" />
+            Skip this cycle
           </Button>
         </div>
       </div>
