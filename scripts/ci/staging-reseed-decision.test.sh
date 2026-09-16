@@ -237,6 +237,22 @@ test_base_not_in_history() {
     cleanup_fixture
 }
 
+test_cwd_outside_any_repo() {
+    echo "test: CWD outside any git repo -> the sourced pre-push hook must not exit the script; base_known=false, exit 0"
+    # The staging runner once had no usable git: the hook's worktree resolution failed
+    # and, sitting above the hook's sourced-guard, its exit 1 killed the decision with
+    # no flags written (staging deploy step 'Decide reseed' red, silently). The hook now
+    # resolves the worktree below the guard; the decision degrades on its own.
+    FIXTURE="$(mktemp -d)"
+    GHENV="$FIXTURE/ghenv"
+    run_decision "$ABSENT_SHA" "$ABSENT_SHA"
+    if [ "$RC" -eq 0 ]; then ok; else fail "outside a repo the decision must exit 0, got $RC"; fi
+    assert_flag base_known false
+    assert_flag seed_changed false
+    assert_flag migrations_changed false
+    cleanup_fixture
+}
+
 # ---------------------------------------------------------------------------
 main() {
     test_seed_only
@@ -251,6 +267,7 @@ main() {
     test_migration_nested_path
     test_empty_base
     test_base_not_in_history
+    test_cwd_outside_any_repo
 
     echo ""
     echo "===================="
