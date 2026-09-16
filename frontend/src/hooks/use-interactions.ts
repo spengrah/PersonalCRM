@@ -10,8 +10,8 @@ import { staleTime } from '@/lib/query-client'
 
 // useCreateInteraction posts a manual interaction for a contact and
 // invalidates the caches that depend on cadence-column state. Used by
-// the contact-detail Log Interaction modal and by the dashboard /
-// contact-list "Mark as Contacted" quick actions. The
+// the contact-detail Log Interaction modal and by the contact-list
+// "Mark as Contacted" quick action. The
 // `interaction:created` invalidation rule is a strict superset of the
 // legacy `contact:touched` rule (adds per-contact detail + task list
 // invalidation), so a single fire is sufficient.

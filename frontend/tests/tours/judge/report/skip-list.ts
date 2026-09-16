@@ -21,7 +21,7 @@ export const PROPOSED_SKIPS: SkipEntry[] = [
   {
     id: 'DSH-006',
     reason:
-      'status: proposed — a failed dashboard mark-as-contacted is logged to the console only, no user-facing error',
+      'status: proposed — a failed dashboard log-interaction or skip is logged to the console only, no user-facing error',
   },
   {
     id: 'DSH-009',
@@ -37,7 +37,7 @@ export const CLAUSE_SKIPS: SkipEntry[] = [
   {
     id: 'DSH-005[1]',
     reason:
-      'multi-surface: only interaction:created (mark-contacted) is dashboard-reachable; merge / meeting-note-resolve are other-surface flows',
+      'multi-surface: only interaction:created (log interaction from the card) and contact:skipped are dashboard-reachable; merge / meeting-note-resolve are other-surface flows',
   },
   {
     id: 'DSH-005[2]',
@@ -49,8 +49,19 @@ export const CLAUSE_SKIPS: SkipEntry[] = [
       'focus-timing: the refocus / 5-minute-staleTime behavior is not deterministically tourable',
   },
   {
-    id: 'CAD-028[2]',
-    reason: 'multi-surface: dashboard/list/detail consistency is not toured in one flow',
+    id: 'CAD-045[0]',
+    reason:
+      "contact-detail undo: the dashboard tour skips a contact but no tour opens that contact's detail afterwards; the state is proven in Go",
+  },
+  {
+    id: 'CAD-045[1]',
+    reason:
+      "contact-detail undo: the dashboard tour skips a contact but no tour opens that contact's detail afterwards; the state is proven in Go",
+  },
+  {
+    id: 'CAD-045[2]',
+    reason:
+      "contact-detail undo: the dashboard tour skips a contact but no tour opens that contact's detail afterwards; the state is proven in Go",
   },
   {
     id: 'CAD-029[2]',

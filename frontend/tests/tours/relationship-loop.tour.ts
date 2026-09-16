@@ -11,17 +11,16 @@
 // through the detail page and back. Splitting the journey across tours would
 // hand the judge the same contact under two pseudonyms.
 //
-// The contact detail page offers no "Mark as Contacted" button (that
-// affordance lives on the dashboard card, CAD-028, and the list row, CON-044);
-// its loop-closing affordance is Log Interaction, whose direction defaults to
-// mutual — the same mutual-interaction POST the mark-as-contacted quick
-// actions send.
+// The contact detail page offers no quick action of its own (the dashboard
+// card's actions are Log Interaction and Skip this cycle, CAD-046; the list
+// row keeps Mark as Contacted, CON-044); its loop-closing affordance is Log
+// Interaction, whose direction defaults to mutual.
 //
 // Imports ONLY `test` from the fixtures — never `expect` — so the tour stays
 // assertion-free. Pair roles here are unique to this journey (loop-landing,
 // signal, act, ...) so the item verifiers' byRole lookups keep binding the
 // per-surface tours' captures ('landing', 'sort-urgency', 'activity-*',
-// 'tasks-empty', 'mark-after'), never these.
+// 'tasks-empty', 'log-after'), never these.
 
 import { test } from './support/tour-fixtures'
 import { assertOverdueFitsCapture, OVERDUE_CAPTURE_CAP } from './support/pinned-fixtures'
@@ -37,7 +36,7 @@ const DETAIL_PAGE_PATH = /^\/contacts\/[0-9a-f-]{36}$/ // frontend route (waitFo
 
 // The rendered overdue cards in DOM order with the DOM/CSS-only bits the aria
 // tree cannot express: the urgency tier is a color class, and the card's
-// contact id (from its View-details href) is the identity anchor the judge
+// contact id (from its contact-name href) is the identity anchor the judge
 // needs to see the acted-on contact leave the list (names are not guaranteed
 // unique in a seeded world). Ids inside fields are uuid-mapped by the normalizer,
 // so they match the detail url's placeholder.
@@ -105,20 +104,22 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
 
   // --- 2. Read the needs-attention signal (CAD-026) ---
   await overdueLoaded // the landing overdue GET (armed pre-nav; race-safe, gh #707)
-  await page
-    .getByRole('button', { name: 'Mark as Contacted' })
-    .first()
-    .waitFor({ state: 'visible' })
+  await page.getByRole('button', { name: 'Skip this cycle' }).first().waitFor({ state: 'visible' })
   const cardsBefore = await readOverdueCards(page)
 
   // The journey target: the FIRST card under the default most-urgent sort.
-  // Picked from the widget itself (its View-details href), not deep-linked —
+  // Picked from the widget itself (its contact-name href), not deep-linked —
   // the point is that the user gets to the contact from the signal.
-  const detailLink = page.getByRole('link', { name: 'View details' }).first()
+  const detailLink = page
+    .getByRole('listitem')
+    .first()
+    .getByRole('heading', { level: 3 })
+    .getByRole('link')
+    .first()
   const detailHref = (await detailLink.getAttribute('href')) ?? ''
   const targetId = detailHref.match(/\/contacts\/([0-9a-f-]{36})/)?.[1] ?? ''
   if (!targetId) {
-    throw new Error('relationship-loop tour: the most-urgent overdue card has no View-details link')
+    throw new Error('relationship-loop tour: the most-urgent overdue card has no contact-name link')
   }
   await tour.capture(page, {
     arrayCap: OVERDUE_CAPTURE_CAP,
@@ -161,7 +162,7 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
   })
 
   // Submit with the defaults (mutual, server-stamped occurred_at) — the same
-  // mutual interaction the mark-as-contacted quick actions record.
+  // mutual interaction the list-row action records.
   await logModal.getByRole('button', { name: 'Log', exact: true }).click()
   await tour.waitForApi(page, 'POST', new RegExp(`/api/v1/contacts/${targetId}/interactions$`))
   await page.getByRole('heading', { name: /Log Interaction with/ }).waitFor({ state: 'hidden' })
@@ -182,7 +183,7 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
   await page.waitForURL(u => new URL(u).pathname === '/dashboard')
   await tour.waitForApi(page, 'GET', OVERDUE_PATH)
   await page
-    .getByRole('button', { name: 'Mark as Contacted' })
+    .getByRole('button', { name: 'Skip this cycle' })
     .or(page.getByRole('heading', { name: /All caught up/ }))
     .first()
     .waitFor({ state: 'visible' })

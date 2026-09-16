@@ -136,3 +136,31 @@ export function useDeleteContact() {
     },
   })
 }
+
+// Skip this cycle / undo skip. Both write the detail cache from the response
+// (the payload carries the fresh contact_by, undo_skip_available and skip
+// fields) and fire contact:skipped, which refreshes the overdue list, the
+// contact list and the detail query.
+export function useSkipCycle() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: string) => contactsApi.skipCycle(id),
+    onSuccess: contact => {
+      queryClient.setQueryData(contactKeys.detail(contact.id), contact)
+      invalidateFor('contact:skipped', contact.id)
+    },
+  })
+}
+
+export function useUndoSkip() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (id: string) => contactsApi.undoSkip(id),
+    onSuccess: contact => {
+      queryClient.setQueryData(contactKeys.detail(contact.id), contact)
+      invalidateFor('contact:skipped', contact.id)
+    },
+  })
+}

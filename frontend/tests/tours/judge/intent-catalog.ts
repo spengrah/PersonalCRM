@@ -39,7 +39,7 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
     statement:
       "a user opening the dashboard can decide who to contact next and how to reach them without opening any contact's page — the overdue surface is scannable rather than a wall of undifferentiated entries, and more urgent relationships stand out from less urgent ones",
     status: 'current',
-    servedBy: ['CAD-026', 'CAD-027', 'CAD-028'],
+    servedBy: ['CAD-026', 'CAD-027', 'CAD-046'],
     visual: true,
   },
   'DSH-011': {
@@ -56,7 +56,7 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
     statement:
       'any action in the app that changes who is overdue is reflected on an open dashboard without the user reloading the page — the overdue list can be trusted as live',
     status: 'proposed',
-    servedBy: ['CAD-028', 'DSH-005', 'DSH-009'],
+    servedBy: ['CAD-046', 'DSH-005', 'DSH-009'],
   },
   'CON-050': {
     id: 'CON-050',
@@ -104,7 +104,7 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
   // servedBy is DELIBERATELY EMPTY, and that is the whole design. A journey binds
   // by DIRECT TAG, never by serves edges: `bindIntentCaptures` unions {id} with
   // servedBy, and the behaviors this journey walks (DSH-001/DSH-005/CAD-026/
-  // CAD-028/CAD-029) are ALSO tagged all over the per-surface tours. Adding those
+  // CAD-046/CAD-029) are ALSO tagged all over the per-surface tours. Adding those
   // edges would pull their captures in, and since binding sorts alphabetically by
   // tour name and truncates at INTENT_CAPTURE_CAP, 'cadence-followup' and
   // 'dashboard' would fill the cap and silently evict 'relationship-loop' — the

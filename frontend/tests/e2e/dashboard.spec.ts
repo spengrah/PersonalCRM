@@ -35,6 +35,7 @@ function overdueEntry(over: {
     awaiting_reply: over.awaitingReply ?? false,
     created_at: over.createdAt ?? '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
+    undo_skip_available: false,
     days_overdue: over.days,
     next_due_date: '2026-07-01T00:00:00Z',
     suggested_action: 'A quick check-in to reconnect',
@@ -483,8 +484,7 @@ test.describe('Dashboard - Sort Orderings (mocked) @area:dashboard', () => {
     await gotoMockedDashboard(page)
     const mikeCard = page.getByRole('listitem').filter({ hasText: `Mike ${fixtureSuffix}` })
     await expect(mikeCard.getByText(/12 days overdue - Added \S+/)).toBeVisible()
-    // Scoped to the recency phrasing — the card's "Mark as Contacted" action
-    // legitimately contains the word.
+    // Scoped to the recency phrasing so a future action label containing the word cannot match.
     await expect(mikeCard.getByText(/Last (contacted|connected)/i)).toHaveCount(0)
   })
 })
@@ -527,20 +527,10 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     await expectAddContactHeader(page)
   })
 
-  test('marking contact as contacted updates dashboard immediately without navigation', async ({
+  test('logging an interaction from the card refreshes the dashboard immediately without navigation', async ({
     page,
   }) => {
-    // spec: DSH-005.overdue-list-refreshes-reflect, CAD-028.mutual-interaction-logged-timestamped, CAD-028.contact-leaves-overdue-list
-    // DSH-005.overdue-list-refreshes-reflect: the on-dashboard interaction:created trigger refreshing the
-    // overdue list without a manual reload. DSH-005's broader trigger coverage
-    // (merge / meeting-note-resolve), the cosmetic-edit no-op, and the
-    // refocus/staleTime timing were verifier-abstained and are not asserted
-    // here.
-    // CAD-028.mutual-interaction-logged-timestamped: the mutual interaction is logged with a server-assigned,
-    // full-precision accelerated-clock timestamp. CAD-028.contact-leaves-overdue-list: the contact
-    // leaves the overdue list without a reload and the header count updates.
-    // CAD-028.change-consistent-across-dashboard (dashboard/list/detail consistency) is proved in
-    // overdue-contact-updates.spec.ts.
+    // spec: DSH-005.overdue-list-refreshes-reflect
     const contactName = seeded.entities['refresh-target'].name
     const sentinelName = seeded.entities['refresh-sentinel'].name
 
@@ -561,83 +551,40 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
       ;(window as Window & { __dsh005NoReload?: boolean }).__dsh005NoReload = true
     })
 
-    // Find the "Mark as Contacted" button for our contact. The card is resolved
-    // by its NAME HEADING matched exactly, not by hasText: a substring filter
-    // would keep the sentinel's card too whenever the two drawn names collide,
-    // and the button lookup below would then be ambiguous.
+    // Resolve the card by its exact name heading so a generated-name collision
+    // cannot select the sentinel.
     const contactCard = page
       .getByRole('listitem')
       .filter({ has: page.getByRole('heading', { name: contactName, exact: true }) })
-    const markContactedButton = contactCard.getByRole('button', { name: /Mark as Contacted/i })
-    await expect(markContactedButton).toBeVisible()
+    await contactCard.getByRole('button', { name: 'Log Interaction', exact: true }).click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toBeVisible()
 
-    // Register both listeners BEFORE the click (waitForResponse must be
-    // set up before the triggering action, not after).
-
-    // The dashboard "Mark as Contacted" quick action posts to
-    // POST /interactions {direction:"mutual"} (the legacy PATCH
-    // /last-contacted endpoint was removed).
-    const markContactedResponsePromise = page.waitForResponse(
+    const interactionResponsePromise = page.waitForResponse(
       response =>
         response.request().method() === 'POST' &&
         response.url().includes(`/api/v1/contacts/${overdueContactId}/interactions`)
     )
-
-    // The invalidation-driven refetch: the open dashboard re-fetches the
-    // overdue list after the mutation. Content-based predicate (reads the
-    // response body) so there is no ordering race against a pre-mutation
-    // fetch that still contains our id.
     const overdueRefetchPromise = waitForOverdueListSettled(page, {
       absentIds: [overdueContactId],
     })
-
-    // Click "Mark as Contacted", bracketed by wall-clock reads so the
-    // server-assigned timestamp can be bounded. The E2E env runs WITHOUT
-    // TIME_ACCELERATION, so the server's accelerated clock IS the wall
-    // clock here (mirrors the retired verifier's optional-base rule).
     const beforeClick = Date.now()
-    await markContactedButton.click()
-
-    // A mutual interaction is logged: the request asks for direction=mutual
-    // AND the server persists it as mutual (the response body reflects the
-    // stored interaction, not just the request).
-    const markContactedResponse = await markContactedResponsePromise
+    await dialog.getByRole('button', { name: 'Log', exact: true }).click()
+    const interactionResponse = await interactionResponsePromise
     const afterResponse = Date.now()
-    expect(markContactedResponse.ok()).toBe(true)
-    expect(markContactedResponse.request().postDataJSON()?.direction).toBe('mutual')
-    const interactionBody = await markContactedResponse.json()
+    expect(interactionResponse.ok()).toBe(true)
+    expect(interactionResponse.request().postDataJSON()?.direction).toBe('mutual')
+    const interactionBody = await interactionResponse.json()
     expect(interactionBody?.data?.direction).toBe('mutual')
-
-    // The timestamp is SERVER-assigned: the client omits occurred_at (the
-    // backend stamps accelerated.GetCurrentTime()), and the stored stamp
-    // lands inside the click bracket with full sub-second precision (not
-    // a midnight date-only value).
-    expect(markContactedResponse.request().postDataJSON()).not.toHaveProperty('occurred_at')
+    expect(interactionResponse.request().postDataJSON()).not.toHaveProperty('occurred_at')
     const occurredAt: string = interactionBody?.data?.occurred_at
-    const occurredAtMs = Date.parse(occurredAt)
-    expect(occurredAtMs).toBeGreaterThanOrEqual(beforeClick - 1000)
-    expect(occurredAtMs).toBeLessThanOrEqual(afterResponse + 1000)
+    expect(Date.parse(occurredAt)).toBeGreaterThanOrEqual(beforeClick - 1000)
+    expect(Date.parse(occurredAt)).toBeLessThanOrEqual(afterResponse + 1000)
     expect(occurredAt).not.toMatch(/T00:00:00(\.0+)?Z$/)
     expect(occurredAt).toMatch(/T\d{2}:\d{2}:\d{2}\.\d+Z$/)
 
-    // The contact leaves the overdue list without a page reload: the open
-    // dashboard's own refetch no longer includes it.
     await overdueRefetchPromise
-
-    // The card vanishes from the live dashboard without navigation. Exact again,
-    // and here exactness is what makes the negative meaningful rather than
-    // weaker: on a name collision the sentinel's heading CONTAINS the target's
-    // name, so a substring match would still resolve it and the assertion would
-    // fail for a reason unrelated to the claim. The negative is not vacuous
-    // either — the same heading was asserted VISIBLE above, and the sentinel's
-    // card is asserted still visible below, so the list is proven to be
-    // rendering cards at this point.
-    await expect(page.getByRole('heading', { name: contactName, exact: true })).not.toBeVisible({
-      timeout: 5000,
-    })
-
-    // The no-reload sentinel survived (a reload/navigation would wipe it) and
-    // we are still on the dashboard — the refresh happened in place.
+    await expect(contactCard).toHaveCount(0)
     expect(
       await page.evaluate(
         () => (window as Window & { __dsh005NoReload?: boolean }).__dsh005NoReload
@@ -645,18 +592,6 @@ test.describe('Dashboard - With Seeded Data @area:dashboard @area:overdue', () =
     ).toBe(true)
     await expect(page).toHaveURL(/\/dashboard(\?|$)/)
 
-    // The count updates: the header count is re-derived from the refetched
-    // list, so it must EQUAL the number of rendered overdue cards (a stale
-    // header would still show the pre-mutation number). The absolute count
-    // is GLOBAL (parallel workers seed/mark concurrently), so assert the
-    // header==cards invariant — which holds regardless of other workers'
-    // data — never an exact decrement. The sentinel keeps the header
-    // numeric (zero overdue renders caught-up prose instead). Header and
-    // card count are read in ONE DOM pass so a concurrent re-render cannot
-    // straddle the two reads.
-    // Matched EXACTLY, like every other name assertion in this file: a
-    // drawn-name collision inside the world renders "<name>" and "<name> N",
-    // and a substring match would resolve both cards.
     await expect(page.getByRole('heading', { name: sentinelName, exact: true })).toBeVisible()
     await expect
       .poll(() =>

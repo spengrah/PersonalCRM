@@ -80,6 +80,21 @@ describe('query-invalidation', () => {
           queryKey: contactKeys.overdue(),
         })
       })
+
+      it('invalidates contact lists, overdue and the contact detail on contact:skipped', () => {
+        invalidateFor('contact:skipped', 'contact-1')
+
+        expect(mockInvalidateQueries).toHaveBeenCalledTimes(3)
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: contactKeys.lists(),
+        })
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: contactKeys.overdue(),
+        })
+        expect(mockInvalidateQueries).toHaveBeenCalledWith({
+          queryKey: contactKeys.detail('contact-1'),
+        })
+      })
     })
 
     it('invalidates the contact interaction list on interaction:created', () => {
@@ -205,6 +220,7 @@ describe('query-invalidation', () => {
         'contact:deleted',
         'contact:touched',
         'contact:merged',
+        'contact:skipped',
         'import:imported',
         'import:linked',
         'import:ignored',

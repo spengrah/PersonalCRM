@@ -38,17 +38,20 @@ func init() {
 		},
 	})
 
-	// A mark-contacted target plus a SENTINEL that stays overdue. The sentinel is
-	// the data-derived settle signal for the dashboard's overdue list: its card
-	// renders only once the list has rendered from data, so the target's absence
-	// can be asserted without racing a loading frame.
+	// A skip target plus a SENTINEL that stays on the list, plus an
+	// awaiting-reply card, so both card states render for CAD-046 and the
+	// skip's observable consequences (window ended, awaiting note gone) can be
+	// asserted on the awaiting card. The sentinel is the data-derived settle
+	// signal for the overdue list. The awaiting shape is CAD-026's.
 	Register(Declaration{
-		Behavior: "CAD-028",
+		Behavior: "CAD-046",
 		Entities: []Entity{
 			Contact("target", Cadence("weekly"), OverdueBy(Days(5))),
 			Contact("sentinel", Cadence("weekly"), OverdueBy(Days(4))),
+			Contact("awaiting", Cadence("weekly"), CreatedAgo(Periods(1).Plus(Days(3))), Outreach(Days(1)), AwaitingReply()),
 		},
 	})
+	RegisterNone("CAD-045", "every then-item is waived in the accelerated lane (#645): a compressed-cadence skip writes today into the DATE column, so the undo window is never open in a browser run and no E2E seeds for it; the behavior is proven in Go under production durations")
 
 	// One contact per recent-activity state the block can render: a mutual
 	// meeting (which bumps outreach AND response), an outbound with no reply

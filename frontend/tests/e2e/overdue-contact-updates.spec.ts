@@ -11,10 +11,9 @@ import { waitForOverdueListSettled } from './helpers/dashboard'
 /**
  * E2E coverage for overdue-contact state changes.
  *
- * The dashboard-card "Mark as Contacted" halves (server-timestamped mutual
- * interaction + immediate removal, CAD-028.mutual-interaction-logged-timestamped + .contact-leaves-overdue-list) are cited and proven in
- * dashboard.spec.ts; this file owns the detail-page Log Interaction modal
- * variant (CON-053), the cross-view consistency leg (CAD-028.change-consistent-across-dashboard), and the
+ * The dashboard-card Log Interaction halves are cited in dashboard.spec.ts
+ * (DSH-005) and the card's action set is CAD-046; this file owns the
+ * detail-page Log Interaction modal variant (CON-053), the cross-view consistency leg, and the
  * overdue endpoint's reporting contract (CAD-023).
  *
  * Note: the declared overdue amount is a FLOOR ("overdue by at least N days"),
@@ -52,14 +51,14 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
   let sentinelName: string
 
   // Both tests in this describe need an overdue contact plus a sentinel that
-  // STAYS overdue, which is exactly CAD-028's declared fixture. The first test
+  // STAYS overdue, which is exactly CAD-046's declared fixture. The first test
   // cites CON-053 and rides it: CON-053's declaration includes both a cadence-less
   // plain contact and an overdue contact, while this variant exercises the same
-  // SEEDED-OVERDUE state from CAD-028, so this describe rides CAD-028.
+  // SEEDED-OVERDUE state from CAD-046, so this describe rides CAD-046.
   test.beforeEach(async ({ request }, testInfo) => {
     testApi = createTestAPI(request, testInfo)
 
-    seeded = await testApi.seedBehavior('CAD-028')
+    seeded = await testApi.seedBehavior('CAD-046')
     contactId = seeded.entities['target'].id
     contactName = seeded.entities['target'].name
     sentinelId = seeded.entities['sentinel'].id
@@ -102,8 +101,8 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     await expect(page.getByRole('heading', { name: contactName, exact: true })).toBeVisible()
 
     // Go to contact detail and log a mutual interaction via the modal.
-    // The header button is "Log Interaction" (not "Mark as Contacted")
-    // and posts to POST /interactions instead of the legacy PATCH
+    // The detail-page action is "Log Interaction" and posts to POST /interactions
+    // instead of the legacy PATCH
     // /last-contacted endpoint.
     await page.goto(`/contacts/${contactId}`)
     await expect(page.getByRole('heading', { name: contactName, level: 2 })).toBeVisible()
@@ -131,11 +130,11 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     expect(stillOverdue).toBe(false)
   })
 
-  test('all views should show consistent state after marking as contacted', async ({
+  test('all views should show consistent state after logging an interaction', async ({
     page,
     request,
   }) => {
-    // spec: CAD-028.change-consistent-across-dashboard, CAD-029.last-response-time-shown
+    // spec: CAD-029.last-response-time-shown
     // The declaration's SENTINEL stays overdue: its rendered card is the
     // data-derived settle signal on the dashboard ("Action Required" renders
     // even while loading, so the heading alone cannot prove the list rendered
@@ -147,7 +146,7 @@ test.describe('Overdue Contact Updates - With Seeded Data @area:overdue', () => 
     expect(await isContactOverdue(request, contactId)).toBe(true)
 
     // Log a mutual interaction via the API (replaces the deleted PATCH
-    // /last-contacted endpoint). All "Mark as Contacted" surfaces
+    // /last-contacted endpoint). The surviving list-row action and modal
     // route through POST /interactions {direction:"mutual"}.
     const interactionResponse = await request.post(
       `${API_BASE_URL}/api/v1/contacts/${contactId}/interactions`,
