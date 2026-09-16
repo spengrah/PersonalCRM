@@ -100,24 +100,27 @@ func contactToResponse(contact *repository.Contact) ContactResponse {
 	}
 
 	return ContactResponse{
-		ID:                 contact.ID.String(),
-		FullName:           contact.FullName,
-		Methods:            methods,
-		PrimaryMethod:      primaryMethod,
-		Location:           contact.Location,
-		Birthday:           contact.Birthday,
-		HowMet:             contact.HowMet,
-		Cadence:            contact.Cadence,
-		LastContacted:      contact.LastContacted,
-		ContactBy:          contact.ContactBy,
-		LastInteractionAt:  contact.LastInteractionAt,
-		LastOutreachAt:     contact.LastOutreachAt,
-		LastResponseAt:     contact.LastResponseAt,
-		AwaitingReply:      cadence.IsAwaitingReply(contact.LastOutreachAt, contact.LastResponseAt, contact.AwaitingReplyUntil, accelerated.GetCurrentTime()),
-		AwaitingReplyUntil: contact.AwaitingReplyUntil,
-		ProfilePhoto:       contact.ProfilePhoto,
-		CreatedAt:          contact.CreatedAt,
-		UpdatedAt:          contact.UpdatedAt,
+		ID:                   contact.ID.String(),
+		FullName:             contact.FullName,
+		Methods:              methods,
+		PrimaryMethod:        primaryMethod,
+		Location:             contact.Location,
+		Birthday:             contact.Birthday,
+		HowMet:               contact.HowMet,
+		Cadence:              contact.Cadence,
+		LastContacted:        contact.LastContacted,
+		ContactBy:            contact.ContactBy,
+		LastInteractionAt:    contact.LastInteractionAt,
+		LastOutreachAt:       contact.LastOutreachAt,
+		LastResponseAt:       contact.LastResponseAt,
+		AwaitingReply:        cadence.IsAwaitingReply(contact.LastOutreachAt, contact.LastResponseAt, contact.AwaitingReplyUntil, accelerated.GetCurrentTime()),
+		AwaitingReplyUntil:   contact.AwaitingReplyUntil,
+		LastSkippedAt:        contact.LastSkippedAt,
+		LastSkippedContactBy: contact.LastSkippedContactBy,
+		UndoSkipAvailable:    cadence.UndoSkipAvailable(contact.LastSkippedAt, contact.ContactBy, accelerated.GetCurrentTime()),
+		ProfilePhoto:         contact.ProfilePhoto,
+		CreatedAt:            contact.CreatedAt,
+		UpdatedAt:            contact.UpdatedAt,
 	}
 }
 
@@ -450,6 +453,64 @@ func (h *ContactHandler) DeleteContact(c *gin.Context) {
 	}
 
 	c.Status(http.StatusNoContent)
+}
+
+// SkipCycle skips the contact's current cadence cycle
+// @Summary Skip this cycle
+// @Description Advance the contact's next-contact date by one cadence cycle, end any live follow-up thread, and record the skip so it can be undone until the skipped-to date arrives.
+// @Tags contacts
+// @Produce json
+// @Param id path string true "Contact ID"
+// @Success 200 {object} api.APIResponse{data=ContactResponse} "Cycle skipped"
+// @Failure 400 {object} api.APIResponse{error=api.APIError} "Invalid contact ID"
+// @Failure 404 {object} api.APIResponse{error=api.APIError} "Contact not found"
+// @Failure 409 {object} api.APIResponse{error=api.APIError} "Contact has no cadence"
+// @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
+// @Router /contacts/{id}/skip [post]
+func (h *ContactHandler) SkipCycle(c *gin.Context) {
+	id, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
+		return
+	}
+	contact, err := h.contactService.SkipCycle(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, service.ErrSkipRequiresCadence) {
+			api.SendConflict(c, "Contact has no cadence to skip")
+			return
+		}
+		api.RespondError(c, err, "Contact")
+		return
+	}
+	api.SendSuccess(c, http.StatusOK, contactToResponse(contact), nil)
+}
+
+// UndoSkip restores the next-contact date the last skip replaced
+// @Summary Undo skip
+// @Description Restore the pre-skip next-contact date while the skip is still in effect (today is before the skipped-to date). Does not reopen the follow-up thread.
+// @Tags contacts
+// @Produce json
+// @Param id path string true "Contact ID"
+// @Success 200 {object} api.APIResponse{data=ContactResponse} "Skip undone"
+// @Failure 400 {object} api.APIResponse{error=api.APIError} "Invalid contact ID"
+// @Failure 404 {object} api.APIResponse{error=api.APIError} "Contact not found"
+// @Failure 409 {object} api.APIResponse{error=api.APIError} "No skip is in effect"
+// @Failure 500 {object} api.APIResponse{error=api.APIError} "Internal server error"
+// @Router /contacts/{id}/skip [delete]
+func (h *ContactHandler) UndoSkip(c *gin.Context) {
+	id, ok := api.ParseUUIDParam(c, "id", "contact")
+	if !ok {
+		return
+	}
+	contact, err := h.contactService.UndoSkip(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, service.ErrUndoSkipUnavailable) {
+			api.SendConflict(c, "No skip is in effect for this contact")
+			return
+		}
+		api.RespondError(c, err, "Contact")
+		return
+	}
+	api.SendSuccess(c, http.StatusOK, contactToResponse(contact), nil)
 }
 
 // ListOverdueContacts retrieves contacts that are overdue for contact

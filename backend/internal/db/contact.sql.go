@@ -12,6 +12,61 @@ import (
 	"github.com/google/uuid"
 )
 
+const ApplyContactSkip = `-- name: ApplyContactSkip :exec
+UPDATE contact SET
+    last_skipped_contact_by = contact_by,
+    contact_by              = $1::date,
+    awaiting_reply_until    = NULL,
+    last_skipped_at         = $2::timestamptz,
+    last_skip_reason        = $3::text,
+    updated_at = NOW()
+WHERE id = $4 AND deleted_at IS NULL
+`
+
+type ApplyContactSkipParams struct {
+	NextContactBy time.Time `json:"next_contact_by"`
+	SkippedAt     time.Time `json:"skipped_at"`
+	Reason        string    `json:"reason"`
+	ID            uuid.UUID `json:"id"`
+}
+
+// The CRM skip (CAD-044): advances contact_by to the caller-computed
+// skipped-to date (cadence.NextAfterSkip), ends the awaiting-reply window,
+// and records the skip state in the SAME statement — last_skipped_contact_by
+// captures the pre-skip contact_by because SET expressions read the old row.
+// Cadence-owned: the caller declares crm.derived_writer=cadence first.
+func (q *Queries) ApplyContactSkip(ctx context.Context, arg ApplyContactSkipParams) error {
+	_, err := q.db.Exec(ctx, ApplyContactSkip,
+		arg.NextContactBy,
+		arg.SkippedAt,
+		arg.Reason,
+		arg.ID,
+	)
+	return err
+}
+
+const ApplyContactUndoSkip = `-- name: ApplyContactUndoSkip :execrows
+UPDATE contact SET
+    contact_by              = last_skipped_contact_by,
+    last_skipped_at         = NULL,
+    last_skipped_contact_by = NULL,
+    last_skip_reason        = NULL,
+    updated_at = NOW()
+WHERE id = $1 AND deleted_at IS NULL AND last_skipped_at IS NOT NULL
+`
+
+// Undo (CAD-045): restores the recorded pre-skip contact_by and clears the
+// skip state. Touches neither awaiting_reply_until nor any follow-up row —
+// undo is not the inverse of skip. Affects zero rows when no skip state is
+// present; the caller has already checked cadence.UndoSkipAvailable.
+func (q *Queries) ApplyContactUndoSkip(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, ApplyContactUndoSkip, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const ComputeContactDatesAfterDelete = `-- name: ComputeContactDatesAfterDelete :one
 WITH agg AS (
   SELECT
@@ -109,7 +164,7 @@ INSERT INTO contact (id, full_name, cadence, last_contacted, profile_photo, crea
 SELECT new_node.id, $1, $2, $3,
        $4, $5, $6
 FROM new_node
-RETURNING contact.id, contact.full_name, contact.location, contact.birthday, contact.how_met, contact.cadence, contact.last_contacted, contact.profile_photo, contact.deleted_at, contact.created_at, contact.updated_at, contact.contact_by, contact.last_interaction_at, contact.last_outreach_at, contact.last_response_at, contact.awaiting_reply_until
+RETURNING contact.id, contact.full_name, contact.location, contact.birthday, contact.how_met, contact.cadence, contact.last_contacted, contact.profile_photo, contact.deleted_at, contact.created_at, contact.updated_at, contact.contact_by, contact.last_interaction_at, contact.last_outreach_at, contact.last_response_at, contact.awaiting_reply_until, contact.last_skipped_at, contact.last_skipped_contact_by, contact.last_skip_reason
 `
 
 type CreateContactWithNodeParams struct {
@@ -162,6 +217,9 @@ func (q *Queries) CreateContactWithNode(ctx context.Context, arg CreateContactWi
 		&i.LastOutreachAt,
 		&i.LastResponseAt,
 		&i.AwaitingReplyUntil,
+		&i.LastSkippedAt,
+		&i.LastSkippedContactBy,
+		&i.LastSkipReason,
 	)
 	return &i, err
 }
@@ -315,7 +373,7 @@ func (q *Queries) FindSimilarContactsBatch(ctx context.Context, arg FindSimilarC
 
 const GetContact = `-- name: GetContact :one
 
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason FROM contact
 WHERE id = $1 AND deleted_at IS NULL
 `
 
@@ -340,6 +398,9 @@ func (q *Queries) GetContact(ctx context.Context, id uuid.UUID) (*Contact, error
 		&i.LastOutreachAt,
 		&i.LastResponseAt,
 		&i.AwaitingReplyUntil,
+		&i.LastSkippedAt,
+		&i.LastSkippedContactBy,
+		&i.LastSkipReason,
 	)
 	return &i, err
 }
@@ -380,7 +441,7 @@ func (q *Queries) ListContactNamesByIDs(ctx context.Context, ids []uuid.UUID) ([
 }
 
 const ListContactsWithCadence = `-- name: ListContactsWithCadence :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason FROM contact
 WHERE deleted_at IS NULL
   AND cadence IS NOT NULL
   AND cadence != ''
@@ -415,6 +476,9 @@ func (q *Queries) ListContactsWithCadence(ctx context.Context, limit int32) ([]*
 			&i.LastOutreachAt,
 			&i.LastResponseAt,
 			&i.AwaitingReplyUntil,
+			&i.LastSkippedAt,
+			&i.LastSkippedContactBy,
+			&i.LastSkipReason,
 		); err != nil {
 			return nil, err
 		}
@@ -427,7 +491,7 @@ func (q *Queries) ListContactsWithCadence(ctx context.Context, limit int32) ([]*
 }
 
 const ListContactsWithContactBy = `-- name: ListContactsWithContactBy :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason FROM contact
 WHERE deleted_at IS NULL
   AND contact_by IS NOT NULL
 ORDER BY contact_by ASC
@@ -462,6 +526,9 @@ func (q *Queries) ListContactsWithContactBy(ctx context.Context, limit int32) ([
 			&i.LastOutreachAt,
 			&i.LastResponseAt,
 			&i.AwaitingReplyUntil,
+			&i.LastSkippedAt,
+			&i.LastSkippedContactBy,
+			&i.LastSkipReason,
 		); err != nil {
 			return nil, err
 		}
@@ -526,7 +593,7 @@ func (q *Queries) ListContactsWithKnowledgeColumns(ctx context.Context) ([]*List
 }
 
 const ListOverdueContacts = `-- name: ListOverdueContacts :many
-SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until FROM contact
+SELECT id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason FROM contact
 WHERE deleted_at IS NULL
   AND contact_by IS NOT NULL
   AND contact_by < $1::date
@@ -567,6 +634,9 @@ func (q *Queries) ListOverdueContacts(ctx context.Context, arg ListOverdueContac
 			&i.LastOutreachAt,
 			&i.LastResponseAt,
 			&i.AwaitingReplyUntil,
+			&i.LastSkippedAt,
+			&i.LastSkippedContactBy,
+			&i.LastSkipReason,
 		); err != nil {
 			return nil, err
 		}
@@ -690,7 +760,7 @@ UPDATE contact SET
   profile_photo = $4,
   updated_at = NOW()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until
+RETURNING id, full_name, location, birthday, how_met, cadence, last_contacted, profile_photo, deleted_at, created_at, updated_at, contact_by, last_interaction_at, last_outreach_at, last_response_at, awaiting_reply_until, last_skipped_at, last_skipped_contact_by, last_skip_reason
 `
 
 type UpdateContactParams struct {
@@ -735,6 +805,9 @@ func (q *Queries) UpdateContact(ctx context.Context, arg UpdateContactParams) (*
 		&i.LastOutreachAt,
 		&i.LastResponseAt,
 		&i.AwaitingReplyUntil,
+		&i.LastSkippedAt,
+		&i.LastSkippedContactBy,
+		&i.LastSkipReason,
 	)
 	return &i, err
 }
@@ -794,8 +867,11 @@ UPDATE contact SET
         THEN $12::date
         ELSE awaiting_reply_until
     END,
+    last_skipped_at = CASE WHEN $13::boolean THEN NULL ELSE last_skipped_at END,
+    last_skipped_contact_by = CASE WHEN $13::boolean THEN NULL ELSE last_skipped_contact_by END,
+    last_skip_reason = CASE WHEN $13::boolean THEN NULL ELSE last_skip_reason END,
     updated_at = NOW()
-WHERE id = $13 AND deleted_at IS NULL
+WHERE id = $14 AND deleted_at IS NULL
 `
 
 type UpdateContactCadenceForwardParams struct {
@@ -811,6 +887,7 @@ type UpdateContactCadenceForwardParams struct {
 	ContactBy               *time.Time `json:"contact_by"`
 	ApplyAwaitingReplyUntil bool       `json:"apply_awaiting_reply_until"`
 	AwaitingReplyUntil      *time.Time `json:"awaiting_reply_until"`
+	ApplyClearSkipState     bool       `json:"apply_clear_skip_state"`
 	ID                      uuid.UUID  `json:"id"`
 }
 
@@ -827,6 +904,8 @@ type UpdateContactCadenceForwardParams struct {
 // Merge (BulkApply) sets apply_last_interaction_at=false because a
 // merge is not an interaction and must not mutate the "last
 // non-outbound interaction" timestamp of the surviving contact.
+// apply_clear_skip_state clears the three skip-state columns (CAD-045: skip
+// state has one setter and every other writer of the clock clears it).
 func (q *Queries) UpdateContactCadenceForward(ctx context.Context, arg UpdateContactCadenceForwardParams) error {
 	_, err := q.db.Exec(ctx, UpdateContactCadenceForward,
 		arg.ApplyLastContacted,
@@ -841,6 +920,7 @@ func (q *Queries) UpdateContactCadenceForward(ctx context.Context, arg UpdateCon
 		arg.ContactBy,
 		arg.ApplyAwaitingReplyUntil,
 		arg.AwaitingReplyUntil,
+		arg.ApplyClearSkipState,
 		arg.ID,
 	)
 	return err
@@ -872,8 +952,11 @@ UPDATE contact SET
         WHEN $11::boolean THEN $12::date
         ELSE awaiting_reply_until
     END,
+    last_skipped_at = CASE WHEN $13::boolean THEN NULL ELSE last_skipped_at END,
+    last_skipped_contact_by = CASE WHEN $13::boolean THEN NULL ELSE last_skipped_contact_by END,
+    last_skip_reason = CASE WHEN $13::boolean THEN NULL ELSE last_skip_reason END,
     updated_at = NOW()
-WHERE id = $13 AND deleted_at IS NULL
+WHERE id = $14 AND deleted_at IS NULL
 `
 
 type UpdateContactCadenceUnconditionalParams struct {
@@ -889,6 +972,7 @@ type UpdateContactCadenceUnconditionalParams struct {
 	ContactBy               *time.Time `json:"contact_by"`
 	ApplyAwaitingReplyUntil bool       `json:"apply_awaiting_reply_until"`
 	AwaitingReplyUntil      *time.Time `json:"awaiting_reply_until"`
+	ApplyClearSkipState     bool       `json:"apply_clear_skip_state"`
 	ID                      uuid.UUID  `json:"id"`
 }
 
@@ -901,6 +985,8 @@ type UpdateContactCadenceUnconditionalParams struct {
 // last_interaction_at is gated by its OWN apply flag
 // (apply_last_interaction_at); see UpdateContactCadenceForward above
 // for the rationale.
+// apply_clear_skip_state clears the three skip-state columns (CAD-045: skip
+// state has one setter and every other writer of the clock clears it).
 func (q *Queries) UpdateContactCadenceUnconditional(ctx context.Context, arg UpdateContactCadenceUnconditionalParams) error {
 	_, err := q.db.Exec(ctx, UpdateContactCadenceUnconditional,
 		arg.ApplyLastContacted,
@@ -915,6 +1001,7 @@ func (q *Queries) UpdateContactCadenceUnconditional(ctx context.Context, arg Upd
 		arg.ContactBy,
 		arg.ApplyAwaitingReplyUntil,
 		arg.AwaitingReplyUntil,
+		arg.ApplyClearSkipState,
 		arg.ID,
 	)
 	return err
@@ -962,6 +1049,9 @@ UPDATE contact SET
   last_outreach_at    = $4::timestamptz,
   contact_by          = $5::date,
   awaiting_reply_until = $6::date,
+  last_skipped_at = NULL,
+  last_skipped_contact_by = NULL,
+  last_skip_reason = NULL,
   updated_at = NOW()
 WHERE id = $7 AND deleted_at IS NULL
 `

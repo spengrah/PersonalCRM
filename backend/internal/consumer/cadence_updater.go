@@ -53,7 +53,9 @@ type contactCadenceReader interface {
 // CadenceUpdater is the cutover consumer — the sole writer of
 // contact.last_contacted, contact.last_outreach_at,
 // contact.last_response_at, contact.contact_by, and
-// contact.awaiting_reply_until.
+// contact.awaiting_reply_until. It is also the sole setter of
+// contact.last_skipped_at, contact.last_skipped_contact_by, and
+// contact.last_skip_reason; every other clock writer clears those columns.
 //
 // Entry points (all funnel into applyTx):
 //   - HandleEvent:       envelope-driven (from InteractionRecorder inline
@@ -65,6 +67,7 @@ type contactCadenceReader interface {
 //     semantics across individual fields.
 //   - ApplyContactByOverride: direct-invoke for user cadence edits
 //     (can clear or backdate contact_by unconditionally).
+//   - ApplySkip / ApplyUndoSkip: direct-invoke CRM skip state setter and undo.
 type CadenceUpdater struct {
 	claims    eventClaimer
 	contacts  contactCadenceReader
@@ -123,6 +126,7 @@ type cadenceWriteRequest struct {
 	ContactBy               *time.Time // nil means "clear contact_by" on the unconditional branch
 	ApplyAwaitingReplyUntil bool
 	AwaitingReplyUntil      *time.Time
+	ClearSkipState          bool
 }
 
 // --------------------------------------------------------------------------
@@ -257,6 +261,7 @@ func (h *CadenceUpdater) BulkApply(ctx context.Context, tx pgx.Tx, contactID uui
 		ContactBy:               fields.ContactBy,
 		ApplyAwaitingReplyUntil: fields.AwaitingReplyUntil != nil,
 		AwaitingReplyUntil:      fields.AwaitingReplyUntil,
+		ClearSkipState:          true,
 		// BulkApply is the merge path and MUST NOT bump last_interaction_at;
 		// merge is not an interaction. Leave ApplyLastInteractionAt false.
 	}
@@ -280,8 +285,53 @@ func (h *CadenceUpdater) ApplyContactByOverride(ctx context.Context, tx pgx.Tx, 
 		Branch:         repository.CadenceBranchUnconditional,
 		ApplyContactBy: true,
 		ContactBy:      contactBy,
+		ClearSkipState: true,
 	}
 	return h.applyTx(ctx, tx, req)
+}
+
+// ApplySkip is the one setter of skip state (CAD-044, CAD-045). nextContactBy
+// is computed by the caller with cadence.NextAfterSkip; the query records the
+// pre-skip contact_by itself.
+func (h *CadenceUpdater) ApplySkip(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, nextContactBy, skippedAt time.Time, reason string) error {
+	if tx == nil {
+		return errors.New("cadence_updater: nil tx")
+	}
+	if h.mode == CadenceModeOff {
+		return nil
+	}
+	if err := repository.SetDerivedWriterTx(ctx, tx, repository.DerivedWriterCadence); err != nil {
+		return err
+	}
+	return db.New(tx).ApplyContactSkip(ctx, db.ApplyContactSkipParams{
+		NextContactBy: nextContactBy,
+		SkippedAt:     skippedAt,
+		Reason:        reason,
+		ID:            contactID,
+	})
+}
+
+// ApplyUndoSkip restores the recorded pre-skip contact_by and clears skip
+// state. Returns an error when no row carried skip state (the caller checks
+// cadence.UndoSkipAvailable first, so this is a race, not a user error).
+func (h *CadenceUpdater) ApplyUndoSkip(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) error {
+	if tx == nil {
+		return errors.New("cadence_updater: nil tx")
+	}
+	if h.mode == CadenceModeOff {
+		return nil
+	}
+	if err := repository.SetDerivedWriterTx(ctx, tx, repository.DerivedWriterCadence); err != nil {
+		return err
+	}
+	rows, err := db.New(tx).ApplyContactUndoSkip(ctx, contactID)
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return errors.New("cadence_updater: undo skip affected no row")
+	}
+	return nil
 }
 
 // --------------------------------------------------------------------------
@@ -324,6 +374,7 @@ func (h *CadenceUpdater) buildInteractionWrite(
 		ApplyLastResponseAt:     applyLastResponseAt,
 		ApplyContactBy:          applyContactBy,
 		ApplyAwaitingReplyUntil: applyAwaitingReplyUntil,
+		ClearSkipState:          applyLastContacted,
 	}
 	if applyLastContacted {
 		t := occurredAt
@@ -359,7 +410,7 @@ func (h *CadenceUpdater) buildInteractionWrite(
 // request (every apply flag false) short-circuits to avoid issuing
 // an UPDATE that would bump updated_at for nothing.
 func (h *CadenceUpdater) applyTx(ctx context.Context, tx pgx.Tx, req cadenceWriteRequest) error {
-	if !req.ApplyLastContacted && !req.ApplyLastInteractionAt && !req.ApplyLastOutreachAt && !req.ApplyLastResponseAt && !req.ApplyContactBy && !req.ApplyAwaitingReplyUntil {
+	if !req.ApplyLastContacted && !req.ApplyLastInteractionAt && !req.ApplyLastOutreachAt && !req.ApplyLastResponseAt && !req.ApplyContactBy && !req.ApplyAwaitingReplyUntil && !req.ClearSkipState {
 		return nil
 	}
 	if err := repository.SetDerivedWriterTx(ctx, tx, repository.DerivedWriterCadence); err != nil {
@@ -381,6 +432,7 @@ func (h *CadenceUpdater) applyTx(ctx context.Context, tx pgx.Tx, req cadenceWrit
 			ContactBy:               req.ContactBy,
 			ApplyAwaitingReplyUntil: req.ApplyAwaitingReplyUntil,
 			AwaitingReplyUntil:      req.AwaitingReplyUntil,
+			ApplyClearSkipState:     req.ClearSkipState,
 			ID:                      req.ContactID,
 		})
 	case repository.CadenceBranchUnconditional:
@@ -397,6 +449,7 @@ func (h *CadenceUpdater) applyTx(ctx context.Context, tx pgx.Tx, req cadenceWrit
 			ContactBy:               req.ContactBy,
 			ApplyAwaitingReplyUntil: req.ApplyAwaitingReplyUntil,
 			AwaitingReplyUntil:      req.AwaitingReplyUntil,
+			ApplyClearSkipState:     req.ClearSkipState,
 			ID:                      req.ContactID,
 		})
 	default:

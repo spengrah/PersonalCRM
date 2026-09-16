@@ -31,9 +31,19 @@ type ContactResponse struct {
 	// the stored expiry it was evaluated against. Absent when no outreach has
 	// opened a window.
 	AwaitingReplyUntil *time.Time `json:"awaiting_reply_until,omitempty"`
-	ProfilePhoto       *string    `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
-	CreatedAt          time.Time  `json:"created_at" example:"2024-01-01T00:00:00Z"`
-	UpdatedAt          time.Time  `json:"updated_at" example:"2024-01-15T10:30:00Z"`
+	// LastSkippedAt is when the user last skipped this contact's cycle from the
+	// CRM (CAD-044). Absent when no skip is recorded.
+	LastSkippedAt *time.Time `json:"last_skipped_at,omitempty"`
+	// LastSkippedContactBy is the next-contact date the last skip replaced,
+	// serialized as that date at UTC midnight; undo restores it (CAD-045).
+	// Absent when no skip is recorded.
+	LastSkippedContactBy *time.Time `json:"last_skipped_contact_by,omitempty"`
+	// UndoSkipAvailable is true while skip state is present and today is before
+	// contact_by — server-computed at the app clock.
+	UndoSkipAvailable bool      `json:"undo_skip_available"`
+	ProfilePhoto      *string   `json:"profile_photo,omitempty" example:"https://example.com/photo.jpg"`
+	CreatedAt         time.Time `json:"created_at" example:"2024-01-01T00:00:00Z"`
+	UpdatedAt         time.Time `json:"updated_at" example:"2024-01-15T10:30:00Z"`
 	// RematchJobID is populated by the CREATE path only. A rematch is triggered
 	// by newly-present method values, and update no longer carries methods, so
 	// it has no job to report. This type is shared by create, get, update, list,

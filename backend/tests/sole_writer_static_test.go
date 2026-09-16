@@ -83,6 +83,8 @@ var derivedWritingSymbols = map[string]struct{}{
 	"UpdateContactCadenceForward":       {},
 	"UpdateContactCadenceUnconditional": {},
 	"WriteContactDatesAfterDelete":      {},
+	"ApplyContactSkip":                  {},
+	"ApplyContactUndoSkip":              {},
 	"UpdateContactLocationCache":        {},
 	"UpdateContactBirthdayCache":        {},
 	"UpdateContactHowMetCache":          {},
@@ -132,7 +134,7 @@ type allowedCallSite struct {
 // entry's symbols list. Keys use forward slashes relative to the backend
 // module root.
 //
-// Two owners, twelve entries: CadenceUpdater.applyTx for the six cadence
+// Two owners, fourteen entries: CadenceUpdater.applyTx for the six cadence
 // columns; KnowledgeCacheUpdater.RefreshTx — the SOLE permitted caller of the
 // three knowledge Tx wrappers — for the three knowledge columns. Every other
 // entry is a narrow, documented carve-out.
@@ -143,6 +145,14 @@ var allowedCallSites = map[string]allowedCallSite{
 	"internal/consumer/cadence_updater.go:applyTx": {
 		symbols: []string{"UpdateContactCadenceForward", "UpdateContactCadenceUnconditional"},
 		why:     "sole writer",
+	},
+	"internal/consumer/cadence_updater.go:ApplySkip": {
+		symbols: []string{"ApplyContactSkip"},
+		why:     "the one setter of skip state; writes contact_by + awaiting_reply_until under the cadence owner",
+	},
+	"internal/consumer/cadence_updater.go:ApplyUndoSkip": {
+		symbols: []string{"ApplyContactUndoSkip"},
+		why:     "undo restores contact_by under the cadence owner",
 	},
 	// The authoritative consumer-owned knowledge-cache writer, and the ONLY
 	// permitted caller of the three knowledge Tx wrappers — those wrappers

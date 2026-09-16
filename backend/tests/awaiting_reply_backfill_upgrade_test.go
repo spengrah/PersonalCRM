@@ -78,6 +78,9 @@ func TestAwaitingReplyBackfill_Upgrade082(t *testing.T) {
 		require.NoError(t, err, "position the clone before migration 082")
 	}
 	require.NoError(t, m.Steps(1))
+	// 083 is additive; every contact-returning sqlc query expands to the head
+	// column list, so reads happen at head.
+	require.NoError(t, m.Up())
 
 	assertBackfill := func(contact *repository.Contact, outreach time.Time, response *time.Time, wantAwaiting bool) {
 		t.Helper()

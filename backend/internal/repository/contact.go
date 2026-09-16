@@ -133,23 +133,26 @@ func ContactCadenceFieldsFromContact(c *Contact) ContactCadenceFields {
 
 // Contact represents a contact entity
 type Contact struct {
-	ID                 uuid.UUID       `json:"id"`
-	FullName           string          `json:"full_name"`
-	Methods            []ContactMethod `json:"methods,omitempty"`
-	PrimaryMethod      *ContactMethod  `json:"primary_method,omitempty"`
-	Location           *string         `json:"location,omitempty"`
-	Birthday           *time.Time      `json:"birthday,omitempty"`
-	HowMet             *string         `json:"how_met,omitempty"`
-	Cadence            *string         `json:"cadence,omitempty"`
-	LastContacted      *time.Time      `json:"last_contacted,omitempty"`
-	ContactBy          *time.Time      `json:"contact_by,omitempty"`
-	LastInteractionAt  *time.Time      `json:"last_interaction_at,omitempty"`
-	LastOutreachAt     *time.Time      `json:"last_outreach_at,omitempty"`
-	LastResponseAt     *time.Time      `json:"last_response_at,omitempty"`
-	AwaitingReplyUntil *time.Time      `json:"awaiting_reply_until,omitempty"`
-	ProfilePhoto       *string         `json:"profile_photo,omitempty"`
-	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt          time.Time       `json:"updated_at"`
+	ID                   uuid.UUID       `json:"id"`
+	FullName             string          `json:"full_name"`
+	Methods              []ContactMethod `json:"methods,omitempty"`
+	PrimaryMethod        *ContactMethod  `json:"primary_method,omitempty"`
+	Location             *string         `json:"location,omitempty"`
+	Birthday             *time.Time      `json:"birthday,omitempty"`
+	HowMet               *string         `json:"how_met,omitempty"`
+	Cadence              *string         `json:"cadence,omitempty"`
+	LastContacted        *time.Time      `json:"last_contacted,omitempty"`
+	ContactBy            *time.Time      `json:"contact_by,omitempty"`
+	LastInteractionAt    *time.Time      `json:"last_interaction_at,omitempty"`
+	LastOutreachAt       *time.Time      `json:"last_outreach_at,omitempty"`
+	LastResponseAt       *time.Time      `json:"last_response_at,omitempty"`
+	AwaitingReplyUntil   *time.Time      `json:"awaiting_reply_until,omitempty"`
+	LastSkippedAt        *time.Time      `json:"last_skipped_at,omitempty"`
+	LastSkippedContactBy *time.Time      `json:"last_skipped_contact_by,omitempty"`
+	LastSkipReason       *string         `json:"last_skip_reason,omitempty"`
+	ProfilePhoto         *string         `json:"profile_photo,omitempty"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
 }
 
 // CreateContactRequest represents the request to create a contact
@@ -221,6 +224,9 @@ func convertDbContact(dbContact *db.Contact) Contact {
 	contact.LastOutreachAt = utcPtr(dbContact.LastOutreachAt)
 	contact.LastResponseAt = utcPtr(dbContact.LastResponseAt)
 	contact.AwaitingReplyUntil = utcPtr(dbContact.AwaitingReplyUntil)
+	contact.LastSkippedAt = utcPtr(dbContact.LastSkippedAt)
+	contact.LastSkippedContactBy = dbContact.LastSkippedContactBy
+	contact.LastSkipReason = dbContact.LastSkipReason
 
 	return contact
 }
@@ -830,6 +836,7 @@ func (s TestCadenceSeed) params(id uuid.UUID) db.UpdateContactCadenceUncondition
 		ContactBy:               s.ContactBy,
 		ApplyAwaitingReplyUntil: s.AwaitingReplyUntil != nil,
 		AwaitingReplyUntil:      s.AwaitingReplyUntil,
+		ApplyClearSkipState:     false,
 		ID:                      id,
 	}
 }

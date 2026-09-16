@@ -43,6 +43,7 @@ var liveContactColumnOrder = []string{
 	"id", "full_name", "location", "birthday", "how_met", "cadence",
 	"last_contacted", "profile_photo", "deleted_at", "created_at", "updated_at",
 	"contact_by", "last_interaction_at", "last_outreach_at", "last_response_at", "awaiting_reply_until",
+	"last_skipped_at", "last_skipped_contact_by", "last_skip_reason",
 }
 
 // TestLiveContactView_MigrationUpDown proves the view shape survives stepping
@@ -129,8 +130,37 @@ func TestLiveContactView_MigrationUpDown(t *testing.T) {
 	require.NoError(t, m.Up())
 	cols, err = database.Queries.TestListViewColumns(ctx, "live_contact")
 	require.NoError(t, err)
-	assert.Len(t, cols, 16, "migration 082 appends the new derived column")
+	assert.Len(t, cols, 19, "migration 083 appends the skip-state columns")
+	assert.Equal(t, "last_skip_reason", cols[len(cols)-1].ColumnName)
+
+	// Round-trip migration 083 explicitly: its down migration restores the
+	// 082 view and its up migration restores all three skip-state columns.
+	require.NoError(t, m.Migrate(82))
+	cols, err = database.Queries.TestListViewColumns(ctx, "live_contact")
+	require.NoError(t, err)
+	assert.Len(t, cols, 16)
 	assert.Equal(t, "awaiting_reply_until", cols[len(cols)-1].ColumnName)
+	contactCols, err := database.Queries.TestListViewColumns(ctx, "contact")
+	require.NoError(t, err)
+	contactNames := make([]string, len(contactCols))
+	for i, col := range contactCols {
+		contactNames[i] = col.ColumnName
+	}
+	assert.NotContains(t, contactNames, "last_skipped_at")
+	require.NoError(t, m.Up())
+	cols, err = database.Queries.TestListViewColumns(ctx, "live_contact")
+	require.NoError(t, err)
+	assert.Len(t, cols, 19)
+	assert.Equal(t, "last_skip_reason", cols[len(cols)-1].ColumnName)
+	contactCols, err = database.Queries.TestListViewColumns(ctx, "contact")
+	require.NoError(t, err)
+	contactNames = make([]string, len(contactCols))
+	for i, col := range contactCols {
+		contactNames[i] = col.ColumnName
+	}
+	assert.Contains(t, contactNames, "last_skipped_at")
+	assert.Contains(t, contactNames, "last_skipped_contact_by")
+	assert.Contains(t, contactNames, "last_skip_reason")
 }
 
 // TestLiveContactView_Shape asserts live_contact's KIND (plain, not

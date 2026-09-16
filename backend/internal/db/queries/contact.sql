@@ -87,6 +87,8 @@ UPDATE contact SET how_met = $2 WHERE id = $1 AND deleted_at IS NULL;
 -- Merge (BulkApply) sets apply_last_interaction_at=false because a
 -- merge is not an interaction and must not mutate the "last
 -- non-outbound interaction" timestamp of the surviving contact.
+-- apply_clear_skip_state clears the three skip-state columns (CAD-045: skip
+-- state has one setter and every other writer of the clock clears it).
 UPDATE contact SET
     last_contacted = CASE
         WHEN sqlc.arg(apply_last_contacted)::boolean
@@ -125,6 +127,9 @@ UPDATE contact SET
         THEN sqlc.narg(awaiting_reply_until)::date
         ELSE awaiting_reply_until
     END,
+    last_skipped_at = CASE WHEN sqlc.arg(apply_clear_skip_state)::boolean THEN NULL ELSE last_skipped_at END,
+    last_skipped_contact_by = CASE WHEN sqlc.arg(apply_clear_skip_state)::boolean THEN NULL ELSE last_skipped_contact_by END,
+    last_skip_reason = CASE WHEN sqlc.arg(apply_clear_skip_state)::boolean THEN NULL ELSE last_skip_reason END,
     updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 
@@ -138,6 +143,8 @@ WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 -- last_interaction_at is gated by its OWN apply flag
 -- (apply_last_interaction_at); see UpdateContactCadenceForward above
 -- for the rationale.
+-- apply_clear_skip_state clears the three skip-state columns (CAD-045: skip
+-- state has one setter and every other writer of the clock clears it).
 UPDATE contact SET
     last_contacted = CASE
         WHEN sqlc.arg(apply_last_contacted)::boolean THEN sqlc.narg(last_contacted)::timestamptz
@@ -163,6 +170,9 @@ UPDATE contact SET
         WHEN sqlc.arg(apply_awaiting_reply_until)::boolean THEN sqlc.narg(awaiting_reply_until)::date
         ELSE awaiting_reply_until
     END,
+    last_skipped_at = CASE WHEN sqlc.arg(apply_clear_skip_state)::boolean THEN NULL ELSE last_skipped_at END,
+    last_skipped_contact_by = CASE WHEN sqlc.arg(apply_clear_skip_state)::boolean THEN NULL ELSE last_skipped_contact_by END,
+    last_skip_reason = CASE WHEN sqlc.arg(apply_clear_skip_state)::boolean THEN NULL ELSE last_skip_reason END,
     updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 
@@ -347,8 +357,39 @@ UPDATE contact SET
   last_outreach_at    = sqlc.narg(new_last_outreach_at)::timestamptz,
   contact_by          = sqlc.narg(new_contact_by)::date,
   awaiting_reply_until = sqlc.narg(new_awaiting_reply_until)::date,
+  last_skipped_at = NULL,
+  last_skipped_contact_by = NULL,
+  last_skip_reason = NULL,
   updated_at = NOW()
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
+-- name: ApplyContactSkip :exec
+-- The CRM skip (CAD-044): advances contact_by to the caller-computed
+-- skipped-to date (cadence.NextAfterSkip), ends the awaiting-reply window,
+-- and records the skip state in the SAME statement — last_skipped_contact_by
+-- captures the pre-skip contact_by because SET expressions read the old row.
+-- Cadence-owned: the caller declares crm.derived_writer=cadence first.
+UPDATE contact SET
+    last_skipped_contact_by = contact_by,
+    contact_by              = sqlc.arg(next_contact_by)::date,
+    awaiting_reply_until    = NULL,
+    last_skipped_at         = sqlc.arg(skipped_at)::timestamptz,
+    last_skip_reason        = sqlc.arg(reason)::text,
+    updated_at = NOW()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
+
+-- name: ApplyContactUndoSkip :execrows
+-- Undo (CAD-045): restores the recorded pre-skip contact_by and clears the
+-- skip state. Touches neither awaiting_reply_until nor any follow-up row —
+-- undo is not the inverse of skip. Affects zero rows when no skip state is
+-- present; the caller has already checked cadence.UndoSkipAvailable.
+UPDATE contact SET
+    contact_by              = last_skipped_contact_by,
+    last_skipped_at         = NULL,
+    last_skipped_contact_by = NULL,
+    last_skip_reason        = NULL,
+    updated_at = NOW()
+WHERE id = sqlc.arg(id) AND deleted_at IS NULL AND last_skipped_at IS NOT NULL;
 
 -- name: SetDerivedWriter :exec
 -- Declares which owner the CALLING TRANSACTION is authorized to write derived

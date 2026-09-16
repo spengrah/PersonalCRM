@@ -56,28 +56,6 @@ func IsAwaitingReply(lastOutreachAt, lastResponseAt, awaitingReplyUntil *time.Ti
 	return !CalendarDate(Today(now)).After(CalendarDate(*awaitingReplyUntil))
 }
 
-// CadenceDays returns the number of days for a given cadence type.
-// These are fixed day counts used for contact_by calculation:
-// weekly: 7, biweekly: 14, monthly: 30, quarterly: 90, biannual: 180, annual: 365
-func CadenceDays(cadenceType CadenceType) int {
-	switch cadenceType {
-	case CadenceWeekly:
-		return 7
-	case CadenceBiweekly:
-		return 14
-	case CadenceMonthly:
-		return 30
-	case CadenceQuarterly:
-		return 90
-	case CadenceBiannual:
-		return 180
-	case CadenceAnnual:
-		return 365
-	default:
-		return 0
-	}
-}
-
 // CalculateContactBy computes the contact_by date from a base timestamp and cadence.
 // The base should typically be last_contacted or created_at.
 // Returns the date when the contact should be reached next.
@@ -91,6 +69,38 @@ func CalculateContactBy(base time.Time, cadenceType CadenceType) time.Time {
 		return nextDue.In(time.Local)
 	}
 	return DateOnly(nextDue)
+}
+
+// NextAfterSkip advances one cadence cycle from today or the current contact_by,
+// whichever produces the later calendar date. It uses CalculateContactBy so
+// skip shares the same environment-scaled cadence duration as other recomputes.
+// A current contact_by is a SQL DATE that may decode as UTC midnight, so its
+// year, month, and day are read in its own location before forming a local base.
+// The local-noon base keeps a 30-day duration on the same calendar day across a
+// DST transition.
+func NextAfterSkip(current *time.Time, cadenceType CadenceType, now time.Time) time.Time {
+	fromToday := CalculateContactBy(Today(now).Add(12*time.Hour), cadenceType)
+	if current == nil {
+		return fromToday
+	}
+
+	year, month, day := current.Date()
+	base := time.Date(year, month, day, 12, 0, 0, 0, time.Local)
+	fromCurrent := CalculateContactBy(base, cadenceType)
+	if CalendarDate(fromCurrent).After(CalendarDate(fromToday)) {
+		return fromCurrent
+	}
+	return fromToday
+}
+
+// UndoSkipAvailable reports whether a recorded skip can be undone. Both the
+// skip timestamp and contact_by must be present, and today must be strictly
+// before the skipped-to date; that date is an exclusive boundary. CalendarDate
+// keeps the comparison correct when a SQL DATE decodes as UTC midnight.
+func UndoSkipAvailable(lastSkippedAt, contactBy *time.Time, now time.Time) bool {
+	return lastSkippedAt != nil &&
+		contactBy != nil &&
+		CalendarDate(Today(now)).Before(CalendarDate(*contactBy))
 }
 
 // IsContactByOverdue checks if a contact_by date is overdue relative to the given time.

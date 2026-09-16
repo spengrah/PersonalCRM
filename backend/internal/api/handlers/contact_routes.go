@@ -23,6 +23,8 @@ type ContactRouteDeps struct {
 //   - GET    /api/v1/contacts/:id
 //   - PUT    /api/v1/contacts/:id
 //   - DELETE /api/v1/contacts/:id
+//   - POST   /api/v1/contacts/:id/skip
+//   - DELETE /api/v1/contacts/:id/skip
 //   - GET    /api/v1/contacts/:id/interactions
 //   - POST   /api/v1/contacts/:id/interactions
 //   - GET    /api/v1/contacts/:id/notes
@@ -44,6 +46,8 @@ func RegisterContactRoutes(v1 *gin.RouterGroup, deps ContactRouteDeps) {
 		contacts.GET("/:id", deps.Contact.GetContact)
 		contacts.PUT("/:id", deps.Contact.UpdateContact)
 		contacts.DELETE("/:id", deps.Contact.DeleteContact)
+		contacts.POST("/:id/skip", deps.Contact.SkipCycle)
+		contacts.DELETE("/:id/skip", deps.Contact.UndoSkip)
 		contacts.GET("/:id/interactions", deps.Interaction.ListContactInteractions)
 		contacts.POST("/:id/interactions", deps.Interaction.CreateInteraction)
 		// POST with OPERATIONS, deliberately never PUT with a desired set: a
