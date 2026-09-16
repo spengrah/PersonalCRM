@@ -1,10 +1,5 @@
 #!/bin/bash
 # Fast, path-selected static checks. Required test suites run in PR CI.
-# Resolve the pushing worktree even when core.hooksPath points elsewhere.
-PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-  echo "Pre-push: cannot resolve pushing worktree" >&2
-  exit 1
-}
 CONFIG_FILE=".ai/pre-push.json"
 FILTERS_FILE="path-filters.yml"
 
@@ -141,6 +136,14 @@ run_checks() {
 if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
   return 0
 fi
+
+# Resolve the pushing worktree even when core.hooksPath points elsewhere. Below the
+# sourced-guard on purpose: a sourcing script (scripts/ci/staging-reseed-decision.sh)
+# borrows the functions above and must never be exited by this file.
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "Pre-push: cannot resolve pushing worktree" >&2
+  exit 1
+}
 
 set -e
 cd "$PROJECT_ROOT"
