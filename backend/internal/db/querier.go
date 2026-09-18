@@ -2687,6 +2687,9 @@ type Querier interface {
 	// This distinguishes the 079 definition from the 082 replacement after each
 	// migration position without issuing ad hoc SQL from Go.
 	TestGetFunctionDef(ctx context.Context, signature string) (string, error)
+	// Test-only read for migration fixtures that verify a deleted interaction is
+	// outside a historical repair selector. Production reads remain live-only.
+	TestGetInteractionIncludingDeleted(ctx context.Context, arg TestGetInteractionIncludingDeletedParams) (*Interaction, error)
 	// Test assertion — a planted job's disposition: its state, whether it is
 	// finalized, and its attempt counter. `attempt` is the load-bearing one for
 	// queue isolation: River increments it on FETCH, so attempt = 0 says the job was

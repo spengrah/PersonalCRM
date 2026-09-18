@@ -473,7 +473,7 @@ func TestIngestCall_Outbound_BumpsLastOutreachAt(t *testing.T) {
 		// Outbound: daemon should send answered=nil and has_voicemail=false.
 		p.Answered = nil
 		p.HasVoicemail = false
-		p.DurationSeconds = 60
+		p.DurationSeconds = 0
 	})
 	w := postIngestCall(t, env, map[string]any{"events": []any{ev}})
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -500,6 +500,54 @@ func TestIngestCall_Outbound_BumpsLastOutreachAt(t *testing.T) {
 	// branch is the path that returns the post-commit refresh closure
 	// for contacts with a pending follow-up task; here no task exists
 	// so the closure is nil, but the claim row lands either way.
+	recordedEv, err := env.eventRepo.FindEventBySource(ctx, "phone_calls", interaction.ID.String())
+	require.NoError(t, err)
+	cadenceClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerCadenceUpdater)
+	require.NoError(t, err)
+	require.True(t, cadenceClaimed, "outbound: inline cadence apply must have claimed the event")
+	followUpClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerFollowUpManager)
+	require.NoError(t, err)
+	require.True(t, followUpClaimed, "outbound: inline follow-up apply must have claimed the event")
+}
+
+// spec: ING-039.connected-outbound
+func TestIngestCall_ConnectedOutbound_BumpsLastContacted(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+	env := setupPhoneCallIngestEnv(t)
+	ctx := context.Background()
+
+	callID := env.sourcePrefix + "outbound"
+	ev := buildCallEvent(t, events.KindCallSent, env.pairedHostID, callID, env.seededPhone, func(p *events.CallPayload) {
+		// Outbound: daemon should send answered=nil and has_voicemail=false.
+		p.Answered = nil
+		p.HasVoicemail = false
+		p.DurationSeconds = 60
+	})
+	w := postIngestCall(t, env, map[string]any{"events": []any{ev}})
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := parseIngestResp(t, w)
+	require.Equal(t, 1, resp.Accepted, "errors=%+v", resp.Errors)
+
+	pc, err := env.phoneCallRepo.GetCallByUniqueID(ctx, callID)
+	require.NoError(t, err)
+	require.Equal(t, "outbound", pc.Direction)
+	require.Nil(t, pc.Answered, "outbound must force answered=NULL on staging")
+	require.False(t, pc.HasVoicemail, "outbound must force has_voicemail=FALSE")
+
+	interaction, err := env.interactionRpo.FindBySourceRef(ctx, env.seededContact, "phone_calls", callID)
+	require.NoError(t, err)
+	require.Equal(t, "mutual", interaction.Direction)
+
+	contact, err := env.contactRepo.GetContact(ctx, env.seededContact)
+	require.NoError(t, err)
+	require.NotNil(t, contact.LastOutreachAt, "outbound interaction must bump last_outreach_at")
+	require.NotNil(t, contact.LastContacted)
+	require.NotNil(t, contact.LastResponseAt)
+	require.WithinDuration(t, interaction.OccurredAt, *contact.LastContacted, time.Second)
+
 	recordedEv, err := env.eventRepo.FindEventBySource(ctx, "phone_calls", interaction.ID.String())
 	require.NoError(t, err)
 	cadenceClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerCadenceUpdater)

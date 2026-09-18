@@ -82,6 +82,42 @@ func (r *PhoneCallRepository) ListByInteractionIDs(ctx context.Context, ids []uu
 	return out, nil
 }
 
+// TestInsertPhoneCallLinked inserts a staged call already linked to an
+// interaction. Test-only: production ingestion links the staging row through
+// MarkProcessed after recording the interaction.
+func (r *PhoneCallRepository) TestInsertPhoneCallLinked(ctx context.Context, p TestInsertPhoneCallLinkedParams) (*PhoneCall, error) {
+	row, err := r.queries.TestInsertPhoneCallLinked(ctx, db.TestInsertPhoneCallLinkedParams{
+		CallUniqueID:     p.CallUniqueID,
+		PeerHandle:       p.PeerHandle,
+		PeerNormalized:   p.PeerNormalized,
+		Service:          p.Service,
+		Direction:        p.Direction,
+		DurationSeconds:  p.DurationSeconds,
+		StartedAt:        p.StartedAt,
+		MatchedContactID: p.MatchedContactID,
+		InteractionID:    p.InteractionID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	call := convertDbPhoneCall(row)
+	return &call, nil
+}
+
+// TestInsertPhoneCallLinkedParams is the test fixture input for
+// TestInsertPhoneCallLinked.
+type TestInsertPhoneCallLinkedParams struct {
+	CallUniqueID     string
+	PeerHandle       string
+	PeerNormalized   string
+	Service          string
+	Direction        string
+	DurationSeconds  int32
+	StartedAt        time.Time
+	MatchedContactID *uuid.UUID
+	InteractionID    *uuid.UUID
+}
+
 // NewPhoneCallRepository creates a new phone_call repository.
 func NewPhoneCallRepository(queries db.Querier) *PhoneCallRepository {
 	return &PhoneCallRepository{queries: queries}

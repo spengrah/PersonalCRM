@@ -373,12 +373,13 @@ func (s *IngestService) handleCall(
 //	| inbound   | true     | (any)    | (any)         | yes    | inbound        |
 //	| inbound   | false    | (any)    | true          | yes    | inbound        |
 //	| inbound   | false/NULL| (any)   | false         | no     | —              |
-//	| outbound  | (ignored)| > 0      | (forced false)| yes    | outbound       |
+//	| outbound  | (ignored)| > 0      | (forced false)| yes    | mutual         |
 //	| outbound  | (ignored)| 0        | (forced false)| yes    | outbound       |
 //
-// Note: outbound ALWAYS creates an interaction (the user's
-// "attempted to reach" signal). Description distinguishes
-// connected / voicemail / missed for the future contact-timeline UI.
+// Note: outbound ALWAYS creates an interaction. A positive duration is a
+// connected call and is mutual; zero duration remains an outbound
+// "attempted to reach" signal. Description distinguishes connected / missed
+// for the future contact-timeline UI.
 func decideCallInteraction(
 	isOutbound bool,
 	answered *bool,
@@ -389,7 +390,7 @@ func decideCallInteraction(
 	serviceLabel := callServiceLabel(service)
 	if isOutbound {
 		if durationSeconds > 0 {
-			return true, repository.InteractionDirectionOutbound,
+			return true, repository.InteractionDirectionMutual,
 				fmt.Sprintf("%s call (%d sec)", serviceLabel, durationSeconds)
 		}
 		return true, repository.InteractionDirectionOutbound,
