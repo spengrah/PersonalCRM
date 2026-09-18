@@ -293,6 +293,24 @@ func (r *InteractionRepository) FindBySourceRef(ctx context.Context, contactID u
 	return &interaction, nil
 }
 
+// TestGetInteractionIncludingDeleted reads a fixture row regardless of its
+// soft-delete state. Test-only: production timeline reads remain live-only.
+func (r *InteractionRepository) TestGetInteractionIncludingDeleted(ctx context.Context, contactID uuid.UUID, source, sourceRef string) (*Interaction, error) {
+	row, err := r.queries.TestGetInteractionIncludingDeleted(ctx, db.TestGetInteractionIncludingDeletedParams{
+		ContactID: contactID,
+		Source:    source,
+		SourceRef: &sourceRef,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, db.ErrNotFound
+		}
+		return nil, err
+	}
+	interaction := convertDbInteraction(row)
+	return &interaction, nil
+}
+
 // FindInWindow finds an existing interaction within a time window for a
 // contact, source, and direction. Direction is part of the dedup key
 // because the manual logger lets users record any direction — an

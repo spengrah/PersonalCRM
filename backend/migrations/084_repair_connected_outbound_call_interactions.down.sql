@@ -1,0 +1,4 @@
+-- This migration repairs historical facts and derived projections. It is
+-- intentionally irreversible: changing repaired mutual rows back to outbound
+-- would erase information about which rows had already been corrected and
+-- could regress newer cadence state.

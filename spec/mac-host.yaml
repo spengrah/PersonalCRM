@@ -352,7 +352,7 @@ behaviors:
   # --- Address-book reconcile ---
   # The call pipeline — cross-field call verification, the call-outcome interaction decision, call
   # peer resolution, direction-field normalization, and phone-call staging dedup — is the ingest
-  # domain's (ING-030, ING-031, ING-036, ING-037, ING-038). Calls originate solely from the daemon's
+  # domain's (ING-031, ING-036, ING-037, ING-038, ING-039). Calls originate solely from the daemon's
   # anarlog call log, but the backend staging/decision logic lives in the ingest service.
 
   - id: MAC-033

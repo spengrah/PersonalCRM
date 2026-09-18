@@ -383,7 +383,7 @@ behaviors:
   - id: ING-030
     title: Call outcome decides whether an interaction is recorded
     type: business-logic
-    status: current
+    status: retired
     surface: none
     given: an ingested call
     when: the interaction-creation decision is applied
@@ -392,6 +392,7 @@ behaviors:
       - an answered inbound call, or a missed inbound call that left a voicemail, records an inbound interaction
       - a missed inbound call with no voicemail records no interaction but keeps its staging row for audit
     provenance: [decideCallInteraction, handleCall]
+    notes: Superseded by ING-039; connected outgoing calls now count as mutual interactions. Migration 084 repairs existing connected outbound call rows and forward-merges the affected cadence projections while preserving user/skip overrides.
 
   - id: ING-031
     title: Peer-resolution outcomes differ across the message and call pipelines
@@ -497,3 +498,20 @@ behaviors:
       - a re-push is a no-op that returns the existing row
     provenance: [phone_call.call_unique_id UNIQUE, UpsertPhoneCall ON CONFLICT DO UPDATE]
     notes: The call-staging analog of the message-guid dedup (ING-029). A late-arriving field change (e.g. a voicemail flag flip) is deduplicated by the event log before reaching the upsert and is dropped — an accepted v1.5 limitation.
+
+  - id: ING-039
+    title: Call outcomes distinguish mutual conversations from outreach and incoming contact
+    type: business-logic
+    status: current
+    surface: none
+    given: an ingested call
+    when: the interaction-creation decision is applied
+    then:
+      - key: connected-outbound
+        text: an outbound call with positive duration records a mutual interaction, regardless of the unreliable outbound answered flag
+      - key: missed-outbound
+        text: an outbound call with zero duration records an outbound interaction
+      - key: inbound
+        text: an answered inbound call or inbound voicemail records an inbound interaction; a missed inbound call without voicemail records no interaction
+    provenance: [decideCallInteraction, handleCall]
+    notes: Migration 084 repairs historical connected outbound call rows without replaying events, forward-merges cadence projections, and preserves newer follow-up and skip state.

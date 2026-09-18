@@ -59,17 +59,21 @@ func TestDecideCallInteraction_MissedInbound_AnsweredNil(t *testing.T) {
 	require.False(t, create)
 }
 
+// spec: ING-039.connected-outbound
 func TestDecideCallInteraction_ConnectedOutbound(t *testing.T) {
-	// T4: outbound connected (duration > 0) → interaction created,
-	// direction outbound, answered IGNORED on outbound.
-	answered := true
-	create, dir, desc := decideCallInteraction(true, &answered, false, 60, "voice")
-	require.True(t, create)
-	require.Equal(t, "outbound", dir)
-	require.Contains(t, desc, "voice")
-	require.Contains(t, desc, "60 sec")
+	for _, service := range []string{"voice", "facetime_audio", "facetime_video"} {
+		for _, duration := range []int32{1, 60} {
+			for _, answered := range []*bool{nil, newBool(false), newBool(true)} {
+				create, dir, desc := decideCallInteraction(true, answered, false, duration, service)
+				require.True(t, create)
+				require.Equal(t, "mutual", dir)
+				require.Contains(t, desc, "sec")
+			}
+		}
+	}
 }
 
+// spec: ING-039.missed-outbound
 func TestDecideCallInteraction_MissedOutbound(t *testing.T) {
 	// T5: outbound missed (duration = 0) → interaction created, the
 	// "attempted to reach" signal. Description marks it "missed".
@@ -624,3 +628,5 @@ func TestHandleCall_PayloadDecodeError(t *testing.T) {
 	require.NotNil(t, rej)
 	require.Equal(t, ingestRejectPayloadInvalid, rej.Code)
 }
+
+func newBool(value bool) *bool { return &value }

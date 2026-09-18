@@ -45,6 +45,15 @@ SELECT * FROM interaction
 WHERE contact_id = $1 AND source = $2 AND source_ref = $3 AND deleted_at IS NULL
 LIMIT 1;
 
+-- name: TestGetInteractionIncludingDeleted :one
+-- Test-only read for migration fixtures that verify a deleted interaction is
+-- outside a historical repair selector. Production reads remain live-only.
+SELECT * FROM interaction
+WHERE contact_id = sqlc.arg(contact_id)
+  AND source = sqlc.arg(source)
+  AND source_ref = sqlc.arg(source_ref)
+LIMIT 1;
+
 -- name: FindInteractionInWindow :one
 -- Find an existing manual interaction within a time window for a given
 -- direction (for manual deduplication). Direction is part of the dedup

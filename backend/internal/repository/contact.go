@@ -882,6 +882,36 @@ func (r *ContactRepository) TestSeedContactCadenceFields(ctx context.Context, id
 	return tx.Commit(ctx)
 }
 
+// TestSeedContactSkipState is a TEST-ONLY fixture writer for the active skip
+// projection. It uses the production skip query so migration tests can verify
+// that historical repairs leave skip state untouched.
+func (r *ContactRepository) TestSeedContactSkipState(ctx context.Context, id uuid.UUID, nextContactBy, skippedAt time.Time, reason string) error {
+	if r.pool == nil {
+		return errors.New("contact repo: TestSeedContactSkipState requires SetPool (pool not configured)")
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin skip seed tx: %w", err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
+			_ = rbErr
+		}
+	}()
+	if err := SetDerivedWriterTx(ctx, tx, DerivedWriterCadence); err != nil {
+		return err
+	}
+	if err := db.New(tx).ApplyContactSkip(ctx, db.ApplyContactSkipParams{
+		NextContactBy: nextContactBy,
+		SkippedAt:     skippedAt,
+		Reason:        reason,
+		ID:            id,
+	}); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // TestWriteCadenceColumnsWithoutGUCTx deliberately writes cadence columns
 // WITHOUT declaring an owner. It exists solely so the derived-writer trigger's
 // rejection tests can attempt an unauthorized write: raw SQL in Go is banned

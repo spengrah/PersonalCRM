@@ -672,6 +672,40 @@ func (q *Queries) SoftDeleteInteraction(ctx context.Context, id uuid.UUID) error
 	return err
 }
 
+const TestGetInteractionIncludingDeleted = `-- name: TestGetInteractionIncludingDeleted :one
+SELECT id, contact_id, source, source_ref, occurred_at, description, created_at, deleted_at, direction, venue_id FROM interaction
+WHERE contact_id = $1
+  AND source = $2
+  AND source_ref = $3
+LIMIT 1
+`
+
+type TestGetInteractionIncludingDeletedParams struct {
+	ContactID uuid.UUID `json:"contact_id"`
+	Source    string    `json:"source"`
+	SourceRef *string   `json:"source_ref"`
+}
+
+// Test-only read for migration fixtures that verify a deleted interaction is
+// outside a historical repair selector. Production reads remain live-only.
+func (q *Queries) TestGetInteractionIncludingDeleted(ctx context.Context, arg TestGetInteractionIncludingDeletedParams) (*Interaction, error) {
+	row := q.db.QueryRow(ctx, TestGetInteractionIncludingDeleted, arg.ContactID, arg.Source, arg.SourceRef)
+	var i Interaction
+	err := row.Scan(
+		&i.ID,
+		&i.ContactID,
+		&i.Source,
+		&i.SourceRef,
+		&i.OccurredAt,
+		&i.Description,
+		&i.CreatedAt,
+		&i.DeletedAt,
+		&i.Direction,
+		&i.VenueID,
+	)
+	return &i, err
+}
+
 const TestInsertInteraction = `-- name: TestInsertInteraction :one
 INSERT INTO interaction (id, contact_id, source, source_ref, occurred_at, direction)
 VALUES (

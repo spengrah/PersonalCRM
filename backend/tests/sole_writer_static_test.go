@@ -91,6 +91,7 @@ var derivedWritingSymbols = map[string]struct{}{
 	// fixture wrapper selectors.
 	"TestSeedContactCadenceFields":          {},
 	"TestSeedContactCadenceFieldsTx":        {},
+	"TestSeedContactSkipState":              {},
 	"TestWriteCadenceColumnsWithoutGUCTx":   {},
 	"TestWriteKnowledgeColumnsWithoutGUCTx": {},
 	// knowledge Tx wrapper selectors.
@@ -211,6 +212,10 @@ var allowedCallSites = map[string]allowedCallSite{
 	"internal/repository/contact.go:TestSeedContactCadenceFields": {
 		symbols: []string{"TestSeedContactCadenceFieldsTx"}, // pool-level variant delegates to the tx form
 		why:     "test fixture writer (pool-level); opens its own tx, then delegates",
+	},
+	"internal/repository/contact.go:TestSeedContactSkipState": {
+		symbols: []string{"ApplyContactSkip"},
+		why:     "test fixture writer; declares the cadence owner before seeding skip state",
 	},
 	"internal/repository/contact.go:TestWriteCadenceColumnsWithoutGUCTx": {
 		symbols: []string{"UpdateContactCadenceUnconditional"},
