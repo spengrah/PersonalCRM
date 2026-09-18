@@ -11,8 +11,9 @@ BEGIN;
 -- so a later interaction remains authoritative. contact_by is advanced only
 -- when it still equals the value cadence would have produced from the old
 -- last_contacted (or created_at); a different value represents a user/skip
--- override and is preserved. Skip and awaiting-reply columns are intentionally
--- not touched by this historical correction.
+-- override and is preserved. A skip predating a repaired call that advances
+-- last_contacted is superseded, including its due date and undo state. Newer
+-- skips and awaiting-reply columns are preserved.
 -- Cadence intervals below are the one-time production snapshot used by the
 -- 082 backfill: they mirror cadence.ProductionCadenceConfig (days × 24 hours).
 -- Date conversion is explicitly UTC so this migration does not depend on the
@@ -52,6 +53,9 @@ WITH repaired AS (
         c.created_at,
         c.last_contacted AS old_last_contacted,
         c.contact_by AS old_contact_by,
+        (c.last_skipped_at IS NOT NULL
+         AND r.connected_at > c.last_skipped_at
+         AND (c.last_contacted IS NULL OR r.connected_at > c.last_contacted)) AS clear_skip,
         CASE
             WHEN c.last_contacted IS NULL OR r.connected_at > c.last_contacted
                 THEN r.connected_at
@@ -98,6 +102,7 @@ SET
           OR d.new_last_contacted = d.old_last_contacted
           OR (
               d.old_contact_by IS NOT NULL
+              AND NOT d.clear_skip
               AND d.old_contact_by <> ((
                   COALESCE(d.old_last_contacted, d.created_at) + d.cadence_interval
               ) AT TIME ZONE 'UTC')::date
@@ -105,6 +110,9 @@ SET
             THEN c.contact_by
         ELSE ((d.new_last_contacted + d.cadence_interval) AT TIME ZONE 'UTC')::date
     END,
+    last_skipped_at = CASE WHEN d.clear_skip THEN NULL ELSE c.last_skipped_at END,
+    last_skipped_contact_by = CASE WHEN d.clear_skip THEN NULL ELSE c.last_skipped_contact_by END,
+    last_skip_reason = CASE WHEN d.clear_skip THEN NULL ELSE c.last_skip_reason END,
     updated_at = NOW()
 FROM derived d
 WHERE c.id = d.id;

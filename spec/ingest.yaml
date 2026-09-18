@@ -392,7 +392,7 @@ behaviors:
       - an answered inbound call, or a missed inbound call that left a voicemail, records an inbound interaction
       - a missed inbound call with no voicemail records no interaction but keeps its staging row for audit
     provenance: [decideCallInteraction, handleCall]
-    notes: Superseded by ING-039; connected outgoing calls now count as mutual interactions. Migration 084 repairs existing connected outbound call rows and forward-merges the affected cadence projections while preserving user/skip overrides.
+    notes: Superseded by ING-039; connected outgoing calls now count as mutual interactions. Migration 084 repairs existing connected outbound call rows and forward-merges the affected cadence projections while preserving user overrides and skips newer than the repaired call.
 
   - id: ING-031
     title: Peer-resolution outcomes differ across the message and call pipelines
@@ -514,4 +514,4 @@ behaviors:
       - key: inbound
         text: an answered inbound call or inbound voicemail records an inbound interaction; a missed inbound call without voicemail records no interaction
     provenance: [decideCallInteraction, handleCall]
-    notes: Migration 084 repairs historical connected outbound call rows without replaying events, forward-merges cadence projections, and preserves newer follow-up and skip state.
+    notes: Migration 084 repairs historical connected outbound call rows without replaying events, forward-merges cadence projections, and preserves newer follow-up and skip state. A repaired call that advances last-contacted past a skip supersedes that skip and its undo state.

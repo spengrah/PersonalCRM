@@ -115,6 +115,9 @@ func TestConnectedOutboundCallRepair_Upgrade084(t *testing.T) {
 	skippedTo := now.AddDate(0, 0, 90)
 	require.NoError(t, contactRepo.TestSeedContactSkipState(ctx, skipped.ID, skippedTo, skippedAt, "fixture"))
 
+	olderSkip := newFixtureContact(t, "older-skip", oldAutomaticContactBy)
+	require.NoError(t, contactRepo.TestSeedContactSkipState(ctx, olderSkip.ID, skippedTo, connectedAt.Add(-time.Hour), "fixture"))
+
 	insertCall := func(t *testing.T, contact *repository.Contact, suffix string, duration int32) {
 		t.Helper()
 		interactionID := uuid.New()
@@ -143,6 +146,7 @@ func TestConnectedOutboundCallRepair_Upgrade084(t *testing.T) {
 	insertCall(t, newer, "newer", 60)
 	insertCall(t, deleted, "deleted", 60)
 	insertCall(t, skipped, "skipped", 60)
+	insertCall(t, olderSkip, "older-skip", 60)
 	insertCall(t, deletedInteraction, "deleted-interaction", 60)
 	deletedRow, err := interactionRepo.FindBySourceRef(ctx, deletedInteraction.ID, repository.InteractionSourcePhoneCalls, "repair-fixture-deleted-interaction")
 	require.NoError(t, err)
@@ -194,6 +198,14 @@ func TestConnectedOutboundCallRepair_Upgrade084(t *testing.T) {
 		require.NotNil(t, timestamp)
 		require.Equal(t, connectedAt.UTC(), timestamp.UTC())
 	}
+	olderSkipContact, err := contactRepo.GetContact(ctx, olderSkip.ID)
+	require.NoError(t, err)
+	require.Equal(t, connectedAt.UTC(), olderSkipContact.LastContacted.UTC())
+	require.Nil(t, olderSkipContact.LastSkippedAt)
+	require.Nil(t, olderSkipContact.LastSkippedContactBy)
+	require.Nil(t, olderSkipContact.LastSkipReason)
+	require.Equal(t, connectedAt.AddDate(0, 0, 30).UTC().Format("2006-01-02"), olderSkipContact.ContactBy.UTC().Format("2006-01-02"))
+
 	// Deleted interactions remain history and are deliberately outside the
 	// repair selector.
 	deletedInteractionRow, err := interactionRepo.TestGetInteractionIncludingDeleted(ctx, deletedInteraction.ID, repository.InteractionSourcePhoneCalls, "repair-fixture-deleted-interaction")
