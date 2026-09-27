@@ -18,10 +18,10 @@ public protocol HeartbeatStateProvider: Sendable {
     var lastKnownPiProtocolVersion: Int32? { get async }
 }
 
-/// In-memory test impl. Reads/writes a single Int32? slot via an
-/// actor — async-safe and concurrency-friendly.
+/// In-memory test impl. Reads a single Int32? slot fixed at init via
+/// an actor — async-safe and concurrency-friendly.
 public actor InMemoryHeartbeatStateProvider: HeartbeatStateProvider {
-    private var value: Int32?
+    private let value: Int32?
 
     public init(initial: Int32? = nil) {
         self.value = initial
@@ -29,10 +29,5 @@ public actor InMemoryHeartbeatStateProvider: HeartbeatStateProvider {
 
     public var lastKnownPiProtocolVersion: Int32? {
         get async { value }
-    }
-
-    /// Test-only setter.
-    public func set(_ v: Int32?) {
-        value = v
     }
 }

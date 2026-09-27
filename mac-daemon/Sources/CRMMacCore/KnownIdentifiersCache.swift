@@ -40,7 +40,6 @@
 // NOT the same as absent: a later identifier appearing offline diffs
 // against `∅` and IS scanned.
 import Foundation
-import CryptoKit
 
 public actor KnownIdentifiersCache {
     /// The current known set (drives `contains` sender filter).
@@ -202,21 +201,5 @@ public actor KnownIdentifiersCache {
         return base
             .subtracting(pendingNewlyAdded[id] ?? [])
             .subtracting(inFlight[id] ?? [])
-    }
-}
-
-/// SHA-256 hash of the sorted canonical set, hex-encoded lowercase.
-///
-/// Retained for the dead `knownIdentifiersHash` cursor field (its
-/// removal is out of scope). Sorting before hashing makes the hash
-/// deterministic regardless of insertion order.
-public enum KnownIdentifiersHash {
-    public static func sha256Hex(of set: Set<String>) -> String {
-        let sorted = set.sorted()
-        // Use NUL separator (\0) so handles containing newlines/commas
-        // don't collide.
-        let canonical = sorted.joined(separator: "\0")
-        let digest = SHA256.hash(data: Data(canonical.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }

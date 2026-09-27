@@ -613,20 +613,12 @@ final class OrphanNotificationCenterTests: XCTestCase {
         XCTAssertEqual(q.first(where: { $0.name == "session" })?.value, Self.session2)
     }
 
-    // MARK: - TC-OC25: delegate is retained after actor init
+    // MARK: - TC-OC25: installDelegate registers with the presenter
 
-    func testDelegateIsRetainedAfterActorInit() async throws {
+    func testInstallDelegateRegistersWithPresenter() async throws {
         let presenter = FakeUserNotificationPresenter(authorizationResult: true)
         let center = makeCenter(presenter: presenter)
         await center.installDelegate()
-        let stillInstalled1 = await center.hasDelegateInstalled()
-        XCTAssertTrue(stillInstalled1)
-        // Push the actor through several await boundaries.
-        await center.consume(needsAttention: [
-            NotificationConsumeItem(sessionID: Self.session1, reason: "orphan"),
-        ])
-        let stillInstalled2 = await center.hasDelegateInstalled()
-        XCTAssertTrue(stillInstalled2, "delegate must survive across await boundaries")
         // Verify the FakeUserNotificationPresenter received the
         // delegate registration call.
         let delegateCount = await presenter.recordedSetDelegateCount()

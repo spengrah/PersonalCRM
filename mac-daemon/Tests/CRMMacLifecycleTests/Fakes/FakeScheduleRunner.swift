@@ -2,8 +2,7 @@ import Foundation
 import CRMMacCore
 @testable import CRMMacLifecycle
 
-/// Records registered plugins; tests call `fire(id:)` to invoke one
-/// tick of a single plugin synchronously.
+/// Records registered and cancelled plugins.
 public final class FakeScheduleRunner: ScheduleRunner, @unchecked Sendable {
     public final class Registration: Cancellable {
         public let plugin: SourcePlugin
@@ -29,17 +28,6 @@ public final class FakeScheduleRunner: ScheduleRunner, @unchecked Sendable {
 
     public func cancelAll() {
         for r in registrations { r.cancel() }
-    }
-
-    /// Fire a single tick on the named plugin. Returns true if found,
-    /// false otherwise.
-    @discardableResult
-    public func fire(id: SourceID) async throws -> Bool {
-        for r in registrations where !r.cancelled && r.plugin.id == id {
-            try await r.plugin.tick()
-            return true
-        }
-        return false
     }
 
     public func cancelledCount() -> Int {
