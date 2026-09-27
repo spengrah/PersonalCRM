@@ -10,6 +10,8 @@
 # the backend lanes execute are listed in backend as well. mac_daemon tests run
 # in CI. seed and migrations drive staging reseed decisions.
 # infra/langfuse/*.ts triggers frontend CI, but model-prices.json does not.
+# frontend also lists the non-frontend files its vitest suite reads (spec YAML,
+# the Go fixture registry), so drift in them runs Frontend Tests.
 
 backend:
   - 'backend/**'
@@ -27,6 +29,8 @@ backend:
 frontend:
   - 'frontend/**'
   - 'infra/langfuse/*.ts'
+  - 'spec/*.yaml'
+  - 'backend/internal/synthetic/fixtures.go'
 mac_daemon:
   - 'mac-daemon/**'
   - '.github/workflows/ci.yml'

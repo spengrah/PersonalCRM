@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { SPEC_CATALOG } from './spec-catalog'
 import { classificationFor } from './grader/classification'
+import { loadSpecBehaviors } from './spec-yaml'
 
 // The judge-residue ID set (D5 completeness guard): spec-catalog.ts is a
 // hand-transcribed copy of the YAML SSOT, so a behavior dropped from the catalog
@@ -14,32 +15,23 @@ describe('spec catalog', () => {
     expect(Object.keys(SPEC_CATALOG).sort()).toEqual(RESIDUE_IDS)
   })
 
-  it('preserves each survivor behavior verbatim — full given/when/then (SSOT transcription)', () => {
-    // A deep-equality guard so truncating or editing a survivor's clauses (e.g.
-    // dropping CON-042's "cannot be undone" then-item, which the judge grades)
-    // fails here rather than silently shrinking the judge prompt.
-    expect(SPEC_CATALOG['CON-042']).toEqual({
-      id: 'CON-042',
-      title: 'Deleting a contact requires explicit confirmation',
-      given: 'a contact detail page',
-      when: 'the user asks to delete the contact',
-      then: [
-        'a confirmation prompt warns the action cannot be undone',
-        'only on confirmation is the contact deleted',
-        'on success the user is returned to the contact list',
-      ],
-    })
-    expect(SPEC_CATALOG['DSH-004']).toEqual({
-      id: 'DSH-004',
-      title: 'The overdue widget distinguishes loading and error states from its content',
-      given: 'the overdue widget is loading or its request has failed',
-      when: 'the dashboard renders',
-      then: [
-        'while loading, placeholder content is shown rather than an empty or caught-up state',
-        'on request failure, an error state with a failure reason is shown rather than an empty or caught-up state',
-        'the shown failure reason faithfully reflects the actual failure',
-      ],
-    })
+  it('transcribes each survivor verbatim from spec YAML — full given/when/then', () => {
+    // Deep equality against the YAML SSOT, so editing or truncating a survivor's
+    // clauses on either side (e.g. dropping CON-042's "cannot be undone"
+    // then-item, which the judge grades) fails here rather than silently
+    // changing the judge prompt.
+    const yaml = new Map(loadSpecBehaviors().map(b => [b.id, b]))
+    for (const id of RESIDUE_IDS) {
+      const b = yaml.get(id)
+      expect(b, `${id} missing from spec YAML`).toBeDefined()
+      expect(SPEC_CATALOG[id]).toEqual({
+        id: b!.id,
+        title: b!.title,
+        given: b!.given,
+        when: b!.when,
+        then: (b!.then ?? []).map(t => t.text),
+      })
+    }
   })
 
   it('every classification row indexes within its catalog then-items (subset)', () => {

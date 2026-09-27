@@ -54,7 +54,7 @@ assert_absent "$out" "executed:Backend lint"
 out=$(select_for spec/example.yaml)
 assert_contains "$out" "executed:Spec lint"
 assert_contains "$out" "executed:Spec drift"
-assert_absent "$out" "executed:Frontend lint"
+assert_contains "$out" "executed:Frontend lint"
 assert_absent "$out" "executed:Backend lint"
 out=$(select_for mac-daemon/Sources/example.swift)
 assert_absent "$out" "executed:Frontend lint"

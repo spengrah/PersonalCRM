@@ -34,7 +34,7 @@ describe('ErrorBoundary', () => {
       expect(screen.getByText('Test content')).toBeInTheDocument()
     })
 
-    it('displays error UI when error occurs', () => {
+    it('catches a child error and renders the fallback UI', () => {
       render(
         <ErrorBoundary>
           <ThrowError shouldThrow={true} />
@@ -42,43 +42,19 @@ describe('ErrorBoundary', () => {
       )
 
       expect(screen.getByText('Something went wrong')).toBeInTheDocument()
-    })
-
-    it('shows error message in error UI', () => {
-      render(
-        <ErrorBoundary>
-          <ThrowError shouldThrow={true} />
-        </ErrorBoundary>
-      )
-
       expect(screen.getByText(/We apologize for the inconvenience/)).toBeInTheDocument()
-    })
-
-    it('shows reload button when error occurs', () => {
-      render(
-        <ErrorBoundary>
-          <ThrowError shouldThrow={true} />
-        </ErrorBoundary>
-      )
-
-      const reloadButton = screen.getByRole('button', { name: /reload page/i })
-      expect(reloadButton).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /reload page/i })).toBeInTheDocument()
     })
   })
 
-  describe('error handling', () => {
-    it('catches errors from children', () => {
-      // Should not throw - error should be caught
-      expect(() => {
-        render(
-          <ErrorBoundary>
-            <ThrowError shouldThrow={true} />
-          </ErrorBoundary>
-        )
-      }).not.toThrow()
-    })
+  describe('error logging', () => {
+    // React itself console.errors every caught error, so match the boundary's own call.
+    const boundaryLogCalls = () =>
+      vi
+        .mocked(console.error)
+        .mock.calls.filter(args => args[0] === 'ErrorBoundary caught an error:')
 
-    it('logs error in development mode', () => {
+    it('logs the caught error in development mode', () => {
       vi.stubEnv('NODE_ENV', 'development')
 
       render(
@@ -87,7 +63,19 @@ describe('ErrorBoundary', () => {
         </ErrorBoundary>
       )
 
-      expect(console.error).toHaveBeenCalled()
+      expect(boundaryLogCalls()).toHaveLength(1)
+    })
+
+    it('does not log the caught error in production mode', () => {
+      vi.stubEnv('NODE_ENV', 'production')
+
+      render(
+        <ErrorBoundary>
+          <ThrowError shouldThrow={true} />
+        </ErrorBoundary>
+      )
+
+      expect(boundaryLogCalls()).toHaveLength(0)
     })
   })
 
