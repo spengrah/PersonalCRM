@@ -475,7 +475,7 @@ behaviors:
     then:
       - every recompute path uses the same environment-scaled interval definition
     provenance: [cadence.NextAfterSkip, cadence.CalculateContactBy, cadence.GetCadenceDuration]
-    notes: 'Unified 2026-09-15: the skip path resolves its interval through cadence.CalculateContactBy like every other recompute path, and cadence.CadenceDays is deleted. cadence.CalculateNextDueDate and its three callers in cadence.go (calendar-month arithmetic) still exist with test-only callers; deleting them is outside this claim.'
+    notes: 'Unified 2026-09-15: the skip path resolves its interval through cadence.CalculateContactBy like every other recompute path, and cadence.CadenceDays is deleted. cadence.CalculateNextDueDate and its three calendar-month-arithmetic callers in cadence.go, which had only test callers, are deleted.'
 
   - id: CAD-035
     title: A remote deadline edit on a cadence task reschedules the contact

@@ -1190,16 +1190,6 @@ func (r *ExternalContactRepository) CountByHostAndSource(
 	return out, nil
 }
 
-// DeleteBySourceForTest hard-deletes ALL external_contact rows for a
-// given source string. TEST ONLY: production code must not call this;
-// it bypasses the tombstone contract and the crm_contact_id /
-// match_status preservation rules. Used by integration tests that
-// seed rows under a synthetic source and need targeted cleanup.
-func (r *ExternalContactRepository) DeleteBySourceForTest(ctx context.Context, source string) error {
-	_, err := r.queries.DeleteExternalContactsBySourceForTest(ctx, source)
-	return err
-}
-
 // ListAnarlogTitleGroups returns the normalized-token groups of
 // unmatched anarlog_title weak candidates for the discovery surface,
 // ranked by member-row evidence count. Each group carries its distinct

@@ -499,13 +499,6 @@ type Querier interface {
 	DeleteExternalContact(ctx context.Context, id uuid.UUID) error
 	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 *string) (int64, error)
 	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
-	// Test teardown — hard-deletes ALL external_contact rows for a given
-	// source string. The known-IDs integration tests use this when they
-	// seed rows under a synthetic source value and need a targeted
-	// cleanup that ignores soft-delete state. Production code must never
-	// call this; it bypasses the tombstone contract and the
-	// crm_contact_id/match_status preservation rules.
-	DeleteExternalContactsBySourceForTest(ctx context.Context, source string) (int64, error)
 	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 *string) (int64, error)
 	// Test teardown — drop external_identity rows seeded by a test under
 	// a known source string (e.g., 'messages'). Used in raw_message ingest

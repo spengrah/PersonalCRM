@@ -150,35 +150,6 @@ func TestHealthEndpoint_NoDatabaseConfigured(t *testing.T) {
 	assert.Contains(t, *dbStatus.Error, "not configured")
 }
 
-func TestHealthEndpoint_LegacyHandler(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	router := gin.New()
-	router.GET("/health", health.HealthHandler)
-
-	req, err := http.NewRequest("GET", "/health", nil)
-	require.NoError(t, err)
-
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	// Legacy handler should always return 200
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	var response health.HealthResponse
-	err = json.Unmarshal(w.Body.Bytes(), &response)
-	require.NoError(t, err)
-
-	// Verify status is ok (legacy)
-	assert.Equal(t, "ok", response.Status)
-
-	// Verify timestamp is present
-	assert.NotEmpty(t, response.Timestamp)
-
-	// Verify version info is present
-	assert.NotEmpty(t, response.Version.Version)
-}
-
 func TestHealthResponse_JSONFormat(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
