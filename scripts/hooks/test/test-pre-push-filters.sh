@@ -62,8 +62,6 @@ assert_not_in_group "infra/backup/install.sh" backend
 assert_in_group     ".ai/pre-push.json" scripts
 assert_not_in_group ".ai/pre-push.json" backend
 # Scripts the backend lanes execute stay in backend (and in scripts).
-assert_in_group     "scripts/ci/sqlc-select-list-guard.sh" backend
-assert_in_group     "scripts/ci/sqlc-select-list-guard.sh" scripts
 assert_in_group     "scripts/check-ingest-registry.sh" backend
 assert_in_group     "scripts/test-parallelism.sh" backend
 assert_not_in_group "scripts/ci/staging-reseed-decision.sh" backend

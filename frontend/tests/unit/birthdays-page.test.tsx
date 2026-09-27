@@ -3,8 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 
 // The backend seeds clock-anchored birthday fixtures by offset-in-days from the
-// reseed clock (synthetic/birthday_fixtures.go). Its Go classifier mirror agreeing
-// with itself is circular — this test closes the loop against the REAL page: it
+// reseed clock (synthetic/birthday_fixtures.go). A Go-side mirror of the page's
+// classification would only agree with itself — this test checks the REAL page: it
 // renders the production birthdays page (reads frontend/src, does not modify it) and
 // asserts the offset→section contract at the imminent/celebrated boundary as the
 // page classifies it. If the page's classification drifts from the seed's offsets,

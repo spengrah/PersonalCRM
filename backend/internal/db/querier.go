@@ -1485,7 +1485,7 @@ type Querier interface {
 	// Discovery counts over unmatched rows for one source, grouped by peer.
 	// One query serves both the batch sweep and the single-peer live check
 	// (@peer_handle NULL = all peers) — a separate single-peer twin would trip
-	// scripts/ci/sqlc-select-list-guard.sh. Backed by
+	// TestNoDuplicatedFullRowSelectLists. Backed by
 	// idx_comms_message_unmatched_peer (076).
 	// The explicit casts on the aggregate columns are load-bearing: sqlc types an
 	// uncast aggregate as `interface{}`. A cast makes it concrete but also
