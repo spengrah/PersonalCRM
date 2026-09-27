@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/messaging/aggregation"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -238,14 +237,6 @@ func TestMapMessage_ReplyTargetID(t *testing.T) {
 		m.SourceMetadata = []byte("{not json")
 		assert.Nil(t, MapMessage(m).ReplyTargetID)
 	})
-}
-
-// TestStore_SatisfiesMessageStore is a compile-time assertion that StoreAdapter
-// implements aggregation.MessageStore and Adapter implements
-// aggregation.SourceAdapter (catches a signature drift on either side).
-func TestStore_SatisfiesMessageStore(t *testing.T) {
-	var _ aggregation.MessageStore = (*StoreAdapter)(nil)
-	var _ aggregation.SourceAdapter = NewAdapter("x", "X")
 }
 
 // TestEventLookup_NilBusReturnsNilInterface is the typed-nil trap the

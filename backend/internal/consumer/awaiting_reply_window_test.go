@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/consumer/consumerjobs"
 	"personal-crm/backend/internal/db"
@@ -90,7 +91,7 @@ func TestAwaitingReplyWindow_FollowUpCreateDeadline(t *testing.T) {
 	var observed []Decision
 	h := NewFollowUpManager(FollowUpModeCutover, claims, contacts, tasks, writer, interactions, inserter, settings, "", testWatchdog())
 	h.SetDecisionObserver(func(d Decision) { observed = append(observed, d) })
-	occurredAt := time.Date(2026, 9, 15, 13, 30, 0, 0, time.Local)
+	occurredAt := accelerated.GetCurrentTime()
 	env := buildRecordedEnv(t, contactID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, occurredAt, cadenceStr)
 	require.NoError(t, h.HandleEvent(context.Background(), &awaitingReplyWindowTx{}, env))
 	require.Len(t, observed, 1)

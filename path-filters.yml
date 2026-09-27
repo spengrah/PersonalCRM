@@ -21,7 +21,6 @@ backend:
   - '.github/workflows/deploy-staging.yml'
   - 'path-filters.yml'
   - 'scripts/check-*.sh'
-  - 'scripts/ci/*-guard.sh'
   - 'scripts/test-parallelism.sh'
   - 'scripts/worktree-test-pg.sh'
 frontend:

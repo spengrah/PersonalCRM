@@ -499,13 +499,6 @@ type Querier interface {
 	DeleteExternalContact(ctx context.Context, id uuid.UUID) error
 	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 *string) (int64, error)
 	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
-	// Test teardown — hard-deletes ALL external_contact rows for a given
-	// source string. The known-IDs integration tests use this when they
-	// seed rows under a synthetic source value and need a targeted
-	// cleanup that ignores soft-delete state. Production code must never
-	// call this; it bypasses the tombstone contract and the
-	// crm_contact_id/match_status preservation rules.
-	DeleteExternalContactsBySourceForTest(ctx context.Context, source string) (int64, error)
 	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 *string) (int64, error)
 	// Test teardown — drop external_identity rows seeded by a test under
 	// a known source string (e.g., 'messages'). Used in raw_message ingest
@@ -1485,7 +1478,7 @@ type Querier interface {
 	// Discovery counts over unmatched rows for one source, grouped by peer.
 	// One query serves both the batch sweep and the single-peer live check
 	// (@peer_handle NULL = all peers) — a separate single-peer twin would trip
-	// scripts/ci/sqlc-select-list-guard.sh. Backed by
+	// TestNoDuplicatedFullRowSelectLists. Backed by
 	// idx_comms_message_unmatched_peer (076).
 	// The explicit casts on the aggregate columns are load-bearing: sqlc types an
 	// uncast aggregate as `interface{}`. A cast makes it concrete but also

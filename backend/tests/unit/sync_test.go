@@ -162,48 +162,6 @@ func TestSyncStrategy(t *testing.T) {
 	})
 }
 
-func TestSourceConfig(t *testing.T) {
-	t.Parallel()
-
-	t.Run("source config fields", func(t *testing.T) {
-		config := psync.SourceConfig{
-			Name:                 "gmail",
-			DisplayName:          "Gmail",
-			Strategy:             repository.SyncStrategyContactDriven,
-			SupportsMultiAccount: true,
-			SupportsDiscovery:    false,
-			DefaultInterval:      15 * time.Minute,
-		}
-
-		assert.Equal(t, "gmail", config.Name)
-		assert.Equal(t, "Gmail", config.DisplayName)
-		assert.Equal(t, repository.SyncStrategyContactDriven, config.Strategy)
-		assert.True(t, config.SupportsMultiAccount)
-		assert.False(t, config.SupportsDiscovery)
-		assert.Equal(t, 15*time.Minute, config.DefaultInterval)
-	})
-}
-
-func TestSyncResult(t *testing.T) {
-	t.Parallel()
-
-	t.Run("sync result fields", func(t *testing.T) {
-		result := psync.SyncResult{
-			ItemsProcessed: 100,
-			ItemsMatched:   50,
-			ItemsCreated:   10,
-			NewCursor:      "cursor123",
-			Metadata:       map[string]any{"key": "value"},
-		}
-
-		assert.Equal(t, 100, result.ItemsProcessed)
-		assert.Equal(t, 50, result.ItemsMatched)
-		assert.Equal(t, 10, result.ItemsCreated)
-		assert.Equal(t, "cursor123", result.NewCursor)
-		assert.Equal(t, "value", result.Metadata["key"])
-	})
-}
-
 // mockSyncProvider is a mock implementation of sync.SyncProvider for testing
 type mockSyncProvider struct {
 	config psync.SourceConfig

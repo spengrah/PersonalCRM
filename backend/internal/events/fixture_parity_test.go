@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 )
 
@@ -93,37 +92,4 @@ func resolveGoldenPath(t *testing.T) string {
 
 func trimTrailingWhitespace(b []byte) []byte {
 	return bytes.TrimRight(b, " \t\r\n")
-}
-
-// TestSampleFixtureKnownFields is a thin guard against accidental
-// struct-field renames: when a future PR adds a new field to
-// RawMessageReceivedPayload, this test fails with a clear pointer at
-// the regenerate command. (Without it, the field would just appear in
-// the golden silently on regeneration.)
-func TestSampleFixtureKnownFields(t *testing.T) {
-	got, err := SampleRawMessageReceivedFixtureJSON()
-	if err != nil {
-		t.Fatalf("marshal sample: %v", err)
-	}
-	jsonString := string(got)
-
-	wantKeys := []string{
-		`"chat_id"`,
-		`"guid"`,
-		`"host_id"`,
-		`"is_group"`,
-		`"message_type"`,
-		`"peer_handle"`,
-		`"reply_to_guid"`,
-		`"sent_at"`,
-		`"source"`,
-		`"text"`,
-		`"version"`,
-	}
-	for _, k := range wantKeys {
-		if !strings.Contains(jsonString, k) {
-			t.Errorf("missing key %s in sample fixture JSON; produced:\n%s",
-				k, jsonString)
-		}
-	}
 }

@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export model-prices-sync model-prices-apply qa-cost-assert qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke check-sqlc-select-lists lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check
+.PHONY: help setup dev dev-seed staging-reset tours build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast qa-report qa-export model-prices-sync model-prices-apply qa-cost-assert qa-langfuse-setup qa-fn-backfill prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -572,16 +572,8 @@ spec-drift: ## Warn when a behavior's assertions changed but no citing test was 
 lint-ingest-registry:
 	@$(REPO_ROOT)/scripts/check-ingest-registry.sh
 
-ci-test: lint check-sqlc-select-lists test-unit test-integration-fast test-frontend
+ci-test: lint test-unit test-integration-fast test-frontend
 	@echo "✅ All CI tests passed"
-
-# Duplicated-SELECT-list guard: fails if an identical explicit >=3-column
-# SELECT projection of the same table appears in 2+ source queries (use
-# SELECT * for full-row reads). Runs alongside the Go test at
-# backend/tests/sqlc_select_list_static_test.go (authoritative parser). See
-# scripts/ci/sqlc-select-list-guard.sh.
-check-sqlc-select-lists:
-	@$(REPO_ROOT)/scripts/ci/sqlc-select-list-guard.sh
 
 # Code generation
 sqlc: ## Regenerate sqlc code from SQL queries
