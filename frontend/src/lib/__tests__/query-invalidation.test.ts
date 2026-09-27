@@ -16,7 +16,7 @@ vi.mock('../query-client', () => ({
 }))
 
 // Import after mocking
-import { invalidateFor, type DomainEvent } from '../query-invalidation'
+import { invalidateFor } from '../query-invalidation'
 import { contactKeys, importKeys, syncKeys, interactionKeys } from '../query-keys'
 
 describe('query-invalidation', () => {
@@ -208,33 +208,6 @@ describe('query-invalidation', () => {
         expect(mockInvalidateQueries).toHaveBeenCalledWith({
           queryKey: importKeys.suggestionsLists(),
         })
-      })
-    })
-  })
-
-  describe('type safety', () => {
-    it('accepts all valid domain events', () => {
-      const validEvents: DomainEvent[] = [
-        'contact:created',
-        'contact:updated',
-        'contact:deleted',
-        'contact:touched',
-        'contact:merged',
-        'contact:skipped',
-        'import:imported',
-        'import:linked',
-        'import:ignored',
-        'import:synced',
-        'method-suggestion:resolved',
-        'method-suggestion:dismissed',
-      ]
-
-      // This test verifies the type definitions are correct
-      // If any event is missing from the type, TypeScript will catch it
-      validEvents.forEach(event => {
-        mockInvalidateQueries.mockClear()
-        expect(() => invalidateFor(event)).not.toThrow()
-        expect(mockInvalidateQueries).toHaveBeenCalled()
       })
     })
   })

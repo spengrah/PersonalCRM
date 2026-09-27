@@ -42,3 +42,8 @@ migrations:
   - 'backend/migrations/**'
 spec:
   - 'spec/**'
+# Non-frontend files the frontend vitest suite reads (catalog/fixture parity
+# tests). Gates only the CI Frontend Tests job, not E2E or local checks.
+frontend_inputs:
+  - 'spec/*.yaml'
+  - 'backend/internal/synthetic/fixtures.go'

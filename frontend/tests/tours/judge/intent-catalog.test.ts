@@ -7,41 +7,12 @@
 // SSOT tombstone (its row stays for the ID to never be reused) but is absent
 // from the judged catalog, so it must never re-enroll.
 
-import * as fs from 'fs'
-import * as path from 'path'
-import { parse } from 'yaml'
 import { describe, expect, it } from 'vitest'
 import { INTENT_CATALOG } from './intent-catalog'
-
-const SPEC_DIR = path.join(import.meta.dirname ?? __dirname, '..', '..', '..', '..', 'spec')
-
-interface YamlBehavior {
-  id: string
-  title: string
-  type: string
-  status: string
-  statement?: string
-  serves?: string | string[]
-}
-
-// Genuinely corpus-wide: every spec/*.yaml, matching the linter's resolution
-// scope — a cross-domain serves edge or an intent minted in a non-toured
-// domain lands in the inversion (and fails the sync assertions) instead of
-// silently under-binding evidence.
-function loadBehaviors(): YamlBehavior[] {
-  return fs
-    .readdirSync(SPEC_DIR)
-    .filter(f => f.endsWith('.yaml'))
-    .flatMap(f => {
-      const doc = parse(fs.readFileSync(path.join(SPEC_DIR, f), 'utf8')) as {
-        behaviors: YamlBehavior[]
-      }
-      return doc.behaviors
-    })
-}
+import { loadSpecBehaviors } from './spec-yaml'
 
 describe('intent-catalog ↔ spec YAML sync', () => {
-  const behaviors = loadBehaviors()
+  const behaviors = loadSpecBehaviors()
   const yamlIntents = behaviors.filter(b => b.type === 'intent' && b.status !== 'retired')
 
   it('transcribes exactly the intent set of the whole corpus', () => {
