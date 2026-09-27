@@ -24,10 +24,6 @@
 // companion integration test (telegram_message_all_fields_test.go) catches the
 // downstream consequence — a dropped column read back as zero — regardless of
 // how the SELECT was written, so the two layers are complementary.
-//
-// This is the Go counterpart (the authoritative parser) to the grep guard at
-// scripts/ci/sqlc-select-list-guard.sh, mirroring the belt-and-suspenders
-// convention of the sibling static guards.
 package tests
 
 import (
@@ -62,8 +58,7 @@ var allowedDuplicateProjections = map[string]string{
 	// and consumed in a later layer; pgvector-go's value type panics scanning a
 	// SQL NULL (it decodes an empty buffer), so SELECT * would crash every read
 	// of a predicate with no embedding yet — i.e. all of them in this layer. The
-	// narrow projection must stay until a NULL-safe vector read exists. Mirrors
-	// the ALLOWLIST entry in scripts/ci/sqlc-select-list-guard.sh.
+	// narrow projection must stay until a NULL-safe vector read exists.
 	"predicate|\"symmetric\", base_rate_days, cardinality, created_at, default_review_policy, default_salience, description, inverse_predicate, key, kind, object_type, proposition_bucket, status, subject_type, synonyms, temporal_profile, typical_duration_days, value_type": "narrow projection excluding the nullable embedding vector; SELECT * panics scanning a NULL vector(1536) with pgvector-go's value type",
 }
 

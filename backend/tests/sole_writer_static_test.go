@@ -245,14 +245,7 @@ func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
 		filepath.Join(moduleRoot, "cmd", "crm-api"),
 	}
 
-	type violation struct {
-		file              string
-		line              int
-		fn                string
-		call              string
-		allowlistedButNot bool // this (file, function) is allowlisted, just not for this symbol
-	}
-	var violations []violation
+	var violations []derivedWriteViolation
 
 	fset := token.NewFileSet()
 	for _, root := range roots {
@@ -287,51 +280,7 @@ func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
 				return err
 			}
 
-			// Walk top-level function declarations so we can track the
-			// enclosing function name for each call.
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
-				}
-				fnName := fn.Name.Name
-				ast.Inspect(fn.Body, func(n ast.Node) bool {
-					call, ok := n.(*ast.CallExpr)
-					if !ok {
-						return true
-					}
-					sel, ok := call.Fun.(*ast.SelectorExpr)
-					if !ok {
-						return true
-					}
-					name := sel.Sel.Name
-					if _, hit := derivedWritingSymbols[name]; !hit {
-						return true
-					}
-					// For collision-prone names, require the receiver
-					// to look like an sqlc Querier (queries, q, or
-					// db.New(tx)).
-					if _, scoped := querierScopedSymbols[name]; scoped {
-						if !receiverIsSqlcQuerier(sel.X) {
-							return true
-						}
-					}
-					key := filepath.ToSlash(rel) + ":" + fnName
-					site, hasKey := allowedCallSites[key]
-					if hasKey && slices.Contains(site.symbols, name) {
-						return true
-					}
-					pos := fset.Position(call.Pos())
-					violations = append(violations, violation{
-						file:              filepath.ToSlash(rel),
-						line:              pos.Line,
-						fn:                fnName,
-						call:              name,
-						allowlistedButNot: hasKey, // key hit, but not for THIS symbol — see the message below
-					})
-					return true
-				})
-			}
+			violations = append(violations, findDerivedColumnWrites(filepath.ToSlash(rel), file, fset)...)
 			return nil
 		}); err != nil {
 			t.Fatalf("walk %s: %v", root, err)
@@ -378,6 +327,71 @@ func TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL(t *testing.T) {
 		}
 		t.Fatal(msg.String())
 	}
+}
+
+// derivedWriteViolation is one derived-column write found outside the
+// per-symbol allowlist.
+type derivedWriteViolation struct {
+	file              string
+	line              int
+	fn                string
+	call              string
+	allowlistedButNot bool // this (file, function) is allowlisted, just not for this symbol
+}
+
+// findDerivedColumnWrites scans one parsed file (relSlash is its
+// module-relative, slash-separated path) for calls to derived-writing symbols
+// that the per-(file, function, symbol) allowlist does not permit. It is the
+// guard both TestCadenceSoleWriter_OnlyAllowedFilesCallCadenceSQL and its
+// negative test run.
+func findDerivedColumnWrites(relSlash string, file *ast.File, fset *token.FileSet) []derivedWriteViolation {
+	var violations []derivedWriteViolation
+	// Walk top-level function declarations so we can track the
+	// enclosing function name for each call.
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		fnName := fn.Name.Name
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			name := sel.Sel.Name
+			if _, hit := derivedWritingSymbols[name]; !hit {
+				return true
+			}
+			// For collision-prone names, require the receiver
+			// to look like an sqlc Querier (queries, q, or
+			// db.New(tx)).
+			if _, scoped := querierScopedSymbols[name]; scoped {
+				if !receiverIsSqlcQuerier(sel.X) {
+					return true
+				}
+			}
+			key := relSlash + ":" + fnName
+			site, hasKey := allowedCallSites[key]
+			if hasKey && slices.Contains(site.symbols, name) {
+				return true
+			}
+			pos := fset.Position(call.Pos())
+			violations = append(violations, derivedWriteViolation{
+				file:              relSlash,
+				line:              pos.Line,
+				fn:                fnName,
+				call:              name,
+				allowlistedButNot: hasKey, // key hit, but not for THIS symbol — see the message below
+			})
+			return true
+		})
+	}
+	return violations
 }
 
 // receiverIsSqlcQuerier returns true when the receiver of a selector
@@ -535,9 +549,9 @@ func TestUpdateContactSQL_SetClauseIsExactlyProfileColumns(t *testing.T) {
 
 // TestCadenceSoleWriter_NegativeGuardCatchesNewWrite synthesizes a tiny
 // Go file that calls r.queries.UpdateContactCadenceForward from an
-// unallowlisted function, runs the same AST check against it, and
-// asserts a violation is reported. Without this, a future loosening
-// of the check (e.g., all-files-allowed) could silently pass.
+// unallowlisted function, runs the real guard (findDerivedColumnWrites)
+// against it, and asserts a violation is reported. Without this, a future
+// loosening of the check (e.g., all-files-allowed) could silently pass.
 //
 // Synthesizes UpdateContactCadenceForward rather than UpdateContactMutualFields
 // (the pre-PR7 choice): the latter left the inventory when the legacy cadence
@@ -564,38 +578,10 @@ func (p *poc) FakeNewWriter() {
 		t.Fatalf("parse poc: %v", err)
 	}
 
-	var found bool
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
-			continue
-		}
-		fnName := fn.Name.Name
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			if _, hit := derivedWritingSymbols[sel.Sel.Name]; !hit {
-				return true
-			}
-			// Simulate the allowlist lookup against a fake path that
-			// is NOT in allowedCallSites — expectation is no match.
-			key := "internal/poc/poc.go:" + fnName
-			if _, allowed := allowedCallSites[key]; allowed {
-				t.Fatalf("unexpected allowlist hit for synthetic key %s", key)
-			}
-			found = true
-			return true
-		})
-	}
-	if !found {
-		t.Fatal("negative guard did not detect a cadence-writing call site in the synthetic POC — the real guard would let a new writer through")
-	}
+	got := findDerivedColumnWrites("internal/poc/poc.go", file, fset)
+	require.Len(t, got, 1, "the real guard must flag the synthetic unallowlisted writer")
+	require.Equal(t, "FakeNewWriter", got[0].fn)
+	require.Equal(t, "UpdateContactCadenceForward", got[0].call)
 }
 
 // backendModuleRoot returns the absolute path to the backend module's root

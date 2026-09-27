@@ -32,41 +32,9 @@ func BirthdayDaysUntil(bday, today time.Time) int {
 	return int(next.Sub(cur) / (24 * time.Hour))
 }
 
-// BirthdayIsPastThisYear mirrors birthdays/page.tsx (isBirthdayPastThisYear): the
-// birthday's occurrence in the current year is strictly before today.
-func BirthdayIsPastThisYear(bday, today time.Time) bool {
-	cur := startOfUTCDay(today)
-	return birthdayInYear(bday, cur.Year()).Before(cur)
-}
-
-// BirthdayBucket mirrors the birthdays-page section split: celebrated (past this
-// year) → today (daysUntil==0) → week (≤7) → distant. Returns one of "celebrated",
-// "today", "week", "distant".
-func BirthdayBucket(bday, today time.Time) string {
-	if BirthdayIsPastThisYear(bday, today) {
-		return "celebrated"
-	}
-	switch d := BirthdayDaysUntil(bday, today); {
-	case d == 0:
-		return "today"
-	case d <= 7:
-		return "week"
-	default:
-		return "distant"
-	}
-}
-
 func startOfUTCDay(t time.Time) time.Time {
 	u := t.UTC()
 	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
-}
-
-// isLeapYear is the calendar rule the leap-safe birth year rests on. The rule
-// itself lives in factory.LeapSafeBirthYear (where both this package and the
-// declare vocabulary can reach it); this predicate stays here so the fixture
-// tests can state the property they are checking directly.
-func isLeapYear(y int) bool {
-	return y%4 == 0 && (y%100 != 0 || y%400 == 0)
 }
 
 // birthdayInYear projects a stored birthday onto a given year, matching the page's
