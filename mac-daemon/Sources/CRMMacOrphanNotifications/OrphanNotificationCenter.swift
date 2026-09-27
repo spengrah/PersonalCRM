@@ -244,12 +244,6 @@ public actor OrphanNotificationCenter {
         }
     }
 
-    // Test-only accessor: returns true when a delegate has been
-    // installed. Used by the delegate-retention regression test.
-    public func hasDelegateInstalled() -> Bool {
-        delegate != nil
-    }
-
     // MARK: - ingest path
 
     /// Forward the ingest response's needs_attention entries

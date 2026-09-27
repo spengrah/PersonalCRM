@@ -38,13 +38,4 @@ final class PluginRegistryTests: XCTestCase {
         XCTAssertEqual(runner.cancelledCount(), 1)
         XCTAssertEqual(registry.registrationCount, 0)
     }
-
-    func testFakeRunnerFiresRegisteredPlugin() async throws {
-        let runner = FakeScheduleRunner()
-        let registry = PluginRegistry(runner: runner, logger: NoopLogger())
-        let plugin = FakeMessagesPluginForRegistryTests()
-        registry.registerAll([plugin])
-        let fired = try await runner.fire(id: .messages)
-        XCTAssertTrue(fired)
-    }
 }

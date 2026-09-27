@@ -12,16 +12,6 @@ import Foundation
 public enum LogValue: Equatable, Sendable {
     case `public`(String)
     case `private`(String)
-
-    /// Returns the underlying string regardless of privacy tier. Used
-    /// by the NoopLogger and by tests; production impls should respect
-    /// the tier.
-    public var stringValue: String {
-        switch self {
-        case .public(let s): return s
-        case .private(let s): return s
-        }
-    }
 }
 
 public enum LogLevel: Sendable {

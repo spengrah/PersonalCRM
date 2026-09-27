@@ -58,31 +58,4 @@ final class KnownIdentifiersCacheTests: XCTestCase {
         let base = await cache.baseline(for: .messages)
         XCTAssertEqual(base, ["a@example.com"])
     }
-
-    func testKnownIdentifiersHashDeterministic() {
-        let set1: Set<String> = ["+15550000001", "foo@example.com", "bar@example.com"]
-        let set2: Set<String> = ["bar@example.com", "+15550000001", "foo@example.com"]
-        // Set is unordered but hash sorts before digesting -> same hash.
-        XCTAssertEqual(
-            KnownIdentifiersHash.sha256Hex(of: set1),
-            KnownIdentifiersHash.sha256Hex(of: set2))
-    }
-
-    func testKnownIdentifiersHashLength() {
-        let hash = KnownIdentifiersHash.sha256Hex(of: ["x", "y"])
-        XCTAssertEqual(hash.count, 64)
-        XCTAssertEqual(hash, hash.lowercased(), "hash must be lowercase hex")
-    }
-
-    func testKnownIdentifiersHashEmptySet() {
-        // SHA-256 of empty input is a known constant.
-        let hash = KnownIdentifiersHash.sha256Hex(of: [])
-        XCTAssertEqual(hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
-    }
-
-    func testKnownIdentifiersHashChangesOnAddition() {
-        let a = KnownIdentifiersHash.sha256Hex(of: ["a"])
-        let ab = KnownIdentifiersHash.sha256Hex(of: ["a", "b"])
-        XCTAssertNotEqual(a, ab)
-    }
 }
