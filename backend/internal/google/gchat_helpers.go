@@ -576,37 +576,3 @@ func NewFakeChatFetcherFactoryForTest(funcs FakeChatFetcherFuncs) func(ctx conte
 		return fetcher, nil
 	}
 }
-
-// CachedEmailResolverForTest wraps the unexported cachedEmailResolver so a
-// cross-package test can build one for RunQualifyForTest without reaching the
-// unexported type. Production code must NOT use this.
-type CachedEmailResolverForTest struct {
-	inner *cachedEmailResolver
-}
-
-// NewCachedEmailResolverForTest builds a resolver over a fake fetcher (the same
-// FakeChatFetcherFuncs shape) with an empty cache. Production code must NOT call
-// this.
-func NewCachedEmailResolverForTest(funcs FakeChatFetcherFuncs) *CachedEmailResolverForTest {
-	return &CachedEmailResolverForTest{inner: newCachedEmailResolver(&fakeChatFetcher{funcs: funcs}, nil)}
-}
-
-// Resolve exposes the unexported resolver's resolve for cross-package tests
-// (id→email caching + TTL coverage). Production code must NOT call this.
-func (r *CachedEmailResolverForTest) Resolve(ctx context.Context, userName string) (string, error) {
-	return r.inner.resolve(ctx, userName)
-}
-
-// SweepCountersForTest is the exported view of the per-sweep counters so tests
-// can assert qualification outcomes. Production code must NOT use this.
-type SweepCountersForTest struct {
-	Processed                     int
-	Matched                       int
-	SendersUnresolved             int
-	EditsApplied                  int
-	DeletesApplied                int
-	MemberIDsResolved             int
-	MemberResolveDeferredCap      int
-	MemberResolveNegativesWritten int
-	SpacesWarmupDeferred          int
-}

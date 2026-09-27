@@ -152,7 +152,7 @@ type SystemInfo struct {
 
 // HealthResponse is the response for the health endpoint. Probe self-documents
 // which contract a body represents ("liveness" on bare /health, "readiness" on
-// ?ready=1); omitempty keeps the legacy HealthHandler output byte-identical.
+// ?ready=1).
 type HealthResponse struct {
 	Status     string                     `json:"status"`
 	Probe      string                     `json:"probe,omitempty"`
@@ -494,20 +494,4 @@ func padLeft(s string, length int, char byte) string {
 		s = string(char) + s
 	}
 	return s
-}
-
-// HealthHandler is a legacy handler for backward compatibility (without DB check)
-// Deprecated: Use NewHealthChecker().Handler instead
-func HealthHandler(c *gin.Context) {
-	response := HealthResponse{
-		Status:    "ok",
-		Timestamp: accelerated.GetCurrentTime().UTC().Format(time.RFC3339),
-		Version: VersionInfo{
-			Version:   Version,
-			BuildTime: BuildTime,
-			GitCommit: GitCommit,
-		},
-		Components: map[string]ComponentStatus{},
-	}
-	c.JSON(http.StatusOK, response)
 }
