@@ -114,10 +114,9 @@ assert_in_group     "spec/contacts.yaml" spec
 assert_in_group     "spec/README.md" spec
 # .ai/spec design docs are NOT the behavior corpus.
 assert_not_in_group ".ai/spec/2026-07-01-behavior-ssot-design.md" spec
-# spec/** is not in backend; spec YAML is in frontend because vitest reads it.
+# Orthogonality: spec/** is not in backend/frontend — a spec-only push changes no test selection.
 assert_not_in_group "spec/contacts.yaml" backend
-assert_in_group     "spec/contacts.yaml" frontend
-assert_not_in_group "spec/README.md" frontend
+assert_not_in_group "spec/contacts.yaml" frontend
 
 # --- infra/langfuse group membership: tooling gates the frontend lane, the
 # checked-in price file does not (a price-only diff must sit in NO test-lane
