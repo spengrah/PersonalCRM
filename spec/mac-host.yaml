@@ -576,7 +576,10 @@ behaviors:
     given: a session the daemon has sent
     when: the session no longer appears in the CLI's full session listing
     then:
-      - the daemon sends the session's deletion
+      - the daemon sends the session's deletion when the tick's deletions are within the configured deletion cap (default 5)
+      - a tick whose deletions exceed the cap sends no deletions and raises the broken-source notification naming the withheld count
+      - an empty listing never deletes more sessions than the cap allows
+      - the notification clears once a tick's deletions fall within the cap
     provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]
 
   - id: MAC-050

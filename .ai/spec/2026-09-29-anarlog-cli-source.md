@@ -88,6 +88,7 @@ In priority order, as confirmed by the user:
 
 - Every read of Anarlog data goes through the `anarlog` CLI's `--json` output. No direct reads of Anarlog's database or file tree.
 - The Anarlog people source never deletes a person from the CRM: not when their last session is deleted, not when they are removed from a session, not when they stop appearing in the CLI. The CRM keeps every identity it has.
+- No tick deletes more sessions than the configured deletion cap (default 5, a daemon config value). A tick over the cap deletes none and raises the broken-source notification with the withheld count; the notification clears once a tick's deletions fall within the cap. The user raises the cap for a run to apply a genuine bulk deletion. Mass deletion from an empty or truncated listing is never acceptable.
 - Each Anarlog source's existing enable switch keeps its meaning: disabling sessions does not stop people syncing, and disabling people does not stop sessions syncing.
 - The wire payloads (`meeting_note.recorded`, `meeting_note.deleted`, and the Anarlog people external-contact payload) keep their current shape and version; the CRM-side ingest contract is unchanged.
 - The operator's Anarlog person ID is configured once in the daemon's config. The daemon never infers it.
@@ -118,7 +119,7 @@ The IDs below are minted as `proposed` behaviors in `spec/mac-host.yaml`. All ar
 
 - **MAC-047** Sessions are read through the Anarlog CLI: each tick lists every live session and sends those at or after the floor and at least three hours old, with title, time, generated summary (default or templated), memo and participants other than the operator. A session younger than three hours is not sent. A settled session, and any later change to it, reaches the CRM within the latency target.
 - **MAC-048** A session is re-sent when anything its payload derives from changes, detected from the CLI's record rather than Anarlog's `updated_at`.
-- **MAC-049** A session that disappears from the CLI's full listing is deleted in the CRM.
+- **MAC-049** A session that disappears from the CLI's full listing is deleted in the CRM, unless the tick would delete more sessions than the configured cap (default 5). Then it deletes none and raises the broken-source notification naming the withheld count. An empty listing is the extreme case of this guard.
 - **MAC-050** People are the participants of every eligible session, excluding the operator, sent as Anarlog identities with ID, name, email and job title; a change to a person is sent on its own; people who appear in no eligible session are not sent; no person is ever deleted by this source.
 - **MAC-051** The operator's Anarlog person ID is set once in the daemon config; while it is unset, the Anarlog sources send nothing and raise the source-broken notification.
 - **MAC-052** A broken CLI raises one sticky notification. A missing binary, a contract version other than `"1"`, or a missing field the daemon uses notifies on the tick that observes it; a runtime failure notifies after two consecutive failed ticks. A single transient failure does not notify, unknown additional fields are ignored, and the notification clears on the next clean tick.
