@@ -26,16 +26,6 @@ public enum CRMMacAnarlogSource {
     /// spec line 59: 60 min. (FSEvents drives the real-time path.)
     public static let sessionsSafetyTickInterval: TimeInterval = 60 * 60
 
-    /// Backfill floor for sessions per spec line 61: 2026-01-01.
-    /// Sessions whose `_meta.json.created_at` is older than this date
-    /// are marked with a sentinel cursor entry and never emit a
-    /// `meeting_note.recorded` event.
-    public static let sessionsBackfillFloor: Date = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
-        return f.date(from: "2026-01-01T00:00:00Z")!
-    }()
-
     /// Hard cap on the size of a single event payload. Anything larger
     /// triggers a `payload_too_large` warning + cursor-entry preserved
     /// per the P0 invariant — the daemon never emits a partial payload.

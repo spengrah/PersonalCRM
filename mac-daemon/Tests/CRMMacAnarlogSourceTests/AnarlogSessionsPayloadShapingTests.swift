@@ -57,7 +57,7 @@ final class AnarlogSessionsPayloadShapingTests: XCTestCase {
     func testPreBackfillFloorDetection() {
         let before = ISO8601DateFormatter().date(from: "2025-12-31T23:59:59Z")!
         let after = ISO8601DateFormatter().date(from: "2026-01-01T00:00:01Z")!
-        let onFloor = CRMMacAnarlogSource.sessionsBackfillFloor
+        let onFloor = AnarlogEligibility.backfillFloor
         let metaBefore = makeMeta(createdAt: before)
         let metaAfter = makeMeta(createdAt: after)
         let metaOn = makeMeta(createdAt: onFloor)
