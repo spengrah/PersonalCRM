@@ -178,7 +178,8 @@ let package = Package(
                     resources: [.copy("Fixtures")]),
         .testTarget(name: "CRMMacAnarlogSourceTests",
                     dependencies: ["CRMMacAnarlogSource", "CRMMacPiClient",
-                                   "CRMMacOrphanNotifications"]),
+                                   "CRMMacOrphanNotifications"],
+                    exclude: ["fake-anarlog"]),
         .testTarget(name: "CRMMacOrphanNotificationsTests",
                     dependencies: ["CRMMacOrphanNotifications", "CRMMacPiClient"]),
         // Cross-cutting conformance suite for DataSourcePlugin. Depends

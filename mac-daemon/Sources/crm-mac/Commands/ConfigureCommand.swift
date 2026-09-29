@@ -301,6 +301,21 @@ struct AnarlogSubcommand: ParsableCommand {
     @Option(name: .long, help: "Absolute path to the Anarlog notes root (containing humans/ and sessions/).")
     var path: String?
 
+    @Option(
+        name: .customLong("operator-person-id"),
+        help: "Your Anarlog person ID (a UUID); the Anarlog sources exclude this person.")
+    var operatorPersonID: String?
+
+    @Option(
+        name: .customLong("cli-path"),
+        help: "Absolute path to the anarlog CLI; without it the daemon looks in ~/.local/bin/anarlog.")
+    var cliPath: String?
+
+    @Option(
+        name: .customLong("deletion-cap"),
+        help: "Most Anarlog session deletions one tick may send (non-negative; default 5).")
+    var deletionCap: Int?
+
     @Option(name: .long, help: "Enable a source: humans | sessions | both.")
     var enable: Target?
 
@@ -354,6 +369,18 @@ struct AnarlogSubcommand: ParsableCommand {
             }
             current.rootPath = path
         }
+        do {
+            try AnarlogConfigureFlow.apply(
+                AnarlogConfigureRequest(
+                    operatorPersonID: operatorPersonID,
+                    cliPath: cliPath,
+                    deletionCap: deletionCap),
+                to: &current)
+        } catch let error {
+            FileHandle.standardError.write(Data(
+                "\(AnarlogConfigureFlow.message(for: error))\n".utf8))
+            throw ExitCode(2)
+        }
         if let enable {
             switch enable {
             case .humans: current.humansEnabled = true
@@ -383,6 +410,9 @@ struct AnarlogSubcommand: ParsableCommand {
         print("  root_path:        \(current.rootPath)")
         print("  humans_enabled:   \(current.humansEnabled)")
         print("  sessions_enabled: \(current.sessionsEnabled)")
+        for line in AnarlogConfigureFlow.summaryLines(current) {
+            print(line)
+        }
         print("")
         print("Start the daemon for changes to take effect: `crm-mac start`.")
     }

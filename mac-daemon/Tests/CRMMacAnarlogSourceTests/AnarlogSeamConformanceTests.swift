@@ -74,7 +74,19 @@ final class AnarlogSeamConformanceTests: XCTestCase {
         XCTAssertEqual(entries, [AnarlogSessionListEntry(id: "session-a", createdAt: Date(timeIntervalSince1970: 1))])
 
         let record = try await client.getSession(id: "session-a")
-        XCTAssertEqual(record?.id, "session-a")
+        XCTAssertEqual(
+            record,
+            AnarlogSessionRecord(
+                id: "session-a",
+                title: "Title A",
+                createdAt: Date(timeIntervalSince1970: 1),
+                memo: "Memo A",
+                summaries: ["Summary A"],
+                participants: [AnarlogParticipant(
+                    personID: "person-a",
+                    displayName: "Participant A",
+                    email: "a@example.test",
+                    jobTitle: "Role A")]))
         let missingRecord = try await client.getSession(id: "session-b")
         XCTAssertNil(missingRecord)
     }

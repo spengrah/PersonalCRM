@@ -120,6 +120,120 @@ final class AnarlogConfigTests: XCTestCase {
         XCTAssertEqual(SourceID.anarlogSessions.rawValue, "anarlog_sessions")
     }
 
+    func testLegacyAnarlogJSONDefaultsNewFields() throws {
+        let body = """
+        {
+          "host_id": "00000000-0000-0000-0000-000000000001",
+          "hostname": "test-host",
+          "installed_at": "2026-01-01T00:00:00Z",
+          "pi_url": "https://pi.example.invalid",
+          "sources": {
+            "anarlog": {
+              "root_path": "/tmp/notes",
+              "humans_enabled": true,
+              "sessions_enabled": false
+            }
+          }
+        }
+        """
+        try Data(body.utf8).write(to: fileURL)
+
+        let loaded = try XCTUnwrap(store.loadAnarlogConfig())
+
+        XCTAssertEqual(loaded.rootPath, "/tmp/notes")
+        XCTAssertTrue(loaded.humansEnabled)
+        XCTAssertFalse(loaded.sessionsEnabled)
+        XCTAssertNil(loaded.operatorPersonID)
+        XCTAssertNil(loaded.cliPath)
+        XCTAssertEqual(loaded.deletionCap, 5)
+    }
+
+    func testRoundTripPreservesAllAnarlogFields() throws {
+        try seedBackwardCompatibleConfig()
+        var cfg = AnarlogConfig(
+            rootPath: "/tmp/notes",
+            humansEnabled: true,
+            sessionsEnabled: false)
+        try cfg.setOperatorPersonID("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
+        try cfg.setCLIPath("/opt/anarlog/bin/anarlog")
+        try cfg.setDeletionCap(7)
+
+        try store.saveAnarlogConfig(cfg)
+        let loaded = try store.loadAnarlogConfig()
+
+        XCTAssertEqual(loaded, cfg)
+    }
+
+    func testSettersAcceptValidValues() throws {
+        var cfg = AnarlogConfig(rootPath: "/tmp/notes")
+
+        try cfg.setOperatorPersonID("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
+        try cfg.setCLIPath("/opt/anarlog/bin/anarlog")
+        try cfg.setDeletionCap(0)
+
+        XCTAssertEqual(cfg.operatorPersonID, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        XCTAssertEqual(cfg.cliPath, "/opt/anarlog/bin/anarlog")
+        XCTAssertEqual(cfg.deletionCap, 0)
+    }
+
+    func testSettersRejectInvalidValuesWithoutChangingProperties() throws {
+        var cfg = AnarlogConfig(rootPath: "/tmp/notes")
+        try cfg.setOperatorPersonID("11111111-2222-3333-4444-555555555555")
+        try cfg.setCLIPath("/opt/anarlog/bin/anarlog")
+        try cfg.setDeletionCap(7)
+
+        XCTAssertThrowsError(try cfg.setOperatorPersonID("not-a-uuid")) { error in
+            XCTAssertEqual(error as? AnarlogConfigError, .operatorPersonIDNotUUID("not-a-uuid"))
+        }
+        XCTAssertThrowsError(try cfg.setCLIPath("relative/anarlog")) { error in
+            XCTAssertEqual(error as? AnarlogConfigError, .cliPathNotAbsolute("relative/anarlog"))
+        }
+        XCTAssertThrowsError(try cfg.setCLIPath("~/bin/anarlog")) { error in
+            XCTAssertEqual(error as? AnarlogConfigError, .cliPathNotAbsolute("~/bin/anarlog"))
+        }
+        XCTAssertThrowsError(try cfg.setDeletionCap(-1)) { error in
+            XCTAssertEqual(error as? AnarlogConfigError, .negativeDeletionCap(-1))
+        }
+
+        XCTAssertEqual(cfg.operatorPersonID, "11111111-2222-3333-4444-555555555555")
+        XCTAssertEqual(cfg.cliPath, "/opt/anarlog/bin/anarlog")
+        XCTAssertEqual(cfg.deletionCap, 7)
+    }
+
+    func testDecodeDoesNotValidatePersistedValues() throws {
+        let body = """
+        {
+          "root_path": "/tmp/notes",
+          "humans_enabled": false,
+          "sessions_enabled": false,
+          "operator_person_id": "not-a-uuid",
+          "cli_path": "relative/anarlog",
+          "deletion_cap": -1
+        }
+        """
+
+        let loaded = try JSONDecoder().decode(AnarlogConfig.self, from: Data(body.utf8))
+
+        XCTAssertEqual(loaded.operatorPersonID, "not-a-uuid")
+        XCTAssertEqual(loaded.cliPath, "relative/anarlog")
+        XCTAssertEqual(loaded.deletionCap, -1)
+    }
+
+    func testExplicitDeletionCapDecodes() throws {
+        let body = """
+        {
+          "root_path": "/tmp/notes",
+          "humans_enabled": false,
+          "sessions_enabled": false,
+          "deletion_cap": 12
+        }
+        """
+
+        let loaded = try JSONDecoder().decode(AnarlogConfig.self, from: Data(body.utf8))
+
+        XCTAssertEqual(loaded.deletionCap, 12)
+    }
+
     // MARK: - helpers
 
     private func seedBackwardCompatibleConfig() throws {

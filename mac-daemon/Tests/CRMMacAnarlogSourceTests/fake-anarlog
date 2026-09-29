@@ -1,0 +1,41 @@
+#!/usr/bin/python3
+import json
+import os
+import sys
+import time
+
+
+def no_scenario():
+    sys.stderr.write("fake-anarlog: no scenario for argv\n")
+    sys.stderr.flush()
+    raise SystemExit(97)
+
+
+invocations_path = os.environ.get("FAKE_ANARLOG_INVOCATIONS")
+if invocations_path is not None:
+    with open(invocations_path, "a", encoding="utf-8") as invocations:
+        invocations.write(json.dumps(sys.argv[1:]) + "\n")
+
+scenario_path = os.environ.get("FAKE_ANARLOG_SCENARIO")
+if scenario_path is None:
+    no_scenario()
+
+try:
+    with open(scenario_path, "r", encoding="utf-8") as scenario_file:
+        scenario = json.load(scenario_file)
+except (OSError, ValueError):
+    no_scenario()
+
+response = next(
+    (entry for entry in scenario["responses"] if entry["argv"] == sys.argv[1:]),
+    None,
+)
+if response is None:
+    no_scenario()
+
+time.sleep(response["delay_ms"] / 1000)
+sys.stdout.write(response["stdout"])
+sys.stderr.write(response["stderr"])
+sys.stdout.flush()
+sys.stderr.flush()
+raise SystemExit(response["exit"])
