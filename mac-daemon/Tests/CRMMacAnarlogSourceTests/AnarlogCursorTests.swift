@@ -28,14 +28,8 @@ final class AnarlogCursorTests: XCTestCase {
 
     func testHumansRoundTrip() throws {
         let map: [String: AnarlogHumansCursorEntry] = [
-            "uuid-1": AnarlogHumansCursorEntry(
-                contentHash: "abc",
-                payloadHash: "def",
-                mtimeEpochMs: 1234567890),
-            "uuid-2": AnarlogHumansCursorEntry(
-                contentHash: "ghi",
-                payloadHash: "jkl",
-                mtimeEpochMs: nil),
+            "uuid-1": AnarlogHumansCursorEntry(recordHash: "abc"),
+            "uuid-2": AnarlogHumansCursorEntry(recordHash: "ghi"),
         ]
         let encoded = try AnarlogHumansCursorCodec.encode(map)
         let decoded = try XCTUnwrap(AnarlogHumansCursorCodec.decodeOrNil(encoded))
@@ -44,9 +38,9 @@ final class AnarlogCursorTests: XCTestCase {
 
     func testHumansEncodeIsByteStable() throws {
         let map: [String: AnarlogHumansCursorEntry] = [
-            "uuid-z": AnarlogHumansCursorEntry(contentHash: "a", payloadHash: "b"),
-            "uuid-a": AnarlogHumansCursorEntry(contentHash: "c", payloadHash: "d"),
-            "uuid-m": AnarlogHumansCursorEntry(contentHash: "e", payloadHash: "f"),
+            "uuid-z": AnarlogHumansCursorEntry(recordHash: "a"),
+            "uuid-a": AnarlogHumansCursorEntry(recordHash: "c"),
+            "uuid-m": AnarlogHumansCursorEntry(recordHash: "e"),
         ]
         // Two independent encodes must produce identical bytes.
         let a = try AnarlogHumansCursorCodec.encode(map)
@@ -68,6 +62,18 @@ final class AnarlogCursorTests: XCTestCase {
         // exists but is empty, which is what the post-commit state
         // looks like.
         XCTAssertEqual(AnarlogHumansCursorCodec.decodeOrNil("{}"), [:])
+    }
+
+    func testHumansLegacyFileTreeEntryDecodesNil() {
+        let cursor = #"{"0a18829e-12b6-40f6-93f8-6307973c926b":{"content_hash":"a","payload_hash":"b","mtime_epoch_ms":1}}"#
+        XCTAssertNil(AnarlogHumansCursorCodec.decodeOrNil(cursor))
+    }
+
+    func testHumansEntryEncodesOnlyRecordHash() throws {
+        let encoded = try AnarlogHumansCursorCodec.encode([
+            "u": AnarlogHumansCursorEntry(recordHash: "h"),
+        ])
+        XCTAssertEqual(encoded, #"{"u":{"record_hash":"h"}}"#)
     }
 
     // MARK: - Sessions

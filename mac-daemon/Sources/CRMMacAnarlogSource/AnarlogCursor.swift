@@ -7,7 +7,7 @@
 // every delete.
 //
 // Spec extensions / owned deviations:
-//   - humans: spec is `{content_hash, mtime}`; we add `payload_hash`.
+//   - humans: an entry is `{record_hash}`, the payload hash of the person's last shaped upsert.
 //   - sessions: spec is `{meta_mtime, meta_hash, summary_hash,
 //     memo_hash}`. We drop `meta_mtime` (mtime never drives skip
 //     decisions in this implementation) and add `payload_hash`.
@@ -27,26 +27,14 @@ import Foundation
 // MARK: - Humans
 
 public struct AnarlogHumansCursorEntry: Codable, Equatable, Sendable {
-    /// SHA-256 of the file bytes — per spec line 185. Drives change
-    /// detection.
-    public let contentHash: String
-    /// SHA-256 of the encoded wire payload — drives the source_id for
-    /// future deletes. Distinct concept from `contentHash`.
-    public let payloadHash: String
-    /// Modification time at scan time, in epoch milliseconds.
-    /// Diagnostic only; NOT used for skip decisions.
-    public let mtimeEpochMs: Int64?
+    public let recordHash: String
 
-    public init(contentHash: String, payloadHash: String, mtimeEpochMs: Int64? = nil) {
-        self.contentHash = contentHash
-        self.payloadHash = payloadHash
-        self.mtimeEpochMs = mtimeEpochMs
+    public init(recordHash: String) {
+        self.recordHash = recordHash
     }
 
     enum CodingKeys: String, CodingKey {
-        case contentHash    = "content_hash"
-        case payloadHash    = "payload_hash"
-        case mtimeEpochMs   = "mtime_epoch_ms"
+        case recordHash = "record_hash"
     }
 }
 

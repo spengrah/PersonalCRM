@@ -11,16 +11,16 @@
 import Foundation
 
 public enum CRMMacAnarlogSource {
-    /// Payload version emitted on every external_contact.upserted /
-    /// external_contact.deleted envelope for source=anarlog_humans.
+    /// Payload version emitted on every external_contact.upserted
+    /// envelope for source=anarlog_humans.
     public static let humansPayloadVersion: Int = 1
 
     /// Payload version emitted on every meeting_note.recorded /
     /// meeting_note.deleted envelope for source=anarlog_sessions.
     public static let meetingNotePayloadVersion: Int = 1
 
-    /// Default cadence for the humans plugin per spec line 58: ~5 min.
-    public static let humansTickInterval: TimeInterval = 5 * 60
+    /// Default cadence for the people plugin: 30 min (arc I9).
+    public static let humansTickInterval: TimeInterval = 30 * 60
 
     /// Default cadence for the sessions plugin's hourly safety poll per
     /// spec line 59: 60 min. (FSEvents drives the real-time path.)
@@ -57,13 +57,5 @@ public enum CRMMacAnarlogSource {
         "AGENTS.md",
         "organizations",
         "templates.json",
-    ]
-
-    /// Files the humans reader silently skips.
-    public static let humanSkipEntries: Set<String> = [
-        ".DS_Store",
-        "AGENTS.md",
-        // Self-human sentinel (spec line 188).
-        "\(selfHumanUUID).md",
     ]
 }

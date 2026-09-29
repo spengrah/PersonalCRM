@@ -194,6 +194,9 @@ struct DaemonCommand: AsyncParsableCommand {
         // fires its tick() when ANY file under the configured
         // sessions/ directory changes; the watcher's start() is gated
         // on the config being present + sessions enabled at startup.
+        // The people plugin reads session participants through the Anarlog CLI
+        // and reports each tick to a no-op health sink until the health
+        // notifier is wired.
         let anarlogFilesystem = ProductionAnarlogFilesystem()
         let anarlogConfigSource = AnarlogConfigStoreSource(store: configStore)
         let anarlogHumansPublisher = AnarlogHumansPublisher(
@@ -206,8 +209,9 @@ struct DaemonCommand: AsyncParsableCommand {
             auth: auth,
             mutator: stateMutator,
             publisher: anarlogHumansPublisher,
-            filesystem: anarlogFilesystem,
             configSource: anarlogConfigSource,
+            makeCLIClient: { AnarlogCLIProcessClient(cliPath: $0) },
+            healthSink: NoopAnarlogHealthSink(),
             healthRegistry: healthRegistry,
             logger: logger)
         let anarlogSessionsPublisher = AnarlogSessionsPublisher(
