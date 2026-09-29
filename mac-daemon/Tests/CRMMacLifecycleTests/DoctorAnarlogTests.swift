@@ -80,8 +80,8 @@ final class DoctorAnarlogTests: XCTestCase {
     func testStaleLastTickWarns() async {
         let path = "/tmp/anarlog-test-\(UUID().uuidString)"
         let now = Date(timeIntervalSince1970: 2_000_000_000)
-        // 30 minutes > 2x 5 min humans interval.
-        let stale = now.addingTimeInterval(-30 * 60)
+        // 1 h 1 s > 2x 30 min humans interval.
+        let stale = now.addingTimeInterval(-(60 * 60 + 1))
         let r = await runDoctor(
             anarlog: AnarlogConfig(rootPath: path, humansEnabled: true),
             humansState: SourceState(lastScheduledAt: stale),
@@ -89,6 +89,19 @@ final class DoctorAnarlogTests: XCTestCase {
             clock: FixedClock(now))
         let lastTick = r.results.first { $0.name == "anarlog_humans.last_tick" }
         XCTAssertEqual(lastTick?.status, .warn)
+    }
+
+    func testLastTickWithinTwoHumansIntervalsPasses() async {
+        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let r = await runDoctor(
+            anarlog: AnarlogConfig(rootPath: path, humansEnabled: true),
+            humansState: SourceState(
+                lastScheduledAt: now.addingTimeInterval(-(60 * 60))),
+            extraDirs: [path, "\(path)/humans"],
+            clock: FixedClock(now))
+        let lastTick = r.results.first { $0.name == "anarlog_humans.last_tick" }
+        XCTAssertEqual(lastTick?.status, .pass)
     }
 
     func testNeitherEnabledSkipsFilesystemProbes() async {

@@ -363,8 +363,9 @@ final class DataSourcePluginConformanceTests: XCTestCase {
                 auth: auth(),
                 mutator: mutator,
                 publisher: publisher,
-                filesystem: NoopAnarlogFilesystem(),
                 configSource: NoopAnarlogConfigSource(),
+                makeCLIClient: { AnarlogCLIProcessClient(cliPath: $0) },
+                healthSink: NoopAnarlogHealthSink(),
                 healthRegistry: registry,
                 logger: NoopLogger(),
                 clock: clock())
