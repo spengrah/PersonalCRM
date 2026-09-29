@@ -8,9 +8,8 @@
 //
 // Spec extensions / owned deviations:
 //   - humans: an entry is `{record_hash}`, the payload hash of the person's last shaped upsert.
-//   - sessions: spec is `{meta_mtime, meta_hash, summary_hash,
-//     memo_hash}`. We drop `meta_mtime` (mtime never drives skip
-//     decisions in this implementation) and add `payload_hash`.
+//   - sessions: `record_hash` is the content hash of the encoded
+//     meeting_note.recorded payload last shaped from the CLI record.
 //
 // The cursor IS the literal `{uuid → entry}` map at the JSON root.
 // No `{version, ...}` wrapper. Future schema bumps will be handled
@@ -64,62 +63,21 @@ public enum AnarlogHumansCursorCodec {
 // MARK: - Sessions
 
 public struct AnarlogSessionsCursorEntry: Codable, Equatable, Sendable {
-    /// SHA-256 of `_meta.json` bytes per spec line 196. The literal
-    /// `"floor_skip"` sentinel marks pre-backfill-floor sessions —
-    /// those never emit an event.
-    public let metaHash: String
-    /// SHA-256 of `_summary.md` bytes; nil when the file is absent.
-    public let summaryHash: String?
-    /// SHA-256 of `_memo.md` bytes; nil when the file is absent.
-    public let memoHash: String?
-    /// SHA-256 of the encoded wire payload — for future delete
-    /// source_ids. Empty string on floor_skip sentinels (they never
-    /// emit a payload).
-    public let payloadHash: String
+    /// Content hash of the encoded meeting_note.recorded payload last
+    /// shaped from this CLI record. It drives both re-sends and the
+    /// prior hash in a deletion source ID.
+    public let recordHash: String
 
-    public init(
-        metaHash: String,
-        summaryHash: String? = nil,
-        memoHash: String? = nil,
-        payloadHash: String
-    ) {
-        self.metaHash = metaHash
-        self.summaryHash = summaryHash
-        self.memoHash = memoHash
-        self.payloadHash = payloadHash
-    }
-
-    /// True when this entry is the pre-floor sentinel — used by the
-    /// tombstone branch to skip emitting deletes for sessions that
-    /// were never published in the first place.
-    public var isFloorSkipped: Bool {
-        metaHash == AnarlogSessionsCursorCodec.floorSkipMarker
+    public init(recordHash: String) {
+        self.recordHash = recordHash
     }
 
     enum CodingKeys: String, CodingKey {
-        case metaHash    = "meta_hash"
-        case summaryHash = "summary_hash"
-        case memoHash    = "memo_hash"
-        case payloadHash = "payload_hash"
+        case recordHash = "record_hash"
     }
 }
 
 public enum AnarlogSessionsCursorCodec {
-    /// Sentinel value placed in `metaHash` to mark pre-floor sessions
-    /// for sessions older than the backfill floor. These cursor
-    /// entries exist so the same session isn't
-    /// re-evaluated every tick, but never produce events.
-    public static let floorSkipMarker = "floor_skip"
-
-    /// Construct a pre-floor sentinel entry.
-    public static func floorSkippedEntry() -> AnarlogSessionsCursorEntry {
-        AnarlogSessionsCursorEntry(
-            metaHash: floorSkipMarker,
-            summaryHash: nil,
-            memoHash: nil,
-            payloadHash: "")
-    }
-
     public static func encode(_ map: [String: AnarlogSessionsCursorEntry]) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]

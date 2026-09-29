@@ -1,6 +1,5 @@
-// Coverage for AnarlogSessionMetadataLookup — the SessionMetadataLookup
-// adapter that bridges CRMMacOrphanNotifications into the
-// CRMMacAnarlogSource filesystem readers.
+// Coverage for the CLI-backed orphan-notification metadata lookup.
+import Foundation
 import XCTest
 import CRMMacCore
 import CRMMacOrphanNotifications
@@ -9,11 +8,6 @@ import CRMMacOrphanNotifications
 final class AnarlogSessionMetadataLookupTests: XCTestCase {
 
     private let sessionUUID = "deadbeef-1111-2222-3333-444455556666"
-    private let rootPath = "/tmp/anarlog-test-root"
-
-    private var sessionsPath: String { rootPath + "/sessions" }
-    private var sessionDir: String { sessionsPath + "/" + sessionUUID }
-    private var metaPath: String { sessionDir + "/_meta.json" }
 
     private final class StubConfigSource: AnarlogConfigSource, @unchecked Sendable {
         let cfg: AnarlogConfig?
@@ -27,172 +21,241 @@ final class AnarlogSessionMetadataLookupTests: XCTestCase {
         }
     }
 
-    private final class StubFS: AnarlogFilesystem, @unchecked Sendable {
-        var files: [String: Data] = [:]
-        var directories: Set<String> = []
+    private final class LockedPathRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String?] = []
 
-        func exists(_ path: String) -> Bool {
-            files[path] != nil || directories.contains(path)
+        func append(_ value: String?) {
+            lock.lock()
+            values.append(value)
+            lock.unlock()
         }
-        func isDirectory(_ path: String) -> Bool { directories.contains(path) }
-        func isReadableDirectory(_ path: String) -> Bool { directories.contains(path) }
-        func listDirectory(_ dir: String) throws -> [String] { [] }
-        func readFile(_ path: String) throws -> Data {
-            guard let b = files[path] else {
-                throw AnarlogFilesystemError.ioError("not found: \(path)")
-            }
-            return b
-        }
-        func mtime(_ path: String) -> Date? { nil }
 
-        func putDir(_ path: String) { directories.insert(path) }
-        func putFile(_ path: String, bytes: Data) {
-            files[path] = bytes
-            let parent = (path as NSString).deletingLastPathComponent
-            directories.insert(parent)
+        func read() -> [String?] {
+            lock.lock()
+            defer { lock.unlock() }
+            return values
         }
     }
 
     private func makeConfig(enabled: Bool = true) -> AnarlogConfig {
-        AnarlogConfig(rootPath: rootPath,
+        AnarlogConfig(rootPath: "/tmp/anarlog-test-root",
                       humansEnabled: false,
                       sessionsEnabled: enabled)
     }
 
-    private func makeFS() -> StubFS {
-        let fs = StubFS()
-        fs.putDir(rootPath)
-        fs.putDir(sessionsPath)
-        return fs
+    private func listResponse() -> FakeAnarlogResponse {
+        FakeAnarlogResponse(
+            argv: FakeAnarlogCLI.listArgv(offset: 0),
+            stdout: FakeAnarlogCLI.listStdout(entries: [], offset: 0, nextOffset: nil))
     }
 
-    // MARK: - happy path
+    private func getResponse(
+        title: String?,
+        exit: Int32 = 0,
+        stderr: String = "",
+        id: String? = nil
+    ) -> FakeAnarlogResponse {
+        let output = exit == 0
+            ? FakeAnarlogCLI.getStdout(FakeAnarlogRecord(
+                id: id ?? sessionUUID,
+                title: title,
+                createdAt: "2026-05-27T14:00:00Z",
+                noteMarkdown: nil,
+                summaries: [],
+                participants: []))
+            : ""
+        return FakeAnarlogResponse(
+            argv: FakeAnarlogCLI.getArgv(id: id ?? sessionUUID),
+            exit: exit,
+            stdout: output,
+            stderr: stderr)
+    }
 
-    func testReturnsMetadataWhenMetaPresent() async throws {
-        let fs = makeFS()
-        fs.putDir(sessionDir)
-        let metaJSON = """
-        {
-            "id": "\(sessionUUID)",
-            "title": "Synthetic Test Session",
-            "created_at": "2026-05-27T14:00:00Z"
-        }
-        """
-        fs.putFile(metaPath, bytes: Data(metaJSON.utf8))
+    private func makeFake(
+        responses: [FakeAnarlogResponse]
+    ) throws -> (FakeAnarlogCLI, AnarlogCLIProcessClient) {
+        let fake = try FakeAnarlogCLI()
+        try fake.setScenario(FakeAnarlogScenario(responses: responses))
+        let client = fake.makeClient()
+        return (fake, client)
+    }
+
+    func testReturnsMetadataFromCLIRecord() async throws {
+        let (fake, client) = try makeFake(responses: [
+            getResponse(title: "Synthetic Test Session"),
+        ])
         let lookup = AnarlogSessionMetadataLookup(
             configSource: StubConfigSource(makeConfig()),
-            filesystem: fs)
+            makeCLIClient: { _ in client })
         let result = await lookup.lookup(sessionUUID: sessionUUID)
-        XCTAssertNotNil(result)
         XCTAssertEqual(result?.title, "Synthetic Test Session")
-        XCTAssertNotNil(result?.createdAt)
-        XCTAssertEqual(result?.sessionDirURL?.path, sessionDir)
+        XCTAssertEqual(result?.createdAt,
+                       ISO8601DateFormatter().date(from: "2026-05-27T14:00:00Z"))
+        XCTAssertNil(result?.sessionDirURL)
+        XCTAssertEqual(try fake.invocations(), [FakeAnarlogCLI.getArgv(id: sessionUUID)])
     }
 
     func testReturnsNilWhenConfigDisabled() async throws {
-        let fs = makeFS()
+        let (fake, client) = try makeFake(responses: [])
         let lookup = AnarlogSessionMetadataLookup(
             configSource: StubConfigSource(makeConfig(enabled: false)),
-            filesystem: fs)
+            makeCLIClient: { _ in client })
         let result = await lookup.lookup(sessionUUID: sessionUUID)
         XCTAssertNil(result)
+        XCTAssertEqual(try fake.invocations(), [])
     }
 
     func testReturnsNilWhenConfigLoadThrows() async throws {
-        let fs = makeFS()
+        let (fake, client) = try makeFake(responses: [])
         let lookup = AnarlogSessionMetadataLookup(
             configSource: FailingConfigSource(),
-            filesystem: fs)
+            makeCLIClient: { _ in client })
         let result = await lookup.lookup(sessionUUID: sessionUUID)
         XCTAssertNil(result)
+        XCTAssertEqual(try fake.invocations(), [])
     }
 
     func testReturnsNilWhenConfigNil() async throws {
-        let fs = makeFS()
+        let (fake, client) = try makeFake(responses: [])
         let lookup = AnarlogSessionMetadataLookup(
             configSource: StubConfigSource(nil),
-            filesystem: fs)
+            makeCLIClient: { _ in client })
         let result = await lookup.lookup(sessionUUID: sessionUUID)
         XCTAssertNil(result)
+        XCTAssertEqual(try fake.invocations(), [])
     }
 
-    func testReturnsNilWhenSessionsRootMissing() async throws {
-        let fs = StubFS() // no directories at all
+    func testReturnsNilWhenSessionNotFound() async throws {
+        let (fake, client) = try makeFake(responses: [
+            getResponse(title: nil, exit: 2,
+                        stderr: FakeAnarlogCLI.errorStderr(code: "not_found", exitCode: 2)),
+        ])
         let lookup = AnarlogSessionMetadataLookup(
             configSource: StubConfigSource(makeConfig()),
-            filesystem: fs)
+            makeCLIClient: { _ in client })
         let result = await lookup.lookup(sessionUUID: sessionUUID)
         XCTAssertNil(result)
+        XCTAssertEqual(try fake.invocations(), [FakeAnarlogCLI.getArgv(id: sessionUUID)])
     }
 
-    func testReturnsNilWhenSessionDirMissing() async throws {
-        let fs = makeFS()
-        // session dir not created
+    func testReturnsNilWhenCLIFails() async throws {
+        let (fake, client) = try makeFake(responses: [
+            getResponse(title: nil, exit: 1,
+                        stderr: FakeAnarlogCLI.errorStderr(code: "internal", exitCode: 1)),
+        ])
         let lookup = AnarlogSessionMetadataLookup(
             configSource: StubConfigSource(makeConfig()),
-            filesystem: fs)
+            makeCLIClient: { _ in client })
         let result = await lookup.lookup(sessionUUID: sessionUUID)
         XCTAssertNil(result)
+        XCTAssertEqual(try fake.invocations(), [FakeAnarlogCLI.getArgv(id: sessionUUID)])
     }
 
-    func testReturnsSessionDirWhenMetaMissing() async throws {
-        // Session dir exists but _meta.json is missing — still
-        // return the sessionDirURL as session metadata (title/time
-        // stay nil).
-        let fs = makeFS()
-        fs.putDir(sessionDir)
-        let lookup = AnarlogSessionMetadataLookup(
-            configSource: StubConfigSource(makeConfig()),
-            filesystem: fs)
-        let result = await lookup.lookup(sessionUUID: sessionUUID)
-        XCTAssertNotNil(result)
-        XCTAssertNil(result?.title)
-        XCTAssertNil(result?.createdAt)
-        XCTAssertEqual(result?.sessionDirURL?.path, sessionDir)
-    }
-
-    func testReturnsSessionDirWhenMetaUnparseable() async throws {
-        let fs = makeFS()
-        fs.putDir(sessionDir)
-        fs.putFile(metaPath, bytes: Data("not valid json".utf8))
-        let lookup = AnarlogSessionMetadataLookup(
-            configSource: StubConfigSource(makeConfig()),
-            filesystem: fs)
-        let result = await lookup.lookup(sessionUUID: sessionUUID)
-        XCTAssertNotNil(result)
-        XCTAssertNil(result?.title)
-        XCTAssertEqual(result?.sessionDirURL?.path, sessionDir)
-    }
-
-    func testTitleEmptyMapsToNil() async throws {
-        // _meta.json has title="" — the lookup normalizes empty to
-        // nil so the notification renders "Untitled session".
-        let fs = makeFS()
-        fs.putDir(sessionDir)
-        let metaJSON = """
-        {"title": "", "created_at": "2026-05-27T14:00:00Z"}
-        """
-        fs.putFile(metaPath, bytes: Data(metaJSON.utf8))
-        let lookup = AnarlogSessionMetadataLookup(
-            configSource: StubConfigSource(makeConfig()),
-            filesystem: fs)
-        let result = await lookup.lookup(sessionUUID: sessionUUID)
-        XCTAssertNotNil(result)
-        XCTAssertNil(result?.title)
+    func testTitleEmptyOrNullMapsToNil() async throws {
+        for title in ["", nil] as [String?] {
+            let (fake, client) = try makeFake(responses: [getResponse(title: title)])
+            let lookup = AnarlogSessionMetadataLookup(
+                configSource: StubConfigSource(makeConfig()),
+                makeCLIClient: { _ in client })
+            let result = await lookup.lookup(sessionUUID: sessionUUID)
+            XCTAssertNil(result?.title)
+            XCTAssertEqual(try fake.invocations(), [FakeAnarlogCLI.getArgv(id: sessionUUID)])
+        }
     }
 
     func testRejectsNonCanonicalUUID() async throws {
-        // Uppercase or otherwise non-canonical UUIDs are rejected
-        // outright — the filesystem uses lowercase directory names.
-        let fs = makeFS()
-        fs.putDir(sessionDir)
+        let (fake, client) = try makeFake(responses: [])
         let lookup = AnarlogSessionMetadataLookup(
             configSource: StubConfigSource(makeConfig()),
-            filesystem: fs)
-        // The canonical-validator lowercases the input first, so
-        // "DEADBEEF-..." still maps to the lowercase form — that's
-        // the intended posture. Test with a clearly invalid shape.
+            makeCLIClient: { _ in client })
         let result = await lookup.lookup(sessionUUID: "not-a-uuid")
         XCTAssertNil(result)
+        XCTAssertEqual(try fake.invocations(), [])
+    }
+
+    func testUppercaseUUIDIsLowercasedInArgv() async throws {
+        let (fake, client) = try makeFake(responses: [getResponse(title: "title")])
+        let lookup = AnarlogSessionMetadataLookup(
+            configSource: StubConfigSource(makeConfig()),
+            makeCLIClient: { _ in client })
+        _ = await lookup.lookup(sessionUUID: sessionUUID.uppercased())
+        XCTAssertEqual(try fake.invocations(), [FakeAnarlogCLI.getArgv(id: sessionUUID)])
+    }
+
+    func testFactoryReceivesConfiguredCLIPath() async throws {
+        var config = makeConfig()
+        try config.setCLIPath("/synthetic/anarlog")
+        let recorder = LockedPathRecorder()
+        let (fake, client) = try makeFake(responses: [getResponse(title: "title")])
+        let lookup = AnarlogSessionMetadataLookup(
+            configSource: StubConfigSource(config),
+            makeCLIClient: { path in
+                recorder.append(path)
+                return client
+            })
+        _ = await lookup.lookup(sessionUUID: sessionUUID)
+        XCTAssertEqual(recorder.read(), ["/synthetic/anarlog"])
+        XCTAssertEqual(try fake.invocations(), [FakeAnarlogCLI.getArgv(id: sessionUUID)])
+    }
+
+    func testDefaultFactoryRunsConfiguredCLIPath() async throws {
+        let fake = try FakeAnarlogCLI()
+        let script = fake.directory.appendingPathComponent("argv-recorder")
+        let log = fake.directory.appendingPathComponent("argv.log")
+        let scriptText = """
+        #!/bin/sh
+        printf '%s\\n' "$@" >> "\(log.path)"
+        exit 1
+        """
+        try Data(scriptText.utf8).write(to: script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        var config = makeConfig()
+        try config.setCLIPath(script.path)
+        let lookup = AnarlogSessionMetadataLookup(configSource: StubConfigSource(config))
+        let result = await lookup.lookup(sessionUUID: sessionUUID)
+        XCTAssertNil(result)
+        let lines = try String(contentsOf: log, encoding: .utf8)
+            .split(whereSeparator: \.isNewline).map(String.init)
+        XCTAssertEqual(lines, FakeAnarlogCLI.getArgv(id: sessionUUID))
+    }
+}
+
+final class AnarlogPathResolverTests: XCTestCase {
+    func testHumansAndSessionsDirsAppend() {
+        let humansURL = AnarlogPathResolver.humansDir(rootPath: "/tmp/notes")
+        XCTAssertTrue(humansURL.path.hasSuffix("/tmp/notes/humans"))
+        let sessionsURL = AnarlogPathResolver.sessionsDir(rootPath: "/tmp/notes")
+        XCTAssertTrue(sessionsURL.path.hasSuffix("/tmp/notes/sessions"))
+    }
+
+    func testTildeExpansion() {
+        let url = AnarlogPathResolver.expand("~/foo")
+        XCTAssertFalse(url.path.hasPrefix("~"))
+        XCTAssertTrue(url.path.contains("/foo"))
+    }
+
+    func testUUIDValidatorAcceptsLowercaseCanonical() {
+        XCTAssertEqual(
+            AnarlogUUIDValidator.canonicalize("0a18829e-12b6-40f6-93f8-6307973c926b"),
+            "0a18829e-12b6-40f6-93f8-6307973c926b")
+    }
+
+    func testUUIDValidatorRejectsUppercase() {
+        // The parent spec is explicit: case-sensitive lowercase. An
+        // uppercase variant might indicate a case-insensitive
+        // filesystem renamed a file behind the operator's back, so we
+        // don't want to accept and risk cursor key collisions.
+        XCTAssertNil(
+            AnarlogUUIDValidator.canonicalize("0A18829E-12B6-40F6-93F8-6307973C926B"))
+        XCTAssertNil(
+            AnarlogUUIDValidator.canonicalize("0a18829e-12b6-40f6-93f8-6307973c926b"),
+            "mixed-case must also be rejected")
+    }
+
+    func testUUIDValidatorRejectsMalformed() {
+        XCTAssertNil(AnarlogUUIDValidator.canonicalize(""))
+        XCTAssertNil(AnarlogUUIDValidator.canonicalize("not-a-uuid"))
+        XCTAssertNil(AnarlogUUIDValidator.canonicalize("0a18829e-12b6-40f6-93f8-6307973c926"))
     }
 }
