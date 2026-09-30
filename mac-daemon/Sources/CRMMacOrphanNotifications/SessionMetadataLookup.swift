@@ -3,28 +3,27 @@
 // so the notification module doesn't depend on transport DTOs.
 //
 // SessionMetadataLookup — narrow protocol the notification module
-// uses to retrieve session title + time + directory URL for a
-// given session UUID.
+// uses to retrieve a session title, time, and optional click target
+// for a given session UUID.
 //
 // The concrete adapter (AnarlogSessionMetadataLookup) lives in
-// CRMMacAnarlogSource because that target already owns the
-// AnarlogConfigSource + AnarlogPathResolver + AnarlogSessionMetaParser
-// deps. CRMMacOrphanNotifications defines only the protocol so the
-// dep graph stays acyclic: anarlog → notifications, never the
-// reverse.
+// CRMMacAnarlogSource, which reads session data through the Anarlog
+// CLI and owns AnarlogConfigSource and the CLI process client.
+// CRMMacOrphanNotifications defines only the protocol so the
+// dependency graph stays acyclic: anarlog → notifications, never
+// the reverse.
 import Foundation
 
 /// Snapshot of the data CRMMacOrphanNotifications needs to render
 /// a notification for a session. Returned by SessionMetadataLookup.
 public struct SessionMetadata: Sendable, Equatable {
-    /// Session title from `_meta.json`. Nil when missing or empty;
-    /// the notification falls back to "Untitled session".
+    /// Session title from the CLI record's `title`. Nil when missing
+    /// or empty; the notification falls back to "Untitled session".
     public let title: String?
-    /// Session creation time from `_meta.json.created_at`. Nil when
-    /// unavailable; the notification omits the time suffix.
+    /// Session creation time from the CLI record's `created_at`. Nil
+    /// when unavailable; the notification omits the time suffix.
     public let createdAt: Date?
-    /// File URL of the session directory on disk. Nil when the
-    /// directory doesn't exist.
+    /// Always nil for the CLI-backed lookup. No click target reads it.
     public let sessionDirURL: URL?
 
     public init(title: String?, createdAt: Date?, sessionDirURL: URL?) {
@@ -35,8 +34,7 @@ public struct SessionMetadata: Sendable, Equatable {
 }
 
 /// Async, Sendable lookup contract. Returns nil for any failure
-/// (config disabled, sessions root missing, session dir missing,
-/// _meta.json missing/unreadable/unparseable) — the notification
+/// (config disabled, CLI failure, unknown session) — the notification
 /// path falls back to "Untitled session" without surfacing the
 /// underlying error.
 public protocol SessionMetadataLookup: Sendable {

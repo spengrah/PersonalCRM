@@ -24,8 +24,7 @@ public struct MeetingNoteRecordedPayload: Encodable, Equatable, Sendable {
     public let memo: String?
     /// CLI record participants excluding the operator and zero-ID sentinel.
     public let participantIDs: [String]
-    /// Reserved for future tag extraction from frontmatter; emitted
-    /// as `[]` in v1 so the wire shape is stable.
+    /// Always [] in payload version 1; the key stays so the wire shape is stable.
     public let tags: [String]
 
     enum CodingKeys: String, CodingKey {

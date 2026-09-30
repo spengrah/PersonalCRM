@@ -65,7 +65,7 @@ final class AnarlogCursorTests: XCTestCase {
     }
 
     func testHumansLegacyFileTreeEntryDecodesNil() {
-        let cursor = #"{"0a18829e-12b6-40f6-93f8-6307973c926b":{"content_hash":"a","payload_hash":"b","mtime_epoch_ms":1}}"#
+        let cursor = #"{"0aaaaaaa-0000-4000-8000-00000000000b":{"content_hash":"a","payload_hash":"b","mtime_epoch_ms":1}}"#
         XCTAssertNil(AnarlogHumansCursorCodec.decodeOrNil(cursor))
     }
 

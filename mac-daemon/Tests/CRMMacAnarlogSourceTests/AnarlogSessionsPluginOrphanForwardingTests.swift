@@ -12,7 +12,7 @@ final class AnarlogSessionsPluginOrphanForwardingTests: XCTestCase {
     private let testAuth = PiAuth(
         hostID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
         apiKey: "k")
-    private static let sessionUUIDA = "0a631ec3-fa11-47d2-aa0f-17b320860001"
+    private static let sessionUUIDA = "0abbbbbb-0000-4000-8000-000000000001"
 
     func testPluginForwardsNeedsAttentionToCenter() async throws {
         let fake = try FakeAnarlogCLI()
@@ -63,7 +63,7 @@ final class AnarlogSessionsPluginOrphanForwardingTests: XCTestCase {
 
         let fakePresenter = FakeFwdPresenter()
         var config = AnarlogConfig(
-            rootPath: "/tmp/anarlog-fwd", humansEnabled: false, sessionsEnabled: true)
+            humansEnabled: false, sessionsEnabled: true)
         try config.setOperatorPersonID("99999999-9999-9999-9999-999999999999")
         let configSource = StubFwdConfigSource(config)
         let metaLookup = AnarlogSessionMetadataLookup(

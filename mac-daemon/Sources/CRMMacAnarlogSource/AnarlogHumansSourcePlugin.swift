@@ -19,98 +19,6 @@ public struct AnarlogConfigStoreSource: AnarlogConfigSource {
     }
 }
 
-/// Filesystem abstraction the plugin uses for directory walking +
-/// file reads. The production impl wraps Foundation FileManager +
-/// Data(contentsOf:); tests inject a stub that returns canned bytes.
-public protocol AnarlogFilesystem: Sendable {
-    /// True when `path` exists (file or directory).
-    func exists(_ path: String) -> Bool
-    /// True when `path` is a directory (regardless of readability).
-    /// False for files and missing paths.
-    func isDirectory(_ path: String) -> Bool
-    /// True when `path` is a readable directory. False on permission
-    /// denied OR on non-directory.
-    func isReadableDirectory(_ path: String) -> Bool
-    /// List immediate children of `dir` (filenames only, no path
-    /// prefix). Throws AnarlogFilesystemError.permissionDenied on
-    /// EACCES so the plugin can surface
-    /// `files_folders_permission_denied` to Doctor + status.
-    func listDirectory(_ dir: String) throws -> [String]
-    /// Read raw file bytes. Throws on EACCES or any other underlying
-    /// error.
-    func readFile(_ path: String) throws -> Data
-    /// File modification time as Date, or nil if unavailable. Used
-    /// as cursor diagnostic only (NOT for skip decisions).
-    func mtime(_ path: String) -> Date?
-}
-
-public enum AnarlogFilesystemError: Error, Equatable, Sendable {
-    case permissionDenied(String)
-    case ioError(String)
-}
-
-public final class ProductionAnarlogFilesystem: AnarlogFilesystem {
-    public init() {}
-
-    public func exists(_ path: String) -> Bool {
-        FileManager.default.fileExists(atPath: path)
-    }
-
-    public func isDirectory(_ path: String) -> Bool {
-        var isDir: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
-        return exists && isDir.boolValue
-    }
-
-    public func isReadableDirectory(_ path: String) -> Bool {
-        guard isDirectory(path) else { return false }
-        return FileManager.default.isReadableFile(atPath: path)
-    }
-
-    public func listDirectory(_ dir: String) throws -> [String] {
-        do {
-            return try FileManager.default.contentsOfDirectory(atPath: dir)
-        } catch let nsErr as NSError where nsErr.domain == NSCocoaErrorDomain &&
-            (nsErr.code == NSFileReadNoPermissionError ||
-             nsErr.code == NSFileReadCorruptFileError) {
-            throw AnarlogFilesystemError.permissionDenied(dir)
-        } catch let posixErr as POSIXError where posixErr.code == .EACCES {
-            throw AnarlogFilesystemError.permissionDenied(dir)
-        } catch {
-            throw AnarlogFilesystemError.ioError(String(describing: error))
-        }
-    }
-
-    public func readFile(_ path: String) throws -> Data {
-        do {
-            return try Data(contentsOf: URL(fileURLWithPath: path))
-        } catch let nsErr as NSError where nsErr.domain == NSCocoaErrorDomain &&
-            nsErr.code == NSFileReadNoPermissionError {
-            throw AnarlogFilesystemError.permissionDenied(path)
-        } catch {
-            throw AnarlogFilesystemError.ioError(String(describing: error))
-        }
-    }
-
-    public func mtime(_ path: String) -> Date? {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path) else {
-            return nil
-        }
-        return attrs[.modificationDate] as? Date
-    }
-}
-
-/// Inputs the plugin's runTick assembles for the publish phase.
-struct AnarlogTickRoute: Equatable {
-    let kind: Kind
-    enum Kind: Equatable {
-        case firstRun
-        case bootstrapViaKnownIDs
-        case delta
-        case recovery
-    }
-}
-
 public actor AnarlogHumansSourcePlugin: DataSourcePlugin {
     public nonisolated let id: SourceID = .anarlogHumans
     public nonisolated let tickInterval: TimeInterval
@@ -129,14 +37,14 @@ public actor AnarlogHumansSourcePlugin: DataSourcePlugin {
     public nonisolated let logger: LoggerProtocol
     public nonisolated let clock: @Sendable () -> Date
 
-    public init(
+    init(
         tickInterval: TimeInterval = CRMMacAnarlogSource.humansTickInterval,
         piClient: PiClient,
         auth: PiAuth,
         mutator: StateMutator,
         publisher: AnarlogHumansPublisher,
         configSource: AnarlogConfigSource,
-        makeCLIClient: @escaping @Sendable (_ cliPath: String?) -> any AnarlogCLIClient,
+        makeCLIClient: @escaping @Sendable (_ cliPath: String?) -> any AnarlogCLIClient = CRMMacAnarlogSource.makeCLIClient,
         healthSink: any AnarlogHealthSink,
         healthRegistry: SourceHealthRegistry,
         logger: LoggerProtocol,

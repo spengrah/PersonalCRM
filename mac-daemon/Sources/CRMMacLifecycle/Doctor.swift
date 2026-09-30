@@ -7,9 +7,10 @@
 //      5xx=WARN, network=WARN)
 //   4. Config + state file presence (both parse; state has correct
 //      schemaVersion)
-// Plus three icloud_contacts checks (permission, allowlist, last-tick)
-// and one phone_calls probe (CallHistoryDB file existence + FDA
-// readability).
+// Plus three icloud_contacts checks (permission, allowlist, last-tick),
+// Anarlog checks (enable flags, CLI resolution, operator person ID,
+// and last tick), and one phone_calls probe (CallHistoryDB file
+// existence + FDA readability).
 //
 // Output: array of CheckResult { name, status, details }; exit code
 // equals the number of FAIL entries.
@@ -57,6 +58,10 @@ public struct DoctorDependencies {
     /// Tests inject stubs.
     public let contactsAuth: ContactsAuthorizationAdapter
     public let containerEnumerator: ContactContainerEnumerator
+    /// Resolves the Anarlog CLI as the Anarlog sources do: configured
+    /// `cli_path`, else the default location; nil when it does not resolve.
+    /// Production passes nothing and gets this default.
+    public let anarlogCLIResolver: (_ cliPath: String?) -> String?
     /// Used to compute the staleness threshold for icloud_contacts'
     /// last-tick-age check (2× tickInterval).
     public let tickInterval: TimeInterval
@@ -71,6 +76,11 @@ public struct DoctorDependencies {
         piClientFactory: @escaping (URL) -> PiClient,
         contactsAuth: ContactsAuthorizationAdapter,
         containerEnumerator: ContactContainerEnumerator,
+        anarlogCLIResolver: @escaping (_ cliPath: String?) -> String? = {
+            AnarlogCLIExecutableResolver.resolve(
+                cliPath: $0,
+                homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+        },
         tickInterval: TimeInterval,
         clock: ClockAdapter,
         logger: LoggerProtocol
@@ -82,6 +92,7 @@ public struct DoctorDependencies {
         self.piClientFactory = piClientFactory
         self.contactsAuth = contactsAuth
         self.containerEnumerator = containerEnumerator
+        self.anarlogCLIResolver = anarlogCLIResolver
         self.tickInterval = tickInterval
         self.clock = clock
         self.logger = logger
@@ -125,11 +136,8 @@ public struct Doctor {
         return DoctorReport(results: results)
     }
 
-    /// Composite check for the anarlog reader sources. Each enable
-    /// flag flips independently between not_configured + active. Path
-    /// + subdir + permission probes happen once and surface as
-    /// shared `anarlog:*` results so the operator sees one row per
-    /// failure instead of two near-identical rows.
+    /// Composite check for the Anarlog sources. Each enable flag is
+    /// independent, and shared CLI and operator checks run once.
     private func checkAnarlog(
         config: AnarlogConfig?,
         humansSource: SourceState?,
@@ -137,131 +145,60 @@ public struct Doctor {
     ) -> [CheckResult] {
         var results: [CheckResult] = []
 
-        // Per-source enable flag — emit one info/warn row per source.
         guard let cfg = config else {
-            results.append(CheckResult(
-                name: "anarlog_humans",
-                status: .warn,
-                details: "not_configured (run `crm-mac configure anarlog --path <abs> --enable both`)"))
-            results.append(CheckResult(
-                name: "anarlog_sessions",
-                status: .warn,
-                details: "not_configured (run `crm-mac configure anarlog --path <abs> --enable both`)"))
+            let details = "not_configured (run `crm-mac configure anarlog --operator-person-id <uuid> --enable both`)"
+            results.append(CheckResult(name: "anarlog_humans", status: .warn, details: details))
+            results.append(CheckResult(name: "anarlog_sessions", status: .warn, details: details))
             return results
         }
         results.append(CheckResult(
             name: "anarlog_humans",
             status: cfg.humansEnabled ? .pass : .warn,
-            details: cfg.humansEnabled
-                ? "enabled (root=\(cfg.rootPath))"
-                : "not_configured (disabled)"))
+            details: cfg.humansEnabled ? "enabled" : "not_configured (disabled)"))
         results.append(CheckResult(
             name: "anarlog_sessions",
             status: cfg.sessionsEnabled ? .pass : .warn,
-            details: cfg.sessionsEnabled
-                ? "enabled (root=\(cfg.rootPath))"
-                : "not_configured (disabled)"))
+            details: cfg.sessionsEnabled ? "enabled" : "not_configured (disabled)"))
 
-        // Only run filesystem probes if at least one source is enabled.
         guard cfg.humansEnabled || cfg.sessionsEnabled else {
             return results
         }
 
-        let rootPath = (cfg.rootPath as NSString).expandingTildeInPath
-        guard deps.filesystem.fileExists(at: rootPath) else {
+        if let cliPath = deps.anarlogCLIResolver(cfg.cliPath) {
             results.append(CheckResult(
-                name: "anarlog:path_missing",
+                name: "anarlog:cli",
+                status: .pass,
+                details: "resolved: \(cliPath)"))
+        } else if let configuredPath = cfg.cliPath {
+            results.append(CheckResult(
+                name: "anarlog:cli",
                 status: .fail,
-                details: "configured path does not exist: \(rootPath)"))
-            return results
+                details: "cli_path is not an executable file: \(configuredPath)"))
+        } else {
+            results.append(CheckResult(
+                name: "anarlog:cli",
+                status: .fail,
+                details: "not found at the default location; set it with `crm-mac configure anarlog --cli-path <abs>`"))
         }
+        results.append(CheckResult(
+            name: "anarlog:operator_person_id",
+            status: cfg.operatorPersonID == nil ? .fail : .pass,
+            details: cfg.operatorPersonID == nil
+                ? "not set; set it with `crm-mac configure anarlog --operator-person-id <uuid>`"
+                : "set"))
 
-        if cfg.humansEnabled {
-            let humansPath = (rootPath as NSString).appendingPathComponent("humans")
-            if !deps.filesystem.fileExists(at: humansPath) {
-                results.append(CheckResult(
-                    name: "anarlog:humans_subdir_missing",
-                    status: .warn,
-                    details: "humans/ subdirectory not found under \(rootPath)"))
-            } else {
-                // Probe readability and count files via listDirectory.
-                // A FilesystemError.permissionDenied is the TCC
-                // Files & Folders rejection — surface it as
-                // `anarlog:files_folders_permission_denied` so the
-                // operator knows to grant the permission.
-                do {
-                    let entries = try deps.filesystem.listDirectory(at: humansPath)
-                    let mdCount = entries.filter { $0.hasSuffix(".md") }.count
-                    results.append(CheckResult(
-                        name: "anarlog:humans_count",
-                        status: .pass,
-                        details: "\(mdCount) human file(s) in \(humansPath)"))
-                } catch FilesystemError.permissionDenied {
-                    results.append(CheckResult(
-                        name: "anarlog:files_folders_permission_denied",
-                        status: .fail,
-                        details: "EACCES on \(humansPath); grant Files & Folders to crm-mac in System Settings"))
-                } catch {
-                    results.append(CheckResult(
-                        name: "anarlog:humans_count",
-                        status: .warn,
-                        details: "list humans/ failed: \(error)"))
-                }
-                if let humansSource {
-                    results.append(lastTickResult(
-                        sourceName: "anarlog_humans.last_tick",
-                        state: humansSource,
-                        intervalSeconds: 30 * 60))
-                }
-            }
+        // Both Anarlog sources tick every 30 minutes.
+        if cfg.humansEnabled, let humansSource {
+            results.append(lastTickResult(
+                sourceName: "anarlog_humans.last_tick",
+                state: humansSource,
+                intervalSeconds: 30 * 60))
         }
-        if cfg.sessionsEnabled {
-            let sessionsPath = (rootPath as NSString).appendingPathComponent("sessions")
-            if !deps.filesystem.fileExists(at: sessionsPath) {
-                results.append(CheckResult(
-                    name: "anarlog:sessions_subdir_missing",
-                    status: .warn,
-                    details: "sessions/ subdirectory not found under \(rootPath)"))
-            } else {
-                do {
-                    let entries = try deps.filesystem.listDirectory(at: sessionsPath)
-                    // Sessions are UUID-named DIRECTORIES. Best-effort
-                    // count entries that (a) match the 8-4-4-4-12
-                    // UUID shape AND (b) are actually directories on
-                    // disk — a bare file named like a UUID is junk
-                    // that the reader skips, so it shouldn't inflate
-                    // the count. Uses a 36-char + 4-hyphen shape
-                    // probe rather than the full UUID validator to
-                    // keep Doctor free of any anarlog-target dep.
-                    let sessionCount = entries
-                        .filter { $0.count == 36 && $0.filter { $0 == "-" }.count == 4 }
-                        .filter { name in
-                            let path = (sessionsPath as NSString).appendingPathComponent(name)
-                            return deps.filesystem.isDirectory(at: path)
-                        }
-                        .count
-                    results.append(CheckResult(
-                        name: "anarlog:sessions_count",
-                        status: .pass,
-                        details: "\(sessionCount) session(s) in \(sessionsPath)"))
-                } catch FilesystemError.permissionDenied {
-                    results.append(CheckResult(
-                        name: "anarlog:files_folders_permission_denied",
-                        status: .fail,
-                        details: "EACCES on \(sessionsPath); grant Files & Folders to crm-mac in System Settings"))
-                } catch {
-                    results.append(CheckResult(
-                        name: "anarlog:sessions_count",
-                        status: .warn,
-                        details: "list sessions/ failed: \(error)"))
-                }
-                if let sessionsSource {
-                    results.append(lastTickResult(
-                        sourceName: "anarlog_sessions.last_tick",
-                        state: sessionsSource,
-                        intervalSeconds: 60 * 60))
-                }
-            }
+        if cfg.sessionsEnabled, let sessionsSource {
+            results.append(lastTickResult(
+                sourceName: "anarlog_sessions.last_tick",
+                state: sessionsSource,
+                intervalSeconds: 30 * 60))
         }
         return results
     }

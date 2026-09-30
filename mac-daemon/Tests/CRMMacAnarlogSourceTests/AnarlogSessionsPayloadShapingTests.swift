@@ -6,7 +6,7 @@ import CRMMacCore
 final class AnarlogSessionsPayloadShapingTests: XCTestCase {
 
     private let hostID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
-    private let sessionUUID = "0a631ec3-fa11-47d2-aa0f-17b320866c87"
+    private let sessionUUID = "0abbbbbb-0000-4000-8000-000000006c87"
     private let operatorPersonID = "99999999-9999-9999-9999-999999999999"
     private let createdAt = ISO8601DateFormatter().date(from: "2026-03-16T20:34:49Z")!
 

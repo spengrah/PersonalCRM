@@ -76,7 +76,7 @@ public struct AnarlogSourceStatus: Equatable {
     public let enabled: Bool
     public let lastScheduledAt: Date?
     public let lastPushedAt: Date?
-    /// Decoded count of cursor entries (live + floor-skipped). 0 for
+    /// Decoded count of cursor entries. 0 for
     /// empty cursor; nil when the cursor JSON failed to decode.
     public let cursorUUIDCount: Int?
     /// Recovery flag — lastError starts with `recovery_requested:`.
@@ -119,8 +119,7 @@ public struct AnarlogSourceStatus: Equatable {
     }
 
     /// Same shape as humansCursorUUIDCount but for the sessions cursor.
-    /// Cursor entries with metaHash="floor_skip" are included in the
-    /// count — they're real entries, just sentinel ones.
+    /// It counts each entry in the cursor.
     public static func sessionsCursorUUIDCount(_ cursor: String) -> Int? {
         if cursor.isEmpty { return 0 }
         guard let data = cursor.data(using: .utf8),

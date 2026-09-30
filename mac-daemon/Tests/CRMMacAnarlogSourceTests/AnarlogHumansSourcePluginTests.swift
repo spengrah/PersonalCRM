@@ -236,7 +236,7 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
 
     private func configuredConfig() throws -> AnarlogConfig {
         var config = AnarlogConfig(
-            rootPath: "/tmp/anarlog-test", humansEnabled: true, sessionsEnabled: false)
+            humansEnabled: true, sessionsEnabled: false)
         try config.setOperatorPersonID(operatorID)
         return config
     }
@@ -271,6 +271,7 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
     private func makeRig(
         config: AnarlogConfig? = nil,
         missingConfig: Bool = false,
+        defaultFactory: Bool = false,
         cursor: String = "",
         cursorStatus: Int = 200,
         knownIDs: [KnownContactID] = [],
@@ -283,6 +284,22 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
         try fake.setScenario(cliScenario ?? scenario())
         let client = fake.makeClient()
         let factory: @Sendable (String?) -> any AnarlogCLIClient = overrideFactory ?? { _ in client }
+        let configuredCLIPath: String?
+        if defaultFactory {
+            let script = fake.directory.appendingPathComponent("argv-recorder")
+            let log = fake.directory.appendingPathComponent("argv.log")
+            let scriptText = """
+            #!/bin/sh
+            printf '%s\\n' "$@" >> "\(log.path)"
+            exit 1
+            """
+            try Data(scriptText.utf8).write(to: script)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: script.path)
+            configuredCLIPath = script.path
+        } else {
+            configuredCLIPath = nil
+        }
 
         let script = PiScript(
             cursorGet: SourceCursorState(cursor: cursor, cursorEpoch: 0, backfillComplete: !cursor.isEmpty),
@@ -307,12 +324,25 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
         if missingConfig {
             effectiveConfig = nil
         } else {
-            effectiveConfig = try config ?? configuredConfig()
+            var value = try config ?? configuredConfig()
+            if let configuredCLIPath { try value.setCLIPath(configuredCLIPath) }
+            effectiveConfig = value
         }
         let common: (TimeInterval?, PiClient, StateMutator, AnarlogHumansPublisher, AnarlogConfigSource, SpyHealthSink) = (
             tickInterval, piClient, mutator, publisher, StubConfigSource(effectiveConfig), healthSink)
         let plugin: AnarlogHumansSourcePlugin
-        if let tickInterval = common.0 {
+        if defaultFactory {
+            plugin = AnarlogHumansSourcePlugin(
+                piClient: common.1,
+                auth: testAuth,
+                mutator: common.2,
+                publisher: common.3,
+                configSource: common.4,
+                healthSink: common.5,
+                healthRegistry: SourceHealthRegistry(),
+                logger: NoopLogger(),
+                clock: { fixedNowValue })
+        } else if let tickInterval = common.0 {
             plugin = AnarlogHumansSourcePlugin(
                 tickInterval: tickInterval,
                 piClient: common.1,
@@ -339,6 +369,25 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
                 clock: { fixedNowValue })
         }
         return Rig(plugin: plugin, fake: fake, mutator: mutator, transport: transport, healthSink: healthSink)
+    }
+
+    func testDefaultFactoryRunsConfiguredCLIPath() async throws {
+        let rig = try makeRig(defaultFactory: true)
+        try await rig.plugin.performTick()
+
+        let log = rig.fake.directory.appendingPathComponent("argv.log")
+        let lines = try String(contentsOf: log, encoding: .utf8)
+            .split(whereSeparator: \.isNewline).map(String.init)
+        XCTAssertEqual(lines, FakeAnarlogCLI.listArgv(offset: 0))
+        XCTAssertTrue(rig.transport.snapshot().requests.isEmpty)
+        let recorded = await outcomes(rig.healthSink)
+        XCTAssertEqual(recorded.count, 1)
+        if let first = recorded.first {
+            if case .failed = first.outcome {
+            } else {
+                XCTFail("expected a failed CLI outcome")
+            }
+        }
     }
 
     private func expectedHash(_ participant: AnarlogParticipant) throws -> String {
@@ -508,7 +557,7 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
     }
 
     func testOperatorUnsetSendsNothingAndReportsFailure() async throws {
-        let config = AnarlogConfig(rootPath: "/tmp/anarlog-test", humansEnabled: true, sessionsEnabled: false)
+        let config = AnarlogConfig(humansEnabled: true, sessionsEnabled: false)
         let rig = try makeRig(config: config)
         try await rig.plugin.tick()
         let values = await outcomes(rig.healthSink)
@@ -546,7 +595,7 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
     }
 
     func testDisabledSourceRecordsNothingAndReadsNoCLI() async throws {
-        let config = AnarlogConfig(rootPath: "/tmp/anarlog-test", humansEnabled: false, sessionsEnabled: true)
+        let config = AnarlogConfig(humansEnabled: false, sessionsEnabled: true)
         let rig = try makeRig(config: config)
         try await rig.plugin.tick()
         let recorded = await outcomes(rig.healthSink)

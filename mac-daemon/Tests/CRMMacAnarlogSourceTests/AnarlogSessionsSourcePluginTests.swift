@@ -5,6 +5,8 @@ import CRMMacCore
 import CRMMacPiClient
 @testable import CRMMacAnarlogSource
 
+private struct SyntheticConfigLoadError: Error {}
+
 final class AnarlogSessionsSourcePluginTests: XCTestCase {
 
     private let testAuth = PiAuth(
@@ -151,7 +153,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     private final class FailingConfigSource: AnarlogConfigSource, @unchecked Sendable {
-        func load() throws -> AnarlogConfig? { throw AnarlogFilesystemError.ioError("synthetic") }
+        func load() throws -> AnarlogConfig? { throw SyntheticConfigLoadError() }
     }
 
     private final class LockedPathRecorder: @unchecked Sendable {
@@ -185,7 +187,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
         cliPath: String? = nil
     ) throws -> AnarlogConfig {
         var result = AnarlogConfig(
-            rootPath: "/tmp/anarlog-test", humansEnabled: false, sessionsEnabled: enabled)
+            humansEnabled: false, sessionsEnabled: enabled)
         if operatorSet { try result.setOperatorPersonID(operatorID) }
         if let cliPath { try result.setCLIPath(cliPath) }
         try result.setDeletionCap(deletionCap)
@@ -311,7 +313,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     // MARK: CLI read and payload projection
 
     func testSessionWithSummaryEmits() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866c87"
+        let id = "0abbbbbb-0000-4000-8000-000000006c87"
         let rig = try makeRig(responses: [listResponse([listEntry(id)]),
                                          getResponse(record(id, summaries: ["summary body"]))])
         try await rig.plugin.tick()
@@ -322,7 +324,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testSessionWithAllFieldsEmits() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866c88"
+        let id = "0abbbbbb-0000-4000-8000-000000006c88"
         let participant = FakeAnarlogParticipant(
             humanID: "11111111-1111-1111-1111-111111111111",
             displayName: nil, email: nil, jobTitle: nil)
@@ -340,7 +342,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testPreFloorSessionIsNeverSent() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866c89"
+        let id = "0abbbbbb-0000-4000-8000-000000006c89"
         let rig = try makeRig(responses: [listResponse([listEntry(id, "2025-12-15T10:00:00Z")])])
         try await rig.plugin.tick()
         XCTAssertEqual(rig.transport.ingestBodies.count, 0)
@@ -349,7 +351,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testOversizedSessionPayloadPreservesPriorEntryAndEmitsNoDelete() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866c90"
+        let id = "0abbbbbb-0000-4000-8000-000000006c90"
         let old = try priorCursor([id: "prevhash"])
         var script = PiScript(cursor: old)
         script.knownIDs = KnownIDsData(ids: [])
@@ -367,8 +369,8 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testSettleBoundary() async throws {
-        let at = "0a631ec3-fa11-47d2-aa0f-17b320866c91"
-        let after = "0a631ec3-fa11-47d2-aa0f-17b320866c92"
+        let at = "0abbbbbb-0000-4000-8000-000000006c91"
+        let after = "0abbbbbb-0000-4000-8000-000000006c92"
         let rig = try makeRig(responses: [
             listResponse([listEntry(at, "2026-03-20T09:00:00Z"), listEntry(after, "2026-03-20T09:00:01Z")]),
             getResponse(record(at, createdAt: "2026-03-20T09:00:00Z")),
@@ -380,8 +382,8 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testFloorBoundary() async throws {
-        let at = "0a631ec3-fa11-47d2-aa0f-17b320866c93"
-        let before = "0a631ec3-fa11-47d2-aa0f-17b320866c94"
+        let at = "0abbbbbb-0000-4000-8000-000000006c93"
+        let before = "0abbbbbb-0000-4000-8000-000000006c94"
         let rig = try makeRig(responses: [
             listResponse([listEntry(at, "2026-01-01T00:00:00Z"), listEntry(before, "2025-12-31T23:59:59Z")]),
             getResponse(record(at, createdAt: "2026-01-01T00:00:00Z")),
@@ -393,9 +395,9 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testInvocationsAreListThenEligibleGetsOnly() async throws {
-        let eligible = "0a631ec3-fa11-47d2-aa0f-17b320866c95"
-        let young = "0a631ec3-fa11-47d2-aa0f-17b320866c96"
-        let old = "0a631ec3-fa11-47d2-aa0f-17b320866c97"
+        let eligible = "0abbbbbb-0000-4000-8000-000000006c95"
+        let young = "0abbbbbb-0000-4000-8000-000000006c96"
+        let old = "0abbbbbb-0000-4000-8000-000000006c97"
         let rig = try makeRig(responses: [
             listResponse([listEntry(eligible), listEntry(young, "2026-03-20T11:30:00Z"),
                           listEntry(old, "2025-12-31T00:00:00Z")]),
@@ -407,7 +409,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testUnchangedRecordIsNotResent() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866c98"
+        let id = "0abbbbbb-0000-4000-8000-000000006c98"
         let value = record(id, summaries: ["same"])
         let rig = try makeRig(responses: [listResponse([listEntry(id)]), getResponse(value),
                                          listResponse([listEntry(id)]), getResponse(value)])
@@ -417,7 +419,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testChangedFieldResendsSession() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866c99"
+        let id = "0abbbbbb-0000-4000-8000-000000006c99"
         let participantA = FakeAnarlogParticipant(humanID: "11111111-1111-1111-1111-111111111111",
                                                    displayName: nil, email: nil, jobTitle: nil)
         let participantB = FakeAnarlogParticipant(humanID: "22222222-2222-2222-2222-222222222222",
@@ -445,7 +447,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testParticipantNameOnlyChangeIsNotResent() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866c9a"
+        let id = "0abbbbbb-0000-4000-8000-000000006c9a"
         let first = FakeAnarlogParticipant(humanID: "11111111-1111-1111-1111-111111111111",
                                            displayName: "Name A", email: nil, jobTitle: nil)
         let second = FakeAnarlogParticipant(humanID: first.humanID,
@@ -461,7 +463,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testOperatorAndZeroIDFilteredFromParticipants() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866c9b"
+        let id = "0abbbbbb-0000-4000-8000-000000006c9b"
         let kept = "11111111-1111-1111-1111-111111111111"
         let participants = [
             FakeAnarlogParticipant(humanID: kept, displayName: nil, email: nil, jobTitle: nil),
@@ -477,7 +479,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testGetNotFoundSkipsSessionAndKeepsPriorEntry() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866c9c"
+        let id = "0abbbbbb-0000-4000-8000-000000006c9c"
         let rig = try makeRig(responses: [listResponse([listEntry(id)]), getNotFound(id)],
                               piScript: PiScript(cursor: try priorCursor([id: "prior"])))
         try await rig.plugin.tick()
@@ -488,7 +490,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testGetFailureFailsTickWithoutPiRequests() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866c9d"
+        let id = "0abbbbbb-0000-4000-8000-000000006c9d"
         let failure = FakeAnarlogResponse(
             argv: FakeAnarlogCLI.getArgv(id: id), exit: 1,
             stderr: FakeAnarlogCLI.errorStderr(code: "internal", exitCode: 1))
@@ -524,7 +526,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     // MARK: deletion reconciliation
 
     func testDeletionUsesPriorRecordHash() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866c9e"
+        let id = "0abbbbbb-0000-4000-8000-000000006c9e"
         let rig = try makeRig(responses: [listResponse([])],
                               piScript: PiScript(cursor: try priorCursor([id: "priorhash"])))
         try await rig.plugin.tick()
@@ -533,8 +535,8 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testPresentButIneligibleSessionIsNeverDeleted() async throws {
-        let old = "0a631ec3-fa11-47d2-aa0f-17b320866c9f"
-        let young = "0a631ec3-fa11-47d2-aa0f-17b320866ca0"
+        let old = "0abbbbbb-0000-4000-8000-000000006c9f"
+        let young = "0abbbbbb-0000-4000-8000-000000006ca0"
         let prior = try priorCursor([old: "oldhash", young: "younghash"])
         let rig = try makeRig(responses: [listResponse([
             listEntry(old, "2025-12-31T23:59:59Z"), listEntry(young, "2026-03-20T11:30:00Z"),
@@ -548,8 +550,8 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testDeletionsAtCapAreSent() async throws {
-        let a = "0a631ec3-fa11-47d2-aa0f-17b320866ca1"
-        let b = "0a631ec3-fa11-47d2-aa0f-17b320866ca2"
+        let a = "0abbbbbb-0000-4000-8000-000000006ca1"
+        let b = "0abbbbbb-0000-4000-8000-000000006ca2"
         let rig = try makeRig(responses: [listResponse([])],
                               config: config(deletionCap: 2),
                               piScript: PiScript(cursor: try priorCursor([a: "a", b: "b"])))
@@ -560,8 +562,8 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testDeletionsOverCapAreWithheld() async throws {
-        let ids = ["0a631ec3-fa11-47d2-aa0f-17b320866ca3", "0a631ec3-fa11-47d2-aa0f-17b320866ca4",
-                   "0a631ec3-fa11-47d2-aa0f-17b320866ca5"]
+        let ids = ["0abbbbbb-0000-4000-8000-000000006ca3", "0abbbbbb-0000-4000-8000-000000006ca4",
+                   "0abbbbbb-0000-4000-8000-000000006ca5"]
         let rig = try makeRig(responses: [listResponse([])], config: config(deletionCap: 2),
                               piScript: PiScript(cursor: try priorCursor(Dictionary(uniqueKeysWithValues: ids.map { ($0, "hash") }))))
         try await rig.plugin.tick()
@@ -572,8 +574,8 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testEmptyListingOverCapWithholds() async throws {
-        let ids = ["0a631ec3-fa11-47d2-aa0f-17b320866ca6", "0a631ec3-fa11-47d2-aa0f-17b320866ca7",
-                   "0a631ec3-fa11-47d2-aa0f-17b320866ca8"]
+        let ids = ["0abbbbbb-0000-4000-8000-000000006ca6", "0abbbbbb-0000-4000-8000-000000006ca7",
+                   "0abbbbbb-0000-4000-8000-000000006ca8"]
         let rig = try makeRig(responses: [listResponse([])], config: config(deletionCap: 2),
                               piScript: PiScript(cursor: try priorCursor(Dictionary(uniqueKeysWithValues: ids.map { ($0, "hash") }))))
         try await rig.plugin.tick()
@@ -582,8 +584,8 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testBootstrapOverCapWithholds() async throws {
-        let ids = ["0a631ec3-fa11-47d2-aa0f-17b320866ca9", "0a631ec3-fa11-47d2-aa0f-17b320866caa",
-                   "0a631ec3-fa11-47d2-aa0f-17b320866cab"]
+        let ids = ["0abbbbbb-0000-4000-8000-000000006ca9", "0abbbbbb-0000-4000-8000-000000006caa",
+                   "0abbbbbb-0000-4000-8000-000000006cab"]
         let known = KnownIDsData(ids: ids.map { KnownContactID(sourceID: "\($0)@old", lastContentHash: "hash") })
         let rig = try makeRig(responses: [listResponse([])], config: config(deletionCap: 2),
                               piScript: PiScript(cursor: "", knownIDs: known))
@@ -596,8 +598,8 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testRaisedCapReleasesWithheldDeletions() async throws {
-        let ids = ["0a631ec3-fa11-47d2-aa0f-17b320866cac", "0a631ec3-fa11-47d2-aa0f-17b320866cad",
-                   "0a631ec3-fa11-47d2-aa0f-17b320866cae"]
+        let ids = ["0abbbbbb-0000-4000-8000-000000006cac", "0abbbbbb-0000-4000-8000-000000006cad",
+                   "0abbbbbb-0000-4000-8000-000000006cae"]
         let rig = try makeRig(responses: [listResponse([]), listResponse([])],
                               config: config(deletionCap: 2),
                               piScript: PiScript(cursor: try priorCursor(Dictionary(uniqueKeysWithValues: ids.map { ($0, "hash") }))))
@@ -611,8 +613,8 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testRaisedCapReleasesWithheldBootstrapDeletions() async throws {
-        let ids = ["0a631ec3-fa11-47d2-aa0f-17b320866caf", "0a631ec3-fa11-47d2-aa0f-17b320866cb0",
-                   "0a631ec3-fa11-47d2-aa0f-17b320866cb1"]
+        let ids = ["0abbbbbb-0000-4000-8000-000000006caf", "0abbbbbb-0000-4000-8000-000000006cb0",
+                   "0abbbbbb-0000-4000-8000-000000006cb1"]
         let known = KnownIDsData(ids: zip(ids, ["hash-a", "hash-b", "hash-c"]).map {
             KnownContactID(sourceID: "\($0.0)@old", lastContentHash: $0.1)
         })
@@ -629,7 +631,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testLegacyFileTreeCursorBootstraps() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866cb2"
+        let id = "0abbbbbb-0000-4000-8000-000000006cb2"
         let legacy = #"{"session":{"meta_hash":"m","summary_hash":"s","memo_hash":"n","payload_hash":"p"}}"#
         let rig = try makeRig(responses: [listResponse([listEntry(id)]), getResponse(record(id))],
                               piScript: PiScript(cursor: legacy))
@@ -639,7 +641,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testOutcomeReportsNewestAcrossWholeListing() async throws {
-        let young = "0a631ec3-fa11-47d2-aa0f-17b320866cb3"
+        let young = "0abbbbbb-0000-4000-8000-000000006cb3"
         let recent = now
         let rig = try makeRig(responses: [listResponse([listEntry(young, "2026-03-20T11:00:00Z")])])
         try await rig.plugin.tick()
@@ -650,7 +652,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     // MARK: outcome timing
 
     func testPiFailureAfterCompleteReadRecordsNoOutcome() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866cb4"
+        let id = "0abbbbbb-0000-4000-8000-000000006cb4"
         for endpoint in [PiEndpoint.cursorGet, .knownIDs, .ingest, .cursorCommit] {
             let script: PiScript
             if endpoint == .knownIDs {
@@ -672,8 +674,8 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testHeldDeletionOutcomeSurvivesPiFailure() async throws {
-        let ids = ["0a631ec3-fa11-47d2-aa0f-17b320866cb5", "0a631ec3-fa11-47d2-aa0f-17b320866cb6",
-                   "0a631ec3-fa11-47d2-aa0f-17b320866cb7"]
+        let ids = ["0abbbbbb-0000-4000-8000-000000006cb5", "0abbbbbb-0000-4000-8000-000000006cb6",
+                   "0abbbbbb-0000-4000-8000-000000006cb7"]
         let rig = try makeRig(responses: [listResponse([]), listResponse([])],
                               config: config(deletionCap: 2),
                               piScript: PiScript(cursor: try priorCursor(Dictionary(uniqueKeysWithValues: ids.map { ($0, "hash") }))))
@@ -686,14 +688,14 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testExactlyOneOutcomePerTick() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866cb8"
+        let id = "0abbbbbb-0000-4000-8000-000000006cb8"
         let clean = try makeRig(responses: [listResponse([])])
         try await clean.plugin.tick()
         let cleanHealth = await health(clean)
         XCTAssertEqual(cleanHealth.count, 1)
 
-        let ids = ["0a631ec3-fa11-47d2-aa0f-17b320866cb9", "0a631ec3-fa11-47d2-aa0f-17b320866cba",
-                   "0a631ec3-fa11-47d2-aa0f-17b320866cbb"]
+        let ids = ["0abbbbbb-0000-4000-8000-000000006cb9", "0abbbbbb-0000-4000-8000-000000006cba",
+                   "0abbbbbb-0000-4000-8000-000000006cbb"]
         let withheld = try makeRig(responses: [listResponse([])], config: config(deletionCap: 2),
                                   piScript: PiScript(cursor: try priorCursor(Dictionary(uniqueKeysWithValues: ids.map { ($0, "h") }))))
         try await withheld.plugin.tick()
@@ -769,7 +771,7 @@ final class AnarlogSessionsSourcePluginTests: XCTestCase {
     }
 
     func testInFlightCoalescing() async throws {
-        let id = "0a631ec3-fa11-47d2-aa0f-17b320866cbc"
+        let id = "0abbbbbb-0000-4000-8000-000000006cbc"
         let rig = try makeRig(responses: [listResponse([listEntry(id)]),
                                          getResponse(record(id), delayMs: 250),
                                          listResponse([listEntry(id)]), getResponse(record(id))])

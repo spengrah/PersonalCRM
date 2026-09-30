@@ -45,7 +45,7 @@ struct ConfigureCommand: ParsableCommand {
     mutating func run() throws {
         print("crm-mac configure: pass a subcommand.")
         print("  containers   Manage the iCloud Contacts allowlist.")
-        print("  anarlog      Configure the Anarlog notes path + enable flags.")
+        print("  anarlog      Configure the Anarlog sources (operator person ID, CLI path, enable flags).")
         print("")
         print("Run `crm-mac configure <subcommand> --help` for details.")
     }
@@ -281,25 +281,22 @@ private func requireDaemonNotRunning(paths: LifecyclePaths) throws {
 
 // MARK: - Anarlog subcommand
 
-/// `crm-mac configure anarlog [--path <abs>] [--enable …] [--disable …]
-/// [--reset-cursor …]` — manage the Anarlog notes path + per-source
-/// enable flags. The daemon must be stopped for any mutation.
+/// `crm-mac configure anarlog [--operator-person-id <uuid>] [--cli-path <abs>]
+/// [--deletion-cap <n>] [--enable …] [--disable …] [--reset-cursor …]`.
+/// The daemon must be stopped for any mutation.
 ///
 /// --enable / --disable / --reset-cursor accept one of:
 ///   humans | sessions | both
 struct AnarlogSubcommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "anarlog",
-        abstract: "Configure the Anarlog notes path and enable flags.")
+        abstract: "Configure the Anarlog sources: operator person ID, CLI path, deletion cap, and enable flags.")
 
     enum Target: String, ExpressibleByArgument {
         case humans
         case sessions
         case both
     }
-
-    @Option(name: .long, help: "Absolute path to the Anarlog notes root (containing humans/ and sessions/).")
-    var path: String?
 
     @Option(
         name: .customLong("operator-person-id"),
@@ -341,34 +338,13 @@ struct AnarlogSubcommand: ParsableCommand {
 
         var current: AnarlogConfig
         do {
-            if let existing = try configStore.loadAnarlogConfig() {
-                current = existing
-            } else if let path {
-                guard isAbsolutePath(path) else {
-                    FileHandle.standardError.write(Data(
-                        "anarlog path must be absolute, got: \(path)\n".utf8))
-                    throw ExitCode(2)
-                }
-                current = AnarlogConfig(rootPath: path)
-            } else {
-                FileHandle.standardError.write(Data(
-                    "no anarlog config yet — pass --path <abs-path> on first run.\n".utf8))
-                throw ExitCode(2)
-            }
+            current = try configStore.loadAnarlogConfig() ?? AnarlogConfig()
         } catch {
             FileHandle.standardError.write(Data(
                 "failed to load config.json: \(error)\n".utf8))
             throw ExitCode(2)
         }
 
-        if let path {
-            guard isAbsolutePath(path) else {
-                FileHandle.standardError.write(Data(
-                    "anarlog path must be absolute, got: \(path)\n".utf8))
-                throw ExitCode(2)
-            }
-            current.rootPath = path
-        }
         do {
             try AnarlogConfigureFlow.apply(
                 AnarlogConfigureRequest(
@@ -407,7 +383,6 @@ struct AnarlogSubcommand: ParsableCommand {
             throw ExitCode(1)
         }
         print("anarlog config updated.")
-        print("  root_path:        \(current.rootPath)")
         print("  humans_enabled:   \(current.humansEnabled)")
         print("  sessions_enabled: \(current.sessionsEnabled)")
         for line in AnarlogConfigureFlow.summaryLines(current) {
@@ -471,12 +446,5 @@ struct AnarlogSubcommand: ParsableCommand {
         for source in sources {
             print("\(source): cursor reset.")
         }
-    }
-
-    private func isAbsolutePath(_ s: String) -> Bool {
-        // Reject tildes too — operators should expand themselves; the
-        // daemon expands when reading config, but the persisted path
-        // should be the canonical absolute form.
-        s.hasPrefix("/")
     }
 }

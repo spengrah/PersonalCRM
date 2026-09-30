@@ -92,32 +92,3 @@ public enum AnarlogSessionsCursorCodec {
         return try? decoder.decode([String: AnarlogSessionsCursorEntry].self, from: data)
     }
 }
-
-// MARK: - Tombstone basis
-
-/// Prior cursor entry used by the tombstone diff. The basis is either
-/// the prior cursor map (delta route) or `/known-ids` results
-/// (bootstrap / recovery routes). Both surfaces carry a UUID + an
-/// optional prior payload hash; we reduce both to this shape so the
-/// tombstone-emission loop is route-agnostic.
-public struct AnarlogTombstoneBasisEntry: Equatable, Sendable {
-    public let uuid: String
-    /// Prior payload hash used to construct
-    /// `<uuid>@deleted@<priorPayloadHash>`. Nil falls back to
-    /// `@deleted@unknown`.
-    public let priorPayloadHash: String?
-    /// True when this entry is the pre-floor sentinel — used by the
-    /// tombstone branch to skip emitting deletes for sessions that
-    /// were never published in the first place.
-    public let isFloorSkipped: Bool
-
-    public init(
-        uuid: String,
-        priorPayloadHash: String?,
-        isFloorSkipped: Bool = false
-    ) {
-        self.uuid = uuid
-        self.priorPayloadHash = priorPayloadHash
-        self.isFloorSkipped = isFloorSkipped
-    }
-}

@@ -24,7 +24,6 @@ final class StatusAnarlogTests: XCTestCase {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         try seedConfigOnly(paths: paths, fs: fs, anarlog: AnarlogConfig(
-            rootPath: "/tmp/anarlog",
             humansEnabled: true,
             sessionsEnabled: false))
         try seedStateOnly(paths: paths, fs: fs)
@@ -46,7 +45,6 @@ final class StatusAnarlogTests: XCTestCase {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         try seedConfigOnly(paths: paths, fs: fs, anarlog: AnarlogConfig(
-            rootPath: "/tmp/anarlog",
             humansEnabled: true,
             sessionsEnabled: true))
         let state = makeState(humansCursor: "", sessionsCursor: "")
@@ -61,7 +59,6 @@ final class StatusAnarlogTests: XCTestCase {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         try seedConfigOnly(paths: paths, fs: fs, anarlog: AnarlogConfig(
-            rootPath: "/tmp/anarlog",
             humansEnabled: true))
         let cursor = """
         {"u1":{"content_hash":"a","payload_hash":"b"},
@@ -79,7 +76,6 @@ final class StatusAnarlogTests: XCTestCase {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         try seedConfigOnly(paths: paths, fs: fs, anarlog: AnarlogConfig(
-            rootPath: "/tmp/anarlog",
             humansEnabled: true))
         let state = makeState(humansCursor: "not json")
         try writeState(state: state, paths: paths, fs: fs)
@@ -93,7 +89,6 @@ final class StatusAnarlogTests: XCTestCase {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         try seedConfigOnly(paths: paths, fs: fs, anarlog: AnarlogConfig(
-            rootPath: "/tmp/anarlog",
             humansEnabled: true))
         let state = makeState(humansCursor: "{}",
                               humansLastError: "recovery_requested:hash_mismatch")
@@ -107,7 +102,6 @@ final class StatusAnarlogTests: XCTestCase {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         try seedConfigOnly(paths: paths, fs: fs, anarlog: AnarlogConfig(
-            rootPath: "/tmp/anarlog",
             humansEnabled: true))
         let state = makeState(humansCursor: "{}",
                               humansLastError: "publish_held_due_to_rejections (123 rejected)")
@@ -123,7 +117,6 @@ final class StatusAnarlogTests: XCTestCase {
         let paths = TestPaths.make()
         let fs = InMemoryFilesystem()
         try seedConfigOnly(paths: paths, fs: fs, anarlog: AnarlogConfig(
-            rootPath: "/tmp/anarlog",
             humansEnabled: false,
             sessionsEnabled: false))
         try seedStateOnly(paths: paths, fs: fs)

@@ -31,7 +31,7 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
         case recovery
     }
 
-    public init(
+    init(
         tickInterval: TimeInterval = CRMMacAnarlogSource.sessionsSafetyTickInterval,
         piClient: PiClient,
         auth: PiAuth,

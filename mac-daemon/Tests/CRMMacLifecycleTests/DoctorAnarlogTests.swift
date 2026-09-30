@@ -1,195 +1,250 @@
-// DoctorAnarlogTests cover the anarlog reader source checks Doctor
-// runs. Same harness shape as DoctorIcloudContactsTests.
+// DoctorAnarlogTests cover the Anarlog source checks Doctor runs.
+// Same harness shape as DoctorIcloudContactsTests.
+import Foundation
 import XCTest
 import CRMMacCore
 @testable import CRMMacLifecycle
 @testable import CRMMacPiClient
 
+private final class ResolverRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String?] = []
+
+    func append(_ value: String?) {
+        lock.lock()
+        values.append(value)
+        lock.unlock()
+    }
+
+    func snapshot() -> [String?] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+}
+
 final class DoctorAnarlogTests: XCTestCase {
 
     func testNoAnarlogConfigEmitsTwoNotConfiguredRows() async {
-        let r = await runDoctor()
-        let humans = r.results.first { $0.name == "anarlog_humans" }
-        let sessions = r.results.first { $0.name == "anarlog_sessions" }
+        let recorder = ResolverRecorder()
+        let report = await runDoctor(resolver: { path in
+            recorder.append(path)
+            return "/synthetic/bin/anarlog"
+        })
+        let humans = report.results.first { $0.name == "anarlog_humans" }
+        let sessions = report.results.first { $0.name == "anarlog_sessions" }
         XCTAssertNotNil(humans)
         XCTAssertNotNil(sessions)
         XCTAssertEqual(humans?.status, .warn)
         XCTAssertEqual(sessions?.status, .warn)
-        XCTAssertTrue(humans?.details.contains("not_configured") ?? false)
+        XCTAssertEqual(humans?.details, "not_configured (run `crm-mac configure anarlog --operator-person-id <uuid> --enable both`)")
+        XCTAssertEqual(sessions?.details, "not_configured (run `crm-mac configure anarlog --operator-person-id <uuid> --enable both`)")
+        XCTAssertTrue(recorder.snapshot().isEmpty)
     }
 
-    func testHumansEnabledShowsActive() async {
-        let r = await runDoctor(anarlog: AnarlogConfig(
-            rootPath: "/tmp/anarlog",
-            humansEnabled: true,
-            sessionsEnabled: false))
-        let humans = r.results.first { $0.name == "anarlog_humans" }
-        let sessions = r.results.first { $0.name == "anarlog_sessions" }
+    func testHumansEnabledShowsActive() async throws {
+        let report = await runDoctor(anarlog: try anarlogConfig(humans: true))
+        let humans = report.results.first { $0.name == "anarlog_humans" }
+        let sessions = report.results.first { $0.name == "anarlog_sessions" }
         XCTAssertEqual(humans?.status, .pass)
-        XCTAssertTrue(humans?.details.contains("enabled") ?? false)
+        XCTAssertEqual(humans?.details, "enabled")
         XCTAssertEqual(sessions?.status, .warn)
-        XCTAssertTrue(sessions?.details.contains("not_configured") ?? false)
+        XCTAssertEqual(sessions?.details, "not_configured (disabled)")
     }
 
-    func testPathMissingFails() async {
-        let r = await runDoctor(anarlog: AnarlogConfig(
-            rootPath: "/nonexistent-path-for-test",
-            humansEnabled: true))
-        let pathCheck = r.results.first { $0.name == "anarlog:path_missing" }
-        XCTAssertNotNil(pathCheck)
-        XCTAssertEqual(pathCheck?.status, .fail)
-    }
-
-    func testHumansSubdirMissingWarns() async {
-        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
-        let r = await runDoctor(
-            anarlog: AnarlogConfig(rootPath: path, humansEnabled: true),
-            // Mark the root path as existing but DON'T mark humans/.
-            extraDirs: [path])
-        let subdir = r.results.first { $0.name == "anarlog:humans_subdir_missing" }
-        XCTAssertNotNil(subdir)
-        XCTAssertEqual(subdir?.status, .warn)
-    }
-
-    func testSessionsSubdirMissingWarns() async {
-        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
-        let r = await runDoctor(
-            anarlog: AnarlogConfig(rootPath: path, sessionsEnabled: true),
-            extraDirs: [path])
-        let subdir = r.results.first { $0.name == "anarlog:sessions_subdir_missing" }
-        XCTAssertNotNil(subdir)
-        XCTAssertEqual(subdir?.status, .warn)
-    }
-
-    func testHappyPathEmitsLastTickRow() async {
-        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
+    func testHappyPathEmitsLastTickRow() async throws {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
         let recent = now.addingTimeInterval(-60)
-        let r = await runDoctor(
-            anarlog: AnarlogConfig(rootPath: path, humansEnabled: true),
-            humansState: SourceState(
-                lastScheduledAt: recent,
-                lastPushedAt: recent),
-            extraDirs: [path, "\(path)/humans"],
+        let report = await runDoctor(
+            anarlog: try anarlogConfig(humans: true),
+            humansState: SourceState(lastScheduledAt: recent, lastPushedAt: recent),
             clock: FixedClock(now))
-        let lastTick = r.results.first { $0.name == "anarlog_humans.last_tick" }
+        let lastTick = report.results.first { $0.name == "anarlog_humans.last_tick" }
         XCTAssertNotNil(lastTick)
         XCTAssertEqual(lastTick?.status, .pass)
     }
 
-    func testStaleLastTickWarns() async {
-        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
+    func testStaleLastTickWarns() async throws {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
-        // 1 h 1 s > 2x 30 min humans interval.
         let stale = now.addingTimeInterval(-(60 * 60 + 1))
-        let r = await runDoctor(
-            anarlog: AnarlogConfig(rootPath: path, humansEnabled: true),
+        let report = await runDoctor(
+            anarlog: try anarlogConfig(humans: true),
             humansState: SourceState(lastScheduledAt: stale),
-            extraDirs: [path, "\(path)/humans"],
             clock: FixedClock(now))
-        let lastTick = r.results.first { $0.name == "anarlog_humans.last_tick" }
+        let lastTick = report.results.first { $0.name == "anarlog_humans.last_tick" }
         XCTAssertEqual(lastTick?.status, .warn)
     }
 
-    func testLastTickWithinTwoHumansIntervalsPasses() async {
-        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
+    func testLastTickWithinTwoHumansIntervalsPasses() async throws {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
-        let r = await runDoctor(
-            anarlog: AnarlogConfig(rootPath: path, humansEnabled: true),
-            humansState: SourceState(
-                lastScheduledAt: now.addingTimeInterval(-(60 * 60))),
-            extraDirs: [path, "\(path)/humans"],
+        let report = await runDoctor(
+            anarlog: try anarlogConfig(humans: true),
+            humansState: SourceState(lastScheduledAt: now.addingTimeInterval(-(60 * 60))),
             clock: FixedClock(now))
-        let lastTick = r.results.first { $0.name == "anarlog_humans.last_tick" }
+        let lastTick = report.results.first { $0.name == "anarlog_humans.last_tick" }
         XCTAssertEqual(lastTick?.status, .pass)
     }
 
-    func testNeitherEnabledSkipsFilesystemProbes() async {
-        // path is bogus but neither source is enabled — Doctor should
-        // NOT probe the filesystem and NOT emit path_missing.
-        let r = await runDoctor(anarlog: AnarlogConfig(
-            rootPath: "/totally/bogus/path",
-            humansEnabled: false,
-            sessionsEnabled: false))
-        XCTAssertNil(r.results.first { $0.name == "anarlog:path_missing" })
+    func testNeitherEnabledRunsNoAnarlogProbes() async throws {
+        let recorder = ResolverRecorder()
+        let report = await runDoctor(
+            anarlog: try anarlogConfig(),
+            resolver: { path in
+                recorder.append(path)
+                return "/synthetic/bin/anarlog"
+            })
+        XCTAssertNil(report.results.first { $0.name == "anarlog:cli" })
+        XCTAssertNil(report.results.first { $0.name == "anarlog:operator_person_id" })
+        XCTAssertTrue(recorder.snapshot().isEmpty)
     }
 
-    func testHumansCountReportsFileCount() async {
-        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
-        let humansPath = "\(path)/humans"
-        let r = await runDoctor(
-            anarlog: AnarlogConfig(rootPath: path, humansEnabled: true),
-            extraDirs: [path, humansPath],
-            extraFiles: [
-                "\(humansPath)/a.md",
-                "\(humansPath)/b.md",
-                "\(humansPath)/c.md",
-                "\(humansPath)/.DS_Store",
-            ])
-        let count = r.results.first { $0.name == "anarlog:humans_count" }
-        XCTAssertNotNil(count)
-        XCTAssertEqual(count?.status, .pass)
-        XCTAssertTrue(count?.details.contains("3 human") ?? false,
-                      "expected 3 .md files counted; got: \(count?.details ?? "nil")")
+    func testCLIResolvedPasses() async throws {
+        let report = await runDoctor(
+            anarlog: try anarlogConfig(humans: true),
+            resolver: { _ in "/synthetic/bin/anarlog" })
+        let check = report.results.first { $0.name == "anarlog:cli" }
+        XCTAssertEqual(check?.status, .pass)
+        XCTAssertEqual(check?.details, "resolved: /synthetic/bin/anarlog")
     }
 
-    func testSessionsCountReportsUUIDDirCount() async {
-        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
-        let sessionsPath = "\(path)/sessions"
-        let uuidShaped1 = "11111111-1111-1111-1111-111111111111"
-        let uuidShaped2 = "22222222-2222-2222-2222-222222222222"
-        let r = await runDoctor(
-            anarlog: AnarlogConfig(rootPath: path, sessionsEnabled: true),
-            extraDirs: [
-                path, sessionsPath,
-                "\(sessionsPath)/\(uuidShaped1)",
-                "\(sessionsPath)/\(uuidShaped2)",
-                "\(sessionsPath)/chats",
-            ],
-            extraFiles: ["\(sessionsPath)/settings.json"])
-        let count = r.results.first { $0.name == "anarlog:sessions_count" }
-        XCTAssertNotNil(count)
-        XCTAssertTrue(count?.details.contains("2 session") ?? false,
-                      "expected 2 UUID-shaped session dirs; got: \(count?.details ?? "nil")")
+    func testCLINotFoundByDefaultSearchFails() async throws {
+        let report = await runDoctor(
+            anarlog: try anarlogConfig(humans: true),
+            resolver: { _ in nil })
+        let check = report.results.first { $0.name == "anarlog:cli" }
+        XCTAssertEqual(check?.status, .fail)
+        XCTAssertEqual(check?.details, "not found at the default location; set it with `crm-mac configure anarlog --cli-path <abs>`")
     }
 
-    func testHumansFilesFoldersPermissionDeniedFails() async {
-        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
-        let humansPath = "\(path)/humans"
-        let r = await runDoctor(
-            anarlog: AnarlogConfig(rootPath: path, humansEnabled: true),
-            extraDirs: [path, humansPath],
-            permissionDeniedDirs: [humansPath])
-        let perm = r.results.first { $0.name == "anarlog:files_folders_permission_denied" }
-        XCTAssertNotNil(perm)
-        XCTAssertEqual(perm?.status, .fail)
-        // Count check should NOT fire when the listing was rejected
-        // — we either get the permission_denied row OR the count row,
-        // not both. (Same path, same probe.)
-        XCTAssertNil(r.results.first { $0.name == "anarlog:humans_count" })
+    func testConfiguredCLIPathNotExecutableFails() async throws {
+        let cliPath = "/opt/synthetic/anarlog"
+        let report = await runDoctor(
+            anarlog: try anarlogConfig(humans: true, cliPath: cliPath),
+            resolver: { _ in nil })
+        let check = report.results.first { $0.name == "anarlog:cli" }
+        XCTAssertEqual(check?.status, .fail)
+        XCTAssertEqual(check?.details, "cli_path is not an executable file: \(cliPath)")
     }
 
-    func testSessionsFilesFoldersPermissionDeniedFails() async {
-        let path = "/tmp/anarlog-test-\(UUID().uuidString)"
-        let sessionsPath = "\(path)/sessions"
-        let r = await runDoctor(
-            anarlog: AnarlogConfig(rootPath: path, sessionsEnabled: true),
-            extraDirs: [path, sessionsPath],
-            permissionDeniedDirs: [sessionsPath])
-        let perm = r.results.first { $0.name == "anarlog:files_folders_permission_denied" }
-        XCTAssertNotNil(perm)
-        XCTAssertEqual(perm?.status, .fail)
+    func testResolverReceivesConfiguredCLIPath() async throws {
+        let configured = ResolverRecorder()
+        _ = await runDoctor(
+            anarlog: try anarlogConfig(humans: true, cliPath: "/opt/synthetic/anarlog"),
+            resolver: { path in
+                configured.append(path)
+                return "/synthetic/bin/anarlog"
+            })
+        XCTAssertEqual(configured.snapshot().map { $0 ?? "<nil>" }, ["/opt/synthetic/anarlog"])
+
+        let defaultSearch = ResolverRecorder()
+        _ = await runDoctor(
+            anarlog: try anarlogConfig(humans: true),
+            resolver: { path in
+                defaultSearch.append(path)
+                return "/synthetic/bin/anarlog"
+            })
+        let defaultValues = defaultSearch.snapshot()
+        XCTAssertEqual(defaultValues.count, 1)
+        XCTAssertNil(defaultValues[0])
     }
 
-    // MARK: - test rig
+    func testChecksRunOncePerDoctorRun() async throws {
+        let recorder = ResolverRecorder()
+        let report = await runDoctor(
+            anarlog: try anarlogConfig(humans: true, sessions: true),
+            resolver: { path in
+                recorder.append(path)
+                return "/synthetic/bin/anarlog"
+            })
+        XCTAssertEqual(report.results.filter { $0.name == "anarlog:cli" }.count, 1)
+        XCTAssertEqual(report.results.filter { $0.name == "anarlog:operator_person_id" }.count, 1)
+        XCTAssertEqual(recorder.snapshot().count, 1)
+    }
+
+    func testOperatorPersonIDSetPasses() async throws {
+        let report = await runDoctor(
+            anarlog: try anarlogConfig(humans: true),
+            resolver: { _ in "/synthetic/bin/anarlog" })
+        let check = report.results.first { $0.name == "anarlog:operator_person_id" }
+        XCTAssertEqual(check?.status, .pass)
+        XCTAssertEqual(check?.details, "set")
+    }
+
+    func testOperatorPersonIDUnsetFails() async throws {
+        let report = await runDoctor(
+            anarlog: try anarlogConfig(humans: true, operatorSet: false),
+            resolver: { _ in "/synthetic/bin/anarlog" })
+        let check = report.results.first { $0.name == "anarlog:operator_person_id" }
+        XCTAssertEqual(check?.status, .fail)
+        XCTAssertEqual(check?.details, "not set; set it with `crm-mac configure anarlog --operator-person-id <uuid>`")
+    }
+
+    func testSessionsLastTickUsesThirtyMinuteInterval() async throws {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let config = try anarlogConfig(sessions: true)
+        let atThreshold = await runDoctor(
+            anarlog: config,
+            sessionsState: SourceState(lastScheduledAt: now.addingTimeInterval(-3600)),
+            clock: FixedClock(now))
+        XCTAssertEqual(atThreshold.results.first { $0.name == "anarlog_sessions.last_tick" }?.status, .pass)
+
+        let beyondThreshold = await runDoctor(
+            anarlog: config,
+            sessionsState: SourceState(lastScheduledAt: now.addingTimeInterval(-3601)),
+            clock: FixedClock(now))
+        XCTAssertEqual(beyondThreshold.results.first { $0.name == "anarlog_sessions.last_tick" }?.status, .warn)
+    }
+
+    func testDefaultResolverResolvesConfiguredCLIPath() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("doctor-anarlog-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let executable = directory.appendingPathComponent("anarlog-executable")
+        let nonExecutable = directory.appendingPathComponent("anarlog-non-executable")
+        try Data("synthetic".utf8).write(to: executable)
+        try Data("synthetic".utf8).write(to: nonExecutable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: nonExecutable.path)
+
+        let executableReport = await runDoctor(
+            anarlog: try anarlogConfig(humans: true, cliPath: executable.path),
+            useDefaultResolver: true)
+        let executableCheck = executableReport.results.first { $0.name == "anarlog:cli" }
+        XCTAssertEqual(executableCheck?.status, .pass)
+        XCTAssertEqual(executableCheck?.details, "resolved: \(executable.path)")
+
+        let nonExecutableReport = await runDoctor(
+            anarlog: try anarlogConfig(humans: true, cliPath: nonExecutable.path),
+            useDefaultResolver: true)
+        let nonExecutableCheck = nonExecutableReport.results.first { $0.name == "anarlog:cli" }
+        XCTAssertEqual(nonExecutableCheck?.status, .fail)
+        XCTAssertEqual(nonExecutableCheck?.details, "cli_path is not an executable file: \(nonExecutable.path)")
+    }
+
+    private func anarlogConfig(
+        humans: Bool = false,
+        sessions: Bool = false,
+        operatorSet: Bool = true,
+        cliPath: String? = nil
+    ) throws -> AnarlogConfig {
+        var config = AnarlogConfig(humansEnabled: humans, sessionsEnabled: sessions)
+        if operatorSet {
+            try config.setOperatorPersonID("aaaaaaaa-0000-4000-8000-000000000001")
+        }
+        if let cliPath {
+            try config.setCLIPath(cliPath)
+        }
+        return config
+    }
 
     private func runDoctor(
         anarlog: AnarlogConfig? = nil,
         humansState: SourceState? = nil,
         sessionsState: SourceState? = nil,
-        extraDirs: [String] = [],
-        extraFiles: [String] = [],
-        permissionDeniedDirs: Set<String> = [],
+        resolver: @escaping (String?) -> String? = { _ in "/synthetic/bin/anarlog" },
+        useDefaultResolver: Bool = false,
         clock: ClockAdapter? = nil
     ) async -> DoctorReport {
         let paths = TestPaths.make()
@@ -207,22 +262,15 @@ final class DoctorAnarlogTests: XCTestCase {
             installedAt: Date(timeIntervalSince1970: 1_700_000_000),
             sources: sources)
         var state = DaemonState(schemaVersion: 1, hostID: config.hostID)
-        if let s = humansState { state.sources["anarlog_humans"] = s }
-        if let s = sessionsState { state.sources["anarlog_sessions"] = s }
+        if let sourceState = humansState { state.sources["anarlog_humans"] = sourceState }
+        if let sourceState = sessionsState { state.sources["anarlog_sessions"] = sourceState }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         try! fs.write(try! encoder.encode(config), to: paths.configFilePath)
         try! fs.write(try! encoder.encode(state), to: paths.stateFilePath)
-        for dir in extraDirs {
-            try! fs.createDirectory(at: dir)
-        }
-        for file in extraFiles {
-            try! fs.write(Data("x".utf8), to: file)
-        }
-        fs.permissionDeniedDirs = permissionDeniedDirs
         var script = FakeAgentService.Script()
         script.statusSequence = [.enabled]
-        let deps = DoctorDependencies(
+        let common = (
             paths: paths,
             filesystem: fs,
             keychain: InMemoryKeychainStore(initial: "key"),
@@ -235,9 +283,36 @@ final class DoctorAnarlogTests: XCTestCase {
             },
             contactsAuth: StubContactsAuthorizationAdapter(status: .authorized),
             containerEnumerator: StubContactContainerEnumerator(),
-            tickInterval: 60,
+            tickInterval: 60.0,
             clock: clock ?? FixedClock(),
             logger: NoopLogger())
-        return await Doctor(deps).run()
+        let dependencies: DoctorDependencies
+        if useDefaultResolver {
+            dependencies = DoctorDependencies(
+                paths: common.paths,
+                filesystem: common.filesystem,
+                keychain: common.keychain,
+                agentService: common.agentService,
+                piClientFactory: common.piClientFactory,
+                contactsAuth: common.contactsAuth,
+                containerEnumerator: common.containerEnumerator,
+                tickInterval: common.tickInterval,
+                clock: common.clock,
+                logger: common.logger)
+        } else {
+            dependencies = DoctorDependencies(
+                paths: common.paths,
+                filesystem: common.filesystem,
+                keychain: common.keychain,
+                agentService: common.agentService,
+                piClientFactory: common.piClientFactory,
+                contactsAuth: common.contactsAuth,
+                containerEnumerator: common.containerEnumerator,
+                anarlogCLIResolver: resolver,
+                tickInterval: common.tickInterval,
+                clock: common.clock,
+                logger: common.logger)
+        }
+        return await Doctor(dependencies).run()
     }
 }
