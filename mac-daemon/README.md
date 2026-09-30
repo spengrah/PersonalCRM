@@ -315,13 +315,19 @@ crm-mac start
 
 ### `crm-mac configure anarlog ...`
 
-Configure the Anarlog notes reader sources. Both `anarlog_humans` and `anarlog_sessions` share a single root path (typically `~/Documents/notes/meetings`) and each has its own enable flag — both default false. The daemon must be stopped for all mutations.
+Configure the Anarlog sources. `anarlog_sessions` sends meeting notes to the CRM, and `anarlog_humans` sends the people who appear in them. Both read Anarlog only through the `anarlog` CLI installed with the Anarlog app. Each source has its own enable flag, and both default to false. The daemon must be stopped for all mutations.
 
 ```bash
 crm-mac stop
 
-# First run — set the path and turn both sources on.
-crm-mac configure anarlog --path ~/Documents/notes/meetings --enable both
+# First run — set the operator person ID and turn both sources on.
+crm-mac configure anarlog --operator-person-id <your-anarlog-person-uuid> --enable both
+
+# Only for a CLI that is not at ~/.local/bin/anarlog.
+crm-mac configure anarlog --cli-path /absolute/path/to/anarlog
+
+# Raise the deletion cap so one tick can apply a larger bulk deletion.
+crm-mac configure anarlog --deletion-cap 20
 
 # Enable / disable individually.
 crm-mac configure anarlog --enable humans
@@ -333,35 +339,27 @@ crm-mac configure anarlog --reset-cursor humans       # or sessions, or both
 crm-mac start
 ```
 
+`--operator-person-id` is required. The sources exclude that person from the participants of every session, and while it is unset they send nothing and raise a notification. `--cli-path` is optional; without it, the daemon looks for the CLI at `~/.local/bin/anarlog`. `--deletion-cap` bounds how many sessions one tick may delete in the CRM (default 5). A tick over the cap deletes none, keeps them pending, and raises a notification naming the withheld count.
+
 Persisted under `sources.anarlog` in `~/Library/Application Support/crm-mac/config.json`:
 
 ```json
 {
   "sources": {
     "anarlog": {
-      "root_path": "/Users/you/Documents/notes/meetings",
       "humans_enabled": true,
-      "sessions_enabled": true
+      "sessions_enabled": true,
+      "operator_person_id": "aaaaaaaa-0000-4000-8000-000000000001",
+      "cli_path": "/Users/you/.local/bin/anarlog",
+      "deletion_cap": 5
     }
   }
 }
 ```
 
-The humans plugin polls every ~5 min (`NSBackgroundActivityScheduler`); the sessions plugin is FSEvents-driven (notified within ~1.5s of any file change under `sessions/`) with an hourly safety poll for catchup and tombstone detection.
+A config that still carries `root_path` from the file-tree reader loads unchanged; the daemon ignores the key and drops it on the next save.
 
-### Anarlog: Files & Folders permission
-
-The daemon reads `humans/*.md` and `sessions/<uuid>/{_meta.json, _summary.md?, _memo.md?}` directly from the Anarlog notes folder, which lives under `~/Documents/`. macOS protects `~/Documents` via TCC; the daemon needs **Files & Folders** access for the configured path.
-
-System Settings - Privacy & Security - Files & Folders - crm-mac - enable Documents Folder.
-
-If permission was revoked after grant (Doctor reports `anarlog:files_folders_permission_denied`), reset and reprompt:
-
-```bash
-tccutil reset SystemPolicyDocumentsFolder xyz.spengrah.crm-mac
-crm-mac stop
-crm-mac start
-```
+Both Anarlog sources tick every 30 minutes. A session is first sent once it is three hours old, which leaves time to tag its participants; after that, a change in Anarlog reaches the CRM within about an hour. A broken CLI, a missing operator person ID, withheld deletions, or 14 days without a new session each raise one macOS notification that clears when the condition does.
 
 ## Daemon-running guard
 

@@ -451,7 +451,7 @@ behaviors:
     given: the running daemon
     when: its source plugins are scheduled
     then:
-      - message, call, contact, and anarlog sources each tick on their own interval, and a filesystem change under the sessions directory triggers a sessions tick promptly
+      - message, call, contact, and anarlog sources each tick on their own interval
       - the orphan-notification reconcile runs once after the first successful heartbeat and then on a steady-state loop
     provenance: [DaemonCommand.swift plugin wiring, NotificationReconcileLoopPlugin, FirstSuccessLatch.swift]
 
@@ -491,7 +491,7 @@ behaviors:
     when: it executes
     then:
       - status reports install, registration, and pairing state plus per-source watermarks without making any network call
-      - doctor runs health checks (key presence, agent registration, config and state integrity, Pi reachability, and permissions) and exits non-zero by the count of failing checks
+      - doctor runs health checks (key presence, agent registration, config and state integrity, Pi reachability, permissions, and, while an Anarlog source is enabled, whether the Anarlog CLI resolves and whether an operator Anarlog person ID is configured) and exits non-zero by the count of failing checks
     provenance: [StatusCommand.swift, DoctorCommand.swift, Doctor.swift]
     notes: CLI specifics asserted from the surface inventory, not read line-by-line.
 
@@ -571,7 +571,7 @@ behaviors:
   - id: MAC-049
     title: An Anarlog session that disappears is deleted in the CRM
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: a session the daemon has sent
     when: the session no longer appears in the CLI's full session listing
@@ -599,7 +599,7 @@ behaviors:
   - id: MAC-051
     title: The operator's Anarlog identity is configured, never inferred
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: the Anarlog sources are enabled
     when: the operator's Anarlog person ID is not set in the daemon config
@@ -611,7 +611,7 @@ behaviors:
   - id: MAC-052
     title: A broken Anarlog CLI raises one sticky notification
     type: ux
-    status: proposed
+    status: current
     surface: none
     given: the Anarlog sources are enabled
     when: the CLI is missing, reports a contract version other than "1", omits a field the daemon uses, or fails at runtime
@@ -627,7 +627,7 @@ behaviors:
   - id: MAC-053
     title: A quiet Anarlog source raises one notification
     type: ux
-    status: proposed
+    status: current
     surface: none
     given: the CLI answers successfully
     when: no session in its listing was created within the last 14 days, including when the listing is empty
@@ -639,7 +639,7 @@ behaviors:
   - id: MAC-054
     title: Anarlog data is read only through the Anarlog CLI
     type: invariant
-    status: proposed
+    status: current
     surface: none
     statement: the daemon reads Anarlog sessions and people only through the Anarlog CLI's JSON output and never reads Anarlog's database or its legacy session and people file tree directly.
     provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]
