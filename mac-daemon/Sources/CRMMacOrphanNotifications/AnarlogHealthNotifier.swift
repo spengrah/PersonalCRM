@@ -40,6 +40,23 @@ enum AnarlogBrokenCondition: String, CaseIterable, Sendable {
     }
 }
 
+enum AnarlogHealthNotification: Hashable, Sendable {
+    case broken(AnarlogBrokenCondition)
+    case quiet
+
+    static let all: [AnarlogHealthNotification] =
+        AnarlogBrokenCondition.allCases.map { .broken($0) } + [.quiet]
+
+    var identifier: String {
+        switch self {
+        case .broken(let condition):
+            return condition.notificationIdentifier
+        case .quiet:
+            return AnarlogHealthNotifier.quietIdentifier
+        }
+    }
+}
+
 public actor AnarlogHealthNotifier: AnarlogHealthSink {
     public static let quietIdentifier = "anarlog_source:quiet"
     public static let quietWindow: TimeInterval = 14 * 24 * 60 * 60
@@ -51,18 +68,30 @@ public actor AnarlogHealthNotifier: AnarlogHealthSink {
         case absent
     }
 
+    private struct HeldCondition {
+        let condition: AnarlogBrokenCondition
+        let request: NotificationRequestSpec
+        let reportOrder: UInt64
+    }
+
     private struct SourceState {
         var runtimeFailureStreak = 0
-        var heldCondition: AnarlogBrokenCondition?
+        var heldCondition: HeldCondition?
+    }
+
+    private struct NotificationState {
+        var presence: Presence = .unknown
+        var shouldShow: Bool?
+        var desiredRequest: NotificationRequestSpec?
     }
 
     private let presenter: UserNotificationPresenter
     private let logger: LoggerProtocol
     private let clock: @Sendable () -> Date
     private var sourceStates: [SourceID: SourceState] = [:]
-    private var latestSpecs: [String: NotificationRequestSpec] = [:]
     private var quietHolds: Bool?
-    private var presence: [String: Presence]
+    private var notificationStates: [AnarlogHealthNotification: NotificationState]
+    private var reportOrder: UInt64 = 0
     private var reconciling = false
     private var dirty = false
 
@@ -74,8 +103,8 @@ public actor AnarlogHealthNotifier: AnarlogHealthSink {
         self.presenter = presenter
         self.logger = logger
         self.clock = clock
-        self.presence = Dictionary(
-            uniqueKeysWithValues: Self.orderedIdentifiers.map { ($0, .unknown) })
+        self.notificationStates = Dictionary(
+            uniqueKeysWithValues: AnarlogHealthNotification.all.map { ($0, NotificationState()) })
     }
 
     public func record(source: SourceID, outcome: AnarlogTickOutcome) async {
@@ -87,29 +116,34 @@ public actor AnarlogHealthNotifier: AnarlogHealthSink {
             quietHolds = isQuiet(newestSessionCreatedAt)
         case .deletionsWithheld(let withheld, let newestSessionCreatedAt):
             state.runtimeFailureStreak = 0
-            state.heldCondition = .deletionsWithheld
-            quietHolds = isQuiet(newestSessionCreatedAt)
-            latestSpecs[AnarlogBrokenCondition.deletionsWithheld.notificationIdentifier] =
-                notificationSpec(
+            state.heldCondition = HeldCondition(
+                condition: .deletionsWithheld,
+                request: notificationSpec(
                     identifier: AnarlogBrokenCondition.deletionsWithheld.notificationIdentifier,
                     title: "Anarlog sync is broken",
-                    body: "\(withheld) Anarlog session deletions were withheld because they exceed the deletion cap. To apply them, raise it with: crm-mac configure anarlog --deletion-cap")
+                    body: "\(withheld) Anarlog session deletions were withheld because they exceed the deletion cap. To apply them, raise it with: crm-mac configure anarlog --deletion-cap"),
+                reportOrder: nextReportOrder())
+            quietHolds = isQuiet(newestSessionCreatedAt)
         case .failed(let failure):
             let condition = AnarlogBrokenCondition(failure)
             if failure.isPermanent {
                 state.runtimeFailureStreak = 0
-                state.heldCondition = condition
+                state.heldCondition = HeldCondition(
+                    condition: condition,
+                    request: spec(for: failure, condition: condition),
+                    reportOrder: nextReportOrder())
             } else {
                 state.runtimeFailureStreak += 1
                 state.heldCondition = state.runtimeFailureStreak >= Self.runtimeFailureThreshold
-                    ? condition
+                    ? HeldCondition(
+                        condition: condition,
+                        request: spec(for: failure, condition: condition),
+                        reportOrder: nextReportOrder())
                     : nil
-            }
-            if state.heldCondition != nil {
-                latestSpecs[condition.notificationIdentifier] = spec(for: failure, condition: condition)
             }
         }
         sourceStates[source] = state
+        refreshDesiredRequests()
 
         dirty = true
         if reconciling {
@@ -124,8 +158,37 @@ public actor AnarlogHealthNotifier: AnarlogHealthSink {
         reconciling = false
     }
 
-    private static var orderedIdentifiers: [String] {
-        AnarlogBrokenCondition.allCases.map(\.notificationIdentifier) + [quietIdentifier]
+    private func nextReportOrder() -> UInt64 {
+        reportOrder += 1
+        return reportOrder
+    }
+
+    private func refreshDesiredRequests() {
+        for notification in AnarlogHealthNotification.all {
+            let shouldShow: Bool?
+            let request: NotificationRequestSpec?
+            switch notification {
+            case .broken(let condition):
+                let heldCondition = sourceStates.values
+                    .compactMap(\.heldCondition)
+                    .filter { $0.condition == condition }
+                    .max { $0.reportOrder < $1.reportOrder }
+                shouldShow = heldCondition.map { _ in true } ?? false
+                request = heldCondition?.request
+            case .quiet:
+                shouldShow = quietHolds
+                if quietHolds == true {
+                    request = notificationSpec(
+                        identifier: Self.quietIdentifier,
+                        title: "No new Anarlog sessions",
+                        body: "Anarlog lists no session created in the last 14 days.")
+                } else {
+                    request = nil
+                }
+            }
+            notificationStates[notification]?.shouldShow = shouldShow
+            notificationStates[notification]?.desiredRequest = request
+        }
     }
 
     private func isQuiet(_ newestSessionCreatedAt: Date?) -> Bool {
@@ -172,57 +235,48 @@ public actor AnarlogHealthNotifier: AnarlogHealthSink {
             sound: true)
     }
 
-    private func desiredState(for identifier: String) -> Bool? {
-        if identifier == Self.quietIdentifier {
-            return quietHolds
-        }
-        guard let condition = AnarlogBrokenCondition.allCases.first(where: {
-            $0.notificationIdentifier == identifier
-        }) else {
-            return false
-        }
-        return sourceStates.values.contains { $0.heldCondition == condition }
-    }
-
-    private func spec(for identifier: String) -> NotificationRequestSpec {
-        if identifier == Self.quietIdentifier {
-            return notificationSpec(
-                identifier: Self.quietIdentifier,
-                title: "No new Anarlog sessions",
-                body: "Anarlog lists no session created in the last 14 days.")
-        }
-        return latestSpecs[identifier]!
-    }
-
     private func reconcilePass() async {
-        let identifiersToRemove = Self.orderedIdentifiers.filter { identifier in
-            desiredState(for: identifier) == false && presence[identifier] != .absent
+        let notificationsToRemove = AnarlogHealthNotification.all.filter { notification in
+            guard let state = notificationStates[notification] else { return false }
+            return state.shouldShow == false && state.presence != .absent
         }
-        if !identifiersToRemove.isEmpty {
-            for identifier in identifiersToRemove {
-                presence[identifier] = .absent
+        if !notificationsToRemove.isEmpty {
+            for notification in notificationsToRemove {
+                notificationStates[notification]?.presence = .absent
             }
-            await presenter.removeDelivered(withIdentifiers: identifiersToRemove)
-            await presenter.removePending(withIdentifiers: identifiersToRemove)
+            let identifiers = notificationsToRemove.map(\.identifier)
+            await presenter.removeDelivered(withIdentifiers: identifiers)
+            await presenter.removePending(withIdentifiers: identifiers)
         }
 
-        let identifiersToAdd = Self.orderedIdentifiers.filter { identifier in
-            desiredState(for: identifier) == true && presence[identifier] != .shown
+        let notificationsToAdd = AnarlogHealthNotification.all.filter { notification in
+            guard let state = notificationStates[notification] else { return false }
+            return state.shouldShow == true && state.presence != .shown
         }
-        for identifier in identifiersToAdd {
-            guard await presenter.requestAuthorization() else {
-                logger.warning("anarlog-health: notification authorization denied for \(identifier)")
-                presence[identifier] = .absent
+        for notification in notificationsToAdd {
+            let authorized = await presenter.requestAuthorization()
+            guard let currentState = notificationStates[notification],
+                  currentState.shouldShow == true,
+                  let request = currentState.desiredRequest else {
+                continue
+            }
+            guard authorized else {
+                logger.warning("anarlog-health: notification authorization denied for \(notification.identifier)")
+                notificationStates[notification]?.presence = .absent
                 continue
             }
 
-            let request = spec(for: identifier)
             do {
                 try await presenter.add(request)
-                presence[identifier] = .shown
+                notificationStates[notification]?.presence = .shown
             } catch {
-                logger.warning("anarlog-health: notification delivery failed for \(identifier)")
-                presence[identifier] = .absent
+                logger.warning(
+                    "anarlog-health: presenter.add threw; notification remains absent for retry",
+                    metadata: [
+                        "identifier": .public(notification.identifier),
+                        "error": .private(String(describing: error)),
+                    ])
+                notificationStates[notification]?.presence = .absent
             }
         }
     }

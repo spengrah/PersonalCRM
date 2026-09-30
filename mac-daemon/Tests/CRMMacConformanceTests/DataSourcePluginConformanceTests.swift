@@ -508,12 +508,3 @@ private struct NoopContactStoreReader: ContactStoreReader {
 private struct NoopAnarlogConfigSource: AnarlogConfigSource {
     func load() throws -> AnarlogConfig? { nil }
 }
-
-private struct NoopAnarlogFilesystem: AnarlogFilesystem {
-    func exists(_ path: String) -> Bool { false }
-    func isDirectory(_ path: String) -> Bool { false }
-    func isReadableDirectory(_ path: String) -> Bool { false }
-    func listDirectory(_ dir: String) throws -> [String] { [] }
-    func readFile(_ path: String) throws -> Data { Data() }
-    func mtime(_ path: String) -> Date? { nil }
-}

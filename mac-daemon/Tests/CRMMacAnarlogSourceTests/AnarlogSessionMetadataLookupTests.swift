@@ -5,6 +5,8 @@ import CRMMacCore
 import CRMMacOrphanNotifications
 @testable import CRMMacAnarlogSource
 
+private struct SyntheticConfigLoadError: Error {}
+
 final class AnarlogSessionMetadataLookupTests: XCTestCase {
 
     private let sessionUUID = "deadbeef-1111-2222-3333-444455556666"
@@ -17,7 +19,7 @@ final class AnarlogSessionMetadataLookupTests: XCTestCase {
 
     private final class FailingConfigSource: AnarlogConfigSource, @unchecked Sendable {
         func load() throws -> AnarlogConfig? {
-            throw AnarlogFilesystemError.ioError("synthetic")
+            throw SyntheticConfigLoadError()
         }
     }
 
@@ -39,8 +41,7 @@ final class AnarlogSessionMetadataLookupTests: XCTestCase {
     }
 
     private func makeConfig(enabled: Bool = true) -> AnarlogConfig {
-        AnarlogConfig(rootPath: "/tmp/anarlog-test-root",
-                      humansEnabled: false,
+        AnarlogConfig(humansEnabled: false,
                       sessionsEnabled: enabled)
     }
 
@@ -221,41 +222,25 @@ final class AnarlogSessionMetadataLookupTests: XCTestCase {
     }
 }
 
-final class AnarlogPathResolverTests: XCTestCase {
-    func testHumansAndSessionsDirsAppend() {
-        let humansURL = AnarlogPathResolver.humansDir(rootPath: "/tmp/notes")
-        XCTAssertTrue(humansURL.path.hasSuffix("/tmp/notes/humans"))
-        let sessionsURL = AnarlogPathResolver.sessionsDir(rootPath: "/tmp/notes")
-        XCTAssertTrue(sessionsURL.path.hasSuffix("/tmp/notes/sessions"))
-    }
-
-    func testTildeExpansion() {
-        let url = AnarlogPathResolver.expand("~/foo")
-        XCTAssertFalse(url.path.hasPrefix("~"))
-        XCTAssertTrue(url.path.contains("/foo"))
-    }
-
+final class AnarlogUUIDValidatorTests: XCTestCase {
     func testUUIDValidatorAcceptsLowercaseCanonical() {
         XCTAssertEqual(
-            AnarlogUUIDValidator.canonicalize("0a18829e-12b6-40f6-93f8-6307973c926b"),
-            "0a18829e-12b6-40f6-93f8-6307973c926b")
+            AnarlogUUIDValidator.canonicalize("0aaaaaaa-0000-4000-8000-00000000000b"),
+            "0aaaaaaa-0000-4000-8000-00000000000b")
     }
 
     func testUUIDValidatorRejectsUppercase() {
-        // The parent spec is explicit: case-sensitive lowercase. An
-        // uppercase variant might indicate a case-insensitive
-        // filesystem renamed a file behind the operator's back, so
-        // we don't want to accept and risk cursor key collisions.
+        // Mixed-case UUIDs are rejected to keep cursor keys canonical.
         XCTAssertNil(
-            AnarlogUUIDValidator.canonicalize("0A18829E-12B6-40F6-93F8-6307973C926B"))
+            AnarlogUUIDValidator.canonicalize("0AAAAAAA-0000-4000-8000-00000000000B"))
         XCTAssertNil(
-            AnarlogUUIDValidator.canonicalize("0a18829e-12b6-40F6-93f8-6307973c926b"),
+            AnarlogUUIDValidator.canonicalize("0aaaaaaa-0000-4000-8000-00000000000B"),
             "mixed-case must also be rejected")
     }
 
     func testUUIDValidatorRejectsMalformed() {
         XCTAssertNil(AnarlogUUIDValidator.canonicalize(""))
         XCTAssertNil(AnarlogUUIDValidator.canonicalize("not-a-uuid"))
-        XCTAssertNil(AnarlogUUIDValidator.canonicalize("0a18829e-12b6-40f6-93f8-6307973c926"))
+        XCTAssertNil(AnarlogUUIDValidator.canonicalize("0aaaaaaa-0000-4000-8000-00000000000"))
     }
 }

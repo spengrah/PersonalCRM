@@ -1,13 +1,7 @@
-// CRMMacAnarlogSource is the namespace for the anarlog reader source
-// plugins (anarlog_humans + anarlog_sessions) and their supporting
-// types. Both plugins live in this one target because they share a
-// root directory + helper code and have no framework-specific deps
-// (pure Foundation). Failure isolation is preserved by giving each
-// plugin its own actor instance.
-//
-// FSEvents (CoreServices) is used only by the sessions plugin's
-// watcher; that lives in CRMMacSystem to keep CoreServices imports
-// out of this target.
+// CRMMacAnarlogSource is the namespace for the Anarlog source plugins
+// and their supporting types. Both plugins read Anarlog only through
+// the CLI and share its client, decoder, eligibility rules, and
+// participant filter. Separate actors preserve failure isolation.
 import Foundation
 
 public enum CRMMacAnarlogSource {
@@ -19,13 +13,16 @@ public enum CRMMacAnarlogSource {
     /// meeting_note.deleted envelope for source=anarlog_sessions.
     public static let meetingNotePayloadVersion: Int = 1
 
-    /// Default cadence for the people plugin: 30 min (arc I9).
+    /// Default cadence for the people plugin: 30 minutes, so a change
+    /// reaches the CRM within about an hour.
     public static let humansTickInterval: TimeInterval = 30 * 60
 
-    /// Default cadence for the sessions plugin per arc invariant I9.
+    /// Default cadence for the sessions plugin: 30 minutes, so settled
+    /// sessions reach the CRM within about an hour.
     public static let sessionsSafetyTickInterval: TimeInterval = 30 * 60
 
-    /// Production CLI client factory for the sessions read path.
+    /// Default CLI client factory for both source plugins and the
+    /// session metadata lookup.
     public static let makeCLIClient: @Sendable (_ cliPath: String?) -> any AnarlogCLIClient = {
         AnarlogCLIProcessClient(cliPath: $0)
     }
@@ -35,9 +32,8 @@ public enum CRMMacAnarlogSource {
     /// per the P0 invariant — the daemon never emits a partial payload.
     public static let maxPayloadBytes: Int = 60 * 1024
 
-    /// Self-human UUID sentinel — the user's own human file is named
-    /// `00000000-0000-0000-0000-000000000000.md` per spec line 188 and
-    /// is skipped at the reader level.
+    /// Legacy Anarlog sessions list the operator under the all-zero
+    /// person ID, which the participant filter always excludes.
     public static let selfHumanUUID: String = "00000000-0000-0000-0000-000000000000"
 
 }

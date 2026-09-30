@@ -1,7 +1,5 @@
-// AnarlogTimestampParser handles the timestamp-format drift the
-// parent spec calls out (`tolerate timestamp format drift`, spec line
-// 187). Anarlog's `_meta.json.created_at` and human-frontmatter
-// `created_at` have been observed in multiple shapes across versions:
+// AnarlogTimestampParser reads the `created_at` values in the Anarlog
+// CLI's JSON output. It handles these shapes:
 //
 //   - `"2026-03-16T20:34:49.936Z"`           (milliseconds + Z)
 //   - `"2026-03-16T20:34:49Z"`                (seconds + Z)
@@ -50,7 +48,7 @@ public enum AnarlogTimestampParser {
     }
 
     /// Trim fractional seconds longer than 3 digits (`.531658` → `.531`).
-    /// Anarlog emits microseconds for humans / `_meta.json`; we collapse
+    /// Anarlog emits microseconds in some versions; we collapse
     /// to milliseconds so a single ISO8601DateFormatter pass handles
     /// every input. No-op when fractional seconds are absent or already
     /// ≤3 digits.

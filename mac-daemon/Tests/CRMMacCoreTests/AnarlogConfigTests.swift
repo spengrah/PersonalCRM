@@ -46,7 +46,6 @@ final class AnarlogConfigTests: XCTestCase {
     func testSaveAndReload() throws {
         try seedBackwardCompatibleConfig()
         let cfg = AnarlogConfig(
-            rootPath: "/Users/test/Documents/notes/meetings",
             humansEnabled: true,
             sessionsEnabled: false)
         try store.saveAnarlogConfig(cfg)
@@ -58,7 +57,6 @@ final class AnarlogConfigTests: XCTestCase {
         try seedBackwardCompatibleConfig()
         let originalDaemon = try store.load()
         let cfg = AnarlogConfig(
-            rootPath: "/tmp/notes",
             humansEnabled: true,
             sessionsEnabled: true)
         try store.saveAnarlogConfig(cfg)
@@ -75,7 +73,6 @@ final class AnarlogConfigTests: XCTestCase {
         let icloud = ICloudContactsConfig(containers: ["container-1"])
         try store.saveICloudContactsConfig(icloud)
         let anarlog = AnarlogConfig(
-            rootPath: "/tmp/notes",
             humansEnabled: true,
             sessionsEnabled: false)
         try store.saveAnarlogConfig(anarlog)
@@ -95,7 +92,6 @@ final class AnarlogConfigTests: XCTestCase {
           "pi_url": "https://pi.example.invalid",
           "sources": {
             "anarlog": {
-              "root_path": "/tmp/notes/meetings",
               "humans_enabled": true,
               "sessions_enabled": false
             }
@@ -104,13 +100,12 @@ final class AnarlogConfigTests: XCTestCase {
         """
         try Data(body.utf8).write(to: fileURL)
         let loaded = try store.loadAnarlogConfig()
-        XCTAssertEqual(loaded?.rootPath, "/tmp/notes/meetings")
         XCTAssertEqual(loaded?.humansEnabled, true)
         XCTAssertEqual(loaded?.sessionsEnabled, false)
     }
 
     func testDefaultEnableFlagsAreFalse() {
-        let cfg = AnarlogConfig(rootPath: "/tmp/notes")
+        let cfg = AnarlogConfig()
         XCTAssertFalse(cfg.humansEnabled)
         XCTAssertFalse(cfg.sessionsEnabled)
     }
@@ -140,7 +135,6 @@ final class AnarlogConfigTests: XCTestCase {
 
         let loaded = try XCTUnwrap(store.loadAnarlogConfig())
 
-        XCTAssertEqual(loaded.rootPath, "/tmp/notes")
         XCTAssertTrue(loaded.humansEnabled)
         XCTAssertFalse(loaded.sessionsEnabled)
         XCTAssertNil(loaded.operatorPersonID)
@@ -148,10 +142,45 @@ final class AnarlogConfigTests: XCTestCase {
         XCTAssertEqual(loaded.deletionCap, 5)
     }
 
+    func testLegacyRootPathIsIgnoredAndDroppedOnSave() throws {
+        try seedBackwardCompatibleConfig()
+        let body = """
+        {
+          "host_id": "00000000-0000-0000-0000-000000000001",
+          "hostname": "test-host",
+          "installed_at": "2026-01-01T00:00:00Z",
+          "pi_url": "https://pi.example.invalid",
+          "sources": {
+            "anarlog": {
+              "root_path": "/tmp/notes",
+              "humans_enabled": true,
+              "sessions_enabled": true,
+              "operator_person_id": "aaaaaaaa-0000-4000-8000-000000000001"
+            }
+          }
+        }
+        """
+        try Data(body.utf8).write(to: fileURL)
+
+        let loaded = try XCTUnwrap(store.loadAnarlogConfig())
+        XCTAssertTrue(loaded.humansEnabled)
+        XCTAssertTrue(loaded.sessionsEnabled)
+        XCTAssertEqual(loaded.operatorPersonID, "aaaaaaaa-0000-4000-8000-000000000001")
+
+        try store.saveAnarlogConfig(loaded)
+
+        let saved = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fileURL)) as? [String: Any])
+        let sources = try XCTUnwrap(saved["sources"] as? [String: Any])
+        let anarlog = try XCTUnwrap(sources["anarlog"] as? [String: Any])
+        XCTAssertNil(anarlog["root_path"])
+        XCTAssertEqual(anarlog["humans_enabled"] as? Bool, true)
+        XCTAssertEqual(anarlog["sessions_enabled"] as? Bool, true)
+    }
+
     func testRoundTripPreservesAllAnarlogFields() throws {
         try seedBackwardCompatibleConfig()
         var cfg = AnarlogConfig(
-            rootPath: "/tmp/notes",
             humansEnabled: true,
             sessionsEnabled: false)
         try cfg.setOperatorPersonID("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
@@ -165,7 +194,7 @@ final class AnarlogConfigTests: XCTestCase {
     }
 
     func testSettersAcceptValidValues() throws {
-        var cfg = AnarlogConfig(rootPath: "/tmp/notes")
+        var cfg = AnarlogConfig()
 
         try cfg.setOperatorPersonID("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
         try cfg.setCLIPath("/opt/anarlog/bin/anarlog")
@@ -177,7 +206,7 @@ final class AnarlogConfigTests: XCTestCase {
     }
 
     func testSettersRejectInvalidValuesWithoutChangingProperties() throws {
-        var cfg = AnarlogConfig(rootPath: "/tmp/notes")
+        var cfg = AnarlogConfig()
         try cfg.setOperatorPersonID("11111111-2222-3333-4444-555555555555")
         try cfg.setCLIPath("/opt/anarlog/bin/anarlog")
         try cfg.setDeletionCap(7)
@@ -203,7 +232,6 @@ final class AnarlogConfigTests: XCTestCase {
     func testDecodeDoesNotValidatePersistedValues() throws {
         let body = """
         {
-          "root_path": "/tmp/notes",
           "humans_enabled": false,
           "sessions_enabled": false,
           "operator_person_id": "not-a-uuid",
@@ -222,7 +250,6 @@ final class AnarlogConfigTests: XCTestCase {
     func testExplicitDeletionCapDecodes() throws {
         let body = """
         {
-          "root_path": "/tmp/notes",
           "humans_enabled": false,
           "sessions_enabled": false,
           "deletion_cap": 12

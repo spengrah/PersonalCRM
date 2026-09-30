@@ -2,21 +2,6 @@ import CRMMacCore
 import Darwin
 import Foundation
 
-public enum AnarlogCLIExecutableResolver {
-
-    public static func defaultCandidatePaths(homeDirectory: URL) -> [String] {
-        [homeDirectory.appendingPathComponent(".local/bin/anarlog").path]
-    }
-
-    public static func resolve(cliPath: String?, homeDirectory: URL) -> String? {
-        if let cliPath {
-            return FileManager.default.isExecutableFile(atPath: cliPath) ? cliPath : nil
-        }
-        return defaultCandidatePaths(homeDirectory: homeDirectory)
-            .first(where: FileManager.default.isExecutableFile(atPath:))
-    }
-}
-
 public struct AnarlogCLIProcessClient: AnarlogCLIClient {
     public static let defaultTimeout: TimeInterval = 30
     public static let pageSize = 200

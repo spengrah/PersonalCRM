@@ -25,8 +25,8 @@ final class AnarlogTimestampParserTests: XCTestCase {
     }
 
     func testMicrosecondsWithOffset() throws {
-        // Anarlog emits microsecond precision for `_meta.json` /
-        // human-frontmatter `created_at`. We truncate to milliseconds
+        // Anarlog emits microsecond precision for `created_at` in some
+        // versions. We truncate to milliseconds
         // since we never compare timestamps at sub-millisecond
         // resolution.
         let raw = "2026-03-04T07:40:49.531658+00:00"

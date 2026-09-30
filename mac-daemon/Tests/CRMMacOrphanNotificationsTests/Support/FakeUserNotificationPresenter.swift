@@ -34,6 +34,9 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
     private var addGate: CheckedContinuation<Void, Never>?
     private var addGateArmed: Bool = false
     private var addsAwaitingGate: Int = 0
+    private var authorizationGate: CheckedContinuation<Void, Never>?
+    private var authorizationGateArmed: Bool = false
+    private var authorizationsAwaitingGate: Int = 0
 
     public init(authorizationResult: Bool = true, addError: Error? = nil) {
         self.authorizationResult = authorizationResult
@@ -46,6 +49,22 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
 
     public func setAddError(_ value: Error?) {
         self.addError = value
+    }
+
+    public func armAuthorizationGate() {
+        authorizationGateArmed = true
+    }
+
+    public func releaseAuthorizationGate() {
+        authorizationGateArmed = false
+        if let cont = authorizationGate {
+            authorizationGate = nil
+            cont.resume()
+        }
+    }
+
+    public func authorizationsCurrentlyAwaitingGate() -> Int {
+        authorizationsAwaitingGate
     }
 
     /// Seed the identifiers `getDeliveredIdentifiers()` will return —
@@ -99,6 +118,14 @@ public actor FakeUserNotificationPresenter: UserNotificationPresenter {
 
     public func requestAuthorization() async -> Bool {
         requestAuthorizationCalls += 1
+        if authorizationGateArmed && authorizationGate == nil {
+            authorizationGateArmed = false
+            authorizationsAwaitingGate += 1
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                authorizationGate = cont
+            }
+            authorizationsAwaitingGate -= 1
+        }
         return authorizationResult
     }
 

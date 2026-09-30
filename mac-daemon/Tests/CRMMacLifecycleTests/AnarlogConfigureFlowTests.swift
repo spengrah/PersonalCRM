@@ -13,7 +13,6 @@ final class AnarlogConfigureFlowTests: XCTestCase {
         try AnarlogConfigureFlow.apply(request, to: &config)
 
         var expected = AnarlogConfig(
-            rootPath: "/tmp/notes",
             humansEnabled: true,
             sessionsEnabled: false)
         try expected.setOperatorPersonID("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
@@ -142,7 +141,6 @@ final class AnarlogConfigureFlowTests: XCTestCase {
 
     func testSummaryLinesForConfiguredAndDefaultValues() throws {
         var configured = AnarlogConfig(
-            rootPath: "/tmp/notes",
             humansEnabled: true,
             sessionsEnabled: false)
         try configured.setOperatorPersonID("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
@@ -154,7 +152,7 @@ final class AnarlogConfigureFlowTests: XCTestCase {
             "  deletion_cap:       7",
         ])
 
-        let defaults = AnarlogConfig(rootPath: "/tmp/notes")
+        let defaults = AnarlogConfig()
         XCTAssertEqual(AnarlogConfigureFlow.summaryLines(defaults), [
             "  operator_person_id: (unset)",
             "  cli_path:           (default search)",
@@ -164,7 +162,6 @@ final class AnarlogConfigureFlowTests: XCTestCase {
 
     private func configuredConfig() throws -> AnarlogConfig {
         var config = AnarlogConfig(
-            rootPath: "/tmp/notes",
             humansEnabled: true,
             sessionsEnabled: false)
         try config.setOperatorPersonID("11111111-2222-3333-4444-555555555555")

@@ -9,7 +9,7 @@ import CRMMacCore
 final class AnarlogHumansPayloadShapingTests: XCTestCase {
 
     private let hostID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
-    private let personID = "0a18829e-12b6-40f6-93f8-6307973c926b"
+    private let personID = "0aaaaaaa-0000-4000-8000-00000000000b"
 
     private func makeParticipant(
         displayName: String? = "Contact A",

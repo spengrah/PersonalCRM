@@ -3,6 +3,23 @@ import CRMMacCore
 import CRMMacPiClient
 @testable import CRMMacOrphanNotifications
 
+fileprivate final class RecordingLogger: LoggerProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedEntries: [(LogLevel, String, [String: LogValue])] = []
+
+    func log(_ level: LogLevel, _ message: String, metadata: [String: LogValue]) {
+        lock.lock()
+        defer { lock.unlock() }
+        storedEntries.append((level, message, metadata))
+    }
+
+    var entries: [(LogLevel, String, [String: LogValue])] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedEntries
+    }
+}
+
 final class AnarlogHealthNotifierTests: XCTestCase {
     private static let now = Date(timeIntervalSince1970: 1_780_000_000)
     private static let brokenIdentifiers = [
@@ -643,5 +660,108 @@ final class AnarlogHealthNotifierTests: XCTestCase {
         let runtimeRemovals = await removalCalls(runtimeRig.presenter)
         XCTAssertEqual(runtimeRemovals.last, [Self.brokenIdentifiers[8]])
         await assertRemovalCallsEqual(runtimeRig.presenter)
+    }
+
+    func testFailedAddLogsThrownError() async {
+        let error = NSError(domain: "synthetic", code: 7)
+        let presenter = FakeUserNotificationPresenter(addError: error)
+        let logger = RecordingLogger()
+        let notifier = AnarlogHealthNotifier(
+            presenter: presenter,
+            logger: logger,
+            clock: { Self.now })
+
+        await record(.failed(.binaryNotFound), using: notifier)
+
+        let entries = logger.entries
+        XCTAssertEqual(entries.count, 1)
+        guard let entry = entries.first else { return }
+        if case .warning = entry.0 {
+        } else {
+            XCTFail("expected a warning log")
+        }
+        XCTAssertEqual(
+            entry.1,
+            "anarlog-health: presenter.add threw; notification remains absent for retry")
+        XCTAssertEqual(entry.2, [
+            "identifier": .public("anarlog_source:broken:binary_not_found"),
+            "error": .private(String(describing: error)),
+        ])
+    }
+
+    func testRetryUsesDetailOfASourceStillHoldingTheCondition() async {
+        let presenter = FakeUserNotificationPresenter(authorizationResult: false)
+        let notifier = AnarlogHealthNotifier(
+            presenter: presenter,
+            logger: NoopLogger(),
+            clock: { Self.now })
+
+        await record(.failed(.unsupportedSchemaVersion("2")), using: notifier)
+        await record(.failed(.unsupportedSchemaVersion("3")), from: .anarlogHumans, using: notifier)
+        await presenter.setAuthorizationResult(true)
+        await record(.clean(newestSessionCreatedAt: recent), from: .anarlogHumans, using: notifier)
+
+        await assertSingleAdd(
+            presenter,
+            identifier: Self.brokenIdentifiers[1],
+            title: Self.brokenTitle,
+            body: "The anarlog CLI reports contract version \"2\"; crm-mac supports \"1\".")
+    }
+
+    func testConditionClearedDuringAuthorizationIsNotAdded() async throws {
+        let rig = makeRig()
+        await rig.presenter.armAuthorizationGate()
+        let firstReport = Task {
+            await rig.notifier.record(source: .anarlogSessions, outcome: .failed(.binaryNotFound))
+        }
+
+        var reads = 0
+        while await rig.presenter.authorizationsCurrentlyAwaitingGate() == 0 && reads < 200 {
+            try await Task.sleep(nanoseconds: 10_000_000)
+            reads += 1
+        }
+        let waiting = await rig.presenter.authorizationsCurrentlyAwaitingGate()
+        XCTAssertEqual(waiting, 1)
+
+        await record(.clean(newestSessionCreatedAt: recent), using: rig.notifier)
+        await rig.presenter.releaseAuthorizationGate()
+        await firstReport.value
+
+        let calls = await addCalls(rig.presenter)
+        XCTAssertTrue(calls.isEmpty)
+        let authorizationCount = await rig.presenter.recordedRequestAuthorizationCount()
+        XCTAssertEqual(authorizationCount, 1)
+        let removals = await removalCalls(rig.presenter)
+        XCTAssertEqual(removals.last, [Self.brokenIdentifiers[0], AnarlogHealthNotifier.quietIdentifier])
+        await assertRemovalCallsEqual(rig.presenter)
+    }
+
+    func testHealthNotificationTableCoversEveryIdentifier() {
+        XCTAssertEqual(
+            AnarlogHealthNotification.all.map(\.identifier),
+            Self.brokenIdentifiers + [AnarlogHealthNotifier.quietIdentifier])
+        XCTAssertEqual(Set(AnarlogHealthNotification.all).count, 10)
+    }
+
+    func testRetryUsesLatestDetailAcrossSources() async {
+        let presenter = FakeUserNotificationPresenter(addError: NSError(domain: "synthetic", code: 1))
+        let notifier = AnarlogHealthNotifier(
+            presenter: presenter,
+            logger: NoopLogger(),
+            clock: { Self.now })
+
+        await record(.failed(.unsupportedSchemaVersion("2")), using: notifier)
+        await presenter.setAddError(nil)
+        await record(.failed(.unsupportedSchemaVersion("3")), from: .anarlogHumans, using: notifier)
+
+        let calls = await addCalls(presenter)
+        XCTAssertEqual(calls.count, 2)
+        XCTAssertEqual(calls.map(\.identifier), [
+            Self.brokenIdentifiers[1],
+            Self.brokenIdentifiers[1],
+        ])
+        XCTAssertEqual(
+            calls.last?.body,
+            "The anarlog CLI reports contract version \"3\"; crm-mac supports \"1\".")
     }
 }

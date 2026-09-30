@@ -146,14 +146,7 @@ let package = Package(
             ]),
         .target(
             name: "CRMMacSystem",
-            dependencies: ["CRMMacCore", "CRMMacLifecycle"],
-            // FSEvents lives in CoreServices. Only the anarlog
-            // sessions watcher uses it; isolating the framework link
-            // here keeps the rest of the daemon Foundation-only.
-            linkerSettings: [
-                .linkedFramework("CoreServices",
-                                 .when(platforms: [.macOS])),
-            ]),
+            dependencies: ["CRMMacCore", "CRMMacLifecycle"]),
         .testTarget(name: "CRMMacCoreTests",
                     dependencies: ["CRMMacCore"]),
         .testTarget(name: "CRMMacPiClientTests",
