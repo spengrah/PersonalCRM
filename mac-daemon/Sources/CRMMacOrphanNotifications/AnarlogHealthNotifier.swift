@@ -79,10 +79,19 @@ public actor AnarlogHealthNotifier: AnarlogHealthSink {
         var heldCondition: HeldCondition?
     }
 
+    /// Whether a notification should be on screen. `.undetermined` until a
+    /// report settles it (the quiet notification before any tick), so the
+    /// reconcile pass neither adds nor removes it. A notification that should
+    /// show always carries the request to show.
+    private enum Desired {
+        case undetermined
+        case hidden
+        case shown(NotificationRequestSpec)
+    }
+
     private struct NotificationState {
         var presence: Presence = .unknown
-        var shouldShow: Bool?
-        var desiredRequest: NotificationRequestSpec?
+        var desired: Desired = .undetermined
     }
 
     private let presenter: UserNotificationPresenter
@@ -165,29 +174,28 @@ public actor AnarlogHealthNotifier: AnarlogHealthSink {
 
     private func refreshDesiredRequests() {
         for notification in AnarlogHealthNotification.all {
-            let shouldShow: Bool?
-            let request: NotificationRequestSpec?
+            let desired: Desired
             switch notification {
             case .broken(let condition):
                 let heldCondition = sourceStates.values
                     .compactMap(\.heldCondition)
                     .filter { $0.condition == condition }
                     .max { $0.reportOrder < $1.reportOrder }
-                shouldShow = heldCondition.map { _ in true } ?? false
-                request = heldCondition?.request
+                desired = heldCondition.map { .shown($0.request) } ?? .hidden
             case .quiet:
-                shouldShow = quietHolds
-                if quietHolds == true {
-                    request = notificationSpec(
+                switch quietHolds {
+                case nil:
+                    desired = .undetermined
+                case false?:
+                    desired = .hidden
+                case true?:
+                    desired = .shown(notificationSpec(
                         identifier: Self.quietIdentifier,
                         title: "No new Anarlog sessions",
-                        body: "Anarlog lists no session created in the last 14 days.")
-                } else {
-                    request = nil
+                        body: "Anarlog lists no session created in the last 14 days."))
                 }
             }
-            notificationStates[notification]?.shouldShow = shouldShow
-            notificationStates[notification]?.desiredRequest = request
+            notificationStates[notification]?.desired = desired
         }
     }
 
@@ -237,8 +245,9 @@ public actor AnarlogHealthNotifier: AnarlogHealthSink {
 
     private func reconcilePass() async {
         let notificationsToRemove = AnarlogHealthNotification.all.filter { notification in
-            guard let state = notificationStates[notification] else { return false }
-            return state.shouldShow == false && state.presence != .absent
+            guard let state = notificationStates[notification],
+                  case .hidden = state.desired else { return false }
+            return state.presence != .absent
         }
         if !notificationsToRemove.isEmpty {
             for notification in notificationsToRemove {
@@ -250,14 +259,13 @@ public actor AnarlogHealthNotifier: AnarlogHealthSink {
         }
 
         let notificationsToAdd = AnarlogHealthNotification.all.filter { notification in
-            guard let state = notificationStates[notification] else { return false }
-            return state.shouldShow == true && state.presence != .shown
+            guard let state = notificationStates[notification],
+                  case .shown = state.desired else { return false }
+            return state.presence != .shown
         }
         for notification in notificationsToAdd {
             let authorized = await presenter.requestAuthorization()
-            guard let currentState = notificationStates[notification],
-                  currentState.shouldShow == true,
-                  let request = currentState.desiredRequest else {
+            guard case .shown(let request)? = notificationStates[notification]?.desired else {
                 continue
             }
             guard authorized else {
