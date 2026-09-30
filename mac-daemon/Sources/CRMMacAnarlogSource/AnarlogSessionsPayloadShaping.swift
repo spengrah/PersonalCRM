@@ -51,7 +51,7 @@ public enum AnarlogSessionsPayloadShaping {
     /// Returns the pre-backfill-floor check used by the sessions
     /// plugin to decide whether to emit a sentinel cursor entry.
     public static func isPreBackfillFloor(_ meta: AnarlogSessionMeta) -> Bool {
-        meta.createdAt < CRMMacAnarlogSource.sessionsBackfillFloor
+        meta.createdAt < AnarlogEligibility.backfillFloor
     }
 
     private static func emptyToNil(_ s: String?) -> String? {

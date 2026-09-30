@@ -536,3 +536,118 @@ behaviors:
         text: while backfill is still in progress, a neutral placeholder is shown — the raw change-token cursor is never displayed and no count is substituted
     provenance: [settings/mac/cursor-cell.ts renderCursorCell/cursorCellState, useMacHostSourceCounts, MacHostHandler.GetSourceCounts]
     notes: 'The regression guard for issue #327: an iCloud change-token cursor is meaningless to the operator, so the cell shows a live count only when the count is trustworthy (backfill complete) and otherwise the neutral placeholder — never the raw change-token. The counts endpoint contract is MAC-018.'
+
+  # --- Anarlog CLI source (spec: .ai/spec/2026-09-29-anarlog-cli-source.md) ---
+
+  - id: MAC-047
+    title: Anarlog sessions are read through the Anarlog CLI
+    type: business-logic
+    status: proposed
+    surface: none
+    given: the Anarlog sessions source is enabled and the operator's Anarlog person ID is configured
+    when: a sessions tick runs
+    then:
+      - every live session is discovered from the CLI's full session listing
+      - each session created on or after the backfill floor is sent with its title, its creation time as the meeting time, its generated summary whether default or produced by a template, its memo, and its participants other than the operator
+      - summaries and memos are sent as the markdown the CLI returns
+      - a session younger than three hours is not sent
+      - a session at least three hours old, and any later change to it, reaches the CRM within the spec's latency target while the daemon runs
+      - a session created before the backfill floor is never sent
+    provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]
+
+  - id: MAC-048
+    title: A changed Anarlog session is re-sent
+    type: business-logic
+    status: proposed
+    surface: none
+    given: a session the daemon has already sent
+    when: its title, time, summary, memo, or participants change in Anarlog
+    then:
+      - the session is sent again on a later tick
+      - the change is detected from the CLI's record of the session, not from Anarlog's updated-at timestamp
+      - a session whose record is unchanged is not sent again
+    provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]
+
+  - id: MAC-049
+    title: An Anarlog session that disappears is deleted in the CRM
+    type: business-logic
+    status: proposed
+    surface: none
+    given: a session the daemon has sent
+    when: the session no longer appears in the CLI's full session listing
+    then:
+      - the daemon sends the session's deletion when the tick's deletions are within the configured deletion cap (default 5)
+      - a tick whose deletions exceed the cap sends no deletions and raises the broken-source notification naming the withheld count
+      - an empty listing never deletes more sessions than the cap allows
+      - the notification clears once a tick's deletions fall within the cap
+    provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]
+
+  - id: MAC-050
+    title: Anarlog people are derived from session participants
+    type: business-logic
+    status: proposed
+    surface: none
+    given: the Anarlog people source is enabled
+    when: a people tick reads the participants of every eligible session (on or after the backfill floor and at least three hours old)
+    then:
+      - each participant other than the operator and the legacy zero-ID sentinel is sent as an Anarlog identity with its person ID, display name, email, and job title
+      - a change to a person is sent even when none of their sessions changed
+      - a person who participates in no eligible session is not sent
+      - people sync whether or not the Anarlog sessions source is enabled
+    provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]
+
+  - id: MAC-051
+    title: The operator's Anarlog identity is configured, never inferred
+    type: business-logic
+    status: proposed
+    surface: none
+    given: the Anarlog sources are enabled
+    when: the operator's Anarlog person ID is not set in the daemon config
+    then:
+      - the Anarlog sources send nothing
+      - the daemon raises the Anarlog source-broken notification naming the missing setting
+    provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]
+
+  - id: MAC-052
+    title: A broken Anarlog CLI raises one sticky notification
+    type: ux
+    status: proposed
+    surface: none
+    given: the Anarlog sources are enabled
+    when: the CLI is missing, reports a contract version other than "1", omits a field the daemon uses, or fails at runtime
+    then:
+      - one macOS notification reports the Anarlog source as broken and stays until the condition clears
+      - a missing binary, a contract version other than "1", or a missing field notifies on the tick that observes it
+      - a runtime failure such as a non-zero exit, a missing database, or a timeout notifies only after two consecutive failed ticks
+      - a single failed tick followed by a clean one raises no notification
+      - additional fields the daemon does not use never raise the notification
+      - the notification is removed on the next clean tick
+    provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]
+
+  - id: MAC-053
+    title: A quiet Anarlog source raises one notification
+    type: ux
+    status: proposed
+    surface: none
+    given: the CLI answers successfully
+    when: no session in its listing was created within the last 14 days, including when the listing is empty
+    then:
+      - one macOS notification says no new Anarlog sessions have arrived
+      - the notification is removed once a session created within the last 14 days appears
+    provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]
+
+  - id: MAC-054
+    title: Anarlog data is read only through the Anarlog CLI
+    type: invariant
+    status: proposed
+    surface: none
+    statement: the daemon reads Anarlog sessions and people only through the Anarlog CLI's JSON output and never reads Anarlog's database or its legacy session and people file tree directly.
+    provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]
+
+  - id: MAC-055
+    title: The Anarlog people source never deletes a person
+    type: invariant
+    status: proposed
+    surface: none
+    statement: the Anarlog people source never sends a person deletion; an identity the CRM holds is kept when the person's last session is deleted, when they are removed from a session, or when they stop appearing in the CLI's output.
+    provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]
