@@ -14,19 +14,15 @@ public struct MeetingNoteRecordedPayload: Encodable, Equatable, Sendable {
     public let source: String
     /// Session UUID. Mirrors spec's `source_id` naming for this kind.
     public let sourceID: String
-    /// Optional title from `_meta.json.title`. Empty string when
-    /// absent; nil when the meta has no title field at all. The
-    /// distinction is preserved on the wire so the Pi-side handler
-    /// can normalize either way without losing data.
+    /// Optional CLI record `title`; nil omits the key on the wire.
     public let title: String?
-    /// Session creation timestamp from `_meta.json.created_at`.
+    /// CLI record `created_at` timestamp.
     public let meetingAt: Date
-    /// `_summary.md` body; nil when the file is absent.
+    /// Markdown from the first CLI record summary; nil when absent or empty.
     public let summary: String?
-    /// `_memo.md` body; nil when the file is absent.
+    /// Markdown from the CLI record note; nil when absent or empty.
     public let memo: String?
-    /// Participant `anarlog_human_id` UUIDs (the recording user has
-    /// been filtered out upstream).
+    /// CLI record participants excluding the operator and zero-ID sentinel.
     public let participantIDs: [String]
     /// Reserved for future tag extraction from frontmatter; emitted
     /// as `[]` in v1 so the wire shape is stable.

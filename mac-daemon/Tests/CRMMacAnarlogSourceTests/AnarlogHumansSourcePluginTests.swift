@@ -1,20 +1,7 @@
-// Tests for the AnarlogHumansSourcePlugin per-tick orchestrator.
-//
-// Focus: the carry-forward invariants:
-//   - file becomes malformed (frontmatter corrupted) but remains
-//     physically present → 0 delete events, cursor entry PRESERVED
-//     (the prior cursor entry survives to the new cursor)
-//   - file becomes oversized → 0 delete events, cursor entry
-//     PRESERVED
-//   - hash-mismatch → recovery flag set; subsequent tick enters
-//     recovery path
-//   - bootstrap route + Pi-known UUID present but malformed
-//     synthesizes cursor entry from /known-ids; no event emitted
-//
-// Mocks: an in-memory AnarlogFilesystem stub that returns canned
-// directory entries + file bytes; URL-pattern-routing transport that
-// scripts cursor + known-ids + ingest responses without network I/O;
-// a spy publisher that records published items.
+// Tests the CLI-driven people source with synthetic Anarlog CLI and Pi
+// responses. People come from eligible sessions, are sent as upserts,
+// and the source reports the completed CLI phase exactly once.
+import Foundation
 import XCTest
 import CRMMacCore
 import CRMMacPiClient
@@ -25,537 +12,690 @@ final class AnarlogHumansSourcePluginTests: XCTestCase {
     private let testAuth = PiAuth(
         hostID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!,
         apiKey: "k")
+    private let operatorID = "aaaaaaaa-0000-4000-8000-000000000001"
+    private let p1 = "bbbbbbbb-0000-4000-8000-000000000001"
+    private let p2 = "bbbbbbbb-0000-4000-8000-000000000002"
+    private let p3 = "bbbbbbbb-0000-4000-8000-000000000003"
+    private let p4 = "bbbbbbbb-0000-4000-8000-000000000004"
+    private let p5 = "bbbbbbbb-0000-4000-8000-000000000005"
+    private let p9 = "bbbbbbbb-0000-4000-8000-000000000009"
+    private let s1 = "cccccccc-0000-4000-8000-000000000001"
+    private let s2 = "cccccccc-0000-4000-8000-000000000002"
+    private let s3 = "cccccccc-0000-4000-8000-000000000003"
+    private let s4 = "cccccccc-0000-4000-8000-000000000004"
+    private let fixedNow = ISO8601DateFormatter().date(from: "2026-06-01T12:00:00Z")!
 
-    // MARK: - Filesystem stub
-
-    private final class StubFilesystem: AnarlogFilesystem, @unchecked Sendable {
-        struct Entry {
-            let bytes: Data
-            let mtime: Date?
-        }
-        var files: [String: Entry] = [:]
-        var directories: Set<String> = []
-        var listError: Error?
-        var permissionDeniedReads: Set<String> = []
-
-        init(rootHumansPath: String) {
-            directories.insert(rootHumansPath)
-            // Also mark the parent root as existing for the
-            // path_missing / humans_subdir_missing checks.
-            let root = (rootHumansPath as NSString).deletingLastPathComponent
-            directories.insert(root)
-        }
-
-        func exists(_ path: String) -> Bool {
-            files[path] != nil || directories.contains(path)
-        }
-
-        func isDirectory(_ path: String) -> Bool {
-            directories.contains(path)
-        }
-
-        func isReadableDirectory(_ path: String) -> Bool {
-            directories.contains(path)
-        }
-
-        func listDirectory(_ dir: String) throws -> [String] {
-            if let err = listError { throw err }
-            let prefix = dir.hasSuffix("/") ? dir : dir + "/"
-            var children: [String] = []
-            for path in files.keys where path.hasPrefix(prefix) {
-                let tail = String(path.dropFirst(prefix.count))
-                if !tail.contains("/") {
-                    children.append(tail)
-                }
-            }
-            return children
-        }
-
-        func readFile(_ path: String) throws -> Data {
-            if permissionDeniedReads.contains(path) {
-                throw AnarlogFilesystemError.permissionDenied(path)
-            }
-            guard let entry = files[path] else {
-                throw AnarlogFilesystemError.ioError("file not found: \(path)")
-            }
-            return entry.bytes
-        }
-
-        func mtime(_ path: String) -> Date? {
-            files[path]?.mtime
-        }
-
-        func put(path: String, bytes: Data, mtime: Date? = Date()) {
-            files[path] = Entry(bytes: bytes, mtime: mtime)
-        }
-    }
-
-    // MARK: - PiClient scripting
-
-    fileprivate struct PiScript {
+    private struct PiScript {
         var cursorGet: SourceCursorState = SourceCursorState(
             cursor: "", cursorEpoch: 0, backfillComplete: false)
-        var knownIDs: KnownIDsData = KnownIDsData(ids: [])
-        var ingestResult: IngestEventsData = IngestEventsData(
-            accepted: 0, duplicate: 0, rejected: 0, errors: [])
-        var ingestThrows: Error?
-        var cursorCommitThrows: Error?
+        var cursorGetStatus = 200
+        var knownIDs = KnownIDsData(ids: [])
+        var ingestResult = IngestEventsData(accepted: 0, duplicate: 0, rejected: 0, errors: [])
     }
 
     private final class MockTransport: @unchecked Sendable {
-        let script: PiScript
-        var committedCursor: String?
-        var ingestBodies: [Data] = []
-        var commitWasAttempted = false
+        struct Snapshot {
+            let requests: [String]
+            let ingestBodies: [Data]
+            let committedCursor: String?
+            let commitWasAttempted: Bool
+        }
+
+        private let lock = NSLock()
+        private let script: PiScript
+        private var requestLog: [String] = []
+        private var bodies: [Data] = []
+        private var committed: String?
+        private var didCommit = false
 
         init(_ script: PiScript) { self.script = script }
 
         func asFunc() -> TransportFunc {
-            return { [self] request in
+            { [self] request in
                 let path = request.url?.path ?? ""
                 let method = request.httpMethod ?? "GET"
+                recordRequest("\(method) \(path)")
+
                 if path.hasSuffix("/cursor") && method == "GET" {
-                    return (encodeCursor(script.cursorGet), Self.ok(request))
+                    if script.cursorGetStatus == 200 {
+                        return (encodeCursor(script.cursorGet), Self.response(request, status: 200))
+                    }
+                    let error = Data(#"{"success":false,"error":{"code":"BAD_REQUEST","message":"synthetic"}}"#.utf8)
+                    return (error, Self.response(request, status: script.cursorGetStatus))
                 }
                 if path.hasSuffix("/known-ids") && method == "GET" {
-                    return (encodeKnownIDs(script.knownIDs), Self.ok(request))
+                    return (encodeKnownIDs(script.knownIDs), Self.response(request, status: 200))
                 }
                 if path.hasSuffix("/ingest/events") && method == "POST" {
-                    if let body = request.httpBody { ingestBodies.append(body) }
-                    if let e = script.ingestThrows { throw e }
-                    return (encodeIngest(script.ingestResult), Self.ok(request))
+                    if let body = request.httpBody {
+                        recordBody(body)
+                    }
+                    return (encodeIngest(script.ingestResult), Self.response(request, status: 200))
                 }
                 if path.hasSuffix("/cursor") && method == "POST" {
-                    commitWasAttempted = true
-                    if let body = request.httpBody,
-                       let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
-                       let cur = parsed["cursor"] as? String {
-                        committedCursor = cur
-                    }
-                    if let e = script.cursorCommitThrows { throw e }
-                    let ok = Data(#"{"success":true,"data":{"ok":true}}"#.utf8)
-                    return (ok, Self.ok(request))
+                    recordCursorCommit(request.httpBody)
+                    return (Data(#"{"success":true,"data":{"ok":true}}"#.utf8), Self.response(request, status: 200))
                 }
                 throw URLError(.unsupportedURL)
             }
         }
 
-        private func encodeCursor(_ s: SourceCursorState) -> Data {
-            let dict: [String: Any] = [
+        func snapshot() -> Snapshot {
+            lock.lock()
+            defer { lock.unlock() }
+            return Snapshot(
+                requests: requestLog,
+                ingestBodies: bodies,
+                committedCursor: committed,
+                commitWasAttempted: didCommit)
+        }
+
+        private func recordRequest(_ value: String) {
+            lock.lock()
+            requestLog.append(value)
+            lock.unlock()
+        }
+
+        private func recordBody(_ value: Data) {
+            lock.lock()
+            bodies.append(value)
+            lock.unlock()
+        }
+
+        private func recordCursorCommit(_ body: Data?) {
+            lock.lock()
+            didCommit = true
+            if let body,
+               let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any] {
+                committed = parsed["cursor"] as? String
+            }
+            lock.unlock()
+        }
+
+        private func encodeCursor(_ cursor: SourceCursorState) -> Data {
+            let root: [String: Any] = [
                 "success": true,
                 "data": [
-                    "cursor": s.cursor,
-                    "cursor_epoch": s.cursorEpoch,
-                    "backfill_complete": s.backfillComplete,
+                    "cursor": cursor.cursor,
+                    "cursor_epoch": cursor.cursorEpoch,
+                    "backfill_complete": cursor.backfillComplete,
                 ],
             ]
-            return try! JSONSerialization.data(withJSONObject: dict)
+            return try! JSONSerialization.data(withJSONObject: root)
         }
 
-        private func encodeKnownIDs(_ k: KnownIDsData) -> Data {
-            let ids: [[String: Any]] = k.ids.map { e in
-                var d: [String: Any] = ["source_id": e.sourceID]
-                if let h = e.lastContentHash { d["last_content_hash"] = h }
-                else { d["last_content_hash"] = NSNull() }
-                return d
+        private func encodeKnownIDs(_ knownIDs: KnownIDsData) -> Data {
+            let ids: [[String: Any]] = knownIDs.ids.map { entry in
+                ["source_id": entry.sourceID, "last_content_hash": entry.lastContentHash as Any? ?? NSNull()]
             }
             return try! JSONSerialization.data(withJSONObject: [
-                "success": true,
-                "data": ["ids": ids],
+                "success": true, "data": ["ids": ids],
             ])
         }
 
-        private func encodeIngest(_ i: IngestEventsData) -> Data {
-            let errs: [[String: Any]] = i.errors.map { e in
-                ["index": e.index, "code": e.code, "message": e.message]
+        private func encodeIngest(_ ingest: IngestEventsData) -> Data {
+            let errors: [[String: Any]] = ingest.errors.map { error in
+                ["index": error.index, "code": error.code, "message": error.message]
             }
             return try! JSONSerialization.data(withJSONObject: [
-                "accepted": i.accepted,
-                "duplicate": i.duplicate,
-                "rejected": i.rejected,
-                "errors": errs,
+                "accepted": ingest.accepted,
+                "duplicate": ingest.duplicate,
+                "rejected": ingest.rejected,
+                "errors": errors,
             ])
         }
 
-        private static func ok(_ req: URLRequest) -> HTTPURLResponse {
-            HTTPURLResponse(url: req.url!, statusCode: 200,
-                            httpVersion: "HTTP/1.1",
-                            headerFields: ["Content-Type": "application/json"])!
+        private static func response(_ request: URLRequest, status: Int) -> HTTPURLResponse {
+            HTTPURLResponse(
+                url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
+                headerFields: ["Content-Type": "application/json"])!
         }
     }
 
-    // MARK: - config stub
+    private struct RecordedOutcome: Equatable {
+        let source: SourceID
+        let outcome: AnarlogTickOutcome
+    }
+
+    private actor SpyHealthSink: AnarlogHealthSink {
+        private var values: [RecordedOutcome] = []
+
+        func record(source: SourceID, outcome: AnarlogTickOutcome) async {
+            values.append(RecordedOutcome(source: source, outcome: outcome))
+        }
+
+        func snapshot() -> [RecordedOutcome] { values }
+    }
 
     private final class StubConfigSource: AnarlogConfigSource, @unchecked Sendable {
-        let result: Result<AnarlogConfig?, Error>
-        init(_ cfg: AnarlogConfig?) { self.result = .success(cfg) }
-        func load() throws -> AnarlogConfig? {
-            switch result {
-            case .success(let v): return v
-            case .failure(let e): throw e
-            }
-        }
+        let value: AnarlogConfig?
+        init(_ value: AnarlogConfig?) { self.value = value }
+        func load() throws -> AnarlogConfig? { value }
     }
 
-    // MARK: - rig
+    private final class PathRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded: [String?] = []
+
+        func append(_ path: String?) {
+            lock.lock()
+            recorded.append(path)
+            lock.unlock()
+        }
+
+        func values() -> [String?] {
+            lock.lock()
+            defer { lock.unlock() }
+            return recorded
+        }
+    }
 
     private struct Rig {
         let plugin: AnarlogHumansSourcePlugin
-        let filesystem: StubFilesystem
+        let fake: FakeAnarlogCLI
         let mutator: StateMutator
         let transport: MockTransport
-        let humansPath: String
+        let healthSink: SpyHealthSink
+    }
+
+    private var listing: [FakeAnarlogListEntry] {
+        [
+            FakeAnarlogListEntry(id: s4, createdAt: "2026-06-01T10:00:00.000Z"),
+            FakeAnarlogListEntry(id: s2, createdAt: "2026-05-20T09:00:00.000Z"),
+            FakeAnarlogListEntry(id: s1, createdAt: "2026-05-10T09:00:00.000Z"),
+            FakeAnarlogListEntry(id: s3, createdAt: "2025-12-31T23:59:59.000Z"),
+        ]
+    }
+
+    private var standardRecords: [String: FakeAnarlogRecord] {
+        [
+            s2: FakeAnarlogRecord(
+                id: s2,
+                title: "Session two",
+                createdAt: "2026-05-20T09:00:00.000Z",
+                noteMarkdown: nil,
+                summaries: [],
+                participants: [
+                    FakeAnarlogParticipant(humanID: p2, displayName: "Contact B newer", email: "b@example.invalid", jobTitle: nil),
+                    FakeAnarlogParticipant(humanID: p3, displayName: "Contact C", email: nil, jobTitle: "Designer"),
+                ]),
+            s1: FakeAnarlogRecord(
+                id: s1,
+                title: "Session one",
+                createdAt: "2026-05-10T09:00:00.000Z",
+                noteMarkdown: nil,
+                summaries: [],
+                participants: [
+                    FakeAnarlogParticipant(humanID: operatorID, displayName: "Operator", email: nil, jobTitle: nil),
+                    FakeAnarlogParticipant(humanID: CRMMacAnarlogSource.selfHumanUUID, displayName: "Sentinel", email: nil, jobTitle: nil),
+                    FakeAnarlogParticipant(humanID: p1, displayName: "Contact A", email: "a@example.invalid", jobTitle: "Engineer"),
+                    FakeAnarlogParticipant(humanID: p2, displayName: "Contact B older", email: "b@example.invalid", jobTitle: nil),
+                ]),
+        ]
+    }
+
+    private func configuredConfig() throws -> AnarlogConfig {
+        var config = AnarlogConfig(
+            rootPath: "/tmp/anarlog-test", humansEnabled: true, sessionsEnabled: false)
+        try config.setOperatorPersonID(operatorID)
+        return config
+    }
+
+    private func scenario(
+        listing entries: [FakeAnarlogListEntry]? = nil,
+        records: [String: FakeAnarlogRecord]? = nil,
+        overrides: [String: FakeAnarlogResponse] = [:]
+    ) -> FakeAnarlogScenario {
+        let listEntries = entries ?? listing
+        let values = records ?? standardRecords
+        let listArgv = FakeAnarlogCLI.listArgv(offset: 0)
+        var responses = [overrides[responseKey(listArgv)] ?? FakeAnarlogResponse(
+            argv: listArgv,
+            stdout: FakeAnarlogCLI.listStdout(entries: listEntries, offset: 0, nextOffset: nil))]
+        for entry in listEntries {
+            let argv = FakeAnarlogCLI.getArgv(id: entry.id)
+            if let override = overrides[responseKey(argv)] {
+                responses.append(override)
+            } else if let record = values[entry.id] {
+                responses.append(FakeAnarlogResponse(
+                    argv: argv, stdout: FakeAnarlogCLI.getStdout(record)))
+            }
+        }
+        return FakeAnarlogScenario(responses: responses)
+    }
+
+    private func responseKey(_ argv: [String]) -> String {
+        argv.joined(separator: "\u{1f}")
     }
 
     private func makeRig(
-        files: [(String, String)] = [],  // (uuid, body)
-        config: AnarlogConfig? = AnarlogConfig(
-            rootPath: "/tmp/anarlog-test",
-            humansEnabled: true,
-            sessionsEnabled: false),
-        script: PiScript = PiScript()
-    ) -> Rig {
-        // When config is nil the plugin short-circuits before touching
-        // the filesystem, so the path here is just a placeholder.
-        let humansPath = (config?.rootPath ?? "/tmp/anarlog-test") + "/humans"
-        let fs = StubFilesystem(rootHumansPath: humansPath)
-        for (uuid, body) in files {
-            fs.put(path: "\(humansPath)/\(uuid).md", bytes: Data(body.utf8))
-        }
+        config: AnarlogConfig? = nil,
+        missingConfig: Bool = false,
+        cursor: String = "",
+        cursorStatus: Int = 200,
+        knownIDs: [KnownContactID] = [],
+        ingestResult: IngestEventsData = IngestEventsData(accepted: 0, duplicate: 0, rejected: 0, errors: []),
+        cliScenario: FakeAnarlogScenario? = nil,
+        tickInterval: TimeInterval? = nil,
+        makeClient overrideFactory: (@Sendable (String?) -> any AnarlogCLIClient)? = nil
+    ) throws -> Rig {
+        let fake = try FakeAnarlogCLI()
+        try fake.setScenario(cliScenario ?? scenario())
+        let client = fake.makeClient()
+        let factory: @Sendable (String?) -> any AnarlogCLIClient = overrideFactory ?? { _ in client }
+
+        let script = PiScript(
+            cursorGet: SourceCursorState(cursor: cursor, cursorEpoch: 0, backfillComplete: !cursor.isEmpty),
+            cursorGetStatus: cursorStatus,
+            knownIDs: KnownIDsData(ids: knownIDs),
+            ingestResult: ingestResult)
         let transport = MockTransport(script)
         let piClient = PiClient(
             baseURL: URL(string: "https://test.invalid")!,
-            transport: transport.asFunc(),
-            logger: NoopLogger())
-
+            transport: transport.asFunc(), logger: NoopLogger())
         let stateURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("anarlog-humans-state-\(UUID().uuidString).json")
         let stateStore = StateStore(fileURL: stateURL)
-        try? stateStore.initializeIfMissing()
+        try stateStore.initializeIfMissing()
         let mutator = StateMutator(store: stateStore)
-
         let publisher = AnarlogHumansPublisher(
-            sender: { auth, body in
-                try await piClient.ingestEvents(auth: auth, body: body)
-            },
+            sender: { auth, body in try await piClient.ingestEvents(auth: auth, body: body) },
             auth: testAuth, logger: NoopLogger())
-        let plugin = AnarlogHumansSourcePlugin(
-            tickInterval: 300,
-            piClient: piClient,
-            auth: testAuth,
-            mutator: mutator,
-            publisher: publisher,
-            filesystem: fs,
-            configSource: StubConfigSource(config),
-            healthRegistry: SourceHealthRegistry(),
-            logger: NoopLogger())
-        return Rig(plugin: plugin, filesystem: fs, mutator: mutator,
-                   transport: transport, humansPath: humansPath)
-    }
-
-    private func validHumanBody(name: String = "Contact A") -> String {
-        """
-        ---
-        name: \(name)
-        emails: []
-        job_title: ''
-        pinned: false
-        pin_order: 0
-        ---
-        """
-    }
-
-    private func uuid(_ tag: String) -> String {
-        // Generate deterministic-shaped UUIDs from a tag for readability.
-        let padded = String(repeating: "0", count: max(0, 12 - tag.count)) + tag
-        return "0a18829e-12b6-40f6-93f8-6307973\(String(padded.suffix(5)))"
-    }
-
-    // MARK: - happy paths
-
-    func testEmptyHumansDirYieldsEmptyCursor() async throws {
-        let rig = makeRig(files: [])
-        try await rig.plugin.tick()
-        XCTAssertEqual(rig.transport.ingestBodies.count, 0)
-        XCTAssertTrue(rig.transport.commitWasAttempted)
-        XCTAssertEqual(rig.transport.committedCursor, "{}")
-    }
-
-    func testFirstRunWithFilesEmitsUpserts() async throws {
-        let u1 = uuid("00001")
-        let u2 = uuid("00002")
-        let rig = makeRig(files: [
-            (u1, validHumanBody(name: "A")),
-            (u2, validHumanBody(name: "B")),
-        ])
-        try await rig.plugin.tick()
-        // 1 ingest call (1 batch).
-        XCTAssertEqual(rig.transport.ingestBodies.count, 1)
-        // 2 events in that batch.
-        let parsed = try JSONSerialization.jsonObject(
-            with: rig.transport.ingestBodies[0]) as! [String: Any]
-        let events = parsed["events"] as! [[String: Any]]
-        XCTAssertEqual(events.count, 2)
-        XCTAssertEqual(rig.transport.committedCursor != "{}", true)
-    }
-
-    func testNoOpDeltaTickEmitsNothing() async throws {
-        let u1 = uuid("00003")
-        let rig = makeRig(files: [(u1, validHumanBody())])
-        // First tick — establishes cursor.
-        try await rig.plugin.tick()
-        XCTAssertEqual(rig.transport.ingestBodies.count, 1)
-        let firstCommitted = rig.transport.committedCursor
-
-        // Second tick: cursor is now non-empty; route is .delta;
-        // contentChanged is false → no events.
-        // We need to set up the cursor GET to return what we just
-        // committed so the second tick sees the committed state.
-        let script = PiScript(
-            cursorGet: SourceCursorState(
-                cursor: firstCommitted!, cursorEpoch: 0, backfillComplete: true),
-            knownIDs: KnownIDsData(ids: []),
-            ingestResult: IngestEventsData(
-                accepted: 0, duplicate: 0, rejected: 0, errors: []))
-        let rig2 = makeRig(files: [(u1, validHumanBody())], script: script)
-        try await rig2.plugin.tick()
-        // Cursor is populated; route is delta; no contentChange so
-        // no ingest call.
-        XCTAssertEqual(rig2.transport.ingestBodies.count, 0)
-        // Cursor commit still happens (with same content).
-        XCTAssertTrue(rig2.transport.commitWasAttempted)
-    }
-
-    func testFileRemovedEmitsTombstone() async throws {
-        let u1 = uuid("00004")
-        // Prior cursor has u1 with a known payload hash.
-        let priorCursor = try AnarlogHumansCursorCodec.encode([
-            u1: AnarlogHumansCursorEntry(
-                contentHash: "prior", payloadHash: "priorpay", mtimeEpochMs: nil),
-        ])
-        let script = PiScript(
-            cursorGet: SourceCursorState(
-                cursor: priorCursor, cursorEpoch: 0, backfillComplete: true))
-        // Now file is gone from disk.
-        let rig = makeRig(files: [], script: script)
-        try await rig.plugin.tick()
-        XCTAssertEqual(rig.transport.ingestBodies.count, 1)
-        let parsed = try JSONSerialization.jsonObject(
-            with: rig.transport.ingestBodies[0]) as! [String: Any]
-        let events = parsed["events"] as! [[String: Any]]
-        XCTAssertEqual(events.count, 1)
-        let event = events[0]
-        XCTAssertEqual(event["kind"] as? String, "external_contact.deleted")
-        // Deterministic source_id uses prior payload hash.
-        XCTAssertEqual(event["source_id"] as? String, "\(u1)@deleted@priorpay")
-        // Cursor commit reflects the file removal.
-        XCTAssertEqual(rig.transport.committedCursor, "{}")
-    }
-
-    // MARK: - carry-forward invariant: malformed file does NOT tombstone
-
-    func testTC_H6_MalformedFilePreservesCursorAndEmitsNoDelete() async throws {
-        let u1 = uuid("00006")
-        // Prior cursor entry is present (delta route).
-        let priorCursor = try AnarlogHumansCursorCodec.encode([
-            u1: AnarlogHumansCursorEntry(
-                contentHash: "prev", payloadHash: "prevpay", mtimeEpochMs: nil),
-        ])
-        let script = PiScript(
-            cursorGet: SourceCursorState(
-                cursor: priorCursor, cursorEpoch: 0, backfillComplete: true))
-        // File is physically present but body is garbage (no `---` opener).
-        let rig = makeRig(
-            files: [(u1, "garbage that won't parse as frontmatter")],
-            script: script)
-
-        try await rig.plugin.tick()
-
-        // Critical P0 assertion: ZERO events in any batch.
-        if rig.transport.ingestBodies.isEmpty {
-            // Even better — no batch at all means definitely no delete.
+        let healthSink = SpyHealthSink()
+        let fixedNowValue = fixedNow
+        let effectiveConfig: AnarlogConfig?
+        if missingConfig {
+            effectiveConfig = nil
         } else {
-            let parsed = try JSONSerialization.jsonObject(
-                with: rig.transport.ingestBodies[0]) as! [String: Any]
-            let events = parsed["events"] as! [[String: Any]]
-            for ev in events {
-                XCTAssertNotEqual(ev["kind"] as? String,
-                                  "external_contact.deleted",
-                                  "P0 violation: malformed file produced a delete event")
-            }
+            effectiveConfig = try config ?? configuredConfig()
         }
-
-        // Cursor was committed (publish was clean — 0 events).
-        XCTAssertTrue(rig.transport.commitWasAttempted)
-        // The committed cursor PRESERVES the prior entry for u1.
-        let committed = try XCTUnwrap(rig.transport.committedCursor)
-        let decoded = try XCTUnwrap(AnarlogHumansCursorCodec.decodeOrNil(committed))
-        let preserved = try XCTUnwrap(decoded[u1])
-        XCTAssertEqual(preserved.payloadHash, "prevpay")
-        XCTAssertEqual(preserved.contentHash, "prev")
-    }
-
-    // MARK: - carry-forward invariant: oversized payload does NOT tombstone
-
-    func testTC_H7_OversizedPayloadPreservesCursorAndEmitsNoDelete() async throws {
-        let u1 = uuid("00007")
-        let priorCursor = try AnarlogHumansCursorCodec.encode([
-            u1: AnarlogHumansCursorEntry(
-                contentHash: "prev", payloadHash: "prevpay", mtimeEpochMs: nil),
-        ])
-        let script = PiScript(
-            cursorGet: SourceCursorState(
-                cursor: priorCursor, cursorEpoch: 0, backfillComplete: true))
-        // Build a body whose memo body alone exceeds maxPayloadBytes.
-        let bigMemo = String(repeating: "X", count: CRMMacAnarlogSource.maxPayloadBytes + 1024)
-        let body = """
-        ---
-        name: Big Contact
-        ---
-        \(bigMemo)
-        """
-        let rig = makeRig(files: [(u1, body)], script: script)
-
-        try await rig.plugin.tick()
-
-        if !rig.transport.ingestBodies.isEmpty {
-            let parsed = try JSONSerialization.jsonObject(
-                with: rig.transport.ingestBodies[0]) as! [String: Any]
-            let events = parsed["events"] as! [[String: Any]]
-            for ev in events {
-                XCTAssertNotEqual(ev["kind"] as? String,
-                                  "external_contact.deleted",
-                                  "P0 violation: oversized file produced a delete event")
-            }
+        let common: (TimeInterval?, PiClient, StateMutator, AnarlogHumansPublisher, AnarlogConfigSource, SpyHealthSink) = (
+            tickInterval, piClient, mutator, publisher, StubConfigSource(effectiveConfig), healthSink)
+        let plugin: AnarlogHumansSourcePlugin
+        if let tickInterval = common.0 {
+            plugin = AnarlogHumansSourcePlugin(
+                tickInterval: tickInterval,
+                piClient: common.1,
+                auth: testAuth,
+                mutator: common.2,
+                publisher: common.3,
+                configSource: common.4,
+                makeCLIClient: factory,
+                healthSink: common.5,
+                healthRegistry: SourceHealthRegistry(),
+                logger: NoopLogger(),
+                clock: { fixedNowValue })
+        } else {
+            plugin = AnarlogHumansSourcePlugin(
+                piClient: common.1,
+                auth: testAuth,
+                mutator: common.2,
+                publisher: common.3,
+                configSource: common.4,
+                makeCLIClient: factory,
+                healthSink: common.5,
+                healthRegistry: SourceHealthRegistry(),
+                logger: NoopLogger(),
+                clock: { fixedNowValue })
         }
-        XCTAssertTrue(rig.transport.commitWasAttempted)
-        let committed = try XCTUnwrap(rig.transport.committedCursor)
-        let decoded = try XCTUnwrap(AnarlogHumansCursorCodec.decodeOrNil(committed))
-        let preserved = try XCTUnwrap(decoded[u1])
-        XCTAssertEqual(preserved.payloadHash, "prevpay")
+        return Rig(plugin: plugin, fake: fake, mutator: mutator, transport: transport, healthSink: healthSink)
     }
 
-    // MARK: - self-human filtered
+    private func expectedHash(_ participant: AnarlogParticipant) throws -> String {
+        let payload = AnarlogHumansPayloadShaping.shape(participant: participant, hostID: testAuth.hostID)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        return try ContentHasher.contentHash(for: encoder.encode(payload))
+    }
 
-    func testSelfHumanFileSkipped() async throws {
-        let rig = makeRig(files: [
-            ("00000000-0000-0000-0000-000000000000", validHumanBody()),
+    private func standardCursor() throws -> String {
+        try AnarlogHumansCursorCodec.encode([
+            p1: AnarlogHumansCursorEntry(recordHash: expectedHash(
+                AnarlogParticipant(personID: p1, displayName: "Contact A", email: "a@example.invalid", jobTitle: "Engineer"))),
+            p2: AnarlogHumansCursorEntry(recordHash: expectedHash(
+                AnarlogParticipant(personID: p2, displayName: "Contact B newer", email: "b@example.invalid", jobTitle: nil))),
+            p3: AnarlogHumansCursorEntry(recordHash: expectedHash(
+                AnarlogParticipant(personID: p3, displayName: "Contact C", email: nil, jobTitle: "Designer"))),
         ])
-        try await rig.plugin.tick()
-        XCTAssertEqual(rig.transport.ingestBodies.count, 0)
-        XCTAssertEqual(rig.transport.committedCursor, "{}")
     }
 
-    // MARK: - hash-mismatch sets recovery flag
+    private func events(_ snapshot: MockTransport.Snapshot) throws -> [[String: Any]] {
+        try snapshot.ingestBodies.flatMap { bytes in
+            let body = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+            return try XCTUnwrap(body["events"] as? [[String: Any]])
+        }
+    }
+
+    private func outcomes(_ sink: SpyHealthSink) async -> [RecordedOutcome] {
+        await sink.snapshot()
+    }
+
+    private func assertSingleCleanOutcome(
+        _ rig: Rig,
+        newest: Date?,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        let values = await outcomes(rig.healthSink)
+        XCTAssertEqual(values.count, 1, file: file, line: line)
+        XCTAssertEqual(values.first?.source, .anarlogHumans, file: file, line: line)
+        XCTAssertEqual(values.first?.outcome, .clean(newestSessionCreatedAt: newest), file: file, line: line)
+    }
+
+    func testFirstRunSendsEligibleParticipantsExceptOperatorAndSentinel() async throws {
+        let rig = try makeRig()
+        try await rig.plugin.tick()
+        let snapshot = rig.transport.snapshot()
+        let parsed = try events(snapshot)
+        XCTAssertEqual(parsed.count, 3)
+        XCTAssertEqual(parsed.map { $0["kind"] as? String }, Array(repeating: "external_contact.upserted", count: 3))
+        XCTAssertEqual(parsed.compactMap { ($0["payload"] as? [String: Any])?["entity_id"] as? String }, [p1, p2, p3])
+        XCTAssertEqual((parsed[1]["payload"] as? [String: Any])?["display_name"] as? String, "Contact B newer")
+        let participants = [
+            AnarlogParticipant(personID: p1, displayName: "Contact A", email: "a@example.invalid", jobTitle: "Engineer"),
+            AnarlogParticipant(personID: p2, displayName: "Contact B newer", email: "b@example.invalid", jobTitle: nil),
+            AnarlogParticipant(personID: p3, displayName: "Contact C", email: nil, jobTitle: "Designer"),
+        ]
+        let expectedSourceIDs = try [p1, p2, p3].enumerated().map { index, id in
+            "\(id)@\(try expectedHash(participants[index]))"
+        }
+        XCTAssertEqual(parsed.map { $0["source_id"] as? String }, expectedSourceIDs)
+        let expectedHashes = try participants.map { try expectedHash($0) }
+        XCTAssertEqual(AnarlogHumansCursorCodec.decodeOrNil(try XCTUnwrap(snapshot.committedCursor)), [
+            p1: AnarlogHumansCursorEntry(recordHash: expectedHashes[0]),
+            p2: AnarlogHumansCursorEntry(recordHash: expectedHashes[1]),
+            p3: AnarlogHumansCursorEntry(recordHash: expectedHashes[2]),
+        ])
+        XCTAssertEqual(try rig.fake.invocations(), [
+            FakeAnarlogCLI.listArgv(offset: 0),
+            FakeAnarlogCLI.getArgv(id: s2),
+            FakeAnarlogCLI.getArgv(id: s1),
+        ])
+        await assertSingleCleanOutcome(rig, newest: ISO8601DateFormatter().date(from: "2026-06-01T10:00:00Z"))
+    }
+
+    func testUnchangedPersonIsNotResent() async throws {
+        let prior = try standardCursor()
+        let rig = try makeRig(cursor: prior)
+        try await rig.plugin.tick()
+        let snapshot = rig.transport.snapshot()
+        XCTAssertTrue(snapshot.ingestBodies.isEmpty)
+        XCTAssertEqual(snapshot.committedCursor, prior)
+    }
+
+    func testChangedPersonIsResentWithoutSessionChange() async throws {
+        let prior = try standardCursor()
+        var records = standardRecords
+        let session = records[s1]!
+        let changedParticipants = session.participants.map { participant in
+            participant.humanID == p1
+                ? FakeAnarlogParticipant(humanID: p1, displayName: "Contact A", email: "a@example.invalid", jobTitle: "Lead")
+                : participant
+        }
+        records[s1] = FakeAnarlogRecord(id: session.id, title: session.title, createdAt: session.createdAt,
+            noteMarkdown: session.noteMarkdown, summaries: session.summaries, participants: changedParticipants)
+        let rig = try makeRig(cursor: prior, cliScenario: scenario(records: records))
+        try await rig.plugin.tick()
+        let parsed = try events(rig.transport.snapshot())
+        XCTAssertEqual(parsed.count, 1)
+        XCTAssertEqual((parsed[0]["payload"] as? [String: Any])?["job_title"] as? String, "Lead")
+        let changed = AnarlogParticipant(personID: p1, displayName: "Contact A", email: "a@example.invalid", jobTitle: "Lead")
+        XCTAssertEqual(parsed[0]["source_id"] as? String, "\(p1)@\(try expectedHash(changed))")
+        let committed = try XCTUnwrap(rig.transport.snapshot().committedCursor)
+        XCTAssertEqual(AnarlogHumansCursorCodec.decodeOrNil(committed)?[p1], AnarlogHumansCursorEntry(recordHash: try expectedHash(changed)))
+    }
+
+    func testLegacyFileTreeCursorResendsEveryPerson() async throws {
+        let cursor = #"{"bbbbbbbb-0000-4000-8000-000000000001":{"content_hash":"a","payload_hash":"b","mtime_epoch_ms":1}}"#
+        let rig = try makeRig(cursor: cursor)
+        try await rig.plugin.tick()
+        let snapshot = rig.transport.snapshot()
+        XCTAssertEqual(try events(snapshot).count, 3)
+        XCTAssertFalse(snapshot.requests.contains { $0.hasSuffix("/known-ids") })
+    }
+
+    func testPersonLeavingEligibleSessionsIsNeverDeleted() async throws {
+        var cursor = try XCTUnwrap(AnarlogHumansCursorCodec.decodeOrNil(standardCursor()))
+        cursor[p9] = AnarlogHumansCursorEntry(recordHash: "x")
+        let rig = try makeRig(cursor: try AnarlogHumansCursorCodec.encode(cursor))
+        try await rig.plugin.tick()
+        let snapshot = rig.transport.snapshot()
+        XCTAssertTrue(snapshot.ingestBodies.isEmpty)
+        XCTAssertEqual(Set(try XCTUnwrap(AnarlogHumansCursorCodec.decodeOrNil(try XCTUnwrap(snapshot.committedCursor))).keys), Set([p1, p2, p3]))
+    }
+
+    func testBootstrapWithPiKnownIdentitiesSendsNoDeletion() async throws {
+        let rig = try makeRig(knownIDs: [KnownContactID(sourceID: "\(p9)@deadbeef", lastContentHash: "deadbeef")])
+        try await rig.plugin.tick()
+        let snapshot = rig.transport.snapshot()
+        let parsed = try events(snapshot)
+        XCTAssertEqual(parsed.count, 3)
+        XCTAssertTrue(parsed.allSatisfy { $0["kind"] as? String == "external_contact.upserted" })
+        XCTAssertFalse(snapshot.requests.contains { $0.hasSuffix("/known-ids") })
+    }
+
+    func testEmptyListingWithPriorPeopleDeletesNothingAndReportsNilNewest() async throws {
+        var cursor = try XCTUnwrap(AnarlogHumansCursorCodec.decodeOrNil(standardCursor()))
+        cursor[p9] = AnarlogHumansCursorEntry(recordHash: "x")
+        let emptyScenario = scenario(listing: [])
+        let rig = try makeRig(
+            cursor: try AnarlogHumansCursorCodec.encode(cursor),
+            knownIDs: [
+                KnownContactID(sourceID: "\(p1)@deadbeef", lastContentHash: "deadbeef"),
+                KnownContactID(sourceID: "\(p9)@deadbeef", lastContentHash: "deadbeef"),
+            ],
+            cliScenario: emptyScenario)
+        try await rig.plugin.tick()
+        let snapshot = rig.transport.snapshot()
+        XCTAssertEqual(try rig.fake.invocations(), [FakeAnarlogCLI.listArgv(offset: 0)])
+        XCTAssertTrue(snapshot.ingestBodies.isEmpty)
+        XCTAssertFalse(snapshot.requests.contains { $0.hasSuffix("/known-ids") })
+        XCTAssertEqual(snapshot.committedCursor, "{}")
+        await assertSingleCleanOutcome(rig, newest: nil)
+    }
+
+    func testSessionDeletedBetweenListAndGetIsSkipped() async throws {
+        let notFound = FakeAnarlogResponse(
+            argv: FakeAnarlogCLI.getArgv(id: s2), exit: 2,
+            stderr: FakeAnarlogCLI.errorStderr(code: "not_found", exitCode: 2))
+        let scenario = self.scenario(overrides: [responseKey(notFound.argv): notFound])
+        let rig = try makeRig(cliScenario: scenario)
+        try await rig.plugin.tick()
+        let parsed = try events(rig.transport.snapshot())
+        XCTAssertEqual(parsed.compactMap { ($0["payload"] as? [String: Any])?["entity_id"] as? String }, [p1, p2])
+        XCTAssertEqual((parsed[1]["payload"] as? [String: Any])?["display_name"] as? String, "Contact B older")
+        await assertSingleCleanOutcome(rig, newest: ISO8601DateFormatter().date(from: "2026-06-01T10:00:00Z"))
+    }
+
+    func testOperatorUnsetSendsNothingAndReportsFailure() async throws {
+        let config = AnarlogConfig(rootPath: "/tmp/anarlog-test", humansEnabled: true, sessionsEnabled: false)
+        let rig = try makeRig(config: config)
+        try await rig.plugin.tick()
+        let values = await outcomes(rig.healthSink)
+        XCTAssertEqual(values, [RecordedOutcome(source: .anarlogHumans, outcome: .failed(.operatorPersonIDUnset))])
+        XCTAssertTrue(try rig.fake.invocations().isEmpty)
+        XCTAssertTrue(rig.transport.snapshot().requests.isEmpty)
+        let state = try await rig.mutator.read()
+        XCTAssertEqual(state.sources["anarlog_humans"]?.lastError, "operator_person_id_unset")
+    }
+
+    func testListFailureReportsFailureAndMakesNoPiRequest() async throws {
+        let argv = FakeAnarlogCLI.listArgv(offset: 0)
+        let failure = FakeAnarlogResponse(
+            argv: argv, exit: 3,
+            stderr: FakeAnarlogCLI.errorStderr(code: "database_not_found", exitCode: 3))
+        let rig = try makeRig(cliScenario: scenario(overrides: [responseKey(argv): failure]))
+        try await rig.plugin.tick()
+        let values = await outcomes(rig.healthSink)
+        XCTAssertEqual(values, [RecordedOutcome(source: .anarlogHumans, outcome: .failed(.databaseNotFound))])
+        XCTAssertTrue(rig.transport.snapshot().requests.isEmpty)
+        let state = try await rig.mutator.read()
+        XCTAssertEqual(state.sources["anarlog_humans"]?.lastError, "anarlog_cli_failed:databaseNotFound")
+    }
+
+    func testGetFailureReportsFailureAndSendsNothing() async throws {
+        let argv = FakeAnarlogCLI.getArgv(id: s1)
+        let failure = FakeAnarlogResponse(argv: argv, exit: 1, stderr: "boom")
+        let rig = try makeRig(cliScenario: scenario(overrides: [responseKey(argv): failure]))
+        try await rig.plugin.tick()
+        let values = await outcomes(rig.healthSink)
+        XCTAssertEqual(values, [RecordedOutcome(
+            source: .anarlogHumans,
+            outcome: .failed(.nonZeroExit(code: 1, errorCode: nil)))])
+        XCTAssertTrue(rig.transport.snapshot().requests.isEmpty)
+    }
+
+    func testDisabledSourceRecordsNothingAndReadsNoCLI() async throws {
+        let config = AnarlogConfig(rootPath: "/tmp/anarlog-test", humansEnabled: false, sessionsEnabled: true)
+        let rig = try makeRig(config: config)
+        try await rig.plugin.tick()
+        let recorded = await outcomes(rig.healthSink)
+        XCTAssertTrue(recorded.isEmpty)
+        XCTAssertTrue(try rig.fake.invocations().isEmpty)
+        let state = try await rig.mutator.read()
+        XCTAssertEqual(state.sources["anarlog_humans"]?.lastError, "not_configured")
+    }
+
+    func testNilConfigRecordsNothing() async throws {
+        let rig = try makeRig(missingConfig: true)
+        try await rig.plugin.tick()
+        let recorded = await outcomes(rig.healthSink)
+        XCTAssertTrue(recorded.isEmpty)
+        XCTAssertTrue(try rig.fake.invocations().isEmpty)
+        let state = try await rig.mutator.read()
+        XCTAssertEqual(state.sources["anarlog_humans"]?.lastError, "not_configured")
+    }
+
+    func testPeopleSyncWithSessionsSourceDisabled() async throws {
+        let rig = try makeRig()
+        try await rig.plugin.tick()
+        XCTAssertEqual(try events(rig.transport.snapshot()).compactMap {
+            ($0["payload"] as? [String: Any])?["entity_id"] as? String
+        }, [p1, p2, p3])
+    }
 
     func testHashMismatchSetsRecoveryFlag() async throws {
-        let u1 = uuid("00011")
-        let script = PiScript(
-            ingestResult: IngestEventsData(
-                accepted: 0, duplicate: 0, rejected: 1,
-                errors: [IngestEventError(
-                    index: 0,
-                    code: "EXTERNAL_CONTACT_HASH_MISMATCH",
-                    message: "mismatch")]))
-        let rig = makeRig(files: [(u1, validHumanBody())], script: script)
+        let result = IngestEventsData(
+            accepted: 0, duplicate: 0, rejected: 1,
+            errors: [IngestEventError(index: 0, code: "EXTERNAL_CONTACT_HASH_MISMATCH", message: "synthetic")])
+        let rig = try makeRig(ingestResult: result)
         try await rig.plugin.tick()
         let state = try await rig.mutator.read()
-        let src = try XCTUnwrap(state.sources["anarlog_humans"])
-        XCTAssertTrue((src.lastError ?? "").contains("recovery_requested"))
-        // Cursor must NOT have committed.
-        XCTAssertFalse(rig.transport.commitWasAttempted)
+        XCTAssertTrue((state.sources["anarlog_humans"]?.lastError ?? "").contains("recovery_requested"))
+        XCTAssertFalse(rig.transport.snapshot().commitWasAttempted)
     }
 
-    // MARK: - unhealthy reasons
-
-    func testNotConfiguredWhenConfigNil() async throws {
-        let rig = makeRig(files: [], config: nil)
-        try await rig.plugin.tick()
-        let state = try await rig.mutator.read()
-        let src = try XCTUnwrap(state.sources["anarlog_humans"])
-        XCTAssertEqual(src.lastError, "not_configured")
-    }
-
-    func testNotConfiguredWhenDisabled() async throws {
-        let rig = makeRig(files: [], config: AnarlogConfig(
-            rootPath: "/tmp/anarlog-test",
-            humansEnabled: false,
-            sessionsEnabled: false))
-        try await rig.plugin.tick()
-        let state = try await rig.mutator.read()
-        let src = try XCTUnwrap(state.sources["anarlog_humans"])
-        XCTAssertEqual(src.lastError, "not_configured")
-    }
-
-    // MARK: - lastError carries anomaly counts on clean commit
-
-    func testCleanCommitWithMalformedFileRecordsAnomaly() async throws {
-        let u1 = uuid("00099")
-        let priorCursor = try AnarlogHumansCursorCodec.encode([
-            u1: AnarlogHumansCursorEntry(
-                contentHash: "p", payloadHash: "p", mtimeEpochMs: nil),
-        ])
-        let script = PiScript(
-            cursorGet: SourceCursorState(
-                cursor: priorCursor, cursorEpoch: 0, backfillComplete: true))
-        let rig = makeRig(files: [(u1, "garbage")], script: script)
-        try await rig.plugin.tick()
-        XCTAssertTrue(rig.transport.commitWasAttempted)
-        let state = try await rig.mutator.read()
-        let src = try XCTUnwrap(state.sources["anarlog_humans"])
-        XCTAssertTrue((src.lastError ?? "").contains("parse_failed=1"),
-                      "expected anomaly summary; got: \(src.lastError ?? "nil")")
-    }
-
-    // MARK: - bootstrap via known-ids
-
-    func testBootstrapViaKnownIDsTombstonesMissing() async throws {
-        let u1 = uuid("00008")
-        // Empty cursor; known-ids returns 1 prior UUID not in scan.
-        let script = PiScript(
-            cursorGet: SourceCursorState(
-                cursor: "", cursorEpoch: 0, backfillComplete: false),
-            knownIDs: KnownIDsData(ids: [
-                KnownContactID(sourceID: "\(u1)@deadbeef",
-                               lastContentHash: "deadbeef"),
-            ]))
-        let rig = makeRig(files: [], script: script)
-        try await rig.plugin.tick()
-        XCTAssertEqual(rig.transport.ingestBodies.count, 1)
-        let parsed = try JSONSerialization.jsonObject(
-            with: rig.transport.ingestBodies[0]) as! [String: Any]
-        let events = parsed["events"] as! [[String: Any]]
-        XCTAssertEqual(events.count, 1)
-        XCTAssertEqual(events[0]["kind"] as? String, "external_contact.deleted")
-        XCTAssertEqual(events[0]["source_id"] as? String, "\(u1)@deleted@deadbeef")
-    }
-
-    func testTC_H19_BootstrapPiKnownButMalformedPreservesAndSynthesizes() async throws {
-        let u1 = uuid("00019")
-        let script = PiScript(
-            cursorGet: SourceCursorState(
-                cursor: "", cursorEpoch: 0, backfillComplete: false),
-            knownIDs: KnownIDsData(ids: [
-                KnownContactID(sourceID: "\(u1)@deadbeef",
-                               lastContentHash: "deadbeef"),
-            ]))
-        let rig = makeRig(files: [(u1, "garbage")], script: script)
-        try await rig.plugin.tick()
-        // No upsert (file failed to parse) and no delete (file is
-        // physically present).
-        if !rig.transport.ingestBodies.isEmpty {
-            let parsed = try JSONSerialization.jsonObject(
-                with: rig.transport.ingestBodies[0]) as! [String: Any]
-            let events = parsed["events"] as! [[String: Any]]
-            XCTAssertEqual(events.count, 0, "no events should be emitted for a present-but-malformed Pi-known file")
+    func testRecoveryFlagResendsEveryPerson() async throws {
+        let rig = try makeRig(cursor: standardCursor())
+        try await rig.mutator.mutate { state in
+            var source = state.sources["anarlog_humans"] ?? SourceState()
+            source.lastError = "recovery_requested:hash_mismatch"
+            state.sources["anarlog_humans"] = source
         }
-        // The cursor commit synthesizes an entry using
-        // knownIDs.lastContentHash so the next scan can build a
-        // deterministic delete source_id.
-        XCTAssertTrue(rig.transport.commitWasAttempted)
-        let committed = try XCTUnwrap(rig.transport.committedCursor)
-        let decoded = try XCTUnwrap(AnarlogHumansCursorCodec.decodeOrNil(committed))
-        let synthesized = try XCTUnwrap(decoded[u1])
-        XCTAssertEqual(synthesized.payloadHash, "deadbeef")
+        try await rig.plugin.tick()
+        XCTAssertEqual(try events(rig.transport.snapshot()).compactMap {
+            ($0["payload"] as? [String: Any])?["entity_id"] as? String
+        }, [p1, p2, p3])
+        let state = try await rig.mutator.read()
+        XCTAssertNil(state.sources["anarlog_humans"]?.lastError)
+    }
+
+    func testOversizedPayloadCarriesPriorEntryAndRecordsAnomaly() async throws {
+        var cursor = try XCTUnwrap(AnarlogHumansCursorCodec.decodeOrNil(standardCursor()))
+        cursor[p1] = AnarlogHumansCursorEntry(recordHash: "prior")
+        var records = standardRecords
+        let session = records[s1]!
+        let largeName = String(repeating: "x", count: CRMMacAnarlogSource.maxPayloadBytes + 1024)
+        let changedParticipants = session.participants.map { participant in
+            participant.humanID == p1
+                ? FakeAnarlogParticipant(humanID: p1, displayName: largeName, email: participant.email, jobTitle: participant.jobTitle)
+                : participant
+        }
+        records[s1] = FakeAnarlogRecord(id: session.id, title: session.title, createdAt: session.createdAt,
+            noteMarkdown: session.noteMarkdown, summaries: session.summaries, participants: changedParticipants)
+        let rig = try makeRig(cursor: try AnarlogHumansCursorCodec.encode(cursor), cliScenario: scenario(records: records))
+        try await rig.plugin.tick()
+        let snapshot = rig.transport.snapshot()
+        XCTAssertTrue(try events(snapshot).isEmpty)
+        let committed = try XCTUnwrap(snapshot.committedCursor)
+        XCTAssertEqual(AnarlogHumansCursorCodec.decodeOrNil(committed)?[p1], AnarlogHumansCursorEntry(recordHash: "prior"))
+        let state = try await rig.mutator.read()
+        XCTAssertEqual(state.sources["anarlog_humans"]?.lastError,
+            "anomalies encode_failed=0 payload_too_large=1")
+    }
+
+    func testCursorFetchFailureAfterCleanReadRecordsOneOutcome() async throws {
+        let rig = try makeRig(cursorStatus: 400)
+        try await rig.plugin.tick()
+        await assertSingleCleanOutcome(rig, newest: ISO8601DateFormatter().date(from: "2026-06-01T10:00:00Z"))
+        let state = try await rig.mutator.read()
+        XCTAssertEqual(state.sources["anarlog_humans"]?.lastError, "cursor_fetch_failed")
+        XCTAssertTrue(rig.transport.snapshot().ingestBodies.isEmpty)
+    }
+
+    func testDefaultTickIntervalIsThirtyMinutes() async throws {
+        XCTAssertEqual(CRMMacAnarlogSource.humansTickInterval, 1800)
+        let rig = try makeRig()
+        XCTAssertEqual(rig.plugin.tickInterval, 1800)
+    }
+
+    func testClientFactoryReceivesConfiguredCLIPath() async throws {
+        var config = try configuredConfig()
+        try config.setCLIPath("/opt/synthetic/anarlog")
+        let fake = try FakeAnarlogCLI()
+        try fake.setScenario(scenario())
+        let client = fake.makeClient()
+        let recorder = PathRecorder()
+        let factory: @Sendable (String?) -> any AnarlogCLIClient = { path in
+            recorder.append(path)
+            return client
+        }
+        let rig = try makeRig(config: config, makeClient: factory)
+        try await rig.plugin.tick()
+        XCTAssertEqual(recorder.values(), ["/opt/synthetic/anarlog"])
+    }
+
+    func testChangedNameIsResentWithoutSessionChange() async throws {
+        let prior = try standardCursor()
+        var records = standardRecords
+        let session = records[s1]!
+        let changedParticipants = session.participants.map { participant in
+            participant.humanID == p1
+                ? FakeAnarlogParticipant(humanID: p1, displayName: "Contact A renamed", email: participant.email, jobTitle: participant.jobTitle)
+                : participant
+        }
+        records[s1] = FakeAnarlogRecord(id: session.id, title: session.title, createdAt: session.createdAt,
+            noteMarkdown: session.noteMarkdown, summaries: session.summaries, participants: changedParticipants)
+        let rig = try makeRig(cursor: prior, cliScenario: scenario(records: records))
+        try await rig.plugin.tick()
+        let parsed = try events(rig.transport.snapshot())
+        XCTAssertEqual(parsed.count, 1)
+        XCTAssertEqual((parsed[0]["payload"] as? [String: Any])?["display_name"] as? String, "Contact A renamed")
+        let changed = AnarlogParticipant(personID: p1, displayName: "Contact A renamed", email: "a@example.invalid", jobTitle: "Engineer")
+        XCTAssertEqual(parsed[0]["source_id"] as? String, "\(p1)@\(try expectedHash(changed))")
+        let committed = try XCTUnwrap(rig.transport.snapshot().committedCursor)
+        XCTAssertEqual(AnarlogHumansCursorCodec.decodeOrNil(committed)?[p1], AnarlogHumansCursorEntry(recordHash: try expectedHash(changed)))
+    }
+
+    func testChangedEmailIsResentWithoutSessionChange() async throws {
+        let prior = try standardCursor()
+        var records = standardRecords
+        let session = records[s1]!
+        let changedParticipants = session.participants.map { participant in
+            participant.humanID == p1
+                ? FakeAnarlogParticipant(humanID: p1, displayName: participant.displayName, email: "a.new@example.invalid", jobTitle: participant.jobTitle)
+                : participant
+        }
+        records[s1] = FakeAnarlogRecord(id: session.id, title: session.title, createdAt: session.createdAt,
+            noteMarkdown: session.noteMarkdown, summaries: session.summaries, participants: changedParticipants)
+        let rig = try makeRig(cursor: prior, cliScenario: scenario(records: records))
+        try await rig.plugin.tick()
+        let parsed = try events(rig.transport.snapshot())
+        XCTAssertEqual(parsed.count, 1)
+        XCTAssertEqual((parsed[0]["payload"] as? [String: Any])?["emails"] as? [[String: String]], [["value": "a.new@example.invalid"]])
+        let changed = AnarlogParticipant(personID: p1, displayName: "Contact A", email: "a.new@example.invalid", jobTitle: "Engineer")
+        XCTAssertEqual(parsed[0]["source_id"] as? String, "\(p1)@\(try expectedHash(changed))")
+        let committed = try XCTUnwrap(rig.transport.snapshot().committedCursor)
+        XCTAssertEqual(AnarlogHumansCursorCodec.decodeOrNil(committed)?[p1], AnarlogHumansCursorEntry(recordHash: try expectedHash(changed)))
     }
 }

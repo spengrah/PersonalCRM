@@ -1,12 +1,7 @@
-// Coverage for AnarlogHumansPayloadShaping. The critical invariants:
-//   - displayName falls back to "<no name>" when frontmatter.name empty
-//     (Pi rejects empty for matching).
-//   - metadata ALWAYS carries pinned + pin_order (so metadata is never
-//     empty on the wire).
-//   - org_id / user_id / created_at land in metadata when present.
-//   - emails arrive as ExternalContactMethodValue with no type and
-//     primary=false.
-//   - jobTitle becomes nil on empty (omitted on the wire).
+// Coverage for the Anarlog participant-to-payload mapping.
+// Invariants: ID, display name, email and job title map to the wire
+// fields; missing or empty values follow the established wire rules;
+// CLI-sourced payload metadata is empty; encoded keys stay exact.
 import XCTest
 import CRMMacCore
 @testable import CRMMacAnarlogSource
@@ -14,129 +9,72 @@ import CRMMacCore
 final class AnarlogHumansPayloadShapingTests: XCTestCase {
 
     private let hostID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+    private let personID = "0a18829e-12b6-40f6-93f8-6307973c926b"
 
-    private func makeRecord(
-        name: String = "Contact A",
-        emails: [String] = [],
-        jobTitle: String = "",
-        linkedinUsername: String = "",
-        orgID: String = "",
-        userID: String = "",
-        pinOrder: Int = 0,
-        pinned: Bool = false,
-        createdAt: Date? = nil,
-        memo: String? = nil
-    ) -> AnarlogHumanRecord {
-        AnarlogHumanRecord(
-            uuid: "0a18829e-12b6-40f6-93f8-6307973c926b",
-            name: name,
-            emails: emails,
-            jobTitle: jobTitle,
-            linkedinUsername: linkedinUsername,
-            orgID: orgID,
-            userID: userID,
-            pinOrder: pinOrder,
-            pinned: pinned,
-            createdAt: createdAt,
-            memo: memo)
+    private func makeParticipant(
+        displayName: String? = "Contact A",
+        email: String? = nil,
+        jobTitle: String? = nil
+    ) -> AnarlogParticipant {
+        AnarlogParticipant(
+            personID: personID,
+            displayName: displayName,
+            email: email,
+            jobTitle: jobTitle)
     }
 
-    func testFullRecordRoundTrips() throws {
-        let createdAt = ISO8601DateFormatter().date(from: "2026-03-04T07:40:49Z")!
-        let rec = makeRecord(
-            name: "Contact A",
-            emails: ["a@example.invalid", "b@example.invalid"],
-            jobTitle: "Engineer",
-            linkedinUsername: "example",
-            orgID: "org-1",
-            userID: "user-1",
-            pinOrder: 5,
-            pinned: true,
-            createdAt: createdAt,
-            memo: "memo body")
-        let payload = AnarlogHumansPayloadShaping.shape(record: rec, hostID: hostID)
+    func testParticipantMapsToWireFields() {
+        let payload = AnarlogHumansPayloadShaping.shape(
+            participant: makeParticipant(
+                displayName: "Contact A",
+                email: "a@example.invalid",
+                jobTitle: "Engineer"),
+            hostID: hostID)
         XCTAssertEqual(payload.version, 1)
         XCTAssertEqual(payload.source, "anarlog_humans")
-        XCTAssertEqual(payload.entityID, rec.uuid)
+        XCTAssertEqual(payload.entityID, personID)
         XCTAssertEqual(payload.displayName, "Contact A")
+        XCTAssertEqual(payload.emails, [AnarlogExternalContactMethodValue(value: "a@example.invalid")])
         XCTAssertEqual(payload.jobTitle, "Engineer")
-        XCTAssertEqual(payload.emails.count, 2)
-        XCTAssertEqual(payload.emails[0].value, "a@example.invalid")
-        XCTAssertNil(payload.emails[0].type)
-        XCTAssertFalse(payload.emails[0].primary)
-
-        XCTAssertEqual(payload.metadata["pinned"], "true")
-        XCTAssertEqual(payload.metadata["pin_order"], "5")
-        XCTAssertEqual(payload.metadata["linkedin_username"], "example")
-        XCTAssertEqual(payload.metadata["org_id"], "org-1")
-        XCTAssertEqual(payload.metadata["user_id"], "user-1")
-        XCTAssertEqual(payload.metadata["memo"], "memo body")
-        XCTAssertNotNil(payload.metadata["created_at"])
+        XCTAssertEqual(payload.metadata, [:])
     }
 
-    func testEmptyNameFallsBackToNoName() {
-        let rec = makeRecord(name: "")
-        let payload = AnarlogHumansPayloadShaping.shape(record: rec, hostID: hostID)
-        XCTAssertEqual(payload.displayName, "<no name>")
+    func testNilOrEmptyDisplayNameFallsBackToNoName() {
+        for displayName in [nil, ""] as [String?] {
+            let payload = AnarlogHumansPayloadShaping.shape(
+                participant: makeParticipant(displayName: displayName), hostID: hostID)
+            XCTAssertEqual(payload.displayName, "<no name>")
+        }
     }
 
-    func testMetadataAlwaysCarriesPinnedAndPinOrder() {
-        let rec = makeRecord(pinOrder: 0, pinned: false)
-        let payload = AnarlogHumansPayloadShaping.shape(record: rec, hostID: hostID)
-        XCTAssertEqual(payload.metadata["pinned"], "false")
-        XCTAssertEqual(payload.metadata["pin_order"], "0")
+    func testNilOrEmptyEmailProducesNoEmails() {
+        for email in [nil, ""] as [String?] {
+            let payload = AnarlogHumansPayloadShaping.shape(
+                participant: makeParticipant(email: email), hostID: hostID)
+            XCTAssertEqual(payload.emails, [])
+        }
     }
 
-    func testEmptyOptionalFieldsOmittedFromMetadata() {
-        let rec = makeRecord(linkedinUsername: "", orgID: "", userID: "")
-        let payload = AnarlogHumansPayloadShaping.shape(record: rec, hostID: hostID)
-        XCTAssertNil(payload.metadata["linkedin_username"])
-        XCTAssertNil(payload.metadata["org_id"])
-        XCTAssertNil(payload.metadata["user_id"])
-        XCTAssertNil(payload.metadata["memo"])
-        XCTAssertNil(payload.metadata["created_at"])
-    }
-
-    func testEmptyJobTitleBecomesNil() {
-        let rec = makeRecord(jobTitle: "")
-        let payload = AnarlogHumansPayloadShaping.shape(record: rec, hostID: hostID)
-        XCTAssertNil(payload.jobTitle)
-    }
-
-    func testEmptyEmailsArrayProducesEmptyList() {
-        let rec = makeRecord(emails: [])
-        let payload = AnarlogHumansPayloadShaping.shape(record: rec, hostID: hostID)
-        XCTAssertEqual(payload.emails, [])
-    }
-
-    func testEmailsFilterEmptyStrings() {
-        let rec = makeRecord(emails: ["a@example.invalid", "", "b@example.invalid"])
-        let payload = AnarlogHumansPayloadShaping.shape(record: rec, hostID: hostID)
-        XCTAssertEqual(payload.emails.count, 2)
-    }
-
-    func testDeletedPayloadShape() {
-        let payload = AnarlogHumansPayloadShaping.shapeDeleted(
-            entityID: "uuid", hostID: hostID)
-        XCTAssertEqual(payload.version, 1)
-        XCTAssertEqual(payload.source, "anarlog_humans")
-        XCTAssertEqual(payload.entityID, "uuid")
+    func testNilOrEmptyJobTitleBecomesNil() {
+        for jobTitle in [nil, ""] as [String?] {
+            let payload = AnarlogHumansPayloadShaping.shape(
+                participant: makeParticipant(jobTitle: jobTitle), hostID: hostID)
+            XCTAssertNil(payload.jobTitle)
+        }
     }
 
     func testEncodedWireShapeUsesSnakeCase() throws {
-        let rec = makeRecord(
-            name: "Contact A",
-            emails: ["a@example.invalid"],
-            jobTitle: "Eng",
-            pinOrder: 3,
-            pinned: true)
-        let payload = AnarlogHumansPayloadShaping.shape(record: rec, hostID: hostID)
+        let participant = makeParticipant(
+            displayName: "Contact A",
+            email: "a@example.invalid",
+            jobTitle: "Eng")
+        let payload = AnarlogHumansPayloadShaping.shape(participant: participant, hostID: hostID)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(payload)
         let json = String(data: data, encoding: .utf8)!
         XCTAssertTrue(json.contains("\"host_id\":\"11111111-2222-3333-4444-555555555555\""))
-        XCTAssertTrue(json.contains("\"entity_id\":\"\(rec.uuid)\""))
+        XCTAssertTrue(json.contains("\"entity_id\":\"\(participant.personID)\""))
         XCTAssertTrue(json.contains("\"display_name\":\"Contact A\""))
         XCTAssertTrue(json.contains("\"job_title\":\"Eng\""))
         XCTAssertTrue(json.contains("\"source\":\"anarlog_humans\""))
@@ -144,10 +82,36 @@ final class AnarlogHumansPayloadShapingTests: XCTestCase {
     }
 
     func testEncodedWireShapeOmitsEmptyOptionals() throws {
-        let rec = makeRecord(jobTitle: "")
-        let payload = AnarlogHumansPayloadShaping.shape(record: rec, hostID: hostID)
+        let payload = AnarlogHumansPayloadShaping.shape(
+            participant: makeParticipant(jobTitle: nil), hostID: hostID)
         let data = try JSONEncoder().encode(payload)
         let json = String(data: data, encoding: .utf8)!
         XCTAssertFalse(json.contains("\"job_title\""))
+    }
+
+    func testEncodedKeySetIsExact() throws {
+        let payload = AnarlogHumansPayloadShaping.shape(
+            participant: makeParticipant(
+                displayName: "Contact A",
+                email: "a@example.invalid",
+                jobTitle: "Engineer"),
+            hostID: hostID)
+        let data = try JSONEncoder().encode(payload)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(Set(object.keys), Set([
+            "version", "host_id", "source", "entity_id", "display_name", "emails", "job_title",
+        ]))
+        XCTAssertEqual(object["version"] as? Int, 1)
+        XCTAssertEqual(object["emails"] as? [[String: String]], [["value": "a@example.invalid"]])
+    }
+
+    func testEncodedKeySetOmitsEmptyOptionals() throws {
+        let payload = AnarlogHumansPayloadShaping.shape(
+            participant: makeParticipant(email: nil, jobTitle: nil), hostID: hostID)
+        let data = try JSONEncoder().encode(payload)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(Set(object.keys), Set([
+            "version", "host_id", "source", "entity_id", "display_name",
+        ]))
     }
 }

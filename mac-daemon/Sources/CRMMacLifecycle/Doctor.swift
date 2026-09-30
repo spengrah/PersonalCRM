@@ -211,7 +211,7 @@ public struct Doctor {
                     results.append(lastTickResult(
                         sourceName: "anarlog_humans.last_tick",
                         state: humansSource,
-                        intervalSeconds: 5 * 60))
+                        intervalSeconds: 30 * 60))
                 }
             }
         }

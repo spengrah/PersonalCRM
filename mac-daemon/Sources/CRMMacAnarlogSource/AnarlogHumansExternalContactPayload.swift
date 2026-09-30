@@ -1,7 +1,7 @@
-// AnarlogHumansExternalContactPayload — duplicate of
-// CRMMacIcloudContactsSource.ExternalContactUpsertedPayload /
-// ExternalContactDeletedPayload, intentionally copied into this
-// target so CRMMacAnarlogSource carries no cross-source dependency.
+// AnarlogHumansExternalContactPayload duplicates
+// CRMMacIcloudContactsSource.ExternalContactUpsertedPayload,
+// intentionally copied into this target so CRMMacAnarlogSource carries
+// no cross-source dependency.
 //
 // Wire shape mirrors the Go-side
 // `backend/internal/events/kinds.go:ExternalContactUpsertedPayload` —
@@ -98,34 +98,5 @@ public struct AnarlogExternalContactUpsertedPayload: Encodable, Equatable, Senda
     private func nonEmpty(_ s: String?) -> String? {
         guard let s, !s.isEmpty else { return nil }
         return s
-    }
-}
-
-public struct AnarlogExternalContactDeletedPayload: Encodable, Equatable, Sendable {
-    public let version: Int
-    public let hostID: UUID
-    public let source: String
-    public let entityID: String
-
-    enum CodingKeys: String, CodingKey {
-        case version
-        case hostID   = "host_id"
-        case source
-        case entityID = "entity_id"
-    }
-
-    public init(version: Int, hostID: UUID, source: String, entityID: String) {
-        self.version = version
-        self.hostID = hostID
-        self.source = source
-        self.entityID = entityID
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(version, forKey: .version)
-        try c.encode(hostID.uuidString.lowercased(), forKey: .hostID)
-        try c.encode(source, forKey: .source)
-        try c.encode(entityID, forKey: .entityID)
     }
 }

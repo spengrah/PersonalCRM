@@ -1,4 +1,5 @@
 import CRMMacCore
+import Darwin
 import Foundation
 
 public enum AnarlogCLIExecutableResolver {
@@ -19,6 +20,7 @@ public enum AnarlogCLIExecutableResolver {
 public struct AnarlogCLIProcessClient: AnarlogCLIClient {
     public static let defaultTimeout: TimeInterval = 30
     public static let pageSize = 200
+    private static let terminationGrace: TimeInterval = 1
 
     private let cliPath: String?
     private let homeDirectory: URL
@@ -99,29 +101,34 @@ public struct AnarlogCLIProcessClient: AnarlogCLIClient {
         let drainGroup = DispatchGroup()
         let stdout = PipeDataCollector(fileHandle: stdoutPipe.fileHandleForReading)
         let stderr = PipeDataCollector(fileHandle: stderrPipe.fileHandleForReading)
-        drain(stdout, group: drainGroup)
-        drain(stderr, group: drainGroup)
+        stdout.start(group: drainGroup)
+        stderr.start(group: drainGroup)
 
         let terminated = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in terminated.signal() }
+        let deadline = DispatchTime.now() + timeout
         do {
             try process.run()
         } catch {
             try? stdoutPipe.fileHandleForWriting.close()
             try? stderrPipe.fileHandleForWriting.close()
-            drainGroup.wait()
+            stdout.stop()
+            stderr.stop()
             throw .binaryNotFound
         }
 
-        if terminated.wait(timeout: .now() + timeout) == .timedOut {
-            if process.isRunning {
-                process.terminate()
-            }
-            process.waitUntilExit()
-            drainGroup.wait()
+        if terminated.wait(timeout: deadline) == .timedOut {
+            terminate(process, terminated: terminated)
+            stdout.stop()
+            stderr.stop()
             throw .timeout
         }
-        drainGroup.wait()
+        if drainGroup.wait(timeout: deadline) == .timedOut {
+            terminate(process, terminated: terminated)
+            stdout.stop()
+            stderr.stop()
+            throw .timeout
+        }
 
         guard process.terminationReason == .exit else {
             throw .nonZeroExit(code: process.terminationStatus, errorCode: nil)
@@ -143,11 +150,14 @@ public struct AnarlogCLIProcessClient: AnarlogCLIClient {
         throw .nonZeroExit(code: status, errorCode: errorCode)
     }
 
-    private func drain(_ collector: PipeDataCollector, group: DispatchGroup) {
-        group.enter()
-        DispatchQueue.global(qos: .utility).async {
-            collector.readToEnd()
-            group.leave()
+    private func terminate(_ process: Process, terminated: DispatchSemaphore) {
+        guard process.isRunning else { return }
+
+        process.terminate()
+        if terminated.wait(timeout: .now() + Self.terminationGrace) == .timedOut,
+           process.isRunning {
+            _ = kill(process.processIdentifier, SIGKILL)
+            _ = terminated.wait(timeout: .now() + Self.terminationGrace)
         }
     }
 }
@@ -156,15 +166,54 @@ private final class PipeDataCollector: @unchecked Sendable {
     private let fileHandle: FileHandle
     private let lock = NSLock()
     private var contents = Data()
+    private var group: DispatchGroup?
+    private var isFinished = false
 
     init(fileHandle: FileHandle) {
         self.fileHandle = fileHandle
     }
 
-    func readToEnd() {
-        let data = fileHandle.readDataToEndOfFile()
+    func start(group: DispatchGroup) {
         lock.lock()
-        contents = data
+        self.group = group
+        group.enter()
+        lock.unlock()
+
+        fileHandle.readabilityHandler = { [weak self] handle in
+            let available = handle.availableData
+            if available.isEmpty {
+                self?.finish()
+            } else {
+                self?.append(available)
+            }
+        }
+    }
+
+    func finish() {
+        lock.lock()
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+        isFinished = true
+        let group = self.group
+        self.group = nil
+        lock.unlock()
+
+        fileHandle.readabilityHandler = nil
+        group?.leave()
+    }
+
+    func stop() {
+        finish()
+        _ = try? fileHandle.close()
+    }
+
+    private func append(_ data: Data) {
+        lock.lock()
+        if !isFinished {
+            contents.append(data)
+        }
         lock.unlock()
     }
 

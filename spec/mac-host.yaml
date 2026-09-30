@@ -542,7 +542,7 @@ behaviors:
   - id: MAC-047
     title: Anarlog sessions are read through the Anarlog CLI
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: the Anarlog sessions source is enabled and the operator's Anarlog person ID is configured
     when: a sessions tick runs
@@ -558,7 +558,7 @@ behaviors:
   - id: MAC-048
     title: A changed Anarlog session is re-sent
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: a session the daemon has already sent
     when: its title, time, summary, memo, or participants change in Anarlog
@@ -585,7 +585,7 @@ behaviors:
   - id: MAC-050
     title: Anarlog people are derived from session participants
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: the Anarlog people source is enabled
     when: a people tick reads the participants of every eligible session (on or after the backfill floor and at least three hours old)
@@ -647,7 +647,7 @@ behaviors:
   - id: MAC-055
     title: The Anarlog people source never deletes a person
     type: invariant
-    status: proposed
+    status: current
     surface: none
     statement: the Anarlog people source never sends a person deletion; an identity the CRM holds is kept when the person's last session is deleted, when they are removed from a session, or when they stop appearing in the CLI's output.
     provenance: [.ai/spec/2026-09-29-anarlog-cli-source.md]

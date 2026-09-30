@@ -28,14 +28,8 @@ final class AnarlogCursorTests: XCTestCase {
 
     func testHumansRoundTrip() throws {
         let map: [String: AnarlogHumansCursorEntry] = [
-            "uuid-1": AnarlogHumansCursorEntry(
-                contentHash: "abc",
-                payloadHash: "def",
-                mtimeEpochMs: 1234567890),
-            "uuid-2": AnarlogHumansCursorEntry(
-                contentHash: "ghi",
-                payloadHash: "jkl",
-                mtimeEpochMs: nil),
+            "uuid-1": AnarlogHumansCursorEntry(recordHash: "abc"),
+            "uuid-2": AnarlogHumansCursorEntry(recordHash: "ghi"),
         ]
         let encoded = try AnarlogHumansCursorCodec.encode(map)
         let decoded = try XCTUnwrap(AnarlogHumansCursorCodec.decodeOrNil(encoded))
@@ -44,9 +38,9 @@ final class AnarlogCursorTests: XCTestCase {
 
     func testHumansEncodeIsByteStable() throws {
         let map: [String: AnarlogHumansCursorEntry] = [
-            "uuid-z": AnarlogHumansCursorEntry(contentHash: "a", payloadHash: "b"),
-            "uuid-a": AnarlogHumansCursorEntry(contentHash: "c", payloadHash: "d"),
-            "uuid-m": AnarlogHumansCursorEntry(contentHash: "e", payloadHash: "f"),
+            "uuid-z": AnarlogHumansCursorEntry(recordHash: "a"),
+            "uuid-a": AnarlogHumansCursorEntry(recordHash: "c"),
+            "uuid-m": AnarlogHumansCursorEntry(recordHash: "e"),
         ]
         // Two independent encodes must produce identical bytes.
         let a = try AnarlogHumansCursorCodec.encode(map)
@@ -70,6 +64,18 @@ final class AnarlogCursorTests: XCTestCase {
         XCTAssertEqual(AnarlogHumansCursorCodec.decodeOrNil("{}"), [:])
     }
 
+    func testHumansLegacyFileTreeEntryDecodesNil() {
+        let cursor = #"{"0a18829e-12b6-40f6-93f8-6307973c926b":{"content_hash":"a","payload_hash":"b","mtime_epoch_ms":1}}"#
+        XCTAssertNil(AnarlogHumansCursorCodec.decodeOrNil(cursor))
+    }
+
+    func testHumansEntryEncodesOnlyRecordHash() throws {
+        let encoded = try AnarlogHumansCursorCodec.encode([
+            "u": AnarlogHumansCursorEntry(recordHash: "h"),
+        ])
+        XCTAssertEqual(encoded, #"{"u":{"record_hash":"h"}}"#)
+    }
+
     // MARK: - Sessions
 
     func testSessionsDecodeEmptyReturnsNil() {
@@ -81,37 +87,31 @@ final class AnarlogCursorTests: XCTestCase {
         XCTAssertNil(AnarlogSessionsCursorCodec.decodeOrNil("{\"a\": {}}"))
     }
 
-    func testSessionsRoundTripWithAllFields() throws {
+    func testSessionsRoundTripWithRecordHash() throws {
         let map: [String: AnarlogSessionsCursorEntry] = [
-            "uuid-1": AnarlogSessionsCursorEntry(
-                metaHash: "abc",
-                summaryHash: "def",
-                memoHash: "ghi",
-                payloadHash: "jkl"),
-            "uuid-2": AnarlogSessionsCursorEntry(
-                metaHash: "mno",
-                summaryHash: nil,
-                memoHash: nil,
-                payloadHash: "pqr"),
+            "uuid-1": AnarlogSessionsCursorEntry(recordHash: "abc"),
+            "uuid-2": AnarlogSessionsCursorEntry(recordHash: "pqr"),
         ]
         let encoded = try AnarlogSessionsCursorCodec.encode(map)
         let decoded = try XCTUnwrap(AnarlogSessionsCursorCodec.decodeOrNil(encoded))
         XCTAssertEqual(decoded, map)
     }
 
-    func testSessionsFloorSkipSentinelRoundTrip() throws {
-        let entry = AnarlogSessionsCursorCodec.floorSkippedEntry()
-        XCTAssertEqual(entry.metaHash, "floor_skip")
-        XCTAssertNil(entry.summaryHash)
-        XCTAssertNil(entry.memoHash)
-        XCTAssertEqual(entry.payloadHash, "")
-        XCTAssertTrue(entry.isFloorSkipped)
+    func testSessionsEncodeIsByteStable() throws {
+        let encoded = try AnarlogSessionsCursorCodec.encode([
+            "b": .init(recordHash: "h2"),
+            "a": .init(recordHash: "h1"),
+        ])
+        XCTAssertEqual(encoded, #"{"a":{"record_hash":"h1"},"b":{"record_hash":"h2"}}"#)
+    }
 
-        let map = ["uuid-pre-floor": entry]
-        let encoded = try AnarlogSessionsCursorCodec.encode(map)
-        let decoded = try XCTUnwrap(AnarlogSessionsCursorCodec.decodeOrNil(encoded))
-        XCTAssertEqual(decoded, map)
-        XCTAssertTrue(decoded["uuid-pre-floor"]!.isFloorSkipped)
+    func testSessionsLegacyFileTreeCursorDecodesNil() throws {
+        let fileTreeEntry = #"{"meta_hash":"m","summary_hash":"s","memo_hash":"n","payload_hash":"p"}"#
+        let floorSkipEntry = #"{"meta_hash":"floor_skip","payload_hash":""}"#
+        XCTAssertNil(AnarlogSessionsCursorCodec.decodeOrNil("{\"a\":\(fileTreeEntry)}"))
+        XCTAssertNil(AnarlogSessionsCursorCodec.decodeOrNil("{\"a\":\(floorSkipEntry)}"))
+        XCTAssertNil(AnarlogSessionsCursorCodec.decodeOrNil(
+            "{\"a\":{\"record_hash\":\"h\"},\"b\":\(fileTreeEntry)}"))
     }
 
     // MARK: - Source ID Builder
