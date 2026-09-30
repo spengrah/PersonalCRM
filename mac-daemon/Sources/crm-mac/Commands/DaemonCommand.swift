@@ -197,7 +197,6 @@ struct DaemonCommand: AsyncParsableCommand {
         // The people plugin reads session participants through the Anarlog CLI
         // and reports each tick to a no-op health sink until the health
         // notifier is wired.
-        let anarlogFilesystem = ProductionAnarlogFilesystem()
         let anarlogConfigSource = AnarlogConfigStoreSource(store: configStore)
         let anarlogHumansPublisher = AnarlogHumansPublisher(
             sender: { [piClient] auth, body in
