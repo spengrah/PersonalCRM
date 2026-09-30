@@ -87,37 +87,31 @@ final class AnarlogCursorTests: XCTestCase {
         XCTAssertNil(AnarlogSessionsCursorCodec.decodeOrNil("{\"a\": {}}"))
     }
 
-    func testSessionsRoundTripWithAllFields() throws {
+    func testSessionsRoundTripWithRecordHash() throws {
         let map: [String: AnarlogSessionsCursorEntry] = [
-            "uuid-1": AnarlogSessionsCursorEntry(
-                metaHash: "abc",
-                summaryHash: "def",
-                memoHash: "ghi",
-                payloadHash: "jkl"),
-            "uuid-2": AnarlogSessionsCursorEntry(
-                metaHash: "mno",
-                summaryHash: nil,
-                memoHash: nil,
-                payloadHash: "pqr"),
+            "uuid-1": AnarlogSessionsCursorEntry(recordHash: "abc"),
+            "uuid-2": AnarlogSessionsCursorEntry(recordHash: "pqr"),
         ]
         let encoded = try AnarlogSessionsCursorCodec.encode(map)
         let decoded = try XCTUnwrap(AnarlogSessionsCursorCodec.decodeOrNil(encoded))
         XCTAssertEqual(decoded, map)
     }
 
-    func testSessionsFloorSkipSentinelRoundTrip() throws {
-        let entry = AnarlogSessionsCursorCodec.floorSkippedEntry()
-        XCTAssertEqual(entry.metaHash, "floor_skip")
-        XCTAssertNil(entry.summaryHash)
-        XCTAssertNil(entry.memoHash)
-        XCTAssertEqual(entry.payloadHash, "")
-        XCTAssertTrue(entry.isFloorSkipped)
+    func testSessionsEncodeIsByteStable() throws {
+        let encoded = try AnarlogSessionsCursorCodec.encode([
+            "b": .init(recordHash: "h2"),
+            "a": .init(recordHash: "h1"),
+        ])
+        XCTAssertEqual(encoded, #"{"a":{"record_hash":"h1"},"b":{"record_hash":"h2"}}"#)
+    }
 
-        let map = ["uuid-pre-floor": entry]
-        let encoded = try AnarlogSessionsCursorCodec.encode(map)
-        let decoded = try XCTUnwrap(AnarlogSessionsCursorCodec.decodeOrNil(encoded))
-        XCTAssertEqual(decoded, map)
-        XCTAssertTrue(decoded["uuid-pre-floor"]!.isFloorSkipped)
+    func testSessionsLegacyFileTreeCursorDecodesNil() throws {
+        let fileTreeEntry = #"{"meta_hash":"m","summary_hash":"s","memo_hash":"n","payload_hash":"p"}"#
+        let floorSkipEntry = #"{"meta_hash":"floor_skip","payload_hash":""}"#
+        XCTAssertNil(AnarlogSessionsCursorCodec.decodeOrNil("{\"a\":\(fileTreeEntry)}"))
+        XCTAssertNil(AnarlogSessionsCursorCodec.decodeOrNil("{\"a\":\(floorSkipEntry)}"))
+        XCTAssertNil(AnarlogSessionsCursorCodec.decodeOrNil(
+            "{\"a\":{\"record_hash\":\"h\"},\"b\":\(fileTreeEntry)}"))
     }
 
     // MARK: - Source ID Builder

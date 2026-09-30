@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import CRMMacCore
 import XCTest
 @testable import CRMMacAnarlogSource
@@ -226,6 +227,77 @@ final class AnarlogCLIProcessClientTests: XCTestCase {
         let start = Date()
         await assertFailure(.timeout) {
             try await fake.makeClient(timeout: 0.5).listSessions()
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+    }
+
+    func testTimeoutIsBoundedWhenChildIgnoresTermAndDescendantHoldsPipes() async throws {
+        let fake = try FakeAnarlogCLI()
+        let childPIDURL = fake.directory.appendingPathComponent("child.pid")
+        let holderPIDURL = fake.directory.appendingPathComponent("holder.pid")
+        let scriptURL = fake.directory.appendingPathComponent("ignore-term-and-hold-pipes")
+        let script = """
+            #!/bin/sh
+            trap '' TERM
+            echo $$ > "\(childPIDURL.path)"
+            sleep 20 &
+            echo $! > "\(holderPIDURL.path)"
+            wait
+            """
+        try Data(script.utf8).write(to: scriptURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        defer {
+            if let holderPID = try? String(contentsOf: holderPIDURL, encoding: .utf8),
+               let pid = Int32(holderPID.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                _ = kill(pid, SIGKILL)
+            }
+        }
+        let client = AnarlogCLIProcessClient(
+            cliPath: scriptURL.path,
+            homeDirectory: fake.directory,
+            environment: fake.environment,
+            timeout: 0.5)
+
+        let start = Date()
+        await assertFailure(.timeout) {
+            try await client.listSessions()
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+
+        let childPID = try XCTUnwrap(Int32(
+            String(contentsOf: childPIDURL, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)))
+        XCTAssertEqual(kill(childPID, 0), -1)
+        XCTAssertEqual(errno, ESRCH)
+    }
+
+    func testTimeoutIsBoundedWhenChildExitsButDescendantHoldsStdout() async throws {
+        let fake = try FakeAnarlogCLI()
+        let holderPIDURL = fake.directory.appendingPathComponent("holder.pid")
+        let scriptURL = fake.directory.appendingPathComponent("exit-with-held-stdout")
+        let script = """
+            #!/bin/sh
+            sleep 20 &
+            echo $! > "\(holderPIDURL.path)"
+            exit 0
+            """
+        try Data(script.utf8).write(to: scriptURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        defer {
+            if let holderPID = try? String(contentsOf: holderPIDURL, encoding: .utf8),
+               let pid = Int32(holderPID.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                _ = kill(pid, SIGKILL)
+            }
+        }
+        let client = AnarlogCLIProcessClient(
+            cliPath: scriptURL.path,
+            homeDirectory: fake.directory,
+            environment: fake.environment,
+            timeout: 0.5)
+
+        let start = Date()
+        await assertFailure(.timeout) {
+            try await client.listSessions()
         }
         XCTAssertLessThan(Date().timeIntervalSince(start), 5)
     }

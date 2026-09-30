@@ -542,7 +542,7 @@ behaviors:
   - id: MAC-047
     title: Anarlog sessions are read through the Anarlog CLI
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: the Anarlog sessions source is enabled and the operator's Anarlog person ID is configured
     when: a sessions tick runs
@@ -558,7 +558,7 @@ behaviors:
   - id: MAC-048
     title: A changed Anarlog session is re-sent
     type: business-logic
-    status: proposed
+    status: current
     surface: none
     given: a session the daemon has already sent
     when: its title, time, summary, memo, or participants change in Anarlog

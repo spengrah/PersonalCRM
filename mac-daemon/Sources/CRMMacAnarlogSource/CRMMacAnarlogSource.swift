@@ -22,9 +22,13 @@ public enum CRMMacAnarlogSource {
     /// Default cadence for the people plugin: 30 min (arc I9).
     public static let humansTickInterval: TimeInterval = 30 * 60
 
-    /// Default cadence for the sessions plugin's hourly safety poll per
-    /// spec line 59: 60 min. (FSEvents drives the real-time path.)
-    public static let sessionsSafetyTickInterval: TimeInterval = 60 * 60
+    /// Default cadence for the sessions plugin per arc invariant I9.
+    public static let sessionsSafetyTickInterval: TimeInterval = 30 * 60
+
+    /// Production CLI client factory for the sessions read path.
+    public static let makeCLIClient: @Sendable (_ cliPath: String?) -> any AnarlogCLIClient = {
+        AnarlogCLIProcessClient(cliPath: $0)
+    }
 
     /// Hard cap on the size of a single event payload. Anything larger
     /// triggers a `payload_too_large` warning + cursor-entry preserved
@@ -36,26 +40,4 @@ public enum CRMMacAnarlogSource {
     /// is skipped at the reader level.
     public static let selfHumanUUID: String = "00000000-0000-0000-0000-000000000000"
 
-    /// Files / dirs the sessions reader silently skips at the top
-    /// level of the configured `sessions/` directory. Tracks the
-    /// parent spec's skip-list plus a few entries observed in the
-    /// real Anarlog notes folder.
-    public static let sessionSkipEntries: Set<String> = [
-        "chats",
-        "daily_notes.json",
-        "chat_shortcuts.json",
-        "memories.json",
-        "tasks.json",
-        "settings.json",
-        "store.json",
-        "search_index",
-        "plugins",
-        "events.json",
-        "calendars.json",
-        ".hyprnote",
-        ".DS_Store",
-        "AGENTS.md",
-        "organizations",
-        "templates.json",
-    ]
 }

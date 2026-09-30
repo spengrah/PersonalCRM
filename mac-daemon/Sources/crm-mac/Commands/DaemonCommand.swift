@@ -197,7 +197,6 @@ struct DaemonCommand: AsyncParsableCommand {
         // The people plugin reads session participants through the Anarlog CLI
         // and reports each tick to a no-op health sink until the health
         // notifier is wired.
-        let anarlogFilesystem = ProductionAnarlogFilesystem()
         let anarlogConfigSource = AnarlogConfigStoreSource(store: configStore)
         let anarlogHumansPublisher = AnarlogHumansPublisher(
             sender: { [piClient] auth, body in
@@ -228,8 +227,7 @@ struct DaemonCommand: AsyncParsableCommand {
         let orphanPresenter = UserNotificationCenterPresenter()
         let orphanOpener = NSWorkspaceOpener()
         let orphanMetadataLookup = AnarlogSessionMetadataLookup(
-            configSource: anarlogConfigSource,
-            filesystem: anarlogFilesystem)
+            configSource: anarlogConfigSource)
         let needsAttentionFetcher: NeedsAttentionFetcher = { [piClient, auth] in
             // Map the PiClient transport DTO to the notification
             // module's domain type at this composition boundary
@@ -268,8 +266,8 @@ struct DaemonCommand: AsyncParsableCommand {
             auth: auth,
             mutator: stateMutator,
             publisher: anarlogSessionsPublisher,
-            filesystem: anarlogFilesystem,
             configSource: anarlogConfigSource,
+            healthSink: NoopAnarlogHealthSink(),
             healthRegistry: healthRegistry,
             orphanNotificationCenter: orphanNotificationCenter,
             logger: logger)

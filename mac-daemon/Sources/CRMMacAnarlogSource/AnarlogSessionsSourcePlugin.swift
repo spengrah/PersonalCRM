@@ -1,23 +1,5 @@
-// AnarlogSessionsSourcePlugin — actor that orchestrates one
-// anarlog_sessions tick.
-//
-// Same route + carry-forward invariants as the humans plugin but
-// with a few session-specific twists:
-//   - reads three files per session (`_meta.json`, `_summary.md?`,
-//     `_memo.md?`); each contributes to the cursor entry's hash
-//     fields and only file-bytes changes drive contentChanged
-//   - pre-backfill-floor sessions (created_at < 2026-01-01) get a
-//     `floor_skip` sentinel cursor entry and never emit an event
-//   - skip-list filters at the top level (chats/, settings.json, etc.)
-//   - in-flight coalescing — FSEvents and the safety timer can both
-//     fire near-simultaneously; only one tick runs at a time, with
-//     a flag to re-tick once if a request arrived mid-tick
-//   - calls /known-ids on bootstrap / recovery routes for symmetry
-//     with humans. Today the Pi-side query returns empty for
-//     source=anarlog_sessions (no `external_contact` rows with that
-//     source — sessions live in a future `meeting_note` table); a
-//     later change to the Pi-side query body lights up tombstones
-//     without any daemon code change.
+// AnarlogSessionsSourcePlugin reads Anarlog sessions through the CLI,
+// shapes eligible records, and reconciles them with the Pi.
 import Foundation
 import CRMMacCore
 import CRMMacOrphanNotifications
@@ -29,21 +11,25 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
 
     private let piClient: PiClient
     private let auth: PiAuth
-    // nonisolated: read by the DataSourcePlugin extension's tick() from
-    // a nonisolated context. Sound because all three are immutable lets
-    // holding Sendable values (same pattern as `id`/`tickInterval`).
     public nonisolated let mutator: StateMutator
     private let publisher: AnarlogSessionsPublisher
-    private let filesystem: AnarlogFilesystem
     private let configSource: AnarlogConfigSource
+    private let makeCLIClient: @Sendable (_ cliPath: String?) -> any AnarlogCLIClient
+    private let healthSink: any AnarlogHealthSink
     private let healthRegistry: SourceHealthRegistry
     private let orphanNotificationCenter: OrphanNotificationCenter?
     public nonisolated let logger: LoggerProtocol
     public nonisolated let clock: @Sendable () -> Date
 
-    // In-flight coalescing.
-    private var tickInFlight: Bool = false
-    private var pendingRequest: Bool = false
+    private var tickInFlight = false
+    private var pendingRequest = false
+
+    private enum Route {
+        case firstRun
+        case bootstrapViaKnownIDs
+        case delta
+        case recovery
+    }
 
     public init(
         tickInterval: TimeInterval = CRMMacAnarlogSource.sessionsSafetyTickInterval,
@@ -51,8 +37,9 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
         auth: PiAuth,
         mutator: StateMutator,
         publisher: AnarlogSessionsPublisher,
-        filesystem: AnarlogFilesystem,
         configSource: AnarlogConfigSource,
+        makeCLIClient: @escaping @Sendable (_ cliPath: String?) -> any AnarlogCLIClient = CRMMacAnarlogSource.makeCLIClient,
+        healthSink: any AnarlogHealthSink,
         healthRegistry: SourceHealthRegistry,
         orphanNotificationCenter: OrphanNotificationCenter? = nil,
         logger: LoggerProtocol,
@@ -63,8 +50,9 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
         self.auth = auth
         self.mutator = mutator
         self.publisher = publisher
-        self.filesystem = filesystem
         self.configSource = configSource
+        self.makeCLIClient = makeCLIClient
+        self.healthSink = healthSink
         self.healthRegistry = healthRegistry
         self.orphanNotificationCenter = orphanNotificationCenter
         self.logger = logger
@@ -72,18 +60,6 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
     }
 
     public func performTick() async throws {
-        // In-flight coalescing. The actor's serial mailbox
-        // already prevents concurrent tick() bodies; this loop
-        // additionally absorbs MULTIPLE pending requests while a tick
-        // is running so the next tick fires exactly once after the
-        // current one finishes.
-        //
-        // The DataSourcePlugin extension bumps state.json
-        // `lastScheduledAt` once per scheduler fire that enters tick()
-        // (BEFORE this method runs) — including a coalesced fire that
-        // only sets `pendingRequest` and early-returns below. That is
-        // strictly more liveness signal than before (every fire now
-        // records a state.json timestamp) and never less.
         if tickInFlight {
             pendingRequest = true
             return
@@ -97,45 +73,53 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
     }
 
     private func runTick() async throws {
-        // The DataSourcePlugin extension already bumped state.json
-        // `lastScheduledAt` via `clock()` before performTick() ran.
-        // This `clock()` read feeds the in-memory heartbeat-payload
-        // registry snapshot; with a fixed test clock the two reads are
-        // equal, and in production the sub-ms drift is irrelevant for a
-        // coarse liveness timestamp.
         let tickStart = clock()
         await healthRegistry.update(
             id, healthSnapshot(enabled: true, lastScheduled: tickStart))
 
-        // Config check.
         let config: AnarlogConfig?
         do {
             config = try configSource.load()
         } catch {
-            await markUnhealthy("config_load_failed:\(error)")
+            await markUnhealthy("config_load_failed:\(error)", at: tickStart)
             return
         }
         guard let cfg = config, cfg.sessionsEnabled else {
-            await markUnhealthy("not_configured")
+            await markUnhealthy("not_configured", at: tickStart)
+            return
+        }
+        guard let operatorPersonID = cfg.operatorPersonID else {
+            await markUnhealthy("operator_person_id_unset", at: tickStart)
+            await healthSink.record(source: .anarlogSessions, outcome: .failed(.operatorPersonIDUnset))
             return
         }
 
-        let rootExpanded = AnarlogPathResolver.expand(cfg.rootPath).path
-        guard filesystem.exists(rootExpanded) else {
-            await markUnhealthy("path_missing")
-            return
-        }
-        let sessionsPath = AnarlogPathResolver.sessionsDir(rootPath: cfg.rootPath).path
-        guard filesystem.exists(sessionsPath) else {
-            await markUnhealthy("sessions_subdir_missing")
-            return
-        }
-        guard filesystem.isReadableDirectory(sessionsPath) else {
-            await markUnhealthy("files_folders_permission_denied")
+        let client = makeCLIClient(cfg.cliPath)
+        let listing: [AnarlogSessionListEntry]
+        do {
+            listing = try await client.listSessions()
+        } catch {
+            await reportCLIFailure(error, at: tickStart)
             return
         }
 
-        // Cursor fetch.
+        let listingIDs = Set(listing.map(\.id))
+        let newest = listing.map(\.createdAt).max()
+        let eligible = listing.filter {
+            AnarlogEligibility.isEligible(createdAt: $0.createdAt, now: tickStart)
+        }
+        var records: [(id: String, record: AnarlogSessionRecord)] = []
+        for entry in eligible {
+            do {
+                if let record = try await client.getSession(id: entry.id) {
+                    records.append((entry.id, record))
+                }
+            } catch {
+                await reportCLIFailure(error, at: tickStart)
+                return
+            }
+        }
+
         let cursorState: SourceCursorState
         do {
             cursorState = try await piClient.getCursor(auth: auth, source: id.rawValue)
@@ -143,483 +127,190 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
             logger.warning("anarlog_sessions tick: cursor fetch failed", metadata: [
                 "error": .private(String(describing: error)),
             ])
-            await markUnhealthy("cursor_fetch_failed")
+            await markUnhealthy("cursor_fetch_failed", at: tickStart)
             return
         }
         let decodedOpt = AnarlogSessionsCursorCodec.decodeOrNil(cursorState.cursor)
-
-        // Recovery flag check.
+        let decoded = decodedOpt ?? [:]
         let state = try? await mutator.read()
         let priorError = state?.sources[id.rawValue]?.lastError ?? ""
         let recoveryRequested = priorError.hasPrefix("recovery_requested:")
 
-        // Route selection.
-        var entryRoute: AnarlogTickRoute.Kind
-        let decoded = decodedOpt ?? [:]
+        var route: Route
         if recoveryRequested {
-            entryRoute = .recovery
+            route = .recovery
         } else if decodedOpt == nil {
-            entryRoute = .bootstrapViaKnownIDs
+            route = .bootstrapViaKnownIDs
         } else {
-            entryRoute = .delta
+            route = .delta
         }
 
-        // /known-ids fetch. The Pi-side query currently returns
-        // empty for source=anarlog_sessions (no `external_contact`
-        // rows with that source — sessions live in a future
-        // `meeting_note` table). We still call /known-ids on
-        // bootstrap/recovery routes for symmetry with humans so a
-        // future Pi-side query body change lights this up without
-        // any daemon-code edit.
         var knownIDs: KnownIDsData?
-        if entryRoute == .bootstrapViaKnownIDs || entryRoute == .recovery {
+        if route == .bootstrapViaKnownIDs || route == .recovery {
             do {
                 knownIDs = try await piClient.knownIDs(auth: auth, source: id.rawValue)
             } catch {
                 logger.warning("anarlog_sessions tick: known_ids fetch failed", metadata: [
                     "error": .private(String(describing: error)),
                 ])
-                await markUnhealthy("known_ids_fetch_failed")
+                await markUnhealthy("known_ids_fetch_failed", at: tickStart)
                 return
             }
-            if entryRoute == .bootstrapViaKnownIDs && (knownIDs?.ids.isEmpty ?? true) {
-                entryRoute = .firstRun
+            if route == .bootstrapViaKnownIDs && (knownIDs?.ids.isEmpty ?? true) {
+                route = .firstRun
                 knownIDs = nil
             }
         }
 
         var knownByEntityID: [String: String?] = [:]
-        if let kids = knownIDs {
-            for entry in kids.ids {
-                let entityID = AnarlogHumansSourcePlugin.entityIDFromSourceID(entry.sourceID)
-                knownByEntityID[entityID] = entry.lastContentHash
+        if let knownIDs {
+            for entry in knownIDs.ids {
+                knownByEntityID[Self.entityID(fromSourceID: entry.sourceID)] = entry.lastContentHash
             }
         }
 
-        // Full inventory scan.
-        var seenPhysicalUUIDs: Set<String> = []
         var desiredCursor: [String: AnarlogSessionsCursorEntry] = [:]
         var publishItems: [AnarlogSessionsPublishItem] = []
-        var parseFailedCount = 0
+        var encodeFailedCount = 0
         var payloadTooLargeCount = 0
+        var recordIDs: Set<String> = []
 
-        let entries: [String]
-        do {
-            entries = try filesystem.listDirectory(sessionsPath)
-        } catch AnarlogFilesystemError.permissionDenied {
-            await markUnhealthy("files_folders_permission_denied")
-            return
-        } catch {
-            await markUnhealthy("dir_list_failed:\(error)")
-            return
-        }
-
-        for entry in entries {
-            if CRMMacAnarlogSource.sessionSkipEntries.contains(entry) { continue }
-            // Session dirs are UUID-named. Anything else (foo.txt,
-            // bare files, dirs that don't UUID-parse) is silently
-            // skipped — covers Anarlog dropping unknown junk in the
-            // sessions/ root.
-            guard let canonicalUUID = AnarlogUUIDValidator.canonicalize(entry) else {
-                continue
-            }
-            let sessionDir = (sessionsPath as NSString).appendingPathComponent(entry)
-            // A bare file at sessions/<uuid> (not a directory) is junk
-            // — Anarlog doesn't produce them and the operator may
-            // have created them by mistake. Skip silently so it
-            // can't suppress a legitimate tombstone for an actual
-            // session UUID that happens to collide.
-            guard filesystem.isDirectory(sessionDir) else { continue }
-            // The directory's physical presence on disk is what gates
-            // tombstone emission. Insert into seenPhysicalUUIDs
-            // BEFORE the readability probe — an unreadable directory
-            // is still physically present, so we must not let it be
-            // tombstoned. The carry-forward path below handles the
-            // unreadable case by preserving the prior cursor entry.
-            seenPhysicalUUIDs.insert(canonicalUUID)
-            guard filesystem.isReadableDirectory(sessionDir) else {
-                parseFailedCount += 1
-                logger.warning("anarlog_sessions tick: session_dir_unreadable", metadata: [
-                    "uuid": .private(canonicalUUID),
-                ])
-                carrySessionForward(
-                    uuid: canonicalUUID,
-                    metaBytesHash: "",
-                    summaryBytesHash: nil,
-                    memoBytesHash: nil,
-                    prior: decoded[canonicalUUID],
-                    entryRoute: entryRoute,
-                    knownByEntityID: knownByEntityID,
-                    desiredCursor: &desiredCursor)
-                continue
-            }
-
-            let metaPath = (sessionDir as NSString).appendingPathComponent("_meta.json")
-            let summaryPath = (sessionDir as NSString).appendingPathComponent("_summary.md")
-            let memoPath = (sessionDir as NSString).appendingPathComponent("_memo.md")
-
-            // _meta.json is REQUIRED; without it the session is
-            // malformed (P0 carry-forward).
-            guard filesystem.exists(metaPath) else {
-                parseFailedCount += 1
-                logger.warning("anarlog_sessions tick: meta_missing", metadata: [
-                    "uuid": .private(canonicalUUID),
-                ])
-                carrySessionForward(
-                    uuid: canonicalUUID,
-                    metaBytesHash: "",
-                    summaryBytesHash: nil,
-                    memoBytesHash: nil,
-                    prior: decoded[canonicalUUID],
-                    entryRoute: entryRoute,
-                    knownByEntityID: knownByEntityID,
-                    desiredCursor: &desiredCursor)
-                continue
-            }
-            let metaBytes: Data
-            do {
-                metaBytes = try filesystem.readFile(metaPath)
-            } catch {
-                parseFailedCount += 1
-                logger.warning("anarlog_sessions tick: meta_read_failed", metadata: [
-                    "uuid": .private(canonicalUUID),
-                    "error": .private(String(describing: error)),
-                ])
-                carrySessionForward(
-                    uuid: canonicalUUID,
-                    metaBytesHash: "",
-                    summaryBytesHash: nil,
-                    memoBytesHash: nil,
-                    prior: decoded[canonicalUUID],
-                    entryRoute: entryRoute,
-                    knownByEntityID: knownByEntityID,
-                    desiredCursor: &desiredCursor)
-                continue
-            }
-            let metaBytesHash = AnarlogFileHash.sha256Hex(metaBytes)
-            // Summary / memo: explicit read with carry-forward on
-            // failure. The previous `try?` happily swallowed
-            // permission denied + IO errors, which would commit a
-            // cursor that says "summary absent" when the file is
-            // actually present-but-unreadable — that drops the
-            // existing summary content on the next successful tick.
-            let summaryBytes: Data?
-            if filesystem.exists(summaryPath) {
-                do {
-                    summaryBytes = try filesystem.readFile(summaryPath)
-                } catch {
-                    parseFailedCount += 1
-                    logger.warning("anarlog_sessions tick: summary_read_failed", metadata: [
-                        "uuid": .private(canonicalUUID),
-                        "error": .private(String(describing: error)),
-                    ])
-                    carrySessionForward(
-                        uuid: canonicalUUID,
-                        metaBytesHash: metaBytesHash,
-                        summaryBytesHash: decoded[canonicalUUID]?.summaryHash,
-                        memoBytesHash: decoded[canonicalUUID]?.memoHash,
-                        prior: decoded[canonicalUUID],
-                        entryRoute: entryRoute,
-                        knownByEntityID: knownByEntityID,
-                        desiredCursor: &desiredCursor)
-                    continue
-                }
-            } else {
-                summaryBytes = nil
-            }
-            let memoBytes: Data?
-            if filesystem.exists(memoPath) {
-                do {
-                    memoBytes = try filesystem.readFile(memoPath)
-                } catch {
-                    parseFailedCount += 1
-                    logger.warning("anarlog_sessions tick: memo_read_failed", metadata: [
-                        "uuid": .private(canonicalUUID),
-                        "error": .private(String(describing: error)),
-                    ])
-                    carrySessionForward(
-                        uuid: canonicalUUID,
-                        metaBytesHash: metaBytesHash,
-                        summaryBytesHash: decoded[canonicalUUID]?.summaryHash,
-                        memoBytesHash: decoded[canonicalUUID]?.memoHash,
-                        prior: decoded[canonicalUUID],
-                        entryRoute: entryRoute,
-                        knownByEntityID: knownByEntityID,
-                        desiredCursor: &desiredCursor)
-                    continue
-                }
-            } else {
-                memoBytes = nil
-            }
-            let summaryHash = summaryBytes.map(AnarlogFileHash.sha256Hex)
-            let memoHash = memoBytes.map(AnarlogFileHash.sha256Hex)
-
-            let prior = decoded[canonicalUUID]
-            let contentChanged: Bool
-            if let prior {
-                contentChanged = prior.metaHash != metaBytesHash
-                    || prior.summaryHash != summaryHash
-                    || prior.memoHash != memoHash
-            } else {
-                contentChanged = true
-            }
-
-            guard let meta = AnarlogSessionMetaParser.parse(
-                uuid: canonicalUUID, metaJSONBytes: metaBytes) else {
-                parseFailedCount += 1
-                logger.warning("anarlog_sessions tick: meta_parse_failed", metadata: [
-                    "uuid": .private(canonicalUUID),
-                ])
-                carrySessionForward(
-                    uuid: canonicalUUID,
-                    metaBytesHash: metaBytesHash,
-                    summaryBytesHash: summaryHash,
-                    memoBytesHash: memoHash,
-                    prior: prior,
-                    entryRoute: entryRoute,
-                    knownByEntityID: knownByEntityID,
-                    desiredCursor: &desiredCursor)
-                continue
-            }
-
-            // Pre-backfill-floor: park as sentinel. Never emit.
-            if AnarlogSessionsPayloadShaping.isPreBackfillFloor(meta) {
-                desiredCursor[canonicalUUID] = AnarlogSessionsCursorCodec.floorSkippedEntry()
-                continue
-            }
-
-            // UTF-8 decode for the text bodies. A non-nil byte array
-            // that fails to decode as UTF-8 is a real content
-            // problem (binary in `_summary.md`, etc.). Carry forward
-            // rather than silently committing a "no summary" cursor
-            // entry that would drop the content on a future scan
-            // after the operator fixes the encoding.
-            let summary: String?
-            if let summaryBytes {
-                guard let decodedSummary = String(data: summaryBytes, encoding: .utf8) else {
-                    parseFailedCount += 1
-                    logger.warning("anarlog_sessions tick: summary_utf8_decode_failed", metadata: [
-                        "uuid": .private(canonicalUUID),
-                    ])
-                    carrySessionForward(
-                        uuid: canonicalUUID,
-                        metaBytesHash: metaBytesHash,
-                        summaryBytesHash: decoded[canonicalUUID]?.summaryHash,
-                        memoBytesHash: decoded[canonicalUUID]?.memoHash,
-                        prior: decoded[canonicalUUID],
-                        entryRoute: entryRoute,
-                        knownByEntityID: knownByEntityID,
-                        desiredCursor: &desiredCursor)
-                    continue
-                }
-                summary = decodedSummary
-            } else {
-                summary = nil
-            }
-            let memo: String?
-            if let memoBytes {
-                guard let decodedMemo = String(data: memoBytes, encoding: .utf8) else {
-                    parseFailedCount += 1
-                    logger.warning("anarlog_sessions tick: memo_utf8_decode_failed", metadata: [
-                        "uuid": .private(canonicalUUID),
-                    ])
-                    carrySessionForward(
-                        uuid: canonicalUUID,
-                        metaBytesHash: metaBytesHash,
-                        summaryBytesHash: decoded[canonicalUUID]?.summaryHash,
-                        memoBytesHash: decoded[canonicalUUID]?.memoHash,
-                        prior: decoded[canonicalUUID],
-                        entryRoute: entryRoute,
-                        knownByEntityID: knownByEntityID,
-                        desiredCursor: &desiredCursor)
-                    continue
-                }
-                memo = decodedMemo
-            } else {
-                memo = nil
-            }
-
-            // Shape + size check.
+        for (sessionID, record) in records {
+            recordIDs.insert(sessionID)
             let payload = AnarlogSessionsPayloadShaping.shape(
-                meta: meta, summary: summary, memo: memo, hostID: auth.hostID)
+                record: record, operatorPersonID: operatorPersonID, hostID: auth.hostID)
             let payloadBytes: Data
             do {
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.withoutEscapingSlashes]
                 payloadBytes = try encoder.encode(payload)
             } catch {
-                parseFailedCount += 1
-                logger.warning("anarlog_sessions tick: payload_encode_failed", metadata: [
-                    "uuid": .private(canonicalUUID),
-                    "error": .private(String(describing: error)),
-                ])
-                carrySessionForward(
-                    uuid: canonicalUUID,
-                    metaBytesHash: metaBytesHash,
-                    summaryBytesHash: summaryHash,
-                    memoBytesHash: memoHash,
-                    prior: prior,
-                    entryRoute: entryRoute,
-                    knownByEntityID: knownByEntityID,
-                    desiredCursor: &desiredCursor)
+                encodeFailedCount += 1
+                carryForward(sessionID, decoded: decoded, route: route,
+                             knownByEntityID: knownByEntityID, desiredCursor: &desiredCursor)
                 continue
             }
-            if payloadBytes.count > CRMMacAnarlogSource.maxPayloadBytes {
+            guard payloadBytes.count <= CRMMacAnarlogSource.maxPayloadBytes else {
                 payloadTooLargeCount += 1
-                logger.error("anarlog_sessions tick: payload_too_large", metadata: [
-                    "uuid": .private(canonicalUUID),
-                    "size": .public(String(payloadBytes.count)),
-                ])
-                carrySessionForward(
-                    uuid: canonicalUUID,
-                    metaBytesHash: metaBytesHash,
-                    summaryBytesHash: summaryHash,
-                    memoBytesHash: memoHash,
-                    prior: prior,
-                    entryRoute: entryRoute,
-                    knownByEntityID: knownByEntityID,
-                    desiredCursor: &desiredCursor)
+                carryForward(sessionID, decoded: decoded, route: route,
+                             knownByEntityID: knownByEntityID, desiredCursor: &desiredCursor)
                 continue
             }
 
-            let payloadHash: String
-            let shouldEmit: Bool
-            switch entryRoute {
-            case .recovery, .bootstrapViaKnownIDs, .firstRun:
-                payloadHash = (try? ContentHasher.contentHash(for: payloadBytes)) ?? ""
-                shouldEmit = !payloadHash.isEmpty
-            case .delta:
-                if contentChanged {
-                    payloadHash = (try? ContentHasher.contentHash(for: payloadBytes)) ?? ""
-                    shouldEmit = !payloadHash.isEmpty
-                } else {
-                    if let prior, !prior.payloadHash.isEmpty {
-                        payloadHash = prior.payloadHash
-                    } else {
-                        payloadHash = (try? ContentHasher.contentHash(for: payloadBytes)) ?? ""
-                    }
-                    shouldEmit = false
-                }
+            let recordHash: String
+            do {
+                recordHash = try ContentHasher.contentHash(for: payloadBytes)
+            } catch {
+                encodeFailedCount += 1
+                carryForward(sessionID, decoded: decoded, route: route,
+                             knownByEntityID: knownByEntityID, desiredCursor: &desiredCursor)
+                continue
             }
-
+            let shouldEmit: Bool
+            switch route {
+            case .firstRun, .bootstrapViaKnownIDs, .recovery:
+                shouldEmit = true
+            case .delta:
+                shouldEmit = decoded[sessionID]?.recordHash != recordHash
+            }
             if shouldEmit {
                 let sourceID = AnarlogSourceIDBuilder.upsertSourceID(
-                    entityID: canonicalUUID, payloadHash: payloadHash)
+                    entityID: sessionID, payloadHash: recordHash)
                 publishItems.append(AnarlogSessionsPublishItem(
-                    sourceID: sourceID,
-                    kind: "meeting_note.recorded",
-                    payloadBytes: payloadBytes))
+                    sourceID: sourceID, kind: "meeting_note.recorded", payloadBytes: payloadBytes))
             }
-
-            desiredCursor[canonicalUUID] = AnarlogSessionsCursorEntry(
-                metaHash: metaBytesHash,
-                summaryHash: summaryHash,
-                memoHash: memoHash,
-                payloadHash: payloadHash)
+            desiredCursor[sessionID] = AnarlogSessionsCursorEntry(recordHash: recordHash)
         }
 
-        // Tombstone basis. The floor_skip sentinel entries
-        // never produce tombstones (isFloorSkipped guard).
-        var tombstoneBasis: [AnarlogTombstoneBasisEntry] = []
-        switch entryRoute {
+        // Listing presence, including ineligible or not-found entries, prevents a delete.
+        let listedWithoutRecord = listingIDs.subtracting(recordIDs)
+        for sessionID in listedWithoutRecord {
+            carryForward(sessionID, decoded: decoded, route: route,
+                         knownByEntityID: knownByEntityID, desiredCursor: &desiredCursor)
+        }
+
+        let basis: [String: String?]
+        switch route {
         case .firstRun:
-            tombstoneBasis = []
+            basis = [:]
         case .delta:
-            for (uuid, entry) in decoded {
-                tombstoneBasis.append(AnarlogTombstoneBasisEntry(
-                    uuid: uuid,
-                    priorPayloadHash: entry.payloadHash.isEmpty ? nil : entry.payloadHash,
-                    isFloorSkipped: entry.isFloorSkipped))
-            }
+            basis = decoded.mapValues { Optional($0.recordHash) }
         case .bootstrapViaKnownIDs, .recovery:
-            for (uuid, lastHash) in knownByEntityID {
-                tombstoneBasis.append(AnarlogTombstoneBasisEntry(
-                    uuid: uuid,
-                    priorPayloadHash: lastHash,
-                    isFloorSkipped: false))
-            }
+            basis = knownByEntityID
         }
-
-        for basis in tombstoneBasis {
-            if basis.isFloorSkipped { continue }
-            if seenPhysicalUUIDs.contains(basis.uuid) { continue }
-            let deleted = AnarlogSessionsPayloadShaping.shapeDeleted(
-                sessionID: basis.uuid, hostID: auth.hostID)
-            let deletedBytes: Data
-            do {
+        let deletions = basis.keys.filter { !listingIDs.contains($0) }
+        let decided: AnarlogTickOutcome
+        if deletions.count <= cfg.deletionCap {
+            for sessionID in deletions {
+                let deleted = AnarlogSessionsPayloadShaping.shapeDeleted(
+                    sessionID: sessionID, hostID: auth.hostID)
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.withoutEscapingSlashes]
-                deletedBytes = try encoder.encode(deleted)
-            } catch {
-                logger.warning("anarlog_sessions tick: delete_encode_failed", metadata: [
-                    "uuid": .private(basis.uuid),
-                    "error": .private(String(describing: error)),
-                ])
-                continue
+                let payloadBytes = try encoder.encode(deleted)
+                publishItems.append(AnarlogSessionsPublishItem(
+                    sourceID: AnarlogSourceIDBuilder.deleteSourceID(
+                        entityID: sessionID, priorPayloadHash: basis[sessionID] ?? nil),
+                    kind: "meeting_note.deleted",
+                    payloadBytes: payloadBytes))
             }
-            let sourceID = AnarlogSourceIDBuilder.deleteSourceID(
-                entityID: basis.uuid,
-                priorPayloadHash: basis.priorPayloadHash)
-            publishItems.append(AnarlogSessionsPublishItem(
-                sourceID: sourceID,
-                kind: "meeting_note.deleted",
-                payloadBytes: deletedBytes))
-        }
-
-        // Publish.
-        let outcome = await publisher.publish(items: publishItems)
-        let hadHashMismatch = outcome.rejected.contains { rej in
-            AnarlogSessionsPublisher.recoveryCodes.contains(rej.code)
-        }
-        if hadHashMismatch {
-            await setRecoveryFlag(reason: "hash_mismatch")
-        }
-
-        // Forward any needs_attention items the Pi surfaced to
-        // the notification center. Map the transport DTO
-        // (NeedsAttentionItem from CRMMacPiClient) to the
-        // notification module's domain type at this boundary so
-        // CRMMacOrphanNotifications doesn't depend on the wire
-        // shape. consume() is non-throwing — we await it before
-        // committing the cursor below so a slow consume() applies
-        // back-pressure onto the next tick rather than letting
-        // notifications pile up unbounded behind the cursor.
-        if !outcome.needsAttention.isEmpty {
-            let domainItems = outcome.needsAttention.map { wire in
-                NotificationConsumeItem(
-                    sessionID: wire.sessionID, reason: wire.reason)
+            decided = .clean(newestSessionCreatedAt: newest)
+        } else {
+            for sessionID in deletions {
+                switch route {
+                case .delta:
+                    if let prior = decoded[sessionID] { desiredCursor[sessionID] = prior }
+                case .bootstrapViaKnownIDs, .recovery:
+                    if let hash = knownByEntityID[sessionID] {
+                        desiredCursor[sessionID] = AnarlogSessionsCursorEntry(recordHash: hash ?? "")
+                    }
+                case .firstRun:
+                    break
+                }
             }
-            await orphanNotificationCenter?.consume(needsAttention: domainItems)
-        }
-
-        let cleanBatch = outcome.rejected.isEmpty && outcome.unconfirmed == 0
-        if !cleanBatch {
-            var errMsg = "publish_held_due_to_rejections (\(outcome.rejected.count) rejected"
-            if outcome.unconfirmed > 0 {
-                errMsg += ", \(outcome.unconfirmed) unconfirmed"
-            }
-            errMsg += ")"
-            if parseFailedCount > 0 || payloadTooLargeCount > 0 {
-                errMsg += "; anomalies parse_failed=\(parseFailedCount) payload_too_large=\(payloadTooLargeCount)"
-            }
-            await recordLastError(errMsg)
-            return
+            decided = .deletionsWithheld(withheld: deletions.count, newestSessionCreatedAt: newest)
         }
 
         let desiredCursorBytes: String
         do {
             desiredCursorBytes = try AnarlogSessionsCursorCodec.encode(desiredCursor)
         } catch {
-            await markUnhealthy("cursor_encode_failed:\(error)")
+            await markUnhealthy("cursor_encode_failed:\(error)", at: tickStart)
+            await healthSink.record(source: .anarlogSessions, outcome: decided)
             return
         }
+
+        let outcome = await publisher.publish(items: publishItems)
+        let hadHashMismatch = outcome.rejected.contains { rejection in
+            AnarlogSessionsPublisher.recoveryCodes.contains(rejection.code)
+        }
+        if hadHashMismatch {
+            await setRecoveryFlag(reason: "hash_mismatch", at: tickStart)
+        }
+        if !outcome.needsAttention.isEmpty {
+            let domainItems = outcome.needsAttention.map {
+                NotificationConsumeItem(sessionID: $0.sessionID, reason: $0.reason)
+            }
+            await orphanNotificationCenter?.consume(needsAttention: domainItems)
+        }
+
+        let cleanBatch = outcome.rejected.isEmpty && outcome.unconfirmed == 0
+        if !cleanBatch {
+            var errorMessage = "publish_held_due_to_rejections (\(outcome.rejected.count) rejected"
+            if outcome.unconfirmed > 0 {
+                errorMessage += ", \(outcome.unconfirmed) unconfirmed"
+            }
+            errorMessage += ")"
+            if encodeFailedCount > 0 || payloadTooLargeCount > 0 {
+                errorMessage += "; anomalies encode_failed=\(encodeFailedCount) payload_too_large=\(payloadTooLargeCount)"
+            }
+            await recordLastError(errorMessage, at: tickStart)
+            return
+        }
+
         do {
             try await piClient.commitCursor(
-                auth: auth,
-                source: id.rawValue,
-                cursor: desiredCursorBytes,
-                baseCursor: cursorState.cursor,
-                cursorEpoch: cursorState.cursorEpoch,
+                auth: auth, source: id.rawValue, cursor: desiredCursorBytes,
+                baseCursor: cursorState.cursor, cursorEpoch: cursorState.cursorEpoch,
                 backfillComplete: true)
         } catch {
             logger.warning("anarlog_sessions tick: cursor commit failed", metadata: [
@@ -628,58 +319,51 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
             return
         }
 
-        let pushedAt = clock()
-        let anomalyMsg: String? = (parseFailedCount > 0 || payloadTooLargeCount > 0)
-            ? "anomalies parse_failed=\(parseFailedCount) payload_too_large=\(payloadTooLargeCount)"
+        await healthSink.record(source: .anarlogSessions, outcome: decided)
+        let anomalyMessage: String? = (encodeFailedCount > 0 || payloadTooLargeCount > 0)
+            ? "anomalies encode_failed=\(encodeFailedCount) payload_too_large=\(payloadTooLargeCount)"
             : nil
         await commitCleanTick(
-            cursor: desiredCursorBytes,
-            cursorEpoch: cursorState.cursorEpoch,
-            pushedAt: pushedAt,
-            anomalyError: anomalyMsg)
-
+            cursor: desiredCursorBytes, cursorEpoch: cursorState.cursorEpoch,
+            pushedAt: tickStart, anomalyError: anomalyMessage)
         await healthRegistry.update(
-            id, healthSnapshot(
-                enabled: true,
-                lastScheduled: tickStart,
-                lastPushed: pushedAt))
-
+            id, healthSnapshot(enabled: true, lastScheduled: tickStart, lastPushed: tickStart))
         logger.debug("anarlog_sessions tick: complete", metadata: [
-            "route": .public(String(describing: entryRoute)),
+            "route": .public(String(describing: route)),
             "emitted": .public(String(publishItems.count)),
             "accepted": .public(String(outcome.accepted)),
             "duplicate": .public(String(outcome.duplicate)),
         ])
     }
 
-    // MARK: - per-file failure helper
+    private static func entityID(fromSourceID sourceID: String) -> String {
+        guard let separator = sourceID.firstIndex(of: "@") else { return sourceID }
+        return String(sourceID[..<separator])
+    }
 
-    private func carrySessionForward(
-        uuid: String,
-        metaBytesHash: String,
-        summaryBytesHash: String?,
-        memoBytesHash: String?,
-        prior: AnarlogSessionsCursorEntry?,
-        entryRoute: AnarlogTickRoute.Kind,
+    private func carryForward(
+        _ sessionID: String,
+        decoded: [String: AnarlogSessionsCursorEntry],
+        route: Route,
         knownByEntityID: [String: String?],
         desiredCursor: inout [String: AnarlogSessionsCursorEntry]
     ) {
-        if let prior {
-            desiredCursor[uuid] = prior
-            return
-        }
-        if entryRoute == .bootstrapViaKnownIDs || entryRoute == .recovery,
-           let knownLastHash = knownByEntityID[uuid] {
-            let payloadHash = knownLastHash ?? "unknown"
-            desiredCursor[uuid] = AnarlogSessionsCursorEntry(
-                metaHash: metaBytesHash.isEmpty ? "unknown" : metaBytesHash,
-                summaryHash: summaryBytesHash,
-                memoHash: memoBytesHash,
-                payloadHash: payloadHash)
+        switch route {
+        case .delta:
+            if let prior = decoded[sessionID] { desiredCursor[sessionID] = prior }
+        case .bootstrapViaKnownIDs, .recovery:
+            if let knownHash = knownByEntityID[sessionID] {
+                desiredCursor[sessionID] = AnarlogSessionsCursorEntry(recordHash: knownHash ?? "")
+            }
+        case .firstRun:
+            break
         }
     }
 
-    // MARK: - state mutators
+    private func reportCLIFailure(_ failure: AnarlogCLIFailure, at date: Date) async {
+        await markUnhealthy("anarlog_cli_failed:\(String(describing: failure))", at: date)
+        await healthSink.record(source: .anarlogSessions, outcome: .failed(failure))
+    }
 
     private func commitCleanTick(
         cursor: String,
@@ -689,18 +373,18 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
     ) async {
         do {
             try await mutator.mutate { state in
-                var src = state.sources[self.id.rawValue] ?? SourceState()
-                src.cursor = cursor
-                src.cursorEpoch = cursorEpoch
-                src.lastPushedAt = pushedAt
+                var source = state.sources[self.id.rawValue] ?? SourceState()
+                source.cursor = cursor
+                source.cursorEpoch = cursorEpoch
+                source.lastPushedAt = pushedAt
                 if let anomalyError {
-                    src.lastError = anomalyError
-                    src.lastErrorAt = pushedAt
+                    source.lastError = anomalyError
+                    source.lastErrorAt = pushedAt
                 } else {
-                    src.lastError = nil
-                    src.lastErrorAt = nil
+                    source.lastError = nil
+                    source.lastErrorAt = nil
                 }
-                state.sources[self.id.rawValue] = src
+                state.sources[self.id.rawValue] = source
             }
         } catch {
             logger.warning("anarlog_sessions tick: commitCleanTick mutate failed", metadata: [
@@ -709,13 +393,13 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
         }
     }
 
-    private func setRecoveryFlag(reason: String) async {
+    private func setRecoveryFlag(reason: String, at date: Date) async {
         do {
             try await mutator.mutate { state in
-                var src = state.sources[self.id.rawValue] ?? SourceState()
-                src.lastError = "recovery_requested:\(reason)"
-                src.lastErrorAt = self.clock()
-                state.sources[self.id.rawValue] = src
+                var source = state.sources[self.id.rawValue] ?? SourceState()
+                source.lastError = "recovery_requested:\(reason)"
+                source.lastErrorAt = date
+                state.sources[self.id.rawValue] = source
             }
         } catch {
             logger.warning("anarlog_sessions tick: setRecoveryFlag failed", metadata: [
@@ -724,18 +408,17 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
         }
     }
 
-    private func recordLastError(_ msg: String) async {
+    private func recordLastError(_ message: String, at date: Date) async {
         do {
             try await mutator.mutate { state in
-                var src = state.sources[self.id.rawValue] ?? SourceState()
-                if let existing = src.lastError,
-                   existing.hasPrefix("recovery_requested:") {
-                    src.lastError = "\(existing); \(msg)"
+                var source = state.sources[self.id.rawValue] ?? SourceState()
+                if let existing = source.lastError, existing.hasPrefix("recovery_requested:") {
+                    source.lastError = "\(existing); \(message)"
                 } else {
-                    src.lastError = msg
+                    source.lastError = message
                 }
-                src.lastErrorAt = self.clock()
-                state.sources[self.id.rawValue] = src
+                source.lastErrorAt = date
+                state.sources[self.id.rawValue] = source
             }
         } catch {
             logger.warning("anarlog_sessions tick: recordLastError failed", metadata: [
@@ -744,15 +427,10 @@ public actor AnarlogSessionsSourcePlugin: DataSourcePlugin {
         }
     }
 
-    private func markUnhealthy(_ reason: String) async {
-        let now = clock()
-        let snap = SourceHealthSnapshot(
-            enabled: false,
-            lastScheduledAt: now,
-            lastError: reason,
-            lastErrorAt: now)
-        await healthRegistry.update(id, snap)
-        await recordLastError(reason)
+    private func markUnhealthy(_ reason: String, at date: Date) async {
+        await healthRegistry.update(id, SourceHealthSnapshot(
+            enabled: false, lastScheduledAt: date, lastError: reason, lastErrorAt: date))
+        await recordLastError(reason, at: date)
         logger.warning("anarlog_sessions tick: marked unhealthy", metadata: [
             "reason": .public(reason),
         ])
