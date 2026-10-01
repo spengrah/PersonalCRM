@@ -13,7 +13,8 @@
 // preserved across cursor round-trip. Two calls can share a wall-clock
 // second; the Z_PK tie-breaker prevents skipping a boundary row.
 //
-// Live iteration uses: WHERE (ZDATE > $1) OR (ZDATE = $1 AND Z_PK > $2)
+// Live iteration uses: WHERE Z_PK > $1 (insertion order; iCloud sync
+//   inserts iPhone calls late, out of ZDATE order)
 // Backfill uses: WHERE (ZDATE < $1) OR (ZDATE = $1 AND Z_PK < $2)
 //
 // Encoding: ZDATE is encoded as a raw Double (seconds since the Apple
@@ -41,11 +42,13 @@ public struct PhoneCallsCursorWire: Codable, Equatable, Sendable {
     /// `backfillCursorZDate` is nil.
     public var backfillCursorZPK: Int64?
 
-    /// ZDATE at-or-below which live events have been emitted (Apple-
-    /// epoch seconds, Double). Walks UP from `installMaxZDate`.
+    /// ZDATE of the row at `liveCursorZPK` (Apple-epoch seconds,
+    /// Double). Display only — the host page shows it as the pushed
+    /// cursor time; live iteration reads `liveCursorZPK` alone.
     public var liveCursorZDate: Double?
 
-    /// Z_PK tie-breaker paired with `liveCursorZDate`.
+    /// Z_PK at-or-below which live rows have been read. Live iteration
+    /// walks UP from here in insertion order.
     public var liveCursorZPK: Int64?
 
     /// Install-time MAX(ZDATE), captured lazily on the first tick.

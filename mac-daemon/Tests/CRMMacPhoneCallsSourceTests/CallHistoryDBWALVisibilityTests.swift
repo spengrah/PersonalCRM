@@ -153,7 +153,7 @@ final class CallHistoryDBWALVisibilityTests: XCTestCase {
         let page = try pool.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: 0, zPK: 0),
+                direction: .insertedAfter(zPK: 0),
                 limit: 100)
         }
         XCTAssertEqual(page.rows.count, 7,
@@ -190,7 +190,7 @@ final class CallHistoryDBWALVisibilityTests: XCTestCase {
             let page = try pool.read { db in
                 try CallHistoryDBReader.fetchPage(
                     db: db,
-                    direction: .forwardFromExclusive(zdate: 0, zPK: 0),
+                    direction: .insertedAfter(zPK: 0),
                     limit: 100)
             }
             XCTAssertEqual(page.rows.count, 1)
@@ -211,7 +211,7 @@ final class CallHistoryDBWALVisibilityTests: XCTestCase {
             let page = try pool.read { db in
                 try CallHistoryDBReader.fetchPage(
                     db: db,
-                    direction: .forwardFromExclusive(zdate: baseZDate + 10, zPK: 1),
+                    direction: .insertedAfter(zPK: 1),
                     limit: 100)
             }
             XCTAssertEqual(page.rows.count, 1,
