@@ -99,6 +99,29 @@ final class CallHistoryDBReaderTests: XCTestCase {
         XCTAssertEqual(page.rows[1].uniqueID, "u1")
     }
 
+    /// Backfill advances to `lastScanned`, which on a descending page
+    /// must be the page's lowest (ZDATE, Z_PK) point even when Z_PK
+    /// order disagrees with ZDATE order.
+    func testBackwardPageLastScannedIsLowestPoint() throws {
+        let queue = try InMemoryCallHistoryDB.makeQueue()
+        let offsets: [Double] = [40, 10, 30, 0, 20] // Z_PK 1...5
+        try seed(queue, offsets.enumerated().map { i, offset in
+            InsertRow(uniqueID: "u\(i + 1)", zdate: baseZDate + offset,
+                      address: "+15551234567",
+                      originated: false, answered: 1, duration: 30,
+                      serviceProvider: "com.apple.Telephony", callType: 0,
+                      hasMessage: false)
+        })
+        let page = try queue.read { db in
+            try CallHistoryDBReader.fetchPage(
+                db: db,
+                direction: .backwardFromExclusive(zdate: baseZDate + 100, zPK: 0),
+                limit: 3)
+        }
+        XCTAssertEqual(page.rows.map(\.uniqueID), ["u1", "u3", "u5"])
+        XCTAssertEqual(page.lastScanned, CallCursorPoint(zdate: baseZDate + 20, zPK: 5))
+    }
+
     func testMaxZDateReturnsTopRow() throws {
         let queue = try InMemoryCallHistoryDB.makeQueue()
         try seed(queue, [
@@ -125,15 +148,15 @@ final class CallHistoryDBReaderTests: XCTestCase {
     func testEmptyAddressRowsAreSkipped() throws {
         let queue = try InMemoryCallHistoryDB.makeQueue()
         try seed(queue, [
-            InsertRow(uniqueID: "u-empty", zdate: baseZDate + 10, address: "",
+            InsertRow(uniqueID: "u-ok", zdate: baseZDate + 10, address: "+15551234567",
                       originated: false, answered: 1, duration: 30,
                       serviceProvider: "com.apple.Telephony", callType: 0,
                       hasMessage: false),
-            InsertRow(uniqueID: "u-nil", zdate: baseZDate + 20, address: nil,
+            InsertRow(uniqueID: "u-empty", zdate: baseZDate + 20, address: "",
                       originated: false, answered: 1, duration: 30,
                       serviceProvider: "com.apple.Telephony", callType: 0,
                       hasMessage: false),
-            InsertRow(uniqueID: "u-ok", zdate: baseZDate + 30, address: "+15551234567",
+            InsertRow(uniqueID: "u-nil", zdate: baseZDate + 30, address: nil,
                       originated: false, answered: 1, duration: 30,
                       serviceProvider: "com.apple.Telephony", callType: 0,
                       hasMessage: false),
@@ -146,8 +169,8 @@ final class CallHistoryDBReaderTests: XCTestCase {
         }
         XCTAssertEqual(page.rows.count, 1)
         XCTAssertEqual(page.rows[0].uniqueID, "u-ok")
-        // lastScanned includes the skipped rows so the caller can
-        // advance past them.
+        // The page ends on skipped rows; lastScanned still reaches them
+        // so the caller can advance past them.
         XCTAssertEqual(page.lastScanned?.zPK, 3)
     }
 

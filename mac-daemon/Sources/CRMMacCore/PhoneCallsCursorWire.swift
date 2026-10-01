@@ -5,23 +5,23 @@
 // consumes the cursor in the source plugin) and any future CLI ops
 // support can share a single definition.
 //
-// The cursor primitive differs from MessagesCursorWire: CallHistoryDB's
-// ZCALLRECORD table is keyed on a (ZDATE, Z_PK) pair, not a single
-// monotonic ROWID. ZDATE is Apple-epoch SECONDS since 2001-01-01 (Core
-// Data's CFAbsoluteTime convention), stored as a SQLite REAL — so
-// fractional sub-second precision IS used by CallHistoryDB and must be
-// preserved across cursor round-trip. Two calls can share a wall-clock
-// second; the Z_PK tie-breaker prevents skipping a boundary row.
+// The cursor primitives differ from MessagesCursorWire. The live cursor
+// is a single Z_PK (CallHistoryDB's insertion order), because iCloud
+// sync inserts iPhone calls late, out of ZDATE order. The backfill
+// cursor and scan progress are (ZDATE, Z_PK) pairs walked downward by
+// call time. ZDATE is Apple-epoch SECONDS since 2001-01-01 (Core Data's
+// CFAbsoluteTime convention), stored as a SQLite REAL — so fractional
+// sub-second precision IS used by CallHistoryDB and must be preserved
+// across cursor round-trip. Two calls can share a wall-clock second;
+// the Z_PK tie-breaker prevents skipping a boundary row.
 //
-// Live iteration uses: WHERE Z_PK > $1 (insertion order; iCloud sync
-//   inserts iPhone calls late, out of ZDATE order)
+// Live iteration uses: WHERE Z_PK > $1 AND ZDATE IS NOT NULL
 // Backfill uses: WHERE (ZDATE < $1) OR (ZDATE = $1 AND Z_PK < $2)
 //
 // Encoding: ZDATE is encoded as a raw Double (seconds since the Apple
 // epoch) rather than an ISO-8601 string so the sub-second part is
 // preserved verbatim. Using ISO-8601 without fractional-seconds would
-// truncate to whole seconds and cause backfill descent to skip rows
-// and live descent to duplicate them across restart.
+// truncate to whole seconds and cause backfill descent to skip rows.
 //
 // Like MessagesCursorWire, this struct carries a pendingScans queue —
 // operator-queued and auto-queued 30-day identifier-scoped backwards
