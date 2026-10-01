@@ -1,7 +1,6 @@
 // AnarlogHumansSourcePlugin reads every eligible session through the
 // Anarlog CLI and syncs its participants as external contacts.
 import Foundation
-import CryptoKit
 import CRMMacCore
 import CRMMacPiClient
 
@@ -365,21 +364,5 @@ public actor AnarlogHumansSourcePlugin: DataSourcePlugin {
             return String(sourceID[..<atIndex])
         }
         return sourceID
-    }
-}
-
-// MARK: - File-bytes hashing helper
-
-/// Lowercase-hex SHA-256 of raw bytes. Distinct from
-/// `ContentHasher.contentHash(for:)` which does JCS canonicalization
-/// for the payload-hash recipe; this is the file-bytes hash that
-/// drives change detection only (file-bytes hash and payload hash
-/// are two distinct hash concepts).
-/// Lives in this target so CRMMacCore stays out of the surface area
-/// for the anarlog source.
-public enum AnarlogFileHash {
-    public static func sha256Hex(_ data: Data) -> String {
-        let digest = SHA256.hash(data: data)
-        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }
