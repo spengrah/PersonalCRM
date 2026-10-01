@@ -27,12 +27,12 @@
 //     dequeue on exhaustion, re-commit. Runs BEFORE the row-emitting
 //     batches.
 //   - Capture install-time MAX(ZDATE, Z_PK) on the first tick. The
-//     live cursor starts at (install_max.zdate, install_max.zPK - 1)
-//     so the first live tick's tuple tie-break includes the
-//     install_max row itself.
+//     live cursor starts at Z_PK install_max.zPK - 1 so the first live
+//     tick includes the install_max row itself.
 //   - Sender filter: bail if KnownIdentifiersCache isn't populated
 //     yet (heartbeat will fill it) — the scan phases above already ran.
-//   - Backfill batch (descending) + live batch (ascending), each
+//   - Backfill batch (descending ZDATE) + live batch (ascending Z_PK,
+//     i.e. insertion order), each
 //     bounded by the shared PhoneCallsBudget.
 //   - If the in-memory cursor changed AND every batch was confirmed
 //     with zero rejections: commitCursor; on 409 refresh + abort;
@@ -262,18 +262,13 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
             return
         }
 
-        // Capture install-time MAX(ZDATE, Z_PK) if needed.
-        // The live cursor starts ONE TICK BEHIND install_max — at
-        // (install_max - epsilon) — so the live forward query
-        // (ZDATE > $1 OR (ZDATE = $1 AND Z_PK > $2)) emits the row at
-        // (install_max.zdate, install_max.z_pk - 1) on the first
-        // tick. Concretely: we set liveCursorZ_PK = install_max.zPK - 1
-        // and liveCursorZDate = install_max.zdate. With ZDATE equal,
-        // the Z_PK > tie-break test fires and includes the install_max
-        // row. The alternative — starting backfill at install_max via
-        // backwardFromExclusive and live at the same tuple via
-        // forwardFromExclusive — would skip the install_max row
-        // forever.
+        // Capture install-time MAX(ZDATE, Z_PK) if needed. Backfill
+        // walks DOWN from install_max exclusive, so the live cursor
+        // starts at Z_PK install_max.zPK - 1 and the live query
+        // (Z_PK > $1) emits the install_max row itself. Rows present at
+        // install with a higher Z_PK but an older ZDATE fall in both
+        // ranges; the Pi upserts by call_unique_id, so the overlap
+        // re-sends them without duplicating.
         if working.installMaxZDate == nil {
             do {
                 let maxPoint = try await pool.read { try CallHistoryDBReader.maxZDate(db: $0) }
@@ -281,8 +276,7 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
                     working.installMaxZDate = p.zdate
                     working.installMaxZPK = p.zPK
                     // Live cursor: one Z_PK before install_max so the
-                    // forward query's tie-break includes the install_max
-                    // row on the very first live tick.
+                    // first live tick includes the install_max row.
                     working.liveCursorZDate = p.zdate
                     working.liveCursorZPK = p.zPK - 1
                     logger.info("phone_calls tick: captured install-time MAX(ZDATE, Z_PK)", metadata: [
@@ -641,8 +635,8 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
         } else if let imDate = cursor.installMaxZDate, let imPK = cursor.installMaxZPK {
             // First descent: walk DOWN from install_max exclusive.
             // The install_max row itself is emitted by the live
-            // branch's tie-break (liveCursor.zPK = install_max.zPK -
-            // 1), so backfill safely skips it here.
+            // branch (liveCursor.zPK = install_max.zPK - 1), so
+            // backfill safely skips it here.
             upperZDate = imDate
             upperZPK = imPK
         } else {
@@ -685,7 +679,7 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
             ])
         }
 
-        if page.scannedBounds == nil {
+        if page.lastScanned == nil {
             cursor.backfillComplete = true
             return BatchSummary(accepted: 0, duplicate: 0,
                                 rejected: [], hadUnconfirmedItems: false)
@@ -707,9 +701,9 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
                 && outcome.rejected.isEmpty
                 && outcome.unconfirmed == 0
         }
-        if let bounds = page.scannedBounds, confirmedAllItems {
-            cursor.backfillCursorZDate = bounds.min.zdate
-            cursor.backfillCursorZPK = bounds.min.zPK
+        if let last = page.lastScanned, confirmedAllItems {
+            cursor.backfillCursorZDate = last.zdate
+            cursor.backfillCursorZPK = last.zPK
         }
         if confirmedAllItems && (belowFloor > 0 || page.exhausted) {
             cursor.backfillComplete = true
@@ -722,23 +716,16 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
             hadUnconfirmedItems: !confirmedAllItems)
     }
 
-    /// Live: walk (ZDATE, Z_PK) upward from the cursor. Stops when
-    /// budget exhausted or no more rows.
+    /// Live: walk Z_PK (insertion order) upward from the cursor, so a
+    /// call synced from the iPhone after newer calls is still read.
+    /// Stops when budget exhausted or no more rows.
     private func runLiveBatch(
         pool: DatabasePool,
         cursor: inout PhoneCallsCursor,
         budget: inout PhoneCallsBudget
     ) async -> BatchSummary {
-        let lowerZDate: Double
-        let lowerZPK: Int64
-        if let lcDate = cursor.liveCursorZDate, let lcPK = cursor.liveCursorZPK {
-            lowerZDate = lcDate
-            lowerZPK = lcPK
-        } else if let imDate = cursor.installMaxZDate, let imPK = cursor.installMaxZPK {
-            lowerZDate = imDate
-            lowerZPK = imPK
-        } else {
-            // Empty table: nothing live.
+        guard let lowerZPK = cursor.liveCursorZPK else {
+            // Empty table at install: nothing live yet.
             return BatchSummary(accepted: 0, duplicate: 0,
                                 rejected: [], hadUnconfirmedItems: false)
         }
@@ -754,7 +741,7 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
             page = try await pool.read { db in
                 try CallHistoryDBReader.fetchPage(
                     db: db,
-                    direction: .forwardFromExclusive(zdate: lowerZDate, zPK: lowerZPK),
+                    direction: .insertedAfter(zPK: lowerZPK),
                     limit: limit)
             }
         } catch let dbError as DatabaseError where isFDAError(dbError) {
@@ -776,7 +763,7 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
             ])
         }
 
-        if page.scannedBounds == nil {
+        if page.lastScanned == nil {
             return BatchSummary(accepted: 0, duplicate: 0,
                                 rejected: [], hadUnconfirmedItems: false)
         }
@@ -794,9 +781,9 @@ public actor PhoneCallsSourcePlugin: DataSourcePlugin {
                 && outcome.rejected.isEmpty
                 && outcome.unconfirmed == 0
         }
-        if let bounds = page.scannedBounds, confirmedAllItems {
-            cursor.liveCursorZDate = bounds.max.zdate
-            cursor.liveCursorZPK = bounds.max.zPK
+        if let last = page.lastScanned, confirmedAllItems {
+            cursor.liveCursorZDate = last.zdate
+            cursor.liveCursorZPK = last.zPK
         }
 
         return BatchSummary(

@@ -5,13 +5,17 @@
 // via `SQLiteSnapshotReader`, which owns the read-only WAL-aware URI
 // shape + the rationale for why we must NOT use `immutable=1`).
 //
-// Cursor primitive: (ZDATE, Z_PK) lexicographic pair. ZDATE is
-// Apple-epoch SECONDS since 2001-01-01 (Core Data's CFAbsoluteTime
-// convention, NOT chat.db's nanoseconds). Z_PK is the row's monotonic
-// primary key; together they make a unique tie-broken cursor.
+// ZDATE is Apple-epoch SECONDS since 2001-01-01 (Core Data's
+// CFAbsoluteTime convention, NOT chat.db's nanoseconds). Z_PK is the
+// row's monotonic primary key, so it records insertion order.
 //
-// Live iteration:    WHERE (ZDATE > $1) OR (ZDATE = $1 AND Z_PK > $2)
+// Live iteration:    WHERE Z_PK > $1 AND ZDATE IS NOT NULL (insertion order)
 // Backfill descent:  WHERE (ZDATE < $1) OR (ZDATE = $1 AND Z_PK < $2)
+//
+// Live follows insertion order, not call time, because iCloud
+// call-history sync inserts an iPhone call hours after it happened: its
+// ZDATE can be older than rows already read. A ZDATE-ordered live cursor
+// would already be past it and skip it forever.
 import Foundation
 import GRDB
 
@@ -55,8 +59,8 @@ public struct CallHistoryRow: Equatable, Sendable {
 
 /// Direction of an iteration query.
 public enum CallReadDirection: Sendable {
-    /// (ZDATE > floor.zdate) OR (ZDATE = floor.zdate AND Z_PK > floor.z_pk)
-    case forwardFromExclusive(zdate: Double, zPK: Int64)
+    /// Z_PK > zPK, ascending Z_PK (insertion order).
+    case insertedAfter(zPK: Int64)
     /// (ZDATE < ceil.zdate) OR (ZDATE = ceil.zdate AND Z_PK < ceil.z_pk)
     case backwardFromExclusive(zdate: Double, zPK: Int64)
 }
@@ -76,9 +80,10 @@ public struct CallCursorPoint: Equatable, Sendable {
 /// `rows`: only the rows we kept after skip filters (corrupt date,
 /// empty address, schema-unmappable service).
 ///
-/// `scannedBounds`: min and max of EVERY row inspected, including
-/// skipped ones. Used by the caller to advance cursors past skipped
-/// rows so a page of all-rejected rows doesn't stall the iterator.
+/// `lastScanned`: the coordinate of the LAST row inspected in query
+/// order, including skipped ones. The caller advances its cursor to it
+/// so a page of all-rejected rows doesn't stall the iterator. Nil when
+/// the query returned no usable row.
 ///
 /// `serviceUnknownCount`: tally of rows whose service couldn't be
 /// resolved via ServiceDerivation. Surfaces as a telemetry counter on
@@ -87,18 +92,18 @@ public struct CallCursorPoint: Equatable, Sendable {
 /// `exhausted`: true if SQL returned fewer than `limit` rows.
 public struct CallHistoryReadPage: Sendable {
     public let rows: [CallHistoryRow]
-    public let scannedBounds: (min: CallCursorPoint, max: CallCursorPoint)?
+    public let lastScanned: CallCursorPoint?
     public let serviceUnknownCount: Int
     public let exhausted: Bool
 
     public init(
         rows: [CallHistoryRow],
-        scannedBounds: (min: CallCursorPoint, max: CallCursorPoint)?,
+        lastScanned: CallCursorPoint?,
         serviceUnknownCount: Int,
         exhausted: Bool
     ) {
         self.rows = rows
-        self.scannedBounds = scannedBounds
+        self.lastScanned = lastScanned
         self.serviceUnknownCount = serviceUnknownCount
         self.exhausted = exhausted
     }
@@ -260,19 +265,19 @@ public enum CallHistoryDBReader {
 
         let whereClause: String
         let order: String
-        let zdateBound: Double
-        let zpkBound: Int64
+        let arguments: StatementArguments
         switch direction {
-        case .forwardFromExclusive(let zdate, let zPK):
-            whereClause = "(ZDATE > ?) OR (ZDATE = ? AND Z_PK > ?)"
-            order = "ZDATE ASC, Z_PK ASC"
-            zdateBound = zdate
-            zpkBound = zPK
+        case .insertedAfter(let zPK):
+            // NULL-ZDATE rows map to `.malformed` and can't advance the
+            // cursor; exclude them here (the ZDATE comparisons in the
+            // backward query exclude them implicitly).
+            whereClause = "Z_PK > ? AND ZDATE IS NOT NULL"
+            order = "Z_PK ASC"
+            arguments = [zPK, limit]
         case .backwardFromExclusive(let zdate, let zPK):
             whereClause = "(ZDATE < ?) OR (ZDATE = ? AND Z_PK < ?)"
             order = "ZDATE DESC, Z_PK DESC"
-            zdateBound = zdate
-            zpkBound = zPK
+            arguments = [zdate, zdate, zPK, limit]
         }
 
         let sql = """
@@ -282,42 +287,31 @@ public enum CallHistoryDBReader {
             LIMIT ?
             """
 
-        let rawRows = try Row.fetchAll(db, sql: sql,
-                                       arguments: [zdateBound, zdateBound, zpkBound, limit])
+        let rawRows = try Row.fetchAll(db, sql: sql, arguments: arguments)
 
         var kept: [CallHistoryRow] = []
         kept.reserveCapacity(rawRows.count)
         var serviceUnknown = 0
-        var scannedMin: CallCursorPoint?
-        var scannedMax: CallCursorPoint?
+        var lastScanned: CallCursorPoint?
 
         for row in rawRows {
             switch mapRow(row) {
             case .malformed:
                 continue
             case .skipped(let point, let unknown):
-                // Track every (ZDATE, Z_PK) we inspected, even rows we
-                // ultimately skip. The caller advances the cursor past
-                // skipped rows so all-rejected pages don't stall.
-                scannedMin = lexExtend(scannedMin, point, choose: .min)
-                scannedMax = lexExtend(scannedMax, point, choose: .max)
+                // Track skipped rows too: the caller advances the cursor
+                // past them so all-rejected pages don't stall.
+                lastScanned = point
                 if unknown { serviceUnknown += 1 }
             case .kept(let mapped, let point):
-                scannedMin = lexExtend(scannedMin, point, choose: .min)
-                scannedMax = lexExtend(scannedMax, point, choose: .max)
+                lastScanned = point
                 kept.append(mapped)
             }
         }
 
-        let bounds: (min: CallCursorPoint, max: CallCursorPoint)?
-        if let lo = scannedMin, let hi = scannedMax {
-            bounds = (min: lo, max: hi)
-        } else {
-            bounds = nil
-        }
         return CallHistoryReadPage(
             rows: kept,
-            scannedBounds: bounds,
+            lastScanned: lastScanned,
             serviceUnknownCount: serviceUnknown,
             exhausted: rawRows.count < limit)
     }

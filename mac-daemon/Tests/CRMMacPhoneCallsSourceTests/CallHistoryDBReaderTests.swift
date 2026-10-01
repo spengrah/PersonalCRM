@@ -64,7 +64,7 @@ final class CallHistoryDBReaderTests: XCTestCase {
         let page = try queue.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: 0, zPK: 0),
+                direction: .insertedAfter(zPK: 0),
                 limit: 10)
         }
         XCTAssertEqual(page.rows.count, 3)
@@ -99,6 +99,29 @@ final class CallHistoryDBReaderTests: XCTestCase {
         XCTAssertEqual(page.rows[1].uniqueID, "u1")
     }
 
+    /// Backfill advances to `lastScanned`, which on a descending page
+    /// must be the page's lowest (ZDATE, Z_PK) point even when Z_PK
+    /// order disagrees with ZDATE order.
+    func testBackwardPageLastScannedIsLowestPoint() throws {
+        let queue = try InMemoryCallHistoryDB.makeQueue()
+        let offsets: [Double] = [40, 10, 30, 0, 20] // Z_PK 1...5
+        try seed(queue, offsets.enumerated().map { i, offset in
+            InsertRow(uniqueID: "u\(i + 1)", zdate: baseZDate + offset,
+                      address: "+15551234567",
+                      originated: false, answered: 1, duration: 30,
+                      serviceProvider: "com.apple.Telephony", callType: 0,
+                      hasMessage: false)
+        })
+        let page = try queue.read { db in
+            try CallHistoryDBReader.fetchPage(
+                db: db,
+                direction: .backwardFromExclusive(zdate: baseZDate + 100, zPK: 0),
+                limit: 3)
+        }
+        XCTAssertEqual(page.rows.map(\.uniqueID), ["u1", "u3", "u5"])
+        XCTAssertEqual(page.lastScanned, CallCursorPoint(zdate: baseZDate + 20, zPK: 5))
+    }
+
     func testMaxZDateReturnsTopRow() throws {
         let queue = try InMemoryCallHistoryDB.makeQueue()
         try seed(queue, [
@@ -125,15 +148,15 @@ final class CallHistoryDBReaderTests: XCTestCase {
     func testEmptyAddressRowsAreSkipped() throws {
         let queue = try InMemoryCallHistoryDB.makeQueue()
         try seed(queue, [
-            InsertRow(uniqueID: "u-empty", zdate: baseZDate + 10, address: "",
+            InsertRow(uniqueID: "u-ok", zdate: baseZDate + 10, address: "+15551234567",
                       originated: false, answered: 1, duration: 30,
                       serviceProvider: "com.apple.Telephony", callType: 0,
                       hasMessage: false),
-            InsertRow(uniqueID: "u-nil", zdate: baseZDate + 20, address: nil,
+            InsertRow(uniqueID: "u-empty", zdate: baseZDate + 20, address: "",
                       originated: false, answered: 1, duration: 30,
                       serviceProvider: "com.apple.Telephony", callType: 0,
                       hasMessage: false),
-            InsertRow(uniqueID: "u-ok", zdate: baseZDate + 30, address: "+15551234567",
+            InsertRow(uniqueID: "u-nil", zdate: baseZDate + 30, address: nil,
                       originated: false, answered: 1, duration: 30,
                       serviceProvider: "com.apple.Telephony", callType: 0,
                       hasMessage: false),
@@ -141,15 +164,14 @@ final class CallHistoryDBReaderTests: XCTestCase {
         let page = try queue.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: 0, zPK: 0),
+                direction: .insertedAfter(zPK: 0),
                 limit: 10)
         }
         XCTAssertEqual(page.rows.count, 1)
         XCTAssertEqual(page.rows[0].uniqueID, "u-ok")
-        // Scanned bounds include the skipped rows so the caller can
-        // advance past them.
-        XCTAssertNotNil(page.scannedBounds)
-        XCTAssertEqual(page.scannedBounds?.max.zPK, 3)
+        // The page ends on skipped rows; lastScanned still reaches them
+        // so the caller can advance past them.
+        XCTAssertEqual(page.lastScanned?.zPK, 3)
     }
 
     func testCorruptDateRowsAreSkipped() throws {
@@ -173,11 +195,39 @@ final class CallHistoryDBReaderTests: XCTestCase {
         let page = try queue.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: 0, zPK: 0),
+                direction: .insertedAfter(zPK: 0),
                 limit: 10)
         }
         XCTAssertEqual(page.rows.count, 1)
         XCTAssertEqual(page.rows[0].uniqueID, "u-ok")
+    }
+
+    /// A NULL-ZDATE row has no cursor coordinate, so it can't advance
+    /// the live cursor. A full page of them must not hide the rows
+    /// inserted after.
+    func testInsertedAfterExcludesNullZDateRows() throws {
+        let queue = try InMemoryCallHistoryDB.makeQueue()
+        try queue.write { db in
+            for id in ["u-null-1", "u-null-2"] {
+                try db.execute(
+                    sql: "INSERT INTO ZCALLRECORD (ZUNIQUE_ID, ZDATE, ZADDRESS) VALUES (?, NULL, '+15551234567')",
+                    arguments: [id])
+            }
+        }
+        try seed(queue, [
+            InsertRow(uniqueID: "u-ok", zdate: baseZDate + 10, address: "+15551234567",
+                      originated: false, answered: 1, duration: 30,
+                      serviceProvider: "com.apple.Telephony", callType: 0,
+                      hasMessage: false),
+        ])
+        let page = try queue.read { db in
+            try CallHistoryDBReader.fetchPage(
+                db: db,
+                direction: .insertedAfter(zPK: 0),
+                limit: 2)
+        }
+        XCTAssertEqual(page.rows.map(\.uniqueID), ["u-ok"])
+        XCTAssertEqual(page.lastScanned?.zPK, 3)
     }
 
     func testServiceUnknownRowsAreCountedAndSkipped() throws {
@@ -195,7 +245,7 @@ final class CallHistoryDBReaderTests: XCTestCase {
         let page = try queue.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: 0, zPK: 0),
+                direction: .insertedAfter(zPK: 0),
                 limit: 10)
         }
         XCTAssertEqual(page.rows.count, 1)
@@ -216,7 +266,7 @@ final class CallHistoryDBReaderTests: XCTestCase {
         let page = try queue.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: 0, zPK: 0),
+                direction: .insertedAfter(zPK: 0),
                 limit: 10)
         }
         XCTAssertEqual(page.rows.count, 1)
@@ -244,7 +294,7 @@ final class CallHistoryDBReaderTests: XCTestCase {
         let page = try queue.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: 0, zPK: 0),
+                direction: .insertedAfter(zPK: 0),
                 limit: 10)
         }
         XCTAssertEqual(page.rows.count, 3)
@@ -256,8 +306,8 @@ final class CallHistoryDBReaderTests: XCTestCase {
     }
 
     /// T-Swift-7: (ZDATE, Z_PK) tie-break test. Two rows at the same
-    /// ZDATE must both be returned in Z_PK order; live iteration past
-    /// the first row of the pair must still return the second.
+    /// ZDATE must both be returned in Z_PK order; backfill descent past
+    /// the second row of the pair must still return the first.
     func testTieBreakOnZDate() throws {
         let queue = try InMemoryCallHistoryDB.makeQueue()
         let tiedZDate = baseZDate + 10
@@ -271,36 +321,32 @@ final class CallHistoryDBReaderTests: XCTestCase {
                       serviceProvider: "com.apple.Telephony", callType: 0,
                       hasMessage: false),
         ])
-        // Forward iteration from a floor BELOW the tied zdate: both
-        // rows returned in Z_PK ascending order.
+        // Descent from a ceiling ABOVE the tied zdate: both rows
+        // returned in Z_PK descending order.
         let firstPage = try queue.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: 0, zPK: 0),
+                direction: .backwardFromExclusive(zdate: tiedZDate + 1, zPK: 0),
                 limit: 10)
         }
-        XCTAssertEqual(firstPage.rows.count, 2)
-        XCTAssertEqual(firstPage.rows[0].uniqueID, "u-a")
-        XCTAssertEqual(firstPage.rows[1].uniqueID, "u-b")
+        XCTAssertEqual(firstPage.rows.map(\.uniqueID), ["u-b", "u-a"])
 
-        // Forward iteration from (tiedZDate, 1): only the second row
-        // returned. Z_PK = 1 is "u-a"; the floor is exclusive of
-        // (tiedZDate, 1), so the second row at the same zdate but
-        // Z_PK=2 must still appear.
+        // Descent from (tiedZDate, 2): the ceiling is exclusive of
+        // "u-b", so the row at the same zdate with Z_PK=1 must still
+        // appear.
         let secondPage = try queue.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: tiedZDate, zPK: 1),
+                direction: .backwardFromExclusive(zdate: tiedZDate, zPK: 2),
                 limit: 10)
         }
-        XCTAssertEqual(secondPage.rows.count, 1)
-        XCTAssertEqual(secondPage.rows[0].uniqueID, "u-b")
+        XCTAssertEqual(secondPage.rows.map(\.uniqueID), ["u-a"])
 
-        // Forward iteration from (tiedZDate, 2): no rows.
+        // Descent from (tiedZDate, 1): no rows.
         let thirdPage = try queue.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: tiedZDate, zPK: 2),
+                direction: .backwardFromExclusive(zdate: tiedZDate, zPK: 1),
                 limit: 10)
         }
         XCTAssertEqual(thirdPage.rows.count, 0)
@@ -321,7 +367,7 @@ final class CallHistoryDBReaderTests: XCTestCase {
         let page = try queue.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: 0, zPK: 0),
+                direction: .insertedAfter(zPK: 0),
                 limit: 3)
         }
         XCTAssertEqual(page.rows.count, 3)
@@ -341,7 +387,7 @@ final class CallHistoryDBReaderTests: XCTestCase {
         let page = try queue.read { db in
             try CallHistoryDBReader.fetchPage(
                 db: db,
-                direction: .forwardFromExclusive(zdate: 0, zPK: 0),
+                direction: .insertedAfter(zPK: 0),
                 limit: 10)
         }
         XCTAssertEqual(page.rows[0].startedAt.timeIntervalSince1970, 1_750_000_000, accuracy: 0.001)
