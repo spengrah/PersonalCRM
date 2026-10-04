@@ -189,7 +189,18 @@ func convertPredicateRow(row predicateRow) Predicate {
 
 // GetPredicate retrieves a predicate by key.
 func (r *PredicateRepository) GetPredicate(ctx context.Context, key string) (*Predicate, error) {
-	row, err := r.queries.GetPredicate(ctx, key)
+	return getPredicate(ctx, r.queries, key)
+}
+
+// GetPredicateTx is the tx-threaded variant of GetPredicate. A caller holding a
+// tx must read through it: a pool read inside a tx needs a second connection,
+// and enough concurrent callers doing that exhaust the pool and deadlock.
+func (r *PredicateRepository) GetPredicateTx(ctx context.Context, tx pgx.Tx, key string) (*Predicate, error) {
+	return getPredicate(ctx, db.New(tx), key)
+}
+
+func getPredicate(ctx context.Context, q db.Querier, key string) (*Predicate, error) {
+	row, err := q.GetPredicate(ctx, key)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, db.ErrNotFound
