@@ -423,7 +423,7 @@ func (s *AssertService) validate(ctx context.Context, tx pgx.Tx, req *AssertRequ
 	}
 
 	// Predicate exists in the catalog.
-	predicate, err = s.predicateRepo.GetPredicate(ctx, req.PredicateKey)
+	predicate, err = s.predicateRepo.GetPredicateTx(ctx, tx, req.PredicateKey)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return nil, "", uuid.Nil, nil, validationError("unknown predicate %q", req.PredicateKey)
@@ -1421,7 +1421,7 @@ func (s *AssertService) AssertClosure(ctx context.Context, req ClosureRequest) (
 
 // AssertClosureTx is the tx-bound variant of AssertClosure.
 func (s *AssertService) AssertClosureTx(ctx context.Context, tx pgx.Tx, req ClosureRequest) error {
-	predicate, err := s.predicateRepo.GetPredicate(ctx, req.PredicateKey)
+	predicate, err := s.predicateRepo.GetPredicateTx(ctx, tx, req.PredicateKey)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			return validationError("unknown predicate %q", req.PredicateKey)
@@ -1494,7 +1494,7 @@ func (s *AssertService) AcceptTx(ctx context.Context, tx pgx.Tx, assertionID uui
 	if err != nil {
 		return nil, err
 	}
-	predicate, err := s.predicateRepo.GetPredicate(ctx, pre.PredicateKey)
+	predicate, err := s.predicateRepo.GetPredicateTx(ctx, tx, pre.PredicateKey)
 	if err != nil {
 		return nil, fmt.Errorf("load predicate: %w", err)
 	}
@@ -1714,7 +1714,7 @@ func (s *AssertService) MergeAssertionsTx(ctx context.Context, tx pgx.Tx, loser,
 	plans := make([]repointedAssertion, 0, len(rows))
 	lockKeys := make(map[int64]struct{})
 	for i := range rows {
-		plan, err := s.planRepoint(ctx, &rows[i], loser, winner)
+		plan, err := s.planRepoint(ctx, tx, &rows[i], loser, winner)
 		if err != nil {
 			return err
 		}
@@ -1746,8 +1746,8 @@ func (s *AssertService) MergeAssertionsTx(ctx context.Context, tx pgx.Tx, loser,
 
 // planRepoint rewrites one loser assertion's node references onto the winner,
 // re-canonicalizes, and recomputes its proposition_key — without writing.
-func (s *AssertService) planRepoint(ctx context.Context, row *repository.Assertion, loser, winner uuid.UUID) (repointedAssertion, error) {
-	predicate, err := s.predicateRepo.GetPredicate(ctx, row.PredicateKey)
+func (s *AssertService) planRepoint(ctx context.Context, tx pgx.Tx, row *repository.Assertion, loser, winner uuid.UUID) (repointedAssertion, error) {
+	predicate, err := s.predicateRepo.GetPredicateTx(ctx, tx, row.PredicateKey)
 	if err != nil {
 		return repointedAssertion{}, fmt.Errorf("load predicate %q for merge: %w", row.PredicateKey, err)
 	}
