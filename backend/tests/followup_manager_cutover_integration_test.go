@@ -80,6 +80,7 @@ type followUpIntegrationEnv struct {
 	riverClient *river.Client[pgx.Tx]
 	manager     *consumer.FollowUpManager
 	bus         *events.Bus
+	settings    consumer.TodoistSettingsFunc
 	watchdog    config.WatchdogConfig
 	// decisions is populated by the DecisionObserver installed on the
 	// manager; integration tests inspect it to assert on the manager's
@@ -170,6 +171,7 @@ func newFollowUpIntegrationEnv(t *testing.T) (*followUpIntegrationEnv, func()) {
 		riverClient: riverClient,
 		manager:     manager,
 		bus:         bus,
+		settings:    settings,
 		watchdog:    watchdog,
 		decisions:   &decisions,
 	}
@@ -592,6 +594,80 @@ func runHandleEventInFreshTx(ctx context.Context, env *followUpIntegrationEnv, e
 	return pgx.BeginTxFunc(ctx, env.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		return env.manager.HandleEvent(ctx, tx, envelope)
 	})
+}
+
+// raceAfterFirstPendingRead runs race once, right after the manager's first
+// pending-follow-up read (guard 3), so a competing writer can commit a row
+// that read did not see.
+type raceAfterFirstPendingRead struct {
+	*repository.ContactTaskRepository
+	race func()
+}
+
+func (r *raceAfterFirstPendingRead) FindPendingFollowUpTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID) (*repository.ContactTask, error) {
+	task, err := r.ContactTaskRepository.FindPendingFollowUpTx(ctx, tx, contactID)
+	if race := r.race; race != nil {
+		r.race = nil
+		race()
+	}
+	return task, err
+}
+
+// TestIntegration_FollowUpManager_UniqueLiveCollisionRefreshesWinner covers
+// the collision path at READ COMMITTED, the isolation production runs at.
+// The winner commits after the loser's guard 3, so the loser's insert hits
+// idx_contact_task_followup_unique_live; the re-read after the savepoint
+// rollback sees the winner's row, and the loser refreshes it.
+func TestIntegration_FollowUpManager_UniqueLiveCollisionRefreshesWinner(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	env, cleanup := newFollowUpIntegrationEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+	contact := env.seedContact(t, "weekly")
+
+	winnerOccurred := accelerated.GetCurrentTime().Add(-2 * time.Hour)
+	loserOccurred := accelerated.GetCurrentTime().Add(-1 * time.Hour)
+	envWinner := env.recordedEnv(t, contact.ID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, winnerOccurred, "weekly")
+	envLoser := env.recordedEnv(t, contact.ID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, loserOccurred, "weekly")
+
+	reader := &raceAfterFirstPendingRead{
+		ContactTaskRepository: env.taskRepo,
+		race: func() {
+			require.NoError(t, runHandleEventInFreshTx(ctx, env, envWinner))
+		},
+	}
+	loser := consumer.NewFollowUpManager(
+		consumer.FollowUpModeCutover,
+		env.claimRepo,
+		env.contactRepo,
+		reader,
+		env.taskRepo,
+		env.interRepo,
+		env.riverClient,
+		env.settings,
+		"http://localhost:3000",
+		env.watchdog,
+	)
+	var decisions []consumer.Decision
+	loser.SetDecisionObserver(func(d consumer.Decision) {
+		decisions = append(decisions, d)
+	})
+
+	require.NoError(t, pgx.BeginTxFunc(ctx, env.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
+		return loser.HandleEvent(ctx, tx, envLoser)
+	}), "collision recovery must not bubble an error out to the outer tx")
+
+	rows, err := env.taskRepo.ListContactTasksFiltered(ctx, contact.ID, nil, nil, ptr(contacttask.LifecycleFollowUpLoop))
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "collision recovery must not insert a duplicate row")
+	require.Len(t, decisions, 1)
+	assert.Equal(t, repository.FollowUpActionRefresh, decisions[0].Action, "the loser refreshes the winner's row")
+	require.NotNil(t, decisions[0].ContactTaskID)
+	assert.Equal(t, rows[0].ID, *decisions[0].ContactTaskID)
+	assert.Equal(t, 1, env.countOpJobs(t, rows[0].ID, consumerjobs.TaskOpUpdateDeadline), "the refresh pushes the advanced deadline")
 }
 
 // TestIntegration_FollowUpManager_InboundClosesFinalizedRow asserts the
