@@ -13,6 +13,7 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
+	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
@@ -752,6 +753,67 @@ func TestContactMerge_Integration(t *testing.T) {
 		// value, confirming BulkApply ran and the refetch picked it up.
 		assert.Equal(t, sourceLastContacted.UTC(), merged.LastContacted.UTC(),
 			"BulkApply should forward-max last_contacted to the source value")
+	})
+
+	// spec: CON-034
+	t.Run("MergeContacts_CadenceTimestampsTakeMostRecent", func(t *testing.T) {
+		// Each side holds the newer value of a different column, so a merge
+		// that drops either side's contribution leaves a stale value behind.
+		apply := func(contactID uuid.UUID, direction string, occurredAt time.Time) {
+			t.Helper()
+			tx, err := database.Pool.Begin(ctx)
+			require.NoError(t, err)
+			defer func() { _ = tx.Rollback(ctx) }()
+			require.NoError(t, cadenceUpdater.ApplyInteraction(ctx, tx, repository.ApplyInteractionRequest{
+				ContactID:  contactID,
+				Direction:  direction,
+				Source:     repository.InteractionSourceManual,
+				OccurredAt: occurredAt,
+			}))
+			require.NoError(t, tx.Commit(ctx))
+		}
+		targetResponse := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+		targetOutreach := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
+		sourceOutreach := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+		sourceResponse := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+
+		target, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "Cadence Max Target " + ns,
+			Cadence:  stringPtr("monthly"),
+		})
+		require.NoError(t, err)
+		defer func() { _ = contactRepo.HardDeleteContact(ctx, target.ID) }()
+		apply(target.ID, repository.InteractionDirectionInbound, targetResponse)
+		apply(target.ID, repository.InteractionDirectionOutbound, targetOutreach)
+
+		source, err := seedContactForMerge(ctx, contactService, repository.CreateContactRequest{
+			FullName: "Cadence Max Source " + ns,
+			Cadence:  stringPtr("monthly"),
+		})
+		require.NoError(t, err)
+		apply(source.ID, repository.InteractionDirectionOutbound, sourceOutreach)
+		apply(source.ID, repository.InteractionDirectionInbound, sourceResponse)
+
+		_, err = contactService.MergeContacts(ctx, service.MergeContactsRequest{
+			TargetContactID: target.ID,
+			SourceContactID: source.ID,
+			FieldSelections: service.MergeFieldSelections{Cadence: "target"},
+		})
+		require.NoError(t, err)
+
+		merged, err := contactRepo.GetContact(ctx, target.ID)
+		require.NoError(t, err)
+		require.NotNil(t, merged.LastContacted)
+		require.NotNil(t, merged.LastResponseAt)
+		require.NotNil(t, merged.LastOutreachAt)
+		require.NotNil(t, merged.ContactBy)
+		require.NotNil(t, merged.LastInteractionAt)
+		assert.Equal(t, sourceResponse, merged.LastContacted.UTC(), "last_contacted takes the source's newer value")
+		assert.Equal(t, sourceResponse, merged.LastResponseAt.UTC(), "last_response_at takes the source's newer value")
+		assert.Equal(t, targetOutreach, merged.LastOutreachAt.UTC(), "last_outreach_at keeps the target's newer value")
+		assert.Equal(t, cadence.CalculateContactBy(sourceResponse, cadence.CadenceMonthly).UTC(), merged.ContactBy.UTC(),
+			"contact_by is re-derived from the merged last_contacted")
+		assert.Equal(t, targetResponse, merged.LastInteractionAt.UTC(), "a merge does not bump last_interaction_at")
 	})
 }
 

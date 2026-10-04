@@ -13,6 +13,7 @@ import (
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
+	"personal-crm/backend/internal/todoist"
 
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -89,7 +90,19 @@ func buildManualHandlerForTest(ctx context.Context, database *db.Database, cfg *
 	stagingRegistry := repository.NewStagingProcessorRegistry(map[string]repository.StagingProcessor{
 		repository.InteractionSourceTelegram: repository.NewTelegramStagingProcessor(telegramMessageRepo),
 	})
-	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry, bus, cadenceUpdater, nil, repository.NewCalendarEventRepository(database.Queries))
+	// A real FollowUpManager, wired into the recorder as production wires it.
+	// Todoist stays unconfigured, as on an instance that never connected it.
+	followUpManager := consumer.NewFollowUpManager(
+		consumer.FollowUpModeCutover,
+		claimRepo, contactRepo, contactTaskRepo, contactTaskRepo, interactionRepo,
+		client,
+		func(context.Context) (*todoist.Settings, string, error) {
+			return nil, "", consumer.ErrTodoistUnconfigured
+		},
+		"",
+		config.TestConfig().Watchdog,
+	)
+	recorder := consumer.NewInteractionRecorder(contactService, stagingRegistry, bus, cadenceUpdater, followUpManager, repository.NewCalendarEventRepository(database.Queries))
 	shim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 
 	manualHandler := service.NewManualInteractionHandler(database.Pool, bus, recorder)
