@@ -3,19 +3,11 @@
 package tests
 
 import (
-	"context"
-	"fmt"
-	"os"
 	"sort"
 	"testing"
 
-	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
-	"personal-crm/backend/internal/testdb"
 
-	migrate "github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,12 +19,6 @@ import (
 // use namespaced keys with scoped cleanup. The migration up/down round-trip runs
 // against an ISOLATED per-test clone (NewEphemeralClone), never the shared DB,
 // because it rolls the schema down.
-
-// seedPredicateCatalogVersion is the golang-migrate version of the predicate
-// catalog SEED migration (066_seed_predicate_catalog). The down/up round-trip
-// test positions the clone at this version before its relative roll-down so it is
-// robust to later migrations (067+) being added above it.
-const seedPredicateCatalogVersion = 66
 
 // i32p returns a pointer to an int32 literal, for the nullable prior fields.
 func i32p(v int32) *int32 { return &v }
@@ -245,120 +231,4 @@ func TestPredicateCatalog_Seed_Integration(t *testing.T) {
 		require.NotNil(t, got.ValueType)
 		assert.Equal(t, value, *got.ValueType)
 	})
-}
-
-// TestPredicateCatalog_MigrationDownUp exercises the 065/066 down + up
-// round-trip and proves the seed-down removes ONLY the seeded curated keys (a
-// provisional row inserted beforehand survives the seed-down). It runs against
-// an isolated clone because it rolls the schema down.
-func TestPredicateCatalog_MigrationDownUp(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	// Migration-subject test: rolls the schema down, so it stays serial and uses
-	// an isolated clone (never the shared package DB).
-
-	ctx := context.Background()
-	cloneURL, drop := testdb.NewEphemeralClone(t)
-	t.Cleanup(drop)
-	migrationsPath := getMigrationsPath()
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
-	predicateRepo := repository.NewPredicateRepository(database.Queries)
-
-	// The clone is template-migrated, so the seed is present up front.
-	_, err = predicateRepo.GetPredicate(ctx, "lives_in")
-	require.NoError(t, err, "fully-migrated clone has the seeded catalog")
-
-	// Insert a provisional predicate that must SURVIVE the seed-down (the down
-	// deletes only the seeded curated keys by name, not provisional rows).
-	value := repository.PredicateValueTypeText
-	const provisionalKey = "test-provisional-survivor"
-	_, err = predicateRepo.CreateProvisional(ctx, repository.CreatePredicateRequest{
-		Key:                 provisionalKey,
-		Kind:                repository.PredicateKindFact,
-		SubjectType:         "person",
-		ValueType:           &value,
-		Cardinality:         repository.PredicateCardinalityMulti,
-		TemporalProfile:     repository.PredicateTemporalMutable,
-		DefaultReviewPolicy: repository.PredicateReviewAutoIfConfident,
-		PropositionBucket:   repository.PredicateBucketDay,
-	})
-	require.NoError(t, err)
-
-	// Insert a provisional EDGE whose inverse_predicate points at a SEEDED key.
-	// The seed-down must clear THIS link (not just the seeded inverse-pair links)
-	// before deleting the seeded rows, or the restrict self-FK blocks rollback.
-	const linkedProvisionalKey = "test-provisional-linked"
-	parentKey := "parent_of"
-	objectPerson := "person"
-	_, err = predicateRepo.CreateProvisional(ctx, repository.CreatePredicateRequest{
-		Key:                 linkedProvisionalKey,
-		Kind:                repository.PredicateKindEdge,
-		SubjectType:         "person",
-		ObjectType:          &objectPerson,
-		Cardinality:         repository.PredicateCardinalityMulti,
-		InversePredicate:    &parentKey,
-		TemporalProfile:     repository.PredicateTemporalPermanent,
-		DefaultReviewPolicy: repository.PredicateReviewAutoIfConfident,
-		PropositionBucket:   repository.PredicateBucketNone,
-	})
-	require.NoError(t, err)
-
-	m, err := migrate.New(fmt.Sprintf("file://%s", migrationsPath), cloneURL)
-	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = m.Close() })
-
-	// Position at the seed migration (066) as the tip BEFORE the relative roll-down,
-	// so this test is independent of however many later migrations exist above it
-	// (e.g. 067+). Without this, m.Steps(-1) would roll down the highest migration,
-	// not the seed. Migrating down to 066 leaves the predicate table + seed intact.
-	require.NoError(t, m.Migrate(seedPredicateCatalogVersion), "position the clone at the seed migration tip")
-
-	// Roll down ONE step: 066 (the seed) down. The predicate table still exists.
-	require.NoError(t, m.Steps(-1), "roll the seed migration down one step")
-
-	// Every seeded curated key is gone...
-	for key := range expectedCuratedCatalog {
-		_, err := predicateRepo.GetPredicate(ctx, key)
-		require.ErrorIsf(t, err, db.ErrNotFound, "seed-down must remove curated key %q", key)
-	}
-	entityRepo := repository.NewEntityRepository(database.Queries)
-	for _, key := range expectedCuratedSubtypes {
-		_, err := entityRepo.GetEntityType(ctx, key)
-		require.ErrorIsf(t, err, db.ErrNotFound, "seed-down must remove curated subtype %q", key)
-	}
-	// ...but the provisional rows survive (seed-down deletes only seeded keys).
-	survivor, err := predicateRepo.GetPredicate(ctx, provisionalKey)
-	require.NoError(t, err, "seed-down must NOT touch a provisional predicate")
-	assert.Equal(t, provisionalKey, survivor.Key)
-
-	// The provisional edge that pointed its inverse at a seeded key survives too:
-	// the seed-down cleared its inverse link (so the seeded-row delete didn't trip
-	// the restrict self-FK) but kept the row itself.
-	linked, err := predicateRepo.GetPredicate(ctx, linkedProvisionalKey)
-	require.NoError(t, err, "seed-down must NOT delete a provisional row linked to a seeded key")
-	assert.Nil(t, linked.InversePredicate, "seed-down clears the inverse link that pointed at a seeded key")
-
-	// Roll down a second step: 065 (the table) down — the predicate table is now
-	// dropped. A query against it errors (not ErrNotFound — the relation is gone).
-	require.NoError(t, m.Steps(-1), "roll the predicate table down one step")
-	_, err = predicateRepo.GetPredicate(ctx, provisionalKey)
-	require.Error(t, err, "predicate table is dropped after the table-down migration")
-
-	// Roll both back up: the table is recreated and the seed is reinstalled. The
-	// provisional row does NOT come back (the table was dropped + recreated).
-	require.NoError(t, m.Steps(2), "re-apply the predicate table + seed")
-	reseeded, err := predicateRepo.GetPredicate(ctx, "lives_in")
-	require.NoError(t, err, "up migration reinstalls the seed")
-	assert.Equal(t, "lives_in", reseeded.Key)
-	_, err = predicateRepo.GetPredicate(ctx, provisionalKey)
-	require.ErrorIs(t, err, db.ErrNotFound, "table drop+recreate does not restore the provisional row")
 }

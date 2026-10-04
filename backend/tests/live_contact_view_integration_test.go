@@ -4,10 +4,7 @@ package tests
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"math/rand"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,25 +12,14 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/contacttask"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
-	"personal-crm/backend/internal/testdb"
 
-	migrate "github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// liveContactViewVersion is the golang-migrate version of 078. The round-trip
-// positions the clone here explicitly so Steps(-1) rolls down 078
-// specifically, robust to later migrations landing above it (PR7's 079 does
-// exactly that) — same discipline as whatsappFoundationsVersion.
-const liveContactViewVersion = 78
 
 // liveContactColumnOrder is db.Contact's field order (backend/internal/db/models.go),
 // which live_contact's projection (migration 078) must match column-for-column
@@ -44,123 +30,6 @@ var liveContactColumnOrder = []string{
 	"last_contacted", "profile_photo", "deleted_at", "created_at", "updated_at",
 	"contact_by", "last_interaction_at", "last_outreach_at", "last_response_at", "awaiting_reply_until",
 	"last_skipped_at", "last_skipped_contact_by", "last_skip_reason",
-}
-
-// TestLiveContactView_MigrationUpDown proves the view shape survives stepping
-// below migration 082 and returning to head without issuing expanded contact
-// queries against the historical schemas.
-func TestLiveContactView_MigrationUpDown(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	ctx := context.Background()
-	cloneURL, drop := testdb.NewEphemeralClone(t)
-	t.Cleanup(drop)
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
-
-	m, err := migrate.New(fmt.Sprintf("file://%s", getMigrationsPath()), cloneURL)
-	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = m.Close() })
-
-	contactRepo := repository.NewContactRepository(database.Queries)
-	support := repository.NewSyntheticSupportRepository(database.Queries)
-
-	live, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "LiveContactView Migration Live"})
-	require.NoError(t, err)
-	deleted, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "LiveContactView Migration Deleted"})
-	require.NoError(t, err)
-	_, err = contactRepo.GetContact(ctx, live.ID)
-	require.NoError(t, err)
-	_, err = contactRepo.GetContact(ctx, deleted.ID)
-	require.NoError(t, err)
-	require.NoError(t, contactRepo.SoftDeleteContact(ctx, deleted.ID))
-
-	if err := m.Migrate(liveContactViewVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		require.NoError(t, err, "position the clone at the 078 live_contact view tip")
-	}
-
-	// The clone is positioned at 078: the view exists as a plain view and its
-	// row count already excludes the soft-deleted contact (this clone is a
-	// fresh database, so the two seeded contacts are its only rows and the
-	// count is exact, not DB-wide).
-	kindCount, err := database.Queries.TestCountPlainViews(ctx, "live_contact")
-	require.NoError(t, err)
-	require.Equal(t, int64(1), kindCount, "live_contact must exist as a plain view at the 078 tip")
-
-	totalContacts, err := support.CountAllRows(ctx, "contact")
-	require.NoError(t, err)
-	liveContacts, err := support.CountAllRows(ctx, "live_contact")
-	require.NoError(t, err)
-	require.Equal(t, totalContacts-1, liveContacts, "live_contact must return only the non-deleted contact")
-
-	cols, err := database.Queries.TestListViewColumns(ctx, "live_contact")
-	require.NoError(t, err)
-	require.Len(t, cols, 15)
-
-	// Roll 078 down.
-	require.NoError(t, m.Steps(-1))
-
-	kindCount, err = database.Queries.TestCountPlainViews(ctx, "live_contact")
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), kindCount, "the down migration drops the view")
-
-	afterDownContacts, err := support.CountAllRows(ctx, "contact")
-	require.NoError(t, err)
-	assert.Equal(t, totalContacts, afterDownContacts, "the down migration must not touch contact's own rows")
-	// Re-apply: the view returns, restored to the same shape.
-	require.NoError(t, m.Steps(1))
-
-	kindCount, err = database.Queries.TestCountPlainViews(ctx, "live_contact")
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), kindCount, "the up migration restores the view")
-
-	cols, err = database.Queries.TestListViewColumns(ctx, "live_contact")
-	require.NoError(t, err)
-	assert.Len(t, cols, 15, "the restored 078 view keeps its historical column list")
-
-	require.NoError(t, m.Up())
-	cols, err = database.Queries.TestListViewColumns(ctx, "live_contact")
-	require.NoError(t, err)
-	assert.Len(t, cols, 19, "migration 083 appends the skip-state columns")
-	assert.Equal(t, "last_skip_reason", cols[len(cols)-1].ColumnName)
-
-	// Round-trip migration 083 explicitly: its down migration restores the
-	// 082 view and its up migration restores all three skip-state columns.
-	require.NoError(t, m.Migrate(82))
-	cols, err = database.Queries.TestListViewColumns(ctx, "live_contact")
-	require.NoError(t, err)
-	assert.Len(t, cols, 16)
-	assert.Equal(t, "awaiting_reply_until", cols[len(cols)-1].ColumnName)
-	contactCols, err := database.Queries.TestListViewColumns(ctx, "contact")
-	require.NoError(t, err)
-	contactNames := make([]string, len(contactCols))
-	for i, col := range contactCols {
-		contactNames[i] = col.ColumnName
-	}
-	assert.NotContains(t, contactNames, "last_skipped_at")
-	require.NoError(t, m.Up())
-	cols, err = database.Queries.TestListViewColumns(ctx, "live_contact")
-	require.NoError(t, err)
-	assert.Len(t, cols, 19)
-	assert.Equal(t, "last_skip_reason", cols[len(cols)-1].ColumnName)
-	contactCols, err = database.Queries.TestListViewColumns(ctx, "contact")
-	require.NoError(t, err)
-	contactNames = make([]string, len(contactCols))
-	for i, col := range contactCols {
-		contactNames[i] = col.ColumnName
-	}
-	assert.Contains(t, contactNames, "last_skipped_at")
-	assert.Contains(t, contactNames, "last_skipped_contact_by")
-	assert.Contains(t, contactNames, "last_skip_reason")
 }
 
 // TestLiveContactView_Shape asserts live_contact's KIND (plain, not

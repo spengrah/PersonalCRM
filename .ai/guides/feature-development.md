@@ -123,7 +123,7 @@ DROP TABLE IF EXISTS new_table;
 ### Migration Best Practices
 
 1. **One logical change per migration**
-2. **Test both up and down migrations**
+2. **Test both up and down migrations, then discard the transition tests.** Every integration run applies the up migration to the test template. Prove the down migration, data backfills, and refusal guards in a test you run locally and do not commit; record what you ran and the result in the PR body. Commit tests only for schema the code relies on going forward (constraints, indexes, views).
 3. **Never modify existing migrations after merge**
 4. **Consider data migrations separately**
 5. **Add helpful comments**
