@@ -76,26 +76,10 @@ func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 	// Inject the failing liveness checker. The batch must abort with
 	// ErrHostRevokedDuringBatch BEFORE any envelope dispatches.
 	liveness := &stubFailingHostLiveness{}
-	svc := service.NewIngestService(
-		database, eventBus,
-		nil, // identity unused — we never reach the per-event handler
-		nil, // messages unused
-		nil, // river unused
-		externalRepo,
-		liveness,
-		nil, // meetingNotes unused
-		nil, // calendar unused
-		nil, // interactions unused
-		nil, // identityLookup unused
-		nil, // contactSvc unused
-		nil, // phoneCalls unused
-		nil, // contactRecorder unused
-		nil, // cadence unused
-		nil, // followUp unused
-		nil, // titleMatcher unused
-		nil, // discovery unused
-		nil, // phoneCallLinkage unused
-	)
+	svcDeps := newIngestDeps(t, database, eventBus)
+	svcDeps.ExternalContacts = externalRepo
+	svcDeps.HostLiveness = liveness
+	svc := service.NewIngestService(svcDeps)
 
 	// Build a structurally-valid envelope so the batch precondition
 	// checks pass and the loop is reached. The FOR UPDATE check must
@@ -141,40 +125,6 @@ func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 		require.True(t, errors.Is(err, db.ErrNotFound),
 			"event-log row absence expected; got error %v", err)
 	}
-}
-
-// TestIngest_HostLivenessNil_SkipsCheck documents the test-fixture
-// path: NewIngestService(... nil) leaves the recheck disabled so
-// existing test wiring without a real mac_host repo continues to work.
-// Production wires a real repo so the check always runs.
-func TestIngest_HostLivenessNil_SkipsCheck(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	t.Parallel()
-	ctx := context.Background()
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
-
-	eventRepo := repository.NewEventRepository(database.Queries)
-	eventBus := events.NewBus(database.Pool, nil, eventRepo)
-
-	// nil hostLiveness — recheck is skipped.
-	svc := service.NewIngestService(database, eventBus, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-
-	// An empty batch passes the precondition layer immediately and
-	// never opens a tx. The test confirms wiring without the recheck
-	// does not panic.
-	accepted, duplicate, rejections, _, err := svc.IngestBatch(ctx, nil, nil, nil)
-	require.NoError(t, err)
-	require.Equal(t, 0, accepted)
-	require.Equal(t, 0, duplicate)
-	require.Empty(t, rejections)
 }
 
 // blockingExternalContactWriter stalls UpsertTx on a release channel
@@ -272,7 +222,11 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, nil, eventRepo)
-	svc := service.NewIngestService(database, eventBus, identityService, nil, nil, blocker, hostRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svcDeps := newIngestDeps(t, database, eventBus)
+	svcDeps.Identity = identityService
+	svcDeps.ExternalContacts = blocker
+	svcDeps.HostLiveness = hostRepo
+	svc := service.NewIngestService(svcDeps)
 
 	entityID := "concurrent-revoke-" + uuid.NewString()[:8]
 	payload, err := events.Marshal(events.KindExternalContactUpserted, events.ExternalContactUpsertedPayload{
@@ -433,7 +387,10 @@ func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
 	// passes), but the tx-internal FOR UPDATE re-check reports it
 	// revoked — the mid-batch revocation race this behavior is about.
 	liveness := &stubFailingHostLiveness{}
-	svc := service.NewIngestService(database, eventBus, nil, nil, nil, externalRepo, liveness, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svcDeps := newIngestDeps(t, database, eventBus)
+	svcDeps.ExternalContacts = externalRepo
+	svcDeps.HostLiveness = liveness
+	svc := service.NewIngestService(svcDeps)
 	ingestHandler := handlers.NewIngestHandler(svc)
 
 	// gin mode is set once for the package in gin_test.go's init().
@@ -522,34 +479,30 @@ func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
 // family allow-list, source_id matching the family's dedup-key shape
 // incl. server-recomputed content hashes, peer_normalized matching the
 // production re-canonicalization), so the asserted rejection can only
-// come from the host-id re-check. The service is wired with nil family
-// deps: on a regression that skips the check, dispatch degrades to a
-// "not configured" rejection whose message fails the assertions below
-// cleanly rather than panicking.
+// come from the host-id re-check.
 //
 // spec: ING-036
 func TestIngest_PayloadHostIDMismatch_RejectedForEveryDaemonFamily(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
 	t.Parallel()
 	ctx := context.Background()
-	cfg := config.TestConfig()
-	cfg.Database.URL = databaseURL
-
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	// The batch's in-tx liveness re-check needs a real active host, and
+	// mac_host is a singleton table, so this test pairs one on its own clone.
+	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, nil, eventRepo)
-	// nil hostLiveness (that re-check is ING-006's concern) and nil
-	// family deps — a host-mismatch rejection fires in the pre-savepoint
-	// verify step, before any dep is touched.
-	svc := service.NewIngestService(database, eventBus, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewIngestService(newIngestDeps(t, database, eventBus))
 
-	authHostID := uuid.New()    // the host the request authenticated as
+	hostRepo := repository.NewMacHostRepository(database.Queries)
+	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
+	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
+	macService := service.NewMacHostService(hostRepo, pairingRepo, syncRepo, nil, nil, nil, database.Pool, 4)
+	plain, _, err := macService.CreatePairingToken(ctx)
+	require.NoError(t, err)
+	pair, err := macService.PairWithToken(ctx, plain, "ing036-test", "0.1.0", 1)
+	require.NoError(t, err)
+
+	authHostID := pair.HostID   // the host the request authenticated as
 	claimedHostID := uuid.New() // the differing claim inside the payload
 	require.NotEqual(t, authHostID, claimedHostID)
 	ns := uuid.NewString()[:8] // per-run namespace for dedup keys on the shared DB

@@ -48,7 +48,7 @@ Find all instances of a layer:
 
 - Run focused tests appropriate to the change; pre-push runs static checks, and required CI suites gate merging.
 - Read repository code before using methods (names vary, e.g., `SoftDeleteContact` not `DeleteContact`)
-- Prefer integration tests over heavy mocking
+- Fake only what a test cannot run (third-party APIs, the clock) or a failure; see `.ai/rules/testing.md`
 - Use `accelerated.GetCurrentTime()` not `time.Now()`
 - New worktrees link env files but do not install dependencies. For frontend work, run `make worktree-deps` when needed (main checkout: `cd frontend && bun install --frozen-lockfile`). Backend/docs-only work needs no frontend install.
 

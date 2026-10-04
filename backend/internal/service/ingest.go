@@ -160,9 +160,7 @@ type ExternalContactWriter interface {
 // (or dup-of-linked) contact AFTER the batch tx commits. icloud is
 // push-only with no periodic resync, so this post-commit hook is the
 // ONLY forward path that closes the "icloud enriches nothing" leak —
-// it must fire on FIRST MATCH too, not only re-upsert. Optional: nil is
-// supported for tests that don't exercise the reconcile; the handler
-// then skips scheduling the post-commit closure. Concrete is
+// it must fire on FIRST MATCH too, not only re-upsert. Concrete is
 // *AddressBookReconcileService (+ *repository.ExternalContactRepository
 // for target resolution); see the addressBookReconcilerAdapter wired in
 // main.go.
@@ -204,10 +202,7 @@ type CalendarLinkageReader interface {
 
 // PhoneCallLinkageReader is the narrow surface the meeting_note
 // handler needs to enumerate candidate phone_call rows in a time
-// window. Concrete is *repository.PhoneCallRepository. Optional —
-// nil is supported for tests that don't exercise the phone_call
-// linkage path; the inline handler skips the phone_call query when
-// the dep is nil.
+// window. Concrete is *repository.PhoneCallRepository.
 type PhoneCallLinkageReader interface {
 	FindLinkageCandidatesTx(ctx context.Context, tx pgx.Tx, windowStart, windowEnd time.Time) ([]repository.LinkageCandidate, error)
 }
@@ -310,35 +305,27 @@ type IngestTitleDiscoveryWriter interface {
 // failures (begin-tx, publish-tx, savepoint commit, end-of-batch
 // aggregator enqueue) abort the whole batch.
 type IngestService struct {
-	database         *db.Database
-	bus              *events.Bus
-	identity         IdentityMatcher
-	messages         MessagesUpserter
-	riverClient      JobInsertTxer
-	externalContacts ExternalContactWriter
-	hostLiveness     HostLivenessChecker
-	meetingNotes     MeetingNoteWriter
-	calendar         CalendarLinkageReader
-	phoneCallLinkage PhoneCallLinkageReader
-	interactions     InteractionWriter
-	identityLookup   AnarlogIdentityLookup
-	contactSvc       ContactInteractionRecorder
-	phoneCalls       PhoneCallWriter
-	contactRecorder  ContactRecorder
-	cadence          CadenceApplier
-	followUp         FollowUpApplier
-	titleMatcher     IngestTitleMatcher
-	discovery        IngestTitleDiscoveryWriter
-	// addressBookReconciler re-propagates address-book methods onto
-	// already-linked contacts after the batch commits. Optional (nil-safe);
-	// wired post-construction via SetAddressBookReconciler so the big
-	// NewIngestService signature is unchanged.
+	database              *db.Database
+	bus                   *events.Bus
+	identity              IdentityMatcher
+	messages              MessagesUpserter
+	riverClient           JobInsertTxer
+	externalContacts      ExternalContactWriter
+	hostLiveness          HostLivenessChecker
+	meetingNotes          MeetingNoteWriter
+	calendar              CalendarLinkageReader
+	phoneCallLinkage      PhoneCallLinkageReader
+	interactions          InteractionWriter
+	identityLookup        AnarlogIdentityLookup
+	contactSvc            ContactInteractionRecorder
+	phoneCalls            PhoneCallWriter
+	contactRecorder       ContactRecorder
+	cadence               CadenceApplier
+	followUp              FollowUpApplier
+	titleMatcher          IngestTitleMatcher
+	discovery             IngestTitleDiscoveryWriter
 	addressBookReconciler AddressBookReconciler
-	// venue resolves the shared-container venue node for phone-call and
-	// anarlog-session interactions, so venue_id is set atomically with the
-	// insert. Optional (nil-safe); wired post-construction via SetVenueResolver
-	// to keep the NewIngestService signature unchanged.
-	venue IngestVenueResolver
+	venue                 IngestVenueResolver
 }
 
 // IngestVenueResolver is the venue-resolution surface the phone-call and
@@ -351,83 +338,105 @@ type IngestVenueResolver interface {
 	ResolveGCalVenueTx(ctx context.Context, tx pgx.Tx, calendarEventID uuid.UUID) (*uuid.UUID, error)
 }
 
-// SetVenueResolver injects the venue resolver. Optional — when unset, the
-// phone-call and anarlog recorders record interactions with a NULL venue_id.
-// Mirrors SetAddressBookReconciler's post-construction injection.
-func (s *IngestService) SetVenueResolver(v IngestVenueResolver) {
-	s.venue = v
+// IngestDeps is every dependency of an IngestService. All are required.
+type IngestDeps struct {
+	Database    *db.Database
+	Bus         *events.Bus
+	Identity    IdentityMatcher
+	Messages    MessagesUpserter
+	RiverClient JobInsertTxer
+	// ExternalContacts writes external_contact.* staging rows.
+	ExternalContacts ExternalContactWriter
+	// HostLiveness re-checks, inside the batch tx (FOR UPDATE), that the
+	// authenticated mac host is still active.
+	HostLiveness HostLivenessChecker
+	// MeetingNotes through Discovery are the meeting_note.* handler's set.
+	MeetingNotes     MeetingNoteWriter
+	Calendar         CalendarLinkageReader
+	PhoneCallLinkage PhoneCallLinkageReader
+	Interactions     InteractionWriter
+	IdentityLookup   AnarlogIdentityLookup
+	ContactSvc       ContactInteractionRecorder
+	TitleMatcher     IngestTitleMatcher
+	Discovery        IngestTitleDiscoveryWriter
+	// PhoneCalls through FollowUp are the call.* handler's set.
+	PhoneCalls      PhoneCallWriter
+	ContactRecorder ContactRecorder
+	Cadence         CadenceApplier
+	FollowUp        FollowUpApplier
+	// AddressBookReconciler re-propagates address-book methods onto
+	// already-linked contacts after an icloud_contacts batch commits.
+	AddressBookReconciler AddressBookReconciler
+	// Venue sets interaction.venue_id for phone-call and anarlog-session
+	// interactions atomically with the insert.
+	Venue IngestVenueResolver
 }
 
-// SetAddressBookReconciler injects the post-commit address-book method
-// reconciler. Optional — when unset, handleExternalContactUpserted skips
-// scheduling the reconcile closure (icloud method propagation then only
-// happens via the one-time catchup subcommand). Must be called before
-// the service handles concurrent batches. This is a genuine cross-block
-// deferred wire-in (the reconciler is built after the IngestService),
-// so it stays a setter.
-func (s *IngestService) SetAddressBookReconciler(r AddressBookReconciler) {
-	s.addressBookReconciler = r
-}
-
-// NewIngestService builds an IngestService. Per-kind dependencies may
-// be nil — in that case the corresponding inline handler rejects events
-// of that kind with PAYLOAD_INVARIANT explaining the missing wiring.
-// Production constructs all dependencies; unit tests can pass nils for
-// the kinds they don't exercise.
-//
-// hostLiveness may be nil for tests that don't exercise the host-auth
-// path. When nil, the per-batch FOR UPDATE re-check is skipped and the
-// batch trusts the auth-middleware's read. Production always wires a
-// concrete repository so the race window between auth and commit is
-// closed.
-//
-// meetingNotes/calendar/interactions/identityLookup/contactSvc/
-// titleMatcher/discovery are the meeting_note.* inline handler's
-// dependency set. Passing nil here is supported for callers that don't
-// need the meeting_note path; the handler returns PAYLOAD_INVARIANT for
-// missing wiring.
-func NewIngestService(
-	database *db.Database,
-	bus *events.Bus,
-	identityMatcher IdentityMatcher,
-	messages MessagesUpserter,
-	riverClient JobInsertTxer,
-	externalContacts ExternalContactWriter,
-	hostLiveness HostLivenessChecker,
-	meetingNotes MeetingNoteWriter,
-	calendar CalendarLinkageReader,
-	interactions InteractionWriter,
-	identityLookup AnarlogIdentityLookup,
-	contactSvc ContactInteractionRecorder,
-	phoneCalls PhoneCallWriter,
-	contactRecorder ContactRecorder,
-	cadence CadenceApplier,
-	followUp FollowUpApplier,
-	titleMatcher IngestTitleMatcher,
-	discovery IngestTitleDiscoveryWriter,
-	phoneCallLinkage PhoneCallLinkageReader,
-) *IngestService {
-	return &IngestService{
-		database:         database,
-		bus:              bus,
-		identity:         identityMatcher,
-		messages:         messages,
-		riverClient:      riverClient,
-		externalContacts: externalContacts,
-		hostLiveness:     hostLiveness,
-		meetingNotes:     meetingNotes,
-		calendar:         calendar,
-		phoneCallLinkage: phoneCallLinkage,
-		interactions:     interactions,
-		identityLookup:   identityLookup,
-		contactSvc:       contactSvc,
-		phoneCalls:       phoneCalls,
-		contactRecorder:  contactRecorder,
-		cadence:          cadence,
-		followUp:         followUp,
-		titleMatcher:     titleMatcher,
-		discovery:        discovery,
+// NewIngestService builds an IngestService. It panics when any dependency
+// is nil: an incomplete wiring is a programming error that must fail at
+// construction, not silently skip a step at request time.
+func NewIngestService(d IngestDeps) *IngestService {
+	if missing := d.missing(); len(missing) > 0 {
+		panic("service: NewIngestService missing dependencies: " + strings.Join(missing, ", "))
 	}
+	return &IngestService{
+		database:              d.Database,
+		bus:                   d.Bus,
+		identity:              d.Identity,
+		messages:              d.Messages,
+		riverClient:           d.RiverClient,
+		externalContacts:      d.ExternalContacts,
+		hostLiveness:          d.HostLiveness,
+		meetingNotes:          d.MeetingNotes,
+		calendar:              d.Calendar,
+		phoneCallLinkage:      d.PhoneCallLinkage,
+		interactions:          d.Interactions,
+		identityLookup:        d.IdentityLookup,
+		contactSvc:            d.ContactSvc,
+		phoneCalls:            d.PhoneCalls,
+		contactRecorder:       d.ContactRecorder,
+		cadence:               d.Cadence,
+		followUp:              d.FollowUp,
+		titleMatcher:          d.TitleMatcher,
+		discovery:             d.Discovery,
+		addressBookReconciler: d.AddressBookReconciler,
+		venue:                 d.Venue,
+	}
+}
+
+func (d IngestDeps) missing() []string {
+	var m []string
+	for _, f := range []struct {
+		name  string
+		isNil bool
+	}{
+		{"Database", d.Database == nil},
+		{"Bus", d.Bus == nil},
+		{"Identity", d.Identity == nil},
+		{"Messages", d.Messages == nil},
+		{"RiverClient", d.RiverClient == nil},
+		{"ExternalContacts", d.ExternalContacts == nil},
+		{"HostLiveness", d.HostLiveness == nil},
+		{"MeetingNotes", d.MeetingNotes == nil},
+		{"Calendar", d.Calendar == nil},
+		{"PhoneCallLinkage", d.PhoneCallLinkage == nil},
+		{"Interactions", d.Interactions == nil},
+		{"IdentityLookup", d.IdentityLookup == nil},
+		{"ContactSvc", d.ContactSvc == nil},
+		{"TitleMatcher", d.TitleMatcher == nil},
+		{"Discovery", d.Discovery == nil},
+		{"PhoneCalls", d.PhoneCalls == nil},
+		{"ContactRecorder", d.ContactRecorder == nil},
+		{"Cadence", d.Cadence == nil},
+		{"FollowUp", d.FollowUp == nil},
+		{"AddressBookReconciler", d.AddressBookReconciler == nil},
+		{"Venue", d.Venue == nil},
+	} {
+		if f.isNil {
+			m = append(m, f.name)
+		}
+	}
+	return m
 }
 
 // isHostOnlyKind reports whether the kind is a daemon-push kind (i.e.,
@@ -535,9 +544,8 @@ func (s *IngestService) IngestBatch(
 	// the batch (nothing commits) and surface ErrHostRevokedDuringBatch
 	// so the handler can return 401 UNKNOWN_HOST.
 	//
-	// Skipped when hostID is nil (global-API-key path) or hostLiveness
-	// is nil (test wiring). Production always sets both.
-	if hostID != nil && s.hostLiveness != nil {
+	// Skipped when hostID is nil (global-API-key path).
+	if hostID != nil {
 		if _, livenessErr := s.hostLiveness.GetActiveHostByIDForUpdateTx(ctx, tx, *hostID); livenessErr != nil {
 			if errors.Is(livenessErr, db.ErrNotFound) {
 				return 0, 0, nil, nil, ErrHostRevokedDuringBatch
@@ -716,12 +724,6 @@ func (s *IngestService) IngestBatch(
 	// batch back. Partial-enqueue stranding would be worse than a
 	// daemon retry.
 	for pair := range pendingAggregate {
-		if s.riverClient == nil {
-			// No river client wired (test mode). Skip enqueue; the
-			// staging rows are still durable so the periodic sweeper
-			// will eventually pick them up.
-			continue
-		}
 		args := consumerjobs.MessagingAggregateForContactArgs{
 			ContactID: pair.ContactID,
 			Source:    pair.Source,
@@ -770,15 +772,6 @@ func (s *IngestService) handleRawMessage(
 	env *events.Envelope,
 	hostID uuid.UUID,
 ) (*uuid.UUID, *IngestPerEventRejection) {
-	// The dependencies are constructor-injected; a missing dep here is
-	// a wiring bug (the handler should not let raw_message events
-	// through when the service wasn't configured for them).
-	if s.identity == nil || s.messages == nil {
-		return nil, &IngestPerEventRejection{
-			Code:    ingestRejectPayloadInvariant,
-			Message: "ingest service was not configured for raw_message processing",
-		}
-	}
 
 	// Re-decode the payload (structurally validated by the handler;
 	// verifyRawMessageInvariants ran on the cross-field invariants).
@@ -1062,12 +1055,6 @@ func (s *IngestService) handleExternalContactUpserted(
 	env *events.Envelope,
 	hostID uuid.UUID,
 ) (postCommit func(context.Context), rejection *IngestPerEventRejection) {
-	if s.identity == nil || s.externalContacts == nil {
-		return nil, &IngestPerEventRejection{
-			Code:    ingestRejectPayloadInvariant,
-			Message: "ingest service was not configured for external_contact processing",
-		}
-	}
 
 	var p events.ExternalContactUpsertedPayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
@@ -1267,7 +1254,7 @@ func (s *IngestService) handleExternalContactUpserted(
 	// If the email/phone path above resolved a contact_id, link the new
 	// identity row to it in the same tx. The Import-handler backfill
 	// (handlers/import.go) covers the "tag now, import later" path.
-	if env.Source == "anarlog_humans" && s.identityLookup != nil {
+	if env.Source == "anarlog_humans" {
 		// FailEmpty: the anarlog_human_id is the single structural key
 		// the meeting_note resolution chain hangs on. A whitespace-only
 		// ID (which passes the upstream non-empty-string guard but
@@ -1318,7 +1305,7 @@ func (s *IngestService) handleExternalContactUpserted(
 	// reconciler internally resolves the effective contact/status
 	// (duplicate-aware precedence) and no-ops for unmatched/ignored rows,
 	// so it is safe to schedule whenever the row exists.
-	if s.addressBookReconciler != nil && env.Source == "icloud_contacts" && external != nil {
+	if env.Source == "icloud_contacts" && external != nil {
 		externalID := external.ID
 		reconciler := s.addressBookReconciler
 		postCommit = func(pcCtx context.Context) {
@@ -1362,12 +1349,6 @@ func (s *IngestService) handleExternalContactDeleted(
 	env *events.Envelope,
 	authenticatedHostID uuid.UUID,
 ) *IngestPerEventRejection {
-	if s.externalContacts == nil {
-		return &IngestPerEventRejection{
-			Code:    ingestRejectPayloadInvariant,
-			Message: "ingest service was not configured for external_contact processing",
-		}
-	}
 	var p events.ExternalContactDeletedPayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return &IngestPerEventRejection{
@@ -1665,7 +1646,7 @@ const phoneCoalesceWindow = 5 * time.Minute
 // UPDATE on the content fields) when nothing changed. Other kinds keep
 // the "duplicate is a true no-op" contract.
 func (s *IngestService) shouldRunInlineOnDuplicate(ctx context.Context, tx pgx.Tx, env *events.Envelope) (bool, error) {
-	if env.Kind != events.KindMeetingNoteRecorded || s.meetingNotes == nil {
+	if env.Kind != events.KindMeetingNoteRecorded {
 		return false, nil
 	}
 	var p events.MeetingNoteRecordedPayload
@@ -1822,14 +1803,6 @@ func (s *IngestService) handleMeetingNoteRecorded(
 	env *events.Envelope,
 	authenticatedHostID uuid.UUID,
 ) (*NeedsAttentionItem, []func(context.Context), *IngestPerEventRejection) {
-	if s.meetingNotes == nil || s.calendar == nil || s.interactions == nil ||
-		s.identityLookup == nil || s.contactSvc == nil ||
-		s.titleMatcher == nil || s.discovery == nil {
-		return nil, nil, &IngestPerEventRejection{
-			Code:    ingestRejectPayloadInvariant,
-			Message: "ingest service was not configured for meeting_note processing",
-		}
-	}
 
 	var p events.MeetingNoteRecordedPayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
@@ -2018,16 +1991,14 @@ func (s *IngestService) handleMeetingNoteRecorded(
 				Message: fmt.Sprintf("find linkage candidates: %s", candErr.Error()),
 			}
 		}
-		if s.phoneCallLinkage != nil {
-			pcCands, pcErr := s.phoneCallLinkage.FindLinkageCandidatesTx(ctx, tx, windowStart, windowEnd)
-			if pcErr != nil {
-				return nil, nil, &IngestPerEventRejection{
-					Code:    ingestRejectLinkageQueryFailed,
-					Message: fmt.Sprintf("find phone_call linkage candidates: %s", pcErr.Error()),
-				}
+		pcCands, pcErr := s.phoneCallLinkage.FindLinkageCandidatesTx(ctx, tx, windowStart, windowEnd)
+		if pcErr != nil {
+			return nil, nil, &IngestPerEventRejection{
+				Code:    ingestRejectLinkageQueryFailed,
+				Message: fmt.Sprintf("find phone_call linkage candidates: %s", pcErr.Error()),
 			}
-			candidates = append(candidates, pcCands...)
 		}
+		candidates = append(candidates, pcCands...)
 		candidatesLen = len(candidates)
 		// Post-coalesce count for observability — coalescedLen < candidatesLen
 		// means coalescing collapsed a mirrored-meeting / dropped-redial
@@ -2809,12 +2780,6 @@ func (s *IngestService) handleMeetingNoteDeleted(
 	env *events.Envelope,
 	authenticatedHostID uuid.UUID,
 ) *IngestPerEventRejection {
-	if s.meetingNotes == nil || s.interactions == nil {
-		return &IngestPerEventRejection{
-			Code:    ingestRejectPayloadInvariant,
-			Message: "ingest service was not configured for meeting_note processing",
-		}
-	}
 
 	var p events.MeetingNoteDeletedPayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {

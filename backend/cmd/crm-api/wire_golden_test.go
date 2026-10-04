@@ -274,11 +274,11 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 	consumers := buildDomainConsumers(cfg, database, core, graph, eventBus, riverClient)
 	contactService := buildContactService(cfg, database, core, graph, consumers, eventBus, riverClient)
 	interactionRecorder := buildInteractionRecorder(contactService, messaging, ingest, consumers, eventBus)
-	ingestStk := buildIngestStack(database, core, contactService, ingest, messaging, consumers, eventBus, riverClient)
+	domain := buildDomainServices(database, core, graph, ingest, consumers, eventBus)
+	buildIngestStack(database, core, contactService, ingest, messaging, consumers, domain, eventBus, riverClient)
 	registerCoreConsumerWorkers(reg, database, core, contactService, interactionRecorder, messaging, consumers, eventBus)
 	pubBus, _ := resolveInteractionMode(cfg, database, interactionRecorder, eventBus)
 	registerModeWorkers(reg, cfg, database, core, consumers, eventBus, riverClient)
-	domain := buildDomainServices(database, core, graph, ingest, consumers, ingestStk, eventBus)
 	registerRematchDispatcher(reg, graph, database, eventBus)
 
 	var syncStk syncStack

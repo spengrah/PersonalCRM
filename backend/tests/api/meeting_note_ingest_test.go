@@ -151,33 +151,25 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	titleMatcher := anarlog.NewTitleMatcher(contactRepo)
 	titleDiscoveryWriter := anarlog.NewDiscoveryWriter(externalRepo)
 	phoneCallRepo := repository.NewPhoneCallRepository(database.Queries)
-	ingestService := service.NewIngestService(
-		database,
-		eventBus,
-		identityService,
-		nil, // messagesRepo unused
-		nil, // riverClient unused
-		externalRepo,
-		hostRepo,
-		meetingRepo,
-		calendarRepo,
-		interactionRepo,
-		identityRepo,
-		contactSvc,
-		nil, // phoneCalls (writer) unused on meeting_note path
-		nil, // contactRecorder unused
-		nil, // cadence unused
-		nil, // followUp unused
-		titleMatcher,
-		titleDiscoveryWriter,
-		phoneCallRepo, // phone_call linkage candidates (read)
-	)
+	ingestDeps := newIngestDeps(t, database, eventBus)
+	ingestDeps.Identity = identityService
+	ingestDeps.ExternalContacts = externalRepo
+	ingestDeps.HostLiveness = hostRepo
+	ingestDeps.MeetingNotes = meetingRepo
+	ingestDeps.Calendar = calendarRepo
+	ingestDeps.Interactions = interactionRepo
+	ingestDeps.IdentityLookup = identityRepo
+	ingestDeps.ContactSvc = contactSvc
+	ingestDeps.TitleMatcher = titleMatcher
+	ingestDeps.Discovery = titleDiscoveryWriter
+	ingestDeps.PhoneCallLinkage = phoneCallRepo
 	// Wire the venue resolver (mirrors production main.go) so the meeting_note
 	// path populates interaction.venue_id and a leak (a venue node minted with no
 	// interaction to reference it) is observable.
 	venueResolver := repository.NewVenueResolverRegistry(
 		repository.NewVenueRepository(database.Queries), nil, calendarRepo)
-	ingestService.SetVenueResolver(venueResolver)
+	ingestDeps.Venue = venueResolver
+	ingestService := service.NewIngestService(ingestDeps)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	gin.SetMode(gin.TestMode)

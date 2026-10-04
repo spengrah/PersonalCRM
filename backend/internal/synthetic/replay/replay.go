@@ -281,7 +281,7 @@ type Harness struct {
 	cadenceUpdater  *consumer.CadenceUpdater
 	support         *repository.SyntheticSupportRepository
 
-	// ingestService is built with the revoked host + hostLiveness=nil.
+	// ingestService is built with the revoked host + syntheticHostLiveness.
 	ingestService *service.IngestService
 	macHostID     uuid.UUID
 

@@ -71,7 +71,7 @@ type MacContactResult struct {
 }
 
 // ReplayMacContacts feeds a synthetic external_contact.upserted envelope through
-// IngestService.IngestBatch (hostLiveness=nil). For MatchSeeded the email matches
+// IngestService.IngestBatch (syntheticHostLiveness). For MatchSeeded the email matches
 // the seeded contact → external_contact linked (match_status='matched'). For
 // MatchUnknown → external_contact.match_status='unmatched' (the Imports queue).
 // Settles synchronously inside the tx (no River cascade for the basic case).
@@ -134,7 +134,7 @@ type IMessageResult struct {
 }
 
 // ReplayIMessage feeds a synthetic raw_message.received envelope through
-// IngestService.IngestBatch (revoked host id, hostLiveness=nil, harness
+// IngestService.IngestBatch (revoked host id, syntheticHostLiveness, harness
 // riverClient so the end-of-batch MessagingAggregateForContactArgs enqueue
 // succeeds). For MatchSeeded the phone matches the seeded contact → matched
 // interaction (via the messaging aggregate worker). For MatchUnknown →

@@ -11,9 +11,8 @@ import (
 	"github.com/riverqueue/river"
 )
 
-// ingestStack holds the IngestService (its AddressBookReconciler is wired
-// later, in buildDomainServices) plus the ingest + meeting-note handlers
-// consumed by route registration.
+// ingestStack holds the IngestService plus the ingest + meeting-note
+// handlers consumed by route registration.
 type ingestStack struct {
 	IngestService      *service.IngestService
 	IngestHandler      *handlers.IngestHandler
@@ -24,8 +23,7 @@ type ingestStack struct {
 // consumers so the call.* inline handler can reuse contactService +
 // cadenceUpdater + followUpManager + eventBus to emit interaction.recorded
 // and apply cadence/follow-up in the same tx as the phone_call staging-row
-// write) and the meeting-note conflict-resolution surface. The
-// AddressBookReconciler back-reference is set later in buildDomainServices.
+// write) and the meeting-note conflict-resolution surface.
 func buildIngestStack(
 	database *db.Database,
 	core coreRepos,
@@ -33,6 +31,7 @@ func buildIngestStack(
 	ingest ingestRepos,
 	messaging messagingFoundation,
 	consumers eventConsumers,
+	domain domainServices,
 	eventBus *events.Bus,
 	riverClient *river.Client[pgx.Tx],
 ) ingestStack {
@@ -55,9 +54,7 @@ func buildIngestStack(
 	// followUpManager, and eventBus.PublishTx to emit
 	// interaction.recorded + apply cadence + follow-up in the SAME tx
 	// as the phone_call staging row write (spec §`phone_calls`
-	// content-delivered cadence). raw_message.* and external_contact.*
-	// inline handlers don't need these four — they were nil before the
-	// v1.5 expansion. The meeting_note.* inline handler reuses
+	// content-delivered cadence). The meeting_note.* inline handler reuses
 	// contactService via the ContactInteractionRecorder interface for
 	// session-attributed interaction writes so cadence + follow-up
 	// fire correctly.
@@ -68,30 +65,31 @@ func buildIngestStack(
 	// persists weak-candidate anarlog_title rows for unmatched tokens.
 	titleMatcher := anarlog.NewTitleMatcher(contactRepo)
 	titleDiscoveryWriter := anarlog.NewDiscoveryWriter(externalContactRepoForIngest)
-	ingestService := service.NewIngestService(
-		database,
-		eventBus,
-		identityServiceForIngest,
-		messagesMessageRepo,
-		riverClient,
-		externalContactRepoForIngest,
-		macHostRepoForIngest, // host-liveness re-check inside the batch tx
-		meetingNoteRepoForIngest,
-		calendarRepoForIngest,
-		interactionRepo,
-		identityRepoForIngest,
-		contactService,
-		phoneCallRepoForIngest,
-		contactService,
-		cadenceUpdater,
-		followUpManager,
-		titleMatcher,
-		titleDiscoveryWriter,
-		phoneCallRepoForIngest, // phone_call linkage candidates for meeting_note Step 1
-	)
-	// Populate interaction.venue_id for phone_calls + anarlog_sessions
-	// interactions the ingest inline handlers write.
-	ingestService.SetVenueResolver(venueResolver)
+	ingestService := service.NewIngestService(service.IngestDeps{
+		Database:              database,
+		Bus:                   eventBus,
+		Identity:              identityServiceForIngest,
+		Messages:              messagesMessageRepo,
+		RiverClient:           riverClient,
+		ExternalContacts:      externalContactRepoForIngest,
+		HostLiveness:          macHostRepoForIngest, // host-liveness re-check inside the batch tx
+		MeetingNotes:          meetingNoteRepoForIngest,
+		Calendar:              calendarRepoForIngest,
+		PhoneCallLinkage:      phoneCallRepoForIngest, // phone_call linkage candidates for meeting_note Step 1
+		Interactions:          interactionRepo,
+		IdentityLookup:        identityRepoForIngest,
+		ContactSvc:            contactService,
+		TitleMatcher:          titleMatcher,
+		Discovery:             titleDiscoveryWriter,
+		PhoneCalls:            phoneCallRepoForIngest,
+		ContactRecorder:       contactService,
+		Cadence:               cadenceUpdater,
+		FollowUp:              followUpManager,
+		AddressBookReconciler: domain.AddressBookReconcileService,
+		// Populate interaction.venue_id for phone_calls + anarlog_sessions
+		// interactions the ingest inline handlers write.
+		Venue: venueResolver,
+	})
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// User-driven conflict-resolution surface for meeting_note rows.

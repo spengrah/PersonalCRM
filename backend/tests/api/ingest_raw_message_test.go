@@ -105,27 +105,12 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, riverClient, eventRepo)
-	ingestService := service.NewIngestService(
-		database,
-		eventBus,
-		identityService,
-		messagesRepo,
-		riverClient,
-		nil,
-		hostRepo,
-		nil, // meetingNotes unused
-		nil, // calendar unused
-		nil, // interactions unused
-		nil, // identityLookup unused
-		nil, // contactSvc unused
-		nil, // phoneCalls unused
-		nil, // contactRecorder unused
-		nil, // cadence unused
-		nil, // followUp unused
-		nil, // titleMatcher unused
-		nil, // discovery unused
-		nil, // phoneCallLinkage unused
-	)
+	ingestDeps := newIngestDeps(t, database, eventBus)
+	ingestDeps.Identity = identityService
+	ingestDeps.Messages = messagesRepo
+	ingestDeps.RiverClient = riverClient
+	ingestDeps.HostLiveness = hostRepo
+	ingestService := service.NewIngestService(ingestDeps)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// gin mode is set once for the package in gin_test.go's init(); calling

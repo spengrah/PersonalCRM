@@ -198,6 +198,11 @@ See `.ai/patterns/backend.md` for the full repository conversion pattern with ex
 - Single repository operations
 - No business logic beyond validation
 
+**Dependencies are required.** New services follow these rules. Convert an existing service when a change already rewrites its construction.
+- Every dependency is a constructor input, and the constructor panics when one is nil. No method checks whether a dependency is set.
+- A feature that can be off gets an explicit disabled implementation, chosen in the composition root. It never gets a nil dependency.
+- Tests supply every dependency. They replace one only to fake what they cannot run or to inject a failure (see `.ai/rules/testing.md`).
+
 ```go
 // backend/internal/service/new_feature.go
 package service
@@ -218,6 +223,9 @@ func NewNewFeatureService(
     newTableRepo *repository.NewTableRepository,
     contactRepo *repository.ContactRepository,
 ) *NewFeatureService {
+    if newTableRepo == nil || contactRepo == nil {
+        panic("service: NewNewFeatureService requires newTableRepo and contactRepo")
+    }
     return &NewFeatureService{
         newTableRepo: newTableRepo,
         contactRepo:  contactRepo,

@@ -17,17 +17,14 @@ type domainServices struct {
 }
 
 // buildDomainServices constructs the note, import-match, enrichment, and
-// address-book-reconcile services and wires the EnrichmentService setters
-// (cadence + knowledge writer) plus the IngestService's AddressBookReconciler
-// back-reference. EnrichmentService is shared by the import handler and the
-// Telegram peer matcher, so it is built once here.
+// address-book-reconcile services. EnrichmentService is shared by the import
+// handler and the Telegram peer matcher, so it is built once here.
 func buildDomainServices(
 	database *db.Database,
 	core coreRepos,
 	graph graphCore,
 	ingest ingestRepos,
 	consumers eventConsumers,
-	ingestStk ingestStack,
 	eventBus *events.Bus,
 ) domainServices {
 	noteRepo := core.Note
@@ -39,7 +36,6 @@ func buildDomainServices(
 	cadenceUpdater := consumers.CadenceUpdater
 	knowledgeCacheUpdater := consumers.KnowledgeCacheUpdater
 	externalContactRepoForIngest := ingest.ExternalContact
-	ingestService := ingestStk.IngestService
 
 	noteService := service.NewNoteService(noteRepo, contactRepo)
 	importMatchService := service.NewImportMatchService(contactRepo)
@@ -66,7 +62,6 @@ func buildDomainServices(
 		contactMethodRepo,
 		externalContactRepoForIngest,
 	)
-	ingestService.SetAddressBookReconciler(addressBookReconcileService)
 
 	return domainServices{
 		NoteService:                 noteService,

@@ -139,7 +139,12 @@ func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 	recorderShim.real = consumer.NewInteractionRecorderWorker(bus, database.Pool, recorder, nil)
 
 	// Now wire the ingest service + handler.
-	ingestService := service.NewIngestService(database, bus, identityService, messagesRepo, riverClient, nil, hostRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ingestDeps := newIngestDeps(t, database, bus)
+	ingestDeps.Identity = identityService
+	ingestDeps.Messages = messagesRepo
+	ingestDeps.RiverClient = riverClient
+	ingestDeps.HostLiveness = hostRepo
+	ingestService := service.NewIngestService(ingestDeps)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// gin mode is set once for the package in gin_test.go's init(); calling
