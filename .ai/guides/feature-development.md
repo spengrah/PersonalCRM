@@ -223,6 +223,9 @@ func NewNewFeatureService(
     newTableRepo *repository.NewTableRepository,
     contactRepo *repository.ContactRepository,
 ) *NewFeatureService {
+    if newTableRepo == nil || contactRepo == nil {
+        panic("service: NewNewFeatureService requires newTableRepo and contactRepo")
+    }
     return &NewFeatureService{
         newTableRepo: newTableRepo,
         contactRepo:  contactRepo,

@@ -160,9 +160,7 @@ type ExternalContactWriter interface {
 // (or dup-of-linked) contact AFTER the batch tx commits. icloud is
 // push-only with no periodic resync, so this post-commit hook is the
 // ONLY forward path that closes the "icloud enriches nothing" leak —
-// it must fire on FIRST MATCH too, not only re-upsert. Optional: nil is
-// supported for tests that don't exercise the reconcile; the handler
-// then skips scheduling the post-commit closure. Concrete is
+// it must fire on FIRST MATCH too, not only re-upsert. Concrete is
 // *AddressBookReconcileService (+ *repository.ExternalContactRepository
 // for target resolution); see the addressBookReconcilerAdapter wired in
 // main.go.
@@ -204,10 +202,7 @@ type CalendarLinkageReader interface {
 
 // PhoneCallLinkageReader is the narrow surface the meeting_note
 // handler needs to enumerate candidate phone_call rows in a time
-// window. Concrete is *repository.PhoneCallRepository. Optional —
-// nil is supported for tests that don't exercise the phone_call
-// linkage path; the inline handler skips the phone_call query when
-// the dep is nil.
+// window. Concrete is *repository.PhoneCallRepository.
 type PhoneCallLinkageReader interface {
 	FindLinkageCandidatesTx(ctx context.Context, tx pgx.Tx, windowStart, windowEnd time.Time) ([]repository.LinkageCandidate, error)
 }

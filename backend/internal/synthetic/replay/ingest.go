@@ -71,7 +71,7 @@ type MacContactResult struct {
 }
 
 // ReplayMacContacts feeds a synthetic external_contact.upserted envelope through
-// IngestService.IngestBatch (hostLiveness=nil). For MatchSeeded the email matches
+// IngestService.IngestBatch (syntheticHostLiveness). For MatchSeeded the email matches
 // the seeded contact → external_contact linked (match_status='matched'). For
 // MatchUnknown → external_contact.match_status='unmatched' (the Imports queue).
 // Settles synchronously inside the tx (no River cascade for the basic case).
