@@ -81,6 +81,43 @@ func newAssertHarness(t *testing.T, ctx context.Context) (*assertHarness, contex
 	}, ctx
 }
 
+// TestAssert_SingleConnectionPool proves the assert write path reads only
+// through its tx. A pool read inside the tx needs a second connection; on a
+// one-connection pool that waits forever, and under concurrent asserts on a
+// normal pool every connection ends up held by a tx waiting for another.
+func TestAssert_SingleConnectionPool(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	t.Parallel()
+	h, ctx := newAssertHarness(t, ctx0())
+
+	_, cfg := newSharedTestDB(t, ctx)
+	cfg.Database.MaxConns = 1
+	cfg.Database.MinConns = 0
+	single, err := db.NewDatabase(ctx, cfg.Database)
+	require.NoError(t, err)
+	t.Cleanup(single.Close)
+	client, err := river.NewClient(riverpgxv5.New(single.Pool), &river.Config{TestOnly: true})
+	require.NoError(t, err)
+	svc := service.NewAssertService(
+		single.Pool,
+		repository.NewNodeRepository(single.Queries),
+		repository.NewEntityRepository(single.Queries),
+		repository.NewPredicateRepository(single.Queries),
+		repository.NewAssertionRepository(single.Queries),
+		events.NewBus(single.Pool, client, repository.NewEventRepository(single.Queries)),
+	)
+
+	gen, _ := migrationGenerator(t)
+	subject := h.seedPerson(t, ctx, gen.Prefix(), "subj")
+	deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	got, err := svc.Assert(deadline, textFactReq(subject, "home_address", "one conn", gen.Prefix(), "single"))
+	require.NoError(t, err, "Assert must not need a second connection while its tx is open")
+	h.cleanupAssertionEvents(t, ctx, got.ID)
+}
+
 // seedPerson creates a person node and registers cleanup (assertions before
 // nodes, since the assertion→node FK is restrict). The event rows an assert
 // produces are cleaned per-assertion by the test via cleanupAssertionEvents.
