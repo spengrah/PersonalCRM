@@ -90,7 +90,7 @@ E2E_DATABASE_NAME ?= personal_crm_test
 E2E_DATABASE_URL ?= postgres://crm_user:crm_password@localhost:5432/$(E2E_DATABASE_NAME)?sslmode=disable
 E2E_FRONTEND_PORT ?= 3000
 E2E_BACKEND_PORT ?= 8080
-BACKEND_SLOW_TESTS_REGEX := TestSyncWorker_LoadNoDuplicateConcurrentSyncs|TestPeriodicTick_FiresOnStart|TestSyncWorker_RescueOnCrash|TestSynthetic|TestTestdb
+BACKEND_SLOW_TESTS_REGEX := TestSyncWorker_LoadNoDuplicateConcurrentSyncs|TestPeriodicTick_FiresOnStart|TestSyncWorker_RescueOnCrash|TestSynthetic|TestTestdb|TestInteractionsDeclare|TestSeedDeclaredEndpoint|TestCleanupEndpoint
 
 # Verbosity for `go test`. Defaults to -v for local readability; CI overrides
 # to empty (GOTEST_VERBOSE=) to cut ~23k log lines. Failures still print.
