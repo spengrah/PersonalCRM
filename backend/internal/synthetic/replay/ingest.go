@@ -134,7 +134,7 @@ type IMessageResult struct {
 }
 
 // ReplayIMessage feeds a synthetic raw_message.received envelope through
-// IngestService.IngestBatch (revoked host id, hostLiveness=nil, harness
+// IngestService.IngestBatch (revoked host id, syntheticHostLiveness, harness
 // riverClient so the end-of-batch MessagingAggregateForContactArgs enqueue
 // succeeds). For MatchSeeded the phone matches the seeded contact → matched
 // interaction (via the messaging aggregate worker). For MatchUnknown →

@@ -689,7 +689,7 @@ func (r *SyntheticSupportRepository) CountUnmatchedExternalContactByEmailPrefix(
 // returns its id. The revoked state dodges the idx_mac_host_singleton partial
 // unique (which only applies to non-revoked rows), so the synthetic harness can
 // seed it freely on the shared test DB. Its id is used as the non-nil hostID for
-// the host-only ingest-kind allowlist (with hostLiveness=nil so the active-host
+// the host-only ingest-kind allowlist (with syntheticHostLiveness so the active-host
 // re-check is skipped). hostname carries the namespace so cleanup is targeted.
 func (r *SyntheticSupportRepository) SeedRevokedMacHost(ctx context.Context, hostname string) (uuid.UUID, error) {
 	row, err := r.queries.SeedRevokedMacHost(ctx, db.SeedRevokedMacHostParams{
