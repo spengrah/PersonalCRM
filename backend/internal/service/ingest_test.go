@@ -550,8 +550,9 @@ func TestHandleExternalContactUpserted_PostUpsertTombstoneTriggersRevive(t *test
 	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
 
 	svc := &IngestService{
-		identity:         stubIdent,
-		externalContacts: stubExt,
+		identity:              stubIdent,
+		externalContacts:      stubExt,
+		addressBookReconciler: noopAddressBookReconciler{},
 	}
 	env := validUpsertedEnv(hostID, "CN-race")
 	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
@@ -581,8 +582,9 @@ func TestHandleExternalContactUpserted_LiveUpsertSkipsRevive(t *testing.T) {
 	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
 
 	svc := &IngestService{
-		identity:         stubIdent,
-		externalContacts: stubExt,
+		identity:              stubIdent,
+		externalContacts:      stubExt,
+		addressBookReconciler: noopAddressBookReconciler{},
 	}
 	env := validUpsertedEnv(hostID, "CN-live")
 	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
@@ -650,8 +652,9 @@ func TestHandleExternalContactUpserted_PhonesLoopUsesSkipEmpty(t *testing.T) {
 	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
 
 	svc := &IngestService{
-		identity:         stubIdent,
-		externalContacts: stubExt,
+		identity:              stubIdent,
+		externalContacts:      stubExt,
+		addressBookReconciler: noopAddressBookReconciler{},
 	}
 	env := upsertEnvWithContactMethods(t, hostID, "CN-junk-phone",
 		nil, []string{"+", "   ", "+15551234567"})
@@ -691,8 +694,9 @@ func TestHandleExternalContactUpserted_EmailsLoopUsesSkipEmpty(t *testing.T) {
 	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
 
 	svc := &IngestService{
-		identity:         stubIdent,
-		externalContacts: stubExt,
+		identity:              stubIdent,
+		externalContacts:      stubExt,
+		addressBookReconciler: noopAddressBookReconciler{},
 	}
 	env := upsertEnvWithContactMethods(t, hostID, "CN-junk-email",
 		[]string{"   ", "\t", "ok@example.com"}, nil)
@@ -736,8 +740,9 @@ func TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_StillA
 	}
 
 	svc := &IngestService{
-		identity:         stubIdent,
-		externalContacts: stubExt,
+		identity:              stubIdent,
+		externalContacts:      stubExt,
+		addressBookReconciler: noopAddressBookReconciler{},
 	}
 	env := upsertEnvWithContactMethods(t, hostID, "CN-all-junk",
 		[]string{"\t"}, []string{"+"})
@@ -784,8 +789,9 @@ func TestHandleExternalContactUpserted_MixedJunkAndValid_NilResultTolerance(t *t
 	}
 
 	svc := &IngestService{
-		identity:         stubIdent,
-		externalContacts: stubExt,
+		identity:              stubIdent,
+		externalContacts:      stubExt,
+		addressBookReconciler: noopAddressBookReconciler{},
 	}
 	env := upsertEnvWithContactMethods(t, hostID, "CN-mixed",
 		[]string{"   ", "ok@example.com"},
@@ -860,9 +866,10 @@ func TestHandleExternalContactUpserted_AnarlogBlockUsesFailEmpty(t *testing.T) {
 	}
 	stubIdent := &stubIdentityMatcher{result: &MatchResult{}}
 	svc := &IngestService{
-		identity:         stubIdent,
-		externalContacts: stubExt,
-		identityLookup:   &stubAnarlogIdentityLookup{},
+		identity:              stubIdent,
+		externalContacts:      stubExt,
+		identityLookup:        &stubAnarlogIdentityLookup{},
+		addressBookReconciler: noopAddressBookReconciler{},
 	}
 	payload := mustMarshalExtUpsert(events.ExternalContactUpsertedPayload{
 		Version:  1,
@@ -938,8 +945,9 @@ func TestHandleExternalContactUpserted_WritesHostIDAndHash(t *testing.T) {
 		},
 	}
 	svc := &IngestService{
-		identity:         &stubIdentityMatcher{result: &MatchResult{}},
-		externalContacts: recorder,
+		identity:              &stubIdentityMatcher{result: &MatchResult{}},
+		externalContacts:      recorder,
+		addressBookReconciler: noopAddressBookReconciler{},
 	}
 	env := validUpsertedEnv(hostID, "CN-fields")
 	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
@@ -2121,3 +2129,9 @@ func TestTaggedImpromptuInteractions(t *testing.T) {
 		}
 	})
 }
+
+// noopAddressBookReconciler stands in for the post-commit address-book
+// reconciler, which these tests never run.
+type noopAddressBookReconciler struct{}
+
+func (noopAddressBookReconciler) ResolveAndReconcile(context.Context, uuid.UUID) error { return nil }

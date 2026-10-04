@@ -36,7 +36,7 @@ still pass for the revision being merged.
 
       Unit Tests
      - Pure functions
-    - Mocked dependencies
+    - Fakes only for what cannot run
    - Fastest, run frequently
 ```
 
@@ -62,9 +62,14 @@ See [Layered Architecture](../guides/architecture.md#why-layered) for how these 
 - Form submissions
 - Error states
 
-## Integration Tests vs Unit Tests
+## What to Fake
 
-**Integration tests suffice for unit tests** when unit tests would require heavy mock infrastructure. If the codebase doesn't have mock interfaces for repositories, write integration tests that exercise the real code path rather than creating mock infrastructure for a single test file.
+New tests follow these rules. Convert an existing fake-based test when a change already requires rewriting it.
+
+- Fake what a test cannot run: third-party APIs and their clients, the network, the clock.
+- Fake a failure the real dependency cannot produce on demand.
+- Run our own repositories and services against real PostgreSQL. A fake of our own repository exists only to inject a failure.
+- When a dependency failure matters, assert what happens on that failure (retried, skipped, rolled back, mapped to a status), not only that an error came back.
 
 ## Build State With the Synthetic Toolkit
 

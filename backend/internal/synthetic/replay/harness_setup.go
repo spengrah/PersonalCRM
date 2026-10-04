@@ -26,6 +26,7 @@ import (
 	"personal-crm/backend/internal/whatsapp"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivertype"
@@ -151,7 +152,6 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	messagesRepo := repository.NewMessagesMessageRepository(database.Queries)
 	identityRepo := repository.NewIdentityRepository(database.Queries)
 	claimRepo := repository.NewEventConsumerClaimRepository(database.Queries)
-	hostRepo := repository.NewMacHostRepository(database.Queries)
 	calendarEventRepo := repository.NewCalendarEventRepository(database.Queries)
 	meetingNoteRepo := repository.NewMeetingNoteRepository(database.Queries)
 	phoneCallRepo := repository.NewPhoneCallRepository(database.Queries)
@@ -349,8 +349,8 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		chatListerRegistry,
 	))
 
-	// IngestService: REVOKED synthetic host + hostLiveness=nil + the harness
-	// riverClient (so the iMessage messaging-aggregate enqueue succeeds).
+	// IngestService: REVOKED synthetic host + syntheticHostLiveness + the
+	// harness riverClient (so the iMessage messaging-aggregate enqueue succeeds).
 	macHostID, err := support.SeedRevokedMacHost(ctx, factory.SyntheticSourcePrefix+namespace+"-host")
 	if err != nil {
 		return nil, nil, fmt.Errorf("seed revoked mac host: %w", err)
@@ -372,13 +372,31 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	}
 	titleMatcher := anarlog.NewTitleMatcher(contactRepo)
 	discovery := anarlog.NewDiscoveryWriter(externalRepo)
-	ingestService := service.NewIngestService(
-		database, bus, identityService, messagesRepo, client, externalRepo,
-		nil, // hostLiveness = nil: skips the active-host re-check + dodges the singleton
-		meetingNoteRepo, calendarEventRepo, interactionRepo, identityRepo,
-		contactService, phoneCallRepo, contactService, cadenceUpdater, followUpManager,
-		titleMatcher, discovery, phoneCallRepo,
-	)
+	ingestService := service.NewIngestService(service.IngestDeps{
+		Database:         database,
+		Bus:              bus,
+		Identity:         identityService,
+		Messages:         messagesRepo,
+		RiverClient:      client,
+		ExternalContacts: externalRepo,
+		HostLiveness:     syntheticHostLiveness{},
+		MeetingNotes:     meetingNoteRepo,
+		Calendar:         calendarEventRepo,
+		PhoneCallLinkage: phoneCallRepo,
+		Interactions:     interactionRepo,
+		IdentityLookup:   identityRepo,
+		ContactSvc:       contactService,
+		TitleMatcher:     titleMatcher,
+		Discovery:        discovery,
+		PhoneCalls:       phoneCallRepo,
+		ContactRecorder:  contactService,
+		Cadence:          cadenceUpdater,
+		FollowUp:         followUpManager,
+		// The harness builds no EnrichmentService, so address-book
+		// reconcile after an icloud_contacts replay is off.
+		AddressBookReconciler: noAddressBookReconcile{},
+		Venue:                 venueResolver,
+	})
 
 	// Telegram peer matcher + aggregation engine for the telegram adapter.
 	peerMatcher := telegram.NewPeerMatcher(identityService, telegramRepo, externalRepo, nil, 3)
@@ -417,7 +435,6 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 		groupMaxMembers: groupMaxMembers,
 		created:         newCreated(),
 	}
-	_ = hostRepo // reserved for future liveness wiring; intentionally nil here
 
 	teardown := func(stopCtx context.Context) error {
 		return h.teardown(stopCtx)
@@ -597,3 +614,17 @@ func (*knowledgeCacheNoopWorker) Work(_ context.Context, _ *river.Job[consumerjo
 func (*knowledgeCacheNoopWorker) Timeout(_ *river.Job[consumerjobs.KnowledgeCacheUpdaterJobArgs]) time.Duration {
 	return 30 * time.Second
 }
+
+// syntheticHostLiveness reports every host live. The harness replays daemon
+// families under a REVOKED synthetic host (so no real daemon token can use
+// it), which the production in-tx liveness re-check would reject.
+type syntheticHostLiveness struct{}
+
+func (syntheticHostLiveness) GetActiveHostByIDForUpdateTx(_ context.Context, _ pgx.Tx, id uuid.UUID) (*repository.MacHost, error) {
+	return &repository.MacHost{ID: id}, nil
+}
+
+// noAddressBookReconcile is the harness's disabled address-book reconciler.
+type noAddressBookReconcile struct{}
+
+func (noAddressBookReconcile) ResolveAndReconcile(context.Context, uuid.UUID) error { return nil }

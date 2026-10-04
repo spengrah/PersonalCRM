@@ -216,10 +216,16 @@ func run() int {
 	// built after buildContactService.
 	interactionRecorder := buildInteractionRecorder(contactService, messaging, ingest, consumers, eventBus)
 
+	// Domain services (note / import-match / enrichment / address-book
+	// reconcile). Built before the IngestService, which takes the
+	// address-book reconciler as a constructor dependency.
+	domain := buildDomainServices(database, core, graph, ingest, consumers, eventBus)
+	noteService := domain.NoteService
+
 	// IngestService + meeting-note conflict-resolution surface. Hoisted
 	// after the consumers so the call.* inline handler can reuse them in
 	// the same tx as the staging-row write.
-	ingestStk := buildIngestStack(database, core, contactService, ingest, messaging, consumers, eventBus, riverClient)
+	ingestStk := buildIngestStack(database, core, contactService, ingest, messaging, consumers, domain, eventBus, riverClient)
 	ingestHandler := ingestStk.IngestHandler
 	meetingNoteHandler := ingestStk.MeetingNoteHandler
 
@@ -234,12 +240,6 @@ func run() int {
 	// Register the cadence / knowledge-cache / follow-up / Todoist workers
 	// + their mode boot logs.
 	registerModeWorkers(reg, cfg, database, core, consumers, eventBus, riverClient)
-
-	// Domain services (note / import-match / enrichment / address-book
-	// reconcile) + the EnrichmentService setter wiring + the IngestService
-	// AddressBookReconciler back-reference.
-	domain := buildDomainServices(database, core, graph, ingest, consumers, ingestStk, eventBus)
-	noteService := domain.NoteService
 
 	// Rematch dispatcher consumer — subscribes to contact_methods.added
 	// events and runs RematchService.Run with per-contact mutex

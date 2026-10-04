@@ -32,9 +32,8 @@ limitation is not itself a blocker; explain what required behavior remains
 unfinished if it prevents approval.
 
 Do not require new tests for documentation, formatting, or mechanical edits
-without a meaningful regression risk. Integration tests may replace unit tests
-when they exercise the real behavior and avoid heavy mock infrastructure.
-See `.ai/rules/testing.md` for proportional verification guidance.
+without a meaningful regression risk. Tests fake only what they cannot run, or a
+failure; see `.ai/rules/testing.md` for that rule and proportional verification guidance.
 
 ## Review Process
 

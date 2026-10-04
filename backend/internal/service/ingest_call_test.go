@@ -373,6 +373,17 @@ type callTestHarness struct {
 	identity        *stubIdentityMatcher
 }
 
+// stubVenueResolver resolves every container to a fresh venue id.
+type stubVenueResolver struct{}
+
+func (stubVenueResolver) ResolveVenueForInteractionTx(context.Context, pgx.Tx, string, string, string, string) (uuid.UUID, error) {
+	return uuid.New(), nil
+}
+
+func (stubVenueResolver) ResolveGCalVenueTx(context.Context, pgx.Tx, uuid.UUID) (*uuid.UUID, error) {
+	return nil, nil
+}
+
 func newCallTestHarness(matchedContactID *uuid.UUID) *callTestHarness {
 	pcWriter := &stubPhoneCallWriter{}
 	recorder := &stubContactRecorder{}
@@ -387,6 +398,7 @@ func newCallTestHarness(matchedContactID *uuid.UUID) *callTestHarness {
 		contactRecorder: recorder,
 		cadence:         cadence,
 		followUp:        followUp,
+		venue:           stubVenueResolver{},
 		// bus intentionally nil — replay-path tests don't hit it; other
 		// branches' tests either configure recorder.response.IsReplay=true
 		// (replay short-circuit) or configure phoneCalls.upsertErr to
@@ -581,34 +593,6 @@ func TestHandleCall_StagingUpsertFailed_Rejects(t *testing.T) {
 	_, rej := h.svc.handleCall(context.Background(), nil, env, host, false)
 	require.NotNil(t, rej)
 	require.Equal(t, ingestRejectStagingUpsertFailed, rej.Code)
-}
-
-// TestHandleCall_MissingDependencies_Rejects: the wiring guard rejects
-// when the service is misconfigured (defence in depth).
-func TestHandleCall_MissingDependencies_Rejects(t *testing.T) {
-	host := uuid.New()
-	env := validCallEnv(t, events.KindCallReceived, host, "missing-deps")
-
-	t.Run("no_identity", func(t *testing.T) {
-		svc := &IngestService{phoneCalls: &stubPhoneCallWriter{}, contactRecorder: &stubContactRecorder{}}
-		_, rej := svc.handleCall(context.Background(), nil, env, host, false)
-		require.NotNil(t, rej)
-		require.Equal(t, ingestRejectPayloadInvariant, rej.Code)
-	})
-
-	t.Run("no_phoneCalls", func(t *testing.T) {
-		svc := &IngestService{identity: &stubIdentityMatcher{result: &MatchResult{}}, contactRecorder: &stubContactRecorder{}}
-		_, rej := svc.handleCall(context.Background(), nil, env, host, false)
-		require.NotNil(t, rej)
-		require.Equal(t, ingestRejectPayloadInvariant, rej.Code)
-	})
-
-	t.Run("no_contactRecorder", func(t *testing.T) {
-		svc := &IngestService{identity: &stubIdentityMatcher{result: &MatchResult{}}, phoneCalls: &stubPhoneCallWriter{}}
-		_, rej := svc.handleCall(context.Background(), nil, env, host, false)
-		require.NotNil(t, rej)
-		require.Equal(t, ingestRejectPayloadInvariant, rej.Code)
-	})
 }
 
 // TestHandleCall_PayloadDecodeError: malformed payload bytes reach the

@@ -100,7 +100,11 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 	// match-flip path errors after Bus.PublishTx + UpsertTx +
 	// MatchOrCreateTx have already written rows inside the savepoint.
 	failingWriter := &failingMatchExternalContactWriter{inner: externalRepo}
-	ingestService := service.NewIngestService(database, eventBus, identityService, nil, nil, failingWriter, hostRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	ingestDeps := newIngestDeps(t, database, eventBus)
+	ingestDeps.Identity = identityService
+	ingestDeps.ExternalContacts = failingWriter
+	ingestDeps.HostLiveness = hostRepo
+	ingestService := service.NewIngestService(ingestDeps)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	gin.SetMode(gin.TestMode)

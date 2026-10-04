@@ -126,13 +126,6 @@ func (s *IngestService) handleCall(
 	hostID uuid.UUID,
 	isOutbound bool,
 ) (func(context.Context), *IngestPerEventRejection) {
-	if s.identity == nil || s.phoneCalls == nil || s.contactRecorder == nil {
-		return nil, &IngestPerEventRejection{
-			Code:    ingestRejectPayloadInvariant,
-			Message: "ingest service was not configured for call processing",
-		}
-	}
-
 	var p events.CallPayload
 	if err := json.Unmarshal(env.Payload, &p); err != nil {
 		return nil, &IngestPerEventRejection{
@@ -250,19 +243,16 @@ func (s *IngestService) handleCall(
 		Direction:   interactionDirection,
 	}
 	// Resolve the call venue from the call's unique id, set atomically with the
-	// insert. A real DB error rejects the event (the batch retries); an unwired
-	// resolver leaves venue_id NULL.
-	if s.venue != nil {
-		venueID, venueErr := s.venue.ResolveVenueForInteractionTx(
-			ctx, tx, repository.InteractionSourcePhoneCalls, repository.VenueKindCall, p.CallUniqueID, "")
-		if venueErr != nil {
-			return nil, &IngestPerEventRejection{
-				Code:    ingestRejectStagingUpsertFailed,
-				Message: fmt.Sprintf("resolve call venue: %s", venueErr.Error()),
-			}
+	// insert. A real DB error rejects the event (the batch retries).
+	venueID, venueErr := s.venue.ResolveVenueForInteractionTx(
+		ctx, tx, repository.InteractionSourcePhoneCalls, repository.VenueKindCall, p.CallUniqueID, "")
+	if venueErr != nil {
+		return nil, &IngestPerEventRejection{
+			Code:    ingestRejectStagingUpsertFailed,
+			Message: fmt.Sprintf("resolve call venue: %s", venueErr.Error()),
 		}
-		recReq.VenueID = &venueID
 	}
+	recReq.VenueID = &venueID
 
 	res, err := s.contactRecorder.RecordInteractionTx(ctx, tx, true, recReq)
 	if err != nil {
@@ -315,15 +305,6 @@ func (s *IngestService) handleCall(
 		Payload:    recordedPayload,
 		ObservedAt: p.StartedAt,
 	}
-	if s.bus == nil {
-		// Production wires the bus; this guard exists for unit tests
-		// that don't reach the publish path. Reaching it on a fresh
-		// write without a bus is a wiring bug.
-		return nil, &IngestPerEventRejection{
-			Code:    ingestRejectPayloadInvariant,
-			Message: "ingest service was not configured with an event bus",
-		}
-	}
 	if err := s.bus.PublishTx(ctx, tx, recordedEnv); err != nil {
 		// PublishTx infrastructure failures are unexpected; surface
 		// as a rejection so the savepoint rolls back. The outer batch
@@ -339,12 +320,10 @@ func (s *IngestService) handleCall(
 	// (last_contacted / last_outreach_at), and marks the event
 	// consumed via event_consumer_claim so a queued re-delivery (if
 	// the event router ever fires one) becomes a no-op.
-	if s.cadence != nil {
-		if err := s.cadence.HandleEvent(ctx, tx, recordedEnv); err != nil {
-			return nil, &IngestPerEventRejection{
-				Code:    ingestRejectStagingUpsertFailed,
-				Message: fmt.Sprintf("inline apply cadence: %s", err.Error()),
-			}
+	if err := s.cadence.HandleEvent(ctx, tx, recordedEnv); err != nil {
+		return nil, &IngestPerEventRejection{
+			Code:    ingestRejectStagingUpsertFailed,
+			Message: fmt.Sprintf("inline apply cadence: %s", err.Error()),
 		}
 	}
 
@@ -352,12 +331,10 @@ func (s *IngestService) handleCall(
 	// jobs enqueued in this tx, so no post-commit closure is produced —
 	// phone_calls contributes nil into the batch post-commit slice (shared
 	// with other ingest families that still return real closures).
-	if s.followUp != nil {
-		if err := s.followUp.HandleEvent(ctx, tx, recordedEnv); err != nil {
-			return nil, &IngestPerEventRejection{
-				Code:    ingestRejectStagingUpsertFailed,
-				Message: fmt.Sprintf("inline apply follow-up: %s", err.Error()),
-			}
+	if err := s.followUp.HandleEvent(ctx, tx, recordedEnv); err != nil {
+		return nil, &IngestPerEventRejection{
+			Code:    ingestRejectStagingUpsertFailed,
+			Message: fmt.Sprintf("inline apply follow-up: %s", err.Error()),
 		}
 	}
 

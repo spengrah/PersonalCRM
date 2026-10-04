@@ -202,27 +202,16 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 	// failOn* fields nil) so it behaves identically to the real repo.
 	failWriter := &failingPhoneCallWriter{inner: phoneCallRepo}
 
-	ingestService := service.NewIngestService(
-		database,
-		eventBus,
-		identityService,
-		nil,
-		riverClient,
-		externalRepo,
-		hostRepo,
-		nil, // meetingNotes unused on phone_call path
-		nil, // calendar unused
-		nil, // interactions unused
-		nil, // identityLookup unused
-		nil, // contactSvc unused
-		failWriter,
-		contactService,
-		cadenceUpdater,
-		followUpManager,
-		nil, // titleMatcher unused on phone_call path
-		nil, // discovery unused
-		nil, // phoneCallLinkage unused on phone_call path
-	)
+	ingestDeps := newIngestDeps(t, database, eventBus)
+	ingestDeps.Identity = identityService
+	ingestDeps.RiverClient = riverClient
+	ingestDeps.ExternalContacts = externalRepo
+	ingestDeps.HostLiveness = hostRepo
+	ingestDeps.PhoneCalls = failWriter
+	ingestDeps.ContactRecorder = contactService
+	ingestDeps.Cadence = cadenceUpdater
+	ingestDeps.FollowUp = followUpManager
+	ingestService := service.NewIngestService(ingestDeps)
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
 	// gin mode is set once for the package in gin_test.go's init(); calling

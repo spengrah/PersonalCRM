@@ -84,38 +84,21 @@ func setupExtContactIngestEnv(t *testing.T) *extContactIngestEnv {
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, nil, eventRepo) // no river client needed for external_contact path
-	ingestService := service.NewIngestService(
-		database,
-		eventBus,
-		identityService,
-		nil, // messagesRepo unused on external_contact path
-		nil, // riverClient unused
-		externalRepo,
-		hostRepo, // host-liveness re-check for the FOR UPDATE lock
-		nil,      // meetingNotes unused on external_contact path
-		nil,      // calendar unused
-		nil,      // interactions unused
-		nil,      // identityLookup unused
-		nil,      // contactSvc unused
-		nil,      // phoneCalls unused on external_contact path
-		nil,      // contactRecorder unused
-		nil,      // cadence unused
-		nil,      // followUp unused
-		nil,      // titleMatcher unused
-		nil,      // discovery unused
-		nil,      // phoneCallLinkage unused
-	)
+	ingestDeps := newIngestDeps(t, database, eventBus)
+	ingestDeps.Identity = identityService
+	ingestDeps.ExternalContacts = externalRepo
+	ingestDeps.HostLiveness = hostRepo
 	// Wire the address-book method reconciler so the icloud post-commit
 	// forward hook fires. nil bus/registry on the enrichment service → the
 	// auto path adds methods but skips the rematch publish (the forward-
 	// hook assertions are on method propagation / suggestion recording,
-	// not the rematch event). The reconciler is nil-safe and a no-op for
-	// rows that don't resolve to a linked contact, so wiring it here does
-	// not change the behavior of the existing non-reconcile tests.
+	// not the rematch event). The reconciler is a no-op for rows that don't
+	// resolve to a linked contact.
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 	enrichSvc := service.NewEnrichmentService(database, contactRepo, contactMethodRepo, enrichmentRepo, nil, nil, nil, nil, nil)
 	addressBookReconcile := service.NewAddressBookReconcileService(enrichSvc, contactRepo, contactMethodRepo, externalRepo)
-	ingestService.SetAddressBookReconciler(addressBookReconcile)
+	ingestDeps.AddressBookReconciler = addressBookReconcile
+	ingestService := service.NewIngestService(ingestDeps)
 
 	ingestHandler := handlers.NewIngestHandler(ingestService)
 
