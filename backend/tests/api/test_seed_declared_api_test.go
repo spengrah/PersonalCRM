@@ -18,6 +18,7 @@ import (
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic/declare"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/tests/testsupport"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -45,6 +46,7 @@ func declaredAPINS(t *testing.T) string {
 // created through the same production writer the product uses.
 func newDeclaredSeedRouter(t *testing.T) (*gin.Engine, *db.Database, context.Context, *service.ContactService) {
 	t.Helper()
+	testsupport.RequireLongTests(t)
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
 	database, _ := newIsolatedRiverTestDB(t, ctx)

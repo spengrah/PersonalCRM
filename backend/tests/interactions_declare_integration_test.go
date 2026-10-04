@@ -17,6 +17,7 @@ import (
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/synthetic/declare"
 	"personal-crm/backend/internal/synthetic/factory"
+	"personal-crm/backend/tests/testsupport"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -25,9 +26,7 @@ import (
 
 func requireInteractionsDeclareIntegration(t *testing.T) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireLongTests(t)
 	if os.Getenv("DATABASE_URL") == "" {
 		t.Skip("DATABASE_URL not set")
 	}

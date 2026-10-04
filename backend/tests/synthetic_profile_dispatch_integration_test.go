@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"personal-crm/backend/internal/synthetic"
+	"personal-crm/backend/tests/testsupport"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,6 +36,7 @@ import (
 // Table-driven so a newly added profile is a compile-time prompt to state its
 // discriminator rather than a silently uncovered branch.
 func TestSyntheticProfile_DispatchesEveryValidProfile(t *testing.T) {
+	testsupport.RequireLongTests(t)
 	cases := []struct {
 		profile synthetic.Profile
 		// distinguish asserts a property the OTHER valid profile cannot satisfy.
