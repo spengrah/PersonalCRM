@@ -3,31 +3,17 @@
 package tests
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
-	"personal-crm/backend/internal/testdb"
 
-	migrate "github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// derivedStorageVersion is the golang-migrate version of the derived-storage
-// migration (070). The down/up round-trip positions the clone here first so
-// Steps(-1) rolls down 070 specifically, robust to later migrations landing
-// above it.
-const derivedStorageVersion = 70
 
 // testEmbeddingDim is the fixed embedding dimensionality (vector(1536)). The
 // stored vector must match the column dimension or the write is rejected.
@@ -210,118 +196,4 @@ func TestDerivedStorage_RelationshipSignalRoundTrip(t *testing.T) {
 	remaining, err := signalRepo.ListSignalsForSubject(ctx, subjectID)
 	require.NoError(t, err)
 	assert.Empty(t, remaining, "delete-for-subject wipes every signal")
-}
-
-// TestDerivedStorage_MigrationDownUp exercises the 070 down + up round-trip
-// against an isolated clone (it rolls the schema down, so it cannot share the
-// package DB). It proves BOTH tables (embedding + relationship_signal) drop
-// cleanly and re-create with the constraints intact — the embedding
-// target_kind CHECK is re-enforced and the relationship_signal FK→node accepts
-// a fresh row after the up-migration.
-func TestDerivedStorage_MigrationDownUp(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	// Migration-subject test: rolls the schema down, so it stays serial and uses an
-	// isolated clone (never the shared package DB).
-
-	ctx := context.Background()
-	cloneURL, drop := testdb.NewEphemeralClone(t)
-	t.Cleanup(drop)
-	migrationsPath := getMigrationsPath()
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
-
-	embeddingRepo := repository.NewEmbeddingRepository(database.Queries)
-	signalRepo := repository.NewRelationshipSignalRepository(database.Queries)
-	nodeRepo := repository.NewNodeRepository(database.Queries)
-
-	// The clone is template-migrated, so both derived-storage tables are present
-	// up front: an embedding and a signal round-trip. The signal's subject is a
-	// real node (restrict FK→node); node is from migration 064 and survives the
-	// 070 down, so the same id anchors the post-rollback signal too.
-	targetID := uuid.New()
-	require.NoError(t, embeddingRepo.UpsertEmbedding(ctx, repository.UpsertEmbeddingRequest{
-		TargetKind:   repository.EmbeddingTargetNode,
-		TargetID:     targetID,
-		ModelVersion: "before-rollback",
-		Vector:       makeTestVector(1),
-	}))
-
-	subjectID := uuid.New()
-	_, err = nodeRepo.CreateNode(ctx, subjectID, repository.NodeTypePerson, "migration-signal-subject")
-	require.NoError(t, err)
-	require.NoError(t, signalRepo.UpsertRelationshipSignal(ctx, repository.UpsertRelationshipSignalRequest{
-		SubjectNodeID: subjectID,
-		SignalKey:     "closeness",
-		Value:         0.5,
-		AsOf:          accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond),
-		MethodVersion: "before-rollback",
-	}))
-
-	m, err := migrate.New(fmt.Sprintf("file://%s", migrationsPath), cloneURL)
-	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = m.Close() })
-
-	// Position the clone at the derived-storage tip (070) FIRST, so Steps(-1) rolls
-	// down 070 specifically — robust to later migrations being added above it.
-	// Migrate(70) is a no-op today because the template clone is already at 70
-	// (ErrNoChange); once 071+ lands it rolls the clone back down to 70 first.
-	if err := m.Migrate(derivedStorageVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		require.NoError(t, err, "position the clone at the derived-storage tip")
-	}
-
-	// Roll down ONE step: 070 down — both tables are dropped. A query against
-	// either now errors (the relation is gone, not ErrNotFound).
-	require.NoError(t, m.Steps(-1), "roll the derived-storage migration down one step")
-	_, err = embeddingRepo.GetEmbedding(ctx, repository.EmbeddingTargetNode, targetID, "before-rollback")
-	require.Error(t, err, "embedding table is dropped after the down migration")
-	_, err = signalRepo.GetRelationshipSignal(ctx, subjectID, "closeness")
-	require.Error(t, err, "relationship_signal table is dropped after the down migration")
-
-	// Roll back up: both tables are recreated with the constraints intact. The old
-	// rows do NOT come back (the tables were dropped + recreated), and fresh
-	// inserts succeed.
-	require.NoError(t, m.Steps(1), "re-apply the derived storage")
-	_, err = embeddingRepo.GetEmbedding(ctx, repository.EmbeddingTargetNode, targetID, "before-rollback")
-	require.ErrorIs(t, err, db.ErrNotFound, "table drop+recreate does not restore the old embedding")
-	_, err = signalRepo.GetRelationshipSignal(ctx, subjectID, "closeness")
-	require.ErrorIs(t, err, db.ErrNotFound, "table drop+recreate does not restore the old signal")
-
-	require.NoError(t, embeddingRepo.UpsertEmbedding(ctx, repository.UpsertEmbeddingRequest{
-		TargetKind:   repository.EmbeddingTargetNode,
-		TargetID:     uuid.New(),
-		ModelVersion: "after-rollback",
-		Vector:       makeTestVector(1),
-	}), "the recreated embedding table accepts a valid insert")
-
-	err = embeddingRepo.UpsertEmbedding(ctx, repository.UpsertEmbeddingRequest{
-		TargetKind:   "contact", // not in the closed CHECK enum
-		TargetID:     uuid.New(),
-		ModelVersion: "after-rollback",
-		Vector:       makeTestVector(1),
-	})
-	require.Error(t, err, "the recreated embedding table re-enforces the target_kind CHECK")
-
-	// The recreated relationship_signal table accepts a fresh row — proving its
-	// FK→node was reinstalled (the subject node survived the 070 down/up) — and
-	// reads it back.
-	require.NoError(t, signalRepo.UpsertRelationshipSignal(ctx, repository.UpsertRelationshipSignalRequest{
-		SubjectNodeID: subjectID,
-		SignalKey:     "closeness",
-		Value:         0.9,
-		AsOf:          accelerated.GetCurrentTime().UTC().Truncate(time.Microsecond),
-		MethodVersion: "after-rollback",
-	}), "the recreated relationship_signal table accepts a valid insert")
-	gotSignal, err := signalRepo.GetRelationshipSignal(ctx, subjectID, "closeness")
-	require.NoError(t, err, "the recreated relationship_signal table round-trips a fresh row")
-	assert.InDelta(t, 0.9, gotSignal.Value, 1e-9)
-	assert.Equal(t, "after-rollback", gotSignal.MethodVersion)
 }

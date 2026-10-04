@@ -54,7 +54,7 @@ See [Layered Architecture](../guides/architecture.md#why-layered) for how these 
 - Repository CRUD operations
 - Database constraints
 - Transaction handling
-- Migration correctness
+- Schema the code relies on (constraints, indexes, views). One-time migration transitions (down/up, backfills) are verified locally and not committed
 
 **E2E Tests:**
 - Critical user flows (create → view → delete)

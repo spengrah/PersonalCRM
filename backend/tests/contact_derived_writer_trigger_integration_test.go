@@ -15,21 +15,16 @@ package tests
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic"
 	"personal-crm/backend/internal/synthetic/factory"
-	"personal-crm/backend/internal/testdb"
 
-	migrate "github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/google/uuid"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
@@ -539,147 +534,4 @@ func TestDerivedWriterGUC_PoolSafety(t *testing.T) {
 		err = contactRepo.TestWriteCadenceColumnsWithoutGUCTx(ctx, txB, contactB.ID, repository.TestCadenceSeed{LastContacted: &now})
 		assertRejected(t, err, "last_contacted")
 	})
-}
-
-// contactDerivedWriterPreVersion is the golang-migrate version immediately
-// before 079. Positioning the clone here makes the historical migration legs
-// independent of later migrations.
-const contactDerivedWriterPreVersion = 78
-
-// awaitingReplyUntilPreVersion is the version immediately before migration
-// 082, whose down restores 079's five-column function body.
-const awaitingReplyUntilPreVersion = 81
-
-// TestDerivedWriterTrigger_MigrationUpDown proves 079 and 082 install and
-// remove the trigger rule without losing the live-contact view shape.
-func TestDerivedWriterTrigger_MigrationUpDown(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	ctx := context.Background()
-	cloneURL, drop := testdb.NewEphemeralClone(t)
-	t.Cleanup(drop)
-
-	cfg := config.TestConfig()
-	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
-
-	m, err := migrate.New(fmt.Sprintf("file://%s", getMigrationsPath()), cloneURL)
-	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = m.Close() })
-
-	contactRepo := repository.NewContactRepository(database.Queries)
-	freshContact := func(t *testing.T) *repository.Contact {
-		t.Helper()
-		c, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
-			FullName: "Migration 079 Fixture " + uuid.NewString(),
-		})
-		require.NoError(t, err)
-		return c
-	}
-	c := freshContact(t)
-	countTrigger := func(t *testing.T) int64 {
-		t.Helper()
-		n, err := database.Queries.TestCountTriggers(ctx, db.TestCountTriggersParams{
-			TableName:   "contact",
-			TriggerName: "reject_unauthorized_derived_contact_write",
-		})
-		require.NoError(t, err)
-		return n
-	}
-	funcExists := func(t *testing.T) bool {
-		t.Helper()
-		exists, err := database.Queries.TestRegprocedureExists(ctx, "reject_unauthorized_derived_contact_write()")
-		require.NoError(t, err)
-		return exists
-	}
-	functionDef := func(t *testing.T) string {
-		t.Helper()
-		definition, err := database.Queries.TestGetFunctionDef(ctx, "reject_unauthorized_derived_contact_write()")
-		require.NoError(t, err)
-		return definition
-	}
-	columnNames := func(t *testing.T, relation string) []string {
-		t.Helper()
-		cols, err := database.Queries.TestListViewColumns(ctx, relation)
-		require.NoError(t, err)
-		names := make([]string, len(cols))
-		for i, col := range cols {
-			names[i] = col.ColumnName
-		}
-		return names
-	}
-	attemptAwaitingReplyWrite := func(t *testing.T, owning bool) error {
-		t.Helper()
-		tx, err := database.Pool.Begin(ctx)
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback(ctx) }()
-		now := accelerated.GetCurrentTime()
-		seed := repository.TestCadenceSeed{AwaitingReplyUntil: &now}
-		if owning {
-			if err := contactRepo.TestSeedContactCadenceFieldsTx(ctx, tx, c.ID, seed); err != nil {
-				return err
-			}
-			return tx.Commit(ctx)
-		}
-		return contactRepo.TestWriteCadenceColumnsWithoutGUCTx(ctx, tx, c.ID, seed)
-	}
-	noAwaitingColumn := func(t *testing.T) {
-		t.Helper()
-		assert.NotContains(t, columnNames(t, "contact"), "awaiting_reply_until")
-	}
-	assertViewShape := func(t *testing.T, want int, last string) {
-		t.Helper()
-		cols := columnNames(t, "live_contact")
-		require.Len(t, cols, want)
-		if last != "" {
-			assert.Equal(t, last, cols[len(cols)-1])
-		}
-	}
-
-	// The clone starts at migration head; the fixture is created and read there.
-	loaded, err := contactRepo.GetContact(ctx, c.ID)
-	require.NoError(t, err)
-	assert.Equal(t, c.ID, loaded.ID)
-
-	// 081 retains the 079 trigger and 15-column view, without the new column.
-	if err := m.Migrate(awaitingReplyUntilPreVersion); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		require.NoError(t, err, "position the clone before migration 082")
-	}
-	noAwaitingColumn(t)
-	assertViewShape(t, 15, "")
-	require.EqualValues(t, 1, countTrigger(t))
-	require.True(t, funcExists(t))
-	assert.NotContains(t, functionDef(t), "awaiting_reply_until")
-
-	// 078 drops both 079 objects; this preserves the DROP FUNCTION vacuity check.
-	require.NoError(t, m.Migrate(contactDerivedWriterPreVersion))
-	require.EqualValues(t, 0, countTrigger(t))
-	require.False(t, funcExists(t), "079 down must DROP FUNCTION reject_unauthorized_derived_contact_write()")
-	assertViewShape(t, 15, "")
-
-	// 079 restores the trigger and its five-column body.
-	require.NoError(t, m.Migrate(79))
-	require.EqualValues(t, 1, countTrigger(t))
-	require.True(t, funcExists(t))
-	assert.NotContains(t, functionDef(t), "awaiting_reply_until")
-
-	// Head adds the column, appends it to the view and extends the trigger.
-	require.NoError(t, m.Up())
-	assert.Contains(t, columnNames(t, "contact"), "awaiting_reply_until")
-	assertViewShape(t, 19, "last_skip_reason")
-	assert.Contains(t, functionDef(t), "awaiting_reply_until")
-	assertRejected(t, attemptAwaitingReplyWrite(t, false), "awaiting_reply_until")
-	require.NoError(t, attemptAwaitingReplyWrite(t, true))
-
-	// Rolling just 082 back restores the exact 079 function body.
-	require.NoError(t, m.Migrate(awaitingReplyUntilPreVersion))
-	noAwaitingColumn(t)
-	assert.NotContains(t, functionDef(t), "awaiting_reply_until")
 }
