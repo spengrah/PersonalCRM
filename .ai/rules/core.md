@@ -84,7 +84,7 @@ blocking criteria, proportional fixes, follow-up reviews, and verdict format.
 - Use conventional commits (feat:, fix:, docs:, refactor:, test:, chore:)
 - First line under 72 characters
 - Commit logical units of work, not partial changes
-- Use conventional branches (feat/, fix/, refactor/, docs/, test/, chore/)
+- Use conventional branches (feat/, fix/, refactor/, docs/, test/, chore/), unless the workflow or tool creating the branch prescribes its own names
 
 ### Branch model: `develop` (default) + `main` (prod)
 
