@@ -9,7 +9,7 @@
 // closures.
 //
 // Tests use synthetic UUIDs and "Synthetic …" session titles —
-// no PII per CLAUDE.md privacy rules.
+// no PII per the AGENTS.md privacy rules.
 import XCTest
 import CRMMacCore
 import CRMMacPiClient

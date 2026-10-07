@@ -2773,7 +2773,7 @@ func disambiguateCandidates(
 //     (source='anarlog_sessions' AND source_ref LIKE 'anarlog:<sid>:%')
 //     and soft-delete the meeting_note row. The interaction cascade is
 //     explicit because UPDATE deleted_at does NOT trigger ON DELETE
-//     CASCADE (CLAUDE.md gotcha).
+//     CASCADE (core.md "Soft Deletes").
 func (s *IngestService) handleMeetingNoteDeleted(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -2840,7 +2840,7 @@ func (s *IngestService) handleMeetingNoteDeleted(
 
 	// Cascade soft-delete to session-attributed interactions. UPDATE
 	// deleted_at does NOT trigger ON DELETE CASCADE — must do this
-	// explicitly (CLAUDE.md gotcha).
+	// explicitly (core.md "Soft Deletes").
 	sourceRefPrefix := fmt.Sprintf("anarlog:%s:%%", sessionID.String())
 	existing, listErr := s.interactions.ListSessionAttributedInteractionsTx(ctx, tx, sourceRefPrefix)
 	if listErr != nil {
