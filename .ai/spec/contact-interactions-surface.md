@@ -138,3 +138,11 @@ Initial assignment of this spec's behavioral claims:
 - IXN-013…IXN-020 — reserved for planner refinement (splits, negative behaviors).
 
 Retirements: CAL-024…CAL-028 (Meetings section UX) are retired with `notes` pointers to their IXN replacements, in the same PR that removes the Meetings section; their E2E/spec citations migrate in that PR.
+
+## Engines
+
+```json engines
+{ "authorFamily": "claude", "arcPlanner": "claude-opus-5-5:high", "arcReview": "gpt-6.1-sol:high" }
+```
+
+Quota is in surplus on both subscriptions, so pick no cheaper engine (such as luna or Sonnet) unless it is genuinely the best fit, and prefer Opus 5.5 over Fable.
