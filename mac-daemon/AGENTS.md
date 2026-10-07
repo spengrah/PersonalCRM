@@ -1,6 +1,6 @@
 # Mac Daemon Rules
 
-Gotchas specific to `mac-daemon/` (Swift). Cross-cutting rules (git practices, code quality, testing policy, safety-critical prohibitions) live in `.ai/rules/core.md` at the repo root — read that first. This file follows the same multi-agent convention as the root `AGENTS.md`: `mac-daemon/CLAUDE.md` is a symlink to this file so Claude Code loads it automatically when working under `mac-daemon/`, and other agents (Codex, etc.) can read `AGENTS.md` directly.
+Gotchas specific to `mac-daemon/` (Swift). Cross-cutting rules (git practices, code quality, testing policy, safety-critical prohibitions) live in `.ai/rules/core.md` at the repo root — read that first.
 
 ## Common Gotchas
 
