@@ -483,8 +483,8 @@ func (s *EnrichmentService) enrichMethodsAndPublishWithSelections(
 //
 // Each CreateContactMethod call runs inside a nested savepoint so a
 // unique-violation (concurrent-insert race) can be rolled back without
-// aborting the outer tx (CLAUDE.md gotcha: "pgx.Tx insert hitting a
-// unique-violation aborts the outer tx"). On savepoint rollback, the
+// aborting the outer tx (backend-troubleshooting gotcha: "pgx.Tx insert
+// hitting a unique-violation aborts the outer tx"). On savepoint rollback, the
 // caller refetches via the tx-scoped repo to recover the raced row's
 // ID for primary-method handling.
 func (s *EnrichmentService) enrichContactMethodsWithSelectionsTx(
@@ -565,7 +565,7 @@ func (s *EnrichmentService) enrichContactMethodsWithSelectionsTx(
 
 		// Savepoint-wrapped insert so a unique-violation from a
 		// concurrent writer rolls back only the nested tx, leaving the
-		// outer tx live for subsequent inserts (CLAUDE.md gotcha).
+		// outer tx live for subsequent inserts (backend-troubleshooting gotcha).
 		newMethod, raced, err := insertContactMethodSavepoint(ctx, tx, repository.CreateContactMethodRequest{
 			ContactID: contact.ID,
 			Type:      sel.Type,
@@ -666,7 +666,7 @@ func (s *EnrichmentService) enrichContactMethodsWithSelectionsTx(
 // Each CreateContactMethod runs inside a nested savepoint — a
 // unique-violation from a concurrent writer rolls back only the
 // savepoint, leaving the outer tx live for subsequent inserts
-// (CLAUDE.md gotcha: pgx.Tx + 23505 aborts the outer tx).
+// (backend-troubleshooting gotcha: pgx.Tx + 23505 aborts the outer tx).
 //
 // Uses BuildMethodsFromExternal as the single source of truth for
 // emitting source-specific methods (emails, phones, telegram
@@ -814,8 +814,8 @@ func (s *EnrichmentService) recordEnrichmentTx(
 // insertContactMethodSavepoint wraps CreateContactMethod in a nested
 // pgx savepoint so a unique-violation (concurrent-insert race) rolls
 // back only the inner savepoint, leaving the outer tx live for
-// subsequent inserts (CLAUDE.md gotcha: a 23505 inside pgx.Tx aborts
-// the outer tx without this).
+// subsequent inserts (backend-troubleshooting gotcha: a 23505 inside
+// pgx.Tx aborts the outer tx without this).
 //
 // Returns (method, raced=false, nil) on a clean insert,
 //

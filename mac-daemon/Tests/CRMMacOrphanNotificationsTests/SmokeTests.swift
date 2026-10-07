@@ -11,7 +11,7 @@
 // trigger.
 //
 // All test data uses synthetic UUIDs and "Synthetic …" titles —
-// no PII per CLAUDE.md privacy rules.
+// no PII per the AGENTS.md privacy rules.
 import XCTest
 import CRMMacCore
 import CRMMacPiClient

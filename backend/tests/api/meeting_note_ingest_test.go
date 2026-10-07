@@ -1450,7 +1450,7 @@ func TestMeetingNote_ConcurrentFirstInsertConverges(t *testing.T) {
 // Title-extraction + discovery integration tests.
 //
 // These tests use Q-prefixed synthetic alphabetic tokens to avoid trigram
-// cross-pollination on the shared test DB (per CLAUDE.md gotcha
+// cross-pollination on the shared test DB (per backend-troubleshooting gotcha
 // "Integration sub-test reuses identifying names across t.Run blocks").
 // Each newTitleToken call yields a unique 7-char alphabetic string that
 // passes the extractor's keep regex (^[A-Z][a-zA-Z]{1,29}$) and is rare
@@ -3105,7 +3105,7 @@ func TestResolveLink_TargetMissingReturns404(t *testing.T) {
 
 	// Hard-delete eventA via the test-only repository helper
 	// (calendar_event has no soft-delete column; raw SQL in Go is
-	// banned by the CLAUDE.md absolute rule).
+	// banned by core.md absolute rule 2).
 	ctx := context.Background()
 	require.NoError(t, env.calendarRepo.TestHardDeleteByID(ctx, eventA))
 
@@ -3278,8 +3278,8 @@ func TestListNeedsAttention_TargetMissingProjection(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	// Hard-delete eventA so its snapshot entry becomes a stale pointer.
-	// Uses the test-only repository helper per CLAUDE.md "no raw SQL
-	// in Go" absolute rule.
+	// Uses the test-only repository helper per core.md absolute rule 2
+	// ("no raw SQL in Go").
 	ctx := context.Background()
 	require.NoError(t, env.calendarRepo.TestHardDeleteByID(ctx, eventA))
 
@@ -3381,8 +3381,8 @@ func TestResolveLink_PhoneCallTargetMissingReturns404(t *testing.T) {
 	require.Equal(t, repository.LinkageStateConflictPending, row.LinkageState)
 
 	// Hard-delete the phone_call so the snapshot entry becomes a stale
-	// pointer. Uses the test-only repository helper per the CLAUDE.md
-	// "no raw SQL in Go" absolute rule.
+	// pointer. Uses the test-only repository helper per core.md absolute
+	// rule 2 ("no raw SQL in Go").
 	ctx := context.Background()
 	pc, err := env.phoneCallRepo.GetCallByID(ctx, callID)
 	require.NoError(t, err)
