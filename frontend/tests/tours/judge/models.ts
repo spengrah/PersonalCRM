@@ -13,10 +13,12 @@
 // judge never silently inherits the operator's codex config (a global
 // gpt-5.5 / xhigh default is both costly AND miscalibrating here — over-reasoning
 // invents false fails). Overridable via QA_JUDGE_MODEL / QA_JUDGE_EFFORT or opts
-// (e.g. the intent pass passes a stronger model). gpt-5.4-mini is the cheapest tier
-// the pinned Codex CLI supports on a ChatGPT account; gpt-5.6-luna is cheaper/
-// newer but needs a Codex CLI upgrade (revalidate exact models at build time).
-export const DEFAULT_JUDGE_MODEL = 'gpt-5.4-mini'
+// (e.g. the intent pass passes a stronger model). Codex on a ChatGPT account
+// rejects models it no longer serves with a 400 ("not supported when using Codex
+// with a ChatGPT account") — gpt-5.4-mini went that way — and newer models need a
+// matching Codex CLI. Probe a candidate with `codex exec -m <model>` under the qa
+// tenant's login before changing this.
+export const DEFAULT_JUDGE_MODEL = 'gpt-6-luna'
 export const DEFAULT_JUDGE_EFFORT = 'low'
 
 // Intent judgment is the semantically hard task and the call count is small
