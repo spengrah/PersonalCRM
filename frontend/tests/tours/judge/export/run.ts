@@ -38,7 +38,7 @@ export interface RunDeps {
 
 const RUN_ID_RE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/
 const GIT_SHA_RE = /^[0-9a-f]{7,40}$/
-const TEST_TAG_RE = /^[A-Za-z0-9._-]{1,64}$/
+export const TEST_TAG_RE = /^[A-Za-z0-9._-]{1,64}$/
 const SIDECAR_SUFFIX = '.qa-provenance'
 
 // QA_RUN_ID must match the timestamp shape AND parse to a real UTC instant that
