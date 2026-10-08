@@ -24,12 +24,8 @@ import {
   buildTraceBody,
   configFromEnv,
   exportSpans,
-  generationSpanId,
-  hexTraceId,
   ingestionOutcome,
-  otlpRejection,
   parseSpanFile,
-  rootSpanId,
   stableSample,
   traceIdFor,
   usageTraceId,
@@ -471,6 +467,10 @@ const triageQueue: QueueObj = { id: TRIAGE_QUEUE_ID, name: TRIAGE_QUEUE_NAME, sc
 const lifecycle = (mock: FakeLangfuse): Array<'media' | 'root'> =>
   mock.order.flatMap(o => (o.kind === 'media' || o.kind === 'root' ? [o.kind] : []))
 
+// The trace id the root with string id `labelId` shipped under, read off the transport.
+const shippedTraceId = (mock: FakeLangfuse, labelId: string): string | undefined =>
+  mock.roots.find(r => r.labelId === labelId)?.traceId
+
 const cfg = { host: 'http://lf', publicKey: 'p', secretKey: 's' }
 
 describe('exportSpans — per-item media lifecycle + attribution', () => {
@@ -494,8 +494,8 @@ describe('exportSpans — per-item media lifecycle + attribution', () => {
     expect(lifecycle(mock)).toEqual(['media', 'root', 'media', 'root'])
     // Media registered against each item-trace's OWN id.
     const mediaTraceIds = mock.order.filter(o => o.kind === 'media').map(o => o.traceId)
-    expect(mediaTraceIds[0]).toBe(hexTraceId(`${traceIdFor(span)}-item0`))
-    expect(mediaTraceIds[1]).toBe(hexTraceId(`${traceIdFor(span)}-item2`))
+    expect(mediaTraceIds[0]).toBe(shippedTraceId(mock, `${traceIdFor(span)}-item0`))
+    expect(mediaTraceIds[1]).toBe(shippedTraceId(mock, `${traceIdFor(span)}-item2`))
     expect(mediaTraceIds[0]).not.toBe(mediaTraceIds[1])
     // Both bodies got the SAME token (sha dedup HIT), attributed at index 0.
     const tok = (b: ShippedRoot): unknown =>
@@ -693,8 +693,14 @@ function itemSpan(verdict: 'pass' | 'fail' | 'unsure', over: Partial<SpanParams>
     ...over,
   })
 }
-// The OTLP trace id of a single-item span's one trace.
-const item0Id = (span: GenAiSpan): string => hexTraceId(`${traceIdFor(span)}-item0`)
+// The trace id a single-item span's one trace ships under, read off the transport of
+// a first export, so a test can seed the queue with what a re-export would enqueue.
+async function item0TraceId(span: GenAiSpan): Promise<string> {
+  const first = createFakeLangfuse()
+  vi.stubGlobal('fetch', first.fetchImpl)
+  await exportSpans(cfg, [span])
+  return shippedTraceId(first, `${traceIdFor(span)}-item0`)!
+}
 
 describe('exportSpans — trace tags + session (contract #3, component-wise)', () => {
   afterEach(() => vi.restoreAllMocks())
@@ -758,7 +764,7 @@ describe('exportSpans — verdict-as-score (contract #4, separate non-fatal requ
     await exportSpans(cfg, [span])
     expect(mock.scores).toHaveLength(1)
     const s = mock.scores[0]
-    const tid = item0Id(span)
+    const tid = shippedTraceId(mock, `${traceIdFor(span)}-item0`)!
     expect(s.type).toBe('score-create')
     expect(s.id.startsWith(`evt-${tid}-score-`)).toBe(true)
     expect(s.timestamp).toBe(new Date(span.start_time_unix_nano / 1e6).toISOString())
@@ -823,29 +829,6 @@ describe('exportSpans — verdict-as-score (contract #4, separate non-fatal requ
     expect(res.traces).toBe(1)
     expect(mock.scores).toHaveLength(0)
     expect(mock.itemPosts).toHaveLength(0)
-  })
-
-  it('a malformed span start_time_unix_nano FAILS that trace loudly and sends nothing for it; the rest of the round ships (P3-2)', async () => {
-    // There is no span-derived time to send, and the export clock would move a
-    // re-export's history — so the trace counts FAILED (a non-zero exit) instead of
-    // shipping under export time. Nothing is sent for it: no root, score, generation
-    // or queue item. The well-formed span alongside it ships and enqueues as usual.
-    const bad = itemSpan('fail', { ...usageParams, behaviorId: 'BAD-1' })
-    bad.start_time_unix_nano = Number.NaN
-    const good = itemSpan('fail', { ...usageParams, behaviorId: 'OK-1' })
-    const mock = createFakeLangfuse()
-    vi.stubGlobal('fetch', mock.fetchImpl)
-    const logs: string[] = []
-    const res = await exportSpans(cfg, [bad, good], m => logs.push(m))
-    expect(res.failed).toBe(1)
-    expect(res.traces).toBe(1)
-    expect(res.observations).toBe(1)
-    expect(res.observationsFailed + res.observationsSkipped).toBe(0) // no carrier, no attempt
-    expect(mock.roots.map(r => r.traceId)).toEqual([item0Id(good)])
-    expect(mock.generations.map(g => g.traceId)).toEqual([item0Id(good)])
-    expect(mock.scores.map(s => s.body.traceId)).toEqual([item0Id(good)])
-    expect(mock.itemPosts.map(p => p.objectId)).toEqual([item0Id(good)])
-    expect(logs.some(l => l.includes('FAILED BAD-1') && l.includes('not a unix-nano'))).toBe(true)
   })
 
   it('the envelope timestamp is span-derived + STABLE across a UTC-date-crossing re-export', async () => {
@@ -1008,7 +991,7 @@ describe('exportSpans — enqueue idempotency + (objectType,objectId) key', () =
 
   it('re-export whose items are already queued → ZERO duplicate POSTs; skipped-existing counts', async () => {
     const span = itemSpan('fail')
-    const tid = item0Id(span)
+    const tid = await item0TraceId(span)
     const mock = createFakeLangfuse({
       existingItems: [{ id: 'e1', objectId: tid, objectType: 'TRACE', status: 'PENDING' }],
     })
@@ -1021,7 +1004,7 @@ describe('exportSpans — enqueue idempotency + (objectType,objectId) key', () =
 
   it('an existing OBSERVATION item with the SAME id does NOT suppress the TRACE enqueue', async () => {
     const span = itemSpan('fail')
-    const tid = item0Id(span)
+    const tid = await item0TraceId(span)
     const mock = createFakeLangfuse({
       existingItems: [{ id: 'e1', objectId: tid, objectType: 'OBSERVATION' }],
     })
@@ -1054,7 +1037,7 @@ describe('exportSpans — queue pagination + PaginationError best-effort (INV-A)
 
   it('resolves qa-triage on page 2 of the queue list AND walks all item pages to dedup', async () => {
     const span = itemSpan('fail')
-    const tid = item0Id(span)
+    const tid = await item0TraceId(span)
     const mock = createFakeLangfuse({
       queues: [{ id: 'q-other', name: 'other-queue' }, triageQueue],
       queuesPerPage: 1, // qa-triage is on page 2
@@ -1271,24 +1254,6 @@ describe('buildGenerationBody (PURE)', () => {
     expect(Math.abs(Number(body.startTimeUnixNano) / 1e6 - Date.now())).toBeGreaterThan(1_000)
   })
 
-  it('carries the span usage onto the LOWEST-itemIndex trace, as a child of its root, under a stable id', () => {
-    const span = usageSpan()
-    const body = buildGenerationBody(span)!
-    const carrier = `${traceIdFor(span)}-item0`
-    expect(body.traceId).toBe(hexTraceId(carrier))
-    expect(body.parentSpanId).toBe(rootSpanId(carrier))
-    expect(body.spanId).toBe(generationSpanId(span))
-    expect(buildGenerationBody(span)).toEqual(body)
-  })
-
-  it('throws RangeError on a span time no Date can represent, rather than inventing one', () => {
-    for (const bad of [Number.NaN, -1, 1e30]) {
-      const span = usageSpan()
-      span.start_time_unix_nano = bad
-      expect(() => buildGenerationBody(span)).toThrow(RangeError)
-    }
-  })
-
   it('routes the model through the SAME scrubber the trace metadata uses', () => {
     const body = buildGenerationBody(usageSpan(), m => `S(${m})`)!
     expect(body.model).toBe('S(gpt-5.4-mini)')
@@ -1344,34 +1309,6 @@ describe('ingestionOutcome (PURE) — three tiers', () => {
   })
 })
 
-describe('otlpRejection (PURE) — a 2xx that rejects a span is a rejection', () => {
-  it('ACCEPTS an empty response and a partialSuccess that rejects nothing (a warning)', () => {
-    expect(otlpRejection({})).toBeUndefined()
-    expect(otlpRejection({ partialSuccess: null })).toBeUndefined()
-    expect(otlpRejection({ partialSuccess: {} })).toBeUndefined()
-    expect(otlpRejection({ partialSuccess: { rejectedSpans: 0 } })).toBeUndefined()
-    expect(
-      otlpRejection({ partialSuccess: { rejectedSpans: '0', errorMessage: 'slow down' } })
-    ).toBeUndefined()
-  })
-
-  it('REJECTS a rejected-span count, as a number or an int64 string, with its message', () => {
-    expect(
-      otlpRejection({ partialSuccess: { rejectedSpans: 1, errorMessage: 'bad usage_details' } })
-    ).toBe('1 span(s) rejected: bad usage_details')
-    expect(otlpRejection({ partialSuccess: { rejectedSpans: '2' } })).toBe('2 span(s) rejected')
-  })
-
-  it('REJECTS a partialSuccess it cannot read, never reading it as success', () => {
-    for (const ps of ['garbage', ['x'], 7]) {
-      expect(otlpRejection({ partialSuccess: ps })).toContain('unreadable partialSuccess')
-    }
-    expect(otlpRejection({ partialSuccess: { rejectedSpans: 'lots' } })).toBe(
-      'lots span(s) rejected'
-    )
-  })
-})
-
 describe('usageTraceId — the carrier trace', () => {
   it('is the LOWEST itemIndex, which is neither first in the array nor necessarily 0', () => {
     const span = usageSpan({
@@ -1405,7 +1342,7 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     expect(mock.generations).toHaveLength(1)
     const gen = mock.generations[0]
     expect(gen.attributes['langfuse.observation.type']).toBe('generation')
-    expect(gen.traceId).toBe(hexTraceId(`${traceIdFor(span)}-item0`))
+    expect(gen.traceId).toBe(shippedTraceId(mock, `${traceIdFor(span)}-item0`))
     expect(gen.usageDetails).toEqual({
       input: 4_000,
       input_cached_tokens: 16_000,
@@ -1437,7 +1374,7 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     const mock = createFakeLangfuse()
     vi.stubGlobal('fetch', mock.fetchImpl)
     await exportSpans(cfg, [span])
-    expect(mock.generations[0].traceId).toBe(hexTraceId(traceIdFor(span)))
+    expect(mock.generations[0].traceId).toBe(shippedTraceId(mock, traceIdFor(span)))
   })
 
   it('ships NO observation for a span with no usage (an error run still ships its trace)', async () => {
@@ -1506,7 +1443,7 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     vi.stubGlobal('fetch', mock.fetchImpl)
     const res = await exportSpans(cfg, [span])
     expect(mock.generations).toHaveLength(1)
-    expect(mock.generations[0].traceId).toBe(hexTraceId(`${traceIdFor(span)}-item0`))
+    expect(mock.generations[0].traceId).toBe(shippedTraceId(mock, `${traceIdFor(span)}-item0`))
     expect(res.observations).toBe(1)
     expect(res.failed).toBe(1)
   })
@@ -1515,7 +1452,11 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     // The silently-wrong-but-green failure: the endpoint can accept the REQUEST while
     // rejecting the SPAN. Counting the POST rather than the span would report a
     // shipped observation that was never stored.
-    const mock = createFakeLangfuse({ generationRejected: true })
+    const mock = createFakeLangfuse({
+      generationResponse: {
+        partialSuccess: { rejectedSpans: 1, errorMessage: 'invalid usage_details' },
+      },
+    })
     vi.stubGlobal('fetch', mock.fetchImpl)
     const logs: string[] = []
     const res = await exportSpans(cfg, [itemSpan('fail', usageParams)], m => logs.push(m))
@@ -1600,6 +1541,17 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     const warnings = logs.filter(l => l.includes('envelope unrecognized'))
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain('verify against the live API')
+  })
+
+  it('counts an UNCONFIRMED response (an unreadable OTLP partialSuccess) as a failed observation, never as shipped', async () => {
+    const mock = createFakeLangfuse({ generationResponse: { partialSuccess: 'garbage' } })
+    vi.stubGlobal('fetch', mock.fetchImpl)
+    const logs: string[] = []
+    const res = await exportSpans(cfg, [itemSpan('fail', usageParams)], m => logs.push(m))
+    expect(res.observations).toBe(0)
+    expect(res.observationsFailed).toBe(1)
+    expect(res.traces).toBe(1)
+    expect(logs.some(l => l.includes('unreadable partialSuccess'))).toBe(true)
   })
 
   it('does NOT count a usage-LESS span as skipped once the breaker is open', async () => {

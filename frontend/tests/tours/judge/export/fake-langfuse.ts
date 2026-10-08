@@ -15,8 +15,20 @@ import { TRIAGE_QUEUE_NAME, VERDICT_SCORE_NAME } from './triage-config'
 
 export const OTLP_PATH = '/api/public/otel/v1/traces'
 
+// The kind of an OTLP AnyValue: the one value field it sets, or 'empty' when it sets
+// none (OTLP's absent value).
+export type AnyValueKind =
+  | 'stringValue'
+  | 'boolValue'
+  | 'intValue'
+  | 'doubleValue'
+  | 'arrayValue'
+  | 'kvlistValue'
+  | 'empty'
+
 // One span as the fake decoded it off an OTLP/JSON request. `attributes` maps each
-// key to its decoded AnyValue (a string, a boolean, a number, or an array of them).
+// key to its decoded AnyValue, typed as sent and never JSON-parsed (a string stays a
+// string); `kinds` maps each key to the AnyValue kind that carried it.
 export interface DecodedSpan {
   traceId: string
   spanId: string
@@ -25,6 +37,7 @@ export interface DecodedSpan {
   startTimeUnixNano: string
   endTimeUnixNano: string
   attributes: Record<string, unknown>
+  kinds: Record<string, AnyValueKind>
 }
 
 export interface OtlpRequest {
@@ -34,8 +47,8 @@ export interface OtlpRequest {
 }
 
 // A root span, with the legacy trace body's fields read back off its attributes.
-// `metadata` values are decoded the way the exporter encodes them: a JSON-parseable
-// string becomes its value, any other string stays as sent.
+// `metadata` values are the decoded attribute values, typed as sent: the input and
+// output are JSON strings by Langfuse's contract and are parsed, metadata never is.
 export interface ShippedRoot extends DecodedSpan {
   labelId: string
   input?: Record<string, unknown>
@@ -134,10 +147,11 @@ export interface FakeOpts {
   // whose `partialSuccess` rejects the span.
   failRootFor?: (labelId: string) => boolean
   rejectRootFor?: (labelId: string) => boolean
-  // OTLP generation spans: an HTTP error status, a `partialSuccess` rejection, or a
+  // OTLP generation spans: an HTTP error status, the JSON body an HTTP 200 answers
+  // with (default `{}`, a full success; a `partialSuccess` to reject or warn), or a
   // request that never settles (rejecting only when the caller aborts it).
   generationStatus?: number
-  generationRejected?: boolean
+  generationResponse?: unknown
   generationNeverSettles?: boolean
   generationNeverSettlesWhen?: () => boolean
 }
@@ -165,21 +179,73 @@ const json = (obj: unknown, status = 200): Response =>
   })
 const errText = (status: number, msg: string): Response => new Response(msg, { status })
 
-// Decode one OTLP AnyValue. Unknown kinds throw, so a malformed attribute fails the
-// request (400) instead of decoding to something a test would trust.
-function decodeAnyValue(v: unknown): unknown {
-  if (v === null || typeof v !== 'object') throw new Error(`AnyValue is not an object`)
-  const o = v as Record<string, unknown>
-  if (typeof o.stringValue === 'string') return o.stringValue
-  if (typeof o.boolValue === 'boolean') return o.boolValue
-  if (typeof o.doubleValue === 'number') return o.doubleValue
-  if (typeof o.intValue === 'string' || typeof o.intValue === 'number') return Number(o.intValue)
-  if (o.arrayValue !== null && typeof o.arrayValue === 'object') {
-    const values = (o.arrayValue as { values?: unknown }).values
-    if (!Array.isArray(values)) throw new Error('arrayValue without values')
-    return values.map(decodeAnyValue)
+const VALUE_KINDS: readonly string[] = [
+  'stringValue',
+  'boolValue',
+  'intValue',
+  'doubleValue',
+  'arrayValue',
+  'kvlistValue',
+]
+
+// The kind of one OTLP AnyValue. An AnyValue sets at most one value field; one that
+// sets two, or a field OTLP does not define, throws.
+function anyValueKind(v: unknown): AnyValueKind {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) {
+    throw new Error(`AnyValue is not an object: ${JSON.stringify(v)}`)
   }
-  throw new Error(`unsupported AnyValue ${JSON.stringify(v)}`)
+  const keys = Object.keys(v)
+  if (keys.length === 0) return 'empty'
+  if (keys.length > 1 || !VALUE_KINDS.includes(keys[0])) {
+    throw new Error(`unsupported AnyValue ${JSON.stringify(v)}`)
+  }
+  return keys[0] as AnyValueKind
+}
+
+// The `values` list of an arrayValue or kvlistValue.
+function listValues(kind: string, x: unknown): unknown[] {
+  const values = (x as { values?: unknown } | null)?.values
+  if (!Array.isArray(values)) throw new Error(`${kind} without values`)
+  return values
+}
+
+// Decode one OTLP AnyValue to the JSON value it carries, typed as sent: a string stays
+// a string and is never JSON-parsed, so a number or boolean sent as a string decodes
+// as a string. The empty AnyValue decodes to null. An `intValue` is accepted only as
+// a JSON integer, the form the exporter sends; a decimal-string intValue throws
+// rather than decode to a number the real server might keep as a string. Anything
+// else malformed throws too, so the request fails (400) instead of decoding to
+// something a test would trust.
+function decodeAnyValue(v: unknown): unknown {
+  const kind = anyValueKind(v)
+  if (kind === 'empty') return null
+  const x = (v as Record<string, unknown>)[kind]
+  switch (kind) {
+    case 'stringValue':
+      if (typeof x === 'string') return x
+      break
+    case 'boolValue':
+      if (typeof x === 'boolean') return x
+      break
+    case 'intValue':
+      if (Number.isSafeInteger(x)) return x
+      break
+    case 'doubleValue':
+      if (typeof x === 'number' && Number.isFinite(x)) return x
+      break
+    case 'arrayValue':
+      return listValues(kind, x).map(decodeAnyValue)
+    case 'kvlistValue': {
+      const out: Record<string, unknown> = {}
+      for (const kv of listValues(kind, x) as Array<{ key?: unknown; value?: unknown }>) {
+        if (typeof kv?.key !== 'string') throw new Error('kvlistValue entry without a key')
+        if (kv.key in out) throw new Error(`duplicate kvlistValue key ${kv.key}`)
+        out[kv.key] = decodeAnyValue(kv.value)
+      }
+      return out
+    }
+  }
+  throw new Error(`${kind} cannot carry ${JSON.stringify(x)}`)
 }
 
 const HEX32 = /^[0-9a-f]{32}$/
@@ -216,10 +282,12 @@ function decodeOtlp(body: unknown): { scopeName?: string; spans: DecodedSpan[] }
         }
         if (!Array.isArray(sp.attributes)) throw new Error('attributes is not an array')
         const attributes: Record<string, unknown> = {}
+        const kinds: Record<string, AnyValueKind> = {}
         for (const a of sp.attributes as Array<{ key?: unknown; value?: unknown }>) {
           if (typeof a.key !== 'string') throw new Error('attribute key missing')
           if (a.key in attributes) throw new Error(`duplicate attribute ${a.key}`)
           attributes[a.key] = decodeAnyValue(a.value)
+          kinds[a.key] = anyValueKind(a.value)
         }
         spans.push({
           traceId: sp.traceId,
@@ -229,6 +297,7 @@ function decodeOtlp(body: unknown): { scopeName?: string; spans: DecodedSpan[] }
           startTimeUnixNano: sp.startTimeUnixNano as string,
           endTimeUnixNano: sp.endTimeUnixNano as string,
           attributes,
+          kinds,
         })
       }
     }
@@ -236,20 +305,11 @@ function decodeOtlp(body: unknown): { scopeName?: string; spans: DecodedSpan[] }
   return { scopeName, spans }
 }
 
-const lenient = (v: unknown): unknown => {
-  if (typeof v !== 'string') return v
-  try {
-    return JSON.parse(v)
-  } catch {
-    return v
-  }
-}
-
-// The `<prefix><key>` attributes of a span, prefix stripped, values decoded leniently.
+// The `<prefix><key>` attributes of a span, prefix stripped, values as decoded.
 export function prefixed(span: DecodedSpan, prefix: string): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(span.attributes)) {
-    if (k.startsWith(prefix)) out[k.slice(prefix.length)] = lenient(v)
+    if (k.startsWith(prefix)) out[k.slice(prefix.length)] = v
   }
   return out
 }
@@ -402,10 +462,8 @@ export function createFakeLangfuse(opts: FakeOpts = {}): FakeLangfuse {
             opts.generationNeverSettlesWhen?.() === true
           ) {
             response = 'hang'
-          } else if (opts.generationRejected === true) {
-            response = json({
-              partialSuccess: { rejectedSpans: 1, errorMessage: 'invalid usage_details' },
-            })
+          } else if (opts.generationResponse !== undefined) {
+            response = json(opts.generationResponse)
           } else if (opts.generationStatus !== undefined) {
             response = errText(opts.generationStatus, 'generation boom')
           }

@@ -16,6 +16,8 @@ import type { GradedEvidenceEntry, Scenario } from '../label-trace'
 import {
   createFakeLangfuse,
   OTLP_PATH,
+  type AnyValueKind,
+  type DecodedSpan,
   type FakeLangfuse,
   type FakeOpts,
   type RecordedRequest,
@@ -525,8 +527,9 @@ describe('P3-4: one generation per usage-carrying span, exact usage keys, isolat
     const run = await qaExport([span])
     const gen = generationRequest(run.fake)
     expect(usageDetails(gen)).toEqual({ input: 4_000, input_cached_tokens: 16_000, output: 1_000 })
-    expect(gen.attributes['langfuse.observation.metadata.reasoning_output_tokens']).toBe('800')
-    expect(gen.attributes['langfuse.observation.metadata.cache_write_input_tokens']).toBe('500')
+    expect(gen.attributes['langfuse.observation.metadata.reasoning_output_tokens']).toBe(800)
+    expect(gen.attributes['langfuse.observation.metadata.cache_write_input_tokens']).toBe(500)
+    expectMetadataKinds(gen)
     const priced = Object.keys(gen.attributes).filter(
       k => k.startsWith('langfuse.observation.') && !k.startsWith('langfuse.observation.metadata.')
     )
@@ -565,11 +568,54 @@ describe('P3-4: one generation per usage-carrying span, exact usage keys, isolat
     expectTraceScoreEnqueueIntact(run, span)
   })
 
-  it('a generation span rejected inside a 200 (OTLP partialSuccess) counts as failed, never as shipped', async () => {
+  // OTLP answers a full success with an empty body and a partial one with
+  // `partialSuccess.rejectedSpans`, an int64 that JSON may carry as a string.
+  it.each([
+    [
+      'a rejected count with its message',
+      { partialSuccess: { rejectedSpans: 1, errorMessage: 'invalid usage_details' } },
+      '1 span(s) rejected: invalid usage_details',
+    ],
+    [
+      'a rejected count as an int64 string',
+      { partialSuccess: { rejectedSpans: '2' } },
+      '2 span(s) rejected',
+    ],
+    [
+      'a rejected count that is not a number',
+      { partialSuccess: { rejectedSpans: 'lots' } },
+      'lots span(s) rejected',
+    ],
+    [
+      'a partialSuccess that is a string',
+      { partialSuccess: 'garbage' },
+      'unreadable partialSuccess',
+    ],
+    ['a partialSuccess that is an array', { partialSuccess: ['x'] }, 'unreadable partialSuccess'],
+    ['a partialSuccess that is a number', { partialSuccess: 7 }, 'unreadable partialSuccess'],
+  ])(
+    'a generation answered 200 with %s counts as failed, never as shipped',
+    async (_case, body, reason) => {
+      const span = behaviorSpan([[0, 'fail']])
+      const run = await qaExport([span], { fake: { generationResponse: body } })
+      expect(run.summary).toContain('0 observation(s), 1 observation(s) failed')
+      expect(run.out.some(l => l.includes('generation failed') && l.includes(reason))).toBe(true)
+      expectTraceScoreEnqueueIntact(run, span)
+    }
+  )
+
+  it.each([
+    ['a null partialSuccess', { partialSuccess: null }],
+    ['an empty partialSuccess', { partialSuccess: {} }],
+    ['zero rejected spans', { partialSuccess: { rejectedSpans: 0 } }],
+    [
+      'zero rejected spans as an int64 string, with a warning',
+      { partialSuccess: { rejectedSpans: '0', errorMessage: 'slow down' } },
+    ],
+  ])('a generation answered 200 with %s counts as accepted', async (_case, body) => {
     const span = behaviorSpan([[0, 'fail']])
-    const run = await qaExport([span], { fake: { generationRejected: true } })
-    expect(run.summary).toContain('0 observation(s), 1 observation(s) failed')
-    expect(run.out.some(l => l.includes('invalid usage_details'))).toBe(true)
+    const run = await qaExport([span], { fake: { generationResponse: body } })
+    expect(run.summary).toMatch(/^qa-export: 1 trace\(s\), 0 screenshot\(s\), 1 observation\(s\); /)
     expectTraceScoreEnqueueIntact(run, span)
   })
 
@@ -685,25 +731,52 @@ const traceLevel = (s: { attributes: Record<string, unknown> }): Record<string, 
   )
 
 // The legacy trace body's metadata for `base` + reasoning/cache-write usage, as
-// transported: every field under `langfuse.trace.metadata.`, each a string.
-const legacyMetadata = (labelId: string, over: Record<string, string> = {}) => ({
+// transported: every field under `langfuse.trace.metadata.`, each with the JSON type
+// the legacy body gave it (counts are numbers, flags are booleans).
+const legacyMetadata = (labelId: string, over: Record<string, unknown> = {}) => ({
   'langfuse.trace.metadata.label_id': labelId,
   'langfuse.trace.metadata.behavior_id': 'CON-042',
   'langfuse.trace.metadata.impl': 'codex-sdk',
   'langfuse.trace.metadata.model': 'gpt-5.4-mini',
-  'langfuse.trace.metadata.input_tokens': '20000',
-  'langfuse.trace.metadata.cached_input_tokens': '16000',
-  'langfuse.trace.metadata.output_tokens': '1000',
-  'langfuse.trace.metadata.reasoning_output_tokens': '800',
-  'langfuse.trace.metadata.cache_write_input_tokens': '500',
-  'langfuse.trace.metadata.tool_rejected': 'false',
+  'langfuse.trace.metadata.input_tokens': 20_000,
+  'langfuse.trace.metadata.cached_input_tokens': 16_000,
+  'langfuse.trace.metadata.output_tokens': 1_000,
+  'langfuse.trace.metadata.reasoning_output_tokens': 800,
+  'langfuse.trace.metadata.cache_write_input_tokens': 500,
+  'langfuse.trace.metadata.tool_rejected': false,
   'langfuse.trace.metadata.status': 'OK',
-  'langfuse.trace.metadata.duration_ms': '3200',
-  'langfuse.trace.metadata.screenshots_expected': '0',
-  'langfuse.trace.metadata.screenshots_attached': '0',
-  'langfuse.trace.metadata.usage_attributed': 'true',
+  'langfuse.trace.metadata.duration_ms': 3_200,
+  'langfuse.trace.metadata.screenshots_expected': 0,
+  'langfuse.trace.metadata.screenshots_attached': 0,
+  'langfuse.trace.metadata.usage_attributed': true,
   ...over,
 })
+
+// The OTLP kind a JSON value travels as: a string, an integer, a non-integer number and
+// a boolean each as their own kind, an array and an object as the list kinds, and null
+// as the empty AnyValue.
+const kindFor = (v: unknown): AnyValueKind => {
+  if (typeof v === 'string') return 'stringValue'
+  if (typeof v === 'boolean') return 'boolValue'
+  if (typeof v === 'number') return Number.isInteger(v) ? 'intValue' : 'doubleValue'
+  if (Array.isArray(v)) return 'arrayValue'
+  return v === null ? 'empty' : 'kvlistValue'
+}
+
+// `legacyMetadata` keyed as `ShippedRoot.metadata` is: the field name alone.
+const prefixStripped = (m: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(
+    Object.entries(m).map(([k, v]) => [k.slice('langfuse.trace.metadata.'.length), v])
+  )
+
+// Every metadata attribute of a span travelled as the kind its JSON type names.
+function expectMetadataKinds(span: DecodedSpan): void {
+  for (const [k, v] of Object.entries(span.attributes)) {
+    if (/^langfuse\.(trace|observation)\.metadata\./.test(k)) {
+      expect(span.kinds[k], k).toBe(kindFor(v))
+    }
+  }
+}
 
 describe('P3-1, D3: the root carries the trace name, session, tags, IO and every legacy metadata field', () => {
   const usage = { reasoningOutputTokens: 800, cacheWriteInputTokens: 500 }
@@ -743,8 +816,10 @@ describe('P3-1, D3: the root carries the trace name, session, tags, IO and every
     })
     expect(root.output).toEqual(verdict(0, 'fail'))
     // The generation is a span of the same trace: it carries the same trace-level
-    // attributes, byte for byte.
+    // attributes, value and type alike.
     expect(traceLevel(run.fake.generations[0])).toEqual(traceLevel(root))
+    expectMetadataKinds(root)
+    expectMetadataKinds(run.fake.generations[0])
   })
 
   it('a run with neither: no session, no provenance tags; an errored span carries its status and error', async () => {
@@ -761,6 +836,7 @@ describe('P3-1, D3: the root carries the trace name, session, tags, IO and every
       }),
     })
     expect(traceLevel(run.fake.generations[0])).toEqual(traceLevel(root))
+    expectMetadataKinds(root)
   })
 
   it('an intent-judge span: pass:intent, the intent scenario item, its verdict as output', async () => {
@@ -803,8 +879,42 @@ describe('P3-1, D3: the root carries the trace name, session, tags, IO and every
       prompt: 'the prompt',
     })
     expect(root.output).toEqual(verdict(0, 'pass'))
-    expect(root.metadata.behavior_id).toBe('DSH-010')
+    expect(root.metadata).toEqual(
+      prefixStripped(
+        legacyMetadata(itemId(span, 0), {
+          'langfuse.trace.metadata.behavior_id': 'DSH-010',
+          'langfuse.trace.metadata.model': 'gpt-5.5',
+        })
+      )
+    )
     expect(traceLevel(run.fake.generations[0])).toEqual(traceLevel(root))
+    expectMetadataKinds(root)
+  })
+
+  it('a span file carrying a non-integer count, a null and a nested value: each keeps its JSON type', async () => {
+    const span = behaviorSpan([[0, 'fail']], { ...usage, cacheWriteInputTokens: 12.5 })
+    // Values only a hand-edited or malformed span file carries; the legacy body
+    // shipped them as JSON.
+    span.attributes['qa.judge.impl'] = null
+    span.attributes['qa.tool_rejected'] = { by: 'policy', codes: [1, 2.5] }
+    const run = await qaExport([span])
+    expect(run.code).toBe(0)
+    const [root] = run.fake.roots
+    const [gen] = run.fake.generations
+    expect(root.metadata).toEqual(
+      prefixStripped(
+        legacyMetadata(itemId(span, 0), {
+          'langfuse.trace.metadata.impl': null,
+          'langfuse.trace.metadata.tool_rejected': { by: 'policy', codes: [1, 2.5] },
+          'langfuse.trace.metadata.cache_write_input_tokens': 12.5,
+        })
+      )
+    )
+    expect(gen.metadata).toEqual({ reasoning_output_tokens: 800, cache_write_input_tokens: 12.5 })
+    expect(root.kinds['langfuse.trace.metadata.impl']).toBe('empty')
+    expect(root.kinds['langfuse.trace.metadata.tool_rejected']).toBe('kvlistValue')
+    expectMetadataKinds(root)
+    expectMetadataKinds(gen)
   })
 })
 
@@ -969,6 +1079,53 @@ describe('P3-9: the summary line keeps its format and every count its meaning', 
     expect(run.fake.scores.some(s => s.body.traceId === bTrace)).toBe(false)
     expect(run.fake.generations.some(g => g.traceId === bTrace)).toBe(false)
     expect(run.fake.itemPosts.some(p => p.objectId === bTrace)).toBe(false)
+  })
+})
+
+// Coordinator ruling R3, the one exception to the unchanged accounting above: a judge
+// span whose start or end time is unusable cannot ship without export-time times, so
+// each of its traces fails — nothing is sent for it, FAILED counts it, the command
+// exits non-zero — while the rest of the round ships.
+describe('R3: a judge span with an unusable time fails its traces loudly; the rest of the round ships', () => {
+  it.each([
+    ['a NaN start, which the span file carries as null', { start_time_unix_nano: Number.NaN }],
+    ['a negative start', { start_time_unix_nano: -1 }],
+    ['an end out of the representable range', { end_time_unix_nano: 1e30 }],
+  ])('%s', async (_case, times) => {
+    const bad = behaviorSpan(
+      [
+        [0, 'fail'],
+        [1, 'pass'],
+      ],
+      { behaviorId: 'CON-050', gradedEvidence: graded([png('r3')]) }
+    )
+    Object.assign(bad, times)
+    const good = behaviorSpan([[0, 'fail']], { behaviorId: 'CON-051' })
+    const goodTrace = hexTrace(itemId(good, 0))
+    const run = await qaExport([bad, good])
+
+    expect(run.code).toBe(1)
+    expect(run.out.filter(l => SUMMARY_RE.test(l))).toHaveLength(1)
+    // Both item-traces of the bad span count FAILED; its usage is never attempted, so
+    // it lands in no observation count.
+    expect(run.summary).toBe(
+      'qa-export: 1 trace(s), 0 screenshot(s), 1 observation(s), 2 FAILED; enqueued 1/1'
+    )
+    // Nothing is sent for the bad span: no media, no span, no score, no queue item.
+    expect(run.fake.requests.filter(r => routeOf(r).startsWith('media'))).toHaveLength(0)
+    expect(allSpans(run.fake).map(s => s.traceId)).toEqual([goodTrace, goodTrace])
+    expect(run.fake.roots.map(r => r.labelId)).toEqual([itemId(good, 0)])
+    expect(run.fake.generations.map(g => g.labelId)).toEqual([itemId(good, 0)])
+    expect(run.fake.scores.map(s => s.body.traceId)).toEqual([goodTrace])
+    expect(run.fake.itemPosts.map(p => p.objectId)).toEqual([goodTrace])
+    // Each failure names its trace and why.
+    for (const n of [0, 1]) {
+      expect(
+        run.out.some(
+          l => l.includes(`FAILED CON-050 ${itemId(bad, n)}`) && l.includes('unix-nano timestamp')
+        )
+      ).toBe(true)
+    }
   })
 })
 

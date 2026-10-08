@@ -407,7 +407,15 @@ export function buildGenerationBody(
 
 // --- OTLP/JSON encoding ---
 
-export type OtlpAnyValue = { stringValue: string } | { arrayValue: { values: OtlpAnyValue[] } }
+export type OtlpAnyValue =
+  | { stringValue: string }
+  | { boolValue: boolean }
+  | { intValue: number }
+  | { doubleValue: number }
+  | { arrayValue: { values: OtlpAnyValue[] } }
+  | { kvlistValue: { values: OtlpAttribute[] } }
+  // The empty AnyValue: OTLP's absent value.
+  | Record<string, never>
 export interface OtlpAttribute {
   key: string
   value: OtlpAnyValue
@@ -430,12 +438,34 @@ const strAttr = (key: string, value: string): OtlpAttribute => ({
   value: { stringValue: value },
 })
 
-// Langfuse stores metadata values as strings: a string ships as itself, any other
-// value as its JSON. An undefined field is omitted, as the legacy JSON body omitted it.
-const metadataAttrs = (prefix: string, metadata: Record<string, unknown>): OtlpAttribute[] =>
-  Object.entries(metadata)
+// The OTLP AnyValue of a metadata value, keeping the JSON type the legacy trace body
+// gave it, because Langfuse keeps a metadata attribute's value as sent: a string, an
+// integer, a non-integer number and a boolean each travel as their own kind (an
+// integer as a JSON-number `intValue`, never a decimal string; one beyond 2^53 as a
+// `doubleValue`), an array as `arrayValue` and an object as
+// `kvlistValue`, each element encoded the same way. Null travels as the empty
+// AnyValue, OTLP's absent value, and so does what JSON writes as null (a non-finite
+// number, an undefined array element). An undefined object field is omitted, as JSON
+// omits it.
+function anyValue(v: unknown): OtlpAnyValue {
+  if (typeof v === 'string') return { stringValue: v }
+  if (typeof v === 'boolean') return { boolValue: v }
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    return Number.isSafeInteger(v) ? { intValue: v } : { doubleValue: v }
+  }
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(anyValue) } }
+  if (v !== null && typeof v === 'object') {
+    return { kvlistValue: { values: metadataAttrs('', v as Record<string, unknown>) } }
+  }
+  return {}
+}
+
+// One attribute per defined field, keyed `<prefix><field>`, valued by `anyValue`.
+function metadataAttrs(prefix: string, fields: Record<string, unknown>): OtlpAttribute[] {
+  return Object.entries(fields)
     .filter(([, v]) => v !== undefined)
-    .map(([k, v]) => strAttr(`${prefix}${k}`, typeof v === 'string' ? v : JSON.stringify(v)))
+    .map(([k, v]) => ({ key: `${prefix}${k}`, value: anyValue(v) }))
+}
 
 // The span-level trace context: the same for every item-trace of one judge span.
 export interface TraceContext {
