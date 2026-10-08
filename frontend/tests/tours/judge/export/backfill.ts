@@ -81,6 +81,19 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 const asVerdict = (v: unknown): Verdict | undefined =>
   v === 'pass' || v === 'fail' || v === 'unsure' ? v : undefined
 
+// v2 returns a root's `output` as the raw string the trace stored. A graded item-trace
+// stored its PerItemVerdict as JSON, so decode it on the client. A string that is not
+// JSON (a content-light trace's plain text, or a malformed body) stays an opaque string
+// and carries no verdict, so it never qualifies on output alone.
+function decodeOutput(raw: unknown): unknown {
+  if (typeof raw !== 'string') return raw
+  try {
+    return JSON.parse(raw) as unknown
+  } catch {
+    return raw
+  }
+}
+
 // A graded item-trace's output is its PerItemVerdict ({verdict, citation, critique});
 // a content-light trace's output is a string/undefined (no verdict).
 function outputVerdict(output: unknown): Verdict | undefined {
@@ -129,18 +142,57 @@ interface CandidateSet {
 // Build a behavior's candidate set: traces tagged `behavior:<id>` (+ an optional round
 // tag, AND-combined), each classified against ALL verdict scores. Throws ApiError /
 // PaginationError on any list/pagination failure (fail-closed at the call site).
+//
+// A trace is read through its ROOT observation (observations v2). The candidate's
+// subject is the root's `traceId`, NEVER its observation `id`: a historic root's id is
+// `t-<traceId>` and a new root's id is its own span id. The score join, the deep link
+// and the queue `objectId` all use `traceId`.
 async function buildCandidateSet(
   cfg: LangfuseConfig,
   behaviorId: string,
   roundTag: string | undefined
 ): Promise<CandidateSet> {
-  // Traces filtered by tag — `tags` is an AND filter, so behavior + round both apply.
-  // `fields=core,io` returns `output` (the verdict/cite/critique) alongside the id/tags.
-  const tParams = new URLSearchParams()
-  tParams.append('tags', `behavior:${behaviorId}`)
-  if (roundTag) tParams.append('tags', roundTag)
-  tParams.set('fields', 'core,io')
-  const traces = await apiGetAllPages(cfg, `/api/public/traces?${tParams.toString()}`, 'page')
+  // Root observations whose trace carries ALL the tags (`all of` keeps today's AND, so
+  // behavior + round both apply). `trace_context` carries the trace's tags; `io` carries
+  // `output` (the verdict/cite/critique) as a raw string.
+  const wantedTags = roundTag ? [`behavior:${behaviorId}`, roundTag] : [`behavior:${behaviorId}`]
+  const rParams = new URLSearchParams()
+  rParams.set('isRootObservation', 'true')
+  rParams.set('fields', 'core,io,trace_context')
+  rParams.set(
+    'filter',
+    JSON.stringify([
+      { type: 'arrayOptions', column: 'traceTags', operator: 'all of', value: wantedTags },
+    ])
+  )
+  const roots = await apiGetAllPages(
+    cfg,
+    `/api/public/v2/observations?${rParams.toString()}`,
+    'observations-v2'
+  )
+
+  // The paginator already dropped repeated `(traceId, id)` rows (an unmerged re-export).
+  // What remains must be exactly one root per trace, inside the tag filter. A row that
+  // breaks either is a read the server did not filter as asked (a non-root under the
+  // same trace, a dropped filter) → fail CLOSED rather than list or enqueue from it.
+  const rootByTrace = new Map<string, Record<string, unknown>>()
+  for (const r of roots) {
+    // The paginator guarantees a string `traceId` and `id` on every row.
+    const traceId = r.traceId as string
+    const tags = (r as { tags?: unknown }).tags
+    if (!Array.isArray(tags) || !wantedTags.every(t => tags.includes(t))) {
+      throw new BackfillDataError(
+        `root observation for trace ${traceId} lacks the requested tags (${wantedTags.join(', ')})`
+      )
+    }
+    if (rootByTrace.has(traceId)) {
+      throw new BackfillDataError(
+        `trace ${traceId} has more than one root observation ` +
+          `(${String(rootByTrace.get(traceId)?.id)}, ${String(r.id)})`
+      )
+    }
+    rootByTrace.set(traceId, r)
+  }
 
   // ALL verdict scores (no `value` filter — a pass-only query cannot tell a hidden
   // fail/unsure from a missing score). `fields=subject` is required because core score
@@ -194,15 +246,13 @@ async function buildCandidateSet(
 
   const candidates: Candidate[] = []
   const ambiguous: string[] = []
-  for (const t of traces) {
-    // The paginator guarantees a string id on every item.
-    const traceId = t.id as string
-    const output = (t as { output?: unknown }).output
+  for (const [traceId, root] of rootByTrace) {
+    const output = decodeOutput((root as { output?: unknown }).output)
     const c = classify(byTrace.get(traceId) ?? [], output)
     if (c === 'ambiguous') ambiguous.push(traceId)
     else if (c === 'candidate') candidates.push({ traceId, ...citeCritique(output) })
   }
-  return { traceCount: traces.length, candidates, ambiguous }
+  return { traceCount: rootByTrace.size, candidates, ambiguous }
 }
 
 // The UI project id for a trace deep link. Deterministic + fail-closed: env override,

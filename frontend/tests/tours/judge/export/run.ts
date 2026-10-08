@@ -2,7 +2,7 @@
 //
 //   QA_JUDGE_TRACE=/path/run.jsonl  JUDGE=1 make qa-report   # produce the spans
 //   LANGFUSE_HOST=... LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=... \
-//     [QA_RUN_ID=...] [QA_GIT_SHA=...] [QA_SALT_PASSES=N] \
+//     [QA_RUN_ID=...] [QA_GIT_SHA=...] [QA_SALT_PASSES=N] [QA_TEST_TAG=<slug>] \
 //     bun run tests/tours/judge/export/run.ts /path/run.jsonl
 //
 // Opt-in by construction: with no LANGFUSE_* env this exits 0 and ships nothing,
@@ -12,6 +12,11 @@
 // whole trace file is read + shipped — not plumbed through the judge span builder.
 // Each component is validated independently and NEVER fail-closed: an invalid one is
 // dropped so the mandatory trap diagnostic still ships.
+//
+// QA_TEST_TAG is the opposite, deliberately: it marks a development or acceptance
+// export, every trace of which must carry `test:<slug>`. An invalid value fails the
+// command before any request, because dropping it would ship untagged test traces
+// into the real project.
 
 import * as fs from 'fs'
 import { configFromEnv, exportSpans, parseSpanFile } from './langfuse'
@@ -33,6 +38,7 @@ export interface RunDeps {
 
 const RUN_ID_RE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/
 const GIT_SHA_RE = /^[0-9a-f]{7,40}$/
+export const TEST_TAG_RE = /^[A-Za-z0-9._-]{1,64}$/
 const SIDECAR_SUFFIX = '.qa-provenance'
 
 // QA_RUN_ID must match the timestamp shape AND parse to a real UTC instant that
@@ -153,6 +159,17 @@ export async function main(
     return 0
   }
 
+  // Before any file read or request: an invalid tag would otherwise ship test traces
+  // untagged, the one failure the tag exists to prevent.
+  const testTag = env.QA_TEST_TAG
+  if (testTag !== undefined && !TEST_TAG_RE.test(testTag)) {
+    errlog(
+      `qa-export: QA_TEST_TAG=${JSON.stringify(testTag)} does not match ${String(TEST_TAG_RE)} ` +
+        '— nothing shipped.'
+    )
+    return 2
+  }
+
   const file = argv[0]
   if (!file) {
     errlog('usage: bun run tests/tours/judge/export/run.ts <trace.jsonl>')
@@ -194,7 +211,13 @@ export async function main(
   staleFileGuard(file, runId, gitSha, rfs, log)
 
   log(`qa-export: shipping ${spans.length} span(s) to ${cfg.host}`)
-  const result = await doExport(cfg, spans, msg => log(msg), { runId, gitSha, saltPasses })
+  const result = await doExport(
+    cfg,
+    spans,
+    msg => log(msg),
+    { runId, gitSha, saltPasses, testTag },
+    msg => errlog(msg)
+  )
   log(
     // The ONE canonical summary line. scripts/ci/qa-nightly-round.sh parses it with a
     // FULLY ANCHORED regex requiring exactly one match, so any field added here must

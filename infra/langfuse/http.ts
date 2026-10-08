@@ -68,6 +68,46 @@ export async function api(
   return text ? (JSON.parse(text) as Record<string, unknown>) : {}
 }
 
+// Walk a v2 cursor-paginated Langfuse list endpoint to completion. A next page
+// is requested with `cursor=<meta.cursor>`; a page whose `meta` has no `cursor`
+// is the last. No `limit` is sent or required. Every structural problem fails the
+// read — a malformed envelope, a cursor that is not a non-empty string, or a
+// cursor already followed (which would loop) — because a silently truncated list
+// would let the caller assert over partial state.
+export async function apiGetAllCursorPages(
+  cfg: LangfuseConfig,
+  path: string,
+  fetchFn: FetchFn = fetch
+): Promise<Array<Record<string, unknown>>> {
+  const items: Array<Record<string, unknown>> = []
+  const followed = new Set<string>()
+  const sep = path.includes('?') ? '&' : '?'
+  let cursor: string | undefined
+  for (let pageNo = 1; ; pageNo++) {
+    const url = cursor === undefined ? path : `${path}${sep}cursor=${encodeURIComponent(cursor)}`
+    const res = await api(cfg, 'GET', url, undefined, fetchFn)
+    if (!Array.isArray(res.data)) {
+      throw new Error(`GET ${path}: page ${pageNo} response has no data array`)
+    }
+    const meta = res.meta
+    if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) {
+      throw new Error(`GET ${path}: page ${pageNo} response has no meta object`)
+    }
+    items.push(...(res.data as Array<Record<string, unknown>>))
+    const next = (meta as Record<string, unknown>).cursor
+    if (next === undefined) break
+    if (typeof next !== 'string' || next === '') {
+      throw new Error(`GET ${path}: page ${pageNo} response has a meta.cursor that is not a non-empty string`)
+    }
+    if (followed.has(next)) {
+      throw new Error(`GET ${path}: page ${pageNo} response repeats meta.cursor already followed`)
+    }
+    followed.add(next)
+    cursor = next
+  }
+  return items
+}
+
 // Walk a page-style paginated Langfuse list endpoint to completion (page+limit
 // request params; meta `{page, limit, totalItems, totalPages}`). Merges the
 // pagination params onto whatever query the caller already put on `path`.

@@ -1,3 +1,17 @@
+import { spawn } from 'node:child_process'
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { main } from './backfill'
 import { TRIAGE_QUEUE_NAME, VERDICT_SCORE_NAME } from './triage-config'
@@ -12,10 +26,18 @@ const ENV = {
 
 type Verdict = 'pass' | 'fail' | 'unsure'
 
-interface TraceObj {
+// A root observation as `GET /api/public/v2/observations` returns it with fields
+// `core,io,trace_context` (arc §2, S2): `input`/`output` are raw strings, and `tags`
+// are the trace's tags.
+interface RootObs {
   id: string
+  traceId: string
+  parentObservationId: string | null
+  startTime: string
+  traceName: string
   tags: string[]
-  output?: unknown
+  input: string | null
+  output: string | null
 }
 interface ScoreObj {
   id: string
@@ -37,7 +59,37 @@ const verdictOutput = (verdict: Verdict, citation = 'c', critique = 'k'): unknow
   critique,
 })
 
-const trace = (id: string, tags: string[], output?: unknown): TraceObj => ({ id, tags, output })
+// The serialization v2 returns for the value a legacy trace body's `output` carried.
+const serialized = (output: unknown): string | null =>
+  output === undefined ? null : JSON.stringify(output)
+
+// A historic trace's root (arc §2, S1): a string trace id and an observation id of
+// `t-<traceId>`. Most tests below build their traces this way.
+const trace = (traceId: string, tags: string[], output?: unknown): RootObs => ({
+  id: `t-${traceId}`,
+  traceId,
+  parentObservationId: null,
+  startTime: '2026-07-17T15:16:39.000Z',
+  traceName: 'judge-synthetic',
+  tags,
+  input: null,
+  output: serialized(output),
+})
+
+// A new trace's root (arc §2, S1): a 32-hex trace id and its own 16-hex span id.
+const newRoot = (traceId: string, spanId: string, tags: string[], output?: unknown): RootObs => ({
+  ...trace(traceId, tags, output),
+  id: spanId,
+})
+
+// A non-root observation of the same trace (the generation PR3 ships). v2's
+// `traceTags` filter matches it too, so only the root filter keeps it out.
+const childObs = (root: RootObs, spanId: string): RootObs => ({
+  ...root,
+  id: spanId,
+  parentObservationId: root.id,
+  output: serialized('raw model completion'),
+})
 
 // A trace-level verdict score: the trace id lives in `subject.id` (kind === 'trace').
 const traceScore = (traceId: string, value: string): ScoreObj => ({
@@ -51,10 +103,13 @@ const traceScore = (traceId: string, value: string): ScoreObj => ({
 const triageQueue: QueueObj = { id: 'q-triage', name: TRIAGE_QUEUE_NAME }
 
 interface MockOpts {
-  traces?: TraceObj[]
+  // Every observation the fake holds; the `trace`/`newRoot` helpers build roots.
+  traces?: RootObs[]
   tracesPerPage?: number
   tracesError?: boolean
   tracesMalformed?: boolean
+  // Answer the observations read as if the server dropped the `filter` param.
+  ignoreFilter?: boolean
   // scores/items accept raw shapes so a test can inject a spec-invalid row.
   scores?: unknown[]
   scoresPerPage?: number
@@ -71,8 +126,17 @@ interface MockOpts {
   failItemPost?: boolean
 }
 
+// A fake Langfuse's reply to one request.
+interface FakeReply {
+  status: number
+  body: string
+}
+
+// One fake Langfuse router. The function-level tests reach it through `fetchImpl` (a
+// stubbed global fetch); the command-level tests reach it over HTTP (`runCommand`).
 function mock(opts: MockOpts = {}): {
   fetchImpl: typeof fetch
+  handle: (method: string, url: URL, body: string | undefined) => FakeReply
   tracesReqs: URLSearchParams[]
   scoresReqs: URLSearchParams[]
   // The EXACT POST bodies (to prove INV-D: identifier/enum-only wire fields) + their queues.
@@ -86,13 +150,11 @@ function mock(opts: MockOpts = {}): {
   const postQueueIds: string[] = []
   const state = { calls: 0 }
 
-  const okText = (obj: unknown): Response =>
-    ({ ok: true, status: 200, text: async () => JSON.stringify(obj) }) as Response
-  const err = (status: number, msg: string): Response =>
-    ({ ok: false, status, text: async () => msg }) as Response
+  const okText = (obj: unknown): FakeReply => ({ status: 200, body: JSON.stringify(obj) })
+  const err = (status: number, msg: string): FakeReply => ({ status, body: msg })
 
   // Page protocol: slice `all` to the requested page, emit utilsMetaResponse.
-  const page = (all: unknown[], q: URLSearchParams, per: number): Response => {
+  const page = (all: unknown[], q: URLSearchParams, per: number): FakeReply => {
     const requested = Number(q.get('page') ?? '1')
     const totalPages = Math.max(1, Math.ceil(all.length / per))
     const start = (requested - 1) * per
@@ -102,7 +164,7 @@ function mock(opts: MockOpts = {}): {
     })
   }
   // Cursor protocol: `cursor` query is a numeric offset; omit meta.cursor on the last page.
-  const cursorPage = (all: unknown[], q: URLSearchParams, per: number): Response => {
+  const cursorPage = (all: unknown[], q: URLSearchParams, per: number): FakeReply => {
     const offset = Number(q.get('cursor') ?? '0')
     const slice = all.slice(offset, offset + per)
     const next = offset + per
@@ -111,24 +173,46 @@ function mock(opts: MockOpts = {}): {
     return okText({ data: slice, meta })
   }
 
-  const fetchImpl = (async (url: string | URL, init?: { method?: string; body?: unknown }) => {
-    state.calls++
-    const u = String(url)
-    const method = init?.method ?? 'GET'
-    const parsed = new URL(u)
-    const pathname = parsed.pathname
-    const q = parsed.searchParams
-    const json = (): Record<string, unknown> =>
-      JSON.parse(String(init?.body)) as Record<string, unknown>
+  // Observations v2: `cursor` is a numeric offset; `meta: {}` on the last page, and
+  // never a `limit`.
+  const v2Page = (all: unknown[], q: URLSearchParams, per: number): FakeReply => {
+    const offset = Number(q.get('cursor') ?? '0')
+    const next = offset + per
+    return okText({
+      data: all.slice(offset, next),
+      meta: next < all.length ? { cursor: String(next) } : {},
+    })
+  }
 
-    if (pathname === '/api/public/traces' && method === 'GET') {
+  const handle = (method: string, url: URL, body: string | undefined): FakeReply => {
+    state.calls++
+    const pathname = url.pathname
+    const q = url.searchParams
+    const json = (): Record<string, unknown> => JSON.parse(String(body)) as Record<string, unknown>
+
+    if (pathname === '/api/public/v2/observations' && method === 'GET') {
       tracesReqs.push(new URLSearchParams(q))
-      if (opts.tracesError === true) return err(500, 'traces boom')
-      if (opts.tracesMalformed === true)
-        return okText({ meta: { page: 1, limit: 100, totalItems: 0, totalPages: 1 } })
-      const wanted = q.getAll('tags')
-      const all = (opts.traces ?? []).filter(t => wanted.every(w => t.tags.includes(w)))
-      return page(all, q, opts.tracesPerPage ?? 100)
+      if (opts.tracesError === true) return err(500, 'observations boom')
+      if (opts.tracesMalformed === true) return okText({ meta: {} })
+      // The one filter shape the backfill sends: all of the given trace tags.
+      const filter = JSON.parse(q.get('filter') ?? '[]') as Array<Record<string, unknown>>
+      const tagFilter = filter.find(f => f.column === 'traceTags')
+      if (
+        filter.length !== 1 ||
+        tagFilter?.type !== 'arrayOptions' ||
+        tagFilter.operator !== 'all of' ||
+        !Array.isArray(tagFilter.value)
+      ) {
+        return err(400, 'invalid filter')
+      }
+      const wanted = tagFilter.value as string[]
+      const rootsOnly = q.get('isRootObservation') === 'true'
+      const all = (opts.traces ?? []).filter(
+        t =>
+          (opts.ignoreFilter === true || wanted.every(w => t.tags.includes(w))) &&
+          (!rootsOnly || t.parentObservationId === null)
+      )
+      return v2Page(all, q, opts.tracesPerPage ?? 100)
     }
     if (pathname === '/api/public/v3/scores' && method === 'GET') {
       scoresReqs.push(new URLSearchParams(q))
@@ -162,10 +246,24 @@ function mock(opts: MockOpts = {}): {
     // Any route/method the CLI is NOT expected to touch (e.g. a PATCH reopen or a direct
     // score write) reddens the test — a silent 200 would make the no-write tests toothless.
     throw new Error(`unexpected fetch: ${method} ${pathname}`)
+  }
+
+  const fetchImpl = (async (url: string | URL, init?: { method?: string; body?: unknown }) => {
+    const reply = handle(
+      init?.method ?? 'GET',
+      new URL(String(url)),
+      init?.body === undefined ? undefined : String(init.body)
+    )
+    return {
+      ok: reply.status >= 200 && reply.status < 300,
+      status: reply.status,
+      text: async () => reply.body,
+    } as Response
   }) as unknown as typeof fetch
 
   return {
     fetchImpl,
+    handle,
     tracesReqs,
     scoresReqs,
     itemPosts,
@@ -189,6 +287,154 @@ function sinks(): {
 }
 
 const RUN_ID = '20260717T151639Z'
+
+// The request contract of the candidate read (arc §2, S2; the plan's tag filter): root
+// observations, fields `core,io,trace_context`, and one `traceTags` "all of" filter.
+// Returns the filter's tags.
+function rootReadTags(q: URLSearchParams): string[] {
+  expect(q.get('isRootObservation')).toBe('true')
+  expect(q.get('fields')).toBe('core,io,trace_context')
+  const filter = JSON.parse(q.get('filter') ?? 'null') as unknown
+  expect(filter).toEqual([
+    { type: 'arrayOptions', column: 'traceTags', operator: 'all of', value: expect.any(Array) },
+  ])
+  return (filter as Array<{ value: string[] }>)[0].value
+}
+
+// --- command level: the process `make qa-fn-backfill` runs ---------------------
+
+// `runCommand` runs `make qa-fn-backfill BEHAVIOR=… [TRACE=… | ROUND=…]` from the
+// repository root as a child process, against a fake Langfuse served over HTTP on
+// loopback, so the target's script path and argument forwarding are under test too.
+const REPO_ROOT = path.resolve(__dirname, '../../../../..')
+const FAKE_PUBLIC_KEY = 'pk-lf-fake'
+const FAKE_SECRET_KEY = 'sk-lf-fake'
+const FAKE_AUTH = 'Basic ' + Buffer.from(`${FAKE_PUBLIC_KEY}:${FAKE_SECRET_KEY}`).toString('base64')
+
+// The child's whole environment: PATH for make, git and bun, the fake host, dummy keys,
+// and every other variable the command reads. bun adds frontend/'s .env files to the
+// environment but never replaces a variable already set, even to the empty string, so
+// nothing those files hold can reach these names (proven by the canary test below).
+// An empty LANGFUSE_PROJECT_ID reads as unset: deep links resolve the fake's project.
+const commandEnv = (host: string): NodeJS.ProcessEnv =>
+  ({
+    PATH: process.env.PATH,
+    LANGFUSE_HOST: host,
+    LANGFUSE_PUBLIC_KEY: FAKE_PUBLIC_KEY,
+    LANGFUSE_SECRET_KEY: FAKE_SECRET_KEY,
+    LANGFUSE_PROJECT_ID: '',
+    // Next's types require NODE_ENV on ProcessEnv; the child deliberately has none.
+  }) as Partial<NodeJS.ProcessEnv> as NodeJS.ProcessEnv
+
+// The target's make variables.
+interface TargetVars {
+  BEHAVIOR: string
+  TRACE?: string
+  ROUND?: string
+}
+
+// One request the command transported to the fake.
+interface Transported {
+  method: string
+  url: URL
+  body: string | undefined
+}
+interface CommandRun {
+  // make's own exit status: 0, or 2 when the recipe fails.
+  code: number | null
+  // The backfill's exit status, which make reports on stderr when the recipe fails.
+  status: number | null
+  stdout: string
+  stderr: string
+  // The fake's base URL, which deep links start with.
+  host: string
+  requests: Transported[]
+}
+
+// The backfill's exit status from make's exit status and stderr. A failed recipe makes
+// make exit 2 and print `make: *** [<file>:<line>: ]qa-fn-backfill] Error <status>`.
+function recipeStatus(code: number | null, stderr: string): number | null {
+  if (code === 0) return 0
+  expect(code).toBe(2)
+  const reported = /^make: \*\*\* \[(?:[^\]]*: )?qa-fn-backfill\] Error (\d+)$/m.exec(stderr)
+  return reported === null ? null : Number(reported[1])
+}
+
+// `root` is the directory make runs from: the repository root, or the canary test's
+// stand-in for it.
+async function runCommand(
+  vars: TargetVars,
+  opts: MockOpts,
+  root: string = REPO_ROOT
+): Promise<CommandRun> {
+  const m = mock(opts)
+  const requests: Transported[] = []
+  const auths: Array<string | undefined> = []
+  const unexpected: string[] = []
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => chunks.push(c))
+    req.on('end', () => {
+      const method = req.method ?? 'GET'
+      const url = new URL(req.url ?? '/', 'http://fake')
+      const body = chunks.length > 0 ? Buffer.concat(chunks).toString('utf8') : undefined
+      requests.push({ method, url, body })
+      auths.push(req.headers.authorization)
+      let reply: FakeReply
+      try {
+        reply = m.handle(method, url, body)
+      } catch (e) {
+        unexpected.push(e instanceof Error ? e.message : String(e))
+        reply = { status: 500, body: 'unexpected request' }
+      }
+      res.writeHead(reply.status, { 'Content-Type': 'application/json' }).end(reply.body)
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const host = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  try {
+    const makeVars = Object.entries(vars)
+      .filter(([, value]) => value !== undefined)
+      .map(([name, value]) => `${name}=${String(value)}`)
+    const child = spawn('make', ['qa-fn-backfill', ...makeVars], {
+      cwd: root,
+      env: commandEnv(host),
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d: Buffer) => (stdout += d.toString('utf8')))
+    child.stderr.on('data', (d: Buffer) => (stderr += d.toString('utf8')))
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.on('error', reject)
+      child.on('close', resolve)
+    })
+    // Every request was one the fake serves, authenticated with the dummy keys.
+    expect(unexpected).toEqual([])
+    expect(auths.every(a => a === FAKE_AUTH)).toBe(true)
+    return { code, status: recipeStatus(code, stderr), stdout, stderr, host, requests }
+  } finally {
+    server.closeAllConnections()
+    await new Promise<void>(resolve => server.close(() => resolve()))
+  }
+}
+
+// The query of each request the run made to `pathname`, in order.
+const gets = (run: CommandRun, pathname: string): URLSearchParams[] =>
+  run.requests
+    .filter(r => r.method === 'GET' && r.url.pathname === pathname)
+    .map(r => r.url.searchParams)
+
+// The decoded body of each write the run made.
+const writes = (run: CommandRun): Array<{ method: string; path: string; body: unknown }> =>
+  run.requests
+    .filter(r => r.method !== 'GET')
+    .map(r => ({
+      method: r.method,
+      path: r.url.pathname,
+      body: r.body === undefined ? undefined : (JSON.parse(r.body) as unknown),
+    }))
+
+const OBSERVATIONS_V2 = '/api/public/v2/observations'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -218,10 +464,9 @@ describe('list — covering-PASS candidates + deep-links', () => {
     expect(shipped).toContain('http://lf/project/proj-1/traces/t1')
     expect(shipped).toContain('cite: row gone')
     expect(shipped).toContain('critique: looks right')
-    // Traces were paginated (3 requests over pages 1..3) and asked for output via fields=core,io.
+    // Roots were paginated (3 requests over 3 cursor pages), each carrying the root read.
     expect(m.tracesReqs.length).toBeGreaterThanOrEqual(3)
-    expect(m.tracesReqs[0].get('fields')).toBe('core,io')
-    expect(m.tracesReqs[0].getAll('tags')).toContain('behavior:CON-042')
+    for (const q of m.tracesReqs) expect(rootReadTags(q)).toEqual(['behavior:CON-042'])
     // EVERY scores request retained name/dataType/fields=subject and carried NO value filter.
     expect(m.scoresReqs.length).toBeGreaterThanOrEqual(2)
     for (const q of m.scoresReqs) {
@@ -414,9 +659,7 @@ describe('--round dispatch + strict arity', () => {
     const s = sinks()
     const code = await main(['CON-042', '--round', RUN_ID], ENV, s.log, s.errlog)
     expect(code).toBe(0)
-    expect(m.tracesReqs[0].getAll('tags')).toEqual(
-      expect.arrayContaining(['behavior:CON-042', `runId:${RUN_ID}`])
-    )
+    expect(rootReadTags(m.tracesReqs[0])).toEqual(['behavior:CON-042', `runId:${RUN_ID}`])
     const shipped = s.out.join('\n')
     expect(shipped).toContain('t1')
     expect(shipped).not.toMatch(/(^|\s)t2(\s|$)/)
@@ -431,7 +674,7 @@ describe('--round dispatch + strict arity', () => {
     const s = sinks()
     const code = await main(['CON-042', '--round', 'abc1234'], ENV, s.log, s.errlog)
     expect(code).toBe(0)
-    expect(m.tracesReqs[0].getAll('tags')).toContain('gitSha:abc1234')
+    expect(rootReadTags(m.tracesReqs[0])).toEqual(['behavior:CON-042', 'gitSha:abc1234'])
   })
 
   it('a --round value that is neither a run-id nor a git sha → usage error, no query', async () => {
@@ -820,5 +1063,424 @@ describe('spec-invalid wire rows fail closed', () => {
     expect(code).toBe(1)
     expect(m.itemPosts).toHaveLength(0)
     expect(s.er.join('\n')).toMatch(/status/)
+  })
+})
+
+// --- v2 root observations: the subject is the trace id (PR2.c1) --------------
+
+// Synthetic ids in the shapes of arc §2, S1: a historic string trace id, and a new
+// 32-hex trace id whose root span id is a different 16-hex id.
+const HIST_TRACE = 'judge-CON-042-sp0001-item0'
+const HEX_TRACE = '3f2a9c0d4b6e1f7a8c5d2e9b0a1f4c7d'
+const HEX_SPAN = '9b1c4e7a2d5f8a3c'
+const HEX_GEN_SPAN = '0c4f7a1e9d2b5c8a'
+
+describe('PR2.c1 (command level) — candidates keyed by traceId, never the observation id', () => {
+  it('a historic root (observation id t-<traceId>) lists, links and joins by its string trace id', async () => {
+    // The output says FAIL; only the PASS score bound to the trace id makes it a candidate,
+    // so a join on the observation id would exclude it.
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('fail', 'hc', 'hk'))],
+        scores: [traceScore(HIST_TRACE, 'pass')],
+      }
+    )
+    expect(run.stderr).toBe('')
+    expect(run.status).toBe(0)
+    expect(run.stdout).toMatch(/1 covering-PASS candidate/)
+    expect(run.stdout).toContain(`\n  ${HIST_TRACE}\n`)
+    expect(run.stdout).toContain(`${run.host}/project/proj-1/traces/${HIST_TRACE}`)
+    expect(run.stdout).not.toContain(`t-${HIST_TRACE}`)
+    expect(run.stdout).toContain('cite: hc')
+    const [rootRead] = gets(run, OBSERVATIONS_V2)
+    expect(rootReadTags(rootRead)).toEqual(['behavior:CON-042'])
+    expect(gets(run, '/api/public/v3/scores')).toHaveLength(1)
+    expect(writes(run)).toEqual([])
+  })
+  it('a new root (32-hex trace id, distinct span id) lists, links and joins by the hex trace id', async () => {
+    const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('fail'))
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        // The generation under the same trace carries the same trace tags; the root
+        // filter keeps it from becoming a second row for the trace.
+        traces: [root, childObs(root, HEX_GEN_SPAN)],
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
+    expect(run.stderr).toBe('')
+    expect(run.status).toBe(0)
+    expect(run.stdout).toMatch(/1 covering-PASS candidate/)
+    expect(run.stdout).toContain(`\n  ${HEX_TRACE}\n`)
+    expect(run.stdout).toContain(`${run.host}/project/proj-1/traces/${HEX_TRACE}`)
+    expect(run.stdout).not.toContain(HEX_SPAN)
+    expect(run.stdout).not.toContain(HEX_GEN_SPAN)
+    expect(rootReadTags(gets(run, OBSERVATIONS_V2)[0])).toEqual(['behavior:CON-042'])
+    expect(writes(run)).toEqual([])
+  })
+
+  it('a round narrowed by runId: lists only roots carrying both tags', async () => {
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', ROUND: RUN_ID },
+      {
+        traces: [
+          newRoot(
+            HEX_TRACE,
+            HEX_SPAN,
+            ['behavior:CON-042', `runId:${RUN_ID}`],
+            verdictOutput('pass')
+          ),
+          trace(HIST_TRACE, ['behavior:CON-042', 'runId:20260716T151639Z'], verdictOutput('pass')),
+          trace('judge-CON-042-sp0002-item0', ['behavior:CON-042'], verdictOutput('pass')),
+        ],
+      }
+    )
+    expect(run.stderr).toBe('')
+    expect(run.status).toBe(0)
+    expect(rootReadTags(gets(run, OBSERVATIONS_V2)[0])).toEqual([
+      'behavior:CON-042',
+      `runId:${RUN_ID}`,
+    ])
+    expect(run.stdout).toMatch(/1 covering-PASS candidate\(s\) for CON-042 \(runId:/)
+    expect(run.stdout).toContain(`${run.host}/project/proj-1/traces/${HEX_TRACE}`)
+    expect(run.stdout).not.toContain(HIST_TRACE)
+    expect(run.stdout).not.toContain('sp0002')
+    expect(writes(run)).toEqual([])
+  })
+
+  it('a round narrowed by gitSha: lists only roots carrying both tags', async () => {
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', ROUND: 'abc1234' },
+      {
+        traces: [
+          trace(HIST_TRACE, ['behavior:CON-042', 'gitSha:abc1234'], verdictOutput('pass')),
+          newRoot(
+            HEX_TRACE,
+            HEX_SPAN,
+            ['behavior:CON-042', 'gitSha:def5678'],
+            verdictOutput('pass')
+          ),
+        ],
+      }
+    )
+    expect(run.stderr).toBe('')
+    expect(run.status).toBe(0)
+    expect(rootReadTags(gets(run, OBSERVATIONS_V2)[0])).toEqual([
+      'behavior:CON-042',
+      'gitSha:abc1234',
+    ])
+    expect(run.stdout).toMatch(/1 covering-PASS candidate\(s\) for CON-042 \(gitSha:abc1234\)/)
+    expect(run.stdout).toContain(`${run.host}/project/proj-1/traces/${HIST_TRACE}`)
+    expect(run.stdout).not.toContain(HEX_TRACE)
+    expect(writes(run)).toEqual([])
+  })
+
+  it('a root carrying the behavior tag but not the round tag is excluded', async () => {
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', ROUND: RUN_ID },
+      {
+        traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
+    expect(run.status).toBe(3)
+    expect(run.stderr).toMatch(/no traces tagged behavior:CON-042 \(runId:20260717T151639Z\)/)
+    expect(run.stdout).toBe('')
+    expect(writes(run)).toEqual([])
+  })
+
+  it('enqueue of a new-root candidate posts objectType TRACE with the hex traceId', async () => {
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', TRACE: HEX_TRACE },
+      {
+        traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
+    expect(run.stderr).toBe('')
+    expect(run.status).toBe(0)
+    expect(run.stdout).toContain(`enqueued ${HEX_TRACE} into ${TRIAGE_QUEUE_NAME}`)
+    // Membership is proven round-agnostic, then the existing items are read for dedup.
+    expect(rootReadTags(gets(run, OBSERVATIONS_V2)[0])).toEqual(['behavior:CON-042'])
+    expect(gets(run, `/api/public/annotation-queues/${triageQueue.id}/items`)).toHaveLength(1)
+    expect(writes(run)).toEqual([
+      {
+        method: 'POST',
+        path: `/api/public/annotation-queues/${triageQueue.id}/items`,
+        body: { objectId: HEX_TRACE, objectType: 'TRACE' },
+      },
+    ])
+  })
+
+  it('enqueue by an observation id (new span id or historic t-<traceId>) is refused', async () => {
+    for (const [root, obsId] of [
+      [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass')), HEX_SPAN],
+      [trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('pass')), `t-${HIST_TRACE}`],
+    ] as const) {
+      const run = await runCommand(
+        { BEHAVIOR: 'CON-042', TRACE: obsId },
+        {
+          traces: [root],
+          scores: [traceScore(root.traceId, 'pass')],
+        }
+      )
+      expect(run.status, obsId).toBe(1)
+      expect(run.stderr, obsId).toContain(`trace ${obsId} is not a covering-PASS candidate`)
+      expect(run.stdout, obsId).toBe('')
+      expect(writes(run), obsId).toEqual([])
+    }
+  })
+
+  // Ruling R2: two fail-closed outcomes beyond PR2.c5, observed at the same level.
+  it('a row outside the requested tags (a dropped filter) fails closed, lists nothing', async () => {
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', ROUND: RUN_ID },
+      {
+        ignoreFilter: true,
+        traces: [
+          newRoot(
+            HEX_TRACE,
+            HEX_SPAN,
+            ['behavior:CON-042', `runId:${RUN_ID}`],
+            verdictOutput('pass')
+          ),
+          trace(HIST_TRACE, ['behavior:DSH-004'], verdictOutput('pass')),
+        ],
+      }
+    )
+    expect(run.status).toBe(1)
+    expect(run.stderr).toMatch(
+      new RegExp(
+        `BackfillDataError: root observation for trace ${HIST_TRACE} lacks the requested tags`
+      )
+    )
+    expect(run.stdout).toBe('')
+    expect(writes(run)).toEqual([])
+  })
+
+  it('two distinct root observations under one trace id fail closed, list nothing', async () => {
+    const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [root, { ...root, id: '5e8b2d7f1a4c9e3b' }],
+      }
+    )
+    expect(run.status).toBe(1)
+    expect(run.stderr).toMatch(
+      new RegExp(`BackfillDataError: trace ${HEX_TRACE} has more than one root observation`)
+    )
+    expect(run.stdout).toBe('')
+    expect(writes(run)).toEqual([])
+  })
+
+  it('enqueue refuses when two distinct root observations share the trace id', async () => {
+    const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', TRACE: HEX_TRACE },
+      {
+        traces: [root, { ...root, id: '5e8b2d7f1a4c9e3b' }],
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
+    expect(run.status).toBe(1)
+    expect(run.stderr).toMatch(/BackfillDataError: .*more than one root observation/)
+    expect(run.stdout).toBe('')
+    expect(writes(run)).toEqual([])
+  })
+})
+
+// --- output decoded on the client from v2's raw string (PR2.c2) --------------
+
+describe('PR2.c2 (command level) — v2 output string decoded on the client; score-over-output and ambiguity unchanged', () => {
+  const HEX_B = '7d1e4a9c3f6b2e8d5a0c7f1b4e9d2a6c'
+  const HEX_B_SPAN = '2a5d8f1c4e7b0a3d'
+
+  it('conflicting verdict scores on one trace → ambiguous, exits non-zero, lists nothing', async () => {
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
+        scores: [traceScore(HEX_TRACE, 'pass'), traceScore(HEX_TRACE, 'fail')],
+      }
+    )
+    expect(run.status).toBe(1)
+    expect(run.stderr).toContain(`multiple verdict scores for trace(s) ${HEX_TRACE}`)
+    expect(run.stderr).toMatch(/ambiguous/)
+    expect(run.stdout).toBe('')
+    expect(writes(run)).toEqual([])
+  })
+
+  it('a scoreless pass whose output string is JSON is a candidate with its cite and critique', async () => {
+    const root = newRoot(
+      HEX_TRACE,
+      HEX_SPAN,
+      ['behavior:CON-042'],
+      verdictOutput('pass', 'jc', 'jk')
+    )
+    expect(typeof root.output).toBe('string')
+    const run = await runCommand({ BEHAVIOR: 'CON-042' }, { traces: [root] })
+    expect(run.stderr).toBe('')
+    expect(run.status).toBe(0)
+    expect(run.stdout).toMatch(/1 covering-PASS candidate/)
+    expect(run.stdout).toContain(`\n  ${HEX_TRACE}\n`)
+    expect(run.stdout).toContain('cite: jc')
+    expect(run.stdout).toContain('critique: jk')
+  })
+
+  it('a malformed output string carries no verdict: scoreless → excluded; a PASS score still wins', async () => {
+    const truncated = '{"itemIndex":0,"verdict":"pass","citation":"mc"'
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [
+          { ...newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042']), output: truncated },
+          { ...newRoot(HEX_B, HEX_B_SPAN, ['behavior:CON-042']), output: truncated },
+        ],
+        scores: [traceScore(HEX_B, 'pass')],
+      }
+    )
+    expect(run.stderr).toBe('')
+    expect(run.status).toBe(0)
+    expect(run.stdout).toMatch(/1 covering-PASS candidate/)
+    expect(run.stdout).toContain(`\n  ${HEX_B}\n`)
+    expect(run.stdout).not.toContain(HEX_TRACE)
+    expect(run.stdout).not.toContain('cite:')
+  })
+
+  it('a verdict score that contradicts the output wins, in both directions', async () => {
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [
+          newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass')),
+          newRoot(HEX_B, HEX_B_SPAN, ['behavior:CON-042'], verdictOutput('fail')),
+        ],
+        scores: [traceScore(HEX_TRACE, 'fail'), traceScore(HEX_B, 'pass')],
+      }
+    )
+    expect(run.stderr).toBe('')
+    expect(run.status).toBe(0)
+    expect(run.stdout).toMatch(/1 covering-PASS candidate/)
+    expect(run.stdout).toContain(`\n  ${HEX_B}\n`)
+    expect(run.stdout).not.toContain(HEX_TRACE)
+  })
+})
+
+// --- a root returned twice under the same (traceId, id) is one candidate (PR2.c4) ---
+
+describe('PR2.c4 (command level) — duplicate root rows (an unmerged re-export) yield one candidate', () => {
+  const listedOnce = (stdout: string, traceId: string): void => {
+    expect(stdout.split('\n').filter(l => l === `  ${traceId}`)).toHaveLength(1)
+  }
+
+  it('a duplicate on the same page', async () => {
+    const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [root, { ...root }],
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
+    expect(run.stderr).toBe('')
+    expect(run.status).toBe(0)
+    expect(gets(run, OBSERVATIONS_V2)).toHaveLength(1)
+    expect(run.stdout).toMatch(/1 covering-PASS candidate/)
+    listedOnce(run.stdout, HEX_TRACE)
+  })
+
+  it('a duplicate across pages, including a page that holds only the duplicate', async () => {
+    const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
+    const other = trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('pass'))
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [root, { ...root }, other],
+        tracesPerPage: 1,
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
+    expect(run.stderr).toBe('')
+    expect(run.status).toBe(0)
+    // Three cursor pages, each the same root read; the second follows the first's cursor.
+    const reads = gets(run, OBSERVATIONS_V2)
+    expect(reads.map(q => q.get('cursor'))).toEqual([null, '1', '2'])
+    for (const q of reads) expect(rootReadTags(q)).toEqual(['behavior:CON-042'])
+    expect(run.stdout).toMatch(/2 covering-PASS candidate/)
+    listedOnce(run.stdout, HEX_TRACE)
+    listedOnce(run.stdout, HIST_TRACE)
+  })
+
+  it('enqueue of a candidate whose root is duplicated posts it once', async () => {
+    const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', TRACE: HEX_TRACE },
+      {
+        traces: [root, { ...root }],
+        tracesPerPage: 1,
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
+    expect(run.stderr).toBe('')
+    expect(run.status).toBe(0)
+    expect(writes(run)).toEqual([
+      {
+        method: 'POST',
+        path: `/api/public/annotation-queues/${triageQueue.id}/items`,
+        body: { objectId: HEX_TRACE, objectType: 'TRACE' },
+      },
+    ])
+  })
+})
+
+// --- the command's environment: no frontend/.env* file reaches it -------------
+
+describe('command environment — frontend/.env* files cannot override the fake host, keys or project', () => {
+  // Every .env file bun loads from its working directory, for any NODE_ENV.
+  const ENV_FILES = [
+    '.env',
+    '.env.local',
+    ...['development', 'production', 'test'].flatMap(mode => [
+      `.env.${mode}`,
+      `.env.${mode}.local`,
+    ]),
+  ]
+  const CANARY = [
+    'LANGFUSE_HOST=http://canary.invalid',
+    'LANGFUSE_PUBLIC_KEY=pk-lf-canary',
+    'LANGFUSE_SECRET_KEY=sk-lf-canary',
+    'LANGFUSE_PROJECT_ID=canary-proj',
+  ].join('\n')
+
+  it('a stand-in root with canary .env files in frontend/ still reaches only the fake, with the dummy keys', async () => {
+    // The stand-in runs the real Makefile and the real script through symlinks; only the
+    // .env files bun reads from frontend/ differ from the repository's.
+    const root = mkdtempSync(path.join(tmpdir(), 'qa-fn-backfill-env-'))
+    const links = [path.join(root, 'Makefile'), path.join(root, 'frontend', 'tests')]
+    try {
+      mkdirSync(path.join(root, 'frontend'))
+      symlinkSync(path.join(REPO_ROOT, 'Makefile'), links[0])
+      symlinkSync(path.join(REPO_ROOT, 'frontend', 'tests'), links[1])
+      for (const file of ENV_FILES) writeFileSync(path.join(root, 'frontend', file), CANARY)
+      const run = await runCommand(
+        { BEHAVIOR: 'CON-042' },
+        {
+          traces: [trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('pass'))],
+          scores: [traceScore(HIST_TRACE, 'pass')],
+        },
+        root
+      )
+      // runCommand already asserted that every request carried the dummy keys.
+      expect(run.status).toBe(0)
+      expect(run.stdout).toContain(`${run.host}/project/proj-1/traces/${HIST_TRACE}`)
+      expect(gets(run, '/api/public/projects')).toHaveLength(1)
+      expect(run.stdout + run.stderr).not.toContain('canary')
+    } finally {
+      // Unlink the symlinks first so removing the stand-in never reaches the repository.
+      for (const link of links) if (lstatSync(link, { throwIfNoEntry: false })) unlinkSync(link)
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

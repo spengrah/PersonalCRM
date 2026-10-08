@@ -620,6 +620,115 @@ describe('apiGetAllPages — cursor protocol (scores v3)', () => {
   })
 })
 
+// Observations v2: `meta: {cursor}` while more pages exist, `meta: {}` at the end, and
+// never a `limit` in the response.
+const v2Resp = (data: unknown[], cursor?: unknown): { json: unknown } => ({
+  json: { data, meta: cursor === undefined ? {} : { cursor } },
+})
+const obs = (traceId: string, id: string): { traceId: string; id: string } => ({ traceId, id })
+
+describe('apiGetAllPages — observations v2 protocol', () => {
+  it('a single page with meta: {} is terminal', async () => {
+    const mock = scripted([v2Resp([obs('t1', 'o1')])])
+    vi.stubGlobal('fetch', mock.impl)
+    const out = await apiGetAllPages(cfg, '/api/public/v2/observations', 'observations-v2')
+    expect(out).toEqual([obs('t1', 'o1')])
+    expect(mock.calls).toHaveLength(1)
+    expect(mock.calls[0].url).not.toContain('cursor=')
+  })
+
+  it('follows meta.cursor across three pages that never carry a limit', async () => {
+    const mock = scripted([
+      v2Resp([obs('t1', 'o1')], 'CUR2'),
+      v2Resp([obs('t2', 'o2')], 'CUR3'),
+      v2Resp([obs('t3', 'o3')]),
+    ])
+    vi.stubGlobal('fetch', mock.impl)
+    const out = await apiGetAllPages(
+      cfg,
+      '/api/public/v2/observations?fields=core&isRootObservation=true',
+      'observations-v2'
+    )
+    expect(out.map(o => o.id)).toEqual(['o1', 'o2', 'o3'])
+    expect(mock.calls).toHaveLength(3)
+    expect(mock.calls[0].url).not.toContain('cursor=')
+    expect(mock.calls[1].url).toContain('cursor=CUR2')
+    expect(mock.calls[2].url).toContain('cursor=CUR3')
+    // The caller's filters ride on every page request.
+    for (const c of mock.calls) {
+      expect(c.url).toContain('fields=core')
+      expect(c.url).toContain('isRootObservation=true')
+    }
+  })
+
+  it('fails on a cursor that is not a non-empty string', async () => {
+    for (const bad of [null, 123, '', {}]) {
+      const mock = scripted([v2Resp([obs('t1', 'o1')], bad)])
+      vi.stubGlobal('fetch', mock.impl)
+      await expect(
+        apiGetAllPages(cfg, '/api/public/v2/observations', 'observations-v2')
+      ).rejects.toBeInstanceOf(PaginationError)
+    }
+  })
+
+  it('fails on a repeated cursor rather than looping', async () => {
+    // `scripted` throws past its last response, so a loop would surface as a plain
+    // Error, not a PaginationError, and the call count would exceed three.
+    const mock = scripted([
+      v2Resp([obs('t1', 'o1')], 'CUR2'),
+      v2Resp([obs('t2', 'o2')], 'CUR3'),
+      v2Resp([obs('t3', 'o3')], 'CUR2'),
+    ])
+    vi.stubGlobal('fetch', mock.impl)
+    await expect(
+      apiGetAllPages(cfg, '/api/public/v2/observations', 'observations-v2')
+    ).rejects.toBeInstanceOf(PaginationError)
+    expect(mock.calls).toHaveLength(3)
+  })
+
+  it('fails on a page missing data', async () => {
+    const mock = scripted([{ json: { meta: {} } }])
+    vi.stubGlobal('fetch', mock.impl)
+    await expect(
+      apiGetAllPages(cfg, '/api/public/v2/observations', 'observations-v2')
+    ).rejects.toBeInstanceOf(PaginationError)
+  })
+
+  it('the same limit-less meta: {} body still fails the Scores v3 mode', async () => {
+    const body = { json: { data: [{ id: 's1', traceId: 't1' }], meta: {} } }
+    const v2 = scripted([body])
+    vi.stubGlobal('fetch', v2.impl)
+    expect(await apiGetAllPages(cfg, '/api/public/v2/observations', 'observations-v2')).toEqual([
+      { id: 's1', traceId: 't1' },
+    ])
+    const v3 = scripted([body])
+    vi.stubGlobal('fetch', v3.impl)
+    await expect(apiGetAllPages(cfg, '/api/public/v3/scores', 'cursor')).rejects.toBeInstanceOf(
+      PaginationError
+    )
+  })
+
+  it('keeps rows unique by (traceId, id), never by id alone', async () => {
+    const mock = scripted([
+      v2Resp([obs('t1', 'o1'), obs('t1', 'o1'), obs('t2', 'o1')], 'CUR2'),
+      v2Resp([obs('t1', 'o1'), obs('t3', 'o3')]),
+    ])
+    vi.stubGlobal('fetch', mock.impl)
+    const out = await apiGetAllPages(cfg, '/api/public/v2/observations', 'observations-v2')
+    expect(out).toEqual([obs('t1', 'o1'), obs('t2', 'o1'), obs('t3', 'o3')])
+  })
+
+  it('fails on a row lacking a string traceId', async () => {
+    for (const row of [{ id: 'o1' }, { id: 'o1', traceId: 7 }, { id: 'o1', traceId: '' }]) {
+      const mock = scripted([v2Resp([row])])
+      vi.stubGlobal('fetch', mock.impl)
+      await expect(
+        apiGetAllPages(cfg, '/api/public/v2/observations', 'observations-v2')
+      ).rejects.toBeInstanceOf(PaginationError)
+    }
+  })
+})
+
 describe('apiGetAllPages — query preservation + dedup + malformed', () => {
   it('MERGES pagination params without clobbering the caller filters (every page)', async () => {
     const mock = scripted([cursorResp([{ id: 's1' }], 'CUR2'), cursorResp([{ id: 's2' }])])
