@@ -415,7 +415,9 @@ export type OtlpAnyValue =
   | { boolValue: boolean }
   | { intValue: number }
   | { doubleValue: number }
-  | { arrayValue: { values: OtlpAnyValue[] } }
+  | { arrayValue: { values: OtlpArrayElement[] } }
+// An arrayValue element. Inside an array the decoder maps the empty AnyValue to null.
+export type OtlpArrayElement = OtlpAnyValue | Record<string, never>
 export interface OtlpAttribute {
   key: string
   value: OtlpAnyValue
@@ -444,18 +446,16 @@ const strAttr = (key: string, value: string): OtlpAttribute => ({
 // kind (an integer as a JSON-number `intValue`, never a decimal string; one beyond
 // 2^53 as a `doubleValue`), and an array as `arrayValue`, each element encoded the
 // same way. An object has no kind that survives, so it travels as a `stringValue`
-// holding its JSON, and so does an array holding an element with no AnyValue. Null,
-// and what JSON writes as null (a non-finite number, undefined), has no AnyValue.
+// holding its JSON. Null, and what JSON writes as null (a non-finite number,
+// undefined), has no AnyValue; as an array element it travels as the empty AnyValue,
+// which the decoder reads back as null, so the array stays an array.
 function anyValue(v: unknown): OtlpAnyValue | undefined {
   if (typeof v === 'string') return { stringValue: v }
   if (typeof v === 'boolean') return { boolValue: v }
   if (typeof v === 'number' && Number.isFinite(v)) {
     return Number.isSafeInteger(v) ? { intValue: v } : { doubleValue: v }
   }
-  if (Array.isArray(v)) {
-    const values = v.map(anyValue)
-    if (values.every((e): e is OtlpAnyValue => e !== undefined)) return { arrayValue: { values } }
-  }
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(e => anyValue(e) ?? {}) } }
   if (v !== null && typeof v === 'object') return { stringValue: JSON.stringify(v) }
   return undefined
 }

@@ -217,10 +217,10 @@ function listValues(kind: string, x: unknown): unknown[] {
 // and is never JSON-parsed, so a number or boolean sent as a string decodes as a
 // string. The decoder has no kvlistValue branch: it JSON-stringifies the wire wrapper,
 // so a kvlistValue decodes to that string. The empty AnyValue decodes to undefined,
-// and the attribute carrying it is dropped. Inside an array the decoder's result for
-// an empty element is not established, so that throws. An `intValue` is accepted
-// only as a JSON integer, the form the exporter sends; a decimal-string intValue
-// throws rather than decode to a number the real server might keep as a string.
+// and the attribute carrying it is dropped; inside an array it decodes to null, so
+// the array keeps its length. An `intValue` is accepted only as a JSON integer, the
+// form the exporter sends; a decimal-string intValue throws rather than decode to a
+// number the real server might keep as a string.
 // Anything else malformed throws too, so the request fails (400) instead of decoding
 // to something a test would trust.
 function decodeAnyValue(v: unknown): unknown {
@@ -241,11 +241,7 @@ function decodeAnyValue(v: unknown): unknown {
       if (typeof x === 'number' && Number.isFinite(x)) return x
       break
     case 'arrayValue':
-      return listValues(kind, x).map(e => {
-        const d = decodeAnyValue(e)
-        if (d === undefined) throw new Error('arrayValue element is the empty AnyValue')
-        return d
-      })
+      return listValues(kind, x).map(e => decodeAnyValue(e) ?? null)
     case 'kvlistValue':
       return JSON.stringify(v)
   }

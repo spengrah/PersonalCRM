@@ -895,7 +895,7 @@ describe('P3-1, D3: the root carries the trace name, session, tags, IO and every
     expectMetadataKinds(root)
   })
 
-  it('a span file carrying a null, an object, an array holding a null and a non-integer count: the null is omitted, the object and that array read as their JSON, the count keeps its type (R4)', async () => {
+  it('a span file carrying a null, an object, an array holding a null and a non-integer count: the null is omitted, the object reads as its JSON, the array stays an array holding null, the count keeps its type (R4)', async () => {
     const span = behaviorSpan([[0, 'fail']], { ...usage, cacheWriteInputTokens: 12.5 })
     // Values only a hand-edited or malformed span file carries; the legacy body
     // shipped them as JSON. Langfuse's OTLP decoder drops an empty AnyValue and has no
@@ -910,7 +910,7 @@ describe('P3-1, D3: the root carries the trace name, session, tags, IO and every
     const expected = prefixStripped(
       legacyMetadata(itemId(span, 0), {
         'langfuse.trace.metadata.tool_rejected': '{"by":"policy","codes":[1,2.5]}',
-        'langfuse.trace.metadata.status': '["OK",null]',
+        'langfuse.trace.metadata.status': ['OK', null],
         'langfuse.trace.metadata.cache_write_input_tokens': 12.5,
       })
     )
