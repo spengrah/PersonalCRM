@@ -56,7 +56,7 @@ The trace/item input must carry the full scenario (`behavior_title`/`given`/`whe
 
 - Seed with the backend STOPPED — assertion-driven caches (birthday etc.) silently vanish under the River race, and the seed still exits 0.
 - `TIME_ACCELERATION` without `TIME_BASE` is a silent no-op server-side but reports `is_accelerated: true` with empty `base_time`, which the frontend renders as "Invalid Date" — set both, base as Unix seconds.
-- Langfuse ingestion dedups by EVENT id (not trace id): re-submitting a trace-create with a previously-used event id is silently dropped. Any upserting writer must generate unique event ids per submission. Ingestion is processed async by a worker: verification reads need a settle delay.
+- Langfuse's legacy ingestion endpoint dedups by EVENT id (not trace id): re-submitting an event with a previously-used event id is silently dropped. Any upserting writer there must generate unique event ids per submission; the verdict score, the only event the exporter still sends there, does. Traces and generations ship over OTLP instead (`.ai/spec/2026-10-08-langfuse-v4-phase3.md`), where a span is keyed by trace id, span id and start time, so the exporter derives all three from the judge span. Ingestion is processed async by a worker: verification reads need a settle delay.
 - Langfuse media = MinIO presigned URLs on :9090; any reach/tunnel story must cover it or every media op fails with an unhelpful generic connection error.
 - Run-level scores (scores with `datasetRunId`) are accepted by the v3.212 API — verify UI rendering; if absent, attach aggregates as run metadata until upgrade.
 - The local dev port 3000 collides with the habitual Langfuse forward — any local tours stack should use a non-3000 frontend port.

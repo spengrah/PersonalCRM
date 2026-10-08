@@ -1,13 +1,27 @@
 // Langfuse exporter — ships the judge's GenAI span records (adapter/span.ts) to a
-// self-hosted Langfuse, with the intent pass's screenshots attached as media.
+// self-hosted Langfuse v4, with the intent pass's screenshots attached as media.
 //
-// WHY NOT PLAIN OTLP: the harness's span record is deliberately backend-neutral
-// (OTel GenAI conventions, JSONL), and Langfuse does accept OTLP. But OTLP has no
-// media channel, and the intent judge's evidence IS the screenshots — a verdict a
-// reviewer cannot see the pixels for is a verdict they cannot adjudicate. So this
-// adapter uses Langfuse's ingestion + media APIs, and the neutrality lives where it
-// belongs: in `span.ts`, which knows nothing about Langfuse. Swapping backends means
-// writing a sibling of THIS file, not touching the harness.
+// Transport. Each judge trace is ONE root span, and each usage-carrying judge call
+// ONE generation span, sent as OTLP/JSON to `POST /api/public/otel/v1/traces` with
+// `x-langfuse-ingestion-version: 4`. Langfuse v4 reads a trace's name, session,
+// tags, metadata and IO off the `langfuse.*` attributes of its spans. The legacy
+// `/api/public/ingestion` endpoint carries the verdict score and nothing else (an
+// `events_only` instance accepts only `score-create` there). Media, score-configs
+// and annotation queues keep their own endpoints.
+//
+// OTLP has no media channel, and the intent judge's evidence IS the screenshots, so
+// the screenshots ride Langfuse's media API: registered against the trace's id
+// BEFORE its root span is sent (registration needs no existing trace), referenced
+// from the root's input by token. The span record stays backend-neutral — `span.ts`
+// knows nothing about Langfuse — so swapping backends means writing a sibling of
+// THIS file, not touching the harness.
+//
+// Identity is derived from the judge span, never from the export (P3-2). The string
+// id `judge-<behavior>-<span_id>[-item<n>]` (`traceIdFor`/`itemTraceId`) travels as
+// `langfuse.trace.metadata.label_id`; the OTLP ids are SHA-256 prefixes of it
+// (`hexTraceId`, `rootSpanId`, `generationSpanId`), and every span takes the judge
+// span's own start/end. v4 replaces a row with the same (span id, start time) in a
+// trace, so a re-export overwrites rather than duplicates.
 //
 // Media flow (all three steps required): register -> presigned PUT -> PATCH finalize.
 // Skipping the PATCH leaves the media 404ing even though the bytes are in the store.
@@ -47,9 +61,9 @@ export function configFromEnv(
   return { host, publicKey, secretKey }
 }
 
-// A stable trace id per (behavior, span) so a re-export overwrites rather than
-// duplicates. Langfuse trace ids are free-form strings. This is the BASE id; the
-// per-item traces suffix it with `-item<itemIndex>` (see `itemTraceId`).
+// The stable string id per (behavior, span): the human-readable `label_id` every
+// OTLP id derives from. This is the BASE id; the per-item traces suffix it with
+// `-item<itemIndex>` (see `itemTraceId`).
 export function traceIdFor(span: GenAiSpan): string {
   const behavior = String(span.attributes['qa.behavior_id'] ?? 'unknown')
   return `judge-${behavior}-${span.span_id}`
@@ -93,10 +107,54 @@ export function usageTraceId(span: GenAiSpan): string {
   return itemTraceId(span, Math.min(...indices))
 }
 
+const sha256Hex = (s: string): string => crypto.createHash('sha256').update(s, 'utf8').digest('hex')
+
+// The OTLP trace id of a judge trace: the first 32 hex of SHA-256 over its string id.
+export function hexTraceId(stringId: string): string {
+  return sha256Hex(stringId).slice(0, 32)
+}
+
+// The root span id of a judge trace: the first 16 hex of SHA-256 over `<string id>:root`.
+export function rootSpanId(stringId: string): string {
+  return sha256Hex(`${stringId}:root`).slice(0, 16)
+}
+
+// The generation span id: ONE per judge span (D1), so it derives from the span's
+// BASE string id, never from the item-trace that happens to carry it.
+export function generationSpanId(span: GenAiSpan): string {
+  return sha256Hex(`${traceIdFor(span)}:gen`).slice(0, 16)
+}
+
+export interface SpanTimes {
+  startTimeUnixNano: string
+  endTimeUnixNano: string
+  // The start as ISO, for the score's envelope timestamp.
+  startIso: string
+}
+
+// The judge span's own start/end, as the decimal nano strings OTLP/JSON carries.
+// A time no Date can represent (NaN, negative, out of range) throws RangeError:
+// there is no span-derived time to send, and substituting the export clock would
+// move a re-export's history, so the trace fails loudly instead.
+export function spanTimes(span: GenAiSpan): SpanTimes {
+  const nanos = (n: number, which: string): string => {
+    if (!Number.isFinite(n) || n < 0 || Number.isNaN(new Date(n / 1e6).getTime())) {
+      throw new RangeError(`span ${which} time ${String(n)} is not a unix-nano timestamp`)
+    }
+    return BigInt(Math.round(n)).toString()
+  }
+  return {
+    startTimeUnixNano: nanos(span.start_time_unix_nano, 'start'),
+    endTimeUnixNano: nanos(span.end_time_unix_nano, 'end'),
+    startIso: new Date(span.start_time_unix_nano / 1e6).toISOString(),
+  }
+}
+
 // PURE: build the label-trace bodies for one span — ONE per graded item (spec
 // line 41), returned as token-free SKELETONS (no media tokens, and NO local
 // screenshot paths: paths never ship — D9). `exportSpans` runs the per-item
-// media lifecycle and calls `attachTokens` before shipping.
+// media lifecycle and calls `attachTokens` before shipping; `buildRootSpan` encodes
+// the result as the trace's OTLP root span. A body's `id` is its string id.
 //
 // PII scrub seam (arc INV-2): `scrub` is applied to EVERY free-form or
 // env-sourced string this body ships — the whole `input`/`output` is deep-walked
@@ -254,16 +312,18 @@ export function attachTokens(body: TraceBody, tokens: (string | undefined)[]): T
   }
 }
 
-// The wire body of the usage-carrying generation observation. Langfuse computes
-// cost ONLY on generation/embedding observations — trace `metadata` is opaque
-// display-only key/value — so this body is the entire cost path.
+// The usage-carrying generation, before OTLP encoding. Langfuse computes cost ONLY
+// on generation/embedding observations — trace `metadata` is opaque display-only
+// key/value — so this body is the entire cost path. It is a child of its carrier
+// trace's root span.
 export interface GenerationBody {
-  id: string
   traceId: string
+  spanId: string
+  parentSpanId: string
   name: string
   model?: string
-  startTime: string
-  endTime: string
+  startTimeUnixNano: string
+  endTimeUnixNano: string
   usageDetails: { input: number; input_cached_tokens: number; output: number }
   metadata: Record<string, unknown>
 }
@@ -288,8 +348,8 @@ export function spanCarriesUsage(span: GenAiSpan): boolean {
 // usable usage (an error run — an observation with no usage is noise). Reads
 // everything off the span itself so it is directly testable without an export.
 //
-// `toISOString()` throws RangeError on a malformed nano value; that is left to
-// throw here and contained at the call site, matching the score step.
+// `spanTimes` throws RangeError on a malformed nano value. `exportSpans` builds this
+// only after the carrier's root span shipped, which validated the same times.
 export function buildGenerationBody(
   span: GenAiSpan,
   scrub: (s: string) => string = s => s
@@ -306,17 +366,20 @@ export function buildGenerationBody(
   // The SAME scrubbed value the trace metadata ships, so trace and observation
   // can never disagree about which model produced the call.
   const model = rawModel !== undefined ? scrub(rawModel) : undefined
+  const carrier = usageTraceId(span)
+  // Span-derived, never the export clock: an export-time start would stamp a
+  // re-export's whole history on the day it was re-exported, and a moved start
+  // time is a second row rather than a replacement.
+  const times = spanTimes(span)
 
   return {
-    id: `obs-${traceIdFor(span)}-gen`,
-    traceId: usageTraceId(span),
+    traceId: hexTraceId(carrier),
+    spanId: generationSpanId(span),
+    parentSpanId: rootSpanId(carrier),
     name: `judge ${behaviorId}`,
     ...(model !== undefined ? { model } : {}),
-    // Span-derived, never the export clock: with no startTime the server falls
-    // back to the ingestion envelope, which would stamp a re-export's whole
-    // history on the day it was re-exported.
-    startTime: new Date(span.start_time_unix_nano / 1e6).toISOString(),
-    endTime: new Date(span.end_time_unix_nano / 1e6).toISOString(),
+    startTimeUnixNano: times.startTimeUnixNano,
+    endTimeUnixNano: times.endTimeUnixNano,
     // EXACTLY these three keys, ALWAYS — never a conditional spread. Langfuse
     // matches bucket names against the model's price keys by exact string
     // equality (a misnamed or missing bucket prices at zero rather than
@@ -339,6 +402,110 @@ export function buildGenerationBody(
       ...(reasoning !== undefined ? { reasoning_output_tokens: reasoning } : {}),
       ...(cacheWrite !== undefined ? { cache_write_input_tokens: cacheWrite } : {}),
     },
+  }
+}
+
+// --- OTLP/JSON encoding ---
+
+export type OtlpAnyValue = { stringValue: string } | { arrayValue: { values: OtlpAnyValue[] } }
+export interface OtlpAttribute {
+  key: string
+  value: OtlpAnyValue
+}
+export interface OtlpSpan {
+  traceId: string
+  spanId: string
+  parentSpanId?: string
+  name: string
+  kind: number
+  startTimeUnixNano: string
+  endTimeUnixNano: string
+  attributes: OtlpAttribute[]
+}
+
+const SPAN_KIND_INTERNAL = 1
+
+const strAttr = (key: string, value: string): OtlpAttribute => ({
+  key,
+  value: { stringValue: value },
+})
+
+// Langfuse stores metadata values as strings: a string ships as itself, any other
+// value as its JSON. An undefined field is omitted, as the legacy JSON body omitted it.
+const metadataAttrs = (prefix: string, metadata: Record<string, unknown>): OtlpAttribute[] =>
+  Object.entries(metadata)
+    .filter(([, v]) => v !== undefined)
+    .map(([k, v]) => strAttr(`${prefix}${k}`, typeof v === 'string' ? v : JSON.stringify(v)))
+
+// The span-level trace context: the same for every item-trace of one judge span.
+export interface TraceContext {
+  tags: string[]
+  sessionId?: string
+}
+
+// PURE: the trace-level attributes of one judge trace. EVERY span of the trace
+// carries them (v4 reads a trace's name, session, tags and metadata off its spans).
+// Every value is identifier-valued or already scrubbed: the name is a spec id, the
+// tags are built from validated ids and the scrubbed model, and the metadata is
+// `buildTraceBody`'s (scrubbed per its policy) plus the trace's own string id.
+export function traceAttributes(body: TraceBody, ctx: TraceContext): OtlpAttribute[] {
+  return [
+    strAttr('langfuse.trace.name', body.name),
+    ...(ctx.sessionId !== undefined ? [strAttr('langfuse.session.id', ctx.sessionId)] : []),
+    {
+      key: 'langfuse.trace.tags',
+      value: { arrayValue: { values: ctx.tags.map(stringValue => ({ stringValue })) } },
+    },
+    ...metadataAttrs('langfuse.trace.metadata.', { label_id: body.id, ...body.metadata }),
+  ]
+}
+
+// PURE: the root span of one judge trace, from its token-attached body. v4 reads the
+// trace's IO off its root observation; each carries the JSON serialization of the
+// value the legacy trace body carried, already deep-scrubbed by `buildTraceBody`.
+export function buildRootSpan(
+  body: TraceBody,
+  times: SpanTimes,
+  traceAttrs: OtlpAttribute[]
+): OtlpSpan {
+  return {
+    traceId: hexTraceId(body.id),
+    spanId: rootSpanId(body.id),
+    name: body.name,
+    kind: SPAN_KIND_INTERNAL,
+    startTimeUnixNano: times.startTimeUnixNano,
+    endTimeUnixNano: times.endTimeUnixNano,
+    attributes: [
+      ...traceAttrs,
+      ...(body.input !== undefined
+        ? [strAttr('langfuse.observation.input', JSON.stringify(body.input))]
+        : []),
+      ...(body.output !== undefined
+        ? [strAttr('langfuse.observation.output', JSON.stringify(body.output))]
+        : []),
+    ],
+  }
+}
+
+// PURE: the generation span, carrying its carrier trace's trace-level attributes.
+// `usage_details` is a JSON object of exactly the three price-key buckets (D2); the
+// reasoning and cache-write counts ride as unpriced observation metadata.
+export function buildGenerationSpan(gen: GenerationBody, traceAttrs: OtlpAttribute[]): OtlpSpan {
+  return {
+    traceId: gen.traceId,
+    spanId: gen.spanId,
+    parentSpanId: gen.parentSpanId,
+    name: gen.name,
+    kind: SPAN_KIND_INTERNAL,
+    startTimeUnixNano: gen.startTimeUnixNano,
+    endTimeUnixNano: gen.endTimeUnixNano,
+    attributes: [
+      ...traceAttrs,
+      strAttr('langfuse.observation.type', 'generation'),
+      ...(gen.model !== undefined ? [strAttr('langfuse.observation.model.name', gen.model)] : []),
+      strAttr('langfuse.observation.usage_details', JSON.stringify(gen.usageDetails)),
+      ...metadataAttrs('langfuse.observation.metadata.', gen.metadata),
+    ],
   }
 }
 
@@ -393,13 +560,14 @@ export class PaginationError extends Error {
 // nightly, the round) indefinitely, which is exactly what the best-effort steps'
 // try/catch isolation cannot protect against. Omitting it preserves the previous
 // unbounded behavior for existing call sites. An abort surfaces as a rejection,
-// which every call site already handles.
+// which every call site already handles. `headers` adds to the auth + JSON pair.
 export async function api(
   cfg: LangfuseConfig,
   method: string,
   path: string,
   body?: unknown,
-  timeoutMs?: number
+  timeoutMs?: number,
+  headers: Record<string, string> = {}
 ): Promise<Record<string, unknown>> {
   const controller = timeoutMs !== undefined ? new AbortController() : undefined
   const timer =
@@ -407,7 +575,11 @@ export async function api(
   try {
     const res = await fetch(`${cfg.host}${path}`, {
       method,
-      headers: { Authorization: authHeader(cfg), 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: authHeader(cfg),
+        'Content-Type': 'application/json',
+        ...headers,
+      },
       body: body ? JSON.stringify(body) : undefined,
       ...(controller !== undefined ? { signal: controller.signal } : {}),
     })
@@ -619,9 +791,57 @@ export async function uploadMedia(
   return `@@@langfuseMedia:type=image/png|id=${mediaId}|source=bytes@@@`
 }
 
-// The bound on the usage-observation POST. Generous — it is a single small
-// request — but finite: an unbounded best-effort step is not best-effort, it is a
-// stall that blocks every step after it.
+const OTLP_TRACES_PATH = '/api/public/otel/v1/traces'
+const OTLP_SCOPE_NAME = 'personalcrm-qa-judge-export'
+
+// What an OTLP export response says about its spans: `undefined` when all were
+// accepted, else the reason. OTLP answers a full success with an empty response
+// and a partial one with `partialSuccess.rejectedSpans` (an int64, so possibly a
+// decimal string); a 2xx that rejects a span is a rejection, never a success.
+export function otlpRejection(res: Record<string, unknown>): string | undefined {
+  const ps = res.partialSuccess
+  if (ps === undefined || ps === null) return undefined
+  if (typeof ps !== 'object' || Array.isArray(ps)) {
+    return `unreadable partialSuccess ${JSON.stringify(ps).slice(0, 200)}`
+  }
+  const { rejectedSpans, errorMessage } = ps as Record<string, unknown>
+  if (rejectedSpans === undefined || Number(rejectedSpans) === 0) return undefined
+  const why = typeof errorMessage === 'string' && errorMessage ? `: ${errorMessage}` : ''
+  return `${String(rejectedSpans)} span(s) rejected${why}`
+}
+
+// Send spans as ONE OTLP/JSON request and throw unless every one was accepted. The
+// trace root and the generation each ride their own request (D5), so a rejection
+// names exactly the span it refused.
+export async function postOtlpSpans(
+  cfg: LangfuseConfig,
+  spans: OtlpSpan[],
+  timeoutMs?: number
+): Promise<void> {
+  const res = await api(
+    cfg,
+    'POST',
+    OTLP_TRACES_PATH,
+    {
+      resourceSpans: [
+        {
+          resource: { attributes: [] },
+          scopeSpans: [{ scope: { name: OTLP_SCOPE_NAME }, spans }],
+        },
+      ],
+    },
+    timeoutMs,
+    { 'x-langfuse-ingestion-version': '4' }
+  )
+  const rejected = otlpRejection(res)
+  if (rejected !== undefined) {
+    throw new Error(`OTLP ${spans.map(s => s.spanId).join(',')}: ${rejected}`)
+  }
+}
+
+// The bound on the generation request. Generous — it is a single small request —
+// but finite: an unbounded best-effort step is not best-effort, it is a stall that
+// blocks every step after it.
 const OBSERVATION_TIMEOUT_MS = 30_000
 
 // Consecutive non-settling observation requests before the breaker opens. Small:
@@ -643,11 +863,9 @@ export interface ExportResult {
   // without surfacing it, a round where every generation was rejected would print
   // a clean summary.
   observations: number
-  // Eligible spans whose observation did not land: a rejection, a stall, an
-  // unconfirmed envelope (including the stalls that open the breaker), or a body
-  // that could not be built at all (e.g. an out-of-range span timestamp). A build
-  // failure counts here rather than nowhere — the span carried usage, so the cost
-  // data IS missing, and a silent drop reports a complete round that is not one.
+  // Eligible spans whose observation did not land: an error status, a rejected span,
+  // or a stall (including the stalls that open the breaker). A span whose timestamps
+  // are unusable never gets this far: its traces fail first and count in `failed`.
   observationsFailed: number
   // Spans whose observation was NOT attempted because the breaker was already open.
   //
@@ -681,10 +899,11 @@ const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(
 // of the documented contract. But this API has already shown one doc-vs-deployed
 // divergence elsewhere in this work, and the write path cannot be exercised from
 // every environment — so if the live envelope turns out NOT to carry `successes`,
-// strict confirmation would report EVERY event as failed: no traces counted, no
-// observation shipped, and a first live run that fails for a reason unrelated to
-// what it was testing. Degrading to the old "no matching error = accepted" reading
-// and SAYING SO LOUDLY keeps the run diagnostic instead of turning it into noise.
+// strict confirmation would report EVERY score as failed, for a reason unrelated to
+// what the run was testing. Degrading to the old "no matching error = accepted"
+// reading and SAYING SO LOUDLY keeps the run diagnostic instead of turning it into
+// noise. (Only the verdict score still rides this endpoint; traces and generations
+// ship over OTLP, which `otlpRejection` reads.)
 export type IngestionOutcome =
   | { kind: 'accepted' }
   | { kind: 'rejected'; reason: string }
@@ -750,18 +969,14 @@ export function ingestionOutcome(res: Record<string, unknown>, eventId: string):
 }
 
 // Post ONE ingestion event and treat a per-event rejection as a failure, not a
-// success. Every ingestion POST in this file goes through here: inferring success
-// from a resolved `api()` call is the defect, and it is identical at all four sites
-// (init trace-create, final trace-create, score-create, generation-create). Callers
-// keep their own failure policy — the fatal ones let it throw, the best-effort ones
-// catch and log.
+// success: inferring success from a resolved `api()` call is the defect. The verdict
+// score is the only ingestion event this exporter sends; its caller catches and logs.
 async function postIngestionEvent(
   cfg: LangfuseConfig,
   event: Record<string, unknown>,
-  timeoutMs?: number,
   onUnrecognized?: (note: string) => void
 ): Promise<void> {
-  const res = await api(cfg, 'POST', '/api/public/ingestion', { batch: [event] }, timeoutMs)
+  const res = await api(cfg, 'POST', '/api/public/ingestion', { batch: [event] })
   const outcome = ingestionOutcome(res, String(event.id))
   if (outcome.kind === 'rejected') {
     throw new Error(`ingestion rejected ${String(event.id)}: ${outcome.reason}`)
@@ -814,7 +1029,9 @@ export interface ExportOptions {
   runId?: string
   gitSha?: string
   saltPasses?: number
-  // Test seam: the per-request bound on the usage-observation POST. Defaults to
+  // QA_TEST_TAG's slug: every trace gains the tag `test:<slug>`.
+  testTag?: string
+  // Test seam: the per-request bound on the generation request. Defaults to
   // OBSERVATION_TIMEOUT_MS; a test proving the bound exists must not wait 30s for it.
   observationTimeoutMs?: number
 }
@@ -840,9 +1057,10 @@ export async function exportSpans(
   const scrubber = createScrubber()
   const scrub = (s: string): string => scrubber.scrub(s)
 
-  // Langfuse ingestion dedups by EVENT id, so a re-export must carry FRESH event
-  // ids (else it is silently dropped) while trace ids stay STABLE (so it
-  // OVERWRITES). One nonce per submission gives both (INV-6).
+  // Langfuse ingestion dedups by EVENT id, so a re-exported score must carry a FRESH
+  // event id (else it is silently dropped) while its score id stays STABLE (so it
+  // OVERWRITES). One nonce per submission gives both (INV-6). OTLP spans need no
+  // nonce: their identity is (trace id, span id, start time), all span-derived.
   const nonce = crypto.randomUUID()
 
   // The verdict score binds to its config by id. Resolve LAZILY, ONCE, and GUARDED:
@@ -908,20 +1126,34 @@ export async function exportSpans(
     const screenshotPaths = spanGraded.map(e => e.screenshot)
     const expected = screenshotPaths.filter((p): p is string => typeof p === 'string').length
 
-    // The pass + model tag dimensions are SPAN-level, so they are derived here —
-    // the per-body loop below has neither value in scope. `model` is the same
-    // scrubbed value the trace metadata ships, deliberately including the empty
-    // string: a misconfigured harness that sets the model to '' must show a bare
-    // `model:` tag rather than look like a run with no model dimension at all.
+    // The trace context is SPAN-level: every item-trace of this span carries the same
+    // tags and session. `model` is the same scrubbed value the trace metadata ships,
+    // deliberately including the empty string: a misconfigured harness that sets the
+    // model to '' must show a bare `model:` tag rather than look like a run with no
+    // model dimension at all. The `behavior:` tag is ALWAYS emitted (the backfill
+    // CLI's lookup key — it comes from the span, not env); `runId:`/`gitSha:` tags +
+    // the session ride only the valid components (contract #3). `pass:` is the only
+    // place the ux/intent dimension exists, suppressed for a metrics-only span, which
+    // genuinely has no pass dimension. All values are identifier/enum by construction
+    // (INV-D).
     const scenario = (span.attributes['qa.scenario'] as Scenario | undefined) ?? undefined
     const rawSpanModel = str(span.attributes['gen_ai.request.model'])
     const spanModel = rawSpanModel !== undefined ? scrub(rawSpanModel) : undefined
+    const tags = [`behavior:${behaviorId}`]
+    if (opts.runId) tags.push(`runId:${opts.runId}`)
+    if (opts.gitSha) tags.push(`gitSha:${opts.gitSha}`)
+    if (scenario) tags.push(`pass:${scenario.kind === 'intent' ? 'intent' : 'ux'}`)
+    if (spanModel !== undefined) tags.push(`model:${spanModel}`)
+    if (opts.testTag !== undefined) tags.push(`test:${opts.testTag}`)
+    const ctx: TraceContext = { tags, ...(opts.runId ? { sessionId: opts.runId } : {}) }
 
-    // The item-trace that will carry this span's usage observation, and whether it
-    // actually shipped. A body failure is caught INSIDE the loop below, so without
-    // this the observation could reference a trace that never landed.
+    // The item-trace that will carry this span's generation, and — once its root has
+    // landed — the trace-level attributes it was sent with. A body failure is caught
+    // INSIDE the loop below, so without this the generation could reference a trace
+    // that never landed; reusing the carrier's attributes makes the generation carry
+    // exactly what its trace carries.
     const carrierId = usageTraceId(span)
-    let carrierShipped = false
+    let carrierAttrs: OtlpAttribute[] | undefined
 
     // ONE trace per graded item (spec line 41). Each item-trace runs its OWN
     // media lifecycle against its OWN trace id: `uploadMedia` REGISTERS against a
@@ -929,29 +1161,22 @@ export async function exportSpans(
     // item-trace 1. Bytes dedup server-side by sha — the first trace PUTs, later
     // ones HIT and get the same token value cheaply.
     for (const body of buildTraceBody(span, scrub)) {
+      const traceId = hexTraceId(body.id)
       try {
-        // (1) The trace must exist before media can be registered against it.
-        await postIngestionEvent(
-          cfg,
-          {
-            id: `evt-${body.id}-init-${nonce}`,
-            type: 'trace-create',
-            timestamp: new Date().toISOString(),
-            body: { id: body.id, name: body.name },
-          },
-          undefined,
-          noteEnvelope
-        )
+        // (1) The span's own times, first: a span with none usable ships nothing for
+        // this trace — no media, no root, no score — and counts as FAILED.
+        const times = spanTimes(span)
 
-        // (2) Register/upload each expected screenshot against THIS trace's id,
-        // by index. All-or-nothing PER TRACE (INV-4): if ANY expected token is
-        // missing, this trace ships ZERO tokens (honest expected=N/attached=0)
-        // rather than mis-attributing a partial set; sibling traces are
-        // independent. A registration/upload THROW (e.g. a non-2xx POST /media)
-        // must NOT escape and drop the trace — it is caught per screenshot and
-        // collapses THIS trace to zero tokens, so the final body below still
-        // ships with an honest attached=0. Only an init/final-body failure (the
-        // outer catch) can drop a trace.
+        // (2) Register/upload each expected screenshot against THIS trace's id, by
+        // index, BEFORE the root is sent: registration needs no existing trace, so
+        // the root goes out once, tokens included (P3-3). All-or-nothing PER TRACE
+        // (INV-4): if ANY expected token is missing, this trace ships ZERO tokens
+        // (honest expected=N/attached=0) rather than mis-attributing a partial set;
+        // sibling traces are independent. A registration/upload THROW (e.g. a
+        // non-2xx POST /media) must NOT escape and drop the trace — it is caught per
+        // screenshot and collapses THIS trace to zero tokens, so the root below still
+        // ships with an honest attached=0. Only a root failure (the outer catch) can
+        // drop a trace.
         const tokens: (string | undefined)[] = []
         let missing = false
         for (const p of screenshotPaths) {
@@ -960,88 +1185,57 @@ export async function exportSpans(
             continue
           }
           try {
-            const tok = await uploadMedia(cfg, body.id, p)
+            const tok = await uploadMedia(cfg, traceId, p)
             if (!tok) missing = true
             tokens.push(tok)
           } catch (err) {
             missing = true
             tokens.push(undefined)
-            log(
-              `  media register failed for ${body.id}: ${err instanceof Error ? err.message : String(err)}`
-            )
+            log(`  media register failed for ${body.id}: ${errMsg(err)}`)
           }
         }
         const finalTokens = missing ? [] : tokens
         const attached = finalTokens.filter((t): t is string => typeof t === 'string').length
         result.screenshots += attached
 
-        // (3) The final body event carries the tokens attached by index, plus the
-        // trace tags + session. The `behavior:` tag is ALWAYS emitted (the downstream
-        // backfill CLI's lookup key — it comes from the span, not env); `runId:`/
-        // `gitSha:` tags + `sessionId` ride only the valid components (contract #3).
-        // All values are identifier/enum by construction (INV-D).
+        // (3) The root span, sent ONCE with the tokens attached by index. A rejection
+        // throws, so `result.traces` and the carrier are never set for a root that
+        // did not land — the generation below must not reference a refused trace.
         const finalBody = attachTokens(body, finalTokens)
-        const tags = [`behavior:${behaviorId}`]
-        if (opts.runId) tags.push(`runId:${opts.runId}`)
-        if (opts.gitSha) tags.push(`gitSha:${opts.gitSha}`)
-        // `pass:` is the only place the ux/intent dimension exists — the two are
-        // otherwise indistinguishable by name or tag. Suppressed for a
-        // metrics-only span, which genuinely has no pass dimension.
-        if (scenario) tags.push(`pass:${scenario.kind === 'intent' ? 'intent' : 'ux'}`)
-        if (spanModel !== undefined) tags.push(`model:${spanModel}`)
-        const wireBody: Record<string, unknown> = { ...finalBody, tags }
-        if (opts.runId) wireBody.sessionId = opts.runId
-        // A per-event rejection here throws, so `result.traces` and `carrierShipped`
-        // are never set for a body that did not land — the generation below must
-        // not be emitted against a trace whose full body was refused.
-        await postIngestionEvent(
-          cfg,
-          {
-            id: `evt-${body.id}-${nonce}`,
-            type: 'trace-create',
-            timestamp: new Date().toISOString(),
-            body: wireBody,
-          },
-          undefined,
-          noteEnvelope
-        )
+        const traceAttrs = traceAttributes(finalBody, ctx)
+        await postOtlpSpans(cfg, [buildRootSpan(finalBody, times, traceAttrs)])
         result.traces++
-        if (body.id === carrierId) carrierShipped = true
-        log(`  ${behaviorId} → ${body.id} (media ${attached}/${expected})`)
+        if (body.id === carrierId) carrierAttrs = traceAttrs
+        log(`  ${behaviorId} → ${body.id} trace ${traceId} (media ${attached}/${expected})`)
 
         // (4) Verdict-as-score: a SEPARATE, non-fatal ingestion request AFTER the
-        // trace shipped (contract #4). NOT co-batched — a rejecting score must not
+        // root shipped (contract #4). NOT co-batched — a rejecting score must not
         // couple/fail the trace ship (INV-A). Metrics-only shapes have no verdict → no
-        // score. The ENTIRE score step is inside its own try/catch (including the
-        // span-start timestamp conversion) so NOTHING here — not a malformed
-        // start_time_unix_nano, not a resolve/ingest failure — can abort the already-
-        // shipped trace or the enqueue collection below.
+        // score. The ENTIRE score step is inside its own try/catch so NOTHING here —
+        // not a resolve/ingest failure — can abort the already-shipped trace or the
+        // enqueue collection below.
         const verdict = bodyVerdict(finalBody)
         if (verdict) {
           try {
-            // Span-derived ENVELOPE timestamp so a re-export on a later UTC date does
-            // not duplicate the score. A malformed/out-of-range start_time_unix_nano
-            // makes toISOString() throw RangeError — caught here, degrading to a
-            // skipped score, never a dropped trace.
-            const spanStartIso = new Date(span.start_time_unix_nano / 1e6).toISOString()
             const configId = await resolveVerdictConfigId()
             const scoreBody: Record<string, unknown> = {
-              id: `score-${body.id}-verdict`,
+              id: `score-${traceId}-verdict`,
               name: VERDICT_SCORE_NAME,
               value: verdict,
               dataType: 'CATEGORICAL',
-              traceId: body.id,
+              traceId,
             }
             if (configId) scoreBody.configId = configId
             await postIngestionEvent(
               cfg,
               {
-                id: `evt-${body.id}-score-${nonce}`,
+                id: `evt-${traceId}-score-${nonce}`,
                 type: 'score-create',
-                timestamp: spanStartIso,
+                // Span-derived ENVELOPE timestamp so a re-export on a later UTC date
+                // does not duplicate the score.
+                timestamp: times.startIso,
                 body: scoreBody,
               },
-              undefined,
               noteEnvelope
             )
           } catch (err) {
@@ -1050,74 +1244,46 @@ export async function exportSpans(
         }
 
         // Collect for the post-loop enqueue pass (runs even on a trap miss — INV-B).
-        enqueueItems.push({ traceId: body.id, verdict, isMutation })
+        enqueueItems.push({ traceId, verdict, isMutation })
       } catch (err) {
         result.failed++
-        log(`  FAILED ${behaviorId}: ${err instanceof Error ? err.message : String(err)}`)
+        log(`  FAILED ${behaviorId} ${body.id}: ${errMsg(err)}`)
       }
     }
 
-    // (5) Usage-as-generation: ONE observation per SPAN — Langfuse computes cost
-    // only on generation observations — carried by the span's lowest-itemIndex
-    // trace, and emitted ONLY IF that trace actually shipped (an observation
-    // whose trace never landed is dangling). A SEPARATE, non-fatal ingestion
-    // request, never co-batched, so a rejected observation can never couple to or
-    // drop an already-shipped trace. The ENTIRE step — including the span-derived
-    // timestamp conversion, which throws RangeError on a malformed nano value —
-    // sits in its own try/catch: it degrades to a skipped observation, never a
-    // dropped trace and never a suppressed enqueue pass.
-    if (carrierShipped) {
-      // Build FIRST, so eligibility is decided before the skip: a span that carries
-      // no usage would never have produced an observation, and counting it as
-      // "skipped" would report a loss that never existed. The build is where the
-      // span-derived timestamp conversion can throw RangeError on a malformed nano
-      // value, so it is contained here — that degrades to no observation, never a
-      // dropped trace and never a suppressed enqueue pass.
-      let genBody: GenerationBody | undefined
-      let buildFailed = false
-      try {
-        genBody = buildGenerationBody(span, scrub)
-      } catch (err) {
-        log(`  generation body unusable for ${traceIdFor(span)}: ${errMsg(err)}`)
-        genBody = undefined
-        // A throw can only come from the code AFTER the eligibility gate (the
-        // span-derived timestamp conversion, the scrub), so the span was eligible
-        // and its observation is genuinely lost. `spanCarriesUsage` is consulted
-        // anyway rather than assumed: the bucket must follow the SAME predicate the
-        // build gates on, so a future reordering cannot make the identity drift.
-        buildFailed = spanCarriesUsage(span)
-      }
-      if (buildFailed) {
-        // Eligible, attempted, and not shipped — the same bucket as a rejected POST.
-        // Left uncounted, a lost observation would report as no missing cost data.
-        result.observationsFailed++
-      } else if (genBody === undefined) {
-        // Not eligible: no usage to ship, so nothing lost — neither counted nor skipped.
-      } else if (observationsBroken) {
+    // (5) Usage-as-generation: ONE generation per SPAN — Langfuse computes cost only
+    // on generation observations — a child of the span's lowest-itemIndex trace,
+    // emitted ONLY IF that trace's root actually shipped (a generation whose trace
+    // never landed is dangling). Its OWN OTLP request after the roots, never
+    // co-sent, so a rejected generation can never couple to or drop an
+    // already-shipped trace, its score or its enqueue (D5).
+    //
+    // A span that carries no usage would never have produced a generation, so it is
+    // in no bucket: nothing is lost and nothing is counted.
+    if (carrierAttrs !== undefined && spanCarriesUsage(span)) {
+      if (observationsBroken) {
         // The breaker is open: attempting would cost another full timeout for a
         // request class that has already proven it is not settling.
         result.observationsSkipped++
       } else {
         try {
-          // A per-event rejection throws, so the count reflects ACCEPTED
-          // observations — counting the POST would report a shipped observation
-          // that was never stored.
-          await postIngestionEvent(
+          // Built inside the try, so an eligible span whose body cannot be built
+          // counts as failed rather than vanishing. (The carrier's root already
+          // validated the span's times, which is the only thing the build can reject.)
+          const genBody = buildGenerationBody(span, scrub)
+          if (genBody === undefined) throw new Error('generation body without usage')
+          // A rejected span throws, so the count reflects ACCEPTED generations —
+          // counting the POST would report a generation that was never stored.
+          await postOtlpSpans(
             cfg,
-            {
-              id: `evt-${traceIdFor(span)}-gen-${nonce}`,
-              type: 'generation-create',
-              timestamp: genBody.startTime,
-              body: genBody,
-            },
-            observationTimeoutMs,
-            noteEnvelope
+            [buildGenerationSpan(genBody, carrierAttrs)],
+            observationTimeoutMs
           )
           result.observations++
           timeoutStreak = 0
         } catch (err) {
           result.observationsFailed++
-          log(`  generation-create failed for ${traceIdFor(span)}: ${errMsg(err)}`)
+          log(`  generation failed for ${traceIdFor(span)}: ${errMsg(err)}`)
           // ONLY a non-settling request trips the breaker. A rejected payload (a 400)
           // is fast and per-span meaningful — it costs nothing to keep trying and its
           // reason may differ per span, so it resets the streak rather than counting
