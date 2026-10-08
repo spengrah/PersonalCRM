@@ -420,17 +420,24 @@ export async function api(
 }
 
 // Walk a paginated Langfuse list endpoint to completion and return the accumulated
-// items, deduped by resource `id`. The REQUIRED `protocol` selects one of v3's two
-// incompatible list styles — there is no reliable way to infer it from a response:
+// items, deduped by resource `id` (by `(traceId, id)` in 'observations-v2'). The
+// REQUIRED `protocol` selects one of three incompatible list styles — there is no
+// reliable way to infer it from a response:
 //
-//   'page'   — annotation-queues, queue items, score-configs, traces. Sends
-//              page+limit; meta is `{page, limit, totalItems, totalPages}`. Advances
-//              until `page >= totalPages`.
-//   'cursor' — scores v3. Sends/follows `cursor`; meta is `{limit, cursor?}`. The
-//              cursor PROPERTY is ABSENT on the terminal page, INCLUDING a one-page
-//              result — do NOT mistake a valid meta with no cursor property for
-//              malformed. A present cursor (even null) that isn't a non-empty string
-//              is malformed.
+//   'page'            — annotation-queues, queue items, score-configs. Sends
+//                       page+limit; meta is `{page, limit, totalItems, totalPages}`.
+//                       Advances until `page >= totalPages`.
+//   'cursor'          — scores v3. Sends/follows `cursor`; meta is `{limit, cursor?}`.
+//                       The cursor PROPERTY is ABSENT on the terminal page, INCLUDING a
+//                       one-page result — do NOT mistake a valid meta with no cursor
+//                       property for malformed. A present cursor (even null) that isn't
+//                       a non-empty string is malformed.
+//   'observations-v2' — `/api/public/v2/observations`. Follows `cursor` like 'cursor',
+//                       but its meta is `{cursor?}` and never carries a `limit`, so the
+//                       terminal page is `meta: {}`. A cursor already followed fails the
+//                       read rather than loop. Span ids are scoped to a trace, so rows
+//                       are unique by `(traceId, id)`, never by `id` alone, and a row
+//                       without a string `traceId` is malformed.
 //
 // It MERGES its pagination params into whatever query the caller already put on
 // `path` (callers filter by tag/name), never clobbering them. It throws
@@ -444,7 +451,7 @@ export async function api(
 export async function apiGetAllPages(
   cfg: LangfuseConfig,
   path: string,
-  protocol: 'page' | 'cursor',
+  protocol: 'page' | 'cursor' | 'observations-v2',
   timeoutMs?: number
 ): Promise<Record<string, unknown>[]> {
   const LIMIT = 100
@@ -452,6 +459,7 @@ export async function apiGetAllPages(
   const basePath = qIdx === -1 ? path : path.slice(0, qIdx)
   const baseParams = qIdx === -1 ? '' : path.slice(qIdx + 1)
 
+  // Keyed by `id`, or by `[traceId, id]` in 'observations-v2'.
   const byId = new Map<string, Record<string, unknown>>()
   let requestedPage = 1
   let cursor: string | undefined
@@ -514,7 +522,15 @@ export async function apiGetAllPages(
       if (typeof id !== 'string' || id.length === 0) {
         throw new PaginationError(`${basePath}: item lacking a valid string 'id'`)
       }
-      if (!byId.has(id)) byId.set(id, item as Record<string, unknown>)
+      let key = id
+      if (protocol === 'observations-v2') {
+        const traceId = (item as Record<string, unknown>).traceId
+        if (typeof traceId !== 'string' || traceId.length === 0) {
+          throw new PaginationError(`${basePath}: item lacking a valid string 'traceId'`)
+        }
+        key = JSON.stringify([traceId, id])
+      }
+      if (!byId.has(key)) byId.set(key, item as Record<string, unknown>)
     }
     const added = byId.size - sizeBefore
 
@@ -544,15 +560,20 @@ export async function apiGetAllPages(
       }
       requestedPage += 1
     } else {
-      // Reject page metadata — a utilsMetaResponse under 'cursor' is a protocol mix.
-      // (`limit` is shared by both metas, so it is NOT a discriminator; page/
-      // totalPages/totalItems are page-only.)
-      if ('page' in m || 'totalPages' in m || 'totalItems' in m) {
-        throw new PaginationError(`${basePath}: cursor-mode response carries page metadata`)
+      // 'cursor' and 'observations-v2' share cursor-following; only Scores v3 carries
+      // a meta to validate beyond the cursor.
+      if (protocol === 'cursor') {
+        // Reject page metadata — a utilsMetaResponse under 'cursor' is a protocol mix.
+        // (`limit` is shared by both metas, so it is NOT a discriminator; page/
+        // totalPages/totalItems are page-only.)
+        if ('page' in m || 'totalPages' in m || 'totalItems' in m) {
+          throw new PaginationError(`${basePath}: cursor-mode response carries page metadata`)
+        }
+        // GetScoresV3Meta requires an integer `limit`; validate it before trusting an
+        // absent cursor as terminal, so an empty/malformed `{}` meta fails closed.
+        // Observations v2 never sends a `limit`: its terminal page is `meta: {}`.
+        reqInt(m.limit, 'limit', 1)
       }
-      // GetScoresV3Meta requires an integer `limit`; validate it before trusting an
-      // absent cursor as terminal, so an empty/malformed `{}` meta fails closed.
-      reqInt(m.limit, 'limit', 1)
       // Terminal state = the cursor PROPERTY is ABSENT (the API omits it when there
       // are no more results, INCLUDING a one-page result). A PRESENT cursor — even
       // `null` — that is not a non-empty string is malformed, never terminal.
@@ -566,8 +587,10 @@ export async function apiGetAllPages(
       if (seenCursors.has(next)) {
         throw new PaginationError(`${basePath}: cursor did not advance (repeated ${next})`)
       }
-      // A fresh cursor that yields no new ids is a fabricated-continuation loop.
-      if (added === 0) {
+      // A fresh cursor that yields no new ids is a fabricated-continuation loop. Not
+      // applied to observations v2: a page of unmerged duplicate rows can legitimately
+      // add nothing new, and the repeated-cursor check above is what stops a loop.
+      if (protocol === 'cursor' && added === 0) {
         throw new PaginationError(`${basePath}: continuation cursor but page added no new items`)
       }
       seenCursors.add(next)

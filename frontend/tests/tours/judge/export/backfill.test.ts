@@ -12,10 +12,18 @@ const ENV = {
 
 type Verdict = 'pass' | 'fail' | 'unsure'
 
-interface TraceObj {
+// A root observation as `GET /api/public/v2/observations` returns it with fields
+// `core,io,trace_context` (arc §2, S2): `input`/`output` are raw strings, and `tags`
+// are the trace's tags.
+interface RootObs {
   id: string
+  traceId: string
+  parentObservationId: string | null
+  startTime: string
+  traceName: string
   tags: string[]
-  output?: unknown
+  input: string | null
+  output: string | null
 }
 interface ScoreObj {
   id: string
@@ -37,7 +45,37 @@ const verdictOutput = (verdict: Verdict, citation = 'c', critique = 'k'): unknow
   critique,
 })
 
-const trace = (id: string, tags: string[], output?: unknown): TraceObj => ({ id, tags, output })
+// The serialization v2 returns for the value a legacy trace body's `output` carried.
+const serialized = (output: unknown): string | null =>
+  output === undefined ? null : JSON.stringify(output)
+
+// A historic trace's root (arc §2, S1): a string trace id and an observation id of
+// `t-<traceId>`. Most tests below build their traces this way.
+const trace = (traceId: string, tags: string[], output?: unknown): RootObs => ({
+  id: `t-${traceId}`,
+  traceId,
+  parentObservationId: null,
+  startTime: '2026-07-17T15:16:39.000Z',
+  traceName: 'judge-synthetic',
+  tags,
+  input: null,
+  output: serialized(output),
+})
+
+// A new trace's root (arc §2, S1): a 32-hex trace id and its own 16-hex span id.
+const newRoot = (traceId: string, spanId: string, tags: string[], output?: unknown): RootObs => ({
+  ...trace(traceId, tags, output),
+  id: spanId,
+})
+
+// A non-root observation of the same trace (the generation PR3 ships). v2's
+// `traceTags` filter matches it too, so only the root filter keeps it out.
+const childObs = (root: RootObs, spanId: string): RootObs => ({
+  ...root,
+  id: spanId,
+  parentObservationId: root.id,
+  output: serialized('raw model completion'),
+})
 
 // A trace-level verdict score: the trace id lives in `subject.id` (kind === 'trace').
 const traceScore = (traceId: string, value: string): ScoreObj => ({
@@ -51,10 +89,13 @@ const traceScore = (traceId: string, value: string): ScoreObj => ({
 const triageQueue: QueueObj = { id: 'q-triage', name: TRIAGE_QUEUE_NAME }
 
 interface MockOpts {
-  traces?: TraceObj[]
+  // Every observation the fake holds; the `trace`/`newRoot` helpers build roots.
+  traces?: RootObs[]
   tracesPerPage?: number
   tracesError?: boolean
   tracesMalformed?: boolean
+  // Answer the observations read as if the server dropped the `filter` param.
+  ignoreFilter?: boolean
   // scores/items accept raw shapes so a test can inject a spec-invalid row.
   scores?: unknown[]
   scoresPerPage?: number
@@ -111,6 +152,17 @@ function mock(opts: MockOpts = {}): {
     return okText({ data: slice, meta })
   }
 
+  // Observations v2: `cursor` is a numeric offset; `meta: {}` on the last page, and
+  // never a `limit`.
+  const v2Page = (all: unknown[], q: URLSearchParams, per: number): Response => {
+    const offset = Number(q.get('cursor') ?? '0')
+    const next = offset + per
+    return okText({
+      data: all.slice(offset, next),
+      meta: next < all.length ? { cursor: String(next) } : {},
+    })
+  }
+
   const fetchImpl = (async (url: string | URL, init?: { method?: string; body?: unknown }) => {
     state.calls++
     const u = String(url)
@@ -121,14 +173,29 @@ function mock(opts: MockOpts = {}): {
     const json = (): Record<string, unknown> =>
       JSON.parse(String(init?.body)) as Record<string, unknown>
 
-    if (pathname === '/api/public/traces' && method === 'GET') {
+    if (pathname === '/api/public/v2/observations' && method === 'GET') {
       tracesReqs.push(new URLSearchParams(q))
-      if (opts.tracesError === true) return err(500, 'traces boom')
-      if (opts.tracesMalformed === true)
-        return okText({ meta: { page: 1, limit: 100, totalItems: 0, totalPages: 1 } })
-      const wanted = q.getAll('tags')
-      const all = (opts.traces ?? []).filter(t => wanted.every(w => t.tags.includes(w)))
-      return page(all, q, opts.tracesPerPage ?? 100)
+      if (opts.tracesError === true) return err(500, 'observations boom')
+      if (opts.tracesMalformed === true) return okText({ meta: {} })
+      // The one filter shape the backfill sends: all of the given trace tags.
+      const filter = JSON.parse(q.get('filter') ?? '[]') as Array<Record<string, unknown>>
+      const tagFilter = filter.find(f => f.column === 'traceTags')
+      if (
+        filter.length !== 1 ||
+        tagFilter?.type !== 'arrayOptions' ||
+        tagFilter.operator !== 'all of' ||
+        !Array.isArray(tagFilter.value)
+      ) {
+        return err(400, 'invalid filter')
+      }
+      const wanted = tagFilter.value as string[]
+      const rootsOnly = q.get('isRootObservation') === 'true'
+      const all = (opts.traces ?? []).filter(
+        t =>
+          (opts.ignoreFilter === true || wanted.every(w => t.tags.includes(w))) &&
+          (!rootsOnly || t.parentObservationId === null)
+      )
+      return v2Page(all, q, opts.tracesPerPage ?? 100)
     }
     if (pathname === '/api/public/v3/scores' && method === 'GET') {
       scoresReqs.push(new URLSearchParams(q))
@@ -190,6 +257,19 @@ function sinks(): {
 
 const RUN_ID = '20260717T151639Z'
 
+// The request contract of the candidate read (arc §2, S2; the plan's tag filter): root
+// observations, fields `core,io,trace_context`, and one `traceTags` "all of" filter.
+// Returns the filter's tags.
+function rootReadTags(q: URLSearchParams): string[] {
+  expect(q.get('isRootObservation')).toBe('true')
+  expect(q.get('fields')).toBe('core,io,trace_context')
+  const filter = JSON.parse(q.get('filter') ?? 'null') as unknown
+  expect(filter).toEqual([
+    { type: 'arrayOptions', column: 'traceTags', operator: 'all of', value: expect.any(Array) },
+  ])
+  return (filter as Array<{ value: string[] }>)[0].value
+}
+
 afterEach(() => vi.restoreAllMocks())
 
 // --- list: covering-PASS candidates + deep-links ----------------------------
@@ -218,10 +298,9 @@ describe('list — covering-PASS candidates + deep-links', () => {
     expect(shipped).toContain('http://lf/project/proj-1/traces/t1')
     expect(shipped).toContain('cite: row gone')
     expect(shipped).toContain('critique: looks right')
-    // Traces were paginated (3 requests over pages 1..3) and asked for output via fields=core,io.
+    // Roots were paginated (3 requests over 3 cursor pages), each carrying the root read.
     expect(m.tracesReqs.length).toBeGreaterThanOrEqual(3)
-    expect(m.tracesReqs[0].get('fields')).toBe('core,io')
-    expect(m.tracesReqs[0].getAll('tags')).toContain('behavior:CON-042')
+    for (const q of m.tracesReqs) expect(rootReadTags(q)).toEqual(['behavior:CON-042'])
     // EVERY scores request retained name/dataType/fields=subject and carried NO value filter.
     expect(m.scoresReqs.length).toBeGreaterThanOrEqual(2)
     for (const q of m.scoresReqs) {
@@ -414,9 +493,7 @@ describe('--round dispatch + strict arity', () => {
     const s = sinks()
     const code = await main(['CON-042', '--round', RUN_ID], ENV, s.log, s.errlog)
     expect(code).toBe(0)
-    expect(m.tracesReqs[0].getAll('tags')).toEqual(
-      expect.arrayContaining(['behavior:CON-042', `runId:${RUN_ID}`])
-    )
+    expect(rootReadTags(m.tracesReqs[0])).toEqual(['behavior:CON-042', `runId:${RUN_ID}`])
     const shipped = s.out.join('\n')
     expect(shipped).toContain('t1')
     expect(shipped).not.toMatch(/(^|\s)t2(\s|$)/)
@@ -431,7 +508,7 @@ describe('--round dispatch + strict arity', () => {
     const s = sinks()
     const code = await main(['CON-042', '--round', 'abc1234'], ENV, s.log, s.errlog)
     expect(code).toBe(0)
-    expect(m.tracesReqs[0].getAll('tags')).toContain('gitSha:abc1234')
+    expect(rootReadTags(m.tracesReqs[0])).toEqual(['behavior:CON-042', 'gitSha:abc1234'])
   })
 
   it('a --round value that is neither a run-id nor a git sha → usage error, no query', async () => {
@@ -820,5 +897,283 @@ describe('spec-invalid wire rows fail closed', () => {
     expect(code).toBe(1)
     expect(m.itemPosts).toHaveLength(0)
     expect(s.er.join('\n')).toMatch(/status/)
+  })
+})
+
+// --- v2 root observations: the subject is the trace id (PR2.c1) --------------
+
+// Synthetic ids in the shapes of arc §2, S1: a historic string trace id, and a new
+// 32-hex trace id whose root span id is a different 16-hex id.
+const HIST_TRACE = 'judge-CON-042-sp0001-item0'
+const HEX_TRACE = '3f2a9c0d4b6e1f7a8c5d2e9b0a1f4c7d'
+const HEX_SPAN = '9b1c4e7a2d5f8a3c'
+
+describe('v2 root observations — candidates keyed by traceId, never the observation id', () => {
+  it('a historic root (observation id t-<traceId>) lists, links and joins by its string trace id', async () => {
+    // The output says FAIL; only the PASS score bound to the trace id makes it a candidate,
+    // so a join on the observation id would exclude it.
+    const m = mock({
+      traces: [trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('fail', 'hc', 'hk'))],
+      scores: [traceScore(HIST_TRACE, 'pass')],
+    })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042'], ENV, s.log, s.errlog)
+    expect(code).toBe(0)
+    const shipped = s.out.join('\n')
+    expect(shipped).toMatch(/1 covering-PASS candidate/)
+    expect(shipped).toContain(`  ${HIST_TRACE}`)
+    expect(shipped).toContain(`http://lf/project/proj-1/traces/${HIST_TRACE}`)
+    expect(shipped).not.toContain(`t-${HIST_TRACE}`)
+    expect(shipped).toContain('cite: hc')
+  })
+  it('a new root (32-hex trace id, distinct span id) lists, links and joins by the hex trace id', async () => {
+    const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('fail'))
+    const m = mock({
+      // The generation under the same trace carries the same trace tags; the root
+      // filter keeps it from becoming a second row for the trace.
+      traces: [root, childObs(root, '0c4f7a1e9d2b5c8a')],
+      scores: [traceScore(HEX_TRACE, 'pass')],
+    })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042'], ENV, s.log, s.errlog)
+    expect(code).toBe(0)
+    const shipped = s.out.join('\n')
+    expect(shipped).toMatch(/1 covering-PASS candidate/)
+    expect(shipped).toContain(`  ${HEX_TRACE}`)
+    expect(shipped).toContain(`http://lf/project/proj-1/traces/${HEX_TRACE}`)
+    expect(shipped).not.toContain(HEX_SPAN)
+    expect(shipped).not.toContain('0c4f7a1e9d2b5c8a')
+  })
+
+  it('a round narrowed by runId: lists only roots carrying both tags', async () => {
+    const m = mock({
+      traces: [
+        newRoot(
+          HEX_TRACE,
+          HEX_SPAN,
+          ['behavior:CON-042', `runId:${RUN_ID}`],
+          verdictOutput('pass')
+        ),
+        trace(HIST_TRACE, ['behavior:CON-042', 'runId:20260716T151639Z'], verdictOutput('pass')),
+        trace('judge-CON-042-sp0002-item0', ['behavior:CON-042'], verdictOutput('pass')),
+      ],
+    })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042', '--round', RUN_ID], ENV, s.log, s.errlog)
+    expect(code).toBe(0)
+    expect(rootReadTags(m.tracesReqs[0])).toEqual(['behavior:CON-042', `runId:${RUN_ID}`])
+    const shipped = s.out.join('\n')
+    expect(shipped).toMatch(/1 covering-PASS candidate/)
+    expect(shipped).toContain(HEX_TRACE)
+    expect(shipped).not.toContain(HIST_TRACE)
+    expect(shipped).not.toContain('sp0002')
+  })
+
+  it('a round narrowed by gitSha: lists only roots carrying both tags', async () => {
+    const m = mock({
+      traces: [
+        trace(HIST_TRACE, ['behavior:CON-042', 'gitSha:abc1234'], verdictOutput('pass')),
+        newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042', 'gitSha:def5678'], verdictOutput('pass')),
+      ],
+    })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042', '--round', 'abc1234'], ENV, s.log, s.errlog)
+    expect(code).toBe(0)
+    expect(rootReadTags(m.tracesReqs[0])).toEqual(['behavior:CON-042', 'gitSha:abc1234'])
+    const shipped = s.out.join('\n')
+    expect(shipped).toMatch(/1 covering-PASS candidate/)
+    expect(shipped).toContain(HIST_TRACE)
+    expect(shipped).not.toContain(HEX_TRACE)
+  })
+
+  it('a root carrying the behavior tag but not the round tag is excluded', async () => {
+    const m = mock({
+      traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
+      scores: [traceScore(HEX_TRACE, 'pass')],
+    })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042', '--round', RUN_ID], ENV, s.log, s.errlog)
+    expect(code).toBe(3)
+    expect(s.er.join('\n')).toMatch(/no traces tagged behavior:CON-042 \(runId:/)
+    expect(s.out.join('\n')).not.toContain(HEX_TRACE)
+  })
+
+  it('enqueue of a new-root candidate posts objectType TRACE with the hex traceId', async () => {
+    const m = mock({
+      traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
+      scores: [traceScore(HEX_TRACE, 'pass')],
+    })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042', HEX_TRACE], ENV, s.log, s.errlog)
+    expect(code).toBe(0)
+    expect(m.itemPosts).toEqual([{ objectId: HEX_TRACE, objectType: 'TRACE' }])
+  })
+
+  it('enqueue by an observation id (new span id or historic t-<traceId>) is refused', async () => {
+    for (const [root, obsId] of [
+      [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass')), HEX_SPAN],
+      [trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('pass')), `t-${HIST_TRACE}`],
+    ] as const) {
+      const m = mock({ traces: [root], scores: [traceScore(root.traceId, 'pass')] })
+      vi.stubGlobal('fetch', m.fetchImpl)
+      const s = sinks()
+      const code = await main(['CON-042', obsId], ENV, s.log, s.errlog)
+      expect(code, obsId).toBe(1)
+      expect(m.itemPosts, obsId).toHaveLength(0)
+      vi.restoreAllMocks()
+    }
+  })
+
+  it('a row outside the requested tags (a dropped filter) fails closed, lists nothing', async () => {
+    const m = mock({
+      ignoreFilter: true,
+      traces: [
+        newRoot(
+          HEX_TRACE,
+          HEX_SPAN,
+          ['behavior:CON-042', `runId:${RUN_ID}`],
+          verdictOutput('pass')
+        ),
+        trace(HIST_TRACE, ['behavior:DSH-004'], verdictOutput('pass')),
+      ],
+    })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042', '--round', RUN_ID], ENV, s.log, s.errlog)
+    expect(code).toBe(1)
+    expect(s.er.join('\n')).toMatch(/BackfillDataError.*lacks the requested tags/)
+    expect(s.out.join('\n')).not.toMatch(/covering-PASS candidate/)
+  })
+
+  it('two distinct root observations under one trace id fail closed, list nothing', async () => {
+    const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
+    const m = mock({ traces: [root, { ...root, id: '5e8b2d7f1a4c9e3b' }] })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042'], ENV, s.log, s.errlog)
+    expect(code).toBe(1)
+    expect(s.er.join('\n')).toMatch(/BackfillDataError.*more than one root observation/)
+    expect(s.out.join('\n')).not.toMatch(/covering-PASS candidate/)
+  })
+})
+
+// --- output decoded on the client from v2's raw string (PR2.c2) --------------
+
+describe('v2 output string — decoded on the client; score-over-output and ambiguity unchanged', () => {
+  const HEX_B = '7d1e4a9c3f6b2e8d5a0c7f1b4e9d2a6c'
+
+  it('conflicting verdict scores on one trace → ambiguous, exits non-zero, lists nothing', async () => {
+    const m = mock({
+      traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
+      scores: [traceScore(HEX_TRACE, 'pass'), traceScore(HEX_TRACE, 'fail')],
+    })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042'], ENV, s.log, s.errlog)
+    expect(code).toBe(1)
+    expect(s.er.join('\n')).toMatch(/ambiguous/)
+    expect(s.er.join('\n')).toContain(HEX_TRACE)
+    expect(s.out.join('\n')).not.toMatch(/covering-PASS candidate/)
+  })
+
+  it('a scoreless pass whose output string is JSON is a candidate with its cite and critique', async () => {
+    const root = newRoot(
+      HEX_TRACE,
+      HEX_SPAN,
+      ['behavior:CON-042'],
+      verdictOutput('pass', 'jc', 'jk')
+    )
+    expect(typeof root.output).toBe('string')
+    const m = mock({ traces: [root] })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042'], ENV, s.log, s.errlog)
+    expect(code).toBe(0)
+    const shipped = s.out.join('\n')
+    expect(shipped).toMatch(/1 covering-PASS candidate/)
+    expect(shipped).toContain(HEX_TRACE)
+    expect(shipped).toContain('cite: jc')
+    expect(shipped).toContain('critique: jk')
+  })
+
+  it('a malformed output string carries no verdict: scoreless → excluded; a PASS score still wins', async () => {
+    const truncated = '{"itemIndex":0,"verdict":"pass","citation":"mc"'
+    const m = mock({
+      traces: [
+        { ...newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042']), output: truncated },
+        { ...newRoot(HEX_B, '2a5d8f1c4e7b0a3d', ['behavior:CON-042']), output: truncated },
+      ],
+      scores: [traceScore(HEX_B, 'pass')],
+    })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042'], ENV, s.log, s.errlog)
+    expect(code).toBe(0)
+    const shipped = s.out.join('\n')
+    expect(shipped).toMatch(/1 covering-PASS candidate/)
+    expect(shipped).toContain(HEX_B)
+    expect(shipped).not.toContain(HEX_TRACE)
+    expect(shipped).not.toContain('cite:')
+  })
+
+  it('a verdict score that contradicts the output wins, in both directions', async () => {
+    const m = mock({
+      traces: [
+        newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass')),
+        newRoot(HEX_B, '2a5d8f1c4e7b0a3d', ['behavior:CON-042'], verdictOutput('fail')),
+      ],
+      scores: [traceScore(HEX_TRACE, 'fail'), traceScore(HEX_B, 'pass')],
+    })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042'], ENV, s.log, s.errlog)
+    expect(code).toBe(0)
+    const shipped = s.out.join('\n')
+    expect(shipped).toMatch(/1 covering-PASS candidate/)
+    expect(shipped).toContain(HEX_B)
+    expect(shipped).not.toContain(HEX_TRACE)
+  })
+})
+
+// --- a root returned twice under the same (traceId, id) is one candidate (PR2.c4) ---
+
+describe('duplicate root rows (an unmerged re-export) yield one candidate', () => {
+  const listedOnce = (out: string[], traceId: string): void => {
+    expect(out.filter(l => l === `  ${traceId}`)).toHaveLength(1)
+  }
+
+  it('a duplicate on the same page', async () => {
+    const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
+    const m = mock({ traces: [root, { ...root }], scores: [traceScore(HEX_TRACE, 'pass')] })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042'], ENV, s.log, s.errlog)
+    expect(code).toBe(0)
+    expect(s.out.join('\n')).toMatch(/1 covering-PASS candidate/)
+    listedOnce(s.out, HEX_TRACE)
+  })
+
+  it('a duplicate across pages, including a page that holds only the duplicate', async () => {
+    const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
+    const other = trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('pass'))
+    const m = mock({
+      traces: [root, { ...root }, other],
+      tracesPerPage: 1,
+      scores: [traceScore(HEX_TRACE, 'pass')],
+    })
+    vi.stubGlobal('fetch', m.fetchImpl)
+    const s = sinks()
+    const code = await main(['CON-042'], ENV, s.log, s.errlog)
+    expect(code).toBe(0)
+    expect(m.tracesReqs).toHaveLength(3)
+    expect(s.out.join('\n')).toMatch(/2 covering-PASS candidate/)
+    listedOnce(s.out, HEX_TRACE)
+    listedOnce(s.out, HIST_TRACE)
   })
 })

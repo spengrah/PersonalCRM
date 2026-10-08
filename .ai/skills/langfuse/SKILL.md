@@ -73,7 +73,7 @@ If not set, ask the user to set them in their shell or a `.env` file (do not ask
 
 ### Detailed CLI Reference
 
-For common workflows, tips, and full usage patterns, see [references/cli.md](references/cli.md).
+For common workflows, tips, and full usage patterns, see [references/cli.md](references/cli.md). Read traces and observations through observations v2 (`observations list`), never the legacy `traces` or `legacy-observations-v1s` endpoints, which a Langfuse v4 instance in `events_only` no longer serves; references/cli.md has the root-observation recipe.
 
 ## 2. Langfuse Documentation
 
