@@ -211,12 +211,13 @@ export async function main(
   staleFileGuard(file, runId, gitSha, rfs, log)
 
   log(`qa-export: shipping ${spans.length} span(s) to ${cfg.host}`)
-  const result = await doExport(cfg, spans, msg => log(msg), {
-    runId,
-    gitSha,
-    saltPasses,
-    testTag,
-  })
+  const result = await doExport(
+    cfg,
+    spans,
+    msg => log(msg),
+    { runId, gitSha, saltPasses, testTag },
+    msg => errlog(msg)
+  )
   log(
     // The ONE canonical summary line. scripts/ci/qa-nightly-round.sh parses it with a
     // FULLY ANCHORED regex requiring exactly one match, so any field added here must
