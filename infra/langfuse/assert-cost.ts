@@ -4,11 +4,15 @@
 // non-zero exit here is surfaced; this file only computes ok/not-ok and a
 // human-readable reason).
 //
-// The `/api/public/observations` endpoint is the authoritative view of a
-// generation row, and an observation's own cost is `costDetails.total`,
-// falling back to the flattened `calculatedTotalCost`.
+// Generations are read through `GET /api/public/v2/observations` with the
+// `usage` field group, which carries each generation's `totalCost`. The v2 list
+// is cursor-paginated (`meta.cursor`, no limit); a page without a cursor is the
+// last. Rows are unique by `(traceId, id)`: a re-exported generation can come
+// back more than once and counts once. This is the same read the Langfuse v4
+// `events_only` write mode serves — the legacy `/api/public/observations`
+// endpoint stops seeing new generations there.
 
-import { apiGetAllPages, type FetchFn, type LangfuseConfig } from './http'
+import { apiGetAllCursorPages, type FetchFn, type LangfuseConfig } from './http'
 
 export interface AssertCostResult {
   ok: boolean
@@ -35,14 +39,18 @@ export interface AssertCostOpts {
 const DEFAULT_RETRIES = 3
 const DEFAULT_RETRY_DELAY_MS = 20_000
 
-function numOf(v: unknown): number | undefined {
-  return typeof v === 'number' ? v : undefined
-}
-
-function observationCost(obs: Record<string, unknown>): number | undefined {
-  const details = obs.costDetails
-  const total = details !== null && typeof details === 'object' ? numOf((details as Record<string, unknown>).total) : undefined
-  return total ?? numOf(obs.calculatedTotalCost)
+// Rows keyed by `(traceId, id)`, first seen wins. A row missing either id would
+// collapse with every other such row, so it fails the read instead.
+function uniqueGenerations(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const byKey = new Map<string, Record<string, unknown>>()
+  for (const row of rows) {
+    if (typeof row.traceId !== 'string' || typeof row.id !== 'string') {
+      throw new Error('GENERATION row has no string traceId and id')
+    }
+    const key = JSON.stringify([row.traceId, row.id])
+    if (!byKey.has(key)) byKey.set(key, row)
+  }
+  return [...byKey.values()]
 }
 
 export async function assertCost(
@@ -52,30 +60,35 @@ export async function assertCost(
 ): Promise<AssertCostResult> {
   const retries = opts.retries ?? DEFAULT_RETRIES
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
-  const path = `/api/public/observations?type=GENERATION&fromStartTime=${encodeURIComponent(fromIso)}`
+  const path = `/api/public/v2/observations?type=GENERATION&fromStartTime=${encodeURIComponent(fromIso)}&fields=core,model,usage`
+  const read = async () => uniqueGenerations(await apiGetAllCursorPages(cfg, path, opts.fetchFn))
 
-  let rows = await apiGetAllPages(cfg, path, opts.fetchFn)
+  let rows = await read()
   for (let attempt = 0; rows.length === 0 && attempt < retries; attempt++) {
     await sleep(opts.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS)
-    rows = await apiGetAllPages(cfg, path, opts.fetchFn)
+    rows = await read()
   }
 
   if (rows.length === 0) {
     return { ok: false, message: `assert-cost: nothing to assert — no GENERATION observations found since ${fromIso}` }
   }
 
-  for (const obs of rows) {
-    const cost = observationCost(obs)
-    if (cost === undefined || cost === 0) {
+  const unpriced = rows
+    .filter(obs => obs.totalCost === undefined || obs.totalCost === null || obs.totalCost === 0)
+    .map(obs => {
       const model = typeof obs.model === 'string' ? obs.model : 'unknown'
-      return {
-        ok: false,
-        message: `assert-cost: observation for model "${model}" has zero/missing cost since ${fromIso}`,
-      }
-    }
-  }
+      return `assert-cost: observation for model "${model}" (trace ${String(obs.traceId)}, id ${String(obs.id)}) has zero/missing cost since ${fromIso}`
+    })
+  if (unpriced.length > 0) return { ok: false, message: unpriced.join('\n') }
 
   return { ok: true, message: `assert-cost: ${rows.length} GENERATION observation(s) since ${fromIso} all priced` }
+}
+
+// Test seam: the retry delay is 20s per attempt, so a command-level test of the
+// "nothing found" path sets this to 0. Unset or non-numeric keeps the default.
+function retryDelayFromEnv(env: Record<string, string | undefined> = process.env): number | undefined {
+  const ms = Number(env.QA_COST_ASSERT_RETRY_DELAY_MS)
+  return env.QA_COST_ASSERT_RETRY_DELAY_MS !== undefined && Number.isInteger(ms) && ms >= 0 ? ms : undefined
 }
 
 async function main(): Promise<number> {
@@ -94,7 +107,7 @@ async function main(): Promise<number> {
   }
 
   try {
-    const result = await assertCost(fromIso, cfg)
+    const result = await assertCost(fromIso, cfg, { retryDelayMs: retryDelayFromEnv() })
     console.log(result.message)
     return result.ok ? 0 : 1
   } catch (err) {

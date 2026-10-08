@@ -241,7 +241,7 @@ model-prices-sync: ## Refresh every declared row in infra/langfuse/model-prices.
 model-prices-apply: ## Converge Langfuse's project-scoped model definitions to infra/langfuse/model-prices.json. Idempotent — identical rows write nothing; changed rows are replaced delete-then-create. Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY with WRITE access. Do not run while an export is in flight — the delete-then-create gap would price a concurrently-ingested observation at zero. Non-zero exit on any failure.
 	@cd infra/langfuse && bun run apply.ts
 
-qa-cost-assert: ## Assert every GENERATION observation since FROM=<ISO8601> carries non-zero cost. Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY. Non-zero exit if any observation has zero/missing cost or none are found.
+qa-cost-assert: ## Assert every GENERATION observation since FROM=<ISO8601> carries non-zero totalCost. Reads GET /api/public/v2/observations with the usage field group, follows meta.cursor to the last page, and counts a generation once per (traceId, id). Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY. Non-zero exit if any generation has zero/missing cost (each is named), none are found, or the read fails (request error, malformed page, repeated cursor).
 	@cd infra/langfuse && bun run assert-cost.ts "$(FROM)"
 
 qa-langfuse-setup: ## Idempotently provision the standing QA triage queue (ground_truth+disposition dims) + verdict/ground_truth/disposition score configs in Langfuse (obs). Re-runnable; reconciles desired state. Requires LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY (errors non-zero without them).
