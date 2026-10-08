@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { rmSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { assertCost } from './assert-cost'
 import type { LangfuseConfig } from './http'
 
@@ -105,13 +107,16 @@ describe('ingestion-lag retry', () => {
   })
 })
 
-// The command level: `bun run assert-cost.ts <FROM>` is what `make qa-cost-assert`
-// runs. The child gets only the fake server's host and dummy keys, never this
+// The command level: `make qa-cost-assert FROM=<ISO8601>` from the repository
+// root, the same invocation the nightly round makes. The child gets only what
+// make and bun need plus the fake server's host and dummy keys, never this
 // process's environment.
 describe('make qa-cost-assert command against a fake Langfuse server', () => {
   type Reply = { status?: number; body?: unknown; raw?: string }
+  const REPO_ROOT = resolve(import.meta.dir, '../..')
   let respond: (url: URL) => Reply
   let requests: URL[]
+  let auths: Array<string | null>
   let server: ReturnType<typeof Bun.serve>
 
   beforeAll(() => {
@@ -121,6 +126,7 @@ describe('make qa-cost-assert command against a fake Langfuse server', () => {
       fetch(req) {
         const url = new URL(req.url)
         requests.push(url)
+        auths.push(req.headers.get('authorization'))
         const reply = respond(url)
         return new Response(reply.raw ?? JSON.stringify(reply.body ?? {}), { status: reply.status ?? 200 })
       },
@@ -132,28 +138,40 @@ describe('make qa-cost-assert command against a fake Langfuse server', () => {
 
   function serve(pages: Record<string, Reply>): void {
     requests = []
+    auths = []
     respond = url => pages[url.searchParams.get('cursor') ?? ''] ?? { status: 404, body: { message: 'no such page' } }
   }
 
-  async function run(args: string[] = [FROM], env: Record<string, string> = {}) {
-    const proc = Bun.spawn(['bun', 'run', 'assert-cost.ts', ...args], {
-      cwd: import.meta.dir,
-      env: {
-        PATH: process.env.PATH ?? '',
-        LANGFUSE_HOST: `http://127.0.0.1:${server.port}`,
-        LANGFUSE_PUBLIC_KEY: 'pk',
-        LANGFUSE_SECRET_KEY: 'sk',
-        QA_COST_ASSERT_RETRY_DELAY_MS: '0',
-        ...env,
-      },
+  // `code` is the recipe's own exit status. make reports a failed recipe as its
+  // own exit 2 and names the recipe's status on stderr ("*** [...] Error N").
+  async function run(from: string | null = FROM, env: Record<string, string | undefined> = {}) {
+    const childEnv: Record<string, string> = {
+      PATH: process.env.PATH ?? '',
+      LANGFUSE_HOST: `http://127.0.0.1:${server.port}`,
+      LANGFUSE_PUBLIC_KEY: 'pk',
+      LANGFUSE_SECRET_KEY: 'sk',
+      QA_COST_ASSERT_RETRY_DELAY_MS: '0',
+    }
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete childEnv[key]
+      else childEnv[key] = value
+    }
+    const proc = Bun.spawn(['make', 'qa-cost-assert', ...(from === null ? [] : [`FROM=${from}`])], {
+      cwd: REPO_ROOT,
+      env: childEnv,
       stdout: 'pipe',
       stderr: 'pipe',
     })
-    const [stdout, stderr, code] = await Promise.all([
+    const [stdout, stderr, makeCode] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
       proc.exited,
     ])
+    const failed = stderr.match(/\*\*\* \[[^\]]*qa-cost-assert\] Error (\d+)/)
+    const code = makeCode === 0 ? 0 : failed ? Number(failed[1]) : Number.NaN
+    // make exits 0 when the recipe passes and 2 when it fails; anything else is
+    // make itself failing, which must not read as a recipe result.
+    expect(makeCode).toBe(code === 0 ? 0 : 2)
     return { stdout, stderr, code }
   }
 
@@ -368,10 +386,66 @@ describe('make qa-cost-assert command against a fake Langfuse server', () => {
     })
   })
 
+  // bun loads `.env` files from the recipe's working directory, infra/langfuse.
+  // Values already in the environment win over them, so a stray file there
+  // cannot point the command at another host or key pair.
+  describe('an .env file in the recipe directory', () => {
+    const ENV_FILES = ['.env', '.env.local'].map(name => join(import.meta.dir, name))
+    let otherRequests: number
+    let other: ReturnType<typeof Bun.serve>
+
+    beforeAll(() => {
+      other = Bun.serve({
+        port: 0,
+        hostname: '127.0.0.1',
+        fetch() {
+          otherRequests += 1
+          return new Response(JSON.stringify({ data: [], meta: {} }), { status: 200 })
+        },
+      })
+    })
+    afterAll(() => {
+      void other.stop(true)
+    })
+
+    test('cannot redirect the command to another host or key pair', async () => {
+      otherRequests = 0
+      serve({ '': page([gen('gpt-5.5', 0.002)]) })
+      // 'wx' fails rather than overwrite a file that already exists.
+      const contents = [
+        `LANGFUSE_HOST=http://127.0.0.1:${other.port}`,
+        'LANGFUSE_PUBLIC_KEY=env-file-pk',
+        'LANGFUSE_SECRET_KEY=env-file-sk',
+        '',
+      ].join('\n')
+      const written: string[] = []
+      try {
+        for (const file of ENV_FILES) {
+          writeFileSync(file, contents, { flag: 'wx' })
+          written.push(file)
+        }
+
+        const out = await run()
+        expect(out.code).toBe(0)
+        expect(requests).toHaveLength(1)
+        expect(auths).toEqual(['Basic ' + Buffer.from('pk:sk').toString('base64')])
+        expect(otherRequests).toBe(0)
+
+        // Control: without the host in the environment the same files do take
+        // effect, so the assertions above are not passing because bun ignores them.
+        const control = await run(FROM, { LANGFUSE_HOST: undefined })
+        expect(control.stderr).not.toContain('LANGFUSE_HOST')
+        expect(otherRequests).toBeGreaterThan(0)
+      } finally {
+        for (const file of written) rmSync(file, { force: true })
+      }
+    })
+  })
+
   describe('PR1.c4: exit codes the nightly reads stay as they are', () => {
     test('missing Langfuse env -> exit 2', async () => {
       serve({ '': page([]) })
-      const out = await run([FROM], { LANGFUSE_HOST: '' })
+      const out = await run(FROM, { LANGFUSE_HOST: '' })
       expect(out.code).toBe(2)
       expect(out.stderr).toContain('LANGFUSE_HOST')
       expect(requests).toHaveLength(0)
@@ -379,7 +453,7 @@ describe('make qa-cost-assert command against a fake Langfuse server', () => {
 
     test('missing FROM -> exit 2 with usage', async () => {
       serve({ '': page([]) })
-      const out = await run([])
+      const out = await run(null)
       expect(out.code).toBe(2)
       expect(out.stderr).toContain('usage')
       expect(requests).toHaveLength(0)
