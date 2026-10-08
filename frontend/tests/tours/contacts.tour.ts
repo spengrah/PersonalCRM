@@ -11,6 +11,7 @@
 // assertion-free. Readiness is via waitForApi / locator.waitFor / waitForURL,
 // never expect().
 
+import { pageFromIndex } from '../../src/lib/contact-list-params'
 import { test } from './support/tour-fixtures'
 import {
   FIXTURE_BIRTHDAY,
@@ -457,14 +458,23 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
     pair: { id: navPair, role: 'escape-discard' },
   })
 
-  // Escape from view returns to the list (context preserved).
-  await gotoDetailReady(midId)
+  // Escape from view returns to the list at the page holding the contact in
+  // view. Pressed from the LAST contact the captures above left the page on,
+  // never after an uncaptured hop to another contact: the judge reads the
+  // capture sequence, so a silent hop makes a correct page-1 return look like
+  // a lost position. Gate on that contact's row rendering, not a list GET: the
+  // response buffer can still hold an earlier list response.
+  const lastPage = pageFromIndex(navIds.length - 1) ?? 1
   await page.keyboard.press('Escape')
   await page.waitForURL(u => new URL(u).pathname === '/contacts') // strict pathname
-  await tour.waitForApi(page, 'GET', CONTACTS_LIST_PATH)
+  await page
+    .locator('tbody tr')
+    .filter({ has: page.locator(`a[href*="/contacts/${lastId}"]`) })
+    .first()
+    .waitFor({ state: 'visible' })
   await tour.capture(page, {
     behaviors: ['CON-040'],
-    note: 'Escape from view returns to the list, context preserved',
+    note: `Escape from view on the last contact returns to the list on page ${lastPage}, the page holding that contact; context preserved`,
     pair: { id: navPair, role: 'escape-to-list' },
   })
 
