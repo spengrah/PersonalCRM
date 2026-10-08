@@ -33,7 +33,7 @@ Where two priorities collide, the higher one wins. Where a choice is cheaper but
 **Call-me-when triggers.** Bring these to the user instead of judging silently:
 - An open question answers badly. Either a re-sent root span leaves two rows that never merge, or the annotation queue UI does not open v4-only traces. Either blocks Phase 4 and changes the design.
 - A live write to the `qa-harness` project fails in a way that needs personal-ops infrastructure, including the Phase 3b edge allowlist for `POST /api/public/otel/v1/traces`.
-- Test traces accumulate beyond a small volume in the real `qa-harness` project. Tag every test trace `test:`.
+- Test traces accumulate beyond a small volume in the real `qa-harness` project (PAR-5).
 - A parity round fails and the cause is not clearly Langfuse, the judge, or a harness defect.
 - Any change needed in personal-ops, including the obs infrastructure or the sandbox edge.
 
@@ -89,12 +89,17 @@ Each claim below is a spec item the arc must cover with at least one acceptance 
 
 Done means the following, all against the live `dual` instance on project `qa-harness`:
 
-- One full nightly round on the new exporter exports with `export_exit=0`, `ship_failed=0`, `observations_failed=0`, traces above zero, enqueue N/N with zero failed, and `cost_check=ok`. This round runs after the change is merged and deployed to staging, or from the Mac if the user prefers, which the user decides at the call-me-when stage.
-- The cost acceptance test (P3-8) passes, and fails under its injected wrong key.
-- The user can open the round's queue items as v4 traces in the UI. The arc reports which items.
-- `qa-fn-backfill` produces correct candidates, queue identities and deep links for a historic round and a new round.
+**PAR-1: A nightly round exports cleanly.** One full nightly round on the new exporter exports with `export_exit=0`, `ship_failed=0`, `observations_failed=0`, traces above zero, enqueue N/N with zero failed, and `cost_check=ok`. The round is the scheduled nightly on staging, after the arc lands on `develop` and staging deploys it. The user authorized merges into `develop` for this reason. No Mac-run substitute counts.
 
-Verification of Langfuse-backed targets runs through `~/.config/langfuse/qa-make.sh <target>` from the repo root. Test writes use a `test:` tag.
+**PAR-2: The cost acceptance test is falsified.** The P3-8 test passes, and fails under its injected wrong key.
+
+**PAR-3: Queue items open as v4 traces.** The user can open the PAR-1 round's queue items as v4 traces in the UI. The arc reports which items, and the user checks them.
+
+**PAR-4: Backfill holds for both eras.** `qa-fn-backfill` produces correct candidates, queue identities and deep links for a historic round and for the PAR-1 round (P3-6).
+
+**PAR-5: Test writes are tagged and few.** Every trace or score written to `qa-harness` during development or acceptance carries a `test:` tag, and their volume stays small (see the call-me-when triggers).
+
+Verification of Langfuse-backed targets runs through `~/.config/langfuse/qa-make.sh <target>` from the repo root.
 
 ## Infrastructure needs (personal-ops, not in this arc)
 
