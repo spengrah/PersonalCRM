@@ -23,6 +23,12 @@
 // span's own start/end. v4 replaces a row with the same (span id, start time) in a
 // trace, so a re-export overwrites rather than duplicates.
 //
+// A trace the exporter before OTLP already shipped carries its string id as its trace
+// id. Re-exporting it under the hex id would split it, so each trace is first looked
+// up by its string id through the v2 observations API and the legacy trace endpoint,
+// and ships only when both answer not-found (`legacyExportRefusal`, P3-5). A trace
+// either lookup finds, or whose lookup fails, sends nothing and counts in FAILED.
+//
 // Media flow (all three steps required): register -> presigned PUT -> PATCH finalize.
 // Skipping the PATCH leaves the media 404ing even though the bytes are in the store.
 
@@ -593,14 +599,17 @@ export class PaginationError extends Error {
 // try/catch isolation cannot protect against. Omitting it preserves the previous
 // unbounded behavior for existing call sites. An abort surfaces as a rejection,
 // which every call site already handles. `headers` adds to the auth + JSON pair.
-export async function api(
+//
+// Resolves with the status and raw body of ANY HTTP answer; rejects only on a
+// transport error or the timeout.
+async function request(
   cfg: LangfuseConfig,
   method: string,
   path: string,
   body?: unknown,
   timeoutMs?: number,
   headers: Record<string, string> = {}
-): Promise<Record<string, unknown>> {
+): Promise<{ status: number; ok: boolean; text: string }> {
   const controller = timeoutMs !== undefined ? new AbortController() : undefined
   const timer =
     controller !== undefined ? setTimeout(() => controller.abort(), timeoutMs) : undefined
@@ -615,12 +624,24 @@ export async function api(
       body: body ? JSON.stringify(body) : undefined,
       ...(controller !== undefined ? { signal: controller.signal } : {}),
     })
-    const text = await res.text()
-    if (!res.ok) throw new ApiError(res.status, text, method, path)
-    return text ? (JSON.parse(text) as Record<string, unknown>) : {}
+    return { status: res.status, ok: res.ok, text: await res.text() }
   } finally {
     if (timer !== undefined) clearTimeout(timer)
   }
+}
+
+// A request whose non-2xx answer throws `ApiError` and whose 2xx body is JSON.
+export async function api(
+  cfg: LangfuseConfig,
+  method: string,
+  path: string,
+  body?: unknown,
+  timeoutMs?: number,
+  headers: Record<string, string> = {}
+): Promise<Record<string, unknown>> {
+  const res = await request(cfg, method, path, body, timeoutMs, headers)
+  if (!res.ok) throw new ApiError(res.status, res.text, method, path)
+  return res.text ? (JSON.parse(res.text) as Record<string, unknown>) : {}
 }
 
 // Walk a paginated Langfuse list endpoint to completion and return the accumulated
@@ -871,6 +892,86 @@ export async function postOtlpSpans(
   }
 }
 
+// --- Legacy-export guard (P3-5) ---
+//
+// Fail-closed: each lookup answers found or not-found exactly as below, and any
+// other answer, a malformed body or a transport error included, is a failed lookup,
+// never read as absent.
+
+// The bound on each lookup. A lookup is one small read; one that has not answered by
+// then fails its trace rather than stall the round.
+const LOOKUP_TIMEOUT_MS = 10_000
+
+type LookupResult = 'found' | 'absent'
+
+const isObject = (v: unknown): v is Record<string, unknown> =>
+  v !== null && typeof v === 'object' && !Array.isArray(v)
+
+// `GET /api/public/v2/observations?traceId=<string id>&limit=1`: found is 200 with a
+// non-empty `data`, not-found is 200 with `data: []`. The body must be the v2 list
+// envelope `{ data: [...], meta: { cursor?: string } }`; any other body is a failure.
+async function v2ObservationLookup(cfg: LangfuseConfig, stringId: string): Promise<LookupResult> {
+  const query = new URLSearchParams({ traceId: stringId, limit: '1' })
+  const path = `/api/public/v2/observations?${query.toString()}`
+  const res = await request(cfg, 'GET', path, undefined, LOOKUP_TIMEOUT_MS)
+  if (res.status !== 200) throw new ApiError(res.status, res.text, 'GET', path)
+  let envelope: unknown
+  try {
+    envelope = JSON.parse(res.text)
+  } catch {
+    envelope = undefined
+  }
+  const meta = isObject(envelope) ? envelope.meta : undefined
+  if (
+    !isObject(envelope) ||
+    !Array.isArray(envelope.data) ||
+    !isObject(meta) ||
+    (meta.cursor !== undefined && typeof meta.cursor !== 'string')
+  ) {
+    throw new Error(
+      `GET ${path} -> 200 body is not the v2 list envelope: ${res.text.slice(0, 200)}`
+    )
+  }
+  return envelope.data.length > 0 ? 'found' : 'absent'
+}
+
+// `GET /api/public/traces/<string id>`: found is 200, not-found is 404.
+async function legacyTraceLookup(cfg: LangfuseConfig, stringId: string): Promise<LookupResult> {
+  const path = `/api/public/traces/${encodeURIComponent(stringId)}`
+  const res = await request(cfg, 'GET', path, undefined, LOOKUP_TIMEOUT_MS)
+  if (res.status === 200) return 'found'
+  if (res.status === 404) return 'absent'
+  throw new ApiError(res.status, res.text, 'GET', path)
+}
+
+// Why a trace must not ship, or undefined when BOTH lookups answered not-found. The
+// two run together, so a stalled instance costs one bound per trace, not two. A
+// lookup that found the trace refuses it whatever the other answered.
+export async function legacyExportRefusal(
+  cfg: LangfuseConfig,
+  stringId: string
+): Promise<string | undefined> {
+  const lookups = [
+    { name: 'v2 observations lookup', run: v2ObservationLookup },
+    { name: 'legacy trace lookup', run: legacyTraceLookup },
+  ]
+  const settled = await Promise.allSettled(lookups.map(l => l.run(cfg, stringId)))
+  const found = lookups.filter((_, i) => {
+    const s = settled[i]
+    return s.status === 'fulfilled' && s.value === 'found'
+  })
+  if (found.length > 0) {
+    const by = found.map(l => l.name).join(' and ')
+    return `already exported by the legacy exporter (found by the ${by}); refused`
+  }
+  const failed = lookups.flatMap((l, i) => {
+    const s = settled[i]
+    return s.status === 'rejected' ? [`${l.name}: ${errMsg(s.reason)}`] : []
+  })
+  if (failed.length > 0) return `legacy-export lookup failed (${failed.join('; ')}); not sent`
+  return undefined
+}
+
 // The bound on the generation request. Generous — it is a single small request —
 // but finite: an unbounded best-effort step is not best-effort, it is a stall that
 // blocks every step after it.
@@ -1068,11 +1169,13 @@ export interface ExportOptions {
   observationTimeoutMs?: number
 }
 
+// `errlog` carries the per-trace guard failures, so the command prints them to stderr.
 export async function exportSpans(
   cfg: LangfuseConfig,
   spans: GenAiSpan[],
   log: (msg: string) => void = () => {},
-  opts: ExportOptions = {}
+  opts: ExportOptions = {},
+  errlog: (msg: string) => void = log
 ): Promise<ExportResult> {
   const result: ExportResult = {
     traces: 0,
@@ -1194,9 +1297,19 @@ export async function exportSpans(
     // ones HIT and get the same token value cheaply.
     for (const body of buildTraceBody(span, scrub)) {
       const traceId = hexTraceId(body.id)
+      // (0) The legacy-export guard, before any request for this trace. A refusal or a
+      // failed lookup sends nothing for it — no media, root, score, enqueue, and so no
+      // generation if it carries the span's usage — and counts it FAILED.
+      const refusal = await legacyExportRefusal(cfg, body.id)
+      if (refusal !== undefined) {
+        result.failed++
+        errlog(`  FAILED ${behaviorId} ${body.id}: ${refusal}`)
+        continue
+      }
       try {
-        // (1) The span's own times, first: a span with none usable ships nothing for
-        // this trace — no media, no root, no score — and counts as FAILED.
+        // (1) The span's own times, before any other request: a span with none usable
+        // ships nothing for this trace — no media, no root, no score — and counts as
+        // FAILED.
         const times = spanTimes(span)
 
         // (2) Register/upload each expected screenshot against THIS trace's id, by

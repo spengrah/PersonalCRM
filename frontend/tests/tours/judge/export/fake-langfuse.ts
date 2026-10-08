@@ -1,7 +1,8 @@
 // The one fake Langfuse the exporter tests talk to. It answers every route
-// `make qa-export` uses — OTLP/JSON traces, legacy ingestion (scores only), media,
-// score-configs and annotation queues — and records what was transported, decoded,
-// so a test asserts on the wire rather than on the exporter's internals.
+// `make qa-export` uses — the legacy-export lookups, OTLP/JSON traces, legacy
+// ingestion (scores only), media, score-configs and annotation queues — and records
+// what was transported, decoded, so a test asserts on the wire rather than on the
+// exporter's internals.
 //
 // Two front doors over ONE handler: `fetchImpl` for an in-process
 // `vi.stubGlobal('fetch', …)`, and `listen()` for a real loopback HTTP server (the
@@ -14,6 +15,13 @@ import type { LangfuseConfig } from './langfuse'
 import { TRIAGE_QUEUE_NAME, VERDICT_SCORE_NAME } from './triage-config'
 
 export const OTLP_PATH = '/api/public/otel/v1/traces'
+export const V2_OBSERVATIONS_PATH = '/api/public/v2/observations'
+export const LEGACY_TRACE_PATH = /^\/api\/public\/traces\/([^/]+)$/
+
+// What one legacy-export lookup (arc §2, S6) answers. 'found' and 'absent' are S6's
+// found and not-found; `{ status, body }` is any other HTTP answer, its body sent raw;
+// 'drop' closes the connection unanswered (a network error); 'hang' never answers.
+export type LookupAnswer = 'found' | 'absent' | { status: number; body?: string } | 'drop' | 'hang'
 
 // The kind of an OTLP AnyValue: the one value field it sets, or 'empty' when it sets
 // none (OTLP's absent value).
@@ -123,6 +131,10 @@ export const VERDICT_CONFIG_ID = 'cfg-verdict'
 export const TRIAGE_QUEUE_ID = 'q-triage'
 
 export interface FakeOpts {
+  // The legacy-export lookups, selected by the trace's string id. Both default to
+  // 'absent': a project that holds no legacy-exported trace.
+  v2LookupFor?: (labelId: string) => LookupAnswer
+  legacyLookupFor?: (labelId: string) => LookupAnswer
   // Triage substrate (defaults model a correctly-provisioned tenant).
   scoreConfigs?: ScoreConfigObj[]
   configError?: boolean
@@ -167,6 +179,8 @@ export interface FakeLangfuse {
   generations: ShippedGeneration[]
   scores: ScoreEvent[]
   itemPosts: ItemPost[]
+  // Every legacy-export lookup, in arrival order, by the string id it asked about.
+  lookups: Array<{ kind: 'v2' | 'legacy'; labelId: string }>
   // Ingestion/OTLP chronology per trace (hex id), so a test can prove the score for a
   // trace is sent after its root, and the generation after every root of its span.
   order: Array<{ kind: 'media' | 'root' | 'score' | 'generation'; traceId: string }>
@@ -179,6 +193,10 @@ const json = (obj: unknown, status = 200): Response =>
     headers: { 'content-type': 'application/json' },
   })
 const errText = (status: number, msg: string): Response => new Response(msg, { status })
+
+// Thrown by the handler for a 'drop' answer: each front door turns it into a request
+// that fails with no response.
+class DroppedConnection extends Error {}
 
 const VALUE_KINDS: readonly string[] = [
   'stringValue',
@@ -366,6 +384,7 @@ export function createFakeLangfuse(opts: FakeOpts = {}): FakeLangfuse {
   const generations: ShippedGeneration[] = []
   const scores: ScoreEvent[] = []
   const itemPosts: ItemPost[] = []
+  const lookups: FakeLangfuse['lookups'] = []
   const order: FakeLangfuse['order'] = []
   const counts = { configResolve: 0 }
   const shaToId = new Map<string, string>()
@@ -435,6 +454,35 @@ export function createFakeLangfuse(opts: FakeOpts = {}): FakeLangfuse {
       }
     }
     requests.push({ method, path: pathname, query: q, headers, body })
+
+    // A lookup's answer: S6's found or not-found response, or the configured other one.
+    const lookup = (answer: LookupAnswer, found: () => Response, absent: () => Response) => {
+      if (answer === 'found') return found()
+      if (answer === 'absent') return absent()
+      if (answer === 'drop') throw new DroppedConnection()
+      if (answer === 'hang') return hang(signal)
+      return new Response(answer.body ?? '', { status: answer.status })
+    }
+    if (pathname === V2_OBSERVATIONS_PATH && method === 'GET') {
+      const labelId = q.get('traceId') ?? ''
+      lookups.push({ kind: 'v2', labelId })
+      // A historic root: its trace id is the string id, its observation id `t-<id>`.
+      return lookup(
+        opts.v2LookupFor?.(labelId) ?? 'absent',
+        () => json({ data: [{ id: `t-${labelId}`, traceId: labelId }], meta: {} }),
+        () => json({ data: [], meta: {} })
+      )
+    }
+    const legacyTrace = LEGACY_TRACE_PATH.exec(pathname)
+    if (legacyTrace && method === 'GET') {
+      const labelId = decodeURIComponent(legacyTrace[1])
+      lookups.push({ kind: 'legacy', labelId })
+      return lookup(
+        opts.legacyLookupFor?.(labelId) ?? 'absent',
+        () => json({ id: labelId, name: 'judge', observations: [], scores: [] }),
+        () => errText(404, JSON.stringify({ message: `Trace ${labelId} not found` }))
+      )
+    }
 
     if (pathname === OTLP_PATH && method === 'POST') {
       let decoded: ReturnType<typeof decodeOtlp>
@@ -560,13 +608,19 @@ export function createFakeLangfuse(opts: FakeOpts = {}): FakeLangfuse {
 
   const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
     const body = init?.body
-    return handle(
-      String(input),
-      init?.method ?? 'GET',
-      lowerKeys(init?.headers),
-      typeof body === 'string' ? body : undefined,
-      init?.signal
-    )
+    try {
+      return await handle(
+        String(input),
+        init?.method ?? 'GET',
+        lowerKeys(init?.headers),
+        typeof body === 'string' ? body : undefined,
+        init?.signal
+      )
+    } catch (e) {
+      // How fetch reports a connection closed with no response.
+      if (e instanceof DroppedConnection) throw new TypeError('fetch failed')
+      throw e
+    }
   }) as unknown as typeof fetch
 
   let server: http.Server | undefined
@@ -581,10 +635,16 @@ export function createFakeLangfuse(opts: FakeOpts = {}): FakeLangfuse {
           req.method ?? 'GET',
           lowerKeys(req.headers),
           raw.length ? raw.toString('utf8') : undefined
-        ).then(async r => {
-          res.writeHead(r.status, { 'content-type': 'application/json' })
-          res.end(await r.text())
-        })
+        ).then(
+          async r => {
+            res.writeHead(r.status, { 'content-type': 'application/json' })
+            res.end(await r.text())
+          },
+          (e: unknown) => {
+            if (e instanceof DroppedConnection) req.socket.destroy()
+            else res.writeHead(500).end(String(e))
+          }
+        )
       })
     })
     await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', () => resolve()))
@@ -608,6 +668,7 @@ export function createFakeLangfuse(opts: FakeOpts = {}): FakeLangfuse {
     generations,
     scores,
     itemPosts,
+    lookups,
     order,
     counts,
   }

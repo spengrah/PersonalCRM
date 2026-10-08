@@ -46,6 +46,12 @@ Every id derives from the judge span, never from the export: the trace id is the
 
 `QA_TEST_TAG=<slug>` (`^[A-Za-z0-9._-]{1,64}$`) adds the tag `test:<slug>` to every span of every trace, for development and acceptance writes to the real project. An invalid value exits non-zero before any request; it is never dropped, because an untagged test trace is the failure the tag exists to prevent.
 
+### Legacy-export guard
+
+Before any request for a trace, `make qa-export` looks up the trace's string id twice: `GET /api/public/v2/observations?traceId=<string id>&limit=1` and `GET /api/public/traces/<string id>`. The exporter before OTLP shipped each trace under its string id, so such a trace is found by one lookup or both, and re-exporting it under its hex id would split it; a found trace is refused. A trace ships only when both lookups answer not-found: v2 with `200` and `data: []`, the legacy endpoint with `404`. Any other answer is a failed lookup, and that trace is not sent either: another status, a v2 body that is not the list envelope, a network error, or no answer within 10 seconds.
+
+A refusal or a failed lookup sends nothing for that trace (no media, root span, generation, score or queue item) and prints `FAILED <behavior> <string id>: <reason>` to stderr. It adds one to the summary line's `FAILED` count and makes the command exit non-zero, while the rest of the file still ships. The nightly sees it only through that count and the exit status, so a round with a refusal is never clean.
+
 ## Detection self-test (trap-as-transformation)
 
 Every JUDGED round (`make qa-report … JUDGE=1`) runs a built-in detection self-test over the round's OWN fresh captures — the trap is the mutation, not a frozen fixture, so there is zero fixture rot. For each committed trap (`judge/trap-config.ts`): apply a single-point `Mutation` to the round's captures, judge the doctored evidence via a RAW judge, and assert a grounded `fail`. A missed trap, a non-executable trap (its target behavior/item is absent, or the mutation is invisible to the judge-rendered prompt), or a per-trap exception sets a non-zero **exit** (a hard signal, distinct from the advisory verdicts, which never gate). The self-test's notion of "detected" matches production exactly: an UNCITED fail is downgraded to `unsure` by the same grounding rule, so it counts as a MISS, not a catch.

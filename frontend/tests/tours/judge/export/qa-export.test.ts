@@ -15,11 +15,14 @@ import type { PerItemVerdict } from '../adapter/types'
 import type { GradedEvidenceEntry, Scenario } from '../label-trace'
 import {
   createFakeLangfuse,
+  LEGACY_TRACE_PATH,
   OTLP_PATH,
+  V2_OBSERVATIONS_PATH,
   type AnyValueKind,
   type DecodedSpan,
   type FakeLangfuse,
   type FakeOpts,
+  type LookupAnswer,
   type RecordedRequest,
 } from './fake-langfuse'
 import { exportSpans } from './langfuse'
@@ -154,8 +157,8 @@ async function qaExport(
         // wait 30 s. The real exportSpans still runs.
         ...(o.observationTimeoutMs !== undefined
           ? {
-              exportSpans: (c, s, l, opts) =>
-                exportSpans(c, s, l, { ...opts, observationTimeoutMs: o.observationTimeoutMs }),
+              exportSpans: (c, s, l, opts, e) =>
+                exportSpans(c, s, l, { ...opts, observationTimeoutMs: o.observationTimeoutMs }, e),
             }
           : {}),
       }
@@ -168,6 +171,8 @@ async function qaExport(
 
 // Which route of the Langfuse API a recorded request hit.
 function routeOf(r: RecordedRequest): string {
+  if (r.path === V2_OBSERVATIONS_PATH && r.method === 'GET') return 'lookup.v2'
+  if (LEGACY_TRACE_PATH.test(r.path) && r.method === 'GET') return 'lookup.legacy'
   if (r.path === OTLP_PATH && r.method === 'POST') return 'otlp'
   if (r.path === '/api/public/ingestion' && r.method === 'POST') return 'ingestion'
   if (r.path === '/api/public/media' && r.method === 'POST') return 'media.register'
@@ -193,6 +198,8 @@ const bodyKeys = (r: RecordedRequest): string[] => Object.keys(r.body as object)
 const queryKeys = (r: RecordedRequest): string[] => [...r.query.keys()].sort()
 const ROUTE_SHAPES: Record<string, { keys: (r: RecordedRequest) => string[]; expected: string[] }> =
   {
+    'lookup.v2': { keys: queryKeys, expected: ['limit', 'traceId'] },
+    'lookup.legacy': { keys: queryKeys, expected: [] },
     'media.register': {
       keys: bodyKeys,
       expected: ['contentLength', 'contentType', 'field', 'sha256Hash', 'traceId'],
@@ -1183,5 +1190,246 @@ describe('make qa-export: the make recipe end to end against the fake server', (
     } finally {
       await fake.close()
     }
+  }, 60_000)
+})
+
+// The command the `qa-export` recipe runs (`cd frontend && bun run
+// tests/tours/judge/export/run.ts "$(TRACE)"`), as a child process against the fake
+// served over loopback (coordinator ruling R5): its stdout, stderr, exit status and
+// the requests it transported.
+async function qaExportProcess(
+  spans: GenAiSpan[],
+  o: { env?: Record<string, string>; fake?: FakeOpts } = {}
+): Promise<CommandRun> {
+  const fake = createFakeLangfuse(o.fake)
+  const cfg = await fake.listen()
+  try {
+    const file = path.join(TMP, `process-${++fileSeq}.jsonl`)
+    fs.writeFileSync(file, spans.map(s => JSON.stringify(s)).join('\n') + '\n')
+    const env: NodeJS.ProcessEnv = { ...process.env }
+    for (const k of Object.keys(env)) {
+      if (k.startsWith('QA_') || k.startsWith('LANGFUSE_')) delete env[k]
+    }
+    Object.assign(env, {
+      LANGFUSE_HOST: cfg.host,
+      LANGFUSE_PUBLIC_KEY: cfg.publicKey,
+      LANGFUSE_SECRET_KEY: cfg.secretKey,
+      ...o.env,
+    })
+    const res = await runProcess('bun', ['run', 'tests/tours/judge/export/run.ts', file], env)
+    const out = res.stdout.split('\n').filter(Boolean)
+    const err = res.stderr.split('\n').filter(Boolean)
+    return { code: res.code ?? 1, out, err, summary: out.find(l => SUMMARY_RE.test(l)), fake }
+  } finally {
+    await fake.close()
+  }
+}
+
+// Each trace named was looked up both ways and then sent nothing — no media, no span,
+// no score, no queue item — and a stderr line names it with `reason`. The command
+// exits non-zero, and the output the nightly reads (stdout and stderr together) holds
+// its one summary line and no `qa-export: WARNING`, so the failure reaches the
+// clean-round predicate only through the exit status and FAILED (PR4.c3).
+function expectNotSent(run: CommandRun, labelIds: string[], reason: RegExp): void {
+  expect(run.code).toBe(1)
+  const output = [...run.out, ...run.err]
+  expect(output.filter(l => SUMMARY_RE.test(l))).toHaveLength(1)
+  expect(output.filter(l => /^qa-export: WARNING/.test(l))).toEqual([])
+  for (const id of labelIds) {
+    const traceId = hexTrace(id)
+    expect(
+      run.fake.lookups
+        .filter(l => l.labelId === id)
+        .map(l => l.kind)
+        .sort()
+    ).toEqual(['legacy', 'v2'])
+    const media = run.fake.requests.filter(
+      r => routeOf(r) === 'media.register' && (r.body as { traceId: string }).traceId === traceId
+    )
+    expect(media, `media sent for ${id}`).toHaveLength(0)
+    expect(
+      allSpans(run.fake).filter(s => s.traceId === traceId),
+      `span sent for ${id}`
+    ).toEqual([])
+    expect(run.fake.scores.filter(s => s.body.traceId === traceId)).toEqual([])
+    expect(run.fake.itemPosts.filter(p => p.objectId === traceId)).toEqual([])
+    expect(
+      run.err.some(l => l.includes(id) && reason.test(l)),
+      `stderr names ${id}`
+    ).toBe(true)
+  }
+}
+
+const REFUSED = /already exported by the legacy exporter/
+
+// Selects one answer for one string id, the default for every other.
+const only =
+  (id: string, answer: LookupAnswer) =>
+  (labelId: string): LookupAnswer =>
+    labelId === id ? answer : 'absent'
+
+describe('P3-5: a trace the legacy exporter already shipped is refused, counted in FAILED', () => {
+  it('found by the legacy endpoint only, v2 still empty (the propagation window)', async () => {
+    const span = behaviorSpan([[0, 'fail']], { gradedEvidence: graded([png()]) })
+    const id = itemId(span, 0)
+    const run = await qaExportProcess([span], { fake: { legacyLookupFor: only(id, 'found') } })
+    expectNotSent(run, [id], REFUSED)
+    expect(run.summary).toBe(
+      'qa-export: 0 trace(s), 0 screenshot(s), 0 observation(s), 1 FAILED; enqueued 0/0'
+    )
+  }, 60_000)
+
+  it('found by v2 only', async () => {
+    const span = behaviorSpan([[0, 'fail']], { gradedEvidence: graded([png()]) })
+    const id = itemId(span, 0)
+    const run = await qaExportProcess([span], { fake: { v2LookupFor: only(id, 'found') } })
+    expectNotSent(run, [id], REFUSED)
+    expect(run.summary).toBe(
+      'qa-export: 0 trace(s), 0 screenshot(s), 0 observation(s), 1 FAILED; enqueued 0/0'
+    )
+  }, 60_000)
+
+  it('found by both', async () => {
+    const span = behaviorSpan([[0, 'fail']], { gradedEvidence: graded([png()]) })
+    const id = itemId(span, 0)
+    const run = await qaExportProcess([span], {
+      fake: { v2LookupFor: only(id, 'found'), legacyLookupFor: only(id, 'found') },
+    })
+    expectNotSent(run, [id], REFUSED)
+    expect(run.summary).toBe(
+      'qa-export: 0 trace(s), 0 screenshot(s), 0 observation(s), 1 FAILED; enqueued 0/0'
+    )
+  }, 60_000)
+
+  it('a file mixing legacy and new spans ships every new trace and exits non-zero', async () => {
+    const legacy = behaviorSpan([[0, 'fail']], { behaviorId: 'CON-060' })
+    const fresh = behaviorSpan([[0, 'fail']], { behaviorId: 'CON-061' })
+    const fresh2 = behaviorSpan(
+      [
+        [0, 'fail'],
+        [1, 'pass'],
+      ],
+      { behaviorId: 'CON-062' }
+    )
+    const legacyId = itemId(legacy, 0)
+    const shipped = [itemId(fresh, 0), itemId(fresh2, 0), itemId(fresh2, 1)]
+    const run = await qaExportProcess([legacy, fresh, fresh2], {
+      env: { QA_SALT_PASSES: '0' },
+      fake: { legacyLookupFor: only(legacyId, 'found') },
+    })
+    expectNotSent(run, [legacyId], REFUSED)
+    expect(run.summary).toBe(
+      'qa-export: 3 trace(s), 0 screenshot(s), 2 observation(s), 1 FAILED; enqueued 2/2'
+    )
+    expect(run.fake.roots.map(r => r.labelId)).toEqual(shipped)
+    expect(run.fake.generations.map(g => g.labelId)).toEqual([itemId(fresh, 0), itemId(fresh2, 0)])
+    expect(run.fake.itemPosts.map(p => p.objectId)).toEqual([
+      hexTrace(itemId(fresh, 0)),
+      hexTrace(itemId(fresh2, 0)),
+    ])
+  }, 60_000)
+
+  it('a refused trace that would have been a salted pass is not enqueued', async () => {
+    const legacy = behaviorSpan([[0, 'pass']], { behaviorId: 'CON-063' })
+    const fresh = behaviorSpan([[0, 'pass']], { behaviorId: 'CON-064' })
+    const legacyId = itemId(legacy, 0)
+    // Every pass is salted: the refused one would be enqueued if it had shipped.
+    const run = await qaExportProcess([legacy, fresh], {
+      env: { QA_SALT_PASSES: '5' },
+      fake: { v2LookupFor: only(legacyId, 'found') },
+    })
+    expectNotSent(run, [legacyId], REFUSED)
+    expect(run.fake.itemPosts.map(p => p.objectId)).toEqual([hexTrace(itemId(fresh, 0))])
+    expect(run.summary).toBe(
+      'qa-export: 1 trace(s), 0 screenshot(s), 1 observation(s), 1 FAILED; enqueued 1/1'
+    )
+  }, 60_000)
+
+  it('a refused lowest-itemIndex trace ships no generation', async () => {
+    const span = behaviorSpan([
+      [3, 'fail'],
+      [1, 'fail'],
+    ])
+    const carrier = itemId(span, 1)
+    const run = await qaExportProcess([span], { fake: { legacyLookupFor: only(carrier, 'found') } })
+    expectNotSent(run, [carrier], REFUSED)
+    expect(run.fake.roots.map(r => r.labelId)).toEqual([itemId(span, 3)])
+    expect(run.fake.generations).toEqual([])
+    expect(run.summary).toBe(
+      'qa-export: 1 trace(s), 0 screenshot(s), 0 observation(s), 1 FAILED; enqueued 1/1'
+    )
+  }, 60_000)
+})
+
+const LOOKUP_FAILED = /legacy-export lookup failed/
+
+describe('P3-5: any lookup answer other than found or not-found fails the trace, counted in FAILED', () => {
+  it.each<[string, FakeOpts['v2LookupFor'] | undefined, FakeOpts['legacyLookupFor'] | undefined]>([
+    ['v2 answers 500', () => ({ status: 500, body: 'boom' }), undefined],
+    ['v2 answers 401', () => ({ status: 401, body: '{"message":"Unauthorized"}' }), undefined],
+    ['v2 answers 200 with an empty object', () => ({ status: 200, body: '{}' }), undefined],
+    ['v2 answers 200 with an array', () => ({ status: 200, body: '[]' }), undefined],
+    ['v2 answers 200 with no meta', () => ({ status: 200, body: '{"data":[]}' }), undefined],
+    [
+      'v2 answers 200 with a data that is not an array',
+      () => ({ status: 200, body: '{"data":"x","meta":{}}' }),
+      undefined,
+    ],
+    [
+      'v2 answers 200 with a cursor that is not a string',
+      () => ({ status: 200, body: '{"data":[],"meta":{"cursor":5}}' }),
+      undefined,
+    ],
+    ['v2 answers 200 with a body that is not JSON', () => ({ status: 200, body: 'ok' }), undefined],
+    ['the legacy endpoint answers 500', undefined, () => ({ status: 500, body: 'boom' })],
+    ['a network error on the v2 lookup', () => 'drop', undefined],
+    ['v2 not-found with the legacy endpoint erroring', () => 'absent', () => 'drop'],
+  ])(
+    '%s',
+    async (_case, v2LookupFor, legacyLookupFor) => {
+      const span = behaviorSpan([[0, 'fail']], { gradedEvidence: graded([png()]) })
+      const id = itemId(span, 0)
+      const run = await qaExportProcess([span], { fake: { v2LookupFor, legacyLookupFor } })
+      expectNotSent(run, [id], LOOKUP_FAILED)
+      expect(run.summary).toBe(
+        'qa-export: 0 trace(s), 0 screenshot(s), 0 observation(s), 1 FAILED; enqueued 0/0'
+      )
+    },
+    60_000
+  )
+
+  it('a timeout: a v2 lookup that never answers fails its trace once the bound passes', async () => {
+    const span = behaviorSpan([[0, 'fail']], { gradedEvidence: graded([png()]) })
+    const id = itemId(span, 0)
+    const run = await qaExportProcess([span], { fake: { v2LookupFor: () => 'hang' } })
+    expectNotSent(run, [id], LOOKUP_FAILED)
+    expect(run.summary).toBe(
+      'qa-export: 0 trace(s), 0 screenshot(s), 0 observation(s), 1 FAILED; enqueued 0/0'
+    )
+  }, 60_000)
+
+  it('both not-found: the trace ships as PR3 ships it, after both lookups by its string id', async () => {
+    const span = behaviorSpan([[0, 'fail']], { gradedEvidence: graded([png()]) })
+    const id = itemId(span, 0)
+    const traceId = hexTrace(id)
+    const run = await qaExportProcess([span])
+    expect(run.code).toBe(0)
+    expect(run.err).toEqual([])
+    expect(run.summary).toBe(
+      'qa-export: 1 trace(s), 1 screenshot(s), 1 observation(s); enqueued 1/1'
+    )
+    expectTransport(run.fake)
+    expect(run.fake.roots.map(r => r.traceId)).toEqual([traceId])
+    expect(run.fake.generations.map(g => g.traceId)).toEqual([traceId])
+    expect(run.fake.scores.map(s => s.body.traceId)).toEqual([traceId])
+    expect(run.fake.itemPosts.map(p => p.objectId)).toEqual([traceId])
+    // S6's two lookups, by the string id, both answered before any request for the trace.
+    const routes = run.fake.requests.map(routeOf)
+    const v2 = run.fake.requests.filter(r => routeOf(r) === 'lookup.v2')
+    expect(v2.map(r => Object.fromEntries(r.query))).toEqual([{ traceId: id, limit: '1' }])
+    const legacy = run.fake.requests.filter(r => routeOf(r) === 'lookup.legacy')
+    expect(legacy.map(r => r.path)).toEqual([`/api/public/traces/${id}`])
+    const firstForTrace = routes.findIndex(r => !r.startsWith('lookup.'))
+    expect(routes.slice(0, firstForTrace).sort()).toEqual(['lookup.legacy', 'lookup.v2'])
   }, 60_000)
 })
