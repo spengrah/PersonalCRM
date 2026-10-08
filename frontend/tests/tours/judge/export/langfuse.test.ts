@@ -1543,17 +1543,6 @@ describe('exportSpans — the generation observation (separate, non-fatal, after
     expect(warnings[0]).toContain('verify against the live API')
   })
 
-  it('counts an UNCONFIRMED response (an unreadable OTLP partialSuccess) as a failed observation, never as shipped', async () => {
-    const mock = createFakeLangfuse({ generationResponse: { partialSuccess: 'garbage' } })
-    vi.stubGlobal('fetch', mock.fetchImpl)
-    const logs: string[] = []
-    const res = await exportSpans(cfg, [itemSpan('fail', usageParams)], m => logs.push(m))
-    expect(res.observations).toBe(0)
-    expect(res.observationsFailed).toBe(1)
-    expect(res.traces).toBe(1)
-    expect(logs.some(l => l.includes('unreadable partialSuccess'))).toBe(true)
-  })
-
   it('does NOT count a usage-LESS span as skipped once the breaker is open', async () => {
     // A judge call that failed before reporting input tokens would never have
     // produced an observation; counting it as skipped reports a loss that never

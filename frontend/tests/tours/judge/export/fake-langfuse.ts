@@ -27,8 +27,9 @@ export type AnyValueKind =
   | 'empty'
 
 // One span as the fake decoded it off an OTLP/JSON request. `attributes` maps each
-// key to its decoded AnyValue, typed as sent and never JSON-parsed (a string stays a
-// string); `kinds` maps each key to the AnyValue kind that carried it.
+// key Langfuse keeps to its value as Langfuse decodes it (see `decodeAnyValue`);
+// `kinds` maps every key on the wire, kept or dropped, to the AnyValue kind that
+// carried it, so a test can see what was sent and not kept.
 export interface DecodedSpan {
   traceId: string
   spanId: string
@@ -47,7 +48,7 @@ export interface OtlpRequest {
 }
 
 // A root span, with the legacy trace body's fields read back off its attributes.
-// `metadata` values are the decoded attribute values, typed as sent: the input and
+// `metadata` values are the attribute values as Langfuse decodes them: the input and
 // output are JSON strings by Langfuse's contract and are parsed, metadata never is.
 export interface ShippedRoot extends DecodedSpan {
   labelId: string
@@ -202,23 +203,29 @@ function anyValueKind(v: unknown): AnyValueKind {
   return keys[0] as AnyValueKind
 }
 
-// The `values` list of an arrayValue or kvlistValue.
+// The `values` list of an arrayValue.
 function listValues(kind: string, x: unknown): unknown[] {
   const values = (x as { values?: unknown } | null)?.values
   if (!Array.isArray(values)) throw new Error(`${kind} without values`)
   return values
 }
 
-// Decode one OTLP AnyValue to the JSON value it carries, typed as sent: a string stays
-// a string and is never JSON-parsed, so a number or boolean sent as a string decodes
-// as a string. The empty AnyValue decodes to null. An `intValue` is accepted only as
-// a JSON integer, the form the exporter sends; a decimal-string intValue throws
-// rather than decode to a number the real server might keep as a string. Anything
-// else malformed throws too, so the request fails (400) instead of decoding to
-// something a test would trust.
+// Decode one OTLP AnyValue the way Langfuse v4.54.0's OTLP attribute decoder does
+// (OtelIngestionProcessor: extractSpanAttributes, convertValueToPlainJavascript), so
+// any encoding Langfuse would mangle fails a test. A string, boolean, integer or
+// double decodes as itself, and an array element by element. A string stays a string
+// and is never JSON-parsed, so a number or boolean sent as a string decodes as a
+// string. The decoder has no kvlistValue branch: it JSON-stringifies the wire wrapper,
+// so a kvlistValue decodes to that string. The empty AnyValue decodes to undefined,
+// and the attribute carrying it is dropped. Inside an array the decoder's result for
+// an empty element is not established, so that throws. An `intValue` is accepted
+// only as a JSON integer, the form the exporter sends; a decimal-string intValue
+// throws rather than decode to a number the real server might keep as a string.
+// Anything else malformed throws too, so the request fails (400) instead of decoding
+// to something a test would trust.
 function decodeAnyValue(v: unknown): unknown {
   const kind = anyValueKind(v)
-  if (kind === 'empty') return null
+  if (kind === 'empty') return undefined
   const x = (v as Record<string, unknown>)[kind]
   switch (kind) {
     case 'stringValue':
@@ -234,16 +241,13 @@ function decodeAnyValue(v: unknown): unknown {
       if (typeof x === 'number' && Number.isFinite(x)) return x
       break
     case 'arrayValue':
-      return listValues(kind, x).map(decodeAnyValue)
-    case 'kvlistValue': {
-      const out: Record<string, unknown> = {}
-      for (const kv of listValues(kind, x) as Array<{ key?: unknown; value?: unknown }>) {
-        if (typeof kv?.key !== 'string') throw new Error('kvlistValue entry without a key')
-        if (kv.key in out) throw new Error(`duplicate kvlistValue key ${kv.key}`)
-        out[kv.key] = decodeAnyValue(kv.value)
-      }
-      return out
-    }
+      return listValues(kind, x).map(e => {
+        const d = decodeAnyValue(e)
+        if (d === undefined) throw new Error('arrayValue element is the empty AnyValue')
+        return d
+      })
+    case 'kvlistValue':
+      return JSON.stringify(v)
   }
   throw new Error(`${kind} cannot carry ${JSON.stringify(x)}`)
 }
@@ -285,9 +289,10 @@ function decodeOtlp(body: unknown): { scopeName?: string; spans: DecodedSpan[] }
         const kinds: Record<string, AnyValueKind> = {}
         for (const a of sp.attributes as Array<{ key?: unknown; value?: unknown }>) {
           if (typeof a.key !== 'string') throw new Error('attribute key missing')
-          if (a.key in attributes) throw new Error(`duplicate attribute ${a.key}`)
-          attributes[a.key] = decodeAnyValue(a.value)
+          if (a.key in kinds) throw new Error(`duplicate attribute ${a.key}`)
           kinds[a.key] = anyValueKind(a.value)
+          const value = decodeAnyValue(a.value)
+          if (value !== undefined) attributes[a.key] = value
         }
         spans.push({
           traceId: sp.traceId,

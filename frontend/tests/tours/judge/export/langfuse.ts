@@ -407,15 +407,15 @@ export function buildGenerationBody(
 
 // --- OTLP/JSON encoding ---
 
+// The AnyValue kinds Langfuse's OTLP decoder keeps. It drops the empty AnyValue and
+// has no kvlistValue branch (it stores a string describing the wire wrapper), so
+// neither is a member.
 export type OtlpAnyValue =
   | { stringValue: string }
   | { boolValue: boolean }
   | { intValue: number }
   | { doubleValue: number }
   | { arrayValue: { values: OtlpAnyValue[] } }
-  | { kvlistValue: { values: OtlpAttribute[] } }
-  // The empty AnyValue: OTLP's absent value.
-  | Record<string, never>
 export interface OtlpAttribute {
   key: string
   value: OtlpAnyValue
@@ -439,32 +439,34 @@ const strAttr = (key: string, value: string): OtlpAttribute => ({
 })
 
 // The OTLP AnyValue of a metadata value, keeping the JSON type the legacy trace body
-// gave it, because Langfuse keeps a metadata attribute's value as sent: a string, an
-// integer, a non-integer number and a boolean each travel as their own kind (an
-// integer as a JSON-number `intValue`, never a decimal string; one beyond 2^53 as a
-// `doubleValue`), an array as `arrayValue` and an object as
-// `kvlistValue`, each element encoded the same way. Null travels as the empty
-// AnyValue, OTLP's absent value, and so does what JSON writes as null (a non-finite
-// number, an undefined array element). An undefined object field is omitted, as JSON
-// omits it.
-function anyValue(v: unknown): OtlpAnyValue {
+// gave it wherever Langfuse's decoder keeps that type (coordinator ruling R4): a
+// string, an integer, a non-integer number and a boolean each travel as their own
+// kind (an integer as a JSON-number `intValue`, never a decimal string; one beyond
+// 2^53 as a `doubleValue`), and an array as `arrayValue`, each element encoded the
+// same way. An object has no kind that survives, so it travels as a `stringValue`
+// holding its JSON, and so does an array holding an element with no AnyValue. Null,
+// and what JSON writes as null (a non-finite number, undefined), has no AnyValue.
+function anyValue(v: unknown): OtlpAnyValue | undefined {
   if (typeof v === 'string') return { stringValue: v }
   if (typeof v === 'boolean') return { boolValue: v }
   if (typeof v === 'number' && Number.isFinite(v)) {
     return Number.isSafeInteger(v) ? { intValue: v } : { doubleValue: v }
   }
-  if (Array.isArray(v)) return { arrayValue: { values: v.map(anyValue) } }
-  if (v !== null && typeof v === 'object') {
-    return { kvlistValue: { values: metadataAttrs('', v as Record<string, unknown>) } }
+  if (Array.isArray(v)) {
+    const values = v.map(anyValue)
+    if (values.every((e): e is OtlpAnyValue => e !== undefined)) return { arrayValue: { values } }
   }
-  return {}
+  if (v !== null && typeof v === 'object') return { stringValue: JSON.stringify(v) }
+  return undefined
 }
 
-// One attribute per defined field, keyed `<prefix><field>`, valued by `anyValue`.
+// One attribute per field that has an AnyValue, keyed `<prefix><field>`: a null or
+// undefined field is omitted, so it reads as absent.
 function metadataAttrs(prefix: string, fields: Record<string, unknown>): OtlpAttribute[] {
-  return Object.entries(fields)
-    .filter(([, v]) => v !== undefined)
-    .map(([k, v]) => ({ key: `${prefix}${k}`, value: anyValue(v) }))
+  return Object.entries(fields).flatMap(([k, v]) => {
+    const value = anyValue(v)
+    return value !== undefined ? [{ key: `${prefix}${k}`, value }] : []
+  })
 }
 
 // The span-level trace context: the same for every item-trace of one judge span.

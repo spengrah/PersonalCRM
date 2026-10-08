@@ -752,15 +752,16 @@ const legacyMetadata = (labelId: string, over: Record<string, unknown> = {}) => 
   ...over,
 })
 
-// The OTLP kind a JSON value travels as: a string, an integer, a non-integer number and
-// a boolean each as their own kind, an array and an object as the list kinds, and null
-// as the empty AnyValue.
-const kindFor = (v: unknown): AnyValueKind => {
+// The OTLP kind that carries a value through Langfuse's decoder unchanged: a string, an
+// integer, a non-integer number and a boolean each as their own kind, an array as
+// `arrayValue`. A decoded value is never null or an object (the decoder drops the
+// empty AnyValue and stringifies a kvlistValue), so no other kind qualifies.
+const kindFor = (v: unknown): AnyValueKind | undefined => {
   if (typeof v === 'string') return 'stringValue'
   if (typeof v === 'boolean') return 'boolValue'
   if (typeof v === 'number') return Number.isInteger(v) ? 'intValue' : 'doubleValue'
   if (Array.isArray(v)) return 'arrayValue'
-  return v === null ? 'empty' : 'kvlistValue'
+  return undefined
 }
 
 // `legacyMetadata` keyed as `ShippedRoot.metadata` is: the field name alone.
@@ -769,11 +770,14 @@ const prefixStripped = (m: Record<string, unknown>): Record<string, unknown> =>
     Object.entries(m).map(([k, v]) => [k.slice('langfuse.trace.metadata.'.length), v])
   )
 
-// Every metadata attribute of a span travelled as the kind its JSON type names.
+// Every metadata attribute a span sent survived Langfuse's decoder, as the kind its
+// decoded JSON type names: none was dropped (an empty AnyValue) or mangled (a
+// kvlistValue, which decodes to a string).
 function expectMetadataKinds(span: DecodedSpan): void {
-  for (const [k, v] of Object.entries(span.attributes)) {
+  for (const [k, kind] of Object.entries(span.kinds)) {
     if (/^langfuse\.(trace|observation)\.metadata\./.test(k)) {
-      expect(span.kinds[k], k).toBe(kindFor(v))
+      expect(span.attributes, `${k} was sent as ${kind} and dropped`).toHaveProperty([k])
+      expect(kind, k).toBe(kindFor(span.attributes[k]))
     }
   }
 }
@@ -891,28 +895,29 @@ describe('P3-1, D3: the root carries the trace name, session, tags, IO and every
     expectMetadataKinds(root)
   })
 
-  it('a span file carrying a non-integer count, a null and a nested value: each keeps its JSON type', async () => {
+  it('a span file carrying a null, an object, an array holding a null and a non-integer count: the null is omitted, the object and that array read as their JSON, the count keeps its type (R4)', async () => {
     const span = behaviorSpan([[0, 'fail']], { ...usage, cacheWriteInputTokens: 12.5 })
     // Values only a hand-edited or malformed span file carries; the legacy body
-    // shipped them as JSON.
+    // shipped them as JSON. Langfuse's OTLP decoder drops an empty AnyValue and has no
+    // kvlistValue branch, so ruling R4 fixes what each reads as.
     span.attributes['qa.judge.impl'] = null
     span.attributes['qa.tool_rejected'] = { by: 'policy', codes: [1, 2.5] }
+    ;(span.status as { code: unknown }).code = ['OK', null]
     const run = await qaExport([span])
     expect(run.code).toBe(0)
     const [root] = run.fake.roots
     const [gen] = run.fake.generations
-    expect(root.metadata).toEqual(
-      prefixStripped(
-        legacyMetadata(itemId(span, 0), {
-          'langfuse.trace.metadata.impl': null,
-          'langfuse.trace.metadata.tool_rejected': { by: 'policy', codes: [1, 2.5] },
-          'langfuse.trace.metadata.cache_write_input_tokens': 12.5,
-        })
-      )
+    const expected = prefixStripped(
+      legacyMetadata(itemId(span, 0), {
+        'langfuse.trace.metadata.tool_rejected': '{"by":"policy","codes":[1,2.5]}',
+        'langfuse.trace.metadata.status': '["OK",null]',
+        'langfuse.trace.metadata.cache_write_input_tokens': 12.5,
+      })
     )
+    delete expected.impl
+    expect(root.metadata).toEqual(expected)
     expect(gen.metadata).toEqual({ reasoning_output_tokens: 800, cache_write_input_tokens: 12.5 })
-    expect(root.kinds['langfuse.trace.metadata.impl']).toBe('empty')
-    expect(root.kinds['langfuse.trace.metadata.tool_rejected']).toBe('kvlistValue')
+    // Nothing was sent for Langfuse to drop or mangle, on either span of the trace.
     expectMetadataKinds(root)
     expectMetadataKinds(gen)
   })
