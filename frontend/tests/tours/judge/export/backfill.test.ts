@@ -1,6 +1,16 @@
-import { execFileSync, spawn } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { main } from './backfill'
@@ -293,17 +303,35 @@ function rootReadTags(q: URLSearchParams): string[] {
 
 // --- command level: the process `make qa-fn-backfill` runs ---------------------
 
-// The Makefile target runs `cd frontend && bun run tests/tours/judge/export/backfill.ts
-// <BEHAVIOR> [<TRACE> | --round <ROUND>]`. `runCommand` runs that command as a child
-// process against a fake Langfuse served over HTTP on loopback, with only the fake host
-// and dummy keys in its environment. `--no-env-file` stops bun from adding frontend/'s
-// .env files to that environment; it changes nothing else about the command.
-const FRONTEND_DIR = path.resolve(__dirname, '../../../..')
-const BACKFILL_SCRIPT = 'tests/tours/judge/export/backfill.ts'
-const BUN = execFileSync('sh', ['-c', 'command -v bun'], { encoding: 'utf8' }).trim()
+// `runCommand` runs `make qa-fn-backfill BEHAVIOR=… [TRACE=… | ROUND=…]` from the
+// repository root as a child process, against a fake Langfuse served over HTTP on
+// loopback, so the target's script path and argument forwarding are under test too.
+const REPO_ROOT = path.resolve(__dirname, '../../../../..')
 const FAKE_PUBLIC_KEY = 'pk-lf-fake'
 const FAKE_SECRET_KEY = 'sk-lf-fake'
 const FAKE_AUTH = 'Basic ' + Buffer.from(`${FAKE_PUBLIC_KEY}:${FAKE_SECRET_KEY}`).toString('base64')
+
+// The child's whole environment: PATH for make, git and bun, the fake host, dummy keys,
+// and every other variable the command reads. bun adds frontend/'s .env files to the
+// environment but never replaces a variable already set, even to the empty string, so
+// nothing those files hold can reach these names (proven by the canary test below).
+// An empty LANGFUSE_PROJECT_ID reads as unset: deep links resolve the fake's project.
+const commandEnv = (host: string): NodeJS.ProcessEnv =>
+  ({
+    PATH: process.env.PATH,
+    LANGFUSE_HOST: host,
+    LANGFUSE_PUBLIC_KEY: FAKE_PUBLIC_KEY,
+    LANGFUSE_SECRET_KEY: FAKE_SECRET_KEY,
+    LANGFUSE_PROJECT_ID: '',
+    // Next's types require NODE_ENV on ProcessEnv; the child deliberately has none.
+  }) as Partial<NodeJS.ProcessEnv> as NodeJS.ProcessEnv
+
+// The target's make variables.
+interface TargetVars {
+  BEHAVIOR: string
+  TRACE?: string
+  ROUND?: string
+}
 
 // One request the command transported to the fake.
 interface Transported {
@@ -312,7 +340,10 @@ interface Transported {
   body: string | undefined
 }
 interface CommandRun {
+  // make's own exit status: 0, or 2 when the recipe fails.
   code: number | null
+  // The backfill's exit status, which make reports on stderr when the recipe fails.
+  status: number | null
   stdout: string
   stderr: string
   // The fake's base URL, which deep links start with.
@@ -320,7 +351,22 @@ interface CommandRun {
   requests: Transported[]
 }
 
-async function runCommand(args: string[], opts: MockOpts): Promise<CommandRun> {
+// The backfill's exit status from make's exit status and stderr. A failed recipe makes
+// make exit 2 and print `make: *** [<file>:<line>: ]qa-fn-backfill] Error <status>`.
+function recipeStatus(code: number | null, stderr: string): number | null {
+  if (code === 0) return 0
+  expect(code).toBe(2)
+  const reported = /^make: \*\*\* \[(?:[^\]]*: )?qa-fn-backfill\] Error (\d+)$/m.exec(stderr)
+  return reported === null ? null : Number(reported[1])
+}
+
+// `root` is the directory make runs from: the repository root, or the canary test's
+// stand-in for it.
+async function runCommand(
+  vars: TargetVars,
+  opts: MockOpts,
+  root: string = REPO_ROOT
+): Promise<CommandRun> {
   const m = mock(opts)
   const requests: Transported[] = []
   const auths: Array<string | undefined> = []
@@ -347,14 +393,12 @@ async function runCommand(args: string[], opts: MockOpts): Promise<CommandRun> {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const host = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   try {
-    const child = spawn(BUN, ['--no-env-file', 'run', BACKFILL_SCRIPT, ...args], {
-      cwd: FRONTEND_DIR,
-      // Next's types require NODE_ENV on ProcessEnv; the child deliberately has none.
-      env: {
-        LANGFUSE_HOST: host,
-        LANGFUSE_PUBLIC_KEY: FAKE_PUBLIC_KEY,
-        LANGFUSE_SECRET_KEY: FAKE_SECRET_KEY,
-      } as Partial<NodeJS.ProcessEnv> as NodeJS.ProcessEnv,
+    const makeVars = Object.entries(vars)
+      .filter(([, value]) => value !== undefined)
+      .map(([name, value]) => `${name}=${String(value)}`)
+    const child = spawn('make', ['qa-fn-backfill', ...makeVars], {
+      cwd: root,
+      env: commandEnv(host),
     })
     let stdout = ''
     let stderr = ''
@@ -367,7 +411,7 @@ async function runCommand(args: string[], opts: MockOpts): Promise<CommandRun> {
     // Every request was one the fake serves, authenticated with the dummy keys.
     expect(unexpected).toEqual([])
     expect(auths.every(a => a === FAKE_AUTH)).toBe(true)
-    return { code, stdout, stderr, host, requests }
+    return { code, status: recipeStatus(code, stderr), stdout, stderr, host, requests }
   } finally {
     server.closeAllConnections()
     await new Promise<void>(resolve => server.close(() => resolve()))
@@ -1035,12 +1079,15 @@ describe('PR2.c1 (command level) — candidates keyed by traceId, never the obse
   it('a historic root (observation id t-<traceId>) lists, links and joins by its string trace id', async () => {
     // The output says FAIL; only the PASS score bound to the trace id makes it a candidate,
     // so a join on the observation id would exclude it.
-    const run = await runCommand(['CON-042'], {
-      traces: [trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('fail', 'hc', 'hk'))],
-      scores: [traceScore(HIST_TRACE, 'pass')],
-    })
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('fail', 'hc', 'hk'))],
+        scores: [traceScore(HIST_TRACE, 'pass')],
+      }
+    )
     expect(run.stderr).toBe('')
-    expect(run.code).toBe(0)
+    expect(run.status).toBe(0)
     expect(run.stdout).toMatch(/1 covering-PASS candidate/)
     expect(run.stdout).toContain(`\n  ${HIST_TRACE}\n`)
     expect(run.stdout).toContain(`${run.host}/project/proj-1/traces/${HIST_TRACE}`)
@@ -1053,14 +1100,17 @@ describe('PR2.c1 (command level) — candidates keyed by traceId, never the obse
   })
   it('a new root (32-hex trace id, distinct span id) lists, links and joins by the hex trace id', async () => {
     const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('fail'))
-    const run = await runCommand(['CON-042'], {
-      // The generation under the same trace carries the same trace tags; the root
-      // filter keeps it from becoming a second row for the trace.
-      traces: [root, childObs(root, HEX_GEN_SPAN)],
-      scores: [traceScore(HEX_TRACE, 'pass')],
-    })
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        // The generation under the same trace carries the same trace tags; the root
+        // filter keeps it from becoming a second row for the trace.
+        traces: [root, childObs(root, HEX_GEN_SPAN)],
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
     expect(run.stderr).toBe('')
-    expect(run.code).toBe(0)
+    expect(run.status).toBe(0)
     expect(run.stdout).toMatch(/1 covering-PASS candidate/)
     expect(run.stdout).toContain(`\n  ${HEX_TRACE}\n`)
     expect(run.stdout).toContain(`${run.host}/project/proj-1/traces/${HEX_TRACE}`)
@@ -1071,20 +1121,23 @@ describe('PR2.c1 (command level) — candidates keyed by traceId, never the obse
   })
 
   it('a round narrowed by runId: lists only roots carrying both tags', async () => {
-    const run = await runCommand(['CON-042', '--round', RUN_ID], {
-      traces: [
-        newRoot(
-          HEX_TRACE,
-          HEX_SPAN,
-          ['behavior:CON-042', `runId:${RUN_ID}`],
-          verdictOutput('pass')
-        ),
-        trace(HIST_TRACE, ['behavior:CON-042', 'runId:20260716T151639Z'], verdictOutput('pass')),
-        trace('judge-CON-042-sp0002-item0', ['behavior:CON-042'], verdictOutput('pass')),
-      ],
-    })
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', ROUND: RUN_ID },
+      {
+        traces: [
+          newRoot(
+            HEX_TRACE,
+            HEX_SPAN,
+            ['behavior:CON-042', `runId:${RUN_ID}`],
+            verdictOutput('pass')
+          ),
+          trace(HIST_TRACE, ['behavior:CON-042', 'runId:20260716T151639Z'], verdictOutput('pass')),
+          trace('judge-CON-042-sp0002-item0', ['behavior:CON-042'], verdictOutput('pass')),
+        ],
+      }
+    )
     expect(run.stderr).toBe('')
-    expect(run.code).toBe(0)
+    expect(run.status).toBe(0)
     expect(rootReadTags(gets(run, OBSERVATIONS_V2)[0])).toEqual([
       'behavior:CON-042',
       `runId:${RUN_ID}`,
@@ -1097,14 +1150,22 @@ describe('PR2.c1 (command level) — candidates keyed by traceId, never the obse
   })
 
   it('a round narrowed by gitSha: lists only roots carrying both tags', async () => {
-    const run = await runCommand(['CON-042', '--round', 'abc1234'], {
-      traces: [
-        trace(HIST_TRACE, ['behavior:CON-042', 'gitSha:abc1234'], verdictOutput('pass')),
-        newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042', 'gitSha:def5678'], verdictOutput('pass')),
-      ],
-    })
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', ROUND: 'abc1234' },
+      {
+        traces: [
+          trace(HIST_TRACE, ['behavior:CON-042', 'gitSha:abc1234'], verdictOutput('pass')),
+          newRoot(
+            HEX_TRACE,
+            HEX_SPAN,
+            ['behavior:CON-042', 'gitSha:def5678'],
+            verdictOutput('pass')
+          ),
+        ],
+      }
+    )
     expect(run.stderr).toBe('')
-    expect(run.code).toBe(0)
+    expect(run.status).toBe(0)
     expect(rootReadTags(gets(run, OBSERVATIONS_V2)[0])).toEqual([
       'behavior:CON-042',
       'gitSha:abc1234',
@@ -1116,23 +1177,29 @@ describe('PR2.c1 (command level) — candidates keyed by traceId, never the obse
   })
 
   it('a root carrying the behavior tag but not the round tag is excluded', async () => {
-    const run = await runCommand(['CON-042', '--round', RUN_ID], {
-      traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
-      scores: [traceScore(HEX_TRACE, 'pass')],
-    })
-    expect(run.code).toBe(3)
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', ROUND: RUN_ID },
+      {
+        traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
+    expect(run.status).toBe(3)
     expect(run.stderr).toMatch(/no traces tagged behavior:CON-042 \(runId:20260717T151639Z\)/)
     expect(run.stdout).toBe('')
     expect(writes(run)).toEqual([])
   })
 
   it('enqueue of a new-root candidate posts objectType TRACE with the hex traceId', async () => {
-    const run = await runCommand(['CON-042', HEX_TRACE], {
-      traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
-      scores: [traceScore(HEX_TRACE, 'pass')],
-    })
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', TRACE: HEX_TRACE },
+      {
+        traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
     expect(run.stderr).toBe('')
-    expect(run.code).toBe(0)
+    expect(run.status).toBe(0)
     expect(run.stdout).toContain(`enqueued ${HEX_TRACE} into ${TRIAGE_QUEUE_NAME}`)
     // Membership is proven round-agnostic, then the existing items are read for dedup.
     expect(rootReadTags(gets(run, OBSERVATIONS_V2)[0])).toEqual(['behavior:CON-042'])
@@ -1151,11 +1218,14 @@ describe('PR2.c1 (command level) — candidates keyed by traceId, never the obse
       [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass')), HEX_SPAN],
       [trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('pass')), `t-${HIST_TRACE}`],
     ] as const) {
-      const run = await runCommand(['CON-042', obsId], {
-        traces: [root],
-        scores: [traceScore(root.traceId, 'pass')],
-      })
-      expect(run.code, obsId).toBe(1)
+      const run = await runCommand(
+        { BEHAVIOR: 'CON-042', TRACE: obsId },
+        {
+          traces: [root],
+          scores: [traceScore(root.traceId, 'pass')],
+        }
+      )
+      expect(run.status, obsId).toBe(1)
       expect(run.stderr, obsId).toContain(`trace ${obsId} is not a covering-PASS candidate`)
       expect(run.stdout, obsId).toBe('')
       expect(writes(run), obsId).toEqual([])
@@ -1164,19 +1234,22 @@ describe('PR2.c1 (command level) — candidates keyed by traceId, never the obse
 
   // Ruling R2: two fail-closed outcomes beyond PR2.c5, observed at the same level.
   it('a row outside the requested tags (a dropped filter) fails closed, lists nothing', async () => {
-    const run = await runCommand(['CON-042', '--round', RUN_ID], {
-      ignoreFilter: true,
-      traces: [
-        newRoot(
-          HEX_TRACE,
-          HEX_SPAN,
-          ['behavior:CON-042', `runId:${RUN_ID}`],
-          verdictOutput('pass')
-        ),
-        trace(HIST_TRACE, ['behavior:DSH-004'], verdictOutput('pass')),
-      ],
-    })
-    expect(run.code).toBe(1)
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', ROUND: RUN_ID },
+      {
+        ignoreFilter: true,
+        traces: [
+          newRoot(
+            HEX_TRACE,
+            HEX_SPAN,
+            ['behavior:CON-042', `runId:${RUN_ID}`],
+            verdictOutput('pass')
+          ),
+          trace(HIST_TRACE, ['behavior:DSH-004'], verdictOutput('pass')),
+        ],
+      }
+    )
+    expect(run.status).toBe(1)
     expect(run.stderr).toMatch(
       new RegExp(
         `BackfillDataError: root observation for trace ${HIST_TRACE} lacks the requested tags`
@@ -1188,10 +1261,13 @@ describe('PR2.c1 (command level) — candidates keyed by traceId, never the obse
 
   it('two distinct root observations under one trace id fail closed, list nothing', async () => {
     const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
-    const run = await runCommand(['CON-042'], {
-      traces: [root, { ...root, id: '5e8b2d7f1a4c9e3b' }],
-    })
-    expect(run.code).toBe(1)
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [root, { ...root, id: '5e8b2d7f1a4c9e3b' }],
+      }
+    )
+    expect(run.status).toBe(1)
     expect(run.stderr).toMatch(
       new RegExp(`BackfillDataError: trace ${HEX_TRACE} has more than one root observation`)
     )
@@ -1201,11 +1277,14 @@ describe('PR2.c1 (command level) — candidates keyed by traceId, never the obse
 
   it('enqueue refuses when two distinct root observations share the trace id', async () => {
     const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
-    const run = await runCommand(['CON-042', HEX_TRACE], {
-      traces: [root, { ...root, id: '5e8b2d7f1a4c9e3b' }],
-      scores: [traceScore(HEX_TRACE, 'pass')],
-    })
-    expect(run.code).toBe(1)
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', TRACE: HEX_TRACE },
+      {
+        traces: [root, { ...root, id: '5e8b2d7f1a4c9e3b' }],
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
+    expect(run.status).toBe(1)
     expect(run.stderr).toMatch(/BackfillDataError: .*more than one root observation/)
     expect(run.stdout).toBe('')
     expect(writes(run)).toEqual([])
@@ -1219,11 +1298,14 @@ describe('PR2.c2 (command level) — v2 output string decoded on the client; sco
   const HEX_B_SPAN = '2a5d8f1c4e7b0a3d'
 
   it('conflicting verdict scores on one trace → ambiguous, exits non-zero, lists nothing', async () => {
-    const run = await runCommand(['CON-042'], {
-      traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
-      scores: [traceScore(HEX_TRACE, 'pass'), traceScore(HEX_TRACE, 'fail')],
-    })
-    expect(run.code).toBe(1)
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))],
+        scores: [traceScore(HEX_TRACE, 'pass'), traceScore(HEX_TRACE, 'fail')],
+      }
+    )
+    expect(run.status).toBe(1)
     expect(run.stderr).toContain(`multiple verdict scores for trace(s) ${HEX_TRACE}`)
     expect(run.stderr).toMatch(/ambiguous/)
     expect(run.stdout).toBe('')
@@ -1238,9 +1320,9 @@ describe('PR2.c2 (command level) — v2 output string decoded on the client; sco
       verdictOutput('pass', 'jc', 'jk')
     )
     expect(typeof root.output).toBe('string')
-    const run = await runCommand(['CON-042'], { traces: [root] })
+    const run = await runCommand({ BEHAVIOR: 'CON-042' }, { traces: [root] })
     expect(run.stderr).toBe('')
-    expect(run.code).toBe(0)
+    expect(run.status).toBe(0)
     expect(run.stdout).toMatch(/1 covering-PASS candidate/)
     expect(run.stdout).toContain(`\n  ${HEX_TRACE}\n`)
     expect(run.stdout).toContain('cite: jc')
@@ -1249,15 +1331,18 @@ describe('PR2.c2 (command level) — v2 output string decoded on the client; sco
 
   it('a malformed output string carries no verdict: scoreless → excluded; a PASS score still wins', async () => {
     const truncated = '{"itemIndex":0,"verdict":"pass","citation":"mc"'
-    const run = await runCommand(['CON-042'], {
-      traces: [
-        { ...newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042']), output: truncated },
-        { ...newRoot(HEX_B, HEX_B_SPAN, ['behavior:CON-042']), output: truncated },
-      ],
-      scores: [traceScore(HEX_B, 'pass')],
-    })
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [
+          { ...newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042']), output: truncated },
+          { ...newRoot(HEX_B, HEX_B_SPAN, ['behavior:CON-042']), output: truncated },
+        ],
+        scores: [traceScore(HEX_B, 'pass')],
+      }
+    )
     expect(run.stderr).toBe('')
-    expect(run.code).toBe(0)
+    expect(run.status).toBe(0)
     expect(run.stdout).toMatch(/1 covering-PASS candidate/)
     expect(run.stdout).toContain(`\n  ${HEX_B}\n`)
     expect(run.stdout).not.toContain(HEX_TRACE)
@@ -1265,15 +1350,18 @@ describe('PR2.c2 (command level) — v2 output string decoded on the client; sco
   })
 
   it('a verdict score that contradicts the output wins, in both directions', async () => {
-    const run = await runCommand(['CON-042'], {
-      traces: [
-        newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass')),
-        newRoot(HEX_B, HEX_B_SPAN, ['behavior:CON-042'], verdictOutput('fail')),
-      ],
-      scores: [traceScore(HEX_TRACE, 'fail'), traceScore(HEX_B, 'pass')],
-    })
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [
+          newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass')),
+          newRoot(HEX_B, HEX_B_SPAN, ['behavior:CON-042'], verdictOutput('fail')),
+        ],
+        scores: [traceScore(HEX_TRACE, 'fail'), traceScore(HEX_B, 'pass')],
+      }
+    )
     expect(run.stderr).toBe('')
-    expect(run.code).toBe(0)
+    expect(run.status).toBe(0)
     expect(run.stdout).toMatch(/1 covering-PASS candidate/)
     expect(run.stdout).toContain(`\n  ${HEX_B}\n`)
     expect(run.stdout).not.toContain(HEX_TRACE)
@@ -1289,12 +1377,15 @@ describe('PR2.c4 (command level) — duplicate root rows (an unmerged re-export)
 
   it('a duplicate on the same page', async () => {
     const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
-    const run = await runCommand(['CON-042'], {
-      traces: [root, { ...root }],
-      scores: [traceScore(HEX_TRACE, 'pass')],
-    })
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [root, { ...root }],
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
     expect(run.stderr).toBe('')
-    expect(run.code).toBe(0)
+    expect(run.status).toBe(0)
     expect(gets(run, OBSERVATIONS_V2)).toHaveLength(1)
     expect(run.stdout).toMatch(/1 covering-PASS candidate/)
     listedOnce(run.stdout, HEX_TRACE)
@@ -1303,13 +1394,16 @@ describe('PR2.c4 (command level) — duplicate root rows (an unmerged re-export)
   it('a duplicate across pages, including a page that holds only the duplicate', async () => {
     const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
     const other = trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('pass'))
-    const run = await runCommand(['CON-042'], {
-      traces: [root, { ...root }, other],
-      tracesPerPage: 1,
-      scores: [traceScore(HEX_TRACE, 'pass')],
-    })
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042' },
+      {
+        traces: [root, { ...root }, other],
+        tracesPerPage: 1,
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
     expect(run.stderr).toBe('')
-    expect(run.code).toBe(0)
+    expect(run.status).toBe(0)
     // Three cursor pages, each the same root read; the second follows the first's cursor.
     const reads = gets(run, OBSERVATIONS_V2)
     expect(reads.map(q => q.get('cursor'))).toEqual([null, '1', '2'])
@@ -1321,13 +1415,16 @@ describe('PR2.c4 (command level) — duplicate root rows (an unmerged re-export)
 
   it('enqueue of a candidate whose root is duplicated posts it once', async () => {
     const root = newRoot(HEX_TRACE, HEX_SPAN, ['behavior:CON-042'], verdictOutput('pass'))
-    const run = await runCommand(['CON-042', HEX_TRACE], {
-      traces: [root, { ...root }],
-      tracesPerPage: 1,
-      scores: [traceScore(HEX_TRACE, 'pass')],
-    })
+    const run = await runCommand(
+      { BEHAVIOR: 'CON-042', TRACE: HEX_TRACE },
+      {
+        traces: [root, { ...root }],
+        tracesPerPage: 1,
+        scores: [traceScore(HEX_TRACE, 'pass')],
+      }
+    )
     expect(run.stderr).toBe('')
-    expect(run.code).toBe(0)
+    expect(run.status).toBe(0)
     expect(writes(run)).toEqual([
       {
         method: 'POST',
@@ -1335,5 +1432,55 @@ describe('PR2.c4 (command level) — duplicate root rows (an unmerged re-export)
         body: { objectId: HEX_TRACE, objectType: 'TRACE' },
       },
     ])
+  })
+})
+
+// --- the command's environment: no frontend/.env* file reaches it -------------
+
+describe('command environment — frontend/.env* files cannot override the fake host, keys or project', () => {
+  // Every .env file bun loads from its working directory, for any NODE_ENV.
+  const ENV_FILES = [
+    '.env',
+    '.env.local',
+    ...['development', 'production', 'test'].flatMap(mode => [
+      `.env.${mode}`,
+      `.env.${mode}.local`,
+    ]),
+  ]
+  const CANARY = [
+    'LANGFUSE_HOST=http://canary.invalid',
+    'LANGFUSE_PUBLIC_KEY=pk-lf-canary',
+    'LANGFUSE_SECRET_KEY=sk-lf-canary',
+    'LANGFUSE_PROJECT_ID=canary-proj',
+  ].join('\n')
+
+  it('a stand-in root with canary .env files in frontend/ still reaches only the fake, with the dummy keys', async () => {
+    // The stand-in runs the real Makefile and the real script through symlinks; only the
+    // .env files bun reads from frontend/ differ from the repository's.
+    const root = mkdtempSync(path.join(tmpdir(), 'qa-fn-backfill-env-'))
+    const links = [path.join(root, 'Makefile'), path.join(root, 'frontend', 'tests')]
+    try {
+      mkdirSync(path.join(root, 'frontend'))
+      symlinkSync(path.join(REPO_ROOT, 'Makefile'), links[0])
+      symlinkSync(path.join(REPO_ROOT, 'frontend', 'tests'), links[1])
+      for (const file of ENV_FILES) writeFileSync(path.join(root, 'frontend', file), CANARY)
+      const run = await runCommand(
+        { BEHAVIOR: 'CON-042' },
+        {
+          traces: [trace(HIST_TRACE, ['behavior:CON-042'], verdictOutput('pass'))],
+          scores: [traceScore(HIST_TRACE, 'pass')],
+        },
+        root
+      )
+      // runCommand already asserted that every request carried the dummy keys.
+      expect(run.status).toBe(0)
+      expect(run.stdout).toContain(`${run.host}/project/proj-1/traces/${HIST_TRACE}`)
+      expect(gets(run, '/api/public/projects')).toHaveLength(1)
+      expect(run.stdout + run.stderr).not.toContain('canary')
+    } finally {
+      // Unlink the symlinks first so removing the stand-in never reaches the repository.
+      for (const link of links) if (lstatSync(link, { throwIfNoEntry: false })) unlinkSync(link)
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
