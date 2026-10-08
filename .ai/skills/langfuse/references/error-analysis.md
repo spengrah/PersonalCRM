@@ -46,6 +46,10 @@ Make sure Langfuse credentials are available before starting — a public key (`
 
 Verify you can actually reach the user's project before proceeding. If access fails, stop and ask the user to check their credentials and host.
 
+### Reading traces
+
+Read traces as their root observations through observations v2, not through `traces list` or `legacy-observations-v1s`; see the root-observation recipe in [cli.md](cli.md). Annotate, score and link a trace by the root row's `traceId`, never by its observation `id`.
+
 ### Annotation target: OBSERVATION versus TRACE
 
 > **CRITICAL:** In OpenTelemetry-instrumented apps, trace-level `input`/`output` can be null — content often lives in a GENERATION observation. In that case, add the GENERATION observation (not the trace) to the annotation queue, so the content being reviewed is actually visible.
