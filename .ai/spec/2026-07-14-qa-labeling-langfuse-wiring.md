@@ -1,5 +1,7 @@
 # QA agent end-state: Langfuse-native labeling, corpus retirement, experiments
 
+> **Superseded** by [Retire the nightly QA judge](2026-10-09-retire-nightly-qa-judge.md): the nightly QA system this doc describes is retired; `make qa-sanity` is the on-demand check that remains.
+
 Status: SETTLED DESIGN (discussion of 2026-07-14; supersedes the same-day first draft of this doc — superseded decisions are kept below, marked, because the reasoning that moved them is part of the design). Owner: maintainer.
 
 ## Framing decisions (the load-bearing ones)

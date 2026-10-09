@@ -87,11 +87,8 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
 
   // --- DSH-001: the dashboard is the default landing surface ---------------
   await page.goto('/')
-  // Best-effort mid-redirect capture: the in-flight state (and its screenshot)
-  // is evidence for the DSH-011 intent ("the dashboard never dead-ends"), bound
-  // via DSH-001's serves edge — the retired DSH-001 clause that graded this
-  // frame directly is gone, but the intent judge still weighs interim surfaces
-  // holistically. The client redirect may already have fired — the capture
+  // Best-effort mid-redirect capture of the in-flight state (and its
+  // screenshot). The client redirect may already have fired — the capture
   // records whatever state was caught.
   // Best-effort in both senses: the OBSERVATION is opportunistic and the
   // CAPTURE itself must not break the sweep if the client redirect races the

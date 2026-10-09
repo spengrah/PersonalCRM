@@ -37,16 +37,16 @@ if [ "${#missing[@]}" -gt 0 ]; then
 fi
 
 # --- Resolve + validate the run id BEFORE any destructive reset ---
-# A caller (e.g. the nightly-round orchestrator) may pre-set TOURS_RUN_ID so it knows the
-# run dir (frontend/tests/tours/.runs/<id>) deterministically; globalSetup honors a pre-set
-# value. Absent an override, mint a fresh filesystem-safe UTC timestamp (also a valid
-# QA_RUN_ID). The run id becomes a path segment (RUNS_ROOT/<id>), so a caller-supplied value
+# A caller (make qa-sanity) may pre-set TOURS_RUN_ID so it knows the run dir
+# (frontend/tests/tours/.runs/<id>) deterministically; globalSetup honors a pre-set
+# value. Absent an override, mint a fresh filesystem-safe UTC timestamp. The run id
+# becomes a path segment (RUNS_ROOT/<id>), so a caller-supplied value
 # must be exactly the run-id timestamp form — otherwise `../` (or any separator) escapes the
 # .runs tree. Validate HERE, before the reseed/reset below, so a bad id never triggers a
 # destructive reseed first. `[[ =~ ]]` matches the WHOLE string (not line-by-line like grep),
-# so an embedded-newline injection cannot slip a valid line past. (This is a shape check; the
-# real-UTC round-trip lives in run.ts validRunId for the export provenance — a well-formed but
-# unreal timestamp like 20269999T999999Z is filesystem-safe, so it is not a traversal risk.)
+# so an embedded-newline injection cannot slip a valid line past. (This is a shape check only:
+# a well-formed but unreal timestamp like 20269999T999999Z is filesystem-safe, so it is not a
+# traversal risk.)
 export TOURS_RUN_ID="${TOURS_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 if [[ ! "$TOURS_RUN_ID" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
     echo "run-tours: TOURS_RUN_ID must be a UTC run-id timestamp (^[0-9]{8}T[0-9]{6}Z\$) — got '$TOURS_RUN_ID'" >&2

@@ -1,5 +1,5 @@
 // Minimal ambient declaration for the bun/node runtime bits the judge CLIs use
-// (doctor.ts / report/render.ts run as entry scripts). Kept tiny so no
+// (sanity.ts / report/render.ts run as entry scripts). Kept tiny so no
 // @types/bun devDep is needed (design: no frontend/package.json change).
 
 interface ImportMeta {

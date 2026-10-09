@@ -1029,7 +1029,7 @@ behaviors:
     provenance: [TransferAutomatedContactTasksToContact, TransferAutomatedTasksForMergeTx, CompleteLiveTasksForContactTx, RepointManualContactTasksToContact]
     notes: Supersedes CON-031, retired. Merge deletes no contact_task row — orphan cleanup of merge-closed automated tasks is tracked separately (issue #811).
 
-  # --- Intents (judged experience goals — Track B agentic judge only) ---
+  # --- Intents (high-level UX goals) ---
 
   - id: CON-050
     title: Destructive contact actions are deliberate

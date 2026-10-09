@@ -1,5 +1,7 @@
 # Agentic UX QA + Behavior SSOT — Umbrella Design
 
+> **Superseded** by [Retire the nightly QA judge](2026-10-09-retire-nightly-qa-judge.md): the nightly QA system this doc describes is retired; `make qa-sanity` is the on-demand check that remains.
+
 **Date:** 2026-05-31
 **Status:** Umbrella design (architecture-level). Detailed sub-specs deferred to their own brainstorms.
 **Author:** spengrah (brainstormed with Claude)

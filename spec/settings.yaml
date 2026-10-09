@@ -257,7 +257,7 @@ behaviors:
         text: a token or provider-API failure surfaces as a server error (500)
     provenance: [TodoistHandler.ListProjects, TodoistHandler.ListLabels]
 
-  # --- Settings surfaces (Track B) ---
+  # --- Settings surfaces ---
 
   - id: SET-019
     title: The settings page presents provider connection sections

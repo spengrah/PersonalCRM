@@ -342,7 +342,7 @@ behaviors:
         text: "a contact that is awaiting a reply (CAD-040: the user reached out and the waiting period is open) renders as a demoted awaiting-reply card: muted, marked Awaiting reply, showing when the user reached out, placed after every needs-attention card under the urgency ordering, and counted separately in the header"
       - key: nothing-overdue-all-caught
         text: with nothing overdue, an all-caught-up state is shown instead
-    serves: [DSH-010, DSH-011]
+    serves: [DSH-010]
     provenance: [dashboard/page.tsx, OverdueContactCard, dashboard.spec.ts]
 
   - id: CAD-027
@@ -506,7 +506,7 @@ behaviors:
     provenance: [service/contact_task.go DeleteTaskLink]
     notes: The safe-remote-state guarantee formerly expressed as the judged intent CAD-037; moved to deterministic coverage (a backend integration test asserts zero outbound calls) per the QA-program rule that deterministic guarantees belong in tests, not the judge.
 
-  # --- Intents (judged experience goals — Track B agentic judge only) ---
+  # --- Intents (high-level UX goals) ---
 
   - id: CAD-036
     title: A contact page answers where the relationship stands
@@ -528,7 +528,7 @@ behaviors:
     type: intent
     status: current
     statement: a user who opens the app to find out who they are losing touch with can go from that signal to having acted, in one continuous pass — the contact they are sent to answers where the relationship stands, the action they take is acknowledged where they take it, and the surface that sent them reflects it when they come back; at no point do they lose their place, have to re-derive context the app already showed them, or have to guess whether the action landed
-    notes: The app's core value loop, judged end to end as one journey rather than as three independent surfaces. Evidence comes from relationship-loop.tour.ts, which walks dashboard → contact detail → log-interaction → back in a SINGLE tour (entity identity is only coherent within one tour, so a journey split across tours would show the judge the same contact under two pseudonyms). This intent carries NO serving behaviors on purpose — a journey binds its evidence by direct capture tag, because serves edges would also pull in the per-surface tours' captures and evict the journey's own under the capture cap. Frontend-surface scope only; the integration/sync half of the loop is deliberately out of scope.
+    notes: The app's core value loop, taken end to end as one journey rather than as three independent surfaces. It carries no serving behaviors on purpose; the sanity check's intent transcription (frontend/tests/tours/judge/intent-catalog.ts) records why. Frontend-surface scope only; the integration/sync half of the loop is deliberately out of scope.
     provenance: ['.ai/spec/2026-07-12-qa-architecture-restructuring.md']
 
   - id: CAD-040
@@ -654,6 +654,6 @@ behaviors:
     waivers:
       - then: skipped-contact-leaves-dashboard
         reason: "not observable in the accelerated E2E lane (#645): contact_by is DATE-typed, a compressed-cadence skip writes today, and the testing overdue path ignores contact_by by design; proven in Go under production durations by TestSkipClock_LeavesOverdueSet"
-    serves: [DSH-010, DSH-012]
+    serves: [DSH-010]
     provenance: [OverdueContactCard, cadence-skip.spec.ts, dashboard.tour.ts]
     notes: Retires CAD-028 (mark-as-contacted from the dashboard). The list-row mark-as-contacted is CON-044 and is unchanged; the modal behind Log Interaction is CON-053.

@@ -6,10 +6,9 @@
 // judge still only reads the captured evidence in the prompt.
 //
 // Every pure piece is shared with the exec path (buildPrompt / OUTPUT_SCHEMA /
-// parseVerdicts / allUnsure / the tool-marker detection);
-// only the transport differs. The turn-parsing logic is pure + unit-tested with
-// canned Turn results; the live SDK call is a thin wrapper (a manual smoke, not
-// exercised by the automated tests), exactly like exec's spawn.
+// parseVerdicts / judgeFailureVerdicts / the tool-marker detection);
+// only the transport differs. The turn-parsing logic is pure; the live SDK call
+// is a thin wrapper, exactly like exec's spawn.
 
 import { DEFAULT_JUDGE_EFFORT, DEFAULT_JUDGE_MODEL } from '../models'
 import { eventUsedTool } from './codex-exec'

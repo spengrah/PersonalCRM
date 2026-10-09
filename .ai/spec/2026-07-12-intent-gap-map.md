@@ -1,5 +1,7 @@
 # Intent gap map — expanding the agentic UX layer
 
+> **Superseded** by [Retire the nightly QA judge](2026-10-09-retire-nightly-qa-judge.md): the nightly QA system this doc describes is retired; `make qa-sanity` is the on-demand check that remains.
+
 Read-only analysis at `develop` / HEAD `495416a8`. No repo file was modified.
 
 ## 1. How the intent model works today, precisely

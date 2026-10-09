@@ -1,5 +1,7 @@
 # UX behavior → E2E migration audit
 
+> **Superseded** by [Retire the nightly QA judge](2026-10-09-retire-nightly-qa-judge.md): the nightly QA system this doc describes is retired; `make qa-sanity` is the on-demand check that remains.
+
 Repo `/Users/spencer/Workspaces/PersonalCRM`, branch `develop`. Read-only audit of every `type: ux` behavior in `spec/*.yaml`, each `then`-item bucketed as ALREADY-COVERED (an existing Playwright spec asserts it), NEEDS-NEW-E2E (deterministic, no E2E asserts it today), or KEEP-FOR-JUDGE (not deterministically assertable).
 
 ## Summary counts

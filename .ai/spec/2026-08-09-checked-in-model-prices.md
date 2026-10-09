@@ -1,5 +1,7 @@
 # Checked-in model prices — retire the Langfuse price reconciler
 
+> **Superseded in part** by [Retire the nightly QA judge](2026-10-09-retire-nightly-qa-judge.md): the nightly QA round this doc applies prices in is retired; prices apply when the maintainer runs `make model-prices-apply`.
+
 Date: 2026-08-09
 Status: PROPOSED
 Implements: [#761](https://github.com/spengrah/PersonalCRM/issues/761). Supersedes the price-sync half (D10–D17, work items 5–6, and the model-prices test plan) of `2026-07-22-langfuse-usage-cost-tracking.md`; that spec's observation/cost half (D1–D9) shipped and is untouched.

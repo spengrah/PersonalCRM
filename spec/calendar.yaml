@@ -370,7 +370,7 @@ behaviors:
       - key: past-meeting-carries-past
         text: a past meeting carries a past marker
     provenance: [components/contacts/meetings.tsx MeetingCard]
-    notes: 'The visual de-emphasis of past cards (reduced opacity) is presentation quality owned by the agentic judge, deliberately not pinned as a then-item. Retired into IXN-002 for calendar row details and IXN-006 for event time, place, and attendee size.'
+    notes: 'The visual de-emphasis of past cards (reduced opacity) is presentation quality, deliberately not pinned as a then-item. Retired into IXN-002 for calendar row details and IXN-006 for event time, place, and attendee size.'
 
   - id: CAL-027
     title: A meeting with a source link opens it externally

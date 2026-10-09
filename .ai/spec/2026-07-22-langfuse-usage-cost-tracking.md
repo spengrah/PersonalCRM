@@ -1,5 +1,7 @@
 # Langfuse token + cost tracking for judge traces
 
+> **Superseded in part** by [Retire the nightly QA judge](2026-10-09-retire-nightly-qa-judge.md): its QA parts describe the retired nightly QA system; `make qa-sanity` is the on-demand check that remains.
+
 Date: 2026-07-22
 Status: The observation/cost half (D1–D9) is IMPLEMENTED. The price-sync half (D10–D17, work items 5–6, and the model-prices test plan) is SUPERSEDED by `2026-08-09-checked-in-model-prices.md`.
 

@@ -3,9 +3,8 @@
 // QA_JUDGE=codex-exec; the codex-sdk adapter is the default and a like-for-like
 // transport swap behind the identical interface.
 //
-// The PARSE + tool-rejection logic is pure + unit-tested with canned event
-// streams; the spawn is a thin wrapper (a live call, exercised by a manual
-// smoke, not by the automated tests).
+// The PARSE + tool-rejection logic is pure; the spawn is a thin wrapper around
+// the live call.
 
 import { spawn } from 'child_process'
 import * as fs from 'fs'

@@ -192,10 +192,8 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   // Genuinely armed, unlike the CON-065 walk below: the capture above DRAINED
   // the response buffer, so the only list-path response left to satisfy this is
   // the detail page's own ids_only fetch (its sole /api/v1/contacts call).
-  // Keep it even though NO shipped trap depends on it today: a FUTURE trap over
-  // CON-038.detail-prev-next-same-default would, because the reorder_ids doctoring op reads this response's
-  // ids array and silently no-ops when it is absent — it would be a trap that
-  // cannot fail. The Edit button below is no substitute: it gates on the CONTACT
+  // The capture must record that response's ids array, the evidence for
+  // CON-038.detail-prev-next-same-default. The Edit button below is no substitute: it gates on the CONTACT
   // fetch (the page renders a skeleton until that lands, and the line above
   // already awaited it), so it says nothing about whether the ids_only response
   // has arrived. This wait is the only thing that guarantees the array is

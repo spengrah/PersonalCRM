@@ -46,16 +46,16 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
     title: 'The dashboard never dead-ends',
     statement:
       'whatever state the dashboard is in — populated, all caught up, still loading, or failed — the user always has a clear next action available and is never stranded on a blank or ambiguous screen',
-    status: 'current',
-    servedBy: ['CAD-026', 'DSH-001', 'DSH-003', 'DSH-004'],
+    status: 'retired',
+    servedBy: [],
   },
   'DSH-012': {
     id: 'DSH-012',
     title: 'The dashboard reflects reality without manual refreshes',
     statement:
       'any action in the app that changes who is overdue is reflected on an open dashboard without the user reloading the page — the overdue list can be trusted as live',
-    status: 'proposed',
-    servedBy: ['CAD-046', 'DSH-005', 'DSH-009'],
+    status: 'retired',
+    servedBy: [],
   },
   'CON-050': {
     id: 'CON-050',

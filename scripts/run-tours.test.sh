@@ -150,8 +150,8 @@ run TOURS_SKIP_RESET=1 TOURS_SEED_PROFILE=minimal-scoped
 grep -qF 'provenance TOURS_SEED_PROFILE=minimal-scoped' "$CALL_LOG" && ok \
     || fail "an explicit TOURS_SEED_PROFILE must win over the skip default (got: $(grep provenance "$CALL_LOG"))"
 
-# 5. A pre-set TOURS_RUN_ID is HONORED (not clobbered) — the nightly-round
-#    orchestrator relies on this to know the run dir deterministically.
+# 5. A pre-set TOURS_RUN_ID is HONORED (not clobbered) — make qa-sanity relies
+#    on this to know the run dir deterministically.
 run_err TOURS_SKIP_RESET=1 TOURS_RUN_ID="20260101T000000Z"
 grep -q 'runId=20260101T000000Z' <<<"$ERR_OUT" && ok \
     || fail "override: pre-set TOURS_RUN_ID must pass through (got: $ERR_OUT)"
