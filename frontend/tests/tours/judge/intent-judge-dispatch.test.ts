@@ -118,10 +118,6 @@ describe('makeIntentJudge adapter dispatch', () => {
   })
 
   it('an UNCONFIGURED run dispatches to codex-sdk — the transport that reports usage in full', () => {
-    // An unconfigured nightly is the common case, and codex-exec reports no
-    // cached-input count (its input_tokens is inclusive of cache reads), so
-    // defaulting there prices every cached token at the full input rate and
-    // publishes the overstatement as the round's cost.
     delete process.env.QA_JUDGE
     sdkSpy.mockClear()
     makeIntentJudge()

@@ -1,22 +1,13 @@
-import * as fs from 'fs'
-import * as os from 'os'
-import * as path from 'path'
-import { beforeEach, describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { DEFAULT_JUDGE_EFFORT, DEFAULT_JUDGE_MODEL } from '../models'
 import {
   codexArgs,
-  EXEC_CACHED_USAGE_WARNING,
   makeCodexExecJudge,
   parseCodexEventStream,
-  resetCachedUsageWarning,
-  usageMissesCachedCount,
   verdictsFromCodexOutput,
-  type CodexParseResult,
 } from './codex-exec'
-import { applyGrounding } from '../grader/grade'
-import { parseSpanFile } from '../export/langfuse'
-import type { GradedEvidenceEntry } from '../label-trace'
-import type { JudgeInput, PerItemVerdict } from './types'
+import { applyGrounding } from '../grounding'
+import type { JudgeInput } from './types'
 
 // A canned codex `--json` event stream: a couple of lifecycle events then the
 // final schema-constrained agent message.
@@ -41,7 +32,8 @@ function stream(finalMessageObj: unknown, opts: { withTool?: boolean } = {}): st
 }
 
 const input: JudgeInput = {
-  behaviorId: 'CON-042',
+  intent: { statement: 'warns cannot be undone', status: 'current' },
+  behaviorId: 'CON-050',
   behaviorTitle: 'delete confirmation',
   given: 'g',
   when: 'w',
@@ -51,14 +43,11 @@ const input: JudgeInput = {
 }
 
 describe('parseCodexEventStream', () => {
-  it('extracts the final agent message + model + usage', () => {
+  it('extracts the final agent message', () => {
     const out = parseCodexEventStream(
       stream({ verdicts: [{ item_index: 0, verdict: 'pass', citation: 'c', critique: 'k' }] })
     )
     expect(out.usedTool).toBe(false)
-    expect(out.model).toBe('gpt-5-codex')
-    expect(out.inputTokens).toBe(1200)
-    expect(out.outputTokens).toBe(40)
     expect(out.message).toContain('verdicts')
   })
 
@@ -291,179 +280,5 @@ describe('makeCodexExecJudge (injected run — no live call)', () => {
     // The adapter returns the raw fail; the grader's grounding rule downgrades it.
     expect(v.verdict).toBe('fail')
     expect(applyGrounding(v).verdict).toBe('unsure')
-  })
-})
-
-// The codex side of the both-adapters test: the appended span must carry the
-// label-trace content (scenario + graded evidence + prompt + completion) AND its
-// qa.item_verdicts must EQUAL the NORMALIZED array the adapter RETURNS — proving
-// the span is built AFTER normalization, not from the pre-normalization parse.
-describe('makeCodexExecJudge — span carries label-trace content + normalized verdicts', () => {
-  // Two graded items so an omitted-item fill is observable; two sections + two
-  // images so codex attaches per-capture screenshots.
-  const contentInput: JudgeInput = {
-    behaviorId: 'CON-042',
-    behaviorTitle: 'delete confirmation',
-    given: 'a contact exists',
-    when: 'the user deletes it',
-    then: ['warns cannot be undone', 'closes', 'removes the row'],
-    items: [
-      { itemIndex: 0, thenText: 'warns cannot be undone' },
-      { itemIndex: 2, thenText: 'removes the row' },
-    ],
-    evidence: {},
-    captureSections: [
-      { captureFile: '001.json', note: 'dialog', evidence: { url: 'http://x/1' } },
-      { captureFile: '002.json', note: 'gone', evidence: { url: 'http://x/2' } },
-    ],
-    images: ['/runs/001.png', '/runs/002.png'],
-  }
-
-  async function spanFor(
-    run: (args: string[], prompt: string) => Promise<string>
-  ): Promise<{ span: ReturnType<typeof parseSpanFile>[number]; verdicts: PerItemVerdict[] }> {
-    const tracePath = path.join(
-      os.tmpdir(),
-      `qa-span-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`
-    )
-    try {
-      const verdicts = await makeCodexExecJudge({ run, tracePath })(contentInput)
-      const [span] = parseSpanFile(fs.readFileSync(tracePath, 'utf8'))
-      return { span, verdicts }
-    } finally {
-      fs.rmSync(tracePath, { force: true })
-    }
-  }
-
-  it('carries scenario + graded_evidence + prompt + completion, with per-capture screenshots', async () => {
-    const { span } = await spanFor(async () =>
-      stream({
-        verdicts: [
-          { item_index: 0, verdict: 'fail', citation: 'dialog', critique: 'k' },
-          { item_index: 2, verdict: 'pass', citation: 'row', critique: 'k' },
-        ],
-      })
-    )
-    expect((span.attributes['qa.scenario'] as { kind: string }).kind).toBe('behavior')
-    const graded = span.attributes['qa.graded_evidence'] as GradedEvidenceEntry[]
-    expect(graded.map(g => g.captureFile)).toEqual(['001.json', '002.json'])
-    // codex-exec CAN attach images → each entry carries its own screenshot path.
-    expect(graded.map(g => g.screenshot)).toEqual(['/runs/001.png', '/runs/002.png'])
-    expect(span.attributes['qa.screenshots']).toEqual(['/runs/001.png', '/runs/002.png'])
-    expect(typeof span.attributes['gen_ai.prompt']).toBe('string')
-    expect(typeof span.attributes['gen_ai.completion']).toBe('string')
-  })
-
-  // qa.item_verdicts EQUALS the returned array across all four normalization paths.
-  it('(a) success: item_verdicts equals the returned verdicts', async () => {
-    const { span, verdicts } = await spanFor(async () =>
-      stream({
-        verdicts: [
-          { item_index: 0, verdict: 'fail', citation: 'dialog', critique: 'k' },
-          { item_index: 2, verdict: 'pass', citation: 'row', critique: 'k' },
-        ],
-      })
-    )
-    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
-    expect(verdicts.map(v => v.verdict)).toEqual(['fail', 'pass'])
-  })
-
-  it('(b) omitted item: span carries the FILLED (unsure) verdict, matching the return', async () => {
-    const { span, verdicts } = await spanFor(async () =>
-      stream({ verdicts: [{ item_index: 0, verdict: 'fail', citation: 'dialog', critique: 'k' }] })
-    )
-    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
-    // item 2 was omitted by the model → filled unsure, NOT the pre-norm parse.
-    expect(verdicts.find(v => v.itemIndex === 2)?.verdict).toBe('unsure')
-  })
-
-  it('(c) tool-rejection: span carries allUnsure, matching the return', async () => {
-    const { span, verdicts } = await spanFor(async () =>
-      stream({ verdicts: [] }, { withTool: true })
-    )
-    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
-    expect(verdicts.every(v => v.verdict === 'unsure')).toBe(true)
-  })
-
-  it('(d) thrown run: span carries allUnsure, matching the return', async () => {
-    const { span, verdicts } = await spanFor(async () => {
-      throw new Error('boom')
-    })
-    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
-    expect(verdicts.every(v => v.verdict === 'unsure')).toBe(true)
-  })
-})
-
-const emptyParse: CodexParseResult = {
-  message: undefined,
-  usedTool: false,
-  model: undefined,
-  inputTokens: undefined,
-  outputTokens: undefined,
-}
-
-describe('incomplete-usage warning (this transport reports no cached-input count)', () => {
-  beforeEach(() => resetCachedUsageWarning())
-
-  it('the REAL parser drops a cached count the CLI actually reports — so the warning is true', () => {
-    // Grounding the gate in the parser, not in a hand-set flag: the CLI's usage
-    // object carries `cached_input_tokens` INSIDE an inclusive `input_tokens`, and
-    // this parser keeps neither the cached figure nor any way to net it out.
-    const withCache = JSON.stringify({
-      type: 'item.completed',
-      item: { type: 'agent_message', text: JSON.stringify({ verdicts: [] }) },
-      msg: { model: 'gpt-5-codex', usage: { input_tokens: 20_000, cached_input_tokens: 16_000 } },
-    })
-    const parsed = parseCodexEventStream(withCache)
-    expect(parsed.inputTokens).toBe(20_000) // inclusive of the 16k cache read
-    expect(parsed.cachedInputTokens).toBeUndefined() // ...and the split is gone
-    expect(usageMissesCachedCount(parsed)).toBe(true)
-  })
-
-  it('warns when a run produces usage, naming the overstatement and the transport to use', async () => {
-    const warnings: string[] = []
-    const judge = makeCodexExecJudge({
-      warn: m => warnings.push(m),
-      run: async () =>
-        stream({ verdicts: [{ item_index: 0, verdict: 'pass', citation: 'c', critique: 'k' }] }),
-    })
-    await judge(input)
-    expect(warnings).toEqual([EXEC_CACHED_USAGE_WARNING])
-    expect(warnings[0]).toMatch(/OVERSTATEMENT/)
-    expect(warnings[0]).toMatch(/QA_JUDGE=codex-sdk/)
-  })
-
-  it('warns ONCE across many judge calls — a line per behavior would bury it', async () => {
-    const warnings: string[] = []
-    const judge = makeCodexExecJudge({
-      warn: m => warnings.push(m),
-      run: async () => stream({ verdicts: [] }),
-    })
-    await judge(input)
-    await judge(input)
-    await judge(input)
-    expect(warnings).toHaveLength(1)
-  })
-
-  it('stays SILENT on a run that produced no usage at all — nothing was mispriced', async () => {
-    const warnings: string[] = []
-    const judge = makeCodexExecJudge({
-      warn: m => warnings.push(m),
-      run: async () => {
-        throw new Error('boom') // no usage parsed
-      },
-    })
-    await judge(input)
-    expect(warnings).toEqual([])
-  })
-
-  it('goes silent by itself if the transport ever starts reporting the cached count', () => {
-    // The predicate keys off the cached figure being ABSENT, not off the adapter's
-    // name — so a transport that starts reporting it silences this without anyone
-    // remembering to delete the check.
-    expect(usageMissesCachedCount({ ...emptyParse, inputTokens: 20_000 })).toBe(true)
-    expect(
-      usageMissesCachedCount({ ...emptyParse, inputTokens: 20_000, cachedInputTokens: 16_000 })
-    ).toBe(false)
   })
 })

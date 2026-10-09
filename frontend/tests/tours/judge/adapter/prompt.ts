@@ -1,9 +1,4 @@
-// Prompt protocol + verdict schema (design D4). Evidence is presented in STABLE
-// labeled blocks in a FIXED order (position-bias mitigation): SPEC, URL, ARIA,
-// API, SERVER_TIME, DIALOGS. The judge grades each residual then-item
-// separately → pass|fail|unsure + a required citation. Output is
-// schema-constrained; categorical only (no scores/Likert). Zero-shot (the
-// shot-insertion seam is `fewShotBlock`, currently empty).
+// Intent prompt, evidence rendering and structured verdict parsing.
 
 import type { AriaChild, AriaNode } from '../../support/types'
 import type { EvidenceBlocks, JudgeInput, PerItemVerdict } from './types'
@@ -31,19 +26,6 @@ export const OUTPUT_SCHEMA = {
     },
   },
 } as const
-
-const SYSTEM_PREAMBLE = [
-  'You are a read-only UX behavior JUDGE. You are criticism, not agency: reason',
-  'ONLY over the labeled evidence blocks below. Do NOT use any tool, run any',
-  'command, browse, or fetch — a run that calls a tool is DISCARDED.',
-  '',
-  'For EACH then-item listed under ITEMS, return a categorical verdict:',
-  '  - pass   : the evidence clearly shows the behavior holds',
-  '  - fail   : the evidence clearly shows the behavior is violated',
-  '  - unsure : the evidence is absent or ambiguous (abstention)',
-  'GROUNDING RULE: a `fail` MUST cite the exact aria node label or JSON path in',
-  '`citation`. An uncited fail is treated as unsure. Categorical only — no scores.',
-].join('\n')
 
 // The intent-pass preamble: the judge grades ONE experience goal over several
 // CAPTURE[n] sections instead of then-items over one merged evidence bundle.
@@ -126,64 +108,7 @@ function renderEvidence(ev: EvidenceBlocks): string {
   return blocks.join('\n\n')
 }
 
-// The shot-insertion seam (deferred — the prompt is zero-shot today; few-shot
-// examples would come from human critiques confirmed in the Langfuse annotation
-// queue).
-export function fewShotBlock(): string {
-  return ''
-}
-
 export function buildPrompt(input: JudgeInput): string {
-  if (input.intent) return buildIntentPrompt(input)
-
-  const spec = [
-    `BEHAVIOR ${input.behaviorId}: ${input.behaviorTitle}`,
-    `GIVEN: ${input.given}`,
-    `WHEN: ${input.when}`,
-    'THEN:',
-    ...input.then.map((t, i) => `  [${i}] ${t}`),
-  ].join('\n')
-
-  const items = input.items.map(i => `  [${i.itemIndex}] ${i.thenText}`).join('\n')
-
-  // Per-capture sections (when present) keep distinct captured states — e.g.
-  // an in-flight redirect vs the settled page — distinguishable; the merged
-  // bundle is the fallback for section-less inputs (older corpus paths).
-  const sections =
-    input.captureSections && input.captureSections.length > 0
-      ? input.captureSections.map((s, n) =>
-          block(`CAPTURE[${n}] — ${s.note}`, renderEvidence(s.evidence))
-        )
-      : [renderEvidence(input.evidence)]
-
-  const sectionNotes: string[] = []
-  if (input.captureSections && input.captureSections.length > 0) {
-    sectionNotes.push(
-      'Evidence is presented as one CAPTURE[n] section per captured state, in tour order — cite the capture index alongside the node/path.'
-    )
-  }
-  if ((input.images?.length ?? 0) > 0) {
-    sectionNotes.push(
-      'Screenshots of the captured states are attached in CAPTURE[n] order — visual qualities MAY ground your verdict.'
-    )
-  }
-
-  const parts = [
-    SYSTEM_PREAMBLE,
-    ...sectionNotes,
-    fewShotBlock(),
-    block('SPEC', spec),
-    ...sections,
-    block('ITEMS', items),
-    'Return ONLY JSON matching the required schema: { "verdicts": [ { "item_index", "verdict", "citation", "critique" } ] }.',
-  ].filter(p => p.trim() !== '')
-
-  return parts.join('\n\n')
-}
-
-// The intent-pass prompt: INTENT block + one CAPTURE[n] section per bound
-// capture (same labeled-block protocol inside each section), fixed order.
-function buildIntentPrompt(input: JudgeInput): string {
   const intent = input.intent
   if (!intent) throw new Error('buildIntentPrompt requires input.intent')
   const head = [
@@ -199,7 +124,6 @@ function buildIntentPrompt(input: JudgeInput): string {
   const parts = [
     INTENT_PREAMBLE,
     (input.images?.length ?? 0) > 0 ? INTENT_IMAGES_NOTE : INTENT_ARIA_ONLY_CAUTION,
-    fewShotBlock(),
     block('INTENT', head),
     ...sections,
     block('ITEMS', `  [0] ${intent.statement}`),
@@ -208,17 +132,6 @@ function buildIntentPrompt(input: JudgeInput): string {
 
   return parts.join('\n\n')
 }
-
-// The stable labeled-block order the prompt emits (for tests / documentation).
-export const BLOCK_ORDER = [
-  'SPEC',
-  'URL',
-  'ARIA',
-  'API',
-  'SERVER_TIME',
-  'DIALOGS',
-  'ITEMS',
-] as const
 
 // Parse a schema-constrained model message into PerItemVerdict[]. Tolerant:
 // unknown verdicts coerce to `unsure`; missing citation/critique default to ''.

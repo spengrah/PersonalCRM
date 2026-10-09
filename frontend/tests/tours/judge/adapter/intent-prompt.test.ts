@@ -1,6 +1,4 @@
-// The intent prompt variant: INTENT block (statement, status framing),
-// per-capture CAPTURE[n] sections in order, the single [0] item, and the
-// no-visual-styling caution — while the behavior path stays byte-identical.
+// Intent prompt and visual evidence framing.
 
 import { describe, expect, it } from 'vitest'
 import { buildPrompt } from './prompt'
@@ -61,43 +59,5 @@ describe('buildPrompt (intent variant)', () => {
   it('lists the single [0] item', () => {
     expect(prompt).toContain('=== ITEMS ===')
     expect(prompt).toContain('[0] the statement')
-  })
-
-  it('does not affect the section-less behavior-path prompt', () => {
-    const behaviorInput: JudgeInput = {
-      behaviorId: 'CON-042',
-      behaviorTitle: 't',
-      given: 'g',
-      when: 'w',
-      then: ['a'],
-      items: [{ itemIndex: 0, thenText: 'a' }],
-      evidence: { url: 'http://y' },
-    }
-    const p = buildPrompt(behaviorInput)
-    expect(p).toContain('=== SPEC ===')
-    expect(p).not.toContain('=== INTENT ===')
-    expect(p).not.toContain('CAPTURE[')
-  })
-
-  it('behavior prompts render per-capture sections when supplied', () => {
-    const behaviorInput: JudgeInput = {
-      behaviorId: 'CON-042',
-      behaviorTitle: 't',
-      given: 'g',
-      when: 'w',
-      then: ['a'],
-      items: [{ itemIndex: 0, thenText: 'a' }],
-      evidence: { url: 'http://merged' },
-      captureSections: [
-        { captureFile: 'a.json', note: 'first', evidence: { url: 'http://y/1' } },
-        { captureFile: 'b.json', note: 'second', evidence: { url: 'http://y/2' } },
-      ],
-    }
-    const p = buildPrompt(behaviorInput)
-    expect(p).toContain('=== CAPTURE[0] — first ===')
-    expect(p).toContain('=== CAPTURE[1] — second ===')
-    expect(p).toContain('cite the capture index')
-    expect(p).not.toContain('http://merged')
-    expect(p).not.toContain('=== INTENT ===')
   })
 })

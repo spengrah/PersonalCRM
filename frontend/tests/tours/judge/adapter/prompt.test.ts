@@ -1,58 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { BLOCK_ORDER, buildPrompt, OUTPUT_SCHEMA, parseVerdicts, renderAria } from './prompt'
-import type { JudgeInput } from './types'
-
-const input: JudgeInput = {
-  behaviorId: 'CON-042',
-  behaviorTitle: 'Deleting a contact requires explicit confirmation',
-  given: 'a contact detail page',
-  when: 'the user asks to delete the contact',
-  then: [
-    'a confirmation prompt warns the action cannot be undone',
-    'only on confirmation is the contact deleted',
-  ],
-  items: [{ itemIndex: 0, thenText: 'a confirmation prompt warns the action cannot be undone' }],
-  evidence: {
-    url: '/contacts/<id:1>',
-    aria: { role: 'root', children: [{ role: 'button', name: 'Delete' }] },
-    serverTime: {
-      currentTime: '2026-07-12T00:00:00Z',
-      isAccelerated: true,
-      accelerationFactor: 60,
-      baseTime: '2026-07-09T00:00:00Z',
-    },
-    dialogs: [{ type: 'confirm', message: 'Are you sure? This action cannot be undone.' }],
-  },
-}
-
-describe('buildPrompt', () => {
-  it('emits the fixed labeled-block order and the residual item', () => {
-    const p = buildPrompt(input)
-    // SPEC before URL before ARIA before SERVER_TIME before DIALOGS before ITEMS.
-    const positions = ['SPEC', 'URL', 'ARIA', 'SERVER_TIME', 'DIALOGS', 'ITEMS'].map(b =>
-      p.indexOf(`=== ${b} ===`)
-    )
-    expect(positions.every(x => x >= 0)).toBe(true)
-    for (let i = 1; i < positions.length; i++)
-      expect(positions[i]).toBeGreaterThan(positions[i - 1])
-    expect(p).toContain('[0] a confirmation prompt warns the action cannot be undone')
-    expect(p).toContain('This action cannot be undone')
-  })
-
-  it('instructs no-tools and the grounding rule', () => {
-    const p = buildPrompt(input)
-    expect(p).toMatch(/Do NOT use any tool/)
-    expect(p).toMatch(/GROUNDING RULE/)
-  })
-
-  it('omits absent evidence blocks (API not present here)', () => {
-    expect(buildPrompt(input)).not.toContain('=== API ===')
-  })
-
-  it('BLOCK_ORDER documents the canonical order', () => {
-    expect(BLOCK_ORDER).toEqual(['SPEC', 'URL', 'ARIA', 'API', 'SERVER_TIME', 'DIALOGS', 'ITEMS'])
-  })
-})
+import { renderAria, OUTPUT_SCHEMA, parseVerdicts } from './prompt'
 
 describe('renderAria', () => {
   it('renders roles, names, state tokens, and text leaves as an indented outline', () => {

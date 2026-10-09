@@ -1,6 +1,5 @@
 // The intent-behavior catalog: the `type: intent` rows of the behavior SSOT
-// (spec/{dashboard,contacts,cadence-followup}.yaml), transcribed verbatim like
-// SPEC_CATALOG, plus `servedBy` — the corpus-wide INVERSION of the YAML's
+// (spec/*.yaml), including retired tombstones, plus `servedBy` — the corpus-wide INVERSION of the YAML's
 // `serves:` edges. The judge binds an intent's evidence to captures tagged with
 // the intent's own ID or any behavior in servedBy (see intent-input.ts).
 //
@@ -8,7 +7,7 @@
 // asserts ids/titles/statements/status AND the inverted edges match
 // (intent-catalog.test.ts) — catalog drift fails offline tests, not a live run.
 
-export type IntentStatus = 'current' | 'proposed'
+export type IntentStatus = 'current' | 'proposed' | 'retired'
 
 export interface IntentSpec {
   id: string
@@ -97,6 +96,14 @@ export const INTENT_CATALOG: Record<string, IntentSpec> = {
       "a contact's detail page answers where things stand with this person — when we last talked in each direction, whether a reply is pending, and what work is queued — without the user digging through raw history",
     status: 'current',
     servedBy: ['CAD-029', 'CAD-030', 'CAD-031'],
+  },
+  'CAD-037': {
+    id: 'CAD-037',
+    title: 'CRM task actions are safe for remote task state',
+    statement:
+      "managing a linked task from the CRM never silently mutates or destroys the user's task in the remote app — remote state changes only where the user expects them to happen",
+    status: 'retired',
+    servedBy: [],
   },
   // The core value loop, judged as ONE journey. Evidence comes from
   // relationship-loop.tour.ts, whose captures are tagged CAD-038 directly.

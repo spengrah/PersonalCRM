@@ -1,12 +1,8 @@
-// The judge adapter contract: a narrow, swappable `judge(input) → verdict[]`
-// seam. Everything downstream (the grader's residue path) is insulated behind
-// this interface, so the concrete brain (codex-sdk default; codex-exec; HTTP stub)
-// is a config swap with ZERO grader change (design D2).
+// The intent judge transport contract.
 
 import type { AriaNode, ApiResponses, DialogRecord, ServerTimeFrame } from '../../support/types'
-import type { Mutation } from '../mutation'
 
-// One residual then-item the judge must grade.
+// The single intent statement sent through the structured verdict protocol.
 export interface JudgeItem {
   itemIndex: number
   thenText: string
@@ -42,7 +38,7 @@ export interface JudgeInput {
   given: string
   when: string
   then: string[] // full then list (context)
-  items: JudgeItem[] // the residual items to grade
+  items: JudgeItem[] // the intent statement at index 0
   evidence: EvidenceBlocks
   /**
    * Intent variant: set on an intent-pass call. The prompt renders an INTENT
@@ -50,7 +46,7 @@ export interface JudgeInput {
    * captureSections; `evidence` is ignored. behaviorId/behaviorTitle carry the
    * intent's id/title; items is the single statement item (index 0).
    */
-  intent?: { statement: string; status: 'current' | 'proposed' }
+  intent: { statement: string; status: 'current' | 'proposed' | 'retired' }
   captureSections?: CaptureSection[]
   /**
    * Absolute paths of capture-point screenshots attached as model images
@@ -58,21 +54,10 @@ export interface JudgeInput {
    * framing switches on their presence).
    */
   images?: string[]
-  /**
-   * HARNESS-INTERNAL, NEVER emitted in a prompt: the doctoring applied to this
-   * input's evidence on the trap self-test path. The adapters forward it onto
-   * the span (`qa.mutation`) so the exporter can render the `mutation` +
-   * DERIVE the `screenshot_caveat` (a doctored trace shows the undoctored
-   * pixels). PR3's trap self-test is the SOLE producer; normal
-   * `buildJudgeInput`/`buildIntentJudgeInput` never set it. Typed as the
-   * relocated `Mutation` (`judge/mutation.ts`) — corpus-independent, so it
-   * survives the corpus deletion the trap self-test replaces.
-   */
-  __trap?: { mutation: Mutation }
 }
 
-// Categorical per-item verdict. `citation` is the exact aria node label / JSON
-// path the model bound to; the grounding rule (grade.ts) downgrades an uncited
+// Categorical intent verdict. `citation` is the exact aria node label / JSON
+// path the model bound to; the grounding rule (grounding.ts) downgrades an uncited
 // `fail` to `unsure`.
 export interface PerItemVerdict {
   itemIndex: number

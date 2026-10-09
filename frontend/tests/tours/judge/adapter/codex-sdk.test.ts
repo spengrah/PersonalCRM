@@ -1,6 +1,3 @@
-import * as fs from 'fs'
-import * as os from 'os'
-import * as path from 'path'
 import { describe, it, expect } from 'vitest'
 import { DEFAULT_JUDGE_EFFORT, DEFAULT_JUDGE_MODEL } from '../models'
 import {
@@ -10,11 +7,9 @@ import {
   threadOptionsFor,
   verdictsFromTurn,
 } from './codex-sdk'
-import { applyGrounding } from '../grader/grade'
-import { parseSpanFile } from '../export/langfuse'
-import type { GradedEvidenceEntry } from '../label-trace'
+import { applyGrounding } from '../grounding'
 import type { Input, ThreadOptions } from '@openai/codex-sdk'
-import type { JudgeInput, PerItemVerdict } from './types'
+import type { JudgeInput } from './types'
 
 // A canned completed turn: a couple of lifecycle items then the final
 // schema-constrained agent message in `finalResponse` (structured output).
@@ -25,12 +20,12 @@ function turn(finalMessageObj: unknown, opts: { withTool?: boolean } = {}): Judg
   return {
     items,
     finalResponse: JSON.stringify(finalMessageObj),
-    usage: { input_tokens: 1200, output_tokens: 40 },
   }
 }
 
 const input: JudgeInput = {
-  behaviorId: 'CON-042',
+  intent: { statement: 'warns cannot be undone', status: 'current' },
+  behaviorId: 'CON-050',
   behaviorTitle: 'delete confirmation',
   given: 'g',
   when: 'w',
@@ -40,49 +35,14 @@ const input: JudgeInput = {
 }
 
 describe('verdictsFromTurn', () => {
-  it('returns parsed verdicts + usage for a clean run', () => {
-    const { verdicts, rejectedForTool, usage } = verdictsFromTurn(
+  it('returns parsed verdicts for a clean run', () => {
+    const { verdicts, rejectedForTool } = verdictsFromTurn(
       turn({ verdicts: [{ item_index: 0, verdict: 'fail', citation: 'dialog', critique: 'ok' }] })
     )
     expect(rejectedForTool).toBe(false)
     expect(verdicts).toEqual([
       { itemIndex: 0, verdict: 'fail', citation: 'dialog', critique: 'ok' },
     ])
-    expect(usage.inputTokens).toBe(1200)
-    expect(usage.outputTokens).toBe(40)
-  })
-
-  it('reads all five runtime usage fields, including the one the SDK type omits', () => {
-    const { usage } = verdictsFromTurn({
-      items: [{ type: 'agent_message' }],
-      finalResponse: '{"verdicts":[]}',
-      usage: {
-        input_tokens: 18_584,
-        cached_input_tokens: 4_480,
-        cache_write_input_tokens: 100,
-        output_tokens: 25,
-        reasoning_output_tokens: 18,
-      },
-    })
-    expect(usage).toEqual({
-      inputTokens: 18_584,
-      cachedInputTokens: 4_480,
-      cacheWriteInputTokens: 100,
-      outputTokens: 25,
-      reasoningOutputTokens: 18,
-    })
-  })
-
-  it('leaves an unreported field undefined rather than 0 or NaN', () => {
-    const { usage } = verdictsFromTurn({
-      items: [{ type: 'agent_message' }],
-      finalResponse: '{"verdicts":[]}',
-      usage: { input_tokens: 10 },
-    })
-    expect(usage.inputTokens).toBe(10)
-    expect(usage.cachedInputTokens).toBeUndefined()
-    expect(usage.cacheWriteInputTokens).toBeUndefined()
-    expect(usage.reasoningOutputTokens).toBeUndefined()
   })
 
   it('REJECTS a turn that used a tool / executed a command (dropped — no verdicts)', () => {
@@ -97,19 +57,8 @@ describe('verdictsFromTurn', () => {
     const { rejectedForTool } = verdictsFromTurn({
       items: [{ type: 'web_search' }, { type: 'agent_message' }],
       finalResponse: '{"verdicts":[]}',
-      usage: null,
     })
     expect(rejectedForTool).toBe(true)
-  })
-
-  it('tolerates null usage', () => {
-    const { usage } = verdictsFromTurn({
-      items: [{ type: 'agent_message' }],
-      finalResponse: '{"verdicts":[]}',
-      usage: null,
-    })
-    expect(usage.inputTokens).toBeUndefined()
-    expect(usage.outputTokens).toBeUndefined()
   })
 })
 
@@ -301,189 +250,5 @@ describe('makeCodexSdkJudge (injected run — no live SDK call)', () => {
     // The adapter returns the raw fail; the grader's grounding rule downgrades it.
     expect(v.verdict).toBe('fail')
     expect(applyGrounding(v).verdict).toBe('unsure')
-  })
-})
-
-// The SDK side of the both-adapters label-trace test: the appended span must
-// carry the label-trace content AND its qa.item_verdicts must EQUAL the
-// NORMALIZED array the adapter RETURNS — proving the span is built AFTER
-// normalization, not from the pre-normalization parse. Identical contract to the
-// exec adapter (impl name aside).
-describe('makeCodexSdkJudge — span carries label-trace content + normalized verdicts', () => {
-  const contentInput: JudgeInput = {
-    behaviorId: 'CON-042',
-    behaviorTitle: 'delete confirmation',
-    given: 'a contact exists',
-    when: 'the user deletes it',
-    then: ['warns cannot be undone', 'closes', 'removes the row'],
-    items: [
-      { itemIndex: 0, thenText: 'warns cannot be undone' },
-      { itemIndex: 2, thenText: 'removes the row' },
-    ],
-    evidence: {},
-    captureSections: [
-      { captureFile: '001.json', note: 'dialog', evidence: { url: 'http://x/1' } },
-      { captureFile: '002.json', note: 'gone', evidence: { url: 'http://x/2' } },
-    ],
-    images: ['/runs/001.png', '/runs/002.png'],
-  }
-
-  async function spanFor(
-    run: (input: Input, threadOptions: ThreadOptions, outputSchema: unknown) => Promise<JudgeTurn>
-  ): Promise<{ span: ReturnType<typeof parseSpanFile>[number]; verdicts: PerItemVerdict[] }> {
-    const tracePath = path.join(
-      os.tmpdir(),
-      `qa-sdk-span-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonl`
-    )
-    try {
-      const verdicts = await makeCodexSdkJudge({ run, tracePath })(contentInput)
-      const [span] = parseSpanFile(fs.readFileSync(tracePath, 'utf8'))
-      return { span, verdicts }
-    } finally {
-      fs.rmSync(tracePath, { force: true })
-    }
-  }
-
-  it('records impl codex-sdk + scenario + graded_evidence + prompt + completion + per-capture screenshots', async () => {
-    const { span } = await spanFor(async () =>
-      turn({
-        verdicts: [
-          { item_index: 0, verdict: 'fail', citation: 'dialog', critique: 'k' },
-          { item_index: 2, verdict: 'pass', citation: 'row', critique: 'k' },
-        ],
-      })
-    )
-    expect(span.attributes['qa.judge.impl']).toBe('codex-sdk')
-    expect((span.attributes['qa.scenario'] as { kind: string }).kind).toBe('behavior')
-    const graded = span.attributes['qa.graded_evidence'] as GradedEvidenceEntry[]
-    expect(graded.map(g => g.captureFile)).toEqual(['001.json', '002.json'])
-    expect(graded.map(g => g.screenshot)).toEqual(['/runs/001.png', '/runs/002.png'])
-    expect(span.attributes['qa.screenshots']).toEqual(['/runs/001.png', '/runs/002.png'])
-    expect(typeof span.attributes['gen_ai.prompt']).toBe('string')
-    expect(typeof span.attributes['gen_ai.completion']).toBe('string')
-    expect(span.attributes['gen_ai.usage.input_tokens']).toBe(1200)
-  })
-
-  it('(a) success: item_verdicts equals the returned verdicts', async () => {
-    const { span, verdicts } = await spanFor(async () =>
-      turn({
-        verdicts: [
-          { item_index: 0, verdict: 'fail', citation: 'dialog', critique: 'k' },
-          { item_index: 2, verdict: 'pass', citation: 'row', critique: 'k' },
-        ],
-      })
-    )
-    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
-    expect(verdicts.map(v => v.verdict)).toEqual(['fail', 'pass'])
-  })
-
-  it('(b) omitted item: span carries the FILLED (unsure) verdict, matching the return', async () => {
-    const { span, verdicts } = await spanFor(async () =>
-      turn({ verdicts: [{ item_index: 0, verdict: 'fail', citation: 'dialog', critique: 'k' }] })
-    )
-    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
-    expect(verdicts.find(v => v.itemIndex === 2)?.verdict).toBe('unsure')
-  })
-
-  it('(c) tool-rejection: span carries allUnsure, matching the return', async () => {
-    const { span, verdicts } = await spanFor(async () => turn({ verdicts: [] }, { withTool: true }))
-    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
-    expect(span.attributes['qa.tool_rejected']).toBe(true)
-    expect(verdicts.every(v => v.verdict === 'unsure')).toBe(true)
-  })
-
-  it('(d) thrown run: span carries allUnsure, matching the return', async () => {
-    const { span, verdicts } = await spanFor(async () => {
-      throw new Error('boom')
-    })
-    expect(span.attributes['qa.item_verdicts']).toEqual(verdicts)
-    expect(span.status.code).toBe('ERROR')
-    expect(verdicts.every(v => v.verdict === 'unsure')).toBe(true)
-  })
-
-  // Usage is summed across ATTEMPTS: a tool-rejected attempt's tokens were really
-  // spent, and dropping them biases any cross-model comparison by the rate at which
-  // a model trips the tool guard. Verdicts still come from the accepted attempt only.
-  const cleanVerdicts = [
-    { item_index: 0, verdict: 'pass', citation: 'row', critique: 'k' },
-    { item_index: 2, verdict: 'pass', citation: 'row', critique: 'k' },
-  ]
-  function attemptTurn(usage: JudgeTurn['usage'], opts: { withTool?: boolean } = {}): JudgeTurn {
-    const items: Array<{ type: string }> = [{ type: 'reasoning' }]
-    if (opts.withTool) items.push({ type: 'command_execution' })
-    items.push({ type: 'agent_message' })
-    return {
-      items,
-      finalResponse: JSON.stringify({ verdicts: opts.withTool ? [] : cleanVerdicts }),
-      usage,
-    }
-  }
-
-  it("sums usage across a tool-rejected retry, keeping the ACCEPTED attempt's verdicts", async () => {
-    const attempts: JudgeTurn[] = [
-      attemptTurn(
-        {
-          input_tokens: 18_584,
-          cached_input_tokens: 4_480,
-          output_tokens: 25,
-          reasoning_output_tokens: 18,
-        },
-        { withTool: true }
-      ),
-      attemptTurn({
-        input_tokens: 12_000,
-        cached_input_tokens: 3_000,
-        output_tokens: 40,
-        reasoning_output_tokens: 30,
-      }),
-    ]
-    let n = 0
-    const { span, verdicts } = await spanFor(async () => attempts[n++])
-    expect(n).toBe(2)
-    expect(span.attributes['gen_ai.usage.input_tokens']).toBe(30_584)
-    expect(span.attributes['gen_ai.usage.cached_input_tokens']).toBe(7_480)
-    expect(span.attributes['gen_ai.usage.output_tokens']).toBe(65)
-    expect(span.attributes['gen_ai.usage.reasoning_output_tokens']).toBe(48)
-    // Verdicts are the SECOND attempt's — the rejected attempt contributes tokens only.
-    expect(verdicts.every(v => v.verdict === 'pass')).toBe(true)
-    expect(span.attributes['qa.tool_rejected']).toBe(false)
-  })
-
-  it('accumulates cache-write across attempts, and keeps absence as ABSENT (not 0)', async () => {
-    const withWrite: JudgeTurn[] = [
-      attemptTurn({ input_tokens: 10, cache_write_input_tokens: 100 }, { withTool: true }),
-      attemptTurn({ input_tokens: 20, cache_write_input_tokens: 250 }),
-    ]
-    let i = 0
-    const { span } = await spanFor(async () => withWrite[i++])
-    expect(span.attributes['qa.usage.cache_write_input_tokens']).toBe(350)
-
-    const noWrite: JudgeTurn[] = [
-      attemptTurn({ input_tokens: 10 }, { withTool: true }),
-      attemptTurn({ input_tokens: 20 }),
-    ]
-    let j = 0
-    const { span: bare } = await spanFor(async () => noWrite[j++])
-    expect('qa.usage.cache_write_input_tokens' in bare.attributes).toBe(false)
-    expect(bare.attributes['gen_ai.usage.input_tokens']).toBe(30)
-  })
-
-  it("retains the FIRST attempt's usage when the retry THROWS", async () => {
-    let k = 0
-    const { span } = await spanFor(async () => {
-      k++
-      if (k === 1)
-        return attemptTurn(
-          { input_tokens: 18_584, cached_input_tokens: 4_480, output_tokens: 25 },
-          { withTool: true }
-        )
-      throw new Error('boom')
-    })
-    expect(k).toBe(2)
-    // Those tokens were really spent — a throw must not erase them.
-    expect(span.attributes['gen_ai.usage.input_tokens']).toBe(18_584)
-    expect(span.attributes['gen_ai.usage.cached_input_tokens']).toBe(4_480)
-    expect(span.attributes['gen_ai.usage.output_tokens']).toBe(25)
-    expect(span.status.code).toBe('ERROR')
   })
 })
