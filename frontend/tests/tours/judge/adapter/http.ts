@@ -4,6 +4,7 @@
 // it throws if unconfigured — it is never the merge-gate default (design D2).
 
 import { buildPrompt, OUTPUT_SCHEMA, parseVerdicts } from './prompt'
+import { judgeFailureVerdicts } from './types'
 import type { Judge, JudgeInput, PerItemVerdict } from './types'
 
 export interface HttpJudgeOptions {
@@ -11,15 +12,6 @@ export interface HttpJudgeOptions {
   model?: string
   apiKey?: string
   fetchImpl?: typeof fetch
-}
-
-function allUnsure(input: JudgeInput, critique: string): PerItemVerdict[] {
-  return input.items.map(i => ({
-    itemIndex: i.itemIndex,
-    verdict: 'unsure' as const,
-    citation: '',
-    critique,
-  }))
 }
 
 export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
@@ -66,7 +58,7 @@ export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
     // Errors, tool use and omitted verdicts abstain instead of fabricating a fail.
     let verdicts: PerItemVerdict[]
     if (error || content === undefined) {
-      verdicts = allUnsure(input, `judge error: ${error ?? 'no content'}`)
+      verdicts = judgeFailureVerdicts(input, `judge error: ${error ?? 'no content'}`)
     } else {
       const parsed = parseVerdicts(content)
       const byIndex = new Map(parsed.map(v => [v.itemIndex, v]))
@@ -77,6 +69,7 @@ export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
             verdict: 'unsure',
             citation: '',
             critique: 'no verdict returned',
+            judgeError: true,
           }
       )
     }

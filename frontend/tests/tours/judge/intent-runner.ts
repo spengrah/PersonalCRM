@@ -24,6 +24,7 @@ export interface IntentGrade {
   verdict: Verdict
   citation?: string
   reason?: string
+  judgeError?: true
   boundCount: number
   droppedCount: number
   servedBy: string[]
@@ -122,7 +123,7 @@ export async function runIntentPass(
         reason: `${grounded.reason ?? 'fail'} — downgraded to unsure: citation needs an in-range CAPTURE[n] index plus the node/path it binds to`,
       }
     }
-    grades.push({ ...base, ...grounded })
+    grades.push({ ...base, ...grounded, ...(v.judgeError ? { judgeError: true } : {}) })
   }
   return grades
 }

@@ -64,6 +64,19 @@ export interface PerItemVerdict {
   verdict: 'pass' | 'fail' | 'unsure'
   citation: string
   critique: string
+  /** The adapter could not produce a verdict for this item. */
+  judgeError?: true
+}
+
+// Shared construction path for transport failures and rejected judge runs.
+export function judgeFailureVerdicts(input: JudgeInput, critique: string): PerItemVerdict[] {
+  return input.items.map(i => ({
+    itemIndex: i.itemIndex,
+    verdict: 'unsure',
+    citation: '',
+    critique,
+    judgeError: true,
+  }))
 }
 
 export type Judge = (input: JudgeInput) => Promise<PerItemVerdict[]>

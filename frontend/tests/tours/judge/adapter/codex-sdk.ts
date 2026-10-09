@@ -12,8 +12,9 @@
 // exercised by the automated tests), exactly like exec's spawn.
 
 import { DEFAULT_JUDGE_EFFORT, DEFAULT_JUDGE_MODEL } from '../models'
-import { allUnsure, eventUsedTool } from './codex-exec'
+import { eventUsedTool } from './codex-exec'
 import { buildPrompt, OUTPUT_SCHEMA, parseVerdicts } from './prompt'
+import { judgeFailureVerdicts } from './types'
 import type { Judge, JudgeInput, PerItemVerdict } from './types'
 import type { Input, ModelReasoningEffort, ThreadOptions } from '@openai/codex-sdk'
 
@@ -120,9 +121,9 @@ export function makeCodexSdkJudge(opts: CodexSdkOptions = {}): Judge {
     // Errors, tool use and omitted verdicts abstain instead of fabricating a fail.
     let verdicts: PerItemVerdict[]
     if (error) {
-      verdicts = allUnsure(input, `judge error: ${error}`)
+      verdicts = judgeFailureVerdicts(input, `judge error: ${error}`)
     } else if (!result || result.rejectedForTool) {
-      verdicts = allUnsure(input, 'discarded: judge run used a tool')
+      verdicts = judgeFailureVerdicts(input, 'discarded: judge run used a tool')
     } else {
       const byIndex = new Map(result.verdicts.map(v => [v.itemIndex, v]))
       verdicts = input.items.map(
@@ -132,6 +133,7 @@ export function makeCodexSdkJudge(opts: CodexSdkOptions = {}): Judge {
             verdict: 'unsure',
             citation: '',
             critique: 'no verdict returned',
+            judgeError: true,
           }
       )
     }

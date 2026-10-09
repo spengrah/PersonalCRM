@@ -13,6 +13,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { DEFAULT_JUDGE_EFFORT, DEFAULT_JUDGE_MODEL } from '../models'
 import { buildPrompt, OUTPUT_SCHEMA, parseVerdicts } from './prompt'
+import { judgeFailureVerdicts } from './types'
 import type { Judge, JudgeInput, PerItemVerdict } from './types'
 
 // Event `type`/nested-type substrings that indicate the model used a tool /
@@ -164,15 +165,6 @@ export function codexArgs(
   return args
 }
 
-export function allUnsure(input: JudgeInput, critique: string): PerItemVerdict[] {
-  return input.items.map(i => ({
-    itemIndex: i.itemIndex,
-    verdict: 'unsure' as const,
-    citation: '',
-    critique,
-  }))
-}
-
 // The Judge implementation. On a tool-using run it re-runs ONCE; a second
 // tool-using run (or a parse miss) yields all-unsure (never a fabricated fail).
 export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
@@ -206,9 +198,9 @@ export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
     // Errors, tool use and omitted verdicts abstain instead of fabricating a fail.
     let verdicts: PerItemVerdict[]
     if (error) {
-      verdicts = allUnsure(input, `judge error: ${error}`)
+      verdicts = judgeFailureVerdicts(input, `judge error: ${error}`)
     } else if (!result || result.rejectedForTool) {
-      verdicts = allUnsure(input, 'discarded: judge run used a tool')
+      verdicts = judgeFailureVerdicts(input, 'discarded: judge run used a tool')
     } else {
       const byIndex = new Map(result.verdicts.map(v => [v.itemIndex, v]))
       verdicts = input.items.map(
@@ -218,6 +210,7 @@ export function makeCodexExecJudge(opts: CodexExecOptions = {}): Judge {
             verdict: 'unsure',
             citation: '',
             critique: 'no verdict returned',
+            judgeError: true,
           }
       )
     }
