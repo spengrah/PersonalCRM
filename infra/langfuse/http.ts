@@ -1,10 +1,7 @@
 // Dependency-free Langfuse HTTP helper for infra/langfuse tooling.
 //
-// This deliberately duplicates the ~40-line Basic-auth fetch helper that already
-// exists in frontend/tests/tours/judge/export/langfuse.ts. Importing across
-// infra/ -> frontend/tests/tours/judge/ would recreate the exact coupling this
-// factoring removes — infra/langfuse/ is a self-contained unit with zero imports
-// from the judge tree. See the spec's "Architectural direction" section.
+// This helper keeps infra/langfuse self-contained, with no imports from the
+// frontend judge tree. See the spec's "Architectural direction" section.
 
 export interface LangfuseConfig {
   host: string

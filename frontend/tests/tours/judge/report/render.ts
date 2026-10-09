@@ -18,7 +18,8 @@ function loadCaptures(dir: string): LoadedCapture[] {
 
 export function renderReport(grades: IntentGrade[]): string {
   const lines = ['# UX sanity check', '', 'Advisory report. Review findings before acting.', '']
-  for (const grade of grades.filter(g => g.boundCount > 0)) {
+  const boundGrades = grades.filter(g => g.boundCount > 0)
+  for (const grade of boundGrades) {
     lines.push(`## ${grade.intentId} — ${grade.verdict} (${grade.status})`, '', grade.title, '')
     lines.push(
       `Evidence: ${grade.boundCount} captures; ${grade.droppedCount} dropped over the cap.`
@@ -28,14 +29,22 @@ export function renderReport(grades: IntentGrade[]): string {
     if (grade.citation) lines.push(`Citation: ${grade.citation}`)
     lines.push(`Critique: ${grade.reason ?? 'No critique returned.'}`, '')
   }
-  lines.push('## No evidence', '')
-  for (const grade of grades.filter(g => g.boundCount === 0)) {
+  const noEvidence = grades.filter(g => g.boundCount === 0)
+  if (noEvidence.length > 0) lines.push('## No evidence', '')
+  for (const grade of noEvidence) {
     lines.push(`- ${grade.intentId} (${grade.status}) — ${grade.title}: no bound evidence.`)
   }
   return lines.join('\n') + '\n'
 }
 
-export async function main(argv = process.argv.slice(2)): Promise<void> {
+export function allBoundGradesAreJudgeErrors(grades: IntentGrade[]): boolean {
+  const boundGrades = grades.filter(grade => grade.boundCount > 0)
+  return (
+    boundGrades.length > 0 && boundGrades.every(grade => grade.reason?.startsWith('judge error:'))
+  )
+}
+
+export async function main(argv = process.argv.slice(2)): Promise<boolean> {
   const [runDir, output] = argv
   if (!runDir || argv.length > 2) throw new Error('usage: render.ts <runDir> [outFile]')
   const captures = loadCaptures(path.join(runDir, 'captures'))
@@ -55,6 +64,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const file = path.resolve(output ?? path.join(runDir, 'sanity-report.md'))
   writeFileSync(file, renderReport(grades), 'utf8')
   console.log(file)
+  return allBoundGradesAreJudgeErrors(grades)
 }
 
 if (import.meta.main) {

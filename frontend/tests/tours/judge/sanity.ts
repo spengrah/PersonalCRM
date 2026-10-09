@@ -21,7 +21,7 @@ async function main(): Promise<void> {
   })
   if (tours.error) throw tours.error
   if (tours.status !== 0) throw new Error(`tours failed (${tours.status ?? tours.signal})`)
-  await report([runDir])
+  if (await report([runDir])) process.exitCode = 1
 }
 
 if (import.meta.main) {

@@ -1,8 +1,7 @@
-// The INTENT_CATALOG ↔ SSOT sync guard: parses the three toured domains' spec
+// The INTENT_CATALOG ↔ SSOT sync guard: parses the spec
 // YAML and asserts the transcription matches — intent ids/titles/statements/
 // status verbatim, and servedBy equal to the corpus-wide inversion of the
 // `serves:` edges. Catalog drift fails HERE (offline), never in a live run.
-//
 import { describe, expect, it } from 'vitest'
 import { INTENT_CATALOG } from './intent-catalog'
 import { loadSpecBehaviors } from './spec-yaml'

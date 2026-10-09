@@ -1,4 +1,4 @@
-// Model and effort defaults shared by the intent adapters.
+// Model and effort defaults used as adapter fallbacks.
 export const DEFAULT_JUDGE_MODEL = 'gpt-6-luna'
 export const DEFAULT_JUDGE_EFFORT = 'low'
 
