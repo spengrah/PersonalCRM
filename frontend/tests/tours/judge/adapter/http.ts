@@ -3,26 +3,15 @@
 // output schema and POSTs to a chat/completions endpoint. Config is env-only and
 // it throws if unconfigured — it is never the merge-gate default (design D2).
 
-import { buildGradedEvidence, buildScenario } from '../label-trace'
 import { buildPrompt, OUTPUT_SCHEMA, parseVerdicts } from './prompt'
-import { appendSpan, buildGenAiSpan } from './span'
+import { judgeFailureVerdicts } from './types'
 import type { Judge, JudgeInput, PerItemVerdict } from './types'
 
 export interface HttpJudgeOptions {
   url?: string
   model?: string
   apiKey?: string
-  tracePath?: string
   fetchImpl?: typeof fetch
-}
-
-function allUnsure(input: JudgeInput, critique: string): PerItemVerdict[] {
-  return input.items.map(i => ({
-    itemIndex: i.itemIndex,
-    verdict: 'unsure' as const,
-    citation: '',
-    critique,
-  }))
 }
 
 export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
@@ -30,7 +19,6 @@ export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
   const model = opts.model ?? process.env.QA_JUDGE_HTTP_MODEL ?? 'gpt-4o-mini'
   const apiKey = opts.apiKey ?? process.env.QA_JUDGE_HTTP_KEY ?? ''
   const fetchImpl = opts.fetchImpl ?? fetch
-  const tracePath = opts.tracePath ?? process.env.QA_JUDGE_TRACE
 
   return async (input: JudgeInput): Promise<PerItemVerdict[]> => {
     if (!url) {
@@ -43,10 +31,8 @@ export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
     // resolved screenshots (else the model is told images exist that it
     // cannot see, licensing false visual grounding).
     const prompt = buildPrompt({ ...input, images: undefined })
-    const start = Date.now()
     let content: string | undefined
     let error: string | undefined
-    let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined
     try {
       const resp = await fetchImpl(url, {
         method: 'POST',
@@ -63,22 +49,16 @@ export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
       if (!resp.ok) throw new Error(`HTTP judge returned ${resp.status}`)
       const body = (await resp.json()) as {
         choices?: Array<{ message?: { content?: string } }>
-        usage?: { prompt_tokens?: number; completion_tokens?: number }
       }
       content = body.choices?.[0]?.message?.content
-      usage = body.usage
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     }
-    const end = Date.now()
 
-    // Normalize the verdicts ONCE, BEFORE the span append (error/no-content →
-    // allUnsure, else parse + omitted-item fill) — so the span's
-    // `response`/`item_verdicts` are the SAME array returned, not a
-    // pre-normalization parse. One source of truth for span + return value.
+    // Errors, tool use and omitted verdicts abstain instead of fabricating a fail.
     let verdicts: PerItemVerdict[]
     if (error || content === undefined) {
-      verdicts = allUnsure(input, `judge error: ${error ?? 'no content'}`)
+      verdicts = judgeFailureVerdicts(input, `judge error: ${error ?? 'no content'}`)
     } else {
       const parsed = parseVerdicts(content)
       const byIndex = new Map(parsed.map(v => [v.itemIndex, v]))
@@ -89,34 +69,8 @@ export function makeHttpJudge(opts: HttpJudgeOptions = {}): Judge {
             verdict: 'unsure',
             citation: '',
             critique: 'no verdict returned',
+            judgeError: true,
           }
-      )
-    }
-
-    if (tracePath) {
-      appendSpan(
-        tracePath,
-        buildGenAiSpan({
-          impl: 'http',
-          behaviorId: input.behaviorId,
-          model,
-          startMs: start,
-          endMs: end,
-          inputTokens: usage?.prompt_tokens,
-          outputTokens: usage?.completion_tokens,
-          error,
-          // This adapter now emits content too (was metrics-only). It is
-          // text-only — it cannot attach image files — so it passes NO
-          // `screenshots` and its `gradedEvidence` entries carry no screenshot
-          // (buildGradedEvidence over an empty `images`), the correct
-          // adapter-specific semantics.
-          prompt,
-          response: JSON.stringify(verdicts),
-          scenario: buildScenario(input),
-          gradedEvidence: buildGradedEvidence(input, []),
-          itemVerdicts: verdicts,
-          mutation: input.__trap?.mutation,
-        })
       )
     }
 

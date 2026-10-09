@@ -1,10 +1,7 @@
 // Dependency-free Langfuse HTTP helper for infra/langfuse tooling.
 //
-// This deliberately duplicates the ~40-line Basic-auth fetch helper that already
-// exists in frontend/tests/tours/judge/export/langfuse.ts. Importing across
-// infra/ -> frontend/tests/tours/judge/ would recreate the exact coupling this
-// factoring removes — infra/langfuse/ is a self-contained unit with zero imports
-// from the judge tree. See the spec's "Architectural direction" section.
+// This helper keeps infra/langfuse self-contained, with no imports from the
+// frontend judge tree. See the spec's "Architectural direction" section.
 
 export interface LangfuseConfig {
   host: string
@@ -59,8 +56,7 @@ export async function api(
     method,
     headers: { Authorization: authHeader(cfg), 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
-    // A hung connection must fail loudly, not stall the caller: the nightly
-    // round's fail-open handling only fires if apply/assert-cost actually exit.
+    // A hung connection must fail loudly, not stall the maintainer-run caller.
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   const text = await res.text()

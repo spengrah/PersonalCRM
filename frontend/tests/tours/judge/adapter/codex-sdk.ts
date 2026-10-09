@@ -6,16 +6,14 @@
 // judge still only reads the captured evidence in the prompt.
 //
 // Every pure piece is shared with the exec path (buildPrompt / OUTPUT_SCHEMA /
-// parseVerdicts / allUnsure / the tool-marker detection / the span builder);
-// only the transport differs. The turn-parsing logic is pure + unit-tested with
-// canned Turn results; the live SDK call is a thin wrapper (a manual smoke, not
-// exercised by the automated tests), exactly like exec's spawn.
+// parseVerdicts / judgeFailureVerdicts / the tool-marker detection);
+// only the transport differs. The turn-parsing logic is pure; the live SDK call
+// is a thin wrapper, exactly like exec's spawn.
 
-import { buildGradedEvidence, buildScenario } from '../label-trace'
 import { DEFAULT_JUDGE_EFFORT, DEFAULT_JUDGE_MODEL } from '../models'
-import { allUnsure, eventUsedTool } from './codex-exec'
+import { eventUsedTool } from './codex-exec'
 import { buildPrompt, OUTPUT_SCHEMA, parseVerdicts } from './prompt'
-import { appendSpan, buildGenAiSpan } from './span'
+import { judgeFailureVerdicts } from './types'
 import type { Judge, JudgeInput, PerItemVerdict } from './types'
 import type { Input, ModelReasoningEffort, ThreadOptions } from '@openai/codex-sdk'
 
@@ -27,46 +25,6 @@ import type { Input, ModelReasoningEffort, ThreadOptions } from '@openai/codex-s
 export interface JudgeTurn {
   items: ReadonlyArray<{ type?: string }>
   finalResponse: string
-  // The SDK's published `Usage` type declares FOUR fields while the runtime emits
-  // FIVE (`cache_write_input_tokens` is undeclared as of codex-sdk 0.144.6).
-  // Declared WIDER than the .d.ts on purpose — read usage defensively rather than
-  // trusting the published type to be exhaustive.
-  usage: {
-    input_tokens?: number
-    cached_input_tokens?: number
-    cache_write_input_tokens?: number
-    output_tokens?: number
-    reasoning_output_tokens?: number
-  } | null
-}
-
-// The usage counts one turn reports. Every field is optional and stays
-// `undefined` when the turn did not report it — 0 is a different, stronger claim
-// ("the model used none") than "the transport told us nothing".
-export interface TurnUsage {
-  inputTokens?: number
-  cachedInputTokens?: number
-  cacheWriteInputTokens?: number
-  outputTokens?: number
-  reasoningOutputTokens?: number
-}
-
-const USAGE_KEYS = [
-  'inputTokens',
-  'cachedInputTokens',
-  'cacheWriteInputTokens',
-  'outputTokens',
-  'reasoningOutputTokens',
-] as const
-
-// Sum `from` into `into`, skipping fields the source never reported so absence
-// survives accumulation (an absent field must not materialize as 0).
-export function addUsage(into: TurnUsage, from: TurnUsage): void {
-  for (const k of USAGE_KEYS) {
-    const v = from[k]
-    if (v === undefined) continue
-    into[k] = (into[k] ?? 0) + v
-  }
 }
 
 // From a completed turn → verdicts (or a tool-rejection signal). Pure — the
@@ -75,20 +33,11 @@ export function addUsage(into: TurnUsage, from: TurnUsage): void {
 export function verdictsFromTurn(turn: JudgeTurn): {
   verdicts: PerItemVerdict[]
   rejectedForTool: boolean
-  usage: TurnUsage
 } {
-  const u = turn.usage
-  const usage: TurnUsage = {
-    inputTokens: u?.input_tokens,
-    cachedInputTokens: u?.cached_input_tokens,
-    cacheWriteInputTokens: u?.cache_write_input_tokens,
-    outputTokens: u?.output_tokens,
-    reasoningOutputTokens: u?.reasoning_output_tokens,
-  }
   const usedTool = turn.items.some(it => eventUsedTool({ type: it.type }))
-  if (usedTool) return { verdicts: [], rejectedForTool: true, usage }
+  if (usedTool) return { verdicts: [], rejectedForTool: true }
   const verdicts = turn.finalResponse ? parseVerdicts(turn.finalResponse) : []
-  return { verdicts, rejectedForTool: false, usage }
+  return { verdicts, rejectedForTool: false }
 }
 
 // Build the SDK turn input: a bare prompt string when there are no images, or a
@@ -117,7 +66,6 @@ export function threadOptionsFor(model?: string, effort?: string): ThreadOptions
 export interface CodexSdkOptions {
   model?: string
   effort?: string
-  tracePath?: string
   // Injected for tests: run one turn and return the completed turn (defaults to a
   // real SDK thread run). Receives the fully-built thread options so tests can
   // observe model/effort/sandbox threading, exactly as the exec seam observes argv.
@@ -137,7 +85,7 @@ function defaultRun(
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
       const turn = await thread.run(input, { outputSchema, signal: controller.signal })
-      return { items: turn.items, finalResponse: turn.finalResponse, usage: turn.usage }
+      return { items: turn.items, finalResponse: turn.finalResponse }
     } finally {
       clearTimeout(timer)
     }
@@ -153,41 +101,28 @@ export function makeCodexSdkJudge(opts: CodexSdkOptions = {}): Judge {
   const effort = opts.effort ?? process.env.QA_JUDGE_EFFORT ?? DEFAULT_JUDGE_EFFORT
   const timeoutMs = opts.timeoutMs ?? 120_000
   const run = opts.run ?? defaultRun(timeoutMs)
-  const tracePath = opts.tracePath ?? process.env.QA_JUDGE_TRACE
   const threadOptions = threadOptionsFor(model, effort)
 
   return async (input: JudgeInput): Promise<PerItemVerdict[]> => {
     const prompt = buildPrompt(input)
-    const start = Date.now()
     let result: ReturnType<typeof verdictsFromTurn> | undefined
     let error: string | undefined
-    // Usage is summed across ATTEMPTS while verdicts come from the accepted
-    // attempt only: a discarded tool-using attempt's tokens were really spent, and
-    // dropping them biases any cross-model cost comparison by the rate at which a
-    // model trips the tool guard. Accumulated INSIDE the try, right after each
-    // parse, so a throw on a later attempt still retains the earlier counts.
-    const usage: TurnUsage = {}
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
         const turn = await run(sdkInput(prompt, input.images), threadOptions, OUTPUT_SCHEMA)
         result = verdictsFromTurn(turn)
-        addUsage(usage, result.usage)
         if (!result.rejectedForTool) break // pure-criticism run — accept
       }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     }
-    const end = Date.now()
 
-    // Normalize the verdicts ONCE, BEFORE the span append — so the span's
-    // response/item_verdicts are the SAME array the judge returns (error →
-    // allUnsure, tool-rejected → allUnsure, else omitted-item fill). One source
-    // of truth for span + return value. Identical to the exec path.
+    // Errors, tool use and omitted verdicts abstain instead of fabricating a fail.
     let verdicts: PerItemVerdict[]
     if (error) {
-      verdicts = allUnsure(input, `judge error: ${error}`)
+      verdicts = judgeFailureVerdicts(input, `judge error: ${error}`)
     } else if (!result || result.rejectedForTool) {
-      verdicts = allUnsure(input, 'discarded: judge run used a tool')
+      verdicts = judgeFailureVerdicts(input, 'discarded: judge run used a tool')
     } else {
       const byIndex = new Map(result.verdicts.map(v => [v.itemIndex, v]))
       verdicts = input.items.map(
@@ -197,38 +132,8 @@ export function makeCodexSdkJudge(opts: CodexSdkOptions = {}): Judge {
             verdict: 'unsure',
             citation: '',
             critique: 'no verdict returned',
+            judgeError: true,
           }
-      )
-    }
-
-    if (tracePath) {
-      appendSpan(
-        tracePath,
-        buildGenAiSpan({
-          impl: 'codex-sdk',
-          behaviorId: input.behaviorId,
-          // The SDK turn does not echo the model back; the configured model is
-          // authoritative (it is what the thread was started with).
-          model,
-          startMs: start,
-          endMs: end,
-          inputTokens: usage.inputTokens,
-          cachedInputTokens: usage.cachedInputTokens,
-          cacheWriteInputTokens: usage.cacheWriteInputTokens,
-          outputTokens: usage.outputTokens,
-          reasoningOutputTokens: usage.reasoningOutputTokens,
-          toolRejected: result?.rejectedForTool,
-          error,
-          // Content IS logged here (provably-synthetic corpus) — a span without
-          // it cannot be adjudicated later. Same call-site opt-in as exec.
-          prompt,
-          response: JSON.stringify(verdicts),
-          screenshots: input.images,
-          scenario: buildScenario(input),
-          gradedEvidence: buildGradedEvidence(input, input.images ?? []),
-          itemVerdicts: verdicts,
-          mutation: input.__trap?.mutation,
-        })
       )
     }
 

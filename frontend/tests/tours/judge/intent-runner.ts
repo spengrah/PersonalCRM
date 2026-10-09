@@ -1,14 +1,12 @@
 // The intent pass: one judge call per intent over the union of its bound
-// captures (see intent-input.ts). Sibling of the item-judge residue path —
-// advisory and label-gated like the rest of the judge layer, never a blocking
-// check.
+// captures (see intent-input.ts). Advisory; never a blocking check.
 
 import { DEFAULT_JUDGE_KIND, selectJudge } from './adapter'
 import { makeCodexExecJudge } from './adapter/codex-exec'
 import { makeCodexSdkJudge } from './adapter/codex-sdk'
 import type { Judge } from './adapter'
-import { applyGrounding } from './grader/grade'
-import type { Verdict } from './grader/types'
+import { applyGrounding } from './grounding'
+import type { Verdict } from './grounding'
 import { allIntents, type IntentSpec, type IntentStatus } from './intent-catalog'
 import {
   bindIntentCaptures,
@@ -26,6 +24,7 @@ export interface IntentGrade {
   verdict: Verdict
   citation?: string
   reason?: string
+  judgeError?: true
   boundCount: number
   droppedCount: number
   servedBy: string[]
@@ -65,8 +64,7 @@ export function makeIntentJudge(kind: string = process.env.QA_JUDGE ?? DEFAULT_J
   return selectJudge(kind, process.env.QA_INTENT_MODEL)
 }
 
-// Run the pass SERIALLY (matching the residue path: concurrent codex spawns
-// storm a quota-limited account). A zero-evidence intent abstains WITHOUT a
+// Run the pass serially: concurrent Codex calls share the account quota. A zero-evidence intent abstains WITHOUT a
 // model call — a freshly minted design-session intent is visibly unjudgeable,
 // not silently absent.
 export async function runIntentPass(
@@ -77,7 +75,7 @@ export async function runIntentPass(
   resolveScreenshot?: ScreenshotResolver
 ): Promise<IntentGrade[]> {
   const grades: IntentGrade[] = []
-  for (const intent of intents) {
+  for (const intent of intents.filter(intent => intent.status !== 'retired')) {
     const { captures: bound, dropped } = bindIntentCaptures(
       intent,
       captures,
@@ -125,7 +123,7 @@ export async function runIntentPass(
         reason: `${grounded.reason ?? 'fail'} — downgraded to unsure: citation needs an in-range CAPTURE[n] index plus the node/path it binds to`,
       }
     }
-    grades.push({ ...base, ...grounded })
+    grades.push({ ...base, ...grounded, ...(v.judgeError ? { judgeError: true } : {}) })
   }
   return grades
 }

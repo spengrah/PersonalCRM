@@ -108,7 +108,7 @@ describe('ingestion-lag retry', () => {
 })
 
 // The command level: `make qa-cost-assert FROM=<ISO8601>` from the repository
-// root, the same invocation the nightly round makes. The child gets only what
+// root, the same invocation the maintainer runs. The child gets only what
 // make and bun need plus the fake server's host and dummy keys, never this
 // process's environment.
 describe('make qa-cost-assert command against a fake Langfuse server', () => {
@@ -442,7 +442,7 @@ describe('make qa-cost-assert command against a fake Langfuse server', () => {
     })
   })
 
-  describe('PR1.c4: exit codes the nightly reads stay as they are', () => {
+  describe('maintainer command: exit codes stay as they are', () => {
     test('missing Langfuse env -> exit 2', async () => {
       serve({ '': page([]) })
       const out = await run(FROM, { LANGFUSE_HOST: '' })

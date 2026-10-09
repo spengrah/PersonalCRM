@@ -1,5 +1,7 @@
 # Restructuring the QA architecture — what the tours harness should actually grade
 
+> **Superseded** by [Retire the nightly QA judge](2026-10-09-retire-nightly-qa-judge.md): the nightly QA system this doc describes is retired; `make qa-sanity` is the on-demand check that remains.
+
 **Issues:** #380 / #606 (agentic UX QA harness), surfaced by #635 · **Date:** 2026-07-12 · **Tree:** `495416a8` · **Status:** plan, no implementation
 
 **Evidence:** [UX behavior → E2E migration audit](./2026-07-12-ux-behavior-e2e-migration-audit.md) (all 56 `ux` behaviors, 153 then-items, bucketed with citations) · [Intent gap map](./2026-07-12-intent-gap-map.md) (how the intent model works, what it is missing, `settings` in depth) · **Unblocks:** [Langfuse as QA SSOT](./2026-07-12-langfuse-as-qa-ssot-plan.md)

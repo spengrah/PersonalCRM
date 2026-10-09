@@ -429,7 +429,7 @@ behaviors:
     notes: A conflict-resolution affordance (keep-CRM vs use-external toggle) exists in the code but is currently unreachable — the detector never emits a conflict state.
     waivers:
       - then: everything-one-scrollable-view
-        reason: single-view/no-wizard is a structural-absence property with no deterministic observable; the citing tests for the other then-items all drive one dialog with no step transitions, and visual composition is judge-owned
+        reason: single-view/no-wizard is a structural-absence property with no deterministic observable; the citing tests for the other then-items all drive one dialog with no step transitions, and visual composition is not deterministically provable
 
   - id: IMP-028
     title: The modal pages the whole queue
@@ -539,7 +539,7 @@ behaviors:
       - key: one-time-session-param
         text: the one-time session param is stripped from the URL so a refresh does not re-trigger the highlight
     provenance: [imports/page.tsx sessionParam effect, InteractionsTab highlightedSession]
-    notes: The scroll-into-view and highlight styling are judge-owned presentation; the deterministic contract is card-present plus param-strip.
+    notes: The scroll-into-view and highlight styling are presentation, deliberately not pinned; the deterministic contract is card-present plus param-strip.
 
   - id: IMP-039
     title: The resolution modal dismisses without resolving

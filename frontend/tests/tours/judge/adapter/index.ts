@@ -1,7 +1,4 @@
-// Judge selection by the QA_JUDGE env. All three adapters sit behind the
-// identical `Judge` interface — codex-sdk (the default `@openai/codex-sdk`
-// transport), codex-exec (spawns the `codex` CLI), and the http stub — so the
-// concrete brain is a config swap with ZERO grader change (D2).
+// Select the transport for the intent pass.
 
 import { makeCodexExecJudge } from './codex-exec'
 import { makeCodexSdkJudge } from './codex-sdk'
@@ -10,16 +7,8 @@ import type { Judge } from './types'
 
 export type JudgeKind = 'codex-exec' | 'http' | 'codex-sdk'
 
-// The transport an unconfigured run gets, in ONE place — every QA_JUDGE fallback
-// in the harness reads this rather than repeating a literal, so the default can
-// never drift between the residue pass, the intent pass and the report CLI's
-// image-capability gate.
-//
-// codex-sdk, not codex-exec: the exec event stream carries no cached-input count
-// (its `input_tokens` is inclusive of cache reads), so an unconfigured round on
-// that transport prices every cached token at the full input rate and reports the
-// overstatement as authoritative. The default has to be the transport that
-// reports usage correctly.
+// The transport an unconfigured intent pass gets. codex-sdk is the default
+// because its usage data distinguishes cached input tokens.
 export const DEFAULT_JUDGE_KIND: JudgeKind = 'codex-sdk'
 
 // `model` overrides the adapter's default model env, so a caller (e.g. the

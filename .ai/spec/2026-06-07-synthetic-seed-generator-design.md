@@ -1,5 +1,7 @@
 # D — Synthetic Seed Generator — Design
 
+> The nightly QA scheduling described below was retired; see [the retirement spec](2026-10-09-retire-nightly-qa-judge.md).
+
 **Date:** 2026-06-07
 **Status:** Design — filled out this session (grounded by a code-explorer pass over the sync/ingestion architecture). Implementation-detail threads remain.
 **Author:** spengrah (brainstormed with Claude)

@@ -48,4 +48,4 @@ jobs:
           body: |
             Automated weekly refresh of `infra/langfuse/model-prices.json` from its declared sources (Venice, OpenRouter — both anonymous APIs).
 
-            Review the diff before merging: each row's price came directly from its source catalog, with no reconciliation against Langfuse's own managed prices. Merging applies these prices to Langfuse on the next nightly QA round.
+            Review the diff before merging: each row's price came directly from its source catalog, with no reconciliation against Langfuse's own managed prices. After merging, the prices reach Langfuse when the maintainer runs `make model-prices-apply`.

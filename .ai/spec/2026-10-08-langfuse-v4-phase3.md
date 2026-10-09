@@ -1,5 +1,7 @@
 # Langfuse v4 Phase 3: QA harness on v4 APIs
 
+> **Superseded in part** by [Retire the nightly QA judge](2026-10-09-retire-nightly-qa-judge.md): its QA parts describe the retired nightly QA system; `make qa-sanity` is the on-demand check that remains.
+
 Date: 2026-10-08
 Status: Draft for arc planning. Implements Phase 3 of the upgrade plan.
 

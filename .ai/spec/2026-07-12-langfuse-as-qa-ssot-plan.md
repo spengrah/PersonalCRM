@@ -1,5 +1,7 @@
 # Langfuse as SSOT for the QA judge loop — plan of attack
 
+> **Superseded** by [Retire the nightly QA judge](2026-10-09-retire-nightly-qa-judge.md): the nightly QA system this doc describes is retired; `make qa-sanity` is the on-demand check that remains.
+
 **Issue:** #635 · **Date:** 2026-07-12 · **Status:** plan, not implemented · **Depends on:** [`2026-07-12-qa-architecture-restructuring.md`](./2026-07-12-qa-architecture-restructuring.md) · **Companion to:** [`2026-07-11-llm-observability-platform-spike-decision.md`](./2026-07-11-llm-observability-platform-spike-decision.md)
 
 > **Superseded on the seed profile (2026-07-30, gh #759).** The `dev` and `prod-shaped` catalog profiles — and the whole invented-distribution layer behind them (bands, quotas, archetypes, margins) — are deleted. There are now exactly two worlds: the declared `standard` world (the default for local dev, staging, the automated staging reseed, and the QA tours) and `minimal-scoped` (an explicit operator override). Historical measurements below were taken against the world that existed at the time and are left as recorded; operational commands and provenance assumptions have been updated to `standard` / `synth-standard-`. See `.ai/patterns/synthetic-seed-toolkit.md` for the current story.

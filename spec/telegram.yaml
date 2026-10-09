@@ -572,4 +572,4 @@ behaviors:
       - key: changing-tracking-choice-persists
         text: changing a chat's tracking choice persists it and the list reflects the persisted choice
     provenance: [telegram-section.tsx TelegramChatList, use-telegram.ts useUpdateTelegramChatStatus]
-    notes: How the tracking choice feeds effective tracking is TGM-011 (surface none); the tracked/untracked dot is judge-owned presentation.
+    notes: How the tracking choice feeds effective tracking is TGM-011 (surface none); the tracked/untracked dot is presentation, deliberately not pinned.

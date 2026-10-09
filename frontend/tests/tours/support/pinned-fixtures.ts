@@ -15,8 +15,8 @@
 //
 // These literals are hand-copied from Go constants, so pinned-fixtures.test.ts
 // reads fixtures.go and fails on drift — a renamed marker would otherwise pass
-// every per-PR gate and surface only as a resolveFixture throw on the nightly
-// staging sweep, out-of-band and post-merge.
+// every per-PR gate and surface only as a resolveFixture throw on the next
+// staging tour run, out-of-band and post-merge.
 
 import type { APIRequestContext } from '@playwright/test'
 

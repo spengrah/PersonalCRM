@@ -1,5 +1,7 @@
 # SSOT Intent Layer + Judged UX Goals — Design
 
+> **Superseded** by [Retire the nightly QA judge](2026-10-09-retire-nightly-qa-judge.md): the nightly QA system this doc describes is retired; `make qa-sanity` is the on-demand check that remains.
+
 **Date:** 2026-07-10
 **Status:** Designed; implementation not started
 **Author:** spengrah (brainstormed with Claude)

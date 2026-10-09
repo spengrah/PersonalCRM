@@ -1,19 +1,14 @@
-// The INTENT_CATALOG ↔ SSOT sync guard: parses the three toured domains' spec
+// The INTENT_CATALOG ↔ SSOT sync guard: parses the spec
 // YAML and asserts the transcription matches — intent ids/titles/statements/
 // status verbatim, and servedBy equal to the corpus-wide inversion of the
 // `serves:` edges. Catalog drift fails HERE (offline), never in a live run.
-//
-// The catalog transcribes the NON-RETIRED intent set: a retired intent is an
-// SSOT tombstone (its row stays for the ID to never be reused) but is absent
-// from the judged catalog, so it must never re-enroll.
-
 import { describe, expect, it } from 'vitest'
 import { INTENT_CATALOG } from './intent-catalog'
 import { loadSpecBehaviors } from './spec-yaml'
 
 describe('intent-catalog ↔ spec YAML sync', () => {
   const behaviors = loadSpecBehaviors()
-  const yamlIntents = behaviors.filter(b => b.type === 'intent' && b.status !== 'retired')
+  const yamlIntents = behaviors.filter(b => b.type === 'intent')
 
   it('transcribes exactly the intent set of the whole corpus', () => {
     expect(Object.keys(INTENT_CATALOG).sort()).toEqual(yamlIntents.map(b => b.id).sort())

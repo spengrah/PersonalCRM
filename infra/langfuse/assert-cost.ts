@@ -1,9 +1,7 @@
-// One cost assertion inside the nightly round: reads GENERATION observations
+// A maintainer-run cost assertion: reads GENERATION observations
 // since a given ISO8601 timestamp and asserts every one of them carries
-// non-zero cost — warn-only, fail-open (the round wrapper decides how a
-// non-zero exit here is surfaced; this file only computes ok/not-ok and a
-// human-readable reason).
-//
+// non-zero cost — this file computes ok/not-ok and a human-readable reason for
+// the maintainer to inspect.
 // Generations are read through `GET /api/public/v2/observations` with the
 // `usage` field group, which carries each generation's `totalCost`. The v2 list
 // is cursor-paginated (`meta.cursor`, no limit); a page without a cursor is the
@@ -29,8 +27,7 @@ export interface AssertCostOpts {
   // if later worker batches are still materializing. Closing either would
   // require the export's run identity or observation count — coupling this
   // self-contained tool to the judge tree, which the design forbids. The check
-  // is an advisory fail-open signal on a single-writer instance; the next
-  // night's round re-covers anything a partial batch missed.
+  // is advisory on a single-writer instance; the maintainer reviews its result.
   retries?: number
   retryDelayMs?: number
   sleep?: (ms: number) => Promise<void>

@@ -103,7 +103,7 @@ describe('resolveFixture', () => {
 describe('marker parity with the Go seed', () => {
   // The markers here are hand-copied across the language boundary. A Go-side
   // rename passes lint, unit, integration and E2E, and fails only as a
-  // resolveFixture throw on the nightly staging sweep — this pulls that into the
+  // resolveFixture throw on the next staging tour run — this pulls that into the
   // deterministic lane.
   const goMarkers = (): string[] => {
     const src = fs.readFileSync(FIXTURES_GO, 'utf8')
