@@ -10,7 +10,7 @@ describe('judge model defaults', () => {
   it('pins the spec values for both passes', () => {
     expect(DEFAULT_JUDGE_MODEL).toBe('gpt-6-luna')
     expect(DEFAULT_JUDGE_EFFORT).toBe('low')
-    expect(DEFAULT_INTENT_MODEL).toBe('gpt-5.5')
+    expect(DEFAULT_INTENT_MODEL).toBe('gpt-6-luna')
     expect(DEFAULT_INTENT_EFFORT).toBe('medium')
   })
 })

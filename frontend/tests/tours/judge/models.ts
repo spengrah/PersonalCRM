@@ -22,8 +22,11 @@ export const DEFAULT_JUDGE_MODEL = 'gpt-6-luna'
 export const DEFAULT_JUDGE_EFFORT = 'low'
 
 // Intent judgment is the semantically hard task and the call count is small
-// (~one per intent per run), so it defaults to a stronger model + effort than
-// the cheap item-residue judge. Overridable via QA_INTENT_MODEL /
+// (~one per intent per run), so it runs at a higher effort than the item judge.
+// gpt-6-luna is the model too: a 2026-10-09 replay of one round's evidence
+// (5 repeats per model) found it as stable as gpt-5.5 and gpt-6-sol, in
+// majority agreement with gpt-6-sol, and stricter than gpt-5.5 on real gaps, at
+// roughly 1/45 of gpt-5.5's cost. Overridable via QA_INTENT_MODEL /
 // QA_INTENT_EFFORT; QA_JUDGE still selects the adapter kind.
-export const DEFAULT_INTENT_MODEL = 'gpt-5.5'
+export const DEFAULT_INTENT_MODEL = 'gpt-6-luna'
 export const DEFAULT_INTENT_EFFORT = 'medium'
