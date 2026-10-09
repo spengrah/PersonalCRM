@@ -28,7 +28,7 @@ The UXQA judge is **not** an autonomous agent and this work does not make it one
 4. Tests mirroring `codex-exec`'s injectable-`run` seam: canned turn results exercise parse / tool-rejection / span logic as pure unit tests; the live SDK call stays a thin wrapper (manual smoke, like exec's).
 5. Update the `codex-sdk` deferral test (`adapter/index.test.ts`) to assert the built behavior instead of the throw.
 
-**Model note.** Item judge = `gpt-5.4-mini`/`low` (cheap, per spec: "cheap model judges"); intent pass = `gpt-5.5`/`medium`. `gpt-5.6` is **not** adopted (see backlog: luna). The SDK adapter keeps these same defaults.
+**Model note.** Both passes default to `gpt-6-luna`: the item judge at `low` effort (#890, after Codex on a ChatGPT account stopped serving `gpt-5.4-mini`), the intent pass at `medium` (see backlog: luna). `models.ts` holds the defaults.
 
 ## Residual backlog (migrated from DEFERRED.md, correctly classified)
 
@@ -39,7 +39,9 @@ The UXQA judge is **not** an autonomous agent and this work does not make it one
 
 **Failure taxonomy — deliberately emergent, not blocked-by-tooling.** `failure_mode` is intentionally kept as free-text comments until categories stabilize over ~20–30 whys, then formalized into a categorical score. Waits on triage volume, by design.
 
-**luna intent-model swap — DECIDED (hold gpt-5.5), not open.** The experiment ran 2026-07-14 (`qa-intent-eval-20260714`): luna ~5× cheaper but less self-consistent; verdict = **hold `DEFAULT_INTENT_MODEL=gpt-5.5`**. Future arms (`luna-3vote` majority-vote, `gpt-5.6-terra`) are queued as candidates, sequenced after #642 — revisit only against a labeled held-out comparison, do not flip without evidence (gpt-5.5 is what caught the CAD-036 class of finding).
+**luna intent-model swap — DECIDED 2026-10-09 (`gpt-6-luna`), superseding the July hold below.** The maintainer moved the intent default to `gpt-6-luna` on a replay of round 20261008T092535Z, five repeats per model: verdict changes between repeats were 5/32 for `gpt-5.5` and 7/32 for both `gpt-6-luna` and `gpt-6-sol`; luna and sol agreed on 7 of 8 majority verdicts and both failed CAD-036 (the #892 gaps) in every repeat, where `gpt-5.5` passed it 3 of 5 times; cost per 8-intent round was $2.26 (`gpt-5.5`), $0.93 (`gpt-6-sol`) and $0.05 (`gpt-6-luna`). It is not the labeled held-out comparison the July entry asked for; the maintainer accepted that, since the nightly judge is being retired to an occasional review.
+
+**Earlier: luna intent-model swap — held at gpt-5.5 (2026-07-14).** The experiment ran 2026-07-14 (`qa-intent-eval-20260714`): luna ~5× cheaper but less self-consistent; verdict = **hold `DEFAULT_INTENT_MODEL=gpt-5.5`**. Future arms (`luna-3vote` majority-vote, `gpt-5.6-terra`) are queued as candidates, sequenced after #642 — revisit only against a labeled held-out comparison, do not flip without evidence (gpt-5.5 is what caught the CAD-036 class of finding).
 
 **Scrubber name-bigram pass — OPEN (low urgency).** `judge/scrub.ts` scrubs email/phone (`pii-patterns.ts`) but not name bigrams. Harmless today (the judge quotes only `synth-<namespace>-`-prefixed synthetic evidence) but the channel is live; extend the scrubber with a name-bigram pass at its next touch.
 
