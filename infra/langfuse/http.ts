@@ -56,8 +56,7 @@ export async function api(
     method,
     headers: { Authorization: authHeader(cfg), 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
-    // A hung connection must fail loudly, not stall the caller: the nightly
-    // round's fail-open handling only fires if apply/assert-cost actually exit.
+    // A hung connection must fail loudly, not stall the maintainer-run caller.
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   const text = await res.text()

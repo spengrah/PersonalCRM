@@ -39,7 +39,7 @@ export function renderReport(grades: IntentGrade[]): string {
 
 export function allBoundGradesAreJudgeErrors(grades: IntentGrade[]): boolean {
   const boundGrades = grades.filter(grade => grade.boundCount > 0)
-  return boundGrades.length > 0 && boundGrades.every(grade => grade.judgeError === true)
+  return boundGrades.length === 0 || boundGrades.every(grade => grade.judgeError === true)
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<boolean> {

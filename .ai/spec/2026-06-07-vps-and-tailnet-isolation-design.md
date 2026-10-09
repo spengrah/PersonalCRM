@@ -1,5 +1,7 @@
 # B — VPS + Tailnet Isolation — Design
 
+> The nightly QA sweep assumed in this design's QA-related resource and contention notes was retired; see [the retirement spec](2026-10-09-retire-nightly-qa-judge.md).
+
 **Date:** 2026-06-07
 **Status:** Skeleton — direction locked, details to be filled out in its own brainstorm.
 **Author:** spengrah (brainstormed with Claude)
