@@ -25,7 +25,7 @@ type Step =
   | 'connected'
 
 export function TelegramSection() {
-  const { data: status, error: statusError, isLoading } = useTelegramStatus()
+  const { data: status, error: statusError, isLoading, refetch } = useTelegramStatus()
   const startAuth = useStartTelegramAuth()
   const verifyCode = useVerifyTelegramCode()
   const verifyPassword = useVerifyTelegramPassword()
@@ -43,30 +43,23 @@ export function TelegramSection() {
     message: string
   } | null>(null)
 
-  // Determine step from status query
-  useEffect(() => {
-    if (isLoading) return
-
+  // Determine step from status query (adjusting state during render)
+  if (!isLoading) {
+    let nextStep: Step = step
     if (statusError) {
       // 404 means routes not registered (Telegram not configured on backend)
       const statusCode =
         statusError instanceof Error && 'status' in statusError
           ? (statusError as { status: number }).status
           : undefined
-      if (statusCode === 404) {
-        setStep('not_configured')
-      } else {
-        setStep('fetch_error')
-      }
-      return
-    }
-
-    if (status?.connected) {
-      setStep('connected')
+      nextStep = statusCode === 404 ? 'not_configured' : 'fetch_error'
+    } else if (status?.connected) {
+      nextStep = 'connected'
     } else if (step === 'loading' || step === 'fetch_error') {
-      setStep('disconnected')
+      nextStep = 'disconnected'
     }
-  }, [status, statusError, isLoading, step])
+    if (nextStep !== step) setStep(nextStep)
+  }
 
   // Auto-dismiss notifications
   useEffect(() => {
@@ -75,6 +68,15 @@ export function TelegramSection() {
       return () => clearTimeout(timer)
     }
   }, [notification])
+
+  const resetAuthState = useCallback(() => {
+    setPhone('')
+    setCode('')
+    setPassword('')
+    setAuthToken('')
+    setCodeType('')
+    setError(null)
+  }, [])
 
   const handleStartAuth = useCallback(async () => {
     setError(null)
@@ -102,7 +104,7 @@ export function TelegramSection() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid code')
     }
-  }, [authToken, code, verifyCode])
+  }, [authToken, code, verifyCode, resetAuthState])
 
   const handleVerifyPassword = useCallback(async () => {
     setError(null)
@@ -116,7 +118,7 @@ export function TelegramSection() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid password')
     }
-  }, [authToken, password, verifyPassword])
+  }, [authToken, password, verifyPassword, resetAuthState])
 
   const handleDisconnect = useCallback(async () => {
     if (!confirm('Disconnect Telegram? This will stop syncing messages.')) return
@@ -128,15 +130,6 @@ export function TelegramSection() {
       setError(err instanceof Error ? err.message : 'Failed to disconnect')
     }
   }, [disconnect])
-
-  const resetAuthState = () => {
-    setPhone('')
-    setCode('')
-    setPassword('')
-    setAuthToken('')
-    setCodeType('')
-    setError(null)
-  }
 
   const handleCancel = async () => {
     // Cancel the server-side auth session so StartAuth can be called again
@@ -229,7 +222,7 @@ export function TelegramSection() {
         <div className="text-center py-6">
           <AlertCircle className="w-8 h-8 text-red-400 mx-auto mb-2" />
           <p className="text-sm text-gray-600 mb-3">Failed to load Telegram status</p>
-          <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
             Retry
           </Button>
         </div>

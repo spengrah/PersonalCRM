@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useId } from 'react'
 import { useCreateManualTask } from '@/hooks/use-contact-tasks'
 import { Button } from '@/components/ui/button'
 import { X, ChevronDown } from 'lucide-react'
@@ -14,6 +14,7 @@ interface AddTaskModalProps {
 type TaskKind = 'reach_out' | 'send' | 'reminder'
 
 export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalProps) {
+  const titleId = useId()
   const [kind, setKind] = useState<TaskKind>('reach_out')
   const [text, setText] = useState('')
   const [notes, setNotes] = useState('')
@@ -75,13 +76,19 @@ export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalPr
       onClick={e => {
         if (e.target === e.currentTarget) onClose()
       }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
     >
       <div className="bg-white rounded-lg shadow-xl max-w-lg w-full mb-4">
         {/* Header */}
         <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="text-lg font-medium text-gray-900">Add Task for {contactName}</h2>
+          <h2 id={titleId} className="text-lg font-medium text-gray-900">
+            Add Task for {contactName}
+          </h2>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100"
           >
             <X className="w-5 h-5" />

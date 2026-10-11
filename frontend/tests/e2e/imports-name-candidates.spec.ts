@@ -5,6 +5,7 @@ import {
   TestAPI,
   type SeedBehaviorResult,
 } from './helpers/test-api'
+import { SHORT_TIMEOUT_MS } from './helpers/timeouts'
 
 // People-tab name candidates: grouped anarlog_title tokens lifted from session
 // titles. Each (token, session) pair is one external_contact row; the Imports
@@ -49,9 +50,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
 
     // The section appears when title-derived tokens exist; the heading is
     // the region's accessible locator.
-    await expect(page.getByRole('heading', { name: 'Names found in session titles' })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByRole('heading', { name: 'Names found in session titles' })).toBeVisible()
     await expect(page.getByText(display, { exact: true }).first()).toBeVisible()
     // Evidence count reflects the two declared (token, session) rows. The
     // literal MIRRORS the declaration's own two token entities rather than a
@@ -90,7 +89,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
   test('imports the whole token group as a new contact', async ({ page }) => {
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByText(display, { exact: true }).first()).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(display, { exact: true }).first()).toBeVisible()
 
     await myRow(page)
       .getByRole('button', { name: /Create contact/ })
@@ -109,7 +108,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     expect(res.ok()).toBeTruthy()
 
     // The token group leaves the name-candidate list after resolution.
-    await expect(page.getByText(display, { exact: true })).toHaveCount(0, { timeout: 10000 })
+    await expect(page.getByText(display, { exact: true })).toHaveCount(0)
   })
 
   // spec: IMP-031.item-leaves-queue-counts-update
@@ -121,7 +120,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
 
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByText(display, { exact: true }).first()).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(display, { exact: true }).first()).toBeVisible()
 
     await myRow(page)
       .getByRole('button', { name: /Create contact/ })
@@ -143,7 +142,7 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     await dialog.getByText('Search contacts...').click()
     await dialog.getByPlaceholder('Search contacts...').fill(declaredWorldNamePrefix(seeded))
     const targetOption = dialog.getByText(targetName, { exact: true }).last()
-    await expect(targetOption).toBeVisible({ timeout: 5000 })
+    await expect(targetOption).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await targetOption.click()
 
     const resolved = myResolve(page)
@@ -151,14 +150,14 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     const res = await resolved
     expect(res.ok()).toBeTruthy()
 
-    await expect(page.getByText(display, { exact: true })).toHaveCount(0, { timeout: 10000 })
+    await expect(page.getByText(display, { exact: true })).toHaveCount(0)
   })
 
   // spec: IMP-031.item-leaves-queue-counts-update
   test('ignores the token group via "Not a person"', async ({ page }) => {
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByText(display, { exact: true }).first()).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(display, { exact: true }).first()).toBeVisible()
 
     const resolved = myResolve(page)
     // The row-level "Not a person" ignores the group directly (no modal).
@@ -169,6 +168,6 @@ test.describe('Imports name candidates (anarlog_title) @area:imports', () => {
     const res = await resolved
     expect(res.ok()).toBeTruthy()
 
-    await expect(page.getByText(display, { exact: true })).toHaveCount(0, { timeout: 10000 })
+    await expect(page.getByText(display, { exact: true })).toHaveCount(0)
   })
 })

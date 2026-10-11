@@ -34,8 +34,8 @@ test.describe('Imports suggestions surface @area:imports', () => {
     // it MIRRORS the declaration's single pending method, not a generated value.
     // Scope to THIS worker's card to stay parallel-safe.
     const cardText = `${contactName} — 1 new method`
-    const card = page.locator('div.border', { hasText: cardText }).first()
-    await expect(card).toBeVisible({ timeout: 10000 })
+    const card = page.getByTestId('method-suggestion-card').filter({ hasText: cardText }).first()
+    await expect(card).toBeVisible()
 
     // Review opens the enrich-locked body: fixed contact header, NO
     // ContactSelector, NO Import.
@@ -65,9 +65,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await confirmButton.click()
     expect((await resolvePost).ok()).toBe(true)
     await invalidationRefetch
-    await expect(page.getByText(cardText)).toHaveCount(0, {
-      timeout: 10000,
-    })
+    await expect(page.getByText(cardText)).toHaveCount(0)
   })
 
   // spec: IMP-030.confirm-requires-one-method, IMP-031.item-leaves-queue-counts-update
@@ -79,16 +77,16 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const cardText = `${contactName} — 1 new method`
-    const card = page.locator('div.border', { hasText: cardText }).first()
-    await expect(card).toBeVisible({ timeout: 10000 })
+    const card = page.getByTestId('method-suggestion-card').filter({ hasText: cardText }).first()
+    await expect(card).toBeVisible()
 
     await card.getByRole('button', { name: 'Dismiss' }).click()
-    await expect(page.getByText(cardText)).toHaveCount(0, { timeout: 10000 })
+    await expect(page.getByText(cardText)).toHaveCount(0)
 
     // Reload: the dismissed suggestion stays gone (sticky).
     await page.reload()
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByText(cardText)).toHaveCount(0, { timeout: 10000 })
+    await expect(page.getByText(cardText)).toHaveCount(0)
   })
 
   // spec: IMP-029.import-not-offered-link, IMP-027.user-chooses-import-new
@@ -101,7 +99,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByText(cardName).first()).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(cardName).first()).toBeVisible()
 
     // Scope to the candidate card via its exact heading (shared helper).
     const card = candidateCardByName(page, cardName)
@@ -134,7 +132,7 @@ test.describe('Imports suggestions surface @area:imports', () => {
 
     const candidateCard = (): import('@playwright/test').Locator =>
       candidateCardByName(page, cardName)
-    await expect(candidateCard()).toBeVisible({ timeout: 10000 })
+    await expect(candidateCard()).toBeVisible()
 
     // Open the modal via Link.
     await candidateCard().getByRole('button', { name: /Link/i }).click()
@@ -184,6 +182,6 @@ test.describe('Imports suggestions surface @area:imports', () => {
     // scope to the list card via its heading). The toHaveCount assertion
     // retries on the live UI, so no networkidle wait is needed.
     await page.keyboard.press('Escape')
-    await expect(candidateCardByName(page, cardName)).toHaveCount(0, { timeout: 10000 })
+    await expect(candidateCardByName(page, cardName)).toHaveCount(0)
   })
 })

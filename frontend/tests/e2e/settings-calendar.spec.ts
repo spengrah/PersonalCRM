@@ -99,7 +99,7 @@ test.describe('Settings calendar sync @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const google = googleRegion(page)
-    await expect(google.getByText(ACCOUNT_ID)).toBeVisible({ timeout: 10_000 })
+    await expect(google.getByText(ACCOUNT_ID)).toBeVisible()
 
     // The badge reports the state derived from the mocked
     // last_successful_sync_at, rendered the same way formatSyncTime does.
@@ -148,15 +148,15 @@ test.describe('Settings calendar sync @area:settings', () => {
 
     const google = googleRegion(page)
     const syncButton = google.getByRole('button', { name: 'Sync Calendar' })
-    await expect(syncButton).toBeVisible({ timeout: 10_000 })
+    await expect(syncButton).toBeVisible()
     await syncButton.click()
 
     // The section reports the sync started…
-    await expect(google.getByText('Calendar sync started!')).toBeVisible({ timeout: 10_000 })
+    await expect(google.getByText('Calendar sync started!')).toBeVisible()
 
     // …and once the state poll returns syncing, the badge reflects it and
     // the trigger control is held disabled.
-    await expect(google.getByText('Syncing...')).toBeVisible({ timeout: 10_000 })
+    await expect(google.getByText('Syncing...')).toBeVisible()
     await expect(syncButton).toBeDisabled()
   })
 
@@ -172,7 +172,7 @@ test.describe('Settings calendar sync @area:settings', () => {
     // The banner names Google Calendar (label derived from the breach's
     // source datum) and carries the watchdog's details.
     const banner = page.getByTestId('sync-staleness-banner')
-    await expect(banner).toBeVisible({ timeout: 10_000 })
+    await expect(banner).toBeVisible()
     await expect(banner).toHaveAttribute('role', 'status')
     await expect(banner).toContainText('Google Calendar')
     await expect(banner).toContainText('no successful sync in 2h')
@@ -189,7 +189,7 @@ test.describe('Settings calendar sync @area:settings', () => {
 
     // Wait for the page to settle (the account section has rendered its
     // data) before asserting the banner's settled-state absence.
-    await expect(googleRegion(page).getByText(ACCOUNT_ID)).toBeVisible({ timeout: 10_000 })
+    await expect(googleRegion(page).getByText(ACCOUNT_ID)).toBeVisible()
     await expect(page.getByTestId('sync-staleness-banner')).toHaveCount(0)
   })
 })

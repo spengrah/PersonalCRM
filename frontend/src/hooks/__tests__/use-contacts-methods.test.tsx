@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -16,12 +15,13 @@ vi.mock('@/lib/contacts-api', () => ({
   },
 }))
 vi.mock('@/lib/query-invalidation', async () => {
-  const actual = await vi.importActual<any>('@/lib/query-invalidation')
+  const actual = await vi.importActual<Record<string, unknown>>('@/lib/query-invalidation')
   return { ...actual, invalidateFor: vi.fn() }
 })
 
 import { useUpdateContact, useApplyMethodOperations } from '@/hooks/use-contacts'
 import { contactsApi } from '@/lib/contacts-api'
+import type { ContactMethodResponse, ContactResponse } from '@/types/generated/contact'
 
 const CONTACT_ID = '11111111-0000-4000-8000-000000000000'
 const JOB_ID = '99999999-0000-4000-8000-000000000009'
@@ -43,7 +43,7 @@ beforeEach(() => {
 // contract that can never fire.
 describe('rematch registration follows the methods', () => {
   it('registers the job from the methods response', async () => {
-    ;(contactsApi.applyMethodOperations as any).mockResolvedValue({
+    vi.mocked(contactsApi.applyMethodOperations).mockResolvedValue({
       methods: [],
       results: [],
       rematch_job_id: JOB_ID,
@@ -63,11 +63,11 @@ describe('rematch registration follows the methods', () => {
   it('does not register a job from the scalar PUT', async () => {
     // Seeded with a rematch_job_id the update path must ignore: if the hook
     // still read the field, this would register and the assertion would fail.
-    ;(contactsApi.updateContact as any).mockResolvedValue({
+    vi.mocked(contactsApi.updateContact).mockResolvedValue({
       id: CONTACT_ID,
       full_name: 'Test Person',
       rematch_job_id: JOB_ID,
-    })
+    } as unknown as ContactResponse)
 
     const { result } = renderHook(() => useUpdateContact(), { wrapper })
     await result.current.mutateAsync({ id: CONTACT_ID, data: { full_name: 'Test Person' } })
@@ -78,7 +78,7 @@ describe('rematch registration follows the methods', () => {
   it('leaves the methods request off entirely when it has no operations to send', async () => {
     // Guards the API surface rather than the caller: an operations array is the
     // only thing this client may send, and it must reach the endpoint verbatim.
-    ;(contactsApi.applyMethodOperations as any).mockResolvedValue({ methods: [], results: [] })
+    vi.mocked(contactsApi.applyMethodOperations).mockResolvedValue({ methods: [], results: [] })
 
     const { result } = renderHook(() => useApplyMethodOperations(), { wrapper })
     const operations = [{ op: 'remove' as const, method_id: 'x' }]
@@ -94,8 +94,8 @@ describe('the detail cache', () => {
     // Retiring the methods branch must not take the detail-cache refresh with
     // it: the detail view reads scalars from this cache, and the edit form
     // closing onto a stale name would look like the save had not happened.
-    const updated = { id: CONTACT_ID, full_name: 'Renamed Person' }
-    ;(contactsApi.updateContact as any).mockResolvedValue(updated)
+    const updated = { id: CONTACT_ID, full_name: 'Renamed Person' } as unknown as ContactResponse
+    vi.mocked(contactsApi.updateContact).mockResolvedValue(updated)
 
     const { result } = renderHook(() => useUpdateContact(), { wrapper })
     await result.current.mutateAsync({ id: CONTACT_ID, data: { full_name: 'Renamed Person' } })
@@ -106,13 +106,15 @@ describe('the detail cache', () => {
   })
 
   it('takes its methods from the operations response', async () => {
-    const methods = [{ id: 'm1', type: 'email', value: 'a@example.test', is_primary: false }]
+    const methods = [
+      { id: 'm1', type: 'email', value: 'a@example.test', is_primary: false },
+    ] as unknown as ContactMethodResponse[]
     queryClient.setQueryData(['contacts', 'detail', CONTACT_ID], {
       id: CONTACT_ID,
       full_name: 'Test Person',
       methods: [],
     })
-    ;(contactsApi.applyMethodOperations as any).mockResolvedValue({ methods, results: [] })
+    vi.mocked(contactsApi.applyMethodOperations).mockResolvedValue({ methods, results: [] })
 
     const { result } = renderHook(() => useApplyMethodOperations(), { wrapper })
     await result.current.mutateAsync({
@@ -121,9 +123,9 @@ describe('the detail cache', () => {
     })
 
     await waitFor(() =>
-      expect((queryClient.getQueryData(['contacts', 'detail', CONTACT_ID]) as any).methods).toEqual(
-        methods
-      )
+      expect(
+        queryClient.getQueryData<{ methods: unknown }>(['contacts', 'detail', CONTACT_ID])?.methods
+      ).toEqual(methods)
     )
   })
 })

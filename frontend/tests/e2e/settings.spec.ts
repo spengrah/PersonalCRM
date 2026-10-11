@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { DEFAULT_EXPECT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 // The provider sections talk to the app's own account/status endpoints, and
 // the sandbox/CI deployment has no GOOGLE_*/TODOIST_* credentials — so the
@@ -86,14 +87,14 @@ test.describe('Settings Page @area:settings', () => {
       google
         .getByRole('button', { name: /Connect Google Account/i })
         .or(google.getByRole('button', { name: 'Add Account' }))
-    ).toBeVisible({ timeout: 15_000 })
+    ).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     const todoist = todoistRegion(page)
     await expect(
       todoist
         .getByRole('button', { name: /Connect Todoist Account/i })
         .or(todoist.getByRole('button', { name: 'Connect Account' }))
-    ).toBeVisible({ timeout: 15_000 })
+    ).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     const telegram = page.getByRole('region', { name: 'Telegram' })
     await expect(
@@ -101,7 +102,7 @@ test.describe('Settings Page @area:settings', () => {
         .getByRole('button', { name: /Connect Telegram/i })
         .or(telegram.getByText('Configuration Required'))
         .or(telegram.getByRole('button', { name: /Disconnect/i }))
-    ).toBeVisible({ timeout: 15_000 })
+    ).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
   })
 
   // spec: SET-019.each-provider-section-shows-state, SET-023.section-shows-not-connected, SET-023.lists-required-configuration
@@ -117,17 +118,13 @@ test.describe('Settings Page @area:settings', () => {
     // Each provider has its own section…
     const google = googleRegion(page)
     const todoist = todoistRegion(page)
-    await expect(google).toBeVisible({ timeout: 10_000 })
+    await expect(google).toBeVisible()
     await expect(todoist).toBeVisible()
 
     // …showing a not-connected empty state (connect affordance, no error
     // stack) rather than surfacing the 404.
-    await expect(google.getByRole('button', { name: /Connect Google Account/i })).toBeVisible({
-      timeout: 10_000,
-    })
-    await expect(todoist.getByRole('button', { name: /Connect Todoist Account/i })).toBeVisible({
-      timeout: 10_000,
-    })
+    await expect(google.getByRole('button', { name: /Connect Google Account/i })).toBeVisible()
+    await expect(todoist.getByRole('button', { name: /Connect Todoist Account/i })).toBeVisible()
 
     // …and listing the configuration the deployment must supply.
     await expect(google.getByText('GOOGLE_CLIENT_ID')).toBeVisible()
@@ -151,7 +148,7 @@ test.describe('Settings Page @area:settings', () => {
     // The account identity and its connected date (mocked created_at
     // 2026-01-05, rendered by formatDate under the pinned en-US/UTC
     // context) appear on the card.
-    await expect(google.getByText('e2e-google-user')).toBeVisible({ timeout: 10_000 })
+    await expect(google.getByText('e2e-google-user')).toBeVisible()
     await expect(google.getByText(/Connected Jan 5, 2026/)).toBeVisible()
 
     // The section offers connect and per-account disconnect affordances.
@@ -175,7 +172,7 @@ test.describe('Settings Page @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const connect = googleRegion(page).getByRole('button', { name: /Connect Google Account/i })
-    await expect(connect).toBeVisible({ timeout: 10_000 })
+    await expect(connect).toBeVisible()
 
     const authUrlRequest = page.waitForRequest(
       req => new URL(req.url()).pathname.endsWith('/api/v1/auth/google') && req.method() === 'GET'
@@ -184,7 +181,7 @@ test.describe('Settings Page @area:settings', () => {
     await authUrlRequest
 
     // The app navigates the whole page to the returned URL.
-    await page.waitForURL('**/settings?consent-stub=1', { timeout: 10_000 })
+    await page.waitForURL('**/settings?consent-stub=1', { timeout: DEFAULT_EXPECT_TIMEOUT_MS })
   })
 
   // spec: SET-021.success-outcome-shows-success, SET-021.one-time-outcome-parameters
@@ -205,15 +202,11 @@ test.describe('Settings Page @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // Success indication renders…
-    await expect(googleRegion(page).getByText(/connected successfully/i)).toBeVisible({
-      timeout: 10_000,
-    })
+    await expect(googleRegion(page).getByText(/connected successfully/i)).toBeVisible()
     // …the landing surfaces the newly-connected account…
-    await expect(googleRegion(page).getByText('e2e-google-user')).toBeVisible({
-      timeout: 10_000,
-    })
+    await expect(googleRegion(page).getByText('e2e-google-user')).toBeVisible()
     // …and the one-time params are stripped so refresh does not re-trigger.
-    await expect(page).toHaveURL('/settings', { timeout: 10_000 })
+    await expect(page).toHaveURL('/settings')
   })
 
   // spec: SET-021.error-outcome-shows-failure, SET-021.one-time-outcome-parameters
@@ -225,10 +218,8 @@ test.describe('Settings Page @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // The reason is derived from the redirect's message param — data.
-    await expect(googleRegion(page).getByText(/exchange failed/i)).toBeVisible({
-      timeout: 10_000,
-    })
-    await expect(page).toHaveURL('/settings', { timeout: 10_000 })
+    await expect(googleRegion(page).getByText(/exchange failed/i)).toBeVisible()
+    await expect(page).toHaveURL('/settings')
   })
 
   // spec: SET-022.confirmation-identifies-account, SET-022.only-confirmation-account-revoked
@@ -252,7 +243,7 @@ test.describe('Settings Page @area:settings', () => {
 
     const google = googleRegion(page)
     const disconnect = google.getByRole('button', { name: 'Disconnect e2e-google-user' })
-    await expect(disconnect).toBeVisible({ timeout: 10_000 })
+    await expect(disconnect).toBeVisible()
     await disconnect.click()
 
     // The confirmation identifies the account and warns what is revoked.
@@ -290,7 +281,7 @@ test.describe('Settings Page @area:settings', () => {
 
     const google = googleRegion(page)
     const disconnect = google.getByRole('button', { name: 'Disconnect e2e-google-user' })
-    await expect(disconnect).toBeVisible({ timeout: 10_000 })
+    await expect(disconnect).toBeVisible()
     await disconnect.click()
 
     // The revoke request targets the CREDENTIAL id, not the provider
@@ -299,12 +290,8 @@ test.describe('Settings Page @area:settings', () => {
       .poll(() => revokePosts.some(u => u.includes('/accounts/cred-e2e-google-user/revoke')))
       .toBe(true)
     // …the outcome is reported, and the list reflects the removal.
-    await expect(google.getByText(/Disconnected e2e-google-user/)).toBeVisible({
-      timeout: 10_000,
-    })
-    await expect(google.getByRole('button', { name: /Connect Google Account/i })).toBeVisible({
-      timeout: 10_000,
-    })
+    await expect(google.getByText(/Disconnected e2e-google-user/)).toBeVisible()
+    await expect(google.getByRole('button', { name: /Connect Google Account/i })).toBeVisible()
   })
 
   // spec: SET-024.per-source-sync-affordance
@@ -319,7 +306,7 @@ test.describe('Settings Page @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const google = googleRegion(page)
-    await expect(google.getByText('e2e-scoped-user')).toBeVisible({ timeout: 10_000 })
+    await expect(google.getByText('e2e-scoped-user')).toBeVisible()
 
     await expect(google.getByRole('button', { name: 'Sync Gmail' })).toBeVisible()
     await expect(google.getByRole('button', { name: 'Sync Calendar' })).toBeVisible()
@@ -338,7 +325,7 @@ test.describe('Settings Page @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const google = googleRegion(page)
-    await expect(google.getByText('e2e-chat-user')).toBeVisible({ timeout: 10_000 })
+    await expect(google.getByText('e2e-chat-user')).toBeVisible()
     await expect(google.getByRole('button', { name: 'Sync Chat' })).toBeVisible()
     await expect(google.getByRole('button', { name: /Chat — reconnect required/ })).toHaveCount(0)
   })
@@ -356,7 +343,7 @@ test.describe('Settings Page @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const google = googleRegion(page)
-    await expect(google.getByText('e2e-partial-chat-user')).toBeVisible({ timeout: 10_000 })
+    await expect(google.getByText('e2e-partial-chat-user')).toBeVisible()
     await expect(google.getByRole('button', { name: /Chat — reconnect required/ })).toBeVisible()
     await expect(google.getByRole('button', { name: 'Sync Chat' })).toHaveCount(0)
   })
@@ -392,7 +379,7 @@ test.describe('Settings Page @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const google = googleRegion(page)
-    await expect(google.getByText('e2e-stale-user')).toBeVisible({ timeout: 10_000 })
+    await expect(google.getByText('e2e-stale-user')).toBeVisible()
     await expect(google.getByText('e2e-fresh-user')).toBeVisible()
 
     // Exactly one Reconnect affordance: present for the stale account,
@@ -439,7 +426,7 @@ test.describe('Settings Page @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const todoist = todoistRegion(page)
-    await expect(todoist.getByText('e2e-todoist-account')).toBeVisible({ timeout: 10_000 })
+    await expect(todoist.getByText('e2e-todoist-account')).toBeVisible()
 
     // Pickers are populated from the live provider lists.
     const projectSelect = todoist.getByRole('combobox', { name: 'Project' })
@@ -456,12 +443,12 @@ test.describe('Settings Page @area:settings', () => {
     await projectSelect.selectOption('proj-1')
     await expect.poll(() => settingsPatches.length).toBeGreaterThanOrEqual(1)
     expect(settingsPatches[0]).toMatchObject({ project_id: 'proj-1' })
-    await expect(todoist.getByText(/Project updated/i)).toBeVisible({ timeout: 10_000 })
+    await expect(todoist.getByText(/Project updated/i)).toBeVisible()
 
     // Completing the pair clears the both-required note.
     await labelSelect.selectOption('label-1')
     await expect.poll(() => settingsPatches.some(p => p.label_id === 'label-1')).toBe(true)
-    await expect(bothRequired).toHaveCount(0, { timeout: 10_000 })
+    await expect(bothRequired).toHaveCount(0)
   })
 
   // spec: TDS-034.sync-requested-account-success, TDS-034.read-write-permission-visible
@@ -501,7 +488,7 @@ test.describe('Settings Page @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const todoist = todoistRegion(page)
-    await expect(todoist.getByText('e2e-todoist-account')).toBeVisible({ timeout: 10_000 })
+    await expect(todoist.getByText('e2e-todoist-account')).toBeVisible()
 
     // The account's read/write permission state is visible (data-derived
     // from the mocked scopes).
@@ -513,13 +500,13 @@ test.describe('Settings Page @area:settings', () => {
     await syncTasks.click()
     await expect.poll(() => triggerBodies.length).toBeGreaterThanOrEqual(1)
     expect(triggerBodies[0]).toMatchObject({ account_id: 'e2e-todoist-account' })
-    await expect(todoist.getByText(/Todoist sync started/i)).toBeVisible({ timeout: 10_000 })
+    await expect(todoist.getByText(/Todoist sync started/i)).toBeVisible()
 
     // A failing trigger is indicated as a failure.
     failMode = true
     await expect(syncTasks).toBeEnabled()
     await syncTasks.click()
-    await expect(todoist.getByText(/Failed to start sync/i)).toBeVisible({ timeout: 10_000 })
+    await expect(todoist.getByText(/Failed to start sync/i)).toBeVisible()
   })
 
   // spec: SET-028.export-affordance-downloads-user, SET-028.import-affordance-accepts-backup, SET-028.import-not-yet-functional
@@ -568,7 +555,7 @@ test.describe('Settings Page @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const sysinfo = page.getByRole('region', { name: 'System Information' })
-    await expect(sysinfo).toBeVisible({ timeout: 10_000 })
+    await expect(sysinfo).toBeVisible()
     // A version value is shown; the exact string is build-stamped, so only
     // non-emptiness is pinned (no dev-fallback copy matching).
     await expect(sysinfo.getByTestId('app-version')).not.toBeEmpty()

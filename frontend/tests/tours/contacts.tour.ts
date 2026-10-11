@@ -13,6 +13,7 @@
 
 import { pageFromIndex } from '../../src/lib/contact-list-params'
 import { test } from './support/tour-fixtures'
+import { DEFAULT_EXPECT_TIMEOUT_MS, JOB_TIMEOUT_MS } from '../e2e/helpers/timeouts'
 import {
   FIXTURE_BIRTHDAY,
   FIXTURE_DELETE,
@@ -168,9 +169,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
 
   // The merge modal overlay — used to root the aria snapshot on the modal for
   // its captures, so its subtree is not truncated out of the content-rich body.
-  const mergeModal = page
-    .locator('div.fixed.inset-0')
-    .filter({ has: page.getByRole('heading', { name: 'Merge Contacts' }) })
+  const mergeModal = page.getByRole('dialog', { name: 'Merge Contacts' })
 
   // =====================================================================
   // READ-ONLY BEHAVIORS FIRST
@@ -297,7 +296,7 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
   await page
     .getByTestId('birthday-card')
     .filter({ hasText: birthdayContact.full_name })
-    .waitFor({ state: 'visible', timeout: 20_000 })
+    .waitFor({ state: 'visible', timeout: JOB_TIMEOUT_MS })
   // DECISION 1 (capture weight): the con045 verifier's birthday ground-truth
   // ([0] grouping / [1] gift candidates / [3] placeholder names) needs only
   // { full_name, birthday } per birthday-bearing contact — NOT the full
@@ -625,7 +624,9 @@ test('contacts tour — current ux behaviors', async ({ page, tour }) => {
     note: 'success banner shown (page-level mergeMessage)',
     pair: { id: 'merge-CON-043', role: 'outcome-reported' },
   })
-  await page.getByText(/merged successfully/i).waitFor({ state: 'hidden', timeout: 10_000 })
+  await page
+    .getByText(/merged successfully/i)
+    .waitFor({ state: 'hidden', timeout: DEFAULT_EXPECT_TIMEOUT_MS })
   await tour.capture(page, {
     behaviors: ['CON-043'],
     note: 'success banner auto-dismissed after ~5s',

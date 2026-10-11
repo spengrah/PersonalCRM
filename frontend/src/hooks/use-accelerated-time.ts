@@ -76,11 +76,9 @@ export function useAcceleratedTime() {
 
       // Update every second for smooth time progression (only when accelerated)
       intervalRef.current = setInterval(updateAcceleratedTime, 1000)
-    } else if (!systemTime?.is_accelerated) {
-      // For normal time, just set current date once (no interval needed)
-      // Components will get fresh time on re-render
-      setLocalTime(new Date())
     }
+    // When not accelerated, currentTime below reads a fresh Date on each render,
+    // so localTime needs no update.
 
     return () => {
       if (intervalRef.current) {

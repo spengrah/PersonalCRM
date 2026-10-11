@@ -1,4 +1,5 @@
 import { Page, Locator, expect } from '@playwright/test'
+import { BRIEF_TIMEOUT_MS, JOB_TIMEOUT_MS, SHORT_TIMEOUT_MS } from './timeouts'
 
 /**
  * Candidate card scoped by its heading (never by presentation classes). The
@@ -8,7 +9,8 @@ import { Page, Locator, expect } from '@playwright/test'
  */
 export function candidateCardByName(page: Page, displayName: string): Locator {
   return page
-    .locator('div.border', { has: page.getByRole('heading', { name: displayName, exact: true }) })
+    .getByTestId('candidate-card')
+    .filter({ has: page.getByRole('heading', { name: displayName, exact: true }) })
     .first()
 }
 
@@ -52,7 +54,7 @@ export async function expectModalCandidate(page: Page, displayName: string): Pro
   // mode a guard like this must not have.
   await expect(
     resolverDialog(page).getByRole('heading', { level: 3, name: displayName, exact: true })
-  ).toBeVisible({ timeout: 5000 })
+  ).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 }
 
 /**
@@ -126,12 +128,12 @@ export async function findCandidateByName(
       break
     }
 
-    await expect(contactHeading).toBeVisible({ timeout: 1000 })
+    await expect(contactHeading).toBeVisible({ timeout: BRIEF_TIMEOUT_MS })
     // Generous budget: when the shared pool hovers at the pagination
     // boundary, concurrent workers' seeding/cleanup can strand the client
     // on an emptied page several times in a row, and each recovery cycle
     // (reload + re-walk) costs a few seconds on the dev server.
-  }).toPass({ timeout: 45000 })
+  }).toPass({ timeout: JOB_TIMEOUT_MS })
 }
 
 /**
@@ -196,6 +198,6 @@ export async function findCandidateByNameNoReload(
       break
     }
 
-    await expect(contactHeading).toBeVisible({ timeout: 1000 })
-  }).toPass({ timeout: 45000 })
+    await expect(contactHeading).toBeVisible({ timeout: BRIEF_TIMEOUT_MS })
+  }).toPass({ timeout: JOB_TIMEOUT_MS })
 }

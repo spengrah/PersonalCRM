@@ -1,6 +1,14 @@
 import { test, expect } from './fixtures'
 import type { APIRequestContext } from '@playwright/test'
-import { createTestAPI, TestAPI, declaredWorldNamePrefix } from './helpers/test-api'
+import {
+  API_BASE_URL,
+  API_HEADERS,
+  API_KEY,
+  createTestAPI,
+  TestAPI,
+  declaredWorldNamePrefix,
+} from './helpers/test-api'
+import { BRIEF_TIMEOUT_MS, SHORT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
 import {
   expectModalCandidate,
   findCandidateByName,
@@ -8,9 +16,6 @@ import {
   resolverDialog,
   selectContactIfNeeded,
 } from './helpers/imports-helpers'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
 
 /**
  * Walk the ALREADY-OPEN modal to a candidate using its own Prev/Next pager.
@@ -40,16 +45,12 @@ async function walkModalToCandidate(
       if (before) {
         // Wait out the pager transition (heading settles on the neighbor).
         await expect(heading)
-          .not.toHaveText(before, { timeout: 2000 })
+          .not.toHaveText(before, { timeout: BRIEF_TIMEOUT_MS })
           .catch(() => {})
       }
     }
   }
-  await expect(target).toBeVisible({ timeout: 2000 })
-}
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
+  await expect(target).toBeVisible({ timeout: BRIEF_TIMEOUT_MS })
 }
 
 /**
@@ -105,7 +106,7 @@ test.describe('Imports Modal @area:imports', () => {
       const displayName = seeded.entities['one'].name
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       await findCandidateByName(page, displayName)
 
@@ -146,7 +147,7 @@ test.describe('Imports Modal @area:imports', () => {
       })
 
       // Wait for heading to change (could be any candidate, just verify navigation works)
-      await expect(heading).not.toHaveText(initialName!, { timeout: 5000 })
+      await expect(heading).not.toHaveText(initialName!, { timeout: SHORT_TIMEOUT_MS })
       const secondName = await heading.textContent()
 
       // Press ArrowLeft to go back
@@ -155,23 +156,23 @@ test.describe('Imports Modal @area:imports', () => {
       })
 
       // Should return to initial contact
-      await expect(heading).toHaveText(initialName!, { timeout: 5000 })
+      await expect(heading).toHaveText(initialName!, { timeout: SHORT_TIMEOUT_MS })
 
       // The position pager buttons drive the same navigation.
       await page.getByRole('button', { name: 'Next candidate' }).click()
-      await expect(heading).toHaveText(secondName!, { timeout: 5000 })
+      await expect(heading).toHaveText(secondName!, { timeout: SHORT_TIMEOUT_MS })
       await page.getByRole('button', { name: 'Previous candidate' }).click()
-      await expect(heading).toHaveText(initialName!, { timeout: 5000 })
+      await expect(heading).toHaveText(initialName!, { timeout: SHORT_TIMEOUT_MS })
 
       // Arrow keys are inert while typing: with the name input focused,
       // ArrowRight must not navigate away from the current candidate.
       await heading.click()
       const nameInput = modal.getByRole('textbox').first()
-      await expect(nameInput).toBeVisible({ timeout: 5000 })
+      await expect(nameInput).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
       await nameInput.press('ArrowRight')
       await expect(nameInput).toHaveValue(displayName)
       await nameInput.press('Escape')
-      await expect(heading).toHaveText(initialName!, { timeout: 5000 })
+      await expect(heading).toHaveText(initialName!, { timeout: SHORT_TIMEOUT_MS })
     })
   })
 
@@ -199,7 +200,7 @@ test.describe('Imports Modal @area:imports', () => {
 
       // Open link modal
       const candidateCard = candidateCardByName(page, candidateName)
-      await expect(candidateCard).toBeVisible({ timeout: 10000 })
+      await expect(candidateCard).toBeVisible()
       await candidateCard.getByRole('button', { name: /Link/i }).click()
 
       // Wait for modal to open in link mode
@@ -213,13 +214,13 @@ test.describe('Imports Modal @area:imports', () => {
       await searchInput.fill(declaredWorldNamePrefix(seeded))
 
       const contactOption = dialog.getByText(targetName, { exact: true }).last()
-      await expect(contactOption).toBeVisible({ timeout: 5000 })
+      await expect(contactOption).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
       await contactOption.click()
 
       // The cadence selector pre-fills from the existing contact. The literal
       // MIRRORS the declaration's Cadence("quarterly").
       const cadenceSelect = page.locator('#contact-cadence')
-      await expect(cadenceSelect).toHaveValue('quarterly', { timeout: 5000 })
+      await expect(cadenceSelect).toHaveValue('quarterly', { timeout: SHORT_TIMEOUT_MS })
     })
 
     // spec: IMP-027.cadence-chosen-or-prefilled
@@ -232,7 +233,7 @@ test.describe('Imports Modal @area:imports', () => {
       const targetName = seeded.entities['cadenced2'].name
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       await findCandidateByName(page, displayName)
 
@@ -250,13 +251,13 @@ test.describe('Imports Modal @area:imports', () => {
       await searchInput.fill(declaredWorldNamePrefix(seeded))
 
       const contactOption = dialog.getByText(targetName, { exact: true }).last()
-      await expect(contactOption).toBeVisible({ timeout: 5000 })
+      await expect(contactOption).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
       await contactOption.click()
 
       // Pre-fill proof, then choose a different cadence.
       const cadenceSelect = page.locator('#contact-cadence')
-      await expect(cadenceSelect).toBeVisible({ timeout: 5000 })
-      await expect(cadenceSelect).toHaveValue('monthly', { timeout: 5000 })
+      await expect(cadenceSelect).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
+      await expect(cadenceSelect).toHaveValue('monthly', { timeout: SHORT_TIMEOUT_MS })
       await cadenceSelect.selectOption('weekly')
       await expect(cadenceSelect).toHaveValue('weekly')
 
@@ -306,7 +307,7 @@ test.describe('Imports Modal @area:imports', () => {
       const displayName = seeded.entities['plain'].name
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       await findCandidateByName(page, displayName)
 
@@ -326,7 +327,7 @@ test.describe('Imports Modal @area:imports', () => {
 
       // Verify input field appears with the name value
       const nameInput = modal.getByRole('textbox').first()
-      await expect(nameInput).toBeVisible({ timeout: 5000 })
+      await expect(nameInput).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
       await expect(nameInput).toHaveValue(displayName)
     })
 
@@ -339,7 +340,7 @@ test.describe('Imports Modal @area:imports', () => {
       const newName = `${declaredWorldNamePrefix(seeded)}Edited Name For Import`
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       await findCandidateByName(page, displayName)
 
@@ -359,7 +360,7 @@ test.describe('Imports Modal @area:imports', () => {
 
       // Wait for input to appear and edit the name
       const nameInput = modal.getByRole('textbox').first()
-      await expect(nameInput).toBeVisible({ timeout: 5000 })
+      await expect(nameInput).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 
       // Clear and type new name, then press Enter to confirm
       await nameInput.fill(newName)
@@ -386,7 +387,9 @@ test.describe('Imports Modal @area:imports', () => {
       // are "…Import Candidate <seq>", so a page-wide substring match on a
       // single-digit seq would also resolve a double-digit sibling and report
       // this candidate as still present.
-      await expect(page.getByText(displayName, { exact: true })).not.toBeVisible({ timeout: 15000 })
+      await expect(page.getByText(displayName, { exact: true })).not.toBeVisible({
+        timeout: SLOW_TIMEOUT_MS,
+      })
 
       // API-read: the contact was created with the edited name.
       const contactRes = await request.get(`${API_BASE_URL}/api/v1/contacts/${createdContactId}`, {
@@ -417,11 +420,11 @@ test.describe('Imports Modal @area:imports', () => {
       const displayName = seeded.entities['multi-method'].name
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       // Open import modal
       const candidateCard = candidateCardByName(page, displayName)
-      await expect(candidateCard).toBeVisible({ timeout: 10000 })
+      await expect(candidateCard).toBeVisible()
       await candidateCard.getByRole('button', { name: /Import/i }).click()
 
       // Wait for modal
@@ -466,7 +469,7 @@ test.describe('Imports Modal @area:imports', () => {
       const displayName = seeded.entities['plain'].name
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       await findCandidateByName(page, displayName)
 
@@ -502,7 +505,7 @@ test.describe('Imports Modal @area:imports', () => {
       expect(createdContactId).toBeTruthy()
 
       // The candidate card leaves the list (it was imported).
-      await expect(candidateCard).not.toBeVisible({ timeout: 15000 })
+      await expect(candidateCard).not.toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
       // API-read: the created contact carries the chosen cadence.
       const contactRes = await request.get(`${API_BASE_URL}/api/v1/contacts/${createdContactId}`, {
@@ -532,7 +535,7 @@ test.describe('Imports Modal @area:imports', () => {
       const displayName = seeded.entities['plain'].name
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
       await findCandidateByName(page, displayName)
 
       await candidateCardByName(page, displayName)
@@ -556,7 +559,7 @@ test.describe('Imports Modal @area:imports', () => {
       // Clear the name, then attempt to import — blocked, modal stays open.
       await modal.getByRole('heading', { level: 3 }).first().click()
       const nameInput = modal.getByRole('textbox').first()
-      await expect(nameInput).toBeVisible({ timeout: 5000 })
+      await expect(nameInput).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
       await nameInput.fill('')
       await page.getByRole('button', { name: 'Import as New Contact', exact: true }).click()
       await expect(modal).toBeVisible()
@@ -631,17 +634,17 @@ test.describe('Imports Modal @area:imports', () => {
       // Opt in to unresolved peers. The hidden-peer count that gates the toggle
       // rides the response META, which the filter leaves untouched.
       const unresolvedToggle = page.getByRole('switch')
-      await expect(unresolvedToggle).toBeVisible({ timeout: 10000 })
+      await expect(unresolvedToggle).toBeVisible()
       await unresolvedToggle.click()
 
       // Exactly one unresolved card is now on the page, and it is ours. A
       // page.route that silently failed to match would leave every sibling's card
       // in the list and make the locator a coin flip again, so the interception is
       // asserted rather than assumed.
-      const ourCard = page.locator('div.border', {
+      const ourCard = page.getByTestId('candidate-card').filter({
         has: page.getByText('Unresolved Telegram peer'),
       })
-      await expect(ourCard).toHaveCount(1, { timeout: 10000 })
+      await expect(ourCard).toHaveCount(1)
       expect(
         filteredResponses.length,
         'the suggestions-list interception must have fired'
@@ -683,7 +686,7 @@ test.describe('Imports Modal @area:imports', () => {
       const editedName = `${declaredWorldNamePrefix(seeded)}Named Telegram Peer`
       await modal.getByRole('heading', { level: 3 }).first().click()
       const nameInput = modal.getByRole('textbox').first()
-      await expect(nameInput).toBeVisible({ timeout: 5000 })
+      await expect(nameInput).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
       await nameInput.fill(editedName)
       await nameInput.press('Enter')
 
@@ -727,11 +730,12 @@ test.describe('Imports Modal @area:imports', () => {
       await selectContactIfNeeded(page, dialog, cardName, cardName)
       await expect(page.getByRole('button', { name: /Link Contact/i })).toBeEnabled()
 
-      const methodRow = (value: string) => dialog.locator('div.border', { hasText: value }).last()
+      const methodRow = (value: string) =>
+        dialog.getByTestId('method-row').filter({ hasText: value }).last()
 
       // The identical email X cannot be re-selected: its toggle is disabled.
       const rowX = methodRow(emailX)
-      await expect(rowX).toBeVisible({ timeout: 10000 })
+      await expect(rowX).toBeVisible()
       await expect(
         rowX.getByRole('button', { name: /Select method|Deselect method/ })
       ).toBeDisabled()
@@ -767,7 +771,7 @@ test.describe('Imports Modal @area:imports', () => {
       const nameTwo = seeded.entities['two'].name
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
       await findCandidateByName(page, nameOne)
 
       await candidateCardByName(page, nameOne)
@@ -797,7 +801,7 @@ test.describe('Imports Modal @area:imports', () => {
       // Our second candidate is still queued, so the modal must NOT close —
       // it advances off the resolved candidate.
       await expect(dialog).toBeVisible()
-      await expect(heading).not.toHaveText(nameOne, { timeout: 10000 })
+      await expect(heading).not.toHaveText(nameOne)
 
       // Resolve the second candidate WITHOUT leaving the modal: the in-place
       // advance may have landed on another worker's candidate, so walk the
@@ -827,10 +831,11 @@ test.describe('Imports Modal @area:imports', () => {
             // Short-timeout read: if the dialog closes between the visibility
             // check and this read, the locator must fail fast (not auto-wait
             // past the poll budget) so the next iteration sees it closed.
-            const text = (await heading.textContent({ timeout: 500 }).catch(() => '')) ?? ''
+            const text =
+              (await heading.textContent({ timeout: BRIEF_TIMEOUT_MS }).catch(() => '')) ?? ''
             return text.includes(nameTwo) ? 'pending' : 'advanced'
           },
-          { timeout: 15000 }
+          { timeout: SLOW_TIMEOUT_MS }
         )
         .not.toBe('pending')
     })
@@ -854,7 +859,7 @@ test.describe('Imports Modal @area:imports', () => {
       const displayName = seeded.entities['cand'].name
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
       await findCandidateByName(page, displayName)
 
       const dialog = resolverDialog(page)
@@ -873,7 +878,7 @@ test.describe('Imports Modal @area:imports', () => {
       // not the dialog).
       await dialog.getByRole('heading', { level: 3 }).first().click()
       const nameInput = dialog.getByRole('textbox').first()
-      await expect(nameInput).toBeVisible({ timeout: 5000 })
+      await expect(nameInput).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
       await nameInput.fill('Should Not Save')
       await nameInput.press('Escape')
       await expect(
@@ -892,7 +897,7 @@ test.describe('Imports Modal @area:imports', () => {
       ).toBeVisible()
 
       // Clicking the backdrop (the overlay outside the panel) closes it.
-      await dialog.locator('xpath=..').click({ position: { x: 10, y: 10 } })
+      await page.mouse.click(10, 10)
       await expect(dialog).not.toBeVisible()
 
       // The Cancel action closes it.

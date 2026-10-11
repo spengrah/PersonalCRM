@@ -19,7 +19,10 @@ interface OrphanCardProps {
  */
 export function OrphanCard({ item, busy, onLogImpromptu }: OrphanCardProps) {
   return (
-    <div className="rounded-lg border border-gray-200 border-l-2 border-l-gray-300 bg-white p-5">
+    <div
+      data-testid="orphan-card"
+      className="rounded-lg border border-gray-200 border-l-2 border-l-gray-300 bg-white p-5"
+    >
       <SessionLede
         title={item.title}
         meetingAt={item.meeting_at}

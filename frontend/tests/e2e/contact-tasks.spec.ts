@@ -1,5 +1,6 @@
 import { test, expect, Page, Route } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
+import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 // The tasks section (TasksSection) renders unconditionally on the contact
 // detail page — it does NOT depend on Todoist being configured. The header
@@ -105,6 +106,12 @@ async function mockTaskLists(
 function tasksSection(page: Page) {
   return page.getByRole('region', { name: 'Tasks', exact: true })
 }
+
+// Every task row carries exactly one "Open in Todoist" link as a direct child,
+// so the link's parent is the row.
+function taskRows(page: Page) {
+  return tasksSection(page).getByRole('link', { name: 'Open in Todoist' }).locator('xpath=..')
+}
 test.describe('Contact Tasks @area:contacts @area:tasks', () => {
   let testApi: TestAPI
 
@@ -132,7 +139,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
       await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
-        timeout: 15000,
+        timeout: SLOW_TIMEOUT_MS,
       })
 
       // Tasks section renders unconditionally with its header and Add button
@@ -166,12 +173,12 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
       await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
-      await expect(page.getByText('Mock follow-up task')).toBeVisible({ timeout: 15000 })
+      await expect(page.getByText('Mock follow-up task')).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
       // The follow-up row precedes the manual row in DOM order (the page
       // merges [...followUpTasks, ...activeManualTasks] — reversing the
       // concat flips this).
-      const rows = tasksSection(page).locator('div.group')
+      const rows = taskRows(page)
       await expect(rows).toHaveCount(2)
       await expect(rows.nth(0)).toContainText('Mock follow-up task')
       await expect(rows.nth(1)).toContainText('Mock manual task')
@@ -228,9 +235,9 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
       await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
-      await expect(page.getByText('Badge case followup')).toBeVisible({ timeout: 15000 })
+      await expect(page.getByText('Badge case followup')).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
-      const rows = tasksSection(page).locator('div.group')
+      const rows = taskRows(page)
       for (const { task, badge } of badgeCases) {
         const row = rows.filter({ hasText: task.content })
         await expect(row.getByText(badge, { exact: true })).toBeVisible()
@@ -270,7 +277,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       // row would render the full marker string and fail the exact match.
       const section = tasksSection(page)
       await expect(section.getByText('Review intro notes', { exact: true })).toBeVisible({
-        timeout: 15000,
+        timeout: SLOW_TIMEOUT_MS,
       })
       await expect(section.getByText('Reach out to Marker Contact', { exact: true })).toBeVisible()
       // Empty content falls back to the placeholder.
@@ -299,7 +306,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       // Collapsed by default: the toggle carries the count, the completed
       // rows are hidden until it is clicked.
       const toggle = page.getByRole('button', { name: 'Show completed (2)' })
-      await expect(toggle).toBeVisible({ timeout: 15000 })
+      await expect(toggle).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
       await expect(page.getByText('Done task one')).not.toBeVisible()
       await expect(page.getByText('Done task two')).not.toBeVisible()
 
@@ -320,7 +327,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
       await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
-        timeout: 15000,
+        timeout: SLOW_TIMEOUT_MS,
       })
 
       await page.getByRole('button', { name: 'Add', exact: true }).click()
@@ -376,7 +383,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
       await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
-        timeout: 15000,
+        timeout: SLOW_TIMEOUT_MS,
       })
 
       await page.getByRole('button', { name: 'Add', exact: true }).click()
@@ -428,7 +435,7 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
       await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
-        timeout: 15000,
+        timeout: SLOW_TIMEOUT_MS,
       })
 
       await page.getByRole('button', { name: 'Add', exact: true }).click()
@@ -494,8 +501,8 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
       await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
-      const row = tasksSection(page).locator('div.group').filter({ hasText: 'Mock linked task' })
-      await expect(row).toBeVisible({ timeout: 15000 })
+      const row = taskRows(page).filter({ hasText: 'Mock linked task' })
+      await expect(row).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
       // Native confirm: register the dialog handler AND the DELETE response
       // listener BEFORE the click (an unhandled native dialog auto-dismisses
@@ -540,12 +547,10 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
       await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
-      const row = tasksSection(page).locator('div.group').filter({ hasText: 'Mock linked task' })
-      await expect(row).toBeVisible({ timeout: 15000 })
+      const row = taskRows(page).filter({ hasText: 'Mock linked task' })
+      await expect(row).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
-      // Dismiss the confirm; collect any DELETE over a bounded settle
-      // window (a negative outcome needs an observation window, not a
-      // first-success poll).
+      // Dismiss the confirm and collect any DELETE until the dialog is handled.
       page.once('dialog', dialog => void dialog.dismiss())
       const deleteRequests: string[] = []
       page.on('request', request => {
@@ -556,10 +561,13 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
           deleteRequests.push(request.url())
         }
       })
+      // Dismissing the confirm is the last step handleUnlink takes, so once the
+      // dialog is handled no DELETE can follow.
+      const dialogHandled = page.waitForEvent('dialog')
       await row.hover()
       await row.locator(`button[title="${UNLINK_TITLE}"]`).click()
 
-      await page.waitForTimeout(1500)
+      await dialogHandled
       expect(deleteRequests).toEqual([])
       await expect(row).toBeVisible()
     })
@@ -583,8 +591,8 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
       await page.goto(`/contacts/${contactId}`)
       await page.waitForLoadState('domcontentloaded')
-      const row = tasksSection(page).locator('div.group').filter({ hasText: 'Mock linked task' })
-      await expect(row).toBeVisible({ timeout: 15000 })
+      const row = taskRows(page).filter({ hasText: 'Mock linked task' })
+      await expect(row).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
       await expect(row.locator(`button[title="${UNLINK_TITLE}"]`)).toHaveCount(1)
       // The Todoist deep link targets THIS task in the Todoist app (the

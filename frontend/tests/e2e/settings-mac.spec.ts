@@ -1,6 +1,13 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
 import { acquireGlobalLock } from './helpers/global-lock'
-import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
+import {
+  createTestAPI,
+  TestAPI,
+  type SeedBehaviorResult,
+  API_BASE_URL,
+  API_KEY,
+} from './helpers/test-api'
+import { DEFAULT_EXPECT_TIMEOUT_MS, SHORT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 // Cross-file mutex on the mac_host SINGLETON. The resource is a database-wide
 // partial unique index that permits one non-revoked host, not a spec convention:
@@ -28,10 +35,6 @@ test.afterAll(async () => {
   releaseMacHostLock = null
 })
 
-// API_KEY is injected by the make target via NEXT_PUBLIC_API_KEY.
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || ''
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-
 interface AdminHost {
   id: string
   hostname: string
@@ -41,7 +44,7 @@ interface AdminHost {
 // The admin list is where a test learns what the daemon reported, so a cursor or
 // a flag is read from the API rather than restated as a literal here.
 async function fetchHost(request: APIRequestContext, hostname: string): Promise<AdminHost> {
-  const response = await request.get(`${API_URL}/api/v1/host`, {
+  const response = await request.get(`${API_BASE_URL}/api/v1/host`, {
     headers: { 'X-API-Key': API_KEY },
   })
   expect(response.ok()).toBe(true)
@@ -68,7 +71,7 @@ const declaredHostId = (seeded: SeedBehaviorResult): string => seeded.entities['
 async function waitForHostList(page: Page): Promise<void> {
   const listPromise = page.waitForResponse(
     resp => resp.url().endsWith('/api/v1/host') && resp.request().method() === 'GET',
-    { timeout: 15_000 }
+    { timeout: SLOW_TIMEOUT_MS }
   )
   await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
   await listPromise
@@ -113,7 +116,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
 
     await page.goto('/settings/mac', { waitUntil: 'domcontentloaded' })
 
-    await expect(page.getByText('No Mac hosts paired')).toBeVisible({ timeout: 10_000 })
+    await expect(page.getByText('No Mac hosts paired')).toBeVisible()
     await expect(page.getByTestId('mac-host-row')).toHaveCount(0)
   })
 
@@ -132,7 +135,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     const tokenResponsePromise = page.waitForResponse(
       resp =>
         resp.url().includes('/api/v1/host/pairing-token') && resp.request().method() === 'POST',
-      { timeout: 10_000 }
+      { timeout: DEFAULT_EXPECT_TIMEOUT_MS }
     )
     await pairButton.click()
     const resp = await tokenResponsePromise
@@ -140,10 +143,10 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
 
     // Modal is rendered as a dialog with the matching aria-label.
     const dialog = page.getByRole('dialog', { name: 'Pair new Mac' })
-    await expect(dialog).toBeVisible({ timeout: 5_000 })
+    await expect(dialog).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 
     const tokenCode = page.getByTestId('pairing-token-value')
-    await expect(tokenCode).toBeVisible({ timeout: 10_000 })
+    await expect(tokenCode).toBeVisible()
     await expect(tokenCode).not.toBeEmpty()
 
     // Close button dismisses the modal.
@@ -172,7 +175,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await waitForHostList(page)
 
     const row = hostRow(page, hostname)
-    await expect(row).toBeVisible({ timeout: 10_000 })
+    await expect(row).toBeVisible()
     await expect(row.getByText(hostname)).toBeVisible()
     await expect(row.getByText(hostId, { exact: false })).toBeVisible()
 
@@ -213,13 +216,13 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
       resp =>
         resp.url().includes('/api/v1/host/' + hostId + '/source-counts') &&
         resp.request().method() === 'GET',
-      { timeout: 15_000 }
+      { timeout: SLOW_TIMEOUT_MS }
     )
     await waitForHostList(page)
     await countsPromise
 
     const row = hostRow(page, hostname)
-    await expect(row).toBeVisible({ timeout: 10_000 })
+    await expect(row).toBeVisible()
 
     // The Cursor cell substitutes the live contact count (3 declared candidates)
     // for the misleading change-token. The checkmark glyph is presentation —
@@ -254,7 +257,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await waitForHostList(page)
 
     const sourceHealth = hostRow(page, hostname).getByTestId('source-health')
-    await expect(sourceHealth).toBeVisible({ timeout: 10_000 })
+    await expect(sourceHealth).toBeVisible()
 
     // While backfill is in progress, the cell stays in its no-count state: no
     // numeric substitution, and the raw change-token is never shown.
@@ -282,7 +285,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     await waitForHostList(page)
 
     const row = hostRow(page, hostname)
-    await expect(row.getByText(hostname)).toBeVisible({ timeout: 10_000 })
+    await expect(row.getByText(hostname)).toBeVisible()
 
     const rotateButton = row.getByRole('button', {
       name: new RegExp(`Rotate pair-key for ${hostname}`, 'i'),
@@ -292,7 +295,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     const tokenResponsePromise = page.waitForResponse(
       resp =>
         resp.url().includes('/api/v1/host/pairing-token') && resp.request().method() === 'POST',
-      { timeout: 10_000 }
+      { timeout: DEFAULT_EXPECT_TIMEOUT_MS }
     )
     await rotateButton.click()
     const resp = await tokenResponsePromise
@@ -301,19 +304,21 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     const dialog = page.getByRole('dialog', {
       name: new RegExp(`Rotate pair-key for ${hostname}`, 'i'),
     })
-    await expect(dialog).toBeVisible({ timeout: 5_000 })
+    await expect(dialog).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 
     // The displayed command is the full templated re-pair invocation —
     // operator can copy and paste directly into a Mac terminal. The
     // token is base64url-encoded 24 bytes = 32 chars.
     const commandEl = page.getByTestId('rotate-key-command')
-    await expect(commandEl).toBeVisible({ timeout: 10_000 })
+    await expect(commandEl).toBeVisible()
     const commandText = (await commandEl.textContent()) ?? ''
     expect(commandText).toMatch(/^crm-mac install --re-pair --pair [A-Za-z0-9_-]{32,}$/)
 
     // Copy button copies the FULL command (not just the token).
     await dialog.getByRole('button', { name: /Copy/i }).click()
-    await expect(dialog.getByRole('button', { name: /Copied/i })).toBeVisible({ timeout: 5_000 })
+    await expect(dialog.getByRole('button', { name: /Copied/i })).toBeVisible({
+      timeout: SHORT_TIMEOUT_MS,
+    })
     const clipboardText = await page.evaluate(() => navigator.clipboard.readText())
     expect(clipboardText).toBe(commandText)
 
@@ -330,7 +335,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
 
     await waitForHostList(page)
     const row = hostRow(page, hostname)
-    await expect(row.getByText(hostname)).toBeVisible({ timeout: 10_000 })
+    await expect(row.getByText(hostname)).toBeVisible()
 
     // Click the row's Uninstall button (aria-label scoped to hostname).
     await row.getByRole('button', { name: new RegExp(`Uninstall ${hostname}`, 'i') }).click()
@@ -339,7 +344,7 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     // The id is pinned so a parallel worker's DELETE cannot satisfy this wait.
     const deleteResponsePromise = page.waitForResponse(
       resp => resp.url().includes(`/api/v1/host/${hostId}`) && resp.request().method() === 'DELETE',
-      { timeout: 10_000 }
+      { timeout: DEFAULT_EXPECT_TIMEOUT_MS }
     )
     await confirmDialog.getByRole('button', { name: 'Uninstall', exact: true }).click()
     const deleteResp = await deleteResponsePromise
@@ -348,6 +353,6 @@ test.describe('Settings — Mac Daemon @area:settings', () => {
     // The removal is reflected in the live list: this test's host row is
     // gone (scoped to the declared hostname — a parallel worker may own an
     // unrelated host at this moment).
-    await expect(hostRow(page, hostname)).toHaveCount(0, { timeout: 10_000 })
+    await expect(hostRow(page, hostname)).toHaveCount(0)
   })
 })

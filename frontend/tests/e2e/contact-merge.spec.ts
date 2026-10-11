@@ -1,13 +1,13 @@
 import { test, expect } from '@playwright/test'
 import type { APIRequestContext, Page } from '@playwright/test'
-import { createTestAPI, declaredWorldNamePrefix, TestAPI } from './helpers/test-api'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
+import {
+  createTestAPI,
+  declaredWorldNamePrefix,
+  TestAPI,
+  API_BASE_URL,
+  API_HEADERS,
+} from './helpers/test-api'
+import { SHORT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 interface ContactRead {
   location?: string
@@ -58,7 +58,7 @@ async function selectMergeSource(page: Page, searchTerm: string, sourceName: str
   await page.getByText('Search for a contact to merge...').click()
   await page.getByPlaceholder('Search for a contact to merge...').fill(searchTerm)
   const sourceOption = page.getByRole('option', { name: sourceName })
-  await expect(sourceOption).toBeVisible({ timeout: 5000 })
+  await expect(sourceOption).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
   await sourceOption.click()
 }
 
@@ -81,7 +81,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
@@ -102,7 +104,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
@@ -114,7 +118,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
       .getByPlaceholder('Search for a contact to merge...')
       .fill(declaredWorldNamePrefix(seeded))
     const sourceOption = page.getByRole('option', { name: sourceName })
-    await expect(sourceOption).toBeVisible({ timeout: 5000 })
+    await expect(sourceOption).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 
     // The selector excludes the merge target — it appears only as the kept
     // heading, never as a selectable option (CON-043.current-contact-marked-kept).
@@ -132,7 +136,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await sourceOption.click()
 
     // Verify "Will Be Merged" section appears (a source loads a preview).
-    await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
   })
 
   test('should toggle field selection between source and target', async ({ page, request }) => {
@@ -159,7 +163,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
@@ -168,7 +174,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await selectMergeSource(page, declaredWorldNamePrefix(seeded), sourceName)
 
     // Wait for conflicts section
-    await expect(page.getByText('Resolve Conflicts')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Resolve Conflicts')).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 
     // Default (before any toggle) keeps the TARGET value selected for EVERY
     // conflicting field — cadence, location, and birthday. Selection state is
@@ -219,7 +225,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
@@ -230,7 +238,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // Verify input appears with current name
     const nameInput = modal.getByRole('textbox', { name: 'Merged contact name' })
-    await expect(nameInput).toBeVisible({ timeout: 5000 })
+    await expect(nameInput).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 
     // Edit the name
     await nameInput.fill('Custom Merged Name')
@@ -252,7 +260,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
@@ -263,7 +273,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // Type a new name
     const nameInput = modal.getByRole('textbox', { name: 'Merged contact name' })
-    await expect(nameInput).toBeVisible({ timeout: 5000 })
+    await expect(nameInput).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await nameInput.fill('Should Not Save')
 
     // Press Escape to cancel
@@ -289,7 +299,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
     const detailUrl = page.url()
 
     // No merge may fire during the dismissal.
@@ -328,7 +340,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
     const detailUrl = page.url()
 
     // No merge may fire during the dismissal.
@@ -377,7 +391,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
@@ -386,18 +402,18 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await selectMergeSource(page, declaredWorldNamePrefix(seeded), sourceName)
 
     // Wait for preview to load
-    await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Will Be Merged')).toBeVisible()
 
     // Wait for merge button to be enabled
     const mergeButton = page.getByRole('button', { name: /Merge Contacts/i })
-    await expect(mergeButton).toBeEnabled({ timeout: 5000 })
+    await expect(mergeButton).toBeEnabled({ timeout: SHORT_TIMEOUT_MS })
 
     const mergeResponse = page.waitForResponse(
       response =>
         response.request().method() === 'POST' &&
         response.url().includes('/api/v1/contacts/') &&
         response.url().endsWith('/merge'),
-      { timeout: 15000 }
+      { timeout: SLOW_TIMEOUT_MS }
     )
 
     // Click Merge Contacts button
@@ -408,19 +424,19 @@ test.describe('Contact Merge @area:contact-merge', () => {
     expect(response.status()).toBe(200)
 
     // Wait for success notification
-    await expect(page.getByText(/merged successfully/i)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(/merged successfully/i)).toBeVisible()
 
     // Verify we're back on the contact page (modal closed)
     await expect(mergeModal(page)).not.toBeVisible()
 
     // Verify source contact's phone was added
-    await expect(page.getByText(sourcePhone as string)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(sourcePhone as string)).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 
     // Verify source contact's notes were transferred
     await expect(page.getByText('Source notes to transfer')).toBeVisible()
 
     // The outcome banner is reported, then auto-dismisses after its timeout.
-    await expect(page.getByText(/merged successfully/i)).not.toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(/merged successfully/i)).not.toBeVisible()
   })
 
   test('should show quick-fill name option when source has different name', async ({ page }) => {
@@ -434,7 +450,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
@@ -443,7 +461,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
     await selectMergeSource(page, declaredWorldNamePrefix(seeded), sourceName)
 
     // Wait for preview
-    await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 
     // Verify the "use this" quick-fill button appears for the source name
     const useThis = page.getByRole('button', { name: 'use this' })
@@ -466,7 +484,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Open merge modal
     await page.getByRole('button', { name: /Merge/i }).click()
@@ -486,7 +506,9 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     await page.getByRole('button', { name: /Merge/i }).click()
 
@@ -505,7 +527,7 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // Once the preview resolves, the submit enables — proving the disabled
     // state was gated by the in-flight preview, not the missing source.
-    await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Will Be Merged')).toBeVisible()
     await expect(mergeButton).toBeEnabled()
   })
 
@@ -518,16 +540,18 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     await page.goto(`/contacts/${targetId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: targetName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     await page.getByRole('button', { name: /Merge/i }).click()
 
     // Select the source and wait for the preview to settle.
     await selectMergeSource(page, declaredWorldNamePrefix(seeded), sourceName)
-    await expect(page.getByText('Will Be Merged')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Will Be Merged')).toBeVisible()
 
     const mergeButton = page.getByRole('button', { name: /Merge Contacts/i })
-    await expect(mergeButton).toBeEnabled({ timeout: 5000 })
+    await expect(mergeButton).toBeEnabled({ timeout: SHORT_TIMEOUT_MS })
 
     // Delay the merge POST so the in-flight disabled state is observable.
     await page.route(/\/api\/v1\/contacts\/[^/]+\/merge(\?|$)/, async route => {
@@ -539,9 +563,11 @@ test.describe('Contact Merge @area:contact-merge', () => {
 
     // While the merge is in flight, the submit relabels to "Merging..." and is
     // disabled (no double-submit) — the delayed route keeps this window open.
-    await expect(page.getByRole('button', { name: /Merging/i })).toBeDisabled({ timeout: 5000 })
+    await expect(page.getByRole('button', { name: /Merging/i })).toBeDisabled({
+      timeout: SHORT_TIMEOUT_MS,
+    })
 
     // The merge then completes.
-    await expect(page.getByText(/merged successfully/i)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(/merged successfully/i)).toBeVisible()
   })
 })

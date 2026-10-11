@@ -1,6 +1,5 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi } from 'vitest'
-import { act, createRef } from 'react'
+import { act, type MutableRefObject } from 'react'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ContactForm, type MethodsReconciler } from '@/components/contacts/contact-form'
@@ -9,6 +8,10 @@ import {
   initializeAcknowledgedMethods,
 } from '@/lib/contact-method-operations'
 import type { Contact } from '@/types/contact'
+
+vi.mock('@/hooks/use-accelerated-time', () => ({
+  useAcceleratedTime: () => ({ currentTime: new Date('2026-06-15T12:00:00Z') }),
+}))
 
 const METHOD_A = 'aaaaaaaa-0000-4000-8000-000000000001'
 const METHOD_B = 'bbbbbbbb-0000-4000-8000-000000000002'
@@ -74,7 +77,7 @@ describe('ContactForm method identity', () => {
     // removal at all: the save reported success while the deletion silently did
     // not persist.
     const onSubmit = vi.fn()
-    const reconcilerRef = createRef<MethodsReconciler | null>() as any
+    const reconcilerRef: MutableRefObject<MethodsReconciler | null> = { current: null }
     const user = userEvent.setup()
 
     render(
@@ -145,7 +148,7 @@ describe('ContactForm method identity', () => {
     // pre-existing alias sits at index 0 and the new one at index 2. Keeping
     // the last row instead would drop index 0 and leave the list reordered.
     const onSubmit = vi.fn()
-    const reconcilerRef = createRef<MethodsReconciler | null>() as any
+    const reconcilerRef: MutableRefObject<MethodsReconciler | null> = { current: null }
     const user = userEvent.setup()
 
     render(
@@ -200,7 +203,7 @@ describe('ContactForm method identity', () => {
     // then rejects the next submit — so an unedited retry after the methods
     // step already landed cannot be saved at all.
     const onSubmit = vi.fn()
-    const reconcilerRef = createRef<MethodsReconciler | null>() as any
+    const reconcilerRef: MutableRefObject<MethodsReconciler | null> = { current: null }
     const user = userEvent.setup()
 
     render(
@@ -259,7 +262,7 @@ describe('ContactForm method identity', () => {
     // would invalidate the save session it just completed, and could loop.
     const onSubmit = vi.fn()
     const onFormEdit = vi.fn()
-    const reconcilerRef = createRef<MethodsReconciler | null>() as any
+    const reconcilerRef: MutableRefObject<MethodsReconciler | null> = { current: null }
     const user = userEvent.setup()
 
     render(

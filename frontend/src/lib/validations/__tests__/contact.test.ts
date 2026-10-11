@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { contactSchema, transformContactFormData, type ContactFormData } from '../contact'
+import { createContactSchema, transformContactFormData, type ContactFormData } from '../contact'
+
+const NOW = new Date('2026-06-15T12:00:00Z')
+const contactSchema = createContactSchema(NOW)
 
 describe('contactSchema', () => {
   describe('valid data', () => {
@@ -215,7 +218,7 @@ describe('contactSchema', () => {
     })
 
     it("accepts today's date", () => {
-      const today = new Date().toISOString().split('T')[0]
+      const today = NOW.toISOString().split('T')[0]
       const data = {
         full_name: 'Test User',
         birthday: today,
@@ -226,8 +229,8 @@ describe('contactSchema', () => {
     })
 
     it('rejects future date', () => {
-      const tomorrow = new Date()
-      tomorrow.setDate(tomorrow.getDate() + 1)
+      const tomorrow = new Date(NOW)
+      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1)
 
       const data = {
         full_name: 'Test User',

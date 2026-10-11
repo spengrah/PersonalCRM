@@ -1,18 +1,18 @@
 import { test, expect } from './fixtures'
 import type { APIRequestContext } from '@playwright/test'
-import { createTestAPI, TestAPI, declaredWorldNamePrefix } from './helpers/test-api'
+import {
+  API_BASE_URL,
+  API_HEADERS,
+  createTestAPI,
+  TestAPI,
+  declaredWorldNamePrefix,
+} from './helpers/test-api'
 import {
   expectModalCandidate,
   findCandidateByName,
   candidateCardByName,
 } from './helpers/imports-helpers'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
+import { SHORT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 /**
  * The primary email a declared candidate actually carries, read back from the
@@ -46,7 +46,7 @@ test.describe('Imports Actions @area:imports', () => {
     const displayName = seeded.entities['cand'].name
 
     await page.goto('/imports')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     // The declared unmatched candidate awaits review in the queue.
     await findCandidateByName(page, displayName)
@@ -64,7 +64,7 @@ test.describe('Imports Actions @area:imports', () => {
     const displayName = seeded.entities['plain'].name
 
     await page.goto('/imports')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     await findCandidateByName(page, displayName)
 
@@ -91,7 +91,7 @@ test.describe('Imports Actions @area:imports', () => {
     const candidateEmail = await primaryEmailOf(request, externalId)
 
     await page.goto('/imports')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     await findCandidateByName(page, displayName)
 
@@ -136,7 +136,7 @@ test.describe('Imports Actions @area:imports', () => {
     expect(rematchPoll.url()).toContain(rematchJobId)
 
     // DOM precondition: the candidate card leaves the list (modal/list advanced).
-    await expect(card).not.toBeVisible({ timeout: 15000 })
+    await expect(card).not.toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     // Persisted-state proof: the external row is marked imported and linked
     // to the new contact.
@@ -167,7 +167,7 @@ test.describe('Imports Actions @area:imports', () => {
     const displayName = seeded.entities['cand'].name
 
     await page.goto('/imports')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     await findCandidateByName(page, displayName)
 
@@ -187,7 +187,7 @@ test.describe('Imports Actions @area:imports', () => {
 
     // DOM precondition: the ignore affordance leaves the list (this contact,
     // not another worker's, was ignored).
-    await expect(ignoreButton).not.toBeVisible({ timeout: 15000 })
+    await expect(ignoreButton).not.toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     // Persisted-state proof: the row is marked ignored.
     const candidateRes = await request.get(`${API_BASE_URL}/api/v1/imports/${externalId}`, {
@@ -224,7 +224,7 @@ test.describe('Imports Actions @area:imports', () => {
     const targetName = seeded.entities['plain'].name
 
     await page.goto('/imports')
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
 
     await findCandidateByName(page, candidateName)
 
@@ -248,7 +248,7 @@ test.describe('Imports Actions @area:imports', () => {
 
     // Wait for the dropdown to show the contact and click it
     const contactOption = dialog.getByText(targetName, { exact: true }).last()
-    await expect(contactOption).toBeVisible({ timeout: 5000 })
+    await expect(contactOption).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await contactOption.click()
 
     // Capture the link POST before triggering it.
@@ -269,7 +269,7 @@ test.describe('Imports Actions @area:imports', () => {
 
     // DOM precondition: the candidate card leaves the list (this candidate,
     // not another worker's, was linked).
-    await expect(candidateCard).not.toBeVisible({ timeout: 15000 })
+    await expect(candidateCard).not.toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     // Re-read confirms the same persisted state (curated link -> imported,
     // not the bare-link matched branch).

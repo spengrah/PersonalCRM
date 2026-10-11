@@ -3,13 +3,14 @@
 import { useEffect, useRef, type MutableRefObject } from 'react'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { FORM_CONTROL_BASE } from '@/lib/form-classes'
 import {
-  contactSchema,
+  createContactSchema,
   submittedMethodSourceRows,
   transformContactFormData,
   type ContactFormData,
@@ -63,6 +64,7 @@ export function ContactForm({
   reconcilerRef,
   onFormEdit,
 }: ContactFormProps) {
+  const { currentTime } = useAcceleratedTime()
   const defaultMethods = contact?.methods?.length
     ? sortContactMethods(contact.methods).map(method => ({
         method_id: method.id,
@@ -82,7 +84,7 @@ export function ContactForm({
     getValues,
     watch,
   } = useForm<ContactFormInput, unknown, ContactFormData>({
-    resolver: zodResolver(contactSchema),
+    resolver: zodResolver(createContactSchema(currentTime)),
     defaultValues: contact
       ? {
           full_name: contact.full_name,

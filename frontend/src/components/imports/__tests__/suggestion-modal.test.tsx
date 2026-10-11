@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -79,7 +78,7 @@ function mockCandidatesQueryRaw(result: {
     isError: result.isError ?? false,
     dataUpdatedAt: result.dataUpdatedAt,
     refetch: refetchMock,
-  } as any)
+  } as unknown as ReturnType<typeof useImportCandidates>)
 }
 
 beforeEach(() => {
@@ -87,15 +86,26 @@ beforeEach(() => {
   // The mount effect chains .finally() on the refetch promise.
   refetchMock = vi.fn().mockResolvedValue(undefined)
   importAsync = vi.fn().mockResolvedValue({})
-  vi.mocked(useContacts).mockReturnValue({ data: { contacts: [] } } as any)
-  vi.mocked(useContact).mockReturnValue({ data: undefined } as any)
-  const inertMutation = { mutateAsync: vi.fn().mockResolvedValue({}), isPending: false } as any
+  vi.mocked(useContacts).mockReturnValue({
+    data: { contacts: [] },
+  } as unknown as ReturnType<typeof useContacts>)
+  vi.mocked(useContact).mockReturnValue({
+    data: undefined,
+  } as unknown as ReturnType<typeof useContact>)
+  const inertMutation = {
+    mutateAsync: vi.fn().mockResolvedValue({}),
+    isPending: false,
+  }
   vi.mocked(useImportAsContact).mockReturnValue({
     mutateAsync: importAsync,
     isPending: false,
-  } as any)
-  vi.mocked(useLinkCandidate).mockReturnValue(inertMutation)
-  vi.mocked(useIgnoreCandidate).mockReturnValue(inertMutation)
+  } as unknown as ReturnType<typeof useImportAsContact>)
+  vi.mocked(useLinkCandidate).mockReturnValue(
+    inertMutation as unknown as ReturnType<typeof useLinkCandidate>
+  )
+  vi.mocked(useIgnoreCandidate).mockReturnValue(
+    inertMutation as unknown as ReturnType<typeof useIgnoreCandidate>
+  )
 })
 
 function renderModal(
@@ -289,7 +299,7 @@ describe('ContactCandidateResolver candidate tracking', () => {
     // React error boundary. The modal must unwind cleanly instead.
     vi.mocked(useContact).mockReturnValue({
       data: { id: 'contact-1', full_name: 'Real Person', methods: [], cadence: '' },
-    } as any)
+    } as unknown as ReturnType<typeof useContact>)
 
     mockCandidatesQuery([X])
     const { props, rerenderModal } = renderModal([X], X.id, { initialMode: 'link' })
@@ -549,7 +559,9 @@ describe('ContactCandidateResolver nameless candidate naming (gmail_participant)
     const contactAlice = { id: 'contact-alice', full_name: 'Alice CRM', methods: [], cadence: '' }
     const contactBob = { id: 'contact-bob', full_name: 'Bob CRM', methods: [], cadence: '' }
 
-    vi.mocked(useContact).mockReturnValue({ data: undefined } as any)
+    vi.mocked(useContact).mockReturnValue({
+      data: undefined,
+    } as unknown as ReturnType<typeof useContact>)
     mockCandidatesQuery([A, B])
     const { rerenderModal } = renderModal([A, B], A.id, { initialMode: 'link' })
 
@@ -559,12 +571,16 @@ describe('ContactCandidateResolver nameless candidate naming (gmail_participant)
 
     // Contact resolves asynchronously (the none -> contact-id transition):
     // the guard must NOT suppress this deliberate reseed.
-    vi.mocked(useContact).mockReturnValue({ data: contactAlice } as any)
+    vi.mocked(useContact).mockReturnValue({ data: contactAlice } as unknown as ReturnType<
+      typeof useContact
+    >)
     rerenderModal()
     expect(heading()).toHaveTextContent('Alice CRM')
 
     // Switching to a different contact reseeds again.
-    vi.mocked(useContact).mockReturnValue({ data: contactBob } as any)
+    vi.mocked(useContact).mockReturnValue({ data: contactBob } as unknown as ReturnType<
+      typeof useContact
+    >)
     rerenderModal()
     expect(heading()).toHaveTextContent('Bob CRM')
 
@@ -579,7 +595,9 @@ describe('ContactCandidateResolver nameless candidate naming (gmail_participant)
     // Candidate navigation also reseeds (currentId is part of the guard
     // key), even with the contact portion of the key unresolved on both
     // sides.
-    vi.mocked(useContact).mockReturnValue({ data: undefined } as any)
+    vi.mocked(useContact).mockReturnValue({
+      data: undefined,
+    } as unknown as ReturnType<typeof useContact>)
     rerenderModal()
     expect(heading()).toHaveTextContent('Candidate A')
 

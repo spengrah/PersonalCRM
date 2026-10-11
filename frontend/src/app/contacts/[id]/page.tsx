@@ -19,6 +19,7 @@ import { useContactTasks } from '@/hooks/use-contact-tasks'
 import { useKeyboardNavigation } from '@/hooks/use-keyboard-navigation'
 import { ContactNavigationBar } from '@/components/contacts/contact-navigation-bar'
 import { formatBirthday, formatDateOnly, formatRelativeTime } from '@/lib/utils'
+import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import {
   Edit,
   Trash2,
@@ -111,6 +112,7 @@ export default function ContactDetailPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const contactId = params.id as string
+  const { currentTime } = useAcceleratedTime()
 
   const action = searchParams.get('action')
   const [isEditing, setIsEditing] = useState(action === 'edit')
@@ -157,17 +159,29 @@ export default function ContactDetailPage() {
   const saveSessionRef = useRef<SaveSession | null>(null)
   const methodsReconcilerRef = useRef<MethodsReconciler | null>(null)
   const [saveReport, setSaveReport] = useState<SaveReport | null>(null)
+  const mergeMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (mergeMessageTimerRef.current) clearTimeout(mergeMessageTimerRef.current)
+    }
+  }, [])
+
+  const showMergeMessage = useCallback((type: 'success' | 'error', text: string) => {
+    if (mergeMessageTimerRef.current) clearTimeout(mergeMessageTimerRef.current)
+    setMergeMessage({ type, text })
+    mergeMessageTimerRef.current = setTimeout(() => setMergeMessage(null), 5000)
+  }, [])
 
   useEffect(() => {
     if (!isEditing) {
       acknowledgedMethodsRef.current = null
       saveSessionRef.current = null
-      // Functional form so an already-null report is a true bail-out. A plain
-      // setSaveReport(null) can still cost a render pass before React compares,
-      // and this effect runs on mount and on every contact change on the
-      // read-only detail view — where a stray render perturbs the notes
-      // overflow measurement (a ResizeObserver reading scrollHeight).
-      setSaveReport(current => (current === null ? current : null))
+      // The save report is cleared by the handlers that leave edit mode, not
+      // here: setting state in this effect would cost a render pass on mount
+      // and on every contact change on the read-only detail view, where a
+      // stray render perturbs the notes overflow measurement (a ResizeObserver
+      // reading scrollHeight).
       return
     }
     if (!contact) return
@@ -221,7 +235,7 @@ export default function ContactDetailPage() {
   )
 
   // Keyboard navigation
-  const navigationIds = navigationData?.ids || []
+  const navigationIds = useMemo(() => navigationData?.ids ?? [], [navigationData])
   const { canGoBack, canGoForward, goBack, goForward, currentIndex, total } = useKeyboardNavigation(
     {
       ids: navigationIds,
@@ -283,11 +297,13 @@ export default function ContactDetailPage() {
   // modal is open, and once the query recovers a fresh AddTaskModal would
   // reopen unprompted — reset on any isMainRendered transition to false,
   // matching what local state would have done regardless of the cause.
-  useEffect(() => {
+  const [prevIsMainRendered, setPrevIsMainRendered] = useState(isMainRendered)
+  if (prevIsMainRendered !== isMainRendered) {
+    setPrevIsMainRendered(isMainRendered)
     if (!isMainRendered) {
       setIsAddTaskModalOpen(false)
     }
-  }, [isMainRendered])
+  }
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -318,6 +334,7 @@ export default function ContactDetailPage() {
         if (isEditing) {
           // Discard changes and exit edit mode
           setIsEditing(false)
+          setSaveReport(null)
         } else {
           // Return to contacts list (preserving context + page)
           router.push(buildBackToListUrl())
@@ -374,16 +391,26 @@ export default function ContactDetailPage() {
   const handleUpdateContact = async (data: ContactSubmitData) => {
     const acknowledged = acknowledgedMethodsRef.current ?? []
 
-    let session = saveSessionRef.current
-    if (!session) {
+    let initial = saveSessionRef.current
+    if (!initial) {
       const derived = deriveMethodOperationsWithOrigins(acknowledged, data.methods)
-      session = {
+      initial = {
         payload: data,
         operations: derived.operations,
         submittedIndexes: derived.submittedIndexes,
         completed: [],
       }
-      saveSessionRef.current = session
+      saveSessionRef.current = initial
+    }
+    let session: SaveSession = initial
+
+    // Records a finished step on a fresh session object. The ref is updated only
+    // while it still holds this attempt's session: a user edit during the save
+    // nulls it, and a late step must not bring the invalidated session back.
+    const markCompleted = (step: SaveStep) => {
+      const next = { ...session, completed: [...session.completed, step] }
+      if (saveSessionRef.current === session) saveSessionRef.current = next
+      session = next
     }
 
     // Built field by field rather than by spreading the payload, so the absence
@@ -401,7 +428,7 @@ export default function ContactDetailPage() {
     try {
       if (!session.completed.includes('contact')) {
         await updateContactMutation.mutateAsync({ id: contactId, data: contactData })
-        session.completed = [...session.completed, 'contact']
+        markCompleted('contact')
       }
 
       step = 'methods'
@@ -432,13 +459,13 @@ export default function ContactDetailPage() {
             )
           )
         }
-        session.completed = [...session.completed, 'methods']
+        markCompleted('methods')
       }
 
       step = 'notes'
       if (!session.completed.includes('notes')) {
         await saveContactNoteMutation.mutateAsync({ contactId, body: notes || '' })
-        session.completed = [...session.completed, 'notes']
+        markCompleted('notes')
       }
 
       saveSessionRef.current = null
@@ -533,7 +560,14 @@ export default function ContactDetailPage() {
               </p>
             </div>
             <div className="mt-4 md:mt-0 md:ml-4">
-              <Button variant="outline" size="sm" onClick={() => setIsEditing(false)}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setIsEditing(false)
+                  setSaveReport(null)
+                }}
+              >
                 Cancel
               </Button>
             </div>
@@ -773,7 +807,9 @@ export default function ContactDetailPage() {
                       <span className="text-gray-400" title="Last outreach">
                         &#8599;
                       </span>
-                      <span>Last outreach: {formatRelativeTime(contact.last_outreach_at)}</span>
+                      <span>
+                        Last outreach: {formatRelativeTime(contact.last_outreach_at, currentTime)}
+                      </span>
                     </div>
                   ) : null}
                   {contact.last_response_at ? (
@@ -781,7 +817,9 @@ export default function ContactDetailPage() {
                       <span className="text-gray-400" title="Last response">
                         &#8601;
                       </span>
-                      <span>Last response: {formatRelativeTime(contact.last_response_at)}</span>
+                      <span>
+                        Last response: {formatRelativeTime(contact.last_response_at, currentTime)}
+                      </span>
                       {contact.awaiting_reply && (
                         <span className="ml-2 text-amber-600" title="Awaiting reply">
                           &#9888; Awaiting reply
@@ -869,6 +907,7 @@ export default function ContactDetailPage() {
               <span>{mergeMessage.text}</span>
               <button
                 onClick={() => setMergeMessage(null)}
+                aria-label="Dismiss message"
                 className="text-current opacity-60 hover:opacity-100"
               >
                 <X className="w-4 h-4" />
@@ -883,14 +922,8 @@ export default function ContactDetailPage() {
         <MergeContactModal
           targetContact={contact}
           onClose={() => setIsMergeModalOpen(false)}
-          onSuccess={message => {
-            setMergeMessage({ type: 'success', text: message })
-            setTimeout(() => setMergeMessage(null), 5000)
-          }}
-          onError={message => {
-            setMergeMessage({ type: 'error', text: message })
-            setTimeout(() => setMergeMessage(null), 5000)
-          }}
+          onSuccess={message => showMergeMessage('success', message)}
+          onError={message => showMergeMessage('error', message)}
         />
       )}
 

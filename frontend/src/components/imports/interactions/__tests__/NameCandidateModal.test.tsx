@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -15,6 +14,11 @@ import { NameCandidateModal } from '../NameCandidateModal'
 import { useResolveNameCandidate } from '@/hooks/use-interactions-queue'
 import { useContacts } from '@/hooks/use-contacts'
 import type { NameCandidateGroup } from '@/types/import'
+
+/** A partial hook result standing in for the full return type; the component under test reads only the fields set here. */
+function stub<T>(value: object): T {
+  return value as unknown as T
+}
 
 const groups: NameCandidateGroup[] = [
   {
@@ -36,15 +40,19 @@ let mutateAsync: ReturnType<typeof vi.fn>
 beforeEach(() => {
   vi.clearAllMocks()
   mutateAsync = vi.fn().mockResolvedValue({ action: 'import', contact_id: 'c-1' })
-  vi.mocked(useResolveNameCandidate).mockReturnValue({
-    mutateAsync,
-    isPending: false,
-  } as any)
-  vi.mocked(useContacts).mockReturnValue({
-    data: {
-      contacts: [{ id: 'contact-1', full_name: 'Existing Person', methods: [] }],
-    },
-  } as any)
+  vi.mocked(useResolveNameCandidate).mockReturnValue(
+    stub({
+      mutateAsync,
+      isPending: false,
+    })
+  )
+  vi.mocked(useContacts).mockReturnValue(
+    stub({
+      data: {
+        contacts: [{ id: 'contact-1', full_name: 'Existing Person', methods: [] }],
+      },
+    })
+  )
 })
 
 describe('NameCandidateModal', () => {

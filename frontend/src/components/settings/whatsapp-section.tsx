@@ -140,7 +140,7 @@ function formatTimestamp(value: string | undefined): string | null {
 }
 
 export function WhatsAppSection() {
-  const { data: status, error: statusError, isLoading } = useWhatsAppStatus()
+  const { data: status, error: statusError, isLoading, refetch } = useWhatsAppStatus()
   const startPairing = useStartWhatsAppPairing()
   const cancelPairing = useCancelWhatsAppPairing()
   const disconnect = useDisconnectWhatsApp()
@@ -321,7 +321,7 @@ export function WhatsAppSection() {
         <div className="text-center py-6">
           <AlertCircle className="w-8 h-8 text-red-400 mx-auto mb-2" />
           <p className="text-sm text-gray-600 mb-3">Failed to load WhatsApp status</p>
-          <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
             Retry
           </Button>
         </div>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { Ban, Check, HelpCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { MethodSelector } from './method-selector'
@@ -46,13 +46,16 @@ export function MethodSuggestionResolver({
   // Per-method selection state, keyed by `type:value` so two methods that
   // share a value under different types (e.g. email vs phone) never collide.
   // Pre-select all by default.
-  const [selected, setSelected] = useState<Map<string, boolean>>(new Map())
-
-  useEffect(() => {
-    const next = new Map<string, boolean>()
-    suggestion.methods.forEach(m => next.set(methodKey(m.type, m.value), true))
-    setSelected(next)
-  }, [suggestion.methods])
+  // Reset to all-selected whenever the suggestion's method list changes;
+  // adjusting state during render avoids a render with a stale selection.
+  const [selectedFor, setSelectedFor] = useState(suggestion.methods)
+  const [selected, setSelected] = useState<Map<string, boolean>>(() =>
+    allSelected(suggestion.methods)
+  )
+  if (selectedFor !== suggestion.methods) {
+    setSelectedFor(suggestion.methods)
+    setSelected(allSelected(suggestion.methods))
+  }
 
   // Adapt the pending methods into an ImportCandidate shape so the existing
   // conflict detector drives the same buckets. Only email/phone are emitted
@@ -250,4 +253,8 @@ export function MethodSuggestionResolver({
  * types never collides. Mirrors the backend's type-scoped dedup space. */
 function methodKey(type: string, value: string): string {
   return `${type}:${value}`
+}
+
+function allSelected(methods: MethodSuggestionMethod[]): Map<string, boolean> {
+  return new Map(methods.map(m => [methodKey(m.type, m.value), true]))
 }

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -82,25 +81,38 @@ import {
   useResolveNameCandidate,
 } from '@/hooks/use-interactions-queue'
 
+/** A partial hook result standing in for the full return type; the component under test reads only the fields set here. */
+function stub<T>(value: object): T {
+  return value as unknown as T
+}
+
 /** Reset the interactions-queue hooks to a quiet default (no items, no
  * name candidates, idle mutations) so existing People-tab tests are unaffected. */
 function mockInteractionsQueueDefaults() {
-  vi.mocked(useInteractionsQueue).mockReturnValue({
-    data: [],
-    isLoading: false,
-  } as any)
-  vi.mocked(useAnarlogTitleCandidates).mockReturnValue({
-    data: [],
-    isLoading: false,
-  } as any)
-  vi.mocked(useResolveLink).mockReturnValue({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  } as any)
-  vi.mocked(useResolveNameCandidate).mockReturnValue({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  } as any)
+  vi.mocked(useInteractionsQueue).mockReturnValue(
+    stub({
+      data: [],
+      isLoading: false,
+    })
+  )
+  vi.mocked(useAnarlogTitleCandidates).mockReturnValue(
+    stub({
+      data: [],
+      isLoading: false,
+    })
+  )
+  vi.mocked(useResolveLink).mockReturnValue(
+    stub({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    })
+  )
+  vi.mocked(useResolveNameCandidate).mockReturnValue(
+    stub({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    })
+  )
 }
 
 /** Set the People-tab list data. The page reads useSuggestions (items
@@ -108,7 +120,7 @@ function mockInteractionsQueueDefaults() {
  * useImportCandidates. Both are populated from the same candidate array so
  * existing assertions on candidate rendering keep working. */
 function setListData(
-  candidates: any[],
+  candidates: object[],
   meta: {
     total?: number
     page?: number
@@ -124,36 +136,44 @@ function setListData(
     pages: meta.pages ?? 1,
     hidden_unresolved_telegram_count: meta.hidden_unresolved_telegram_count ?? 0,
   }
-  vi.mocked(useSuggestions).mockReturnValue({
-    data: {
-      items: candidates.map(candidate => ({ kind: 'contact', candidate })),
-      ...m,
-    },
-    isLoading: false,
-    error: null,
-  } as any)
-  vi.mocked(useImportCandidates).mockReturnValue({
-    data: { candidates, ...m },
-    isLoading: false,
-    error: null,
-    // The resolver modal reads these for its post-open authority logic and
-    // forces one refetch on mount when the cache predates the open.
-    isError: false,
-    dataUpdatedAt: Date.now() + 60_000,
-    refetch: vi.fn().mockResolvedValue(undefined),
-  } as any)
+  vi.mocked(useSuggestions).mockReturnValue(
+    stub({
+      data: {
+        items: candidates.map(candidate => ({ kind: 'contact', candidate })),
+        ...m,
+      },
+      isLoading: false,
+      error: null,
+    })
+  )
+  vi.mocked(useImportCandidates).mockReturnValue(
+    stub({
+      data: { candidates, ...m },
+      isLoading: false,
+      error: null,
+      // The resolver modal reads these for its post-open authority logic and
+      // forces one refetch on mount when the cache predates the open.
+      isError: false,
+      dataUpdatedAt: Date.now() + 60_000,
+      refetch: vi.fn().mockResolvedValue(undefined),
+    })
+  )
 }
 
 /** Quiet defaults for the method-suggestion mutations. */
 function mockMethodSuggestionDefaults() {
-  vi.mocked(useResolveMethodSuggestions).mockReturnValue({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  } as any)
-  vi.mocked(useDismissMethodSuggestions).mockReturnValue({
-    mutateAsync: vi.fn(),
-    isPending: false,
-  } as any)
+  vi.mocked(useResolveMethodSuggestions).mockReturnValue(
+    stub({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    })
+  )
+  vi.mocked(useDismissMethodSuggestions).mockReturnValue(
+    stub({
+      mutateAsync: vi.fn(),
+      isPending: false,
+    })
+  )
 }
 
 const createWrapper = () => {
@@ -177,55 +197,69 @@ describe('ImportsPage - Suggested Matches', () => {
     mockMethodSuggestionDefaults()
 
     // Default mock implementations
-    vi.mocked(useImportAsContact).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
+    vi.mocked(useImportAsContact).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
 
-    vi.mocked(useLinkCandidate).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
+    vi.mocked(useLinkCandidate).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
 
-    vi.mocked(useIgnoreCandidate).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
+    vi.mocked(useIgnoreCandidate).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
 
-    vi.mocked(useTriggerSync).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
+    vi.mocked(useTriggerSync).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
 
-    vi.mocked(useGoogleAccounts).mockReturnValue({
-      data: [],
-    } as any)
+    vi.mocked(useGoogleAccounts).mockReturnValue(
+      stub({
+        data: [],
+      })
+    )
 
-    vi.mocked(useContacts).mockReturnValue({
-      data: {
-        contacts: [
-          {
-            id: 'contact-1',
-            full_name: 'John Smith',
-            created_at: '2024-01-01',
-            updated_at: '2024-01-01',
-          },
-        ],
-        total: 1,
-        page: 1,
-        limit: 500,
-      },
-    } as any)
+    vi.mocked(useContacts).mockReturnValue(
+      stub({
+        data: {
+          contacts: [
+            {
+              id: 'contact-1',
+              full_name: 'John Smith',
+              created_at: '2024-01-01',
+              updated_at: '2024-01-01',
+            },
+          ],
+          total: 1,
+          page: 1,
+          limit: 500,
+        },
+      })
+    )
 
-    vi.mocked(useContact).mockReturnValue({
-      data: {
-        id: 'contact-1',
-        full_name: 'John Smith',
-        methods: [],
-        created_at: '2024-01-01',
-        updated_at: '2024-01-01',
-      },
-    } as any)
+    vi.mocked(useContact).mockReturnValue(
+      stub({
+        data: {
+          id: 'contact-1',
+          full_name: 'John Smith',
+          methods: [],
+          created_at: '2024-01-01',
+          updated_at: '2024-01-01',
+        },
+      })
+    )
   })
 
   it('shows "Link to [Name]" when candidate has suggested match', () => {
@@ -500,42 +534,56 @@ describe('ImportsPage - Source Filter', () => {
     mockMethodSuggestionDefaults()
 
     // Default mock implementations
-    vi.mocked(useImportAsContact).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
+    vi.mocked(useImportAsContact).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
 
-    vi.mocked(useLinkCandidate).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
+    vi.mocked(useLinkCandidate).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
 
-    vi.mocked(useIgnoreCandidate).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
+    vi.mocked(useIgnoreCandidate).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
 
-    vi.mocked(useTriggerSync).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
+    vi.mocked(useTriggerSync).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
 
-    vi.mocked(useGoogleAccounts).mockReturnValue({
-      data: [],
-    } as any)
+    vi.mocked(useGoogleAccounts).mockReturnValue(
+      stub({
+        data: [],
+      })
+    )
 
-    vi.mocked(useContacts).mockReturnValue({
-      data: {
-        contacts: [],
-        total: 0,
-        page: 1,
-        limit: 500,
-      },
-    } as any)
+    vi.mocked(useContacts).mockReturnValue(
+      stub({
+        data: {
+          contacts: [],
+          total: 0,
+          page: 1,
+          limit: 500,
+        },
+      })
+    )
 
-    vi.mocked(useContact).mockReturnValue({
-      data: undefined,
-    } as any)
+    vi.mocked(useContact).mockReturnValue(
+      stub({
+        data: undefined,
+      })
+    )
 
     setListData([], { total: 0, page: 1, limit: 20, pages: 0 })
   })
@@ -670,27 +718,37 @@ describe('ImportsPage - Telegram @username', () => {
     mockInteractionsQueueDefaults()
     mockMethodSuggestionDefaults()
 
-    vi.mocked(useImportAsContact).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
-    vi.mocked(useLinkCandidate).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
-    vi.mocked(useIgnoreCandidate).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
-    vi.mocked(useTriggerSync).mockReturnValue({
-      mutateAsync: vi.fn(),
-      isPending: false,
-    } as any)
-    vi.mocked(useGoogleAccounts).mockReturnValue({ data: [] } as any)
-    vi.mocked(useContacts).mockReturnValue({
-      data: { contacts: [], total: 0, page: 1, limit: 500 },
-    } as any)
-    vi.mocked(useContact).mockReturnValue({ data: null } as any)
+    vi.mocked(useImportAsContact).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
+    vi.mocked(useLinkCandidate).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
+    vi.mocked(useIgnoreCandidate).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
+    vi.mocked(useTriggerSync).mockReturnValue(
+      stub({
+        mutateAsync: vi.fn(),
+        isPending: false,
+      })
+    )
+    vi.mocked(useGoogleAccounts).mockReturnValue(stub({ data: [] }))
+    vi.mocked(useContacts).mockReturnValue(
+      stub({
+        data: { contacts: [], total: 0, page: 1, limit: 500 },
+      })
+    )
+    vi.mocked(useContact).mockReturnValue(stub({ data: null }))
   })
 
   it('renders @username chip for Telegram candidate with a handle', () => {
@@ -793,15 +851,17 @@ describe('ImportsPage - Sub-tabs and name candidates', () => {
     mockReplace.mockClear()
     mockInteractionsQueueDefaults()
     mockMethodSuggestionDefaults()
-    vi.mocked(useImportAsContact).mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as any)
-    vi.mocked(useLinkCandidate).mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as any)
-    vi.mocked(useIgnoreCandidate).mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as any)
-    vi.mocked(useTriggerSync).mockReturnValue({ mutateAsync: vi.fn(), isPending: false } as any)
-    vi.mocked(useGoogleAccounts).mockReturnValue({ data: [] } as any)
-    vi.mocked(useContacts).mockReturnValue({
-      data: { contacts: [], total: 0, page: 1, limit: 500 },
-    } as any)
-    vi.mocked(useContact).mockReturnValue({ data: undefined } as any)
+    vi.mocked(useImportAsContact).mockReturnValue(stub({ mutateAsync: vi.fn(), isPending: false }))
+    vi.mocked(useLinkCandidate).mockReturnValue(stub({ mutateAsync: vi.fn(), isPending: false }))
+    vi.mocked(useIgnoreCandidate).mockReturnValue(stub({ mutateAsync: vi.fn(), isPending: false }))
+    vi.mocked(useTriggerSync).mockReturnValue(stub({ mutateAsync: vi.fn(), isPending: false }))
+    vi.mocked(useGoogleAccounts).mockReturnValue(stub({ data: [] }))
+    vi.mocked(useContacts).mockReturnValue(
+      stub({
+        data: { contacts: [], total: 0, page: 1, limit: 500 },
+      })
+    )
+    vi.mocked(useContact).mockReturnValue(stub({ data: undefined }))
     setListData([], { total: 0, page: 1, limit: 20, pages: 0 })
   })
 
@@ -812,14 +872,18 @@ describe('ImportsPage - Sub-tabs and name candidates', () => {
   })
 
   it('shows the amber badge with the conflict + orphan count (name candidates excluded)', () => {
-    vi.mocked(useInteractionsQueue).mockReturnValue({
-      data: [conflictItem, orphanItem],
-      isLoading: false,
-    } as any)
-    vi.mocked(useAnarlogTitleCandidates).mockReturnValue({
-      data: [nameCandidateGroup],
-      isLoading: false,
-    } as any)
+    vi.mocked(useInteractionsQueue).mockReturnValue(
+      stub({
+        data: [conflictItem, orphanItem],
+        isLoading: false,
+      })
+    )
+    vi.mocked(useAnarlogTitleCandidates).mockReturnValue(
+      stub({
+        data: [nameCandidateGroup],
+        isLoading: false,
+      })
+    )
     render(<ImportsPage />, { wrapper: createWrapper() })
     // Badge = 2 (two needs-attention rows); the name-candidate group is not counted.
     expect(screen.getByLabelText('2 needing attention')).toHaveTextContent('2')
@@ -827,10 +891,12 @@ describe('ImportsPage - Sub-tabs and name candidates', () => {
 
   it('switches to the Interactions tab via ?tab=interactions and renders conflict + orphan cards', () => {
     mockSearchParams = new URLSearchParams('tab=interactions')
-    vi.mocked(useInteractionsQueue).mockReturnValue({
-      data: [conflictItem, orphanItem],
-      isLoading: false,
-    } as any)
+    vi.mocked(useInteractionsQueue).mockReturnValue(
+      stub({
+        data: [conflictItem, orphanItem],
+        isLoading: false,
+      })
+    )
     render(<ImportsPage />, { wrapper: createWrapper() })
     expect(screen.getByRole('tab', { name: /Interactions/ })).toHaveAttribute(
       'aria-selected',
@@ -861,10 +927,12 @@ describe('ImportsPage - Sub-tabs and name candidates', () => {
   })
 
   it('renders the name-candidate section under the People tab', () => {
-    vi.mocked(useAnarlogTitleCandidates).mockReturnValue({
-      data: [nameCandidateGroup],
-      isLoading: false,
-    } as any)
+    vi.mocked(useAnarlogTitleCandidates).mockReturnValue(
+      stub({
+        data: [nameCandidateGroup],
+        isLoading: false,
+      })
+    )
     render(<ImportsPage />, { wrapper: createWrapper() })
     expect(screen.getByText('Names found in session titles')).toBeInTheDocument()
     expect(screen.getByText('Lena')).toBeInTheDocument()
@@ -872,10 +940,12 @@ describe('ImportsPage - Sub-tabs and name candidates', () => {
 
   it('consumes ?session by highlighting the matching card and stripping the param', () => {
     mockSearchParams = new URLSearchParams('tab=interactions&session=sess-orphan')
-    vi.mocked(useInteractionsQueue).mockReturnValue({
-      data: [conflictItem, orphanItem],
-      isLoading: false,
-    } as any)
+    vi.mocked(useInteractionsQueue).mockReturnValue(
+      stub({
+        data: [conflictItem, orphanItem],
+        isLoading: false,
+      })
+    )
     render(<ImportsPage />, { wrapper: createWrapper() })
     // The session param is consumed and stripped (replace called without session).
     expect(mockReplace).toHaveBeenCalled()

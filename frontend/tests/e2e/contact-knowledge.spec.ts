@@ -1,14 +1,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import type { APIRequestContext } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
-
-// API configuration for E2E tests
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
+import { createTestAPI, TestAPI, API_BASE_URL, API_HEADERS } from './helpers/test-api'
+import { JOB_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 // A labeled row in the contact-detail definition list, located by its label.
 const detailRow = (page: Page, label: string) =>
@@ -63,7 +56,9 @@ test.describe('Contact knowledge rows @area:contacts', () => {
     // on-demand route compilation on top of the data fetch)
     // spec: KNW-034.known-location-appears-labeled
     await page.goto(`/contacts/${located.id}`)
-    await expect(page.getByRole('heading', { name: located.name })).toBeVisible({ timeout: 30000 })
+    await expect(page.getByRole('heading', { name: located.name })).toBeVisible({
+      timeout: JOB_TIMEOUT_MS,
+    })
     await expect(detailRow(page, 'Location')).toBeVisible()
     await expect(detailRow(page, 'Location')).toContainText(location as string)
 
@@ -71,7 +66,7 @@ test.describe('Contact knowledge rows @area:contacts', () => {
     // spec: KNW-034.known-location-appears-labeled
     await page.goto(`/contacts/${unlocated.id}`)
     await expect(page.getByRole('heading', { name: unlocated.name })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await expect(detailRow(page, 'Location')).toHaveCount(0)
   })
@@ -99,7 +94,7 @@ test.describe('Contact knowledge rows @area:contacts', () => {
     // spec: KNW-034.known-birthday-appears-labeled
     await page.goto(`/contacts/${withBirthday.id}`)
     await expect(page.getByRole('heading', { name: withBirthday.name })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await expect(detailRow(page, 'Birthday')).toBeVisible()
     await expect(detailRow(page, 'Birthday')).toContainText(expectedBirthday)
@@ -107,7 +102,9 @@ test.describe('Contact knowledge rows @area:contacts', () => {
     // Unknown birthday: no row renders
     // spec: KNW-034.known-birthday-appears-labeled
     await page.goto(`/contacts/${plain.id}`)
-    await expect(page.getByRole('heading', { name: plain.name })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: plain.name })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
     await expect(detailRow(page, 'Birthday')).toHaveCount(0)
   })
 })

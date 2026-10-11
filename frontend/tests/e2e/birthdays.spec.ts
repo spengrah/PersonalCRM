@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
+import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 // Freeze the client-side accelerated-time frame to a fixed instant by mocking
 // GET /system/time BEFORE the page loads. `acceleration_factor: 0` pins
@@ -100,14 +101,16 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     await page.getByPlaceholder('Search contacts...').fill(contact.name)
     await page.getByPlaceholder('Search contacts...').press('Enter')
     const row = page.locator('tr', { has: page.getByText(contact.name, { exact: true }) })
-    await expect(row).toBeVisible({ timeout: 15000 })
+    await expect(row).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     await expect(row).toContainText(expectedListDate)
     await expect(row).not.toContainText('/00')
     await expect(row).not.toContainText('1900')
 
     await page.goto(`/contacts/${contact.id}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: contact.name })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: contact.name })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
     await expect(page.getByText(expectedDetailDate, { exact: true })).toBeVisible()
     await expect(page.getByText('1900')).not.toBeVisible()
 
@@ -119,7 +122,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     const card = page
       .getByTestId('birthday-card')
       .filter({ has: page.getByText(contact.name, { exact: true }) })
-    await expect(card).toBeVisible({ timeout: 15000 })
+    await expect(card).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     await expect(card).toContainText(expectedBirthdayPageDate)
     await expect(card).not.toContainText(/Turning|Turned/)
   })
@@ -147,7 +150,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     const todaySection = page.locator('section', {
       has: page.getByRole('heading', { name: /Today's Birthdays/ }),
     })
-    await expect(todaySection).toBeVisible({ timeout: 15000 })
+    await expect(todaySection).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     const card = todaySection
       .getByTestId('birthday-card')
       .filter({ has: page.getByText(contact.name, { exact: true }) })
@@ -178,7 +181,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
       has: page.getByRole('heading', { name: /Already Celebrated This Year/ }),
     })
 
-    await expect(todaySection).toBeVisible({ timeout: 15000 })
+    await expect(todaySection).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     await expect(upcomingSection).toBeVisible()
     await expect(celebratedSection).toBeVisible()
 
@@ -200,11 +203,13 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     const card = page.getByTestId('birthday-card').filter({
       has: page.getByRole('heading', { name: contact.name, exact: true }),
     })
-    await expect(card).toBeVisible({ timeout: 15000 })
+    await expect(card).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     await card.getByRole('link', { name: contact.name, exact: true }).click()
-    await expect(page).toHaveURL(new RegExp(`/contacts/${contact.id}$`), { timeout: 15000 })
+    await expect(page).toHaveURL(new RegExp(`/contacts/${contact.id}$`), {
+      timeout: SLOW_TIMEOUT_MS,
+    })
     await expect(page.getByRole('heading', { name: contact.name, exact: true })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
   })
 
@@ -227,7 +232,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     const celebratedSection = page.locator('section', {
       has: page.getByRole('heading', { name: /Already Celebrated This Year/ }),
     })
-    await expect(upcomingSection).toBeVisible({ timeout: 15000 })
+    await expect(upcomingSection).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     await expect(celebratedSection).toBeVisible()
 
     // Within upcoming, the sooner birthday (3 days) precedes the later (10 days)
@@ -267,7 +272,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     await page.goto('/birthdays')
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: 'Birthday Tracker' })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await expect(page.getByText(/September 3, 2026/)).toBeVisible()
   })
@@ -286,7 +291,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     const giftSection = page.locator('section', {
       has: page.getByRole('heading', { name: /Gift Planning/ }),
     })
-    await expect(giftSection).toBeVisible({ timeout: 15000 })
+    await expect(giftSection).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     await expect(giftSection.getByText(febName, { exact: true })).toBeVisible()
   })
 
@@ -305,7 +310,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     const todaySection = page.locator('section', {
       has: page.getByRole('heading', { name: /Today's Birthdays/ }),
     })
-    await expect(todaySection).toBeVisible({ timeout: 15000 })
+    await expect(todaySection).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     const card = todaySection
       .getByTestId('birthday-card')
       .filter({ has: page.getByText(leapName, { exact: true }) })
@@ -333,7 +338,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     const upcomingSection = page.locator('section', {
       has: page.getByRole('heading', { name: /Upcoming Birthdays/ }),
     })
-    await expect(upcomingSection).toBeVisible({ timeout: 15000 })
+    await expect(upcomingSection).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     const card = upcomingSection
       .getByTestId('birthday-card')
       .filter({ has: page.getByText(leapName, { exact: true }) })
@@ -360,7 +365,7 @@ test.describe('Birthdays - Placeholder Years @area:birthdays', () => {
     await page.waitForLoadState('domcontentloaded')
     // Wait for the sections to render (the Feb contact shows as celebrated),
     // then assert the gift-planning section is absent.
-    await expect(page.getByText(febName, { exact: true })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(febName, { exact: true })).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     await expect(page.getByRole('heading', { name: /Gift Planning/ })).toHaveCount(0)
   })
 })

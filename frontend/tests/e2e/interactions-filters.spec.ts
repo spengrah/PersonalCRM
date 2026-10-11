@@ -1,12 +1,12 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
-import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
+import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
+import {
+  API_BASE_URL,
+  API_HEADERS,
+  createTestAPI,
+  TestAPI,
+  type SeedBehaviorResult,
+} from './helpers/test-api'
 
 interface InteractionItem {
   id: string
@@ -102,9 +102,15 @@ test.describe('Interactions Filters @area:interactions', () => {
     const selectedVenue = gchat!.venue_tags[0].key
 
     await page.goto(`/contacts/${contactId}`)
-    await expect(page.locator(`[data-interaction-id="${gchatId}"]`)).toBeVisible({ timeout: 15000 })
-    await expect(page.locator(`[data-interaction-id="${emailId}"]`)).toBeVisible({ timeout: 15000 })
-    await expect(page.locator(`[data-event-id="${futureId}"]`)).toBeVisible({ timeout: 15000 })
+    await expect(page.locator(`[data-interaction-id="${gchatId}"]`)).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(page.locator(`[data-interaction-id="${emailId}"]`)).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(page.locator(`[data-event-id="${futureId}"]`)).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     const venueSelect = page.getByRole('combobox', { name: 'Venue' })
     await expect(venueSelect.locator('option')).toHaveText([
@@ -123,14 +129,18 @@ test.describe('Interactions Filters @area:interactions', () => {
 
     await venueSelect.selectOption({ value: selectedVenue })
     // spec: IXN-007.venue-narrows-list
-    await expect(page.locator(`[data-interaction-id="${gchatId}"]`)).toBeVisible({ timeout: 15000 })
-    await expect(page.locator(`[data-interaction-id="${emailId}"]`)).toHaveCount(0, {
-      timeout: 15000,
+    await expect(page.locator(`[data-interaction-id="${gchatId}"]`)).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
     })
-    await expect(page.locator(`[data-event-id="${futureId}"]`)).toHaveCount(0, { timeout: 15000 })
+    await expect(page.locator(`[data-interaction-id="${emailId}"]`)).toHaveCount(0, {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(page.locator(`[data-event-id="${futureId}"]`)).toHaveCount(0, {
+      timeout: SLOW_TIMEOUT_MS,
+    })
     await expect(venueSelect.locator('option')).toHaveText(
       ['All venues', ...list.venue_options.map(option => option.label)],
-      { timeout: 15000 }
+      { timeout: SLOW_TIMEOUT_MS }
     )
 
     await page
@@ -150,7 +160,7 @@ test.describe('Interactions Filters @area:interactions', () => {
     const region = page.locator(`[data-interaction-id="${gchatId}"] [data-content-region]`)
     // spec: IXN-007.expanded-shows-venue-messages
     await expect(region.locator('[data-message-id]')).toHaveCount(relevant.length, {
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     for (const message of relevant) {
       const node = region.locator(`[data-message-id="${message.id}"]`)
@@ -171,60 +181,60 @@ test.describe('Interactions Filters @area:interactions', () => {
     const edge91Id = handleId(seeded, 'edge-91')
 
     await page.goto(`/contacts/${contactId}`)
-    await expect(historyRows(page)).toHaveCount(20, { timeout: 15000 })
+    await expect(historyRows(page)).toHaveCount(20, { timeout: SLOW_TIMEOUT_MS })
     await expect(page.getByRole('list', { name: 'Upcoming events' })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     await page.getByRole('button', { name: '30 days', exact: true }).click()
     await expect(page.getByRole('button', { name: '30 days', exact: true })).toHaveAttribute(
       'aria-pressed',
       'true',
-      { timeout: 15000 }
+      { timeout: SLOW_TIMEOUT_MS }
     )
     // spec: IXN-008.preset-30-days
     await expect(page.locator(`[data-interaction-id="${recentId}"]`)).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await expect(page.getByRole('list', { name: 'Upcoming events' })).toHaveCount(0, {
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await page.getByRole('button', { name: 'Load more', exact: true }).click()
     await expect(page.locator(`[data-interaction-id="${edge29Id}"]`)).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
-    await expect(historyRows(page)).toHaveCount(21, { timeout: 15000 })
+    await expect(historyRows(page)).toHaveCount(21, { timeout: SLOW_TIMEOUT_MS })
     await expect(page.locator(`[data-interaction-id="${edge31Id}"]`)).toHaveCount(0, {
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await expect(page.locator(`[data-interaction-id="${edge89Id}"]`)).toHaveCount(0, {
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await expect(page.locator(`[data-interaction-id="${edge91Id}"]`)).toHaveCount(0, {
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await expect(page.getByRole('button', { name: 'Load more', exact: true })).toHaveCount(0, {
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     await page.getByRole('button', { name: '90 days', exact: true }).click()
     await expect(page.locator(`[data-interaction-id="${recentId}"]`)).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await page.getByRole('button', { name: 'Load more', exact: true }).click()
     // spec: IXN-008.preset-90-days
     await expect(page.locator(`[data-interaction-id="${edge89Id}"]`)).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
-    await expect(historyRows(page)).toHaveCount(23, { timeout: 15000 })
+    await expect(historyRows(page)).toHaveCount(23, { timeout: SLOW_TIMEOUT_MS })
     await expect(page.locator(`[data-interaction-id="${edge31Id}"]`)).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await expect(page.locator(`[data-interaction-id="${edge91Id}"]`)).toHaveCount(0, {
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await expect(page.getByRole('button', { name: 'Load more', exact: true })).toHaveCount(0, {
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
   })
 
@@ -259,11 +269,11 @@ test.describe('Interactions Filters @area:interactions', () => {
     await page.getByLabel('End date').fill(new Date(edge31!.occurred_at).toISOString().slice(0, 10))
     // spec: IXN-008.custom-range
     await expect(page.locator(`[data-interaction-id="${edge31Id}"]`)).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
-    await expect(historyRows(page)).toHaveCount(1, { timeout: 15000 })
+    await expect(historyRows(page)).toHaveCount(1, { timeout: SLOW_TIMEOUT_MS })
     await expect(page.getByRole('list', { name: 'Upcoming events' })).toHaveCount(0, {
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     const beforeBoundB = new Date(event(boundBId).start_time)
@@ -271,23 +281,35 @@ test.describe('Interactions Filters @area:interactions', () => {
     await page.getByLabel('Start date').fill(dateOf(event(boundAId)))
     await page.getByLabel('End date').fill(beforeBoundB.toISOString().slice(0, 10))
     // spec: IXN-008.custom-range-bounds-upcoming
-    await expect(page.locator(`[data-event-id="${boundAId}"]`)).toBeVisible({ timeout: 15000 })
-    await expect(page.locator(`[data-event-id="${boundBId}"]`)).toHaveCount(0, { timeout: 15000 })
-    await expect(page.locator(`[data-event-id="${boundCId}"]`)).toHaveCount(0, { timeout: 15000 })
-    await expect(historyRows(page)).toHaveCount(0, { timeout: 15000 })
+    await expect(page.locator(`[data-event-id="${boundAId}"]`)).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(page.locator(`[data-event-id="${boundBId}"]`)).toHaveCount(0, {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(page.locator(`[data-event-id="${boundCId}"]`)).toHaveCount(0, {
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(historyRows(page)).toHaveCount(0, { timeout: SLOW_TIMEOUT_MS })
 
     await page.getByRole('button', { name: 'All', exact: true }).click()
     // spec: IXN-008.all-includes-upcoming
     await expect(page.locator(`[data-interaction-id="${recentId}"]`)).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
-    await expect(page.locator(`[data-event-id="${boundAId}"]`)).toBeVisible({ timeout: 15000 })
-    await expect(page.locator(`[data-event-id="${boundBId}"]`)).toBeVisible({ timeout: 15000 })
-    await expect(page.locator(`[data-event-id="${boundCId}"]`)).toBeVisible({ timeout: 15000 })
+    await expect(page.locator(`[data-event-id="${boundAId}"]`)).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(page.locator(`[data-event-id="${boundBId}"]`)).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(page.locator(`[data-event-id="${boundCId}"]`)).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
     await page.getByRole('button', { name: 'Load more', exact: true }).click()
     await expect(page.locator(`[data-interaction-id="${edge91Id}"]`)).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
-    await expect(historyRows(page)).toHaveCount(24, { timeout: 15000 })
+    await expect(historyRows(page)).toHaveCount(24, { timeout: SLOW_TIMEOUT_MS })
   })
 })

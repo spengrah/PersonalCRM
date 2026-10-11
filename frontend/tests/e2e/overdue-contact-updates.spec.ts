@@ -1,5 +1,7 @@
 import { test, expect, APIRequestContext } from '@playwright/test'
 import {
+  API_BASE_URL,
+  API_HEADERS,
   createTestAPI,
   declaredWorldSearch,
   TestAPI,
@@ -24,14 +26,6 @@ import { waitForOverdueListSettled } from './helpers/dashboard'
  * here asserts an exact day count. Relative ORDER is safe, because the lag is
  * the same constant for every contact.
  */
-
-// API configuration for E2E tests
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
 
 // Helper to verify contact is not in overdue list via API
 async function isContactOverdue(request: APIRequestContext, contactId: string): Promise<boolean> {

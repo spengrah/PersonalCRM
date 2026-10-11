@@ -90,7 +90,7 @@ export function formatBirthday(
  */
 export function formatRelativeTime(
   dateString: string | undefined | null,
-  referenceDate: Date = new Date()
+  referenceDate: Date
 ): string {
   if (!dateString) return ''
   const date = new Date(dateString)

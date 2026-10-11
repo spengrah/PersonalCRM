@@ -3,6 +3,7 @@
 import { RefreshCw } from 'lucide-react'
 import type { SyncState } from '@/types/sync'
 import { formatSyncTime } from '@/hooks/use-sync-states'
+import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 
 interface SyncBadgeProps {
   label: string
@@ -18,7 +19,8 @@ interface SyncBadgeProps {
  * Matches the design in designs/ui-components.pen (SyncBadge component).
  */
 export function SyncBadge({ label, syncState, onSync, loading }: SyncBadgeProps) {
-  const lastSyncText = formatSyncTime(syncState?.last_successful_sync_at ?? null)
+  const { currentTime } = useAcceleratedTime()
+  const lastSyncText = formatSyncTime(syncState?.last_successful_sync_at ?? null, currentTime)
   const isSyncing = syncState?.status === 'syncing'
   const hasError = syncState?.status === 'error'
 
