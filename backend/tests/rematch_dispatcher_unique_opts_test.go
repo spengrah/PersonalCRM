@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -29,9 +30,7 @@ import (
 // (same source_id → event.source_id unique).
 func TestRematch_RiverUniqueOpts_DedupsByContactAndJobID(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	// Per-test isolated clone: this client exercises River UniqueOpts dedup
 	// (the count is already (contactID, jobID)-scoped, so it doesn't collide

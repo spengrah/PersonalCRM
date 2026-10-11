@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"hash/fnv"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strconv"
 	"sync"
 	"testing"
@@ -41,13 +41,7 @@ type matcherEnrichTestEnv struct {
 // t.Cleanup callbacks in LIFO order — opposite of `defer cleanup()`).
 func setupMatcherEnrichmentTest(t *testing.T) *matcherEnrichTestEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
@@ -450,13 +444,7 @@ func (failingEnricher) SyncMethodsFromExternal(_ context.Context, _ uuid.UUID, _
 }
 
 func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 

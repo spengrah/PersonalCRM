@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/api"
@@ -230,14 +231,7 @@ func (h *sortTestHelper) findPosition(ids []string, target string) int {
 }
 
 func TestContactSort_LastContactedNullsLast(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
@@ -286,14 +280,7 @@ func TestContactSort_LastContactedNullsLast(t *testing.T) {
 }
 
 func TestContactSort_ContactBy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
@@ -392,14 +379,7 @@ func TestContactSort_ContactBy(t *testing.T) {
 }
 
 func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
@@ -562,14 +542,7 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 }
 
 func TestContactSort_Location(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
@@ -640,14 +613,7 @@ func TestContactSort_Location(t *testing.T) {
 }
 
 func TestContactSort_Birthday(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)

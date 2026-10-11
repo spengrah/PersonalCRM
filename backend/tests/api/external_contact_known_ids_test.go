@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -46,10 +46,7 @@ type knownIDsByHostEnv struct {
 
 func setupKnownIDsByHostEnv(t *testing.T) *knownIDsByHostEnv {
 	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

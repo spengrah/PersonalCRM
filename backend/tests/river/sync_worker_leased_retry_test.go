@@ -3,7 +3,6 @@ package river
 import (
 	"context"
 	"errors"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,13 +59,7 @@ func (p *retryTestProvider) Sync(_ context.Context, _ *repository.SyncState, _ [
 //   - external_sync_state.status is 'idle' (not 'syncing') at the end.
 //   - provider.Sync was invoked exactly 2 times.
 func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -215,13 +208,7 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 // case called out in DD 9 — it checks the data-integrity story even
 // without invoking the rescue daemon.
 func TestSyncWorker_AbandonedLogOnStartupRecovery(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -384,10 +371,7 @@ func waitForRiverJobState(t *testing.T, ctx context.Context, queries *db.Queries
 // for this test lives in the dedicated Backend Slow Tests workflow.
 func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cfg := config.TestConfig()

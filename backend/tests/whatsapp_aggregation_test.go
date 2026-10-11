@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -45,9 +46,7 @@ type whatsappTestEnv struct {
 // rejects the source outright and no interaction is ever written).
 func setupWhatsAppEngineTest(t *testing.T) *whatsappTestEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	database, _ := newIsolatedRiverTestDB(t, ctx)

@@ -23,6 +23,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -58,9 +59,7 @@ type discoveryEnv struct {
 
 func newDiscoveryEnv(t *testing.T) *discoveryEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	// Per-test isolated clone: the live consumer drains a private river_job.
 	ctx := context.Background()
 	database, _ := newIsolatedRiverTestDB(t, ctx)

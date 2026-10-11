@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
@@ -67,10 +67,7 @@ func (m *mockTodoistClient) Sync(ctx context.Context, syncToken string, resource
 // Returns the service, contact, the contact and contact-task repositories
 // (for direct-DB seeding and re-fetch assertions), and a cleanup function.
 func setupServiceTest(t *testing.T) (*service.ContactTaskService, *repository.Contact, *repository.ContactRepository, *repository.ContactTaskRepository, func()) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -138,9 +135,7 @@ func setupServiceTest(t *testing.T) (*service.ContactTaskService, *repository.Co
 }
 
 func TestContactTaskService_CreateManualTask_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	svc, contact, _, _, cleanup := setupServiceTest(t)
@@ -426,9 +421,7 @@ func TestContactTaskService_CreateManualTask_Integration(t *testing.T) {
 }
 
 func TestContactTaskService_CRMMarkerFormat(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	svc, contact, _, _, cleanup := setupServiceTest(t)
@@ -484,9 +477,7 @@ func TestContactTaskService_CRMMarkerFormat(t *testing.T) {
 // outbound call to the unlink path.
 func TestDeleteTaskLink_IssuesNoOutboundTodoistCall(t *testing.T) {
 	// spec: CAD-039.crm-deletes-only-own, CAD-039.no-outbound-call-made
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	svc, contact, contactRepo, taskRepo, cleanup := setupServiceTest(t)

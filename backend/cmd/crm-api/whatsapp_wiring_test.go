@@ -21,7 +21,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -142,9 +142,7 @@ func seedWhatsAppWiringFixture(t *testing.T, ctx context.Context, chain wireChai
 // spec: WHA-040
 func TestWhatsAppWiring_ProductionRegistriesDispatchWhatsApp(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 	ctx := context.Background()
 
 	cloneURL, drop := testdb.NewEphemeralClone(t)
@@ -305,9 +303,7 @@ func envelopeWithPeerRef(t *testing.T, peerRef string) *events.Envelope {
 // the `if` would be caught by no test without this one.
 func TestWhatsAppWiring_RematchHandlersFollowTheFeatureFlag(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	// A phone method is the discriminating input: 'whatsapp' has no other
 	// handler, but 'phone' is shared with Telegram, so an unconditional

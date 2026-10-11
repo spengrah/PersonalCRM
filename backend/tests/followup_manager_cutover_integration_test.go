@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -307,9 +308,7 @@ func (e *followUpIntegrationEnv) applyInEventTx(t *testing.T, env *events.Envelo
 // produces a skip observation and NO contact_task row. Closes #267.
 func TestIntegration_FollowUpManager_BackdatedOutbound(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	contact := env.seedContact(t, "weekly")
@@ -333,9 +332,7 @@ func TestIntegration_FollowUpManager_BackdatedOutbound(t *testing.T) {
 // it proceeds to create the pending_remote_create row.
 func TestIntegration_FollowUpManager_ManualSourceBypassesBackdatedGuard(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	contact := env.seedContact(t, "weekly")
@@ -354,9 +351,7 @@ func TestIntegration_FollowUpManager_ManualSourceBypassesBackdatedGuard(t *testi
 // occurred_at, the outbound is skipped.
 func TestIntegration_FollowUpManager_OutOfOrderSkips(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -391,9 +386,7 @@ func TestIntegration_FollowUpManager_OutOfOrderSkips(t *testing.T) {
 // idempotency key, and enqueues a TodoistFollowUpCreateJob.
 func TestIntegration_FollowUpManager_OutboundFreshCreatesPendingRow(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -444,9 +437,7 @@ func TestIntegration_FollowUpManager_OutboundFreshCreatesPendingRow(t *testing.T
 // handle the race when it runs).
 func TestIntegration_FollowUpManager_InboundCompletesPending(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -489,9 +480,7 @@ func TestIntegration_FollowUpManager_InboundCompletesPending(t *testing.T) {
 // event never both land follow-up work.
 func TestIntegration_FollowUpManager_DuplicateEventClaimBlocks(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	contact := env.seedContact(t, "weekly")
@@ -530,9 +519,7 @@ func TestIntegration_FollowUpManager_DuplicateEventClaimBlocks(t *testing.T) {
 // past their own guard-3 read.
 func TestIntegration_FollowUpManager_UniqueLiveCollisionRecovers(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -620,9 +607,7 @@ func (r *raceAfterFirstPendingRead) FindPendingFollowUpTx(ctx context.Context, t
 // rollback sees the winner's row, and the loser refreshes it.
 func TestIntegration_FollowUpManager_UniqueLiveCollisionRefreshesWinner(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -679,9 +664,7 @@ func TestIntegration_FollowUpManager_UniqueLiveCollisionRefreshesWinner(t *testi
 // the authoritative signal.
 func TestIntegration_FollowUpManager_InboundClosesFinalizedRow(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	ctx := context.Background()

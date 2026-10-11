@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 	"time"
@@ -160,9 +161,7 @@ func (h *mergeAttrHarness) addPhone(t *testing.T, ctx context.Context, contactID
 // identity cache so a subsequent match on the same handle attributes to the
 // survivor A — not the tombstoned loser B.
 func TestMergeContacts_IdentityAttribution_FollowsSurvivor(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := ctx0()
 
@@ -215,9 +214,7 @@ func TestMergeContacts_IdentityAttribution_FollowsSurvivor(t *testing.T) {
 // external_contact import link, and a pre-merge B-attributed row in EACH of
 // the four ingest-staging tables all point at A.
 func TestMergeContacts_RepointsIdentityAndAttribution(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := ctx0()
 
@@ -342,9 +339,7 @@ func TestMergeContacts_RepointsIdentityAndAttribution(t *testing.T) {
 // abort the merge with a 23505 on idx_comms_message_dedup; the two-step
 // (soft-delete B's colliding copy, then repoint the rest) must succeed.
 func TestMergeContacts_CommsMessageDedupCollision(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := ctx0()
 
@@ -417,9 +412,7 @@ func TestMergeContacts_CommsMessageDedupCollision(t *testing.T) {
 // and the scoped retry must recover WITHOUT aborting the outer tx. This test
 // fails if the savepoint/retry is removed.
 func TestCommsRepointForMerge_RacedInsertRetries(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := ctx0()
 
@@ -485,9 +478,7 @@ func TestCommsRepointForMerge_RacedInsertRetries(t *testing.T) {
 // barrier) must still end up attributed to the survivor. This test fails if
 // the post-commit second pass is removed.
 func TestMergeContacts_SecondPassRepointsRacedRows(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := ctx0()
 
@@ -613,9 +604,7 @@ func (h *mergeAttrHarness) seedTaskWithIdempotencyKey(t *testing.T, ctx context.
 // (with a durable remote close job only for real external ids); manual rows
 // repoint to the survivor in every state.
 func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := ctx0()
 
@@ -879,9 +868,7 @@ func TestMergeContacts_ClosesLiveContactTasks(t *testing.T) {
 // rollback); setter called with remoteCloseEnabled=false (follow-up mode
 // 'off') closes locally with no job.
 func TestMergeContacts_EnqueuerNotWired_Errors(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := ctx0()
 
@@ -942,9 +929,7 @@ func TestMergeContacts_EnqueuerNotWired_Errors(t *testing.T) {
 //
 // spec: CON-067.race-falls-back-to-close
 func TestMergeContacts_TransferRaceFallsBackToClose(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	ctx := ctx0()
 
 	h := newMergeAttrHarness(t, ctx)
@@ -1047,9 +1032,7 @@ func TestMergeContacts_TransferRaceFallsBackToClose(t *testing.T) {
 // must fall through to discovery — self-healing to the surviving holder of
 // the handle, or unlinking when no live holder exists.
 func TestMatchOrCreate_TombstonedCacheFallsThroughToSurvivor(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := ctx0()
 
@@ -1158,9 +1141,7 @@ func (e assertErr) Error() string { return string(e) }
 // through the adapter and asserts it reaches an item_close for the row's
 // real external id.
 func TestMergeContacts_CloseEnqueue_ExecutesThroughAdapter(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := ctx0()
 

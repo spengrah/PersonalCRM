@@ -3,7 +3,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -87,9 +87,7 @@ func mustMarshalManualPayload(t *testing.T, contactID uuid.UUID, at time.Time) j
 }
 
 func TestEventRepository_InsertAndFetch_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, _ := newEventBusTestDB(t, ctx)
@@ -127,9 +125,7 @@ func TestEventRepository_InsertAndFetch_Integration(t *testing.T) {
 }
 
 func TestEventRepository_DuplicateSourceID_ReturnsErrDuplicate_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, _ := newEventBusTestDB(t, ctx)
@@ -177,9 +173,7 @@ func TestEventRepository_DuplicateSourceID_ReturnsErrDuplicate_Integration(t *te
 }
 
 func TestEventRepository_NullSourceID_AllowsMultipleInserts_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, _ := newEventBusTestDB(t, ctx)
@@ -214,9 +208,7 @@ func TestEventRepository_NullSourceID_AllowsMultipleInserts_Integration(t *testi
 }
 
 func TestEventRepository_GetEvent_NotFound_ReturnsErrNotFound_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, _ := newEventBusTestDB(t, ctx)
@@ -227,9 +219,7 @@ func TestEventRepository_GetEvent_NotFound_ReturnsErrNotFound_Integration(t *tes
 }
 
 func TestEventRepository_FindEventBySource_NotFound_ReturnsErrNotFound_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, _ := newEventBusTestDB(t, ctx)
@@ -240,9 +230,7 @@ func TestEventRepository_FindEventBySource_NotFound_ReturnsErrNotFound_Integrati
 }
 
 func TestBus_PublishTx_Succeeds_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
@@ -272,9 +260,7 @@ func TestBus_PublishTx_Succeeds_Integration(t *testing.T) {
 }
 
 func TestBus_PublishTx_DuplicateSourceID_IsNoOp_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
@@ -318,9 +304,7 @@ func TestBus_PublishTx_DuplicateSourceID_IsNoOp_Integration(t *testing.T) {
 }
 
 func TestBus_Publish_OpensOwnTransaction_AndCommits_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
@@ -346,9 +330,7 @@ func TestBus_Publish_OpensOwnTransaction_AndCommits_Integration(t *testing.T) {
 }
 
 func TestBus_PublishTx_ValidationError_NoRowPersisted_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)
@@ -372,13 +354,11 @@ func TestBus_PublishTx_ValidationError_NoRowPersisted_Integration(t *testing.T) 
 	require.NoError(t, tx.Rollback(ctx))
 
 	_, err = repo.FindEventBySource(ctx, "telegram", sourceID)
-	require.True(t, errors.Is(err, db.ErrNotFound), "validation-failed row must not be persisted")
+	require.ErrorIs(t, err, db.ErrNotFound, "validation-failed row must not be persisted")
 }
 
 func TestBus_PublishTx_PreGeneratedID_IsRespected_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, cfg := newEventBusTestDB(t, ctx)

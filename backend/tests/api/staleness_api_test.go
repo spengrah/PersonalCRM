@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 	"time"
@@ -34,10 +34,7 @@ func stalenessNS(t *testing.T) string {
 func setupStalenessAPITest(t *testing.T) (*gin.Engine, *repository.StalenessRepository, func()) {
 	t.Helper()
 	ctx := context.Background()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	dbConfig := config.DatabaseConfig{
 		URL:               databaseURL,

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/api"
@@ -55,12 +55,7 @@ func listCandidateIDs(t *testing.T, router http.Handler, query string) ([]string
 // test's rows), and the telegram/anarlog checks query their own sources.
 // spec: IMP-010
 func TestImportAPI_CandidateListConfidenceOrder(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()

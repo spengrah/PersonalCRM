@@ -4,7 +4,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -36,12 +36,7 @@ type waEnv struct {
 
 func setupWhatsAppRepoTest(t *testing.T) *waEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	testsupport.RequireDatabase(t)
 	ctx := context.Background()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)

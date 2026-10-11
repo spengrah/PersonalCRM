@@ -6,7 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/db"
@@ -34,9 +34,7 @@ import (
 // migrations into the clone, so MigrationStatus starts up-to-date.
 func newMigrationStatusClone(t *testing.T) (cloneURL, migrationsPath string) {
 	t.Helper()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 	return cloneURL, getMigrationsPath()

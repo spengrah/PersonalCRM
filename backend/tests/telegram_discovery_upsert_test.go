@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -30,13 +30,7 @@ func setupDiscoveryUpsertTest(t *testing.T) (
 	func(),
 ) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
@@ -424,13 +418,7 @@ func TestUpsertExternalContact_SharedUpsertStillOverwrites(t *testing.T) {
 // external_contact row with populated names and a metadata.username, not
 // wipe them.
 func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 

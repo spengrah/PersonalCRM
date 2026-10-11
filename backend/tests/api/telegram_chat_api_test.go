@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"sync/atomic"
 	"testing"
 
@@ -34,10 +34,7 @@ var telegramChatIDSeq atomic.Int64
 func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramChatConfigRepository, int64, int64, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Reserve a disjoint ID pair for this test.
 	n := telegramChatIDSeq.Add(2)
@@ -138,9 +135,7 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 }
 
 func TestChatAPI_ListChats(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, chatConfigRepo, chatID1, chatID2, cleanup := setupTelegramChatRouter(t)
@@ -207,9 +202,7 @@ func TestChatAPI_ListChats(t *testing.T) {
 
 // spec: TGM-014.list-returns-only-group
 func TestChatAPI_ListChats_ExcludesPrivate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, chatConfigRepo, chatID1, chatID2, cleanup := setupTelegramChatRouter(t)
@@ -272,9 +265,7 @@ func TestChatAPI_ListChats_ExcludesPrivate(t *testing.T) {
 
 // spec: TGM-014.status-update-closed-set
 func TestChatAPI_UpdateStatus_Ignored(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
@@ -313,9 +304,7 @@ func TestChatAPI_UpdateStatus_Ignored(t *testing.T) {
 
 // spec: TGM-014.status-update-closed-set
 func TestChatAPI_UpdateStatus_TrackedOverridesLarge(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
@@ -354,9 +343,7 @@ func TestChatAPI_UpdateStatus_TrackedOverridesLarge(t *testing.T) {
 
 // spec: TGM-014.status-update-closed-set
 func TestChatAPI_UpdateStatus_Auto(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
@@ -394,9 +381,7 @@ func TestChatAPI_UpdateStatus_Auto(t *testing.T) {
 
 // spec: TGM-014.status-update-closed-set
 func TestChatAPI_UpdateStatus_InvalidStatus(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, chatID1, _, cleanup := setupTelegramChatRouter(t)
@@ -413,9 +398,7 @@ func TestChatAPI_UpdateStatus_InvalidStatus(t *testing.T) {
 
 // spec: TGM-014.non-numeric-chat-id
 func TestChatAPI_UpdateStatus_NotFound(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	// chatID1 is reserved for this test but never upserted, so it is
@@ -434,9 +417,7 @@ func TestChatAPI_UpdateStatus_NotFound(t *testing.T) {
 
 // spec: TGM-014.non-numeric-chat-id
 func TestChatAPI_UpdateStatus_NonNumericChatID(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, _, _, cleanup := setupTelegramChatRouter(t)

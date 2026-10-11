@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/url"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -16,9 +17,7 @@ import (
 )
 
 func TestContactAPI_AwaitingReplyUntilOnPayloads(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, contactRepo, _, cleanup := setupAwaitingReplyAPIRouter(t)

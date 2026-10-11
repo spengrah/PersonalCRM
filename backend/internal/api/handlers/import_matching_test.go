@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Test the scoring logic for findBestMatch without mocks
@@ -308,7 +309,7 @@ func TestMatchScoring_MultipleMatches(t *testing.T) {
 	}
 
 	// Best match should be John Smith (highest combined score)
-	assert.NotNil(t, bestMatch)
+	require.NotNil(t, bestMatch)
 	assert.Equal(t, "John Smith", bestMatch.name)
 	assert.InDelta(t, 0.97, bestScore, 0.01) // 0.95 * 0.6 + 1.0 * 0.4
 }

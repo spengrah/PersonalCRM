@@ -4,7 +4,7 @@ package api
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -16,10 +16,7 @@ import (
 func newAPISharedTestDB(t *testing.T, ctx context.Context) (*db.Database, *config.Config) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

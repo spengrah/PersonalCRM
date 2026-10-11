@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,13 +32,7 @@ import (
 // doesn't block, cross-window) lives in sync_repo_enqueue_test.go. This
 // file only proves the tick-to-insert plumbing.
 func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -175,10 +168,7 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 // returns empty due list → tick Work returns nil fast).
 func TestPeriodicTick_FiresOnStart(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cfg := config.TestConfig()

@@ -4,6 +4,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
@@ -83,9 +84,7 @@ var catalogExclusions = []string{"predicate", "entity_type"}
 // asserts: every wiped table is empty after the reset, schema_migrations
 // survives, and the catalog guard (every public table is accounted for).
 func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping destructive reset integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
@@ -233,9 +232,7 @@ func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 // guard were absent or moved AFTER ResetSyntheticData, the seeded contact would
 // be wiped and the survival assertion would fail.
 func TestSyntheticReset_InvalidNamespaceLeavesDataIntact(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping destructive reset integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cloneURL, drop := testdb.NewEphemeralClone(t)

@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -32,10 +32,7 @@ type extSweepFixtures struct {
 func seedExtSweepFixtures(t *testing.T) *extSweepFixtures {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -163,10 +160,7 @@ func TestExternalContactSweep_FindBySourceAndSourceID_FiltersTombstone(t *testin
 func TestExternalContactSweep_ListUnmatched_FiltersTombstone(t *testing.T) {
 	t.Parallel()
 	// Re-seed but with both rows unmatched so the predicate fires.
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -215,10 +209,7 @@ func TestExternalContactSweep_ListUnmatched_FiltersTombstone(t *testing.T) {
 }
 
 func TestExternalContactSweep_ListAllUnmatched_FiltersTombstone(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -263,10 +254,7 @@ func TestExternalContactSweep_ListAllUnmatched_FiltersTombstone(t *testing.T) {
 }
 
 func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -315,10 +303,7 @@ func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
 // unresolved row between the baseline and final reads. The other 11 funcs in
 // this file are prefix-scoped and flip.
 func TestExternalContactUnmatched_HidesUnresolvedTelegramByDefault(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -418,10 +403,7 @@ func TestExternalContactSweep_FindByNormalizedEmail_FiltersTombstone(t *testing.
 }
 
 func TestExternalContactSweep_ListForCRMContact_FiltersTombstone(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -477,10 +459,7 @@ func externalIDs(rows []repository.ExternalContact) map[uuid.UUID]bool {
 }
 
 func TestExternalContactSweep_RoundTrip_ReviveAfterSoftDelete(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -534,10 +513,7 @@ func TestExternalContactSweep_RoundTrip_ReviveAfterSoftDelete(t *testing.T) {
 }
 
 func TestExternalContactSweep_GetByID_AccountIDNullSemantics(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()

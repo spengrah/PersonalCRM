@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -381,9 +382,7 @@ func postIngestCall(t *testing.T, env *phoneCallIngestEnv, body any) *httptest.R
 // NOT last_outreach_at — phone_calls follow the standard direction
 // semantics).
 func TestIngestCall_Inbound_RecordsInteractionAndBumpsLastContacted(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 	ctx := context.Background()
@@ -450,9 +449,7 @@ func TestIngestCall_Inbound_RecordsInteractionAndBumpsLastContacted(t *testing.T
 // last_outreach_at and NOT last_contacted (the user reaching out is
 // recorded as outreach, not as contact).
 func TestIngestCall_Outbound_BumpsLastOutreachAt(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 	ctx := context.Background()
@@ -501,9 +498,7 @@ func TestIngestCall_Outbound_BumpsLastOutreachAt(t *testing.T) {
 
 // spec: ING-039.connected-outbound
 func TestIngestCall_ConnectedOutbound_BumpsLastContacted(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 	ctx := context.Background()
@@ -553,9 +548,7 @@ func TestIngestCall_ConnectedOutbound_BumpsLastContacted(t *testing.T) {
 // interaction_id=NULL, but no interaction row, no interaction.recorded
 // event, and no cadence bump.
 func TestIngestCall_MissedInboundNoVoicemail_NoInteractionWritten(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 	ctx := context.Background()
@@ -591,9 +584,7 @@ func TestIngestCall_MissedInboundNoVoicemail_NoInteractionWritten(t *testing.T) 
 // rolls back; the response surfaces a rejection. No phone_call row,
 // no interaction row, no event row land for this envelope.
 func TestIngestCall_UpsertFailure_RollsBackBatch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 	ctx := context.Background()
@@ -621,9 +612,7 @@ func TestIngestCall_UpsertFailure_RollsBackBatch(t *testing.T) {
 // the staging row AND the interaction. The event-log row must also be
 // rolled back.
 func TestIngestCall_MarkProcessedFailure_RollsBackBatch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 	ctx := context.Background()
@@ -654,9 +643,7 @@ func TestIngestCall_MarkProcessedFailure_RollsBackBatch(t *testing.T) {
 // TestIngestExternalContact_VersionTooHigh_Rejected and the equivalent
 // raw_message guard.
 func TestIngestCall_VersionTooHigh_Rejected(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 

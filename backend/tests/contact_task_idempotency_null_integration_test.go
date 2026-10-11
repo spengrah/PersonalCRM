@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -25,14 +25,7 @@ import (
 // idempotency_key, which the index treats as a real match and rejects on
 // the second insert with a unique_violation (23505).
 func TestContactTask_NilIdempotencyKey_AllowsRepeatedCreates(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()

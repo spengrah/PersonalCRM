@@ -26,6 +26,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"sync"
 	"testing"
 
@@ -218,9 +219,7 @@ func (e *opWorkerEnv) countOps(t *testing.T, taskID uuid.UUID, op string) int {
 // deterministic temp_id = row id.
 func TestIntegration_OpWorker_Create_NormalFinalize(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -246,9 +245,7 @@ func TestIntegration_OpWorker_Create_NormalFinalize(t *testing.T) {
 // managed (another worker finalized).
 func TestIntegration_OpWorker_Create_AlreadyManaged(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -275,9 +272,7 @@ func TestIntegration_OpWorker_Create_AlreadyManaged(t *testing.T) {
 // item_close against the recorded external id.
 func TestIntegration_OpWorker_Create_CompletedMidFlight(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -326,9 +321,7 @@ func TestIntegration_OpWorker_Create_CompletedMidFlight(t *testing.T) {
 // wrong; legacy finalizeTempIDMappingTx rule preserved).
 func TestIntegration_OpWorker_Create_DismissedMidFlight(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -365,9 +358,7 @@ func TestIntegration_OpWorker_Create_DismissedMidFlight(t *testing.T) {
 // the update op pushes the row's CURRENT due_date.
 func TestIntegration_OpWorker_RefreshConverges(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
 	ctx := context.Background()
@@ -380,7 +371,7 @@ func TestIntegration_OpWorker_RefreshConverges(t *testing.T) {
 	env.setDueDate(t, task.ID, "2026-07-15")
 	err := env.runOp(ctx, task.ID, consumerjobs.TaskOpUpdateDeadline)
 	var snooze *river.JobSnoozeError
-	require.Truef(t, errors.As(err, &snooze), "update op on pending row must snooze, got %v", err)
+	require.ErrorAsf(t, err, &snooze, "update op on pending row must snooze, got %v", err)
 	assert.Empty(t, env.mock.snapshotCalls(), "no push while pending")
 
 	// Create finalizes.
@@ -404,9 +395,7 @@ func TestIntegration_OpWorker_RefreshConverges(t *testing.T) {
 // carries the same payload-fingerprint UUID as a retry would.
 func TestIntegration_OpWorker_AtLeastOnceConvergence(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
 	ctx := context.Background()

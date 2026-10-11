@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -56,9 +57,7 @@ func setupAggregationTest(t *testing.T) (
 	*db.Database,
 ) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	// Per-test isolated clone: the live InteractionRecorder worker drains a
 	// private river_job, and the fixed chat/message IDs these tests use no

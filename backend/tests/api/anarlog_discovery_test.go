@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -33,10 +33,7 @@ type discoveryTestEnv struct {
 func setupDiscoveryEnv(t *testing.T) *discoveryTestEnv {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	ctx := context.Background()
 	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPath()))
 

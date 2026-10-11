@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -25,9 +26,7 @@ import (
 
 func setupSkipAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactRepository, func()) {
 	t.Helper()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 	ctx := context.Background()
 	database, err := db.NewDatabase(ctx, config.DatabaseConfig{
 		URL: os.Getenv("DATABASE_URL"), MaxConns: 8, MinConns: 1,
@@ -52,9 +51,7 @@ func setupSkipAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactRepositor
 }
 
 func TestContactAPI_SkipAndUndo(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	router, contactRepo, cleanup := setupSkipAPIRouter(t)
 	defer cleanup()

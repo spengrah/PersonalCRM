@@ -15,10 +15,10 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"personal-crm/backend/tests/testsupport"
 	"runtime"
 	"testing"
 
@@ -59,9 +59,7 @@ func migrationsPathForTest() string {
 // starts up-to-date.
 func newMigrateClone(t *testing.T) (cloneURL, migrationsPath string) {
 	t.Helper()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 	return cloneURL, migrationsPathForTest()
@@ -153,7 +151,7 @@ func TestMigrateCheckDirtyExit1(t *testing.T) {
 	require.Error(t, err, "a dirty DB must surface as an operational error")
 	require.ErrorIs(t, err, db.ErrDirtyMigration, "dirty error must wrap ErrDirtyMigration")
 	var ee exitErr
-	require.False(t, errors.As(err, &ee), "a dirty DB must map to exit 1, NOT exitErr{code:2}")
+	require.NotErrorAs(t, err, &ee, "a dirty DB must map to exit 1, NOT exitErr{code:2}")
 }
 
 // rollAppDownOne rolls the golang-migrate app schema down by exactly one

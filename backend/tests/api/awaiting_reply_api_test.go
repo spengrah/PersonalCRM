@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -22,9 +23,7 @@ import (
 // spec: CON-005.live-contact-flag, CON-005.list-entries-carry-flag
 // spec: CON-018.followup-filter-closed-set
 func TestContactAPI_FourConsumersAgree(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, contactRepo, _, cleanup := setupAwaitingReplyAPIRouter(t)

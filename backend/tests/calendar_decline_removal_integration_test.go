@@ -16,7 +16,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -50,10 +50,7 @@ type declineTestEnv struct {
 
 func newDeclineTestEnv(t *testing.T, ctx context.Context) *declineTestEnv {
 	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	// Provision schema explicitly (CI has bare PostgreSQL without a
 	// pre-existing schema) for parity with sibling integration tests and the
 	// documented gotcha; idempotent under the package TestMain harness.
@@ -155,9 +152,7 @@ func (e *declineTestEnv) runDecline(t *testing.T, contactID uuid.UUID, sourceRef
 
 // Test 5: consumer-direct soft-delete + recompute.
 func TestIntegration_CalendarDecline_SoftDeletesAndRecomputes(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -190,9 +185,7 @@ func TestIntegration_CalendarDecline_SoftDeletesAndRecomputes(t *testing.T) {
 
 // Test 6(a): NULL-out (sourced + none remain) + contact_by from created_at.
 func TestIntegration_CalendarDecline_NullOutWithCadenceFallback(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -224,9 +217,7 @@ func TestIntegration_CalendarDecline_NullOutWithCadenceFallback(t *testing.T) {
 
 // Test 6(b): cadence-unset variant → contact_by left as-is (NULL).
 func TestIntegration_CalendarDecline_NoCadence_ContactByStaysNil(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -250,9 +241,7 @@ func TestIntegration_CalendarDecline_NoCadence_ContactByStaysNil(t *testing.T) {
 // (middle) live; remove the mutual; last_outreach_at rolls to the outbound
 // time, the non-outbound columns roll to the inbound time.
 func TestIntegration_CalendarDecline_PerDirectionRollback(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -308,9 +297,7 @@ func TestIntegration_CalendarDecline_PerDirectionRollback(t *testing.T) {
 // Test 6(d): PROVENANCE GUARD — a creation-set last_contacted (no backing
 // interaction, distinct instant from the gcal occurred_at) is NOT erased.
 func TestIntegration_CalendarDecline_PreservesCreationValue(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -349,9 +336,7 @@ func TestIntegration_CalendarDecline_PreservesCreationValue(t *testing.T) {
 // Test 6(e): PROVENANCE GUARD — a Todoist/user contact_by override is
 // preserved even when the gcal interaction sourced last_contacted.
 func TestIntegration_CalendarDecline_PreservesContactByOverride(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -385,9 +370,7 @@ func TestIntegration_CalendarDecline_PreservesContactByOverride(t *testing.T) {
 // Test 6(f): contact_by correctly rolled back when it still reflects the
 // removed interaction (no override since).
 func TestIntegration_CalendarDecline_RollsBackContactByWhenNoOverride(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -422,9 +405,7 @@ func TestIntegration_CalendarDecline_RollsBackContactByWhenNoOverride(t *testing
 // Test 6(g): forward-writer parity — the recomputed contact_by equals what
 // the forward path would store for the equivalent base+cadence.
 func TestIntegration_CalendarDecline_ContactByForwardWriterParity(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -453,9 +434,7 @@ func TestIntegration_CalendarDecline_ContactByForwardWriterParity(t *testing.T) 
 
 // Test 7: replay — delivering the same decline twice is a safe no-op.
 func TestIntegration_CalendarDecline_ReplayIsNoOp(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -478,9 +457,7 @@ func TestIntegration_CalendarDecline_ReplayIsNoOp(t *testing.T) {
 // Test 8(a): attended-after-delete skip-when-deleted — calendar.attended whose
 // backing calendar_event was deleted → no interaction written.
 func TestIntegration_AttendedAfterDelete_SkipsInsert(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -507,9 +484,7 @@ func TestIntegration_AttendedAfterDelete_SkipsInsert(t *testing.T) {
 // without sleeps. Then the decline DELETE soft-deletes the just-written
 // interaction; and the reverse order (decline-first) skips the attended insert.
 func TestIntegration_AttendedAfterDelete_LockSerialization(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -568,9 +543,7 @@ func TestIntegration_AttendedAfterDelete_LockSerialization(t *testing.T) {
 // TestCalendarAPI_CancelledEventsExcluded in
 // backend/tests/api/calendar_api_test.go.
 func TestIntegration_CalendarEvent_HardDeleteReadBack(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -617,9 +590,7 @@ func TestIntegration_CalendarEvent_HardDeleteReadBack(t *testing.T) {
 // blocked (its lock probe from a third tx conflicts), commit A; B unblocks and
 // its aggregate must include A's interaction.
 func TestIntegration_CalendarDecline_RecomputeSeesConcurrentInteraction(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)
@@ -701,9 +672,7 @@ func TestIntegration_CalendarDecline_RecomputeSeesConcurrentInteraction(t *testi
 // regression). Publishing both an attended and a declined event for the same
 // internal UUID + contact yields TWO distinct event-log rows.
 func TestIntegration_DeclineSourceID_CoexistsWithAttended(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	e := newDeclineTestEnv(t, ctx)

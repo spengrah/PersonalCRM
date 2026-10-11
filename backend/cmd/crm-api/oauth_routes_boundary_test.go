@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/api"
@@ -215,9 +215,7 @@ var wiringTodoistOAuthRouteSet = []string{
 // route sits inside it (keyless is 401, keyed proceeds).
 func TestOAuthRouteWiring_AuthBoundary(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	cfg := oauthWiringConfig(t)
 	cfg.Features.EnableExternalSync = true
@@ -293,9 +291,7 @@ func TestOAuthRouteWiring_AuthBoundary(t *testing.T) {
 // config, and registerRoutes must translate those nils into absent routes.
 func TestOAuthRouteWiring_ProviderGating(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Run("external sync enabled with both providers configured registers both full route sets", func(t *testing.T) {
 		// spec: SET-005

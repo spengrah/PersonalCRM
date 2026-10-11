@@ -21,6 +21,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -40,9 +41,7 @@ import (
 // is the phase-5 go-live acceptance test.
 func TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCadence(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	// Per-test isolated clone: the live email consumer + scheduler sweep
 	// drain a private river_job.
 	ctx := context.Background()

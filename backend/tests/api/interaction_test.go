@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -112,13 +113,7 @@ func deleteInteractionTestContact(t *testing.T, router *gin.Engine, contactID st
 }
 
 func TestInteraction_CreateAndList(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
@@ -205,20 +200,14 @@ func TestInteraction_CreateAndList(t *testing.T) {
 		assert.Equal(t, "mutual", coffeeRow["direction"]) // create passed no direction; manual default is mutual
 
 		// Check pagination meta
-		assert.NotNil(t, response.Meta)
-		assert.NotNil(t, response.Meta.Pagination)
+		require.NotNil(t, response.Meta)
+		require.NotNil(t, response.Meta.Pagination)
 		assert.GreaterOrEqual(t, response.Meta.Pagination.Total, int64(2))
 	})
 }
 
 func TestInteraction_ManualDeduplication(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
@@ -264,13 +253,7 @@ func TestInteraction_ManualDeduplication(t *testing.T) {
 }
 
 func TestInteraction_SoftDelete(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
@@ -333,13 +316,7 @@ func TestInteraction_SoftDelete(t *testing.T) {
 }
 
 func TestInteraction_UpdatesLastContacted(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
@@ -376,13 +353,7 @@ func TestInteraction_UpdatesLastContacted(t *testing.T) {
 }
 
 func TestInteraction_NonExistentContact(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
@@ -424,13 +395,7 @@ func TestInteraction_NonExistentContact(t *testing.T) {
 }
 
 func TestInteraction_FutureDateRejected(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)
@@ -465,13 +430,7 @@ func TestInteraction_FutureDateRejected(t *testing.T) {
 // asserts only `Total >= 2` on an unpaginated read, which is a one-sided bound —
 // it keeps passing if later pages vanish or the total is wrong.
 func TestInteraction_ListPaginatesAWholeHistory(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupInteractionTestRouter(t)

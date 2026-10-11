@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/repository"
@@ -118,12 +118,7 @@ func findSuggestionItemIndex(items []suggestionItem, kind, id string) int {
 // in full above the fold; paginating to page 2 must never repeat it.
 // spec: IMP-022.method-suggestions-ride-top
 func TestImportSuggestionsAPI_MethodGroupOnlyOnFirstPage(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
@@ -173,12 +168,7 @@ func TestImportSuggestionsAPI_MethodGroupOnlyOnFirstPage(t *testing.T) {
 // itself, not the shared sort helper.
 // spec: IMP-022.contact-candidates-follow-confidence
 func TestImportSuggestionsAPI_CandidatesRankedAndPaginated(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
@@ -268,12 +258,7 @@ func TestImportSuggestionsAPI_CandidatesRankedAndPaginated(t *testing.T) {
 // an ordinary source offers all three. Asserted on the literal wire key.
 // spec: IMP-022.each-candidate-declares-server
 func TestImportSuggestionsAPI_CandidateAllowedActionsPerSource(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, _, _, cleanup := setupImportTestRouter()

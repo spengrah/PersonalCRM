@@ -9,7 +9,7 @@ package main
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -82,9 +82,7 @@ func newWireWhatsAppHarness(t *testing.T, mutate func(*config.Config)) wireWhats
 // to false would have landed with everything green.
 func TestWireWhatsApp_TurnsTheFeatureOn(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	h := newWireWhatsAppHarness(t, func(c *config.Config) {
 		c.Features.EnableExternalSync = true
@@ -134,9 +132,7 @@ func TestWireWhatsApp_TurnsTheFeatureOn(t *testing.T) {
 // WhatsApp-disabled deployment gains no manager, no worker and no periodic.
 func TestWireWhatsApp_RegistersNothingWhenDisabled(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	h := newWireWhatsAppHarness(t, func(c *config.Config) {})
 

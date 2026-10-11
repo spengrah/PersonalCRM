@@ -14,6 +14,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -119,9 +120,7 @@ func (e *applyInteractionEnv) seedContact(t *testing.T, cadence string) *reposit
 // "todoist not configured; skipping create" WARN log lines.
 func TestIntegration_ApplyInteraction_NilEnvelope_DoesNotPanic(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newApplyInteractionEnv(t, nil)
 	defer cleanup()
 	ctx := context.Background()
@@ -152,9 +151,7 @@ func TestIntegration_ApplyInteraction_NilEnvelope_DoesNotPanic(t *testing.T) {
 // work — cadence advance, etc.).
 func TestIntegration_ApplyInteraction_TodoistUnconfigured_NoRowNoRollback(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newApplyInteractionEnv(t, consumer.ErrTodoistUnconfigured)
 	defer cleanup()
 	ctx := context.Background()
@@ -186,9 +183,7 @@ func TestIntegration_ApplyInteraction_TodoistUnconfigured_NoRowNoRollback(t *tes
 // doesn't silently swallow the state.
 func TestIntegration_ApplyInteraction_SettingsError_PropagatesRollback(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newApplyInteractionEnv(t, errors.New("transient 503"))
 	defer cleanup()
 	ctx := context.Background()

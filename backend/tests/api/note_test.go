@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
@@ -117,14 +118,7 @@ func deleteTestContact(t *testing.T, router *gin.Engine, contactID string) {
 }
 
 func TestNoteAPI_GetContactNotepad(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupNoteTestRouter()
@@ -238,14 +232,7 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 }
 
 func TestNoteAPI_SaveContactNotepad(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupNoteTestRouter()
@@ -545,14 +532,7 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 }
 
 func TestNoteAPI_LazyCreationPattern(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupNoteTestRouter()

@@ -3,8 +3,8 @@ package tests
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -25,13 +25,7 @@ import (
 // (gotcha table).
 func setupCommsMessageTest(t *testing.T) (context.Context, *repository.CommsMessageRepository, *repository.ContactRepository, *repository.ContactMethodRepository) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -239,7 +233,7 @@ func TestCommsMessageRepository_GetMessage_NotFound(t *testing.T) {
 
 	_, err := repo.GetMessage(ctx, repository.InteractionSourceEmail, "<missing-"+suffix+">", contact.ID)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound, got %v", err)
+	assert.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound, got %v", err)
 }
 
 func TestCommsMessageRepository_UpsertIdempotentSameAccount(t *testing.T) {
@@ -557,13 +551,7 @@ func TestCommsMessageRepository_ListEmailIdentitiesForSync(t *testing.T) {
 // HARD-delete the seeded interaction before closing (the 059 down-migration
 // data-loss guard counts rows regardless of deleted_at).
 func TestInteractionSourceCheck_AcceptsEmail(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -779,9 +767,9 @@ func TestSoftDeleteByExternalID_AllFannedRows(t *testing.T) {
 
 	// Both rows now invisible to the deleted_at-filtered GetMessage.
 	_, err = repo.GetMessage(ctx, src, externalID, contactA.ID)
-	assert.True(t, errors.Is(err, db.ErrNotFound))
+	assert.ErrorIs(t, err, db.ErrNotFound)
 	_, err = repo.GetMessage(ctx, src, externalID, contactB.ID)
-	assert.True(t, errors.Is(err, db.ErrNotFound))
+	assert.ErrorIs(t, err, db.ErrNotFound)
 
 	// Idempotent: re-deleting affects 0 rows.
 	n, err = repo.SoftDeleteByExternalID(ctx, src, externalID, now)
@@ -812,7 +800,7 @@ func TestGetLatestByExternalID_NewestFirstAndNotFound(t *testing.T) {
 	assert.Equal(t, externalID, got.ExternalID)
 
 	_, err = repo.GetLatestByExternalID(ctx, src, "spaces/AAAA/messages/missing-"+suffix)
-	assert.True(t, errors.Is(err, db.ErrNotFound))
+	assert.ErrorIs(t, err, db.ErrNotFound)
 }
 
 // TestBackfillParticipantNames_AdditiveMergeAndIdempotent pins the additive

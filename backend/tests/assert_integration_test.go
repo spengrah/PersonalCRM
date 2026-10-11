@@ -4,6 +4,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -86,9 +87,7 @@ func newAssertHarness(t *testing.T, ctx context.Context) (*assertHarness, contex
 // one-connection pool that waits forever, and under concurrent asserts on a
 // normal pool every connection ends up held by a tx waiting for another.
 func TestAssert_SingleConnectionPool(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	h, ctx := newAssertHarness(t, ctx0())
 
@@ -210,9 +209,7 @@ func supersededSourceID(id uuid.UUID) string { return id.String() + ":superseded
 func rejectedSourceID(id uuid.UUID) string   { return id.String() + ":rejected" }
 
 func TestAssert_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	h, ctx := newAssertHarness(t, ctx0())
 
@@ -539,9 +536,7 @@ func ctx0() context.Context { return context.Background() }
 // TestAssert_Concurrency covers the race-protection cases (savepoint-recover +
 // advisory lock). Each runs concurrent top-level Assert calls (separate txs).
 func TestAssert_Concurrency(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	h, ctx := newAssertHarness(t, ctx0())
 
@@ -652,9 +647,7 @@ func TestAssert_Concurrency(t *testing.T) {
 // TestAssert_ValidTime covers the bi-temporal valid-time branches (future
 // successor + rollover, past-bounded backfill, present-edit cancellation).
 func TestAssert_ValidTime(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	h, ctx := newAssertHarness(t, ctx0())
 
@@ -1169,9 +1162,7 @@ func TestAssert_ValidTime(t *testing.T) {
 // TestAssert_Lifecycle covers the lifecycle-transition concurrency + same-value
 // accept-time behaviors the review surfaced.
 func TestAssert_Lifecycle(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	h, ctx := newAssertHarness(t, ctx0())
 
@@ -1387,9 +1378,7 @@ func TestAssert_Lifecycle(t *testing.T) {
 // TestAssert_Validation covers the DB-dependent validation rejections (the pure
 // ones are in the service-package unit tests).
 func TestAssert_Validation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	h, ctx := newAssertHarness(t, ctx0())
 

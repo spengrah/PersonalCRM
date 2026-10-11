@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 	"time"
@@ -220,9 +221,7 @@ func (h *tagMigrationHarness) findTaggedAs(t *testing.T, ctx context.Context, su
 // input. Each subtest builds a fresh harness, seeds only its own tags, and cleans
 // them up, so the global tag set during a subtest is just that subtest's tags.
 func TestTagMigration_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	ctx := context.Background()
 
 	t.Run("migrates tags + contact_tags with user provenance and color", func(t *testing.T) {

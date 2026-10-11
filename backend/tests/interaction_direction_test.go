@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -21,10 +21,7 @@ import (
 func setupDirectionTestDeps(t *testing.T) (*service.ContactService, *repository.ContactRepository, *repository.ContactTaskRepository, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 	ctx := context.Background()
@@ -87,11 +84,11 @@ func TestRecordInteraction_DirectionOutbound(t *testing.T) {
 	// Verify: last_contacted should NOT have changed (outbound doesn't reset cadence clock)
 	updated, err := contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
-	assert.NotNil(t, updated.LastContacted)
+	require.NotNil(t, updated.LastContacted)
 	assert.Equal(t, initialTime.UTC(), updated.LastContacted.UTC(), "outbound should not change last_contacted")
 
 	// Verify: last_outreach_at should be updated
-	assert.NotNil(t, updated.LastOutreachAt)
+	require.NotNil(t, updated.LastOutreachAt)
 	assert.Equal(t, outboundTime.UTC(), updated.LastOutreachAt.UTC())
 
 	// Verify: last_response_at and last_interaction_at should NOT be set by outbound
@@ -131,13 +128,13 @@ func TestRecordInteraction_DirectionMutual(t *testing.T) {
 	// Verify: all fields should be updated
 	updated, err := contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
-	assert.NotNil(t, updated.LastContacted)
+	require.NotNil(t, updated.LastContacted)
 	assert.Equal(t, mutualTime.UTC(), updated.LastContacted.UTC(), "mutual should update last_contacted")
-	assert.NotNil(t, updated.LastOutreachAt)
+	require.NotNil(t, updated.LastOutreachAt)
 	assert.Equal(t, mutualTime.UTC(), updated.LastOutreachAt.UTC())
-	assert.NotNil(t, updated.LastResponseAt)
+	require.NotNil(t, updated.LastResponseAt)
 	assert.Equal(t, mutualTime.UTC(), updated.LastResponseAt.UTC())
-	assert.NotNil(t, updated.LastInteractionAt)
+	require.NotNil(t, updated.LastInteractionAt)
 	assert.Equal(t, mutualTime.UTC(), updated.LastInteractionAt.UTC())
 	// contact_by should be recalculated
 	assert.NotNil(t, updated.ContactBy)
@@ -174,12 +171,12 @@ func TestRecordInteraction_DirectionInbound(t *testing.T) {
 	// Verify: last_contacted should be updated (inbound resets cadence clock)
 	updated, err := contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
-	assert.NotNil(t, updated.LastContacted)
+	require.NotNil(t, updated.LastContacted)
 	assert.Equal(t, inboundTime.UTC(), updated.LastContacted.UTC(), "inbound should update last_contacted")
 	// last_outreach_at should NOT be set by inbound
 	assert.Nil(t, updated.LastOutreachAt, "inbound should not set last_outreach_at")
 	// last_response_at should be updated
-	assert.NotNil(t, updated.LastResponseAt)
+	require.NotNil(t, updated.LastResponseAt)
 	assert.Equal(t, inboundTime.UTC(), updated.LastResponseAt.UTC())
 }
 

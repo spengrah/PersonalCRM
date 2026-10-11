@@ -14,7 +14,7 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"sync"
 	"testing"
 	"time"
@@ -82,9 +82,7 @@ func newJobSampleTestDB(t *testing.T, ctx context.Context) (*db.Database, *confi
 
 func TestJobSampleRecorder_EndToEnd(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	// Base ctx for Start — NEVER a timeout-derived ctx (River silently stops
 	// fetching if its fetch-loop ctx cancels).
@@ -220,9 +218,7 @@ func (w *jsSnoozeWorker) Work(_ context.Context, job *river.Job[jsSnoozeArgs]) e
 // reuses the decremented attempt across snoozes; only attempted_at differs).
 func TestJobSampleRecorder_RepeatedSnooze(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	database, cfg := newJobSampleTestDB(t, ctx)

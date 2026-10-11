@@ -4,7 +4,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -23,12 +23,7 @@ import (
 // database no sibling writes to; and it freezes the process-global app clock
 // via accelerated.SetNowForTest, which a parallel sibling could observe.
 func TestSyncLogTrim_Isolated(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cloneURL, drop := testdb.NewEphemeralClone(t)

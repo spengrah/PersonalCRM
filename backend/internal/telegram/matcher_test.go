@@ -221,7 +221,7 @@ func TestOnPeerLinked_WithUsername(t *testing.T) {
 	// Should call MatchOrCreate with KnownContactID to link identity
 	require.Len(t, identityMock.calls, 1)
 	assert.Equal(t, "alice", identityMock.calls[0].RawIdentifier)
-	assert.NotNil(t, identityMock.calls[0].KnownContactID)
+	require.NotNil(t, identityMock.calls[0].KnownContactID)
 	assert.Equal(t, contactID, *identityMock.calls[0].KnownContactID)
 }
 

@@ -15,7 +15,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
@@ -59,9 +59,7 @@ var whatsAppRouteSetExpected = []string{
 
 func TestWhatsAppRouteWiring_FeatureGating(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Run("disabled registers no whatsapp routes", func(t *testing.T) {
 		// spec: WHA-007.status-absent-when-feature-disabled

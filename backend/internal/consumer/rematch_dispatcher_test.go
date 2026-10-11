@@ -127,7 +127,7 @@ func TestRematchDispatcherWorker_Work_BudgetExhausted_CeilingCancels(t *testing.
 	err := worker.Work(context.Background(), job)
 
 	var snooze *river.JobSnoozeError
-	require.False(t, errors.As(err, &snooze), "at the ceiling Work must stop snoozing")
+	require.NotErrorAs(t, err, &snooze, "at the ceiling Work must stop snoozing")
 	var cancel *river.JobCancelError
 	require.ErrorAs(t, err, &cancel, "at the ceiling Work must cancel the job (terminal, no retries)")
 

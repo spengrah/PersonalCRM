@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 	"time"
@@ -68,10 +68,7 @@ type ingestTestSetup struct {
 func setupIngestTestRouter(t *testing.T, enableIngest bool) *ingestTestSetup {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	// Migrations are applied once by TestMain.
@@ -208,9 +205,7 @@ func uniqueIngestSource(prefix string) string {
 
 // spec: ING-001.endpoint-registered-when-enabled, ING-007.internally-published-kinds-accepted, ING-004.kind-required-must-known
 func TestIngest_ValidBatch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -241,9 +236,7 @@ func TestIngest_ValidBatch(t *testing.T) {
 
 // spec: ING-001.request-without-host-header
 func TestIngest_AuthFailure_MissingKey(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	batch := handlers.IngestBatchRequest{
@@ -258,9 +251,7 @@ func TestIngest_AuthFailure_MissingKey(t *testing.T) {
 
 // spec: ING-001.request-without-host-header
 func TestIngest_AuthFailure_InvalidKey(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	batch := handlers.IngestBatchRequest{
@@ -275,9 +266,7 @@ func TestIngest_AuthFailure_InvalidKey(t *testing.T) {
 
 // spec: ING-002.malformed-json-body-rejected
 func TestIngest_MalformedJSON(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	w := postIngest(t, setup.router, setup.apiKey, []byte("{not json"))
@@ -290,9 +279,7 @@ func TestIngest_MalformedJSON(t *testing.T) {
 // errors[] — NOT 400'd wholesale at gin's bind step.
 // spec: ING-003.each-rejected-event-appears
 func TestIngest_MissingFields(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -368,9 +355,7 @@ func TestIngest_MissingFields(t *testing.T) {
 // with all-zero payload fields.
 // spec: ING-003.http-response-success-200, ING-004.payload-required-size-bounded
 func TestIngest_NullPayload(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	source := uniqueIngestSource("null-payload")
@@ -399,9 +384,7 @@ func TestIngest_NullPayload(t *testing.T) {
 
 // spec: ING-004.kind-required-must-known
 func TestIngest_UnknownKind(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	source := uniqueIngestSource("unknown-kind")
@@ -427,9 +410,7 @@ func TestIngest_UnknownKind(t *testing.T) {
 
 // spec: ING-004.payload-required-size-bounded
 func TestIngest_PayloadStructurallyInvalid(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 	source := uniqueIngestSource("payload-invalid")
@@ -481,9 +462,7 @@ func padUniqueTo(n int) string {
 
 // spec: ING-004.source-required-length-bounded
 func TestIngest_SourceLengthBound(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -525,9 +504,7 @@ func TestIngest_SourceLengthBound(t *testing.T) {
 
 // spec: ING-004.source-required-length-bounded
 func TestIngest_SourceIDLengthBound(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -581,9 +558,7 @@ func TestIngest_SourceIDLengthBound(t *testing.T) {
 //
 // spec: ING-004.payload-required-size-bounded
 func TestIngest_PayloadSizeBound(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -668,9 +643,7 @@ func TestIngest_PayloadSizeBound(t *testing.T) {
 
 // spec: ING-002.batch-over-max-count-rejected
 func TestIngest_BatchTooLarge(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -689,9 +662,7 @@ func TestIngest_BatchTooLarge(t *testing.T) {
 
 // spec: ING-002.empty-events-array-rejected
 func TestIngest_EmptyBatch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -704,9 +675,7 @@ func TestIngest_EmptyBatch(t *testing.T) {
 }
 
 func TestIngest_DuplicateInBatch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -732,9 +701,7 @@ func TestIngest_DuplicateInBatch(t *testing.T) {
 }
 
 func TestIngest_DuplicateAcrossBatches(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -772,9 +739,7 @@ func TestIngest_DuplicateAcrossBatches(t *testing.T) {
 // NULL source_ids never collide. Two events with empty source_id submitted
 // as two separate requests both insert.
 func TestIngest_NullSourceID_NotDeduped(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -806,9 +771,7 @@ func TestIngest_NullSourceID_NotDeduped(t *testing.T) {
 // v1 group's API-key middleware.
 // spec: ING-001.endpoint-registered-when-enabled
 func TestIngest_GateDisabled_Returns404(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, false)
 	batch := handlers.IngestBatchRequest{
@@ -824,9 +787,7 @@ func TestIngest_GateDisabled_Returns404(t *testing.T) {
 // the flag-off + no-key case returns 404, NOT 401. An unregistered route
 // bypasses the v1 group's middleware chain entirely.
 func TestIngest_GateDisabled_NoKey_StillReturns404(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, false)
 	body := []byte(`{"events":[]}`)
@@ -839,9 +800,7 @@ func TestIngest_GateDisabled_NoKey_StillReturns404(t *testing.T) {
 
 // spec: ING-003.response-reports-separate-accepted
 func TestIngest_MixedBatch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -886,9 +845,7 @@ func TestIngest_MixedBatch(t *testing.T) {
 // JSON decode, before any per-field validation runs.
 // spec: ING-002.body-over-size-cap
 func TestIngest_BodyTooLarge_Returns413(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -911,9 +868,7 @@ func TestIngest_BodyTooLarge_Returns413(t *testing.T) {
 // with a key-presence check.
 // spec: ING-035.field-omitted-daemons-predate
 func TestIngest_NeedsAttentionKeyAbsentWhenNoAttention(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 
@@ -972,9 +927,7 @@ func (f *failingRepo) FindEventBySource(ctx context.Context, source, sourceID st
 // and we assert zero rows landed in the event table for this batch's
 // source prefix.
 func TestIngest_MidTxRollback_RollsBack_And_Returns500(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	setup := setupIngestTestRouter(t, true)
 

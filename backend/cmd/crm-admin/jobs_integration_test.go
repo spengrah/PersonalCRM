@@ -15,7 +15,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strconv"
 	"strings"
 	"testing"
@@ -93,12 +93,7 @@ func waitForJobState(t *testing.T, ctx context.Context, queries *db.Queries, id 
 
 func TestListAndRetryJobs_Integration(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	database, cfg := newJobsTestDB(t, ctx)

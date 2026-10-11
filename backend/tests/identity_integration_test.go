@@ -3,7 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -19,14 +19,7 @@ import (
 
 // TestIdentityRepository_Integration tests the identity repository with a real database
 func TestIdentityRepository_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()
@@ -152,7 +145,7 @@ func TestIdentityRepository_Integration(t *testing.T) {
 			MatchConfidence: &confidence,
 		})
 		require.NoError(t, err)
-		assert.NotNil(t, linked.ContactID)
+		require.NotNil(t, linked.ContactID)
 		assert.Equal(t, contact.ID, *linked.ContactID)
 		assert.Equal(t, repository.MatchTypeManual, linked.MatchType)
 
@@ -299,14 +292,7 @@ func TestIdentityRepository_Integration(t *testing.T) {
 
 // TestIdentityService_Integration tests identity matching with real database
 func TestIdentityService_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()
@@ -381,7 +367,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		require.NotNil(t, result)
 
 		// Should match the contact
-		assert.NotNil(t, result.ContactID)
+		require.NotNil(t, result.ContactID)
 		assert.Equal(t, contact.ID, *result.ContactID)
 		assert.Equal(t, repository.MatchTypeExact, result.MatchType)
 		assert.False(t, result.Cached)
@@ -450,7 +436,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		require.NotNil(t, result)
 
 		// Should link directly without searching
-		assert.NotNil(t, result.ContactID)
+		require.NotNil(t, result.ContactID)
 		assert.Equal(t, contact.ID, *result.ContactID)
 		assert.Equal(t, repository.MatchTypeExact, result.MatchType)
 		assert.False(t, result.Cached)
@@ -508,7 +494,7 @@ func TestIdentityService_Integration(t *testing.T) {
 			require.NoError(t, err, "failed for format: %s", phoneFormat)
 
 			// Should match despite different formats
-			assert.NotNil(t, result.ContactID, "should match for format: %s", phoneFormat)
+			require.NotNil(t, result.ContactID, "should match for format: %s", phoneFormat)
 			assert.Equal(t, contact.ID, *result.ContactID, "should match correct contact for format: %s", phoneFormat)
 
 			// Clean up
@@ -537,7 +523,7 @@ func TestIdentityService_Integration(t *testing.T) {
 		// Manually link
 		linked, err := identityService.LinkIdentity(ctx, result.Identity.ID, contact.ID)
 		require.NoError(t, err)
-		assert.NotNil(t, linked.ContactID)
+		require.NotNil(t, linked.ContactID)
 		assert.Equal(t, contact.ID, *linked.ContactID)
 		assert.Equal(t, repository.MatchTypeManual, linked.MatchType)
 
@@ -636,14 +622,7 @@ func TestIdentityService_Integration(t *testing.T) {
 // sub-test opens its own tx and rolls it back so the valid-input writes
 // never persist into the shared personal_crm_test DB.
 func TestIdentityService_NormalizationPolicy_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()

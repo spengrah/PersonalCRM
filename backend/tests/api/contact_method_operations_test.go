@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"sort"
 	"strings"
 	"sync"
@@ -45,12 +46,7 @@ var (
 
 func methodOpsShared(t *testing.T) (*db.Database, *gin.Engine) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	methodOpsSharedOnce.Do(func() {
 		cfg := config.TestConfig()

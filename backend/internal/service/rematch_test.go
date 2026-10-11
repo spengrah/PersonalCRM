@@ -12,6 +12,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 )
 
 // stubHandler records invocations and returns a configurable matched count / err.
@@ -397,7 +398,8 @@ func TestRun_RetryAfterFailure_ResetsState(t *testing.T) {
 	if err := svc.Run(context.Background(), jobID, contactID, methods); !errors.Is(err, errBoom) {
 		t.Fatalf("first Run should fail with boom, got %v", err)
 	}
-	firstSnap, _ := svc.GetJob(jobID)
+	firstSnap, err := svc.GetJob(jobID)
+	require.NoError(t, err)
 	if firstSnap.Status != JobStatusFailed {
 		t.Fatalf("expected Failed after first run, got %s", firstSnap.Status)
 	}
@@ -407,7 +409,8 @@ func TestRun_RetryAfterFailure_ResetsState(t *testing.T) {
 	if err := svc.Run(context.Background(), jobID, contactID, methods); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
-	final, _ := svc.GetJob(jobID)
+	final, err := svc.GetJob(jobID)
+	require.NoError(t, err)
 	if final.Status != JobStatusCompleted {
 		t.Fatalf("expected Completed after retry, got %s", final.Status)
 	}
@@ -456,11 +459,13 @@ func TestRegisterPending_Idempotent(t *testing.T) {
 	contactID := uuid.New()
 
 	svc.RegisterPending(jobID, contactID, []Method{{Type: "email", Value: "a@b.c"}})
-	first, _ := svc.GetJob(jobID)
+	first, err := svc.GetJob(jobID)
+	require.NoError(t, err)
 
 	// Second call with different methods should be a no-op.
 	svc.RegisterPending(jobID, contactID, []Method{{Type: "phone", Value: "+1"}})
-	second, _ := svc.GetJob(jobID)
+	second, err := svc.GetJob(jobID)
+	require.NoError(t, err)
 
 	if second.StartedAt != first.StartedAt {
 		t.Fatalf("second RegisterPending bumped StartedAt: %v vs %v", second.StartedAt, first.StartedAt)

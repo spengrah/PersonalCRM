@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -18,9 +19,7 @@ import (
 )
 
 func TestPairingTokenJanitor_DeletesExpired(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	database, _ := newAPISharedTestDB(t, ctx)

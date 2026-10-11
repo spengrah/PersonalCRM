@@ -5,6 +5,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -61,9 +62,7 @@ func seedTieBreakTrio(ctx context.Context, t *testing.T, database *db.Database, 
 // order from the descending insertion order, under every axis this test
 // walks.
 func TestContactList_DeterministicTieBreak(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	ctx := context.Background()
@@ -138,9 +137,7 @@ func TestContactList_DeterministicTieBreak(t *testing.T) {
 // filter intersection return empty from all three queries, which is a
 // vacuous pass, not a real one.
 func TestContactList_TripleParity(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	ctx := context.Background()

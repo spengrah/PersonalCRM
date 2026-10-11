@@ -25,9 +25,7 @@ import (
 // t.Parallel().
 
 func TestContactNodeDualWrite_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	database, ctx := graphTestDB(t)

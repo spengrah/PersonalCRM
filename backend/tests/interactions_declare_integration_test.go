@@ -5,7 +5,6 @@ package tests
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -27,9 +26,7 @@ import (
 func requireInteractionsDeclareIntegration(t *testing.T) {
 	t.Helper()
 	testsupport.RequireLongTests(t)
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	testsupport.RequireDatabase(t)
 }
 
 func interactionContentService(database *db.Database) *service.InteractionContentService {
@@ -149,9 +146,9 @@ func TestInteractionsDeclare_RowWorld(t *testing.T) {
 	require.NotEqual(t, uuid.Nil, gcalRow.ID)
 	gcal := enriched[gcalRow.ID]
 	require.NotNil(t, gcal.Event)
-	assert.NotNil(t, gcal.Event.Location)
+	require.NotNil(t, gcal.Event.Location)
 	assert.NotEmpty(t, *gcal.Event.Location)
-	assert.NotNil(t, gcal.Event.HTMLLink)
+	require.NotNil(t, gcal.Event.HTMLLink)
 	assert.NotEmpty(t, *gcal.Event.HTMLLink)
 
 	callRow := findDeclaredRow(t, rows, seeded.Entities["call-row"].ID)

@@ -3,6 +3,7 @@
 package tests
 
 import (
+	"personal-crm/backend/tests/testsupport"
 	"sort"
 	"testing"
 
@@ -80,9 +81,7 @@ var expectedCuratedCatalog = map[string]expectedCuratedPredicate{
 var expectedCuratedSubtypes = []string{"organization", "place", "topic", "tag"}
 
 func TestPredicateCatalog_Seed_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	database, ctx := graphTestDB(t)

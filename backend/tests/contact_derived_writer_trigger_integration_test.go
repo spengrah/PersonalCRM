@@ -14,7 +14,6 @@ package tests
 
 import (
 	"context"
-	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -149,7 +148,7 @@ func assertRejected(t *testing.T, err error, column string) {
 	t.Helper()
 	require.Error(t, err)
 	var pgErr *pgconn.PgError
-	require.Truef(t, errors.As(err, &pgErr), "expected a *pgconn.PgError, got %v", err)
+	require.ErrorAsf(t, err, &pgErr, "expected a *pgconn.PgError, got %v", err)
 	assert.Equal(t, pgerrcode.RaiseException, pgErr.Code)
 	assert.Contains(t, pgErr.Message, "contact."+column)
 }

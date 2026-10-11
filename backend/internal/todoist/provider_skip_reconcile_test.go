@@ -1,6 +1,7 @@
 package todoist
 
 import (
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -17,9 +18,7 @@ func skipReconcileUTCDate(base time.Time, offset int) time.Time {
 }
 
 func TestReconcile_AfterSkip_RedatesCadenceTaskToSkippedToDate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := setupDismissalTest(t)
 	defer cleanup()
 	cadenceName := "monthly"
@@ -57,9 +56,7 @@ func TestReconcile_AfterSkip_RedatesCadenceTaskToSkippedToDate(t *testing.T) {
 }
 
 func TestReconcile_AfterUndoPastDate_ClampsToToday(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := setupDismissalTest(t)
 	defer cleanup()
 	cadenceName := "monthly"

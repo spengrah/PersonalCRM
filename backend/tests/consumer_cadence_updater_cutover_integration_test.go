@@ -19,7 +19,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -39,10 +39,7 @@ import (
 
 func newCadenceUpdaterTestDB(t *testing.T) (*db.Database, func()) {
 	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -71,9 +68,7 @@ func applyInTx(t *testing.T, database *db.Database, fn func(tx pgx.Tx) error) {
 // that an outbound ApplyInteraction bumps ONLY last_outreach_at and leaves
 // last_contacted, last_response_at, contact_by untouched.
 func TestIntegration_CadenceUpdater_ApplyInteraction_Outbound_LiveDB(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
@@ -112,9 +107,7 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Outbound_LiveDB(t *testing.
 // TestIntegration_CadenceUpdater_ApplyInteraction_Mutual_ForwardOnly verifies
 // an older mutual ApplyInteraction cannot regress a newer last_contacted.
 func TestIntegration_CadenceUpdater_ApplyInteraction_Mutual_ForwardOnly(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
@@ -149,9 +142,7 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Mutual_ForwardOnly(t *testi
 // verifies the manual-source unconditional branch CAN backdate
 // last_contacted when the user submits a correction.
 func TestIntegration_CadenceUpdater_ApplyInteraction_Manual_UnconditionalBackdate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
@@ -189,9 +180,7 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Manual_UnconditionalBackdat
 // Guards against a regression where the cutover queries piggybacked
 // last_interaction_at on apply_last_contacted.
 func TestIntegration_CadenceUpdater_BulkApply_DoesNotBumpLastInteractionAt(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
@@ -243,9 +232,7 @@ func TestIntegration_CadenceUpdater_BulkApply_DoesNotBumpLastInteractionAt(t *te
 // TestIntegration_CadenceUpdater_BulkApply_ForwardMaxOnMerge verifies
 // MergeContacts' BulkApply path never regresses an existing field.
 func TestIntegration_CadenceUpdater_BulkApply_ForwardMaxOnMerge(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
@@ -285,9 +272,7 @@ func TestIntegration_CadenceUpdater_BulkApply_ForwardMaxOnMerge(t *testing.T) {
 // verifies the user-cadence-preference direct API can both clear and
 // backdate contact_by via the unconditional branch.
 func TestIntegration_CadenceUpdater_ApplyContactByOverride_ClearAndBackdate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
@@ -331,9 +316,7 @@ func TestIntegration_CadenceUpdater_ApplyContactByOverride_ClearAndBackdate(t *t
 // lets the inline recorder call and the queued river delivery of the
 // same event coexist safely).
 func TestIntegration_CadenceUpdater_HandleEvent_DuplicateClaim_NoOp(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
@@ -414,9 +397,7 @@ func TestIntegration_CadenceUpdater_HandleEvent_DuplicateClaim_NoOp(t *testing.T
 // TestIntegration_CadenceUpdater_ModeOff_NoWrite verifies mode=off
 // short-circuits cadence writes even with a valid envelope.
 func TestIntegration_CadenceUpdater_ModeOff_NoWrite(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
@@ -450,9 +431,7 @@ func TestIntegration_CadenceUpdater_ModeOff_NoWrite(t *testing.T) {
 // (end-to-end verification against a live DB, distinct from the unit tests
 // that assert on flags alone).
 func TestIntegration_CadenceUpdater_ContactBy_DerivedFromCadence(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()

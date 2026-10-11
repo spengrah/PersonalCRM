@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -20,10 +20,7 @@ import (
 func setupInteractionTestDeps(t *testing.T) (*service.ContactService, *repository.InteractionRepository, *repository.ContactRepository, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 	ctx := context.Background()
@@ -62,9 +59,7 @@ func createTestContactForInteraction(t *testing.T, contactRepo *repository.Conta
 }
 
 func TestRecordInteraction_SourceRefDedup(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	contactService, interactionRepo, contactRepo, cleanup := setupInteractionTestDeps(t)
@@ -122,9 +117,7 @@ func TestRecordInteraction_SourceRefDedup(t *testing.T) {
 }
 
 func TestRecordInteraction_ForwardOnlyLastContacted(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	contactService, _, contactRepo, cleanup := setupInteractionTestDeps(t)
@@ -171,9 +164,7 @@ func TestRecordInteraction_ForwardOnlyLastContacted(t *testing.T) {
 }
 
 func TestRecordInteraction_ManualAlwaysUpdates(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	contactService, _, contactRepo, cleanup := setupInteractionTestDeps(t)
@@ -201,9 +192,7 @@ func TestRecordInteraction_ManualAlwaysUpdates(t *testing.T) {
 }
 
 func TestRecordInteraction_NonExistentContact(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	contactService, _, _, cleanup := setupInteractionTestDeps(t)

@@ -5,6 +5,10 @@ run:
   # Hang backstop for cold package loading or constrained environments.
   # This is not the target runtime for the warm pre-push checks.
   timeout: 10m
+  # Lint the integration-tagged test files too; without the tag their hits are
+  # invisible. The few `!integration_testdb` stub files drop out of the run.
+  build-tags:
+    - integration_testdb
 
 linters:
   enable:
@@ -12,7 +16,24 @@ linters:
     - govet      # Go vet
     - errcheck   # Check error handling
     - errorlint  # Forbid err == SentinelErr; require errors.Is/As; require %w in fmt.Errorf
+    - testifylint  # Only the error-is-as checker (see settings)
+    - usetesting  # t.Context() instead of context.Background()/TODO() in tests
   settings:
+    testifylint:
+      disable-all: true
+      enable:
+        - error-is-as
+    usetesting:
+      context-background: true
+      context-todo: true
+      # Scope is contexts only; the other checks are off.
+      os-setenv: false
+      os-create-temp: false
+      os-mkdir-temp: false
+      os-temp-dir: false
+      os-chdir: false
+      oserrors-is-exist: false
+      oserrors-is-not-exist: false
     errorlint:
       # comparison: errors.Is over `err == ErrFoo`. errorf: %w over %v/%s for
       # error operands. asserts stays off (type assertions on errors).
@@ -30,6 +51,8 @@ linters:
           msg: 'StartRematchForContact is test-only; production rematch dispatch goes through events.Bus + RematchDispatcher'
         - pattern: '^time\.Sleep$'
           msg: 'time.Sleep ignores cancellation: select on ctx.Done() and time.After'
+        - pattern: '^db\.NewDatabase$'
+          msg: 'tests open databases through the shared test DB helper, not db.NewDatabase'
       # Legitimate time.Now exceptions use inline //nolint:forbidigo comments:
       # - backend/internal/accelerated/time.go (wrapper implementation)
       # - backend/internal/api/middleware.go (latency measurement)
@@ -47,6 +70,14 @@ linters:
       - path: 'internal/synthetic/'
         linters: [forbidigo]
         text: 'time\.Sleep'
+      # db.NewDatabase: banned in tests only; the files that define the shared
+      # test DB helpers open it.
+      - path-except: '_test\.go$'
+        linters: [forbidigo]
+        text: 'shared test DB helper'
+      - path: '(testdb[^/]*|synthetic_replay_integration|assert_integration|template_isolation_integration)_test\.go$'
+        linters: [forbidigo]
+        text: 'shared test DB helper'
 
 issues:
   max-issues-per-linter: 0

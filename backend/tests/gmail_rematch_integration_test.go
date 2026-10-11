@@ -35,6 +35,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"strconv"
 	"strings"
 	"testing"
@@ -80,9 +81,7 @@ type gmailRematchEnv struct {
 // gate scans them. Pass nil/empty to seed nothing (the no-op gate test).
 func newGmailRematchEnv(t *testing.T, accountIDs []string) *gmailRematchEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	// Per-test isolated clone: the live email consumer + rematch jobs drain
 	// a private river_job.
 	ctx := context.Background()

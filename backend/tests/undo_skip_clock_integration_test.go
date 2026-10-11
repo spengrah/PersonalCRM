@@ -4,6 +4,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -17,9 +18,7 @@ import (
 )
 
 func TestUndoSkipClock_RestoresFutureDate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)
@@ -40,9 +39,7 @@ func TestUndoSkipClock_RestoresFutureDate(t *testing.T) {
 }
 
 func TestUndoSkipClock_RestoresPastDateExactly(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)
@@ -63,9 +60,7 @@ func TestUndoSkipClock_RestoresPastDateExactly(t *testing.T) {
 }
 
 func TestUndoSkipClock_DoesNotReopenWindowOrReminder(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)
@@ -95,9 +90,7 @@ func TestUndoSkipClock_DoesNotReopenWindowOrReminder(t *testing.T) {
 }
 
 func TestUndoSkipClock_UnavailableOnceTodayReachesContactBy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	for _, offset := range []int{0, -1} {
@@ -120,9 +113,7 @@ func TestUndoSkipClock_UnavailableOnceTodayReachesContactBy(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByInboundWithoutClockMove(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)
@@ -148,9 +139,7 @@ func TestUndoSkipClock_ClearedByInboundWithoutClockMove(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByMutualWithClockMove(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)
@@ -172,9 +161,7 @@ func TestUndoSkipClock_ClearedByMutualWithClockMove(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByCadenceEdit(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)
@@ -196,9 +183,7 @@ func TestUndoSkipClock_ClearedByCadenceEdit(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByContactByOverride(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)
@@ -222,9 +207,7 @@ func TestUndoSkipClock_ClearedByContactByOverride(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByDeleteRollbackRecompute(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)
@@ -247,9 +230,7 @@ func TestUndoSkipClock_ClearedByDeleteRollbackRecompute(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByMerge(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)

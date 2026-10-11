@@ -37,9 +37,7 @@ import (
 // and returns the base URL plus an admin connection bound to t.Cleanup.
 func requireDB(t *testing.T) (baseURL string, admin *pgx.Conn) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("skipping DB-backed testdb test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	baseURL = envBaseURL()
 	if baseURL == "" {
 		t.Skip("skipping DB-backed testdb test; DATABASE_URL/TEST_DATABASE_URL not set")

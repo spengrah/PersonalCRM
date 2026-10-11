@@ -3,7 +3,7 @@ package todoist
 import (
 	"context"
 	"fmt"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"sync"
 	"testing"
@@ -122,10 +122,7 @@ type atomicTxTestEnv struct {
 func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once into the template; the per-package clone
 	// (testdb.SetupPackage in testmain_integration_test.go) inherits the

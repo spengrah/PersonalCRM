@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -28,10 +28,7 @@ import (
 func setupAwaitingReplyAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactRepository, *repository.ContactTaskRepository, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	database, err := db.NewDatabase(ctx, config.DatabaseConfig{
@@ -77,9 +74,7 @@ func setupAwaitingReplyAPIRouter(t *testing.T) (*gin.Engine, *repository.Contact
 
 // spec: CAD-023.each-entry-carries-pending-followup
 func TestOverdueAPI_DismissedFollowUpLeavesContactAwaitingReply(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	router, contactRepo, contactTaskRepo, cleanup := setupAwaitingReplyAPIRouter(t)
 	defer cleanup()

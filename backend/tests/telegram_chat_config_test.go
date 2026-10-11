@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -34,14 +34,7 @@ func chatConfigIDs(t *testing.T, queries db.Querier) (id1, id2, id3 int64) {
 }
 
 func TestChatConfig_UpsertAndList(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
@@ -86,14 +79,7 @@ func TestChatConfig_UpsertAndList(t *testing.T) {
 }
 
 func TestChatConfig_UpdateStatus(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
@@ -127,14 +113,7 @@ func TestChatConfig_UpdateStatus(t *testing.T) {
 }
 
 func TestChatConfig_BackfillCursorAndComplete(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
@@ -181,14 +160,7 @@ func TestChatConfig_BackfillCursorAndComplete(t *testing.T) {
 }
 
 func TestChatConfig_ResetBackfill(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
@@ -229,14 +201,7 @@ func TestChatConfig_ResetBackfill(t *testing.T) {
 }
 
 func TestChatConfig_ListForBackfill(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
@@ -291,14 +256,7 @@ func TestChatConfig_ListForBackfill(t *testing.T) {
 }
 
 func TestChatConfig_UpdateMemberCount(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
@@ -336,14 +294,7 @@ func TestChatConfig_UpdateMemberCount(t *testing.T) {
 }
 
 func TestChatConfig_BackfillResume(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.

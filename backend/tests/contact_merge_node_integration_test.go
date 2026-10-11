@@ -4,6 +4,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 	"time"
@@ -143,9 +144,7 @@ func nowMicro() time.Time {
 // the loser node is tombstoned, its assertions re-point onto the winner, and the
 // single-cardinality slot ends with exactly one live assertion (D9).
 func TestContactMergeNode_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := ctx0()
 
@@ -349,9 +348,7 @@ func liveEdgesToObject(t *testing.T, ctx context.Context, h *assertHarness, subj
 // re-point primitive) for the cases the contact-profile predicates can't reach:
 // the object-side slot-lock case and the latent-person promotion mechanic (D9).
 func TestMergeAssertions_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := ctx0()
 
@@ -553,7 +550,7 @@ func TestMergeAssertions_Integration(t *testing.T) {
 		// one stint.
 		edges, err := h.assertionRepo.ListLiveEdgesForNode(ctx, winner, "lives_in")
 		require.NoError(t, err)
-		assert.Len(t, edges, 1, "same-value stints collapse to one live edge")
+		require.Len(t, edges, 1, "same-value stints collapse to one live edge")
 		// The survivor's window covers the earlier (2018) stint (widened backward).
 		require.NotNil(t, edges[0].ValidFrom)
 		assert.False(t, edges[0].ValidFrom.After(from2018), "survivor window widened to cover the earlier stint")

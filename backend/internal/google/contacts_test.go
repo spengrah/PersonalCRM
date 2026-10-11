@@ -7,6 +7,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/api/people/v1"
 )
 
@@ -143,7 +144,7 @@ func TestContactsProvider_ConvertPersonToRequest(t *testing.T) {
 
 			// Check names if present
 			if len(tt.person.Names) > 0 {
-				assert.NotNil(t, result.DisplayName)
+				require.NotNil(t, result.DisplayName)
 				assert.Equal(t, tt.person.Names[0].DisplayName, *result.DisplayName)
 				if tt.person.Names[0].GivenName != "" {
 					assert.Equal(t, tt.person.Names[0].GivenName, *result.FirstName)
@@ -169,11 +170,11 @@ func TestContactsProvider_ConvertPersonToRequest(t *testing.T) {
 			// Check organization
 			if len(tt.person.Organizations) > 0 {
 				if tt.person.Organizations[0].Name != "" {
-					assert.NotNil(t, result.Organization)
+					require.NotNil(t, result.Organization)
 					assert.Equal(t, tt.person.Organizations[0].Name, *result.Organization)
 				}
 				if tt.person.Organizations[0].Title != "" {
-					assert.NotNil(t, result.JobTitle)
+					require.NotNil(t, result.JobTitle)
 					assert.Equal(t, tt.person.Organizations[0].Title, *result.JobTitle)
 				}
 			}
@@ -182,7 +183,7 @@ func TestContactsProvider_ConvertPersonToRequest(t *testing.T) {
 			if len(tt.person.Birthdays) > 0 && tt.person.Birthdays[0].Date != nil {
 				date := tt.person.Birthdays[0].Date
 				if date.Year > 0 && date.Month > 0 && date.Day > 0 {
-					assert.NotNil(t, result.Birthday)
+					require.NotNil(t, result.Birthday)
 					expectedDate := time.Date(int(date.Year), time.Month(date.Month), int(date.Day), 0, 0, 0, 0, time.UTC)
 					assert.Equal(t, expectedDate, *result.Birthday)
 				}
@@ -190,13 +191,13 @@ func TestContactsProvider_ConvertPersonToRequest(t *testing.T) {
 
 			// Check photo
 			if len(tt.person.Photos) > 0 && tt.person.Photos[0].Url != "" {
-				assert.NotNil(t, result.PhotoURL)
+				require.NotNil(t, result.PhotoURL)
 				assert.Equal(t, tt.person.Photos[0].Url, *result.PhotoURL)
 			}
 
 			// Check etag
 			if tt.person.Etag != "" {
-				assert.NotNil(t, result.Etag)
+				require.NotNil(t, result.Etag)
 				assert.Equal(t, tt.person.Etag, *result.Etag)
 			}
 
@@ -277,7 +278,7 @@ func TestContactsProvider_ConvertPersonToRequest_EmailPrimary(t *testing.T) {
 
 	result := provider.convertPersonToRequest(person, accountID)
 
-	assert.Len(t, result.Emails, 2)
+	require.Len(t, result.Emails, 2)
 	assert.True(t, result.Emails[0].Primary)
 	assert.False(t, result.Emails[1].Primary)
 }

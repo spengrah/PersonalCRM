@@ -3,7 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"sort"
 	"strings"
 	"testing"
@@ -36,13 +36,7 @@ type jsonbGINEnv struct {
 
 func setupJSONBGINEnv(t *testing.T) *jsonbGINEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL

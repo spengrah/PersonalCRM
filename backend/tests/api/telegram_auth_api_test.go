@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
@@ -179,9 +180,7 @@ func telegramWireData(t *testing.T, body map[string]interface{}) map[string]inte
 // proven by reaching the manager's already-connected conflict (409) instead of
 // a 400, which requires no MTProto client.
 func TestTelegramAuthAPI_ValidationErrors(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	ctx := context.Background()
@@ -293,9 +292,7 @@ func TestTelegramAuthAPI_ValidationErrors(t *testing.T) {
 // AuthSessionManager's session field is unexported and set only inside a real
 // StartAuth flow — so the whole item cannot be cited yet.
 func TestTelegramAuthAPI_StartConflictWhenAlreadyConnected(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	ctx := context.Background()
@@ -322,9 +319,7 @@ func TestTelegramAuthAPI_StartConflictWhenAlreadyConnected(t *testing.T) {
 // token check and the Done check of a LIVE MTProto-backed session, and the TTL
 // timer is a raw time.AfterFunc the accelerated clock cannot advance.
 func TestTelegramAuthAPI_InvalidTokenBadRequest(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	ctx := context.Background()
@@ -356,9 +351,7 @@ func TestTelegramAuthAPI_InvalidTokenBadRequest(t *testing.T) {
 // success returning 200 with the flow status) requires a completing MTProto
 // auth flow, for which no stub seam exists.
 func TestTelegramAuthAPI_CancelAlwaysSucceeds(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	ctx := context.Background()
@@ -380,9 +373,7 @@ func TestTelegramAuthAPI_CancelAlwaysSucceeds(t *testing.T) {
 // already-cancelled context, so the repository DELETE fails without any
 // production seam) is a 500 that leaves the row intact for retry.
 func TestTelegramAuthAPI_Disconnect(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	t.Run("SucceedsAndClearsSession", func(t *testing.T) {
@@ -441,9 +432,7 @@ func TestTelegramAuthAPI_Disconnect(t *testing.T) {
 // reflects the current connection state, asserting the LITERAL wire keys of
 // the payload in both the no-session and stored-connected-session states.
 func TestTelegramAuthAPI_Status(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	t.Run("DisconnectedWithoutSession", func(t *testing.T) {

@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
@@ -36,9 +37,7 @@ type abReconcileEnv struct {
 // the worker drains them.
 func setupABReconcileEnv(t *testing.T) *abReconcileEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	database, _ := newSharedTestDB(t, ctx)

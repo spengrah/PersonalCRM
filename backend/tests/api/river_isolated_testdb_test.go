@@ -4,7 +4,7 @@ package api
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -22,9 +22,7 @@ import (
 func newIsolatedRiverTestDB(t *testing.T, ctx context.Context) (*db.Database, *config.Config) {
 	t.Helper()
 
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)

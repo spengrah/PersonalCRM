@@ -4,6 +4,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -91,9 +92,7 @@ func closeOpCount(t *testing.T, h *skipHarness, ctx context.Context, taskID uuid
 }
 
 func TestSkipClock_AdvancesOneCycleLaterOf(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)
@@ -116,9 +115,7 @@ func TestSkipClock_AdvancesOneCycleLaterOf(t *testing.T) {
 }
 
 func TestSkipClock_RecordsSkipState(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)
@@ -164,9 +161,7 @@ func TestSkipClock_RecordsSkipState(t *testing.T) {
 }
 
 func TestSkipClock_EndsWindowAndClosesReminderExactlyOnce(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	for _, tc := range []struct {
 		name, external string
@@ -202,9 +197,7 @@ func TestSkipClock_EndsWindowAndClosesReminderExactlyOnce(t *testing.T) {
 }
 
 func TestSkipClock_LeavesOverdueSet(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)
@@ -235,9 +228,7 @@ func overdueIDs(entries []service.OverdueContact) []uuid.UUID {
 }
 
 func TestSkipClock_RequiresCadence(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	h := newSkipHarness(t, ctx)

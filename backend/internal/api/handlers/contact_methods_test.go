@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // spec: CON-015.blank-valued-entries-dropped
@@ -15,8 +16,8 @@ func TestNormalizeContactMethodRequests(t *testing.T) {
 		{Type: "telegram", Value: "   "},
 		{Type: "email", Value: "person@example.com"},
 	})
-	assert.NoError(t, err)
-	assert.Len(t, methods, 2)
+	require.NoError(t, err)
+	require.Len(t, methods, 2)
 	assert.Equal(t, "twitter", methods[0].Type)
 	assert.Equal(t, "handle", methods[0].Value)
 	assert.Equal(t, "email", methods[1].Type)

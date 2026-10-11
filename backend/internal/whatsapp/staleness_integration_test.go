@@ -15,6 +15,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"personal-crm/backend/tests/testsupport"
 	"runtime"
 	"testing"
 
@@ -49,12 +50,7 @@ func migrationsPathForWhatsAppTest() string {
 
 func TestWhatsAppManager_TerminalDisconnectOpensAStalenessBreach(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cloneURL, drop := testdb.NewEphemeralClone(t)

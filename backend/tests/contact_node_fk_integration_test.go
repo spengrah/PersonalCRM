@@ -4,6 +4,7 @@ package tests
 
 import (
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -30,9 +31,7 @@ import (
 // asserted only by its own existence, which proves nothing.
 func TestContactNodeFK_RejectsContactWithoutNode(t *testing.T) {
 	// spec: CON-003.fk-enforced
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := graphTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
@@ -43,7 +42,7 @@ func TestContactNodeFK_RejectsContactWithoutNode(t *testing.T) {
 
 	require.Error(t, err, "a contact row at an id with no node must be rejected")
 	var pgErr *pgconn.PgError
-	require.Truef(t, errors.As(err, &pgErr), "expected a *pgconn.PgError, got %v", err)
+	require.ErrorAsf(t, err, &pgErr, "expected a *pgconn.PgError, got %v", err)
 	assert.Equal(t, pgerrcode.ForeignKeyViolation, pgErr.Code)
 	assert.Equal(t, "contact_id_node_fk", pgErr.ConstraintName)
 }
@@ -52,9 +51,7 @@ func TestContactNodeFK_RejectsContactWithoutNode(t *testing.T) {
 // CreateContact itself creates the person node, called at pool level outside
 // any transaction — the shape ~150 existing integration-test call sites use.
 func TestContactRepositoryCreate_CreatesPersonNode(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := graphTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
@@ -80,9 +77,7 @@ func TestContactRepositoryCreate_CreatesPersonNode(t *testing.T) {
 // failure subtest passes vacuously (a create that never makes a node cannot
 // orphan one).
 func TestContactRepositoryCreate_IsAtomic(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := graphTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)
@@ -126,9 +121,7 @@ func TestContactRepositoryCreate_IsAtomic(t *testing.T) {
 // the ~170 test-cleanup call sites through HardDeleteContact leaks a node into
 // the shared test database across runs.
 func TestHardDeleteContact_LeavesNoOrphanNode(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := graphTestDB(t)
 	support := repository.NewSyntheticSupportRepository(database.Queries)

@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -42,9 +43,7 @@ type gchatTestEnv struct {
 // interaction is ever recorded.
 func setupGChatEngineTest(t *testing.T) *gchatTestEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	database, _ := newIsolatedRiverTestDB(t, ctx)

@@ -136,7 +136,7 @@ func (i *recordingInserter) InsertTx(_ context.Context, _ pgx.Tx, args river.Job
 func requireSnooze(t *testing.T, err error) {
 	t.Helper()
 	var snooze *river.JobSnoozeError
-	require.Truef(t, errors.As(err, &snooze), "expected *river.JobSnoozeError, got %v", err)
+	require.ErrorAsf(t, err, &snooze, "expected *river.JobSnoozeError, got %v", err)
 }
 
 // settingsOK returns a TodoistSettingsFunc that always resolves.
@@ -249,7 +249,7 @@ func TestOpWorker_UnknownVerb_PermanentCancel(t *testing.T) {
 	err := w.Work(context.Background(), opJob(taskID, "bogus_verb"))
 	require.Error(t, err)
 	var cancel *river.JobCancelError
-	require.Truef(t, errors.As(err, &cancel), "unknown verb must be a permanent JobCancel, got %v", err)
+	require.ErrorAsf(t, err, &cancel, "unknown verb must be a permanent JobCancel, got %v", err)
 	require.Empty(t, client.commands, "unknown verb must not touch Todoist")
 }
 
@@ -366,7 +366,7 @@ func TestOpWorker_UpdateDeadline_ManagedEmptyExternalID_Errors(t *testing.T) {
 	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
 	require.Error(t, err, "a managed row with an empty external id is corrupt — retryable error, not a snooze")
 	var snooze *river.JobSnoozeError
-	require.False(t, errors.As(err, &snooze), "must not snooze forever on a corrupt row")
+	require.NotErrorAs(t, err, &snooze, "must not snooze forever on a corrupt row")
 	require.Empty(t, client.commands)
 }
 
@@ -439,7 +439,7 @@ func TestOpWorker_UpdateDescription_MissingKeyPermanent(t *testing.T) {
 	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDescription))
 	require.Error(t, err)
 	var cancel *river.JobCancelError
-	require.Truef(t, errors.As(err, &cancel), "missing description key must be a permanent JobCancel, got %v", err)
+	require.ErrorAsf(t, err, &cancel, "missing description key must be a permanent JobCancel, got %v", err)
 	require.Empty(t, client.commands)
 }
 

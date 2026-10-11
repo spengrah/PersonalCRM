@@ -14,6 +14,7 @@ package whatsapp
 import (
 	"context"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -41,9 +42,7 @@ type deviceStoreFixture struct {
 
 func newDeviceStoreFixture(t *testing.T) *deviceStoreFixture {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cloneURL, drop := testdb.NewEphemeralClone(t)

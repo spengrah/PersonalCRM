@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -600,7 +599,7 @@ func TestMacHost_CursorFirstWriteRace(t *testing.T) {
 			continue
 		}
 		var baseErr *repository.ErrCursorBaseMismatch
-		require.Truef(t, errors.As(err, &baseErr), "unexpected error type: %v", err)
+		require.ErrorAsf(t, err, &baseErr, "unexpected error type: %v", err)
 		conflict++
 	}
 	require.Equal(t, 1, success, "exactly one commit must win")

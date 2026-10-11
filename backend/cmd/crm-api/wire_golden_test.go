@@ -20,6 +20,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"personal-crm/backend/tests/testsupport"
 	"runtime"
 	"sort"
 	"testing"
@@ -121,9 +122,7 @@ var shape6Providers = sortedCopy([]string{
 
 func TestWireGoldenLists(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	tests := []struct {
 		name          string

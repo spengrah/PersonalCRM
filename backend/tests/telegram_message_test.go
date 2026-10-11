@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -32,14 +32,7 @@ func telegramTestChat(t *testing.T, repo *repository.TelegramMessageRepository) 
 }
 
 func TestTelegramMessage_UpsertAndGet(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
@@ -94,14 +87,7 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 }
 
 func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
@@ -151,14 +137,7 @@ func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
 }
 
 func TestTelegramMessage_UpsertEdit(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
@@ -210,14 +189,7 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 }
 
 func TestTelegramMessage_SoftDelete(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
@@ -264,14 +236,7 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 }
 
 func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
@@ -318,14 +283,7 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 }
 
 func TestTelegramMessage_ListUnprocessed(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.

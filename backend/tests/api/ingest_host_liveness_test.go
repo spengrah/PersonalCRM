@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"sync"
 	"testing"
 	"time"
@@ -56,10 +56,7 @@ func (s *stubFailingHostLiveness) GetActiveHostByIDForUpdateTx(
 
 // spec: ING-006.whole-batch-rolled-back
 func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -107,7 +104,7 @@ func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 		ctx, []*events.Envelope{env}, []int{0}, &hostID,
 	)
 	require.Error(t, err, "batch must abort when liveness check reports revoked host")
-	require.True(t, errors.Is(err, service.ErrHostRevokedDuringBatch),
+	require.ErrorIs(t, err, service.ErrHostRevokedDuringBatch,
 		"abort error must be ErrHostRevokedDuringBatch (got %v)", err)
 	require.Equal(t, 0, accepted)
 	require.Equal(t, 0, duplicate)
@@ -122,7 +119,7 @@ func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 	if err == nil {
 		require.Nil(t, logged, "no event-log row may commit when batch aborts")
 	} else {
-		require.True(t, errors.Is(err, db.ErrNotFound),
+		require.ErrorIs(t, err, db.ErrNotFound,
 			"event-log row absence expected; got error %v", err)
 	}
 }
@@ -176,10 +173,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 	if os.Getenv("LONG_TESTS") == "" {
 		t.Skip("LONG_TESTS not set; skipping concurrency test")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -341,10 +335,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 //
 // spec: ING-006.unauthorized-401-stops-retries
 func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -456,7 +447,7 @@ func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
 	if err == nil {
 		require.Nil(t, logged, "no event-log row may commit when the batch 401s")
 	} else {
-		require.True(t, errors.Is(err, db.ErrNotFound),
+		require.ErrorIs(t, err, db.ErrNotFound,
 			"event-log row absence expected; got error %v", err)
 	}
 }
@@ -618,7 +609,7 @@ func TestIngest_PayloadHostIDMismatch_RejectedForEveryDaemonFamily(t *testing.T)
 			if ferr == nil {
 				require.Nil(t, logged, "no event-log row may persist for a host-mismatch rejection")
 			} else {
-				require.True(t, errors.Is(ferr, db.ErrNotFound),
+				require.ErrorIs(t, ferr, db.ErrNotFound,
 					"event-log row absence expected; got error %v", ferr)
 			}
 		})

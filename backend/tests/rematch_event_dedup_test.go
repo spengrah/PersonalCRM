@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -31,9 +32,7 @@ import (
 // layer, bypassing the event-layer dedup via distinct source_ids).
 func TestRematch_EventSourceIDDedup(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	// Per-test isolated clone: the live river client + DB-wide river_job
 	// count assertion need a private river_job table.

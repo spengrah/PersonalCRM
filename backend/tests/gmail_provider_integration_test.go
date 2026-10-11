@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"personal-crm/backend/tests/testsupport"
 	"strconv"
 	"strings"
 	"testing"
@@ -61,9 +62,7 @@ type gmailProviderEnv struct {
 
 func newGmailProviderEnv(t *testing.T) *gmailProviderEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	// Per-test isolated clone: the live consumer drains a private river_job.
 	ctx := context.Background()
 	database, _ := newIsolatedRiverTestDB(t, ctx)

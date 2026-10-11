@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -29,10 +29,7 @@ import (
 func setupDirectionAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactTaskRepository, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
@@ -121,9 +118,7 @@ func recordDirectionTestInteraction(t *testing.T, router *gin.Engine, contactID,
 }
 
 func TestInteractionAPI_DirectionInResponse(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
@@ -196,9 +191,7 @@ func TestInteractionAPI_DirectionInResponse(t *testing.T) {
 }
 
 func TestContactAPI_AwaitingReply(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
@@ -238,9 +231,7 @@ func TestContactAPI_AwaitingReply(t *testing.T) {
 
 func TestContactAPI_ListReportsAwaitingReply(t *testing.T) {
 	// spec: CON-005.list-entries-carry-flag
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
@@ -280,9 +271,7 @@ func TestContactAPI_ListReportsAwaitingReply(t *testing.T) {
 }
 
 func TestContactAPI_DirectionTimestamps(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
@@ -319,9 +308,7 @@ func TestContactAPI_DirectionTimestamps(t *testing.T) {
 }
 
 func TestContactAPI_FollowupFilter(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
@@ -380,9 +367,7 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 }
 
 func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, contactTaskRepo, cleanup := setupDirectionAPIRouter(t)

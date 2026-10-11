@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"personal-crm/backend/tests/testsupport"
 	"runtime"
 	"sort"
 	"strings"
@@ -97,14 +98,7 @@ func setupContactValidationTestRouter() (*gin.Engine, func()) {
 }
 
 func TestContactAPI_ValidationErrors(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
@@ -130,7 +124,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.False(t, response.Success)
-		assert.NotNil(t, response.Error)
+		require.NotNil(t, response.Error)
 		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	})
 
@@ -167,7 +161,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.False(t, response.Success)
-			assert.NotNil(t, response.Error)
+			require.NotNil(t, response.Error)
 			assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 		}
 	})
@@ -318,7 +312,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.False(t, response.Success)
-		assert.NotNil(t, response.Error)
+		require.NotNil(t, response.Error)
 		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	})
 
@@ -343,7 +337,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.False(t, response.Success)
-		assert.NotNil(t, response.Error)
+		require.NotNil(t, response.Error)
 		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	})
 
@@ -395,7 +389,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.False(t, response.Success)
-		assert.NotNil(t, response.Error)
+		require.NotNil(t, response.Error)
 		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	})
 
@@ -420,7 +414,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.False(t, response.Success)
-		assert.NotNil(t, response.Error)
+		require.NotNil(t, response.Error)
 		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	})
 
@@ -514,14 +508,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 }
 
 func TestContactAPI_UpdateValidation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
@@ -716,7 +703,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.False(t, response.Success)
-		assert.NotNil(t, response.Error)
+		require.NotNil(t, response.Error)
 		assert.Equal(t, "VALIDATION_ERROR", response.Error.Code)
 	})
 
@@ -830,14 +817,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 // not-found for unknown/already-deleted contacts, the no-content shape of a
 // successful delete, and the absence of any hard-delete route.
 func TestContactAPI_DeleteValidation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
@@ -979,12 +959,7 @@ func TestContactAPI_DeleteValidation(t *testing.T) {
 // create field with it would silently stop persisting methods on every new
 // contact while every request still returned 201.
 func TestCreateContact_StillAcceptsMethods(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
@@ -1034,14 +1009,7 @@ func TestCreateContact_StillAcceptsMethods(t *testing.T) {
 }
 
 func TestContactAPI_QueryValidation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
@@ -1346,14 +1314,7 @@ func TestContactAPI_QueryValidation(t *testing.T) {
 }
 
 func TestContactAPI_GetContactValidation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
@@ -1443,14 +1404,7 @@ func TestContactAPI_GetContactValidation(t *testing.T) {
 // cmd/crm-api/knowledge_route_absence_test.go; together the citing set
 // covers both clauses.
 func TestContactAPI_KnowledgeProjectionWireKeys(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()
@@ -1500,14 +1454,7 @@ func TestContactAPI_KnowledgeProjectionWireKeys(t *testing.T) {
 }
 
 func TestContactAPI_DuplicateMethodValues(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactValidationTestRouter()

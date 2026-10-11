@@ -2,7 +2,6 @@ package tests
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -126,5 +125,5 @@ func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
 	wouldBeRef := fmt.Sprintf("tg:%d:%d:%s", chatID, msgIDBase+1, contact.ID.String())
 	_, err = eventRepo.FindEventBySource(ctx, repository.InteractionSourceTelegram, wouldBeRef)
 	require.Error(t, err, "extend path must not publish a create event for the inbound extension")
-	assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound for the missing extend event, got %v", err)
+	assert.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound for the missing extend event, got %v", err)
 }

@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/api/handlers"
@@ -30,13 +30,7 @@ type linkCuratedEnv struct {
 
 func setupLinkCuratedEnv(t *testing.T) *linkCuratedEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	// gin.SetMode is hoisted to TestMain so parallel tests don't race on it.
 
 	cfg := config.TestConfig()

@@ -3,7 +3,6 @@ package todoist
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -178,10 +177,10 @@ func TestRefusedError_Surface(t *testing.T) {
 	c, _ := newRecordingClient("staging", "")
 
 	task, err := c.QuickAdd(context.Background(), "x", "")
-	assert.True(t, errors.Is(err, ErrNonProdWriteRefused))
+	assert.ErrorIs(t, err, ErrNonProdWriteRefused)
 	assert.Nil(t, task)
 
 	resp, err := c.Sync(context.Background(), "*", []string{"items"}, []SyncCommand{NewItemCloseCommand("t")})
-	assert.True(t, errors.Is(err, ErrNonProdWriteRefused))
+	assert.ErrorIs(t, err, ErrNonProdWriteRefused)
 	assert.Nil(t, resp)
 }

@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"sort"
 	"sync/atomic"
 	"testing"
@@ -61,12 +61,7 @@ func (e *contentEnv) svc(q db.Querier) *service.InteractionContentService {
 
 func requireContentIntegration(t *testing.T) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	testsupport.RequireDatabase(t)
 }
 
 func seedInteraction(t *testing.T, e *contentEnv, contactID uuid.UUID, source string, at time.Time, ref *string) repository.Interaction {

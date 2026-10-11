@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -50,13 +50,7 @@ func (w *localNoopWorker) Work(_ context.Context, _ *river.Job[localNoopJobArgs]
 // TestRunMigrations_River_Integration asserts that RunMigrations applies
 // River's own schema migrations and that a second call is idempotent.
 func TestRunMigrations_River_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
@@ -87,9 +81,7 @@ func TestRunMigrations_River_Integration(t *testing.T) {
 // starts and stops cleanly.
 func TestRiverClient_StartStop_Integration(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	// Per-test isolated clone so the live client owns a private river_job.
 	ctx := context.Background()
@@ -123,9 +115,7 @@ func TestRiverClient_StartStop_Integration(t *testing.T) {
 // test so a registration regression fails this test specifically.
 func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	// Per-test isolated clone so the inserted job lands in a private
 	// river_job and no concurrent sibling steals it. newIsolatedRiverTestDB
@@ -197,9 +187,7 @@ func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 // default configuration. #281 restored the noop.
 func TestRiverClient_BootsWithNoopWorkerOnly(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	// Per-test isolated clone so the live client owns a private river_job.
 	ctx := context.Background()
@@ -262,9 +250,7 @@ func (errorHandlerFastRetry) NextRetry(_ *rivertype.JobRow) time.Time {
 // silently mislabeling.
 func TestRiverErrorHandler_DiscardLogging_Integration(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)

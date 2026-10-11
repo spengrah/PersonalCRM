@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"sync"
 	"testing"
@@ -105,10 +105,7 @@ func (e *meetingNoteIngestEnv) newSessionUUID() string {
 func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -943,7 +940,8 @@ func TestMeetingNote_DeleteCascadesToInteractions(t *testing.T) {
 	tx, err := env.database.Pool.Begin(ctx)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
-	liveRow, _ := env.meetingRepo.GetMeetingNoteBySessionIDTx(ctx, tx, sid)
+	liveRow, err := env.meetingRepo.GetMeetingNoteBySessionIDTx(ctx, tx, sid)
+	require.NoError(t, err)
 	require.Nil(t, liveRow, "live row must be gone after delete")
 	tomb, err := env.meetingRepo.GetTombstonedMeetingNoteBySessionIDTx(ctx, tx, sid)
 	require.NoError(t, err)

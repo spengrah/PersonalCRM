@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"sync"
 	"testing"
@@ -82,10 +81,7 @@ type contactTaskAPIHarness struct {
 func setupContactTaskAPIRouter(t *testing.T) (*contactTaskAPIHarness, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
@@ -173,9 +169,7 @@ func decodeContactTaskEnvelope(t *testing.T, body []byte) map[string]any {
 }
 
 func TestContactTaskAPI_ListFilters(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	h, cleanup := setupContactTaskAPIRouter(t)
@@ -362,9 +356,7 @@ func postManualTask(t *testing.T, h *contactTaskAPIHarness, contactID uuid.UUID,
 }
 
 func TestContactTaskAPI_CreateManualTask(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	h, cleanup := setupContactTaskAPIRouter(t)
@@ -475,9 +467,7 @@ func TestContactTaskAPI_CreateManualTask(t *testing.T) {
 }
 
 func TestContactTaskAPI_DeleteTaskLink(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	h, cleanup := setupContactTaskAPIRouter(t)
@@ -507,7 +497,7 @@ func TestContactTaskAPI_DeleteTaskLink(t *testing.T) {
 
 		// The CRM link row is gone...
 		_, err = h.contactTaskRepo.GetContactTask(ctx, task.ID)
-		assert.True(t, errors.Is(err, db.ErrNotFound), "CRM link should be removed, got err=%v", err)
+		assert.ErrorIs(t, err, db.ErrNotFound, "CRM link should be removed, got err=%v", err)
 
 		// ...but ONLY the link: the contact is untouched and no remote
 		// provider mutation happened (the Todoist client was never called).

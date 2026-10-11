@@ -3,7 +3,6 @@ package river
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -87,10 +86,7 @@ func (p *loadTestProvider) Sync(ctx context.Context, state *repository.SyncState
 // The test's budget is bounded: windowBudget caps total runtime.
 func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	const accountCount = 10
 	const windowBudget = 30 * time.Second

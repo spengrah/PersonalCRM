@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
@@ -91,14 +92,7 @@ func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository
 }
 
 func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
@@ -352,14 +346,7 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 }
 
 func TestImportAPI_LinkWithMethodSelection(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
@@ -649,14 +636,7 @@ func TestImportAPI_LinkWithMethodSelection(t *testing.T) {
 }
 
 func TestImportAPI_ImportWithCadence(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
@@ -779,14 +759,7 @@ func TestImportAPI_ImportWithCadence(t *testing.T) {
 }
 
 func TestImportAPI_LinkWithCadence(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
@@ -1030,14 +1003,7 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 }
 
 func TestImportAPI_ImportWithName(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
@@ -1157,14 +1123,7 @@ func TestImportAPI_ImportWithName(t *testing.T) {
 }
 
 func TestImportAPI_ImportWithPrimaryMethod(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
@@ -1301,14 +1260,7 @@ func TestImportAPI_ImportWithPrimaryMethod(t *testing.T) {
 }
 
 func TestImportAPI_LinkWithName(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
@@ -1419,14 +1371,7 @@ func TestImportAPI_LinkWithName(t *testing.T) {
 }
 
 func TestImportAPI_LinkWithPrimaryMethod(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
@@ -1634,14 +1579,7 @@ func TestImportAPI_LinkWithPrimaryMethod(t *testing.T) {
 }
 
 func TestImportAPI_EdgeCases(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
@@ -2123,14 +2061,7 @@ func TestImportAPI_EdgeCases(t *testing.T) {
 }
 
 func TestImportAPI_ImportValidation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
@@ -2308,14 +2239,7 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 // server-side (403) rather than merely hidden by the UI.
 // spec: IMP-014
 func TestImportAPI_LinkOnlySourcePolicy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, _, _, cleanup := setupImportTestRouter()
@@ -2395,14 +2319,7 @@ func TestImportAPI_LinkOnlySourcePolicy(t *testing.T) {
 }
 
 func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
@@ -2623,14 +2540,7 @@ func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {
 }
 
 func TestImportAPI_TelegramImportNewRegression(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()

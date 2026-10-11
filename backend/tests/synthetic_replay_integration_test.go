@@ -3,7 +3,6 @@ package tests
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
@@ -28,10 +27,7 @@ import (
 
 func newSyntheticDB(t *testing.T) (*db.Database, context.Context) {
 	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	ctx := context.Background()
 	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPath()))
 	cfg := config.TestConfig()

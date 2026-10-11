@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"personal-crm/backend/tests/testsupport"
 	"runtime"
 	"strings"
 	"testing"
@@ -41,14 +42,7 @@ func getMigrationsPath() string {
 
 // TestRunMigrations_Integration tests the migration runner
 func TestRunMigrations_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	migrationsPath := getMigrationsPath()
 
@@ -74,14 +68,7 @@ func TestRunMigrations_Integration(t *testing.T) {
 }
 
 func TestMigration020_UnifyEmailDedup(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	conn, err := pgx.Connect(ctx, databaseURL)
@@ -186,16 +173,11 @@ func splitSQLStatements(t *testing.T, sqlText string) []string {
 // TestContactRepository_Integration tests the contact repository with a real database
 // This test requires a running PostgreSQL database with the DATABASE_URL environment variable set
 func TestContactRepository_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Check if DATABASE_URL is set for integration testing
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 
@@ -300,14 +282,7 @@ func TestContactRepository_Integration(t *testing.T) {
 
 // TestContactMethodRepository_Integration tests contact method CRUD
 func TestContactMethodRepository_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()
@@ -351,7 +326,7 @@ func TestContactMethodRepository_Integration(t *testing.T) {
 
 	methods, err := methodRepo.ListContactMethodsByContact(ctx, contact.ID)
 	require.NoError(t, err)
-	assert.Len(t, methods, 2)
+	require.Len(t, methods, 2)
 	assert.True(t, methods[0].IsPrimary)
 	assert.Equal(t, string(repository.ContactMethodEmail), methods[0].Type)
 
@@ -388,14 +363,7 @@ func TestContactMethodRepository_Integration(t *testing.T) {
 
 // TestSyncRepository_Integration tests the sync repository with a real database
 func TestSyncRepository_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()
@@ -531,7 +499,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 		updated, err := repo.GetSyncState(ctx, state.ID)
 		require.NoError(t, err)
 		assert.Equal(t, repository.SyncStatusError, updated.Status)
-		assert.NotNil(t, updated.ErrorMessage)
+		require.NotNil(t, updated.ErrorMessage)
 		assert.Equal(t, "connection timeout", *updated.ErrorMessage)
 	})
 
@@ -618,7 +586,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, logs, 1)
 		assert.Equal(t, "error", string(logs[0].Status))
-		assert.NotNil(t, logs[0].ErrorMessage)
+		require.NotNil(t, logs[0].ErrorMessage)
 		assert.Equal(t, "API rate limit exceeded", *logs[0].ErrorMessage)
 	})
 
@@ -759,14 +727,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 
 // TestOAuthRepository_Integration tests the OAuth repository with a real database
 func TestOAuthRepository_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()
@@ -1114,14 +1075,7 @@ func timeNow() time.Time {
 
 // TestFindSimilarContactsBatch_Integration tests the batch matching query
 func TestFindSimilarContactsBatch_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()

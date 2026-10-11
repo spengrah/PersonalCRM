@@ -3,7 +3,7 @@ package todoist
 import (
 	"context"
 	"errors"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"sync"
 	"testing"
 	"time"
@@ -133,10 +133,7 @@ type providerTestEnv struct {
 func newProviderTestEnv(t *testing.T) *providerTestEnv {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once into the template; the per-package clone
 	// (testdb.SetupPackage in testmain_integration_test.go) inherits the
@@ -516,7 +513,7 @@ func TestFollowUpDismissal_FindPendingFollowUpIgnoresDismissed(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = env.contactTaskRepo.FindPendingFollowUp(env.ctx, contact.ID)
-	assert.True(t, errors.Is(err, db.ErrNotFound), "FindPendingFollowUp must treat dismissed as absent")
+	assert.ErrorIs(t, err, db.ErrNotFound, "FindPendingFollowUp must treat dismissed as absent")
 }
 
 // Case 7: has_followup / no_followup filters read the contact's awaiting-reply columns, not the reminder row.
@@ -684,7 +681,7 @@ func assertDismissedAndInvariants(t *testing.T, env *dismissalTestEnv, contactID
 
 	// No pending follow-up remains.
 	_, err = env.contactTaskRepo.FindPendingFollowUp(env.ctx, contactID)
-	assert.True(t, errors.Is(err, db.ErrNotFound), "no pending follow-up should exist after dismissal")
+	assert.ErrorIs(t, err, db.ErrNotFound, "no pending follow-up should exist after dismissal")
 
 	// No new follow-up rows were created (count stays at 1 — the dismissed one).
 	tasks, err := env.contactTaskRepo.ListContactTasksByContact(env.ctx, contactID)

@@ -2,7 +2,6 @@ package tests
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -150,5 +149,5 @@ func TestAggregation_IncrementalExplicitReplyBridge_CrossBatch(t *testing.T) {
 	wouldBeRef := fmt.Sprintf("tg:%d:%d:%s", chatID, msgIDBase+1, contact.ID.String())
 	_, err = eventRepo.FindEventBySource(ctx, repository.InteractionSourceTelegram, wouldBeRef)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound for the would-be inbound event, got %v", err)
+	assert.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound for the would-be inbound event, got %v", err)
 }

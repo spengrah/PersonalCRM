@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -27,10 +28,7 @@ import (
 
 // setupTestDB sets up a test database connection
 func setupTestDB(t *testing.T) (*db.Database, func()) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	ctx := context.Background()
 	cfg := config.TestConfig()
@@ -53,9 +51,7 @@ func seedContactForMerge(ctx context.Context, svc *service.ContactService, req r
 }
 
 func TestContactMerge_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	database, cleanup := setupTestDB(t)
@@ -304,7 +300,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		// Verify methods transferred
 		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, merged.ID)
 		require.NoError(t, err)
-		assert.Len(t, methods, 1)
+		require.Len(t, methods, 1)
 		assert.Equal(t, "+1-555-0100", methods[0].Value)
 
 		// Verify source is soft-deleted
@@ -379,7 +375,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		// Verify only one phone number exists
 		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, merged.ID)
 		require.NoError(t, err)
-		assert.Len(t, methods, 1)
+		require.Len(t, methods, 1)
 		assert.Equal(t, "phone", methods[0].Type)
 		assert.True(t, methods[0].IsPrimary) // Target's primary status preserved
 
@@ -866,14 +862,7 @@ func setupContactMergePreviewTestRouter() (*gin.Engine, func()) {
 }
 
 func TestContactMergePreviewAPI_Errors(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactMergePreviewTestRouter()
@@ -979,14 +968,7 @@ func TestContactMergePreviewAPI_Errors(t *testing.T) {
 // counters the spec names, with values matching seeded data — a service-level
 // preview test cannot catch an omitted or misnamed response field.
 func TestContactMergePreviewAPI_SuccessCounts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, rcleanup := setupContactMergePreviewTestRouter()

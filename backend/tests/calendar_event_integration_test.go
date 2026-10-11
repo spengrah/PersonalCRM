@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -17,14 +17,7 @@ import (
 )
 
 func TestCalendarEventUpsertResetsLastContactedUpdated(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()
@@ -176,14 +169,7 @@ func TestCalendarEventUpsertResetsLastContactedUpdated(t *testing.T) {
 // contact's matched_contact_ids, so the exact == 1 assertion is independent
 // of sibling tests on the shared DB.
 func TestCalendarEventCountForContact_ExcludesCancelled(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()

@@ -5,6 +5,7 @@ package tests
 import (
 	"context"
 	"math/rand"
+	"personal-crm/backend/tests/testsupport"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,9 +42,7 @@ var liveContactColumnOrder = []string{
 // non-materialized view with an exact, ordered projection is substituted and
 // flattened by the planner's subquery pull-up.
 func TestLiveContactView_Shape(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, _ := newSharedTestDB(t, ctx)
@@ -153,9 +152,7 @@ func seedLiveContactFixture(t *testing.T, ctx context.Context, contactRepo *repo
 // definition) is run separately per the element's mandatory falsification
 // protocol, not by this test.
 func TestLiveContactView_ExcludesSoftDeletedOwners(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, _ := newSharedTestDB(t, ctx)
@@ -209,9 +206,7 @@ func TestLiveContactView_ExcludesSoftDeletedOwners(t *testing.T) {
 // one subtest per read, each excluding a soft-deleted owner's row and
 // including a live one.
 func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, _ := newSharedTestDB(t, ctx)
@@ -473,9 +468,7 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 // integration coverage of the blocked branch previously (verified by grep), so
 // this is a genuine red-first for that branch, not just a regression pin.
 func TestLiveContactView_UpdateGuardsHonourLiveness(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	ctx := context.Background()
 	database, _ := newSharedTestDB(t, ctx)

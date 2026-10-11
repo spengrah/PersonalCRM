@@ -4,7 +4,7 @@ package google
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
@@ -35,13 +35,7 @@ type gcontactsForwardEnv struct {
 // Sync, so no Google client is needed.
 func setupGcontactsForwardEnv(t *testing.T) *gcontactsForwardEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping DB-backed test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
