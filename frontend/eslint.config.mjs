@@ -1,7 +1,7 @@
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { FlatCompat } from '@eslint/eslintrc'
-import localRules from './eslint-rules/icon-only-button.mjs'
+import localRules from './eslint-rules/index.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -71,14 +71,6 @@ const testSelectors = [
     message:
       'Do not sleep with waitForTimeout. Wait on a condition (web-first expect, waitForResponse).',
   },
-  {
-    // First literal argument of .locator( containing a CSS class selector:
-    // `.text-lg`, `div.border`, or `[class...]`. Attribute selectors such as
-    // [data-testid=...] do not match.
-    selector:
-      "CallExpression[callee.property.name='locator'] > Literal:first-child[value=/(^|[\\s>+~])\\.?[a-zA-Z][\\w-]*\\.[a-zA-Z_-]|^\\.[a-zA-Z_-]|\\[class/]",
-    message: 'Locate by role, label, or test id instead of a CSS class.',
-  },
 ]
 
 const srcTestFiles = ['**/__tests__/**', '**/*.test.*']
@@ -86,9 +78,9 @@ const srcTestFiles = ['**/__tests__/**', '**/*.test.*']
 const eslintConfig = [
   ...compat.extends('next/core-web-vitals', 'next/typescript'),
   { linterOptions: { reportUnusedDisableDirectives: 'error' } },
+  { plugins: { local: localRules } },
   {
     files: ['**/*.{jsx,tsx}'],
-    plugins: { local: localRules },
     rules: { 'local/icon-only-button': 'error' },
   },
   {
@@ -108,6 +100,7 @@ const eslintConfig = [
     rules: {
       // Playwright fixtures name their callback parameter `use`, which the hooks rule mistakes for React's use().
       'react-hooks/rules-of-hooks': 'off',
+      'local/no-css-class-locator': 'error',
       'no-restricted-syntax': ['error', ...testSelectors, ...apiConstantSelectors],
     },
   },

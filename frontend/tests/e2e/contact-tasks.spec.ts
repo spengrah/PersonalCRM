@@ -550,7 +550,9 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       const row = taskRows(page).filter({ hasText: 'Mock linked task' })
       await expect(row).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
-      // Dismiss the confirm and collect any DELETE until the dialog is handled.
+      // Dismiss the confirm; collect any DELETE over a bounded settle
+      // window (a negative outcome needs an observation window, not a
+      // first-success poll).
       page.once('dialog', dialog => void dialog.dismiss())
       const deleteRequests: string[] = []
       page.on('request', request => {
@@ -561,13 +563,11 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
           deleteRequests.push(request.url())
         }
       })
-      // Dismissing the confirm is the last step handleUnlink takes, so once the
-      // dialog is handled no DELETE can follow.
-      const dialogHandled = page.waitForEvent('dialog')
       await row.hover()
       await row.locator(`button[title="${UNLINK_TITLE}"]`).click()
 
-      await dialogHandled
+      // eslint-disable-next-line no-restricted-syntax -- negative assertion: no DELETE may follow the dismissed confirm within this window
+      await page.waitForTimeout(1500)
       expect(deleteRequests).toEqual([])
       await expect(row).toBeVisible()
     })

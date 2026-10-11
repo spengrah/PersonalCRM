@@ -523,11 +523,12 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
       confirmMessage = dialog.message()
       void dialog.dismiss()
     })
-    // Dismissing the confirm is the last step the page takes, so once the dialog
-    // is handled no DELETE can follow.
-    const dialogHandled = page.waitForEvent('dialog')
     await page.getByRole('button', { name: 'Delete' }).click()
-    await dialogHandled
+    // Asserting ABSENCE: there is no positive signal to await on dismiss, so give
+    // any (erroneous) DELETE a bounded settle window to appear, then confirm none
+    // fired and the contact is still live.
+    // eslint-disable-next-line no-restricted-syntax -- negative assertion: no DELETE may follow the dismissed confirm within this window
+    await page.waitForTimeout(1000)
     expect(deleteFired).toBe(false)
     expect(confirmMessage).toContain('cannot be undone')
     page.off('request', watchDelete)

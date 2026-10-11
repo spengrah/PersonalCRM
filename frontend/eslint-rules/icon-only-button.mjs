@@ -1,5 +1,7 @@
-// Flags <button>/<Button> with no accessible name: no aria-label, aria-labelledby, title or
-// spread props, and children that are only elements with no text and no {expressions}.
+// Flags <button>/<Button> with no accessible name: no aria-label, aria-labelledby, title
+// or spread props, and content that renders elements but no text. Fragments and the
+// branches of `cond ? a : b` and `cond && a` are followed; any other {expression} may
+// render text, so it passes.
 const NAME_ATTRS = new Set(['aria-label', 'aria-labelledby', 'title'])
 
 function hasNameSource(opening) {
@@ -8,14 +10,35 @@ function hasNameSource(opening) {
   )
 }
 
-// True when the children could render visible text: literal text or any {expression}.
+// The JSX a child can render: elements and fragments, through conditional branches.
+function rendered(node) {
+  if (!node) return []
+  if (node.type === 'JSXExpressionContainer') return rendered(node.expression)
+  if (node.type === 'ConditionalExpression')
+    return [...rendered(node.consequent), ...rendered(node.alternate)]
+  if (node.type === 'LogicalExpression' && node.operator === '&&') return rendered(node.right)
+  return [node]
+}
+
 function mayRenderText(children) {
-  return children.some(child => {
-    if (child.type === 'JSXText') return child.value.trim() !== ''
-    if (child.type === 'JSXElement' || child.type === 'JSXFragment')
-      return mayRenderText(child.children)
-    return child.type === 'JSXExpressionContainer' && child.expression.type !== 'JSXEmptyExpression'
-  })
+  return children.some(child =>
+    rendered(child).some(node => {
+      if (node.type === 'JSXText') return node.value.trim() !== ''
+      if (node.type === 'JSXElement' || node.type === 'JSXFragment')
+        return mayRenderText(node.children)
+      if (node.type === 'Literal') return node.value !== null && typeof node.value !== 'boolean'
+      return node.type !== 'JSXEmptyExpression'
+    })
+  )
+}
+
+function rendersElement(children) {
+  return children.some(child =>
+    rendered(child).some(
+      node =>
+        node.type === 'JSXElement' || (node.type === 'JSXFragment' && rendersElement(node.children))
+    )
+  )
 }
 
 const rule = {
@@ -34,8 +57,7 @@ const rule = {
           return
         }
         if (hasNameSource(node.openingElement)) return
-        const hasChildElement = node.children.some(c => c.type === 'JSXElement')
-        if (hasChildElement && !mayRenderText(node.children)) {
+        if (rendersElement(node.children) && !mayRenderText(node.children)) {
           context.report({ node: node.openingElement, messageId: 'iconOnly' })
         }
       },
@@ -43,4 +65,4 @@ const rule = {
   },
 }
 
-export default { rules: { 'icon-only-button': rule } }
+export default rule
