@@ -8,6 +8,7 @@ import { ContactSelector } from '@/components/ui/contact-selector'
 import { useContacts } from '@/hooks/use-contacts'
 import { useResolveNameCandidate } from '@/hooks/use-interactions-queue'
 import type { NameCandidateGroup } from '@/types/import'
+import { getErrorMessage } from '@/lib/utils'
 
 // Cadence options mirror the import-link modal's kept controls.
 const cadenceOptions = [
@@ -124,7 +125,7 @@ export function NameCandidateModal({
       )
       advanceAfterResolve()
     } catch (error) {
-      onError(error instanceof Error ? error.message : 'Failed to resolve token group')
+      onError(getErrorMessage(error, 'Failed to resolve token group'))
     }
   }
 

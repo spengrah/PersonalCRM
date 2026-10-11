@@ -18,7 +18,7 @@ import { useContactNote, useSaveContactNote } from '@/hooks/use-contact-note'
 import { useContactTasks } from '@/hooks/use-contact-tasks'
 import { useKeyboardNavigation } from '@/hooks/use-keyboard-navigation'
 import { ContactNavigationBar } from '@/components/contacts/contact-navigation-bar'
-import { formatBirthday, formatDateOnly, formatRelativeTime } from '@/lib/utils'
+import { formatBirthday, formatDateOnly, formatRelativeTime, getErrorMessage } from '@/lib/utils'
 import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import {
   Edit,
@@ -610,9 +610,7 @@ export default function ContactDetailPage() {
             <div className="mt-4 bg-red-50 border border-red-200 rounded-md p-4">
               <h3 className="text-sm font-medium text-red-800">Error updating contact</h3>
               <p className="mt-1 text-sm text-red-700">
-                {updateContactMutation.error instanceof Error
-                  ? updateContactMutation.error.message
-                  : 'An unexpected error occurred'}
+                {getErrorMessage(updateContactMutation.error, 'An unexpected error occurred')}
               </p>
             </div>
           )}

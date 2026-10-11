@@ -2,7 +2,7 @@
 // Kept OUT of page.tsx: Next.js App Router rejects any named export from a
 // page file beyond its default component and a small reserved set
 // (metadata, generateStaticParams, ...) — a build-time-only check that
-// neither `tsc --noEmit` nor `next lint` catches.
+// neither `tsc --noEmit` nor ESLint catches.
 
 // Whether the page's main (non-editing) body — and therefore every modal it
 // hosts — is actually rendered. Three things independently unmount it, each

@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button'
 import { Pagination } from '@/components/ui/pagination'
 import { Navigation } from '@/components/layout/navigation'
 import { FORM_CONTROL_WITH_ICON, FORM_SELECT_BASE } from '@/lib/form-classes'
-import { formatDateOnly, formatCadence, formatBirthday } from '@/lib/utils'
+import { formatDateOnly, formatCadence, formatBirthday, getErrorMessage } from '@/lib/utils'
 import type { Contact } from '@/types/contact'
 import {
   buildContactDetailUrl,
@@ -618,7 +618,7 @@ function ContactsPageContent() {
               <div className="ml-3">
                 <h3 className="text-sm font-medium text-red-800">Error loading contacts</h3>
                 <p className="mt-1 text-sm text-red-700">
-                  {error instanceof Error ? error.message : 'An unexpected error occurred'}
+                  {getErrorMessage(error, 'An unexpected error occurred')}
                 </p>
               </div>
             </div>

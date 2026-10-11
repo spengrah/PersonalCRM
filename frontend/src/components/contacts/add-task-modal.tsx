@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useId } from 'react'
 import { useCreateManualTask } from '@/hooks/use-contact-tasks'
 import { Button } from '@/components/ui/button'
 import { X, ChevronDown } from 'lucide-react'
+import { getErrorMessage } from '@/lib/utils'
 
 interface AddTaskModalProps {
   contactId: string
@@ -60,7 +61,7 @@ export function AddTaskModal({ contactId, contactName, onClose }: AddTaskModalPr
       })
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create task')
+      setError(getErrorMessage(err, 'Failed to create task'))
     }
   }
 

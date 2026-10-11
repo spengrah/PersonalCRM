@@ -27,6 +27,7 @@ import type {
 } from '@/types/import'
 import type { ContactMethodType } from '@/types/contact'
 import { MethodSuggestionResolver } from './method-suggestion-resolver'
+import { getErrorMessage } from '@/lib/utils'
 
 // Trusted domains for photo URLs
 const TRUSTED_PHOTO_DOMAINS = ['googleusercontent.com', 'google.com', 'gstatic.com']
@@ -381,7 +382,7 @@ function ContactCandidateResolver({
   // Helper to handle action errors - avoids code duplication
   const handleActionError = useCallback(
     (error: unknown, fallbackMessage: string) => {
-      onError(error instanceof Error ? error.message : fallbackMessage)
+      onError(getErrorMessage(error, fallbackMessage))
     },
     [onError]
   )

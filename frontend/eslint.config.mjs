@@ -28,6 +28,16 @@ const srcSelectors = [
       "MemberExpression[property.name='reload']:matches([object.name='location'], [object.property.name='location'])",
     message: "Use the query's refetch() instead of reloading the page.",
   },
+  {
+    selector:
+      "ConditionalExpression[test.operator='instanceof'][test.right.name='Error'][consequent.property.name='message']",
+    message: 'Use getErrorMessage(error, fallback) from src/lib/utils.ts.',
+  },
+  {
+    selector:
+      "IfStatement[test.operator='instanceof'][test.right.name='Error']:has(MemberExpression[property.name='message'])",
+    message: 'Use getErrorMessage(error, fallback) from src/lib/utils.ts.',
+  },
 ]
 
 // The accelerated clock: src/hooks/use-accelerated-time.ts is the only wall-clock reader.
@@ -94,6 +104,23 @@ const eslintConfig = [
   {
     files: ['src/hooks/use-accelerated-time.ts'],
     rules: { 'no-restricted-syntax': ['error', ...srcSelectors] },
+  },
+  // Forward-only rules: eslint-suppressions.json records the violations that predate
+  // them, so they block new violations only. Each rule is off in the file it points to.
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: srcTestFiles,
+    rules: {
+      'local/api-client-only': 'error',
+      'local/form-control-primitives': 'error',
+      'local/query-invalidation-registry': 'error',
+    },
+  },
+  { files: ['src/lib/api-client.ts'], rules: { 'local/api-client-only': 'off' } },
+  { files: ['src/components/ui/**'], rules: { 'local/form-control-primitives': 'off' } },
+  {
+    files: ['src/lib/query-invalidation.ts'],
+    rules: { 'local/query-invalidation-registry': 'off' },
   },
   {
     files: ['tests/**/*.{ts,tsx}'],

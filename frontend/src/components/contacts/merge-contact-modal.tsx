@@ -8,7 +8,7 @@ import { ContactSelector } from '@/components/ui/contact-selector'
 import { useContacts } from '@/hooks/use-contacts'
 import { useMergePreview, useMergeContacts, type MergeFieldSelections } from '@/hooks/use-merge'
 import type { Contact } from '@/types/contact'
-import { formatCadence as formatCadenceBase } from '@/lib/utils'
+import { formatCadence as formatCadenceBase, getErrorMessage } from '@/lib/utils'
 
 interface MergeContactModalProps {
   /** The target contact (will receive merged data) */
@@ -143,7 +143,7 @@ export function MergeContactModal({
       )
       onClose()
     } catch (error) {
-      onError(error instanceof Error ? error.message : 'Failed to merge contacts')
+      onError(getErrorMessage(error, 'Failed to merge contacts'))
     }
   }
 

@@ -23,6 +23,7 @@ import {
   useWhatsAppStatus,
 } from '@/hooks/use-whatsapp'
 import type { WhatsAppChatStatus, WhatsAppStatus } from '@/lib/whatsapp-api'
+import { getErrorMessage } from '@/lib/utils'
 
 export type Step =
   | 'loading'
@@ -178,7 +179,7 @@ export function WhatsAppSection() {
       await startPairing.mutateAsync({ method: 'qr' })
       resetPairFlow()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start pairing')
+      setError(getErrorMessage(err, 'Failed to start pairing'))
     }
   }, [startPairing, resetPairFlow])
 
@@ -188,7 +189,7 @@ export function WhatsAppSection() {
       await startPairing.mutateAsync({ method: 'phone', phone: phone.trim() })
       resetPairFlow()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start pairing')
+      setError(getErrorMessage(err, 'Failed to start pairing'))
     }
   }, [startPairing, phone, resetPairFlow])
 
@@ -198,7 +199,7 @@ export function WhatsAppSection() {
       await cancelPairing.mutateAsync()
       resetPairFlow()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to cancel pairing')
+      setError(getErrorMessage(err, 'Failed to cancel pairing'))
     }
   }, [cancelPairing, resetPairFlow])
 
@@ -213,7 +214,7 @@ export function WhatsAppSection() {
           message: result.warning || 'WhatsApp disconnected',
         })
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to disconnect')
+        setError(getErrorMessage(err, 'Failed to disconnect'))
       }
     },
     [disconnect, resetPairFlow]
