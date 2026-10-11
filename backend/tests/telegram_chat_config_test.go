@@ -43,8 +43,7 @@ func TestChatConfig_UpsertAndList(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -55,7 +54,7 @@ func TestChatConfig_UpsertAndList(t *testing.T) {
 
 	title := "Test Group"
 	mc := int32(5)
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID1,
 		ChatTitle:      &title,
 		ChatType:       "group",
@@ -88,8 +87,7 @@ func TestChatConfig_UpdateStatus(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -99,7 +97,7 @@ func TestChatConfig_UpdateStatus(t *testing.T) {
 	chatID1, _, _ := chatConfigIDs(t, database.Queries)
 
 	title := "Status Test"
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID1,
 		ChatTitle:      &title,
 		ChatType:       "group",
@@ -122,8 +120,7 @@ func TestChatConfig_BackfillCursorAndComplete(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -132,7 +129,7 @@ func TestChatConfig_BackfillCursorAndComplete(t *testing.T) {
 
 	_, chatID2, _ := chatConfigIDs(t, database.Queries)
 
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID2,
 		ChatType:       "private",
 		Status:         "auto",
@@ -169,8 +166,7 @@ func TestChatConfig_ResetBackfill(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -179,7 +175,7 @@ func TestChatConfig_ResetBackfill(t *testing.T) {
 
 	_, _, chatID3 := chatConfigIDs(t, database.Queries)
 
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID3,
 		ChatType:       "group",
 		Status:         "auto",
@@ -210,8 +206,7 @@ func TestChatConfig_ListForBackfill(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -221,7 +216,7 @@ func TestChatConfig_ListForBackfill(t *testing.T) {
 	chatID1, chatID2, _ := chatConfigIDs(t, database.Queries)
 
 	// Create one incomplete and one complete
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID1,
 		ChatType:       "private",
 		Status:         "auto",
@@ -265,8 +260,7 @@ func TestChatConfig_UpdateMemberCount(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -276,7 +270,7 @@ func TestChatConfig_UpdateMemberCount(t *testing.T) {
 	chatID1, _, _ := chatConfigIDs(t, database.Queries)
 
 	mc := int32(5)
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID1,
 		ChatType:       "group",
 		MemberCount:    &mc,
@@ -303,8 +297,7 @@ func TestChatConfig_BackfillResume(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -314,7 +307,7 @@ func TestChatConfig_BackfillResume(t *testing.T) {
 	chatID1, chatID2, _ := chatConfigIDs(t, database.Queries)
 
 	// Chat 1: has cursor (interrupted mid-backfill)
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID1,
 		ChatType:       "private",
 		Status:         "auto",

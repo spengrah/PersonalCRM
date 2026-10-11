@@ -8,7 +8,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -37,9 +36,7 @@ func seedExtSweepFixtures(t *testing.T) *extSweepFixtures {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -164,9 +161,7 @@ func TestExternalContactSweep_ListUnmatched_FiltersTombstone(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 	prefix := "sweep-unm-" + syntheticNS(t) + "-"
@@ -214,9 +209,7 @@ func TestExternalContactSweep_ListAllUnmatched_FiltersTombstone(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 	prefix := "sweep-allunm-" + syntheticNS(t) + "-"
@@ -259,9 +252,7 @@ func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 	// Use a unique source per-run so counts are bounded. The namespace token
@@ -269,7 +260,7 @@ func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
 	source := "sweep-src-" + syntheticNS(t)
 	prefix := "sweep-cnt-" + syntheticNS(t) + "-"
 	syncedAt := accelerated.GetCurrentTime()
-	_, err = repo.Upsert(ctx, repository.UpsertExternalContactRequest{
+	_, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source: source, SourceID: prefix + "live-a", SyncedAt: &syncedAt,
 	})
 	require.NoError(t, err)
@@ -307,9 +298,7 @@ func TestExternalContactUnmatched_HidesUnresolvedTelegramByDefault(t *testing.T)
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 	prefix := "tg-hidden-" + syntheticNS(t) + "-"
@@ -408,9 +397,7 @@ func TestExternalContactSweep_ListForCRMContact_FiltersTombstone(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -464,9 +451,7 @@ func TestExternalContactSweep_RoundTrip_ReviveAfterSoftDelete(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -518,16 +503,14 @@ func TestExternalContactSweep_GetByID_AccountIDNullSemantics(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 	prefix := "sweep-acct-" + syntheticNS(t) + "-"
 	syncedAt := accelerated.GetCurrentTime()
 
 	// account_id = NULL (icloud_contacts shape).
-	_, err = repo.Upsert(ctx, repository.UpsertExternalContactRequest{
+	_, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source: "icloud_contacts", SourceID: prefix + "x", SyncedAt: &syncedAt,
 	})
 	require.NoError(t, err)

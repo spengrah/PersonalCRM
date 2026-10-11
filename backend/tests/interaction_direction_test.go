@@ -10,7 +10,6 @@ import (
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/contacttask"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -21,20 +20,7 @@ import (
 func setupDirectionTestDeps(t *testing.T) (*service.ContactService, *repository.ContactRepository, *repository.ContactTaskRepository, func()) {
 	t.Helper()
 
-	databaseURL := testsupport.RequireDatabase(t)
-
-	// Migrations are applied once by TestMain.
-	ctx := context.Background()
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)

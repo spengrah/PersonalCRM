@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
 
@@ -28,11 +27,7 @@ func TestContactListUnified_Integration(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewContactRepository(database.Queries)
 	gen, ns := migrationGenerator(t)

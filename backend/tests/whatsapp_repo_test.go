@@ -43,9 +43,7 @@ func setupWhatsAppRepoTest(t *testing.T) *waEnv {
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	return &waEnv{
 		ctx:   ctx,

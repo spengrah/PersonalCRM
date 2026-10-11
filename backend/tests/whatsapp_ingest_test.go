@@ -106,8 +106,7 @@ func setupIngestTest(t *testing.T) *ingestEnv {
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Registered first so it runs LAST (t.Cleanup is LIFO) — the row sweeps
 	// below need the pool open.
 	t.Cleanup(database.Close)

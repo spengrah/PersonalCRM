@@ -55,9 +55,7 @@ func TestSyncService_ListDueAccounts_ExcludesPushStrategy(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	// Build a real SyncRepository against the DB.
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -77,7 +75,7 @@ func TestSyncService_ListDueAccounts_ExcludesPushStrategy(t *testing.T) {
 	// Seed one due row per source.
 	nextSync := accelerated.GetCurrentTime().Add(-1 * time.Minute) // due (in the past)
 	pushAccountID := "host-x"
-	_, err = database.Queries.SeedExternalSyncState(ctx, db.SeedExternalSyncStateParams{
+	_, err := database.Queries.SeedExternalSyncState(ctx, db.SeedExternalSyncStateParams{
 		Source:     pushSource,
 		AccountID:  &pushAccountID,
 		Enabled:    true,

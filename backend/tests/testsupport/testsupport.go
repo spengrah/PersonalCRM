@@ -2,18 +2,20 @@
 // integration test packages (tests, tests/river, tests/scheduler, ...).
 //
 // It is deliberately UNTAGGED (no //go:build integration_testdb) and imports
-// only the Go standard library. The files that consume it — the River and
+// only the Go standard library plus the db and config packages (OpenDatabase).
+// The files that consume it — the River and
 // scheduler test files — are themselves untagged and must still compile under
 // the no-tag unit build before they self-skip on an unset DATABASE_URL.
 // A build-tagged helper package would leave those untagged importers with no
 // buildable dependency under the no-tag build. Keeping testsupport untagged
-// and stdlib-only avoids that.
+// avoids that; db and config are untagged too.
 //
 // The functions hold no mutable package state, so the package is import-safe
 // from multiple concurrent test packages.
 package testsupport
 
 import (
+	"context"
 	"net"
 	"net/url"
 	"os"
@@ -21,6 +23,9 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/db"
 )
 
 const (
@@ -98,4 +103,34 @@ func RequireDatabase(t testing.TB) string {
 	}
 	_ = conn.Close()
 	return dbURL
+}
+
+// OpenDatabase opens a pool on DATABASE_URL for the calling test and closes it
+// with t.Cleanup. It applies RequireDatabase's skip and fail rules, then
+// fails the test if the pool cannot open. The pool uses the pool settings of
+// config.TestConfig(). Tests open databases through this helper (or
+// OpenDatabaseAt), never db.NewDatabase directly; forbidigo enforces it.
+//
+// t.Cleanup is LIFO: cleanups registered after OpenDatabase run while the
+// pool is still open.
+func OpenDatabase(t testing.TB) *db.Database {
+	t.Helper()
+
+	return OpenDatabaseAt(t, RequireDatabase(t))
+}
+
+// OpenDatabaseAt is OpenDatabase for a database other than DATABASE_URL, such
+// as a per-test clone of the migrated template database.
+func OpenDatabaseAt(t testing.TB, databaseURL string) *db.Database {
+	t.Helper()
+
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	// The pool outlives t.Context(), which is cancelled before cleanups run.
+	database, err := db.NewDatabase(context.WithoutCancel(t.Context()), cfg.Database)
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	t.Cleanup(database.Close)
+	return database
 }

@@ -188,11 +188,7 @@ func TestContactRepository_Integration(t *testing.T) {
 	}
 
 	// Connect to database
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	// Create repository
 	repo := repository.NewContactRepository(database.Queries)
@@ -291,11 +287,7 @@ func TestContactMethodRepository_Integration(t *testing.T) {
 		cfg.Database.URL = databaseURL
 	}
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -372,11 +364,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewSyncRepository(database.Queries)
 
@@ -736,11 +724,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewOAuthRepository(database.Queries)
 
@@ -1075,24 +1059,13 @@ func timeNow() time.Time {
 
 // TestFindSimilarContactsBatch_Integration tests the batch matching query
 func TestFindSimilarContactsBatch_Integration(t *testing.T) {
-	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()
 
 	// Migrations are applied once by TestMain.
 	// Create database connection
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)

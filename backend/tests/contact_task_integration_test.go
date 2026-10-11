@@ -30,11 +30,7 @@ func TestContactTask_CRUD(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
@@ -281,11 +277,7 @@ func TestContactTask_CountByProvider(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	gen, _ := migrationGenerator(t)
@@ -346,11 +338,7 @@ func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	gen, ns := migrationGenerator(t)
@@ -438,11 +426,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	gen, ns := migrationGenerator(t)
@@ -663,11 +647,7 @@ func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	gen, ns := migrationGenerator(t)
@@ -781,11 +761,7 @@ func TestContactTask_Migration046_PartialUniqueIndexes(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	gen, ns := migrationGenerator(t)

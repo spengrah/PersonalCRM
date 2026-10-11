@@ -11,7 +11,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -40,8 +39,7 @@ func setupChatStagingTest(t *testing.T) *chatStagingEnv {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Registered first so it runs LAST (t.Cleanup is LIFO) — the row sweeps
 	// below need the pool open.
 	t.Cleanup(database.Close)

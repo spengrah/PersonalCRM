@@ -52,8 +52,7 @@ func setupKnownIDsByHostEnv(t *testing.T) *knownIDsByHostEnv {
 	cfg.Database.URL = databaseURL
 	cfg.External.APIKey = macHostTestKey
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)

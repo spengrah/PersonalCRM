@@ -38,8 +38,7 @@ func setupMessagesMessageTest(t *testing.T) (context.Context, *factory.Generator
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	gen, _ := migrationGenerator(t)
 

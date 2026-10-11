@@ -58,7 +58,7 @@ func TestImportAPI_CandidateListConfidenceOrder(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	// Register the pool close FIRST so it runs LAST — t.Cleanup is LIFO, and
 	// the fixture deletes registered below need the pool still open.
 	t.Cleanup(cleanup)

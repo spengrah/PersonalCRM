@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 
@@ -34,16 +33,7 @@ import (
 func newSystemTestDatabase(t *testing.T) *db.Database {
 	t.Helper()
 
-	dbConfig := config.DatabaseConfig{
-		URL:               os.Getenv("DATABASE_URL"),
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(context.Background(), dbConfig)
-	require.NoError(t, err, "failed to connect to test database")
+	database := testsupport.OpenDatabase(t)
 	return database
 }
 

@@ -64,8 +64,7 @@ func setupExtContactIngestEnv(t *testing.T) *extContactIngestEnv {
 	cfg.External.APIKey = macHostTestKey
 	cfg.Features.EnableEventBusIngest = true
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)

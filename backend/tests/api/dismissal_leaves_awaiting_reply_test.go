@@ -15,7 +15,6 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/contacttask"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -28,18 +27,8 @@ import (
 func setupAwaitingReplyAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactRepository, *repository.ContactTaskRepository, func()) {
 	t.Helper()
 
-	databaseURL := testsupport.RequireDatabase(t)
-
 	ctx := context.Background()
-	database, err := db.NewDatabase(ctx, config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	})
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)

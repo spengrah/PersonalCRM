@@ -8,7 +8,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/stretchr/testify/assert"
@@ -35,9 +34,7 @@ func TestCommsThreadID_ThreeStateDiscrimination(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	gen, ns := migrationGenerator(t)
 	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
@@ -62,7 +59,7 @@ func TestCommsThreadID_ThreeStateDiscrimination(t *testing.T) {
 	nullRow := base
 	nullRow.ExternalID = ns + "-null"
 	nullRow.ThreadID = nil
-	_, err = comms.UpsertMessage(ctx, nullRow)
+	_, err := comms.UpsertMessage(ctx, nullRow)
 	require.NoError(t, err)
 
 	emptyRow := base
@@ -94,9 +91,7 @@ func TestTelegramPeerEntity_ThreeStateDiscrimination(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	_, ns := migrationGenerator(t)
 	repo := repository.NewTelegramMessageRepository(database.Queries)

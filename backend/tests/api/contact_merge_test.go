@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
@@ -30,12 +29,10 @@ import (
 func setupTestDB(t *testing.T) (*db.Database, func()) {
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	return database, func() { database.Close() }
 }
@@ -817,22 +814,9 @@ func TestContactMerge_Integration(t *testing.T) {
 // wiring, but only registers the merge-preview route (GET /:id/merge/preview,
 // where :id is the TARGET and source_id is a query param) plus a bare CreateContact
 // route needed to seed fixtures through the HTTP layer's own DB handle.
-func setupContactMergePreviewTestRouter() (*gin.Engine, func()) {
-	ctx := context.Background()
-	databaseURL := os.Getenv("DATABASE_URL")
+func setupContactMergePreviewTestRouter(t *testing.T) (*gin.Engine, func()) {
 
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	if err != nil {
-		panic("Failed to connect to test database: " + err.Error())
-	}
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -865,7 +849,7 @@ func TestContactMergePreviewAPI_Errors(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupContactMergePreviewTestRouter()
+	router, cleanup := setupContactMergePreviewTestRouter(t)
 	defer cleanup()
 
 	ns := uuid.New().String()[:8]
@@ -971,7 +955,7 @@ func TestContactMergePreviewAPI_SuccessCounts(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, rcleanup := setupContactMergePreviewTestRouter()
+	router, rcleanup := setupContactMergePreviewTestRouter(t)
 	defer rcleanup()
 
 	database, cleanup := setupTestDB(t)

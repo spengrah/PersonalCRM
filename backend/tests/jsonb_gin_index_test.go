@@ -42,9 +42,7 @@ func setupJSONBGINEnv(t *testing.T) *jsonbGINEnv {
 	cfg.Database.URL = databaseURL
 
 	ctx := context.Background()
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	suffix := uuid.NewString()
 	sourceIDPfx := "jsonb_gin_test_" + suffix + "_"

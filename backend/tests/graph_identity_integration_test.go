@@ -27,11 +27,7 @@ func graphTestDB(t *testing.T) (*db.Database, context.Context) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 	return database, ctx
 }
 

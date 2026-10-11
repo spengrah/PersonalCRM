@@ -74,10 +74,7 @@ func setupServiceTest(t *testing.T) (*service.ContactTaskService, *repository.Co
 	cfg.Database.URL = databaseURL
 	cfg.CORS.FrontendURL = "https://example.com"
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)

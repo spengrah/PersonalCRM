@@ -34,11 +34,7 @@ func newMethodOpsFixture(t *testing.T) *methodOpsFixture {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{

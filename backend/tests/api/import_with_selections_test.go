@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
@@ -14,7 +13,6 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -24,25 +22,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository, *repository.ContactRepository, *repository.ContactMethodRepository, func()) {
-	ctx := context.Background()
-	databaseURL := os.Getenv("DATABASE_URL")
+func setupImportTestRouter(t *testing.T) (*gin.Engine, *repository.ExternalContactRepository, *repository.ContactRepository, *repository.ContactMethodRepository, func()) {
 
 	// Migrations are applied once by TestMain.
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	if err != nil {
-		panic("Failed to connect to test database: " + err.Error())
-	}
+	database := testsupport.OpenDatabase(t)
 
 	// Create repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -95,7 +80,7 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -349,7 +334,7 @@ func TestImportAPI_LinkWithMethodSelection(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -639,7 +624,7 @@ func TestImportAPI_ImportWithCadence(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -762,7 +747,7 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -1006,7 +991,7 @@ func TestImportAPI_ImportWithName(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -1126,7 +1111,7 @@ func TestImportAPI_ImportWithPrimaryMethod(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -1263,7 +1248,7 @@ func TestImportAPI_LinkWithName(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -1374,7 +1359,7 @@ func TestImportAPI_LinkWithPrimaryMethod(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -1582,7 +1567,7 @@ func TestImportAPI_EdgeCases(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -2064,7 +2049,7 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -2242,7 +2227,7 @@ func TestImportAPI_LinkOnlySourcePolicy(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, _, _, cleanup := setupImportTestRouter()
+	router, externalRepo, _, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
@@ -2322,24 +2307,13 @@ func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
 	// Use a separate enrichment repo to verify audit rows.
-	databaseURL2 := os.Getenv("DATABASE_URL")
-	dbCfg := config.DatabaseConfig{
-		URL:               databaseURL2,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	auditDB, err := db.NewDatabase(ctx, dbCfg)
-	require.NoError(t, err)
-	defer auditDB.Close()
+	auditDB := testsupport.OpenDatabase(t)
 	enrichmentRepo := repository.NewEnrichmentRepository(auditDB.Queries)
 
 	seed := func(t *testing.T, tgUsername string) (*repository.Contact, *repository.ExternalContact, func()) {
@@ -2543,7 +2517,7 @@ func TestImportAPI_TelegramImportNewRegression(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
 	ctx := context.Background()

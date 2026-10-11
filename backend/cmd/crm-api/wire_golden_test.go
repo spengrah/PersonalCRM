@@ -236,9 +236,7 @@ func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 	t.Helper()
 	ctx := context.Background()
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	core := buildCoreRepos(database.Queries)
 

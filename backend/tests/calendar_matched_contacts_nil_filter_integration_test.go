@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -31,23 +29,11 @@ import (
 // which filters uuid.Nil on the way out regardless of what the write path
 // actually stored.
 func TestCalendarMatchedContactsNilFilter(t *testing.T) {
-	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	ctx := context.Background()
 
-	// Migrations are applied once by TestMain.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	gen, _ := migrationGenerator(t)
 	calendarRepo := repository.NewCalendarEventRepository(database.Queries)

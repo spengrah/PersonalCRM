@@ -24,7 +24,6 @@ import (
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
@@ -64,9 +63,7 @@ func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 	t.Helper()
 	ctx := context.Background()
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	core := buildCoreRepos(database.Queries)
 

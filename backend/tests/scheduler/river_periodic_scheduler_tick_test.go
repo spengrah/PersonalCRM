@@ -8,7 +8,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
@@ -41,9 +40,7 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	// Clean-up pre-existing state that could collide with this test's
 	// account IDs. The source strings embed the test name so future
@@ -51,7 +48,7 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 	src1 := "tick_test_gmail"
 	src2 := "tick_test_todoist"
 
-	_, err = database.Pool.Exec(ctx,
+	_, err := database.Pool.Exec(ctx,
 		`DELETE FROM river_job WHERE kind = 'sync_provider_account'
 		 AND (args->>'source') IN ($1, $2)`, src1, src2)
 	require.NoError(t, err)
@@ -177,9 +174,7 @@ func TestPeriodicTick_FiresOnStart(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	// Empty registry → service.ListDueAccounts returns 0 due accounts →
 	// Work returns nil immediately with no downstream enqueues.

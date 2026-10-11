@@ -68,9 +68,7 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	source := "retry_test_ctx_cancel"
 
@@ -217,9 +215,7 @@ func TestSyncWorker_AbandonedLogOnStartupRecovery(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	source := "retry_test_abandon_on_recovery"
 	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_log WHERE source = $1`, source)
@@ -379,9 +375,7 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	source := "retry_test_rescue_on_crash"
 	// Sweep ALL river_job rows in this package clone before starting our own
@@ -395,7 +389,7 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	// test's own t.Cleanup still scrubs this test's source-scoped rows.
 	sweepCtx, sweepCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer sweepCancel()
-	_, err = database.Queries.SweepRiverJobsInCloneForTest(sweepCtx)
+	_, err := database.Queries.SweepRiverJobsInCloneForTest(sweepCtx)
 	require.NoError(t, err, "sweep river_job in package clone")
 	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_log WHERE source = $1`, source)
 	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)

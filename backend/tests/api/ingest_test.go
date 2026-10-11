@@ -87,9 +87,7 @@ func setupIngestTestRouter(t *testing.T, enableIngest bool) *ingestTestSetup {
 	cfg.External.APIKey = ingestTestAPIKey
 	cfg.Features.EnableEventBusIngest = enableIngest
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	// River client (TestOnly skips leader election / periodic loops).
 	workers := river.NewWorkers()

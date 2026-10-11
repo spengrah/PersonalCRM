@@ -8,7 +8,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/stretchr/testify/assert"
@@ -41,8 +40,7 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -96,8 +94,7 @@ func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -146,8 +143,7 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -159,7 +155,7 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Original"
 
-	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+	_, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90003,
 		TelegramChatID:    chatID,
 		ChatType:          "private",
@@ -198,8 +194,7 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -215,7 +210,7 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "To be deleted"
 
-	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+	_, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: msgID,
 		TelegramChatID:    chatID,
 		ChatType:          "private",
@@ -245,8 +240,7 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -263,7 +257,7 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Channel message"
 
-	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+	_, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90005,
 		TelegramChatID:    chatID,
 		ChatType:          "group",
@@ -292,8 +286,7 @@ func TestTelegramMessage_ListUnprocessed(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -305,7 +298,7 @@ func TestTelegramMessage_ListUnprocessed(t *testing.T) {
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Unprocessed msg"
 
-	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+	_, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90001,
 		TelegramChatID:    chatID,
 		ChatType:          "private",

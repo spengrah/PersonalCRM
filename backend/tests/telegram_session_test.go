@@ -30,9 +30,7 @@ func TestSessionRepository_UpsertAndGet(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramSessionRepository(database.Queries)
 	cleanupTelegramSession(t, database.Queries)
@@ -72,16 +70,14 @@ func TestSessionRepository_UpdateAuthState(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramSessionRepository(database.Queries)
 	cleanupTelegramSession(t, database.Queries)
 	t.Cleanup(func() { cleanupTelegramSession(t, database.Queries) })
 
 	// Create session in disconnected state
-	_, err = repo.UpsertSession(ctx, repository.UpsertTelegramSessionParams{
+	_, err := repo.UpsertSession(ctx, repository.UpsertTelegramSessionParams{
 		SessionDataEncrypted: []byte("data"),
 		EncryptionNonce:      []byte("nonce"),
 		AuthState:            "disconnected",
@@ -103,15 +99,13 @@ func TestSessionRepository_Delete(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramSessionRepository(database.Queries)
 	cleanupTelegramSession(t, database.Queries)
 	t.Cleanup(func() { cleanupTelegramSession(t, database.Queries) })
 
-	_, err = repo.UpsertSession(ctx, repository.UpsertTelegramSessionParams{
+	_, err := repo.UpsertSession(ctx, repository.UpsertTelegramSessionParams{
 		SessionDataEncrypted: []byte("data"),
 		EncryptionNonce:      []byte("nonce"),
 		AuthState:            "disconnected",
@@ -134,9 +128,7 @@ func TestDatabaseSessionStorage_EncryptDecrypt(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramSessionRepository(database.Queries)
 	cleanupTelegramSession(t, database.Queries)
@@ -167,9 +159,7 @@ func TestDatabaseSessionStorage_NoSession(t *testing.T) {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramSessionRepository(database.Queries)
 	cleanupTelegramSession(t, database.Queries)

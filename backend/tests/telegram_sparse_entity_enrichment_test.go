@@ -59,9 +59,7 @@ func setupSparseEnrichTest(t *testing.T) *sparseEnrichEnv {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(context.Background(), cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	messageRepo := repository.NewTelegramMessageRepository(database.Queries)
 	chatConfigRepo := repository.NewTelegramChatConfigRepository(database.Queries)

@@ -70,13 +70,9 @@ func newJobSampleTestDB(t *testing.T, ctx context.Context) (*db.Database, *confi
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
 	cfg.Database.MigrationsPath = migrationsPathForTest()
-	cfg.Database.MaxConns = 6
-	cfg.Database.MinConns = 1
 	cfg.River.WorkerConcurrency = 2
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 	return database, cfg
 }
 

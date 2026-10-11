@@ -31,9 +31,7 @@ func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceF
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	gen, _ := migrationGenerator(t)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
@@ -73,7 +71,7 @@ func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceF
 
 	// Insert one telegram inbound + one gcal inbound for the same contact
 	// in overlapping windows. The source filter must distinguish them.
-	_, err = interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+	_, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
 		ContactID:  contact.ID,
 		Source:     repository.InteractionSourceTelegram,
 		SourceRef:  &tgRef,

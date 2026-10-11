@@ -63,12 +63,10 @@ func TestRunMigrations_River_Integration(t *testing.T) {
 	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
 
 	// Verify river's schema is present by querying its migration table.
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	var count int
-	err = database.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM river_migration`).Scan(&count)
+	err := database.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM river_migration`).Scan(&count)
 	require.NoError(t, err)
 	require.Positive(t, count, "river_migration table should have at least one row")
 

@@ -121,7 +121,7 @@ func TestImportSuggestionsAPI_MethodGroupOnlyOnFirstPage(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	t.Cleanup(cleanup)
 
 	ctx := context.Background()
@@ -171,7 +171,7 @@ func TestImportSuggestionsAPI_CandidatesRankedAndPaginated(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	t.Cleanup(cleanup)
 
 	ctx := context.Background()
@@ -261,7 +261,7 @@ func TestImportSuggestionsAPI_CandidateAllowedActionsPerSource(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, _, _, cleanup := setupImportTestRouter()
+	router, externalRepo, _, _, cleanup := setupImportTestRouter(t)
 	t.Cleanup(cleanup)
 
 	ctx := context.Background()

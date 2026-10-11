@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/testdb"
 
@@ -50,9 +49,7 @@ func newDeviceStoreFixture(t *testing.T) *deviceStoreFixture {
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	container, err := NewDeviceContainer(ctx, database.Pool, NewWALogger("whatsapp-test"))
 	require.NoError(t, err)

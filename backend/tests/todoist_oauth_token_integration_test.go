@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/todoist"
 
@@ -31,9 +30,7 @@ func newTodoistOAuthTestService(t *testing.T) (*todoist.OAuthService, *repositor
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewOAuthRepository(database.Queries)
 	svc, err := todoist.NewOAuthService(cfg, repo, nil)

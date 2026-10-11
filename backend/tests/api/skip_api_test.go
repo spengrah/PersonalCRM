@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
@@ -16,7 +15,6 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/gin-gonic/gin"
@@ -28,12 +26,7 @@ func setupSkipAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactRepositor
 	t.Helper()
 	testsupport.RequireDatabase(t)
 	ctx := context.Background()
-	database, err := db.NewDatabase(ctx, config.DatabaseConfig{
-		URL: os.Getenv("DATABASE_URL"), MaxConns: 8, MinConns: 1,
-		MaxConnIdleTime: config.DefaultDBMaxConnIdleTime, MaxConnLifetime: config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	})
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}

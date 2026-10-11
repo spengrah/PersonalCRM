@@ -92,9 +92,7 @@ func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -240,9 +238,7 @@ func TestSyntheticReset_InvalidNamespaceLeavesDataIntact(t *testing.T) {
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -250,7 +246,7 @@ func TestSyntheticReset_InvalidNamespaceLeavesDataIntact(t *testing.T) {
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, "reset", factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
-	_, err = h.SeedContact(ctx, spec)
+	_, err := h.SeedContact(ctx, spec)
 	require.NoError(t, err)
 
 	beforeContacts, err := support.CountAllRows(ctx, "contact")

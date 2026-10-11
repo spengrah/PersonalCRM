@@ -44,9 +44,7 @@ func setupWhatsAppStoreTest(t *testing.T) *waStoreEnv {
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	return &waStoreEnv{ctx: ctx, database: database, log: wapkg.NewWALogger("whatsapp-test")}
 }

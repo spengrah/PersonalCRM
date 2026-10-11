@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -20,20 +18,7 @@ import (
 func setupInteractionTestDeps(t *testing.T) (*service.ContactService, *repository.InteractionRepository, *repository.ContactRepository, func()) {
 	t.Helper()
 
-	databaseURL := testsupport.RequireDatabase(t)
-
-	// Migrations are applied once by TestMain.
-	ctx := context.Background()
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)

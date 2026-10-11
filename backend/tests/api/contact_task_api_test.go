@@ -13,7 +13,6 @@ import (
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
@@ -81,23 +80,12 @@ type contactTaskAPIHarness struct {
 func setupContactTaskAPIRouter(t *testing.T) (*contactTaskAPIHarness, func()) {
 	t.Helper()
 
-	databaseURL := testsupport.RequireDatabase(t)
-
 	// Migrations are applied once by TestMain.
 
 	ctx := context.Background()
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)

@@ -48,9 +48,7 @@ func setupMatcherEnrichmentTest(t *testing.T) *matcherEnrichTestEnv {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(context.Background(), cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -450,9 +448,7 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(context.Background(), cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	ctx := context.Background()
 	gen, ns := migrationGenerator(t)
@@ -473,7 +469,7 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 		contactCleanup()
 	})
 
-	_, err = identitySvc.MatchOrCreate(ctx, service.MatchRequest{
+	_, err := identitySvc.MatchOrCreate(ctx, service.MatchRequest{
 		RawIdentifier:  username,
 		Type:           identity.IdentifierTypeTelegram,
 		Source:         "telegram",

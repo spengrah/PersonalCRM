@@ -47,9 +47,7 @@ func newServiceSuiteDB(t *testing.T) (*db.Database, context.Context) {
 	ctx := context.Background()
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 	return database, ctx
 }
 

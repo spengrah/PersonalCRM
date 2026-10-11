@@ -10,7 +10,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
@@ -97,9 +96,7 @@ func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	source := "load_test_provider"
 
@@ -140,7 +137,7 @@ func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 	for i := 0; i < accountCount; i++ {
 		a := fmt.Sprintf("load-acct-%d", i)
 		acctIDs[i] = a
-		_, err = syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+		_, err := syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
 			Source:     source,
 			AccountID:  &a,
 			Enabled:    true,

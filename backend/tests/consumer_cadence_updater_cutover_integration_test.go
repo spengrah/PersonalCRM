@@ -40,11 +40,9 @@ import (
 func newCadenceUpdaterTestDB(t *testing.T) (*db.Database, func()) {
 	t.Helper()
 	databaseURL := testsupport.RequireDatabase(t)
-	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	return database, func() { database.Close() }
 }
 

@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +18,6 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -47,25 +45,10 @@ func getMigrationsPath() string {
 // helper above is shared between the tagged bridge and the migration tests in
 // this package, so it stays untagged here.
 
-func setupContactValidationTestRouter() (*gin.Engine, func()) {
-	ctx := context.Background()
-	databaseURL := os.Getenv("DATABASE_URL")
+func setupContactValidationTestRouter(t *testing.T) (*gin.Engine, func()) {
 
 	// Migrations are applied once by TestMain.
-	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
-	// connection ceiling under parallel execution.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	if err != nil {
-		panic("Failed to connect to test database: " + err.Error())
-	}
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -101,7 +84,7 @@ func TestContactAPI_ValidationErrors(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupContactValidationTestRouter()
+	router, cleanup := setupContactValidationTestRouter(t)
 	defer cleanup()
 
 	t.Run("CreateContact_MissingRequiredField", func(t *testing.T) {
@@ -511,7 +494,7 @@ func TestContactAPI_UpdateValidation(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupContactValidationTestRouter()
+	router, cleanup := setupContactValidationTestRouter(t)
 	defer cleanup()
 
 	// Per-test namespace so the CREATE + self-clean DELETE never collide with a
@@ -820,7 +803,7 @@ func TestContactAPI_DeleteValidation(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupContactValidationTestRouter()
+	router, cleanup := setupContactValidationTestRouter(t)
 	defer cleanup()
 
 	ns := uuid.New().String()[:8]
@@ -962,7 +945,7 @@ func TestCreateContact_StillAcceptsMethods(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupContactValidationTestRouter()
+	router, cleanup := setupContactValidationTestRouter(t)
 	defer cleanup()
 
 	ns := uuid.New().String()[:8]
@@ -1012,7 +995,7 @@ func TestContactAPI_QueryValidation(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupContactValidationTestRouter()
+	router, cleanup := setupContactValidationTestRouter(t)
 	defer cleanup()
 
 	t.Run("ListContacts_InvalidPage", func(t *testing.T) {
@@ -1317,7 +1300,7 @@ func TestContactAPI_GetContactValidation(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupContactValidationTestRouter()
+	router, cleanup := setupContactValidationTestRouter(t)
 	defer cleanup()
 
 	t.Run("GetContact_InvalidUUID", func(t *testing.T) {
@@ -1407,7 +1390,7 @@ func TestContactAPI_KnowledgeProjectionWireKeys(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupContactValidationTestRouter()
+	router, cleanup := setupContactValidationTestRouter(t)
 	defer cleanup()
 
 	// spec: KNW-033
@@ -1457,7 +1440,7 @@ func TestContactAPI_DuplicateMethodValues(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupContactValidationTestRouter()
+	router, cleanup := setupContactValidationTestRouter(t)
 	defer cleanup()
 
 	// Create contact with duplicate normalized values for the same type

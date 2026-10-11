@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/testdb"
@@ -58,9 +57,7 @@ func TestWhatsAppManager_TerminalDisconnectOpensAStalenessBreach(t *testing.T) {
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	waLog := NewWALogger("whatsapp-test")
 	container, err := NewDeviceContainer(ctx, database.Pool, waLog)

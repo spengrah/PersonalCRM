@@ -122,22 +122,12 @@ type atomicTxTestEnv struct {
 func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	t.Helper()
 
-	databaseURL := testsupport.RequireDatabase(t)
-
 	// Migrations are applied once into the template; the per-package clone
 	// (testdb.SetupPackage in testmain_integration_test.go) inherits the
 	// fully-migrated schema, so no inline db.RunMigrations is needed here.
 	ctx := context.Background()
 
-	database, err := db.NewDatabase(ctx, config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	})
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)

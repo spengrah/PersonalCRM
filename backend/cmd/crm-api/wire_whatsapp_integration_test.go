@@ -42,7 +42,6 @@ type wireWhatsAppHarness struct {
 
 func newWireWhatsAppHarness(t *testing.T, mutate func(*config.Config)) wireWhatsAppHarness {
 	t.Helper()
-	ctx := context.Background()
 
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
@@ -52,9 +51,7 @@ func newWireWhatsAppHarness(t *testing.T, mutate func(*config.Config)) wireWhats
 	cfg.Database.MigrationsPath = migrationsPathForTest()
 	mutate(cfg)
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	riverWorkers := river.NewWorkers()
 	reg := newRiverRegistrar(riverWorkers)

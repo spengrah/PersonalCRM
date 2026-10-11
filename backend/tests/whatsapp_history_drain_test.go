@@ -60,9 +60,7 @@ func setupHistoryDrainTest(t *testing.T) *drainEnv {
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	env := &drainEnv{
 		ctx:      ctx,

@@ -15,7 +15,6 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/crypto"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	tgpkg "personal-crm/backend/internal/telegram"
@@ -34,8 +33,6 @@ var telegramChatIDSeq atomic.Int64
 func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramChatConfigRepository, int64, int64, func()) {
 	t.Helper()
 
-	databaseURL := testsupport.RequireDatabase(t)
-
 	// Reserve a disjoint ID pair for this test.
 	n := telegramChatIDSeq.Add(2)
 	chatID1 := 1_000_000 + n
@@ -46,16 +43,7 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 	ctx := context.Background()
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	sessionRepo := repository.NewTelegramSessionRepository(database.Queries)
 	updateStateRepo := repository.NewTelegramUpdateStateRepository(database.Queries)

@@ -10,7 +10,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/testdb"
 
@@ -31,9 +30,7 @@ func TestSyncLogTrim_Isolated(t *testing.T) {
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 	repo := repository.NewSyncRepository(database.Queries)
 
 	// Freeze the app clock 100 days AHEAD of wall time. This is the time-

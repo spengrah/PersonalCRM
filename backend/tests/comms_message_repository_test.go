@@ -30,8 +30,7 @@ func setupCommsMessageTest(t *testing.T) (context.Context, *repository.CommsMess
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	// Register the pool close via t.Cleanup BEFORE any row-cleanup callbacks
 	// are registered in the test body. t.Cleanup runs LIFO, so this close runs
@@ -398,8 +397,7 @@ func TestCommsMessageRepository_MarkProcessedTx(t *testing.T) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close this second pool via t.Cleanup (LIFO) so it outlives the
 	// interaction-cleanup callback registered below, which uses interactionRepo.
 	t.Cleanup(database.Close)
@@ -556,9 +554,7 @@ func TestInteractionSourceCheck_AcceptsEmail(t *testing.T) {
 	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)

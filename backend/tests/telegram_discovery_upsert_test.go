@@ -37,8 +37,7 @@ func setupDiscoveryUpsertTest(t *testing.T) (
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(context.Background(), cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 
@@ -426,8 +425,7 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER the row-delete t.Cleanup below
 	// — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -469,7 +467,7 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 
 	// Newer row: blank entity strings (the outbound private-chat shape).
-	_, err = messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+	_, err := messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 99001,
 		TelegramChatID:    testChatID,
 		ChatType:          "private",
