@@ -3,11 +3,12 @@
 package tests
 
 import (
-	"context"
 	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"personal-crm/backend/tests/testsupport"
 )
 
 // nullableNowTimestampBaseline lists the "table.column" timestamp columns that
@@ -58,11 +59,9 @@ var nullableNowTimestampBaseline = map[string]struct{}{
 }
 
 func TestSchema_NowDefaultTimestampsAreNotNull(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 
 	cols, err := database.Queries.TestListNullableTimestampDefaultNow(ctx)
