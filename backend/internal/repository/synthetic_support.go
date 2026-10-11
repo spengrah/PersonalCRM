@@ -206,7 +206,7 @@ func int64sToStrings(ids []int64) []string {
 // DeleteCalendarEventsByGcalEventIDPrefix removes calendar_event rows whose
 // gcal_event_id is ns-prefixed (cleanup step 7). Reuses the existing query.
 func (r *SyntheticSupportRepository) DeleteCalendarEventsByGcalEventIDPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.DeleteCalendarEventsByGcalEventIdPrefix(ctx, &prefix)
+	return r.queries.DeleteCalendarEventsByGcalEventIdPrefix(ctx, prefix)
 }
 
 // DeleteExternalIdentitiesByIdentifierPrefix removes identities whose normalized
@@ -240,7 +240,7 @@ func (r *SyntheticSupportRepository) DeleteIdentitiesForOwnedCandidates(ctx cont
 // DeleteExternalContactsBySourceIDPrefix removes external_contact rows whose
 // source_id is ns-prefixed (cleanup step 9). Reuses the existing query.
 func (r *SyntheticSupportRepository) DeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) (int64, error) {
-	return r.queries.DeleteExternalContactsBySourceIDPrefix(ctx, &prefix)
+	return r.queries.DeleteExternalContactsBySourceIDPrefix(ctx, prefix)
 }
 
 // SelectLinkedContactIDsByExternalContactIDs returns the CRM contacts the product
@@ -754,7 +754,7 @@ type PrefixCleanupResult struct {
 func (r *SyntheticSupportRepository) CleanupByPrefix(ctx context.Context, escapedPrefix string) (PrefixCleanupResult, error) {
 	var res PrefixCleanupResult
 
-	deletedContacts, err := r.queries.DeleteContactsByNamePrefix(ctx, &escapedPrefix)
+	deletedContacts, err := r.queries.DeleteContactsByNamePrefix(ctx, escapedPrefix)
 	if err != nil {
 		return res, err
 	}

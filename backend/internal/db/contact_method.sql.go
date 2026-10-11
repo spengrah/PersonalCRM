@@ -113,7 +113,7 @@ WHERE cm.type = ANY($1::text[])
 `
 
 type FindMethodsByNormalizedValueParams struct {
-	Column1         []string `json:"column_1"`
+	Types           []string `json:"types"`
 	ValueNormalized string   `json:"value_normalized"`
 }
 
@@ -130,7 +130,7 @@ type FindMethodsByNormalizedValueRow struct {
 }
 
 func (q *Queries) FindMethodsByNormalizedValue(ctx context.Context, arg FindMethodsByNormalizedValueParams) ([]*FindMethodsByNormalizedValueRow, error) {
-	rows, err := q.db.Query(ctx, FindMethodsByNormalizedValue, arg.Column1, arg.ValueNormalized)
+	rows, err := q.db.Query(ctx, FindMethodsByNormalizedValue, arg.Types, arg.ValueNormalized)
 	if err != nil {
 		return nil, err
 	}
@@ -237,8 +237,8 @@ ORDER BY cm.value_normalized ASC
 // Used by GET /api/v1/host/:id/known-identifiers — the daemon needs the
 // SET of canonical phones/emails, not the contact mapping, so DISTINCT
 // collapses the same value across multiple contacts.
-func (q *Queries) ListCanonicalIdentifiersByType(ctx context.Context, dollar_1 []string) ([]string, error) {
-	rows, err := q.db.Query(ctx, ListCanonicalIdentifiersByType, dollar_1)
+func (q *Queries) ListCanonicalIdentifiersByType(ctx context.Context, types []string) ([]string, error) {
+	rows, err := q.db.Query(ctx, ListCanonicalIdentifiersByType, types)
 	if err != nil {
 		return nil, err
 	}

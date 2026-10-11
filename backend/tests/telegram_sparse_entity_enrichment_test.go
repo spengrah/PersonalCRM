@@ -109,7 +109,7 @@ func setupSparseEnrichTest(t *testing.T) *sparseEnrichEnv {
 func cleanupExternalBySource(t *testing.T, env *sparseEnrichEnv, peerIDStr string) {
 	t.Helper()
 	ctx := context.Background()
-	_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, &peerIDStr)
+	_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, peerIDStr)
 }
 
 // cleanupSparseEnrichTestData hard-deletes any telegram_message rows for the

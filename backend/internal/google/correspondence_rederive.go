@@ -73,8 +73,18 @@ type rederiveFetcher interface {
 type CorrespondenceNameRederiveService struct {
 	comms    rederiveCommsRepo
 	fetcher  rederiveFetcher
-	sleep    func(time.Duration)
+	sleep    func(ctx context.Context, d time.Duration) error
 	maxBatch int32
+}
+
+// sleepCtx pauses for d, returning early with ctx.Err() if ctx is canceled.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
 }
 
 // NewCorrespondenceNameRederiveService builds the runner.
@@ -82,7 +92,7 @@ func NewCorrespondenceNameRederiveService(comms rederiveCommsRepo, fetcher reder
 	return &CorrespondenceNameRederiveService{
 		comms:    comms,
 		fetcher:  fetcher,
-		sleep:    time.Sleep,
+		sleep:    sleepCtx,
 		maxBatch: rederiveBatchSize,
 	}
 }
@@ -133,7 +143,7 @@ func (s *CorrespondenceNameRederiveService) processRow(ctx context.Context, row 
 	// Every path below makes at least one Gmail re-fetch, so pace after the call
 	// regardless of outcome — a 404/failure-heavy backlog would otherwise hammer
 	// Gmail back-to-back. Defer keeps the single sleep on all return paths.
-	defer s.sleep(rederiveInterCallDelay)
+	defer func() { _ = s.sleep(ctx, rederiveInterCallDelay) }()
 
 	names, err := s.refetchWithRetry(ctx, accountID, gmailID)
 	if err != nil {
@@ -182,7 +192,9 @@ func (s *CorrespondenceNameRederiveService) refetchWithRetry(ctx context.Context
 		}
 		lastErr = err
 		if attempt < rederiveMaxTransientRetries {
-			s.sleep(backoff)
+			if err := s.sleep(ctx, backoff); err != nil {
+				return repository.ParticipantNames{}, err
+			}
 			backoff *= 2
 		}
 	}

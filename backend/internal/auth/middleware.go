@@ -2,6 +2,7 @@ package auth
 
 import (
 	"net/http"
+	"personal-crm/backend/internal/api"
 	"strings"
 
 	"personal-crm/backend/internal/config"
@@ -28,7 +29,7 @@ func APIKeyMiddleware(cfg *config.Config) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"success": false,
 				"error": gin.H{
-					"code":    "MISSING_API_KEY",
+					"code":    api.ErrCodeMissingAPIKey,
 					"message": "API key is required. Provide X-API-Key header or Authorization: ApiKey <key>",
 				},
 			})
@@ -39,7 +40,7 @@ func APIKeyMiddleware(cfg *config.Config) gin.HandlerFunc {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"success": false,
 				"error": gin.H{
-					"code":    "INVALID_API_KEY",
+					"code":    api.ErrCodeInvalidAPIKey,
 					"message": "Invalid API key provided",
 				},
 			})

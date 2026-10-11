@@ -113,7 +113,7 @@ func rederiveRow(t *testing.T, id uuid.UUID, accountID string, gmailID string) r
 
 func newRederiveService(comms rederiveCommsRepo, fetcher rederiveFetcher) *CorrespondenceNameRederiveService {
 	s := NewCorrespondenceNameRederiveService(comms, fetcher)
-	s.sleep = func(time.Duration) {} // no real waits in tests
+	s.sleep = func(context.Context, time.Duration) error { return nil } // no real waits in tests
 	return s
 }
 

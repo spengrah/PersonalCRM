@@ -741,9 +741,9 @@ func classifyRefetchError(err error) error {
 	if errors.As(err, &apiErr) {
 		switch {
 		case apiErr.Code == 404:
-			return fmt.Errorf("%w: %v", errCorrespondenceUnavailable, err)
+			return fmt.Errorf("%w: %w", errCorrespondenceUnavailable, err)
 		case apiErr.Code == 429 || (apiErr.Code >= 500 && apiErr.Code < 600):
-			return fmt.Errorf("%w: %v", errCorrespondenceTransient, err)
+			return fmt.Errorf("%w: %w", errCorrespondenceTransient, err)
 		}
 	}
 	return fmt.Errorf("refetch message: %w", err)

@@ -112,7 +112,7 @@ func uniqueTestIDs(t *testing.T, ns string) (int64, string) {
 func registerCleanupBySource(t *testing.T, env *matcherEnrichTestEnv, ctx context.Context, contactCleanup func(), peerIDStr string) {
 	t.Helper()
 	t.Cleanup(func() {
-		_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, &peerIDStr)
+		_, _ = env.database.Queries.DeleteExternalContactsBySourceIDPrefix(ctx, peerIDStr)
 		_, _ = env.database.Queries.DeleteExternalIdentitiesBySourceID(ctx, &peerIDStr)
 		contactCleanup()
 	})

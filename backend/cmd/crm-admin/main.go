@@ -1827,7 +1827,7 @@ func (a seedAdapter) runProfile(ctx context.Context, params synthetic.SeedParams
 		// the partial world is still standing) ALONGSIDE the seed error — silently
 		// dropping it would hide that the "no leave-behind" guarantee was not met.
 		if tdErr := teardown(context.Background()); tdErr != nil {
-			return res, fmt.Errorf("seed failed: %w; AND partial-world teardown also failed (data may remain): %v", err, tdErr)
+			return res, fmt.Errorf("seed failed: %w; AND partial-world teardown also failed (data may remain): %w", err, tdErr)
 		}
 		return res, err
 	}

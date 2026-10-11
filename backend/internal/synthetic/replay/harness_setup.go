@@ -365,7 +365,7 @@ func newHarness(ctx context.Context, database *db.Database, namespace string, se
 	// instead of assuming either outcome.
 	postHostFailure := func(cause error) (*Harness, func(context.Context) error, error) {
 		if _, delErr := support.DeleteMacHostByID(ctx, macHostID); delErr != nil {
-			return nil, nil, fmt.Errorf("%w: removing the namespaced synthetic host after a constructor failure failed (%v); original failure: %w",
+			return nil, nil, fmt.Errorf("%w: removing the namespaced synthetic host after a constructor failure failed (%w); original failure: %w",
 				ErrConstructorResidue, delErr, cause)
 		}
 		return nil, nil, cause

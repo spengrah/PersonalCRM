@@ -298,11 +298,11 @@ func (r *WhatsAppRepository) ObservedFloor(ctx context.Context) (*time.Time, err
 	if err != nil {
 		return nil, err
 	}
-	oldest, ok := v.(time.Time)
-	if !ok {
-		return nil, nil
+	oldest, err := scanNullableTime(v)
+	if err != nil {
+		return nil, fmt.Errorf("scan observed floor: %w", err)
 	}
-	return utcPtr(&oldest), nil
+	return utcPtr(oldest), nil
 }
 
 // GetChatConfig reads one chat's gate state. Returns db.ErrNotFound when the

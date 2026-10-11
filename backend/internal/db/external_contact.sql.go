@@ -253,8 +253,8 @@ WHERE emails @> $1::jsonb
 ORDER BY created_at
 `
 
-func (q *Queries) FindExternalContactsByEmail(ctx context.Context, dollar_1 []byte) ([]*ExternalContact, error) {
-	rows, err := q.db.Query(ctx, FindExternalContactsByEmail, dollar_1)
+func (q *Queries) FindExternalContactsByEmail(ctx context.Context, emails []byte) ([]*ExternalContact, error) {
+	rows, err := q.db.Query(ctx, FindExternalContactsByEmail, emails)
 	if err != nil {
 		return nil, err
 	}
@@ -852,22 +852,22 @@ WHERE source = $1
   AND ($2::text IS NULL OR account_id = $2)
   AND deleted_at IS NULL
 ORDER BY display_name
-LIMIT $3 OFFSET $4
+LIMIT $4 OFFSET $3
 `
 
 type ListExternalContactsBySourceParams struct {
-	Source  string `json:"source"`
-	Column2 string `json:"column_2"`
-	Limit   int32  `json:"limit"`
-	Offset  int32  `json:"offset"`
+	Source    string  `json:"source"`
+	AccountID *string `json:"account_id"`
+	RowOffset int32   `json:"row_offset"`
+	RowLimit  int32   `json:"row_limit"`
 }
 
 func (q *Queries) ListExternalContactsBySource(ctx context.Context, arg ListExternalContactsBySourceParams) ([]*ExternalContact, error) {
 	rows, err := q.db.Query(ctx, ListExternalContactsBySource,
 		arg.Source,
-		arg.Column2,
-		arg.Limit,
-		arg.Offset,
+		arg.AccountID,
+		arg.RowOffset,
+		arg.RowLimit,
 	)
 	if err != nil {
 		return nil, err

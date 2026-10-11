@@ -77,11 +77,11 @@ RETURNING *;
 
 -- name: BulkLinkIdentitiesToContact :exec
 UPDATE external_identity SET
-    contact_id = $2,
-    match_type = $3,
-    match_confidence = $4,
+    contact_id = sqlc.arg(contact_id),
+    match_type = sqlc.arg(match_type),
+    match_confidence = sqlc.arg(match_confidence),
     updated_at = NOW()
-WHERE id = ANY($1::uuid[]);
+WHERE id = ANY(sqlc.arg(ids)::uuid[]);
 
 -- name: ListIdentitiesBySource :many
 SELECT * FROM external_identity

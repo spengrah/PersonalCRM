@@ -140,7 +140,7 @@ func (g *ChatGate) decide(ctx context.Context, chatJID, chatType, accountJID str
 
 	cfg, err := g.repo.GetChatConfig(ctx, chatJID)
 	if err != nil && !errors.Is(err, db.ErrNotFound) {
-		return false, fmt.Errorf("%w: read chat config: %v", ErrChatGateUndecided, err)
+		return false, fmt.Errorf("%w: read chat config: %w", ErrChatGateUndecided, err)
 	}
 	if errors.Is(err, db.ErrNotFound) {
 		cfg = nil
@@ -225,7 +225,7 @@ func (g *ChatGate) decide(ctx context.Context, chatJID, chatType, accountJID str
 		}); err != nil {
 			// Undecided rather than decided: without the write the count would
 			// be re-fetched on every message from this chat.
-			return false, fmt.Errorf("%w: persist chat config: %v", ErrChatGateUndecided, err)
+			return false, fmt.Errorf("%w: persist chat config: %w", ErrChatGateUndecided, err)
 		}
 	}
 
@@ -297,7 +297,7 @@ func (g *ChatGate) lookupGroup(ctx context.Context, chatJID, accountJID string) 
 		return nil, permanentSizeUnknown, nil
 	}
 	logger.Warn().Err(err).Msg("whatsapp: group lookup failed; withholding the ack")
-	return nil, permanentNone, fmt.Errorf("%w: %v", ErrChatGateUndecided, err)
+	return nil, permanentNone, fmt.Errorf("%w: %w", ErrChatGateUndecided, err)
 }
 
 // int32PtrToIntPtr converts the repository's column width to the gate's.

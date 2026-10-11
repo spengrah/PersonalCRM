@@ -72,12 +72,12 @@ func (q *Queries) CountActiveRiverJobsByStateBySourceForTest(ctx context.Context
 
 const CountExternalContactsByDisplayNamePrefix = `-- name: CountExternalContactsByDisplayNamePrefix :one
 SELECT COUNT(*) FROM external_contact
-WHERE display_name LIKE $1 || '%'
+WHERE display_name LIKE $1::text || '%'
   AND deleted_at IS NULL
 `
 
-func (q *Queries) CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 *string) (int64, error) {
-	row := q.db.QueryRow(ctx, CountExternalContactsByDisplayNamePrefix, dollar_1)
+func (q *Queries) CountExternalContactsByDisplayNamePrefix(ctx context.Context, prefix string) (int64, error) {
+	row := q.db.QueryRow(ctx, CountExternalContactsByDisplayNamePrefix, prefix)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -258,11 +258,11 @@ func (q *Queries) DeleteAllPairingTokens(ctx context.Context) (int64, error) {
 }
 
 const DeleteCalendarEventsByGcalEventIdPrefix = `-- name: DeleteCalendarEventsByGcalEventIdPrefix :execrows
-DELETE FROM calendar_event WHERE gcal_event_id LIKE $1 || '%'
+DELETE FROM calendar_event WHERE gcal_event_id LIKE $1::text || '%'
 `
 
-func (q *Queries) DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 *string) (int64, error) {
-	result, err := q.db.Exec(ctx, DeleteCalendarEventsByGcalEventIdPrefix, dollar_1)
+func (q *Queries) DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, prefix string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteCalendarEventsByGcalEventIdPrefix, prefix)
 	if err != nil {
 		return 0, err
 	}
@@ -271,13 +271,13 @@ func (q *Queries) DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, d
 
 const DeleteContactsByNamePrefix = `-- name: DeleteContactsByNamePrefix :execrows
 
-DELETE FROM contact WHERE full_name LIKE $1 || '%'
+DELETE FROM contact WHERE full_name LIKE $1::text || '%'
 `
 
 // Test data management queries
 // These queries are used by the test API endpoints to seed and cleanup test data
-func (q *Queries) DeleteContactsByNamePrefix(ctx context.Context, dollar_1 *string) (int64, error) {
-	result, err := q.db.Exec(ctx, DeleteContactsByNamePrefix, dollar_1)
+func (q *Queries) DeleteContactsByNamePrefix(ctx context.Context, prefix string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteContactsByNamePrefix, prefix)
 	if err != nil {
 		return 0, err
 	}
@@ -299,11 +299,11 @@ func (q *Queries) DeleteEventsBySource(ctx context.Context, source string) (int6
 }
 
 const DeleteExternalContactsByDisplayNamePrefix = `-- name: DeleteExternalContactsByDisplayNamePrefix :execrows
-DELETE FROM external_contact WHERE display_name LIKE $1 || '%'
+DELETE FROM external_contact WHERE display_name LIKE $1::text || '%'
 `
 
-func (q *Queries) DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 *string) (int64, error) {
-	result, err := q.db.Exec(ctx, DeleteExternalContactsByDisplayNamePrefix, dollar_1)
+func (q *Queries) DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, prefix string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteExternalContactsByDisplayNamePrefix, prefix)
 	if err != nil {
 		return 0, err
 	}
@@ -311,11 +311,11 @@ func (q *Queries) DeleteExternalContactsByDisplayNamePrefix(ctx context.Context,
 }
 
 const DeleteExternalContactsBySourceIDPrefix = `-- name: DeleteExternalContactsBySourceIDPrefix :execrows
-DELETE FROM external_contact WHERE source_id LIKE $1 || '%'
+DELETE FROM external_contact WHERE source_id LIKE $1::text || '%'
 `
 
-func (q *Queries) DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 *string) (int64, error) {
-	result, err := q.db.Exec(ctx, DeleteExternalContactsBySourceIDPrefix, dollar_1)
+func (q *Queries) DeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteExternalContactsBySourceIDPrefix, prefix)
 	if err != nil {
 		return 0, err
 	}
@@ -459,8 +459,8 @@ const DeleteTelegramMessagesByMessageIDs = `-- name: DeleteTelegramMessagesByMes
 DELETE FROM telegram_message WHERE telegram_message_id = ANY($1::int[])
 `
 
-func (q *Queries) DeleteTelegramMessagesByMessageIDs(ctx context.Context, dollar_1 []int32) (int64, error) {
-	result, err := q.db.Exec(ctx, DeleteTelegramMessagesByMessageIDs, dollar_1)
+func (q *Queries) DeleteTelegramMessagesByMessageIDs(ctx context.Context, messageIds []int32) (int64, error) {
+	result, err := q.db.Exec(ctx, DeleteTelegramMessagesByMessageIDs, messageIds)
 	if err != nil {
 		return 0, err
 	}

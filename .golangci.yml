@@ -11,13 +11,12 @@ linters:
     - forbidigo  # Forbid specific function calls
     - govet      # Go vet
     - errcheck   # Check error handling
-    - errorlint  # Forbid err == SentinelErr; require errors.Is/As
+    - errorlint  # Forbid err == SentinelErr; require errors.Is/As; require %w in fmt.Errorf
   settings:
     errorlint:
-      # Comparison-only: enforce errors.Is over `err == ErrFoo`. We intentionally
-      # do NOT enable errorf (%w) or asserts here — those would force an unrelated
-      # codebase-wide sweep. Scope is exactly the "compare errors with ==" gotcha.
-      errorf: false
+      # comparison: errors.Is over `err == ErrFoo`. errorf: %w over %v/%s for
+      # error operands. asserts stays off (type assertions on errors).
+      errorf: true
       asserts: false
       comparison: true
     forbidigo:
@@ -29,6 +28,8 @@ linters:
         # direct entry point is kept for tests only (exclusion below).
         - pattern: '\.StartRematchForContact$'
           msg: 'StartRematchForContact is test-only; production rematch dispatch goes through events.Bus + RematchDispatcher'
+        - pattern: '^time\.Sleep$'
+          msg: 'time.Sleep ignores cancellation: select on ctx.Done() and time.After'
       # Legitimate time.Now exceptions use inline //nolint:forbidigo comments:
       # - backend/internal/accelerated/time.go (wrapper implementation)
       # - backend/internal/api/middleware.go (latency measurement)
@@ -39,3 +40,14 @@ linters:
       - path: '_test\.go$'
         linters: [forbidigo]
         text: 'StartRematchForContact'
+      # time.Sleep: banned in non-test backend code, except the synthetic harness.
+      - path: '_test\.go$'
+        linters: [forbidigo]
+        text: 'time\.Sleep'
+      - path: 'internal/synthetic/'
+        linters: [forbidigo]
+        text: 'time\.Sleep'
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

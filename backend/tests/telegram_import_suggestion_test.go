@@ -87,7 +87,7 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 		prefix := "tg-suggestion-"
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
 			context.Background(),
-			&prefix,
+			prefix,
 		)
 		database.Close()
 	}

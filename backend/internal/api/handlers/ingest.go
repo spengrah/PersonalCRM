@@ -251,7 +251,7 @@ func (h *IngestHandler) IngestEvents(c *gin.Context) {
 		// daemon stops retrying. Matches the cursor-commit precedent
 		// (MacHostHandler.CommitCursor).
 		if errors.Is(err, service.ErrHostRevokedDuringBatch) {
-			api.SendError(c, http.StatusUnauthorized, "UNKNOWN_HOST",
+			api.SendError(c, http.StatusUnauthorized, api.ErrCodeUnknownHost,
 				"host revoked during ingest batch", "")
 			return
 		}
