@@ -263,7 +263,7 @@ type Querier interface {
 	CountEventsBySource(ctx context.Context, source string) (int64, error)
 	// Count events for a specific contact
 	CountEventsForContact(ctx context.Context, contactID uuid.UUID) (int64, error)
-	CountExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 *string) (int64, error)
+	CountExternalContactsByDisplayNamePrefix(ctx context.Context, prefix string) (int64, error)
 	// Counts live external_contact rows per source, scoped to a host. Powers
 	// the GET /api/v1/host/:id/source-counts endpoint (issue #327). Filters
 	// match the "caught up" semantic the Hosts page UI needs:
@@ -290,7 +290,7 @@ type Querier interface {
 	// nothing to tombstone it. O(1) on idx_comms_message_dedup.
 	CountLiveMatchedChatMessage(ctx context.Context, arg CountLiveMatchedChatMessageParams) (int64, error)
 	// Count calendar events involving a contact (for merge preview)
-	CountMergeCalendarEvents(ctx context.Context, dollar_1 uuid.UUID) (int64, error)
+	CountMergeCalendarEvents(ctx context.Context, contactID uuid.UUID) (int64, error)
 	// Count contact methods for a contact (for merge preview)
 	CountMergeContactMethods(ctx context.Context, contactID uuid.UUID) (int64, error)
 	// Count interactions for a contact (for merge preview)
@@ -466,7 +466,7 @@ type Querier interface {
 	// triple. Used by the decline/cancel remove branch. calendar_event has no
 	// deleted_at column — removal is a hard DELETE (cf. DeleteEventsByAccount).
 	DeleteCalendarEventByGcalID(ctx context.Context, arg DeleteCalendarEventByGcalIDParams) error
-	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, dollar_1 *string) (int64, error)
+	DeleteCalendarEventsByGcalEventIdPrefix(ctx context.Context, prefix string) (int64, error)
 	// Contact-scoped single-row delete. Used both for removals and for the first
 	// phase of the delete-and-reinsert applied to key-changing rows.
 	DeleteContactMethodByContact(ctx context.Context, arg DeleteContactMethodByContactParams) error
@@ -482,7 +482,7 @@ type Querier interface {
 	DeleteContactTasksByProvider(ctx context.Context, provider string) error
 	// Test data management queries
 	// These queries are used by the test API endpoints to seed and cleanup test data
-	DeleteContactsByNamePrefix(ctx context.Context, dollar_1 *string) (int64, error)
+	DeleteContactsByNamePrefix(ctx context.Context, prefix string) (int64, error)
 	// Delete contact methods from source that already exist in target (by normalized value and type)
 	DeleteDuplicateContactMethods(ctx context.Context, arg DeleteDuplicateContactMethodsParams) error
 	// Wipe every model's embedding for one target (e.g. when the target's content
@@ -497,9 +497,9 @@ type Querier interface {
 	DeleteEventsBySource(ctx context.Context, source string) (int64, error)
 	DeleteExpiredPairingTokens(ctx context.Context) (int64, error)
 	DeleteExternalContact(ctx context.Context, id uuid.UUID) error
-	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, dollar_1 *string) (int64, error)
+	DeleteExternalContactsByDisplayNamePrefix(ctx context.Context, prefix string) (int64, error)
 	DeleteExternalContactsBySourceAccount(ctx context.Context, arg DeleteExternalContactsBySourceAccountParams) error
-	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, dollar_1 *string) (int64, error)
+	DeleteExternalContactsBySourceIDPrefix(ctx context.Context, prefix string) (int64, error)
 	// Test teardown — drop external_identity rows seeded by a test under
 	// a known source string (e.g., 'messages'). Used in raw_message ingest
 	// integration tests to ensure shared-DB cleanup is complete between
@@ -565,7 +565,7 @@ type Querier interface {
 	DeleteTag(ctx context.Context, id uuid.UUID) error
 	DeleteTelegramChannelState(ctx context.Context, channelID int64) error
 	DeleteTelegramChatConfig(ctx context.Context, telegramChatID int64) error
-	DeleteTelegramMessagesByMessageIDs(ctx context.Context, dollar_1 []int32) (int64, error)
+	DeleteTelegramMessagesByMessageIDs(ctx context.Context, messageIds []int32) (int64, error)
 	DeleteTelegramMessagesByPeerUserID(ctx context.Context, peerUserID *int64) (int64, error)
 	DeleteTelegramSession(ctx context.Context) error
 	DeleteTelegramUpdateState(ctx context.Context, userID int64) error
@@ -668,7 +668,7 @@ type Querier interface {
 	// jsonb_array_lower_values helper.
 	// calendar_event has no deleted_at column — do not filter on it.
 	FindEventsByAttendeeEmailUnmatchedForContact(ctx context.Context, arg FindEventsByAttendeeEmailUnmatchedForContactParams) ([]*CalendarEvent, error)
-	FindExternalContactsByEmail(ctx context.Context, dollar_1 []byte) ([]*ExternalContact, error)
+	FindExternalContactsByEmail(ctx context.Context, emails []byte) ([]*ExternalContact, error)
 	// Finds external contacts whose JSONB emails contain the given normalized
 	// email value. Backed by idx_external_contact_emails_value_lower_gin via
 	// the jsonb_array_lower_values helper. Tombstoned rows are excluded so
@@ -1251,7 +1251,7 @@ type Querier interface {
 	// Used by GET /api/v1/host/:id/known-identifiers — the daemon needs the
 	// SET of canonical phones/emails, not the contact mapping, so DISTINCT
 	// collapses the same value across multiple contacts.
-	ListCanonicalIdentifiersByType(ctx context.Context, dollar_1 []string) ([]string, error)
+	ListCanonicalIdentifiersByType(ctx context.Context, types []string) ([]string, error)
 	ListCommsContainersForContact(ctx context.Context, contactID *uuid.UUID) ([]*ListCommsContainersForContactRow, error)
 	// Per-contact content, newest first (backs idx_comms_message_contact_sent).
 	ListCommsMessagesByContact(ctx context.Context, matchedContactID *uuid.UUID) ([]*CommsMessage, error)

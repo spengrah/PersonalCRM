@@ -624,7 +624,7 @@ func (s *IngestService) IngestBatch(
 		// to per-event rejection here.
 		if pubErr := s.bus.PublishTx(ctx, sp, env); pubErr != nil {
 			if rbErr := sp.Rollback(ctx); rbErr != nil {
-				return 0, 0, nil, nil, fmt.Errorf("publish event index %d (original %d): %w (rollback: %v)", i, originalIdx, pubErr, rbErr)
+				return 0, 0, nil, nil, fmt.Errorf("publish event index %d (original %d): %w (rollback: %w)", i, originalIdx, pubErr, rbErr)
 			}
 			return 0, 0, nil, nil, fmt.Errorf("publish event index %d (original %d): %w", i, originalIdx, pubErr)
 		}
@@ -652,7 +652,7 @@ func (s *IngestService) IngestBatch(
 			should, probeErr := s.shouldRunInlineOnDuplicate(ctx, sp, env)
 			if probeErr != nil {
 				if rbErr := sp.Rollback(ctx); rbErr != nil {
-					return 0, 0, nil, nil, fmt.Errorf("probe revive-bypass for index %d (original %d): %w (rollback: %v)", i, originalIdx, probeErr, rbErr)
+					return 0, 0, nil, nil, fmt.Errorf("probe revive-bypass for index %d (original %d): %w (rollback: %w)", i, originalIdx, probeErr, rbErr)
 				}
 				return 0, 0, nil, nil, fmt.Errorf("probe revive-bypass for index %d (original %d): %w", i, originalIdx, probeErr)
 			}

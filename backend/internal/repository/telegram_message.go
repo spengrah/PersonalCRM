@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -471,8 +472,12 @@ func (r *TelegramMessageRepository) CountMessagesByPeer(ctx context.Context) ([]
 			OutboundCount: row.OutboundCount,
 			InboundCount:  row.InboundCount,
 		}
-		if t, ok := row.LastMessageAt.(time.Time); ok {
-			counts[i].LastMessageAt = t
+		t, err := scanNullableTime(row.LastMessageAt)
+		if err != nil {
+			return nil, fmt.Errorf("scan last_message_at: %w", err)
+		}
+		if t != nil {
+			counts[i].LastMessageAt = *t
 		}
 	}
 	return counts, nil
@@ -565,8 +570,12 @@ func (r *TelegramMessageRepository) CountMessagesByPeerID(ctx context.Context, p
 		OutboundCount: row.OutboundCount,
 		InboundCount:  row.InboundCount,
 	}
-	if t, ok := row.LastMessageAt.(time.Time); ok {
-		count.LastMessageAt = t
+	t, err := scanNullableTime(row.LastMessageAt)
+	if err != nil {
+		return nil, fmt.Errorf("scan last_message_at: %w", err)
+	}
+	if t != nil {
+		count.LastMessageAt = *t
 	}
 	return count, nil
 }

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"personal-crm/backend/internal/db"
@@ -646,10 +647,10 @@ func (r *InteractionRepository) HasResponseAfter(ctx context.Context, contactID 
 // The consumer worker holds its tx across guard evaluation to read its
 // own prior writes within the worker's unit of work.
 func (r *InteractionRepository) HasResponseAfterTx(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, outreachAt time.Time) (bool, error) {
-	q := r.queries
-	if tx != nil {
-		q = db.New(tx)
+	if tx == nil {
+		return false, fmt.Errorf("HasResponseAfterTx: %w", errNilTx)
 	}
+	q := db.New(tx)
 	hasResp, err := q.HasResponseAfter(ctx, db.HasResponseAfterParams{
 		ContactID:  contactID,
 		OutreachAt: outreachAt,

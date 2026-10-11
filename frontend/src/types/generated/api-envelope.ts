@@ -37,30 +37,171 @@ export interface PaginationMeta {
   pages: number /* int */;
 }
 /**
- * Standard error codes
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
  */
 export const ErrCodeValidation = "VALIDATION_ERROR";
 /**
- * Standard error codes
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
  */
 export const ErrCodeNotFound = "NOT_FOUND";
 /**
- * Standard error codes
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
  */
 export const ErrCodeUnauthorized = "UNAUTHORIZED";
 /**
- * Standard error codes
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
  */
 export const ErrCodeForbidden = "FORBIDDEN";
 /**
- * Standard error codes
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
  */
 export const ErrCodeInternal = "INTERNAL_ERROR";
 /**
- * Standard error codes
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
  */
 export const ErrCodeConflict = "CONFLICT";
 /**
- * Standard error codes
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
  */
 export const ErrCodeBadRequest = "BAD_REQUEST";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeDatabase = "DATABASE_ERROR";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeGone = "GONE";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeServiceUnavailable = "SERVICE_UNAVAILABLE";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeGatewayTimeout = "GATEWAY_TIMEOUT";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeBadGateway = "BAD_GATEWAY";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeClientClosedRequest = "CLIENT_CLOSED_REQUEST";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeRateLimited = "RATE_LIMITED";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeUnknownHost = "UNKNOWN_HOST";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeInteractionsDisabled = "interactions.disabled";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodePairingTokenInvalid = "PAIRING_TOKEN_INVALID";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeInvalidPairingToken = "INVALID_PAIRING_TOKEN";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeTokenAlreadyUsed = "TOKEN_ALREADY_USED";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeTokenExpired = "TOKEN_EXPIRED";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeHostAlreadyPaired = "HOST_ALREADY_PAIRED";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeUpgradeRequired = "UPGRADE_REQUIRED";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeStaleAuth = "STALE_AUTH";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeEpochMismatch = "EPOCH_MISMATCH";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeBaseCursorMismatch = "BASE_CURSOR_MISMATCH";
+/**
+ * Authentication middleware (internal/auth).
+ */
+export const ErrCodeMissingAPIKey = "MISSING_API_KEY";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeInvalidAPIKey = "INVALID_API_KEY";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeMissingMacHostID = "MISSING_MAC_HOST_ID";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeInvalidMacHostID = "INVALID_MAC_HOST_ID";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeAmbiguousAuth = "AMBIGUOUS_AUTH";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeMissingBearer = "MISSING_BEARER";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeAuthError = "AUTH_ERROR";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeInvalidKey = "INVALID_KEY";
+/**
+ * Error codes on the wire. Clients match on these exact strings, so each value
+ * must stay byte-identical to the literal it names.
+ */
+export const ErrCodeWrongHostID = "WRONG_HOST_ID";

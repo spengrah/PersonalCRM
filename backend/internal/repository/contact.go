@@ -991,8 +991,15 @@ func recomputeContactDatesAfterDelete(ctx context.Context, tx pgx.Tx, contactID 
 	// (new_non_outbound / new_outreach, each NULL when no live interaction of
 	// that direction subset remains) plus the pre-image columns, and the
 	// per-column CASE that used to run in SQL runs here instead.
-	nonOutbound := recomputeAggTime(row.NewNonOutbound)
-	outreach := recomputeAggTime(row.NewOutreach)
+	nonOutbound, err := scanNullableTime(row.NewNonOutbound)
+	if err != nil {
+		return fmt.Errorf("scan new_non_outbound: %w", err)
+	}
+	outreach, err := scanNullableTime(row.NewOutreach)
+	if err != nil {
+		return fmt.Errorf("scan new_outreach: %w", err)
+	}
+	nonOutbound, outreach = utcPtr(nonOutbound), utcPtr(outreach)
 
 	newLastContacted := recomputeColumn(row.OldLastContacted, deletedAt, nonOutbound)
 	newLastInteractionAt := recomputeColumn(row.OldLastInteractionAt, deletedAt, nonOutbound)
@@ -1017,20 +1024,6 @@ func recomputeContactDatesAfterDelete(ctx context.Context, tx pgx.Tx, contactID 
 		NewAwaitingReplyUntil: newAwaitingReplyUntil,
 		ID:                    contactID,
 	})
-}
-
-// recomputeAggTime adapts ComputeContactDatesAfterDeleteRow's NewNonOutbound /
-// NewOutreach fields (interface{}, since sqlc cannot type an uncast
-// MAX(timestamptz) aggregate as nullable) into a UTC-normalized *time.Time:
-// pgx scans a non-NULL MAX into time.Time; an all-NULL aggregate (no live
-// interaction remains in that direction subset) scans into a value that
-// fails the type assertion, which this reports as nil.
-func recomputeAggTime(v interface{}) *time.Time {
-	t, ok := v.(time.Time)
-	if !ok {
-		return nil
-	}
-	return utcPtr(&t)
 }
 
 // recomputeColumn reproduces the removed SQL "CASE WHEN column =

@@ -39,7 +39,8 @@ type PaginationMeta struct {
 	Pages int   `json:"pages"`
 }
 
-// Standard error codes
+// Error codes on the wire. Clients match on these exact strings, so each value
+// must stay byte-identical to the literal it names.
 const (
 	ErrCodeValidation   = "VALIDATION_ERROR"
 	ErrCodeNotFound     = "NOT_FOUND"
@@ -48,6 +49,36 @@ const (
 	ErrCodeInternal     = "INTERNAL_ERROR"
 	ErrCodeConflict     = "CONFLICT"
 	ErrCodeBadRequest   = "BAD_REQUEST"
+
+	ErrCodeDatabase             = "DATABASE_ERROR"
+	ErrCodeGone                 = "GONE"
+	ErrCodeServiceUnavailable   = "SERVICE_UNAVAILABLE"
+	ErrCodeGatewayTimeout       = "GATEWAY_TIMEOUT"
+	ErrCodeBadGateway           = "BAD_GATEWAY"
+	ErrCodeClientClosedRequest  = "CLIENT_CLOSED_REQUEST"
+	ErrCodeRateLimited          = "RATE_LIMITED"
+	ErrCodeUnknownHost          = "UNKNOWN_HOST"
+	ErrCodeInteractionsDisabled = "interactions.disabled"
+	ErrCodePairingTokenInvalid  = "PAIRING_TOKEN_INVALID"
+	ErrCodeInvalidPairingToken  = "INVALID_PAIRING_TOKEN"
+	ErrCodeTokenAlreadyUsed     = "TOKEN_ALREADY_USED"
+	ErrCodeTokenExpired         = "TOKEN_EXPIRED"
+	ErrCodeHostAlreadyPaired    = "HOST_ALREADY_PAIRED"
+	ErrCodeUpgradeRequired      = "UPGRADE_REQUIRED"
+	ErrCodeStaleAuth            = "STALE_AUTH"
+	ErrCodeEpochMismatch        = "EPOCH_MISMATCH"
+	ErrCodeBaseCursorMismatch   = "BASE_CURSOR_MISMATCH"
+
+	// Authentication middleware (internal/auth).
+	ErrCodeMissingAPIKey    = "MISSING_API_KEY"
+	ErrCodeInvalidAPIKey    = "INVALID_API_KEY"
+	ErrCodeMissingMacHostID = "MISSING_MAC_HOST_ID"
+	ErrCodeInvalidMacHostID = "INVALID_MAC_HOST_ID"
+	ErrCodeAmbiguousAuth    = "AMBIGUOUS_AUTH"
+	ErrCodeMissingBearer    = "MISSING_BEARER"
+	ErrCodeAuthError        = "AUTH_ERROR"
+	ErrCodeInvalidKey       = "INVALID_KEY"
+	ErrCodeWrongHostID      = "WRONG_HOST_ID"
 )
 
 // BuildPaginationMeta computes pagination metadata using ceil-style page counting.

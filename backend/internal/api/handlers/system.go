@@ -70,7 +70,7 @@ func (h *SystemHandler) SetTimeAcceleration(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
 			"error": gin.H{
-				"code":    "VALIDATION_ERROR",
+				"code":    api.ErrCodeValidation,
 				"message": err.Error(),
 			},
 		})
@@ -82,13 +82,10 @@ func (h *SystemHandler) SetTimeAcceleration(c *gin.Context) {
 	// 500 on.
 	appliedAt := accelerated.ConfigureNow(settings.Factor)
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"acceleration_factor": settings.Factor,
-			"applied_at":          appliedAt,
-		},
-	})
+	api.SendSuccess(c, http.StatusOK, gin.H{
+		"acceleration_factor": settings.Factor,
+		"applied_at":          appliedAt,
+	}, nil)
 }
 
 // ExportData exports all CRM data as JSON
@@ -104,7 +101,7 @@ func (h *SystemHandler) ExportData(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"error": gin.H{
-				"code":    "DATABASE_ERROR",
+				"code":    api.ErrCodeDatabase,
 				"message": "Failed to fetch contacts",
 			},
 		})
@@ -120,20 +117,14 @@ func (h *SystemHandler) ExportData(c *gin.Context) {
 	}
 
 	c.Header("Content-Disposition", "attachment; filename=crm_export.json")
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data":    exportData,
-	})
+	api.SendSuccess(c, http.StatusOK, exportData, nil)
 }
 
 // ImportData imports CRM data from JSON
 func (h *SystemHandler) ImportData(c *gin.Context) {
 	// This is a placeholder - full implementation would parse uploaded file
 	// and import contacts
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data": gin.H{
-			"message": "Import functionality not yet implemented",
-		},
-	})
+	api.SendSuccess(c, http.StatusOK, gin.H{
+		"message": "Import functionality not yet implemented",
+	}, nil)
 }

@@ -62,14 +62,23 @@ func (r *EventConsumerClaimRepository) TryClaimTx(ctx context.Context, tx pgx.Tx
 	return rows == 1, nil
 }
 
+// Exists returns true if a claim row is present for (event_id, consumer),
+// reading through the repository's own querier (no caller transaction).
+func (r *EventConsumerClaimRepository) Exists(ctx context.Context, eventID uuid.UUID, consumer string) (bool, error) {
+	return r.queries.ExistsEventConsumerClaim(ctx, db.ExistsEventConsumerClaimParams{
+		EventID:  eventID,
+		Consumer: consumer,
+	})
+}
+
 // ExistsTx returns true if a claim row is present for (event_id, consumer).
 // Read-only helper used by tests that want to assert the claim landed
 // without attempting to re-insert.
 func (r *EventConsumerClaimRepository) ExistsTx(ctx context.Context, tx pgx.Tx, eventID uuid.UUID, consumer string) (bool, error) {
-	q := r.queries
-	if tx != nil {
-		q = db.New(tx)
+	if tx == nil {
+		return false, fmt.Errorf("ExistsTx: %w", errNilTx)
 	}
+	q := db.New(tx)
 	return q.ExistsEventConsumerClaim(ctx, db.ExistsEventConsumerClaimParams{
 		EventID:  eventID,
 		Consumer: consumer,

@@ -107,7 +107,7 @@ WHERE contact_id = $1;
 -- name: CountMergeCalendarEvents :one
 -- Count calendar events involving a contact (for merge preview)
 SELECT COUNT(*) FROM calendar_event
-WHERE $1::uuid = ANY(matched_contact_ids);
+WHERE sqlc.arg(contact_id)::uuid = ANY(matched_contact_ids);
 
 -- name: FindDuplicateContactMethods :many
 -- Find contact methods that exist in both source and target

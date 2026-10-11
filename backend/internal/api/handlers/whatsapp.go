@@ -67,7 +67,7 @@ func NewWhatsAppHandler(manager WhatsAppManager, chats WhatsAppChatSettings) *Wh
 // @Router /whatsapp/auth/start [post]
 func (h *WhatsAppHandler) StartPairing(c *gin.Context) {
 	if h.manager == nil {
-		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		api.SendError(c, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "WhatsApp integration is not available", "")
 		return
 	}
 
@@ -92,7 +92,7 @@ func (h *WhatsAppHandler) StartPairing(c *gin.Context) {
 		// the stable machine code the settings surface branches on; the message
 		// names the dependency, which is the actionable half.
 		_, missing := h.manager.Ready()
-		api.SendError(c, http.StatusConflict, "CONFLICT",
+		api.SendError(c, http.StatusConflict, api.ErrCodeConflict,
 			"WhatsApp is not ready to link an account yet: "+missing, wapkg.ReasonIngestNotWired)
 	case errors.Is(err, wapkg.ErrAlreadyConnected):
 		api.SendConflict(c, "Already connected — disconnect first")
@@ -108,7 +108,7 @@ func (h *WhatsAppHandler) StartPairing(c *gin.Context) {
 	case errors.Is(err, wapkg.ErrUnknownPairMethod):
 		api.SendValidationError(c, "Invalid pairing method", "method must be 'qr' or 'phone'")
 	case errors.Is(err, wapkg.ErrQRCodeTimeout):
-		api.SendError(c, http.StatusGatewayTimeout, "GATEWAY_TIMEOUT", "No QR code arrived in time", "qr_code_timeout")
+		api.SendError(c, http.StatusGatewayTimeout, api.ErrCodeGatewayTimeout, "No QR code arrived in time", "qr_code_timeout")
 	default:
 		api.RespondInternal(c, err)
 	}
@@ -124,7 +124,7 @@ func (h *WhatsAppHandler) StartPairing(c *gin.Context) {
 // @Router /whatsapp/auth/cancel [post]
 func (h *WhatsAppHandler) CancelPairing(c *gin.Context) {
 	if h.manager == nil {
-		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		api.SendError(c, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "WhatsApp integration is not available", "")
 		return
 	}
 	h.manager.CancelPairing()
@@ -153,7 +153,7 @@ const StatusClientClosedRequest = 499
 // @Router /whatsapp/auth [delete]
 func (h *WhatsAppHandler) Disconnect(c *gin.Context) {
 	if h.manager == nil {
-		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		api.SendError(c, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "WhatsApp integration is not available", "")
 		return
 	}
 
@@ -177,20 +177,20 @@ func (h *WhatsAppHandler) Disconnect(c *gin.Context) {
 		// A forced clear makes NO remote call, so it produced no evidence about
 		// the remote device. Telling the user it was unlinked remotely would be
 		// an outright fabrication: it may well still be linked.
-		api.SendError(c, http.StatusBadGateway, "BAD_GATEWAY",
+		api.SendError(c, http.StatusBadGateway, api.ErrCodeBadGateway,
 			"The stored WhatsApp credentials could not be cleared, and forcing contacts WhatsApp not at all — the device may still be linked. Retry, and remove it from your phone's Linked Devices screen", err.Error())
 	case errors.Is(err, wapkg.ErrLocalCleanupFailed):
 		// The remote side is settled — the device is unlinked, or no remote call
 		// was wanted — and only the LOCAL delete failed. Saying "retry the
 		// unlink" would send the user at the half that already worked.
-		api.SendError(c, http.StatusBadGateway, "BAD_GATEWAY",
+		api.SendError(c, http.StatusBadGateway, api.ErrCodeBadGateway,
 			"The WhatsApp device is unlinked remotely, but the stored credentials could not be cleared; retry to clear them locally", err.Error())
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		// The CALLER went away; the unlink did not. It is already queued on the
 		// actor and runs to completion, so this is not a server fault and must
 		// not be counted as one. There is no prior caller-abandoned case in this
 		// API, so StatusClientClosedRequest is the convention being set.
-		api.SendError(c, StatusClientClosedRequest, "CLIENT_CLOSED_REQUEST",
+		api.SendError(c, StatusClientClosedRequest, api.ErrCodeClientClosedRequest,
 			"The request was abandoned before the unlink finished; it is still running — check the status", err.Error())
 	case errors.Is(err, wapkg.ErrOperationSuperseded):
 		// The session this unlink decided about was replaced while it ran, so its
@@ -200,7 +200,7 @@ func (h *WhatsAppHandler) Disconnect(c *gin.Context) {
 		// The device is deliberately KEPT: a failed unlink is not evidence the
 		// remote device is gone, and discarding credentials here would orphan
 		// a live device on the user's phone.
-		api.SendError(c, http.StatusBadGateway, "BAD_GATEWAY",
+		api.SendError(c, http.StatusBadGateway, api.ErrCodeBadGateway,
 			"WhatsApp did not confirm the unlink; the device was kept so you can retry", err.Error())
 	default:
 		api.RespondInternal(c, err)
@@ -217,7 +217,7 @@ func (h *WhatsAppHandler) Disconnect(c *gin.Context) {
 // @Router /whatsapp/auth/status [get]
 func (h *WhatsAppHandler) GetStatus(c *gin.Context) {
 	if h.manager == nil {
-		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		api.SendError(c, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "WhatsApp integration is not available", "")
 		return
 	}
 	api.SendSuccess(c, http.StatusOK, whatsAppStatusResponse(h.manager.Status()), nil)
@@ -234,7 +234,7 @@ func (h *WhatsAppHandler) GetStatus(c *gin.Context) {
 // @Router /whatsapp/chats [get]
 func (h *WhatsAppHandler) ListChats(c *gin.Context) {
 	if h.chats == nil {
-		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		api.SendError(c, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "WhatsApp integration is not available", "")
 		return
 	}
 
@@ -269,7 +269,7 @@ func (h *WhatsAppHandler) ListChats(c *gin.Context) {
 // @Router /whatsapp/chats/{chat_jid} [patch]
 func (h *WhatsAppHandler) UpdateChatStatus(c *gin.Context) {
 	if h.chats == nil {
-		api.SendError(c, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "WhatsApp integration is not available", "")
+		api.SendError(c, http.StatusServiceUnavailable, api.ErrCodeServiceUnavailable, "WhatsApp integration is not available", "")
 		return
 	}
 

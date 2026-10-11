@@ -120,7 +120,7 @@ func ValidateNamespaceToken(namespace string) error {
 		return fmt.Errorf("%w: %q has length %d, want 1..%d", ErrInvalidNamespace, namespace, l, maxNamespaceLen)
 	}
 	if err := replay.ValidateNamespace(namespace); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidNamespace, err)
+		return fmt.Errorf("%w: %w", ErrInvalidNamespace, err)
 	}
 	return nil
 }

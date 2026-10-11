@@ -142,7 +142,7 @@ func (h *MacHostHandler) Pair(c *gin.Context) {
 	// terminates the TCP connection from the daemon directly so the
 	// RemoteAddr is the authoritative source.
 	if h.pairingLimiter != nil && !h.pairingLimiter.Allow(remoteIP(c)) {
-		api.SendError(c, http.StatusTooManyRequests, "RATE_LIMITED", "too many pairing attempts", "")
+		api.SendError(c, http.StatusTooManyRequests, api.ErrCodeRateLimited, "too many pairing attempts", "")
 		return
 	}
 
@@ -177,10 +177,10 @@ func (h *MacHostHandler) Pair(c *gin.Context) {
 			// in every case. Log the specific reason server-side for
 			// operator debugging.
 			logger.Info().Err(err).Msg("pair: pairing token rejected")
-			api.SendError(c, http.StatusGone, "PAIRING_TOKEN_INVALID", "pairing token invalid", "")
+			api.SendError(c, http.StatusGone, api.ErrCodePairingTokenInvalid, "pairing token invalid", "")
 			return
 		case errors.Is(err, service.ErrHostAlreadyPaired):
-			api.SendError(c, http.StatusConflict, "HOST_ALREADY_PAIRED", err.Error(), "")
+			api.SendError(c, http.StatusConflict, api.ErrCodeHostAlreadyPaired, err.Error(), "")
 			return
 		case errors.Is(err, service.ErrPairingValidation):
 			// Defence-in-depth for paths that bypass the handler check.
@@ -233,7 +233,7 @@ func (h *MacHostHandler) Heartbeat(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusPreconditionFailed, gin.H{
 			"success": false,
 			"error": gin.H{
-				"code":             "UPGRADE_REQUIRED",
+				"code":             api.ErrCodeUpgradeRequired,
 				"message":          "daemon protocol_version below server minimum",
 				"min_version":      mac.MinProtocolVersion,
 				"upgrade_required": true,
@@ -252,7 +252,7 @@ func (h *MacHostHandler) Heartbeat(c *gin.Context) {
 		if errors.Is(err, db.ErrNotFound) {
 			// Host revoked between auth and write — middleware would
 			// catch on next request; for this one return 401.
-			api.SendError(c, http.StatusUnauthorized, "UNKNOWN_HOST", "host not found or revoked", "")
+			api.SendError(c, http.StatusUnauthorized, api.ErrCodeUnknownHost, "host not found or revoked", "")
 			return
 		}
 		api.RespondInternal(c, err)
@@ -315,16 +315,16 @@ func (h *MacHostHandler) RotateKey(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, service.ErrPairingTokenInvalid):
-			api.SendError(c, http.StatusBadRequest, "INVALID_PAIRING_TOKEN", "pairing token invalid", "")
+			api.SendError(c, http.StatusBadRequest, api.ErrCodeInvalidPairingToken, "pairing token invalid", "")
 			return
 		case errors.Is(err, service.ErrPairingTokenAlreadyUsed):
-			api.SendError(c, http.StatusBadRequest, "TOKEN_ALREADY_USED", "pairing token already consumed", "")
+			api.SendError(c, http.StatusBadRequest, api.ErrCodeTokenAlreadyUsed, "pairing token already consumed", "")
 			return
 		case errors.Is(err, service.ErrPairingTokenExpired):
-			api.SendError(c, http.StatusBadRequest, "TOKEN_EXPIRED", "pairing token expired", "")
+			api.SendError(c, http.StatusBadRequest, api.ErrCodeTokenExpired, "pairing token expired", "")
 			return
 		case errors.Is(err, service.ErrAPIKeyStaleAuth):
-			api.SendError(c, http.StatusUnauthorized, "STALE_AUTH", "api-key was rotated by another request; re-authenticate", "")
+			api.SendError(c, http.StatusUnauthorized, api.ErrCodeStaleAuth, "api-key was rotated by another request; re-authenticate", "")
 			return
 		case errors.Is(err, db.ErrNotFound):
 			// Host was revoked or deleted between auth and tx-internal
@@ -439,7 +439,7 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 	}
 
 	if errors.Is(err, db.ErrNotFound) {
-		api.SendError(c, http.StatusUnauthorized, "UNKNOWN_HOST", "host not found or revoked", "")
+		api.SendError(c, http.StatusUnauthorized, api.ErrCodeUnknownHost, "host not found or revoked", "")
 		return
 	}
 	if errors.Is(err, service.ErrUnknownPushSource) {
@@ -454,7 +454,7 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 			"success": false,
 			"error": gin.H{
-				"code":    "EPOCH_MISMATCH",
+				"code":    api.ErrCodeEpochMismatch,
 				"message": "cursor epoch mismatch",
 			},
 			"data": commitCursorConflict{CurrentCursor: &cur, CurrentEpoch: &epoch},
@@ -468,7 +468,7 @@ func (h *MacHostHandler) CommitCursor(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 			"success": false,
 			"error": gin.H{
-				"code":    "BASE_CURSOR_MISMATCH",
+				"code":    api.ErrCodeBaseCursorMismatch,
 				"message": "cursor base mismatch",
 			},
 			"data": commitCursorConflict{CurrentCursor: &cur, CurrentEpoch: &epoch},

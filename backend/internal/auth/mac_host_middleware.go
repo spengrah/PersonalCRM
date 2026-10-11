@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"personal-crm/backend/internal/api"
 	"strings"
 	"sync"
 
@@ -289,34 +290,34 @@ func macHostAuthMiddleware(
 	return func(c *gin.Context) {
 		hostIDRaw := c.GetHeader("X-Mac-Host-ID")
 		if hostIDRaw == "" {
-			abortAuth(c, http.StatusUnauthorized, "MISSING_MAC_HOST_ID", "X-Mac-Host-ID header required")
+			abortAuth(c, http.StatusUnauthorized, api.ErrCodeMissingMacHostID, "X-Mac-Host-ID header required")
 			return
 		}
 		hostID, err := uuid.Parse(hostIDRaw)
 		if err != nil {
-			abortAuth(c, http.StatusUnauthorized, "INVALID_MAC_HOST_ID", "X-Mac-Host-ID header is not a UUID")
+			abortAuth(c, http.StatusUnauthorized, api.ErrCodeInvalidMacHostID, "X-Mac-Host-ID header is not a UUID")
 			return
 		}
 
 		// Ambiguous-auth check.
 		if c.GetHeader("X-API-Key") != "" {
-			abortAuth(c, http.StatusBadRequest, "AMBIGUOUS_AUTH", "X-API-Key and X-Mac-Host-ID cannot both be set")
+			abortAuth(c, http.StatusBadRequest, api.ErrCodeAmbiguousAuth, "X-API-Key and X-Mac-Host-ID cannot both be set")
 			return
 		}
 		authHeader := c.GetHeader("Authorization")
 		if strings.HasPrefix(authHeader, "ApiKey ") {
-			abortAuth(c, http.StatusBadRequest, "AMBIGUOUS_AUTH", "Authorization: ApiKey is reserved for global API key; Mac daemon uses Bearer")
+			abortAuth(c, http.StatusBadRequest, api.ErrCodeAmbiguousAuth, "Authorization: ApiKey is reserved for global API key; Mac daemon uses Bearer")
 			return
 		}
 
 		// Parse Authorization: Bearer.
 		if !strings.HasPrefix(authHeader, "Bearer ") {
-			abortAuth(c, http.StatusUnauthorized, "MISSING_BEARER", "Authorization: Bearer <token> required")
+			abortAuth(c, http.StatusUnauthorized, api.ErrCodeMissingBearer, "Authorization: Bearer <token> required")
 			return
 		}
 		bearer := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 		if bearer == "" {
-			abortAuth(c, http.StatusUnauthorized, "MISSING_BEARER", "Authorization: Bearer <token> required")
+			abortAuth(c, http.StatusUnauthorized, api.ErrCodeMissingBearer, "Authorization: Bearer <token> required")
 			return
 		}
 
@@ -329,7 +330,7 @@ func macHostAuthMiddleware(
 		// daemon's burst budget is preserved.
 		reservation := limiter.reserve(hostID)
 		if !reservation.Allowed() {
-			abortAuth(c, http.StatusTooManyRequests, "RATE_LIMITED", "too many failed auth attempts for this host")
+			abortAuth(c, http.StatusTooManyRequests, api.ErrCodeRateLimited, "too many failed auth attempts for this host")
 			return
 		}
 
@@ -337,19 +338,19 @@ func macHostAuthMiddleware(
 		if err != nil {
 			if errors.Is(err, db.ErrNotFound) {
 				reservation.Commit()
-				abortAuth(c, http.StatusUnauthorized, "UNKNOWN_HOST", "host not found or revoked")
+				abortAuth(c, http.StatusUnauthorized, api.ErrCodeUnknownHost, "host not found or revoked")
 				return
 			}
 			// Internal error — don't penalize the daemon for a Pi-side
 			// hiccup. Refund the token.
 			reservation.Refund()
-			abortAuth(c, http.StatusInternalServerError, "AUTH_ERROR", "internal auth error")
+			abortAuth(c, http.StatusInternalServerError, api.ErrCodeAuthError, "internal auth error")
 			return
 		}
 
 		if err := compare([]byte(host.APIKeyHash), []byte(bearer)); err != nil {
 			reservation.Commit()
-			abortAuth(c, http.StatusUnauthorized, "INVALID_KEY", "invalid API key")
+			abortAuth(c, http.StatusUnauthorized, api.ErrCodeInvalidKey, "invalid API key")
 			return
 		}
 
@@ -360,7 +361,7 @@ func macHostAuthMiddleware(
 		if idParam := c.Param("id"); idParam != "" {
 			if idParam != hostID.String() {
 				reservation.Refund()
-				abortAuth(c, http.StatusForbidden, "WRONG_HOST_ID", "X-Mac-Host-ID does not match route :id")
+				abortAuth(c, http.StatusForbidden, api.ErrCodeWrongHostID, "X-Mac-Host-ID does not match route :id")
 				return
 			}
 		}

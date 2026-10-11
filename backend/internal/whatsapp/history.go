@@ -51,7 +51,7 @@ var _ HistoryFetcher = (*clientHistoryFetcher)(nil)
 func unmarshalNotification(notification []byte) (*waE2E.HistorySyncNotification, error) {
 	var notif waE2E.HistorySyncNotification
 	if err := proto.Unmarshal(notification, &notif); err != nil {
-		return nil, fmt.Errorf("%w: unmarshal: %v", ErrHistoryNotificationMalformed, err)
+		return nil, fmt.Errorf("%w: unmarshal: %w", ErrHistoryNotificationMalformed, err)
 	}
 	return &notif, nil
 }

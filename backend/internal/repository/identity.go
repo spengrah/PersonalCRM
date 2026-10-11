@@ -395,7 +395,7 @@ func (r *IdentityRepository) DeleteForContact(ctx context.Context, contactID uui
 // FindContactMethodsByValue finds contact methods matching the given value and types
 func (r *IdentityRepository) FindContactMethodsByValue(ctx context.Context, types []string, normalizedValue string) ([]ContactMethodMatch, error) {
 	rows, err := r.queries.FindMethodsByNormalizedValue(ctx, db.FindMethodsByNormalizedValueParams{
-		Column1:         types,
+		Types:           types,
 		ValueNormalized: normalizedValue,
 	})
 	if err != nil {
@@ -415,7 +415,7 @@ func (r *IdentityRepository) FindContactMethodsByValue(ctx context.Context, type
 // so the contact-method search runs in the caller's transaction.
 func (r *IdentityRepository) FindContactMethodsByValueTx(ctx context.Context, tx pgx.Tx, types []string, normalizedValue string) ([]ContactMethodMatch, error) {
 	rows, err := db.New(tx).FindMethodsByNormalizedValue(ctx, db.FindMethodsByNormalizedValueParams{
-		Column1:         types,
+		Types:           types,
 		ValueNormalized: normalizedValue,
 	})
 	if err != nil {
@@ -432,7 +432,7 @@ func (r *IdentityRepository) FindContactMethodsByValueTx(ctx context.Context, tx
 func (r *IdentityRepository) BulkLinkToContact(ctx context.Context, identityIDs []uuid.UUID, contactID uuid.UUID, matchType MatchType, confidence *float64) error {
 	matchTypeStr := string(matchType)
 	params := db.BulkLinkIdentitiesToContactParams{
-		Column1:         identityIDs,
+		Ids:             identityIDs,
 		ContactID:       &contactID,
 		MatchType:       &matchTypeStr,
 		MatchConfidence: confidence,

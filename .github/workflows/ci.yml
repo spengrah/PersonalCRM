@@ -209,6 +209,8 @@ jobs:
         run: make api-docs-check
       - name: Check generated contact list queries are in sync
         run: make contact-queries-check
+      - name: Check generated sqlc code has no unnamed params
+        run: make sqlc-params-check
 
   backend-tests:
     name: Backend Tests

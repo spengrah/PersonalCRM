@@ -54,7 +54,7 @@ func setupDiscoveryUpsertTest(t *testing.T) (
 		// (also used by the /test/cleanup handler) rather than raw SQL.
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
 			context.Background(),
-			&prefix,
+			prefix,
 		)
 		database.Close()
 	}
@@ -469,7 +469,7 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 		)
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
 			ctx,
-			&peerStr,
+			peerStr,
 		)
 		// External_identity row created by MatchOrCreate — also keyed by source_id.
 		_, _ = database.Queries.DeleteExternalIdentitiesBySourceID(

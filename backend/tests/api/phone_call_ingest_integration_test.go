@@ -437,10 +437,10 @@ func TestIngestCall_Inbound_RecordsInteractionAndBumpsLastContacted(t *testing.T
 	// queued re-delivery is no-op too, since this test uses
 	// TestOnly river workers). Asserting on the claims proves both
 	// inline legs of handleCall executed against the published event.
-	cadenceClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerCadenceUpdater)
+	cadenceClaimed, err := env.claimRepo.Exists(ctx, recordedEv.ID, repository.EventConsumerCadenceUpdater)
 	require.NoError(t, err)
 	require.True(t, cadenceClaimed, "inline cadence apply must have claimed the interaction.recorded event")
-	followUpClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerFollowUpManager)
+	followUpClaimed, err := env.claimRepo.Exists(ctx, recordedEv.ID, repository.EventConsumerFollowUpManager)
 	require.NoError(t, err)
 	require.True(t, followUpClaimed, "inline follow-up apply must have claimed the interaction.recorded event")
 }
@@ -491,10 +491,10 @@ func TestIngestCall_Outbound_BumpsLastOutreachAt(t *testing.T) {
 	// so the closure is nil, but the claim row lands either way.
 	recordedEv, err := env.eventRepo.FindEventBySource(ctx, "phone_calls", interaction.ID.String())
 	require.NoError(t, err)
-	cadenceClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerCadenceUpdater)
+	cadenceClaimed, err := env.claimRepo.Exists(ctx, recordedEv.ID, repository.EventConsumerCadenceUpdater)
 	require.NoError(t, err)
 	require.True(t, cadenceClaimed, "outbound: inline cadence apply must have claimed the event")
-	followUpClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerFollowUpManager)
+	followUpClaimed, err := env.claimRepo.Exists(ctx, recordedEv.ID, repository.EventConsumerFollowUpManager)
 	require.NoError(t, err)
 	require.True(t, followUpClaimed, "outbound: inline follow-up apply must have claimed the event")
 }
@@ -539,10 +539,10 @@ func TestIngestCall_ConnectedOutbound_BumpsLastContacted(t *testing.T) {
 
 	recordedEv, err := env.eventRepo.FindEventBySource(ctx, "phone_calls", interaction.ID.String())
 	require.NoError(t, err)
-	cadenceClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerCadenceUpdater)
+	cadenceClaimed, err := env.claimRepo.Exists(ctx, recordedEv.ID, repository.EventConsumerCadenceUpdater)
 	require.NoError(t, err)
 	require.True(t, cadenceClaimed, "outbound: inline cadence apply must have claimed the event")
-	followUpClaimed, err := env.claimRepo.ExistsTx(ctx, nil, recordedEv.ID, repository.EventConsumerFollowUpManager)
+	followUpClaimed, err := env.claimRepo.Exists(ctx, recordedEv.ID, repository.EventConsumerFollowUpManager)
 	require.NoError(t, err)
 	require.True(t, followUpClaimed, "outbound: inline follow-up apply must have claimed the event")
 }

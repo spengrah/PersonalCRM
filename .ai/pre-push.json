@@ -74,6 +74,13 @@
       "groups": [
         "backend"
       ]
+    },
+    {
+      "name": "sqlc unnamed params",
+      "command": "make sqlc-params-check",
+      "groups": [
+        "backend"
+      ]
     }
   ]
 }

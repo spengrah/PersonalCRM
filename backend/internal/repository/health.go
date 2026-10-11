@@ -42,11 +42,11 @@ func (r *HealthRepository) OldestDueRiverJobScheduledAt(ctx context.Context, now
 	if err != nil {
 		return nil, fmt.Errorf("oldest due river job scheduled_at: %w", err)
 	}
-	ts, ok := v.(time.Time)
-	if !ok {
-		return nil, nil
+	ts, err := scanNullableTime(v)
+	if err != nil {
+		return nil, fmt.Errorf("scan river job time: %w", err)
 	}
-	return utcPtr(&ts), nil
+	return utcPtr(ts), nil
 }
 
 // LatestCompletedRiverJobByKind returns the newest finalized_at among COMPLETED
@@ -59,11 +59,11 @@ func (r *HealthRepository) LatestCompletedRiverJobByKind(ctx context.Context, ki
 	if err != nil {
 		return nil, fmt.Errorf("latest completed river job by kind: %w", err)
 	}
-	ts, ok := v.(time.Time)
-	if !ok {
-		return nil, nil
+	ts, err := scanNullableTime(v)
+	if err != nil {
+		return nil, fmt.Errorf("scan river job time: %w", err)
 	}
-	return utcPtr(&ts), nil
+	return utcPtr(ts), nil
 }
 
 // InsertRiverJobForTest plants one river_job with an explicit kind, state,

@@ -256,7 +256,7 @@ func (h *InteractionHandler) CreateInteraction(c *gin.Context) {
 	}
 
 	if h.manualHandler == nil {
-		api.SendError(c, http.StatusServiceUnavailable, "interactions.disabled",
+		api.SendError(c, http.StatusServiceUnavailable, api.ErrCodeInteractionsDisabled,
 			"Interaction recording is disabled",
 			"Set EVENT_BUS_INTERACTION_MODE=cutover to enable.")
 		return

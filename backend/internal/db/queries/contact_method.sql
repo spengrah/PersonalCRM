@@ -49,8 +49,8 @@ RETURNING *;
 SELECT cm.*, c.full_name as contact_name
 FROM contact_method cm
 JOIN live_contact c ON c.id = cm.contact_id
-WHERE cm.type = ANY($1::text[])
-  AND cm.value_normalized = $2;
+WHERE cm.type = ANY(sqlc.arg(types)::text[])
+  AND cm.value_normalized = sqlc.arg(value_normalized);
 
 -- name: SetContactMethodPrimary :exec
 UPDATE contact_method cm
@@ -72,7 +72,7 @@ WHERE cm.id = $1
 SELECT DISTINCT cm.value_normalized
 FROM contact_method cm
 JOIN live_contact c ON c.id = cm.contact_id
-WHERE cm.type = ANY($1::text[])
+WHERE cm.type = ANY(sqlc.arg(types)::text[])
   AND cm.value_normalized <> ''
 ORDER BY cm.value_normalized ASC;
 

@@ -105,14 +105,14 @@ func (h *TelegramHandler) VerifyCode(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, tg.ErrAuthTokenExpired) {
-			api.SendError(c, http.StatusGone, "GONE", "Auth token expired", "")
+			api.SendError(c, http.StatusGone, api.ErrCodeGone, "Auth token expired", "")
 			return
 		}
 		if errors.Is(err, tg.ErrAuthInternal) {
 			api.RespondInternal(c, err)
 			return
 		}
-		api.SendError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Invalid verification code", "")
+		api.SendError(c, http.StatusUnauthorized, api.ErrCodeUnauthorized, "Invalid verification code", "")
 		return
 	}
 
@@ -151,14 +151,14 @@ func (h *TelegramHandler) VerifyPassword(c *gin.Context) {
 			return
 		}
 		if errors.Is(err, tg.ErrAuthTokenExpired) {
-			api.SendError(c, http.StatusGone, "GONE", "Auth token expired", "")
+			api.SendError(c, http.StatusGone, api.ErrCodeGone, "Auth token expired", "")
 			return
 		}
 		if errors.Is(err, tg.ErrAuthInternal) {
 			api.RespondInternal(c, err)
 			return
 		}
-		api.SendError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Invalid password", "")
+		api.SendError(c, http.StatusUnauthorized, api.ErrCodeUnauthorized, "Invalid password", "")
 		return
 	}
 

@@ -14,26 +14,26 @@ import (
 
 const BulkLinkIdentitiesToContact = `-- name: BulkLinkIdentitiesToContact :exec
 UPDATE external_identity SET
-    contact_id = $2,
-    match_type = $3,
-    match_confidence = $4,
+    contact_id = $1,
+    match_type = $2,
+    match_confidence = $3,
     updated_at = NOW()
-WHERE id = ANY($1::uuid[])
+WHERE id = ANY($4::uuid[])
 `
 
 type BulkLinkIdentitiesToContactParams struct {
-	Column1         []uuid.UUID `json:"column_1"`
 	ContactID       *uuid.UUID  `json:"contact_id"`
 	MatchType       *string     `json:"match_type"`
 	MatchConfidence *float64    `json:"match_confidence"`
+	Ids             []uuid.UUID `json:"ids"`
 }
 
 func (q *Queries) BulkLinkIdentitiesToContact(ctx context.Context, arg BulkLinkIdentitiesToContactParams) error {
 	_, err := q.db.Exec(ctx, BulkLinkIdentitiesToContact,
-		arg.Column1,
 		arg.ContactID,
 		arg.MatchType,
 		arg.MatchConfidence,
+		arg.Ids,
 	)
 	return err
 }

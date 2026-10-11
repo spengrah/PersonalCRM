@@ -322,7 +322,7 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 		titlePrefixes := append([]string(nil), env.titleTokenPrefixes...)
 		env.titleTokenPrefixesMu.Unlock()
 		for _, prefix := range titlePrefixes {
-			_, _ = database.Queries.DeleteExternalContactsByDisplayNamePrefix(cleanCtx, &prefix)
+			_, _ = database.Queries.DeleteExternalContactsByDisplayNamePrefix(cleanCtx, prefix)
 		}
 		// Drop synthetic calendar events seeded by these tests.
 		_ = database.Queries.TestDeleteCalendarEventsByGcalEventIDPrefix(cleanCtx, env.sourceIDPrefix+"cal-")
@@ -1528,7 +1528,7 @@ func getAnarlogTitleRow(t *testing.T, env *meetingNoteIngestEnv, normalizedToken
 func countAnarlogTitleRowsForToken(t *testing.T, env *meetingNoteIngestEnv, tokenDisplay string) int64 {
 	t.Helper()
 	ctx := context.Background()
-	n, err := env.database.Queries.CountExternalContactsByDisplayNamePrefix(ctx, &tokenDisplay)
+	n, err := env.database.Queries.CountExternalContactsByDisplayNamePrefix(ctx, tokenDisplay)
 	require.NoError(t, err)
 	return n
 }
@@ -2484,7 +2484,7 @@ func TestMeetingNote_TitleMatch_LegacySessionBackfillsDiscoveryOnCarryForward(t 
 	// The meeting_note row's input_hash + resolved_set_hash are
 	// unchanged from the original ingest.
 	ctx := context.Background()
-	rowsDeleted, err := env.database.Queries.DeleteExternalContactsByDisplayNamePrefix(ctx, &tokenK)
+	rowsDeleted, err := env.database.Queries.DeleteExternalContactsByDisplayNamePrefix(ctx, tokenK)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, rowsDeleted, int64(1), "delete the pre-existing discovery row")
 	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenK), sessionUUID),

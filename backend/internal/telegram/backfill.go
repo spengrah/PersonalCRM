@@ -123,7 +123,11 @@ func (b *Backfiller) Run(ctx context.Context) error {
 			b.onProgress(total, completed)
 		}
 
-		time.Sleep(time.Duration(backfillChatSleepMs) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(backfillChatSleepMs) * time.Millisecond):
+		}
 	}
 
 	log.Info().Int("total_chats", total).Msg("telegram: backfill complete")
@@ -310,7 +314,10 @@ func (b *Backfiller) backfillChatWithPeer(ctx context.Context, chat repository.T
 	if err := iter.Err(); err != nil {
 		if d, ok := tgerr.AsFloodWait(err); ok {
 			log.Warn().Dur("wait", d).Int64("chat_id", chat.TelegramChatID).Msg("telegram: flood wait during backfill")
-			time.Sleep(d + time.Second)
+			select {
+			case <-ctx.Done():
+			case <-time.After(d + time.Second):
+			}
 		}
 		return fmt.Errorf("iterate history for chat %d: %w", chat.TelegramChatID, err)
 	}

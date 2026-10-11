@@ -134,11 +134,11 @@ WHERE id = $1
 
 -- name: ListExternalContactsBySource :many
 SELECT * FROM external_contact
-WHERE source = $1
-  AND ($2::text IS NULL OR account_id = $2)
+WHERE source = sqlc.arg(source)
+  AND (sqlc.narg(account_id)::text IS NULL OR account_id = sqlc.narg(account_id))
   AND deleted_at IS NULL
 ORDER BY display_name
-LIMIT $3 OFFSET $4;
+LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
 -- name: ListUnmatchedExternalContacts :many
 -- Per-source query; anarlog_title rows are intentionally NOT exposed
@@ -392,7 +392,7 @@ WHERE source = 'anarlog_title'
 
 -- name: FindExternalContactsByEmail :many
 SELECT * FROM external_contact
-WHERE emails @> $1::jsonb
+WHERE emails @> sqlc.arg(emails)::jsonb
   AND duplicate_of_id IS NULL
   AND deleted_at IS NULL
 ORDER BY created_at;

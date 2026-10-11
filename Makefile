@@ -1,6 +1,6 @@
 # Personal CRM Makefile
 
-.PHONY: help setup dev dev-seed staging-reset tours qa-sanity build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast model-prices-sync model-prices-apply qa-cost-assert prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check
+.PHONY: help setup dev dev-seed staging-reset tours qa-sanity build crm-admin mac-daemon test test-daemon-local clean docker-up docker-down docker-reset test-cadence-ultra test-cadence-fast model-prices-sync model-prices-apply qa-cost-assert prod staging accelerated testing start start-local stop restart reload status dev-stop dev-restart dev-api-stop dev-api-start dev-api-restart ci-build-backend ci-build-frontend ci-build ci-test test-e2e test-e2e-local e2e-db e2e-ports-free deploy-mac promote setup-pi setup-mac-deploy dev-native postgres-native sqlc smoke-test test-deploy-scripts worktree-env worktree-deps test-integration-fast test-integration-slow test-clean-clones worktree-test-pg-ensure test-pg-stop test-pg-teardown test-pg-reap test-pg-smoke lint-ingest-registry spec-lint spec-coverage spec-drift api-types api-types-check api-docs api-docs-check contact-queries contact-queries-check sqlc-params-check
 
 # Repo root (supports running make from subdirectories).
 REPO_ROOT := $(shell git rev-parse --show-toplevel)
@@ -634,6 +634,16 @@ contact-queries-check: ## Fail if the generated contact-list queries drifted (no
 		exit 1; \
 	fi && \
 	echo "✅ Generated contact list queries are in sync"
+
+# sqlc names an unnamed parameter ($1, ANY($1::text[])) Column1/dollar_1 in the
+# generated Go. Name every parameter with sqlc.arg()/sqlc.narg(). The generated
+# files are committed, so grepping them needs no sqlc run (~0.02s).
+sqlc-params-check: ## Fail if generated sqlc code has unnamed params (Column1, dollar_1)
+	@if grep -nE '\b(Column[0-9]+|[Dd]ollar_[0-9]+)\b' backend/internal/db/*.go; then \
+		echo "❌ Unnamed sqlc params above — use sqlc.arg(name)/sqlc.narg(name) in the .sql and run 'make sqlc'"; \
+		exit 1; \
+	fi && \
+	echo "✅ No unnamed sqlc params"
 
 api-build:
 	@echo "Building API server..."

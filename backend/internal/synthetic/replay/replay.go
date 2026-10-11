@@ -1165,7 +1165,11 @@ func (h *Harness) waitGateA(ctx context.Context, predicate gateA) error {
 		lastErr = err
 		time.Sleep(settlePollInterval)
 	}
-	return fmt.Errorf("synthetic settle: Gate A (domain terminal predicate) not met within %s: %v", defaultSettleTimeout, lastErr)
+	msg := fmt.Sprintf("synthetic settle: Gate A (domain terminal predicate) not met within %s", defaultSettleTimeout)
+	if lastErr != nil {
+		return fmt.Errorf("%s: %w", msg, lastErr)
+	}
+	return errors.New(msg)
 }
 
 func (h *Harness) waitGateB(ctx context.Context, source string) error {
@@ -1200,8 +1204,12 @@ func (h *Harness) waitGateB(ctx context.Context, source string) error {
 		}
 		time.Sleep(settlePollInterval)
 	}
-	return fmt.Errorf("synthetic settle: Gate B (River-job finalization) not met within %s: event_jobs=%d agg_jobs=%d err=%v",
-		defaultSettleTimeout, lastEventJobs, lastAggJobs, lastErr)
+	msg := fmt.Sprintf("synthetic settle: Gate B (River-job finalization) not met within %s: event_jobs=%d agg_jobs=%d",
+		defaultSettleTimeout, lastEventJobs, lastAggJobs)
+	if lastErr != nil {
+		return fmt.Errorf("%s err=%w", msg, lastErr)
+	}
+	return errors.New(msg)
 }
 
 // captureEventIDs grows created.eventIDs to the UNION of contact-scoped cascade

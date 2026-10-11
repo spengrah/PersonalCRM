@@ -74,7 +74,7 @@ func classifyApplyError(err error) error {
 		return nil
 	}
 	if errors.Is(err, repository.ErrMethodValueConflict) {
-		return fmt.Errorf("%w: %v", ErrInvalidOperations, err)
+		return fmt.Errorf("%w: %v", ErrInvalidOperations, err) //nolint:errorlint // classifyApplyError hides repository error values by design
 	}
 	return err
 }

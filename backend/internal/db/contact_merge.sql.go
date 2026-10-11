@@ -17,8 +17,8 @@ WHERE $1::uuid = ANY(matched_contact_ids)
 `
 
 // Count calendar events involving a contact (for merge preview)
-func (q *Queries) CountMergeCalendarEvents(ctx context.Context, dollar_1 uuid.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, CountMergeCalendarEvents, dollar_1)
+func (q *Queries) CountMergeCalendarEvents(ctx context.Context, contactID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, CountMergeCalendarEvents, contactID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err

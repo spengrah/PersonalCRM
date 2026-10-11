@@ -2,27 +2,27 @@
 -- These queries are used by the test API endpoints to seed and cleanup test data
 
 -- name: DeleteContactsByNamePrefix :execrows
-DELETE FROM contact WHERE full_name LIKE $1 || '%';
+DELETE FROM contact WHERE full_name LIKE sqlc.arg(prefix)::text || '%';
 
 -- name: DeleteExternalContactsByDisplayNamePrefix :execrows
-DELETE FROM external_contact WHERE display_name LIKE $1 || '%';
+DELETE FROM external_contact WHERE display_name LIKE sqlc.arg(prefix)::text || '%';
 
 -- name: DeleteExternalContactsBySourceIDPrefix :execrows
-DELETE FROM external_contact WHERE source_id LIKE $1 || '%';
+DELETE FROM external_contact WHERE source_id LIKE sqlc.arg(prefix)::text || '%';
 
 -- name: CountExternalContactsByDisplayNamePrefix :one
 SELECT COUNT(*) FROM external_contact
-WHERE display_name LIKE $1 || '%'
+WHERE display_name LIKE sqlc.arg(prefix)::text || '%'
   AND deleted_at IS NULL;
 
 -- name: DeleteCalendarEventsByGcalEventIdPrefix :execrows
-DELETE FROM calendar_event WHERE gcal_event_id LIKE $1 || '%';
+DELETE FROM calendar_event WHERE gcal_event_id LIKE sqlc.arg(prefix)::text || '%';
 
 -- name: DeleteTelegramMessagesByPeerUserID :execrows
 DELETE FROM telegram_message WHERE peer_user_id = $1;
 
 -- name: DeleteTelegramMessagesByMessageIDs :execrows
-DELETE FROM telegram_message WHERE telegram_message_id = ANY($1::int[]);
+DELETE FROM telegram_message WHERE telegram_message_id = ANY(sqlc.arg(message_ids)::int[]);
 
 -- name: DeleteExternalIdentitiesBySourceID :execrows
 DELETE FROM external_identity WHERE source_id = $1;
