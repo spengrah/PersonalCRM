@@ -42,6 +42,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Full history: the forward-only lint step diffs against origin/develop.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -104,6 +107,15 @@ jobs:
           version: v2.12.2
           working-directory: backend
           # No --timeout flag: inherit the single source in .golangci.yml (10m).
+
+      # Forward-only rules: same flags as `make lint-forward`. Only lines changed
+      # since origin/develop can fail; keep the args in lockstep with the Makefile.
+      - name: Run forward-only golangci-lint rules
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          working-directory: backend
+          args: -c ../.golangci.forward.yml --new-from-merge-base=origin/develop
 
       # The derived-column sole-writer, CRM-marker construction, and sqlc
       # SELECT-list duplication invariants are enforced by static tests in

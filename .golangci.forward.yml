@@ -1,0 +1,46 @@
+# golangci-lint config for forward-only rules.
+#
+# These rules flag patterns that exist in the codebase today and need a
+# refactor to remove. They run with `--new-from-merge-base=origin/develop`
+# (see `make lint-forward`), so only lines a change adds or modifies can fail.
+# Existing violations on untouched lines are not reported. Do not run this
+# config without that flag: it would report every existing violation.
+#
+# Rules that must hold for the whole tree live in .golangci.yml.
+version: "2"
+
+run:
+  timeout: 10m
+
+linters:
+  default: none
+  enable:
+    - forbidigo
+    - dupl
+  settings:
+    dupl:
+      threshold: 100
+    forbidigo:
+      forbid:
+        # EC: request-param parsing in handlers.
+        - pattern: '^(strconv\.Atoi|strconv\.Parse.*|fmt\.Sscan.*)$'
+          msg: 'handlers must not parse request params with strconv/fmt.Sscan (forward rule EC): add or reuse a shared api helper'
+        # P1: test seams called from shipped code.
+        - pattern: '(ForTest|ForTesting|WithURL)$'
+          msg: 'test seam called from non-test code (forward rule P1): construct production dependencies through the production path'
+  exclusions:
+    rules:
+      # EC applies to handlers only, never to tests.
+      - path-except: 'internal/api/handlers/'
+        linters: [forbidigo]
+        text: 'forward rule EC'
+      - path: '_test\.go$'
+        linters: [forbidigo]
+        text: 'forward rule EC'
+      # P1 exempts tests and the packages that define or host the seams.
+      - path: '(_test\.go$|internal/db/|internal/testdb/|internal/synthetic/|tests/testsupport/|docs/)'
+        linters: [forbidigo]
+        text: 'forward rule P1'
+      # D1 covers non-test files only.
+      - path: '_test\.go$'
+        linters: [dupl]

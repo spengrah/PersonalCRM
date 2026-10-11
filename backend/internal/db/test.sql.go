@@ -3369,6 +3369,40 @@ func (q *Queries) TestListIndexDefsForTable(ctx context.Context, tableName strin
 	return items, nil
 }
 
+const TestListNullableTimestampDefaultNow = `-- name: TestListNullableTimestampDefaultNow :many
+SELECT (table_name || '.' || column_name)::text AS qualified_column
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND data_type LIKE 'timestamp%'
+  AND is_nullable = 'YES'
+  AND column_default ILIKE '%now()%'
+ORDER BY table_name, column_name
+`
+
+// Schema-invariant test only: every public timestamp column that is nullable
+// yet defaults to now(). Such a column promises "always set" but lets an
+// explicit NULL through, so it must be NOT NULL. Read-only catalog access,
+// mirroring TestListPublicTables.
+func (q *Queries) TestListNullableTimestampDefaultNow(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, TestListNullableTimestampDefaultNow)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var qualified_column string
+		if err := rows.Scan(&qualified_column); err != nil {
+			return nil, err
+		}
+		items = append(items, qualified_column)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const TestListPublicTables = `-- name: TestListPublicTables :many
 SELECT table_name::text FROM information_schema.tables
 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
