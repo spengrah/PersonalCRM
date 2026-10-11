@@ -3,6 +3,7 @@ import os from 'os'
 import { readFileSync } from 'fs'
 import path from 'path'
 import { execSync } from 'child_process'
+import { DEFAULT_EXPECT_TIMEOUT_MS } from './tests/e2e/helpers/timeouts'
 
 // Store browsers on the workspace volume, not the default ~/.cache/ms-playwright
 // home-layer cache — a container rebuild wipes that even when the workspace
@@ -94,6 +95,7 @@ const frontendNodeEnv = isCI ? 'production' : 'development'
 
 export default defineConfig({
   testDir: './tests/e2e',
+  expect: { timeout: DEFAULT_EXPECT_TIMEOUT_MS },
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

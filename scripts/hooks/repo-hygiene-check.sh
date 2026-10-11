@@ -6,6 +6,9 @@
 # Checks:
 #   - No prototype *.html committed at the repo root. Prototypes belong in temp/
 #     (gitignored); a stray root-level .html is almost always an accidental commit.
+#   - No file-wide `/* eslint-disable` block comment under frontend/. It hides every
+#     later violation of that rule in the file; use `eslint-disable-next-line` or
+#     `-line` with a reason instead.
 #
 # Sourceable: when sourced (BASH_SOURCE != $0) it only defines functions, so the
 # logic can be unit-tested with injected input (see test/test-repo-hygiene-check.sh).
@@ -18,6 +21,14 @@ root_html_offenders() {
   grep -E '^[^/]+\.html$' || true
 }
 
+# eslint_filewide_disable_offenders reads `git grep -n` output (path:line:text) on
+# stdin and prints the lines whose text is a file-wide `/* eslint-disable` block
+# comment. `-next-line` and `-line` directives have a `-` after "disable", so
+# they never match. Pure, like root_html_offenders.
+eslint_filewide_disable_offenders() {
+  grep -E '/\* eslint-disable( |\*/|$)' || true
+}
+
 run_repo_hygiene() {
   local repo_root fail=0 offenders
   repo_root="$(git rev-parse --show-toplevel)"
@@ -26,6 +37,14 @@ run_repo_hygiene() {
   offenders="$(git -C "$repo_root" ls-files -- '*.html' | root_html_offenders)"
   if [ -n "$offenders" ]; then
     echo "repo-hygiene: prototype HTML committed at repo root — move to temp/ (gitignored):" >&2
+    echo "$offenders" | sed 's/^/  - /' >&2
+    fail=1
+  fi
+
+  # Check: no file-wide `/* eslint-disable` under frontend/.
+  offenders="$(git -C "$repo_root" grep -n -e '/\* eslint-disable' -- frontend | eslint_filewide_disable_offenders)"
+  if [ -n "$offenders" ]; then
+    echo "repo-hygiene: file-wide '/* eslint-disable' under frontend/ — use eslint-disable-next-line with a reason:" >&2
     echo "$offenders" | sed 's/^/  - /' >&2
     fail=1
   fi
