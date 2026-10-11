@@ -32,8 +32,6 @@ linters:
       os-mkdir-temp: false
       os-temp-dir: false
       os-chdir: false
-      oserrors-is-exist: false
-      oserrors-is-not-exist: false
     errorlint:
       # comparison: errors.Is over `err == ErrFoo`. errorf: %w over %v/%s for
       # error operands. asserts stays off (type assertions on errors).
