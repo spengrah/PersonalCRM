@@ -7,6 +7,7 @@ import {
   TestAPI,
 } from './helpers/test-api'
 import { SHORT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
+import { expectNoRequestWithin } from './helpers/negative-assertions'
 
 // The Notes row in the contact-detail definition list, scoped so a
 // presence/absence assertion on its expand control cannot collide with another
@@ -508,13 +509,10 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     // Deletion is guarded by a native window.confirm (see the detail page).
     // Dismiss path: no DELETE fires and the contact stays live.
-    let deleteFired = false
-    const watchDelete = (req: import('@playwright/test').Request) => {
-      if (req.method() === 'DELETE' && req.url().includes(`/contacts/${contactId}`)) {
-        deleteFired = true
-      }
-    }
-    page.on('request', watchDelete)
+    const noDelete = expectNoRequestWithin(
+      page,
+      req => req.method() === 'DELETE' && req.url().includes(`/contacts/${contactId}`)
+    )
     // The confirmation copy is captured INSIDE the handler (it cannot be read
     // after the dialog resolves) and asserted below: the prompt must warn the
     // action cannot be undone (CON-042.confirmation-prompt-warns-action).
@@ -524,14 +522,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
       void dialog.dismiss()
     })
     await page.getByRole('button', { name: 'Delete' }).click()
-    // Asserting ABSENCE: there is no positive signal to await on dismiss, so give
-    // any (erroneous) DELETE a bounded settle window to appear, then confirm none
-    // fired and the contact is still live.
-    // eslint-disable-next-line no-restricted-syntax -- negative assertion: no DELETE may follow the dismissed confirm within this window
-    await page.waitForTimeout(1000)
-    expect(deleteFired).toBe(false)
+    // Absence has no positive signal: the helper observes a bounded window.
+    await noDelete
     expect(confirmMessage).toContain('cannot be undone')
-    page.off('request', watchDelete)
     const liveResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
       headers: API_HEADERS,
     })

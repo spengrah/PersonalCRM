@@ -21,13 +21,15 @@ root_html_offenders() {
   grep -E '^[^/]+\.html$' || true
 }
 
-# eslint_filewide_disable_offenders reads `git grep -n` output (path:line:text) on
-# stdin and prints the lines whose text is a file-wide `/* eslint-disable` block
-# comment, with any whitespace ESLint accepts after `/*`. `-next-line` and
-# `-line` directives have a `-` after "disable", so they never match. Pure,
-# like root_html_offenders.
+# eslint_filewide_disable_offenders reads file paths on stdin and prints path:line
+# for each file-wide `/* eslint-disable` block comment, with any whitespace ESLint
+# accepts between `/*` and the directive, newlines included. `-next-line` and
+# `-line` directives have a `-` after "disable", so they never match.
 eslint_filewide_disable_offenders() {
-  grep -E '/\*[[:space:]]*eslint-disable([[:space:]]|\*/|$)' || true
+  while IFS= read -r file; do
+    [ -f "$file" ] || continue
+    perl -0777 -ne 'while (m{/\*\s*eslint-disable(?=\s|\*/)}g) { my $line = 1 + (substr($_, 0, $-[0]) =~ tr/\n//); print "$ARGV:$line\n" }' "$file"
+  done
 }
 
 run_repo_hygiene() {
@@ -43,7 +45,7 @@ run_repo_hygiene() {
   fi
 
   # Check: no file-wide `/* eslint-disable` under frontend/.
-  offenders="$(git -C "$repo_root" grep -n -E -e '/\*[[:space:]]*eslint-disable' -- frontend | eslint_filewide_disable_offenders)"
+  offenders="$(cd "$repo_root" && git grep -l -e 'eslint-disable' -- frontend | eslint_filewide_disable_offenders)"
   if [ -n "$offenders" ]; then
     echo "repo-hygiene: file-wide '/* eslint-disable' under frontend/ — use eslint-disable-next-line with a reason:" >&2
     echo "$offenders" | sed 's/^/  - /' >&2

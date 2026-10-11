@@ -1,6 +1,7 @@
 import { test, expect, Page, Route } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
+import { expectNoRequestWithin } from './helpers/negative-assertions'
 
 // The tasks section (TasksSection) renders unconditionally on the contact
 // detail page — it does NOT depend on Todoist being configured. The header
@@ -550,25 +551,17 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
       const row = taskRows(page).filter({ hasText: 'Mock linked task' })
       await expect(row).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
-      // Dismiss the confirm; collect any DELETE over a bounded settle
-      // window (a negative outcome needs an observation window, not a
-      // first-success poll).
+      // Dismiss the confirm; no DELETE may follow within the bounded window.
       page.once('dialog', dialog => void dialog.dismiss())
-      const deleteRequests: string[] = []
-      page.on('request', request => {
-        if (
+      const noDelete = expectNoRequestWithin(
+        page,
+        request =>
           request.method() === 'DELETE' &&
           request.url().includes(`/api/v1/contacts/${contactId}/tasks/`)
-        ) {
-          deleteRequests.push(request.url())
-        }
-      })
+      )
       await row.hover()
       await row.locator(`button[title="${UNLINK_TITLE}"]`).click()
-
-      // eslint-disable-next-line no-restricted-syntax -- negative assertion: no DELETE may follow the dismissed confirm within this window
-      await page.waitForTimeout(1500)
-      expect(deleteRequests).toEqual([])
+      await noDelete
       await expect(row).toBeVisible()
     })
 
