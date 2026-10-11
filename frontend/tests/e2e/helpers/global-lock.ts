@@ -16,9 +16,12 @@
  * for its next serial test, starving the other file's waiter.
  */
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || process.env.API_KEY || ''
-const HEADERS = { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' }
+import { API_BASE_URL } from './test-api'
+
+// Lock calls use their own key expression, which differs from the shared API_KEY
+// (no 'test-api-key-for-ci' fallback, and it reads the API_KEY env var).
+const LOCK_API_KEY = process.env.NEXT_PUBLIC_API_KEY || process.env.API_KEY || ''
+const HEADERS = { 'X-API-Key': LOCK_API_KEY, 'Content-Type': 'application/json' }
 
 const LEASE_TTL_MS = 30_000
 const RENEW_EVERY_MS = 10_000
@@ -28,7 +31,7 @@ export async function acquireGlobalLock(
   name: string,
   { deadlineMs = 300_000 }: { deadlineMs?: number } = {}
 ): Promise<() => Promise<void>> {
-  const resp = await fetch(`${API_URL}/api/v1/test/lock`, {
+  const resp = await fetch(`${API_BASE_URL}/api/v1/test/lock`, {
     method: 'POST',
     headers: HEADERS,
     body: JSON.stringify({ name, wait_ms: deadlineMs, ttl_ms: LEASE_TTL_MS }),
@@ -80,7 +83,7 @@ export async function acquireGlobalLock(
     escalateTimer.unref?.()
   }
   const renewTimer = setInterval(() => {
-    void fetch(`${API_URL}/api/v1/test/lock/${lease}/renew`, {
+    void fetch(`${API_BASE_URL}/api/v1/test/lock/${lease}/renew`, {
       method: 'POST',
       headers: HEADERS,
       body: JSON.stringify({ ttl_ms: LEASE_TTL_MS }),
@@ -126,7 +129,7 @@ export async function acquireGlobalLock(
     // escalateTimer is intentionally left to fire for that reason.
     renewAbort.abort()
     // Best-effort: a failed release just leaves the lease to lapse.
-    await fetch(`${API_URL}/api/v1/test/lock/${lease}`, {
+    await fetch(`${API_BASE_URL}/api/v1/test/lock/${lease}`, {
       method: 'DELETE',
       headers: HEADERS,
     }).catch(() => {})

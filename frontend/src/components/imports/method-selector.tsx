@@ -67,6 +67,7 @@ export function MethodSelector({
 
   return (
     <div
+      data-testid="method-row"
       className={clsx(
         'flex flex-wrap items-center gap-3 p-3 rounded-lg border transition-colors',
         stateClasses,

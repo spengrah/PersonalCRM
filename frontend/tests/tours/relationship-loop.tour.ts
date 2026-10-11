@@ -23,6 +23,7 @@
 // 'tasks-empty', 'log-after'), never these.
 
 import { test } from './support/tour-fixtures'
+import { DEFAULT_EXPECT_TIMEOUT_MS, JOB_TIMEOUT_MS } from '../e2e/helpers/timeouts'
 import { assertOverdueFitsCapture, OVERDUE_CAPTURE_CAP } from './support/pinned-fixtures'
 import type { Page } from '@playwright/test'
 
@@ -91,7 +92,7 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
   // drains the response buffer before step 2's readiness gate — so a post-hoc
   // waitForApi(OVERDUE_PATH) would wait for a second GET the page never issues
   // (deterministic on slower ARM tenants, gh #707). Awaited at step 2.
-  const overdueLoaded = tour.expectApi(page, 'GET', OVERDUE_PATH, { timeout: 30_000 })
+  const overdueLoaded = tour.expectApi(page, 'GET', OVERDUE_PATH, { timeout: JOB_TIMEOUT_MS })
   await page.goto('/')
   await page.waitForURL(u => new URL(u).pathname === '/dashboard')
   await page.getByRole('heading', { name: 'Action Required' }).waitFor({ state: 'visible' })
@@ -148,9 +149,7 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
   })
 
   // --- 4. Act: the detail page's loop-closing affordance ---
-  const logModal = page
-    .locator('div.fixed.inset-0')
-    .filter({ has: page.getByRole('heading', { name: /Log Interaction with/ }) })
+  const logModal = page.getByRole('dialog', { name: /Log Interaction with/ })
   await page.getByRole('button', { name: 'Log Interaction' }).click()
   await page.getByRole('heading', { name: /Log Interaction with/ }).waitFor({ state: 'visible' })
   await tour.capture(page, {
@@ -202,7 +201,7 @@ test('relationship-loop tour — dashboard signal → contact → act → reflec
     await page.waitForFunction(
       id => !document.querySelector(`a[href="/contacts/${id}"]`),
       targetId,
-      { timeout: 10_000 }
+      { timeout: DEFAULT_EXPECT_TIMEOUT_MS }
     )
     reflected = true
   } catch {

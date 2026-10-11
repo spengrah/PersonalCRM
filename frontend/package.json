@@ -6,8 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint && tsc --noEmit && prettier --check .",
-    "lint:code": "next lint && tsc --noEmit",
+    "lint": "next lint --dir src --dir tests && tsc --noEmit && prettier --check .",
+    "lint:code": "next lint --dir src --dir tests && tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -42,6 +42,7 @@
     "@vitejs/plugin-react": "^5.1.2",
     "eslint": "^9",
     "eslint-config-next": "15.4.6",
+    "eslint-plugin-react-hooks": "7.1.1",
     "jsdom": "^27.3.0",
     "playwright": "^1.54.2",
     "prettier": "^3.7.4",
@@ -49,5 +50,8 @@
     "typescript": "^5",
     "vitest": "^4.0.16",
     "yaml": "^2.9.0"
+  },
+  "overrides": {
+    "eslint-plugin-react-hooks": "7.1.1"
   }
 }

@@ -141,38 +141,35 @@ describe('getSyncStateForAccount', () => {
 })
 
 describe('formatSyncTime', () => {
+  const now = new Date('2026-06-15T12:00:00Z')
+
   it('should return "Never" for null input', () => {
-    expect(formatSyncTime(null)).toBe('Never')
+    expect(formatSyncTime(null, now)).toBe('Never')
   })
 
   it('should return "Just now" for times less than 1 minute ago', () => {
-    const now = new Date()
     const thirtySecondsAgo = new Date(now.getTime() - 30 * 1000)
-    expect(formatSyncTime(thirtySecondsAgo.toISOString())).toBe('Just now')
+    expect(formatSyncTime(thirtySecondsAgo.toISOString(), now)).toBe('Just now')
   })
 
   it('should return minutes ago for times less than 1 hour ago', () => {
-    const now = new Date()
     const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000)
-    expect(formatSyncTime(fifteenMinutesAgo.toISOString())).toBe('15m ago')
+    expect(formatSyncTime(fifteenMinutesAgo.toISOString(), now)).toBe('15m ago')
   })
 
   it('should return hours ago for times less than 24 hours ago', () => {
-    const now = new Date()
     const threeHoursAgo = new Date(now.getTime() - 3 * 60 * 60 * 1000)
-    expect(formatSyncTime(threeHoursAgo.toISOString())).toBe('3h ago')
+    expect(formatSyncTime(threeHoursAgo.toISOString(), now)).toBe('3h ago')
   })
 
   it('should return days ago for times less than 7 days ago', () => {
-    const now = new Date()
     const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000)
-    expect(formatSyncTime(twoDaysAgo.toISOString())).toBe('2d ago')
+    expect(formatSyncTime(twoDaysAgo.toISOString(), now)).toBe('2d ago')
   })
 
   it('should return formatted date for times 7+ days ago', () => {
-    const now = new Date()
     const tenDaysAgo = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000)
-    const result = formatSyncTime(tenDaysAgo.toISOString())
+    const result = formatSyncTime(tenDaysAgo.toISOString(), now)
     // Should be a month/day format like "Jan 12"
     expect(result).toMatch(/^[A-Z][a-z]{2} \d{1,2}$/)
   })

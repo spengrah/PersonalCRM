@@ -1,14 +1,14 @@
 import { test, expect } from '@playwright/test'
-import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
+import {
+  createTestAPI,
+  TestAPI,
+  type SeedBehaviorResult,
+  API_BASE_URL,
+  API_HEADERS,
+} from './helpers/test-api'
 import { expectAddContactHeader, waitForOverdueListSettled } from './helpers/dashboard'
 import type { OverdueContactResponse } from '../../src/types/generated/contact'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
+import { SHORT_TIMEOUT_MS } from './helpers/timeouts'
 
 // Full-envelope overdue-entry builder for route-mocked dashboard tests,
 // typed against the real wire DTO so fixture drift fails tsc. The real
@@ -48,7 +48,7 @@ test.describe('Dashboard @area:dashboard', () => {
     await page.goto('/')
 
     // Should redirect to dashboard (client-side redirect via useEffect)
-    await expect(page).toHaveURL('/dashboard', { timeout: 10000 })
+    await expect(page).toHaveURL('/dashboard')
 
     // Wait for page to fully load
     await page.waitForLoadState('domcontentloaded')
@@ -288,7 +288,7 @@ test.describe('Dashboard - Log Interaction @area:dashboard @area:overdue', () =>
     expect(response.request().postDataJSON()?.direction).toBe('outbound')
 
     await overdueRefetch
-    await expect(dialog).not.toBeVisible({ timeout: 5000 })
+    await expect(dialog).not.toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await expect(card).toBeVisible()
   })
 })

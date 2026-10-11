@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import { expectAddContactHeader } from './helpers/dashboard'
 import type { APIResponse } from '../../src/types/generated/api-envelope'
+import { JOB_TIMEOUT_MS } from './helpers/timeouts'
 
 // The mock envelopes below are typed against the tygo-GENERATED wire type
 // (backend api/response.go → APIResponse), so a backend envelope change
@@ -80,7 +81,7 @@ test.describe('Error Boundary @area:error-boundary', () => {
     const alert = page.getByRole('alert')
     await expect(
       alert.getByRole('heading', { name: 'Error loading overdue contacts' })
-    ).toBeVisible({ timeout: 20000 })
+    ).toBeVisible({ timeout: JOB_TIMEOUT_MS })
 
     // The shown reason FAITHFULLY reflects the actual failure (DSH-004.shown-failure-reason-faithfully):
     // apiClient plumbs the envelope's error.message into ApiError.message and

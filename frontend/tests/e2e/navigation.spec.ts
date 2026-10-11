@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 test.describe('Navigation @area:navigation', () => {
   // Note: Sync indicator visual states (gray/green/red) are tested via unit
@@ -52,7 +53,7 @@ test.describe('Navigation @area:navigation', () => {
 
     await expect(page).toHaveURL(/\/contacts(\?|$)/)
     await expect(page.getByRole('heading', { name: 'Contacts', level: 2 })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
   })
 

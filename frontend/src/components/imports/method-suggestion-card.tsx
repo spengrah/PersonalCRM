@@ -28,7 +28,10 @@ export function MethodSuggestionCard({
   const count = suggestion.methods.length
 
   return (
-    <div className="p-4 bg-white border border-gray-200 rounded-lg hover:shadow-sm transition-shadow">
+    <div
+      data-testid="method-suggestion-card"
+      className="p-4 bg-white border border-gray-200 rounded-lg hover:shadow-sm transition-shadow"
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
           <div className="flex items-center flex-wrap gap-2">

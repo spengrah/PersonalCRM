@@ -156,19 +156,20 @@ export function GoogleAccountsSection() {
     }
   }
 
-  // Handle OAuth callback query params
-  useEffect(() => {
+  // Show the OAuth callback result. Adjusting state during render (keyed on the
+  // query string) replaces an effect that only copied URL params into state.
+  const paramsKey = searchParams.toString()
+  const [handledParamsKey, setHandledParamsKey] = useState<string | null>(null)
+  if (paramsKey !== handledParamsKey) {
+    setHandledParamsKey(paramsKey)
     const auth = searchParams.get('auth')
-    const provider = searchParams.get('provider')
     const message = searchParams.get('message')
-
-    if (auth && provider === 'google') {
+    if (searchParams.get('provider') === 'google') {
       if (auth === 'success') {
         setNotification({
           type: 'success',
           message: 'Google account connected successfully!',
         })
-        refetch()
       } else if (auth === 'error') {
         setNotification({
           type: 'error',
@@ -176,6 +177,18 @@ export function GoogleAccountsSection() {
             ? `Failed to connect: ${message.replace(/_/g, ' ')}`
             : 'Failed to connect Google account.',
         })
+      }
+    }
+  }
+
+  // Handle OAuth callback query params
+  useEffect(() => {
+    const auth = searchParams.get('auth')
+    const provider = searchParams.get('provider')
+
+    if (auth && provider === 'google') {
+      if (auth === 'success') {
+        refetch()
       }
 
       // Clear the query params after showing notification

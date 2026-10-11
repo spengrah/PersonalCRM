@@ -61,13 +61,15 @@ export function TodoistAccountsSection() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
   const [selectedLabelId, setSelectedLabelId] = useState<string>('')
 
-  // Update local state when settings load
-  useEffect(() => {
+  // Reset local selectors when settings load (adjusting state during render)
+  const [syncedSettings, setSyncedSettings] = useState(settings)
+  if (settings !== syncedSettings) {
+    setSyncedSettings(settings)
     if (settings) {
       setSelectedProjectId(settings.project_id || '')
       setSelectedLabelId(settings.label_id || '')
     }
-  }, [settings])
+  }
 
   // Save settings when selection changes
   const handleProjectChange = async (projectId: string) => {
@@ -104,16 +106,17 @@ export function TodoistAccountsSection() {
     }
   }
 
-  // Handle OAuth callback query params
-  useEffect(() => {
+  // Show the OAuth callback result. Adjusting state during render (keyed on the
+  // query string) replaces an effect that only copied URL params into state.
+  const paramsKey = searchParams.toString()
+  const [handledParamsKey, setHandledParamsKey] = useState<string | null>(null)
+  if (paramsKey !== handledParamsKey) {
+    setHandledParamsKey(paramsKey)
     const auth = searchParams.get('auth')
-    const provider = searchParams.get('provider')
     const message = searchParams.get('message')
-
-    if (auth && provider === 'todoist') {
+    if (searchParams.get('provider') === 'todoist') {
       if (auth === 'success') {
         setNotification({ type: 'success', message: 'Todoist account connected successfully!' })
-        refetch()
       } else if (auth === 'error') {
         setNotification({
           type: 'error',
@@ -121,6 +124,18 @@ export function TodoistAccountsSection() {
             ? `Failed to connect: ${message.replace(/_/g, ' ')}`
             : 'Failed to connect Todoist account.',
         })
+      }
+    }
+  }
+
+  // Handle OAuth callback query params
+  useEffect(() => {
+    const auth = searchParams.get('auth')
+    const provider = searchParams.get('provider')
+
+    if (auth && provider === 'todoist') {
+      if (auth === 'success') {
+        refetch()
       }
 
       const timeout = setTimeout(() => {

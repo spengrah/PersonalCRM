@@ -1,13 +1,13 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
-import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
+import { JOB_TIMEOUT_MS } from './helpers/timeouts'
+import {
+  API_BASE_URL,
+  API_HEADERS,
+  createTestAPI,
+  TestAPI,
+  type SeedBehaviorResult,
+} from './helpers/test-api'
 import { fulfillJson } from './helpers/fulfill-json'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
 
 interface InteractionItem {
   id: string
@@ -450,7 +450,7 @@ test.describe('Interactions Section @area:interactions', () => {
     ).toBeVisible()
     await expect(errorPage.getByText('Failed to load interactions.', { exact: true })).toHaveCount(
       1,
-      { timeout: 20000 }
+      { timeout: JOB_TIMEOUT_MS }
     )
     await errorContext.close()
   })

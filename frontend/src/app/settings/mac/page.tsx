@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Cpu, ArrowLeft, RefreshCw, Trash2, Copy, AlertTriangle, KeyRound } from 'lucide-react'
 
@@ -60,6 +60,9 @@ export default function MacSettingsPage() {
   const deleteHost = useDeleteMacHost()
   const createToken = useCreatePairingToken()
 
+  // Heartbeat age compares against server timestamps written on the wall clock, so this
+  // measures real elapsed time, not the accelerated clock.
+  // eslint-disable-next-line no-restricted-syntax -- heartbeat age is real elapsed time
   const [now, setNow] = useState(() => Date.now())
   const [pairingModalOpen, setPairingModalOpen] = useState(false)
   const [pairingToken, setPairingToken] = useState<{ token: string; expires_at: string } | null>(
@@ -77,7 +80,11 @@ export default function MacSettingsPage() {
 
   // Tick `now` once a second so the relative-time labels stay current.
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    const id = window.setInterval(
+      // eslint-disable-next-line no-restricted-syntax -- heartbeat age is real elapsed time
+      () => setNow(Date.now()),
+      1000
+    )
     return () => window.clearInterval(id)
   }, [])
 
@@ -289,13 +296,21 @@ interface PairingTokenModalProps {
 
 function PairingTokenModal({ token, isPending, isError, onClose }: PairingTokenModalProps) {
   const [copied, setCopied] = useState(false)
+  const copiedTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+    }
+  }, [])
 
   const handleCopy = async () => {
     if (!token) return
     try {
       await navigator.clipboard.writeText(token.token)
       setCopied(true)
-      window.setTimeout(() => setCopied(false), 2000)
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+      copiedTimerRef.current = window.setTimeout(() => setCopied(false), 2000)
     } catch (err) {
       console.error('clipboard write failed', err)
     }

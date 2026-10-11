@@ -1,12 +1,6 @@
 import { test, expect } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
+import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
+import { API_BASE_URL, API_HEADERS, createTestAPI, TestAPI } from './helpers/test-api'
 
 // Exercise the full rematch happy path: seed an unmatched calendar event
 // with an attendee email, add that email to a CRM contact, and assert — via
@@ -49,7 +43,7 @@ test.describe('Rematch on add email @area:contacts', () => {
     await page.goto(`/contacts/${contactId}?action=edit`)
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     // Add an email method. The form starts with one empty method row (type

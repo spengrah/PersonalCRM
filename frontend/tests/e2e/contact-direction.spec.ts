@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
+import { SHORT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 test.describe('Contact Direction Signals @area:contacts', () => {
   let testApi: TestAPI
@@ -26,14 +27,14 @@ test.describe('Contact Direction Signals @area:contacts', () => {
 
     // Wait for contact data to load
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     // Direction signals section should appear with outreach and response
     // TIMES, not just the labels — the value after the colon must be
     // non-empty (formatRelativeTime renders e.g. "3 days ago"; a blank
     // value would render "Last outreach: " and fail the \S+ match).
-    await expect(page.getByText(/Last outreach: \S+/)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(/Last outreach: \S+/)).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await expect(page.getByText(/Last response: \S+/)).toBeVisible()
   })
 
@@ -50,11 +51,11 @@ test.describe('Contact Direction Signals @area:contacts', () => {
     await page.waitForLoadState('domcontentloaded')
 
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     // Should show the outreach TIME (non-empty value after the label)
-    await expect(page.getByText(/Last outreach: \S+/)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(/Last outreach: \S+/)).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 
     // Shown-IFF-exists: with no inbound/mutual interaction there is no
     // response timestamp, so the response line must be ABSENT.
@@ -72,7 +73,7 @@ test.describe('Contact Direction Signals @area:contacts', () => {
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     // The awaiting-reply indicator renders while the follow-up pends, targeted
@@ -92,7 +93,7 @@ test.describe('Contact Direction Signals @area:contacts', () => {
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
     await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     await expect(page.getByText('No recent activity')).toBeVisible()

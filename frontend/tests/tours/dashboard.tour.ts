@@ -181,9 +181,7 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   })
   await page.getByRole('button', { name: 'Log Interaction' }).first().click()
   await page.getByRole('heading', { name: /Log Interaction with/ }).waitFor({ state: 'visible' })
-  const logModal = page
-    .locator('div.fixed.inset-0')
-    .filter({ has: page.getByRole('heading', { name: /Log Interaction with/ }) })
+  const logModal = page.getByRole('dialog', { name: /Log Interaction with/ })
   await logModal.getByRole('button', { name: 'Log', exact: true }).click()
   await tour.waitForApi(page, 'POST', /\/contacts\/[0-9a-f-]{36}\/interactions$/)
   await tour.waitForApi(page, 'GET', OVERDUE_PATH) // the invalidation refetch
@@ -218,8 +216,10 @@ test('dashboard tour — DSH + dashboard-hosted CAD behaviors', async ({ page, t
   // --- DSH-004.while-loading-placeholder-content: loading placeholder (route held) ---
   const hold = await tour.holdRoute(page, OVERDUE_MATCH)
   await page.goto('/dashboard')
-  await page.locator('.max-w-7xl [class*="animate-pulse"]').first().waitFor({ state: 'visible' })
-  const overdueLoadingSkeletons = await page.locator('.max-w-7xl [class*="animate-pulse"]').count()
+  const overdueLoading = page.getByRole('status', { name: 'Loading overdue contacts' })
+  await overdueLoading.waitFor({ state: 'visible' })
+  // Each skeleton card is a direct child of the status region.
+  const overdueLoadingSkeletons = await overdueLoading.locator(':scope > div').count()
   await tour.capture(page, {
     arrayCap: OVERDUE_CAPTURE_CAP,
     behaviors: ['DSH-004'],

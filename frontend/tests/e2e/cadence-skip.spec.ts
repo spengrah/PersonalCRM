@@ -1,13 +1,12 @@
 import { test, expect } from '@playwright/test'
-import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
+import {
+  createTestAPI,
+  TestAPI,
+  type SeedBehaviorResult,
+  API_BASE_URL,
+  API_HEADERS,
+} from './helpers/test-api'
 import { waitForOverdueListSettled } from './helpers/dashboard'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
 
 test.describe('Cadence skip @area:dashboard @area:overdue', () => {
   let testApi: TestAPI

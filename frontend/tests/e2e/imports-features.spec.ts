@@ -1,6 +1,8 @@
 import { test, expect } from './fixtures'
 import type { APIRequestContext } from '@playwright/test'
 import {
+  API_BASE_URL,
+  API_HEADERS,
   createTestAPI,
   TestAPI,
   declaredWorldNamePrefix,
@@ -11,13 +13,6 @@ import {
   findCandidateByName,
   candidateCardByName,
 } from './helpers/imports-helpers'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
 
 /**
  * The '@handle' a declared telegram candidate actually carries, read back from
@@ -121,7 +116,7 @@ test.describe('Imports Features @area:imports', () => {
       const displayName = seeded.entities['unmatched-gc'].name
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       await findCandidateByName(page, displayName)
 
@@ -140,7 +135,7 @@ test.describe('Imports Features @area:imports', () => {
       const displayName = seeded.entities['matching'].name
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       await findCandidateByName(page, displayName)
 
@@ -161,7 +156,7 @@ test.describe('Imports Features @area:imports', () => {
       const displayName = seeded.entities['matching'].name
 
       await page.goto('/imports')
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
 
       await findCandidateByName(page, displayName)
 
@@ -277,7 +272,7 @@ test.describe('Imports Features @area:imports', () => {
       // visible value and defaults to selected.
       const dialog = page.getByRole('dialog', { name: 'Resolve import candidate' })
       await expect(dialog.getByText('No contact methods available')).not.toBeVisible()
-      const methodRow = dialog.locator('div.border', { hasText: handle }).last()
+      const methodRow = dialog.getByTestId('method-row').filter({ hasText: handle }).last()
       await expect(methodRow.getByRole('button', { name: 'Deselect method' })).toHaveAttribute(
         'aria-pressed',
         'true'
@@ -335,7 +330,7 @@ test.describe('Imports Features @area:imports', () => {
       // added") rather than "No contact methods available".
       await expect(dialog.getByText('No contact methods available')).not.toBeVisible()
       await expect(dialog.getByText('Will be added')).toBeVisible()
-      const methodRow = dialog.locator('div.border', { hasText: handle }).last()
+      const methodRow = dialog.getByTestId('method-row').filter({ hasText: handle }).last()
       await expect(
         methodRow.getByRole('button', { name: /Select method|Deselect method/ })
       ).toBeVisible()

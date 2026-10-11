@@ -144,7 +144,11 @@ function Notification({
       <p className={`flex-1 text-sm ${type === 'success' ? 'text-green-800' : 'text-red-800'}`}>
         {message}
       </p>
-      <button onClick={onDismiss} className="text-gray-400 hover:text-gray-600">
+      <button
+        onClick={onDismiss}
+        aria-label="Dismiss message"
+        className="text-gray-400 hover:text-gray-600"
+      >
         <X className="w-4 h-4" />
       </button>
     </div>
@@ -185,7 +189,10 @@ function CandidateCard({
   const evidenceLabel = candidateEvidenceLabel(candidate)
 
   return (
-    <div className="p-4 bg-white border border-gray-200 rounded-lg hover:shadow-sm transition-shadow">
+    <div
+      data-testid="candidate-card"
+      className="p-4 bg-white border border-gray-200 rounded-lg hover:shadow-sm transition-shadow"
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         {/* Left side: Avatar and info */}
         <div className="flex items-start space-x-4 min-w-0">
@@ -467,6 +474,10 @@ function ImportsPageInner() {
     if (attentionLoading) return
     const match = items.find(i => i.anarlog_session_id === sessionParam)
     if (match) {
+      // One-shot deep-link consumption: the highlight must be captured before the
+      // router.replace below strips the param it is derived from, and the same
+      // effect scrolls the DOM node, so it cannot be derived during render.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- param is consumed (removed from the URL) in this effect, so the highlight needs its own state
       setHighlightedSession(match.id)
       cardRefs.current[match.id]?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       const fade = setTimeout(() => setHighlightedSession(null), 2500)

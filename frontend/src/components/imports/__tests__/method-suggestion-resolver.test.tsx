@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -16,6 +15,11 @@ import { MethodSuggestionResolver } from '../method-suggestion-resolver'
 import { useContact } from '@/hooks/use-contacts'
 import { useResolveMethodSuggestions, useDismissMethodSuggestions } from '@/hooks/use-suggestions'
 import type { MethodSuggestion } from '@/types/import'
+
+/** A partial hook result standing in for the full return type; the component under test reads only the fields set here. */
+function stub<T>(value: object): T {
+  return value as unknown as T
+}
 
 const suggestion: MethodSuggestion = {
   external_contact_id: 'ext-1',
@@ -35,15 +39,19 @@ beforeEach(() => {
   vi.clearAllMocks()
   resolveAsync = vi.fn().mockResolvedValue({})
   dismissAsync = vi.fn().mockResolvedValue({})
-  vi.mocked(useContact).mockReturnValue({ data: { id: 'contact-1', methods: [] } } as any)
-  vi.mocked(useResolveMethodSuggestions).mockReturnValue({
-    mutateAsync: resolveAsync,
-    isPending: false,
-  } as any)
-  vi.mocked(useDismissMethodSuggestions).mockReturnValue({
-    mutateAsync: dismissAsync,
-    isPending: false,
-  } as any)
+  vi.mocked(useContact).mockReturnValue(stub({ data: { id: 'contact-1', methods: [] } }))
+  vi.mocked(useResolveMethodSuggestions).mockReturnValue(
+    stub({
+      mutateAsync: resolveAsync,
+      isPending: false,
+    })
+  )
+  vi.mocked(useDismissMethodSuggestions).mockReturnValue(
+    stub({
+      mutateAsync: dismissAsync,
+      isPending: false,
+    })
+  )
 })
 
 function renderResolver() {

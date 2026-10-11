@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+import { DEFAULT_EXPECT_TIMEOUT_MS } from './tests/e2e/helpers/timeouts'
 
 // Dedicated, ISOLATED tours config. This file is NEVER imported
 // by playwright.config.ts and is only ever reached via an explicit
@@ -13,6 +14,7 @@ import { defineConfig, devices } from '@playwright/test'
 export default defineConfig({
   testDir: './tests/tours',
   testMatch: '**/*.tour.ts',
+  expect: { timeout: DEFAULT_EXPECT_TIMEOUT_MS },
   fullyParallel: false,
   workers: 1,
   // A tour error is signal (navigation breakage / missing control), not flake —

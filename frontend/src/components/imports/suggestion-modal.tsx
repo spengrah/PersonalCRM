@@ -161,6 +161,50 @@ interface MethodSelection {
   isEmail: boolean
 }
 
+/**
+ * True on the first render and on any render where a dep changed identity
+ * since the last render. Replaces "reset state in an effect when X changes":
+ * the caller sets state under `if (useChanged(...))` during render, which
+ * React applies before painting (no extra committed render with stale state).
+ */
+function useChanged(deps: readonly unknown[]): boolean {
+  const [prev, setPrev] = useState<readonly unknown[] | null>(null)
+  const changed = prev === null || deps.some((dep, i) => !Object.is(dep, prev[i]))
+  if (changed) setPrev(deps)
+  return changed
+}
+
+/** Pre-selects every method the candidate carries. */
+function buildMethodSelections(candidate: ImportCandidate): Map<string, MethodSelection> {
+  const selections = new Map<string, MethodSelection>()
+
+  // Add emails with inferred types
+  candidate.emails.forEach(email => {
+    selections.set(email, { value: email, selected: true, type: 'email', isEmail: true })
+  })
+
+  // Add phones
+  candidate.phones.forEach(phone => {
+    selections.set(phone, { value: phone, selected: true, type: 'phone', isEmail: false })
+  })
+
+  // Add Telegram @username from metadata as a telegram method.
+  // Mirrors the backend's buildMethodsAuto behavior in handlers/import.go so
+  // the UI reflects the method that will actually be created on import.
+  // Display the handle with a leading '@' for consistency with the card chip.
+  if (candidate.source === 'telegram' && candidate.metadata?.username) {
+    const rawHandle = candidate.metadata.username
+    const displayValue = rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`
+    selections.set(displayValue, {
+      value: displayValue,
+      selected: true,
+      type: 'telegram',
+      isEmail: false,
+    })
+  }
+  return selections
+}
+
 function ContactCandidateResolver({
   candidates: initialCandidates,
   initialCandidateId,
@@ -173,17 +217,21 @@ function ContactCandidateResolver({
   // The modal tracks the current candidate by id, not by list position: the
   // candidates list is a live query that can refetch/reorder underneath the
   // open modal, and an index would silently start pointing at a different
-  // candidate. lastIndexRef remembers where the tracked candidate sits (or
+  // candidate. lastIndex remembers where the tracked candidate sits (or
   // where a pager navigation intended to land) so that when the id is
   // removed the modal can advance in place.
   const [currentId, setCurrentId] = useState(initialCandidateId)
-  const lastIndexRef = useRef(0)
+  const [lastIndex, setLastIndex] = useState(0)
+  const navTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Ids this modal instance resolved itself (import/link/ignore succeeded):
   // known-gone even if the confirming refetch never lands.
   const [locallyResolvedIds, setLocallyResolvedIds] = useState<ReadonlySet<string>>(() => new Set())
   // Only a list fetched AFTER the modal opened may declare the tracked
   // candidate gone: the mount-time cache predates the click by definition.
-  const mountTimeRef = useRef(Date.now())
+  // React Query stamps dataUpdatedAt with the wall clock, so the comparison
+  // must use the wall clock too (the accelerated clock can differ).
+  // eslint-disable-next-line no-restricted-syntax -- compared against React Query's wall-clock dataUpdatedAt
+  const [mountTime] = useState(() => Date.now())
   const [mode, setMode] = useState<ModalMode>(initialMode)
   const [selectedContactId, setSelectedContactId] = useState<string | undefined>()
   const [methodSelections, setMethodSelections] = useState<Map<string, MethodSelection>>(new Map())
@@ -223,7 +271,7 @@ function ContactCandidateResolver({
   // is the truth. A pre-open cache — even a time-fresh one — belongs to a
   // DIFFERENT query than the page list the user clicked in and may simply
   // predate the clicked candidate, so its absences prove nothing.
-  const listAuthoritative = fetchedCandidates !== null && dataUpdatedAt > mountTimeRef.current
+  const listAuthoritative = fetchedCandidates !== null && dataUpdatedAt > mountTime
 
   // The tracked candidate is known-gone only when this modal resolved it
   // itself, or when an authoritative fetch no longer contains it.
@@ -259,11 +307,8 @@ function ContactCandidateResolver({
   // state retained from before the open: only the former may drive a close.
   const [postMountSettled, setPostMountSettled] = useState(false)
   useEffect(() => {
-    const cached = allCandidatesData?.candidates
-    if (dataUpdatedAt > mountTimeRef.current && cached?.some(c => c.id === initialCandidateId)) {
-      setPostMountSettled(true)
-      return
-    }
+    // The cache at mount predates the open (mountTime is taken at mount), so
+    // it can never already be authoritative: always force one refetch.
     refetch().finally(() => setPostMountSettled(true))
     // Mount-only: the mount-time cache is by definition pre-open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -275,9 +320,7 @@ function ContactCandidateResolver({
   // the end — the modal advances in place.
   const trackedIndex = candidates.findIndex(c => c.id === currentId)
   const currentIndex =
-    trackedIndex >= 0
-      ? trackedIndex
-      : Math.max(0, Math.min(lastIndexRef.current, candidates.length - 1))
+    trackedIndex >= 0 ? trackedIndex : Math.max(0, Math.min(lastIndex, candidates.length - 1))
 
   const candidate = candidates[currentIndex]
   const displayName = candidate ? getCandidateDisplayName(candidate) : ''
@@ -301,11 +344,9 @@ function ContactCandidateResolver({
   const linkOnly = candidate ? !sourceAllowsImport(candidate.source) : false
 
   // Force link mode for a link-only source (Import is absent).
-  useEffect(() => {
-    if (linkOnly && mode !== 'link') {
-      setMode('link')
-    }
-  }, [linkOnly, mode])
+  if (linkOnly && mode !== 'link') {
+    setMode('link')
+  }
 
   // Fetch contacts for link mode selector
   const { data: contactsData } = useContacts({ limit: 500 })
@@ -351,13 +392,11 @@ function ContactCandidateResolver({
   // position so the modal advances in place. Without that knowledge the
   // modal waits — adopting from a pre-open cache is how a wrong candidate
   // gets latched.
-  useEffect(() => {
-    if (trackedIndex >= 0) {
-      lastIndexRef.current = trackedIndex
-    } else if (knownGone && candidate) {
-      setCurrentId(candidate.id)
-    }
-  }, [trackedIndex, candidate, knownGone])
+  if (trackedIndex >= 0) {
+    if (lastIndex !== trackedIndex) setLastIndex(trackedIndex)
+  } else if (knownGone && candidate) {
+    setCurrentId(candidate.id)
+  }
 
   // The SOLE close decision: nothing left to act on because the queue is
   // confirmed empty (authoritative fetch / this modal resolved the last
@@ -376,59 +415,15 @@ function ContactCandidateResolver({
   }, [candidates.length, knownGone, listAuthoritative, isError, postMountSettled, onClose])
 
   // Initialize method selections when candidate changes
-  useEffect(() => {
-    // Guard against undefined candidate (can happen during cache invalidation race conditions)
-    if (!candidate) return
-
-    const selections = new Map<string, MethodSelection>()
-
-    // Add emails with inferred types
-    candidate.emails.forEach(email => {
-      const inferredType: ContactMethodType = 'email'
-      selections.set(email, {
-        value: email,
-        selected: true, // Pre-select all by default
-        type: inferredType,
-        isEmail: true,
-      })
-    })
-
-    // Add phones
-    candidate.phones.forEach(phone => {
-      selections.set(phone, {
-        value: phone,
-        selected: true,
-        type: 'phone',
-        isEmail: false,
-      })
-    })
-
-    // Add Telegram @username from metadata as a telegram method.
-    // Mirrors the backend's buildMethodsAuto behavior in handlers/import.go so
-    // the UI reflects the method that will actually be created on import.
-    // Display the handle with a leading '@' for consistency with the card chip.
-    if (candidate.source === 'telegram' && candidate.metadata?.username) {
-      const rawHandle = candidate.metadata.username
-      const displayValue = rawHandle.startsWith('@') ? rawHandle : `@${rawHandle}`
-      selections.set(displayValue, {
-        value: displayValue,
-        selected: true,
-        type: 'telegram',
-        isEmail: false,
-      })
-    }
-
-    setMethodSelections(selections)
+  const candidateChanged = useChanged([currentId, candidate])
+  // Guard against undefined candidate (can happen during cache invalidation race conditions)
+  if (candidateChanged && candidate) {
+    setMethodSelections(buildMethodSelections(candidate))
     setConflictResolutions(new Map())
     setSelectedCadence('')
-
     // Auto-select suggested match if available
-    if (candidate.suggested_match) {
-      setSelectedContactId(candidate.suggested_match.contact_id)
-    } else {
-      setSelectedContactId(undefined)
-    }
-  }, [currentId, candidate])
+    setSelectedContactId(candidate.suggested_match?.contact_id)
+  }
 
   // Detect conflicts when in link mode and CRM contact is selected
   const methodComparisons = useMemo<MethodComparison[]>(() => {
@@ -444,74 +439,59 @@ function ContactCandidateResolver({
   }, [mode, selectedContact, candidate])
 
   // Initialize conflict resolutions when comparisons change
-  useEffect(() => {
-    if (mode === 'link' && methodComparisons.length > 0) {
-      const resolutions = new Map<string, 'use_crm' | 'use_external'>()
-      methodComparisons.forEach(comp => {
-        if (comp.conflict_type === 'value_conflict') {
-          // Pre-select CRM value for safety
-          resolutions.set(comp.external_value, 'use_crm')
-        }
-      })
-      setConflictResolutions(resolutions)
-    }
-  }, [mode, methodComparisons])
+  if (useChanged([mode, methodComparisons]) && mode === 'link' && methodComparisons.length > 0) {
+    const resolutions = new Map<string, 'use_crm' | 'use_external'>()
+    methodComparisons.forEach(comp => {
+      if (comp.conflict_type === 'value_conflict') {
+        // Pre-select CRM value for safety
+        resolutions.set(comp.external_value, 'use_crm')
+      }
+    })
+    setConflictResolutions(resolutions)
+  }
 
   // Pre-select the contact's existing cadence in link mode
-  useEffect(() => {
-    if (mode === 'link' && selectedContact) {
-      setSelectedCadence(selectedContact.cadence || '')
-    }
-  }, [mode, selectedContact])
+  if (useChanged([mode, selectedContact]) && mode === 'link' && selectedContact) {
+    setSelectedCadence(selectedContact.cadence || '')
+  }
 
-  // The seeding effect re-runs whenever any of its deps change identity
-  // (e.g. selectedContact refreshing with the same underlying contact, or a
+  // Reseeding on every identity change of displayName/selectedContact (e.g.
+  // selectedContact refreshing with the same underlying contact, or a
   // background candidates refetch producing a new candidate object for the
-  // same id). Reseeding on every such re-run would clobber a name the user
-  // is mid-typing. lastSeededRef remembers the last combination the effect
-  // actually seeded for, so only a REAL transition (a different candidate,
-  // mode, or selected contact) reseeds — same-key churn is a no-op. The
-  // key deliberately includes selectedContact's id, not the object itself,
-  // so the deliberate none -> contact-id reseed (link mode's contact fetch
-  // resolving) still fires while an identity-only refresh of the same
-  // contact does not.
-  const lastSeededRef = useRef<string | null>(null)
+  // same id) would clobber a name the user is mid-typing. seededKey remembers
+  // the last combination actually seeded, so only a REAL transition (a
+  // different candidate, mode, or selected contact) reseeds. The key
+  // deliberately includes selectedContact's id, not the object itself, so the
+  // deliberate none -> contact-id reseed (link mode's contact fetch
+  // resolving) still fires while an identity-only refresh does not.
+  const seedKey = `${currentId}:${mode}:${selectedContact?.id ?? 'none'}`
+  const [seededKey, setSeededKey] = useState<string | null>(null)
 
   // Initialize editedName when candidate/mode/contact changes (GH-155)
-  useEffect(() => {
-    const seedKey = `${currentId}:${mode}:${selectedContact?.id ?? 'none'}`
-    if (lastSeededRef.current === seedKey) return
-    lastSeededRef.current = seedKey
-
-    if (mode === 'import') {
-      // Import mode: use external name, unless this is a nameless
-      // gmail_participant (the address fallback must never be pre-filled).
-      setEditedName(isNamelessParticipant ? '' : displayName)
-    } else if (mode === 'link' && selectedContact) {
+  if (seededKey !== seedKey) {
+    setSeededKey(seedKey)
+    if (mode === 'link' && selectedContact) {
       // Link mode: use CRM contact name
       setEditedName(selectedContact.full_name)
-    } else if (mode === 'link') {
-      // Link mode but no contact selected yet: use external name as
-      // placeholder, same nameless-participant rule as import mode.
+    } else {
+      // Import mode, or link mode with no contact selected yet: use the
+      // external name, unless this is a nameless gmail_participant (the
+      // address fallback must never be pre-filled).
       setEditedName(isNamelessParticipant ? '' : displayName)
     }
     setIsEditingName(false)
-  }, [mode, selectedContact, displayName, currentId, isNamelessParticipant])
+  }
 
   // Initialize primary method from CRM contact in link mode (GH-159)
-  useEffect(() => {
+  if (useChanged([mode, selectedContact, currentId])) {
     if (mode === 'link' && selectedContact?.methods) {
       const primaryMethod = selectedContact.methods.find(m => m.is_primary)
-      if (primaryMethod) {
-        setPrimaryMethodValue(primaryMethod.value)
-      } else {
-        setPrimaryMethodValue(null)
-      }
+      setPrimaryMethodValue(primaryMethod ? primaryMethod.value : null)
     } else if (mode === 'import') {
       // Reset primary in import mode
       setPrimaryMethodValue(null)
     }
-  }, [mode, selectedContact, currentId])
+  }
 
   // Focus name input when entering edit mode
   useEffect(() => {
@@ -735,12 +715,22 @@ function ContactCandidateResolver({
   // (the adjacent remaining one) instead of re-latching the current one.
   const navigateTo = useCallback((id: string, index: number) => {
     setIsTransitioning(true)
-    setTimeout(() => {
-      lastIndexRef.current = index
+    if (navTimerRef.current) clearTimeout(navTimerRef.current)
+    navTimerRef.current = setTimeout(() => {
+      navTimerRef.current = null
+      setLastIndex(index)
       setCurrentId(id)
       setIsTransitioning(false)
     }, 150)
   }, [])
+
+  // Drop a pending navigation if the modal unmounts mid-transition.
+  useEffect(
+    () => () => {
+      if (navTimerRef.current) clearTimeout(navTimerRef.current)
+    },
+    []
+  )
 
   const goBack = useCallback(() => {
     if (canGoBack && !isLoading && !isTransitioning)
@@ -882,6 +872,7 @@ function ContactCandidateResolver({
                     <button
                       type="button"
                       onClick={handleConfirmNameEdit}
+                      aria-label="Confirm name"
                       className="p-1 text-green-600 hover:bg-green-50 rounded flex-shrink-0"
                       disabled={isLoading}
                     >

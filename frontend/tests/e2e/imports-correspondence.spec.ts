@@ -1,18 +1,11 @@
 import { test, expect } from './fixtures'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import { createTestAPI, TestAPI, API_BASE_URL, API_HEADERS } from './helpers/test-api'
 import {
   candidateCardByName,
   expectModalCandidate,
   resolverDialog,
   selectContactIfNeeded,
 } from './helpers/imports-helpers'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
 
 // gmail_correspondence source: a link-only candidate carries an evidence badge
 // (co-occurring contact + message count) and links to an existing contact,
@@ -57,7 +50,7 @@ test.describe('Imports gmail_correspondence evidence @area:imports', () => {
     await page.goto('/imports')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByText(cardName).first()).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(cardName).first()).toBeVisible()
 
     const card = candidateCardByName(page, cardName)
 
@@ -100,6 +93,6 @@ test.describe('Imports gmail_correspondence evidence @area:imports', () => {
 
     // The candidate leaves the People list once linked.
     await page.keyboard.press('Escape')
-    await expect(candidateCardByName(page, cardName)).toHaveCount(0, { timeout: 10000 })
+    await expect(candidateCardByName(page, cardName)).toHaveCount(0)
   })
 })

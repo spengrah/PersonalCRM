@@ -41,6 +41,6 @@ test.describe('Imports People tab — Anarlog source @area:imports', () => {
     // The seeded candidate card is visible under the Anarlog filter. Its name is
     // read from the manifest — the ingest pipeline mints it, so re-deriving it
     // here would assert against a string this test invented.
-    await expect(page.getByText(anarlogName).first()).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(anarlogName).first()).toBeVisible()
   })
 })

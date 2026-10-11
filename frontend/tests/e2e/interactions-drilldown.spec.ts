@@ -1,12 +1,12 @@
 import { test, expect, type APIRequestContext } from '@playwright/test'
-import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
+import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
+import {
+  API_BASE_URL,
+  API_HEADERS,
+  createTestAPI,
+  TestAPI,
+  type SeedBehaviorResult,
+} from './helpers/test-api'
 
 interface ContentMessage {
   id: string
@@ -102,9 +102,9 @@ test.describe('Interactions Drill-down @area:interactions', () => {
 
     const content = await fetchContent(request, interactionId)
     const region = row.locator('[data-content-region]')
-    await expect(region).toBeVisible({ timeout: 15000 })
+    await expect(region).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     const messageNodes = region.locator('[data-message-id]')
-    await expect(messageNodes).toHaveCount(content.messages.length, { timeout: 15000 })
+    await expect(messageNodes).toHaveCount(content.messages.length, { timeout: SLOW_TIMEOUT_MS })
     await expect(
       messageNodes.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-message-id')))
     ).resolves.toEqual(content.messages.map(message => message.id))
@@ -113,17 +113,17 @@ test.describe('Interactions Drill-down @area:interactions', () => {
       const message = content.messages[index]
       const node = messageNodes.nth(index)
       await expect(node.locator('[data-message-body]')).toHaveText(message.body, {
-        timeout: 15000,
+        timeout: SLOW_TIMEOUT_MS,
       })
       await expect(node.locator('[data-message-sender]')).toHaveText(message.sender, {
-        timeout: 15000,
+        timeout: SLOW_TIMEOUT_MS,
       })
       await expect(node.locator('[data-message-timestamp]')).toHaveText(
         expectedDateTime(message.sent_at),
-        { timeout: 15000 }
+        { timeout: SLOW_TIMEOUT_MS }
       )
       if (message.body.includes('<b>not-markup</b>')) {
-        await expect(region.locator('b')).toHaveCount(0, { timeout: 15000 })
+        await expect(region.locator('b')).toHaveCount(0, { timeout: SLOW_TIMEOUT_MS })
       }
     }
 
@@ -141,11 +141,13 @@ test.describe('Interactions Drill-down @area:interactions', () => {
     // sets — recorded-against-the-interaction vs the surrounding thread
     // window — so when they differ the drill-down states both.
     const scope = region.locator('[data-evidence-scope]')
-    await expect(scope).toHaveCount(1, { timeout: 15000 })
+    await expect(scope).toHaveCount(1, { timeout: SLOW_TIMEOUT_MS })
     await expect(scope).toContainText(`Showing ${content.messages.length} messages`, {
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
-    await expect(scope).toContainText('2 recorded for this interaction', { timeout: 15000 })
+    await expect(scope).toContainText('2 recorded for this interaction', {
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     const senders = new Set(renderedSenders)
     expect(senders.size).toBe(2)
@@ -159,20 +161,20 @@ test.describe('Interactions Drill-down @area:interactions', () => {
       await expect(region.locator('[data-message-sender]', { hasText: sender })).toHaveCount(
         count,
         {
-          timeout: 15000,
+          timeout: SLOW_TIMEOUT_MS,
         }
       )
     }
-    await expect(page).toHaveURL(urlBeforeExpand, { timeout: 15000 })
-    await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: 15000 })
-    await expect(row).toBeVisible({ timeout: 15000 })
+    await expect(page).toHaveURL(urlBeforeExpand, { timeout: SLOW_TIMEOUT_MS })
+    await expect(page.getByRole('dialog')).toHaveCount(0, { timeout: SLOW_TIMEOUT_MS })
+    await expect(row).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     await row.getByRole('button', { name: 'Collapse content', exact: true }).click()
-    await expect(row.locator('[data-content-region]')).toHaveCount(0, { timeout: 15000 })
+    await expect(row.locator('[data-content-region]')).toHaveCount(0, { timeout: SLOW_TIMEOUT_MS })
     await expect(row.getByRole('button', { name: 'Expand content', exact: true })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
-    await expect(page).toHaveURL(urlBeforeExpand, { timeout: 15000 })
+    await expect(page).toHaveURL(urlBeforeExpand, { timeout: SLOW_TIMEOUT_MS })
   })
 
   // spec: IXN-005.summary-and-memo-shown, IXN-005.all-linked-notes-shown, IXN-005.provenance-footnote
@@ -193,9 +195,9 @@ test.describe('Interactions Drill-down @area:interactions', () => {
 
     const content = await fetchContent(request, interactionId!)
     const region = row.locator('[data-content-region]')
-    await expect(region).toBeVisible({ timeout: 15000 })
+    await expect(region).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     const noteNodes = region.locator('[data-meeting-note]')
-    await expect(noteNodes).toHaveCount(content.meeting_notes.length, { timeout: 15000 })
+    await expect(noteNodes).toHaveCount(content.meeting_notes.length, { timeout: SLOW_TIMEOUT_MS })
     expect(content.meeting_notes).toHaveLength(2)
     expect(content.meeting_notes[0].title).toBe(handleName(seeded, 'note-a'))
     expect(content.meeting_notes[1].title).toBe(handleName(seeded, 'note-b'))
@@ -204,18 +206,18 @@ test.describe('Interactions Drill-down @area:interactions', () => {
       const note = content.meeting_notes[index]
       const node = noteNodes.nth(index)
       await expect(node.locator('[data-note-title]')).toHaveText(note.title!, {
-        timeout: 15000,
+        timeout: SLOW_TIMEOUT_MS,
       })
       await expect(node.locator('[data-note-summary]')).toHaveText(note.summary!, {
-        timeout: 15000,
+        timeout: SLOW_TIMEOUT_MS,
       })
       await expect(node.locator('[data-note-memo]')).toHaveText(note.memo!, {
-        timeout: 15000,
+        timeout: SLOW_TIMEOUT_MS,
       })
     }
-    await expect(region.locator('i')).toHaveCount(0, { timeout: 15000 })
+    await expect(region.locator('i')).toHaveCount(0, { timeout: SLOW_TIMEOUT_MS })
     await expect(
       region.getByText('Meeting notes are processed on-device.', { exact: true })
-    ).toHaveCount(1, { timeout: 15000 })
+    ).toHaveCount(1, { timeout: SLOW_TIMEOUT_MS })
   })
 })

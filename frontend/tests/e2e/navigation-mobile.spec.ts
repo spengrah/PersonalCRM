@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
 import { createTestAPI, declaredWorldSearch } from './helpers/test-api'
 
 // Phone-width navigation: below Tailwind's `sm` breakpoint the inline link
@@ -65,7 +66,7 @@ test.describe('Mobile navigation @area:navigation', () => {
       // so the trailing row-actions column is reachable (clicking auto-scrolls
       // the container) while the page itself stays viewport-wide.
       await page.goto(`/contacts?search=${encodeURIComponent(declaredWorldSearch(seeded))}`)
-      await expect(page.getByText(fullName)).toBeVisible({ timeout: 15000 })
+      await expect(page.getByText(fullName)).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
       await expectNoPageOverflow()
 
       await page.getByRole('button', { name: 'Contact actions' }).first().click()
@@ -75,7 +76,9 @@ test.describe('Mobile navigation @area:navigation', () => {
       // Contact detail: all four header actions sit inside the viewport (the
       // row wraps instead of running off the right edge).
       await page.goto(`/contacts/${contactId}`)
-      await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+      await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+        timeout: SLOW_TIMEOUT_MS,
+      })
       for (const name of ['Log Interaction', 'Edit', 'Merge', 'Delete']) {
         await expect(page.getByRole('button', { name, exact: true }).first()).toBeInViewport()
       }

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -47,6 +46,11 @@ import { useContactNote, useSaveContactNote } from '@/hooks/use-contact-note'
 import { useContactTasks } from '@/hooks/use-contact-tasks'
 import { useKeyboardNavigation } from '@/hooks/use-keyboard-navigation'
 
+/** A partial hook result standing in for the full return type; the component under test reads only the fields set here. */
+function stub<T>(value: object): T {
+  return value as unknown as T
+}
+
 const CONTACT_ID = '11111111-0000-4000-8000-000000000000'
 const METHOD_A = 'aaaaaaaa-0000-4000-8000-000000000001'
 const METHOD_B = 'bbbbbbbb-0000-4000-8000-000000000002'
@@ -75,7 +79,7 @@ function mutation(mutateAsync: ReturnType<typeof vi.fn>) {
 }
 
 function setContact(contact: Contact) {
-  ;(useContact as any).mockReturnValue({ data: contact, isLoading: false, error: null })
+  vi.mocked(useContact).mockReturnValue(stub({ data: contact, isLoading: false, error: null }))
 }
 
 function renderPage() {
@@ -113,23 +117,25 @@ beforeEach(() => {
   saveNote = vi.fn().mockResolvedValue({})
 
   setContact(contactWith([methodA]))
-  ;(useContactIDs as any).mockReturnValue({ data: { ids: [CONTACT_ID] }, isLoading: false })
-  ;(usePrefetchContact as any).mockReturnValue(vi.fn())
-  ;(useUpdateContact as any).mockReturnValue(mutation(updateContact))
-  ;(useApplyMethodOperations as any).mockReturnValue(mutation(applyMethods))
-  ;(useDeleteContact as any).mockReturnValue(mutation(vi.fn()))
-  ;(useUndoSkip as any).mockReturnValue(mutation(vi.fn()))
-  ;(useContactNote as any).mockReturnValue({ data: { body: '' } })
-  ;(useSaveContactNote as any).mockReturnValue(mutation(saveNote))
-  ;(useContactTasks as any).mockReturnValue({ data: [], isLoading: false })
-  ;(useKeyboardNavigation as any).mockReturnValue({
-    canGoBack: false,
-    canGoForward: false,
-    goBack: vi.fn(),
-    goForward: vi.fn(),
-    currentIndex: 0,
-    total: 1,
-  })
+  vi.mocked(useContactIDs).mockReturnValue(stub({ data: { ids: [CONTACT_ID] }, isLoading: false }))
+  vi.mocked(usePrefetchContact).mockReturnValue(stub(vi.fn()))
+  vi.mocked(useUpdateContact).mockReturnValue(stub(mutation(updateContact)))
+  vi.mocked(useApplyMethodOperations).mockReturnValue(stub(mutation(applyMethods)))
+  vi.mocked(useDeleteContact).mockReturnValue(stub(mutation(vi.fn())))
+  vi.mocked(useUndoSkip).mockReturnValue(stub(mutation(vi.fn())))
+  vi.mocked(useContactNote).mockReturnValue(stub({ data: { body: '' } }))
+  vi.mocked(useSaveContactNote).mockReturnValue(stub(mutation(saveNote)))
+  vi.mocked(useContactTasks).mockReturnValue(stub({ data: [], isLoading: false }))
+  vi.mocked(useKeyboardNavigation).mockReturnValue(
+    stub({
+      canGoBack: false,
+      canGoForward: false,
+      goBack: vi.fn(),
+      goForward: vi.fn(),
+      currentIndex: 0,
+      total: 1,
+    })
+  )
 })
 
 describe('the save sequence', () => {

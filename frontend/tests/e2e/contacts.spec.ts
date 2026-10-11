@@ -1,5 +1,13 @@
 import { test, expect, type Page } from '@playwright/test'
-import { createTestAPI, declaredWorldSearch, TestAPI } from './helpers/test-api'
+import {
+  API_BASE_URL,
+  API_HEADERS,
+  createTestAPI,
+  declaredWorldSearch,
+  TestAPI,
+} from './helpers/test-api'
+import { SHORT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
+import { expectNoRequestDuring } from './helpers/negative-assertions'
 
 // The Notes row in the contact-detail definition list, scoped so a
 // presence/absence assertion on its expand control cannot collide with another
@@ -8,13 +16,6 @@ const notesRow = (page: Page) =>
   page.locator('dl > div').filter({ has: page.getByText('Notes', { exact: true }) })
 
 // API configuration for direct backend assertions in E2E tests.
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
-
 test.describe('Contacts - TestAPI Seeded @area:contacts', () => {
   let testApi: TestAPI
 
@@ -70,16 +71,20 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await testApi.seedContactNote(contactId, longNotes)
 
     await page.goto(`/contacts/${contactId}`)
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Wait for notes to render before checking overflow detection
-    await expect(page.getByText('Met at the AI conference')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText('Met at the AI conference')).toBeVisible({
+      timeout: SHORT_TIMEOUT_MS,
+    })
 
     // The expand control exists only while the page's client-side overflow
     // measurement is true. Scoped to the Notes ROW so it cannot resolve against
     // another section's control, and so a failure names this row.
     const showMoreButton = notesRow(page).getByRole('button', { name: 'Show more' })
-    await expect(showMoreButton).toBeVisible({ timeout: 5000 })
+    await expect(showMoreButton).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 
     // Click "Show more" to expand
     await showMoreButton.click()
@@ -158,7 +163,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     })
 
     await page.goto(`/contacts/${contactId}`)
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
     await expect(notesRow(page)).toContainText('First paragraph')
 
     // The forced ordering actually held, quantitatively. Without this the test
@@ -182,7 +189,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Verify notes are displayed
     await expect(page.getByText(shortNotes)).toBeVisible()
@@ -204,7 +213,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Open the modal via the header button.
     await page.getByRole('button', { name: 'Log Interaction' }).click()
@@ -233,7 +244,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     expect(body.data.occurred_at).toContain('2024-01-15')
 
     // Modal closes on success.
-    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 })
+    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: SHORT_TIMEOUT_MS })
   })
 
   // visual-guard: the context menu clipping on bottom rows is an already-bitten
@@ -262,7 +273,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // page-1 tail row plus a full 20-row page == the filter and sort applied.
     const rows = page.locator('tbody tr')
     await expect(page.locator('tr', { has: page.getByText(lastRowName) })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await expect(rows).toHaveCount(20)
     const lastRow = rows.last()
@@ -292,7 +303,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     // Find the row and open context menu
     const contactRow = page.locator('tr', { has: page.getByText(fullName) })
-    await expect(contactRow).toBeVisible({ timeout: 15000 })
+    await expect(contactRow).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     const actionButton = contactRow.getByRole('button', { name: 'Contact actions' })
     await actionButton.click()
 
@@ -302,7 +313,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // Should navigate to detail page in edit mode
     await page.waitForURL(/\/contacts\/.*action=edit/)
     await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     // The action param is consumed once, then stripped from the URL (mount-only
@@ -323,7 +334,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     // Find the row and open context menu
     const contactRow = page.locator('tr', { has: page.getByText(fullName) })
-    await expect(contactRow).toBeVisible({ timeout: 15000 })
+    await expect(contactRow).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     const actionButton = contactRow.getByRole('button', { name: 'Contact actions' })
     await actionButton.click()
 
@@ -333,7 +344,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     // Should navigate to detail page with merge modal open
     await page.waitForURL(/\/contacts\/.*action=merge/)
     await expect(page.getByRole('heading', { name: 'Merge Contacts' })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     // The action param is consumed once, then stripped from the URL (mount-only
@@ -356,7 +367,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     const responsePromise = page.waitForResponse(
       resp =>
@@ -371,7 +384,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     expect(response.status()).toBe(201)
     expect((await response.json()).data.direction).toBe('mutual')
 
-    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 })
+    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: SHORT_TIMEOUT_MS })
   })
 
   // spec: CON-053.direction-chosen-outbound-inbound
@@ -385,7 +398,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     await page.getByRole('button', { name: 'Log Interaction' }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
@@ -413,7 +428,9 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     await page.getByRole('button', { name: 'Log Interaction' }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
@@ -463,7 +480,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.getByPlaceholder('Search contacts...').fill(declaredWorldSearch(seeded))
     await page.getByPlaceholder('Search contacts...').press('Enter')
     await expect(page.locator('tbody tr', { has: page.getByText(monthlyName) })).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     const rowText = await page.locator('tbody tr').allTextContents()
@@ -486,17 +503,12 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     await page.goto(`/contacts/${contactId}`)
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Deletion is guarded by a native window.confirm (see the detail page).
     // Dismiss path: no DELETE fires and the contact stays live.
-    let deleteFired = false
-    const watchDelete = (req: import('@playwright/test').Request) => {
-      if (req.method() === 'DELETE' && req.url().includes(`/contacts/${contactId}`)) {
-        deleteFired = true
-      }
-    }
-    page.on('request', watchDelete)
     // The confirmation copy is captured INSIDE the handler (it cannot be read
     // after the dialog resolves) and asserted below: the prompt must warn the
     // action cannot be undone (CON-042.confirmation-prompt-warns-action).
@@ -505,14 +517,12 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
       confirmMessage = dialog.message()
       void dialog.dismiss()
     })
-    await page.getByRole('button', { name: 'Delete' }).click()
-    // Asserting ABSENCE: there is no positive signal to await on dismiss, so give
-    // any (erroneous) DELETE a bounded settle window to appear, then confirm none
-    // fired and the contact is still live.
-    await page.waitForTimeout(1000)
-    expect(deleteFired).toBe(false)
+    await expectNoRequestDuring(
+      page,
+      req => req.method() === 'DELETE' && req.url().includes(`/contacts/${contactId}`),
+      () => page.getByRole('button', { name: 'Delete' }).click()
+    )
     expect(confirmMessage).toContain('cannot be undone')
-    page.off('request', watchDelete)
     const liveResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
       headers: API_HEADERS,
     })
@@ -553,7 +563,7 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
     await page.waitForLoadState('domcontentloaded')
 
     const row = page.locator('tr', { has: page.getByText(fullName) })
-    await expect(row).toBeVisible({ timeout: 15000 })
+    await expect(row).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     const actionButton = row.getByRole('button', { name: 'Contact actions' })
     await actionButton.click()
 
@@ -635,14 +645,14 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     await searchInput.fill(worldTerm)
     await searchInput.press('Enter')
     await worldResponse
-    await expect(page.getByText(weekly, { exact: true })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(weekly, { exact: true })).toBeVisible()
     await expect(page.getByText(unrelated, { exact: true })).toBeVisible()
 
     const searchResponse = listResponseFor(searchTerm)
     await searchInput.fill(searchTerm)
     await searchInput.press('Enter')
     await searchResponse
-    await expect(page.getByText(weekly, { exact: true })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(weekly, { exact: true })).toBeVisible()
     // The search FILTERS: the non-matching contact phase 1 proved present is
     // now absent.
     await expect(page.getByText(unrelated, { exact: true })).not.toBeVisible()
@@ -679,9 +689,7 @@ test.describe('Contacts - Cadence Filter @area:contacts', () => {
     // Reset to "All contacts" - should show all again
     await filterSelect.selectOption('')
 
-    await expect(page.getByText(weekly, { exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByText(weekly, { exact: true })).toBeVisible()
     await expect(page.getByText(noCadence, { exact: true })).toBeVisible()
   })
 })
@@ -709,7 +717,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
       page.getByRole('button', { name: 'Create Contact' }).click(),
     ])
 
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
   })
 
   // spec: CON-055.contact-created-user-lands
@@ -734,8 +744,10 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
       page.getByRole('button', { name: 'Create Contact' }).click(),
     ])
 
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
-    await expect(page.getByText(email)).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
+    await expect(page.getByText(email)).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
   })
 
   // spec: NTS-008.displayed-notepad-reflects-new
@@ -751,7 +763,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await testApi.seedContactNote(contactId, notes)
 
     await page.goto(`/contacts/${contactId}`)
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
     await expect(page.getByText(notes)).toBeVisible()
 
     // Edit the contact to update notes (use first() to get header Edit button, not the last contacted edit)
@@ -764,7 +778,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     await page.getByRole('button', { name: 'Update Contact' }).click()
 
     // Wait for form to close and return to detail view (Edit button visible again)
-    await expect(page.getByRole('button', { name: 'Edit' }).first()).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('button', { name: 'Edit' }).first()).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Verify updated notes are displayed
     await expect(page.getByText(updatedNotes)).toBeVisible()
@@ -810,7 +826,9 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     const normalizedTelegram = `@${storedTelegram}`
 
     await page.goto(`/contacts/${contactId}`)
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     // Seeded methods display, the handle in its normalized form.
     await expect(page.getByText(personalEmail, { exact: true })).toBeVisible()
@@ -854,7 +872,7 @@ test.describe('Contacts - UI Create (preserved for coverage) @area:contacts', ()
     const noneRow = page.locator('tr', {
       has: page.getByText(seeded.entities['without-cadence'].name, { exact: true }),
     })
-    await expect(weeklyRow).toBeVisible({ timeout: 15000 })
+    await expect(weeklyRow).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     await expect(noneRow).toBeVisible()
 
     // Formatted cadence label in the seeded row (derived from the stored

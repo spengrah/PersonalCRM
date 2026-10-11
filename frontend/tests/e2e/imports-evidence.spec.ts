@@ -1,14 +1,7 @@
 import { test, expect } from './fixtures'
 import type { APIRequestContext } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import { createTestAPI, TestAPI, API_BASE_URL, API_HEADERS } from './helpers/test-api'
 import { candidateCardByName, findCandidateByName } from './helpers/imports-helpers'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
 
 /**
  * The '@handle' a declared telegram candidate actually carries, read back
@@ -80,7 +73,7 @@ test.describe('Imports evidence line @area:imports', () => {
     // located via the paging helper rather than a direct locator.
     await findCandidateByName(page, telegramName)
     const telegramCard = candidateCardByName(page, telegramName)
-    await expect(telegramCard).toBeVisible({ timeout: 10000 })
+    await expect(telegramCard).toBeVisible()
     await expect(
       telegramCard.getByText(
         `${telegramMessageCount} ${telegramMessageCount === 1 ? 'message' : 'messages'}`

@@ -1,9 +1,12 @@
 import { test, expect } from './fixtures'
-import { createTestAPI, TestAPI, type SeedBehaviorResult } from './helpers/test-api'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = { 'X-API-Key': API_KEY }
+import {
+  API_BASE_URL,
+  API_HEADERS,
+  createTestAPI,
+  TestAPI,
+  type SeedBehaviorResult,
+} from './helpers/test-api'
+import { DEFAULT_EXPECT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 // This file holds NO mac-host lock. Disjointness from settings-mac.spec.ts is now
 // provable from both sides: this file's orphans hang off its declared namespace's
@@ -64,7 +67,7 @@ test.describe('Imports Interactions tab @area:imports', () => {
       'aria-selected',
       'true'
     )
-    await expect(page.getByText(titleA).first()).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(titleA).first()).toBeVisible()
     await expect(page.getByText(titleB).first()).toBeVisible()
     // Orphan cards expose the bare hyprnote:// launch link.
     await expect(page.getByRole('link', { name: /Open Anarlog/ }).first()).toHaveAttribute(
@@ -97,7 +100,7 @@ test.describe('Imports Interactions tab @area:imports', () => {
     await page.reload()
     await page.waitForLoadState('domcontentloaded')
     const badgeAfter = page.getByLabel(/\d+ needing attention/)
-    await expect(badgeAfter).toBeVisible({ timeout: 10000 })
+    await expect(badgeAfter).toBeVisible()
     const badgeCountAfter = parseInt((await badgeAfter.getAttribute('aria-label'))!, 10)
     expect(badgeCountAfter).toBe(badgeCount)
   })
@@ -116,7 +119,7 @@ test.describe('Imports Interactions tab @area:imports', () => {
     )
     // The URL is normalized to the canonical param. The normalize effect
     // fires after hydration, which can lag under real parallel worker load.
-    await expect(page).toHaveURL(/tab=interactions/, { timeout: 15000 })
+    await expect(page).toHaveURL(/tab=interactions/, { timeout: SLOW_TIMEOUT_MS })
   })
 
   // spec: IMP-031.item-leaves-queue-counts-update, IMP-026.interactions-tab-holds-conflicts
@@ -135,25 +138,26 @@ test.describe('Imports Interactions tab @area:imports', () => {
 
     const headingA = page.getByRole('heading', { name: titleA })
     const headingB = page.getByRole('heading', { name: titleB })
-    await expect(headingA).toBeVisible({ timeout: 10000 })
+    await expect(headingA).toBeVisible()
 
     // The orphan card for titleA — scope the button click to it so list
     // order can't pick the wrong card.
     const cardA = page
-      .locator('div.border', { has: page.getByRole('heading', { name: titleA }) })
+      .getByTestId('orphan-card')
+      .filter({ has: page.getByRole('heading', { name: titleA }) })
       .first()
 
     // Register the response wait BEFORE the click so a fast 200 isn't missed.
     const responsePromise = page.waitForResponse(
       res => res.url().includes('/resolve-link') && res.request().method() === 'POST',
-      { timeout: 10000 }
+      { timeout: DEFAULT_EXPECT_TIMEOUT_MS }
     )
     await cardA.getByRole('button', { name: /Log as impromptu/ }).click()
     const res = await responsePromise
     expect(res.status()).toBe(200)
 
     // The resolved card leaves the queue; the untouched sibling stays.
-    await expect(headingA).toHaveCount(0, { timeout: 10000 })
+    await expect(headingA).toHaveCount(0)
     await expect(headingB).toBeVisible()
   })
 
@@ -162,7 +166,7 @@ test.describe('Imports Interactions tab @area:imports', () => {
     await page.goto(`/imports?tab=interactions&session=${sessionB}`)
     await page.waitForLoadState('domcontentloaded')
     // The deep-linked card is visible and the session param is stripped.
-    await expect(page.getByText(titleB).first()).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(titleB).first()).toBeVisible()
     await expect(page).not.toHaveURL(/session=/)
   })
 })

@@ -1,5 +1,6 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test'
-import { createTestAPI, TestAPI } from './helpers/test-api'
+import { createTestAPI, TestAPI, API_BASE_URL, API_HEADERS } from './helpers/test-api'
+import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 // Plain @playwright/test, deliberately NOT the custom fixture: that fixture's
 // query client sets staleTime: 0, which refetches the contact detail constantly
@@ -9,10 +10,6 @@ import { createTestAPI, TestAPI } from './helpers/test-api'
 // The incident: enrichment added a method server-side, the open edit form held
 // a stale list, and saving wholesale-deleted and recreated from that stale
 // list, permanently destroying the enriched method. @area:contacts
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = { 'X-API-Key': API_KEY, 'Content-Type': 'application/json' }
 
 interface MethodRow {
   id: string
@@ -66,7 +63,9 @@ async function addMethodOutOfBand(
 async function openEditMode(page: Page, contactId: string) {
   await page.goto(`/contacts/${contactId}?action=edit`)
   await page.waitForLoadState('domcontentloaded')
-  await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({ timeout: 15000 })
+  await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeVisible({
+    timeout: SLOW_TIMEOUT_MS,
+  })
 }
 
 function methodValues(page: Page) {
@@ -140,7 +139,9 @@ test.describe('Contact method preservation @area:contacts', () => {
     await methodValues(page).first().fill(emailB)
     await save(page)
 
-    await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeHidden({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeHidden({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     const methods = await getMethods(request, contactId)
     expect(methods.map(m => m.value).sort()).toEqual([emailB, '5555550142'].sort())
@@ -170,7 +171,9 @@ test.describe('Contact method preservation @area:contacts', () => {
     await page.getByRole('button', { name: 'Remove' }).nth(rowIndex).click()
     await save(page)
 
-    await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeHidden({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: 'Edit Contact' })).toBeHidden({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     const methods = await getMethods(request, contactId)
     expect(methods.map(m => m.value)).toEqual([emailA])
@@ -188,7 +191,7 @@ test.describe('Contact method preservation @area:contacts', () => {
     await save(page)
 
     const report = page.getByTestId('save-report')
-    await expect(report).toBeVisible({ timeout: 15000 })
+    await expect(report).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     // Names what landed rather than reporting a generic failure — the user's
     // next action differs between "nothing saved" and "the note did not save".
     await expect(report).toContainText('contact methods')
@@ -210,12 +213,12 @@ test.describe('Contact method preservation @area:contacts', () => {
 
     await methodValues(page).first().fill(emailB)
     await save(page)
-    await expect(page.getByTestId('save-report')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByTestId('save-report')).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     // Retry unedited. The methods step already landed and must stay landed, so
     // the retry resumes at notes and issues no methods request at all.
     await saveAndAwait(page, contactId, 'notes')
-    await expect(page.getByTestId('save-report')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByTestId('save-report')).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     const methods = await getMethods(request, contactId)
     expect(methods.map(m => m.value)).toEqual([emailB])
@@ -245,7 +248,7 @@ test.describe('Contact method preservation @area:contacts', () => {
     await page.getByRole('combobox', { name: 'Contact method type' }).nth(1).selectOption('phone')
     await methodValues(page).nth(1).fill(phoneC)
     await save(page)
-    await expect(page.getByTestId('save-report')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByTestId('save-report')).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     const afterFirst = await getMethods(request, contactId)
     expect(afterFirst.map(m => m.value).sort()).toEqual([emailA, '5555550145', phoneC].sort())
@@ -287,7 +290,7 @@ test.describe('Contact method preservation @area:contacts', () => {
     await page.getByRole('combobox', { name: 'Contact method type' }).nth(1).selectOption('phone')
     await methodValues(page).nth(1).fill(phoneC)
     await save(page)
-    await expect(page.getByTestId('save-report')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByTestId('save-report')).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     const created = (await getMethods(request, contactId)).find(m => m.value === phoneC)
     expect(created, 'the added method should exist after the methods step landed').toBeTruthy()
@@ -327,7 +330,7 @@ test.describe('Contact method preservation @area:contacts', () => {
 
     await methodValues(page).first().fill(emailIntermediate)
     await save(page)
-    await expect(page.getByTestId('save-report')).toBeVisible({ timeout: 15000 })
+    await expect(page.getByTestId('save-report')).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     expect((await getMethods(request, contactId)).map(m => m.value)).toEqual([emailIntermediate])
 
     // Revert. Against a frozen edit-start baseline this emits nothing, the save

@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 
 // The Notes row in the contact-detail definition list. Scoped to the row so
@@ -30,7 +31,9 @@ test.describe('Contact notepad @area:contacts', () => {
     // With no note seeded, the detail page renders no Notes row at all
     // spec: NTS-007.notepad-appears-only-with-content
     await page.goto(`/contacts/${contactId}`)
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
     await expect(notesRow(page)).toHaveCount(0)
 
     // A short note renders the row with its body, and no expand control
@@ -39,7 +42,7 @@ test.describe('Contact notepad @area:contacts', () => {
     const shortNote = `${testApi.prefix} short note body`
     await testApi.seedContactNote(contactId, shortNote)
     await page.reload()
-    await expect(notesRow(page)).toBeVisible({ timeout: 15000 })
+    await expect(notesRow(page)).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     await expect(notesRow(page)).toContainText(shortNote)
     await expect(notesRow(page).getByRole('button', { name: /Show more/i })).not.toBeVisible()
 
@@ -57,7 +60,7 @@ test.describe('Contact notepad @area:contacts', () => {
     ].join('\n\n')
     await testApi.seedContactNote(contactId, longNote)
     await page.reload()
-    await expect(notesRow(page)).toBeVisible({ timeout: 15000 })
+    await expect(notesRow(page)).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     // spec: NTS-007.long-content-clamped-expand
     const expand = notesRow(page).getByRole('button', { name: /Show more/i })
@@ -82,7 +85,9 @@ test.describe('Contact notepad @area:contacts', () => {
     const fullName = seeded.entities['target'].name
 
     await page.goto(`/contacts/${contactId}`)
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
 
     await page.getByRole('button', { name: 'Edit' }).first().click()
     await expect(page.getByLabel('Notes')).toBeVisible()
@@ -129,7 +134,7 @@ test.describe('Contact notepad @area:contacts', () => {
     expect(notesResponse.ok()).toBe(true)
     // spec: NTS-008.notepad-saved-own-operation
     await expect(page.getByRole('button', { name: 'Edit' }).first()).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
 
     // Both new values render after the save
@@ -147,7 +152,9 @@ test.describe('Contact notepad @area:contacts', () => {
     await testApi.seedContactNote(contactId, disposable)
 
     await page.goto(`/contacts/${contactId}`)
-    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({ timeout: 15000 })
+    await expect(page.getByRole('heading', { name: fullName })).toBeVisible({
+      timeout: SLOW_TIMEOUT_MS,
+    })
     await expect(notesRow(page)).toContainText(disposable)
 
     await page.getByRole('button', { name: 'Edit' }).first().click()
@@ -168,7 +175,7 @@ test.describe('Contact notepad @area:contacts', () => {
     // Back on the detail view, the Notes row is gone
     // spec: NTS-008.clearing-notepad-field-removes
     await expect(page.getByRole('button', { name: 'Edit' }).first()).toBeVisible({
-      timeout: 15000,
+      timeout: SLOW_TIMEOUT_MS,
     })
     await expect(notesRow(page)).toHaveCount(0)
   })

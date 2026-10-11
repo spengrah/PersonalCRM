@@ -13,6 +13,8 @@ import {
   TestAPI,
   declaredWorldNamePrefix,
   declaredWorldSearch,
+  API_BASE_URL,
+  API_HEADERS,
 } from './helpers/test-api'
 import {
   candidateCardByName,
@@ -20,13 +22,7 @@ import {
   findCandidateByNameNoReload,
   resolverDialog,
 } from './helpers/imports-helpers'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
+import { SHORT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 /** Marker used to prove no full page load happened after it was planted. */
 const SENTINEL = '__crmNoReloadSentinel'
@@ -108,7 +104,7 @@ test.describe('Import link invalidates contact detail @area:imports', () => {
     // The seeded method proves the detail query actually resolved and is now
     // cached — without this, "candidate email absent" would be trivially true
     // on a page that never loaded, and the cache under test would not exist.
-    await expect(page.getByText(seededEmail!)).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(seededEmail!)).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     await expect(page.getByText(candidateEmail)).toHaveCount(0)
 
     await plantNoReloadSentinel(page)
@@ -169,13 +165,13 @@ test.describe('Import link invalidates contact detail @area:imports', () => {
     await dialog.getByText('Search for a contact...').click()
     await dialog.getByPlaceholder('Search for a contact...').fill(declaredWorldNamePrefix(seeded))
     const contactOption = dialog.getByText(contactName, { exact: true }).last()
-    await expect(contactOption).toBeVisible({ timeout: 5000 })
+    await expect(contactOption).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await contactOption.click()
 
     // The method comparison only renders once a target contact is chosen. The
     // candidate's email is offered there, pre-selected by default, so linking
     // applies it to the contact.
-    await expect(dialog.getByText(candidateEmail)).toBeVisible({ timeout: 10000 })
+    await expect(dialog.getByText(candidateEmail)).toBeVisible()
 
     const linkResponsePromise = page.waitForResponse(
       res =>
@@ -221,7 +217,7 @@ test.describe('Import link invalidates contact detail @area:imports', () => {
 
     // --- Step 5: navigate back to the contact, still client-side -----------
     await page.keyboard.press('Escape')
-    await expect(dialog).toBeHidden({ timeout: 10000 })
+    await expect(dialog).toBeHidden()
 
     await nav.getByRole('link', { name: 'Contacts' }).click()
     await expect(page).toHaveURL(/\/contacts/)
@@ -229,14 +225,14 @@ test.describe('Import link invalidates contact detail @area:imports', () => {
     // world's lexeme form rather than its name prefix.
     await page.getByPlaceholder('Search contacts...').fill(declaredWorldSearch(seeded))
     const contactLink = page.getByRole('link', { name: contactName, exact: true })
-    await expect(contactLink).toBeVisible({ timeout: 15000 })
+    await expect(contactLink).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
     await contactLink.click()
 
     // --- Step 6: the assertion this spec exists for ------------------------
     // Without the import:linked detail invalidation, the detail entry cached in
     // step 1 is still fresh (staleTime is five minutes in production) and the
     // remount serves it, so the newly linked email never appears.
-    await expect(page.getByText(candidateEmail)).toBeVisible({ timeout: 15000 })
+    await expect(page.getByText(candidateEmail)).toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     // --- Step 7: prove the whole run was reload-free ------------------------
     // A full page load from ANY source — a stray goto, a helper's reload, an

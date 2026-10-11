@@ -1,6 +1,12 @@
 import { test, expect } from './fixtures'
 import type { APIRequestContext } from '@playwright/test'
-import { createTestAPI, TestAPI, declaredWorldNamePrefix } from './helpers/test-api'
+import {
+  API_BASE_URL,
+  API_HEADERS,
+  createTestAPI,
+  TestAPI,
+  declaredWorldNamePrefix,
+} from './helpers/test-api'
 import {
   candidateCardByName,
   expectModalCandidate,
@@ -8,13 +14,7 @@ import {
   findCandidateByNameNoReload,
   resolverDialog,
 } from './helpers/imports-helpers'
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || 'test-api-key-for-ci'
-const API_HEADERS = {
-  'X-API-Key': API_KEY,
-  'Content-Type': 'application/json',
-}
+import { SHORT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 /**
  * The nameless candidate's primary (only) address, read back from the
@@ -82,7 +82,7 @@ test.describe('Imports gmail_participant @area:imports', () => {
     // would not have found it).
     await findCandidateByName(page, address)
     const card = candidateCardByName(page, address)
-    await expect(card).toBeVisible({ timeout: 10000 })
+    await expect(card).toBeVisible()
 
     await card.getByRole('button', { name: /Import/i }).click()
     // Same exact-match proof, scoped to the modal heading this time.
@@ -96,7 +96,7 @@ test.describe('Imports gmail_participant @area:imports', () => {
     // with the address, which is a display fallback only.
     await modal.getByRole('heading', { level: 3 }).first().click()
     const nameInput = modal.getByRole('textbox').first()
-    await expect(nameInput).toBeVisible({ timeout: 5000 })
+    await expect(nameInput).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await expect(nameInput).toHaveValue('')
 
     const typedName = `${declaredWorldNamePrefix(seeded)}Named After Import`
@@ -116,7 +116,7 @@ test.describe('Imports gmail_participant @area:imports', () => {
     expect(importBody?.data?.contact?.full_name).toBe(typedName)
 
     // DOM precondition: the candidate card leaves the list.
-    await expect(card).not.toBeVisible({ timeout: 15000 })
+    await expect(card).not.toBeVisible({ timeout: SLOW_TIMEOUT_MS })
 
     // Persisted-state proof: the row is marked imported.
     const candidateRes = await request.get(`${API_BASE_URL}/api/v1/imports/${candidateId}`, {
@@ -192,12 +192,12 @@ test.describe('Imports gmail_participant @area:imports', () => {
 
     // The hold must actually be in effect before we type, or the race this
     // test exists to force never happens.
-    await expect.poll(() => mountFetchIntercepted, { timeout: 5000 }).toBe(true)
+    await expect.poll(() => mountFetchIntercepted, { timeout: SHORT_TIMEOUT_MS }).toBe(true)
 
     const modal = resolverDialog(page)
     await modal.getByRole('heading', { level: 3 }).first().click()
     const nameInput = modal.getByRole('textbox').first()
-    await expect(nameInput).toBeVisible({ timeout: 5000 })
+    await expect(nameInput).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await expect(nameInput).toHaveValue('')
 
     const typedName = `${declaredWorldNamePrefix(seeded)}Typed During Refetch`
@@ -214,11 +214,16 @@ test.describe('Imports gmail_participant @area:imports', () => {
 
     // The network round trip landing is not the same moment as React having
     // committed the re-render it triggers — the seeding effect fires (or, on
-    // a clobber regression, reseeds) on the commit AFTER that. Without this
-    // settle window, a same-tick assertion can observe the pre-render DOM and
-    // pass vacuously whether or not the guard exists, because a same-tick
-    // read observes the DOM from before the effect's commit.
-    await page.waitForTimeout(500)
+    // a clobber regression, reseeds) on the commit AFTER that. Without
+    // waiting two animation frames, a same-tick assertion can observe the
+    // pre-render DOM and pass vacuously whether or not the guard exists, because
+    // a same-tick read observes the DOM from before the effect's commit.
+    await page.evaluate(
+      () =>
+        new Promise<void>(resolve => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        })
+    )
 
     // The typed name and edit mode must survive the refetch landing.
     await expect(nameInput).toHaveValue(typedName)
@@ -240,7 +245,7 @@ test.describe('Imports gmail_participant @area:imports', () => {
 
     await findCandidateByName(page, participantName)
     const card = candidateCardByName(page, participantName)
-    await expect(card).toBeVisible({ timeout: 10000 })
+    await expect(card).toBeVisible()
     await expect(card.getByText(`From ${senderName}`)).toBeVisible()
     await expect(
       card.getByText(`${messageCount} ${messageCount === 1 ? 'message' : 'messages'}`)

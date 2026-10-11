@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { fulfillJson } from './helpers/fulfill-json'
+import { DEFAULT_EXPECT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
 
 // The WhatsApp section talks to the app's own /api/v1/whatsapp/* endpoints,
 // which cannot run live in E2E: whatsmeow needs a real linked phone, and no
@@ -51,9 +52,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     // real page rendering the real section.
     await openSettings(page)
 
-    await expect(page.getByRole('heading', { name: 'WhatsApp', exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByRole('heading', { name: 'WhatsApp', exact: true })).toBeVisible()
     await expect(whatsappRegion(page)).toBeVisible()
   })
 
@@ -72,7 +71,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText('Configuration Required')).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText('Configuration Required')).toBeVisible()
     // Both variables are named because the backend refuses to start with
     // WhatsApp enabled while external sync is off — naming only the first would
     // send the user into a failed start.
@@ -88,9 +87,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText('Failed to load WhatsApp status')).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByText('Failed to load WhatsApp status')).toBeVisible()
     await expect(section.getByRole('button', { name: 'Retry' })).toBeVisible()
   })
 
@@ -103,13 +100,9 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByRole('status', { name: 'Loading WhatsApp status' })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByRole('status', { name: 'Loading WhatsApp status' })).toBeVisible()
     // And it resolves rather than spinning forever.
-    await expect(section.getByRole('button', { name: 'Link WhatsApp', exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByRole('button', { name: 'Link WhatsApp', exact: true })).toBeVisible()
   })
 
   // spec: WHA-071.not-ready-names-the-missing-piece
@@ -125,9 +118,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText(/WhatsApp cannot link an account yet/)).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByText(/WhatsApp cannot link an account yet/)).toBeVisible()
     await expect(section.getByText(/history drain worker is not registered/)).toBeVisible()
     // The button is ABSENT, not disabled: the backend would answer 409, and a
     // disabled control invites the user to wonder what unlocks it.
@@ -143,7 +134,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     const section = whatsappRegion(page)
     await section
       .getByRole('button', { name: 'Link WhatsApp', exact: true })
-      .click({ timeout: 10000 })
+      .click({ timeout: DEFAULT_EXPECT_TIMEOUT_MS })
     await expect(section.getByRole('button', { name: 'Scan a QR code' })).toBeVisible()
     await expect(section.getByRole('button', { name: 'Use a phone pairing code' })).toBeVisible()
   })
@@ -177,12 +168,14 @@ test.describe('WhatsApp Settings @area:settings', () => {
 
     const section = whatsappRegion(page)
     const figure = section.getByRole('img', { name: 'WhatsApp pairing QR code' })
-    await expect(figure).toBeVisible({ timeout: 10000 })
+    await expect(figure).toBeVisible()
     // The accessible name is the human description; the code itself is exposed
     // on a value attribute, so this asserts the MOCKED code reached the DOM
     // rather than that some image exists.
     await expect(figure).toHaveAttribute('data-qr-value', 'MOCK-QR-FIRST')
-    await expect(figure).toHaveAttribute('data-qr-value', 'MOCK-QR-REFRESHED', { timeout: 15000 })
+    await expect(figure).toHaveAttribute('data-qr-value', 'MOCK-QR-REFRESHED', {
+      timeout: SLOW_TIMEOUT_MS,
+    })
   })
 
   // spec: WHA-070.phone-pairing-shows-typed-code
@@ -222,7 +215,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     const section = whatsappRegion(page)
     await section
       .getByRole('button', { name: 'Link WhatsApp', exact: true })
-      .click({ timeout: 10000 })
+      .click({ timeout: DEFAULT_EXPECT_TIMEOUT_MS })
     await section.getByRole('button', { name: 'Use a phone pairing code' }).click()
     await section.getByLabel('Phone Number').fill('+15551234567')
 
@@ -234,7 +227,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     const posted = await startRequest
     expect(posted.postDataJSON()).toMatchObject({ method: 'phone', phone: '+15551234567' })
 
-    await expect(section.getByText('ABCD-1234')).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText('ABCD-1234')).toBeVisible()
   })
 
   // spec: WHA-070.pairing-can-be-cancelled
@@ -270,18 +263,14 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByRole('img', { name: 'WhatsApp pairing QR code' })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByRole('img', { name: 'WhatsApp pairing QR code' })).toBeVisible()
     await section.getByRole('button', { name: 'Cancel' }).click()
 
     // The Link button — not the method chooser — is what must come back. That
     // assertion is what keeps the pair-mode reset rule from being decorative: a
     // cancel that left the mode set would drop the user back into the middle of
     // the flow they just abandoned.
-    await expect(section.getByRole('button', { name: 'Link WhatsApp', exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByRole('button', { name: 'Link WhatsApp', exact: true })).toBeVisible()
     await expect(section.getByRole('button', { name: 'Scan a QR code' })).toHaveCount(0)
   })
 
@@ -302,7 +291,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText(/Connected as Test Account/)).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText(/Connected as Test Account/)).toBeVisible()
     await expect(section.getByText(/\+15559876543/)).toBeVisible()
     await expect(section.getByText(/15559876543:12@s\.whatsapp\.net/)).toBeVisible()
     await expect(section.getByText(/Connected since/)).toBeVisible()
@@ -330,9 +319,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
 
     const section = whatsappRegion(page)
     // 2 pending + 1 processing = 3 chunks still to import.
-    await expect(section.getByText(/Importing message history… 3 chunks remaining/)).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByText(/Importing message history… 3 chunks remaining/)).toBeVisible()
     await expect(section.getByText(/1 chunk\(s\) could not be imported/)).toBeVisible()
     await expect(section.getByText(/History reaches back to/)).toBeVisible()
   })
@@ -355,9 +342,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText(/Unidentified peers observed: 4/)).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByText(/Unidentified peers observed: 4/)).toBeVisible()
     // A stale count is labelled rather than presented as a fresh zero.
     await expect(section.getByText(/Counts may be out of date/)).toBeVisible()
   })
@@ -379,9 +364,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText(/2 chunk\(s\) of message history were dropped/)).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByText(/2 chunk\(s\) of message history were dropped/)).toBeVisible()
     await expect(
       section.getByText(/not recoverable without unlinking and pairing again/)
     ).toBeVisible()
@@ -404,7 +387,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText(/Connected as No Gap/)).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText(/Connected as No Gap/)).toBeVisible()
     await expect(section.getByText(/of message history were dropped/)).toHaveCount(0)
   })
 
@@ -439,7 +422,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText(/Connected as Unlink Me/)).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText(/Connected as Unlink Me/)).toBeVisible()
 
     const deleteRequest = page.waitForRequest(
       req => req.method() === 'DELETE' && req.url().includes('/api/v1/whatsapp/auth')
@@ -447,9 +430,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await section.getByRole('button', { name: /Disconnect/ }).click()
     await deleteRequest
 
-    await expect(section.getByRole('button', { name: 'Link WhatsApp', exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByRole('button', { name: 'Link WhatsApp', exact: true })).toBeVisible()
   })
 
   // spec: WHA-074.failed-unlink-keeps-credentials-and-offers-retry
@@ -462,7 +443,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText(/The unlink did not complete/)).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText(/The unlink did not complete/)).toBeVisible()
     await expect(section.getByText(/credentials were deliberately\s+kept/)).toBeVisible()
     await expect(section.getByRole('button', { name: 'Retry disconnect' })).toBeVisible()
   })
@@ -498,9 +479,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByRole('button', { name: 'Force clear' })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByRole('button', { name: 'Force clear' })).toBeVisible()
     // The standing copy states the consequence before the user commits.
     await expect(section.getByText(/remove this device from\s+your phone/)).toBeVisible()
 
@@ -510,9 +489,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await section.getByRole('button', { name: 'Force clear' }).click()
     await forcedRequest
 
-    await expect(section.getByText(/Remove this device from your phone/)).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByText(/Remove this device from your phone/)).toBeVisible()
   })
 
   // spec: WHA-075.degraded-store-surfaced
@@ -538,9 +515,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
       await openSettings(page)
 
       const section = whatsappRegion(page)
-      await expect(section.getByText(/stored WhatsApp device state is degraded/)).toBeVisible({
-        timeout: 10000,
-      })
+      await expect(section.getByText(/stored WhatsApp device state is degraded/)).toBeVisible()
       await expect(section.getByText(note)).toBeVisible()
       // One remedy, named in the words the backend documents.
       await expect(section.getByText(/Force disconnect clears it/)).toBeVisible()
@@ -579,7 +554,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText('Book Club')).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText('Book Club')).toBeVisible()
     await expect(section.getByText('4 members')).toBeVisible()
     await expect(section.getByText('400 members')).toBeVisible()
     // A group whose size WhatsApp never reported says so, rather than showing a
@@ -608,7 +583,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
 
     const section = whatsappRegion(page)
     // The JID, not a placeholder: two unnamed groups must stay distinguishable.
-    await expect(section.getByText('999-9@g.us')).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText('999-9@g.us')).toBeVisible()
     await expect(section.getByLabel('Tracking for 999-9@g.us')).toBeVisible()
   })
 
@@ -652,7 +627,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
 
     const section = whatsappRegion(page)
     const select = section.getByLabel('Tracking for Book Club')
-    await expect(select).toHaveValue('auto', { timeout: 10000 })
+    await expect(select).toHaveValue('auto')
 
     const patchRequest = page.waitForRequest(
       req => req.method() === 'PATCH' && req.url().includes('/api/v1/whatsapp/chats/')
@@ -664,7 +639,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     expect(decodeURIComponent(new URL(patched.url()).pathname)).toContain('111-1@g.us')
 
     // The refetch reflects the stored choice, so the change survives the read.
-    await expect(select).toHaveValue('tracked', { timeout: 10000 })
+    await expect(select).toHaveValue('tracked')
   })
 
   // spec: WHA-076.untracked-history-is-not-recoverable
@@ -688,7 +663,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     // WhatsApp history arrives once, at link time.
     await expect(
       section.getByText(/messages received while it was\s+untracked were never stored/)
-    ).toBeVisible({ timeout: 10000 })
+    ).toBeVisible()
   })
 
   // spec: WHA-076.empty-state-before-any-group
@@ -699,22 +674,18 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText(/No group chats discovered yet/)).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText(/No group chats discovered yet/)).toBeVisible()
   })
 
   test('connecting and reconnecting both render a waiting state', async ({ page }) => {
     await mockStatus(page, statusPayload({ state: 'connecting' }))
     await openSettings(page)
-    await expect(whatsappRegion(page).getByText('Connecting to WhatsApp…')).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(whatsappRegion(page).getByText('Connecting to WhatsApp…')).toBeVisible()
 
     await page.unrouteAll({ behavior: 'ignoreErrors' })
     await mockStatus(page, statusPayload({ state: 'reconnecting' }))
     await openSettings(page)
-    await expect(whatsappRegion(page).getByText('Reconnecting to WhatsApp…')).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(whatsappRegion(page).getByText('Reconnecting to WhatsApp…')).toBeVisible()
   })
 
   // spec: WHA-077.disconnected-shows-the-reason
@@ -726,7 +697,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     let section = whatsappRegion(page)
-    await expect(section.getByText(/WhatsApp is disconnected/)).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText(/WhatsApp is disconnected/)).toBeVisible()
     // The machine reason is rendered in human words.
     await expect(section.getByText(/device was unlinked from WhatsApp/)).toBeVisible()
 
@@ -742,9 +713,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     section = whatsappRegion(page)
-    await expect(section.getByText(/temporarily restricted this account/)).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(section.getByText(/temporarily restricted this account/)).toBeVisible()
     // The lift time is the only actionable half of a ban.
     await expect(section.getByText(/The restriction lifts/)).toBeVisible()
   })
@@ -756,7 +725,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
     await openSettings(page)
 
     const section = whatsappRegion(page)
-    await expect(section.getByText(/WhatsApp could not start/)).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText(/WhatsApp could not start/)).toBeVisible()
     await expect(section.getByText(/could not be resolved to the linked account/)).toBeVisible()
   })
 
@@ -774,7 +743,7 @@ test.describe('WhatsApp Settings @area:settings', () => {
 
     const section = whatsappRegion(page)
     const relink = section.getByRole('button', { name: 'Link WhatsApp again' })
-    await expect(relink).toBeVisible({ timeout: 10000 })
+    await expect(relink).toBeVisible()
     await relink.click()
 
     await expect(section.getByRole('button', { name: 'Scan a QR code' })).toBeVisible()

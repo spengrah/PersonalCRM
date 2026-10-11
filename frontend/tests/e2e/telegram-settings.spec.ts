@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { SHORT_TIMEOUT_MS } from './helpers/timeouts'
 
 // The telegram section talks to the app's own /api/v1/telegram/* endpoints,
 // which cannot run live in E2E (MTProto needs real credentials and a real
@@ -24,9 +25,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // Telegram section should be visible
-    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible()
   })
 
   // spec: SET-027.not-configured-state-when-disabled
@@ -49,7 +48,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const section = telegramRegion(page)
-    await expect(section.getByText('Configuration Required')).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText('Configuration Required')).toBeVisible()
     // The behavior mandates naming the configuration the deployment must
     // supply; match the keys loosely so copy rewording survives.
     await expect(section.getByText(/ENABLE_TELEGRAM_SYNC/)).toBeVisible()
@@ -64,9 +63,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible()
 
     // Click Connect
     await page.getByRole('button', { name: /Connect Telegram/i }).click()
@@ -101,9 +98,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible()
 
     // Start auth flow, asserting the start request carries the entered phone
     // (network-param proof that the input is wired to the API).
@@ -118,7 +113,7 @@ test.describe('Telegram Settings @area:settings', () => {
 
     // Should show code input, reflecting the mocked delivery channel (app).
     await expect(page.getByText(/code was sent to your Telegram app/i)).toBeVisible({
-      timeout: 5000,
+      timeout: SHORT_TIMEOUT_MS,
     })
     await expect(page.getByLabel('Verification Code')).toBeVisible()
   })
@@ -159,16 +154,14 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible()
 
     // Complete auth flow
     await page.getByRole('button', { name: /Connect Telegram/i }).click()
     await page.getByLabel('Phone Number').fill('+15551234567')
     await page.getByRole('button', { name: 'Send Code' }).click()
 
-    await expect(page.getByLabel('Verification Code')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByLabel('Verification Code')).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await page.getByLabel('Verification Code').fill('12345')
     await page.getByRole('button', { name: 'Verify' }).click()
 
@@ -176,7 +169,7 @@ test.describe('Telegram Settings @area:settings', () => {
     // response's username, and the view switches to the connected state
     // (its disconnect affordance appears). The connected VIEW's username
     // display is TGM-038.connected-state-shows-account, proven by the pre-connected-status test.
-    await expect(page.getByText(/Connected.*@testuser/)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(/Connected.*@testuser/)).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
 
@@ -227,20 +220,18 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible()
 
     // Start and enter code
     await page.getByRole('button', { name: /Connect Telegram/i }).click()
     await page.getByLabel('Phone Number').fill('+15551234567')
     await page.getByRole('button', { name: 'Send Code' }).click()
-    await expect(page.getByLabel('Verification Code')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByLabel('Verification Code')).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await page.getByLabel('Verification Code').fill('12345')
     await page.getByRole('button', { name: 'Verify' }).click()
 
     // Should show 2FA password step (the awaiting_password branch)
-    await expect(page.getByLabel('2FA Password')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByLabel('2FA Password')).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
 
     // Enter password
     await page.getByLabel('2FA Password').fill('mypassword')
@@ -248,7 +239,9 @@ test.describe('Telegram Settings @area:settings', () => {
 
     // A valid password connects: success indication plus the view's
     // disconnect affordance.
-    await expect(page.getByText(/Connected.*@testuser2fa/)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(/Connected.*@testuser2fa/)).toBeVisible({
+      timeout: SHORT_TIMEOUT_MS,
+    })
     await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
 
@@ -265,12 +258,12 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible()
 
     // Identity from the mocked status is reflected in the section.
-    await expect(page.getByText(/Connected.*@existinguser/)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(/Connected.*@existinguser/)).toBeVisible({
+      timeout: SHORT_TIMEOUT_MS,
+    })
     await expect(page.getByText('+15559876543')).toBeVisible()
     await expect(page.getByRole('button', { name: /Disconnect/i })).toBeVisible()
   })
@@ -323,7 +316,7 @@ test.describe('Telegram Settings @area:settings', () => {
 
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
-    await expect(page.getByText(/Connected.*@disconnectme/)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(/Connected.*@disconnectme/)).toBeVisible()
 
     const deleteRequest = page.waitForRequest(
       req => req.method() === 'DELETE' && req.url().includes('/api/v1/telegram/auth')
@@ -333,7 +326,7 @@ test.describe('Telegram Settings @area:settings', () => {
 
     // The section returns to the disconnected state (connect affordance back).
     await expect(page.getByRole('button', { name: /Connect Telegram/i })).toBeVisible({
-      timeout: 5000,
+      timeout: SHORT_TIMEOUT_MS,
     })
   })
 
@@ -372,21 +365,21 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(page.getByRole('heading', { name: 'Telegram', exact: true })).toBeVisible()
 
     await page.getByRole('button', { name: /Connect Telegram/i }).click()
     await page.getByLabel('Phone Number').fill('+15551234567')
     await page.getByRole('button', { name: 'Send Code' }).click()
 
-    await expect(page.getByLabel('Verification Code')).toBeVisible({ timeout: 5000 })
+    await expect(page.getByLabel('Verification Code')).toBeVisible({ timeout: SHORT_TIMEOUT_MS })
     await page.getByLabel('Verification Code').fill('99999')
     await page.getByRole('button', { name: 'Verify' }).click()
 
     // The rejection reason (the mocked error payload's message) is surfaced,
     // and the flow stays on the code step so the user can retry.
-    await expect(page.getByText(/Invalid verification code/i)).toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(/Invalid verification code/i)).toBeVisible({
+      timeout: SHORT_TIMEOUT_MS,
+    })
     await expect(page.getByLabel('Verification Code')).toBeVisible()
   })
 
@@ -426,7 +419,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     const section = telegramRegion(page)
-    await expect(section.getByText('Close Friends')).toBeVisible({ timeout: 10000 })
+    await expect(section.getByText('Close Friends')).toBeVisible()
     await expect(section.getByText('Work Team')).toBeVisible()
     await expect(section.getByText('5 members').first()).toBeVisible()
     await expect(section.getByText('25 members').first()).toBeVisible()
@@ -447,9 +440,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(telegramRegion(page).getByText(/No group chats/i)).toBeVisible({
-      timeout: 10000,
-    })
+    await expect(telegramRegion(page).getByText(/No group chats/i)).toBeVisible()
   })
 
   // spec: TGM-039.backfill-progress-counts-shown
@@ -475,7 +466,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.waitForLoadState('domcontentloaded')
 
     // The 15/42 figures are the mocked backfill progress reflected in the UI.
-    await expect(page.getByText(/Syncing messages.*15\/42/)).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText(/Syncing messages.*15\/42/)).toBeVisible()
   })
 
   // spec: TGM-041.changing-tracking-choice-persists
@@ -529,7 +520,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByText('Toggle Test Group')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Toggle Test Group')).toBeVisible()
 
     const select = page.getByRole('combobox', { name: 'Tracking for Toggle Test Group' })
     await expect(select).toHaveValue('auto')
@@ -542,7 +533,7 @@ test.describe('Telegram Settings @area:settings', () => {
     expect((await patchRequest).postDataJSON()).toMatchObject({ status: 'ignored' })
 
     // After the mutation + refetch the list reflects the persisted choice.
-    await expect(select).toHaveValue('ignored', { timeout: 5000 })
+    await expect(select).toHaveValue('ignored', { timeout: SHORT_TIMEOUT_MS })
   })
 
   // spec: TGM-041.changing-tracking-choice-persists
@@ -593,7 +584,7 @@ test.describe('Telegram Settings @area:settings', () => {
     await page.goto('/settings')
     await page.waitForLoadState('domcontentloaded')
 
-    await expect(page.getByText('Large Work Group')).toBeVisible({ timeout: 10000 })
+    await expect(page.getByText('Large Work Group')).toBeVisible()
 
     const select = page.getByRole('combobox', { name: 'Tracking for Large Work Group' })
     await expect(select).toHaveValue('auto')
@@ -606,6 +597,6 @@ test.describe('Telegram Settings @area:settings', () => {
     expect((await patchRequest).postDataJSON()).toMatchObject({ status: 'tracked' })
 
     // After mutation + refetch, the list reflects the persisted choice.
-    await expect(select).toHaveValue('tracked', { timeout: 5000 })
+    await expect(select).toHaveValue('tracked', { timeout: SHORT_TIMEOUT_MS })
   })
 })

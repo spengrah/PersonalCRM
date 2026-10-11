@@ -178,6 +178,7 @@ export function ContactSelector({
               <button
                 type="button"
                 onClick={handleClear}
+                aria-label="Clear selection"
                 className="flex-shrink-0 text-gray-400 hover:text-gray-600"
                 disabled={disabled}
               >

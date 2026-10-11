@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { ChevronLeft, ChevronRight, UserPlus, Link2, Ban, MessageCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select } from '@/components/ui/select'
@@ -52,7 +52,7 @@ export function NameCandidateModal({
   const [queue, setQueue] = useState<NameCandidateGroup[]>(groups)
   const [index, setIndex] = useState(initialIndex)
   const [mode, setMode] = useState<NameCandidateMode>('import')
-  const [name, setName] = useState('')
+  const [name, setName] = useState(groups[initialIndex]?.token_display ?? '')
   const [cadence, setCadence] = useState('')
   const [contactId, setContactId] = useState<string | undefined>()
 
@@ -62,14 +62,16 @@ export function NameCandidateModal({
 
   const group = queue[index]
 
-  // Reset per-group form state when the visible group changes.
-  useEffect(() => {
-    if (!group) return
+  // Reset per-group form state when the visible group changes. Adjusting state
+  // during render (rather than in an effect) avoids a render with stale fields.
+  const [formFor, setFormFor] = useState({ index, group })
+  if (group && (formFor.index !== index || formFor.group !== group)) {
+    setFormFor({ index, group })
     setName(group.token_display)
     setMode('import')
     setCadence('')
     setContactId(undefined)
-  }, [index, group])
+  }
 
   if (!group) return null
 

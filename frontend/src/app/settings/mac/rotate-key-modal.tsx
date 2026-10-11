@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Copy } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -28,6 +28,13 @@ export function RotateKeyModal({
   onClose,
 }: RotateKeyModalProps) {
   const [copied, setCopied] = useState(false)
+  const copiedTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+    }
+  }, [])
 
   const fullCommand = token ? `crm-mac install --re-pair --pair ${token.token}` : ''
 
@@ -36,7 +43,8 @@ export function RotateKeyModal({
     try {
       await navigator.clipboard.writeText(fullCommand)
       setCopied(true)
-      window.setTimeout(() => setCopied(false), 2000)
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current)
+      copiedTimerRef.current = window.setTimeout(() => setCopied(false), 2000)
     } catch (err) {
       console.error('clipboard write failed', err)
     }

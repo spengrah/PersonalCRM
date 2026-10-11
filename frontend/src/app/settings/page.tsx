@@ -18,7 +18,7 @@ export default function SettingsPage() {
   const [isExporting, setIsExporting] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
   const [importFile, setImportFile] = useState<File | null>(null)
-  const { environment, isAccelerated, accelerationFactor } = useAcceleratedTime()
+  const { currentTime, environment, isAccelerated, accelerationFactor } = useAcceleratedTime()
 
   const handleExportData = async () => {
     setIsExporting(true)
@@ -41,7 +41,7 @@ export default function SettingsPage() {
       const link = document.createElement('a')
       link.href = url
 
-      const timestamp = new Date().toISOString().split('T')[0]
+      const timestamp = currentTime.toISOString().split('T')[0]
       link.download = `personal-crm-backup-${timestamp}.json`
 
       document.body.appendChild(link)

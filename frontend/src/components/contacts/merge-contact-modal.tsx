@@ -184,6 +184,7 @@ export function MergeContactModal({
           </div>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="p-1.5 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-colors"
           >
             <X className="w-5 h-5" />
@@ -216,6 +217,7 @@ export function MergeContactModal({
                     <button
                       type="button"
                       onClick={handleConfirmNameEdit}
+                      aria-label="Confirm name"
                       className="p-1 text-green-600 hover:bg-green-50 rounded flex-shrink-0"
                       disabled={isLoading}
                     >

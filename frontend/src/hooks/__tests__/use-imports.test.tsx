@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -30,14 +29,14 @@ vi.mock('@/lib/query-invalidation', () => ({
   contactKeys: {
     all: ['contacts'] as const,
     lists: () => ['contacts', 'list'] as const,
-    list: (params: any) => ['contacts', 'list', params] as const,
+    list: (params: unknown) => ['contacts', 'list', params] as const,
     details: () => ['contacts', 'detail'] as const,
     detail: (id: string) => ['contacts', 'detail', id] as const,
   },
   importKeys: {
     all: ['imports'] as const,
     lists: () => ['imports', 'list'] as const,
-    list: (params: any) => ['imports', 'list', params] as const,
+    list: (params: unknown) => ['imports', 'list', params] as const,
     details: () => ['imports', 'detail'] as const,
     detail: (id: string) => ['imports', 'detail', id] as const,
   },

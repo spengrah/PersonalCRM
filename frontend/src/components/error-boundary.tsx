@@ -40,6 +40,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   handleReload = (): void => {
+    // eslint-disable-next-line no-restricted-syntax -- resets after a render crash; no query exists to refetch
     window.location.reload()
   }
 

@@ -64,11 +64,10 @@ export function getSyncIconClasses(syncStatus: AggregateSyncStatus): string {
 }
 
 // Format relative time for sync status
-export function formatSyncTime(dateString: string | null): string {
+export function formatSyncTime(dateString: string | null, now: Date): string {
   if (!dateString) return 'Never'
 
   const date = new Date(dateString)
-  const now = new Date()
   const diffMs = now.getTime() - date.getTime()
   const diffMins = Math.floor(diffMs / (1000 * 60))
   const diffHours = Math.floor(diffMs / (1000 * 60 * 60))

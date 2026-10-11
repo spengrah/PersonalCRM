@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useCreateInteraction } from '@/hooks/use-interactions'
+import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import { Button } from '@/components/ui/button'
 import { X } from 'lucide-react'
 import type { InteractionDirection } from '@/lib/interactions-api'
@@ -12,14 +13,13 @@ interface LogInteractionModalProps {
   onClose: () => void
 }
 
-// today returns a YYYY-MM-DD string from the browser's wall clock for the
+// today returns a YYYY-MM-DD string from the accelerated clock for the
 // date input's `max` attribute (cosmetic guard — the backend rejects future
 // occurred_at regardless). When the user does NOT change the date input we
 // omit occurred_at from the payload entirely so the backend can stamp it
 // with accelerated.GetCurrentTime() — important in dev mode where the
 // browser's wall clock and the backend's accelerated clock can drift.
-function todayString(): string {
-  const d = new Date()
+function todayString(d: Date): string {
   const yyyy = d.getFullYear()
   const mm = String(d.getMonth() + 1).padStart(2, '0')
   const dd = String(d.getDate()).padStart(2, '0')
@@ -27,7 +27,8 @@ function todayString(): string {
 }
 
 export function LogInteractionModal({ contactId, contactName, onClose }: LogInteractionModalProps) {
-  const today = todayString()
+  const { currentTime } = useAcceleratedTime()
+  const today = todayString(currentTime)
   const [direction, setDirection] = useState<InteractionDirection>('mutual')
   // Default the visible value to today. userChangedDate tracks whether
   // the user explicitly picked a different value: if false at submit, we
