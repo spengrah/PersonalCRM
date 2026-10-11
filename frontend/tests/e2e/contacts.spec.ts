@@ -7,7 +7,7 @@ import {
   TestAPI,
 } from './helpers/test-api'
 import { SHORT_TIMEOUT_MS, SLOW_TIMEOUT_MS } from './helpers/timeouts'
-import { expectNoRequestWithin } from './helpers/negative-assertions'
+import { expectNoRequestDuring } from './helpers/negative-assertions'
 
 // The Notes row in the contact-detail definition list, scoped so a
 // presence/absence assertion on its expand control cannot collide with another
@@ -509,10 +509,6 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
 
     // Deletion is guarded by a native window.confirm (see the detail page).
     // Dismiss path: no DELETE fires and the contact stays live.
-    const noDelete = expectNoRequestWithin(
-      page,
-      req => req.method() === 'DELETE' && req.url().includes(`/contacts/${contactId}`)
-    )
     // The confirmation copy is captured INSIDE the handler (it cannot be read
     // after the dialog resolves) and asserted below: the prompt must warn the
     // action cannot be undone (CON-042.confirmation-prompt-warns-action).
@@ -521,9 +517,11 @@ Follow-up: Share the pgvector article, introduce to Sarah from the embeddings te
       confirmMessage = dialog.message()
       void dialog.dismiss()
     })
-    await page.getByRole('button', { name: 'Delete' }).click()
-    // Absence has no positive signal: the helper observes a bounded window.
-    await noDelete
+    await expectNoRequestDuring(
+      page,
+      req => req.method() === 'DELETE' && req.url().includes(`/contacts/${contactId}`),
+      () => page.getByRole('button', { name: 'Delete' }).click()
+    )
     expect(confirmMessage).toContain('cannot be undone')
     const liveResp = await request.get(`${API_BASE_URL}/api/v1/contacts/${contactId}`, {
       headers: API_HEADERS,

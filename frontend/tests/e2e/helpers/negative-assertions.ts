@@ -1,44 +1,43 @@
-import type { Page, Request } from '@playwright/test'
+import { errors, type Page, type Request } from '@playwright/test'
 
 /**
- * Negative assertions ("this request must NOT happen") have no positive signal
- * to await: a first-success poll passes immediately and would miss a late,
- * erroneous request. The only sound observation is a bounded window in which
- * the request would have appeared by now if the code were wrong.
- *
- * This file is the single place the `waitForTimeout` lint rule allows that
- * window (see the override in eslint.config.mjs). Specs call
- * `expectNoRequestWithin` instead of sleeping inline.
+ * Negative assertions ("this request must NOT happen") have no positive signal to
+ * await. expectNoRequestDuring runs the action with a request listener attached,
+ * then waits for a matching request for a bounded window after the action
+ * returns: a matching request fails the test, and the wait timing out passes it.
  */
 
-/** Long enough for a delayed erroneous request to land; short enough to keep tests fast. */
+/** How long after the action a delayed erroneous request is still caught. */
 export const NEGATIVE_ASSERTION_WINDOW_MS = 1500
 
-/**
- * Fails if any request matching `matches` is issued within `windowMs`.
- * Start it BEFORE the action under test and await it AFTER, so the listener
- * is attached before the action can trigger a request.
- */
-export async function expectNoRequestWithin(
+export async function expectNoRequestDuring(
   page: Page,
   matches: (request: Request) => boolean,
+  action: () => Promise<void>,
   windowMs: number = NEGATIVE_ASSERTION_WINDOW_MS
 ): Promise<void> {
   const seen: string[] = []
   const onRequest = (request: Request) => {
-    if (matches(request)) {
-      seen.push(`${request.method()} ${request.url()}`)
-    }
+    if (matches(request)) seen.push(`${request.method()} ${request.url()}`)
   }
   page.on('request', onRequest)
   try {
-    await page.waitForTimeout(windowMs)
+    await action()
+    if (seen.length === 0) {
+      const late = await page
+        .waitForEvent('request', { predicate: matches, timeout: windowMs })
+        .catch(error => {
+          if (error instanceof errors.TimeoutError) return null
+          throw error
+        })
+      if (late) seen.push(`${late.method()} ${late.url()}`)
+    }
   } finally {
     page.off('request', onRequest)
   }
   if (seen.length > 0) {
     throw new Error(
-      `Expected no matching request within ${windowMs}ms, but saw ${seen.length}:\n${seen.join('\n')}`
+      `Expected no matching request during the action or ${windowMs}ms after it, but saw:\n${seen.join('\n')}`
     )
   }
 }

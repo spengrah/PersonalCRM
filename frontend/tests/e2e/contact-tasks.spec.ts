@@ -1,7 +1,7 @@
 import { test, expect, Page, Route } from '@playwright/test'
 import { createTestAPI, TestAPI } from './helpers/test-api'
 import { SLOW_TIMEOUT_MS } from './helpers/timeouts'
-import { expectNoRequestWithin } from './helpers/negative-assertions'
+import { expectNoRequestDuring } from './helpers/negative-assertions'
 
 // The tasks section (TasksSection) renders unconditionally on the contact
 // detail page — it does NOT depend on Todoist being configured. The header
@@ -553,15 +553,16 @@ test.describe('Contact Tasks @area:contacts @area:tasks', () => {
 
       // Dismiss the confirm; no DELETE may follow within the bounded window.
       page.once('dialog', dialog => void dialog.dismiss())
-      const noDelete = expectNoRequestWithin(
+      await expectNoRequestDuring(
         page,
         request =>
           request.method() === 'DELETE' &&
-          request.url().includes(`/api/v1/contacts/${contactId}/tasks/`)
+          request.url().includes(`/api/v1/contacts/${contactId}/tasks/`),
+        async () => {
+          await row.hover()
+          await row.locator(`button[title="${UNLINK_TITLE}"]`).click()
+        }
       )
-      await row.hover()
-      await row.locator(`button[title="${UNLINK_TITLE}"]`).click()
-      await noDelete
       await expect(row).toBeVisible()
     })
 

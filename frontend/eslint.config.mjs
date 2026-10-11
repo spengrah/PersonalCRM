@@ -108,17 +108,6 @@ const eslintConfig = [
     files: ['tests/e2e/helpers/test-api.ts'],
     rules: { 'no-restricted-syntax': ['error', ...testSelectors] },
   },
-  {
-    // The one sanctioned bounded wait: a negative assertion needs an observation window.
-    files: ['tests/e2e/helpers/negative-assertions.ts'],
-    rules: {
-      'no-restricted-syntax': [
-        'error',
-        ...testSelectors.filter(s => !s.selector.includes('waitForTimeout')),
-        ...apiConstantSelectors,
-      ],
-    },
-  },
 ]
 
 export default eslintConfig
