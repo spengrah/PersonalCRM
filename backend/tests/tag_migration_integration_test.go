@@ -222,7 +222,7 @@ func (h *tagMigrationHarness) findTaggedAs(t *testing.T, ctx context.Context, su
 // them up, so the global tag set during a subtest is just that subtest's tags.
 func TestTagMigration_Integration(t *testing.T) {
 	testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("migrates tags + contact_tags with user provenance and color", func(t *testing.T) {
 		h, ctx := newTagMigrationHarness(t, ctx)

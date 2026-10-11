@@ -150,7 +150,7 @@ func anarlogTitleSibling() repository.ExternalContact {
 func TestResolveToken_UnknownToken(t *testing.T) {
 	repo := &stubDiscoveryRepo{siblings: nil}
 	svc := NewAnarlogDiscoveryService(repo, &stubDiscoveryContacts{})
-	_, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{NormalizedToken: "ghost", Action: DiscoveryActionImport})
+	_, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{NormalizedToken: "ghost", Action: DiscoveryActionImport})
 	require.ErrorIs(t, err, ErrTokenGroupNotFound)
 	require.False(t, repo.importMarkCalled)
 }
@@ -159,7 +159,7 @@ func TestResolveToken_Ignore(t *testing.T) {
 	repo := &stubDiscoveryRepo{siblings: []repository.ExternalContact{anarlogTitleSibling()}}
 	contacts := &stubDiscoveryContacts{}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
-	res, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{NormalizedToken: "lena", Action: DiscoveryActionIgnore})
+	res, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{NormalizedToken: "lena", Action: DiscoveryActionIgnore})
 	require.NoError(t, err)
 	require.Equal(t, DiscoveryActionIgnore, res.Action)
 	require.Nil(t, res.ContactID)
@@ -173,7 +173,7 @@ func TestResolveToken_ImportCreatesContactAndMarks(t *testing.T) {
 	repo := &stubDiscoveryRepo{siblings: []repository.ExternalContact{anarlogTitleSibling()}}
 	contacts := &stubDiscoveryContacts{}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
-	res, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+	res, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{
 		NormalizedToken: "lena",
 		Action:          DiscoveryActionImport,
 		Cadence:         strptr("monthly"),
@@ -193,7 +193,7 @@ func TestResolveToken_ImportNameOverride(t *testing.T) {
 	repo := &stubDiscoveryRepo{siblings: []repository.ExternalContact{anarlogTitleSibling()}}
 	contacts := &stubDiscoveryContacts{}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
-	_, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+	_, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{
 		NormalizedToken: "lena",
 		Action:          DiscoveryActionImport,
 		Name:            strptr("Lena Smith"),
@@ -213,7 +213,7 @@ func TestResolveToken_ImportZeroRowsRollsBackOrphanContact(t *testing.T) {
 	contacts := &stubDiscoveryContacts{}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
 
-	res, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+	res, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{
 		NormalizedToken: "lena",
 		Action:          DiscoveryActionImport,
 	})
@@ -234,7 +234,7 @@ func TestResolveToken_ImportMarkErrorRollsBackOrphanContact(t *testing.T) {
 	contacts := &stubDiscoveryContacts{}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
 
-	_, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+	_, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{
 		NormalizedToken: "lena",
 		Action:          DiscoveryActionImport,
 	})
@@ -254,7 +254,7 @@ func TestResolveToken_LinkZeroRowsReportsNotFound(t *testing.T) {
 	contacts := &stubDiscoveryContacts{existing: &repository.Contact{ID: contactID, FullName: "Stay"}}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
 
-	_, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+	_, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{
 		NormalizedToken: "lena",
 		Action:          DiscoveryActionLink,
 		CRMContactID:    &contactID,
@@ -281,7 +281,7 @@ func TestResolveToken_LinkWithNameAndCadencePreservesProfile(t *testing.T) {
 	contacts := &stubDiscoveryContacts{existing: existing}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
 
-	res, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+	res, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{
 		NormalizedToken: "lena",
 		Action:          DiscoveryActionLink,
 		Name:            strptr("New Name"),
@@ -314,7 +314,7 @@ func TestResolveToken_LinkNameOnlyCarriesExistingCadence(t *testing.T) {
 	contacts := &stubDiscoveryContacts{existing: existing}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
 
-	_, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+	_, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{
 		NormalizedToken: "lena",
 		Action:          DiscoveryActionLink,
 		Name:            strptr("New"),
@@ -334,7 +334,7 @@ func TestResolveToken_LinkNoEditsSkipsUpdate(t *testing.T) {
 	contacts := &stubDiscoveryContacts{existing: &repository.Contact{ID: contactID, FullName: "Stay"}}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
 
-	res, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+	res, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{
 		NormalizedToken: "lena",
 		Action:          DiscoveryActionLink,
 		CRMContactID:    &contactID,
@@ -351,7 +351,7 @@ func TestResolveToken_LinkMissingContact(t *testing.T) {
 	contacts := &stubDiscoveryContacts{getErr: db.ErrNotFound}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
 
-	_, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+	_, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{
 		NormalizedToken: "lena",
 		Action:          DiscoveryActionLink,
 		CRMContactID:    &contactID,
@@ -371,7 +371,7 @@ func TestResolveToken_LinkUpdateFailureSurfacesError(t *testing.T) {
 	}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
 
-	_, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+	_, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{
 		NormalizedToken: "lena",
 		Action:          DiscoveryActionLink,
 		Cadence:         strptr("monthly"),
@@ -394,7 +394,7 @@ func TestResolveToken_LinkZeroRowsAppliesNoEdit(t *testing.T) {
 	contacts := &stubDiscoveryContacts{existing: &repository.Contact{ID: contactID, FullName: "Stay"}}
 	svc := NewAnarlogDiscoveryService(repo, contacts)
 
-	_, err := svc.ResolveToken(context.Background(), ResolveTokenRequest{
+	_, err := svc.ResolveToken(t.Context(), ResolveTokenRequest{
 		NormalizedToken: "lena",
 		Action:          DiscoveryActionLink,
 		Name:            strptr("Renamed"),
@@ -412,7 +412,7 @@ func TestListGroups_Passthrough(t *testing.T) {
 		{NormalizedToken: "ravi", TokenDisplay: "Ravi", EvidenceCount: 1, SessionTitles: nil},
 	}}
 	svc := NewAnarlogDiscoveryService(repo, &stubDiscoveryContacts{})
-	out, err := svc.ListGroups(context.Background())
+	out, err := svc.ListGroups(t.Context())
 	require.NoError(t, err)
 	require.Len(t, out, 2)
 	require.Equal(t, "lena", out[0].NormalizedToken)

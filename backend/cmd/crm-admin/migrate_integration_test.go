@@ -68,7 +68,7 @@ func newMigrateClone(t *testing.T) (cloneURL, migrationsPath string) {
 // TestMigrateCheckExitContract drives the real runMigrateCheck end-to-end and
 // asserts the 0 / 2 exit-code contract against a real DB.
 func TestMigrateCheckExitContract(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, migrationsPath := newMigrateClone(t)
 
 	// Call before any read (CI bare-Postgres gotcha; here a no-op backstop).
@@ -95,7 +95,7 @@ func TestMigrateCheckExitContract(t *testing.T) {
 // real --migrate the DB is up-to-date, so --migrate-check returns exit 0. Also
 // confirms --migrate is idempotent (a second apply is a clean no-op).
 func TestMigrateAppliesThenCheckClean(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, migrationsPath := newMigrateClone(t)
 
 	// Roll the app schema down one step so --migrate has real work to do.
@@ -121,7 +121,7 @@ func TestMigrateAppliesThenCheckClean(t *testing.T) {
 // against a clone whose River schema is one migration behind (app fully applied),
 // asserting River-pending maps to exit 2.
 func TestMigrateCheckRiverPendingExit2(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, migrationsPath := newMigrateClone(t)
 	require.NoError(t, db.RunMigrations(ctx, cloneURL, migrationsPath))
 
@@ -140,7 +140,7 @@ func TestMigrateCheckRiverPendingExit2(t *testing.T) {
 // clone forced into a dirty golang-migrate state, asserting the operational-error
 // mapping to exit 1 (a plain error, NOT an exitErr{code:2}).
 func TestMigrateCheckDirtyExit1(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, migrationsPath := newMigrateClone(t)
 	require.NoError(t, db.RunMigrations(ctx, cloneURL, migrationsPath))
 

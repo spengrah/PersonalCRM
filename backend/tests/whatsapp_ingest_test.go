@@ -101,7 +101,7 @@ type ingestEnv struct {
 func setupIngestTest(t *testing.T) *ingestEnv {
 	t.Helper()
 	databaseURL := testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPath()))
 
 	cfg := config.TestConfig()

@@ -12,7 +12,6 @@
 package main
 
 import (
-	"context"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 
@@ -26,7 +25,7 @@ func TestSeedAdapterRunProfileCarriesPartialResultOnFailure(t *testing.T) {
 	t.Parallel()
 	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newJobsTestDB(t, ctx)
 
 	adapter := seedAdapter{

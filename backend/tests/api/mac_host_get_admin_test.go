@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -24,7 +23,7 @@ type hostDetailView struct {
 func TestMacHost_GetAdmin_DetailView(t *testing.T) {
 
 	env := setupMacHostEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	headers := map[string]string{"X-API-Key": env.apiKey}
 
 	// Live host (the singleton index allows one live host at a time).
@@ -73,7 +72,7 @@ func TestMacHost_GetAdmin_BadID_400(t *testing.T) {
 func TestMacHost_GetAdmin_Unauthenticated_401(t *testing.T) {
 
 	env := setupMacHostEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	host, err := env.hostRepo.SeedRevokedHostForTest(ctx,
 		"get-admin-noauth-"+uuid.NewString()[:8], "0.0.0", 1, "$2a$04$nA")
 	require.NoError(t, err)

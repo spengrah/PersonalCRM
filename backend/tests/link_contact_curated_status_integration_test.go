@@ -146,7 +146,7 @@ func (env *linkCuratedEnv) seedUnmatchedExternal(t *testing.T, ctx context.Conte
 func TestLinkContact_CuratedWithSelections_LandsImported(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
 	email := external.Emails[0].Value
 
@@ -165,7 +165,7 @@ func TestLinkContact_CuratedWithSelections_LandsImported(t *testing.T) {
 func TestLinkContact_CuratedWithCadence_LandsImported(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
 	cadence := "monthly"
 
@@ -187,7 +187,7 @@ func TestLinkContact_CuratedWithCadence_LandsImported(t *testing.T) {
 func TestLinkContact_Bare_LandsMatched(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
 
 	code := env.callLink(t, external.ID.String(), handlers.LinkRequest{
@@ -207,7 +207,7 @@ func TestLinkContact_Bare_LandsMatched(t *testing.T) {
 func TestLinkContact_MethodsCuratedDeselectAll_LandsImported(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
 
 	code := env.callLink(t, external.ID.String(), handlers.LinkRequest{
@@ -228,7 +228,7 @@ func TestLinkContact_MethodsCuratedDeselectAll_LandsImported(t *testing.T) {
 func TestImportContact_LinkOnlySource_Forbidden(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	external := env.seedUnmatchedExternalSource(t, ctx, "gmail_correspondence")
 
 	code := env.callImport(t, external.ID.String(), nil)
@@ -244,7 +244,7 @@ func TestImportContact_LinkOnlySource_Forbidden(t *testing.T) {
 func TestImportContact_OrdinarySource_Imports(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	external := env.seedUnmatchedExternalSource(t, ctx, "gcontacts")
 	t.Cleanup(func() {
 		// The import creates a CRM contact named after the display_name;

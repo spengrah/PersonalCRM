@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -40,7 +39,7 @@ func setupTelegramChatRouter(t *testing.T) (*gin.Engine, *repository.TelegramCha
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
 	database := testsupport.OpenDatabase(t)
@@ -129,7 +128,7 @@ func TestChatAPI_ListChats(t *testing.T) {
 	router, chatConfigRepo, chatID1, chatID2, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a small group (tracked) and a large group (not tracked)
 	mc5 := int32(5)
@@ -196,7 +195,7 @@ func TestChatAPI_ListChats_ExcludesPrivate(t *testing.T) {
 	router, chatConfigRepo, chatID1, chatID2, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID1,
@@ -259,7 +258,7 @@ func TestChatAPI_UpdateStatus_Ignored(t *testing.T) {
 	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mc5 := int32(5)
 	_, err := chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
@@ -298,7 +297,7 @@ func TestChatAPI_UpdateStatus_TrackedOverridesLarge(t *testing.T) {
 	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mc50 := int32(50)
 	_, err := chatConfigRepo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
@@ -337,7 +336,7 @@ func TestChatAPI_UpdateStatus_Auto(t *testing.T) {
 	router, chatConfigRepo, chatID1, _, cleanup := setupTelegramChatRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed as "ignored" so the PATCH to "auto" exercises a real transition,
 	// not a no-op re-write of the default.

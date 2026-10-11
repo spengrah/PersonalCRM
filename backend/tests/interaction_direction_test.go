@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
@@ -42,7 +41,7 @@ func TestRecordInteraction_DirectionOutbound(t *testing.T) {
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a contact with cadence and a known last_contacted time
 	cadence := "monthly"
@@ -87,7 +86,7 @@ func TestRecordInteraction_DirectionMutual(t *testing.T) {
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cadence := "monthly"
 	initialTime := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
@@ -130,7 +129,7 @@ func TestRecordInteraction_DirectionInbound(t *testing.T) {
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cadence := "monthly"
 	initialTime := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
@@ -170,7 +169,7 @@ func TestRecordInteraction_EmptyDirectionDefaultsMutual(t *testing.T) {
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 		FullName: "Direction Test Default",
@@ -194,7 +193,7 @@ func TestRecordInteraction_ForwardOnlyGuard_ContactByNotRegressed(t *testing.T) 
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cadence := "monthly"
 	// Start with a recent last_contacted
@@ -248,7 +247,7 @@ func TestAwaitingReply_DerivedFromInteractionColumns(t *testing.T) {
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cadenceStr := "monthly"
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -298,7 +297,7 @@ func TestFollowupFilter(t *testing.T) {
 	t.Parallel()
 	_, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Namespaced names: this test scans the whole table via the has_followup /
 	// no_followup filters, so fixed names risk fuzzy-trigram collision with a
@@ -368,7 +367,7 @@ func TestCompletedCadenceTask_CanBeReplacedByNewOne(t *testing.T) {
 	t.Parallel()
 	_, contactRepo, contactTaskRepo, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Per-test namespace so the fixed external_task_id literals below don't
 	// collide on the (provider, external_task_id) key across parallel clones.

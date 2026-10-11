@@ -70,7 +70,7 @@ func setupIngestTestRouter(t *testing.T, enableIngest bool) *ingestTestSetup {
 
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// Migrations are applied once by TestMain.
 
 	cfg := config.TestConfig()

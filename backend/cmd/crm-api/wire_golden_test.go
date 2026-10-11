@@ -17,7 +17,6 @@
 package main
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"personal-crm/backend/tests/testsupport"
@@ -234,7 +233,7 @@ type wireChain struct {
 // server.
 func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 

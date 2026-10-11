@@ -33,7 +33,7 @@ func seedExtSweepFixtures(t *testing.T) *extSweepFixtures {
 
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -92,7 +92,7 @@ func seedExtSweepFixtures(t *testing.T) *extSweepFixtures {
 	tomb = post
 
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		// Hard delete the rows we seeded (covers tombstoned + live).
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
@@ -110,7 +110,7 @@ func seedExtSweepFixtures(t *testing.T) *extSweepFixtures {
 func TestExternalContactSweep_GetByID_LiveRowReturned(t *testing.T) {
 	t.Parallel()
 	fx := seedExtSweepFixtures(t)
-	row, err := fx.repo.GetByID(context.Background(), fx.live.ID)
+	row, err := fx.repo.GetByID(t.Context(), fx.live.ID)
 	require.NoError(t, err)
 	require.NotNil(t, row)
 	require.Equal(t, fx.live.ID, row.ID)
@@ -119,7 +119,7 @@ func TestExternalContactSweep_GetByID_LiveRowReturned(t *testing.T) {
 func TestExternalContactSweep_GetByID_TombstonedRowAbsent(t *testing.T) {
 	t.Parallel()
 	fx := seedExtSweepFixtures(t)
-	row, err := fx.repo.GetByID(context.Background(), fx.tombstoned.ID)
+	row, err := fx.repo.GetByID(t.Context(), fx.tombstoned.ID)
 	require.NoError(t, err)
 	require.Nil(t, row, "GetByID must not return a tombstoned row through normal flows")
 }
@@ -128,14 +128,14 @@ func TestExternalContactSweep_GetBySource_TombstoneAware(t *testing.T) {
 	t.Parallel()
 	fx := seedExtSweepFixtures(t)
 	// Live row reachable.
-	live, err := fx.repo.GetBySource(context.Background(), fx.live.Source, fx.live.SourceID, nil)
+	live, err := fx.repo.GetBySource(t.Context(), fx.live.Source, fx.live.SourceID, nil)
 	require.NoError(t, err)
 	require.NotNil(t, live)
 	require.Nil(t, live.DeletedAt)
 	// Tombstoned row INTENTIONALLY visible via GetBySource — the
 	// mac-daemon revive path depends on this. Callers that want
 	// live-only rows must filter on DeletedAt themselves.
-	tomb, err := fx.repo.GetBySource(context.Background(), fx.tombstoned.Source, fx.tombstoned.SourceID, nil)
+	tomb, err := fx.repo.GetBySource(t.Context(), fx.tombstoned.Source, fx.tombstoned.SourceID, nil)
 	require.NoError(t, err)
 	require.NotNil(t, tomb)
 	require.NotNil(t, tomb.DeletedAt)
@@ -147,7 +147,7 @@ func TestExternalContactSweep_FindBySourceAndSourceID_FiltersTombstone(t *testin
 	// Use the tombstoned row's source_id; FindBySourceAndSourceID is
 	// the rematch query and must NEVER return a tombstoned candidate.
 	results, err := fx.repo.FindBySourceAndSourceID(
-		context.Background(), fx.tombstoned.Source, fx.tombstoned.SourceID)
+		t.Context(), fx.tombstoned.Source, fx.tombstoned.SourceID)
 	require.NoError(t, err)
 	for _, r := range results {
 		require.NotEqual(t, fx.tombstoned.ID, r.ID, "rematch must not surface a tombstoned candidate")
@@ -158,7 +158,7 @@ func TestExternalContactSweep_ListUnmatched_FiltersTombstone(t *testing.T) {
 	t.Parallel()
 	// Re-seed but with both rows unmatched so the predicate fires.
 	databaseURL := testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -184,7 +184,7 @@ func TestExternalContactSweep_ListUnmatched_FiltersTombstone(t *testing.T) {
 	require.NoError(t, repo.SoftDeleteTx(ctx, tx, tomb.ID))
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 	})
@@ -206,7 +206,7 @@ func TestExternalContactSweep_ListUnmatched_FiltersTombstone(t *testing.T) {
 func TestExternalContactSweep_ListAllUnmatched_FiltersTombstone(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -227,7 +227,7 @@ func TestExternalContactSweep_ListAllUnmatched_FiltersTombstone(t *testing.T) {
 	require.NoError(t, repo.SoftDeleteTx(ctx, tx, tomb.ID))
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 	})
@@ -249,7 +249,7 @@ func TestExternalContactSweep_ListAllUnmatched_FiltersTombstone(t *testing.T) {
 func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -277,7 +277,7 @@ func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
 	require.NoError(t, repo.SoftDeleteTx(ctx, tx, tomb.ID))
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 	})
@@ -295,7 +295,7 @@ func TestExternalContactSweep_CountUnmatched_ExcludesTombstone(t *testing.T) {
 // this file are prefix-scoped and flip.
 func TestExternalContactUnmatched_HidesUnresolvedTelegramByDefault(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -304,7 +304,7 @@ func TestExternalContactUnmatched_HidesUnresolvedTelegramByDefault(t *testing.T)
 	prefix := "tg-hidden-" + syntheticNS(t) + "-"
 	syncedAt := accelerated.GetCurrentTime()
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 	})
@@ -384,7 +384,7 @@ func TestExternalContactSweep_FindByNormalizedEmail_FiltersTombstone(t *testing.
 	// row's email is at index 0.
 	require.NotEmpty(t, fx.live.Emails)
 	target := fx.live.Emails[0].Value
-	results, err := fx.repo.FindByNormalizedEmail(context.Background(), target)
+	results, err := fx.repo.FindByNormalizedEmail(t.Context(), target)
 	require.NoError(t, err)
 	for _, r := range results {
 		require.NotEqual(t, fx.tombstoned.ID, r.ID, "duplicate-email lookup must skip tombstoned rows")
@@ -394,7 +394,7 @@ func TestExternalContactSweep_FindByNormalizedEmail_FiltersTombstone(t *testing.
 func TestExternalContactSweep_ListForCRMContact_FiltersTombstone(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -425,7 +425,7 @@ func TestExternalContactSweep_ListForCRMContact_FiltersTombstone(t *testing.T) {
 	require.NoError(t, repo.SoftDeleteTx(ctx, tx, tomb.ID))
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 		_ = contactRepo.HardDeleteContact(cleanCtx, crm.ID)
@@ -448,7 +448,7 @@ func externalIDs(rows []repository.ExternalContact) map[uuid.UUID]bool {
 func TestExternalContactSweep_RoundTrip_ReviveAfterSoftDelete(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -472,7 +472,7 @@ func TestExternalContactSweep_RoundTrip_ReviveAfterSoftDelete(t *testing.T) {
 	require.NoError(t, repo.SoftDeleteTx(ctx, tx, row.ID))
 	require.NoError(t, tx.Commit(ctx))
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 		_ = contactRepo.HardDeleteContact(cleanCtx, crm.ID)
@@ -500,7 +500,7 @@ func TestExternalContactSweep_RoundTrip_ReviveAfterSoftDelete(t *testing.T) {
 func TestExternalContactSweep_GetByID_AccountIDNullSemantics(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -515,7 +515,7 @@ func TestExternalContactSweep_GetByID_AccountIDNullSemantics(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, prefix)
 	})

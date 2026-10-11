@@ -22,7 +22,7 @@ import (
 func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -65,7 +65,7 @@ func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
 func TestInteraction_SourceCheckAcceptsWhatsapp(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -108,7 +108,7 @@ func TestInteraction_SourceCheckAcceptsWhatsapp(t *testing.T) {
 func TestInteraction_SourceCheckRejectsUnknownSource(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)

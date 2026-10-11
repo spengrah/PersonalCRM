@@ -31,7 +31,7 @@ import (
 func TestCommsThreadID_ThreeStateDiscrimination(t *testing.T) {
 	t.Parallel()
 	databaseURL := testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -88,7 +88,7 @@ func TestCommsThreadID_ThreeStateDiscrimination(t *testing.T) {
 func TestTelegramPeerEntity_ThreeStateDiscrimination(t *testing.T) {
 	t.Parallel()
 	databaseURL := testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)

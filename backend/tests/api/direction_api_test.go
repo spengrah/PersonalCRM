@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +29,7 @@ func setupDirectionAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactTask
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
 	database := testsupport.OpenDatabase(t)
@@ -360,7 +359,7 @@ func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
 
 	router, contactTaskRepo, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := createDirectionTestContact(t, router, "Task Kind API Test "+uuid.NewString()[:8])
 	id, _ := uuid.Parse(contactID)

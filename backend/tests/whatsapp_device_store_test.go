@@ -38,7 +38,7 @@ type waStoreEnv struct {
 func setupWhatsAppStoreTest(t *testing.T) *waStoreEnv {
 	t.Helper()
 	testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 
@@ -97,7 +97,7 @@ func TestWhatsAppDeviceContainer_UpgradeIsIdempotent(t *testing.T) {
 
 func TestWhatsAppDeviceContainer_RejectsNilPool(t *testing.T) {
 	t.Parallel()
-	_, err := wapkg.NewDeviceContainer(context.Background(), nil, wapkg.NewWALogger("t"))
+	_, err := wapkg.NewDeviceContainer(t.Context(), nil, wapkg.NewWALogger("t"))
 	assert.Error(t, err)
 }
 

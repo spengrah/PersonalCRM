@@ -50,7 +50,7 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 	testsupport.RequireDatabase(t)
 	// Per-test isolated clone: the live rematch dispatcher worker drains a
 	// private river_job.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)

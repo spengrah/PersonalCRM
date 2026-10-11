@@ -30,7 +30,7 @@ func newMethodOpsFixture(t *testing.T) *methodOpsFixture {
 	t.Helper()
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

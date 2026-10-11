@@ -90,7 +90,7 @@ func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 	const accountCount = 10
 	const windowBudget = 30 * time.Second
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
@@ -146,7 +146,7 @@ func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	t.Cleanup(func() { _ = cleanup(context.Background()) })
+	t.Cleanup(func() { _ = cleanup(context.WithoutCancel(t.Context())) })
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, scheduler.NewSchedulerTickWorker(svc))
@@ -168,7 +168,7 @@ func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 	// keeps its own bounded ctx below — that bound is legitimate.
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})

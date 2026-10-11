@@ -30,7 +30,7 @@ func TestTemplateIsolation(t *testing.T) {
 	t.Parallel()
 	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Package clone: create a sentinel contact.
 	pkgCfg := config.TestConfig()

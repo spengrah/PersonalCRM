@@ -531,7 +531,7 @@ func TestMsgDirection(t *testing.T) {
 // fields when the inbound batch has no existing interaction to bridge
 // against.
 func TestEngine_FakeSource_AggregateForContactBatch_CreatesEvents(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 
@@ -560,7 +560,7 @@ func TestEngine_FakeSource_AggregateForContactBatch_CreatesEvents(t *testing.T) 
 // asserts the time-based reply bridge fires when an inbound session
 // arrives within the reply-bridge window after an outbound interaction.
 func TestEngine_FakeSource_AggregateForContact_TimeBridgePromotesToMutual(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 	priorOutboundID := uuid.New()
@@ -598,7 +598,7 @@ func TestEngine_FakeSource_AggregateForContact_TimeBridgePromotesToMutual(t *tes
 // asserts an inbound session with a matching prior inbound interaction
 // extends rather than creates.
 func TestEngine_FakeSource_AggregateForContact_ExtendPathExtendsSameDirection(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 	priorInboundID := uuid.New()
@@ -640,7 +640,7 @@ func TestEngine_FakeSource_AggregateForContact_ExtendPathExtendsSameDirection(t 
 // engine must call GetInteraction, verify the source/direction, and
 // promote.
 func TestEngine_FakeSource_ExplicitReplyBridge(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 	priorOutboundID := uuid.New()
@@ -702,7 +702,7 @@ func TestEngine_FakeSource_ExplicitReplyBridge(t *testing.T) {
 // content stores where a shared address fans out), the engine must NOT promote
 // it. Instead it falls through to the create path (publishes a new event).
 func TestEngine_FakeSource_ExplicitReplyBridge_RejectsOtherContact(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 	otherContactID := uuid.New()
@@ -760,7 +760,7 @@ func TestEngine_FakeSource_ExplicitReplyBridge_RejectsOtherContact(t *testing.T)
 // TestEngine_FakeSource_NoMatch_PublishesCreateEvent asserts the
 // create-path runs when finder + reply target both miss.
 func TestEngine_FakeSource_NoMatch_PublishesCreateEvent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 
@@ -792,7 +792,7 @@ func TestEngine_FakeSource_NoMatch_PublishesCreateEvent(t *testing.T) {
 // public AggregateForContact swallows this error and returns nil to
 // match the pre-refactor behaviour.
 func TestEngine_FakeSource_NilPublisher_Errors(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	contactID := uuid.New()
 	sess := msgSession{
 		direction:       repository.InteractionDirectionInbound,
@@ -814,7 +814,7 @@ func TestEngine_FakeSource_NilPublisher_Errors(t *testing.T) {
 // in the shared package — proves the adapter contract reproduces the
 // pre-refactor source_ref byte-for-byte.
 func TestEngine_TelegramShape_SourceRefMatchesLegacyFormat(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 
@@ -841,7 +841,7 @@ func TestEngine_TelegramShape_SourceRefMatchesLegacyFormat(t *testing.T) {
 // adapter.SourceRefPrefix(chatID) produces. Regression guard for the
 // "engine bakes its own format" failure mode.
 func TestEngine_FakeSource_FinderReceivesAdapterPrefix(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 
@@ -872,7 +872,7 @@ func TestEngine_FakeSource_FinderReceivesAdapterPrefix(t *testing.T) {
 // the AggregateAll batch-mode error-swallowing semantic: a contact
 // whose ListUnprocessedByContact fails does NOT abort the loop.
 func TestEngine_FakeSource_AggregateAll_SwallowsPerContactErrors(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	failingContactID := uuid.New()
 	goodContactID := uuid.New()
@@ -1009,7 +1009,7 @@ func (f *fakeConsumerEnqueuer) EnqueueInteractionRecorderJob(_ context.Context, 
 // gate-1 path: with TxBeginner wired and a fresh session, the engine
 // claims rows, publishes via PublishTx, and commits the tx.
 func TestEngine_ClaimPath_CommitsAtomically(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 
@@ -1039,7 +1039,7 @@ func TestEngine_ClaimPath_CommitsAtomically(t *testing.T) {
 // guard: when ClaimRowsTx returns a strict subset of the requested
 // IDs, the engine rolls back and yields without publishing.
 func TestEngine_ClaimPath_PartialClaimRollsBack(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 
@@ -1079,7 +1079,7 @@ func TestEngine_ClaimPath_PartialClaimRollsBack(t *testing.T) {
 // hit) enqueues an InteractionRecorder job via ConsumerJobEnqueuer —
 // without publishing a duplicate event.
 func TestEngine_StaleRecovery_LooksUpEventAndEnqueues(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 	existingEventID := uuid.New()
@@ -1120,7 +1120,7 @@ func TestEngine_StaleRecovery_LooksUpEventAndEnqueues(t *testing.T) {
 // no row. The engine should clear the stale claim and yield (next pass
 // will treat rows as unclaimed).
 func TestEngine_StaleRecovery_NoEventClearsClaim(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 
@@ -1160,7 +1160,7 @@ func TestEngine_StaleRecovery_NoEventClearsClaim(t *testing.T) {
 // non-tx Publish behavior so existing tests (and any future
 // no-DB modes) continue to work.
 func TestEngine_NoTxBeginnerFallsBackToNonTxPublish(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 
@@ -1190,7 +1190,7 @@ func TestEngine_NoTxBeginnerFallsBackToNonTxPublish(t *testing.T) {
 // pass an inequality check here while still colliding two different
 // sessions of the SAME contact on the event unique key.
 func TestCreateInteractionForSession_ClaimAndEventKeyAreContactScoped(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactA := uuid.New()
 	contactB := uuid.New()
@@ -1241,7 +1241,7 @@ func TestCreateInteractionForSession_ClaimAndEventKeyAreContactScoped(t *testing
 // which would look up an event, find none matching, and yield without
 // publishing, leaving the row stranded forever.
 func TestCreateInteractionForSession_ContactFreeClaimIsBoundaryShift(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	base := accelerated.GetCurrentTime()
 	contactID := uuid.New()
 

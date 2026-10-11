@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"net/url"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
@@ -35,7 +34,7 @@ func TestContactAPI_AwaitingReplyUntilOnPayloads(t *testing.T) {
 	for _, id := range []string{awaitingID, noOutreachID} {
 		contactID, err := uuid.Parse(id)
 		require.NoError(t, err)
-		require.NoError(t, contactRepo.TestSeedContactCadenceFields(context.Background(), contactID, repository.TestCadenceSeed{
+		require.NoError(t, contactRepo.TestSeedContactCadenceFields(t.Context(), contactID, repository.TestCadenceSeed{
 			ContactBy: &contactBy,
 		}))
 	}
@@ -43,7 +42,7 @@ func TestContactAPI_AwaitingReplyUntilOnPayloads(t *testing.T) {
 
 	awaitingUUID, err := uuid.Parse(awaitingID)
 	require.NoError(t, err)
-	stored, err := contactRepo.GetContact(context.Background(), awaitingUUID)
+	stored, err := contactRepo.GetContact(t.Context(), awaitingUUID)
 	require.NoError(t, err)
 	require.NotNil(t, stored.AwaitingReplyUntil)
 

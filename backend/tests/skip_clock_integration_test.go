@@ -94,7 +94,7 @@ func closeOpCount(t *testing.T, h *skipHarness, ctx context.Context, taskID uuid
 func TestSkipClock_AdvancesOneCycleLaterOf(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	today := cadence.Today(accelerated.GetCurrentTime())
 	for _, offset := range []int{-10, 5} {
@@ -117,7 +117,7 @@ func TestSkipClock_AdvancesOneCycleLaterOf(t *testing.T) {
 func TestSkipClock_RecordsSkipState(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	today := cadence.Today(accelerated.GetCurrentTime())
 	c := createMonthlySkipContact(t, h, ctx)
@@ -172,7 +172,7 @@ func TestSkipClock_EndsWindowAndClosesReminderExactlyOnce(t *testing.T) {
 		{name: "create in flight", state: repository.ContactTaskStatePendingRemoteCreate, external: "", wantClose: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			h := newSkipHarness(t, ctx)
 			c := createMonthlySkipContact(t, h, ctx)
 			now := accelerated.GetCurrentTime()
@@ -199,7 +199,7 @@ func TestSkipClock_EndsWindowAndClosesReminderExactlyOnce(t *testing.T) {
 func TestSkipClock_LeavesOverdueSet(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	today := cadence.Today(accelerated.GetCurrentTime())
 	a := createMonthlySkipContact(t, h, ctx)
@@ -230,7 +230,7 @@ func overdueIDs(entries []service.OverdueContact) []uuid.UUID {
 func TestSkipClock_RequiresCadence(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	c := createMonthlySkipContact(t, h, ctx)
 	_, err := h.contactSvc.UpdateContact(ctx, c.ID, repository.UpdateContactRequest{FullName: c.FullName, Cadence: nil})

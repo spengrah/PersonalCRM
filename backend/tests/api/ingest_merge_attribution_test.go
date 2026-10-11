@@ -7,7 +7,6 @@ package api
 // matched_contact_id = the winner — not the tombstoned loser.
 
 import (
-	"context"
 	"net/http"
 	"testing"
 
@@ -62,7 +61,7 @@ func newMergeCapableContactService(t *testing.T, env *ingestRawTestEnv) *service
 func TestIngestRawMessage_AfterMerge_AttributesToSurvivor(t *testing.T) {
 	env := setupRawIngestEnv(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactSvc := newMergeCapableContactService(t, env)
 

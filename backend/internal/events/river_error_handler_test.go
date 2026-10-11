@@ -2,7 +2,6 @@ package events
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -41,7 +40,7 @@ func TestHandleError_RetryableLogsWarn(t *testing.T) {
 		MaxAttempts: 5,
 		EncodedArgs: []byte(`{"event_id":"00000000-0000-0000-0000-000000000001"}`),
 	}
-	res := h.HandleError(context.Background(), job, errors.New("transient db error"))
+	res := h.HandleError(t.Context(), job, errors.New("transient db error"))
 	assert.Nil(t, res, "handler must always return nil (pure observer)")
 
 	m := decodeRecord(t, buf)
@@ -71,7 +70,7 @@ func TestHandleError_FinalAttemptLogsErrorDiscarded(t *testing.T) {
 		MaxAttempts: 5,
 		EncodedArgs: []byte(`{"contact_id":"00000000-0000-0000-0000-000000000002"}`),
 	}
-	res := h.HandleError(context.Background(), job, errors.New("permanent failure"))
+	res := h.HandleError(t.Context(), job, errors.New("permanent failure"))
 	assert.Nil(t, res)
 
 	m := decodeRecord(t, buf)
@@ -96,7 +95,7 @@ func TestHandleError_TodoistFollowupExhaustion(t *testing.T) {
 		MaxAttempts: 10,
 		EncodedArgs: []byte(`{"contact_task_id":"00000000-0000-0000-0000-000000000003"}`),
 	}
-	res := h.HandleError(context.Background(), job, errors.New("POST /tasks: 503"))
+	res := h.HandleError(t.Context(), job, errors.New("POST /tasks: 503"))
 	assert.Nil(t, res)
 
 	m := decodeRecord(t, buf)
@@ -118,7 +117,7 @@ func TestHandlePanic_NonFinalLogsErrorWithTrace(t *testing.T) {
 		MaxAttempts: 3,
 		EncodedArgs: []byte(`{"event_id":"00000000-0000-0000-0000-000000000004"}`),
 	}
-	res := h.HandlePanic(context.Background(), job, "nil map write", "goroutine 1 [running]:\nmain.work()")
+	res := h.HandlePanic(t.Context(), job, "nil map write", "goroutine 1 [running]:\nmain.work()")
 	assert.Nil(t, res)
 
 	m := decodeRecord(t, buf)
@@ -143,7 +142,7 @@ func TestHandlePanic_FinalAttemptStaysDistinguishable(t *testing.T) {
 		MaxAttempts: 3,
 		EncodedArgs: []byte(`{"contact_id":"00000000-0000-0000-0000-000000000005"}`),
 	}
-	res := h.HandlePanic(context.Background(), job, "index out of range", "trace")
+	res := h.HandlePanic(t.Context(), job, "index out of range", "trace")
 	assert.Nil(t, res)
 
 	m := decodeRecord(t, buf)
@@ -164,7 +163,7 @@ func TestHandleError_EmptyArgsStaysValidJSON(t *testing.T) {
 		MaxAttempts: 3,
 		EncodedArgs: nil,
 	}
-	res := h.HandleError(context.Background(), job, errors.New("boom"))
+	res := h.HandleError(t.Context(), job, errors.New("boom"))
 	assert.Nil(t, res)
 
 	// The record must still be valid JSON.

@@ -78,7 +78,7 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 	cleanup := func() {
 		prefix := "tg-suggestion-"
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
-			context.Background(),
+			t.Context(),
 			prefix,
 		)
 		database.Close()
@@ -126,7 +126,7 @@ func seedTelegramCandidateWithName(
 ) *repository.ExternalContact {
 	t.Helper()
 	sourceID := "tg-suggestion-" + uuid.New().String()
-	ext, err := repo.Upsert(context.Background(), repository.UpsertExternalContactRequest{
+	ext, err := repo.Upsert(t.Context(), repository.UpsertExternalContactRequest{
 		Source:      "telegram",
 		SourceID:    sourceID,
 		DisplayName: displayName,
@@ -143,12 +143,12 @@ func seedTelegramCandidateWithName(
 // the collision-gap rule by producing multiple equal-score matches.
 func seedContactWithCleanup(t *testing.T, repo *repository.ContactRepository, fullName string) uuid.UUID {
 	t.Helper()
-	c, err := repo.CreateContact(context.Background(), repository.CreateContactRequest{
+	c, err := repo.CreateContact(context.WithoutCancel(t.Context()), repository.CreateContactRequest{
 		FullName: fullName,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = repo.HardDeleteContact(context.Background(), c.ID)
+		_ = repo.HardDeleteContact(context.WithoutCancel(t.Context()), c.ID)
 	})
 	return c.ID
 }

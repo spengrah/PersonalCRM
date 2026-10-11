@@ -91,7 +91,7 @@ func TestListAndRetryJobs_Integration(t *testing.T) {
 	t.Parallel()
 	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newJobsTestDB(t, ctx)
 
 	workers := river.NewWorkers()
@@ -110,7 +110,7 @@ func TestListAndRetryJobs_Integration(t *testing.T) {
 		if clientStopped {
 			return
 		}
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 		clientStopped = true

@@ -34,7 +34,7 @@ type awaitingReplyDerivationEnv struct {
 func newAwaitingReplyDerivationEnv(t *testing.T) *awaitingReplyDerivationEnv {
 	t.Helper()
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)

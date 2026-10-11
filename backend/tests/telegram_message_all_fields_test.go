@@ -35,7 +35,7 @@ func TestTelegramMessage_AllFieldsPopulatedOnRead(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

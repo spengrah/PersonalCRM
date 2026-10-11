@@ -30,7 +30,7 @@ import (
 func TestAggregation_IncrementalInboundCoalesce(t *testing.T) {
 	t.Parallel()
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	eventRepo := repository.NewEventRepository(database.Queries)
 
 	const testStripe = 1

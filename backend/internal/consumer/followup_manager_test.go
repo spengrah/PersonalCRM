@@ -180,7 +180,7 @@ func TestFollowUpManager_ModeOff_NoWrites(t *testing.T) {
 	h, tasks, inters, observed := newUnitFollowUp(FollowUpModeOff)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 0, tasks.calls, "mode=off must not query task repo")
 	require.Equal(t, 0, inters.calls, "mode=off must not query interaction repo")
@@ -267,7 +267,7 @@ func TestFollowUpManager_ModeCutover_RequiresCollaborators(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := tc.build()
-			err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+			err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.contains)
 		})
@@ -282,14 +282,14 @@ func settingsOKStub() TodoistSettingsFunc {
 
 func TestFollowUpManager_NilEnvelope(t *testing.T) {
 	h, _, _, _ := newUnitFollowUp(FollowUpModeCutover)
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), nil)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), nil)
 	require.Error(t, err)
 }
 
 func TestFollowUpManager_NilTx(t *testing.T) {
 	h, _, _, _ := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
-	err := h.HandleEvent(context.Background(), nil, env)
+	err := h.HandleEvent(t.Context(), nil, env)
 	require.Error(t, err)
 }
 
@@ -313,7 +313,7 @@ func TestFollowUpManager_V1PayloadRejected(t *testing.T) {
 		ObservedAt: accelerated.GetCurrentTime(),
 	}
 
-	err = h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err = h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.NoError(t, err, "V1 payload is logged but not returned as error")
 	require.Empty(t, *observed)
 }
@@ -335,7 +335,7 @@ func TestFollowUpManager_AcceptsV2AndV3(t *testing.T) {
 				accelerated.GetCurrentTime(),
 				"" /* no cadence -> skips at guard 0 */, false)
 
-			err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+			err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 			require.NoError(t, err)
 			require.Len(t, *observed, 1,
 				"V%d payload must produce exactly one decision", version)
@@ -362,7 +362,7 @@ func TestFollowUpManager_SuppressFollowUp_TrueEarlyReturns(t *testing.T) {
 		repository.InteractionSourceTodoist,
 		accelerated.GetCurrentTime(), "weekly", true /* suppress */)
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 0, tasks.calls,
 		"SuppressFollowUp=true must short-circuit before task lookup")
@@ -387,7 +387,7 @@ func TestFollowUpManager_SuppressFollowUp_FalseDispatches(t *testing.T) {
 		repository.InteractionSourceTodoist,
 		accelerated.GetCurrentTime(), "weekly", false /* do not suppress */)
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 1, inters.calls,
 		"SuppressFollowUp=false must reach the out-of-order guard")
@@ -410,7 +410,7 @@ func TestFollowUpManager_SuppressFollowUp_TelegramPathIgnored(t *testing.T) {
 		repository.InteractionSourceTelegram,
 		accelerated.GetCurrentTime(), "weekly", false)
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, *observed, 1)
 	require.NotEqual(t, repository.FollowUpSkipReasonSuppressed, (*observed)[0].SkipReason,
@@ -425,7 +425,7 @@ func TestFollowUpManager_UnknownDirection_Skips(t *testing.T) {
 	h, _, _, observed := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), "bogus", repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Empty(t, *observed)
 }
@@ -441,7 +441,7 @@ func TestFollowUpManager_Outbound_NoCadence_SkipsWithoutReason(t *testing.T) {
 	h, tasks, inters, observed := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 0, tasks.calls, "no-cadence skip must not run guard 3")
 	require.Equal(t, 0, inters.calls, "no-cadence skip must not run guard 2")
@@ -457,7 +457,7 @@ func TestFollowUpManager_Outbound_Backdated_NonManual_SkipsBackdated(t *testing.
 	occurred := accelerated.GetCurrentTime().Add(-90 * 24 * time.Hour)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, occurred, "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, *observed, 1)
 	require.Equal(t, repository.FollowUpActionSkip, (*observed)[0].Action)
@@ -469,7 +469,7 @@ func TestFollowUpManager_Outbound_OutOfOrder_Skips(t *testing.T) {
 	inters.hasResp = true
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Equal(t, 1, inters.calls)
 	require.Len(t, *observed, 1)
@@ -482,7 +482,7 @@ func TestFollowUpManager_Outbound_HasResponseErr_Propagates(t *testing.T) {
 	inters.err = errors.New("boom")
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.Error(t, err)
 }
 
@@ -497,7 +497,7 @@ func TestFollowUpManager_Mutual_NoPending_RecordsSkipNoReason(t *testing.T) {
 	h, _, _, observed := newUnitFollowUp(FollowUpModeCutover)
 	env := buildRecordedEnv(t, uuid.New(), repository.InteractionDirectionMutual, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), "weekly")
 
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 	require.Len(t, *observed, 1)
 	require.Equal(t, repository.FollowUpActionSkip, (*observed)[0].Action)
@@ -623,7 +623,7 @@ func TestFollowUpManager_Refresh_UpdatesMetadataAndEnqueuesUpdateOp(t *testing.T
 	h.SetDecisionObserver(func(d Decision) { observed = append(observed, d) })
 
 	env := buildRecordedEnv(t, contactID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, accelerated.GetCurrentTime(), cadenceStr)
-	err := h.HandleEvent(context.Background(), nonNilFakeTx(), env)
+	err := h.HandleEvent(t.Context(), nonNilFakeTx(), env)
 	require.NoError(t, err)
 
 	// Metadata due_date advanced in tx.

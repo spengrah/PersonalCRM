@@ -45,7 +45,7 @@ func newFetcherTestProvider(calRepo calendarRepoInterface) *CalendarSyncProvider
 // calendarFetcher seam drives initialSync without OAuth: a two-page initial
 // sync processes every event and records the final sync token as the cursor.
 func TestCalendarFetcherSeam_InitialSync_PagesAllEvents(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	const accountID = "user@example.com"
 
 	mockCal := &mockCalendarRepo{}
@@ -94,7 +94,7 @@ func TestCalendarFetcherSeam_InitialSync_PagesAllEvents(t *testing.T) {
 // TestCalendarFetcherSeam_IncrementalSync_UsesSyncToken proves incrementalSync
 // threads the stored sync token and records the new one.
 func TestCalendarFetcherSeam_IncrementalSync_UsesSyncToken(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	const accountID = "user@example.com"
 
 	mockCal := &mockCalendarRepo{}
@@ -127,7 +127,7 @@ func TestCalendarFetcherSeam_IncrementalSync_UsesSyncToken(t *testing.T) {
 // 410/fullSyncRequired fallback path is preserved: a 410 on the incremental
 // call re-runs the initial window sync.
 func TestCalendarFetcherSeam_IncrementalSync_410FallsBackToInitial(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	const accountID = "user@example.com"
 
 	mockCal := &mockCalendarRepo{}

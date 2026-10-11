@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -88,7 +87,7 @@ func TestSyntheticSeedAll_CleanupEmptiesNamespace(t *testing.T) {
 	require.Greater(t, venueBefore, int64(0), "the Gmail replay must mint a venue node")
 
 	// Run the target's teardown (quiesce + Gate-B-gated cleanup).
-	require.NoError(t, teardown(context.Background()))
+	require.NoError(t, teardown(t.Context()))
 
 	// The target's contacts are gone.
 	gone, err := target.ContactsRemaining(ctx)

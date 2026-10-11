@@ -380,7 +380,7 @@ func TestRecorderRun_WritesEachEventAndStampsCreatedAt(t *testing.T) {
 	}
 	close(ch)
 
-	rec.Run(context.Background(), ch)
+	rec.Run(t.Context(), ch)
 
 	require.Len(t, fw.rows, 3)
 	for _, row := range fw.rows {
@@ -400,7 +400,7 @@ func TestRecorderRun_WriteErrorDoesNotStopLoop(t *testing.T) {
 	}
 	close(ch)
 
-	rec.Run(context.Background(), ch)
+	rec.Run(t.Context(), ch)
 
 	assert.Equal(t, 3, fw.calls, "all events must be processed despite a mid-stream write error")
 	require.Len(t, fw.rows, 2, "the failed write must not append a row")

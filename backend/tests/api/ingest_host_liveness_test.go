@@ -58,7 +58,7 @@ func (s *stubFailingHostLiveness) GetActiveHostByIDForUpdateTx(
 func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -111,7 +111,7 @@ func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 
 	// No event-log row may have committed. Cleanup-safe query: source
 	// matches our test's synthetic prefix.
-	cleanCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cleanCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	logged, err := eventRepo.FindEventBySource(cleanCtx, "icloud_contacts", env.SourceID)
 	if err == nil {
@@ -172,7 +172,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 		t.Skip("LONG_TESTS not set; skipping concurrency test")
 	}
 	databaseURL := testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -192,7 +192,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 	pair, err := macService.PairWithToken(ctx, plain, "concurrent-revoke-test", "0.1.0", 1)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
 		defer cancel()
 		_, _ = database.Queries.DeleteAllMacHosts(cleanCtx)
 		_, _ = database.Queries.DeleteAllPairingTokens(cleanCtx)
@@ -306,7 +306,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 
 	// Cleanup: drop the row the batch upserted (UpsertTx ran on the
 	// real repo via the blocker's inner).
-	cleanCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
 	defer cancel()
 	_, _ = database.Queries.DeleteEventsBySource(cleanCtx, "icloud_contacts")
 	_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, "concurrent-revoke-")
@@ -332,7 +332,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 // spec: ING-006.unauthorized-401-stops-retries
 func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.External.APIKey = macHostTestKey
@@ -352,7 +352,7 @@ func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
 	pair, err := macService.PairWithToken(ctx, plain, "ing006-revoked-mid-batch", "0.1.0", 1)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		// Same sweep as setupMacHostEnv: hosts + tokens + any push
 		// sync-state rows pairing created.
@@ -469,7 +469,7 @@ func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
 // spec: ING-036
 func TestIngest_PayloadHostIDMismatch_RejectedForEveryDaemonFamily(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	// The batch's in-tx liveness re-check needs a real active host, and
 	// mac_host is a singleton table, so this test pairs one on its own clone.
 	database, _ := newIsolatedRiverTestDB(t, ctx)

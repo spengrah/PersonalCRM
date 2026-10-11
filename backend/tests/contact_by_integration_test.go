@@ -38,7 +38,7 @@ func TestContactBy_CreateWithCadence(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -124,7 +124,7 @@ func TestContactBy_CadenceStateTransitions(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -250,7 +250,7 @@ func TestContactBy_ListOverdueContacts(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

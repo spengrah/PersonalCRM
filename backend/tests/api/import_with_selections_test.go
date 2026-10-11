@@ -83,7 +83,7 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_WithSelectedMethods", func(t *testing.T) {
 		// Create an external contact with multiple emails
@@ -337,7 +337,7 @@ func TestImportAPI_LinkWithMethodSelection(t *testing.T) {
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("LinkContact_WithSelectedMethods_AddsNewMethods", func(t *testing.T) {
 		// Create a CRM contact without methods
@@ -627,7 +627,7 @@ func TestImportAPI_ImportWithCadence(t *testing.T) {
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_WithCadence", func(t *testing.T) {
 		// Create an external contact
@@ -750,7 +750,7 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("LinkContact_WithCadence_UpdatesExisting", func(t *testing.T) {
 		// Create a CRM contact without cadence
@@ -994,7 +994,7 @@ func TestImportAPI_ImportWithName(t *testing.T) {
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_WithCustomName", func(t *testing.T) {
 		// Create an external contact with a name
@@ -1114,7 +1114,7 @@ func TestImportAPI_ImportWithPrimaryMethod(t *testing.T) {
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_WithPrimaryMethod", func(t *testing.T) {
 		// Create an external contact with multiple methods
@@ -1251,7 +1251,7 @@ func TestImportAPI_LinkWithName(t *testing.T) {
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("LinkContact_WithCustomName_UpdatesCRM", func(t *testing.T) {
 		// Create a CRM contact with original name
@@ -1362,7 +1362,7 @@ func TestImportAPI_LinkWithPrimaryMethod(t *testing.T) {
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("LinkContact_WithPrimaryMethod_SetsNewPrimary", func(t *testing.T) {
 		// Create a CRM contact
@@ -1570,7 +1570,7 @@ func TestImportAPI_EdgeCases(t *testing.T) {
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_WithEmptyStringNameOverride_UsesOriginal", func(t *testing.T) {
 		// Create an external contact with a valid name
@@ -2052,7 +2052,7 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_InvalidUUID", func(t *testing.T) {
 		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/not-a-uuid/import", nil)
@@ -2230,7 +2230,7 @@ func TestImportAPI_LinkOnlySourcePolicy(t *testing.T) {
 	router, externalRepo, _, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	suffix := uuid.New().String()[:8]
 	displayName := "Link Only Policy " + suffix
@@ -2310,7 +2310,7 @@ func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Use a separate enrichment repo to verify audit rows.
 	auditDB := testsupport.OpenDatabase(t)
@@ -2520,7 +2520,7 @@ func TestImportAPI_TelegramImportNewRegression(t *testing.T) {
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	displayName := "TG Import Regression " + uuid.New().String()[:8]
 	external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{

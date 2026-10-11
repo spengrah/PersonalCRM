@@ -89,7 +89,7 @@ func newDeclineCutoverEnv(t *testing.T, ctx context.Context) *declineCutoverEnv 
 	declineShim.real = consumer.NewCalendarDeclineHandlerWorker(bus, database.Pool, declineHandler)
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})
@@ -205,7 +205,7 @@ func (e *declineCutoverEnv) waitForInteractionGone(t *testing.T, contactID uuid.
 func TestIntegration_DeclineCutover_RemovesEventAndInteractionThroughProcessEvent(t *testing.T) {
 	t.Parallel()
 	testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	e := newDeclineCutoverEnv(t, ctx)
 
 	cad := "weekly"
@@ -276,7 +276,7 @@ func TestIntegration_DeclineCutover_RemovesEventAndInteractionThroughProcessEven
 func TestIntegration_DeclineCutover_PublishFailureLeavesRowIntact(t *testing.T) {
 	t.Parallel()
 	testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newDeclineCutoverEnv(t, ctx)
 
 	contact := e.newContact(t, nil)

@@ -136,7 +136,7 @@ func newProviderTestEnv(t *testing.T) *providerTestEnv {
 	// Migrations are applied once into the template; the per-package clone
 	// (testdb.SetupPackage in testmain_integration_test.go) inherits the
 	// fully-migrated schema, so no inline db.RunMigrations is needed here.
-	ctx := context.Background()
+	ctx := t.Context()
 	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)

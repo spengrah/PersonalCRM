@@ -24,7 +24,7 @@ func telegramTestChat(t *testing.T, repo *repository.TelegramMessageRepository) 
 	t.Helper()
 	_, ns := migrationGenerator(t)
 	base, _ := uniqueTestIDs(t, ns)
-	clean := func() { _ = repo.HardDeleteByChatIDRange(context.Background(), base, base) }
+	clean := func() { _ = repo.HardDeleteByChatIDRange(t.Context(), base, base) }
 	clean()
 	t.Cleanup(clean)
 	return base
@@ -36,7 +36,7 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -90,7 +90,7 @@ func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -139,7 +139,7 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -190,7 +190,7 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -236,7 +236,7 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -252,7 +252,7 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 	// matching negative-range cleanup too.
 	base := telegramTestChat(t, repo)
 	chatID := -base
-	t.Cleanup(func() { _ = repo.HardDeleteByChatIDRange(context.Background(), chatID, chatID) })
+	t.Cleanup(func() { _ = repo.HardDeleteByChatIDRange(context.WithoutCancel(t.Context()), chatID, chatID) })
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Channel message"
@@ -282,7 +282,7 @@ func TestTelegramMessage_ListUnprocessed(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

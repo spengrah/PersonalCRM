@@ -27,7 +27,7 @@ func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceF
 	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

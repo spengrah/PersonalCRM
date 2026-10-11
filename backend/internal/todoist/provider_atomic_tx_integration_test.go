@@ -125,7 +125,7 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	// Migrations are applied once into the template; the per-package clone
 	// (testdb.SetupPackage in testmain_integration_test.go) inherits the
 	// fully-migrated schema, so no inline db.RunMigrations is needed here.
-	ctx := context.Background()
+	ctx := t.Context()
 
 	database := testsupport.OpenDatabase(t)
 
@@ -176,7 +176,7 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	)
 
 	cleanup := func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer stopCancel()
 		_ = riverClient.Stop(stopCtx)
 		database.Close()

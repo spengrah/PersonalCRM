@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"testing"
 
 	"personal-crm/backend/internal/identity"
@@ -33,7 +32,7 @@ func TestMatchOrCreateTx_EmptyAfterNormalization_PolicyBranch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// "+" normalizes to "" for phone; nil tx is never
 			// dereferenced on the empty branch.
-			res, err := svc.MatchOrCreateTx(context.Background(), nil, MatchRequest{
+			res, err := svc.MatchOrCreateTx(t.Context(), nil, MatchRequest{
 				RawIdentifier: "+",
 				Type:          identity.IdentifierTypePhone,
 				Source:        "test",

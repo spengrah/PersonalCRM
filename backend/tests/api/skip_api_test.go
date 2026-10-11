@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +24,7 @@ import (
 func setupSkipAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactRepository, func()) {
 	t.Helper()
 	testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database := testsupport.OpenDatabase(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
@@ -64,7 +63,7 @@ func TestContactAPI_SkipAndUndo(t *testing.T) {
 	require.NoError(t, err)
 	today := cadence.Today(accelerated.GetCurrentTime())
 	seeded := time.Date(today.Year(), today.Month(), today.Day()-10, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, contactRepo.TestSeedContactCadenceFields(context.Background(), id, repository.TestCadenceSeed{ContactBy: &seeded}))
+	require.NoError(t, contactRepo.TestSeedContactCadenceFields(t.Context(), id, repository.TestCadenceSeed{ContactBy: &seeded}))
 
 	t.Run("skip advances one cycle and reports undo", func(t *testing.T) {
 		capturedAt := accelerated.GetCurrentTime()

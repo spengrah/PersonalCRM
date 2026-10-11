@@ -30,7 +30,7 @@ func newGoogleOAuthTestService(t *testing.T) (*google.OAuthService, *repository.
 	t.Helper()
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -111,8 +111,8 @@ func TestGoogleOAuth_ExchangeRoundTrip(t *testing.T) {
 	svc.SetUserInfoEndpoint(fake.server.URL + "/userinfo")
 
 	t.Cleanup(func() {
-		if cred, err := repo.GetByProviderAndAccount(context.Background(), google.ProviderName, email); err == nil {
-			_ = repo.Delete(context.Background(), cred.ID)
+		if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), google.ProviderName, email); err == nil {
+			_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 		}
 	})
 
@@ -147,8 +147,8 @@ func TestGoogleOAuth_RefreshPersistsRotatedToken(t *testing.T) {
 	svc.SetUserInfoEndpoint(fake.server.URL + "/userinfo")
 
 	t.Cleanup(func() {
-		if cred, err := repo.GetByProviderAndAccount(context.Background(), google.ProviderName, email); err == nil {
-			_ = repo.Delete(context.Background(), cred.ID)
+		if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), google.ProviderName, email); err == nil {
+			_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 		}
 	})
 
@@ -209,8 +209,8 @@ func TestGoogleOAuth_LegacyRowDecryptsAndUpgrades(t *testing.T) {
 	svc, repo, cfg, ctx := newGoogleOAuthTestService(t)
 
 	t.Cleanup(func() {
-		if cred, err := repo.GetByProviderAndAccount(context.Background(), google.ProviderName, email); err == nil {
-			_ = repo.Delete(context.Background(), cred.ID)
+		if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), google.ProviderName, email); err == nil {
+			_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 		}
 	})
 
@@ -307,8 +307,8 @@ func TestGoogleOAuth_LegacyRow_RefreshlessWriteKeepsDecryptable(t *testing.T) {
 		require.NoError(t, err)
 
 		t.Cleanup(func() {
-			if cred, err := repo.GetByProviderAndAccount(context.Background(), google.ProviderName, email); err == nil {
-				_ = repo.Delete(context.Background(), cred.ID)
+			if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), google.ProviderName, email); err == nil {
+				_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 			}
 		})
 	}

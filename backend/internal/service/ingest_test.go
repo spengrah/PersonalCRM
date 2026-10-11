@@ -24,7 +24,7 @@ import (
 // pool, so the test proves the short-circuit works.
 func TestIngestService_EmptyBatch_FastPath(t *testing.T) {
 	svc := &IngestService{} // no DB, no bus — fast path must not touch them
-	accepted, duplicate, rejections, needsAttention, err := svc.IngestBatch(context.Background(), nil, nil, nil)
+	accepted, duplicate, rejections, needsAttention, err := svc.IngestBatch(t.Context(), nil, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, accepted)
 	require.Equal(t, 0, duplicate)
@@ -32,7 +32,7 @@ func TestIngestService_EmptyBatch_FastPath(t *testing.T) {
 	require.Empty(t, needsAttention)
 
 	// Same for an explicit zero-length slice.
-	accepted, duplicate, rejections, needsAttention, err = svc.IngestBatch(context.Background(), []*events.Envelope{}, []int{}, nil)
+	accepted, duplicate, rejections, needsAttention, err = svc.IngestBatch(t.Context(), []*events.Envelope{}, []int{}, nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, accepted)
 	require.Equal(t, 0, duplicate)
@@ -45,7 +45,7 @@ func TestIngestService_EmptyBatch_FastPath(t *testing.T) {
 // inside the publish loop once a transaction is open.
 func TestIngestService_RejectsNilEnvelope(t *testing.T) {
 	svc := &IngestService{} // precondition check fires before DB access
-	_, _, _, _, err := svc.IngestBatch(context.Background(), []*events.Envelope{nil}, []int{0}, nil)
+	_, _, _, _, err := svc.IngestBatch(t.Context(), []*events.Envelope{nil}, []int{0}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "envelope at index 0 is nil")
 }
@@ -58,7 +58,7 @@ func TestIngestService_RejectsNilEnvelope(t *testing.T) {
 func TestIngestService_RejectsPreAssignedID(t *testing.T) {
 	svc := &IngestService{} // precondition check fires before DB access
 	env := &events.Envelope{ID: uuid.New()}
-	_, _, _, _, err := svc.IngestBatch(context.Background(), []*events.Envelope{env}, []int{0}, nil)
+	_, _, _, _, err := svc.IngestBatch(t.Context(), []*events.Envelope{env}, []int{0}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "pre-assigned ID")
 }
@@ -69,7 +69,7 @@ func TestIngestService_RejectsPreAssignedID(t *testing.T) {
 func TestIngestService_RejectsLenMismatchOnOriginalIndices(t *testing.T) {
 	svc := &IngestService{}
 	env := &events.Envelope{} // valid (uuid.Nil)
-	_, _, _, _, err := svc.IngestBatch(context.Background(), []*events.Envelope{env}, []int{0, 1}, nil)
+	_, _, _, _, err := svc.IngestBatch(t.Context(), []*events.Envelope{env}, []int{0, 1}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "originalIndices length")
 }
@@ -555,7 +555,7 @@ func TestHandleExternalContactUpserted_PostUpsertTombstoneTriggersRevive(t *test
 		addressBookReconciler: noopAddressBookReconciler{},
 	}
 	env := validUpsertedEnv(hostID, "CN-race")
-	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(t.Context(), nil, env, hostID)
 	require.Nil(t, rej, "handler must not reject when revive succeeds")
 	require.Equal(t, 1, stubExt.reviveCalls, "ReviveTx must be called when post-upsert row is tombstoned")
 }
@@ -587,7 +587,7 @@ func TestHandleExternalContactUpserted_LiveUpsertSkipsRevive(t *testing.T) {
 		addressBookReconciler: noopAddressBookReconciler{},
 	}
 	env := validUpsertedEnv(hostID, "CN-live")
-	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(t.Context(), nil, env, hostID)
 	require.Nil(t, rej)
 	require.Equal(t, 0, stubExt.reviveCalls, "ReviveTx must NOT be called on a live first-insert")
 }
@@ -658,7 +658,7 @@ func TestHandleExternalContactUpserted_PhonesLoopUsesSkipEmpty(t *testing.T) {
 	}
 	env := upsertEnvWithContactMethods(t, hostID, "CN-junk-phone",
 		nil, []string{"+", "   ", "+15551234567"})
-	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(t.Context(), nil, env, hostID)
 	require.Nil(t, rej, "handler must not reject under SkipEmpty")
 	// All three non-literal-empty phones reach the matcher; the real
 	// empty-after-normalization skip happens inside MatchOrCreateTx.
@@ -700,7 +700,7 @@ func TestHandleExternalContactUpserted_EmailsLoopUsesSkipEmpty(t *testing.T) {
 	}
 	env := upsertEnvWithContactMethods(t, hostID, "CN-junk-email",
 		[]string{"   ", "\t", "ok@example.com"}, nil)
-	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(t.Context(), nil, env, hostID)
 	require.Nil(t, rej, "handler must not reject under SkipEmpty")
 	require.Equal(t, 3, stubIdent.calls)
 	require.Len(t, stubIdent.requests, 3)
@@ -746,7 +746,7 @@ func TestHandleExternalContactUpserted_AllPhonesAndEmailsNormalizeToEmpty_StillA
 	}
 	env := upsertEnvWithContactMethods(t, hostID, "CN-all-junk",
 		[]string{"\t"}, []string{"+"})
-	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(t.Context(), nil, env, hostID)
 	require.Nil(t, rej, "handler must accept envelope even if all identifiers normalize to empty")
 	require.Equal(t, 2, stubIdent.calls, "both junk values now reach the matcher under SkipEmpty")
 	for i, pol := range stubIdent.policies {
@@ -796,7 +796,7 @@ func TestHandleExternalContactUpserted_MixedJunkAndValid_NilResultTolerance(t *t
 	env := upsertEnvWithContactMethods(t, hostID, "CN-mixed",
 		[]string{"   ", "ok@example.com"},
 		[]string{"+", "+15551234567"})
-	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(t.Context(), nil, env, hostID)
 	require.Nil(t, rej)
 	// All four non-literal-empty values reach the matcher in source order
 	// (emails loop first, then phones).
@@ -841,7 +841,7 @@ func TestHandleRawMessage_UsesFailEmptyPolicy(t *testing.T) {
 		Kind:     events.KindRawMessageReceived,
 		Payload:  payload,
 	}
-	_, rej := svc.handleRawMessage(context.Background(), nil, env, hostID)
+	_, rej := svc.handleRawMessage(t.Context(), nil, env, hostID)
 	require.Nil(t, rej)
 	require.Equal(t, []NormalizationPolicy{NormalizationFailEmpty}, stubIdent.policies)
 }
@@ -887,7 +887,7 @@ func TestHandleExternalContactUpserted_AnarlogBlockUsesFailEmpty(t *testing.T) {
 		Kind:     events.KindExternalContactUpserted,
 		Payload:  payload,
 	}
-	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(t.Context(), nil, env, hostID)
 	require.Nil(t, rej)
 	// Only the anarlog block calls the matcher (no emails/phones present).
 	require.Equal(t, []NormalizationPolicy{NormalizationFailEmpty}, stubIdent.policies)
@@ -950,7 +950,7 @@ func TestHandleExternalContactUpserted_WritesHostIDAndHash(t *testing.T) {
 		addressBookReconciler: noopAddressBookReconciler{},
 	}
 	env := validUpsertedEnv(hostID, "CN-fields")
-	_, rej := svc.handleExternalContactUpserted(context.Background(), nil, env, hostID)
+	_, rej := svc.handleExternalContactUpserted(t.Context(), nil, env, hostID)
 	require.Nil(t, rej)
 	require.NotNil(t, recorder.lastUpsert)
 	require.NotNil(t, recorder.lastUpsert.HostID, "HostID must be set on the upsert request")
@@ -984,7 +984,7 @@ func TestHandleExternalContactDeleted_HashMatch(t *testing.T) {
 			Version: 1, HostID: uuid.New(), Source: "icloud_contacts", EntityID: "CN-del",
 		}),
 	}
-	rej := svc.handleExternalContactDeleted(context.Background(), nil, env, uuid.UUID{})
+	rej := svc.handleExternalContactDeleted(t.Context(), nil, env, uuid.UUID{})
 	require.Nil(t, rej)
 }
 
@@ -1010,7 +1010,7 @@ func TestHandleExternalContactDeleted_HashMismatchRejected(t *testing.T) {
 			Version: 1, HostID: uuid.New(), Source: "icloud_contacts", EntityID: "CN-del",
 		}),
 	}
-	rej := svc.handleExternalContactDeleted(context.Background(), nil, env, uuid.UUID{})
+	rej := svc.handleExternalContactDeleted(t.Context(), nil, env, uuid.UUID{})
 	require.NotNil(t, rej)
 	require.Equal(t, ingestRejectExternalContactDeleteHashMismatch, rej.Code)
 	require.Contains(t, rej.Message, claimedHash)
@@ -1037,7 +1037,7 @@ func TestHandleExternalContactDeleted_UnknownSentinelAccepted(t *testing.T) {
 			Version: 1, HostID: uuid.New(), Source: "icloud_contacts", EntityID: "CN-del",
 		}),
 	}
-	rej := svc.handleExternalContactDeleted(context.Background(), nil, env, uuid.UUID{})
+	rej := svc.handleExternalContactDeleted(t.Context(), nil, env, uuid.UUID{})
 	require.Nil(t, rej, "@unknown sentinel must be accepted even when stored hash exists")
 }
 
@@ -1063,7 +1063,7 @@ func TestHandleExternalContactDeleted_NullStoredHashAccepted(t *testing.T) {
 			Version: 1, HostID: uuid.New(), Source: "icloud_contacts", EntityID: "CN-legacy",
 		}),
 	}
-	rej := svc.handleExternalContactDeleted(context.Background(), nil, env, uuid.UUID{})
+	rej := svc.handleExternalContactDeleted(t.Context(), nil, env, uuid.UUID{})
 	require.Nil(t, rej, "legacy row with NULL stored hash must accept any delete hash")
 }
 
@@ -1096,7 +1096,7 @@ func TestHandleExternalContactDeleted_CrossHostNoOp(t *testing.T) {
 			Version: 1, HostID: hostB, Source: "icloud_contacts", EntityID: "CN-xhost",
 		}),
 	}
-	rej := svc.handleExternalContactDeleted(context.Background(), nil, env, hostB)
+	rej := svc.handleExternalContactDeleted(t.Context(), nil, env, hostB)
 	require.Nil(t, rej, "cross-host delete must be a silent no-op")
 }
 

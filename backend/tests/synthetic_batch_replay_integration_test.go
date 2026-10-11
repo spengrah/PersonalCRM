@@ -161,7 +161,7 @@ func messageOptions(p payloadPlan) []factory.MessageOption {
 
 func TestSyntheticBatchReplay_Gmail_EquivalentToSingles(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	singles := func() []contactFingerprint {
@@ -250,7 +250,7 @@ func gmailAge(it replay.GmailBatchItem) time.Duration {
 
 func TestSyntheticBatchReplay_GChat_EquivalentToSingles(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	singles := func() []contactFingerprint {
@@ -305,7 +305,7 @@ func TestSyntheticBatchReplay_GChat_EquivalentToSingles(t *testing.T) {
 
 func TestSyntheticBatchReplay_GCal_EquivalentToSingles(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	singles := func() []contactFingerprint {
@@ -360,7 +360,7 @@ func TestSyntheticBatchReplay_GCal_EquivalentToSingles(t *testing.T) {
 
 func TestSyntheticBatchReplay_Telegram_EquivalentToSingles(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	singles := func() []contactFingerprint {
@@ -415,7 +415,7 @@ func TestSyntheticBatchReplay_Telegram_EquivalentToSingles(t *testing.T) {
 
 func TestSyntheticBatchReplay_IMessage_EquivalentToSingles(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	singles := func() []contactFingerprint {
@@ -475,7 +475,7 @@ func TestSyntheticBatchReplay_IMessage_EquivalentToSingles(t *testing.T) {
 // database is the "nothing was written" half.
 func TestSyntheticBatchReplay_RejectsInvalidInput(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	h := batchTestHarness(t, ctx, database)
@@ -539,7 +539,7 @@ func TestSyntheticBatchReplay_RejectsInvalidInput(t *testing.T) {
 // surface 30 seconds later as a Gate A timeout naming the wrong cause.
 func TestSyntheticBatchReplay_RejectsUnownedIdentifier(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	h := batchTestHarness(t, ctx, database)
@@ -595,7 +595,7 @@ func cloneTelegramReply(outbound factory.TelegramMessageSpec) factory.TelegramMe
 // error is therefore the proof that the gate is generation-scoped.
 func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	const repetitions = 3
@@ -736,7 +736,7 @@ func TestSyntheticBatchReplay_PromotionBarrier(t *testing.T) {
 // half.
 func TestSyntheticBatchReplay_TelegramOrderPromotesMutual(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	t.Run("chronological_promotes", func(t *testing.T) {
@@ -810,7 +810,7 @@ func TestSyntheticBatchReplay_TelegramOrderPromotesMutual(t *testing.T) {
 // prior interaction, so it MAY be order-insensitive. Both shapes are driven.
 func TestSyntheticBatchReplay_GmailSameLocalDayPromotion(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	// pair builds an outbound/inbound Gmail pair at the SAME age sharing one
@@ -905,7 +905,7 @@ func TestSyntheticBatchReplay_GmailSameLocalDayPromotion(t *testing.T) {
 // fine once the caller buckets them.
 func TestSyntheticBatchReplay_GmailSpanBoundRejected(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	h := batchTestHarness(t, ctx, database)
@@ -952,7 +952,7 @@ func TestSyntheticBatchReplay_GmailSpanBoundRejected(t *testing.T) {
 // make progress rather than repeat. Settle still runs exactly once.
 func TestSyntheticBatchReplay_GCalDrainsOverLimit(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	const events = 120
@@ -1039,7 +1039,7 @@ func cloneGChatMessage(base factory.GChatMessageSpec, suffix string, outbound bo
 // stall, and only partitioning the input gets a large batch through.
 func TestSyntheticBatchReplay_GChatBucketsAcrossBudget(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	const spaces = 60
@@ -1155,7 +1155,7 @@ func TestSyntheticBatchReplay_GChatBucketsAcrossBudget(t *testing.T) {
 // does.
 func TestSyntheticBatchReplay_GChatPromotionBarrier(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	h := batchTestHarness(t, ctx, database)
@@ -1196,7 +1196,7 @@ func TestSyntheticBatchReplay_GChatPromotionBarrier(t *testing.T) {
 // recorders minted, which have no prefix-cleanup fallback of their own.
 func TestSyntheticBatchReplay_CleanupParity(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	h, teardown, err := synthetic.NewHarnessWithDBForNamespace(ctx, database, syntheticNS(t), factory.DefaultSeed)
@@ -1262,7 +1262,7 @@ func TestSyntheticBatchReplay_CleanupParity(t *testing.T) {
 // mid-batch failure leaves. drainPartial is what closes all three.
 func TestSyntheticBatchReplay_MidBatchFailureIsReclaimable(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	const events = 120

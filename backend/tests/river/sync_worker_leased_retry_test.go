@@ -61,7 +61,7 @@ func (p *retryTestProvider) Sync(_ context.Context, _ *repository.SyncState, _ [
 func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
@@ -119,7 +119,7 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 	// (documented project gotcha; applies to test harnesses too).
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})
@@ -134,10 +134,10 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(),
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()),
 			`DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_log WHERE source = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_log WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_state WHERE source = $1`, source)
 	})
 
 	// Enqueue the job.
@@ -208,7 +208,7 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 func TestSyncWorker_AbandonedLogOnStartupRecovery(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
@@ -245,8 +245,8 @@ func TestSyncWorker_AbandonedLogOnStartupRecovery(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_log WHERE source = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_log WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_state WHERE source = $1`, source)
 	})
 
 	// Seed a pre-existing 'running' log row for this state, as if a
@@ -369,7 +369,7 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
@@ -419,10 +419,10 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(),
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()),
 			`DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_log WHERE source = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_log WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_state WHERE source = $1`, source)
 	})
 
 	// Simulate the "crashed mid-sync" pre-state directly:
@@ -470,7 +470,7 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	// gotcha; applies to test harnesses too.)
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})

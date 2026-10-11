@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 
@@ -19,7 +18,7 @@ func TestCadenceFilter_Integration(t *testing.T) {
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

@@ -54,7 +54,7 @@ type drainEnv struct {
 func setupHistoryDrainTest(t *testing.T) *drainEnv {
 	t.Helper()
 	testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 

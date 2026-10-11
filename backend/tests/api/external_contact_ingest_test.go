@@ -58,7 +58,7 @@ func setupExtContactIngestEnv(t *testing.T) *extContactIngestEnv {
 
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.External.APIKey = macHostTestKey
@@ -165,7 +165,7 @@ func setupExtContactIngestEnv(t *testing.T) *extContactIngestEnv {
 	}
 
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		// Drop external_contact rows seeded by this test, including
 		// tombstoned ones (uses hard DELETE).
@@ -271,7 +271,7 @@ func postIngestExt(t *testing.T, env *extContactIngestEnv, hostID *uuid.UUID, ho
 // returns tombstoned rows so the inline handler can revive them).
 func findExtRow(t *testing.T, env *extContactIngestEnv, entityID string) *repository.ExternalContact {
 	t.Helper()
-	row, err := env.externalRepo.GetBySource(context.Background(), "icloud_contacts", entityID, nil)
+	row, err := env.externalRepo.GetBySource(t.Context(), "icloud_contacts", entityID, nil)
 	require.NoError(t, err)
 	return row
 }
@@ -302,7 +302,7 @@ func TestIngestExternalContact_Upserted_FirstInsert_EmailMatch(t *testing.T) {
 	entityID := env.sourceIDPrefix + "email-match"
 
 	// Pull the email that was seeded for env.seededContact.
-	methods, err := env.cmRepo.ListContactMethodsByContact(context.Background(), env.seededContact)
+	methods, err := env.cmRepo.ListContactMethodsByContact(t.Context(), env.seededContact)
 	require.NoError(t, err)
 	var seededEmail string
 	for _, m := range methods {
@@ -338,7 +338,7 @@ func icloudForwardSuffix() string { return uuid.NewString()[:8] }
 // auto-matches it.
 func seedContactWithEmailForward(t *testing.T, env *extContactIngestEnv, name, email string) uuid.UUID {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	c, err := env.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
 	require.NoError(t, err)
 	_, err = env.cmRepo.CreateContactMethod(ctx, repository.CreateContactMethodRequest{
@@ -346,7 +346,7 @@ func seedContactWithEmailForward(t *testing.T, env *extContactIngestEnv, name, e
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		cleanCtx := context.Background()
+		cleanCtx := context.WithoutCancel(t.Context())
 		_ = env.cmRepo.DeleteContactMethodsByContact(cleanCtx, c.ID)
 		_ = env.contactRepo.HardDeleteContact(cleanCtx, c.ID)
 	})
@@ -355,7 +355,7 @@ func seedContactWithEmailForward(t *testing.T, env *extContactIngestEnv, name, e
 
 func contactHasEmailMethod(t *testing.T, env *extContactIngestEnv, contactID uuid.UUID, email string) bool {
 	t.Helper()
-	methods, err := env.cmRepo.ListContactMethodsByContact(context.Background(), contactID)
+	methods, err := env.cmRepo.ListContactMethodsByContact(t.Context(), contactID)
 	require.NoError(t, err)
 	for _, m := range methods {
 		if m.ValueNormalized == strings.ToLower(email) {
@@ -418,7 +418,7 @@ func TestIngestExternalContact_Upserted_ReUpsertImported_RecordsSuggestionNotAut
 	row := findExtRow(t, env, entityID)
 	require.NotNil(t, row)
 	require.NotNil(t, row.CRMContactID)
-	_, err := env.externalRepo.UpdateMatch(context.Background(), row.ID, row.CRMContactID, repository.MatchStatusImported)
+	_, err := env.externalRepo.UpdateMatch(t.Context(), row.ID, row.CRMContactID, repository.MatchStatusImported)
 	require.NoError(t, err)
 
 	// Re-upsert with the same content hash would dedup-skip the handler, so
@@ -443,7 +443,7 @@ func TestIngestExternalContact_Upserted_ReUpsertImported_RecordsSuggestionNotAut
 func TestIngestExternalContact_Upserted_ReUpsertPreservesMatchState(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
 	entityID := env.sourceIDPrefix + "preserve"
-	methods, err := env.cmRepo.ListContactMethodsByContact(context.Background(), env.seededContact)
+	methods, err := env.cmRepo.ListContactMethodsByContact(t.Context(), env.seededContact)
 	require.NoError(t, err)
 	var seededEmail string
 	for _, m := range methods {
@@ -498,7 +498,7 @@ func TestIngestExternalContact_Upserted_RevivesTombstone(t *testing.T) {
 	entityID := env.sourceIDPrefix + "revive"
 
 	// Plant a live row, tombstone it, then upsert and assert revive.
-	ctx := context.Background()
+	ctx := t.Context()
 	syncedAt := accelerated.GetCurrentTime()
 	first, err := env.externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{
 		Source:   "icloud_contacts",
@@ -578,7 +578,7 @@ func TestIngestExternalContact_Deleted_NoExistingRow_NoOp(t *testing.T) {
 
 	// But the event-log row should exist (audit trail).
 	logged, err := env.eventRepo.FindEventBySource(
-		context.Background(), "icloud_contacts", canonicalDeleteSourceID(entityID))
+		t.Context(), "icloud_contacts", canonicalDeleteSourceID(entityID))
 	require.NoError(t, err)
 	require.NotNil(t, logged, "event-log row must persist for the no-op delete (audit)")
 }
@@ -624,7 +624,7 @@ func TestIngestExternalContact_Deleted_AlreadyTombstoned_NoOp(t *testing.T) {
 
 func TestIngestExternalContact_Deleted_CrossHost_NoOp(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	entityID := env.sourceIDPrefix + "cross-host-delete"
 
 	// Host A (the env's paired host) creates the row.
@@ -672,7 +672,7 @@ func TestIngestExternalContact_Deleted_CrossHost_NoOp(t *testing.T) {
 
 func TestIngestExternalContact_Deleted_LegacyNullHost_SoftDeletes(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	entityID := env.sourceIDPrefix + "legacy-null-host-delete"
 
 	// Seed a row directly with NULL host_id (simulates pre-migration-052
@@ -839,7 +839,7 @@ func TestIngestExternalContact_VersionTooHigh_Rejected(t *testing.T) {
 // existing tests but in one place.
 func findSeededMethod(t *testing.T, env *extContactIngestEnv, methodType string) string {
 	t.Helper()
-	methods, err := env.cmRepo.ListContactMethodsByContact(context.Background(), env.seededContact)
+	methods, err := env.cmRepo.ListContactMethodsByContact(t.Context(), env.seededContact)
 	require.NoError(t, err)
 	for _, m := range methods {
 		if m.Type == methodType {
@@ -870,7 +870,7 @@ func addSeededPhoneWithUniqueDigits(t *testing.T, env *extContactIngestEnv) stri
 		fmt.Fprintf(&b, "%d", int(by)%10)
 	}
 	phone := "+1" + b.String()
-	_, err := env.cmRepo.CreateContactMethod(context.Background(), repository.CreateContactMethodRequest{
+	_, err := env.cmRepo.CreateContactMethod(t.Context(), repository.CreateContactMethodRequest{
 		ContactID: env.seededContact,
 		Type:      "phone",
 		Value:     phone,
@@ -881,7 +881,7 @@ func addSeededPhoneWithUniqueDigits(t *testing.T, env *extContactIngestEnv) stri
 
 func TestIngestExternalContact_Upserted_PhoneJunkPlusValidMatching_MatchesContact(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	entityID := env.sourceIDPrefix + "phone-junk-plus-valid"
 	seededPhone := addSeededPhoneWithUniqueDigits(t, env)
 
@@ -922,7 +922,7 @@ func TestIngestExternalContact_Upserted_PhoneJunkPlusValidMatching_MatchesContac
 
 func TestIngestExternalContact_Upserted_AllPhonesNormalizeToEmpty_StillAccepts(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	entityID := env.sourceIDPrefix + "phones-all-junk"
 
 	countBefore, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
@@ -955,7 +955,7 @@ func TestIngestExternalContact_Upserted_AllPhonesNormalizeToEmpty_StillAccepts(t
 // IDENTITY_MATCH_FAILED, now silently skipped.
 func TestIngestExternalContact_Upserted_PhoneLiteralPlus_RegressionForSurfacedData(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	entityID := env.sourceIDPrefix + "phone-literal-plus"
 
 	countBefore, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
@@ -984,7 +984,7 @@ func TestIngestExternalContact_Upserted_PhoneLiteralPlus_RegressionForSurfacedDa
 
 func TestIngestExternalContact_Upserted_EmailJunkPlusValidMatching_MatchesContact(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	entityID := env.sourceIDPrefix + "email-junk-plus-valid"
 	seededEmail := findSeededMethod(t, env, "email")
 
@@ -1024,7 +1024,7 @@ func TestIngestExternalContact_Upserted_EmailJunkPlusValidMatching_MatchesContac
 
 func TestIngestExternalContact_Upserted_AllEmailsNormalizeToEmpty_StillAccepts(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	entityID := env.sourceIDPrefix + "emails-all-junk"
 
 	countBefore, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")
@@ -1056,7 +1056,7 @@ func TestIngestExternalContact_Upserted_AllEmailsNormalizeToEmpty_StillAccepts(t
 // and would exercise a different code path.
 func TestIngestExternalContact_Upserted_EmailWhitespaceOnly_RegressionForJunkData(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	entityID := env.sourceIDPrefix + "email-whitespace-only"
 
 	countBefore, err := env.identityRepo.CountBySource(ctx, "icloud_contacts")

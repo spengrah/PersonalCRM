@@ -82,7 +82,7 @@ func TestJobSampleRecorder_EndToEnd(t *testing.T) {
 
 	// Base ctx for Start — NEVER a timeout-derived ctx (River silently stops
 	// fetching if its fetch-loop ctx cancels).
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newJobSampleTestDB(t, ctx)
 	repo := repository.NewJobSampleRepository(database.Queries)
 
@@ -107,7 +107,7 @@ func TestJobSampleRecorder_EndToEnd(t *testing.T) {
 		if stopped {
 			return
 		}
-		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		_ = client.Stop(stopCtx)
 		stopped = true
@@ -216,7 +216,7 @@ func TestJobSampleRecorder_RepeatedSnooze(t *testing.T) {
 	t.Parallel()
 	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newJobSampleTestDB(t, ctx)
 	repo := repository.NewJobSampleRepository(database.Queries)
 
@@ -238,7 +238,7 @@ func TestJobSampleRecorder_RepeatedSnooze(t *testing.T) {
 		if stopped {
 			return
 		}
-		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		_ = client.Stop(stopCtx)
 		stopped = true

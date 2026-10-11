@@ -49,7 +49,7 @@ var checkDefLiteralRe = regexp.MustCompile(`'([^']+)'::text`)
 func TestInteractionSourceCheck_AgreesWithDescriptorAndConstants(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// CI runs against a bare PostgreSQL — run migrations before opening
 	// the pool so the interaction table + its CHECK exist. (TestMain in
@@ -128,7 +128,7 @@ func TestInteractionSourceCheck_AgreesWithDescriptorAndConstants(t *testing.T) {
 func TestInteractionSourceCheck_AcceptsPhoneCalls(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)

@@ -111,7 +111,7 @@ func (env *gcontactsForwardEnv) seedContactWithEmail(t *testing.T, ctx context.C
 // forward).
 func TestProcessContact_ForwardReconcile_LinkedRowGainsMethod(t *testing.T) {
 	env := setupGcontactsForwardEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	sfx := gcontactsForwardSuffix()
 	accountID := "acct-" + sfx + "@example.com"
 	resource := "people/c-fwd-" + sfx
@@ -154,7 +154,7 @@ func TestProcessContact_ForwardReconcile_LinkedRowGainsMethod(t *testing.T) {
 // via attemptMatch's match path (which a stale-struct read would allow).
 func TestProcessContact_ForwardReconcile_DupOfLinkedReconcilesToCanonical(t *testing.T) {
 	env := setupGcontactsForwardEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	sfx := gcontactsForwardSuffix()
 	acctA := "acctA-" + sfx + "@example.com"
 	acctB := "acctB-" + sfx + "@example.com"

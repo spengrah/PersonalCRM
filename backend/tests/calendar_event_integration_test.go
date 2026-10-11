@@ -17,7 +17,7 @@ import (
 func TestCalendarEventUpsertResetsLastContactedUpdated(t *testing.T) {
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	database := testsupport.OpenDatabase(t)
 
@@ -157,7 +157,7 @@ func TestCalendarEventUpsertResetsLastContactedUpdated(t *testing.T) {
 func TestCalendarEventCountForContact_ExcludesCancelled(t *testing.T) {
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	database := testsupport.OpenDatabase(t)
 

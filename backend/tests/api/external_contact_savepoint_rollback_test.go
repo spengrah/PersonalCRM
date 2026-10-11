@@ -68,7 +68,7 @@ func (f *failingMatchExternalContactWriter) SoftDeleteTx(ctx context.Context, tx
 // it), which is the same contract raw_message.* follows.
 func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.External.APIKey = macHostTestKey
@@ -145,7 +145,7 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 
 	sourceIDPrefix := "rollback-" + suffix + "-"
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, sourceIDPrefix)
 		_, _ = database.Queries.DeleteEventsBySource(cleanCtx, "icloud_contacts")

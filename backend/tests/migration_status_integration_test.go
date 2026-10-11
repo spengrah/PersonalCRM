@@ -41,7 +41,7 @@ func newMigrationStatusClone(t *testing.T) (cloneURL, migrationsPath string) {
 }
 
 func TestMigrationStatus_UpToDate(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, migrationsPath := newMigrationStatusClone(t)
 
 	// The clone is template-migrated; RunMigrations is a no-op backstop and must
@@ -55,7 +55,7 @@ func TestMigrationStatus_UpToDate(t *testing.T) {
 }
 
 func TestMigrationStatus_AppPending(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, migrationsPath := newMigrationStatusClone(t)
 	require.NoError(t, db.RunMigrations(ctx, cloneURL, migrationsPath))
 
@@ -83,7 +83,7 @@ func TestMigrationStatus_AppPending(t *testing.T) {
 }
 
 func TestMigrationStatus_RiverPending(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, migrationsPath := newMigrationStatusClone(t)
 	require.NoError(t, db.RunMigrations(ctx, cloneURL, migrationsPath))
 
@@ -105,7 +105,7 @@ func TestMigrationStatus_RiverPending(t *testing.T) {
 }
 
 func TestMigrationStatus_DirtyIsOperationalError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, migrationsPath := newMigrationStatusClone(t)
 	require.NoError(t, db.RunMigrations(ctx, cloneURL, migrationsPath))
 
@@ -122,7 +122,7 @@ func TestMigrationStatus_DirtyIsOperationalError(t *testing.T) {
 }
 
 func TestMigrate_Idempotent(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, migrationsPath := newMigrationStatusClone(t)
 
 	// First apply (clone is already template-migrated, so this is the no-op
@@ -142,7 +142,7 @@ func TestMigrate_Idempotent(t *testing.T) {
 // Postgres driver creates that table at migrate.New time, so a naive read would
 // mutate a fresh DB — the read-only to_regclass short-circuit must prevent it.
 func TestMigrationStatus_FreshDBNonMutating(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, migrationsPath := newMigrationStatusClone(t)
 	require.NoError(t, db.RunMigrations(ctx, cloneURL, migrationsPath))
 

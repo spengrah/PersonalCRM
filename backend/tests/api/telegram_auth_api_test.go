@@ -183,7 +183,7 @@ func TestTelegramAuthAPI_ValidationErrors(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	router, _ := setupTelegramAuthRouter(t, ctx)
 
 	t.Run("StartAuth_MissingOrEmptyPhone", func(t *testing.T) {
@@ -220,7 +220,7 @@ func TestTelegramAuthAPI_ValidationErrors(t *testing.T) {
 		// that PASSES validation reaches the manager and is answered with the
 		// already-connected 409 (decided from the DB row, before any MTProto
 		// client is created). A validation regression would answer 400 instead.
-		bctx := context.Background()
+		bctx := t.Context()
 		brouter, bsessionRepo := setupTelegramAuthRouter(t, bctx)
 		ns := uuid.NewString()[:8]
 		seedConnectedTelegramSession(t, bctx, bsessionRepo, "tg-boundary-"+ns, "+15550000001")
@@ -295,7 +295,7 @@ func TestTelegramAuthAPI_StartConflictWhenAlreadyConnected(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	router, sessionRepo := setupTelegramAuthRouter(t, ctx)
 	ns := uuid.NewString()[:8]
 	seedConnectedTelegramSession(t, ctx, sessionRepo, "tg-conflict-"+ns, "+15550000002")
@@ -322,7 +322,7 @@ func TestTelegramAuthAPI_InvalidTokenBadRequest(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	router, _ := setupTelegramAuthRouter(t, ctx)
 
 	for _, tc := range []struct {
@@ -354,7 +354,7 @@ func TestTelegramAuthAPI_CancelAlwaysSucceeds(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	router, _ := setupTelegramAuthRouter(t, ctx)
 
 	for i := 0; i < 2; i++ { // idempotent: "always succeeds"
@@ -378,7 +378,7 @@ func TestTelegramAuthAPI_Disconnect(t *testing.T) {
 
 	t.Run("SucceedsAndClearsSession", func(t *testing.T) {
 		// spec: TGM-007.disconnect-200-unless-delete-fails
-		ctx := context.Background()
+		ctx := t.Context()
 		router, sessionRepo := setupTelegramAuthRouter(t, ctx)
 		ns := uuid.NewString()[:8]
 		seedConnectedTelegramSession(t, ctx, sessionRepo, "tg-disc-"+ns, "+15550000003")
@@ -396,14 +396,14 @@ func TestTelegramAuthAPI_Disconnect(t *testing.T) {
 
 	t.Run("SessionDeleteFailureIsServerError", func(t *testing.T) {
 		// spec: TGM-007.disconnect-200-unless-delete-fails
-		ctx := context.Background()
+		ctx := t.Context()
 		router, sessionRepo := setupTelegramAuthRouter(t, ctx)
 		ns := uuid.NewString()[:8]
 		seedConnectedTelegramSession(t, ctx, sessionRepo, "tg-discfail-"+ns, "+15550000004")
 
 		// A pre-cancelled request context makes the session-row DELETE fail
 		// inside TelegramManager.Disconnect without touching production code.
-		cancelledCtx, cancel := context.WithCancel(context.Background())
+		cancelledCtx, cancel := context.WithCancel(t.Context())
 		cancel()
 		req, err := http.NewRequestWithContext(cancelledCtx, http.MethodDelete, "/api/v1/telegram/auth", nil)
 		require.NoError(t, err)
@@ -437,7 +437,7 @@ func TestTelegramAuthAPI_Status(t *testing.T) {
 
 	t.Run("DisconnectedWithoutSession", func(t *testing.T) {
 		// spec: TGM-007.status-always-returns-200
-		ctx := context.Background()
+		ctx := t.Context()
 		router, _ := setupTelegramAuthRouter(t, ctx)
 
 		w := doTelegramJSON(t, router, http.MethodGet, "/api/v1/telegram/auth/status", nil)
@@ -455,7 +455,7 @@ func TestTelegramAuthAPI_Status(t *testing.T) {
 
 	t.Run("ConnectedFromStoredSession", func(t *testing.T) {
 		// spec: TGM-007.status-always-returns-200
-		ctx := context.Background()
+		ctx := t.Context()
 		router, sessionRepo := setupTelegramAuthRouter(t, ctx)
 		ns := uuid.NewString()[:8]
 		username := "tg-status-" + ns

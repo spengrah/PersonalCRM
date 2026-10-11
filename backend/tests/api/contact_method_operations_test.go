@@ -51,7 +51,7 @@ func methodOpsShared(t *testing.T) (*db.Database, *gin.Engine) {
 	methodOpsSharedOnce.Do(func() {
 		cfg := config.TestConfig()
 		cfg.Database.URL = os.Getenv("DATABASE_URL")
-		database, err := db.NewDatabase(context.Background(), cfg.Database) //nolint:forbidigo // package-shared pool: it must outlive the first test that builds it, so it cannot close with that test's t.Cleanup
+		database, err := db.NewDatabase(t.Context(), cfg.Database) //nolint:forbidigo // package-shared pool: it must outlive the first test that builds it, so it cannot close with that test's t.Cleanup
 		if err != nil {
 			panic("failed to connect to test database: " + err.Error())
 		}
@@ -90,7 +90,7 @@ type methodOpsFx struct {
 func newMethodOpsFx(t *testing.T) *methodOpsFx {
 	t.Helper()
 	database, router := methodOpsShared(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{

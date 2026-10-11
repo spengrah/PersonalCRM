@@ -47,7 +47,7 @@ type applyInteractionEnv struct {
 func newApplyInteractionEnv(t *testing.T, settingsErr error) (*applyInteractionEnv, func()) {
 	t.Helper()
 	database, closeFn := newFollowUpIntegrationDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
@@ -102,7 +102,7 @@ func newApplyInteractionEnv(t *testing.T, settingsErr error) (*applyInteractionE
 
 func (e *applyInteractionEnv) seedContact(t *testing.T, cadence string) *repository.Contact {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	req := repository.CreateContactRequest{FullName: e.gen.Contact(factory.WithNoMethods()).FullName}
 	if cadence != "" {
 		req.Cadence = &cadence
@@ -123,7 +123,7 @@ func TestIntegration_ApplyInteraction_NilEnvelope_DoesNotPanic(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	env, cleanup := newApplyInteractionEnv(t, nil)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 	contact := env.seedContact(t, "weekly")
 
 	require.NotPanics(t, func() {
@@ -154,7 +154,7 @@ func TestIntegration_ApplyInteraction_TodoistUnconfigured_NoRowNoRollback(t *tes
 	testsupport.RequireDatabase(t)
 	env, cleanup := newApplyInteractionEnv(t, consumer.ErrTodoistUnconfigured)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 	contact := env.seedContact(t, "weekly")
 
 	// Drive the direct-invoke outbound path. The caller commits its own
@@ -186,7 +186,7 @@ func TestIntegration_ApplyInteraction_SettingsError_PropagatesRollback(t *testin
 	testsupport.RequireDatabase(t)
 	env, cleanup := newApplyInteractionEnv(t, errors.New("transient 503"))
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 	contact := env.seedContact(t, "weekly")
 
 	var applyErr error

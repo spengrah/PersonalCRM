@@ -51,7 +51,7 @@ func TestSyncService_ListDueAccounts_ExcludesPushStrategy(t *testing.T) {
 
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

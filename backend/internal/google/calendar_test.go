@@ -1,7 +1,6 @@
 package google
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -746,7 +745,7 @@ func TestPtrToStr(t *testing.T) {
 // TestMatchAttendees_WithMockedIdentityService tests contact matching with mocked identity service
 // This tests the ACTUAL CalendarSyncProvider.matchAttendees() method with mocked dependencies
 func TestMatchAttendees_WithMockedIdentityService(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID1 := uuid.New()
 	contactID2 := uuid.New()
@@ -786,7 +785,7 @@ func TestMatchAttendees_WithMockedIdentityService(t *testing.T) {
 
 // TestMatchAttendees_DeduplicatesContacts tests that duplicate contact matches are deduplicated
 func TestMatchAttendees_DeduplicatesContacts(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -814,7 +813,7 @@ func TestMatchAttendees_DeduplicatesContacts(t *testing.T) {
 
 // TestMatchAttendees_HandlesIdentityServiceError tests error handling
 func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -849,7 +848,7 @@ func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
 // exercises the real plan Decision 6 wiring — rolling back to off/shadow
 // does NOT restore the direct path (spec §3.9).
 func TestUpdateLastContactedForPastEvents_NilBus_SkipsEventsWithoutMarking(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	eventID := uuid.New()
 	contactID1 := uuid.New()
@@ -884,7 +883,7 @@ func TestUpdateLastContactedForPastEvents_NilBus_SkipsEventsWithoutMarking(t *te
 
 // TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate tests the empty case
 func TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockCalRepo := &mockCalendarRepo{
 		listPastResult: []repository.CalendarEvent{}, // No events
@@ -907,7 +906,7 @@ func TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate(t *testing.T) {
 
 // TestMatchAttendees_FuzzyMatchFallback tests that fuzzy matching is attempted when exact match fails
 func TestMatchAttendees_FuzzyMatchFallback(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -959,7 +958,7 @@ func TestMatchAttendees_FuzzyMatchFallback(t *testing.T) {
 
 // TestMatchAttendees_FuzzyMatchWithMethodOverlap tests fuzzy matching with contact method overlap
 func TestMatchAttendees_FuzzyMatchWithMethodOverlap(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1008,7 +1007,7 @@ func TestMatchAttendees_FuzzyMatchWithMethodOverlap(t *testing.T) {
 
 // TestMatchAttendees_ExactMatchTakesPrecedence tests that exact matches are preferred over fuzzy
 func TestMatchAttendees_ExactMatchTakesPrecedence(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	exactContactID := uuid.New()
 	fuzzyContactID := uuid.New()
@@ -1058,7 +1057,7 @@ func TestMatchAttendees_ExactMatchTakesPrecedence(t *testing.T) {
 
 // TestMatchAttendees_NoDisplayName_SkipsFuzzyMatch tests that fuzzy matching is skipped without display name
 func TestMatchAttendees_NoDisplayName_SkipsFuzzyMatch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Identity service returns no match
 	mockIdentity := &mockIdentityService{
@@ -1086,7 +1085,7 @@ func TestMatchAttendees_NoDisplayName_SkipsFuzzyMatch(t *testing.T) {
 
 // TestFindFuzzyMatch_NoMatches tests findFuzzyMatch when no similar contacts exist
 func TestFindFuzzyMatch_NoMatches(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockContactRepo := &mockContactRepo{
 		findSimilarResults: []repository.ContactMatch{}, // No matches
@@ -1102,7 +1101,7 @@ func TestFindFuzzyMatch_NoMatches(t *testing.T) {
 
 // TestFindFuzzyMatch_BelowThreshold tests that matches below confidence threshold are rejected
 func TestFindFuzzyMatch_BelowThreshold(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1130,7 +1129,7 @@ func TestFindFuzzyMatch_BelowThreshold(t *testing.T) {
 
 // TestFindFuzzyMatch_SelectsBestMatch tests that the highest scoring match is selected
 func TestFindFuzzyMatch_SelectsBestMatch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contact1ID := uuid.New()
 	contact2ID := uuid.New()
@@ -1170,7 +1169,7 @@ func TestFindFuzzyMatch_SelectsBestMatch(t *testing.T) {
 
 // TestFindFuzzyMatch_EmailNormalization tests that email comparison is case-insensitive
 func TestFindFuzzyMatch_EmailNormalization(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1201,7 +1200,7 @@ func TestFindFuzzyMatch_EmailNormalization(t *testing.T) {
 
 // TestFindFuzzyMatch_IgnoresNonEmailMethods tests that only emails are counted for overlap
 func TestFindFuzzyMatch_IgnoresNonEmailMethods(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1250,7 +1249,7 @@ func TestSyncWindowConstants(t *testing.T) {
 
 // TestProcessEvent_ExtractsHtmlLink verifies that HtmlLink is extracted from Google Calendar events
 func TestProcessEvent_ExtractsHtmlLink(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockCalRepo := &mockCalendarRepo{}
 	mockContactRepo := &mockContactRepo{}
@@ -1287,7 +1286,7 @@ func TestProcessEvent_ExtractsHtmlLink(t *testing.T) {
 // TestProcessEvent_MatchesOrganizerNotInAttendees verifies that when an organizer is not in the
 // attendees list, they are still matched to a contact (fix for issue #183)
 func TestProcessEvent_MatchesOrganizerNotInAttendees(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	organizerContactID := uuid.New()
 
@@ -1359,7 +1358,7 @@ func TestProcessEvent_MatchesOrganizerNotInAttendees(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_Success tests successful storage of unmatched attendees
 func TestStoreUnmatchedAttendee_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 
@@ -1402,7 +1401,7 @@ func TestStoreUnmatchedAttendee_Success(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_NilExternalRepo tests that nil repo is handled gracefully
 func TestStoreUnmatchedAttendee_NilExternalRepo(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Provider without external contact repo
 	provider := newTestProvider(nil, nil, nil)
@@ -1425,7 +1424,7 @@ func TestStoreUnmatchedAttendee_NilExternalRepo(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_NilEventContext tests that nil event context is handled gracefully
 func TestStoreUnmatchedAttendee_NilEventContext(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
@@ -1444,7 +1443,7 @@ func TestStoreUnmatchedAttendee_NilEventContext(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_EmailNormalization tests that email is normalized to lowercase
 func TestStoreUnmatchedAttendee_EmailNormalization(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
@@ -1471,7 +1470,7 @@ func TestStoreUnmatchedAttendee_EmailNormalization(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_EmptyDisplayName_InfersFromEmail tests that name is inferred from email when display name is empty
 func TestStoreUnmatchedAttendee_EmptyDisplayName_InfersFromEmail(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
@@ -1499,7 +1498,7 @@ func TestStoreUnmatchedAttendee_EmptyDisplayName_InfersFromEmail(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_RepoError tests error handling when repo fails
 func TestStoreUnmatchedAttendee_RepoError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{
 		upsertError: assert.AnError,
@@ -1524,7 +1523,7 @@ func TestStoreUnmatchedAttendee_RepoError(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_Deduplication tests that same email results in same source_id
 func TestStoreUnmatchedAttendee_Deduplication(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
@@ -1551,7 +1550,7 @@ func TestStoreUnmatchedAttendee_Deduplication(t *testing.T) {
 
 // TestMatchAttendees_StoresUnmatchedAttendees tests that unmatched attendees are stored via matchAttendees
 func TestMatchAttendees_StoresUnmatchedAttendees(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1596,7 +1595,7 @@ func TestMatchAttendees_StoresUnmatchedAttendees(t *testing.T) {
 
 // TestProcessEvent_HandlesEmptyHtmlLink verifies that empty HtmlLink is handled correctly
 func TestProcessEvent_HandlesEmptyHtmlLink(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockCalRepo := &mockCalendarRepo{}
 	mockContactRepo := &mockContactRepo{}
@@ -1673,7 +1672,7 @@ func TestIsBlockedCalendarEmail_Legacy(t *testing.T) {
 
 // TestMatchAttendees_SkipsBlockedDomains tests that blocked calendar domains are skipped
 func TestMatchAttendees_SkipsBlockedDomains(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1822,7 +1821,7 @@ func TestCapitalize(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_PreservesExistingDisplayName tests that provided display names are not overwritten
 func TestStoreUnmatchedAttendee_PreservesExistingDisplayName(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)

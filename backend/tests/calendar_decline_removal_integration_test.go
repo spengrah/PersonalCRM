@@ -152,7 +152,7 @@ func (e *declineTestEnv) runDecline(t *testing.T, contactID uuid.UUID, sourceRef
 func TestIntegration_CalendarDecline_SoftDeletesAndRecomputes(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newDeclineTestEnv(t, ctx)
 
 	occurredAt := time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC)
@@ -185,7 +185,7 @@ func TestIntegration_CalendarDecline_SoftDeletesAndRecomputes(t *testing.T) {
 func TestIntegration_CalendarDecline_NullOutWithCadenceFallback(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newDeclineTestEnv(t, ctx)
 
 	cad := "weekly"
@@ -217,7 +217,7 @@ func TestIntegration_CalendarDecline_NullOutWithCadenceFallback(t *testing.T) {
 func TestIntegration_CalendarDecline_NoCadence_ContactByStaysNil(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newDeclineTestEnv(t, ctx)
 
 	occurredAt := time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC)
@@ -241,7 +241,7 @@ func TestIntegration_CalendarDecline_NoCadence_ContactByStaysNil(t *testing.T) {
 func TestIntegration_CalendarDecline_PerDirectionRollback(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newDeclineTestEnv(t, ctx)
 
 	cad := "weekly"
@@ -297,7 +297,7 @@ func TestIntegration_CalendarDecline_PerDirectionRollback(t *testing.T) {
 func TestIntegration_CalendarDecline_PreservesCreationValue(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	e := newDeclineTestEnv(t, ctx)
 
 	// Creation-set last_contacted distinct from the gcal occurred_at.
@@ -336,7 +336,7 @@ func TestIntegration_CalendarDecline_PreservesCreationValue(t *testing.T) {
 func TestIntegration_CalendarDecline_PreservesContactByOverride(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newDeclineTestEnv(t, ctx)
 
 	cad := "weekly"
@@ -370,7 +370,7 @@ func TestIntegration_CalendarDecline_PreservesContactByOverride(t *testing.T) {
 func TestIntegration_CalendarDecline_RollsBackContactByWhenNoOverride(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newDeclineTestEnv(t, ctx)
 
 	cad := "weekly"
@@ -405,7 +405,7 @@ func TestIntegration_CalendarDecline_RollsBackContactByWhenNoOverride(t *testing
 func TestIntegration_CalendarDecline_ContactByForwardWriterParity(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newDeclineTestEnv(t, ctx)
 
 	cad := "monthly"
@@ -434,7 +434,7 @@ func TestIntegration_CalendarDecline_ContactByForwardWriterParity(t *testing.T) 
 func TestIntegration_CalendarDecline_ReplayIsNoOp(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newDeclineTestEnv(t, ctx)
 
 	occurredAt := time.Date(2026, 3, 15, 10, 0, 0, 0, time.UTC)
@@ -457,7 +457,7 @@ func TestIntegration_CalendarDecline_ReplayIsNoOp(t *testing.T) {
 func TestIntegration_AttendedAfterDelete_SkipsInsert(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newDeclineTestEnv(t, ctx)
 	contact := e.newContact(t, nil, nil)
 
@@ -484,7 +484,7 @@ func TestIntegration_AttendedAfterDelete_SkipsInsert(t *testing.T) {
 func TestIntegration_AttendedAfterDelete_LockSerialization(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	e := newDeclineTestEnv(t, ctx)
 	contact := e.newContact(t, nil, nil)
 
@@ -543,7 +543,7 @@ func TestIntegration_AttendedAfterDelete_LockSerialization(t *testing.T) {
 func TestIntegration_CalendarEvent_HardDeleteReadBack(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newDeclineTestEnv(t, ctx)
 	contact := e.newContact(t, nil, nil)
 
@@ -590,7 +590,7 @@ func TestIntegration_CalendarEvent_HardDeleteReadBack(t *testing.T) {
 func TestIntegration_CalendarDecline_RecomputeSeesConcurrentInteraction(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	e := newDeclineTestEnv(t, ctx)
 
 	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
@@ -672,7 +672,7 @@ func TestIntegration_CalendarDecline_RecomputeSeesConcurrentInteraction(t *testi
 func TestIntegration_DeclineSourceID_CoexistsWithAttended(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	e := newDeclineTestEnv(t, ctx)
 
 	eventRepo := repository.NewEventRepository(e.database.Queries)

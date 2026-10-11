@@ -58,7 +58,7 @@ func newCadenceUpdaterForTest(t *testing.T, database *db.Database, mode string) 
 
 func applyInTx(t *testing.T, database *db.Database, fn func(tx pgx.Tx) error) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, pgx.BeginTxFunc(ctx, database.Pool, pgx.TxOptions{}, fn))
 }
 
@@ -70,7 +70,7 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Outbound_LiveDB(t *testing.
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cad := "monthly"
 	initial := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
 	gen, _ := migrationGenerator(t)
@@ -109,7 +109,7 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Mutual_ForwardOnly(t *testi
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cad := "weekly"
 	newer := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
 	gen, _ := migrationGenerator(t)
@@ -144,7 +144,7 @@ func TestIntegration_CadenceUpdater_ApplyInteraction_Manual_UnconditionalBackdat
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cad := "weekly"
 	newer := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
 	gen, _ := migrationGenerator(t)
@@ -182,7 +182,7 @@ func TestIntegration_CadenceUpdater_BulkApply_DoesNotBumpLastInteractionAt(t *te
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	targetLast := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	// Seed a pre-merge last_interaction_at on the target so we can
@@ -234,7 +234,7 @@ func TestIntegration_CadenceUpdater_BulkApply_ForwardMaxOnMerge(t *testing.T) {
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	targetLast := time.Date(2026, 3, 15, 12, 0, 0, 0, time.UTC)
 	gen, _ := migrationGenerator(t)
@@ -274,7 +274,7 @@ func TestIntegration_CadenceUpdater_ApplyContactByOverride_ClearAndBackdate(t *t
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cad := "weekly"
 	gen, _ := migrationGenerator(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -318,7 +318,7 @@ func TestIntegration_CadenceUpdater_HandleEvent_DuplicateClaim_NoOp(t *testing.T
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cad := "weekly"
 	initialLast := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
 	gen, _ := migrationGenerator(t)
@@ -399,7 +399,7 @@ func TestIntegration_CadenceUpdater_ModeOff_NoWrite(t *testing.T) {
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cad := "weekly"
 	initialLast := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
 	gen, _ := migrationGenerator(t)
@@ -433,7 +433,7 @@ func TestIntegration_CadenceUpdater_ContactBy_DerivedFromCadence(t *testing.T) {
 	t.Parallel()
 	database, cleanup := newCadenceUpdaterTestDB(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cad := "monthly"
 	initialLast := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
 	gen, _ := migrationGenerator(t)

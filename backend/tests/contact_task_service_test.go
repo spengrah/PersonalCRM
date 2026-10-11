@@ -69,7 +69,7 @@ func (m *mockTodoistClient) Sync(ctx context.Context, syncToken string, resource
 func setupServiceTest(t *testing.T) (*service.ContactTaskService, *repository.Contact, *repository.ContactRepository, *repository.ContactTaskRepository, func()) {
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.CORS.FrontendURL = "https://example.com"
@@ -138,7 +138,7 @@ func TestContactTaskService_CreateManualTask_Integration(t *testing.T) {
 	svc, contact, _, _, cleanup := setupServiceTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("creates task with contact link in content", func(t *testing.T) {
 		mock := &mockTodoistClient{}
@@ -424,7 +424,7 @@ func TestContactTaskService_CRMMarkerFormat(t *testing.T) {
 	svc, contact, _, _, cleanup := setupServiceTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("CRM marker contains required fields", func(t *testing.T) {
 		var capturedDesc string
@@ -480,7 +480,7 @@ func TestDeleteTaskLink_IssuesNoOutboundTodoistCall(t *testing.T) {
 	svc, contact, contactRepo, taskRepo, cleanup := setupServiceTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// A spy in place of a real Todoist client: DeleteTaskLink must never reach
 	// it, so any recorded call is a regression.

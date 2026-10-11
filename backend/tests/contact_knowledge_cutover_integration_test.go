@@ -160,7 +160,7 @@ func (h *knowledgeCutoverHarness) seedPreCutoverContact(t *testing.T, ctx contex
 
 func TestContactKnowledgeCutover_CreateWritesAssertionsAndCache(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]
@@ -208,7 +208,7 @@ func TestContactKnowledgeCutover_CreateWritesAssertionsAndCache(t *testing.T) {
 
 func TestContactKnowledgeCutover_UpdateSupersedesAndClears(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]
@@ -254,7 +254,7 @@ func TestContactKnowledgeCutover_UpdateSupersedesAndClears(t *testing.T) {
 
 func TestContactKnowledgeCutover_AsyncWorkerRefreshesCache(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]
@@ -305,7 +305,7 @@ func TestContactKnowledgeCutover_AsyncWorkerRefreshesCache(t *testing.T) {
 // returns nothing) and sets the cache column to NULL.
 func TestContactKnowledgeCutover_AsyncWorkerBlanksCacheOnClosure(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]
@@ -354,7 +354,7 @@ func TestContactKnowledgeCutover_AsyncWorkerBlanksCacheOnClosure(t *testing.T) {
 
 func TestContactKnowledgeCutover_Backfill(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]
@@ -403,7 +403,7 @@ func TestContactKnowledgeCutover_Backfill(t *testing.T) {
 
 func TestContactKnowledgeCutover_BackfillSkipsSoftDeleted(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]
@@ -425,7 +425,7 @@ func TestContactKnowledgeCutover_BackfillSkipsSoftDeleted(t *testing.T) {
 
 func TestContactKnowledgeCutover_SortStillWorks(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]
@@ -467,7 +467,7 @@ func TestContactKnowledgeCutover_SortStillWorks(t *testing.T) {
 
 func TestContactKnowledgeCutover_ListAndSearchReadCache(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]
@@ -519,7 +519,7 @@ func TestContactKnowledgeCutover_ListAndSearchReadCache(t *testing.T) {
 
 func TestContactKnowledgeCutover_EnrichmentEmitsAssertionAndCache(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]
@@ -567,7 +567,7 @@ func TestContactKnowledgeCutover_EnrichmentEmitsAssertionAndCache(t *testing.T) 
 
 func TestContactKnowledgeCutover_EmptyFieldNormalization(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]
@@ -616,7 +616,7 @@ func TestContactKnowledgeCutover_EmptyFieldNormalization(t *testing.T) {
 
 func TestContactKnowledgeCutover_HowMetPreservedWhenFormOmitsIt(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]
@@ -670,7 +670,7 @@ func TestContactKnowledgeCutover_HowMetPreservedWhenFormOmitsIt(t *testing.T) {
 
 func TestContactKnowledgeCutover_EnrichmentErrorPropagates(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newKnowledgeCutoverHarness(t, ctx)
 
 	ns := uuid.New().String()[:8]

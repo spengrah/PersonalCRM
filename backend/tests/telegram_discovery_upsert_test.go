@@ -46,7 +46,7 @@ func setupDiscoveryUpsertTest(t *testing.T) (
 		// Narrow cleanup: only this test's per-run prefix. Use the sqlc query
 		// (also used by the /test/cleanup handler) rather than raw SQL.
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
-			context.Background(),
+			t.Context(),
 			prefix,
 		)
 		database.Close()
@@ -59,7 +59,7 @@ func TestUpsertDiscoveryCandidate_InsertsNewRow(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	got, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
@@ -96,7 +96,7 @@ func TestUpsertDiscoveryCandidate_TelegramSemanticsUnchanged(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 	sourceID := prefix + "semantics"
 
@@ -135,7 +135,7 @@ func TestUpsertDiscoveryCandidate_WhatsAppRowUsesSameSemantics(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 	sourceID := prefix + "wa@lid"
 
@@ -168,7 +168,7 @@ func TestUpsertDiscoveryCandidate_PreservesFirstNameWhenNil(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	// Seed with names populated.
@@ -199,7 +199,7 @@ func TestUpsertDiscoveryCandidate_OverwritesFirstNameWhenNewValueProvided(t *tes
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
@@ -226,7 +226,7 @@ func TestUpsertDiscoveryCandidate_MergesMetadata_PreservesExistingKey(t *testing
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	// Seed with a username key.
@@ -255,7 +255,7 @@ func TestUpsertDiscoveryCandidate_MergesMetadata_IncomingWinsForDuplicate(t *tes
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
@@ -281,7 +281,7 @@ func TestUpsertDiscoveryCandidate_SyncedAtAlwaysUpdates(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	start := accelerated.GetCurrentTime()
 	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
@@ -310,7 +310,7 @@ func TestUpsertDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert(t *testing
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	// Seed via the shared Upsert so emails are populated.
@@ -344,7 +344,7 @@ func TestUpsertDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) {
 	repo, database, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	// Create a real CRM contact so the FK (external_contact.crm_contact_id ->
@@ -388,7 +388,7 @@ func TestUpsertExternalContact_SharedUpsertStillOverwrites(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	_, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
@@ -421,7 +421,7 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

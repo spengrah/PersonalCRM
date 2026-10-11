@@ -8,7 +8,6 @@
 package main
 
 import (
-	"context"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 
@@ -104,7 +103,7 @@ func TestWireWhatsApp_TurnsTheFeatureOn(t *testing.T) {
 		nil,
 	)
 
-	stk := wireWhatsApp(context.Background(), h.cfg, h.database, h.reg, ingestor)
+	stk := wireWhatsApp(t.Context(), h.cfg, h.database, h.reg, ingestor)
 	require.NotNil(t, stk.Manager, "the device store opens against a real database")
 	t.Cleanup(stk.Manager.Stop)
 
@@ -133,7 +132,7 @@ func TestWireWhatsApp_RegistersNothingWhenDisabled(t *testing.T) {
 
 	h := newWireWhatsAppHarness(t, func(c *config.Config) {})
 
-	stk := wireWhatsApp(context.Background(), h.cfg, h.database, h.reg, nil)
+	stk := wireWhatsApp(t.Context(), h.cfg, h.database, h.reg, nil)
 
 	assert.Nil(t, stk.Manager)
 	assert.Nil(t, stk.Handler)

@@ -113,7 +113,7 @@ func registerCleanupBySource(t *testing.T, env *matcherEnrichTestEnv, ctx contex
 func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "AboveUser" + peerIDStr
@@ -180,7 +180,7 @@ func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
 func TestMatcherEnrichment_BelowThreshold_NoExternalContact(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "BelowUser" + peerIDStr
@@ -226,7 +226,7 @@ func TestMatcherEnrichment_BelowThreshold_NoExternalContact(t *testing.T) {
 func TestMatcherEnrichment_PhoneMatchWithUsername(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "PhoneMatched" + peerIDStr
@@ -261,7 +261,7 @@ func TestMatcherEnrichment_PhoneMatchWithUsername(t *testing.T) {
 func TestMatcherEnrichment_PhoneMatchWithoutUsername(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	phone := "+1555" + peerIDStr[:7]
@@ -289,7 +289,7 @@ func TestMatcherEnrichment_PhoneMatchWithoutUsername(t *testing.T) {
 func TestMatcherEnrichment_Idempotency(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "IdemUser" + peerIDStr
@@ -331,7 +331,7 @@ func TestMatcherEnrichment_Idempotency(t *testing.T) {
 func TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "RaceUser" + peerIDStr
@@ -390,7 +390,7 @@ func TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess(t *tes
 func TestMatcherEnrichment_AlreadyMatchedExternalContact_RepairsMissingMethod(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "RepairUser" + peerIDStr
@@ -450,7 +450,7 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "FaultyUser" + peerIDStr

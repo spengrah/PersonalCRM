@@ -35,7 +35,7 @@ func setupMessagesMessageTest(t *testing.T) (context.Context, *factory.Generator
 	t.Helper()
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)

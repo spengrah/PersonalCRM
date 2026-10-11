@@ -41,7 +41,7 @@ func setupJSONBGINEnv(t *testing.T) *jsonbGINEnv {
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database := testsupport.OpenDatabase(t)
 
 	suffix := uuid.NewString()
@@ -63,8 +63,8 @@ func setupJSONBGINEnv(t *testing.T) *jsonbGINEnv {
 		// Best-effort cleanup. Ignore errors so a failing test still cleans
 		// up the rest. Each fixture row has the per-test suffix in its
 		// identifying column so this never touches another test's data.
-		_ = env.fixtureRepo.DeleteExternalContactsBySourceIDPrefix(context.Background(), sourceIDPfx)
-		_ = env.fixtureRepo.DeleteCalendarEventsByGcalEventIDPrefix(context.Background(), gcalIDPfx)
+		_ = env.fixtureRepo.DeleteExternalContactsBySourceIDPrefix(context.WithoutCancel(t.Context()), sourceIDPfx)
+		_ = env.fixtureRepo.DeleteCalendarEventsByGcalEventIDPrefix(context.WithoutCancel(t.Context()), gcalIDPfx)
 	})
 
 	return env

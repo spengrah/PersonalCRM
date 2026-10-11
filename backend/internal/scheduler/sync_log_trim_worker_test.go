@@ -37,7 +37,7 @@ func TestSyncLogTrimWorker_CutoffIsRetentionDaysBeforeAppClock(t *testing.T) {
 	stub := &stubSyncLogTrimmer{deleted: 3}
 	worker := NewSyncLogTrimWorker(stub, 7)
 
-	err := worker.Work(context.Background(), &river.Job[SyncLogTrimArgs]{})
+	err := worker.Work(t.Context(), &river.Job[SyncLogTrimArgs]{})
 	require.NoError(t, err)
 
 	require.Equal(t, 1, stub.calls)
@@ -48,7 +48,7 @@ func TestSyncLogTrimWorker_WrapsRepositoryError(t *testing.T) {
 	boom := errors.New("boom")
 	worker := NewSyncLogTrimWorker(&stubSyncLogTrimmer{err: boom}, 30)
 
-	err := worker.Work(context.Background(), &river.Job[SyncLogTrimArgs]{})
+	err := worker.Work(t.Context(), &river.Job[SyncLogTrimArgs]{})
 	require.EqualError(t, err, "trim sync logs: boom")
 	require.ErrorIs(t, err, boom)
 }

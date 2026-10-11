@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 
@@ -18,7 +17,7 @@ import (
 
 func cleanupTelegramSession(t *testing.T, queries db.Querier) {
 	t.Helper()
-	_ = queries.DeleteTelegramSession(context.Background())
+	_ = queries.DeleteTelegramSession(t.Context())
 }
 
 func TestSessionRepository_UpsertAndGet(t *testing.T) {
@@ -26,7 +25,7 @@ func TestSessionRepository_UpsertAndGet(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -66,7 +65,7 @@ func TestSessionRepository_UpdateAuthState(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -95,7 +94,7 @@ func TestSessionRepository_Delete(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -124,7 +123,7 @@ func TestDatabaseSessionStorage_EncryptDecrypt(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -155,7 +154,7 @@ func TestDatabaseSessionStorage_NoSession(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

@@ -14,7 +14,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -61,7 +60,7 @@ func oauthWiringConfig(t *testing.T) *config.Config {
 // returned router is therefore the production route tree for cfg's shape.
 func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 

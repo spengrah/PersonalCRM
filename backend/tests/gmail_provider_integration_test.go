@@ -64,7 +64,7 @@ func newGmailProviderEnv(t *testing.T) *gmailProviderEnv {
 	t.Helper()
 	testsupport.RequireDatabase(t)
 	// Per-test isolated clone: the live consumer drains a private river_job.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)

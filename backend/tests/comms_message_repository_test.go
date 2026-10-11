@@ -27,7 +27,7 @@ func setupCommsMessageTest(t *testing.T) (context.Context, *repository.CommsMess
 	t.Helper()
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)
@@ -551,7 +551,7 @@ func TestCommsMessageRepository_ListEmailIdentitiesForSync(t *testing.T) {
 func TestInteractionSourceCheck_AcceptsEmail(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)

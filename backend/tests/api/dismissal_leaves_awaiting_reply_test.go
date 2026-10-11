@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +26,7 @@ import (
 func setupAwaitingReplyAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactRepository, *repository.ContactTaskRepository, func()) {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -87,7 +86,7 @@ func TestOverdueAPI_DismissedFollowUpLeavesContactAwaitingReply(t *testing.T) {
 	now := accelerated.GetCurrentTime().UTC().Truncate(time.Second)
 	old := now.AddDate(0, 0, -40)
 	contactBy := now.AddDate(0, 0, -10)
-	require.NoError(t, contactRepo.TestSeedContactCadenceFields(context.Background(), contactID, repository.TestCadenceSeed{
+	require.NoError(t, contactRepo.TestSeedContactCadenceFields(t.Context(), contactID, repository.TestCadenceSeed{
 		LastContacted:     &old,
 		LastInteractionAt: &old,
 		LastResponseAt:    &old,
@@ -105,7 +104,7 @@ func TestOverdueAPI_DismissedFollowUpLeavesContactAwaitingReply(t *testing.T) {
 	router.ServeHTTP(interactionResponse, interactionRequest)
 	require.Equal(t, http.StatusCreated, interactionResponse.Code)
 
-	task, err := contactTaskRepo.CreateContactTask(context.Background(), repository.CreateContactTaskRequest{
+	task, err := contactTaskRepo.CreateContactTask(t.Context(), repository.CreateContactTaskRequest{
 		ContactID:      contactID,
 		Provider:       "todoist",
 		Kind:           contacttask.KindReachOut,
@@ -114,7 +113,7 @@ func TestOverdueAPI_DismissedFollowUpLeavesContactAwaitingReply(t *testing.T) {
 		State:          string(repository.ContactTaskStateManaged),
 	})
 	require.NoError(t, err)
-	_, err = contactTaskRepo.UpdateContactTaskState(context.Background(), task.ID, repository.ContactTaskStateDismissed)
+	_, err = contactTaskRepo.UpdateContactTaskState(t.Context(), task.ID, repository.ContactTaskStateDismissed)
 	require.NoError(t, err)
 
 	overdueRequest := httptest.NewRequest(http.MethodGet, "/api/v1/contacts/overdue", nil)

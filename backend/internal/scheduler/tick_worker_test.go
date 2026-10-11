@@ -65,7 +65,7 @@ func TestSchedulerTickWorker_Work_EnqueuesPerDueAccount(t *testing.T) {
 	}
 
 	worker := NewSchedulerTickWorker(svc)
-	err := worker.Work(context.Background(), &river.Job[SchedulerTickArgs]{Args: SchedulerTickArgs{}})
+	err := worker.Work(t.Context(), &river.Job[SchedulerTickArgs]{Args: SchedulerTickArgs{}})
 	require.NoError(t, err)
 
 	require.Len(t, svc.enqueueCalls, 3)
@@ -81,7 +81,7 @@ func TestSchedulerTickWorker_Work_EmptyDueSetIsNoop(t *testing.T) {
 	svc := &fakeSyncServiceForTick{listAccounts: nil}
 
 	worker := NewSchedulerTickWorker(svc)
-	err := worker.Work(context.Background(), &river.Job[SchedulerTickArgs]{Args: SchedulerTickArgs{}})
+	err := worker.Work(t.Context(), &river.Job[SchedulerTickArgs]{Args: SchedulerTickArgs{}})
 	require.NoError(t, err)
 	assert.Empty(t, svc.enqueueCalls)
 }
@@ -100,7 +100,7 @@ func TestSchedulerTickWorker_Work_SkipsWhenEnqueuerReturnsFalse(t *testing.T) {
 	}
 
 	worker := NewSchedulerTickWorker(svc)
-	err := worker.Work(context.Background(), &river.Job[SchedulerTickArgs]{Args: SchedulerTickArgs{}})
+	err := worker.Work(t.Context(), &river.Job[SchedulerTickArgs]{Args: SchedulerTickArgs{}})
 	require.NoError(t, err)
 	require.Len(t, svc.enqueueCalls, 2, "both sources were attempted even though gmail was deduped")
 }
@@ -120,7 +120,7 @@ func TestSchedulerTickWorker_Work_ContinuesAfterPerAccountError(t *testing.T) {
 	}
 
 	worker := NewSchedulerTickWorker(svc)
-	err := worker.Work(context.Background(), &river.Job[SchedulerTickArgs]{Args: SchedulerTickArgs{}})
+	err := worker.Work(t.Context(), &river.Job[SchedulerTickArgs]{Args: SchedulerTickArgs{}})
 	require.NoError(t, err, "per-account error should not fail the tick")
 	require.Len(t, svc.enqueueCalls, 3)
 }
@@ -129,7 +129,7 @@ func TestSchedulerTickWorker_Work_ReturnsErrorWhenListFails(t *testing.T) {
 	svc := &fakeSyncServiceForTick{listErr: errors.New("db down")}
 
 	worker := NewSchedulerTickWorker(svc)
-	err := worker.Work(context.Background(), &river.Job[SchedulerTickArgs]{Args: SchedulerTickArgs{}})
+	err := worker.Work(t.Context(), &river.Job[SchedulerTickArgs]{Args: SchedulerTickArgs{}})
 	require.Error(t, err, "list error should surface so river retries the tick")
 	assert.Empty(t, svc.enqueueCalls)
 }

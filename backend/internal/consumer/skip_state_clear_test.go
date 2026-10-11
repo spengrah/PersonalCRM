@@ -49,9 +49,9 @@ func TestSkipStateClear_ApplyTxShortCircuit(t *testing.T) {
 	h, _, _ := newUnitUpdater(CadenceModeCutover)
 	req := cadenceWriteRequest{ContactID: uuid.New(), Branch: repository.CadenceBranchForward, ClearSkipState: true}
 	var tx *skipStateErrorTx
-	err := h.applyTx(context.Background(), tx, req)
+	err := h.applyTx(t.Context(), tx, req)
 	require.Error(t, err, "clearing skip state must reach the writer rather than short-circuit")
 
 	req.ClearSkipState = false
-	require.NoError(t, h.applyTx(context.Background(), tx, req))
+	require.NoError(t, h.applyTx(t.Context(), tx, req))
 }

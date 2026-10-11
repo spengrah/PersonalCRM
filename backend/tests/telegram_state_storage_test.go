@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 
@@ -20,7 +19,7 @@ const testChannelID int64 = 88888
 
 func cleanupTelegramState(t *testing.T, queries db.Querier) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	_ = queries.DeleteTelegramUpdateState(ctx, testUserID)
 	_ = queries.DeleteTelegramChannelState(ctx, testChannelID)
 	_ = queries.DeleteTelegramChannelState(ctx, testChannelID+1)
@@ -31,7 +30,7 @@ func TestStateStorage_GetSetState(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -67,7 +66,7 @@ func TestStateStorage_IndividualSetters(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -103,7 +102,7 @@ func TestChannelHasher_GetSetAccessHash(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -136,7 +135,7 @@ func TestChannelHasher_SetAccessHash_PreservesPts(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -183,7 +182,7 @@ func TestStateStorage_ChannelPts(t *testing.T) {
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

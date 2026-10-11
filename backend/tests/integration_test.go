@@ -49,20 +49,20 @@ func TestRunMigrations_Integration(t *testing.T) {
 	t.Run("RunMigrations_NoChange", func(t *testing.T) {
 		// Running migrations on an already-migrated database should succeed
 		// and return nil (ErrNoChange is handled internally)
-		err := db.RunMigrations(context.Background(), databaseURL, migrationsPath)
+		err := db.RunMigrations(t.Context(), databaseURL, migrationsPath)
 		assert.NoError(t, err)
 	})
 
 	t.Run("RunMigrations_InvalidPath", func(t *testing.T) {
 		// Invalid migrations path should return error
-		err := db.RunMigrations(context.Background(), databaseURL, "/nonexistent/path")
+		err := db.RunMigrations(t.Context(), databaseURL, "/nonexistent/path")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to create migration instance")
 	})
 
 	t.Run("RunMigrations_InvalidDatabaseURL", func(t *testing.T) {
 		// Invalid database URL should return error
-		err := db.RunMigrations(context.Background(), "postgres://invalid:invalid@localhost:9999/invalid?sslmode=disable", migrationsPath)
+		err := db.RunMigrations(t.Context(), "postgres://invalid:invalid@localhost:9999/invalid?sslmode=disable", migrationsPath)
 		assert.Error(t, err)
 	})
 }
@@ -70,7 +70,7 @@ func TestRunMigrations_Integration(t *testing.T) {
 func TestMigration020_UnifyEmailDedup(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	conn, err := pgx.Connect(ctx, databaseURL)
 	require.NoError(t, err)
 	defer func() { _ = conn.Close(ctx) }()
@@ -179,7 +179,7 @@ func TestContactRepository_Integration(t *testing.T) {
 	// Check if DATABASE_URL is set for integration testing
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Get test config and override DATABASE_URL if set in environment
 	cfg := config.TestConfig()
@@ -281,7 +281,7 @@ func TestContactMethodRepository_Integration(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	if databaseURL != "" {
 		cfg.Database.URL = databaseURL
@@ -358,7 +358,7 @@ func TestSyncRepository_Integration(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Migrations are applied once by TestMain.
 	cfg := config.TestConfig()
@@ -718,7 +718,7 @@ func TestOAuthRepository_Integration(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Migrations are applied once by TestMain.
 	cfg := config.TestConfig()
@@ -1061,7 +1061,7 @@ func timeNow() time.Time {
 func TestFindSimilarContactsBatch_Integration(t *testing.T) {
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Migrations are applied once by TestMain.
 	// Create database connection

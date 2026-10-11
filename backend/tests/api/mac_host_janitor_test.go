@@ -21,7 +21,7 @@ import (
 func TestPairingTokenJanitor_DeletesExpired(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	database, _ := newAPISharedTestDB(t, ctx)
 
 	tokenRepo := repository.NewMacHostPairingTokenRepository(database.Queries)

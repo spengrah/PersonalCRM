@@ -141,7 +141,7 @@ func runDiscovery(
 	t.Helper()
 	agg := map[string]*correspondenceAggregate{}
 	aggregateParticipants(parts, known, own, emptySet(), coOccurIDs, participantMessageContext{}, agg)
-	return d.EvaluateAddresses(context.Background(), sortedAggregates(agg))
+	return d.EvaluateAddresses(context.WithoutCancel(t.Context()), sortedAggregates(agg))
 }
 
 func emptySet() map[string]struct{} { return map[string]struct{}{} }
@@ -282,7 +282,7 @@ func TestDiscovery_DedupByAddressAcrossMessages(t *testing.T) {
 	// msg2: Cc = the same unknown address.
 	aggregateParticipants([]participant{{name: "Pat Carter", address: "pat@example.com"}}, emptySet(), emptySet(), emptySet(), nil, participantMessageContext{}, agg)
 
-	n, err := d.EvaluateAddresses(context.Background(), sortedAggregates(agg))
+	n, err := d.EvaluateAddresses(t.Context(), sortedAggregates(agg))
 	require.NoError(t, err)
 	require.Equal(t, 1, n, "two messages for one address → one candidate")
 	require.Len(t, ext.upserts, 1)
@@ -462,7 +462,7 @@ func TestDiscovery_BccKnownContactNotEvidence(t *testing.T) {
 	known := map[string]struct{}{"a@example.com": {}, "bcc@example.com": {}}
 	agg := map[string]*correspondenceAggregate{}
 	aggregateParticipants(parts, known, emptySet(), emptySet(), coOccurIDs, participantMessageContext{}, agg)
-	n, err := d.EvaluateAddresses(context.Background(), sortedAggregates(agg))
+	n, err := d.EvaluateAddresses(t.Context(), sortedAggregates(agg))
 	require.NoError(t, err)
 	require.Equal(t, 1, n, "the Cc unknown address still produces a candidate")
 	require.Len(t, ext.upserts, 1)
@@ -483,7 +483,7 @@ func TestDiscovery_BccKnownContactNotEvidence(t *testing.T) {
 // Empty input → no error, no upsert.
 func TestDiscovery_EmptyInputNoError(t *testing.T) {
 	d := NewCorrespondenceDiscoverer(&fakeCorrespondenceContacts{}, newFakeExternal())
-	n, err := d.EvaluateAddresses(context.Background(), nil)
+	n, err := d.EvaluateAddresses(t.Context(), nil)
 	require.NoError(t, err)
 	require.Equal(t, 0, n)
 }
@@ -510,7 +510,7 @@ func TestDiscovery_PerAddressErrorAggregated(t *testing.T) {
 	aggregateParticipants([]participant{{name: "Good Person", address: "good@example.com"}}, emptySet(), emptySet(), emptySet(), nil, participantMessageContext{}, agg)
 	aggregateParticipants([]participant{{name: "Bad Person", address: "bad@example.com"}}, emptySet(), emptySet(), emptySet(), nil, participantMessageContext{}, agg)
 
-	n, err := d.EvaluateAddresses(context.Background(), sortedAggregates(agg))
+	n, err := d.EvaluateAddresses(t.Context(), sortedAggregates(agg))
 	require.Error(t, err, "an upsert failure must surface as a non-nil aggregated error")
 	require.Contains(t, err.Error(), "failed")
 	require.Equal(t, 1, n, "the surviving address still upserts and is counted")

@@ -46,7 +46,7 @@ func seedSampleAt(t *testing.T, ctx context.Context, repo *repository.JobSampleR
 // own rows.
 func TestJobSample_MaxConcurrencyAndSaturatedSeconds(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	repo := repository.NewJobSampleRepository(database.Queries)
 
@@ -120,7 +120,7 @@ func TestJobSample_MaxConcurrencyAndSaturatedSeconds(t *testing.T) {
 
 func TestJobSample_RunDurationByKind(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	repo := repository.NewJobSampleRepository(database.Queries)
 
@@ -153,7 +153,7 @@ func TestJobSample_RunDurationByKind(t *testing.T) {
 
 func TestJobSample_WaitByKind(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	repo := repository.NewJobSampleRepository(database.Queries)
 
@@ -186,7 +186,7 @@ func TestJobSample_WaitByKind(t *testing.T) {
 // third kind must not be blamed for a consumer kind's wait).
 func TestJobSample_WaitDuringSaturationAndBlame(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	repo := repository.NewJobSampleRepository(database.Queries)
 
@@ -262,7 +262,7 @@ func TestJobSample_WaitDuringSaturationAndBlame(t *testing.T) {
 // shared DB it would delete sibling tests' rows).
 func TestJobSample_Trim(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	repo := repository.NewJobSampleRepository(database.Queries)
 
@@ -301,7 +301,7 @@ func TestJobSample_Trim(t *testing.T) {
 // Tier-0 per-kind wait/run percentiles.
 func TestJobSample_Tier0StatsByKind(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	repo := repository.NewJobSampleRepository(database.Queries)
 

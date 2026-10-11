@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -41,7 +40,7 @@ func TestContactAPI_FourConsumersAgree(t *testing.T) {
 	for _, id := range []string{awaitingID, closedID} {
 		contactUUID, err := uuid.Parse(id)
 		require.NoError(t, err)
-		require.NoError(t, contactRepo.TestSeedContactCadenceFields(context.Background(), contactUUID, repository.TestCadenceSeed{
+		require.NoError(t, contactRepo.TestSeedContactCadenceFields(t.Context(), contactUUID, repository.TestCadenceSeed{
 			ContactBy: &contactBy,
 		}))
 	}
@@ -59,7 +58,7 @@ func TestContactAPI_FourConsumersAgree(t *testing.T) {
 			detail := fetchContactEntry(t, router, "/api/v1/contacts/"+candidate.id, candidate.id)
 			contactUUID, err := uuid.Parse(candidate.id)
 			require.NoError(t, err)
-			contact, err := contactRepo.GetContact(context.Background(), contactUUID)
+			contact, err := contactRepo.GetContact(t.Context(), contactUUID)
 			require.NoError(t, err)
 			expected := cadence.IsAwaitingReply(
 				payloadTime(t, detail, "last_outreach_at"),

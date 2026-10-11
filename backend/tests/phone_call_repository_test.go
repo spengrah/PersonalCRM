@@ -42,7 +42,7 @@ func setupPhoneCallTest(t *testing.T) (phoneCallTestEnv, func()) {
 	t.Helper()
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)

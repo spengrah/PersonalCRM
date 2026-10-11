@@ -1,7 +1,6 @@
 package todoist
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -123,7 +122,7 @@ func TestExchangeCodeForToken_Success(t *testing.T) {
 		httpClient:   server.Client(),
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	token, err := service.exchangeCodeForTokenWithURL(ctx, "test-auth-code", server.URL)
 	require.NoError(t, err)
 	assert.Equal(t, "test-access-token", token.AccessToken)
@@ -145,7 +144,7 @@ func TestExchangeCodeForToken_Error(t *testing.T) {
 		httpClient:   server.Client(),
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := service.exchangeCodeForTokenWithURL(ctx, "invalid-code", server.URL)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "token exchange failed")
@@ -169,7 +168,7 @@ func TestGetUserInfo_Success(t *testing.T) {
 		httpClient: server.Client(),
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	userInfo, err := service.getUserInfoWithURL(ctx, "test-access-token", server.URL)
 	require.NoError(t, err)
 	assert.Equal(t, "12345", userInfo.ID)
@@ -188,7 +187,7 @@ func TestGetUserInfo_Error(t *testing.T) {
 		httpClient: server.Client(),
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := service.getUserInfoWithURL(ctx, "invalid-token", server.URL)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "user info request failed")
@@ -220,7 +219,7 @@ func TestRevokeToken_Success(t *testing.T) {
 		httpClient:   server.Client(),
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	err := service.revokeTokenWithURL(ctx, "test-access-token", server.URL)
 	require.NoError(t, err)
 
@@ -243,7 +242,7 @@ func TestRevokeToken_Error(t *testing.T) {
 		httpClient:   server.Client(),
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	err := service.revokeTokenWithURL(ctx, "test-access-token", server.URL)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "revoke failed")
@@ -262,7 +261,7 @@ func TestRevokeToken_NoContent(t *testing.T) {
 		httpClient:   server.Client(),
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	err := service.revokeTokenWithURL(ctx, "test-access-token", server.URL)
 	require.NoError(t, err)
 }
@@ -285,7 +284,7 @@ func TestExchangeCodeForToken_MissingAccessToken(t *testing.T) {
 		httpClient:   server.Client(),
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	token, err := service.exchangeCodeForTokenWithURL(ctx, "test-auth-code", server.URL)
 	// Empty access token should be returned - caller should validate
 	require.NoError(t, err)
@@ -307,7 +306,7 @@ func TestExchangeCodeForToken_InvalidJSON(t *testing.T) {
 		httpClient:   server.Client(),
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := service.exchangeCodeForTokenWithURL(ctx, "test-auth-code", server.URL)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "decode token response")
@@ -325,7 +324,7 @@ func TestGetUserInfo_InvalidJSON(t *testing.T) {
 		httpClient: server.Client(),
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := service.getUserInfoWithURL(ctx, "test-access-token", server.URL)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "decode user info")
@@ -374,7 +373,7 @@ func TestExchangeCodeForToken_HTTPStatusCodes(t *testing.T) {
 				httpClient:   server.Client(),
 			}
 
-			ctx := context.Background()
+			ctx := t.Context()
 			_, err := service.exchangeCodeForTokenWithURL(ctx, "test-auth-code", server.URL)
 			if tc.expectErr {
 				assert.Error(t, err)

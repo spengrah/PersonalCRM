@@ -24,7 +24,7 @@ func TestStalenessWatchdogWorker_Work_CallsRunChecks(t *testing.T) {
 	checker := &fakeStalenessChecker{}
 	worker := NewStalenessWatchdogWorker(checker)
 
-	err := worker.Work(context.Background(), &river.Job[StalenessWatchdogArgs]{
+	err := worker.Work(t.Context(), &river.Job[StalenessWatchdogArgs]{
 		Args: StalenessWatchdogArgs{},
 	})
 	require.NoError(t, err)
@@ -35,7 +35,7 @@ func TestStalenessWatchdogWorker_Work_WrapsError(t *testing.T) {
 	checker := &fakeStalenessChecker{returnErr: errors.New("boom")}
 	worker := NewStalenessWatchdogWorker(checker)
 
-	err := worker.Work(context.Background(), &river.Job[StalenessWatchdogArgs]{
+	err := worker.Work(t.Context(), &river.Job[StalenessWatchdogArgs]{
 		Args: StalenessWatchdogArgs{},
 	})
 	require.Error(t, err)

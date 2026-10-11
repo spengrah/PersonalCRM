@@ -56,7 +56,7 @@ func TestRunMigrations_River_Integration(t *testing.T) {
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = getMigrationsPath()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// First run: golang-migrate + river-migrate both apply (or report
 	// no-op if a previous test already migrated the shared DB).
@@ -82,7 +82,7 @@ func TestRiverClient_StartStop_Integration(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	// Per-test isolated clone so the live client owns a private river_job.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	workers := river.NewWorkers()
@@ -120,7 +120,7 @@ func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 	// registers database.Close() on t.Cleanup; the client.Stop cleanup
 	// registered below runs first (t.Cleanup is LIFO), so the pool stays
 	// alive while the client finalizes its last job batch.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	var invoked atomic.Int32
@@ -142,7 +142,7 @@ func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 	require.NoError(t, client.Start(ctx))
 
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})
@@ -188,7 +188,7 @@ func TestRiverClient_BootsWithNoopWorkerOnly(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
 	// Per-test isolated clone so the live client owns a private river_job.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	// Simulate the main.go boot path with EnableExternalSync=false: only
@@ -250,7 +250,7 @@ func TestRiverErrorHandler_DiscardLogging_Integration(t *testing.T) {
 	t.Parallel()
 	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	// Thread-safe buffer: River invokes the ErrorHandler on its own goroutines.
@@ -276,7 +276,7 @@ func TestRiverErrorHandler_DiscardLogging_Integration(t *testing.T) {
 	// silently stops fetching when its fetch-loop ctx cancels).
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})

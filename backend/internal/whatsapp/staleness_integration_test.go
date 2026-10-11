@@ -51,7 +51,7 @@ func TestWhatsAppManager_TerminalDisconnectOpensAStalenessBreach(t *testing.T) {
 	t.Parallel()
 	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 

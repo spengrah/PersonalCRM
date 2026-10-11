@@ -63,7 +63,7 @@ func TestImportAPI_CandidateListConfidenceOrder(t *testing.T) {
 	// the fixture deletes registered below need the pool still open.
 	t.Cleanup(cleanup)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	suffix := uuid.New().String()[:8]
 	orderSource := "test-order-" + suffix
 

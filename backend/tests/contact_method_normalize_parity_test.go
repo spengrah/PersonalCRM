@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 
@@ -31,7 +30,7 @@ func TestMethodOps_UniquenessKeyMatchesTrigger(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

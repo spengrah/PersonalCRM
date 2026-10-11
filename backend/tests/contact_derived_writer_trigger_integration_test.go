@@ -364,7 +364,7 @@ func TestDerivedWriterTrigger_IgnoresProfileOnlyUpdate(t *testing.T) {
 func TestDerivedWriterTrigger_InsertUnaffected(t *testing.T) {
 	t.Parallel()
 	database, _ := newSyntheticDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	contactRepo := repository.NewContactRepository(database.Queries)
 
 	cadenceVal := "monthly"

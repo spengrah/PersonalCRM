@@ -80,7 +80,7 @@ func TestSystemAPI_ExportData(t *testing.T) {
 	defer database.Close()
 	router := setupSystemExportTestRouter(database)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contactRepo := repository.NewContactRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	noteRepo := repository.NewNoteRepository(database.Queries)

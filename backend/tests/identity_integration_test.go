@@ -21,7 +21,7 @@ func TestIdentityRepository_Integration(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Migrations are applied once by TestMain.
 	cfg := config.TestConfig()
@@ -290,7 +290,7 @@ func TestIdentityService_Integration(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Migrations are applied once by TestMain.
 	cfg := config.TestConfig()
@@ -616,7 +616,7 @@ func TestIdentityService_NormalizationPolicy_Integration(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Migrations are applied once by TestMain.
 	cfg := config.TestConfig()

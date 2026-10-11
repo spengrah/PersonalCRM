@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -200,7 +199,7 @@ func TestRunSeedEntrypointsPrintPartialSummaryOnFailure(t *testing.T) {
 				err:    errors.New("replay gmail 3 msg 1: boom"),
 			}
 
-			err := run(context.Background(), tc.opts, deps)
+			err := run(t.Context(), tc.opts, deps)
 			require.Error(t, err, "the seed failure is still surfaced")
 			require.Contains(t, err.Error(), "boom")
 
@@ -226,7 +225,7 @@ func TestRunSeedPrintsCompleteSummaryWhenOnlyPostSeedStepFailed(t *testing.T) {
 		err: fmt.Errorf("%w: quiesce after seed: %w", errSeedWorldIntact, errors.New("stop river client")),
 	}
 
-	err := run(context.Background(), runOptions{doSeed: true, seedYes: true}, deps)
+	err := run(t.Context(), runOptions{doSeed: true, seedYes: true}, deps)
 
 	require.Error(t, err, "the command still fails")
 	require.Contains(t, err.Error(), "quiesce after seed")
@@ -258,7 +257,7 @@ func TestRunSeedPrintsNoSummaryWhenProfileNeverRan(t *testing.T) {
 	deps, stdout, _, _, _, _ := newTestDeps()
 	deps.seed = &fakeSeedRunner{err: errors.New("refusing additive --seed: 4 queued river_job row(s)")}
 
-	err := run(context.Background(), runOptions{doSeed: true, seedYes: true}, deps)
+	err := run(t.Context(), runOptions{doSeed: true, seedYes: true}, deps)
 	require.Error(t, err)
 	require.False(t, strings.Contains(stdout.String(), "seed summary"),
 		"a run that never reached the profile prints no summary, got %q", stdout.String())

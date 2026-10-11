@@ -84,7 +84,7 @@ func newGmailRematchEnv(t *testing.T, accountIDs []string) *gmailRematchEnv {
 	testsupport.RequireDatabase(t)
 	// Per-test isolated clone: the live email consumer + rematch jobs drain
 	// a private river_job.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)

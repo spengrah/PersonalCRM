@@ -44,7 +44,7 @@ var liveContactColumnOrder = []string{
 func TestLiveContactView_Shape(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 
 	kindCount, err := database.Queries.TestCountPlainViews(ctx, "live_contact")
@@ -134,14 +134,14 @@ func seedLiveContactFixture(t *testing.T, ctx context.Context, contactRepo *repo
 		FullName: "LiveContactView " + tag + " Live " + token,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(context.Background(), live.ID) })
+	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(context.WithoutCancel(t.Context()), live.ID) })
 
 	deleted, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 		FullName: "LiveContactView " + tag + " Deleted " + token,
 	})
 	require.NoError(t, err)
 	require.NoError(t, contactRepo.SoftDeleteContact(ctx, deleted.ID))
-	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(context.Background(), deleted.ID) })
+	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(context.WithoutCancel(t.Context()), deleted.ID) })
 
 	return liveContactFixture{live: live, deleted: deleted}
 }
@@ -154,7 +154,7 @@ func seedLiveContactFixture(t *testing.T, ctx context.Context, contactRepo *repo
 func TestLiveContactView_ExcludesSoftDeletedOwners(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -208,7 +208,7 @@ func TestLiveContactView_ExcludesSoftDeletedOwners(t *testing.T) {
 func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -321,14 +321,14 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 			SentAt: accelerated.GetCurrentTime(), MatchedContactID: fx.live.ID, SourceMetadata: []byte(`{}`),
 		})
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = commsRepo.HardDeleteByContact(context.Background(), fx.live.ID) })
+		t.Cleanup(func() { _ = commsRepo.HardDeleteByContact(context.WithoutCancel(t.Context()), fx.live.ID) })
 
 		deletedMsg, err := commsRepo.UpsertMessage(ctx, repository.UpsertCommsMessageParams{
 			Source: "email", ExternalID: "live-contact-view-rr-msg-deleted-" + token, Direction: "inbound",
 			SentAt: accelerated.GetCurrentTime(), MatchedContactID: fx.deleted.ID, SourceMetadata: []byte(`{}`),
 		})
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = commsRepo.HardDeleteByContact(context.Background(), fx.deleted.ID) })
+		t.Cleanup(func() { _ = commsRepo.HardDeleteByContact(context.WithoutCancel(t.Context()), fx.deleted.ID) })
 
 		rows, err := commsRepo.ListMissingParticipantNames(ctx, since, uuid.Nil, 10000)
 		require.NoError(t, err)
@@ -470,7 +470,7 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 func TestLiveContactView_UpdateGuardsHonourLiveness(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)

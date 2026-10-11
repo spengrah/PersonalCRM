@@ -1,7 +1,6 @@
 package consumer
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -39,7 +38,7 @@ func TestLegacyCreateAdapter_DelegatesWithLegacyUUID(t *testing.T) {
 	executor := newOpWorker(repo, client, &recordingInserter{})
 	adapter := NewTodoistFollowUpCreateAdapterWorker(executor)
 
-	err := adapter.Work(context.Background(), &river.Job[consumerjobs.TodoistFollowUpCreateJobArgs]{
+	err := adapter.Work(t.Context(), &river.Job[consumerjobs.TodoistFollowUpCreateJobArgs]{
 		Args: consumerjobs.TodoistFollowUpCreateJobArgs{ContactTaskID: taskID},
 	})
 	// The unit executor has no pool, so phase 3 (finalize) fails — the
@@ -67,7 +66,7 @@ func TestLegacyCloseAdapter_DelegatesToCloseVerb(t *testing.T) {
 	executor := newOpWorker(repo, client, &recordingInserter{})
 	adapter := NewTodoistFollowUpCloseAdapterWorker(executor)
 
-	err := adapter.Work(context.Background(), &river.Job[consumerjobs.TodoistFollowUpCloseJobArgs]{
+	err := adapter.Work(t.Context(), &river.Job[consumerjobs.TodoistFollowUpCloseJobArgs]{
 		Args: consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: taskID},
 	})
 	require.NoError(t, err)
@@ -91,7 +90,7 @@ func TestLegacyRefreshAdapter_IgnoresCarriedDeadline(t *testing.T) {
 	// The carried NewDeadline is STALE by design — the adapter converges
 	// on the row's current metadata instead (strictly more correct).
 	carried := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	err := adapter.Work(context.Background(), &river.Job[consumerjobs.TodoistFollowUpRefreshJobArgs]{
+	err := adapter.Work(t.Context(), &river.Job[consumerjobs.TodoistFollowUpRefreshJobArgs]{
 		Args: consumerjobs.TodoistFollowUpRefreshJobArgs{ContactTaskID: taskID, NewDeadline: carried},
 	})
 	require.NoError(t, err)
@@ -105,17 +104,17 @@ func TestLegacyRefreshAdapter_IgnoresCarriedDeadline(t *testing.T) {
 func TestLegacyAdapters_MissingDepsError(t *testing.T) {
 	executor := NewTodoistTaskOpWorker(FollowUpModeCutover, nil, nil, nil, nil, nil)
 
-	err := NewTodoistFollowUpCreateAdapterWorker(executor).Work(context.Background(),
+	err := NewTodoistFollowUpCreateAdapterWorker(executor).Work(t.Context(),
 		&river.Job[consumerjobs.TodoistFollowUpCreateJobArgs]{Args: consumerjobs.TodoistFollowUpCreateJobArgs{ContactTaskID: uuid.New()}})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not wired")
 
-	err = NewTodoistFollowUpCloseAdapterWorker(executor).Work(context.Background(),
+	err = NewTodoistFollowUpCloseAdapterWorker(executor).Work(t.Context(),
 		&river.Job[consumerjobs.TodoistFollowUpCloseJobArgs]{Args: consumerjobs.TodoistFollowUpCloseJobArgs{ContactTaskID: uuid.New()}})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not wired")
 
-	err = NewTodoistFollowUpRefreshAdapterWorker(executor).Work(context.Background(),
+	err = NewTodoistFollowUpRefreshAdapterWorker(executor).Work(t.Context(),
 		&river.Job[consumerjobs.TodoistFollowUpRefreshJobArgs]{Args: consumerjobs.TodoistFollowUpRefreshJobArgs{ContactTaskID: uuid.New()}})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not wired")

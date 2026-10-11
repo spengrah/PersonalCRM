@@ -24,7 +24,7 @@ import (
 func TestSyncLogTrim_Isolated(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 

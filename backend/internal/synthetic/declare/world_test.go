@@ -1,7 +1,6 @@
 package declare
 
 import (
-	"context"
 	"errors"
 	"sort"
 	"testing"
@@ -106,7 +105,7 @@ func TestWorldPlan_CoversEveryRegisteredUnit(t *testing.T) {
 
 func TestExecuteWorld_FinalDrainFailureUsesTheProductionErrorPath(t *testing.T) {
 	res, err := executeWorld(
-		context.Background(),
+		t.Context(),
 		WorldResult{Entities: map[string]Seeded{}},
 		[]WorldStep{{Kind: WorldStepTail, Key: "minimal-tail"}},
 		func(WorldStep) ([]string, []Seeded, error) { return nil, nil, nil },
@@ -135,7 +134,7 @@ func TestExecuteWorld_FailuresNameTheActualStepAndKeepPartialEntities(t *testing
 	for failAt := range plan {
 		t.Run(plan[failAt].Key, func(t *testing.T) {
 			res, err := executeWorld(
-				context.Background(),
+				t.Context(),
 				WorldResult{Entities: map[string]Seeded{}},
 				plan,
 				func(step WorldStep) ([]string, []Seeded, error) {
@@ -163,7 +162,7 @@ func TestExecuteWorld_FailuresNameTheActualStepAndKeepPartialEntities(t *testing
 
 func TestExecuteWorld_RejectsAnUnreportedTailContact(t *testing.T) {
 	res, err := executeWorld(
-		context.Background(),
+		t.Context(),
 		WorldResult{Entities: map[string]Seeded{}},
 		[]WorldStep{{Kind: WorldStepTail, Key: "fixtures"}},
 		func(WorldStep) ([]string, []Seeded, error) {

@@ -36,7 +36,7 @@ type chatStagingEnv struct {
 func setupChatStagingTest(t *testing.T) *chatStagingEnv {
 	t.Helper()
 	databaseURL := testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	database := testsupport.OpenDatabase(t)

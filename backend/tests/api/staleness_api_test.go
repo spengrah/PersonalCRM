@@ -3,7 +3,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -53,7 +52,7 @@ func setupStalenessAPITest(t *testing.T) (*gin.Engine, *repository.StalenessRepo
 
 func TestStalenessAPI_GetActiveBreaches(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	router, breachRepo, cleanup := setupStalenessAPITest(t)
 	defer cleanup()
 

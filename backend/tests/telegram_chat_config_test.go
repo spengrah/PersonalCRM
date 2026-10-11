@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 
@@ -23,7 +22,7 @@ func chatConfigIDs(t *testing.T, queries db.Querier) (id1, id2, id3 int64) {
 	base, _ := uniqueTestIDs(t, ns)
 	id1, id2, id3 = base, base+1, base+2
 	clean := func() {
-		ctx := context.Background()
+		ctx := t.Context()
 		_ = queries.DeleteTelegramChatConfig(ctx, id1)
 		_ = queries.DeleteTelegramChatConfig(ctx, id2)
 		_ = queries.DeleteTelegramChatConfig(ctx, id3)
@@ -39,7 +38,7 @@ func TestChatConfig_UpsertAndList(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -83,7 +82,7 @@ func TestChatConfig_UpdateStatus(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -116,7 +115,7 @@ func TestChatConfig_BackfillCursorAndComplete(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -162,7 +161,7 @@ func TestChatConfig_ResetBackfill(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -202,7 +201,7 @@ func TestChatConfig_ListForBackfill(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -256,7 +255,7 @@ func TestChatConfig_UpdateMemberCount(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -293,7 +292,7 @@ func TestChatConfig_BackfillResume(t *testing.T) {
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 

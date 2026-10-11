@@ -26,7 +26,7 @@ func newTodoistOAuthTestService(t *testing.T) (*todoist.OAuthService, *repositor
 	t.Helper()
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -102,8 +102,8 @@ func TestTodoistOAuth_ExchangeRoundTrip(t *testing.T) {
 	withTodoistEndpoints(t, fake)
 
 	t.Cleanup(func() {
-		if cred, err := repo.GetByProviderAndAccount(context.Background(), todoist.ProviderName, userID); err == nil {
-			_ = repo.Delete(context.Background(), cred.ID)
+		if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), todoist.ProviderName, userID); err == nil {
+			_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 		}
 	})
 
@@ -148,8 +148,8 @@ func TestTodoistOAuth_ReExchangeUsesDistinctNonce(t *testing.T) {
 	withTodoistEndpoints(t, fake)
 
 	t.Cleanup(func() {
-		if cred, err := repo.GetByProviderAndAccount(context.Background(), todoist.ProviderName, userID); err == nil {
-			_ = repo.Delete(context.Background(), cred.ID)
+		if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), todoist.ProviderName, userID); err == nil {
+			_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 		}
 	})
 

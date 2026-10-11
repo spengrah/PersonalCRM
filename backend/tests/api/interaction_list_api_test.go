@@ -40,7 +40,7 @@ func strptr(value string) *string { return &value }
 
 func newInteractionAPITest(t *testing.T) *interactionAPIDB {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Synthetic interaction contact"})

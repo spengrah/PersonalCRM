@@ -330,7 +330,7 @@ func TestHistoryDrainer_ClampDropsPreHorizonMessages(t *testing.T) {
 	)))
 	env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, []string{"new-1", "new-2"}, env.ingestedIDs())
 	assert.Equal(t, []string{"new-1", "new-2"}, env.fetcher.projected,
@@ -346,7 +346,7 @@ func TestHistoryDrainer_DeletesMediaOnlyAfterAck(t *testing.T) {
 	env := newDrainEnv(t, chunk(conversation(testHistoryDMJID, webMessage("m-1", afterFloor, "hi"))))
 	row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, []string{"download", "ack", "delete"}, env.fetcher.calls)
 	assert.Equal(t, repository.HistoryNotificationStateDone, env.store.find(row.ID).State)
@@ -360,7 +360,7 @@ func TestHistoryDrainer_DoesNotAckOrDeleteOnProjectionFailure(t *testing.T) {
 	row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 	env.ingestor.setErr(errors.New("pool exhausted"))
 
-	err := env.drainer.Drain(context.Background())
+	err := env.drainer.Drain(t.Context())
 
 	require.Error(t, err)
 	assert.Equal(t, []string{"download"}, env.fetcher.calls)
@@ -378,7 +378,7 @@ func TestHistoryDrainer_CompletesAFreshChunkInOneClaim(t *testing.T) {
 	env := newDrainEnv(t, chunk(conversation(testHistoryDMJID, webMessage("m-1", afterFloor, "hi"))))
 	row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, 1, env.store.claims, "one claim carries a fresh chunk all the way to done")
 	assert.Equal(t, repository.HistoryNotificationStateDone, env.store.find(row.ID).State)
@@ -392,7 +392,7 @@ func TestHistoryDrainer_DrainsTheWholeBacklogInOneRun(t *testing.T) {
 		env.store.add(&repository.HistoryNotification{ProtocolMsgID: fmt.Sprintf("pm-%d", i)})
 	}
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	for _, row := range env.store.rows {
 		assert.Equal(t, repository.HistoryNotificationStateDone, row.State)
@@ -407,7 +407,7 @@ func TestHistoryDrainer_ChunkWithNoConversationsCompletes(t *testing.T) {
 	env := newDrainEnv(t, chunk())
 	row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1", SyncType: "PUSH_NAME"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, repository.HistoryNotificationStateDone, env.store.find(row.ID).State)
 	assert.Equal(t, []string{"download", "ack", "delete"}, env.fetcher.calls)
@@ -433,7 +433,7 @@ func TestHistoryDrainer_ResolvesEachGroupExactlyOnce(t *testing.T) {
 
 	env.group.info = &ChatGroupInfo{Title: "Book Club", MemberCount: 4}
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, 1, env.group.calls, "one lookup per distinct group, however many messages it carries")
 	assert.Equal(t, []string{"g-1", "d-1"}, env.ingestedIDs())
@@ -451,7 +451,7 @@ func TestHistoryDrainer_FailsClosedOnUnresolvableGroup(t *testing.T) {
 	env.group.info = nil
 	env.group.err = errors.New("socket closed")
 
-	err := env.drainer.Drain(context.Background())
+	err := env.drainer.Drain(t.Context())
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrChatGateUndecided)
@@ -471,7 +471,7 @@ func TestHistoryDrainer_SkipsIneligibleChats(t *testing.T) {
 	))
 	env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, []string{"d-1"}, env.fetcher.projected)
 	assert.Equal(t, []string{"d-1"}, env.ingestedIDs())
@@ -486,7 +486,7 @@ func TestHistoryDrainer_LIDDMIsKeyedOnThePhoneNumberThread(t *testing.T) {
 	env := newDrainEnv(t, chunk(conv))
 	env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	require.Equal(t, 1, env.ingestor.count())
 	assert.Equal(t, testHistoryDMJID, env.ingestor.first().ChatJID)
@@ -499,7 +499,7 @@ func TestHistoryDrainer_LIDDMWithoutAPnJIDKeepsItsOwnThread(t *testing.T) {
 	env := newDrainEnv(t, chunk(conversation(testHistoryLIDJID, webMessage("m-1", afterFloor, "hi"))))
 	env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	require.Equal(t, 1, env.ingestor.count())
 	assert.Equal(t, testHistoryLIDJID, env.ingestor.first().ChatJID)
@@ -525,7 +525,7 @@ func TestHistoryDrainer_StubAndSystemEntriesAreNeverStaged(t *testing.T) {
 	)))
 	env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, []string{"real-1", "real-2"}, env.ingestedIDs())
 	assert.Equal(t, []string{"real-1", "real-2"}, env.fetcher.projected,
@@ -543,7 +543,7 @@ func TestHistoryDrainer_StubTypeWithContentIsStagedAndReported(t *testing.T) {
 	)))
 	env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	require.Equal(t, 1, env.ingestor.count(), "a message with real content is never dropped on a stub type alone")
 	assert.Equal(t, "hybrid-1", env.ingestor.first().MessageID)
@@ -561,7 +561,7 @@ func TestHistoryDrainer_MalformedMessageIsSkippedNotFatal(t *testing.T) {
 	env.fetcher.projectErr["bad-decode"] = errors.New("proto: bad wire format")
 	row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, []string{"good-1"}, env.ingestedIDs())
 	assert.Equal(t, repository.HistoryNotificationStateDone, env.store.find(row.ID).State)
@@ -577,7 +577,7 @@ func TestHistoryDrainer_IneligibleProjectionIsNotStaged(t *testing.T) {
 	env.fetcher.ineligible["reaction-1"] = true
 	env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, []string{"good-1"}, env.ingestedIDs())
 }
@@ -593,7 +593,7 @@ func TestHistoryDrainer_LIDMappingsIncompleteIsTransientAndRetries(t *testing.T)
 	row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 	env.fetcher.downloadErr = fmt.Errorf("%w: no stored phone number", ErrLIDMappingsIncomplete)
 
-	err := env.drainer.Drain(context.Background())
+	err := env.drainer.Drain(t.Context())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrLIDMappingsIncomplete)
 	stored := env.store.find(row.ID)
@@ -604,7 +604,7 @@ func TestHistoryDrainer_LIDMappingsIncompleteIsTransientAndRetries(t *testing.T)
 	// The retry, once the mappings land.
 	env.fetcher.downloadErr = nil
 	stored.State = repository.HistoryNotificationStatePending
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 	assert.Equal(t, repository.HistoryNotificationStateDone, env.store.find(row.ID).State)
 	assert.Equal(t, 1, env.ingestor.count())
 }
@@ -616,7 +616,7 @@ func TestHistoryDrainer_MediaMissingAtRecordedFails(t *testing.T) {
 	row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 	env.fetcher.downloadErr = fmt.Errorf("download: %w", whatsmeow.ErrMediaDownloadFailedWith404)
 
-	require.NoError(t, env.drainer.Drain(context.Background()), "a decided failure is not the job's error")
+	require.NoError(t, env.drainer.Drain(t.Context()), "a decided failure is not the job's error")
 
 	assert.Equal(t, repository.HistoryNotificationStateFailed, env.store.find(row.ID).State)
 	assert.Equal(t, []string{"download"}, env.fetcher.calls, "no receipt for a chunk that stored nothing")
@@ -638,7 +638,7 @@ func TestHistoryDrainer_MediaMissingAtDownloadedWithNoCheckpointFails(t *testing
 	})
 	env.fetcher.downloadErr = fmt.Errorf("download: %w", whatsmeow.ErrMediaDownloadFailedWith410)
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, repository.HistoryNotificationStateFailed, env.store.find(row.ID).State)
 	assert.NotContains(t, env.fetcher.calls, "ack",
@@ -658,7 +658,7 @@ func TestHistoryDrainer_MediaMissingAtDownloadedWithACheckpointCompletesSuccessf
 	})
 	env.fetcher.downloadErr = fmt.Errorf("download: %w", whatsmeow.ErrMediaDownloadFailedWith403)
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	stored := env.store.find(row.ID)
 	assert.Equal(t, repository.HistoryNotificationStateDone, stored.State)
@@ -685,7 +685,7 @@ func TestHistoryDrainer_DeleteFailureStillCompletesTheChunk(t *testing.T) {
 			row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 			env.fetcher.deleteErr = deleteErr
 
-			require.NoError(t, env.drainer.Drain(context.Background()))
+			require.NoError(t, env.drainer.Drain(t.Context()))
 
 			stored := env.store.find(row.ID)
 			assert.Equal(t, repository.HistoryNotificationStateDone, stored.State,
@@ -709,7 +709,7 @@ func TestHistoryDrainer_DeleteIsNeverRetriedIntoAFailedChunk(t *testing.T) {
 	row.Attempts = maxTransientAttempts + 5 // long past the cap
 	env.fetcher.deleteErr = errors.New("media delete failed with status code 410")
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, repository.HistoryNotificationStateDone, env.store.find(row.ID).State)
 	assert.Empty(t, env.store.failures)
@@ -724,7 +724,7 @@ func TestHistoryDrainer_MalformedNotificationIsTerminal(t *testing.T) {
 	row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 	env.fetcher.downloadErr = fmt.Errorf("%w: unmarshal: bad wire", ErrHistoryNotificationMalformed)
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, repository.HistoryNotificationStateFailed, env.store.find(row.ID).State)
 }
@@ -741,7 +741,7 @@ func TestHistoryDrainer_TransientFailuresAreCapped(t *testing.T) {
 	// Under the cap: the failure is returned so River records it, and the row
 	// stays recoverable.
 	row.Attempts = maxTransientAttempts - 1
-	require.Error(t, env.drainer.Drain(context.Background()))
+	require.Error(t, env.drainer.Drain(t.Context()))
 	assert.Equal(t, repository.HistoryNotificationStateProcessing, env.store.find(row.ID).State)
 	assert.Empty(t, env.store.failures)
 
@@ -749,7 +749,7 @@ func TestHistoryDrainer_TransientFailuresAreCapped(t *testing.T) {
 	// in the status counts and the operator listing instead of grinding.
 	row.State = repository.HistoryNotificationStatePending
 	row.Attempts = maxTransientAttempts
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 	assert.Equal(t, repository.HistoryNotificationStateFailed, env.store.find(row.ID).State)
 	require.Len(t, env.store.failures, 1)
 	assert.Contains(t, env.store.failures[0], "gave up after")
@@ -776,7 +776,7 @@ func TestHistoryDrainer_ResumesAtEachPhase(t *testing.T) {
 			env := newDrainEnv(t, chunk(conversation(testHistoryDMJID, webMessage("m-1", afterFloor, "hi"))))
 			row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1", Phase: tc.phase})
 
-			require.NoError(t, env.drainer.Drain(context.Background()))
+			require.NoError(t, env.drainer.Drain(t.Context()))
 
 			assert.Equal(t, tc.wantCalls, env.fetcher.calls)
 			assert.Equal(t, repository.HistoryNotificationStateDone, env.store.find(row.ID).State)
@@ -790,7 +790,7 @@ func TestHistoryDrainer_ResumesAfterCrashBetweenDeleteAndMarkDone(t *testing.T) 
 	env := newDrainEnv(t, chunk(conversation(testHistoryDMJID, webMessage("m-1", afterFloor, "hi"))))
 	row := env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1", Phase: repository.HistoryPhaseDeleted})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Empty(t, env.fetcher.calls, "no re-download, no second receipt, no second delete")
 	assert.Zero(t, env.ingestor.count())
@@ -812,7 +812,7 @@ func TestHistoryDrainer_ResumeSkipsCompletedConversations(t *testing.T) {
 		Checkpoint:    checkpointJSON(1, "15551110002@s.whatsapp.net", 2),
 	})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, []string{"c-1"}, env.ingestedIDs())
 }
@@ -832,7 +832,7 @@ func TestHistoryDrainer_CheckpointMismatchReprojectsFromTheStart(t *testing.T) {
 		Checkpoint:    checkpointJSON(0, "15559999999@s.whatsapp.net", 1),
 	})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, []string{"a-1", "b-1"}, env.ingestedIDs())
 }
@@ -864,7 +864,7 @@ func TestHistoryDrainer_AbandonsTheChunkWhenTheLeaseIsLost(t *testing.T) {
 		env.store.find(row.ID).ClaimToken = &stolen
 	}
 
-	require.NoError(t, env.drainer.Drain(context.Background()), "a lost lease is not a job failure")
+	require.NoError(t, env.drainer.Drain(t.Context()), "a lost lease is not a job failure")
 
 	stored := env.store.find(row.ID)
 	assert.Equal(t, repository.HistoryNotificationStateProcessing, stored.State,
@@ -888,7 +888,7 @@ func TestHistoryDrainer_DroppedInlineChunkSkipsDownloadAndDelete(t *testing.T) {
 		Phase: repository.HistoryPhaseProjected,
 	})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, []string{"ack"}, env.fetcher.calls)
 	assert.Zero(t, env.ingestor.count(), "a dropped chunk is never projected")
@@ -919,7 +919,7 @@ func TestHistoryDrainer_DefersWithoutClaimingWhenNoClientIsConnected(t *testing.
 			drainer := NewHistoryDrainer(store, tc.ingestor, nil, tc.source)
 
 			require.NotPanics(t, func() {
-				require.NoError(t, drainer.Drain(context.Background()))
+				require.NoError(t, drainer.Drain(t.Context()))
 			})
 
 			assert.Zero(t, store.claims, "deferring must not claim, or the lease burns for nothing")
@@ -935,7 +935,7 @@ func TestHistoryDrainer_StopsOnACancelledContext(t *testing.T) {
 	env := newDrainEnv(t, chunk())
 	env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	require.NoError(t, env.drainer.Drain(ctx))
@@ -948,7 +948,7 @@ func TestHistoryDrainer_ClaimFailureIsReturned(t *testing.T) {
 	env := newDrainEnv(t, chunk())
 	env.store.claimErr = errors.New("pool exhausted")
 
-	require.Error(t, env.drainer.Drain(context.Background()))
+	require.Error(t, env.drainer.Drain(t.Context()))
 }
 
 // TestHistoryDrainer_MediaMissingAtDownloadedWithAnEmptyCheckpointFails is the
@@ -969,7 +969,7 @@ func TestHistoryDrainer_MediaMissingAtDownloadedWithAnEmptyCheckpointFails(t *te
 	})
 	env.fetcher.downloadErr = fmt.Errorf("download: %w", whatsmeow.ErrMediaDownloadFailedWith410)
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, repository.HistoryNotificationStateFailed, env.store.find(row.ID).State)
 	assert.NotContains(t, env.fetcher.calls, "ack",
@@ -990,7 +990,7 @@ func TestHistoryDrainer_CheckpointStagedCountSurvivesAResume(t *testing.T) {
 		Checkpoint:    checkpointJSON(0, "15551110001@s.whatsapp.net", 1),
 	})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	cp, ok := parseHistoryCheckpoint(env.store.find(row.ID).Checkpoint)
 	require.True(t, ok)
@@ -1014,7 +1014,7 @@ func TestHistoryDrainer_UndatedMessagesAreNotCountedAsPreHorizon(t *testing.T) {
 	)))
 	env.store.add(&repository.HistoryNotification{ProtocolMsgID: "pm-1"})
 
-	require.NoError(t, env.drainer.Drain(context.Background()))
+	require.NoError(t, env.drainer.Drain(t.Context()))
 
 	assert.Equal(t, []string{"good-1"}, env.ingestedIDs(),
 		"an undatable message cannot be placed on a timeline, so it is not stored either")
@@ -1082,7 +1082,7 @@ func TestHistoryDrainer_ResolvesEveryGroupBeforeTheFirstIngest(t *testing.T) {
 		gate, func() HistoryFetcher { return fetcher })
 	drainer.pacing = 0
 
-	require.NoError(t, drainer.Drain(context.Background()))
+	require.NoError(t, drainer.Drain(t.Context()))
 
 	require.NotEmpty(t, log)
 	lastGate := -1

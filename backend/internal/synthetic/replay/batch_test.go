@@ -282,7 +282,7 @@ func TestDriveUntilCountStopsOnCompletion(t *testing.T) {
 	// The GCal drain shape: the same input each iteration, the provider advancing
 	// irreversibly, so re-driving makes progress.
 	landed := int64(0)
-	calls, err := driveUntilCount(context.Background(), 250, 5,
+	calls, err := driveUntilCount(t.Context(), 250, 5,
 		func(context.Context) error { landed += 100; return nil },
 		func(context.Context) (int64, error) { return landed, nil })
 
@@ -294,7 +294,7 @@ func TestDriveUntilCountFailsLoudlyOnStall(t *testing.T) {
 	// A stall is deterministic starvation, not a flake a more generous cap could
 	// absorb — so it must name the shortfall rather than spin.
 	landed := int64(0)
-	calls, err := driveUntilCount(context.Background(), 250, 20,
+	calls, err := driveUntilCount(t.Context(), 250, 20,
 		func(context.Context) error {
 			if landed < 100 {
 				landed = 100
@@ -310,7 +310,7 @@ func TestDriveUntilCountFailsLoudlyOnStall(t *testing.T) {
 
 func TestDriveUntilCountFailsAtTheIterationCap(t *testing.T) {
 	landed := int64(0)
-	_, err := driveUntilCount(context.Background(), 250, 2,
+	_, err := driveUntilCount(t.Context(), 250, 2,
 		func(context.Context) error { landed += 10; return nil },
 		func(context.Context) (int64, error) { return landed, nil })
 
@@ -320,7 +320,7 @@ func TestDriveUntilCountFailsAtTheIterationCap(t *testing.T) {
 
 func TestDriveUntilCountPropagatesDriveError(t *testing.T) {
 	sentinel := errors.New("provider exploded")
-	_, err := driveUntilCount(context.Background(), 10, 5,
+	_, err := driveUntilCount(t.Context(), 10, 5,
 		func(context.Context) error { return sentinel },
 		func(context.Context) (int64, error) { return 0, nil })
 

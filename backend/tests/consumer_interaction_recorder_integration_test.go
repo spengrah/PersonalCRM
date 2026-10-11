@@ -240,7 +240,7 @@ func (e *consumerTestEnv) mustPublish(t *testing.T, env *events.Envelope) {
 func TestIntegration_CalendarAttended_CutoverWritesInteraction(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "calendar-attended-cutover")
@@ -292,7 +292,7 @@ func TestIntegration_CalendarAttended_CutoverWritesInteraction(t *testing.T) {
 func TestIntegration_CalendarAttended_TitlePreservedInInteraction(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "calendar-attended-title")
@@ -329,7 +329,7 @@ func TestIntegration_CalendarAttended_TitlePreservedInInteraction(t *testing.T) 
 func TestIntegration_CalendarAttended_Replay(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "calendar-attended-replay")
@@ -380,7 +380,7 @@ func TestIntegration_CalendarAttended_Replay(t *testing.T) {
 func TestIntegration_ManualHandler_SingleTxFlow(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "manual-single-tx")
@@ -420,7 +420,7 @@ func TestIntegration_ManualHandler_SingleTxFlow(t *testing.T) {
 func TestIntegration_ManualHandler_DedupWithinWindow(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "manual-dedup")
@@ -448,7 +448,7 @@ func TestIntegration_ManualHandler_DedupWithinWindow(t *testing.T) {
 func TestIntegration_ManualHandler_DifferentDirectionsDoNotDedup(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "manual-direction-dedup")
@@ -471,7 +471,7 @@ func TestIntegration_ManualHandler_DifferentDirectionsDoNotDedup(t *testing.T) {
 func TestIntegration_MissingContact_ConsumerReturnsNotFound(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	missingID := uuid.New()

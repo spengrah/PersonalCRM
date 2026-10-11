@@ -36,7 +36,7 @@ func setupInteractionTestDeps(t *testing.T) (*service.ContactService, *repositor
 
 func createTestContactForInteraction(t *testing.T, contactRepo *repository.ContactRepository, name string) uuid.UUID {
 	t.Helper()
-	contact, err := contactRepo.CreateContact(context.Background(), repository.CreateContactRequest{
+	contact, err := contactRepo.CreateContact(t.Context(), repository.CreateContactRequest{
 		FullName: name,
 	})
 	require.NoError(t, err)
@@ -50,7 +50,7 @@ func TestRecordInteraction_SourceRefDedup(t *testing.T) {
 	contactService, interactionRepo, contactRepo, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contactID := createTestContactForInteraction(t, contactRepo, "SourceRef Dedup Test")
 	defer func() { _ = contactRepo.SoftDeleteContact(ctx, contactID) }()
 
@@ -108,7 +108,7 @@ func TestRecordInteraction_ForwardOnlyLastContacted(t *testing.T) {
 	contactService, _, contactRepo, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contactID := createTestContactForInteraction(t, contactRepo, "Forward Only Test")
 	defer func() { _ = contactRepo.SoftDeleteContact(ctx, contactID) }()
 
@@ -155,7 +155,7 @@ func TestRecordInteraction_ManualAlwaysUpdates(t *testing.T) {
 	contactService, _, contactRepo, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contactID := createTestContactForInteraction(t, contactRepo, "Manual Update Test")
 	defer func() { _ = contactRepo.SoftDeleteContact(ctx, contactID) }()
 
@@ -183,7 +183,7 @@ func TestRecordInteraction_NonExistentContact(t *testing.T) {
 	contactService, _, _, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	fakeID := uuid.New()
 
 	_, err := contactService.RecordInteraction(ctx, repository.RecordInteractionRequest{

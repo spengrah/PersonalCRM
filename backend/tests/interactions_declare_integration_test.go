@@ -328,7 +328,7 @@ func findDeclaredRow(t *testing.T, rows []repository.Interaction, id string) rep
 func TestInteractionsDeclare_DrilldownWorld(t *testing.T) {
 	t.Parallel()
 	requireInteractionsDeclareIntegration(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	seeded, err := declare.Run(ctx, database, "IXN-004", syntheticNS(t), factory.DefaultSeed)
 	require.NoError(t, err)
@@ -385,7 +385,7 @@ func TestInteractionsDeclare_DrilldownWorld(t *testing.T) {
 func TestInteractionsDeclare_NotesWorld(t *testing.T) {
 	t.Parallel()
 	requireInteractionsDeclareIntegration(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	seeded, err := declare.Run(ctx, database, "IXN-005", syntheticNS(t), factory.DefaultSeed)
 	require.NoError(t, err)
@@ -491,7 +491,7 @@ func mustCountUnmatchedExternalContacts(t *testing.T, database *db.Database, ctx
 
 func TestInteractionsDeclare_NotesCleanup(t *testing.T) {
 	requireInteractionsDeclareIntegration(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	t0 := accelerated.GetCurrentTime().Truncate(time.Second)
 	restore := accelerated.SetNowForTest(func() time.Time { return t0 })
@@ -575,7 +575,7 @@ func TestInteractionsDeclare_NotesCleanup(t *testing.T) {
 func TestInteractionsDeclare_VenueFilterWorld(t *testing.T) {
 	t.Parallel()
 	requireInteractionsDeclareIntegration(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	seeded, err := declare.Run(ctx, database, "IXN-007", syntheticNS(t), factory.DefaultSeed)
 	require.NoError(t, err)
@@ -629,7 +629,7 @@ func TestInteractionsDeclare_VenueFilterWorld(t *testing.T) {
 func TestInteractionsDeclare_DateSpreadWorld(t *testing.T) {
 	t.Parallel()
 	requireInteractionsDeclareIntegration(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	seeded, err := declare.Run(ctx, database, "IXN-008", syntheticNS(t), factory.DefaultSeed)
 	require.NoError(t, err)

@@ -65,7 +65,7 @@ func TestContactList_DeterministicTieBreak(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	contactRepo := repository.NewContactRepository(database.Queries)
 
@@ -140,7 +140,7 @@ func TestContactList_TripleParity(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)

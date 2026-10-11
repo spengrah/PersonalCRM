@@ -216,7 +216,7 @@ func TestHandleEvent_ModeOff_NoClaimNoWrite(t *testing.T) {
 		Source:              repository.InteractionSourceTelegram,
 		PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
 	})
-	require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env))
+	require.NoError(t, h.HandleEvent(t.Context(), nonNilTx(), env))
 	require.Zero(t, claims.calls, "off-mode must not attempt a claim")
 }
 
@@ -227,7 +227,7 @@ func TestHandleEvent_V1Payload_Rejected(t *testing.T) {
 		ContactID: uuid.New(),
 		Direction: repository.InteractionDirectionMutual,
 	})
-	require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env),
+	require.NoError(t, h.HandleEvent(t.Context(), nonNilTx(), env),
 		"V1 payload must be rejected cleanly without error (no river retry)")
 	require.Zero(t, claims.calls, "V1 rejection fires before claim attempt")
 }
@@ -239,7 +239,7 @@ func TestHandleEvent_V2MissingSnapshot_Rejected(t *testing.T) {
 		ContactID: uuid.New(),
 		Direction: repository.InteractionDirectionMutual,
 	})
-	require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env))
+	require.NoError(t, h.HandleEvent(t.Context(), nonNilTx(), env))
 	require.Zero(t, claims.calls)
 }
 
@@ -265,7 +265,7 @@ func TestHandleEvent_AcceptsV2AndV3(t *testing.T) {
 				Source:              repository.InteractionSourceTelegram,
 				PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
 			})
-			require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env))
+			require.NoError(t, h.HandleEvent(t.Context(), nonNilTx(), env))
 			require.Equal(t, 1, claims.calls,
 				"V%d payload must reach the claim attempt", version)
 		})
@@ -284,7 +284,7 @@ func TestHandleEvent_AlreadyClaimed_NoOp(t *testing.T) {
 		Source:              repository.InteractionSourceTelegram,
 		PrevCadenceSnapshot: &events.CadenceFieldsSnapshot{},
 	})
-	require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env))
+	require.NoError(t, h.HandleEvent(t.Context(), nonNilTx(), env))
 	require.Equal(t, 1, claims.calls)
 	require.Equal(t, env.ID, claims.lastEventID)
 	require.Equal(t, repository.EventConsumerCadenceUpdater, claims.lastConsumer)
@@ -296,12 +296,12 @@ func TestHandleEvent_AlreadyClaimed_NoOp(t *testing.T) {
 
 func TestBulkApply_ModeOff_NoOp(t *testing.T) {
 	h, _, _ := newUnitUpdater(CadenceModeOff)
-	require.NoError(t, h.BulkApply(context.Background(), nonNilTx(), uuid.New(), repository.ContactCadenceFields{}))
+	require.NoError(t, h.BulkApply(t.Context(), nonNilTx(), uuid.New(), repository.ContactCadenceFields{}))
 }
 
 func TestApplyContactByOverride_ModeOff_NoOp(t *testing.T) {
 	h, _, _ := newUnitUpdater(CadenceModeOff)
-	require.NoError(t, h.ApplyContactByOverride(context.Background(), nonNilTx(), uuid.New(), nil))
+	require.NoError(t, h.ApplyContactByOverride(t.Context(), nonNilTx(), uuid.New(), nil))
 }
 
 // -----------------------------------------------------------------------------

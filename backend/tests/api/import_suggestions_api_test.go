@@ -124,7 +124,7 @@ func TestImportSuggestionsAPI_MethodGroupOnlyOnFirstPage(t *testing.T) {
 	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	t.Cleanup(cleanup)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	suffix := uuid.New().String()[:8]
 
 	_, methodExternal := seedLinkedRowWithPendingMethod(t, ctx, contactRepo, externalRepo, suffix)
@@ -174,7 +174,7 @@ func TestImportSuggestionsAPI_CandidatesRankedAndPaginated(t *testing.T) {
 	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	t.Cleanup(cleanup)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	suffix := uuid.New().String()[:8]
 	source := "test-rank-" + suffix
 	strPtr := func(s string) *string { return &s }
@@ -264,7 +264,7 @@ func TestImportSuggestionsAPI_CandidateAllowedActionsPerSource(t *testing.T) {
 	router, externalRepo, _, _, cleanup := setupImportTestRouter(t)
 	t.Cleanup(cleanup)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	suffix := uuid.New().String()[:8]
 	strPtr := func(s string) *string { return &s }
 

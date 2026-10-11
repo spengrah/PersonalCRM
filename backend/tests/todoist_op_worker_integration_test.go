@@ -141,14 +141,14 @@ func newOpWorkerEnv(t *testing.T) (*opWorkerEnv, func()) {
 		mock:        mock,
 	}
 	return env, func() {
-		_ = riverClient.Stop(context.Background())
+		_ = riverClient.Stop(context.WithoutCancel(t.Context()))
 		closeFn()
 	}
 }
 
 func (e *opWorkerEnv) seedPendingTask(t *testing.T) *repository.ContactTask {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contact, err := e.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: e.gen.Contact(factory.WithNoMethods()).FullName})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = e.contactRepo.HardDeleteContact(ctx, contact.ID) })
@@ -189,7 +189,7 @@ func (e *opWorkerEnv) runOp(ctx context.Context, taskID uuid.UUID, op string) er
 
 func (e *opWorkerEnv) setDueDate(t *testing.T, taskID uuid.UUID, due string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	fresh, err := e.taskRepo.GetContactTask(ctx, taskID)
 	require.NoError(t, err)
 	newMeta := map[string]any{}
@@ -205,7 +205,7 @@ func (e *opWorkerEnv) setDueDate(t *testing.T, taskID uuid.UUID, due string) {
 
 func (e *opWorkerEnv) countOps(t *testing.T, taskID uuid.UUID, op string) int {
 	t.Helper()
-	n, err := e.taskRepo.CountTodoistOpJobsByOp(context.Background(), taskID, op)
+	n, err := e.taskRepo.CountTodoistOpJobsByOp(t.Context(), taskID, op)
 	require.NoError(t, err)
 	return int(n)
 }
@@ -222,7 +222,7 @@ func TestIntegration_OpWorker_Create_NormalFinalize(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	task := env.seedPendingTask(t)
 	env.mock.realIDs[task.ID.String()] = "real-123"
@@ -248,7 +248,7 @@ func TestIntegration_OpWorker_Create_AlreadyManaged(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	task := env.seedPendingTask(t)
 	require.NoError(t, pgx.BeginTxFunc(ctx, env.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
@@ -275,7 +275,7 @@ func TestIntegration_OpWorker_Create_CompletedMidFlight(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	task := env.seedPendingTask(t)
 	env.mock.realIDs[task.ID.String()] = "real-race"
@@ -324,7 +324,7 @@ func TestIntegration_OpWorker_Create_DismissedMidFlight(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	task := env.seedPendingTask(t)
 	env.mock.realIDs[task.ID.String()] = "real-dismissed"
@@ -361,7 +361,7 @@ func TestIntegration_OpWorker_RefreshConverges(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	task := env.seedPendingTask(t)
 	env.mock.realIDs[task.ID.String()] = "real-conv"
@@ -398,7 +398,7 @@ func TestIntegration_OpWorker_AtLeastOnceConvergence(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	env, cleanup := newOpWorkerEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	task := env.seedPendingTask(t)
 	env.mock.realIDs[task.ID.String()] = "real-alo"

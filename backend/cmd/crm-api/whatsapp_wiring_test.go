@@ -89,7 +89,7 @@ func seedWhatsAppWiringFixture(t *testing.T, ctx context.Context, chain wireChai
 	fx.contactID = contact.ID
 
 	t.Cleanup(func() {
-		cleanupCtx := context.Background()
+		cleanupCtx := context.WithoutCancel(t.Context())
 		// These three take LIKE patterns, so the trailing % is what makes them
 		// prefix deletes rather than exact-match no-ops.
 		_ = chain.messaging.CommsMessageRepo.HardDeleteBySourceAndExternalIDPrefix(cleanupCtx, repository.InteractionSourceWhatsApp, fx.idPrefix+"%")
@@ -143,7 +143,7 @@ func seedWhatsAppWiringFixture(t *testing.T, ctx context.Context, chain wireChai
 func TestWhatsAppWiring_ProductionRegistriesDispatchWhatsApp(t *testing.T) {
 	t.Parallel()
 	testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
@@ -350,12 +350,12 @@ func TestWhatsAppWiring_RematchHandlersFollowTheFeatureFlag(t *testing.T) {
 			// silently drifted from run()'s wiring fails here rather than in
 			// production. No rows match the number, so the handler attaches
 			// nothing and reports zero.
-			contact, err := chain.core.Contact.CreateContact(context.Background(), repository.CreateContactRequest{
+			contact, err := chain.core.Contact.CreateContact(t.Context(), repository.CreateContactRequest{
 				FullName: "WhatsApp Flag Gate " + uuid.NewString()[:8],
 			})
 			require.NoError(t, err)
 			require.NoError(t,
-				chain.graph.RematchService.Run(context.Background(), uuid.New(), contact.ID, phone),
+				chain.graph.RematchService.Run(t.Context(), uuid.New(), contact.ID, phone),
 				"the registered whatsapp phone handler must run against a pooled comms repository")
 		})
 	}

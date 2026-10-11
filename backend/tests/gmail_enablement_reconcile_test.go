@@ -65,7 +65,7 @@ type reconcileEnv struct {
 func newReconcileEnv(t *testing.T) *reconcileEnv {
 	t.Helper()
 	testsupport.RequireDatabase(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newEventBusTestDB(t, ctx)
 
 	syncRepo := repository.NewSyncRepository(database.Queries)

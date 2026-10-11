@@ -8,7 +8,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -33,7 +32,7 @@ import (
 func setupLastContactedTestRouter(t *testing.T) (*gin.Engine, func()) {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.

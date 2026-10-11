@@ -33,7 +33,7 @@ import (
 func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
@@ -97,9 +97,9 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(),
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()),
 			`DELETE FROM external_sync_state WHERE source IN ($1, $2)`, src1, src2)
-		_, _ = database.Pool.Exec(context.Background(),
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()),
 			`DELETE FROM river_job WHERE kind = 'sync_provider_account'
 			 AND (args->>'source') IN ($1, $2)`, src1, src2)
 	})
@@ -127,7 +127,7 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 	// (TestPeriodicTick_FiresOnStart below opens its own non-TestOnly
 	// client and is sensitive to any residual notifier reconnect loops).
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})
@@ -167,7 +167,7 @@ func TestPeriodicTick_FiresOnStart(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
@@ -226,7 +226,7 @@ func TestPeriodicTick_FiresOnStart(t *testing.T) {
 	// (documented project gotcha; applies to test harnesses too).
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})

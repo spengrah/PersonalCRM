@@ -82,7 +82,7 @@ func setupContactTaskAPIRouter(t *testing.T) (*contactTaskAPIHarness, func()) {
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
 	database := testsupport.OpenDatabase(t)
@@ -140,7 +140,7 @@ func setupContactTaskAPIRouter(t *testing.T) (*contactTaskAPIHarness, func()) {
 // contact_task rows).
 func createContactTaskTestContact(t *testing.T, h *contactTaskAPIHarness, name string) uuid.UUID {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contact, err := h.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -162,7 +162,7 @@ func TestContactTaskAPI_ListFilters(t *testing.T) {
 
 	h, cleanup := setupContactTaskAPIRouter(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	suffix := uuid.NewString()[:8]
 	contactID := createContactTaskTestContact(t, h, "Task State Filter API Test "+suffix)
@@ -460,7 +460,7 @@ func TestContactTaskAPI_DeleteTaskLink(t *testing.T) {
 
 	h, cleanup := setupContactTaskAPIRouter(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	suffix := uuid.NewString()[:8]
 	contactID := createContactTaskTestContact(t, h, "Task Unlink API Test "+suffix)

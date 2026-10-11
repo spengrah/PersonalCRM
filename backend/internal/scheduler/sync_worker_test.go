@@ -29,7 +29,7 @@ func TestSyncProviderAccountWorker_Work_CallsRunAccountSync(t *testing.T) {
 	svc := &fakeSyncServiceForAccount{}
 	worker := NewSyncProviderAccountWorker(svc)
 
-	err := worker.Work(context.Background(), &river.Job[SyncProviderAccountArgs]{
+	err := worker.Work(t.Context(), &river.Job[SyncProviderAccountArgs]{
 		Args: SyncProviderAccountArgs{Source: "gmail", AccountID: &acct},
 	})
 	require.NoError(t, err)
@@ -42,7 +42,7 @@ func TestSyncProviderAccountWorker_Work_PropagatesError(t *testing.T) {
 	svc := &fakeSyncServiceForAccount{returnErr: errors.New("provider failed")}
 	worker := NewSyncProviderAccountWorker(svc)
 
-	err := worker.Work(context.Background(), &river.Job[SyncProviderAccountArgs]{
+	err := worker.Work(t.Context(), &river.Job[SyncProviderAccountArgs]{
 		Args: SyncProviderAccountArgs{Source: "gmail"},
 	})
 	require.Error(t, err)
@@ -53,7 +53,7 @@ func TestSyncProviderAccountWorker_Work_NotFoundIsTerminal(t *testing.T) {
 	svc := &fakeSyncServiceForAccount{returnErr: db.ErrNotFound}
 	worker := NewSyncProviderAccountWorker(svc)
 
-	err := worker.Work(context.Background(), &river.Job[SyncProviderAccountArgs]{
+	err := worker.Work(t.Context(), &river.Job[SyncProviderAccountArgs]{
 		Args: SyncProviderAccountArgs{Source: "gmail"},
 	})
 	require.NoError(t, err, "db.ErrNotFound should be swallowed as terminal")

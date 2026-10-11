@@ -282,7 +282,7 @@ type stubTxImpl struct{ pgx.Tx }
 // envelopes BEFORE calling InsertEvent. Because validation fails first, the
 // stub's InsertEvent is never called and riverClient stays nil-safe.
 func TestPublishTx_ValidatesEnvelope(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	validPayload := json.RawMessage(`{"version":1,"peer_ref":"tg:1:2","message_at":"2026-04-10T12:00:00Z"}`)
 	validObservedAt := time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)
 
@@ -376,7 +376,7 @@ func TestPublishTx_ValidatesEnvelope(t *testing.T) {
 // InsertEvent returns ErrDuplicate BEFORE the consumer-job loop runs, nil
 // riverClient is still safe.
 func TestPublishTx_DuplicateIsNoOp(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	stub := &stubEventRepo{insertErr: db.ErrDuplicate}
 	bus := &Bus{eventRepo: stub}
 
@@ -395,7 +395,7 @@ func TestPublishTx_DuplicateIsNoOp(t *testing.T) {
 // TestPublishTx_RepoErrorPropagates asserts that a non-ErrDuplicate repo
 // error propagates wrapped to the caller.
 func TestPublishTx_RepoErrorPropagates(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	sentinel := errors.New("db down")
 	stub := &stubEventRepo{insertErr: sentinel}
 	bus := &Bus{eventRepo: stub}
@@ -424,7 +424,7 @@ func TestPublishTx_RepoErrorPropagates(t *testing.T) {
 // time — that's the window where routing has populated the consumer
 // job args.
 func TestPublishTx_PreassignsEventID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	// Stub returns ErrDuplicate after capturing the insert params so we
 	// can verify env.ID was populated at insert time. The bus then
 	// resets env.ID on the dup path.
@@ -463,7 +463,7 @@ func TestPublishTx_PreassignsEventID(t *testing.T) {
 // so caller tx can roll back without a stranded event row. Regression
 // guard for Design Decision 3 (Codex round-1 P2).
 func TestPublishTx_MalformedPayload_RollsBackTx(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	stub := &stubEventRepo{}
 	bus := &Bus{eventRepo: stub}
 
@@ -486,7 +486,7 @@ func TestPublishTx_MalformedPayload_RollsBackTx(t *testing.T) {
 // Existing TestPublishTx_DuplicateIsNoOp covers the post-duplicate case;
 // this documents the same invariant for the routing-yields-empty path.
 func TestPublishTx_NoJobsMeansNilRiverOK(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	stub := &stubEventRepo{}
 	bus := &Bus{eventRepo: stub}
 

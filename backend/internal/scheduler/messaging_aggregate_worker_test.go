@@ -78,7 +78,7 @@ func TestMessagingAggregateWorker_HappyPath_DrainsAndCallsPerChat(t *testing.T) 
 	)
 
 	contactID := uuid.New()
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
 		Args: consumerjobs.MessagingAggregateForContactArgs{ContactID: contactID, Source: "messages"},
 	})
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func TestMessagingAggregateWorker_RelistLoopDrainsLandedRows(t *testing.T) {
 		map[string]ChatAwareAggregator{"messages": agg},
 		lister,
 	)
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
 		Args: consumerjobs.MessagingAggregateForContactArgs{ContactID: uuid.New(), Source: "messages"},
 	})
 	require.NoError(t, err)
@@ -124,7 +124,7 @@ func TestMessagingAggregateWorker_UnknownSource_NoOp(t *testing.T) {
 		map[string]ChatAwareAggregator{"messages": agg},
 		lister,
 	)
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
 		Args: consumerjobs.MessagingAggregateForContactArgs{ContactID: uuid.New(), Source: "whatsapp"},
 	})
 	require.NoError(t, err)
@@ -141,7 +141,7 @@ func TestMessagingAggregateWorker_EngineError_Propagates(t *testing.T) {
 		map[string]ChatAwareAggregator{"messages": agg},
 		lister,
 	)
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
 		Args: consumerjobs.MessagingAggregateForContactArgs{ContactID: uuid.New(), Source: "messages"},
 	})
 	require.Error(t, err)
@@ -164,7 +164,7 @@ func TestMessagingAggregateWorker_ListerError_Propagates(t *testing.T) {
 		map[string]ChatAwareAggregator{"messages": agg},
 		lister,
 	)
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
 		Args: consumerjobs.MessagingAggregateForContactArgs{ContactID: uuid.New(), Source: "messages"},
 	})
 	require.Error(t, err)
@@ -187,7 +187,7 @@ func TestMessagingAggregateWorker_LoopBound_TerminatesAndLogs(t *testing.T) {
 		map[string]ChatAwareAggregator{"messages": agg},
 		lister,
 	)
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateForContactArgs]{
 		Args: consumerjobs.MessagingAggregateForContactArgs{ContactID: uuid.New(), Source: "messages"},
 	})
 	require.NoError(t, err)
@@ -206,12 +206,12 @@ func TestPerSourceChatListerRegistry_DispatchesAndNoOpsUnknown(t *testing.T) {
 		},
 	})
 
-	got, err := reg.ListUnprocessedChats(context.Background(), "messages", uuid.New())
+	got, err := reg.ListUnprocessedChats(t.Context(), "messages", uuid.New())
 	require.NoError(t, err)
 	require.Equal(t, []string{"chat-A"}, got)
 	require.Equal(t, 1, called)
 
-	got, err = reg.ListUnprocessedChats(context.Background(), "unknown", uuid.New())
+	got, err = reg.ListUnprocessedChats(t.Context(), "unknown", uuid.New())
 	require.NoError(t, err)
 	require.Nil(t, got)
 	require.Equal(t, 1, called, "unknown source should not call any entry")

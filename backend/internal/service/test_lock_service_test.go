@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -35,7 +34,7 @@ func newLockFixture() (*TestLockService, *fakeClock) {
 func TestTestLock_MutualExclusionAndRelease(t *testing.T) {
 	t.Parallel()
 	svc, _ := newLockFixture()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	lease, err := svc.Acquire(ctx, "mac-host", time.Minute, 0)
 	if err != nil {
@@ -63,7 +62,7 @@ func TestTestLock_MutualExclusionAndRelease(t *testing.T) {
 func TestTestLock_ExpiredLeaseIsTakenOverExactlyOnce(t *testing.T) {
 	t.Parallel()
 	svc, clock := newLockFixture()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	stale, err := svc.Acquire(ctx, "mac-host", 30*time.Second, 0)
 	if err != nil {
@@ -105,7 +104,7 @@ func TestTestLock_ExpiredLeaseIsTakenOverExactlyOnce(t *testing.T) {
 func TestTestLock_RenewExtendsExpiry(t *testing.T) {
 	t.Parallel()
 	svc, clock := newLockFixture()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	lease, err := svc.Acquire(ctx, "mac-host", 30*time.Second, 0)
 	if err != nil {
@@ -126,7 +125,7 @@ func TestTestLock_RenewExtendsExpiry(t *testing.T) {
 func TestTestLock_AcquireWaitsForRelease(t *testing.T) {
 	t.Parallel()
 	svc, _ := newLockFixture()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	lease, err := svc.Acquire(ctx, "mac-host", time.Minute, 0)
 	if err != nil {

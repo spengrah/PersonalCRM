@@ -54,7 +54,7 @@ func TestContactMerge_Integration(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Per-test namespace so fixed contact names cannot collide with concurrent
 	// siblings under fuzzy-match (trigram) pollution.
@@ -961,7 +961,7 @@ func TestContactMergePreviewAPI_SuccessCounts(t *testing.T) {
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	ns := uuid.New().String()[:8]
 
 	contactRepo := repository.NewContactRepository(database.Queries)

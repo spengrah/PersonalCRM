@@ -157,7 +157,7 @@ func newTestDeps() (adminDeps, *bytes.Buffer, *fakeTokenMinter, *fakeHostLister,
 
 func TestRunNoFlagsErrors(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
-	err := run(context.Background(), runOptions{}, deps)
+	err := run(t.Context(), runOptions{}, deps)
 	if err == nil {
 		t.Fatal("expected error on missing subcommand")
 	}
@@ -168,7 +168,7 @@ func TestRunNoFlagsErrors(t *testing.T) {
 
 func TestRunMutualExclusionErrors(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
-	err := run(context.Background(), runOptions{
+	err := run(t.Context(), runOptions{
 		mintPairingToken: true,
 		listHosts:        true,
 	}, deps)
@@ -182,7 +182,7 @@ func TestRunMutualExclusionErrors(t *testing.T) {
 
 func TestRunMintPairingTokenHappy(t *testing.T) {
 	deps, stdout, tokens, _, _, _ := newTestDeps()
-	err := run(context.Background(), runOptions{mintPairingToken: true}, deps)
+	err := run(t.Context(), runOptions{mintPairingToken: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestRunMintPairingTokenHappy(t *testing.T) {
 
 func TestRunMintPairingTokenWithLabelEchoes(t *testing.T) {
 	deps, stdout, _, _, _, _ := newTestDeps()
-	err := run(context.Background(), runOptions{
+	err := run(t.Context(), runOptions{
 		mintPairingToken: true,
 		hostnameLabel:    "mac-1",
 	}, deps)
@@ -215,7 +215,7 @@ func TestRunMintPairingTokenWithLabelEchoes(t *testing.T) {
 func TestRunMintPairingTokenError(t *testing.T) {
 	deps, _, tokens, _, _, _ := newTestDeps()
 	tokens.err = errors.New("kaboom")
-	err := run(context.Background(), runOptions{mintPairingToken: true}, deps)
+	err := run(t.Context(), runOptions{mintPairingToken: true}, deps)
 	if err == nil {
 		t.Fatal("expected mint error")
 	}
@@ -223,7 +223,7 @@ func TestRunMintPairingTokenError(t *testing.T) {
 
 func TestRunListHostsEmpty(t *testing.T) {
 	deps, stdout, _, hosts, _, _ := newTestDeps()
-	err := run(context.Background(), runOptions{listHosts: true}, deps)
+	err := run(t.Context(), runOptions{listHosts: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestRunListHostsPopulated(t *testing.T) {
 			LastHeartbeatAt: &heartbeat,
 		},
 	}
-	err := run(context.Background(), runOptions{listHosts: true}, deps)
+	err := run(t.Context(), runOptions{listHosts: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestRunListHostsNeverHeartbeat(t *testing.T) {
 	hosts.hosts = []*repository.MacHost{
 		{ID: uuid.New(), Hostname: "mac-1", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 	}
-	err := run(context.Background(), runOptions{listHosts: true}, deps)
+	err := run(t.Context(), runOptions{listHosts: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestRunListHostsNeverHeartbeat(t *testing.T) {
 func TestRunListHostsError(t *testing.T) {
 	deps, _, _, hosts, _, _ := newTestDeps()
 	hosts.err = errors.New("db unreachable")
-	err := run(context.Background(), runOptions{listHosts: true}, deps)
+	err := run(t.Context(), runOptions{listHosts: true}, deps)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -292,7 +292,7 @@ func TestRunListHostsError(t *testing.T) {
 
 func TestRunRevokeHostMalformedUUID(t *testing.T) {
 	deps, _, _, _, revoker, _ := newTestDeps()
-	err := run(context.Background(), runOptions{revokeHostID: "not-a-uuid"}, deps)
+	err := run(t.Context(), runOptions{revokeHostID: "not-a-uuid"}, deps)
 	if err == nil {
 		t.Fatal("expected uuid parse error")
 	}
@@ -304,7 +304,7 @@ func TestRunRevokeHostMalformedUUID(t *testing.T) {
 func TestRunRevokeHostHappy(t *testing.T) {
 	deps, stdout, _, _, revoker, _ := newTestDeps()
 	id := uuid.New()
-	err := run(context.Background(), runOptions{revokeHostID: id.String()}, deps)
+	err := run(t.Context(), runOptions{revokeHostID: id.String()}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestRunRevokeHostHappy(t *testing.T) {
 func TestRunRevokeHostError(t *testing.T) {
 	deps, _, _, _, revoker, _ := newTestDeps()
 	revoker.err = errors.New("not found")
-	err := run(context.Background(), runOptions{revokeHostID: uuid.New().String()}, deps)
+	err := run(t.Context(), runOptions{revokeHostID: uuid.New().String()}, deps)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -327,7 +327,7 @@ func TestRunRevokeHostError(t *testing.T) {
 
 func TestRunRotateHostKeyMalformedUUID(t *testing.T) {
 	deps, _, tokens, hosts, _, _ := newTestDeps()
-	err := run(context.Background(), runOptions{rotateHostID: "not-a-uuid"}, deps)
+	err := run(t.Context(), runOptions{rotateHostID: "not-a-uuid"}, deps)
 	if err == nil {
 		t.Fatal("expected uuid parse error")
 	}
@@ -344,7 +344,7 @@ func TestRunRotateHostKeyHostNotFound(t *testing.T) {
 	hosts.hosts = []*repository.MacHost{
 		{ID: uuid.New(), Hostname: "other"},
 	}
-	err := run(context.Background(), runOptions{rotateHostID: uuid.New().String()}, deps)
+	err := run(t.Context(), runOptions{rotateHostID: uuid.New().String()}, deps)
 	if err == nil {
 		t.Fatal("expected not-found error")
 	}
@@ -359,7 +359,7 @@ func TestRunRotateHostKeyHostNotFound(t *testing.T) {
 func TestRunRotateHostKeyListError(t *testing.T) {
 	deps, _, tokens, hosts, _, _ := newTestDeps()
 	hosts.err = errors.New("db down")
-	err := run(context.Background(), runOptions{rotateHostID: uuid.New().String()}, deps)
+	err := run(t.Context(), runOptions{rotateHostID: uuid.New().String()}, deps)
 	if err == nil {
 		t.Fatal("expected list error")
 	}
@@ -374,7 +374,7 @@ func TestRunRotateHostKeyHappy(t *testing.T) {
 	hosts.hosts = []*repository.MacHost{
 		{ID: id, Hostname: "mac-1"},
 	}
-	err := run(context.Background(), runOptions{rotateHostID: id.String()}, deps)
+	err := run(t.Context(), runOptions{rotateHostID: id.String()}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestRunRotateHostKeyTokenMintError(t *testing.T) {
 	id := uuid.New()
 	hosts.hosts = []*repository.MacHost{{ID: id, Hostname: "mac-1"}}
 	tokens.err = errors.New("rng failed")
-	err := run(context.Background(), runOptions{rotateHostID: id.String()}, deps)
+	err := run(t.Context(), runOptions{rotateHostID: id.String()}, deps)
 	if err == nil {
 		t.Fatal("expected mint error")
 	}
@@ -409,7 +409,7 @@ func TestRunRematchStrandedDelegates(t *testing.T) {
 	rematch.result = &messages.RematchStrandedResult{
 		Scanned: 10, Matched: 3, StillStranded: 7, Enqueued: 3, Errors: 0,
 	}
-	err := run(context.Background(), runOptions{rematchStranded: true}, deps)
+	err := run(t.Context(), runOptions{rematchStranded: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestRunResetGmailBackfillCursorsCountsOnly(t *testing.T) {
 	}
 	deps.gmailReset = reset
 
-	err := run(context.Background(), runOptions{resetGmailBackfill: true}, deps)
+	err := run(t.Context(), runOptions{resetGmailBackfill: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestRunResetGmailBackfillCursorsError(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	deps.gmailReset = &fakeGmailBackfillResetter{err: errors.New("db down")}
 
-	err := run(context.Background(), runOptions{resetGmailBackfill: true}, deps)
+	err := run(t.Context(), runOptions{resetGmailBackfill: true}, deps)
 	if err == nil {
 		t.Fatal("expected reset error")
 	}
@@ -485,7 +485,7 @@ func TestRunReconcileAddressBookMethodsHappy(t *testing.T) {
 	}}
 	deps.reconcile = reconcile
 
-	err := run(context.Background(), runOptions{reconcileAddressBook: true}, deps)
+	err := run(t.Context(), runOptions{reconcileAddressBook: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -507,7 +507,7 @@ func TestRunReconcileAddressBookMethodsFailedExitsNonZero(t *testing.T) {
 	}}
 	deps.reconcile = reconcile
 
-	err := run(context.Background(), runOptions{reconcileAddressBook: true}, deps)
+	err := run(t.Context(), runOptions{reconcileAddressBook: true}, deps)
 	if err == nil {
 		t.Fatal("expected non-nil error when some rows failed (non-zero exit)")
 	}
@@ -521,7 +521,7 @@ func TestRunReconcileAddressBookMethodsError(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	deps.reconcile = &fakeReconcileRunner{err: errors.New("list failed")}
 
-	err := run(context.Background(), runOptions{reconcileAddressBook: true}, deps)
+	err := run(t.Context(), runOptions{reconcileAddressBook: true}, deps)
 	if err == nil {
 		t.Fatal("expected error when reconcile runner errors")
 	}
@@ -530,7 +530,7 @@ func TestRunReconcileAddressBookMethodsError(t *testing.T) {
 func TestRunReconcileMutualExclusion(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	deps.reconcile = &fakeReconcileRunner{}
-	err := run(context.Background(), runOptions{
+	err := run(t.Context(), runOptions{
 		reconcileAddressBook: true,
 		listHosts:            true,
 	}, deps)
@@ -560,7 +560,7 @@ func TestRunMigrateTagsHappy(t *testing.T) {
 	}}
 	deps.migrateTags = migrator
 
-	err := run(context.Background(), runOptions{migrateTags: true}, deps)
+	err := run(t.Context(), runOptions{migrateTags: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -586,7 +586,7 @@ func TestRunMigrateTagsError(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	deps.migrateTags = &fakeTagMigrator{err: service.ErrTagCaseCollision}
 
-	err := run(context.Background(), runOptions{migrateTags: true}, deps)
+	err := run(t.Context(), runOptions{migrateTags: true}, deps)
 	if err == nil {
 		t.Fatal("expected error when the tag migrator errors (e.g. case collision)")
 	}
@@ -598,7 +598,7 @@ func TestRunMigrateTagsError(t *testing.T) {
 func TestRunMigrateTagsMutualExclusion(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	deps.migrateTags = &fakeTagMigrator{}
-	err := run(context.Background(), runOptions{
+	err := run(t.Context(), runOptions{
 		migrateTags: true,
 		listHosts:   true,
 	}, deps)
@@ -628,7 +628,7 @@ func TestRunMigrateContactKnowledgeHappy(t *testing.T) {
 	}}
 	deps.migrateContactKnowledge = migrator
 
-	err := run(context.Background(), runOptions{migrateContactKnowledge: true}, deps)
+	err := run(t.Context(), runOptions{migrateContactKnowledge: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -649,7 +649,7 @@ func TestRunMigrateContactKnowledgeError(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	deps.migrateContactKnowledge = &fakeContactKnowledgeMigrator{err: errors.New("boom")}
 
-	err := run(context.Background(), runOptions{migrateContactKnowledge: true}, deps)
+	err := run(t.Context(), runOptions{migrateContactKnowledge: true}, deps)
 	if err == nil {
 		t.Fatal("expected error when the contact-knowledge migrator errors")
 	}
@@ -658,7 +658,7 @@ func TestRunMigrateContactKnowledgeError(t *testing.T) {
 func TestRunMigrateContactKnowledgeMutualExclusion(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	deps.migrateContactKnowledge = &fakeContactKnowledgeMigrator{}
-	err := run(context.Background(), runOptions{
+	err := run(t.Context(), runOptions{
 		migrateContactKnowledge: true,
 		migrateTags:             true,
 	}, deps)
@@ -669,7 +669,7 @@ func TestRunMigrateContactKnowledgeMutualExclusion(t *testing.T) {
 
 func TestRunResetGmailBackfillMutualExclusion(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
-	err := run(context.Background(), runOptions{
+	err := run(t.Context(), runOptions{
 		resetGmailBackfill: true,
 		rematchStranded:    true,
 	}, deps)
@@ -870,7 +870,7 @@ func TestRunRederiveCorrespondenceNamesHappy(t *testing.T) {
 	}
 	deps.rederive = rederive
 
-	err := run(context.Background(), runOptions{rederiveCorrespondence: true}, deps)
+	err := run(t.Context(), runOptions{rederiveCorrespondence: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -907,7 +907,7 @@ func TestRunRederiveCorrespondenceNamesFailedExitsNonZero(t *testing.T) {
 		log:    log,
 	}
 
-	err := run(context.Background(), runOptions{rederiveCorrespondence: true}, deps)
+	err := run(t.Context(), runOptions{rederiveCorrespondence: true}, deps)
 	if err == nil {
 		t.Fatal("expected non-nil error when some rows failed")
 	}
@@ -921,7 +921,7 @@ func TestRunRederiveCorrespondenceNamesRederiveErrorFails(t *testing.T) {
 	log := &[]string{}
 	deps.rederive = &fakeRederiveRunner{err: errors.New("list failed"), log: log}
 
-	err := run(context.Background(), runOptions{rederiveCorrespondence: true}, deps)
+	err := run(t.Context(), runOptions{rederiveCorrespondence: true}, deps)
 	if err == nil {
 		t.Fatal("expected error when the re-derive phase hard-errors")
 	}
@@ -938,7 +938,7 @@ func TestRunSeedDispatchesAdditiveWithDefaults(t *testing.T) {
 	deps.seed = seed
 
 	// --yes confirms; the default profile for --seed is the declared `standard` world.
-	err := run(context.Background(), runOptions{doSeed: true, seedYes: true}, deps)
+	err := run(t.Context(), runOptions{doSeed: true, seedYes: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -962,7 +962,7 @@ func TestRunResetAndSeedDispatchesWithDefaults(t *testing.T) {
 	seed := &fakeSeedRunner{}
 	deps.seed = seed
 
-	err := run(context.Background(), runOptions{resetAndSeed: true, seedYes: true}, deps)
+	err := run(t.Context(), runOptions{resetAndSeed: true, seedYes: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -987,7 +987,7 @@ func TestRunSeedRequiresConfirm(t *testing.T) {
 
 	// No --yes and no CRM_SEED_RESET_CONFIRM → refuse, do NOT run the seed.
 	t.Setenv(seedConfirmEnv, "")
-	err := run(context.Background(), runOptions{doSeed: true}, deps)
+	err := run(t.Context(), runOptions{doSeed: true}, deps)
 	if err == nil {
 		t.Fatal("expected --seed to refuse without confirmation")
 	}
@@ -1002,7 +1002,7 @@ func TestRunResetAndSeedRequiresConfirm(t *testing.T) {
 	deps.seed = seed
 
 	t.Setenv(seedConfirmEnv, "")
-	err := run(context.Background(), runOptions{resetAndSeed: true}, deps)
+	err := run(t.Context(), runOptions{resetAndSeed: true}, deps)
 	if err == nil {
 		t.Fatal("expected --reset-and-seed to refuse without confirmation")
 	}
@@ -1018,7 +1018,7 @@ func TestRunSeedConfirmViaEnv(t *testing.T) {
 
 	// The env-var alternative to --yes.
 	t.Setenv(seedConfirmEnv, "1")
-	err := run(context.Background(), runOptions{doSeed: true}, deps)
+	err := run(t.Context(), runOptions{doSeed: true}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1032,7 +1032,7 @@ func TestRunSeedProfileOverride(t *testing.T) {
 	seed := &fakeSeedRunner{}
 	deps.seed = seed
 
-	err := run(context.Background(), runOptions{doSeed: true, seedYes: true, seedProfile: "minimal-scoped"}, deps)
+	err := run(t.Context(), runOptions{doSeed: true, seedYes: true, seedProfile: "minimal-scoped"}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1046,7 +1046,7 @@ func TestRunSeedUnknownProfileErrors(t *testing.T) {
 	seed := &fakeSeedRunner{}
 	deps.seed = seed
 
-	err := run(context.Background(), runOptions{doSeed: true, seedYes: true, seedProfile: "nope"}, deps)
+	err := run(t.Context(), runOptions{doSeed: true, seedYes: true, seedProfile: "nope"}, deps)
 	if err == nil {
 		t.Fatal("expected unknown-profile error")
 	}
@@ -1068,7 +1068,7 @@ func TestRunResetAndSeedInvalidNamespaceRefusesBeforeDispatch(t *testing.T) {
 
 	// `bad_ns` contains an underscore — a SQL LIKE metacharacter outside the
 	// safe [a-z0-9-] charset.
-	err := run(context.Background(), runOptions{resetAndSeed: true, seedYes: true, seedNamespace: "bad_ns"}, deps)
+	err := run(t.Context(), runOptions{resetAndSeed: true, seedYes: true, seedNamespace: "bad_ns"}, deps)
 	if err == nil {
 		t.Fatal("expected invalid-namespace error")
 	}
@@ -1085,7 +1085,7 @@ func TestRunSeedInvalidNamespaceRefusesBeforeDispatch(t *testing.T) {
 	seed := &fakeSeedRunner{}
 	deps.seed = seed
 
-	err := run(context.Background(), runOptions{doSeed: true, seedYes: true, seedNamespace: "bad_ns"}, deps)
+	err := run(t.Context(), runOptions{doSeed: true, seedYes: true, seedNamespace: "bad_ns"}, deps)
 	if err == nil {
 		t.Fatal("expected invalid-namespace error")
 	}
@@ -1099,7 +1099,7 @@ func TestRunSeedNamespaceAndPRNGOverride(t *testing.T) {
 	seed := &fakeSeedRunner{}
 	deps.seed = seed
 
-	err := run(context.Background(), runOptions{
+	err := run(t.Context(), runOptions{
 		doSeed: true, seedYes: true, seedNamespace: "myworld", prngSeed: 99,
 	}, deps)
 	if err != nil {
@@ -1117,7 +1117,7 @@ func TestRunSeedPropagatesError(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	deps.seed = &fakeSeedRunner{err: errors.New("queue not drained")}
 
-	err := run(context.Background(), runOptions{doSeed: true, seedYes: true}, deps)
+	err := run(t.Context(), runOptions{doSeed: true, seedYes: true}, deps)
 	if err == nil {
 		t.Fatal("expected the seed error to propagate")
 	}
@@ -1128,7 +1128,7 @@ func TestRunSeedPropagatesError(t *testing.T) {
 
 func TestRunSeedMutualExclusion(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
-	err := run(context.Background(), runOptions{doSeed: true, resetAndSeed: true, seedYes: true}, deps)
+	err := run(t.Context(), runOptions{doSeed: true, resetAndSeed: true, seedYes: true}, deps)
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("expected mutual-exclusion error, got %v", err)
 	}
@@ -1173,7 +1173,7 @@ func TestValidateSubcommandMigrateMutualExclusion(t *testing.T) {
 func TestRunMigrateThroughDispatcherGuards(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	for _, opts := range []runOptions{{migrate: true}, {migrateCheck: true}} {
-		err := run(context.Background(), opts, deps)
+		err := run(t.Context(), opts, deps)
 		if err == nil || !strings.Contains(err.Error(), "dispatched pre-DB") {
 			t.Fatalf("expected pre-DB dispatch guard error, got %v", err)
 		}
@@ -1186,7 +1186,7 @@ func TestRunMigrateCheckUpToDate(t *testing.T) {
 	status := func(_ context.Context, _, _ string) (bool, bool, error) {
 		return false, false, nil
 	}
-	err := runMigrateCheckWith(context.Background(), "url", "path", stdout, status)
+	err := runMigrateCheckWith(t.Context(), "url", "path", stdout, status)
 	if err != nil {
 		t.Fatalf("expected nil (up-to-date), got %v", err)
 	}
@@ -1212,7 +1212,7 @@ func TestRunMigrateCheckPendingExit2(t *testing.T) {
 			status := func(_ context.Context, _, _ string) (bool, bool, error) {
 				return c.app, c.river, nil
 			}
-			err := runMigrateCheckWith(context.Background(), "url", "path", stdout, status)
+			err := runMigrateCheckWith(t.Context(), "url", "path", stdout, status)
 			var ee exitErr
 			if !errors.As(err, &ee) {
 				t.Fatalf("expected exitErr, got %v", err)
@@ -1234,7 +1234,7 @@ func TestRunMigrateCheckErrorExit1(t *testing.T) {
 	status := func(_ context.Context, _, _ string) (bool, bool, error) {
 		return false, false, errors.New("dirty migration state")
 	}
-	err := runMigrateCheckWith(context.Background(), "url", "path", stdout, status)
+	err := runMigrateCheckWith(t.Context(), "url", "path", stdout, status)
 	if err == nil {
 		t.Fatal("expected an operational error")
 	}
@@ -1400,7 +1400,7 @@ func TestRunListJobsHappy(t *testing.T) {
 		},
 	}
 	deps, stdout := depsWithJobs(jobs)
-	err := run(context.Background(), runOptions{listJobs: true, jobState: "discarded,retryable", jobLimit: 100}, deps)
+	err := run(t.Context(), runOptions{listJobs: true, jobState: "discarded,retryable", jobLimit: 100}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1438,7 +1438,7 @@ func TestRunListJobsHappy(t *testing.T) {
 func TestRunListJobsEmpty(t *testing.T) {
 	jobs := &fakeRiverJobAdmin{listResult: &river.JobListResult{Jobs: nil}}
 	deps, stdout := depsWithJobs(jobs)
-	err := run(context.Background(), runOptions{listJobs: true, jobState: "discarded,retryable", jobLimit: 100}, deps)
+	err := run(t.Context(), runOptions{listJobs: true, jobState: "discarded,retryable", jobLimit: 100}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1459,7 +1459,7 @@ func TestRunListJobsLimitReachedNote(t *testing.T) {
 	}
 	jobs := &fakeRiverJobAdmin{listResult: &river.JobListResult{Jobs: rows}}
 	deps, stdout := depsWithJobs(jobs)
-	err := run(context.Background(), runOptions{listJobs: true, jobState: "discarded", jobLimit: 2}, deps)
+	err := run(t.Context(), runOptions{listJobs: true, jobState: "discarded", jobLimit: 2}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1471,7 +1471,7 @@ func TestRunListJobsLimitReachedNote(t *testing.T) {
 func TestRunListJobsInvalidState(t *testing.T) {
 	jobs := &fakeRiverJobAdmin{}
 	deps, _ := depsWithJobs(jobs)
-	err := run(context.Background(), runOptions{listJobs: true, jobState: "bogus", jobLimit: 100}, deps)
+	err := run(t.Context(), runOptions{listJobs: true, jobState: "bogus", jobLimit: 100}, deps)
 	if err == nil {
 		t.Fatal("expected unknown-state error")
 	}
@@ -1487,7 +1487,7 @@ func TestRunListJobsInvalidLimit(t *testing.T) {
 	for _, lim := range []int{0, 10001} {
 		jobs := &fakeRiverJobAdmin{}
 		deps, _ := depsWithJobs(jobs)
-		err := run(context.Background(), runOptions{listJobs: true, jobState: "discarded", jobLimit: lim}, deps)
+		err := run(t.Context(), runOptions{listJobs: true, jobState: "discarded", jobLimit: lim}, deps)
 		if err == nil {
 			t.Fatalf("expected limit error for --job-limit %d", lim)
 		}
@@ -1503,7 +1503,7 @@ func TestRunListJobsInvalidLimit(t *testing.T) {
 func TestRunListJobsError(t *testing.T) {
 	jobs := &fakeRiverJobAdmin{listErr: errors.New("db unreachable")}
 	deps, _ := depsWithJobs(jobs)
-	err := run(context.Background(), runOptions{listJobs: true, jobState: "discarded", jobLimit: 100}, deps)
+	err := run(t.Context(), runOptions{listJobs: true, jobState: "discarded", jobLimit: 100}, deps)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1521,7 +1521,7 @@ func TestRunRetryJobHappy(t *testing.T) {
 		},
 	}
 	deps, stdout := depsWithJobs(jobs)
-	err := run(context.Background(), runOptions{retryJobID: 412}, deps)
+	err := run(t.Context(), runOptions{retryJobID: 412}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1540,7 +1540,7 @@ func TestRunRetryJobHappy(t *testing.T) {
 func TestRunRetryJobNotFound(t *testing.T) {
 	jobs := &fakeRiverJobAdmin{retryErr: rivertype.ErrNotFound}
 	deps, _ := depsWithJobs(jobs)
-	err := run(context.Background(), runOptions{retryJobID: 999999999}, deps)
+	err := run(t.Context(), runOptions{retryJobID: 999999999}, deps)
 	if err == nil {
 		t.Fatal("expected not-found error")
 	}
@@ -1554,7 +1554,7 @@ func TestRunRetryJobInvalidID(t *testing.T) {
 	deps, _ := depsWithJobs(jobs)
 	// A negative id counts as active in validateSubcommand but is rejected by
 	// the runner before calling JobRetry.
-	err := run(context.Background(), runOptions{retryJobID: -1}, deps)
+	err := run(t.Context(), runOptions{retryJobID: -1}, deps)
 	if err == nil {
 		t.Fatal("expected invalid-id error")
 	}
@@ -1569,7 +1569,7 @@ func TestRunRetryJobInvalidID(t *testing.T) {
 func TestRunRetryJobError(t *testing.T) {
 	jobs := &fakeRiverJobAdmin{retryErr: errors.New("connection reset")}
 	deps, _ := depsWithJobs(jobs)
-	err := run(context.Background(), runOptions{retryJobID: 412}, deps)
+	err := run(t.Context(), runOptions{retryJobID: 412}, deps)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1629,7 +1629,7 @@ func TestRunRiverTier0DispatchesAndFormats(t *testing.T) {
 	deps.tier0 = tier0
 
 	before := accelerated.GetCurrentTime()
-	err := run(context.Background(), runOptions{riverTier0: true, windowHours: 24}, deps)
+	err := run(t.Context(), runOptions{riverTier0: true, windowHours: 24}, deps)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1658,7 +1658,7 @@ func TestRunRiverTier0Empty(t *testing.T) {
 	deps, stdout, _, _, _, _ := newTestDeps()
 	deps.tier0 = &fakeTier0Reader{rows: nil}
 
-	if err := run(context.Background(), runOptions{riverTier0: true, windowHours: 24}, deps); err != nil {
+	if err := run(t.Context(), runOptions{riverTier0: true, windowHours: 24}, deps); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "no finished jobs in window") {
@@ -1680,7 +1680,7 @@ func TestRunRiverTier0RejectsBadWindow(t *testing.T) {
 			tier0 := &fakeTier0Reader{}
 			deps.tier0 = tier0
 
-			err := run(context.Background(), runOptions{riverTier0: true, windowHours: tc.windowHours}, deps)
+			err := run(t.Context(), runOptions{riverTier0: true, windowHours: tc.windowHours}, deps)
 			if err == nil {
 				t.Fatalf("expected error for window-hours=%d", tc.windowHours)
 			}
@@ -1698,7 +1698,7 @@ func TestRunRiverTier0Error(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	deps.tier0 = &fakeTier0Reader{err: errors.New("db down")}
 
-	err := run(context.Background(), runOptions{riverTier0: true, windowHours: 24}, deps)
+	err := run(t.Context(), runOptions{riverTier0: true, windowHours: 24}, deps)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -1775,7 +1775,7 @@ func TestCrmAdmin_ListWhatsAppHistoryNeverPrintsThePayload(t *testing.T) {
 		ReceivedAt:    time.Date(2026, 2, 3, 5, 0, 0, 0, time.UTC),
 	}}}
 
-	if err := run(context.Background(), runOptions{listWhatsAppHistory: true}, deps); err != nil {
+	if err := run(t.Context(), runOptions{listWhatsAppHistory: true}, deps); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1802,7 +1802,7 @@ func TestCrmAdmin_ListWhatsAppHistoryValidatesTheStateFilter(t *testing.T) {
 	fake := &fakeWhatsAppHistoryAdmin{}
 	deps.whatsappHistory = fake
 
-	err := run(context.Background(), runOptions{listWhatsAppHistory: true, historyState: "pending,bogus"}, deps)
+	err := run(t.Context(), runOptions{listWhatsAppHistory: true, historyState: "pending,bogus"}, deps)
 	if err == nil || !strings.Contains(err.Error(), "unknown state") {
 		t.Fatalf("expected an unknown-state usage error, got %v", err)
 	}
@@ -1810,7 +1810,7 @@ func TestCrmAdmin_ListWhatsAppHistoryValidatesTheStateFilter(t *testing.T) {
 		t.Fatalf("a rejected filter must not reach the repository, got %v", fake.askedStates)
 	}
 
-	if err := run(context.Background(), runOptions{listWhatsAppHistory: true}, deps); err != nil {
+	if err := run(t.Context(), runOptions{listWhatsAppHistory: true}, deps); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(fake.askedStates) != 4 {
@@ -1825,7 +1825,7 @@ func TestCrmAdmin_RequeueWhatsAppHistoryRejectsANonFailedRow(t *testing.T) {
 	deps, _, _, _, _, _ := newTestDeps()
 	deps.whatsappHistory = &fakeWhatsAppHistoryAdmin{requeueErr: db.ErrNotFound}
 
-	err := run(context.Background(), runOptions{requeueWhatsAppHistoryID: uuid.NewString()}, deps)
+	err := run(t.Context(), runOptions{requeueWhatsAppHistoryID: uuid.NewString()}, deps)
 	if err == nil {
 		t.Fatal("expected an error for a chunk that could not be requeued")
 	}
@@ -1842,7 +1842,7 @@ func TestCrmAdmin_RequeueWhatsAppHistoryRejectsAMalformedID(t *testing.T) {
 	fake := &fakeWhatsAppHistoryAdmin{}
 	deps.whatsappHistory = fake
 
-	err := run(context.Background(), runOptions{requeueWhatsAppHistoryID: "not-a-uuid"}, deps)
+	err := run(t.Context(), runOptions{requeueWhatsAppHistoryID: "not-a-uuid"}, deps)
 	if err == nil || !strings.Contains(err.Error(), "valid UUID") {
 		t.Fatalf("expected a UUID usage error, got %v", err)
 	}
@@ -1858,7 +1858,7 @@ func TestCrmAdmin_RequeueWhatsAppHistorySucceeds(t *testing.T) {
 	deps.whatsappHistory = fake
 	id := uuid.New()
 
-	if err := run(context.Background(), runOptions{requeueWhatsAppHistoryID: id.String()}, deps); err != nil {
+	if err := run(t.Context(), runOptions{requeueWhatsAppHistoryID: id.String()}, deps); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(fake.requeued) != 1 || fake.requeued[0] != id {
@@ -1961,7 +1961,7 @@ func TestSetEmailOwnDomains_ExplicitEmptyClears(t *testing.T) {
 		t.Fatal("expected explicit empty --set-email-own-domains to be detected as SET, not omitted")
 	}
 
-	if err := run(context.Background(), opts, deps); err != nil {
+	if err := run(t.Context(), opts, deps); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if fake.updateCalls != 1 {
@@ -1989,7 +1989,7 @@ func TestSetEmailOwnDomains_AccountSelection(t *testing.T) {
 	t.Run("zero email states errors", func(t *testing.T) {
 		deps, _, _, _, _, _ := newTestDeps()
 		deps.emailOwnDomains = &fakeEmailOwnDomainsRepo{}
-		err := run(context.Background(), runOptions{setEmailOwnDomains: "second.example", setEmailOwnDomainsSet: true}, deps)
+		err := run(t.Context(), runOptions{setEmailOwnDomains: "second.example", setEmailOwnDomainsSet: true}, deps)
 		if err == nil {
 			t.Fatal("expected error with zero email sync states")
 		}
@@ -1999,7 +1999,7 @@ func TestSetEmailOwnDomains_AccountSelection(t *testing.T) {
 		deps, _, _, _, _, _ := newTestDeps()
 		fake := &fakeEmailOwnDomainsRepo{states: []repository.SyncState{stateA}}
 		deps.emailOwnDomains = fake
-		err := run(context.Background(), runOptions{setEmailOwnDomains: "second.example", setEmailOwnDomainsSet: true}, deps)
+		err := run(t.Context(), runOptions{setEmailOwnDomains: "second.example", setEmailOwnDomainsSet: true}, deps)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -2012,7 +2012,7 @@ func TestSetEmailOwnDomains_AccountSelection(t *testing.T) {
 		deps, _, _, _, _, _ := newTestDeps()
 		fake := &fakeEmailOwnDomainsRepo{states: []repository.SyncState{stateA, stateB}}
 		deps.emailOwnDomains = fake
-		err := run(context.Background(), runOptions{setEmailOwnDomains: "second.example", setEmailOwnDomainsSet: true}, deps)
+		err := run(t.Context(), runOptions{setEmailOwnDomains: "second.example", setEmailOwnDomainsSet: true}, deps)
 		if err == nil {
 			t.Fatal("expected ambiguous-account error")
 		}
@@ -2028,7 +2028,7 @@ func TestSetEmailOwnDomains_AccountSelection(t *testing.T) {
 		deps, _, _, _, _, _ := newTestDeps()
 		fake := &fakeEmailOwnDomainsRepo{states: []repository.SyncState{stateA, stateB}}
 		deps.emailOwnDomains = fake
-		err := run(context.Background(), runOptions{
+		err := run(t.Context(), runOptions{
 			setEmailOwnDomains:     "second.example",
 			setEmailOwnDomainsSet:  true,
 			emailOwnDomainsAccount: acctB,
@@ -2065,7 +2065,7 @@ func TestSetEmailOwnDomains_WritesPreservedMetadata(t *testing.T) {
 	}
 	deps.emailOwnDomains = fake
 
-	err := run(context.Background(), runOptions{
+	err := run(t.Context(), runOptions{
 		setEmailOwnDomains:    " Own-Domain.Example , Second.Example ",
 		setEmailOwnDomainsSet: true,
 	}, deps)

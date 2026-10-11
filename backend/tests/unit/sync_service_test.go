@@ -44,7 +44,7 @@ func newServiceSuiteDB(t *testing.T) (*db.Database, context.Context) {
 	databaseURL := testsupport.RequireDatabase(t)
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	ctx := context.Background()
+	ctx := t.Context()
 	// Migrations are applied once by TestMain.
 
 	database := testsupport.OpenDatabase(t)
@@ -66,8 +66,8 @@ func TestSyncService_TriggerSync_UsesEnqueuerWhenSet(t *testing.T) {
 	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -118,8 +118,8 @@ func TestSyncService_TriggerSync_FallsBackWhenEnqueuerNil(t *testing.T) {
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	_ = syncRepo.DeleteSyncLogsBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncLogsBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncLogsBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -158,8 +158,8 @@ func TestSyncService_TriggerSync_DedupedIsNoError(t *testing.T) {
 	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -213,7 +213,7 @@ func TestSyncService_TriggerSync_EnqueueErrorWrapped(t *testing.T) {
 	source := "service_test_enqueue_errwrapped"
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -264,8 +264,8 @@ func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
 	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -317,7 +317,7 @@ func TestSyncService_EnqueueRequiresEnqueuer(t *testing.T) {
 	t.Parallel()
 	syncRepo := repository.NewSyncRepository(nil)
 	svc := service.NewSyncService(syncRepo, nil, syncpkg.NewProviderRegistry())
-	_, err := svc.EnqueueAccountSyncIfNotInFlight(context.Background(), "gmail", nil)
+	_, err := svc.EnqueueAccountSyncIfNotInFlight(t.Context(), "gmail", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "enqueuer")
 }
@@ -340,7 +340,7 @@ func TestSyncService_ListDueAccounts_FiltersUnregisteredProviders(t *testing.T) 
 		_ = syncRepo.DeleteSyncStatesBySourceForTest(c, deadSource)
 	}
 	cleanupSources(ctx)
-	t.Cleanup(func() { cleanupSources(context.Background()) })
+	t.Cleanup(func() { cleanupSources(context.WithoutCancel(t.Context())) })
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
@@ -403,7 +403,7 @@ func TestSyncService_ListDueAccounts_SkipsAccountScopedRowsMissingAccount(t *tes
 	source := "service_test_acct_scoped_source"
 	cleanup := func(c context.Context) { _ = syncRepo.DeleteSyncStatesBySourceForTest(c, source) }
 	cleanup(ctx)
-	t.Cleanup(func() { cleanup(context.Background()) })
+	t.Cleanup(func() { cleanup(context.WithoutCancel(t.Context())) })
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
@@ -470,8 +470,8 @@ func TestSyncService_TriggerSync_RejectsNilAccountForAccountScopedProvider(t *te
 	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -540,8 +540,8 @@ func TestSyncService_TriggerSync_RejectsMissingAccountVariants(t *testing.T) {
 			_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
 			_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 			t.Cleanup(func() {
-				_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
-				_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+				_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.WithoutCancel(t.Context()), source)
+				_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 			})
 
 			registry := syncpkg.NewProviderRegistry()
@@ -586,8 +586,8 @@ func TestSyncService_TriggerSync_AccountOptionalProviderStillBootstraps(t *testi
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	_ = syncRepo.DeleteSyncLogsBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncLogsBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncLogsBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)

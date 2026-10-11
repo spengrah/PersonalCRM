@@ -50,7 +50,7 @@ type macHostTestEnv struct {
 func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	database, cfg := newAPISharedTestDB(t, ctx)
 	cfg.External.APIKey = macHostTestKey
@@ -103,7 +103,7 @@ func setupMacHostEnv(t *testing.T) *macHostTestEnv {
 		// flow has created — without this, the migration test's
 		// 048-down guard fires on leftover push rows from earlier
 		// tests in the same `go test` invocation.
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		// Look up sync states, drop any with strategy='push'. (No
 		// dedicated test-only delete-by-strategy query; the list
@@ -311,7 +311,7 @@ func TestMacHost_FullPairingFlow(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 
 	// External_sync_state rows for the host should now be gone.
-	cursorRow, cursorErr := env.syncRepo.GetMacHostSyncCursor(context.Background(), "messages", pair.HostID)
+	cursorRow, cursorErr := env.syncRepo.GetMacHostSyncCursor(t.Context(), "messages", pair.HostID)
 	require.ErrorIs(t, cursorErr, db.ErrNotFound, "cursor rows must be deleted on revoke; got cursor=%v err=%v", cursorRow, cursorErr)
 
 	// 11. Daemon's next heartbeat → 401.
@@ -351,7 +351,7 @@ func TestMacHost_Pair_MissingHostname_400(t *testing.T) {
 
 	// Mint a real token via the service so we know the only validation
 	// gate left is the hostname check.
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
 
 	w := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
@@ -383,7 +383,7 @@ func TestMacHost_Singleton_SecondPairBlocked(t *testing.T) {
 	env := setupMacHostEnv(t)
 
 	// First pair.
-	plain1, _, err := env.macService.CreatePairingToken(context.Background())
+	plain1, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
 	w := macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
 		"pairing_token":    plain1,
@@ -394,7 +394,7 @@ func TestMacHost_Singleton_SecondPairBlocked(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "first pair: %s", w.Body.String())
 
 	// Second pair attempt with a different token.
-	plain2, _, err := env.macService.CreatePairingToken(context.Background())
+	plain2, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
 	w = macHTTP(t, env, http.MethodPost, "/api/v1/host", nil, map[string]any{
 		"pairing_token":    plain2,
@@ -415,9 +415,9 @@ func TestMacHost_Heartbeat_PersistsFieldsAndEchoesProtocolState(t *testing.T) {
 
 	env := setupMacHostEnv(t)
 
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
-	res, err := env.macService.PairWithToken(context.Background(), plain, "heartbeat-fields-host", "0.1.0", 1)
+	res, err := env.macService.PairWithToken(t.Context(), plain, "heartbeat-fields-host", "0.1.0", 1)
 	require.NoError(t, err)
 
 	hostHeaders := map[string]string{
@@ -425,7 +425,7 @@ func TestMacHost_Heartbeat_PersistsFieldsAndEchoesProtocolState(t *testing.T) {
 		"Authorization": "Bearer " + res.APIKey,
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Bump the host's cursor_epoch twice (1 → 3) so cursor_epoch,
 	// protocol_version (mac.ProtocolVersion = 2), and
@@ -533,9 +533,9 @@ func TestMacHost_GetCursor_PreCommit_EmptyBaseline(t *testing.T) {
 
 	env := setupMacHostEnv(t)
 
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
-	res, err := env.macService.PairWithToken(context.Background(), plain, "precommit-cursor-host", "0.1.0", 1)
+	res, err := env.macService.PairWithToken(t.Context(), plain, "precommit-cursor-host", "0.1.0", 1)
 	require.NoError(t, err)
 
 	hostHeaders := map[string]string{
@@ -564,9 +564,9 @@ func TestMacHost_CursorFirstWriteRace(t *testing.T) {
 	env := setupMacHostEnv(t)
 
 	// Pair a host directly via the service to bypass HTTP.
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
-	res, err := env.macService.PairWithToken(context.Background(), plain, "racer", "0.1.0", 1)
+	res, err := env.macService.PairWithToken(t.Context(), plain, "racer", "0.1.0", 1)
 	require.NoError(t, err)
 
 	// Spawn N goroutines, each trying to commit a different cursor with
@@ -579,7 +579,7 @@ func TestMacHost_CursorFirstWriteRace(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			err := env.macService.CommitCursor(context.Background(), repository.CommitMacHostCursorParams{
+			err := env.macService.CommitCursor(t.Context(), repository.CommitMacHostCursorParams{
 				HostID:       res.HostID,
 				Source:       "messages",
 				BaseCursor:   "",
@@ -616,7 +616,7 @@ func TestMacHost_Pair_PlaintextKeyNeverLeaksInSubsequentReads(t *testing.T) {
 
 	env := setupMacHostEnv(t)
 
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
 
 	// spec: MAC-003.valid-token-pairs-host
@@ -641,7 +641,7 @@ func TestMacHost_Pair_PlaintextKeyNeverLeaksInSubsequentReads(t *testing.T) {
 
 	// cursor_epoch must be the host's CURRENT epoch — compare against an
 	// independent repository read of the freshly-created host row.
-	hostRow, err := env.hostRepo.GetHost(context.Background(), pair.HostID)
+	hostRow, err := env.hostRepo.GetHost(t.Context(), pair.HostID)
 	require.NoError(t, err)
 	require.Equal(t, hostRow.CursorEpoch, pair.CursorEpoch, "pair response cursor_epoch must equal the host row's current epoch")
 
@@ -687,7 +687,7 @@ func TestMacHost_Pair_PlaintextKeyNeverLeaksInSubsequentReads(t *testing.T) {
 func TestMacHost_Pair_TokenStateFailures_Opaque410(t *testing.T) {
 
 	env := setupMacHostEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	pairBody := func(token string) map[string]any {
 		return map[string]any{
@@ -741,9 +741,9 @@ func TestMacHost_Heartbeat_TooOldProtocol_NoWriteBefore412(t *testing.T) {
 
 	env := setupMacHostEnv(t)
 
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
-	res, err := env.macService.PairWithToken(context.Background(), plain, "protocol-gate-host-"+uuid.NewString()[:8], "0.1.0", 1)
+	res, err := env.macService.PairWithToken(t.Context(), plain, "protocol-gate-host-"+uuid.NewString()[:8], "0.1.0", 1)
 	require.NoError(t, err)
 
 	hostHeaders := map[string]string{
@@ -763,7 +763,7 @@ func TestMacHost_Heartbeat_TooOldProtocol_NoWriteBefore412(t *testing.T) {
 	})
 	require.Equal(t, http.StatusOK, w.Code, "seed heartbeat: %s", w.Body.String())
 
-	pre, err := env.hostRepo.GetHost(context.Background(), res.HostID)
+	pre, err := env.hostRepo.GetHost(t.Context(), res.HostID)
 	require.NoError(t, err)
 	require.NotNil(t, pre.LastHeartbeatAt, "seed heartbeat must have recorded last_heartbeat_at")
 
@@ -777,7 +777,7 @@ func TestMacHost_Heartbeat_TooOldProtocol_NoWriteBefore412(t *testing.T) {
 	})
 	require.Equal(t, http.StatusPreconditionFailed, w.Code, "body: %s", w.Body.String())
 
-	post, err := env.hostRepo.GetHost(context.Background(), res.HostID)
+	post, err := env.hostRepo.GetHost(t.Context(), res.HostID)
 	require.NoError(t, err)
 
 	require.Equal(t, pre.LastHeartbeatAt, post.LastHeartbeatAt, "last_heartbeat_at must be untouched by a 412-rejected heartbeat")
@@ -795,9 +795,9 @@ func TestMacHost_Cursor_BackfillComplete_DefaultsFalseWhenAbsent(t *testing.T) {
 
 	env := setupMacHostEnv(t)
 
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
-	res, err := env.macService.PairWithToken(context.Background(), plain, "backfill-default-host-"+uuid.NewString()[:8], "0.1.0", 1)
+	res, err := env.macService.PairWithToken(t.Context(), plain, "backfill-default-host-"+uuid.NewString()[:8], "0.1.0", 1)
 	require.NoError(t, err)
 
 	hostHeaders := map[string]string{
@@ -834,9 +834,9 @@ func TestMacHost_PushSourceAllowlist_HTTP(t *testing.T) {
 
 	env := setupMacHostEnv(t)
 
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
-	res, err := env.macService.PairWithToken(context.Background(), plain, "allowlist-host-"+uuid.NewString()[:8], "0.1.0", 1)
+	res, err := env.macService.PairWithToken(t.Context(), plain, "allowlist-host-"+uuid.NewString()[:8], "0.1.0", 1)
 	require.NoError(t, err)
 
 	hostHeaders := map[string]string{
@@ -911,7 +911,7 @@ func TestMacHost_PushSourceAllowlist_HTTP(t *testing.T) {
 func TestMacHost_PushSourceAllowlist_ServiceReCheck(t *testing.T) {
 
 	env := setupMacHostEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	hostID := uuid.New()
 	const unknownSource = "not_a_real_source"
 

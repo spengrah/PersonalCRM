@@ -33,7 +33,7 @@ func declareIsolationNS(t *testing.T) string {
 func declareIsolationDB(t *testing.T) (*db.Database, context.Context) {
 	t.Helper()
 	testsupport.RequireLongTests(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// A per-test clone: this test asserts over river_job, and a live River client
 	// draining a shared database would steal sibling tests' jobs.
 	database, _ := newIsolatedRiverTestDB(t, ctx)

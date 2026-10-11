@@ -31,7 +31,7 @@ import (
 func TestCalendarMatchedContactsNilFilter(t *testing.T) {
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	database := testsupport.OpenDatabase(t)
 

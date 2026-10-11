@@ -44,7 +44,7 @@ func TestGmailGoLive_RegisteredProvider_SchedulerSweep_ProducesInteractionsAndCa
 	testsupport.RequireDatabase(t)
 	// Per-test isolated clone: the live email consumer + scheduler sweep
 	// drain a private river_job.
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)

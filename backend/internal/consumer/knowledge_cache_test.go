@@ -75,7 +75,7 @@ func TestKnowledgeCacheUpdater_HandleEvent_NoOpsForNonCutoverPredicate(t *testin
 	require.NoError(t, err)
 	env := &events.Envelope{Source: "assertion", Kind: events.KindAssertionAccepted, Payload: payload}
 
-	require.NoError(t, u.HandleEvent(context.Background(), nil, env))
+	require.NoError(t, u.HandleEvent(t.Context(), nil, env))
 	assert.False(t, stubs.wroteLoc, "non-cutover predicate must not touch the cache")
 	assert.False(t, stubs.wroteBday)
 	assert.False(t, stubs.wroteHow)
@@ -90,7 +90,7 @@ func TestKnowledgeCacheUpdater_RefreshTx_LivesInWritesPlaceLabel(t *testing.T) {
 	}
 	u := NewKnowledgeCacheUpdater(stubs, stubs, stubs)
 
-	require.NoError(t, u.RefreshTx(context.Background(), nil, uuid.New(), repository.PredicateLivesIn))
+	require.NoError(t, u.RefreshTx(t.Context(), nil, uuid.New(), repository.PredicateLivesIn))
 	require.True(t, stubs.wroteLoc)
 	require.NotNil(t, stubs.gotLocation)
 	assert.Equal(t, "Portland", *stubs.gotLocation, "cache gets the place node's canonical_label")
@@ -101,7 +101,7 @@ func TestKnowledgeCacheUpdater_RefreshTx_NoCurrentClearsToNull(t *testing.T) {
 	stubs := &knowledgeCacheStubs{currentErr: db.ErrNotFound}
 	u := NewKnowledgeCacheUpdater(stubs, stubs, stubs)
 
-	require.NoError(t, u.RefreshTx(context.Background(), nil, uuid.New(), repository.PredicateBirthday))
+	require.NoError(t, u.RefreshTx(t.Context(), nil, uuid.New(), repository.PredicateBirthday))
 	require.True(t, stubs.wroteBday)
 	assert.Nil(t, stubs.gotBirthday, "no current accepted birthday clears the cache to NULL")
 }
@@ -111,13 +111,13 @@ func TestKnowledgeCacheUpdater_RefreshTx_BirthdayAndHowMet(t *testing.T) {
 	bday := time.Date(1991, 5, 2, 0, 0, 0, 0, time.UTC)
 	stubsB := &knowledgeCacheStubs{current: &repository.Assertion{PredicateKey: repository.PredicateBirthday, ValueDate: &bday}}
 	uB := NewKnowledgeCacheUpdater(stubsB, stubsB, stubsB)
-	require.NoError(t, uB.RefreshTx(context.Background(), nil, uuid.New(), repository.PredicateBirthday))
+	require.NoError(t, uB.RefreshTx(t.Context(), nil, uuid.New(), repository.PredicateBirthday))
 	require.NotNil(t, stubsB.gotBirthday)
 	assert.Equal(t, bday, *stubsB.gotBirthday)
 
 	stubsH := &knowledgeCacheStubs{current: &repository.Assertion{PredicateKey: repository.PredicateHowMet, ValueText: strPtr("at a wedding")}}
 	uH := NewKnowledgeCacheUpdater(stubsH, stubsH, stubsH)
-	require.NoError(t, uH.RefreshTx(context.Background(), nil, uuid.New(), repository.PredicateHowMet))
+	require.NoError(t, uH.RefreshTx(t.Context(), nil, uuid.New(), repository.PredicateHowMet))
 	require.NotNil(t, stubsH.gotHowMet)
 	assert.Equal(t, "at a wedding", *stubsH.gotHowMet)
 }

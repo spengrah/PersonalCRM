@@ -3,7 +3,6 @@
 package tests
 
 import (
-	"context"
 	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
@@ -86,7 +85,7 @@ var catalogExclusions = []string{"predicate", "entity_type"}
 func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 
@@ -232,7 +231,7 @@ func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 func TestSyntheticReset_InvalidNamespaceLeavesDataIntact(t *testing.T) {
 	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 

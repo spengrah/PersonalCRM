@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"context"
 	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
@@ -23,7 +22,7 @@ func TestEnrichmentService_NilPairGuards(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)

@@ -23,7 +23,7 @@ func TestOAuthCredential_TokenTypeStoredNullNotEmptyString(t *testing.T) {
 
 	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
@@ -45,7 +45,7 @@ func TestOAuthCredential_TokenTypeStoredNullNotEmptyString(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = repo.Delete(context.Background(), cred.ID)
+		_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 	})
 
 	n, err := repo.CountOAuthCredentialWithNullTokenTypeForTest(ctx, cred.ID)

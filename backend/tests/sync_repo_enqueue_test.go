@@ -44,7 +44,7 @@ func newEnqueueTestEnv(t *testing.T) (*repository.SyncRepository, *db.Database) 
 	// Per-test isolated clone: these tests issue DB-wide river_job
 	// count/delete assertions, so a private river_job table keeps sibling
 	// jobs from colliding.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	repo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -112,7 +112,7 @@ func TestEnqueueAccountSyncIfNotInFlight_SkipsWhenInFlight(t *testing.T) {
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "gmail"
 	acct := "u1@example.com"
 
@@ -140,7 +140,7 @@ func TestEnqueueAccountSyncIfNotInFlight_InsertsWhenClear(t *testing.T) {
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "gmail"
 	acct := "u2@example.com"
 
@@ -164,7 +164,7 @@ func TestEnqueueAccountSyncIfNotInFlight_CompletedDoesNotBlock(t *testing.T) {
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "gmail"
 	acct := "u3@example.com"
 
@@ -184,7 +184,7 @@ func TestEnqueueAccountSyncIfNotInFlight_CrossWindowOverlapPrevented(t *testing.
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "calendar"
 	acct := "u4@example.com"
 
@@ -210,7 +210,7 @@ func TestEnqueueAccountSyncIfNotInFlight_AtomicUnderConcurrency(t *testing.T) {
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "todoist"
 	acct := "race@example.com"
 
@@ -284,7 +284,7 @@ func TestEnqueueAccountSyncIfNotInFlight_NilAccountID(t *testing.T) {
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "imessage"
 
 	// First call: inserts.

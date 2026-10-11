@@ -49,12 +49,12 @@ func requireDB(t *testing.T) (baseURL string, admin *pgx.Conn) {
 	if err := assertBaseDBName(baseName); err != nil {
 		t.Fatalf("base DB guard: %v", err)
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	admin, err = connectAdmin(ctx, baseURL)
 	if err != nil {
 		t.Fatalf("connect admin: %v", err)
 	}
-	t.Cleanup(func() { _ = admin.Close(context.Background()) })
+	t.Cleanup(func() { _ = admin.Close(context.WithoutCancel(t.Context())) })
 	return baseURL, admin
 }
 
@@ -105,7 +105,7 @@ func createSyntheticTemplate(t *testing.T, ctx context.Context, admin *pgx.Conn,
 		t.Fatalf("create synthetic template %q: %v", templateName, err)
 	}
 	t.Cleanup(func() {
-		if err := dropDatabaseNoForceConn(context.Background(), admin, templateName); err != nil {
+		if err := dropDatabaseNoForceConn(context.WithoutCancel(t.Context()), admin, templateName); err != nil {
 			t.Logf("cleanup drop %q (non-fatal): %v", templateName, err)
 		}
 	})
@@ -159,12 +159,12 @@ func mustOID(t *testing.T, ctx context.Context, admin *pgx.Conn, name string) ui
 func TestTestdbTemplateReuseSameSet(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	baseURL, admin := requireDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	migPath, wantHash, templateName := syntheticMigDir(t)
 	// Drop the synthetic template at the end regardless of which path built it.
 	t.Cleanup(func() {
-		if err := dropDatabaseNoForceConn(context.Background(), admin, templateName); err != nil {
+		if err := dropDatabaseNoForceConn(context.WithoutCancel(t.Context()), admin, templateName); err != nil {
 			t.Logf("cleanup drop %q (non-fatal): %v", templateName, err)
 		}
 	})
@@ -197,7 +197,7 @@ func TestTestdbTemplateReuseSameSet(t *testing.T) {
 func TestTestdbDistinctSetsNoContention(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	baseURL, admin := requireDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	migA, hashA, nameA := syntheticMigDir(t)
 	migB, hashB, nameB := syntheticMigDir(t)
@@ -207,7 +207,7 @@ func TestTestdbDistinctSetsNoContention(t *testing.T) {
 	for _, n := range []string{nameA, nameB} {
 		n := n
 		t.Cleanup(func() {
-			if err := dropDatabaseNoForceConn(context.Background(), admin, n); err != nil {
+			if err := dropDatabaseNoForceConn(context.WithoutCancel(t.Context()), admin, n); err != nil {
 				t.Logf("cleanup drop %q (non-fatal): %v", n, err)
 			}
 		})
@@ -256,7 +256,7 @@ func TestTestdbDistinctSetsNoContention(t *testing.T) {
 func TestTestdbMissingMarkerRebuilds(t *testing.T) {
 	testsupport.RequireLongTests(t)
 	baseURL, admin := requireDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	migPath, wantHash, templateName := syntheticMigDir(t)
 	// Create the matching-named template WITHOUT a marker (empty DB).
@@ -285,7 +285,7 @@ func TestTestdbMissingMarkerRebuilds(t *testing.T) {
 // happens (the wrong-marker branch errors before building).
 func TestTestdbWrongMarkerFailsLoud(t *testing.T) {
 	baseURL, admin := requireDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	migPath, _, templateName := syntheticMigDir(t)
 	// Write a marker whose hash differs from the synthetic set's hash.
@@ -313,7 +313,7 @@ func TestTestdbWrongMarkerFailsLoud(t *testing.T) {
 // did not create.
 func TestTestdbReaperSweepsStaleTemplate(t *testing.T) {
 	baseURL, admin := requireDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, hash, templateName := syntheticMigDir(t)
 	createSyntheticTemplate(t, ctx, admin, baseURL, templateName, hash)
@@ -343,7 +343,7 @@ func TestTestdbReaperSweepsStaleTemplate(t *testing.T) {
 // race is closed by serialization, not by a connection count.
 func TestTestdbReaperBlocksOnAdvisoryLock(t *testing.T) {
 	baseURL, admin := requireDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, hash, templateName := syntheticMigDir(t)
 	createSyntheticTemplate(t, ctx, admin, baseURL, templateName, hash)
@@ -357,13 +357,13 @@ func TestTestdbReaperBlocksOnAdvisoryLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect lock holder: %v", err)
 	}
-	defer func() { _ = holder.Close(context.Background()) }()
+	defer func() { _ = holder.Close(t.Context()) }()
 
 	reaperConn, err := connectAdmin(ctx, baseURL)
 	if err != nil {
 		t.Fatalf("connect reaper conn: %v", err)
 	}
-	defer func() { _ = reaperConn.Close(context.Background()) }()
+	defer func() { _ = reaperConn.Close(t.Context()) }()
 
 	if _, err := holder.Exec(ctx, "SELECT pg_advisory_lock($1)", templateBuildAdvisoryLockID); err != nil {
 		t.Fatalf("acquire lock on holder: %v", err)
@@ -374,7 +374,7 @@ func TestTestdbReaperBlocksOnAdvisoryLock(t *testing.T) {
 			return
 		}
 		lockReleased = true
-		if _, err := holder.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", templateBuildAdvisoryLockID); err != nil {
+		if _, err := holder.Exec(t.Context(), "SELECT pg_advisory_unlock($1)", templateBuildAdvisoryLockID); err != nil {
 			t.Logf("release lock (non-fatal): %v", err)
 		}
 	}
@@ -426,7 +426,7 @@ func TestTestdbReaperBlocksOnAdvisoryLock(t *testing.T) {
 // re-run drops it.
 func TestTestdbReaperSkipsOpenSession(t *testing.T) {
 	baseURL, admin := requireDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, hash, templateName := syntheticMigDir(t)
 	// Register the synthetic-template drop FIRST so it runs LAST (LIFO); the
@@ -448,7 +448,7 @@ func TestTestdbReaperSkipsOpenSession(t *testing.T) {
 			return
 		}
 		sessClosed = true
-		_ = sess.Close(context.Background())
+		_ = sess.Close(t.Context())
 	}
 	t.Cleanup(closeSess)
 
@@ -501,7 +501,7 @@ func TestTestdbReaperSkipsOpenSession(t *testing.T) {
 // independent of the connection check.
 func TestTestdbReaperKeepsCurrentTemplate(t *testing.T) {
 	baseURL, admin := requireDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, hash, templateName := syntheticMigDir(t)
 	createSyntheticTemplate(t, ctx, admin, baseURL, templateName, hash)
@@ -528,7 +528,7 @@ func TestTestdbReaperKeepsCurrentTemplate(t *testing.T) {
 // safe under the parallel suite.
 func TestTestdbListStaleTemplateCandidates(t *testing.T) {
 	baseURL, admin := requireDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, hashA, nameA := syntheticMigDir(t)
 	_, hashB, nameB := syntheticMigDir(t)
@@ -542,7 +542,7 @@ func TestTestdbListStaleTemplateCandidates(t *testing.T) {
 		t.Fatalf("create decoy clone: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := dropDatabaseConn(context.Background(), admin, cloneName); err != nil {
+		if err := dropDatabaseConn(context.WithoutCancel(t.Context()), admin, cloneName); err != nil {
 			t.Logf("cleanup decoy clone %q (non-fatal): %v", cloneName, err)
 		}
 	})

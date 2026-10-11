@@ -36,7 +36,7 @@ var aggregationTestMessageIDs = []int32{80001, 80002, 80003, 80011, 80012, 80013
 // wrappers (no raw SQL in Go, including tests).
 func cleanupAggregationMessages(t *testing.T, database *db.Database) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	eventRepo := repository.NewEventRepository(database.Queries)
 
@@ -62,7 +62,7 @@ func setupAggregationTest(t *testing.T) (
 	// Per-test isolated clone: the live InteractionRecorder worker drains a
 	// private river_job, and the fixed chat/message IDs these tests use no
 	// longer collide across parallel siblings.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	messageRepo := repository.NewTelegramMessageRepository(database.Queries)
@@ -102,7 +102,7 @@ func setupAggregationTest(t *testing.T) (
 // transitions against a deterministic starting state.
 func createTestContactWithCadence(t *testing.T, contactRepo *repository.ContactRepository, name, cadence string, lastContacted time.Time) *repository.Contact {
 	t.Helper()
-	contact, err := contactRepo.CreateContact(context.Background(), repository.CreateContactRequest{
+	contact, err := contactRepo.CreateContact(t.Context(), repository.CreateContactRequest{
 		FullName:      name,
 		Cadence:       &cadence,
 		LastContacted: &lastContacted,
@@ -114,7 +114,7 @@ func createTestContactWithCadence(t *testing.T, contactRepo *repository.ContactR
 func insertTestMessage(t *testing.T, repo *repository.TelegramMessageRepository, msgID int32, chatID int64, outgoing bool, sentAt time.Time, contactID *uuid.UUID, peerUserID int64) *repository.TelegramMessage {
 	t.Helper()
 	text := "test message"
-	msg, err := repo.UpsertMessage(context.Background(), repository.UpsertTelegramMessageParams{
+	msg, err := repo.UpsertMessage(t.Context(), repository.UpsertTelegramMessageParams{
 		TelegramMessageID: msgID,
 		TelegramChatID:    chatID,
 		ChatType:          "private",
@@ -127,7 +127,7 @@ func insertTestMessage(t *testing.T, repo *repository.TelegramMessageRepository,
 	require.NoError(t, err)
 
 	if contactID != nil {
-		err = repo.UpdateMessageContact(context.Background(), peerUserID, *contactID)
+		err = repo.UpdateMessageContact(t.Context(), peerUserID, *contactID)
 		require.NoError(t, err)
 	}
 
@@ -137,7 +137,7 @@ func insertTestMessage(t *testing.T, repo *repository.TelegramMessageRepository,
 func TestAggregation_BatchOutboundBurst(t *testing.T) {
 	t.Parallel()
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	gen, _ := migrationGenerator(t)
 	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
@@ -163,7 +163,7 @@ func TestAggregation_BatchOutboundBurst(t *testing.T) {
 func TestAggregation_BatchMutualBridge(t *testing.T) {
 	t.Parallel()
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	gen, _ := migrationGenerator(t)
 	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
@@ -189,7 +189,7 @@ func TestAggregation_BatchNoChurnFollowUp(t *testing.T) {
 	// it should directly create mutual. This test verifies by checking that exactly
 	// one interaction is created (not an outbound followed by a mutual update).
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	gen, _ := migrationGenerator(t)
 	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
@@ -209,7 +209,7 @@ func TestAggregation_BatchNoChurnFollowUp(t *testing.T) {
 func TestAggregation_ChatScoped(t *testing.T) {
 	t.Parallel()
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	gen, _ := migrationGenerator(t)
 	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
@@ -234,7 +234,7 @@ func TestAggregation_ChatScoped(t *testing.T) {
 func TestAggregation_IncrementalCoalescing(t *testing.T) {
 	t.Parallel()
 	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Seed with cadence + a baseline last_contacted so we can observe
 	// cadence column transitions after ExtendInteraction runs.
@@ -297,7 +297,7 @@ func TestAggregation_IncrementalCoalescing(t *testing.T) {
 func TestAggregation_IncrementalReplyBridge(t *testing.T) {
 	t.Parallel()
 	messageRepo, interactionRepo, contactRepo, _, engine, _ := setupAggregationTest(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Seed with cadence + a baseline last_contacted so we can observe
 	// cadence column transitions after PromoteInteractionToMutual runs.
@@ -359,7 +359,7 @@ func TestAggregation_IncrementalReplyBridge(t *testing.T) {
 func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
 	t.Parallel()
 	messageRepo, interactionRepo, _, _, engine, database := setupAggregationTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	gen, _ := migrationGenerator(t)
 	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
@@ -428,7 +428,7 @@ func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
 func TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow(t *testing.T) {
 	t.Parallel()
 	messageRepo, _, _, _, _, database := setupAggregationTest(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	const testPeerID int64 = 90001
 	const testChatID int64 = 900
@@ -504,7 +504,7 @@ func TestListDistinctUnmatchedPeers_PrefersPopulatedNameRow(t *testing.T) {
 func TestListDistinctUnmatchedPeers_TreatsBlankStringsAsAbsent(t *testing.T) {
 	t.Parallel()
 	messageRepo, _, _, _, _, database := setupAggregationTest(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	const testPeerID int64 = 90002
 	const testChatID int64 = 901

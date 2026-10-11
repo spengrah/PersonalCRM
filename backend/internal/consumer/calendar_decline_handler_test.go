@@ -100,7 +100,7 @@ func TestCalendarDeclineHandler_InteractionFound_SoftDeletesAndRecomputes(t *tes
 	env := mustDeclineEnv(t, events.CalendarDeclinedPayload{
 		Version: 1, ContactID: cid, EventID: eventUUID, OccurredAt: occurredAt,
 	})
-	require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env))
+	require.NoError(t, h.HandleEvent(t.Context(), nonNilTx(), env))
 
 	require.Equal(t, 1, ir.findCalls)
 	require.Equal(t, [3]string{cid.String(), "gcal", eventUUID}, ir.lastFindKey, "looks up by (contact, gcal, internal-UUID source_ref)")
@@ -122,7 +122,7 @@ func TestCalendarDeclineHandler_InteractionNotFound_NoOp(t *testing.T) {
 		Version: 1, ContactID: cid, EventID: uuid.New().String(),
 		OccurredAt: time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC),
 	})
-	require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env))
+	require.NoError(t, h.HandleEvent(t.Context(), nonNilTx(), env))
 
 	require.Equal(t, 1, ir.findCalls)
 	require.Zero(t, ir.softDelCalls, "no soft-delete when no live interaction")
@@ -140,7 +140,7 @@ func TestCalendarDeclineHandler_InvalidPayload_Errors(t *testing.T) {
 			Version: 1, ContactID: uuid.Nil, EventID: uuid.New().String(),
 			OccurredAt: time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC),
 		})
-		err := h.HandleEvent(context.Background(), nonNilTx(), env)
+		err := h.HandleEvent(t.Context(), nonNilTx(), env)
 		require.Error(t, err)
 		require.Zero(t, ir.findCalls)
 	})
@@ -150,7 +150,7 @@ func TestCalendarDeclineHandler_InvalidPayload_Errors(t *testing.T) {
 			Version: 1, ContactID: uuid.New(), EventID: "",
 			OccurredAt: time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC),
 		})
-		err := h.HandleEvent(context.Background(), nonNilTx(), env)
+		err := h.HandleEvent(t.Context(), nonNilTx(), env)
 		require.Error(t, err)
 	})
 }
@@ -174,7 +174,7 @@ func TestCalendarDeclineHandler_RecomputeContactNotFound_BenignNoOp(t *testing.T
 	env := mustDeclineEnv(t, events.CalendarDeclinedPayload{
 		Version: 1, ContactID: cid, EventID: uuid.New().String(), OccurredAt: occurredAt,
 	})
-	require.NoError(t, h.HandleEvent(context.Background(), nonNilTx(), env), "contact-not-found recompute is a benign no-op")
+	require.NoError(t, h.HandleEvent(t.Context(), nonNilTx(), env), "contact-not-found recompute is a benign no-op")
 	require.Equal(t, 1, ir.softDelCalls, "interaction still soft-deleted before recompute")
 	require.Equal(t, 1, cr.recomputeCalls)
 }
@@ -193,5 +193,5 @@ func TestCalendarDeclineHandler_RecomputeOtherError_Propagates(t *testing.T) {
 	env := mustDeclineEnv(t, events.CalendarDeclinedPayload{
 		Version: 1, ContactID: cid, EventID: uuid.New().String(), OccurredAt: occurredAt,
 	})
-	require.Error(t, h.HandleEvent(context.Background(), nonNilTx(), env))
+	require.Error(t, h.HandleEvent(t.Context(), nonNilTx(), env))
 }

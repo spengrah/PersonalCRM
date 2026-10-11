@@ -162,7 +162,7 @@ func TestStart_RefusesWhenNotReady(t *testing.T) {
 
 			// The session factory errors if reached, so a not_ready status with
 			// no error state proves no connect was attempted.
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 			assert.Equal(t, StateNotReady, m.Status().State)
 			assert.Equal(t, ReasonIngestNotWired, m.Status().Reason)
 		})
@@ -174,7 +174,7 @@ func TestStart_RefusesWhenNotReady(t *testing.T) {
 // connected client with no durable sink.
 func TestStartPairing_RefusesWhenNotReady(t *testing.T) {
 	m := newNotReadyManager(t)
-	err := m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR})
+	err := m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR})
 	assert.ErrorIs(t, err, ErrIngestNotWired)
 	assert.Nil(t, m.Status().Pairing, "no pairing state may be created")
 }
@@ -183,7 +183,7 @@ func TestStartPairing_RefusesWhenNotReady(t *testing.T) {
 // shape that loses data: a default no-op that SUCCEEDS would acknowledge and
 // drop a live message irrecoverably.
 func TestDefaultIngestor_RefusesAndWithholdsAck(t *testing.T) {
-	err := refusingIngestor{}.IngestMessage(context.Background(), IngestedMessage{})
+	err := refusingIngestor{}.IngestMessage(t.Context(), IngestedMessage{})
 	assert.ErrorIs(t, err, ErrIngestNotWired)
 
 	m := newManagerForTest(t, newFakeSyncStore(), &fakeBackfillReader{})
@@ -203,7 +203,7 @@ func TestStart_WithNoDeviceStaysIdle(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	assert.Equal(t, StateNotPaired, m.Status().State)
 	assert.NotContains(t, cli.callLog(), "connect", "an unpaired device must never connect")
 }
@@ -218,7 +218,7 @@ func TestStart_DoesNotReconnectAfterPersistedTerminalReason(t *testing.T) {
 			m, syncStore, _, _ := newTestManager(t, cli, true)
 			syncStore.seedTerminal(reason, nil)
 
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 
 			status := m.Status()
 			assert.Equal(t, StateDisconnected, status.State)
@@ -235,7 +235,7 @@ func TestStart_DoesNotReconnectDuringActiveBan(t *testing.T) {
 	until := accelerated.GetCurrentTime().Add(time.Hour)
 	syncStore.seedTerminal(ReasonTemporaryBan, &until)
 
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
 	status := m.Status()
 	assert.Equal(t, StateDisconnected, status.State)
@@ -250,7 +250,7 @@ func TestStart_ReconnectsWhenPersistedStateIsNotTerminal(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
 
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
 	assert.Contains(t, cli.callLog(), "connect")
 	assert.Equal(t, StateConnecting, m.Status().State)
@@ -262,7 +262,7 @@ func TestStart_ExpiredBanReconnects(t *testing.T) {
 	until := accelerated.GetCurrentTime().Add(-time.Hour)
 	syncStore.seedTerminal(ReasonTemporaryBan, &until)
 
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	assert.Contains(t, cli.callLog(), "connect", "an expired ban is not a terminal state")
 }
 
@@ -270,7 +270,7 @@ func TestStart_ExpiredBanReconnects(t *testing.T) {
 // banner can see WhatsApp at all.
 func TestStart_CreatesSyncStateRow(t *testing.T) {
 	m, syncStore, _, _ := newTestManager(t, newFakeClient(), false)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	assert.Contains(t, syncStore.callLog(), "create")
 }
 
@@ -281,7 +281,7 @@ func TestStart_ConnectFailureDoesNotAbortBoot(t *testing.T) {
 	cli.connectErr = errors.New("dial tcp: no route to host")
 	m, syncStore, _, _ := newTestManager(t, cli, true)
 
-	require.NoError(t, m.Start(context.Background()), "a WhatsApp failure must never abort boot")
+	require.NoError(t, m.Start(t.Context()), "a WhatsApp failure must never abort boot")
 	assert.Equal(t, StateError, m.Status().State)
 	assert.Contains(t, syncStore.callLog(), "status:error")
 
@@ -303,7 +303,7 @@ func TestStart_RefusesAnAmbiguousDeviceStore(t *testing.T) {
 		return nil, errors.Join(ErrDeviceStoreAmbiguous, errors.New("2 stored devices"))
 	})
 
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
 	status := m.Status()
 	assert.Equal(t, StateError, status.State)
@@ -316,7 +316,7 @@ func TestStart_RefusesAnAmbiguousDeviceStore(t *testing.T) {
 
 func TestHandleEvent_ConnectedSetsConnected(t *testing.T) {
 	m, syncStore, _, _ := newTestManager(t, newFakeClient(), true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
 	assert.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	assert.Equal(t, StateConnected, m.Status().State)
@@ -325,7 +325,7 @@ func TestHandleEvent_ConnectedSetsConnected(t *testing.T) {
 
 func TestHandleEvent_DisconnectedSetsReconnecting(t *testing.T) {
 	m, _, _, _ := newTestManager(t, newFakeClient(), true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	assert.True(t, dispatchEvent(t, m, nil, &events.Disconnected{}))
@@ -343,9 +343,9 @@ func TestHandleEvent_PairSuccessAdoptsButAwaitsTheConnection(t *testing.T) {
 
 	// Start first so the sync-state row exists: without it the status writes are
 	// no-ops and "the sync error is not cleared yet" would pass vacuously.
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	pairingSess := pairingSession(t, m)
 	require.NotNil(t, pairingSess)
 
@@ -395,7 +395,7 @@ func TestHandleEvent_LoggedOutIsTerminalWithReason(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cli := newFakeClient()
 			m, syncStore, _, _ := newTestManager(t, cli, true)
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 			require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 			assert.True(t, dispatchEvent(t, m, nil, tt.event))
@@ -740,7 +740,7 @@ func TestStatus_ReportsBackfillCounts(t *testing.T) {
 
 func TestStatus_ReportsNotReadyReason(t *testing.T) {
 	m := newNotReadyManager(t)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
 	status := m.Status()
 	assert.True(t, status.Configured)
@@ -755,7 +755,7 @@ func TestSelfJID(t *testing.T) {
 	assert.False(t, ok)
 
 	jid := types.NewJID("15551234567", types.DefaultUserServer)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	require.True(t, dispatchEvent(t, m, pairingSession(t, m), &events.PairSuccess{ID: jid}))
 
 	got, ok := m.SelfJID()
@@ -833,7 +833,7 @@ func newHistoryNotificationEvent(protocolMsgID string, inlinePayload []byte) *ev
 func TestHandleEvent_TerminalReasonWriteFailureIsSurfaced(t *testing.T) {
 	cli := newFakeClient()
 	m, syncStore, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	syncStore.resetCalls()
@@ -862,7 +862,7 @@ func TestHandleEvent_TerminalReasonWriteFailureIsSurfaced(t *testing.T) {
 func TestHandleEvent_TerminalDecisionIsOneDurableWrite(t *testing.T) {
 	t.Run("both land together", func(t *testing.T) {
 		m, syncStore, _, _ := newTestManager(t, newFakeClient(), true)
-		require.NoError(t, m.Start(context.Background()))
+		require.NoError(t, m.Start(t.Context()))
 		require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 		syncStore.resetCalls()
 
@@ -880,7 +880,7 @@ func TestHandleEvent_TerminalDecisionIsOneDurableWrite(t *testing.T) {
 
 	t.Run("failure injection leaves nothing partial", func(t *testing.T) {
 		m, syncStore, _, _ := newTestManager(t, newFakeClient(), true)
-		require.NoError(t, m.Start(context.Background()))
+		require.NoError(t, m.Start(t.Context()))
 		require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 		syncStore.setErr(func(f *fakeSyncStore) { f.terminalErr = errors.New("database is down") })
@@ -915,7 +915,7 @@ func TestHandleEvent_TerminalFromAbandonedClientIsIgnored(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cli := newFakeClient()
 			m, syncStore, _, _ := newTestManager(t, cli, true)
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 			require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 			require.Equal(t, StateConnected, m.Status().State)
 
@@ -945,13 +945,13 @@ func TestHandleEvent_TerminalFromAbandonedClientIsIgnored(t *testing.T) {
 func TestHandleEvent_TerminalFromPairingClientDoesNotSpeakForTheSession(t *testing.T) {
 	installed := newFakeClient()
 	m, syncStore, _, _ := newTestManager(t, installed, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	pairingClient := newFakeClient()
 	useClient(m, pairingClient, false)
 	installed.setConnected(false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	pairingSess := pairingSession(t, m)
 	require.NotNil(t, pairingSess)
 	syncStore.resetCalls()
@@ -974,7 +974,7 @@ func TestHandleEvent_TerminalFromPairingClientDoesNotSpeakForTheSession(t *testi
 func TestHandleEvent_TerminalOnTheSessionLeavesAnInFlightPairingAlone(t *testing.T) {
 	installed := newFakeClient()
 	m, _, _, _ := newTestManager(t, installed, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	require.True(t, dispatchEvent(t, m, nil, &events.Disconnected{}))
 	installed.setConnected(false)
@@ -984,7 +984,7 @@ func TestHandleEvent_TerminalOnTheSessionLeavesAnInFlightPairingAlone(t *testing
 
 	pairingClient := newFakeClient()
 	useClient(m, pairingClient, false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	require.NotNil(t, m.Status().Pairing)
 
 	assert.True(t, dispatchEvent(t, m, installedSess, &events.LoggedOut{}))
@@ -1000,7 +1000,7 @@ func TestHandleEvent_TerminalOnTheSessionLeavesAnInFlightPairingAlone(t *testing
 // a client nobody owns says nothing about the installed session.
 func TestHandleEvent_DisconnectedFromAbandonedClientIsIgnored(t *testing.T) {
 	m, _, _, _ := newTestManager(t, newFakeClient(), true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	orphan := &session{client: newFakeClient(), retired: true}
@@ -1014,14 +1014,14 @@ func TestHandleEvent_DisconnectedFromAbandonedClientIsIgnored(t *testing.T) {
 func TestHandleEvent_DisconnectedFromPairingClientIsIgnored(t *testing.T) {
 	installed := newFakeClient()
 	m, _, _, _ := newTestManager(t, installed, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	installedSess := installedSession(t, m)
 	installed.setConnected(false)
 
 	pairingClient := newFakeClient()
 	useClient(m, pairingClient, false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	pairingSess := pairingSession(t, m)
 	require.NotNil(t, pairingSess)
 
@@ -1046,7 +1046,7 @@ func TestHandleEvent_DisconnectedFromPairingClientIsIgnored(t *testing.T) {
 // green while production silently lost all attribution.
 func TestNewClient_HandlerIsBoundToItsOwnSession(t *testing.T) {
 	m, syncStore, _, _ := newTestManager(t, newFakeClient(), true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.Equal(t, StateConnecting, m.Status().State)
 	syncStore.resetCalls()
 
@@ -1069,7 +1069,7 @@ func TestNewClient_HandlerIsBoundToItsOwnSession(t *testing.T) {
 // TestHandleEvent_TerminalReasonPersistedOnHappyPath is the positive control.
 func TestHandleEvent_TerminalReasonPersistedOnHappyPath(t *testing.T) {
 	m, _, _, _ := newTestManager(t, newFakeClient(), true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	require.True(t, dispatchEvent(t, m, nil, &events.LoggedOut{}))
@@ -1085,7 +1085,7 @@ func TestStart_FailsClosedWhenSyncStateUnreadable(t *testing.T) {
 	m, syncStore, _, _ := newTestManager(t, cli, true)
 	syncStore.setErr(func(f *fakeSyncStore) { f.getErr = errors.New("database is down") })
 
-	require.NoError(t, m.Start(context.Background()), "a WhatsApp failure never aborts boot")
+	require.NoError(t, m.Start(t.Context()), "a WhatsApp failure never aborts boot")
 
 	assert.Equal(t, StateError, m.Status().State)
 	assert.NotContains(t, cli.callLog(), "connect",
@@ -1138,7 +1138,7 @@ func TestStatus_NamesTheMissingDependency(t *testing.T) {
 				return nil, errors.New("must not be reached")
 			})
 
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 			status := m.Status()
 			assert.Equal(t, StateNotReady, status.State)
 			assert.Equal(t, ReasonIngestNotWired, status.Reason, "the machine-readable code stays stable")
@@ -1150,7 +1150,7 @@ func TestStatus_NamesTheMissingDependency(t *testing.T) {
 			fresh.setSessionFactory(func(context.Context, sessionRequest) (*session, error) {
 				return nil, errors.New("must not be reached")
 			})
-			assert.ErrorIs(t, fresh.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}), ErrIngestNotWired)
+			assert.ErrorIs(t, fresh.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}), ErrIngestNotWired)
 			assert.Contains(t, fresh.Status().Missing, tt.want)
 		})
 	}
@@ -1166,7 +1166,7 @@ func TestStart_FailsClosedWhenSyncStateCannotBeCreated(t *testing.T) {
 		f.createErr = errors.New("database is down")
 	})
 
-	require.NoError(t, m.Start(context.Background()), "a WhatsApp failure never aborts boot")
+	require.NoError(t, m.Start(t.Context()), "a WhatsApp failure never aborts boot")
 
 	assert.Equal(t, StateError, m.Status().State)
 	assert.NotContains(t, cli.callLog(), "connect",
@@ -1180,7 +1180,7 @@ func TestStart_FailsClosedWhenSyncStateCannotBeCreated(t *testing.T) {
 func TestOnConnected_FromRetiredSessionIsIgnored(t *testing.T) {
 	cli := newFakeClient()
 	m, syncStore, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	sess := installedSession(t, m)
@@ -1203,7 +1203,7 @@ func TestOnConnected_FromRetiredSessionIsIgnored(t *testing.T) {
 func TestOnPairSuccess_RetiresAndDeletesTheReplacedSession(t *testing.T) {
 	oldClient := newFakeClient()
 	m, _, _, _ := newTestManager(t, oldClient, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	require.True(t, dispatchEvent(t, m, nil, &events.Disconnected{}))
 	oldClient.setConnected(false)
@@ -1213,7 +1213,7 @@ func TestOnPairSuccess_RetiresAndDeletesTheReplacedSession(t *testing.T) {
 
 	newClient := newFakeClient()
 	useClient(m, newClient, false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	pairingSess := pairingSession(t, m)
 	require.NotNil(t, pairingSess)
 
@@ -1245,13 +1245,13 @@ func TestOnPairSuccess_RetainedReplacedDeviceIsRetriedAndSurfaced(t *testing.T) 
 	oldClient := newFakeClient()
 	oldClient.deleteDeviceErr = errors.New("database is down")
 	m, _, _, _ := newTestManager(t, oldClient, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	oldClient.setConnected(false)
 
 	newClient := newFakeClient()
 	useClient(m, newClient, false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	pairingSess := pairingSession(t, m)
 	require.NotNil(t, pairingSess)
 
@@ -1272,7 +1272,7 @@ func TestOnPairSuccess_RetainedReplacedDeviceIsRetriedAndSurfaced(t *testing.T) 
 func TestOnPairSuccess_ClearsTheReplacedDevicesTerminalFields(t *testing.T) {
 	oldClient := newFakeClient()
 	m, _, _, _ := newTestManager(t, oldClient, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	require.True(t, dispatchEvent(t, m, nil, &events.TemporaryBan{Expire: 24 * time.Hour}))
 	oldClient.setConnected(false)
@@ -1283,7 +1283,7 @@ func TestOnPairSuccess_ClearsTheReplacedDevicesTerminalFields(t *testing.T) {
 
 	newClient := newFakeClient()
 	useClient(m, newClient, false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	pairingSess := pairingSession(t, m)
 	require.NotNil(t, pairingSess)
 	require.True(t, dispatchEvent(t, m, pairingSess, &events.PairSuccess{
@@ -1305,9 +1305,9 @@ func TestOnPairSuccess_ClearsTheReplacedDevicesTerminalFields(t *testing.T) {
 func TestOnPairSuccess_SelectorPersistFailureIsSurfaced(t *testing.T) {
 	cli := newFakeClient()
 	m, syncStore, _, _ := newTestManager(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	pairingSess := pairingSession(t, m)
 	require.NotNil(t, pairingSess)
 
@@ -1331,13 +1331,13 @@ func TestOnPairSuccess_SelectorPersistFailureIsSurfaced(t *testing.T) {
 func TestOnPairSuccess_SelectorWriteFailureStillDeletesTheReplacedDevice(t *testing.T) {
 	oldClient := newFakeClient()
 	m, syncStore, _, _ := newTestManager(t, oldClient, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	oldClient.setConnected(false)
 
 	newClient := newFakeClient()
 	useClient(m, newClient, false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	pairingSess := pairingSession(t, m)
 	require.NotNil(t, pairingSess)
 
@@ -1417,13 +1417,13 @@ func TestManagerHistoryFetcher_ProjectsThroughTheLiveParser(t *testing.T) {
 		Message:          &waE2E.Message{Conversation: proto.String("from history")},
 	}
 
-	got, eligible, err := fetcher.ProjectHistoryMessage(context.Background(), chatJID, web)
+	got, eligible, err := fetcher.ProjectHistoryMessage(t.Context(), chatJID, web)
 	require.NoError(t, err)
 	require.True(t, eligible)
 
 	// The same content as a LIVE event, through the same parser.
 	own, resolver := m.ownIdentityFor(fetcher.sess)
-	live, _, liveEligible := parseMessage(context.Background(), &events.Message{
+	live, _, liveEligible := parseMessage(t.Context(), &events.Message{
 		Info: types.MessageInfo{
 			MessageSource: types.MessageSource{Chat: types.NewJID("15559990001", types.DefaultUserServer)},
 			ID:            "hist-1",
@@ -1466,7 +1466,7 @@ func TestManagerHistoryFetcher_ProjectionCountsUnresolvedLIDPeers(t *testing.T) 
 		Message:          &waE2E.Message{Conversation: proto.String("from a LID-only peer")},
 	}
 
-	msg, eligible, err := fetcher.ProjectHistoryMessage(context.Background(), lidChat, web)
+	msg, eligible, err := fetcher.ProjectHistoryMessage(t.Context(), lidChat, web)
 	require.NoError(t, err)
 	require.True(t, eligible)
 	assert.Nil(t, msg.PeerPhoneE164, "the peer's number could not be recovered")
@@ -1479,7 +1479,7 @@ func TestManagerHistoryFetcher_ProjectionCountsUnresolvedLIDPeers(t *testing.T) 
 func TestManagerHistoryFetcher_UnparseableChatJIDIsThatMessagesError(t *testing.T) {
 	_, fetcher := newProjectionSeam(t, &fakeLIDStore{})
 
-	_, eligible, err := fetcher.ProjectHistoryMessage(context.Background(), "not a jid", &waWeb.WebMessageInfo{
+	_, eligible, err := fetcher.ProjectHistoryMessage(t.Context(), "not a jid", &waWeb.WebMessageInfo{
 		Key: &waCommon.MessageKey{ID: proto.String("x")},
 	})
 
@@ -1497,7 +1497,7 @@ func TestManagerHistoryFetcher_UnparseableChatJIDIsThatMessagesError(t *testing.
 func TestManagerHistoryFetcher_RefusesToAcknowledgeAnIdlessChunk(t *testing.T) {
 	_, fetcher := newProjectionSeam(t, &fakeLIDStore{})
 
-	err := fetcher.AckHistorySync(context.Background(), "")
+	err := fetcher.AckHistorySync(t.Context(), "")
 
 	require.Error(t, err, "an ack that tells WhatsApp nothing must not report success")
 	assert.Contains(t, err.Error(), "protocol message id")

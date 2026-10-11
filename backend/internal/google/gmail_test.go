@@ -380,7 +380,7 @@ func TestProcessMessage_Inbound(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "Contact A <contact@example.com>",
 		[]string{"me@example.com"}, nil, nil, "Hi", "hello", "<m1@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "inbound", rows[0].Direction)
@@ -398,7 +398,7 @@ func TestProcessMessage_Outbound_To(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "me@example.com",
 		[]string{"contact@example.com"}, nil, nil, "Re", "yo", "<m2@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "outbound", rows[0].Direction)
@@ -414,7 +414,7 @@ func TestProcessMessage_Outbound_ViaCcAndBcc(t *testing.T) {
 		knownMap := map[string][]uuid.UUID{"contact@example.com": {contactA}}
 		msg := buildMessage(t, "g1", "t1", "me@example.com",
 			[]string{"other@example.com"}, []string{"contact@example.com"}, nil, "S", "b", "<c1@example.com>", 1700000000000)
-		rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+		rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 		require.NoError(t, err)
 		require.Len(t, rows, 1)
 		require.Equal(t, "outbound", rows[0].Direction)
@@ -426,7 +426,7 @@ func TestProcessMessage_Outbound_ViaCcAndBcc(t *testing.T) {
 		knownMap := map[string][]uuid.UUID{"contact@example.com": {contactA}}
 		msg := buildMessage(t, "g2", "t2", "me@example.com",
 			[]string{"other@example.com"}, nil, []string{"contact@example.com"}, "S", "b", "<c2@example.com>", 1700000000000)
-		rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+		rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 		require.NoError(t, err)
 		require.Len(t, rows, 1)
 		require.Equal(t, "outbound", rows[0].Direction)
@@ -446,7 +446,7 @@ func TestProcessMessage_GroupOutbound_TwoContacts(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "me@example.com",
 		[]string{"a@example.com", "b@example.com"}, nil, nil, "S", "hi both", "<g@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	dirs := map[uuid.UUID]string{}
@@ -470,7 +470,7 @@ func TestProcessMessage_Bystander_Skipped(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "third@example.com",
 		[]string{"other@example.com"}, []string{"contact@example.com"}, nil, "S", "b", "<by@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Empty(t, rows)
 }
@@ -489,7 +489,7 @@ func TestProcessMessage_InboundForA_RecipientBNotQualifying(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "a@example.com",
 		[]string{"me@example.com", "b@example.com"}, nil, nil, "S", "b", "<ab@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, contactA, rows[0].ContactID)
@@ -507,7 +507,7 @@ func TestProcessMessage_AmbiguousSharedAddress_FansOut(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "shared@example.com",
 		[]string{"me@example.com"}, nil, nil, "S", "b", "<sh@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 2)
 	ids := map[uuid.UUID]bool{}
@@ -534,7 +534,7 @@ func TestProcessMessage_PeerHandlePrecedence_ToWinsOverCc(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "me@example.com",
 		[]string{"primary@example.com"}, []string{"alias@example.com"}, nil, "S", "b", "<pp@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "primary@example.com", rows[0].PeerNormalized)
@@ -552,7 +552,7 @@ func TestProcessMessage_PeerHandlePrecedence_FirstListedWinsInBucket(t *testing.
 	msg := buildMessage(t, "g1", "t1", "me@example.com",
 		[]string{"first@example.com", "second@example.com"}, nil, nil, "S", "b", "<fl@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "first@example.com", rows[0].PeerNormalized)
@@ -566,7 +566,7 @@ func TestProcessMessage_DisplayNameHeaders_Parsed(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "\"Contact A\" <contact@example.com>",
 		[]string{"\"My Self\" <me@example.com>"}, nil, nil, "S", "b", "<dn@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "inbound", rows[0].Direction)
@@ -583,7 +583,7 @@ func TestProcessMessage_DedupAddressInToAndCc(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "me@example.com",
 		[]string{"contact@example.com"}, []string{"contact@example.com"}, nil, "S", "b", "<dd@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 }
@@ -596,7 +596,7 @@ func TestProcessMessage_NomsgidFallbackInResolution(t *testing.T) {
 	msg := buildMessage(t, "gmail-xyz", "t1", "contact@example.com",
 		[]string{"me@example.com"}, nil, nil, "S", "b", "", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, "nomsgid:me@example.com:gmail-xyz", rows[0].ExternalID)
@@ -625,7 +625,7 @@ func TestProcessMessage_MetadataCarriesAttachmentsAndHTML(t *testing.T) {
 			},
 		},
 	}
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 
@@ -651,7 +651,7 @@ func TestProcessMessage_MetadataCapturesDisplayNames(t *testing.T) {
 		[]string{"\"My Self\" <me@example.com>", "bare@example.com"}, nil, nil,
 		"S", "b", "<dn@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 
@@ -675,7 +675,7 @@ func TestProcessMessage_MetadataNoDisplayNameStoresEmpty(t *testing.T) {
 	msg := buildMessage(t, "g1", "t1", "contact@example.com",
 		[]string{"me@example.com"}, nil, nil, "S", "b", "<nodn@example.com>", 1700000000000)
 
-	rows, err := p.RunProcessMessageForTest(context.Background(), msg, "me@example.com", knownMap, meSet)
+	rows, err := p.RunProcessMessageForTest(t.Context(), msg, "me@example.com", knownMap, meSet)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 
@@ -845,7 +845,7 @@ func TestScanWindowChunks_FiltersByInternalDateAndStoresBoundaryHashes(t *testin
 	f.messages["boundary"] = &gmail.Message{Id: "boundary", InternalDate: end * 1000}
 	f.messages["future"] = &gmail.Message{Id: "future", InternalDate: (end + 1) * 1000}
 
-	res, err := p.scanWindowChunks(context.Background(), f, []string{query}, "account@example.com", nil, nil, gmailScanWindow{
+	res, err := p.scanWindowChunks(t.Context(), f, []string{query}, "account@example.com", nil, nil, gmailScanWindow{
 		StartEpoch:          start,
 		EndEpoch:            end,
 		PriorBoundaryHashes: map[string]struct{}{},
@@ -868,7 +868,7 @@ func TestScanWindowChunks_PriorBoundarySkipsReplayAllowsNewSameSecond(t *testing
 	f.messages["replayed"] = &gmail.Message{Id: "replayed", InternalDate: start * 1000}
 	f.messages["late-indexed"] = &gmail.Message{Id: "late-indexed", InternalDate: start*1000 + 999}
 
-	res, err := p.scanWindowChunks(context.Background(), f, []string{query}, "account@example.com", nil, nil, gmailScanWindow{
+	res, err := p.scanWindowChunks(t.Context(), f, []string{query}, "account@example.com", nil, nil, gmailScanWindow{
 		StartEpoch: start,
 		EndEpoch:   end,
 		PriorBoundaryHashes: map[string]struct{}{
@@ -891,7 +891,7 @@ func TestScanWindowChunks_ReusesFetchedMessageAcrossOverlappingWindows(t *testin
 	f.messages["overlap"] = &gmail.Message{Id: "overlap", InternalDate: 1150 * 1000}
 
 	fetchedMessages := map[string]*gmail.Message{}
-	first, err := p.scanWindowChunks(context.Background(), f, []string{firstQuery}, "account@example.com", nil, nil, gmailScanWindow{
+	first, err := p.scanWindowChunks(t.Context(), f, []string{firstQuery}, "account@example.com", nil, nil, gmailScanWindow{
 		StartEpoch:          1000,
 		EndEpoch:            1100,
 		PriorBoundaryHashes: map[string]struct{}{},
@@ -900,7 +900,7 @@ func TestScanWindowChunks_ReusesFetchedMessageAcrossOverlappingWindows(t *testin
 	require.Equal(t, 0, first.Processed, "neighboring overlap fetch is outside the exact first window")
 	require.Equal(t, 1, f.getCalls["overlap"])
 
-	second, err := p.scanWindowChunks(context.Background(), f, []string{secondQuery}, "account@example.com", nil, nil, gmailScanWindow{
+	second, err := p.scanWindowChunks(t.Context(), f, []string{secondQuery}, "account@example.com", nil, nil, gmailScanWindow{
 		StartEpoch:          1100,
 		EndEpoch:            1200,
 		PriorBoundaryHashes: map[string]struct{}{},
@@ -915,7 +915,7 @@ func TestScanWindowChunks_ListFailureReturnsError(t *testing.T) {
 	f := newFakeFetcher()
 	f.listErr = fmt.Errorf("forced list error")
 
-	_, err := p.scanWindowChunks(context.Background(), f, []string{"q"}, "account@example.com", nil, nil, gmailScanWindow{
+	_, err := p.scanWindowChunks(t.Context(), f, []string{"q"}, "account@example.com", nil, nil, gmailScanWindow{
 		StartEpoch:          1000,
 		EndEpoch:            1100,
 		PriorBoundaryHashes: map[string]struct{}{},
@@ -950,9 +950,9 @@ func TestCrossChunkDedup_Precondition_SameIDFromTwoChunks(t *testing.T) {
 
 	// Both chunk queries hand back the same id (the cross-chunk duplicate Sync's
 	// seen set must collapse to a single GetMessage).
-	page0, _, err := f.ListMessageIDs(context.Background(), chunks[0], "")
+	page0, _, err := f.ListMessageIDs(t.Context(), chunks[0], "")
 	require.NoError(t, err)
-	pageN, _, err := f.ListMessageIDs(context.Background(), chunks[len(chunks)-1], "")
+	pageN, _, err := f.ListMessageIDs(t.Context(), chunks[len(chunks)-1], "")
 	require.NoError(t, err)
 	require.Len(t, page0, 1)
 	require.Len(t, pageN, 1)

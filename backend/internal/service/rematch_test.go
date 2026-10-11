@@ -166,7 +166,7 @@ func TestRun_AggregatesCountsAcrossMethods(t *testing.T) {
 		{Type: "email", Value: "a@b.c"},
 		{Type: "phone", Value: "+15551212"},
 	}
-	if err := svc.Run(context.Background(), jobID, contactID, methods); err != nil {
+	if err := svc.Run(t.Context(), jobID, contactID, methods); err != nil {
 		t.Fatalf("Run returned unexpected error: %v", err)
 	}
 	job, err := svc.GetJob(jobID)
@@ -187,7 +187,7 @@ func TestRun_HandlerErrorFailsJob(t *testing.T) {
 	svc.Register(&stubHandler{typ: "email", err: errBoom})
 
 	jobID := uuid.New()
-	runErr := svc.Run(context.Background(), jobID, uuid.New(), []Method{{Type: "email", Value: "a@b.c"}})
+	runErr := svc.Run(t.Context(), jobID, uuid.New(), []Method{{Type: "email", Value: "a@b.c"}})
 	if !errors.Is(runErr, errBoom) {
 		t.Fatalf("Run should return handler error for river retry; got %v", runErr)
 	}
@@ -212,7 +212,7 @@ func TestRun_BudgetExhausted_KeepsRunning(t *testing.T) {
 	svc.Register(&stubHandler{typ: "email", err: wrapped})
 
 	jobID := uuid.New()
-	runErr := svc.Run(context.Background(), jobID, uuid.New(), []Method{{Type: "email", Value: "a@b.c"}})
+	runErr := svc.Run(t.Context(), jobID, uuid.New(), []Method{{Type: "email", Value: "a@b.c"}})
 
 	// Run must still return the sentinel so RematchDispatcherWorker.Work snoozes.
 	if !errors.Is(runErr, ErrRematchBudgetExhausted) {
@@ -278,7 +278,7 @@ func TestRun_PanicPropagatesAsError(t *testing.T) {
 	svc := NewRematchService()
 	svc.Register(panickyHandler{})
 	jobID := uuid.New()
-	runErr := svc.Run(context.Background(), jobID, uuid.New(), []Method{{Type: "email", Value: "x"}})
+	runErr := svc.Run(t.Context(), jobID, uuid.New(), []Method{{Type: "email", Value: "x"}})
 	if runErr == nil {
 		t.Fatal("Run should return non-nil error when handler panics (named-return recovery)")
 	}
@@ -302,7 +302,7 @@ func TestRun_NoMatchingHandler_Completes(t *testing.T) {
 	// pre-spawn eligibility filter.
 	svc := NewRematchService()
 	jobID := uuid.New()
-	if err := svc.Run(context.Background(), jobID, uuid.New(), []Method{{Type: "email", Value: "x"}}); err != nil {
+	if err := svc.Run(t.Context(), jobID, uuid.New(), []Method{{Type: "email", Value: "x"}}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	job, err := svc.GetJob(jobID)
@@ -325,7 +325,7 @@ func TestRun_RehydrateOrLookup_CreatesEntry(t *testing.T) {
 
 	jobID := uuid.New()
 	contactID := uuid.New()
-	if err := svc.Run(context.Background(), jobID, contactID, []Method{{Type: "email", Value: "a@b.c"}}); err != nil {
+	if err := svc.Run(t.Context(), jobID, contactID, []Method{{Type: "email", Value: "a@b.c"}}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	job, err := svc.GetJob(jobID)
@@ -362,7 +362,7 @@ func TestRun_RehydrateOrLookup_LoadsExistingEntry(t *testing.T) {
 		t.Fatalf("expected Matched=0 before Run, got %d", snap.Matched)
 	}
 
-	if err := svc.Run(context.Background(), jobID, contactID, methods); err != nil {
+	if err := svc.Run(t.Context(), jobID, contactID, methods); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	final, err := svc.GetJob(jobID)
@@ -395,7 +395,7 @@ func TestRun_RetryAfterFailure_ResetsState(t *testing.T) {
 	contactID := uuid.New()
 	methods := []Method{{Type: "email", Value: "a@b.c"}}
 
-	if err := svc.Run(context.Background(), jobID, contactID, methods); !errors.Is(err, errBoom) {
+	if err := svc.Run(t.Context(), jobID, contactID, methods); !errors.Is(err, errBoom) {
 		t.Fatalf("first Run should fail with boom, got %v", err)
 	}
 	firstSnap, err := svc.GetJob(jobID)
@@ -406,7 +406,7 @@ func TestRun_RetryAfterFailure_ResetsState(t *testing.T) {
 
 	// Swap in a successful handler for the retry and re-run.
 	svc.handlers["email"] = []RematchHandler{&stubHandler{typ: "email", matched: 5}}
-	if err := svc.Run(context.Background(), jobID, contactID, methods); err != nil {
+	if err := svc.Run(t.Context(), jobID, contactID, methods); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
 	final, err := svc.GetJob(jobID)
@@ -598,7 +598,7 @@ func TestRun_FanOut_BothEmailHandlersFire(t *testing.T) {
 
 	jobID := uuid.New()
 	contactID := uuid.New()
-	if err := svc.Run(context.Background(), jobID, contactID, []Method{{Type: "email", Value: "a@b.c"}}); err != nil {
+	if err := svc.Run(t.Context(), jobID, contactID, []Method{{Type: "email", Value: "a@b.c"}}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if h1.callCount() != 1 {
@@ -629,7 +629,7 @@ func TestRun_CalendarOnly_StillFires(t *testing.T) {
 
 	jobID := uuid.New()
 	contactID := uuid.New()
-	if err := svc.Run(context.Background(), jobID, contactID, []Method{{Type: "email", Value: "a@b.c"}}); err != nil {
+	if err := svc.Run(t.Context(), jobID, contactID, []Method{{Type: "email", Value: "a@b.c"}}); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if calendarLike.callCount() != 1 {
@@ -665,7 +665,7 @@ func TestRun_FanOut_NonEmailTypesUnaffected(t *testing.T) {
 		{Type: "email", Value: "a@b.c"},
 		{Type: "telegram", Value: "alice"},
 	}
-	if err := svc.Run(context.Background(), jobID, contactID, methods); err != nil {
+	if err := svc.Run(t.Context(), jobID, contactID, methods); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if email1.callCount() != 1 || email2.callCount() != 1 {
@@ -695,7 +695,7 @@ func TestRun_FanOut_FirstHandlerErrorFailsJob(t *testing.T) {
 	svc.Register(second)
 
 	jobID := uuid.New()
-	runErr := svc.Run(context.Background(), jobID, uuid.New(), []Method{{Type: "email", Value: "a@b.c"}})
+	runErr := svc.Run(t.Context(), jobID, uuid.New(), []Method{{Type: "email", Value: "a@b.c"}})
 	if !errors.Is(runErr, errBoom) {
 		t.Fatalf("expected Run to return the first handler's error, got %v", runErr)
 	}

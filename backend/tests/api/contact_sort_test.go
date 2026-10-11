@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -25,7 +24,7 @@ import (
 func setupContactSortTestRouter(t *testing.T) (*gin.Engine, func()) {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Migrations are applied once by TestMain.
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool

@@ -118,7 +118,7 @@ func TestMatchPeer_ResolvedPhoneMatchesContact(t *testing.T) {
 	ext := &fakeExternalContactUpserter{}
 	m := NewPeerMatcher(ids, &fakeCommsPeerStore{}, ext, nil, nil, 3)
 
-	got, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), strp("Their Name"))
+	got, err := m.MatchPeer(t.Context(), "15559876543@s.whatsapp.net", strp("+15559876543"), strp("Their Name"))
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, want, *got)
@@ -137,7 +137,7 @@ func TestMatchPeer_NilPhoneIsUnmatchedWithoutIdentityCall(t *testing.T) {
 	ids := &fakeIdentityMatcher{}
 	m := NewPeerMatcher(ids, &fakeCommsPeerStore{}, &fakeExternalContactUpserter{}, nil, nil, 3)
 
-	got, err := m.MatchPeer(context.Background(), "88800000002@lid", nil, nil)
+	got, err := m.MatchPeer(t.Context(), "88800000002@lid", nil, nil)
 	require.NoError(t, err)
 	assert.Nil(t, got)
 	assert.Empty(t, ids.requests, "a LID-only peer has no identifier worth minting")
@@ -147,7 +147,7 @@ func TestMatchPeer_IdentityErrorIsNonFatal(t *testing.T) {
 	ids := &fakeIdentityMatcher{err: errors.New("identity service down")}
 	m := NewPeerMatcher(ids, &fakeCommsPeerStore{}, &fakeExternalContactUpserter{}, nil, nil, 3)
 
-	got, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
+	got, err := m.MatchPeer(t.Context(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
 	require.NoError(t, err, "matching is best-effort; the message still stages")
 	assert.Nil(t, got)
 }
@@ -162,7 +162,7 @@ func TestMatchPeer_FiresEnricherOnMatch(t *testing.T) {
 	enricher := &fakeEnricher{}
 	m := NewPeerMatcher(ids, &fakeCommsPeerStore{}, ext, enricher, nil, 3)
 
-	_, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
+	_, err := m.MatchPeer(t.Context(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, enricher.calls)
 	require.NotNil(t, enricher.external)
@@ -175,7 +175,7 @@ func TestMatchPeer_NilEnricherNoPanic(t *testing.T) {
 	want := uuid.New()
 	m := NewPeerMatcher(&fakeIdentityMatcher{contactID: &want}, &fakeCommsPeerStore{}, &fakeExternalContactUpserter{}, nil, nil, 3)
 
-	got, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
+	got, err := m.MatchPeer(t.Context(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
 	require.NoError(t, err)
 	assert.NotNil(t, got)
 }
@@ -188,7 +188,7 @@ func TestOnPeerLinked_PassesBothSelectors(t *testing.T) {
 	ids := &fakeIdentityMatcher{contactID: &contactID}
 	m := NewPeerMatcher(ids, comms, &fakeExternalContactUpserter{}, nil, nil, 3)
 
-	require.NoError(t, m.OnPeerLinked(context.Background(), "88800000002@lid", strp("+15559876543"), contactID))
+	require.NoError(t, m.OnPeerLinked(t.Context(), "88800000002@lid", strp("+15559876543"), contactID))
 
 	require.Len(t, comms.attachCalls, 1)
 	assert.Equal(t, "whatsapp", comms.attachCalls[0].source)
@@ -209,7 +209,7 @@ func TestOnPeerLinked_NilPhoneReproducesTheContractedShape(t *testing.T) {
 	ids := &fakeIdentityMatcher{}
 	m := NewPeerMatcher(ids, comms, &fakeExternalContactUpserter{}, nil, nil, 3)
 
-	require.NoError(t, m.OnPeerLinked(context.Background(), "88800000002@lid", nil, contactID))
+	require.NoError(t, m.OnPeerLinked(t.Context(), "88800000002@lid", nil, contactID))
 	assert.Empty(t, ids.requests, "with no phone there is nothing to link the identity by")
 	require.Len(t, comms.attachCalls, 1)
 	assert.Nil(t, comms.attachCalls[0].peerNormalized)
@@ -220,7 +220,7 @@ func TestOnPeerLinked_AttachErrorIsFatal(t *testing.T) {
 	engine := &fakeContactAggregator{}
 	m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, &fakeExternalContactUpserter{}, nil, engine, 3)
 
-	err := m.OnPeerLinked(context.Background(), "88800000002@lid", nil, uuid.New())
+	err := m.OnPeerLinked(t.Context(), "88800000002@lid", nil, uuid.New())
 	require.Error(t, err, "the attach IS the user-visible effect of linking; a silent failure loses it")
 	assert.Zero(t, engine.calls, "nothing was attached, so there is nothing new to aggregate")
 }
@@ -230,7 +230,7 @@ func TestOnPeerLinked_IdentityLinkFailureIsNonFatal(t *testing.T) {
 	ids := &fakeIdentityMatcher{err: errors.New("identity service down")}
 	m := NewPeerMatcher(ids, comms, &fakeExternalContactUpserter{}, nil, nil, 3)
 
-	require.NoError(t, m.OnPeerLinked(context.Background(), "88800000002@lid", strp("+15559876543"), uuid.New()),
+	require.NoError(t, m.OnPeerLinked(t.Context(), "88800000002@lid", strp("+15559876543"), uuid.New()),
 		"the identity link is a convenience for future matches; the attach still has to run")
 	assert.Len(t, comms.attachCalls, 1)
 }
@@ -242,7 +242,7 @@ func TestOnPeerLinked_AggregatesAfterAttach(t *testing.T) {
 	engine := &fakeContactAggregator{}
 	m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, &fakeExternalContactUpserter{}, nil, engine, 3)
 
-	require.NoError(t, m.OnPeerLinked(context.Background(), "88800000002@lid", nil, contactID))
+	require.NoError(t, m.OnPeerLinked(t.Context(), "88800000002@lid", nil, contactID))
 
 	assert.Equal(t, 1, engine.calls, "linking is only visible once the interactions exist; waiting on the sweeper leaves it looking like nothing happened")
 	assert.Equal(t, contactID, engine.gotContactID)
@@ -254,7 +254,7 @@ func TestOnPeerLinked_AggregationErrorIsNonFatal(t *testing.T) {
 	engine := &fakeContactAggregator{err: errors.New("aggregation down")}
 	m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, &fakeExternalContactUpserter{}, nil, engine, 3)
 
-	err := m.OnPeerLinked(context.Background(), "88800000002@lid", nil, uuid.New())
+	err := m.OnPeerLinked(t.Context(), "88800000002@lid", nil, uuid.New())
 	require.NoError(t, err, "the rows ARE attached, so the link succeeded; the periodic sweeper is the retry")
 	assert.Equal(t, 1, engine.calls)
 }
@@ -264,7 +264,7 @@ func TestOnPeerLinked_NoAttachSkipsAggregation(t *testing.T) {
 	engine := &fakeContactAggregator{}
 	m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, &fakeExternalContactUpserter{}, nil, engine, 3)
 
-	require.NoError(t, m.OnPeerLinked(context.Background(), "88800000002@lid", nil, uuid.New()))
+	require.NoError(t, m.OnPeerLinked(t.Context(), "88800000002@lid", nil, uuid.New()))
 	assert.Zero(t, engine.calls, "nothing was attached, so there is nothing new to aggregate")
 }
 
@@ -272,7 +272,7 @@ func TestOnPeerLinked_NilEngineNoPanic(t *testing.T) {
 	comms := &fakeCommsPeerStore{attached: 3}
 	m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, &fakeExternalContactUpserter{}, nil, nil, 3)
 
-	require.NoError(t, m.OnPeerLinked(context.Background(), "88800000002@lid", nil, uuid.New()))
+	require.NoError(t, m.OnPeerLinked(t.Context(), "88800000002@lid", nil, uuid.New()))
 }
 
 // --- discovery --------------------------------------------------------------
@@ -295,7 +295,7 @@ func TestDiscovery_ThresholdIsAppliedByTheQuery(t *testing.T) {
 	ext := &fakeExternalContactUpserter{}
 	m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, ext, nil, nil, 3)
 
-	require.NoError(t, m.UpdateDiscoveryCandidates(context.Background(), strp("15559876543@s.whatsapp.net")))
+	require.NoError(t, m.UpdateDiscoveryCandidates(t.Context(), strp("15559876543@s.whatsapp.net")))
 
 	require.Len(t, comms.countsCalls, 1)
 	assert.Equal(t, 3, comms.countsCalls[0].minMessages,
@@ -311,7 +311,7 @@ func TestDiscovery_BelowThresholdNoCandidate(t *testing.T) {
 	ext := &fakeExternalContactUpserter{}
 	m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, ext, nil, nil, 3)
 
-	require.NoError(t, m.UpdateDiscoveryCandidates(context.Background(), nil))
+	require.NoError(t, m.UpdateDiscoveryCandidates(t.Context(), nil))
 	assert.Empty(t, ext.upserts)
 }
 
@@ -323,7 +323,7 @@ func TestDiscovery_MetadataCarriesCountsAndPhone(t *testing.T) {
 	ext := &fakeExternalContactUpserter{}
 	m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, ext, nil, nil, 3)
 
-	require.NoError(t, m.UpdateDiscoveryCandidates(context.Background(), nil))
+	require.NoError(t, m.UpdateDiscoveryCandidates(t.Context(), nil))
 	require.Len(t, ext.upserts, 1)
 	meta := ext.upserts[0].Metadata
 	assert.EqualValues(t, 5, meta["message_count"])
@@ -362,7 +362,7 @@ func TestDiscovery_AlwaysWritesADisplayName(t *testing.T) {
 			ext := &fakeExternalContactUpserter{}
 			m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, ext, nil, nil, 3)
 
-			require.NoError(t, m.UpdateDiscoveryCandidates(context.Background(), nil))
+			require.NoError(t, m.UpdateDiscoveryCandidates(t.Context(), nil))
 			require.Len(t, ext.upserts, 1)
 			require.NotNil(t, ext.upserts[0].DisplayName, "a WhatsApp candidate is never contentless")
 			assert.Equal(t, tt.want, *ext.upserts[0].DisplayName)
@@ -380,9 +380,9 @@ func TestDiscovery_LaterPushNameUpgradesJIDLabel(t *testing.T) {
 	ext := &fakeExternalContactUpserter{}
 	m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, ext, nil, nil, 3)
 
-	require.NoError(t, m.UpdateDiscoveryCandidates(context.Background(), nil))
+	require.NoError(t, m.UpdateDiscoveryCandidates(t.Context(), nil))
 	comms.counts = []repository.UnmatchedPeerCount{peerCount("88800000002@lid", 4, nil, strp("Their Name"))}
-	require.NoError(t, m.UpdateDiscoveryCandidates(context.Background(), nil))
+	require.NoError(t, m.UpdateDiscoveryCandidates(t.Context(), nil))
 
 	require.Len(t, ext.upserts, 2)
 	assert.Equal(t, "WhatsApp 88800000002", *ext.upserts[0].DisplayName)
@@ -399,7 +399,7 @@ func TestDiscovery_EmptyPushNameDoesNotClobberStoredName(t *testing.T) {
 	ext := &fakeExternalContactUpserter{}
 	m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, ext, nil, nil, 3)
 
-	require.NoError(t, m.UpdateDiscoveryCandidates(context.Background(), nil))
+	require.NoError(t, m.UpdateDiscoveryCandidates(t.Context(), nil))
 	require.Len(t, ext.upserts, 1)
 	assert.NotContains(t, ext.upserts[0].Metadata, "push_name")
 	assert.Equal(t, "+15559876543", *ext.upserts[0].DisplayName)
@@ -412,7 +412,7 @@ func TestDiscovery_UpsertErrorIsNonFatal(t *testing.T) {
 	ext := &fakeExternalContactUpserter{upsertErrOne: errors.New("database down")}
 	m := NewPeerMatcher(&fakeIdentityMatcher{}, comms, ext, nil, nil, 3)
 
-	require.NoError(t, m.UpdateDiscoveryCandidates(context.Background(), nil),
+	require.NoError(t, m.UpdateDiscoveryCandidates(t.Context(), nil),
 		"discovery is best-effort; it must not withhold an ack for a message already staged")
 }
 
@@ -470,7 +470,7 @@ func TestMatchPeer_ReconcileIsFirstMatchGated(t *testing.T) {
 			enricher := &fakeEnricher{}
 			m := NewPeerMatcher(ids, &fakeCommsPeerStore{}, ext, enricher, nil, 3)
 
-			got, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
+			got, err := m.MatchPeer(t.Context(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
 			require.NoError(t, err)
 			require.NotNil(t, got, "the match itself is unaffected by the gate")
 
@@ -492,14 +492,14 @@ func TestMatchPeer_RepeatedMessagesFromAKnownPeerCostNothingExtra(t *testing.T) 
 	m := NewPeerMatcher(ids, &fakeCommsPeerStore{}, ext, enricher, nil, 3)
 
 	// First message: the identity is newly bound, so it reconciles once.
-	_, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
+	_, err := m.MatchPeer(t.Context(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
 	require.NoError(t, err)
 	require.Equal(t, 1, enricher.calls)
 
 	// Every later message finds the identity cached.
 	ids.cached = true
 	for range 5 {
-		_, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
+		_, err := m.MatchPeer(t.Context(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
 		require.NoError(t, err)
 	}
 
@@ -518,7 +518,7 @@ func TestMatchPeer_ReconcileRunsOnceForANewCandidate(t *testing.T) {
 	enricher := &fakeEnricher{}
 	m := NewPeerMatcher(&fakeIdentityMatcher{contactID: &want}, &fakeCommsPeerStore{}, ext, enricher, nil, 3)
 
-	_, err := m.MatchPeer(context.Background(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
+	_, err := m.MatchPeer(t.Context(), "15559876543@s.whatsapp.net", strp("+15559876543"), nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, ext.getCalls)
