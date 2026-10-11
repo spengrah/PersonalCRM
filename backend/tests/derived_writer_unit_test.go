@@ -7,7 +7,6 @@
 package tests
 
 import (
-	"context"
 	"testing"
 
 	"personal-crm/backend/internal/repository"
@@ -23,7 +22,7 @@ import (
 // only the owner branch.
 func TestDerivedWriterHelpers_RejectsUnknownOwner(t *testing.T) {
 	t.Parallel()
-	err := repository.SetDerivedWriterTx(context.Background(), nil, repository.DerivedWriter("bogus"))
+	err := repository.SetDerivedWriterTx(t.Context(), nil, repository.DerivedWriter("bogus"))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown owner")
 }
@@ -33,7 +32,7 @@ func TestDerivedWriterHelpers_RejectsUnknownOwner(t *testing.T) {
 // second guard clause.
 func TestDerivedWriterHelpers_RejectsNilTx(t *testing.T) {
 	t.Parallel()
-	err := repository.SetDerivedWriterTx(context.Background(), nil, repository.DerivedWriterCadence)
+	err := repository.SetDerivedWriterTx(t.Context(), nil, repository.DerivedWriterCadence)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "nil tx")
 }
@@ -46,7 +45,7 @@ func TestDerivedWriterHelpers_RejectsNilTx(t *testing.T) {
 func TestDerivedWriterHelpers_SeedRequiresPool(t *testing.T) {
 	t.Parallel()
 	repo := repository.NewContactRepository(nil)
-	err := repo.TestSeedContactCadenceFields(context.Background(), uuid.New(), repository.TestCadenceSeed{})
+	err := repo.TestSeedContactCadenceFields(t.Context(), uuid.New(), repository.TestCadenceSeed{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "SetPool")
 }

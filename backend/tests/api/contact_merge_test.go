@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -27,17 +27,12 @@ import (
 
 // setupTestDB sets up a test database connection
 func setupTestDB(t *testing.T) (*db.Database, func()) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	return database, func() { database.Close() }
 }
@@ -53,15 +48,13 @@ func seedContactForMerge(ctx context.Context, svc *service.ContactService, req r
 }
 
 func TestContactMerge_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Per-test namespace so fixed contact names cannot collide with concurrent
 	// siblings under fuzzy-match (trigram) pollution.
@@ -304,7 +297,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		// Verify methods transferred
 		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, merged.ID)
 		require.NoError(t, err)
-		assert.Len(t, methods, 1)
+		require.Len(t, methods, 1)
 		assert.Equal(t, "+1-555-0100", methods[0].Value)
 
 		// Verify source is soft-deleted
@@ -379,7 +372,7 @@ func TestContactMerge_Integration(t *testing.T) {
 		// Verify only one phone number exists
 		methods, err := contactMethodRepo.ListContactMethodsByContact(ctx, merged.ID)
 		require.NoError(t, err)
-		assert.Len(t, methods, 1)
+		require.Len(t, methods, 1)
 		assert.Equal(t, "phone", methods[0].Type)
 		assert.True(t, methods[0].IsPrimary) // Target's primary status preserved
 
@@ -821,22 +814,9 @@ func TestContactMerge_Integration(t *testing.T) {
 // wiring, but only registers the merge-preview route (GET /:id/merge/preview,
 // where :id is the TARGET and source_id is a query param) plus a bare CreateContact
 // route needed to seed fixtures through the HTTP layer's own DB handle.
-func setupContactMergePreviewTestRouter() (*gin.Engine, func()) {
-	ctx := context.Background()
-	databaseURL := os.Getenv("DATABASE_URL")
+func setupContactMergePreviewTestRouter(t *testing.T) (*gin.Engine, func()) {
 
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	if err != nil {
-		panic("Failed to connect to test database: " + err.Error())
-	}
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -866,17 +846,10 @@ func setupContactMergePreviewTestRouter() (*gin.Engine, func()) {
 }
 
 func TestContactMergePreviewAPI_Errors(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupContactMergePreviewTestRouter()
+	router, cleanup := setupContactMergePreviewTestRouter(t)
 	defer cleanup()
 
 	ns := uuid.New().String()[:8]
@@ -979,23 +952,16 @@ func TestContactMergePreviewAPI_Errors(t *testing.T) {
 // counters the spec names, with values matching seeded data — a service-level
 // preview test cannot catch an omitted or misnamed response field.
 func TestContactMergePreviewAPI_SuccessCounts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, rcleanup := setupContactMergePreviewTestRouter()
+	router, rcleanup := setupContactMergePreviewTestRouter(t)
 	defer rcleanup()
 
 	database, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	ns := uuid.New().String()[:8]
 
 	contactRepo := repository.NewContactRepository(database.Queries)

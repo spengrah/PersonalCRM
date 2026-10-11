@@ -52,7 +52,7 @@ func NewHarness(t *testing.T, ctx context.Context, database *db.Database) *Harne
 	h, teardown, err := NewHarnessWithDB(ctx, database)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		if err := teardown(context.Background()); err != nil {
+		if err := teardown(context.WithoutCancel(t.Context())); err != nil {
 			t.Logf("synthetic harness teardown error (non-fatal): %v", err)
 		}
 	})
@@ -90,7 +90,7 @@ func NewHarnessForNamespace(t *testing.T, ctx context.Context, database *db.Data
 	h, teardown, err := newHarness(ctx, database, namespace, seed, accelerated.GetCurrentTime())
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		if err := teardown(context.Background()); err != nil {
+		if err := teardown(context.WithoutCancel(t.Context())); err != nil {
 			t.Logf("synthetic harness teardown error (non-fatal): %v", err)
 		}
 	})

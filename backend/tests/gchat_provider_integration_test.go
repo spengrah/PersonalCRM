@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strconv"
 	"testing"
 	"time"
@@ -34,19 +34,11 @@ type gchatProviderEnv struct {
 
 func setupGChatProviderTest(t *testing.T) *gchatProviderEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)

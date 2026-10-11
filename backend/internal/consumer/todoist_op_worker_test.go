@@ -136,7 +136,7 @@ func (i *recordingInserter) InsertTx(_ context.Context, _ pgx.Tx, args river.Job
 func requireSnooze(t *testing.T, err error) {
 	t.Helper()
 	var snooze *river.JobSnoozeError
-	require.Truef(t, errors.As(err, &snooze), "expected *river.JobSnoozeError, got %v", err)
+	require.ErrorAsf(t, err, &snooze, "expected *river.JobSnoozeError, got %v", err)
 }
 
 // settingsOK returns a TodoistSettingsFunc that always resolves.
@@ -246,16 +246,16 @@ func TestOpWorker_UnknownVerb_PermanentCancel(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, "bogus_verb"))
+	err := w.Work(t.Context(), opJob(taskID, "bogus_verb"))
 	require.Error(t, err)
 	var cancel *river.JobCancelError
-	require.Truef(t, errors.As(err, &cancel), "unknown verb must be a permanent JobCancel, got %v", err)
+	require.ErrorAsf(t, err, &cancel, "unknown verb must be a permanent JobCancel, got %v", err)
 	require.Empty(t, client.commands, "unknown verb must not touch Todoist")
 }
 
 func TestOpWorker_MissingDependencies_Errors(t *testing.T) {
 	w := NewTodoistTaskOpWorker(FollowUpModeCutover, nil, nil, nil, nil, nil)
-	err := w.Work(context.Background(), opJob(uuid.New(), consumerjobs.TaskOpUpdateDeadline))
+	err := w.Work(t.Context(), opJob(uuid.New(), consumerjobs.TaskOpUpdateDeadline))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not wired")
 }
@@ -274,7 +274,7 @@ func TestOpWorker_UpdateDeadline_PendingRowSnoozes(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
 	requireSnooze(t, err)
 	require.Empty(t, client.commands, "pending row must not push before the create finalizes")
 }
@@ -297,7 +297,7 @@ func TestOpWorker_UpdateDeadline_TerminalRowsNoOp(t *testing.T) {
 			client := &fakeOpClient{}
 			w := newOpWorker(repo, client, &recordingInserter{})
 
-			err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
+			err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
 			require.NoError(t, err, "terminal update must no-op (close/delete owns terminal convergence)")
 			require.Empty(t, client.commands, "a stale update must never touch a retired task")
 		})
@@ -317,7 +317,7 @@ func TestOpWorker_UpdateDeadline_ManagedPushesCurrentValue(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
 	require.NoError(t, err)
 	require.Len(t, client.commands, 1)
 	cmd := client.commands[0]
@@ -343,7 +343,7 @@ func TestOpWorker_UpdateDeadline_ClearsUserSetDueDate(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
 	require.NoError(t, err)
 	require.Len(t, client.commands, 1)
 	cmd := client.commands[0]
@@ -363,10 +363,10 @@ func TestOpWorker_UpdateDeadline_ManagedEmptyExternalID_Errors(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
 	require.Error(t, err, "a managed row with an empty external id is corrupt — retryable error, not a snooze")
 	var snooze *river.JobSnoozeError
-	require.False(t, errors.As(err, &snooze), "must not snooze forever on a corrupt row")
+	require.NotErrorAs(t, err, &snooze, "must not snooze forever on a corrupt row")
 	require.Empty(t, client.commands)
 }
 
@@ -384,7 +384,7 @@ func TestOpWorker_UpdateDeadline_VerifyAfterPush_StaleSnoozes(t *testing.T) {
 	client.beforeSync = func() { repo.setMetadata(taskID, "due_date", "2026-04-01") }
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
 	requireSnooze(t, err)
 	require.Len(t, client.commands, 1, "the push still happened; the snooze re-runs to push the newer value")
 }
@@ -400,7 +400,7 @@ func TestOpWorker_UpdateDeadline_VerifyAfterPush_UnchangedCompletes(t *testing.T
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpUpdateDeadline))
 	require.NoError(t, err, "an unchanged value completes normally")
 }
 
@@ -415,7 +415,7 @@ func TestOpWorker_UpdateDescription_ManagedPushesDescription(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDescription))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpUpdateDescription))
 	require.NoError(t, err)
 	require.Len(t, client.commands, 1)
 	cmd := client.commands[0]
@@ -436,10 +436,10 @@ func TestOpWorker_UpdateDescription_MissingKeyPermanent(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpUpdateDescription))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpUpdateDescription))
 	require.Error(t, err)
 	var cancel *river.JobCancelError
-	require.Truef(t, errors.As(err, &cancel), "missing description key must be a permanent JobCancel, got %v", err)
+	require.ErrorAsf(t, err, &cancel, "missing description key must be a permanent JobCancel, got %v", err)
 	require.Empty(t, client.commands)
 }
 
@@ -457,7 +457,7 @@ func TestOpWorker_Close_ManagedIssuesItemClose(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpClose))
 	require.NoError(t, err)
 	require.Len(t, client.commands, 1)
 	require.Equal(t, "item_close", client.commands[0].Type)
@@ -475,7 +475,7 @@ func TestOpWorker_Close_EmptyExternalID_PendingSnoozes(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpClose))
 	requireSnooze(t, err)
 	require.Empty(t, client.commands)
 }
@@ -490,7 +490,7 @@ func TestOpWorker_Close_EmptyExternalID_TerminalNoOp(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpClose))
 	require.NoError(t, err, "terminal row that never created a remote task → no-op")
 	require.Empty(t, client.commands)
 }
@@ -505,10 +505,10 @@ func TestOpWorker_Delete_IssuesItemDeleteIdempotent(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	require.NoError(t, w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpDelete)))
+	require.NoError(t, w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpDelete)))
 	// Idempotent on repeat: a second execution issues item_delete again
 	// without error (Todoist ignores a delete of an already-gone task).
-	require.NoError(t, w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpDelete)))
+	require.NoError(t, w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpDelete)))
 	require.Len(t, client.commands, 2)
 	require.Equal(t, "item_delete", client.commands[0].Type)
 	require.Equal(t, "item_delete", client.commands[1].Type)
@@ -528,7 +528,7 @@ func TestOpWorker_TerminalOp_TodoistFailureBubblesUp(t *testing.T) {
 	client := &fakeOpClient{syncErr: errors.New("500 upstream")}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpClose))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "todoist close")
 }
@@ -559,7 +559,7 @@ func TestOpWorker_Create_ManagedRowNoOp(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpCreate))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpCreate))
 	require.NoError(t, err, "already-managed row → idempotent no-op")
 	require.Empty(t, client.commands, "must not re-create an already-managed row")
 }
@@ -574,7 +574,7 @@ func TestOpWorker_Create_MissingMetadataPermanent(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpCreate))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpCreate))
 	require.Error(t, err, "incomplete item_add metadata is a permanent build error")
 	require.Empty(t, client.commands)
 }
@@ -589,7 +589,7 @@ func TestOpWorker_Create_UnknownStateErrors(t *testing.T) {
 	client := &fakeOpClient{}
 	w := newOpWorker(repo, client, &recordingInserter{})
 
-	err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpCreate))
+	err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpCreate))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected state")
 }
@@ -615,7 +615,7 @@ func TestOpWorker_FinalizeCreate_Pending_FinalizesManaged(t *testing.T) {
 	inserter := &recordingInserter{}
 	w := newOpWorker(repo, &fakeOpClient{}, inserter)
 
-	err := w.finalizeCreate(context.Background(), nonNilFakeTx(), row, "real-1")
+	err := w.finalizeCreate(t.Context(), nonNilFakeTx(), row, "real-1")
 	require.NoError(t, err)
 	require.Equal(t, repository.ContactTaskStateManaged, repo.rows[taskID].State)
 	require.Equal(t, "real-1", repo.rows[taskID].ExternalTaskID)
@@ -634,7 +634,7 @@ func TestOpWorker_FinalizeCreate_RetiredMidFlight_RecordsIDAndEnqueuesClose(t *t
 			inserter := &recordingInserter{}
 			w := newOpWorker(repo, &fakeOpClient{}, inserter)
 
-			err := w.finalizeCreate(context.Background(), nonNilFakeTx(), row, "real-2")
+			err := w.finalizeCreate(t.Context(), nonNilFakeTx(), row, "real-2")
 			require.NoError(t, err)
 			require.Equal(t, "real-2", repo.rows[taskID].ExternalTaskID, "records the real id")
 			require.Equal(t, state, repo.rows[taskID].State, "state is NOT flipped to managed")
@@ -655,7 +655,7 @@ func TestOpWorker_FinalizeCreate_DismissedUnmanaged_RecordsIDNoClose(t *testing.
 			inserter := &recordingInserter{}
 			w := newOpWorker(repo, &fakeOpClient{}, inserter)
 
-			err := w.finalizeCreate(context.Background(), nonNilFakeTx(), row, "real-3")
+			err := w.finalizeCreate(t.Context(), nonNilFakeTx(), row, "real-3")
 			require.NoError(t, err)
 			require.Equal(t, "real-3", repo.rows[taskID].ExternalTaskID)
 			require.Empty(t, inserter.args, "dismissed/unmanaged finalize records id only, NO close")
@@ -693,7 +693,7 @@ func TestTodoistTaskOpWorker_FollowUpOffMode_SnoozesWithoutRemoteWrite(t *testin
 		client := failIfCalled(t)
 		w := newOpWorkerMode(FollowUpModeOff, repo, client, &recordingInserter{})
 
-		err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpCreate))
+		err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpCreate))
 		requireSnooze(t, err)
 		require.Empty(t, client.commands)
 		require.Equal(t, repository.ContactTaskStatePendingRemoteCreate, repo.rows[taskID].State,
@@ -719,7 +719,7 @@ func TestTodoistTaskOpWorker_FollowUpOffMode_SnoozesWithoutRemoteWrite(t *testin
 			client := failIfCalled(t)
 			w := newOpWorkerMode(FollowUpModeOff, repo, client, &recordingInserter{})
 
-			err := w.Work(context.Background(), opJob(taskID, op))
+			err := w.Work(t.Context(), opJob(taskID, op))
 			requireSnooze(t, err)
 			require.Empty(t, client.commands)
 		})
@@ -736,7 +736,7 @@ func TestTodoistTaskOpWorker_FollowUpOffMode_SnoozesWithoutRemoteWrite(t *testin
 		client := &fakeOpClient{}
 		w := newOpWorkerMode(FollowUpModeOff, repo, client, &recordingInserter{})
 
-		err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+		err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpClose))
 		require.NoError(t, err, "a follow-up kill switch must never suppress cadence writes")
 		require.Len(t, client.commands, 1)
 		require.Equal(t, "item_close", client.commands[0].Type)
@@ -753,7 +753,7 @@ func TestTodoistTaskOpWorker_FollowUpOffMode_SnoozesWithoutRemoteWrite(t *testin
 		client := &fakeOpClient{}
 		w := newOpWorkerMode(FollowUpModeCutover, repo, client, &recordingInserter{})
 
-		err := w.Work(context.Background(), opJob(taskID, consumerjobs.TaskOpClose))
+		err := w.Work(t.Context(), opJob(taskID, consumerjobs.TaskOpClose))
 		require.NoError(t, err)
 		require.Len(t, client.commands, 1)
 		require.Equal(t, "item_close", client.commands[0].Type)
@@ -771,7 +771,7 @@ func TestTodoistTaskOpWorker_FollowUpOffMode_SnoozesWithoutRemoteWrite(t *testin
 		executor := newOpWorkerMode(FollowUpModeOff, repo, client, &recordingInserter{})
 		adapter := NewTodoistFollowUpCreateAdapterWorker(executor)
 
-		err := adapter.Work(context.Background(), &river.Job[consumerjobs.TodoistFollowUpCreateJobArgs]{
+		err := adapter.Work(t.Context(), &river.Job[consumerjobs.TodoistFollowUpCreateJobArgs]{
 			Args: consumerjobs.TodoistFollowUpCreateJobArgs{ContactTaskID: taskID},
 		})
 		requireSnooze(t, err)
@@ -786,7 +786,7 @@ func TestOpWorker_FinalizeCreate_ManagedNoOp(t *testing.T) {
 	inserter := &recordingInserter{}
 	w := newOpWorker(repo, &fakeOpClient{}, inserter)
 
-	err := w.finalizeCreate(context.Background(), nonNilFakeTx(), row, "real-4")
+	err := w.finalizeCreate(t.Context(), nonNilFakeTx(), row, "real-4")
 	require.NoError(t, err, "another worker finalized first → idempotent no-op")
 	require.Equal(t, "already", repo.rows[taskID].ExternalTaskID)
 	require.Empty(t, inserter.args)

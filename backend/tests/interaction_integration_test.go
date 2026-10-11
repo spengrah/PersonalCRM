@@ -2,13 +2,11 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
-	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -20,23 +18,7 @@ import (
 func setupInteractionTestDeps(t *testing.T) (*service.ContactService, *repository.InteractionRepository, *repository.ContactRepository, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	// Migrations are applied once by TestMain.
-	ctx := context.Background()
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -54,7 +36,7 @@ func setupInteractionTestDeps(t *testing.T) (*service.ContactService, *repositor
 
 func createTestContactForInteraction(t *testing.T, contactRepo *repository.ContactRepository, name string) uuid.UUID {
 	t.Helper()
-	contact, err := contactRepo.CreateContact(context.Background(), repository.CreateContactRequest{
+	contact, err := contactRepo.CreateContact(t.Context(), repository.CreateContactRequest{
 		FullName: name,
 	})
 	require.NoError(t, err)
@@ -62,15 +44,13 @@ func createTestContactForInteraction(t *testing.T, contactRepo *repository.Conta
 }
 
 func TestRecordInteraction_SourceRefDedup(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	contactService, interactionRepo, contactRepo, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contactID := createTestContactForInteraction(t, contactRepo, "SourceRef Dedup Test")
 	defer func() { _ = contactRepo.SoftDeleteContact(ctx, contactID) }()
 
@@ -122,15 +102,13 @@ func TestRecordInteraction_SourceRefDedup(t *testing.T) {
 }
 
 func TestRecordInteraction_ForwardOnlyLastContacted(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	contactService, _, contactRepo, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contactID := createTestContactForInteraction(t, contactRepo, "Forward Only Test")
 	defer func() { _ = contactRepo.SoftDeleteContact(ctx, contactID) }()
 
@@ -171,15 +149,13 @@ func TestRecordInteraction_ForwardOnlyLastContacted(t *testing.T) {
 }
 
 func TestRecordInteraction_ManualAlwaysUpdates(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	contactService, _, contactRepo, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contactID := createTestContactForInteraction(t, contactRepo, "Manual Update Test")
 	defer func() { _ = contactRepo.SoftDeleteContact(ctx, contactID) }()
 
@@ -201,15 +177,13 @@ func TestRecordInteraction_ManualAlwaysUpdates(t *testing.T) {
 }
 
 func TestRecordInteraction_NonExistentContact(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	contactService, _, _, cleanup := setupInteractionTestDeps(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	fakeID := uuid.New()
 
 	_, err := contactService.RecordInteraction(ctx, repository.RecordInteractionRequest{

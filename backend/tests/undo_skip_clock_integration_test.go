@@ -3,7 +3,7 @@
 package tests
 
 import (
-	"context"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -17,11 +17,9 @@ import (
 )
 
 func TestUndoSkipClock_RestoresFutureDate(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	c := createMonthlySkipContact(t, h, ctx)
 	seeded := skipUTCDate(cadence.Today(accelerated.GetCurrentTime()), 5)
@@ -40,11 +38,9 @@ func TestUndoSkipClock_RestoresFutureDate(t *testing.T) {
 }
 
 func TestUndoSkipClock_RestoresPastDateExactly(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	c := createMonthlySkipContact(t, h, ctx)
 	seeded := skipUTCDate(cadence.Today(accelerated.GetCurrentTime()), -10)
@@ -63,11 +59,9 @@ func TestUndoSkipClock_RestoresPastDateExactly(t *testing.T) {
 }
 
 func TestUndoSkipClock_DoesNotReopenWindowOrReminder(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	c := createMonthlySkipContact(t, h, ctx)
 	now := accelerated.GetCurrentTime()
@@ -95,11 +89,9 @@ func TestUndoSkipClock_DoesNotReopenWindowOrReminder(t *testing.T) {
 }
 
 func TestUndoSkipClock_UnavailableOnceTodayReachesContactBy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, offset := range []int{0, -1} {
 		t.Run(string(rune('a'+offset+1)), func(t *testing.T) {
 			h := newSkipHarness(t, ctx)
@@ -120,11 +112,9 @@ func TestUndoSkipClock_UnavailableOnceTodayReachesContactBy(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByInboundWithoutClockMove(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	c := createMonthlySkipContact(t, h, ctx)
 	seed := skipUTCDate(cadence.Today(accelerated.GetCurrentTime()), -10)
@@ -148,11 +138,9 @@ func TestUndoSkipClock_ClearedByInboundWithoutClockMove(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByMutualWithClockMove(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	c := createMonthlySkipContact(t, h, ctx)
 	seedSkipContactBy(t, h, ctx, c.ID, skipUTCDate(cadence.Today(accelerated.GetCurrentTime()), -10))
@@ -172,11 +160,9 @@ func TestUndoSkipClock_ClearedByMutualWithClockMove(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByCadenceEdit(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	c := createMonthlySkipContact(t, h, ctx)
 	seedSkipContactBy(t, h, ctx, c.ID, skipUTCDate(cadence.Today(accelerated.GetCurrentTime()), -10))
@@ -196,11 +182,9 @@ func TestUndoSkipClock_ClearedByCadenceEdit(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByContactByOverride(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	c := createMonthlySkipContact(t, h, ctx)
 	seedSkipContactBy(t, h, ctx, c.ID, skipUTCDate(cadence.Today(accelerated.GetCurrentTime()), -10))
@@ -222,11 +206,9 @@ func TestUndoSkipClock_ClearedByContactByOverride(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByDeleteRollbackRecompute(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	c := createMonthlySkipContact(t, h, ctx)
 	seedSkipContactBy(t, h, ctx, c.ID, skipUTCDate(cadence.Today(accelerated.GetCurrentTime()), -10))
@@ -247,11 +229,9 @@ func TestUndoSkipClock_ClearedByDeleteRollbackRecompute(t *testing.T) {
 }
 
 func TestUndoSkipClock_ClearedByMerge(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	h := newSkipHarness(t, ctx)
 	source := createMonthlySkipContact(t, h, ctx)
 	target := createMonthlySkipContact(t, h, ctx)

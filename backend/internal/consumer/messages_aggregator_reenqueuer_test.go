@@ -82,7 +82,7 @@ func TestReenqueuer_EnqueuesFreshJobAndCallsEngine(t *testing.T) {
 	contactID := uuid.New()
 
 	env := buildMessageEnvelope(t, events.KindMessageReceived, "messages:chat-A")
-	err := r.Reenqueue(context.Background(), env, contactID)
+	err := r.Reenqueue(t.Context(), env, contactID)
 	require.NoError(t, err)
 	require.Len(t, ins.calls, 1)
 	require.Equal(t, contactID, ins.calls[0].ContactID)
@@ -100,7 +100,7 @@ func TestReenqueuer_OutboundKindAlsoParses(t *testing.T) {
 	contactID := uuid.New()
 
 	env := buildMessageEnvelope(t, events.KindMessageSent, "messages:chat-B")
-	err := r.Reenqueue(context.Background(), env, contactID)
+	err := r.Reenqueue(t.Context(), env, contactID)
 	require.NoError(t, err)
 	require.Len(t, eng.calls, 1)
 	require.Equal(t, "chat-B", eng.calls[0].chatID)
@@ -114,7 +114,7 @@ func TestReenqueuer_MalformedPeerRef_LogsAndReturnsNil(t *testing.T) {
 	r := NewMessagesAggregatorReenqueuer(eng, nil, "messages")
 
 	env := buildMessageEnvelope(t, events.KindMessageReceived, "tg:1234567")
-	err := r.Reenqueue(context.Background(), env, uuid.New())
+	err := r.Reenqueue(t.Context(), env, uuid.New())
 	require.NoError(t, err)
 	require.Empty(t, eng.calls, "engine MUST NOT be invoked when PeerRef is unparseable")
 }
@@ -126,7 +126,7 @@ func TestReenqueuer_EmptyChatID_LogsAndReturnsNil(t *testing.T) {
 	r := NewMessagesAggregatorReenqueuer(eng, nil, "messages")
 
 	env := buildMessageEnvelope(t, events.KindMessageReceived, "messages:")
-	err := r.Reenqueue(context.Background(), env, uuid.New())
+	err := r.Reenqueue(t.Context(), env, uuid.New())
 	require.NoError(t, err)
 	require.Empty(t, eng.calls, "engine MUST NOT be invoked when chat ID is empty")
 }
@@ -138,7 +138,7 @@ func TestReenqueuer_NilEngine_NoOpsButStillEnqueues(t *testing.T) {
 	ins := &stubMsgInserter{}
 	r := NewMessagesAggregatorReenqueuer(nil, ins, "messages")
 	env := buildMessageEnvelope(t, events.KindMessageReceived, "messages:chat-X")
-	err := r.Reenqueue(context.Background(), env, uuid.New())
+	err := r.Reenqueue(t.Context(), env, uuid.New())
 	require.NoError(t, err)
 	require.Len(t, ins.calls, 1, "fresh-enqueue path must fire even when engine is nil")
 }
@@ -152,7 +152,7 @@ func TestReenqueuer_InserterError_LogsAndContinues(t *testing.T) {
 	r := NewMessagesAggregatorReenqueuer(eng, ins, "messages")
 
 	env := buildMessageEnvelope(t, events.KindMessageReceived, "messages:chat-Z")
-	err := r.Reenqueue(context.Background(), env, uuid.New())
+	err := r.Reenqueue(t.Context(), env, uuid.New())
 	require.NoError(t, err) // best-effort path; logger.Warn only
 	require.Len(t, eng.calls, 1, "engine pass must still fire after enqueue failure")
 }
@@ -165,7 +165,7 @@ func TestReenqueuer_NonMessageKind_ReturnsNil(t *testing.T) {
 	r := NewMessagesAggregatorReenqueuer(eng, nil, "messages")
 
 	env := &events.Envelope{Source: "messages", Kind: events.KindInteractionRecorded}
-	err := r.Reenqueue(context.Background(), env, uuid.New())
+	err := r.Reenqueue(t.Context(), env, uuid.New())
 	require.NoError(t, err)
 	require.Empty(t, eng.calls)
 }

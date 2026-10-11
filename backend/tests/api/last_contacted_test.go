@@ -8,12 +8,11 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -21,7 +20,6 @@ import (
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -34,23 +32,11 @@ import (
 func setupLastContactedTestRouter(t *testing.T) (*gin.Engine, func()) {
 	t.Helper()
 
-	ctx := context.Background()
-	databaseURL := os.Getenv("DATABASE_URL")
+	ctx := t.Context()
 
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	if err != nil {
-		panic("Failed to connect to test database: " + err.Error())
-	}
+	database := testsupport.OpenDatabase(t)
 
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
@@ -115,12 +101,7 @@ func createContactForTest(t *testing.T, router *gin.Engine, fullName string) str
 // direction=mutual updates last_contacted via the manual interaction
 // pipeline (publish -> InteractionRecorder -> CadenceUpdater all in one tx).
 func TestPostInteraction_DirectionMutual_BumpsLastContacted(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupLastContactedTestRouter(t)
@@ -172,12 +153,7 @@ func TestPostInteraction_DirectionMutual_BumpsLastContacted(t *testing.T) {
 // interaction values to confirm the outbound interaction did NOT advance
 // last_contacted, NOT that last_contacted is nil.
 func TestPostInteraction_DirectionOutbound_DoesNotBumpLastContacted(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupLastContactedTestRouter(t)
@@ -232,12 +208,7 @@ func TestPostInteraction_DirectionOutbound_DoesNotBumpLastContacted(t *testing.T
 // must see a clean 404 (gin's default no-route response) rather than
 // silent success or an unexpected handler match.
 func TestRemovedEndpoint_PatchLastContacted_Returns404(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, cleanup := setupLastContactedTestRouter(t)

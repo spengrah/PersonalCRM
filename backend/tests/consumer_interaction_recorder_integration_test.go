@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -237,11 +238,9 @@ func (e *consumerTestEnv) mustPublish(t *testing.T, env *events.Envelope) {
 // consumer writes the interaction row and emits interaction.recorded in
 // the same tx (spec §3.4.1 atomicity contract).
 func TestIntegration_CalendarAttended_CutoverWritesInteraction(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "calendar-attended-cutover")
@@ -291,11 +290,9 @@ func TestIntegration_CalendarAttended_CutoverWritesInteraction(t *testing.T) {
 // interaction.description. Pre-cutover this came from the direct-path
 // RecordInteraction arg; post-cutover it must flow through the payload.
 func TestIntegration_CalendarAttended_TitlePreservedInInteraction(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "calendar-attended-title")
@@ -330,11 +327,9 @@ func TestIntegration_CalendarAttended_TitlePreservedInInteraction(t *testing.T) 
 // finds the existing row and early-returns without emitting a second
 // interaction.recorded.
 func TestIntegration_CalendarAttended_Replay(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "calendar-attended-replay")
@@ -383,11 +378,9 @@ func TestIntegration_CalendarAttended_Replay(t *testing.T) {
 // ManualInteractionHandler writes the interaction and emits
 // interaction.recorded inside a single tx.
 func TestIntegration_ManualHandler_SingleTxFlow(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "manual-single-tx")
@@ -425,11 +418,9 @@ func TestIntegration_ManualHandler_SingleTxFlow(t *testing.T) {
 // TestIntegration_ManualHandler_DedupWithinWindow asserts two manual
 // writes within the 30-min dedup window return the same row (replay).
 func TestIntegration_ManualHandler_DedupWithinWindow(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "manual-dedup")
@@ -455,11 +446,9 @@ func TestIntegration_ManualHandler_DedupWithinWindow(t *testing.T) {
 // inbound must take effect (bumping last_response_at + last_contacted)
 // independently of the outbound (which only bumped last_outreach_at).
 func TestIntegration_ManualHandler_DifferentDirectionsDoNotDedup(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	contactID := env.newContact(t, "manual-direction-dedup")
@@ -480,11 +469,9 @@ func TestIntegration_ManualHandler_DifferentDirectionsDoNotDedup(t *testing.T) {
 // TestIntegration_MissingContact_ConsumerReturnsNotFound asserts unresolved
 // contact_ids surface as db.ErrNotFound (wrapped), per spec §3.4.1.
 func TestIntegration_MissingContact_ConsumerReturnsNotFound(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	env := newConsumerTestEnv(t, ctx)
 
 	missingID := uuid.New()

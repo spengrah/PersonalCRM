@@ -3,7 +3,6 @@ package river
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,7 +10,6 @@ import (
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
@@ -87,23 +85,18 @@ func (p *loadTestProvider) Sync(ctx context.Context, state *repository.SyncState
 // The test's budget is bounded: windowBudget caps total runtime.
 func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	const accountCount = 10
 	const windowBudget = 30 * time.Second
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	source := "load_test_provider"
 
@@ -144,7 +137,7 @@ func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 	for i := 0; i < accountCount; i++ {
 		a := fmt.Sprintf("load-acct-%d", i)
 		acctIDs[i] = a
-		_, err = syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
+		_, err := syncRepo.CreateSyncState(ctx, repository.CreateSyncStateRequest{
 			Source:     source,
 			AccountID:  &a,
 			Enabled:    true,
@@ -153,7 +146,7 @@ func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	t.Cleanup(func() { _ = cleanup(context.Background()) })
+	t.Cleanup(func() { _ = cleanup(context.WithoutCancel(t.Context())) })
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, scheduler.NewSchedulerTickWorker(svc))
@@ -175,7 +168,7 @@ func TestSyncWorker_LoadNoDuplicateConcurrentSyncs(t *testing.T) {
 	// keeps its own bounded ctx below — that bound is legitimate.
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})

@@ -1,7 +1,7 @@
 package tests
 
 import (
-	"context"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -19,12 +19,10 @@ import (
 // cadence guard is live semantics, not dead code.) The ContactService + half-set
 // construction guards are unit-tested in internal/service/wiring_guards_test.go.
 func TestEnrichmentService_NilPairGuards(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)

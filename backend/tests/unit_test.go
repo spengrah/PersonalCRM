@@ -71,7 +71,7 @@ func TestHealthEndpoint_Healthy(t *testing.T) {
 	assert.Nil(t, dbStatus.Error)
 
 	// Verify system info is present
-	assert.NotNil(t, response.System)
+	require.NotNil(t, response.System)
 	assert.NotEmpty(t, response.System.Uptime)
 	assert.NotEmpty(t, response.System.GoVersion)
 	assert.Greater(t, response.System.NumGoroutine, 0)
@@ -113,7 +113,7 @@ func TestHealthEndpoint_Degraded(t *testing.T) {
 	dbStatus, ok := response.Components["database"]
 	assert.True(t, ok, "database component should be present")
 	assert.Equal(t, "unhealthy", dbStatus.Status)
-	assert.NotNil(t, dbStatus.Error)
+	require.NotNil(t, dbStatus.Error)
 	assert.Contains(t, *dbStatus.Error, "connection refused")
 }
 
@@ -146,7 +146,7 @@ func TestHealthEndpoint_NoDatabaseConfigured(t *testing.T) {
 	dbStatus, ok := response.Components["database"]
 	assert.True(t, ok, "database component should be present")
 	assert.Equal(t, "unhealthy", dbStatus.Status)
-	assert.NotNil(t, dbStatus.Error)
+	require.NotNil(t, dbStatus.Error)
 	assert.Contains(t, *dbStatus.Error, "not configured")
 }
 

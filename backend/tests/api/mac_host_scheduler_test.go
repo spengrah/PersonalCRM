@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -46,23 +46,16 @@ func (p *contactDrivenTestProvider) ValidateCredentials(_ context.Context, _ *st
 }
 
 func TestSyncService_ListDueAccounts_ExcludesPushStrategy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	// Build a real SyncRepository against the DB.
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -82,7 +75,7 @@ func TestSyncService_ListDueAccounts_ExcludesPushStrategy(t *testing.T) {
 	// Seed one due row per source.
 	nextSync := accelerated.GetCurrentTime().Add(-1 * time.Minute) // due (in the past)
 	pushAccountID := "host-x"
-	_, err = database.Queries.SeedExternalSyncState(ctx, db.SeedExternalSyncStateParams{
+	_, err := database.Queries.SeedExternalSyncState(ctx, db.SeedExternalSyncStateParams{
 		Source:     pushSource,
 		AccountID:  &pushAccountID,
 		Enabled:    true,

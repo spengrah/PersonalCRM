@@ -2,18 +2,16 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -26,24 +24,12 @@ import (
 func setupContactSortTestRouter(t *testing.T) (*gin.Engine, func()) {
 	t.Helper()
 
-	ctx := context.Background()
-	databaseURL := os.Getenv("DATABASE_URL")
+	ctx := t.Context()
 
 	// Migrations are applied once by TestMain.
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	if err != nil {
-		panic("Failed to connect to test database: " + err.Error())
-	}
+	database := testsupport.OpenDatabase(t)
 
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
 	manualHandler, contactService := mustBuildManualHandlerForTest(t, ctx, database, cfg)
@@ -230,14 +216,7 @@ func (h *sortTestHelper) findPosition(ids []string, target string) int {
 }
 
 func TestContactSort_LastContactedNullsLast(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
@@ -286,14 +265,7 @@ func TestContactSort_LastContactedNullsLast(t *testing.T) {
 }
 
 func TestContactSort_ContactBy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
@@ -392,14 +364,7 @@ func TestContactSort_ContactBy(t *testing.T) {
 }
 
 func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
@@ -562,14 +527,7 @@ func TestContactSort_LastResponseAtNullsLast(t *testing.T) {
 }
 
 func TestContactSort_Location(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)
@@ -640,14 +598,7 @@ func TestContactSort_Location(t *testing.T) {
 }
 
 func TestContactSort_Birthday(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	router, cleanup := setupContactSortTestRouter(t)

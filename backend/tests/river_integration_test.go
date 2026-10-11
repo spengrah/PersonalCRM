@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -50,31 +50,23 @@ func (w *localNoopWorker) Work(_ context.Context, _ *river.Job[localNoopJobArgs]
 // TestRunMigrations_River_Integration asserts that RunMigrations applies
 // River's own schema migrations and that a second call is idempotent.
 func TestRunMigrations_River_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = getMigrationsPath()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// First run: golang-migrate + river-migrate both apply (or report
 	// no-op if a previous test already migrated the shared DB).
 	require.NoError(t, db.RunMigrations(ctx, cfg.Database.URL, cfg.Database.MigrationsPath))
 
 	// Verify river's schema is present by querying its migration table.
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	var count int
-	err = database.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM river_migration`).Scan(&count)
+	err := database.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM river_migration`).Scan(&count)
 	require.NoError(t, err)
 	require.Positive(t, count, "river_migration table should have at least one row")
 
@@ -87,12 +79,10 @@ func TestRunMigrations_River_Integration(t *testing.T) {
 // starts and stops cleanly.
 func TestRiverClient_StartStop_Integration(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	// Per-test isolated clone so the live client owns a private river_job.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	workers := river.NewWorkers()
@@ -123,16 +113,14 @@ func TestRiverClient_StartStop_Integration(t *testing.T) {
 // test so a registration regression fails this test specifically.
 func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	// Per-test isolated clone so the inserted job lands in a private
 	// river_job and no concurrent sibling steals it. newIsolatedRiverTestDB
 	// registers database.Close() on t.Cleanup; the client.Stop cleanup
 	// registered below runs first (t.Cleanup is LIFO), so the pool stays
 	// alive while the client finalizes its last job batch.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	var invoked atomic.Int32
@@ -154,7 +142,7 @@ func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 	require.NoError(t, client.Start(ctx))
 
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})
@@ -197,12 +185,10 @@ func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 // default configuration. #281 restored the noop.
 func TestRiverClient_BootsWithNoopWorkerOnly(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
 	// Per-test isolated clone so the live client owns a private river_job.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	// Simulate the main.go boot path with EnableExternalSync=false: only
@@ -262,11 +248,9 @@ func (errorHandlerFastRetry) NextRetry(_ *rivertype.JobRow) time.Time {
 // silently mislabeling.
 func TestRiverErrorHandler_DiscardLogging_Integration(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	// Thread-safe buffer: River invokes the ErrorHandler on its own goroutines.
@@ -292,7 +276,7 @@ func TestRiverErrorHandler_DiscardLogging_Integration(t *testing.T) {
 	// silently stops fetching when its fetch-loop ctx cancels).
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})

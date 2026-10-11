@@ -42,7 +42,7 @@ import (
 func newParticipantTestRouter(t *testing.T) (*gin.Engine, *db.Database, context.Context, *repository.ContactRepository) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)

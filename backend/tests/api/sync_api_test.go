@@ -66,7 +66,7 @@ func (f *fakeSyncProvider) ValidateCredentials(ctx context.Context, accountID *s
 // exact-count/404 assertion, especially under -shuffle=on.
 func newSyncAPITest(t *testing.T) (router *gin.Engine, syncRepo *repository.SyncRepository, registry *sync.ProviderRegistry, ctx context.Context) {
 	t.Helper()
-	ctx = context.Background()
+	ctx = t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	syncRepo = repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)

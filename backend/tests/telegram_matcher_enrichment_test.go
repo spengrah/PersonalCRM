@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"hash/fnv"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strconv"
 	"sync"
 	"testing"
@@ -41,22 +41,14 @@ type matcherEnrichTestEnv struct {
 // t.Cleanup callbacks in LIFO order — opposite of `defer cleanup()`).
 func setupMatcherEnrichmentTest(t *testing.T) *matcherEnrichTestEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(context.Background(), cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -121,7 +113,7 @@ func registerCleanupBySource(t *testing.T, env *matcherEnrichTestEnv, ctx contex
 func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "AboveUser" + peerIDStr
@@ -188,7 +180,7 @@ func TestMatcherEnrichment_AboveThreshold_UsernameMatch(t *testing.T) {
 func TestMatcherEnrichment_BelowThreshold_NoExternalContact(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "BelowUser" + peerIDStr
@@ -234,7 +226,7 @@ func TestMatcherEnrichment_BelowThreshold_NoExternalContact(t *testing.T) {
 func TestMatcherEnrichment_PhoneMatchWithUsername(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "PhoneMatched" + peerIDStr
@@ -269,7 +261,7 @@ func TestMatcherEnrichment_PhoneMatchWithUsername(t *testing.T) {
 func TestMatcherEnrichment_PhoneMatchWithoutUsername(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	phone := "+1555" + peerIDStr[:7]
@@ -297,7 +289,7 @@ func TestMatcherEnrichment_PhoneMatchWithoutUsername(t *testing.T) {
 func TestMatcherEnrichment_Idempotency(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "IdemUser" + peerIDStr
@@ -339,7 +331,7 @@ func TestMatcherEnrichment_Idempotency(t *testing.T) {
 func TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "RaceUser" + peerIDStr
@@ -398,7 +390,7 @@ func TestMatcherEnrichment_ConcurrentMatch_TreatsUniqueViolationAsSuccess(t *tes
 func TestMatcherEnrichment_AlreadyMatchedExternalContact_RepairsMissingMethod(t *testing.T) {
 	t.Parallel()
 	env := setupMatcherEnrichmentTest(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "RepairUser" + peerIDStr
@@ -450,23 +442,15 @@ func (failingEnricher) SyncMethodsFromExternal(_ context.Context, _ uuid.UUID, _
 }
 
 func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(context.Background(), cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	gen, ns := migrationGenerator(t)
 	peerUserID, peerIDStr := uniqueTestIDs(t, ns)
 	username := "FaultyUser" + peerIDStr
@@ -485,7 +469,7 @@ func TestMatcherEnrichment_EnricherErrorDoesNotBreakMatch(t *testing.T) {
 		contactCleanup()
 	})
 
-	_, err = identitySvc.MatchOrCreate(ctx, service.MatchRequest{
+	_, err := identitySvc.MatchOrCreate(ctx, service.MatchRequest{
 		RawIdentifier:  username,
 		Type:           identity.IdentifierTypeTelegram,
 		Source:         "telegram",

@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -41,21 +40,14 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 	func(),
 ) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(context.Background(), cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactMethodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -86,7 +78,7 @@ func setupTelegramImportSuggestionTest(t *testing.T) (
 	cleanup := func() {
 		prefix := "tg-suggestion-"
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
-			context.Background(),
+			t.Context(),
 			prefix,
 		)
 		database.Close()
@@ -134,7 +126,7 @@ func seedTelegramCandidateWithName(
 ) *repository.ExternalContact {
 	t.Helper()
 	sourceID := "tg-suggestion-" + uuid.New().String()
-	ext, err := repo.Upsert(context.Background(), repository.UpsertExternalContactRequest{
+	ext, err := repo.Upsert(t.Context(), repository.UpsertExternalContactRequest{
 		Source:      "telegram",
 		SourceID:    sourceID,
 		DisplayName: displayName,
@@ -151,12 +143,12 @@ func seedTelegramCandidateWithName(
 // the collision-gap rule by producing multiple equal-score matches.
 func seedContactWithCleanup(t *testing.T, repo *repository.ContactRepository, fullName string) uuid.UUID {
 	t.Helper()
-	c, err := repo.CreateContact(context.Background(), repository.CreateContactRequest{
+	c, err := repo.CreateContact(context.WithoutCancel(t.Context()), repository.CreateContactRequest{
 		FullName: fullName,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = repo.HardDeleteContact(context.Background(), c.ID)
+		_ = repo.HardDeleteContact(context.WithoutCancel(t.Context()), c.ID)
 	})
 	return c.ID
 }

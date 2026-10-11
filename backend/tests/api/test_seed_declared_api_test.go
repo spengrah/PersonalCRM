@@ -48,7 +48,7 @@ func newDeclaredSeedRouter(t *testing.T) (*gin.Engine, *db.Database, context.Con
 	t.Helper()
 	testsupport.RequireLongTests(t)
 	gin.SetMode(gin.TestMode)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -195,7 +195,7 @@ func TestSeedDeclaredEndpoint_MaxLengthNamespaceResalts(t *testing.T) {
 	gen := factory.NewGenerator(factory.DefaultSeed, namespace)
 	require.NoError(t, support.InsertTelegramChatConfigInBand(ctx, gen.PeerBandStart()))
 	t.Cleanup(func() {
-		_, _ = support.DeleteTelegramChatConfigsByChatIds(context.Background(), []int64{gen.PeerBandStart()})
+		_, _ = support.DeleteTelegramChatConfigsByChatIds(context.WithoutCancel(t.Context()), []int64{gen.PeerBandStart()})
 	})
 
 	w := postDeclared(t, router, "/api/v1/test/seed/declared", map[string]any{

@@ -226,14 +226,14 @@ func NewEphemeralClone(t testing.TB) (cloneConnURL string, drop func()) {
 		t.Fatal("testdb.NewEphemeralClone: SetupPackage was not called with a configured DATABASE_URL/TEST_DATABASE_URL")
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneName, cloneConnURL, err := createCloneFromTemplate(ctx, originalBaseURL, migrationsPath)
 	if err != nil {
 		t.Fatalf("testdb.NewEphemeralClone: %v", err)
 	}
 
 	drop = func() {
-		if err := dropDatabase(context.Background(), originalBaseURL, cloneName); err != nil {
+		if err := dropDatabase(t.Context(), originalBaseURL, cloneName); err != nil {
 			t.Logf("testdb.NewEphemeralClone: drop %s (non-fatal): %v", cloneName, err)
 		}
 	}

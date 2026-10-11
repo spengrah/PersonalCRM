@@ -4,7 +4,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -23,25 +23,16 @@ import (
 
 func graphTestDB(t *testing.T) (*db.Database, context.Context) {
 	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 	return database, ctx
 }
 
 func TestGraphIdentity_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	database, ctx := graphTestDB(t)

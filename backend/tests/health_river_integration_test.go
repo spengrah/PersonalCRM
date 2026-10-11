@@ -3,7 +3,6 @@
 package tests
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -29,7 +28,7 @@ import (
 // deterministic.
 func TestHealthRepository_RiverQueries(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	repo := repository.NewHealthRepository(database.Queries)
 
@@ -79,7 +78,7 @@ func TestHealthRepository_RiverQueries(t *testing.T) {
 // non-completed states of the target kind, and a later-finalized OTHER kind.
 func TestHealthRepository_LatestCompletedByKind(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	repo := repository.NewHealthRepository(database.Queries)
 
@@ -119,7 +118,7 @@ func TestHealthRepository_LatestCompletedByKind(t *testing.T) {
 func TestHealth_EndToEnd_ReadinessAndPIIGuard(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)

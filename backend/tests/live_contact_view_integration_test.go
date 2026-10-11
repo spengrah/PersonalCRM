@@ -5,6 +5,7 @@ package tests
 import (
 	"context"
 	"math/rand"
+	"personal-crm/backend/tests/testsupport"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,11 +42,9 @@ var liveContactColumnOrder = []string{
 // non-materialized view with an exact, ordered projection is substituted and
 // flattened by the planner's subquery pull-up.
 func TestLiveContactView_Shape(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 
 	kindCount, err := database.Queries.TestCountPlainViews(ctx, "live_contact")
@@ -135,14 +134,14 @@ func seedLiveContactFixture(t *testing.T, ctx context.Context, contactRepo *repo
 		FullName: "LiveContactView " + tag + " Live " + token,
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(context.Background(), live.ID) })
+	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(context.WithoutCancel(t.Context()), live.ID) })
 
 	deleted, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 		FullName: "LiveContactView " + tag + " Deleted " + token,
 	})
 	require.NoError(t, err)
 	require.NoError(t, contactRepo.SoftDeleteContact(ctx, deleted.ID))
-	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(context.Background(), deleted.ID) })
+	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(context.WithoutCancel(t.Context()), deleted.ID) })
 
 	return liveContactFixture{live: live, deleted: deleted}
 }
@@ -153,11 +152,9 @@ func seedLiveContactFixture(t *testing.T, ctx context.Context, contactRepo *repo
 // definition) is run separately per the element's mandatory falsification
 // protocol, not by this test.
 func TestLiveContactView_ExcludesSoftDeletedOwners(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -209,11 +206,9 @@ func TestLiveContactView_ExcludesSoftDeletedOwners(t *testing.T) {
 // one subtest per read, each excluding a soft-deleted owner's row and
 // including a live one.
 func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -326,14 +321,14 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 			SentAt: accelerated.GetCurrentTime(), MatchedContactID: fx.live.ID, SourceMetadata: []byte(`{}`),
 		})
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = commsRepo.HardDeleteByContact(context.Background(), fx.live.ID) })
+		t.Cleanup(func() { _ = commsRepo.HardDeleteByContact(context.WithoutCancel(t.Context()), fx.live.ID) })
 
 		deletedMsg, err := commsRepo.UpsertMessage(ctx, repository.UpsertCommsMessageParams{
 			Source: "email", ExternalID: "live-contact-view-rr-msg-deleted-" + token, Direction: "inbound",
 			SentAt: accelerated.GetCurrentTime(), MatchedContactID: fx.deleted.ID, SourceMetadata: []byte(`{}`),
 		})
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = commsRepo.HardDeleteByContact(context.Background(), fx.deleted.ID) })
+		t.Cleanup(func() { _ = commsRepo.HardDeleteByContact(context.WithoutCancel(t.Context()), fx.deleted.ID) })
 
 		rows, err := commsRepo.ListMissingParticipantNames(ctx, since, uuid.Nil, 10000)
 		require.NoError(t, err)
@@ -473,11 +468,9 @@ func TestLiveContactView_RewrittenReadsHonourLiveness(t *testing.T) {
 // integration coverage of the blocked branch previously (verified by grep), so
 // this is a genuine red-first for that branch, not just a regression pin.
 func TestLiveContactView_UpdateGuardsHonourLiveness(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newSharedTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)

@@ -15,11 +15,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"personal-crm/backend/tests/testsupport"
 	"runtime"
 	"testing"
 
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 	"personal-crm/backend/internal/testdb"
@@ -49,22 +49,15 @@ func migrationsPathForWhatsAppTest() string {
 
 func TestWhatsAppManager_TerminalDisconnectOpensAStalenessBreach(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	waLog := NewWALogger("whatsapp-test")
 	container, err := NewDeviceContainer(ctx, database.Pool, waLog)

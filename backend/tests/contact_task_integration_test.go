@@ -6,7 +6,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
@@ -23,25 +23,14 @@ import (
 
 // TestContactTask_CRUD verifies basic CRUD operations for contact_task
 func TestContactTask_CRUD(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
@@ -281,25 +270,14 @@ func TestContactTask_CRUD(t *testing.T) {
 
 // TestContactTask_CountByProvider verifies counting tasks by provider and state
 func TestContactTask_CountByProvider(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	gen, _ := migrationGenerator(t)
@@ -353,25 +331,14 @@ func TestContactTask_CountByProvider(t *testing.T) {
 // TestContactTask_SyncedDeadlineMetadata verifies the synced_deadline metadata
 // behavior used for detecting when contact_by drifts from the Todoist task deadline.
 func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	gen, ns := migrationGenerator(t)
@@ -452,25 +419,14 @@ func TestContactTask_SyncedDeadlineMetadata(t *testing.T) {
 
 // TestContactTask_ActionTasks verifies action task operations
 func TestContactTask_ActionTasks(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	gen, ns := migrationGenerator(t)
@@ -584,7 +540,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		completed := "completed"
 		completedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &completed, nil, nil)
 		require.NoError(t, err)
-		assert.Len(t, completedTasks, 1)
+		require.Len(t, completedTasks, 1)
 		assert.Equal(t, tid("action-completed"), completedTasks[0].ExternalTaskID)
 
 		// Filter by kind=action
@@ -596,7 +552,7 @@ func TestContactTask_ActionTasks(t *testing.T) {
 		// Filter by kind=action AND state=managed
 		actionManagedTasks, err := contactTaskRepo.ListContactTasksFiltered(ctx, contact.ID, &managed, &action, nil)
 		require.NoError(t, err)
-		assert.Len(t, actionManagedTasks, 1)
+		require.Len(t, actionManagedTasks, 1)
 		assert.Equal(t, tid("action-managed"), actionManagedTasks[0].ExternalTaskID)
 
 		// Clean up
@@ -685,23 +641,13 @@ func TestContactTask_ActionTasks(t *testing.T) {
 // or renames a CHECK is caught loudly rather than silently letting
 // invalid rows land.
 func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	gen, ns := migrationGenerator(t)
@@ -809,23 +755,13 @@ func TestContactTask_Migration046_CheckConstraints(t *testing.T) {
 // multi-row hit. lifecycle=manual has NO uniqueness — multiple rows
 // per (contact_id, provider) are allowed (intentional design choice).
 func TestContactTask_Migration046_PartialUniqueIndexes(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
 	gen, ns := migrationGenerator(t)

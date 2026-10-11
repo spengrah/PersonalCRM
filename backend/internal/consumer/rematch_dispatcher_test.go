@@ -62,7 +62,7 @@ func TestRematchDispatcherWorker_Work_BudgetExhausted_Snoozes(t *testing.T) {
 	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", service.ErrRematchBudgetExhausted))
 	worker, job := newWorkerForRunner(t, runnerErr)
 
-	err := worker.Work(context.Background(), job)
+	err := worker.Work(t.Context(), job)
 
 	var snooze *river.JobSnoozeError
 	require.ErrorAs(t, err, &snooze, "budget exhaustion must reschedule via JobSnooze, not discard")
@@ -81,7 +81,7 @@ func TestRematchDispatcherWorker_Work_GenuineError_Propagates(t *testing.T) {
 	runnerErr := errors.Join(fmt.Errorf("account acct-1: %w", sentinel))
 	worker, job := newWorkerForRunner(t, runnerErr)
 
-	err := worker.Work(context.Background(), job)
+	err := worker.Work(t.Context(), job)
 
 	require.ErrorIs(t, err, sentinel, "genuine errors must propagate so river retries/discards normally")
 	var snooze *river.JobSnoozeError
@@ -103,7 +103,7 @@ func TestRematchDispatcherWorker_Work_MixedError_Snoozes(t *testing.T) {
 	)
 	worker, job := newWorkerForRunner(t, runnerErr)
 
-	err := worker.Work(context.Background(), job)
+	err := worker.Work(t.Context(), job)
 
 	var snooze *river.JobSnoozeError
 	require.ErrorAs(t, err, &snooze,
@@ -124,10 +124,10 @@ func TestRematchDispatcherWorker_Work_BudgetExhausted_CeilingCancels(t *testing.
 	worker, job := newWorkerForRunner(t, runnerErr)
 	job.Metadata = fmt.Appendf(nil, `{"snoozes": %d}`, rematchBudgetSnoozeCeiling)
 
-	err := worker.Work(context.Background(), job)
+	err := worker.Work(t.Context(), job)
 
 	var snooze *river.JobSnoozeError
-	require.False(t, errors.As(err, &snooze), "at the ceiling Work must stop snoozing")
+	require.NotErrorAs(t, err, &snooze, "at the ceiling Work must stop snoozing")
 	var cancel *river.JobCancelError
 	require.ErrorAs(t, err, &cancel, "at the ceiling Work must cancel the job (terminal, no retries)")
 
@@ -144,7 +144,7 @@ func TestRematchDispatcherWorker_Work_BudgetExhausted_BelowCeiling_Snoozes(t *te
 	worker, job := newWorkerForRunner(t, runnerErr)
 	job.Metadata = fmt.Appendf(nil, `{"snoozes": %d}`, rematchBudgetSnoozeCeiling-1)
 
-	err := worker.Work(context.Background(), job)
+	err := worker.Work(t.Context(), job)
 
 	var snooze *river.JobSnoozeError
 	require.ErrorAs(t, err, &snooze, "below the ceiling Work must keep snoozing")
@@ -226,7 +226,7 @@ func TestRematchDispatcher_HandleEvent_DispatchesToRunner(t *testing.T) {
 	}
 	env := validEnvelope(t, contactID, jobID, methods)
 
-	require.NoError(t, d.HandleEvent(context.Background(), env))
+	require.NoError(t, d.HandleEvent(t.Context(), env))
 	require.Equal(t, 1, runner.callCount())
 	call := runner.calls[0]
 	require.Equal(t, jobID, call.jobID)
@@ -238,7 +238,7 @@ func TestRematchDispatcher_HandleEvent_DispatchesToRunner(t *testing.T) {
 
 func TestRematchDispatcher_HandleEvent_NilEnvelope_Errors(t *testing.T) {
 	d := NewRematchDispatcher(&stubRunner{})
-	err := d.HandleEvent(context.Background(), nil)
+	err := d.HandleEvent(t.Context(), nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "nil envelope")
 }
@@ -249,7 +249,7 @@ func TestRematchDispatcher_HandleEvent_WrongKind_Errors(t *testing.T) {
 		ID:   uuid.New(),
 		Kind: events.KindInteractionRecorded,
 	}
-	err := d.HandleEvent(context.Background(), env)
+	err := d.HandleEvent(t.Context(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unexpected kind")
 }
@@ -261,7 +261,7 @@ func TestRematchDispatcher_HandleEvent_MalformedPayload_Errors(t *testing.T) {
 		Kind:    events.KindContactMethodsAdded,
 		Payload: json.RawMessage(`{not json`),
 	}
-	err := d.HandleEvent(context.Background(), env)
+	err := d.HandleEvent(t.Context(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unmarshal contact_methods.added")
 }
@@ -269,7 +269,7 @@ func TestRematchDispatcher_HandleEvent_MalformedPayload_Errors(t *testing.T) {
 func TestRematchDispatcher_HandleEvent_EmptyRematchJobID_Errors(t *testing.T) {
 	d := NewRematchDispatcher(&stubRunner{})
 	env := validEnvelope(t, uuid.New(), uuid.Nil, []events.ContactMethodRef{{Type: "email", Value: "x"}})
-	err := d.HandleEvent(context.Background(), env)
+	err := d.HandleEvent(t.Context(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "empty rematch_job_id")
 }
@@ -277,7 +277,7 @@ func TestRematchDispatcher_HandleEvent_EmptyRematchJobID_Errors(t *testing.T) {
 func TestRematchDispatcher_HandleEvent_EmptyContactID_Errors(t *testing.T) {
 	d := NewRematchDispatcher(&stubRunner{})
 	env := validEnvelope(t, uuid.Nil, uuid.New(), []events.ContactMethodRef{{Type: "email", Value: "x"}})
-	err := d.HandleEvent(context.Background(), env)
+	err := d.HandleEvent(t.Context(), env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "empty contact_id")
 }
@@ -286,7 +286,7 @@ func TestRematchDispatcher_HandleEvent_EmptyMethods_NoOp(t *testing.T) {
 	runner := &stubRunner{}
 	d := NewRematchDispatcher(runner)
 	env := validEnvelope(t, uuid.New(), uuid.New(), nil)
-	require.NoError(t, d.HandleEvent(context.Background(), env))
+	require.NoError(t, d.HandleEvent(t.Context(), env))
 	require.Zero(t, runner.callCount(), "empty methods must not invoke runner")
 }
 
@@ -296,7 +296,7 @@ func TestRematchDispatcher_HandleEvent_RunnerError_Propagates(t *testing.T) {
 	d := NewRematchDispatcher(runner)
 
 	env := validEnvelope(t, uuid.New(), uuid.New(), []events.ContactMethodRef{{Type: "email", Value: "a"}})
-	err := d.HandleEvent(context.Background(), env)
+	err := d.HandleEvent(t.Context(), env)
 	require.Error(t, err)
 	require.ErrorIs(t, err, sentinel, "dispatcher must surface runner error so river retries")
 	require.Contains(t, err.Error(), "rematch run")

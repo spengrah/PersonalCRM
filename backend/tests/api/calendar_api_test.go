@@ -141,7 +141,7 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 	t.Parallel()
 
 	t.Run("ContactEvents_ReturnsSeededEvent", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-read-" + uuid.NewString()[:8]
@@ -162,7 +162,7 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 	t.Run("UpcomingForContact_IncludedUntilEnded", func(t *testing.T) {
 		// spec: CAL-031.included-until-ended
 		// spec: CAL-031.ended-excluded
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-upcoming-" + uuid.NewString()[:8]
@@ -186,7 +186,7 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 
 	t.Run("UpcomingForContact_LimitCap", func(t *testing.T) {
 		// spec: CAL-031.limit-cap-250
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-upcoming-limit-" + uuid.NewString()[:8]
@@ -223,7 +223,7 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 	})
 
 	t.Run("GlobalUpcoming_ReturnsFutureEvents", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-global-" + uuid.NewString()[:8]
@@ -247,7 +247,7 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 	})
 
 	t.Run("Pagination_ClampsAndDefaults", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-page-" + uuid.NewString()[:8]
@@ -282,7 +282,7 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 	})
 
 	t.Run("MalformedContactID_Returns400", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, _, _ := newCalendarAPITest(t, ctx)
 
 		w := doCalendarGet(router, "/api/v1/contacts/not-a-uuid/events")
@@ -290,7 +290,7 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 	})
 
 	t.Run("RoutesAreReadOnly", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, _, _ := newCalendarAPITest(t, ctx)
 
 		routes := router.Routes()
@@ -307,7 +307,7 @@ func TestCalendarAPI_ReadEndpoints(t *testing.T) {
 // at the current time remains in the contact-scoped upcoming feed, while one
 // ending one second earlier is excluded.
 func TestUpcomingForContact_EndTimeBoundary(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	frozen := accelerated.GetCurrentTime().Truncate(time.Second)
 	restore := accelerated.SetNowForTest(func() time.Time { return frozen })
 	t.Cleanup(restore)
@@ -334,7 +334,7 @@ func TestCalendarAPI_AttendeeRedaction(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Response_ReportsAttendeeCount", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-redact-count-" + uuid.NewString()[:8]
@@ -357,7 +357,7 @@ func TestCalendarAPI_AttendeeRedaction(t *testing.T) {
 	})
 
 	t.Run("Response_OmitsAttendeeAddresses", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-redact-omit-" + uuid.NewString()[:8]
@@ -407,7 +407,7 @@ func TestCalendarAPI_CancelledEventsExcluded(t *testing.T) {
 	t.Parallel()
 
 	t.Run("ContactEvents_ExcludesCancelled", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-cancel-history-" + uuid.NewString()[:8]
@@ -427,7 +427,7 @@ func TestCalendarAPI_CancelledEventsExcluded(t *testing.T) {
 	})
 
 	t.Run("UpcomingForContact_ExcludesCancelled", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-cancel-upcoming-" + uuid.NewString()[:8]
@@ -447,7 +447,7 @@ func TestCalendarAPI_CancelledEventsExcluded(t *testing.T) {
 	})
 
 	t.Run("GlobalUpcoming_ExcludesCancelled", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-cancel-global-" + uuid.NewString()[:8]
@@ -484,7 +484,7 @@ func TestCalendarAPI_EventOrdering(t *testing.T) {
 	t.Parallel()
 
 	t.Run("ContactEvents_MostRecentFirst", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-order-history-" + uuid.NewString()[:8]
@@ -508,7 +508,7 @@ func TestCalendarAPI_EventOrdering(t *testing.T) {
 	})
 
 	t.Run("UpcomingForContact_SoonestFirst", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-order-upcoming-" + uuid.NewString()[:8]
@@ -532,7 +532,7 @@ func TestCalendarAPI_EventOrdering(t *testing.T) {
 	})
 
 	t.Run("GlobalUpcoming_SoonestFirst", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		router, calendarRepo, seedContact := newCalendarAPITest(t, ctx)
 
 		ns := "cal-order-global-" + uuid.NewString()[:8]

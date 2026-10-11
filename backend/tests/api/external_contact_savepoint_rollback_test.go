@@ -7,7 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -67,19 +67,14 @@ func (f *failingMatchExternalContactWriter) SoftDeleteTx(ctx context.Context, tx
 // event will re-execute the handler (no event-log dedup suppresses
 // it), which is the same contract raw_message.* follows.
 func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.External.APIKey = macHostTestKey
 	cfg.Features.EnableEventBusIngest = true
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
@@ -150,7 +145,7 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 
 	sourceIDPrefix := "rollback-" + suffix + "-"
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, sourceIDPrefix)
 		_, _ = database.Queries.DeleteEventsBySource(cleanCtx, "icloud_contacts")
@@ -214,7 +209,7 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 	//    savepoint, so rollback undoes it too).
 	logged, err := eventRepo.FindEventBySource(ctx, "icloud_contacts", entityID+"@"+hashHex)
 	require.Error(t, err, "event-log row must not be committed after savepoint rollback")
-	require.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound, got %v", err)
+	require.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound, got %v", err)
 	require.Nil(t, logged)
 
 	// 3. No external_identity row was committed. The handler called
@@ -224,6 +219,6 @@ func TestIngestExternalContact_SavepointRollback_OnMatchFailure(t *testing.T) {
 	ident, err := identityRepo.GetByIdentifier(ctx,
 		identity.IdentifierTypeEmail, seededEmail, "icloud_contacts")
 	require.Error(t, err, "external_identity row must not be committed after savepoint rollback")
-	require.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound, got %v", err)
+	require.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound, got %v", err)
 	require.Nil(t, ident)
 }

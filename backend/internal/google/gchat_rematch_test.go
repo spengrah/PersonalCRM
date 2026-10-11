@@ -37,7 +37,7 @@ func noopFetcherProvider(t *testing.T) *GChatSyncProvider {
 }
 
 func TestGChatHandleRematch_NoOpWhenNoEnabledState(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p := noopFetcherProvider(t)
 
 	// (a) zero states at all.
@@ -58,7 +58,7 @@ func TestGChatHandleRematch_NoOpWhenNoEnabledState(t *testing.T) {
 }
 
 func TestGChatEmailRematch_NoOpWhenNoEnabledState(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p := noopFetcherProvider(t)
 
 	h := NewGChatEmailRematchHandler(p, &fakeStateLister{states: nil}, nil, nil)
@@ -75,7 +75,7 @@ func TestGChatRematch_IdentifierTypes(t *testing.T) {
 }
 
 func TestGChatRematch_EmptyAddressNoOps(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	p := noopFetcherProvider(t)
 
 	// An empty/whitespace address normalizes to "" and short-circuits BEFORE the

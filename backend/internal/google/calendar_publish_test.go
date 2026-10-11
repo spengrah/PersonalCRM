@@ -36,8 +36,8 @@ func TestPublishCalendarAttended_SourceIDPerContact(t *testing.T) {
 	contactB := uuid.New()
 	occurredAt := time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC)
 
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contactA, eventID, occurredAt, nil))
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contactB, eventID, occurredAt, nil))
+	require.NoError(t, publishCalendarAttended(t.Context(), bus, contactA, eventID, occurredAt, nil))
+	require.NoError(t, publishCalendarAttended(t.Context(), bus, contactB, eventID, occurredAt, nil))
 	require.Len(t, bus.calls, 2)
 
 	idA := bus.calls[0].SourceID
@@ -60,8 +60,8 @@ func TestPublishCalendarAttended_RetriesSamePair_SameSourceID(t *testing.T) {
 	contact := uuid.New()
 	occurredAt := time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC)
 
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt, nil))
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt, nil))
+	require.NoError(t, publishCalendarAttended(t.Context(), bus, contact, eventID, occurredAt, nil))
+	require.NoError(t, publishCalendarAttended(t.Context(), bus, contact, eventID, occurredAt, nil))
 	require.Len(t, bus.calls, 2)
 	require.Equal(t, bus.calls[0].SourceID, bus.calls[1].SourceID)
 }
@@ -75,7 +75,7 @@ func TestPublishCalendarAttended_EnvelopeFields(t *testing.T) {
 	contact := uuid.New()
 	occurredAt := time.Date(2026, 4, 10, 14, 30, 0, 0, time.UTC)
 
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt, nil))
+	require.NoError(t, publishCalendarAttended(t.Context(), bus, contact, eventID, occurredAt, nil))
 	require.Len(t, bus.calls, 1)
 
 	env := bus.calls[0]
@@ -97,7 +97,7 @@ func TestPublishCalendarAttended_CarriesTitleInPayload(t *testing.T) {
 	occurredAt := time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC)
 	title := "Quarterly sync with Alice"
 
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt, &title))
+	require.NoError(t, publishCalendarAttended(t.Context(), bus, contact, eventID, occurredAt, &title))
 	require.Len(t, bus.calls, 1)
 
 	env := bus.calls[0]
@@ -116,7 +116,7 @@ func TestPublishCalendarAttended_NilTitleOmittedFromJSON(t *testing.T) {
 	contact := uuid.New()
 	occurredAt := time.Date(2026, 4, 10, 14, 0, 0, 0, time.UTC)
 
-	require.NoError(t, publishCalendarAttended(context.Background(), bus, contact, eventID, occurredAt, nil))
+	require.NoError(t, publishCalendarAttended(t.Context(), bus, contact, eventID, occurredAt, nil))
 	require.Len(t, bus.calls, 1)
 
 	env := bus.calls[0]
@@ -147,7 +147,7 @@ func TestPublishCalendarDeclinedTx_EnvelopeFields(t *testing.T) {
 	contact := uuid.New()
 	occurredAt := time.Date(2026, 4, 10, 15, 30, 0, 0, time.UTC)
 
-	require.NoError(t, publishCalendarDeclinedTx(context.Background(), bus, nil, contact, internalUUID, occurredAt))
+	require.NoError(t, publishCalendarDeclinedTx(t.Context(), bus, nil, contact, internalUUID, occurredAt))
 	require.Len(t, bus.calls, 1)
 
 	env := bus.calls[0]
@@ -178,8 +178,8 @@ func TestPublishCalendarDeclinedTx_SourceIDPerContact(t *testing.T) {
 	contactB := uuid.New()
 	occurredAt := time.Date(2026, 4, 10, 15, 0, 0, 0, time.UTC)
 
-	require.NoError(t, publishCalendarDeclinedTx(context.Background(), bus, nil, contactA, internalUUID, occurredAt))
-	require.NoError(t, publishCalendarDeclinedTx(context.Background(), bus, nil, contactB, internalUUID, occurredAt))
+	require.NoError(t, publishCalendarDeclinedTx(t.Context(), bus, nil, contactA, internalUUID, occurredAt))
+	require.NoError(t, publishCalendarDeclinedTx(t.Context(), bus, nil, contactB, internalUUID, occurredAt))
 	require.Len(t, bus.calls, 2)
 	require.NotEqual(t, bus.calls[0].SourceID, bus.calls[1].SourceID)
 	require.Equal(t, "declined:"+internalUUID+":"+contactA.String(), bus.calls[0].SourceID)

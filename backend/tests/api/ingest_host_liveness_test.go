@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"sync"
 	"testing"
 	"time"
@@ -56,18 +56,13 @@ func (s *stubFailingHostLiveness) GetActiveHostByIDForUpdateTx(
 
 // spec: ING-006.whole-batch-rolled-back
 func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	eventRepo := repository.NewEventRepository(database.Queries)
 	eventBus := events.NewBus(database.Pool, nil, eventRepo)
@@ -107,7 +102,7 @@ func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 		ctx, []*events.Envelope{env}, []int{0}, &hostID,
 	)
 	require.Error(t, err, "batch must abort when liveness check reports revoked host")
-	require.True(t, errors.Is(err, service.ErrHostRevokedDuringBatch),
+	require.ErrorIs(t, err, service.ErrHostRevokedDuringBatch,
 		"abort error must be ErrHostRevokedDuringBatch (got %v)", err)
 	require.Equal(t, 0, accepted)
 	require.Equal(t, 0, duplicate)
@@ -116,13 +111,13 @@ func TestIngest_HostRevokedMidTx_AbortsBatch(t *testing.T) {
 
 	// No event-log row may have committed. Cleanup-safe query: source
 	// matches our test's synthetic prefix.
-	cleanCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cleanCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	logged, err := eventRepo.FindEventBySource(cleanCtx, "icloud_contacts", env.SourceID)
 	if err == nil {
 		require.Nil(t, logged, "no event-log row may commit when batch aborts")
 	} else {
-		require.True(t, errors.Is(err, db.ErrNotFound),
+		require.ErrorIs(t, err, db.ErrNotFound,
 			"event-log row absence expected; got error %v", err)
 	}
 }
@@ -176,17 +171,12 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 	if os.Getenv("LONG_TESTS") == "" {
 		t.Skip("LONG_TESTS not set; skipping concurrency test")
 	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
@@ -202,7 +192,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 	pair, err := macService.PairWithToken(ctx, plain, "concurrent-revoke-test", "0.1.0", 1)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
 		defer cancel()
 		_, _ = database.Queries.DeleteAllMacHosts(cleanCtx)
 		_, _ = database.Queries.DeleteAllPairingTokens(cleanCtx)
@@ -316,7 +306,7 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 
 	// Cleanup: drop the row the batch upserted (UpsertTx ran on the
 	// real repo via the blocker's inner).
-	cleanCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
 	defer cancel()
 	_, _ = database.Queries.DeleteEventsBySource(cleanCtx, "icloud_contacts")
 	_ = database.Queries.TestDeleteExternalContactsBySourceIDPrefix(cleanCtx, "concurrent-revoke-")
@@ -341,19 +331,14 @@ func TestIngest_ConcurrentRevokeBlocksUntilBatchCommit(t *testing.T) {
 //
 // spec: ING-006.unauthorized-401-stops-retries
 func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.External.APIKey = macHostTestKey
 	cfg.Features.EnableEventBusIngest = true
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
@@ -367,7 +352,7 @@ func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
 	pair, err := macService.PairWithToken(ctx, plain, "ing006-revoked-mid-batch", "0.1.0", 1)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		// Same sweep as setupMacHostEnv: hosts + tokens + any push
 		// sync-state rows pairing created.
@@ -456,7 +441,7 @@ func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
 	if err == nil {
 		require.Nil(t, logged, "no event-log row may commit when the batch 401s")
 	} else {
-		require.True(t, errors.Is(err, db.ErrNotFound),
+		require.ErrorIs(t, err, db.ErrNotFound,
 			"event-log row absence expected; got error %v", err)
 	}
 }
@@ -484,7 +469,7 @@ func TestIngest_HostRevokedMidBatch_Returns401UnknownHost(t *testing.T) {
 // spec: ING-036
 func TestIngest_PayloadHostIDMismatch_RejectedForEveryDaemonFamily(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	// The batch's in-tx liveness re-check needs a real active host, and
 	// mac_host is a singleton table, so this test pairs one on its own clone.
 	database, _ := newIsolatedRiverTestDB(t, ctx)
@@ -618,7 +603,7 @@ func TestIngest_PayloadHostIDMismatch_RejectedForEveryDaemonFamily(t *testing.T)
 			if ferr == nil {
 				require.Nil(t, logged, "no event-log row may persist for a host-mismatch rejection")
 			} else {
-				require.True(t, errors.Is(ferr, db.ErrNotFound),
+				require.ErrorIs(t, ferr, db.ErrNotFound,
 					"event-log row absence expected; got error %v", ferr)
 			}
 		})

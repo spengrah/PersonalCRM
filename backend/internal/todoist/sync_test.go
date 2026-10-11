@@ -2,8 +2,6 @@ package todoist
 
 import (
 	"bytes"
-	"context"
-	"errors"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -56,7 +54,7 @@ func TestQuickAdd_NonProd_Refuses(t *testing.T) {
 		t.Run(env, func(t *testing.T) {
 			t.Parallel()
 			c, rt := newRecordingClient(env, "")
-			task, err := c.QuickAdd(context.Background(), "do a thing", "")
+			task, err := c.QuickAdd(t.Context(), "do a thing", "")
 			require.ErrorIs(t, err, ErrNonProdWriteRefused)
 			assert.Nil(t, task)
 			assert.Equal(t, int32(0), rt.calls.Load(), "no HTTP request should be issued")
@@ -73,7 +71,7 @@ func TestSync_WithCommands_NonProd_Refuses(t *testing.T) {
 			t.Parallel()
 			c, rt := newRecordingClient(env, "")
 			cmds := []SyncCommand{NewItemCloseCommand("task-123")}
-			resp, err := c.Sync(context.Background(), "*", []string{"items"}, cmds)
+			resp, err := c.Sync(t.Context(), "*", []string{"items"}, cmds)
 			require.ErrorIs(t, err, ErrNonProdWriteRefused)
 			assert.Nil(t, resp)
 			assert.Equal(t, int32(0), rt.calls.Load(), "no HTTP request should be issued")
@@ -86,7 +84,7 @@ func TestSync_WithCommands_NonProd_Refuses(t *testing.T) {
 func TestSync_ReadOnly_NonProd_Allowed(t *testing.T) {
 	t.Parallel()
 	c, rt := newRecordingClient("staging", `{"sync_token":"abc","full_sync":true}`)
-	resp, err := c.Sync(context.Background(), "*", []string{"items"}, nil)
+	resp, err := c.Sync(t.Context(), "*", []string{"items"}, nil)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.Equal(t, "abc", resp.SyncToken)
@@ -97,7 +95,7 @@ func TestSync_ReadOnly_NonProd_Allowed(t *testing.T) {
 func TestQuickAdd_Production_Writes(t *testing.T) {
 	t.Parallel()
 	c, rt := newRecordingClient("production", `{"id":"6abc","content":"do a thing"}`)
-	task, err := c.QuickAdd(context.Background(), "do a thing", "")
+	task, err := c.QuickAdd(t.Context(), "do a thing", "")
 	require.NoError(t, err)
 	require.NotNil(t, task)
 	assert.Equal(t, "6abc", task.ID)
@@ -114,7 +112,7 @@ func TestSync_WithCommands_ProdAliases_Write(t *testing.T) {
 			t.Parallel()
 			c, rt := newRecordingClient(env, `{"sync_token":"xyz"}`)
 			cmds := []SyncCommand{NewItemCloseCommand("task-123")}
-			resp, err := c.Sync(context.Background(), "*", []string{"items"}, cmds)
+			resp, err := c.Sync(t.Context(), "*", []string{"items"}, cmds)
 			require.NoError(t, err)
 			require.NotNil(t, resp)
 			assert.Equal(t, "xyz", resp.SyncToken)
@@ -131,7 +129,7 @@ func TestNewSyncClient_BackCompat_Writes(t *testing.T) {
 	c := NewSyncClient("test-token")
 	c.SetHTTPClient(&http.Client{Transport: rt})
 	cmds := []SyncCommand{NewItemCloseCommand("task-123")}
-	resp, err := c.Sync(context.Background(), "*", []string{"items"}, cmds)
+	resp, err := c.Sync(t.Context(), "*", []string{"items"}, cmds)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.Equal(t, int32(1), rt.calls.Load())
@@ -151,7 +149,7 @@ func TestNewClientFactory_EnvWiring(t *testing.T) {
 		sc, ok := client.(*SyncClient)
 		require.True(t, ok, "factory should return *SyncClient")
 		sc.SetHTTPClient(&http.Client{Transport: rt})
-		task, err := sc.QuickAdd(context.Background(), "x", "")
+		task, err := sc.QuickAdd(t.Context(), "x", "")
 		require.ErrorIs(t, err, ErrNonProdWriteRefused)
 		assert.Nil(t, task)
 		assert.Equal(t, int32(0), rt.calls.Load(), "no HTTP request should be issued")
@@ -165,7 +163,7 @@ func TestNewClientFactory_EnvWiring(t *testing.T) {
 		sc, ok := client.(*SyncClient)
 		require.True(t, ok, "factory should return *SyncClient")
 		sc.SetHTTPClient(&http.Client{Transport: rt})
-		task, err := sc.QuickAdd(context.Background(), "x", "")
+		task, err := sc.QuickAdd(t.Context(), "x", "")
 		require.NoError(t, err)
 		require.NotNil(t, task)
 		assert.Equal(t, int32(1), rt.calls.Load())
@@ -177,11 +175,11 @@ func TestRefusedError_Surface(t *testing.T) {
 	t.Parallel()
 	c, _ := newRecordingClient("staging", "")
 
-	task, err := c.QuickAdd(context.Background(), "x", "")
-	assert.True(t, errors.Is(err, ErrNonProdWriteRefused))
+	task, err := c.QuickAdd(t.Context(), "x", "")
+	assert.ErrorIs(t, err, ErrNonProdWriteRefused)
 	assert.Nil(t, task)
 
-	resp, err := c.Sync(context.Background(), "*", []string{"items"}, []SyncCommand{NewItemCloseCommand("t")})
-	assert.True(t, errors.Is(err, ErrNonProdWriteRefused))
+	resp, err := c.Sync(t.Context(), "*", []string{"items"}, []SyncCommand{NewItemCloseCommand("t")})
+	assert.ErrorIs(t, err, ErrNonProdWriteRefused)
 	assert.Nil(t, resp)
 }

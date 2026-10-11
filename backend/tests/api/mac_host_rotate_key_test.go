@@ -85,7 +85,7 @@ func TestMacHostRotateKey_HappyPath(t *testing.T) {
 	token := mintRotateToken(t, env)
 
 	// Snapshot pre-rotate host state so we can assert preservation.
-	pre, err := env.hostRepo.GetHost(context.Background(), hostID)
+	pre, err := env.hostRepo.GetHost(t.Context(), hostID)
 	require.NoError(t, err)
 
 	w := macHTTP(t, env, http.MethodPost, "/api/v1/host/"+hostID.String()+"/rotate-key",
@@ -121,7 +121,7 @@ func TestMacHostRotateKey_HappyPath(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, w.Code, "old key must 401 immediately")
 
 	// Identity preservation: id, cursor_epoch, hostname unchanged.
-	post, err := env.hostRepo.GetHost(context.Background(), hostID)
+	post, err := env.hostRepo.GetHost(t.Context(), hostID)
 	require.NoError(t, err)
 	require.Equal(t, pre.ID, post.ID, "host_id preserved")
 	require.Equal(t, pre.CursorEpoch, post.CursorEpoch, "cursor_epoch preserved")
@@ -192,7 +192,7 @@ func TestMacHostRotateKey_TokenExpired(t *testing.T) {
 	// CreatePairingToken because the service enforces forward-only TTL.
 	plaintext := "expired-rotate-token-xyz"
 	hash := sha256.Sum256([]byte(plaintext))
-	_, err := env.database.Queries.SeedPairingToken(context.Background(), db.SeedPairingTokenParams{
+	_, err := env.database.Queries.SeedPairingToken(t.Context(), db.SeedPairingTokenParams{
 		TokenHash: hex.EncodeToString(hash[:]),
 		ExpiresAt: accelerated.GetCurrentTime().Add(-1 * time.Hour),
 	})
@@ -244,7 +244,7 @@ func TestMacHostRotateKey_RevokedHostRotation(t *testing.T) {
 	hostID, oldKey := pairFreshHost(t, env, "rotate-revoked")
 
 	// Revoke the host.
-	require.NoError(t, env.macService.RevokeHost(context.Background(), hostID))
+	require.NoError(t, env.macService.RevokeHost(t.Context(), hostID))
 
 	// Mint a fresh token, attempt to rotate the revoked host.
 	token := mintRotateToken(t, env)
@@ -269,10 +269,10 @@ func TestMacHostRotateKey_WrongCurrentKey(t *testing.T) {
 	// Pairing token must still be unconsumed (middleware rejected
 	// before the handler ran).
 	hash := sha256.Sum256([]byte(token))
-	tx, err := env.database.Pool.Begin(context.Background())
+	tx, err := env.database.Pool.Begin(context.WithoutCancel(t.Context()))
 	require.NoError(t, err)
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	row, err := env.tokenRepo.GetTokenByHashForUpdateTx(context.Background(), tx, hex.EncodeToString(hash[:]))
+	defer func() { _ = tx.Rollback(t.Context()) }()
+	row, err := env.tokenRepo.GetTokenByHashForUpdateTx(t.Context(), tx, hex.EncodeToString(hash[:]))
 	require.NoError(t, err)
 	require.Nil(t, row.ConsumedAt, "token must not be consumed by rejected rotate")
 }
@@ -293,7 +293,7 @@ func callRotateAPIKeyDirect(
 	startingHash, token string,
 ) (*service.RotateAPIKeyResult, error) {
 	t.Helper()
-	return env.macService.RotateAPIKey(context.Background(), hostID, startingHash, token)
+	return env.macService.RotateAPIKey(context.WithoutCancel(t.Context()), hostID, startingHash, token)
 }
 
 // spec: MAC-010.rotated-out-key-stale-auth
@@ -312,7 +312,7 @@ func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
 	// request could legitimately race past the first commit and get
 	// INVALID_KEY at the middleware layer (a different valid
 	// outcome) instead of STALE_AUTH at the service CAS check.
-	pre, err := env.hostRepo.GetHost(context.Background(), hostID)
+	pre, err := env.hostRepo.GetHost(t.Context(), hostID)
 	require.NoError(t, err)
 	startingHash := pre.APIKeyHash
 
@@ -352,14 +352,14 @@ func TestMacHostRotateKey_ConcurrentRotation_DifferentTokens(t *testing.T) {
 	consumedCount := 0
 	for _, tok := range []string{tokenA, tokenB} {
 		hash := sha256.Sum256([]byte(tok))
-		tx, err := env.database.Pool.Begin(context.Background())
+		tx, err := env.database.Pool.Begin(t.Context())
 		require.NoError(t, err)
-		row, err := env.tokenRepo.GetTokenByHashForUpdateTx(context.Background(), tx, hex.EncodeToString(hash[:]))
+		row, err := env.tokenRepo.GetTokenByHashForUpdateTx(t.Context(), tx, hex.EncodeToString(hash[:]))
 		require.NoError(t, err)
 		if row.ConsumedAt != nil {
 			consumedCount++
 		}
-		require.NoError(t, tx.Rollback(context.Background()))
+		require.NoError(t, tx.Rollback(t.Context()))
 	}
 	require.Equal(t, 1, consumedCount, "exactly one token must be consumed")
 }
@@ -377,7 +377,7 @@ func TestMacHostRotateKey_ConcurrentRotation_SameToken(t *testing.T) {
 	// ErrPairingTokenAlreadyUsed). Asserting the exact error locks
 	// down the ordering invariant. See callRotateAPIKeyDirect for
 	// why this test bypasses HTTP.
-	pre, err := env.hostRepo.GetHost(context.Background(), hostID)
+	pre, err := env.hostRepo.GetHost(t.Context(), hostID)
 	require.NoError(t, err)
 	startingHash := pre.APIKeyHash
 
@@ -414,10 +414,10 @@ func TestMacHostRotateKey_ConcurrentRotation_SameToken(t *testing.T) {
 
 	// The token IS consumed (by the winner, before the loser's CAS).
 	hash := sha256.Sum256([]byte(token))
-	tx, err := env.database.Pool.Begin(context.Background())
+	tx, err := env.database.Pool.Begin(context.WithoutCancel(t.Context()))
 	require.NoError(t, err)
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	row, err := env.tokenRepo.GetTokenByHashForUpdateTx(context.Background(), tx, hex.EncodeToString(hash[:]))
+	defer func() { _ = tx.Rollback(t.Context()) }()
+	row, err := env.tokenRepo.GetTokenByHashForUpdateTx(t.Context(), tx, hex.EncodeToString(hash[:]))
 	require.NoError(t, err)
 	require.NotNil(t, row.ConsumedAt, "token must be consumed by winner")
 }

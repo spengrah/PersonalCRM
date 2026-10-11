@@ -12,8 +12,7 @@
 package main
 
 import (
-	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/repository"
@@ -24,14 +23,9 @@ import (
 
 func TestSeedAdapterRunProfileCarriesPartialResultOnFailure(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newJobsTestDB(t, ctx)
 
 	adapter := seedAdapter{

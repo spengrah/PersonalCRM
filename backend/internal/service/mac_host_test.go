@@ -45,7 +45,7 @@ func TestMacHostService_KnownIdentifiers_HappyPath(t *testing.T) {
 		phones: []string{"+15550001111", "+15550002222"},
 	}
 	svc := &MacHostService{contactMethodRepo: stub}
-	res, err := svc.KnownIdentifiers(context.Background())
+	res, err := svc.KnownIdentifiers(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	require.Equal(t, []string{"+15550001111", "+15550002222"}, res.Phones)
@@ -60,7 +60,7 @@ func TestMacHostService_KnownIdentifiers_EmptyDB(t *testing.T) {
 		phones: []string{},
 	}
 	svc := &MacHostService{contactMethodRepo: stub}
-	res, err := svc.KnownIdentifiers(context.Background())
+	res, err := svc.KnownIdentifiers(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	require.Equal(t, []string{}, res.Emails)
@@ -76,7 +76,7 @@ func TestMacHostService_KnownIdentifiers_NilSlicesBecomeEmpty(t *testing.T) {
 		phones: nil,
 	}
 	svc := &MacHostService{contactMethodRepo: stub}
-	res, err := svc.KnownIdentifiers(context.Background())
+	res, err := svc.KnownIdentifiers(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	require.NotNil(t, res.Emails, "emails should be empty slice, never nil")
@@ -91,7 +91,7 @@ func TestMacHostService_KnownIdentifiers_EmailErrorSurfaces(t *testing.T) {
 		phones:    []string{},
 	}
 	svc := &MacHostService{contactMethodRepo: stub}
-	res, err := svc.KnownIdentifiers(context.Background())
+	res, err := svc.KnownIdentifiers(t.Context())
 	require.Error(t, err)
 	require.Nil(t, res)
 	require.Contains(t, err.Error(), "list canonical emails")
@@ -103,7 +103,7 @@ func TestMacHostService_KnownIdentifiers_PhoneErrorSurfaces(t *testing.T) {
 		phonesErr: errors.New("db: connection refused"),
 	}
 	svc := &MacHostService{contactMethodRepo: stub}
-	res, err := svc.KnownIdentifiers(context.Background())
+	res, err := svc.KnownIdentifiers(t.Context())
 	require.Error(t, err)
 	require.Nil(t, res)
 	require.Contains(t, err.Error(), "list canonical phones")
@@ -115,7 +115,7 @@ func TestMacHostService_KnownIdentifiers_NilRepoErrors(t *testing.T) {
 	// hit. Production main.go always wires it; test fixtures that don't
 	// exercise the endpoint pass nil.
 	svc := &MacHostService{contactMethodRepo: nil}
-	_, err := svc.KnownIdentifiers(context.Background())
+	_, err := svc.KnownIdentifiers(t.Context())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "contact_method repository not wired")
 }
@@ -161,7 +161,7 @@ func TestMacHostService_KnownIDsForSource_HappyPath(t *testing.T) {
 	}
 	svc := &MacHostService{externalContactRepo: stub}
 	hostID := uuid.New()
-	got, err := svc.KnownIDsForSource(context.Background(), hostID, "icloud_contacts")
+	got, err := svc.KnownIDsForSource(t.Context(), hostID, "icloud_contacts")
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	require.Equal(t, "CN-A", got[0].SourceID)
@@ -176,7 +176,7 @@ func TestMacHostService_KnownIDsForSource_HappyPath(t *testing.T) {
 func TestMacHostService_KnownIDsForSource_EmptyResult(t *testing.T) {
 	stub := &stubExternalContactReader{resp: []KnownExternalContactID{}}
 	svc := &MacHostService{externalContactRepo: stub}
-	got, err := svc.KnownIDsForSource(context.Background(), uuid.New(), "icloud_contacts")
+	got, err := svc.KnownIDsForSource(t.Context(), uuid.New(), "icloud_contacts")
 	require.NoError(t, err)
 	require.NotNil(t, got, "empty result must be a non-nil slice for JSON marshaling")
 	require.Len(t, got, 0)
@@ -185,14 +185,14 @@ func TestMacHostService_KnownIDsForSource_EmptyResult(t *testing.T) {
 func TestMacHostService_KnownIDsForSource_RepoErrorSurfaces(t *testing.T) {
 	stub := &stubExternalContactReader{err: errors.New("db: connection refused")}
 	svc := &MacHostService{externalContactRepo: stub}
-	_, err := svc.KnownIDsForSource(context.Background(), uuid.New(), "icloud_contacts")
+	_, err := svc.KnownIDsForSource(t.Context(), uuid.New(), "icloud_contacts")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "connection refused")
 }
 
 func TestMacHostService_KnownIDsForSource_NilRepoErrors(t *testing.T) {
 	svc := &MacHostService{externalContactRepo: nil}
-	_, err := svc.KnownIDsForSource(context.Background(), uuid.New(), "icloud_contacts")
+	_, err := svc.KnownIDsForSource(t.Context(), uuid.New(), "icloud_contacts")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "external_contact repository not wired")
 }

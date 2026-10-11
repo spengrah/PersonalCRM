@@ -3,7 +3,7 @@ package unit
 import (
 	"context"
 	"errors"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -41,18 +41,13 @@ func (p *countingProvider) Sync(_ context.Context, _ *repository.SyncState, _ []
 
 func newServiceSuiteDB(t *testing.T) (*db.Database, context.Context) {
 	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration-adjacent service test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	ctx := context.Background()
+	ctx := t.Context()
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 	return database, ctx
 }
 
@@ -60,9 +55,7 @@ func newServiceSuiteDB(t *testing.T) (*db.Database, context.Context) {
 // SetRiverEnqueuer has been called, TriggerSync routes through the
 // repository's atomic-claim helper and does NOT run the provider inline.
 func TestSyncService_TriggerSync_UsesEnqueuerWhenSet(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping db-backed service test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
@@ -73,8 +66,8 @@ func TestSyncService_TriggerSync_UsesEnqueuerWhenSet(t *testing.T) {
 	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -115,9 +108,7 @@ func TestSyncService_TriggerSync_UsesEnqueuerWhenSet(t *testing.T) {
 // when the enqueuer has NOT been set, TriggerSync runs the sync inline
 // via runSyncForState.
 func TestSyncService_TriggerSync_FallsBackWhenEnqueuerNil(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping db-backed service test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
@@ -127,8 +118,8 @@ func TestSyncService_TriggerSync_FallsBackWhenEnqueuerNil(t *testing.T) {
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	_ = syncRepo.DeleteSyncLogsBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncLogsBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncLogsBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -157,9 +148,7 @@ func TestSyncService_TriggerSync_FallsBackWhenEnqueuerNil(t *testing.T) {
 // hard-block returning an error was retired along with the
 // status='syncing' mutex.
 func TestSyncService_TriggerSync_DedupedIsNoError(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping db-backed service test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
@@ -169,8 +158,8 @@ func TestSyncService_TriggerSync_DedupedIsNoError(t *testing.T) {
 	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -216,9 +205,7 @@ func TestSyncService_TriggerSync_EnqueueErrorWrapped(t *testing.T) {
 	// Simplest path: use a fake repo that has SyncRepository pointing at
 	// a minimal pool but the enqueuer errors — this is integration-
 	// adjacent, so gate on DB.
-	if testing.Short() {
-		t.Skip("skipping db-backed service test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	database, ctx := newServiceSuiteDB(t)
 
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -226,7 +213,7 @@ func TestSyncService_TriggerSync_EnqueueErrorWrapped(t *testing.T) {
 	source := "service_test_enqueue_errwrapped"
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -267,9 +254,7 @@ func (f *failingEnqueuer) InsertTx(_ context.Context, _ pgx.Tx, _ river.JobArgs,
 // successfully — the status-column mutex was retired in favor of
 // river_job state as the source of truth for "in-flight".
 func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping db-backed service test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
@@ -279,8 +264,8 @@ func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
 	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -332,7 +317,7 @@ func TestSyncService_EnqueueRequiresEnqueuer(t *testing.T) {
 	t.Parallel()
 	syncRepo := repository.NewSyncRepository(nil)
 	svc := service.NewSyncService(syncRepo, nil, syncpkg.NewProviderRegistry())
-	_, err := svc.EnqueueAccountSyncIfNotInFlight(context.Background(), "gmail", nil)
+	_, err := svc.EnqueueAccountSyncIfNotInFlight(t.Context(), "gmail", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "enqueuer")
 }
@@ -342,9 +327,7 @@ func TestSyncService_EnqueueRequiresEnqueuer(t *testing.T) {
 // out of the tick-worker's enumeration — the Codex round-1 finding
 // about poison jobs.
 func TestSyncService_ListDueAccounts_FiltersUnregisteredProviders(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping db-backed service test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
@@ -357,7 +340,7 @@ func TestSyncService_ListDueAccounts_FiltersUnregisteredProviders(t *testing.T) 
 		_ = syncRepo.DeleteSyncStatesBySourceForTest(c, deadSource)
 	}
 	cleanupSources(ctx)
-	t.Cleanup(func() { cleanupSources(context.Background()) })
+	t.Cleanup(func() { cleanupSources(context.WithoutCancel(t.Context())) })
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
@@ -411,9 +394,7 @@ func TestSyncService_ListDueAccounts_FiltersUnregisteredProviders(t *testing.T) 
 // prevents creating such rows; this covers any that already exist. A row WITH
 // an account for the same provider is still listed (positive control).
 func TestSyncService_ListDueAccounts_SkipsAccountScopedRowsMissingAccount(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping db-backed service test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
@@ -422,7 +403,7 @@ func TestSyncService_ListDueAccounts_SkipsAccountScopedRowsMissingAccount(t *tes
 	source := "service_test_acct_scoped_source"
 	cleanup := func(c context.Context) { _ = syncRepo.DeleteSyncStatesBySourceForTest(c, source) }
 	cleanup(ctx)
-	t.Cleanup(func() { cleanup(context.Background()) })
+	t.Cleanup(func() { cleanup(context.WithoutCancel(t.Context())) })
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	registry := syncpkg.NewProviderRegistry()
@@ -479,9 +460,7 @@ func TestSyncService_ListDueAccounts_SkipsAccountScopedRowsMissingAccount(t *tes
 // NOT bootstrap an external_sync_state row (which would error on every dispatch
 // forever). The enqueuer is wired so we can also assert no river_job was queued.
 func TestSyncService_TriggerSync_RejectsNilAccountForAccountScopedProvider(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping db-backed service test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
@@ -491,8 +470,8 @@ func TestSyncService_TriggerSync_RejectsNilAccountForAccountScopedProvider(t *te
 	_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -516,14 +495,14 @@ func TestSyncService_TriggerSync_RejectsNilAccountForAccountScopedProvider(t *te
 
 	err := svc.TriggerSync(ctx, source, nil)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, service.ErrAccountRequired),
+	assert.ErrorIs(t, err, service.ErrAccountRequired,
 		"expected ErrAccountRequired, got %v", err)
 
 	// No external_sync_state row was created. GetSyncStateBySource uses
 	// COALESCE(account_id,'') = COALESCE($2,'') so a nil lookup matches both a
 	// NULL and an empty-string row — this single check covers both variants.
 	_, getErr := syncRepo.GetSyncStateBySource(ctx, source, nil)
-	assert.True(t, errors.Is(getErr, db.ErrNotFound),
+	assert.ErrorIs(t, getErr, db.ErrNotFound,
 		"no sync_state row should exist, got %v", getErr)
 
 	// Provider.Sync was never called and nothing was enqueued.
@@ -538,9 +517,7 @@ func TestSyncService_TriggerSync_RejectsNilAccountForAccountScopedProvider(t *te
 // "", " ", and "\t" are all rejected — without this a {"account_id":""} body
 // would bootstrap a non-NULL empty-string row that still errors at OAuth lookup.
 func TestSyncService_TriggerSync_RejectsMissingAccountVariants(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping db-backed service test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
@@ -563,8 +540,8 @@ func TestSyncService_TriggerSync_RejectsMissingAccountVariants(t *testing.T) {
 			_ = syncRepo.DeleteRiverJobsBySourceArgForTest(ctx, source)
 			_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 			t.Cleanup(func() {
-				_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.Background(), source)
-				_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
+				_ = syncRepo.DeleteRiverJobsBySourceArgForTest(context.WithoutCancel(t.Context()), source)
+				_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
 			})
 
 			registry := syncpkg.NewProviderRegistry()
@@ -580,14 +557,14 @@ func TestSyncService_TriggerSync_RejectsMissingAccountVariants(t *testing.T) {
 
 			err := svc.TriggerSync(ctx, source, tc.accountID)
 			require.Error(t, err)
-			assert.True(t, errors.Is(err, service.ErrAccountRequired),
+			assert.ErrorIs(t, err, service.ErrAccountRequired,
 				"expected ErrAccountRequired for %q, got %v", tc.name, err)
 
 			// No row created for the exact value passed. The COALESCE lookup
 			// collapses NULL/'' (covering nil + empty); for whitespace we query
 			// with the same whitespace value, which the guard never wrote.
 			_, getErr := syncRepo.GetSyncStateBySource(ctx, source, tc.accountID)
-			assert.True(t, errors.Is(getErr, db.ErrNotFound),
+			assert.ErrorIs(t, getErr, db.ErrNotFound,
 				"no sync_state row should exist for %q, got %v", tc.name, getErr)
 			assert.Equal(t, 0, provider.count, "provider.Sync must not run for %q", tc.name)
 		})
@@ -599,9 +576,7 @@ func TestSyncService_TriggerSync_RejectsMissingAccountVariants(t *testing.T) {
 // (RequiresAccount defaults false) keeps its create-on-first-trigger behavior
 // when called with a nil account. Prevents an over-broad rejection regression.
 func TestSyncService_TriggerSync_AccountOptionalProviderStillBootstraps(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping db-backed service test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	database, ctx := newServiceSuiteDB(t)
 
@@ -611,8 +586,8 @@ func TestSyncService_TriggerSync_AccountOptionalProviderStillBootstraps(t *testi
 	_ = syncRepo.DeleteSyncStatesBySourceForTest(ctx, source)
 	_ = syncRepo.DeleteSyncLogsBySourceForTest(ctx, source)
 	t.Cleanup(func() {
-		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.Background(), source)
-		_ = syncRepo.DeleteSyncLogsBySourceForTest(context.Background(), source)
+		_ = syncRepo.DeleteSyncStatesBySourceForTest(context.WithoutCancel(t.Context()), source)
+		_ = syncRepo.DeleteSyncLogsBySourceForTest(context.WithoutCancel(t.Context()), source)
 	})
 
 	contactRepo := repository.NewContactRepository(database.Queries)

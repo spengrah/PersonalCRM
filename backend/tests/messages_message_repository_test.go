@@ -2,8 +2,7 @@ package tests
 
 import (
 	"context"
-	"errors"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -34,19 +33,12 @@ import (
 // clear deleted_at on conflict, so a soft delete would resurrect rows across runs.
 func setupMessagesMessageTest(t *testing.T) (context.Context, *factory.Generator, *db.Database, *repository.MessagesMessageRepository, uuid.UUID, func()) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	gen, _ := migrationGenerator(t)
 
@@ -93,7 +85,7 @@ func TestMessagesMessageRepository_UpsertAndGet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, guid, msg.Guid)
 	assert.Equal(t, "text", msg.MessageType)
-	assert.NotNil(t, msg.MatchedContactID)
+	require.NotNil(t, msg.MatchedContactID)
 	assert.Equal(t, contact.ID, *msg.MatchedContactID)
 
 	got, err := repo.GetMessage(ctx, guid)
@@ -280,7 +272,7 @@ func TestMessagesMessageRepository_ClaimMessages_PartialClaim(t *testing.T) {
 
 	claimed, err := repo.ClaimMessages(ctx, []uuid.UUID{m1.ID, m2.ID}, "new")
 	require.NoError(t, err)
-	assert.Len(t, claimed, 1)
+	require.Len(t, claimed, 1)
 	assert.Equal(t, m2.ID, claimed[0])
 }
 
@@ -337,5 +329,5 @@ func TestMessagesMessageRepository_GetMessage_NotFound(t *testing.T) {
 
 	_, err := repo.GetMessage(ctx, gen.Prefix()+"non-existent-guid")
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound, got %v", err)
+	assert.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound, got %v", err)
 }

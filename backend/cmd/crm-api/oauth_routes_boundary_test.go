@@ -14,17 +14,15 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/events"
 	"personal-crm/backend/internal/logger"
 	"personal-crm/backend/internal/repository"
@@ -62,11 +60,9 @@ func oauthWiringConfig(t *testing.T) *config.Config {
 // returned router is therefore the production route tree for cfg's shape.
 func buildRouterForOAuthWiring(t *testing.T, cfg *config.Config) *gin.Engine {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	core := buildCoreRepos(database.Queries)
 
@@ -215,9 +211,7 @@ var wiringTodoistOAuthRouteSet = []string{
 // route sits inside it (keyless is 401, keyed proceeds).
 func TestOAuthRouteWiring_AuthBoundary(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	cfg := oauthWiringConfig(t)
 	cfg.Features.EnableExternalSync = true
@@ -293,9 +287,7 @@ func TestOAuthRouteWiring_AuthBoundary(t *testing.T) {
 // config, and registerRoutes must translate those nils into absent routes.
 func TestOAuthRouteWiring_ProviderGating(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Run("external sync enabled with both providers configured registers both full route sets", func(t *testing.T) {
 		// spec: SET-005

@@ -1,8 +1,7 @@
 package tests
 
 import (
-	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -18,28 +17,19 @@ import (
 
 func cleanupTelegramSession(t *testing.T, queries db.Querier) {
 	t.Helper()
-	_ = queries.DeleteTelegramSession(context.Background())
+	_ = queries.DeleteTelegramSession(t.Context())
 }
 
 func TestSessionRepository_UpsertAndGet(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramSessionRepository(database.Queries)
 	cleanupTelegramSession(t, database.Queries)
@@ -71,31 +61,22 @@ func TestSessionRepository_UpsertAndGet(t *testing.T) {
 }
 
 func TestSessionRepository_UpdateAuthState(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramSessionRepository(database.Queries)
 	cleanupTelegramSession(t, database.Queries)
 	t.Cleanup(func() { cleanupTelegramSession(t, database.Queries) })
 
 	// Create session in disconnected state
-	_, err = repo.UpsertSession(ctx, repository.UpsertTelegramSessionParams{
+	_, err := repo.UpsertSession(ctx, repository.UpsertTelegramSessionParams{
 		SessionDataEncrypted: []byte("data"),
 		EncryptionNonce:      []byte("nonce"),
 		AuthState:            "disconnected",
@@ -109,30 +90,21 @@ func TestSessionRepository_UpdateAuthState(t *testing.T) {
 }
 
 func TestSessionRepository_Delete(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramSessionRepository(database.Queries)
 	cleanupTelegramSession(t, database.Queries)
 	t.Cleanup(func() { cleanupTelegramSession(t, database.Queries) })
 
-	_, err = repo.UpsertSession(ctx, repository.UpsertTelegramSessionParams{
+	_, err := repo.UpsertSession(ctx, repository.UpsertTelegramSessionParams{
 		SessionDataEncrypted: []byte("data"),
 		EncryptionNonce:      []byte("nonce"),
 		AuthState:            "disconnected",
@@ -147,24 +119,15 @@ func TestSessionRepository_Delete(t *testing.T) {
 }
 
 func TestDatabaseSessionStorage_EncryptDecrypt(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramSessionRepository(database.Queries)
 	cleanupTelegramSession(t, database.Queries)
@@ -187,24 +150,15 @@ func TestDatabaseSessionStorage_EncryptDecrypt(t *testing.T) {
 }
 
 func TestDatabaseSessionStorage_NoSession(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramSessionRepository(database.Queries)
 	cleanupTelegramSession(t, database.Queries)

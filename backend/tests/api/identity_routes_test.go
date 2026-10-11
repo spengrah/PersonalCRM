@@ -38,7 +38,7 @@ import (
 // exact-count assertion.
 func newIdentityRoutesTest(t *testing.T) (router *gin.Engine, identityRepo *repository.IdentityRepository, contactRepo *repository.ContactRepository, ctx context.Context) {
 	t.Helper()
-	ctx = context.Background()
+	ctx = t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	identityRepo = repository.NewIdentityRepository(database.Queries)

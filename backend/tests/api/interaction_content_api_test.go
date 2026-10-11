@@ -86,11 +86,12 @@ func TestInteractionContentAPI_KindPerSource(t *testing.T) {
 		require.Equal(t, tc.kind, data["kind"])
 		require.NotNil(t, data["messages"])
 		require.NotNil(t, data["meeting_notes"])
-		if tc.kind == "messages" {
+		switch tc.kind {
+		case "messages":
 			assert.Equal(t, empty, data["meeting_notes"])
-		} else if tc.kind == "meeting_note" {
+		case "meeting_note":
 			assert.Equal(t, empty, data["messages"])
-		} else {
+		default:
 			assertEmptyArrays(t, data, empty, empty)
 		}
 	}

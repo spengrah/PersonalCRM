@@ -1,12 +1,10 @@
 package tests
 
 import (
-	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/stretchr/testify/require"
@@ -29,24 +27,14 @@ import (
 // Mutation that must turn this red: change the mirror's handle branch to strip
 // one '@' instead of all of them.
 func TestMethodOps_UniquenessKeyMatchesTrigger(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	if err != nil {
-		t.Skipf("Could not connect to database: %v", err)
-	}
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewContactMethodRepository(database.Queries)
 

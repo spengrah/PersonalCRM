@@ -1,8 +1,7 @@
 package tests
 
 import (
-	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -20,31 +19,22 @@ const testChannelID int64 = 88888
 
 func cleanupTelegramState(t *testing.T, queries db.Querier) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	_ = queries.DeleteTelegramUpdateState(ctx, testUserID)
 	_ = queries.DeleteTelegramChannelState(ctx, testChannelID)
 	_ = queries.DeleteTelegramChannelState(ctx, testChannelID+1)
 }
 
 func TestStateStorage_GetSetState(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramUpdateStateRepository(database.Queries)
 	storage := tg.NewPostgresStateStorage(repo)
@@ -72,24 +62,15 @@ func TestStateStorage_GetSetState(t *testing.T) {
 }
 
 func TestStateStorage_IndividualSetters(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramUpdateStateRepository(database.Queries)
 	storage := tg.NewPostgresStateStorage(repo)
@@ -98,7 +79,7 @@ func TestStateStorage_IndividualSetters(t *testing.T) {
 	t.Cleanup(func() { cleanupTelegramState(t, database.Queries) })
 
 	// Create initial state
-	err = storage.SetState(ctx, testUserID, updates.State{Pts: 1, Qts: 1, Seq: 1, Date: 1})
+	err := storage.SetState(ctx, testUserID, updates.State{Pts: 1, Qts: 1, Seq: 1, Date: 1})
 	require.NoError(t, err)
 
 	// Update individual fields
@@ -117,24 +98,15 @@ func TestStateStorage_IndividualSetters(t *testing.T) {
 }
 
 func TestChannelHasher_GetSetAccessHash(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramUpdateStateRepository(database.Queries)
 	hasher := tg.NewPostgresChannelHasher(repo)
@@ -159,24 +131,15 @@ func TestChannelHasher_GetSetAccessHash(t *testing.T) {
 }
 
 func TestChannelHasher_SetAccessHash_PreservesPts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramUpdateStateRepository(database.Queries)
 	hasher := tg.NewPostgresChannelHasher(repo)
@@ -186,7 +149,7 @@ func TestChannelHasher_SetAccessHash_PreservesPts(t *testing.T) {
 	t.Cleanup(func() { cleanupTelegramState(t, database.Queries) })
 
 	// Create channel with access hash and pts
-	err = hasher.SetChannelAccessHash(ctx, testUserID, testChannelID, 1111)
+	err := hasher.SetChannelAccessHash(ctx, testUserID, testChannelID, 1111)
 	require.NoError(t, err)
 	err = storage.SetChannelPts(ctx, testUserID, testChannelID, 999)
 	require.NoError(t, err)
@@ -215,24 +178,15 @@ func TestChannelHasher_SetAccessHash_PreservesPts(t *testing.T) {
 }
 
 func TestStateStorage_ChannelPts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramUpdateStateRepository(database.Queries)
 	storage := tg.NewPostgresStateStorage(repo)

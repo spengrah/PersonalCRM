@@ -1,8 +1,7 @@
 package tests
 
 import (
-	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -10,7 +9,6 @@ import (
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/contacttask"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -21,23 +19,7 @@ import (
 func setupDirectionTestDeps(t *testing.T) (*service.ContactService, *repository.ContactRepository, *repository.ContactTaskRepository, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
-	// Migrations are applied once by TestMain.
-	ctx := context.Background()
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8, // mirrors the lowered TestConfig() ceiling for parallel tests
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
@@ -59,7 +41,7 @@ func TestRecordInteraction_DirectionOutbound(t *testing.T) {
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a contact with cadence and a known last_contacted time
 	cadence := "monthly"
@@ -87,11 +69,11 @@ func TestRecordInteraction_DirectionOutbound(t *testing.T) {
 	// Verify: last_contacted should NOT have changed (outbound doesn't reset cadence clock)
 	updated, err := contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
-	assert.NotNil(t, updated.LastContacted)
+	require.NotNil(t, updated.LastContacted)
 	assert.Equal(t, initialTime.UTC(), updated.LastContacted.UTC(), "outbound should not change last_contacted")
 
 	// Verify: last_outreach_at should be updated
-	assert.NotNil(t, updated.LastOutreachAt)
+	require.NotNil(t, updated.LastOutreachAt)
 	assert.Equal(t, outboundTime.UTC(), updated.LastOutreachAt.UTC())
 
 	// Verify: last_response_at and last_interaction_at should NOT be set by outbound
@@ -104,7 +86,7 @@ func TestRecordInteraction_DirectionMutual(t *testing.T) {
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cadence := "monthly"
 	initialTime := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
@@ -131,13 +113,13 @@ func TestRecordInteraction_DirectionMutual(t *testing.T) {
 	// Verify: all fields should be updated
 	updated, err := contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
-	assert.NotNil(t, updated.LastContacted)
+	require.NotNil(t, updated.LastContacted)
 	assert.Equal(t, mutualTime.UTC(), updated.LastContacted.UTC(), "mutual should update last_contacted")
-	assert.NotNil(t, updated.LastOutreachAt)
+	require.NotNil(t, updated.LastOutreachAt)
 	assert.Equal(t, mutualTime.UTC(), updated.LastOutreachAt.UTC())
-	assert.NotNil(t, updated.LastResponseAt)
+	require.NotNil(t, updated.LastResponseAt)
 	assert.Equal(t, mutualTime.UTC(), updated.LastResponseAt.UTC())
-	assert.NotNil(t, updated.LastInteractionAt)
+	require.NotNil(t, updated.LastInteractionAt)
 	assert.Equal(t, mutualTime.UTC(), updated.LastInteractionAt.UTC())
 	// contact_by should be recalculated
 	assert.NotNil(t, updated.ContactBy)
@@ -147,7 +129,7 @@ func TestRecordInteraction_DirectionInbound(t *testing.T) {
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cadence := "monthly"
 	initialTime := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
@@ -174,12 +156,12 @@ func TestRecordInteraction_DirectionInbound(t *testing.T) {
 	// Verify: last_contacted should be updated (inbound resets cadence clock)
 	updated, err := contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
-	assert.NotNil(t, updated.LastContacted)
+	require.NotNil(t, updated.LastContacted)
 	assert.Equal(t, inboundTime.UTC(), updated.LastContacted.UTC(), "inbound should update last_contacted")
 	// last_outreach_at should NOT be set by inbound
 	assert.Nil(t, updated.LastOutreachAt, "inbound should not set last_outreach_at")
 	// last_response_at should be updated
-	assert.NotNil(t, updated.LastResponseAt)
+	require.NotNil(t, updated.LastResponseAt)
 	assert.Equal(t, inboundTime.UTC(), updated.LastResponseAt.UTC())
 }
 
@@ -187,7 +169,7 @@ func TestRecordInteraction_EmptyDirectionDefaultsMutual(t *testing.T) {
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
 		FullName: "Direction Test Default",
@@ -211,7 +193,7 @@ func TestRecordInteraction_ForwardOnlyGuard_ContactByNotRegressed(t *testing.T) 
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cadence := "monthly"
 	// Start with a recent last_contacted
@@ -265,7 +247,7 @@ func TestAwaitingReply_DerivedFromInteractionColumns(t *testing.T) {
 	t.Parallel()
 	contactService, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cadenceStr := "monthly"
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{
@@ -315,7 +297,7 @@ func TestFollowupFilter(t *testing.T) {
 	t.Parallel()
 	_, contactRepo, _, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Namespaced names: this test scans the whole table via the has_followup /
 	// no_followup filters, so fixed names risk fuzzy-trigram collision with a
@@ -385,7 +367,7 @@ func TestCompletedCadenceTask_CanBeReplacedByNewOne(t *testing.T) {
 	t.Parallel()
 	_, contactRepo, contactTaskRepo, cleanup := setupDirectionTestDeps(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Per-test namespace so the fixed external_task_id literals below don't
 	// collide on the (provider, external_task_id) key across parallel clones.

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -21,7 +20,7 @@ import (
 // flag) alongside the matched-contact id set.
 func (e *meetingNoteIngestEnv) seedCalendarEventWithAttendees(t *testing.T, startTime time.Time, attendees []repository.Attendee, matchedContactIDs []uuid.UUID) uuid.UUID {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	suffix := uuid.NewString()[:8]
 	upserted, err := e.calendarRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
 		GcalEventID:       e.sourceIDPrefix + "cal-att-" + suffix,
@@ -65,7 +64,7 @@ type needsAttentionListResponse struct {
 // OverlapCount stays authoritative.
 func TestNeedsAttention_EnrichedAttendees(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactA, err := env.contactRepo.GetContact(ctx, env.contactA)
 	require.NoError(t, err)
@@ -160,7 +159,7 @@ func TestNeedsAttention_EnrichedAttendees(t *testing.T) {
 // spec: NTS-025.candidate-overlap-count-independent
 func TestNeedsAttention_OverlapCountIndependentOfMatchedFlags(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactA, err := env.contactRepo.GetContact(ctx, env.contactA)
 	require.NoError(t, err)

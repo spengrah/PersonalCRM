@@ -9,6 +9,7 @@ import (
 	psync "personal-crm/backend/internal/sync"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBackoffCalculation(t *testing.T) {
@@ -66,7 +67,7 @@ func TestProviderRegistry(t *testing.T) {
 
 		retrieved, ok := registry.Get("test")
 		assert.True(t, ok)
-		assert.NotNil(t, retrieved)
+		require.NotNil(t, retrieved)
 		assert.Equal(t, "test", retrieved.Config().Name)
 	})
 

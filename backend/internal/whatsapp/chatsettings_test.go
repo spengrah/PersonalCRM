@@ -74,7 +74,7 @@ func TestChatSettingsService_ListComputesEffectiveTrackedFromTheGatePredicate(t 
 				MemberCount: tc.memberCount,
 			}}}
 
-			chats, err := NewChatSettingsService(store, 10).ListChats(context.Background())
+			chats, err := NewChatSettingsService(store, 10).ListChats(t.Context())
 			require.NoError(t, err)
 			require.Len(t, chats, 1)
 			assert.Equal(t, tc.wantTracked, chats[0].EffectiveTracked)
@@ -94,7 +94,7 @@ func TestChatSettingsService_UnknownMemberCountIsNotTracked(t *testing.T) {
 		ChatJID: "nosize@g.us", ChatType: ChatTypeGroup, Status: ChatStatusAuto,
 	}}}
 
-	chats, err := NewChatSettingsService(store, 10).ListChats(context.Background())
+	chats, err := NewChatSettingsService(store, 10).ListChats(t.Context())
 	require.NoError(t, err)
 	require.Len(t, chats, 1)
 	assert.False(t, chats[0].EffectiveTracked)
@@ -106,7 +106,7 @@ func TestChatSettingsService_ExplicitOverrideWinsOverSize(t *testing.T) {
 		{ChatJID: "small@g.us", ChatType: ChatTypeGroup, Status: ChatStatusIgnored, MemberCount: int32p(3)},
 	}}
 
-	chats, err := NewChatSettingsService(store, 10).ListChats(context.Background())
+	chats, err := NewChatSettingsService(store, 10).ListChats(t.Context())
 	require.NoError(t, err)
 	require.Len(t, chats, 2)
 	assert.True(t, chats[0].EffectiveTracked, "an explicit track is the user's decision, whatever the size")
@@ -116,7 +116,7 @@ func TestChatSettingsService_ExplicitOverrideWinsOverSize(t *testing.T) {
 func TestChatSettingsService_ListPropagatesStoreError(t *testing.T) {
 	store := &fakeChatSettingsStore{listErr: errors.New("connection refused")}
 
-	_, err := NewChatSettingsService(store, 10).ListChats(context.Background())
+	_, err := NewChatSettingsService(store, 10).ListChats(t.Context())
 	require.Error(t, err)
 }
 
@@ -128,7 +128,7 @@ func TestChatSettingsService_SetStatusRecomputesTheDecision(t *testing.T) {
 		ChatJID: "big@g.us", ChatType: ChatTypeGroup, Status: ChatStatusTracked, MemberCount: int32p(900),
 	}}
 
-	chat, err := NewChatSettingsService(store, 10).SetChatStatus(context.Background(), "big@g.us", ChatStatusTracked)
+	chat, err := NewChatSettingsService(store, 10).SetChatStatus(t.Context(), "big@g.us", ChatStatusTracked)
 	require.NoError(t, err)
 	require.NotNil(t, chat)
 	assert.True(t, chat.EffectiveTracked)
@@ -140,7 +140,7 @@ func TestChatSettingsService_SetStatusRecomputesTheDecision(t *testing.T) {
 func TestChatSettingsService_SetStatusPropagatesNotFound(t *testing.T) {
 	store := &fakeChatSettingsStore{setErr: db.ErrNotFound}
 
-	_, err := NewChatSettingsService(store, 10).SetChatStatus(context.Background(), "never-seen@g.us", ChatStatusIgnored)
+	_, err := NewChatSettingsService(store, 10).SetChatStatus(t.Context(), "never-seen@g.us", ChatStatusIgnored)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, db.ErrNotFound,
 		"the handler branches on this to answer 404 rather than 500")

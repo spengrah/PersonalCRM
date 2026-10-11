@@ -2,8 +2,8 @@ package tests
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -47,12 +47,10 @@ type rematchTestEnv struct {
 
 func setupRematchEnv(t *testing.T) *rematchTestEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	// Per-test isolated clone: the live rematch dispatcher worker drains a
 	// private river_job.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -233,7 +231,7 @@ func TestRematch_CalendarFutureEvent_NoInteraction(t *testing.T) {
 	// No interaction should be recorded (future events).
 	eventIDStr := event.ID.String()
 	_, err = env.interactionRepo.FindBySourceRef(env.ctx, contact.ID, repository.InteractionSourceGCal, eventIDStr)
-	assert.True(t, errors.Is(err, db.ErrNotFound), "expected no interaction for future event, got %v", err)
+	assert.ErrorIs(t, err, db.ErrNotFound, "expected no interaction for future event, got %v", err)
 }
 
 func TestRematch_CalendarCaseInsensitiveEmailMatch(t *testing.T) {
@@ -688,7 +686,7 @@ func TestRematch_RescanContact_UnknownContactReturnsNotFound(t *testing.T) {
 	env := setupRematchEnv(t)
 
 	_, err := env.contactSvc.RescanRematch(env.ctx, uuid.New())
-	assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound for unknown contact, got %v", err)
+	assert.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound for unknown contact, got %v", err)
 }
 
 // TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction

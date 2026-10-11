@@ -2,11 +2,10 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/cadence"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/gin-gonic/gin"
@@ -25,16 +23,9 @@ import (
 
 func setupSkipAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactRepository, func()) {
 	t.Helper()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	ctx := context.Background()
-	database, err := db.NewDatabase(ctx, config.DatabaseConfig{
-		URL: os.Getenv("DATABASE_URL"), MaxConns: 8, MinConns: 1,
-		MaxConnIdleTime: config.DefaultDBMaxConnIdleTime, MaxConnLifetime: config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	})
-	require.NoError(t, err)
+	testsupport.RequireDatabase(t)
+	ctx := t.Context()
+	database := testsupport.OpenDatabase(t)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
 	cfg := &config.Config{River: config.RiverConfig{WorkerConcurrency: 1}}
@@ -52,9 +43,7 @@ func setupSkipAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactRepositor
 }
 
 func TestContactAPI_SkipAndUndo(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	router, contactRepo, cleanup := setupSkipAPIRouter(t)
 	defer cleanup()
@@ -74,7 +63,7 @@ func TestContactAPI_SkipAndUndo(t *testing.T) {
 	require.NoError(t, err)
 	today := cadence.Today(accelerated.GetCurrentTime())
 	seeded := time.Date(today.Year(), today.Month(), today.Day()-10, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, contactRepo.TestSeedContactCadenceFields(context.Background(), id, repository.TestCadenceSeed{ContactBy: &seeded}))
+	require.NoError(t, contactRepo.TestSeedContactCadenceFields(t.Context(), id, repository.TestCadenceSeed{ContactBy: &seeded}))
 
 	t.Run("skip advances one cycle and reports undo", func(t *testing.T) {
 		capturedAt := accelerated.GetCurrentTime()

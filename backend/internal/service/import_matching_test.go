@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type fakeContactRepo struct {
@@ -46,7 +47,7 @@ func TestImportMatchServiceFindBestMatch_NoName(t *testing.T) {
 	svc := NewImportMatchService(&fakeContactRepo{})
 	external := &repository.ExternalContact{}
 
-	match, err := svc.FindBestMatch(context.Background(), external)
+	match, err := svc.FindBestMatch(t.Context(), external)
 	assert.NoError(t, err)
 	assert.Nil(t, match)
 }
@@ -73,7 +74,7 @@ func TestImportMatchServiceFindBestMatch_BelowThreshold(t *testing.T) {
 		Emails:      []repository.EmailEntry{{Value: "nope@example.com"}},
 	}
 
-	match, err := svc.FindBestMatch(context.Background(), external)
+	match, err := svc.FindBestMatch(t.Context(), external)
 	assert.NoError(t, err)
 	assert.Nil(t, match)
 }
@@ -100,7 +101,7 @@ func TestImportMatchServiceFindBestMatch_SingleMatch(t *testing.T) {
 		Emails:      []repository.EmailEntry{{Value: "jane@example.com"}},
 	}
 
-	match, err := svc.FindBestMatch(context.Background(), external)
+	match, err := svc.FindBestMatch(t.Context(), external)
 	assert.NoError(t, err)
 	if assert.NotNil(t, match) {
 		assert.Equal(t, contactID.String(), match.ContactID)
@@ -142,7 +143,7 @@ func TestImportMatchServiceFindBestMatch_PrefersBestScore(t *testing.T) {
 		Emails:      []repository.EmailEntry{{Value: "b@example.com"}},
 	}
 
-	match, err := svc.FindBestMatch(context.Background(), external)
+	match, err := svc.FindBestMatch(t.Context(), external)
 	assert.NoError(t, err)
 	if assert.NotNil(t, match) {
 		assert.Equal(t, bestID.String(), match.ContactID)
@@ -158,7 +159,7 @@ func TestImportMatchServiceFindBestMatch_Error(t *testing.T) {
 		DisplayName: stringPtr("Jane Doe"),
 	}
 
-	match, err := svc.FindBestMatch(context.Background(), external)
+	match, err := svc.FindBestMatch(t.Context(), external)
 	assert.Error(t, err)
 	assert.Nil(t, match)
 }
@@ -232,7 +233,7 @@ func TestFindBestMatch_ExactHandleBonusBaseline(t *testing.T) {
 		Metadata: map[string]any{"username": "@alicesmith"},
 	}
 
-	match, err := svc.FindBestMatch(context.Background(), external)
+	match, err := svc.FindBestMatch(t.Context(), external)
 	assert.NoError(t, err)
 	if assert.NotNil(t, match) {
 		assert.Equal(t, contactID.String(), match.ContactID)
@@ -254,7 +255,7 @@ func TestFindBestMatch_BelowMinLengthHandle(t *testing.T) {
 		Metadata: map[string]any{"username": "@bob"},
 	}
 
-	match, err := svc.FindBestMatch(context.Background(), external)
+	match, err := svc.FindBestMatch(t.Context(), external)
 	assert.NoError(t, err)
 	assert.Nil(t, match)
 	assert.Equal(t, "", repo.lastName) // no repo call
@@ -282,7 +283,7 @@ func TestFindBestMatch_CollisionSuppressionUsername(t *testing.T) {
 		Metadata: map[string]any{"username": "@alexey"},
 	}
 
-	match, err := svc.FindBestMatch(context.Background(), external)
+	match, err := svc.FindBestMatch(t.Context(), external)
 	assert.NoError(t, err)
 	assert.Nil(t, match, "collision gap should drop ambiguous username-derived top match")
 }
@@ -298,7 +299,7 @@ func TestFindBestMatch_NonTelegramSourceNoUsername(t *testing.T) {
 		Metadata: map[string]any{"username": "alicesmith"},
 	}
 
-	match, err := svc.FindBestMatch(context.Background(), external)
+	match, err := svc.FindBestMatch(t.Context(), external)
 	assert.NoError(t, err)
 	assert.Nil(t, match)
 	assert.Equal(t, "", repo.lastName)
@@ -327,7 +328,7 @@ func TestFindBestMatch_UsernameBonusBeatsDisplay(t *testing.T) {
 		Metadata:    map[string]any{"username": "@alicesmith"},
 	}
 
-	match, err := svc.FindBestMatch(context.Background(), external)
+	match, err := svc.FindBestMatch(t.Context(), external)
 	assert.NoError(t, err)
 	if assert.NotNil(t, match) {
 		// Bob: 1.0 * 0.6 = 0.6 (display, no bonus)
@@ -364,7 +365,7 @@ func TestFindBestMatchesBatch_EmptyInput(t *testing.T) {
 	repo := &fakeContactRepo{}
 	svc := NewImportMatchService(repo)
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), []*repository.ExternalContact{})
+	results, err := svc.FindBestMatchesBatch(t.Context(), []*repository.ExternalContact{})
 	assert.NoError(t, err)
 	assert.Empty(t, results)
 }
@@ -378,9 +379,9 @@ func TestFindBestMatchesBatch_AllEmptyNames(t *testing.T) {
 		{ID: uuid.New()}, // No name
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
-	assert.Len(t, results, 2)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
+	require.Len(t, results, 2)
 	assert.Nil(t, results[0])
 	assert.Nil(t, results[1])
 }
@@ -418,9 +419,9 @@ func TestFindBestMatchesBatch_SingleCandidate(t *testing.T) {
 		},
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
-	assert.Len(t, results, 1)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
 	if assert.NotNil(t, results[0]) {
 		assert.Equal(t, contactID.String(), results[0].ContactID)
 		assert.Equal(t, "Jane Doe", results[0].ContactName)
@@ -493,9 +494,9 @@ func TestFindBestMatchesBatch_MultipleCandidates(t *testing.T) {
 		},
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
-	assert.Len(t, results, 3)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
+	require.Len(t, results, 3)
 
 	// First candidate should have a match
 	if assert.NotNil(t, results[0]) {
@@ -545,9 +546,9 @@ func TestFindBestMatchesBatch_SomeEmptyNames(t *testing.T) {
 		{ID: external3ID}, // No name - should be skipped
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
-	assert.Len(t, results, 3)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
+	require.Len(t, results, 3)
 
 	// First candidate has no name, so no match
 	assert.Nil(t, results[0])
@@ -561,7 +562,7 @@ func TestFindBestMatchesBatch_SomeEmptyNames(t *testing.T) {
 	assert.Nil(t, results[2])
 
 	// Verify only candidate with name was sent to batch (composite ID = uuid|0)
-	assert.Len(t, repo.lastBatchInputs, 1)
+	require.Len(t, repo.lastBatchInputs, 1)
 	assert.Equal(t, external2ID.String()+"|0", repo.lastBatchInputs[0].CandidateID)
 }
 
@@ -597,9 +598,9 @@ func TestFindBestMatchesBatch_BelowThreshold(t *testing.T) {
 		},
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
-	assert.Len(t, results, 1)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
 	assert.Nil(t, results[0]) // Below confidence threshold
 }
 
@@ -646,9 +647,9 @@ func TestFindBestMatchesBatch_PrefersBestScore(t *testing.T) {
 		},
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
-	assert.Len(t, results, 1)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
 	if assert.NotNil(t, results[0]) {
 		assert.Equal(t, bestID.String(), results[0].ContactID)
 	}
@@ -667,7 +668,7 @@ func TestFindBestMatchesBatch_Error(t *testing.T) {
 		},
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
 	assert.Error(t, err)
 	assert.Nil(t, results)
 }
@@ -709,9 +710,9 @@ func TestFindBestMatchesBatch_UnexpectedCandidateID(t *testing.T) {
 
 	// Should not panic and should return nil for the external contact
 	// since the batch result didn't have a matching candidate ID
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
-	assert.Len(t, results, 1)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
 	assert.Nil(t, results[0]) // No match because candidate ID didn't match
 }
 
@@ -755,8 +756,8 @@ func TestFindBestMatchesBatch_ExactHandleBonusBaseline(t *testing.T) {
 		telegramExternalWithUsername(externalID, "@alicesmith"),
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	if assert.NotNil(t, results[0]) {
 		assert.Equal(t, contactID.String(), results[0].ContactID)
 		assert.Equal(t, "Alice Smith", results[0].ContactName)
@@ -765,7 +766,7 @@ func TestFindBestMatchesBatch_ExactHandleBonusBaseline(t *testing.T) {
 	}
 
 	// Verify search term was the normalized handle
-	assert.Len(t, repo.lastBatchInputs, 1)
+	require.Len(t, repo.lastBatchInputs, 1)
 	assert.Equal(t, "alicesmith", repo.lastBatchInputs[0].CandidateName)
 }
 
@@ -798,8 +799,8 @@ func TestFindBestMatchesBatch_ExactHandleBonusCap(t *testing.T) {
 	ext := telegramExternalWithUsername(externalID, "@alicesmith")
 	ext.Emails = []repository.EmailEntry{{Value: "alice@example.com"}}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), []*repository.ExternalContact{ext})
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), []*repository.ExternalContact{ext})
+	require.NoError(t, err)
 	if assert.NotNil(t, results[0]) {
 		// Pre-bonus = 1.0*0.6 + 1.0*0.4 = 1.0; +0.4 bonus → 1.4 → cap 1.0
 		assert.Equal(t, 1.0, results[0].Confidence)
@@ -834,8 +835,8 @@ func TestFindBestMatchesBatch_ExactHandleDiacritic(t *testing.T) {
 		telegramExternalWithUsername(externalID, "@jose_smith"),
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	if assert.NotNil(t, results[0]) {
 		assert.Equal(t, contactID.String(), results[0].ContactID)
 		// 0.78*0.6 + 0.4 = 0.868
@@ -872,8 +873,8 @@ func TestFindBestMatchesBatch_PartialHandleNoBonus(t *testing.T) {
 		telegramExternalWithUsername(externalID, "@alice"),
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	// 0.60 * 0.6 = 0.36, no bonus, below 0.5 threshold
 	assert.Nil(t, results[0])
 }
@@ -910,8 +911,8 @@ func TestFindBestMatchesBatch_DisplayNameNoBonus(t *testing.T) {
 		},
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	if assert.NotNil(t, results[0]) {
 		// 0.95 * 0.6 = 0.57 (no bonus because display-name term, not username)
 		assert.InDelta(t, 0.57, results[0].Confidence, 0.001)
@@ -958,8 +959,8 @@ func TestFindBestMatchesBatch_TwoTermsUsernameWins(t *testing.T) {
 		},
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	if assert.NotNil(t, results[0]) {
 		// Alice Smith: 0.82*0.6 + 0.4 = 0.892 (username + bonus)
 		// Alice Johnson: 0.92*0.6 = 0.552 (display, no bonus)
@@ -1009,8 +1010,8 @@ func TestFindBestMatchesBatch_PerContactDedupe(t *testing.T) {
 		},
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	if assert.NotNil(t, results[0]) {
 		assert.Equal(t, contactID.String(), results[0].ContactID)
 		// Best score for this contact = 0.892 (username+bonus beats display 0.57)
@@ -1029,8 +1030,8 @@ func TestFindBestMatchesBatch_BelowMinLengthUsername(t *testing.T) {
 		telegramExternalWithUsername(externalID, "@bob"),
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	assert.Nil(t, results[0])
 	assert.Empty(t, repo.lastBatchInputs) // no inputs sent to repo
 }
@@ -1046,8 +1047,8 @@ func TestFindBestMatchesBatch_NumericOnlyHandle(t *testing.T) {
 		telegramExternalWithUsername(externalID, "@12345"),
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	assert.Nil(t, results[0])
 	assert.Empty(t, repo.lastBatchInputs)
 }
@@ -1080,8 +1081,8 @@ func TestFindBestMatchesBatch_CollisionSuppressionUsername(t *testing.T) {
 		telegramExternalWithUsername(externalID, "@alexey"),
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	// Alex Johnson: 0.90*0.6 = 0.54 (no bonus, strict "alexey" vs "alexjohnson")
 	// Alexander Chen: 0.88*0.6 = 0.528 (no bonus)
 	// Gap 0.012 < 0.15, top-1 from username → dropped
@@ -1121,8 +1122,8 @@ func TestFindBestMatchesBatch_NoCollisionSuppressionOnDisplayName(t *testing.T) 
 		},
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	if assert.NotNil(t, results[0]) {
 		// Display-term path: top-1 wins regardless of gap
 		assert.Equal(t, winnerID.String(), results[0].ContactID)
@@ -1144,8 +1145,8 @@ func TestFindBestMatchesBatch_NonTelegramSourceNoUsername(t *testing.T) {
 		},
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	assert.Nil(t, results[0])
 	assert.Empty(t, repo.lastBatchInputs)
 }
@@ -1181,12 +1182,12 @@ func TestFindBestMatchesBatch_TelegramMetadataWithoutUsername(t *testing.T) {
 		},
 	}
 
-	results, err := svc.FindBestMatchesBatch(context.Background(), externals)
-	assert.NoError(t, err)
+	results, err := svc.FindBestMatchesBatch(t.Context(), externals)
+	require.NoError(t, err)
 	if assert.NotNil(t, results[0]) {
 		assert.Equal(t, contactID.String(), results[0].ContactID)
 	}
 	// Only one term sent to repo (the display term)
-	assert.Len(t, repo.lastBatchInputs, 1)
+	require.Len(t, repo.lastBatchInputs, 1)
 	assert.Equal(t, "Alice Smith", repo.lastBatchInputs[0].CandidateName)
 }

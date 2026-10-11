@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -46,17 +46,13 @@ type knownIDsByHostEnv struct {
 
 func setupKnownIDsByHostEnv(t *testing.T) *knownIDsByHostEnv {
 	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.External.APIKey = macHostTestKey
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
@@ -96,7 +92,7 @@ func setupKnownIDsByHostEnv(t *testing.T) *knownIDsByHostEnv {
 	}
 
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		// Hard-delete every external_contact row seeded under our
 		// per-test source_id prefix (covers live and tombstoned).
@@ -115,7 +111,7 @@ func (e *knownIDsByHostEnv) seedExternalContact(
 	t *testing.T, hostID uuid.UUID, source, entityID string, hash *string,
 ) string {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	sourceID := e.sourceIDPrefix + entityID
 	syncedAt := accelerated.GetCurrentTime()
 	tx, err := e.database.Pool.Begin(ctx)
@@ -135,7 +131,7 @@ func (e *knownIDsByHostEnv) seedExternalContact(
 
 func (e *knownIDsByHostEnv) softDeleteRow(t *testing.T, source, sourceID string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	row, err := e.externalRepo.GetBySource(ctx, source, sourceID, nil)
 	require.NoError(t, err)
 	require.NotNil(t, row, "row %s should exist before soft-delete", sourceID)
@@ -275,7 +271,7 @@ func TestKnownIDsByHost_HostScoped(t *testing.T) {
 	// rows survive (no cascade on revoke) but they're owned by A and
 	// the partial filter excludes them from B's view.
 	env := setupKnownIDsByHostEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Host A is already paired by setup; treat env.pairedHostID as A.
 	hA := env.pairedHostID
@@ -387,7 +383,7 @@ func TestKnownIDsByHost_RoundTripUpsertThenFetch(t *testing.T) {
 	// Verify the host_id was persisted on the row too — the
 	// application-level invariant for icloud_contacts is that every
 	// row carries both host_id and last_content_hash.
-	row, err := env.externalRepo.GetBySource(context.Background(),
+	row, err := env.externalRepo.GetBySource(t.Context(),
 		"icloud_contacts", entityID, nil)
 	require.NoError(t, err)
 	require.NotNil(t, row)
@@ -409,7 +405,7 @@ func TestKnownIDsByHost_RoundTripUpsertThenFetch(t *testing.T) {
 // claimer's ownership.
 func TestUpsertExternalContact_ClaimsLegacyNullHostID(t *testing.T) {
 	env := setupExtContactIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	entityID := env.sourceIDPrefix + "legacy-claim"
 
 	// Plant a legacy row directly via the repository with HostID = nil

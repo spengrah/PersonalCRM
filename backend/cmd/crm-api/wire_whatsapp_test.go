@@ -46,7 +46,7 @@ func (stubRecorder) RecordHistoryNotification(context.Context, string, []byte, s
 // manager that had already decided not to connect.
 func TestBuildWhatsApp_StartIsCalledAfterEverySetter(t *testing.T) {
 	rec := &recordingWhatsAppManager{}
-	activateWhatsApp(context.Background(), rec, whatsappPrereqs{
+	activateWhatsApp(t.Context(), rec, whatsappPrereqs{
 		Ingestor:   stubIngestor{},
 		Recorder:   stubRecorder{},
 		DrainReady: true,
@@ -85,7 +85,7 @@ func TestBuildWhatsApp_ConnectsOnlyWhenAllPrerequisitesArePresent(t *testing.T) 
 					if recorder {
 						prereqs.Recorder = stubRecorder{}
 					}
-					activateWhatsApp(context.Background(), m, prereqs)
+					activateWhatsApp(t.Context(), m, prereqs)
 
 					ready, missing := m.Ready()
 					status := m.Status()
@@ -166,7 +166,7 @@ func TestWhatsAppWiring_ActivationBindsTheGroupInfoSource(t *testing.T) {
 	t.Cleanup(m.Stop)
 
 	binder := &bindOrderIngestor{}
-	activateWhatsApp(context.Background(), m, whatsappPrereqs{
+	activateWhatsApp(t.Context(), m, whatsappPrereqs{
 		Ingestor:   binder,
 		Recorder:   stubRecorder{},
 		DrainReady: true,

@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"regexp"
 	"testing"
 	"time"
@@ -47,15 +47,9 @@ var checkDefLiteralRe = regexp.MustCompile(`'([^']+)'::text`)
 // interactionSource present in the live CHECK set. Closes the loop three
 // ways: descriptor ↔ Go constants ↔ live DB CHECK.
 func TestInteractionSourceCheck_AgreesWithDescriptorAndConstants(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// CI runs against a bare PostgreSQL — run migrations before opening
 	// the pool so the interaction table + its CHECK exist. (TestMain in
@@ -65,9 +59,7 @@ func TestInteractionSourceCheck_AgreesWithDescriptorAndConstants(t *testing.T) {
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 
@@ -134,20 +126,12 @@ func TestInteractionSourceCheck_AgreesWithDescriptorAndConstants(t *testing.T) {
 // before closing the DB handle (soft-delete is insufficient — the
 // down-migration data-loss guard counts rows regardless of deleted_at).
 func TestInteractionSourceCheck_AcceptsPhoneCalls(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)

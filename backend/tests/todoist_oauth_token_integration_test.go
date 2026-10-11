@@ -6,11 +6,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/todoist"
 
@@ -25,22 +24,13 @@ import (
 // point them at a fake server and restore the originals in t.Cleanup.
 func newTodoistOAuthTestService(t *testing.T) (*todoist.OAuthService, *repository.OAuthRepository, context.Context) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewOAuthRepository(database.Queries)
 	svc, err := todoist.NewOAuthService(cfg, repo, nil)
@@ -112,8 +102,8 @@ func TestTodoistOAuth_ExchangeRoundTrip(t *testing.T) {
 	withTodoistEndpoints(t, fake)
 
 	t.Cleanup(func() {
-		if cred, err := repo.GetByProviderAndAccount(context.Background(), todoist.ProviderName, userID); err == nil {
-			_ = repo.Delete(context.Background(), cred.ID)
+		if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), todoist.ProviderName, userID); err == nil {
+			_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 		}
 	})
 
@@ -158,8 +148,8 @@ func TestTodoistOAuth_ReExchangeUsesDistinctNonce(t *testing.T) {
 	withTodoistEndpoints(t, fake)
 
 	t.Cleanup(func() {
-		if cred, err := repo.GetByProviderAndAccount(context.Background(), todoist.ProviderName, userID); err == nil {
-			_ = repo.Delete(context.Background(), cred.ID)
+		if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), todoist.ProviderName, userID); err == nil {
+			_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 		}
 	})
 

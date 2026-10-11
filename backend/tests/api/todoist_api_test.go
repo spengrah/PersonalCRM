@@ -20,7 +20,6 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -50,7 +49,7 @@ import (
 // a sibling "NoAccount" subtest, especially under -shuffle=on.
 func newTodoistAPITest(t *testing.T) (router *gin.Engine, syncRepo *repository.SyncRepository, seedAccount func() string, seedAccountWithToken func(accessToken string) string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	oauthRepo := repository.NewOAuthRepository(database.Queries)
@@ -200,7 +199,7 @@ func TestTodoistAPI_GetSettings(t *testing.T) {
 		wantInstanceID := "instance-" + uuid.NewString()[:8]
 		wantTimezone := "America/Chicago"
 
-		_, err := syncRepo.CreateSyncState(context.Background(), repository.CreateSyncStateRequest{
+		_, err := syncRepo.CreateSyncState(t.Context(), repository.CreateSyncStateRequest{
 			Source:    todoist.SourceName,
 			AccountID: &accountID,
 			Enabled:   true,
@@ -272,7 +271,7 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 		})
 		require.Equal(t, http.StatusOK, w.Code)
 
-		state, err := syncRepo.GetSyncStateBySource(context.Background(), todoist.SourceName, &accountID)
+		state, err := syncRepo.GetSyncStateBySource(t.Context(), todoist.SourceName, &accountID)
 		require.NoError(t, err, "sync state must be lazily created")
 		assert.True(t, state.Enabled)
 		assert.Equal(t, repository.SyncStrategyFetchAll, state.Strategy)
@@ -284,7 +283,7 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 		accountID := seedAccount()
 
 		unrelatedValue := "unrelated-" + uuid.NewString()[:8]
-		_, err := syncRepo.CreateSyncState(context.Background(), repository.CreateSyncStateRequest{
+		_, err := syncRepo.CreateSyncState(t.Context(), repository.CreateSyncStateRequest{
 			Source:    todoist.SourceName,
 			AccountID: &accountID,
 			Enabled:   true,
@@ -301,7 +300,7 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 		})
 		require.Equal(t, http.StatusOK, w.Code)
 
-		state, err := syncRepo.GetSyncStateBySource(context.Background(), todoist.SourceName, &accountID)
+		state, err := syncRepo.GetSyncStateBySource(t.Context(), todoist.SourceName, &accountID)
 		require.NoError(t, err)
 		assert.Equal(t, unrelatedValue, state.Metadata[todoist.MetadataKeyUserTimezone], "unrelated metadata key must survive the merge")
 		assert.Equal(t, labelID, state.Metadata[todoist.MetadataKeyLabelID])
@@ -335,7 +334,7 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 
 		oldLabelID := "label-" + uuid.NewString()[:8]
 		cachedLabelName := "cached-name-" + uuid.NewString()[:8]
-		_, err := syncRepo.CreateSyncState(context.Background(), repository.CreateSyncStateRequest{
+		_, err := syncRepo.CreateSyncState(t.Context(), repository.CreateSyncStateRequest{
 			Source:    todoist.SourceName,
 			AccountID: &accountID,
 			Enabled:   true,
@@ -353,7 +352,7 @@ func TestTodoistAPI_UpdateSettings(t *testing.T) {
 		})
 		require.Equal(t, http.StatusOK, w.Code)
 
-		state, err := syncRepo.GetSyncStateBySource(context.Background(), todoist.SourceName, &accountID)
+		state, err := syncRepo.GetSyncStateBySource(t.Context(), todoist.SourceName, &accountID)
 		require.NoError(t, err)
 		assert.Equal(t, newLabelID, state.Metadata[todoist.MetadataKeyLabelID])
 		_, hasLabelName := state.Metadata[todoist.MetadataKeyLabelName]

@@ -1,8 +1,6 @@
 package api
 
 import (
-	"context"
-	"errors"
 	"testing"
 
 	"personal-crm/backend/internal/db"
@@ -26,7 +24,7 @@ import (
 func TestMacHost_CommitCursor_RevokedHostRejected(t *testing.T) {
 
 	env := setupMacHostEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	liveName := "cursor-guard-live-" + uuid.NewString()[:8]
 	live, err := env.hostRepo.SeedHostForTest(ctx, liveName, "0.1.0", 1, "$2a$04$live", nil, nil)
@@ -57,5 +55,5 @@ func TestMacHost_CommitCursor_RevokedHostRejected(t *testing.T) {
 		ClaimedEpoch: revoked.CursorEpoch,
 	})
 	require.Error(t, err, "a revoked host's cursor commit must be rejected")
-	require.True(t, errors.Is(err, db.ErrNotFound), "revoked-host commit must surface db.ErrNotFound, got %v", err)
+	require.ErrorIs(t, err, db.ErrNotFound, "revoked-host commit must surface db.ErrNotFound, got %v", err)
 }

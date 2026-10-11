@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -100,20 +100,13 @@ type ingestEnv struct {
 
 func setupIngestTest(t *testing.T) *ingestEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := context.WithoutCancel(t.Context())
 	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPath()))
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Registered first so it runs LAST (t.Cleanup is LIFO) — the row sweeps
 	// below need the pool open.
 	t.Cleanup(database.Close)

@@ -24,7 +24,7 @@ func TestWaitGateAAccountsInlineHit(t *testing.T) {
 	h := &Harness{}
 	calls := 0
 
-	require.NoError(t, h.waitGateA(context.Background(), func(context.Context) (bool, error) {
+	require.NoError(t, h.waitGateA(t.Context(), func(context.Context) (bool, error) {
 		calls++
 		return true, nil
 	}))
@@ -42,7 +42,7 @@ func TestWaitGateAAccountsPollsWithoutInlineHit(t *testing.T) {
 	const wantPolls = 3
 	calls := 0
 
-	require.NoError(t, h.waitGateA(context.Background(), func(context.Context) (bool, error) {
+	require.NoError(t, h.waitGateA(t.Context(), func(context.Context) (bool, error) {
 		calls++
 		return calls >= wantPolls, nil
 	}))
@@ -61,7 +61,7 @@ func TestWaitGateAAccountsErroringPredicate(t *testing.T) {
 	h := &Harness{}
 	calls := 0
 
-	require.NoError(t, h.waitGateA(context.Background(), func(context.Context) (bool, error) {
+	require.NoError(t, h.waitGateA(t.Context(), func(context.Context) (bool, error) {
 		calls++
 		if calls < 2 {
 			return false, errors.New("not ready")
@@ -79,7 +79,7 @@ func TestWaitGateAAccountsErroringPredicate(t *testing.T) {
 func TestWaitGateANilPredicateIsNotAccounted(t *testing.T) {
 	h := &Harness{}
 
-	require.NoError(t, h.waitGateA(context.Background(), nil))
+	require.NoError(t, h.waitGateA(t.Context(), nil))
 
 	stats := h.SettleStats()
 	require.Zero(t, stats.GateACalls)
@@ -93,8 +93,8 @@ func TestSettleStatsAccumulateAcrossGates(t *testing.T) {
 	h := &Harness{}
 	always := func(context.Context) (bool, error) { return true, nil }
 
-	require.NoError(t, h.waitGateA(context.Background(), always))
-	require.NoError(t, h.waitGateA(context.Background(), always))
+	require.NoError(t, h.waitGateA(t.Context(), always))
+	require.NoError(t, h.waitGateA(t.Context(), always))
 	h.recordSettleCall()
 	h.recordSettleCall()
 	h.recordGateB(7*time.Millisecond, 4)

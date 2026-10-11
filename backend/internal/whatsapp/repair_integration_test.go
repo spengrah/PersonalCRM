@@ -14,10 +14,10 @@ package whatsapp
 import (
 	"context"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/testdb"
 
@@ -41,19 +41,15 @@ type deviceStoreFixture struct {
 
 func newDeviceStoreFixture(t *testing.T) *deviceStoreFixture {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	container, err := NewDeviceContainer(ctx, database.Pool, NewWALogger("whatsapp-test"))
 	require.NoError(t, err)

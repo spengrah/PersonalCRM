@@ -14,6 +14,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -46,7 +47,7 @@ type applyInteractionEnv struct {
 func newApplyInteractionEnv(t *testing.T, settingsErr error) (*applyInteractionEnv, func()) {
 	t.Helper()
 	database, closeFn := newFollowUpIntegrationDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
@@ -101,7 +102,7 @@ func newApplyInteractionEnv(t *testing.T, settingsErr error) (*applyInteractionE
 
 func (e *applyInteractionEnv) seedContact(t *testing.T, cadence string) *repository.Contact {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	req := repository.CreateContactRequest{FullName: e.gen.Contact(factory.WithNoMethods()).FullName}
 	if cadence != "" {
 		req.Cadence = &cadence
@@ -119,12 +120,10 @@ func (e *applyInteractionEnv) seedContact(t *testing.T, cadence string) *reposit
 // "todoist not configured; skipping create" WARN log lines.
 func TestIntegration_ApplyInteraction_NilEnvelope_DoesNotPanic(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newApplyInteractionEnv(t, nil)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 	contact := env.seedContact(t, "weekly")
 
 	require.NotPanics(t, func() {
@@ -152,12 +151,10 @@ func TestIntegration_ApplyInteraction_NilEnvelope_DoesNotPanic(t *testing.T) {
 // work — cadence advance, etc.).
 func TestIntegration_ApplyInteraction_TodoistUnconfigured_NoRowNoRollback(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newApplyInteractionEnv(t, consumer.ErrTodoistUnconfigured)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 	contact := env.seedContact(t, "weekly")
 
 	// Drive the direct-invoke outbound path. The caller commits its own
@@ -186,12 +183,10 @@ func TestIntegration_ApplyInteraction_TodoistUnconfigured_NoRowNoRollback(t *tes
 // doesn't silently swallow the state.
 func TestIntegration_ApplyInteraction_SettingsError_PropagatesRollback(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newApplyInteractionEnv(t, errors.New("transient 503"))
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 	contact := env.seedContact(t, "weekly")
 
 	var applyErr error

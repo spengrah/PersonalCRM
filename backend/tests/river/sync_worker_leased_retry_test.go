@@ -3,7 +3,6 @@ package river
 import (
 	"context"
 	"errors"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,24 +59,16 @@ func (p *retryTestProvider) Sync(_ context.Context, _ *repository.SyncState, _ [
 //   - external_sync_state.status is 'idle' (not 'syncing') at the end.
 //   - provider.Sync was invoked exactly 2 times.
 func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	source := "retry_test_ctx_cancel"
 
@@ -128,7 +119,7 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 	// (documented project gotcha; applies to test harnesses too).
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})
@@ -143,10 +134,10 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(),
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()),
 			`DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_log WHERE source = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_log WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_state WHERE source = $1`, source)
 	})
 
 	// Enqueue the job.
@@ -215,24 +206,16 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 // case called out in DD 9 — it checks the data-integrity story even
 // without invoking the rescue daemon.
 func TestSyncWorker_AbandonedLogOnStartupRecovery(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	source := "retry_test_abandon_on_recovery"
 	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_log WHERE source = $1`, source)
@@ -262,8 +245,8 @@ func TestSyncWorker_AbandonedLogOnStartupRecovery(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_log WHERE source = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_log WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_state WHERE source = $1`, source)
 	})
 
 	// Seed a pre-existing 'running' log row for this state, as if a
@@ -384,20 +367,15 @@ func waitForRiverJobState(t *testing.T, ctx context.Context, queries *db.Queries
 // for this test lives in the dedicated Backend Slow Tests workflow.
 func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	source := "retry_test_rescue_on_crash"
 	// Sweep ALL river_job rows in this package clone before starting our own
@@ -411,7 +389,7 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	// test's own t.Cleanup still scrubs this test's source-scoped rows.
 	sweepCtx, sweepCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer sweepCancel()
-	_, err = database.Queries.SweepRiverJobsInCloneForTest(sweepCtx)
+	_, err := database.Queries.SweepRiverJobsInCloneForTest(sweepCtx)
 	require.NoError(t, err, "sweep river_job in package clone")
 	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_log WHERE source = $1`, source)
 	_, _ = database.Pool.Exec(ctx, `DELETE FROM external_sync_state WHERE source = $1`, source)
@@ -441,10 +419,10 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(),
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()),
 			`DELETE FROM river_job WHERE kind = 'sync_provider_account' AND (args->>'source') = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_log WHERE source = $1`, source)
-		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM external_sync_state WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_log WHERE source = $1`, source)
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()), `DELETE FROM external_sync_state WHERE source = $1`, source)
 	})
 
 	// Simulate the "crashed mid-sync" pre-state directly:
@@ -492,7 +470,7 @@ func TestSyncWorker_RescueOnCrash(t *testing.T) {
 	// gotcha; applies to test harnesses too.)
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})

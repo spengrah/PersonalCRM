@@ -19,7 +19,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strconv"
 	"testing"
 	"time"
@@ -64,13 +64,8 @@ type reconcileEnv struct {
 
 func newReconcileEnv(t *testing.T) *reconcileEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	ctx := context.Background()
+	testsupport.RequireDatabase(t)
+	ctx := t.Context()
 	database, _ := newEventBusTestDB(t, ctx)
 
 	syncRepo := repository.NewSyncRepository(database.Queries)

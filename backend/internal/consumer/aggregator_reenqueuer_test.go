@@ -51,8 +51,8 @@ func TestAggregatorReenqueuerRegistry_DispatchesBySource(t *testing.T) {
 
 	contactA := uuid.New()
 	contactB := uuid.New()
-	require.NoError(t, reg.Reenqueue(context.Background(), &events.Envelope{Source: "telegram"}, contactA))
-	require.NoError(t, reg.Reenqueue(context.Background(), &events.Envelope{Source: "messages"}, contactB))
+	require.NoError(t, reg.Reenqueue(t.Context(), &events.Envelope{Source: "telegram"}, contactA))
+	require.NoError(t, reg.Reenqueue(t.Context(), &events.Envelope{Source: "messages"}, contactB))
 
 	require.Len(t, tg.calls, 1)
 	assert.Equal(t, "telegram", tg.calls[0].source)
@@ -68,7 +68,7 @@ func TestAggregatorReenqueuerRegistry_DispatchesBySource(t *testing.T) {
 // already-committed interaction on a missing entry).
 func TestAggregatorReenqueuerRegistry_UnknownSourceIsLoggedNoop(t *testing.T) {
 	reg := NewAggregatorReenqueuerRegistry(map[string]AggregatorReenqueuer{})
-	err := reg.Reenqueue(context.Background(), &events.Envelope{Source: "telegram"}, uuid.New())
+	err := reg.Reenqueue(t.Context(), &events.Envelope{Source: "telegram"}, uuid.New())
 	assert.NoError(t, err, "unknown source must NOT error")
 }
 
@@ -76,7 +76,7 @@ func TestAggregatorReenqueuerRegistry_UnknownSourceIsLoggedNoop(t *testing.T) {
 // reenqueuer tolerates every input and never errors.
 func TestNoopAggregatorReenqueuer_AlwaysReturnsNil(t *testing.T) {
 	r := NoopAggregatorReenqueuer{}
-	assert.NoError(t, r.Reenqueue(context.Background(), &events.Envelope{}, uuid.New()))
+	assert.NoError(t, r.Reenqueue(t.Context(), &events.Envelope{}, uuid.New()))
 }
 
 // fakeTelegramEngine captures invocations of the chat-aware vs batch
@@ -133,7 +133,7 @@ func TestTelegramAggregatorReenqueuer_ParsesChatIDFromPeerRef(t *testing.T) {
 			ExternalMessageID: "tg:12345:50001",
 		}),
 	}
-	require.NoError(t, r.Reenqueue(context.Background(), env, contactID))
+	require.NoError(t, r.Reenqueue(t.Context(), env, contactID))
 
 	require.Len(t, eng.aggregateForCalls, 1, "chat-aware path called")
 	assert.Equal(t, contactID, eng.aggregateForCalls[0].contactID)
@@ -158,7 +158,7 @@ func TestTelegramAggregatorReenqueuer_MessageSentAlsoParses(t *testing.T) {
 			ExternalMessageID: "tg:99999:1",
 		}),
 	}
-	require.NoError(t, r.Reenqueue(context.Background(), env, contactID))
+	require.NoError(t, r.Reenqueue(t.Context(), env, contactID))
 
 	require.Len(t, eng.aggregateForCalls, 1)
 	assert.Equal(t, int64(99999), eng.aggregateForCalls[0].chatID)
@@ -186,7 +186,7 @@ func TestTelegramAggregatorReenqueuer_NonParseablePeerRefFallsBackToBatch(t *tes
 			ExternalMessageID: "x",
 		}),
 	}
-	require.NoError(t, r.Reenqueue(context.Background(), env, contactID))
+	require.NoError(t, r.Reenqueue(t.Context(), env, contactID))
 
 	assert.Empty(t, eng.aggregateForCalls, "non-parseable PeerRef falls back to batch")
 	require.Len(t, eng.batchCalls, 1)
@@ -207,7 +207,7 @@ func TestTelegramAggregatorReenqueuer_UnsupportedKindFallsBackToBatch(t *testing
 		Kind:    events.KindCalendarAttended, // not a message kind
 		Payload: mustMarshal(t, map[string]any{}),
 	}
-	require.NoError(t, r.Reenqueue(context.Background(), env, contactID))
+	require.NoError(t, r.Reenqueue(t.Context(), env, contactID))
 
 	assert.Empty(t, eng.aggregateForCalls)
 	require.Len(t, eng.batchCalls, 1)
@@ -221,7 +221,7 @@ func TestAggregatorReenqueuerRegistry_PropagatesError(t *testing.T) {
 	tg := &fakeReenqueuer{err: errors.New("simulated reenqueue failure")}
 	reg := NewAggregatorReenqueuerRegistry(map[string]AggregatorReenqueuer{"telegram": tg})
 
-	err := reg.Reenqueue(context.Background(), &events.Envelope{Source: "telegram"}, uuid.New())
+	err := reg.Reenqueue(t.Context(), &events.Envelope{Source: "telegram"}, uuid.New())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "simulated reenqueue failure")
 }

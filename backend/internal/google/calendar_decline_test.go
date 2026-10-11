@@ -1,7 +1,6 @@
 package google
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -24,7 +23,7 @@ import (
 // declined event with a previously-stored row marks the row cancelled
 // (off-mode deferral) rather than publishing or deleting.
 func TestProcessEvent_DeclinedEvent_OffMode_MarksCancelled(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	storedID := uuid.New()
 	mockCalRepo := &mockCalendarRepo{
 		getByGcalIDResult: &repository.CalendarEvent{
@@ -57,7 +56,7 @@ func TestProcessEvent_DeclinedEvent_OffMode_MarksCancelled(t *testing.T) {
 // event with no stored row is a clean no-op: no mark-cancelled, no delete,
 // no upsert. We must NOT emit a decline for events never in the CRM.
 func TestProcessEvent_DeclinedEvent_NeverStored_NoOp(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mockCalRepo := &mockCalendarRepo{getByGcalIDError: db.ErrNotFound}
 	provider := newTestProvider(mockCalRepo, &mockContactRepo{}, &mockIdentityService{})
 
@@ -84,7 +83,7 @@ func TestProcessEvent_DeclinedEvent_NeverStored_NoOp(t *testing.T) {
 // organizer is the user (synthesized "accepted"), so it is the
 // status='cancelled' clause that drives keep=false.
 func TestProcessEvent_CancelledWithoutDateTime_ReachesRemoveBranch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	storedID := uuid.New()
 	mockCalRepo := &mockCalendarRepo{
 		getByGcalIDResult: &repository.CalendarEvent{
@@ -118,7 +117,7 @@ func TestProcessEvent_CancelledWithoutDateTime_ReachesRemoveBranch(t *testing.T)
 // also fires for tentative (non-accepted) responses, exercising the
 // userResponse != "accepted" clause.
 func TestProcessEvent_TentativeEvent_OffMode_MarksCancelled(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	mockCalRepo := &mockCalendarRepo{
 		getByGcalIDResult: &repository.CalendarEvent{
 			ID:                uuid.New(),

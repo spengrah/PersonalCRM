@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/api/handlers"
@@ -30,20 +30,12 @@ type linkCuratedEnv struct {
 
 func setupLinkCuratedEnv(t *testing.T) *linkCuratedEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	// gin.SetMode is hoisted to TestMain so parallel tests don't race on it.
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(context.Background(), cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -154,7 +146,7 @@ func (env *linkCuratedEnv) seedUnmatchedExternal(t *testing.T, ctx context.Conte
 func TestLinkContact_CuratedWithSelections_LandsImported(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
 	email := external.Emails[0].Value
 
@@ -173,7 +165,7 @@ func TestLinkContact_CuratedWithSelections_LandsImported(t *testing.T) {
 func TestLinkContact_CuratedWithCadence_LandsImported(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
 	cadence := "monthly"
 
@@ -195,7 +187,7 @@ func TestLinkContact_CuratedWithCadence_LandsImported(t *testing.T) {
 func TestLinkContact_Bare_LandsMatched(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
 
 	code := env.callLink(t, external.ID.String(), handlers.LinkRequest{
@@ -215,7 +207,7 @@ func TestLinkContact_Bare_LandsMatched(t *testing.T) {
 func TestLinkContact_MethodsCuratedDeselectAll_LandsImported(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	contact, external := env.seedUnmatchedExternal(t, ctx)
 
 	code := env.callLink(t, external.ID.String(), handlers.LinkRequest{
@@ -236,7 +228,7 @@ func TestLinkContact_MethodsCuratedDeselectAll_LandsImported(t *testing.T) {
 func TestImportContact_LinkOnlySource_Forbidden(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	external := env.seedUnmatchedExternalSource(t, ctx, "gmail_correspondence")
 
 	code := env.callImport(t, external.ID.String(), nil)
@@ -252,7 +244,7 @@ func TestImportContact_LinkOnlySource_Forbidden(t *testing.T) {
 func TestImportContact_OrdinarySource_Imports(t *testing.T) {
 	t.Parallel()
 	env := setupLinkCuratedEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	external := env.seedUnmatchedExternalSource(t, ctx, "gcontacts")
 	t.Cleanup(func() {
 		// The import creates a CRM contact named after the display_name;

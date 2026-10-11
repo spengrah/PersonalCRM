@@ -2,25 +2,37 @@
 // integration test packages (tests, tests/river, tests/scheduler, ...).
 //
 // It is deliberately UNTAGGED (no //go:build integration_testdb) and imports
-// only the Go standard library. The files that consume it — the River and
+// only the Go standard library plus the db and config packages (OpenDatabase).
+// The files that consume it — the River and
 // scheduler test files — are themselves untagged and must still compile under
 // the no-tag unit build before they self-skip on an unset DATABASE_URL.
 // A build-tagged helper package would leave those untagged importers with no
 // buildable dependency under the no-tag build. Keeping testsupport untagged
-// and stdlib-only avoids that.
+// avoids that; db and config are untagged too.
 //
 // The functions hold no mutable package state, so the package is import-safe
 // from multiple concurrent test packages.
 package testsupport
 
 import (
+	"context"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
+
+	"personal-crm/backend/internal/config"
+	"personal-crm/backend/internal/db"
 )
 
-const longTestsEnvVar = "LONG_TESTS"
+const (
+	longTestsEnvVar     = "LONG_TESTS"
+	databaseURLEnvVar   = "DATABASE_URL"
+	databaseDialTimeout = 5 * time.Second
+)
 
 // GetMigrationsPath returns the absolute path to the backend migrations
 // directory.
@@ -56,4 +68,69 @@ func RequireLongTests(t testing.TB) {
 	if os.Getenv(longTestsEnvVar) == "" {
 		t.Skip("skipping long integration test; set LONG_TESTS=1 or run make test-integration-slow")
 	}
+}
+
+// RequireDatabase is the single DB-availability preamble for integration
+// tests. It skips the calling test in short mode or when DATABASE_URL is
+// unset (the no-database unit lane), and FAILS the test when DATABASE_URL is
+// set but the server does not accept a TCP connection, so a broken database
+// reports red instead of skipped-green. It returns DATABASE_URL.
+//
+// The reachability check is a TCP dial of the URL's host:port, which keeps
+// this package stdlib-only (see the package comment).
+func RequireDatabase(t testing.TB) string {
+	t.Helper()
+
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	dbURL := os.Getenv(databaseURLEnvVar)
+	if dbURL == "" {
+		t.Skip("DATABASE_URL not set, skipping integration test")
+	}
+
+	u, err := url.Parse(dbURL)
+	if err != nil {
+		t.Fatalf("parse DATABASE_URL: %v", err)
+	}
+	addr := u.Host
+	if u.Port() == "" {
+		addr = net.JoinHostPort(u.Hostname(), "5432")
+	}
+	conn, err := net.DialTimeout("tcp", addr, databaseDialTimeout)
+	if err != nil {
+		t.Fatalf("DATABASE_URL is set but the database is unreachable: %v", err)
+	}
+	_ = conn.Close()
+	return dbURL
+}
+
+// OpenDatabase opens a pool on DATABASE_URL for the calling test and closes it
+// with t.Cleanup. It applies RequireDatabase's skip and fail rules, then
+// fails the test if the pool cannot open. The pool uses the pool settings of
+// config.TestConfig(). Tests open databases through this helper (or
+// OpenDatabaseAt), never db.NewDatabase directly; forbidigo enforces it.
+//
+// t.Cleanup is LIFO: cleanups registered after OpenDatabase run while the
+// pool is still open.
+func OpenDatabase(t testing.TB) *db.Database {
+	t.Helper()
+
+	return OpenDatabaseAt(t, RequireDatabase(t))
+}
+
+// OpenDatabaseAt is OpenDatabase for a database other than DATABASE_URL, such
+// as a per-test clone of the migrated template database.
+func OpenDatabaseAt(t testing.TB, databaseURL string) *db.Database {
+	t.Helper()
+
+	cfg := config.TestConfig()
+	cfg.Database.URL = databaseURL
+	// The pool outlives t.Context(), which is cancelled before cleanups run.
+	database, err := db.NewDatabase(context.WithoutCancel(t.Context()), cfg.Database)
+	if err != nil {
+		t.Fatalf("open test database: %v", err)
+	}
+	t.Cleanup(database.Close)
+	return database
 }

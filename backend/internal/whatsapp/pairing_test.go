@@ -20,13 +20,13 @@ import (
 
 func TestStartPairing_RejectsUnknownMethod(t *testing.T) {
 	m, _, _, _ := newTestManager(t, newFakeClient(), false)
-	assert.ErrorIs(t, m.StartPairing(context.Background(), PairRequest{Method: "carrier-pigeon"}), ErrUnknownPairMethod)
+	assert.ErrorIs(t, m.StartPairing(t.Context(), PairRequest{Method: "carrier-pigeon"}), ErrUnknownPairMethod)
 }
 
 func TestStartPairing_RejectsNonE164Phone(t *testing.T) {
 	m, _, _, _ := newTestManager(t, newFakeClient(), false)
 	for _, phone := range []string{"", "5551234567", "+123", "+1555123456789012", "+1-555-123-4567"} {
-		assert.ErrorIs(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: phone}),
+		assert.ErrorIs(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: phone}),
 			ErrInvalidPhone, "phone %q must be rejected", phone)
 	}
 }
@@ -35,7 +35,7 @@ func TestStartPairing_AcceptsE164Phone(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
 
 	status := m.Status()
 	require.NotNil(t, status.Pairing)
@@ -49,20 +49,20 @@ func TestStartPairing_RejectsSecondConcurrentPairing(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
-	assert.ErrorIs(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}),
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+	assert.ErrorIs(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}),
 		ErrPairingInProgress, "at most one pairing runs at a time")
 }
 
 func TestStartPairing_RejectsWhenConnected(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	cli.mu.Lock()
 	cli.loggedIn = true
 	cli.mu.Unlock()
 
-	assert.ErrorIs(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}), ErrAlreadyConnected)
+	assert.ErrorIs(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}), ErrAlreadyConnected)
 }
 
 // TestStartPairing_UsesBrowserShapedDisplayName pins the server-validated
@@ -71,7 +71,7 @@ func TestStartPairing_UsesBrowserShapedDisplayName(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
 	assert.Contains(t, cli.callLog(), "pair_phone:"+pairClientDisplayName)
 	assert.Equal(t, "Chrome (Linux)", pairClientDisplayName)
 }
@@ -82,7 +82,7 @@ func TestStartPairing_QRReturnsFirstCodeWithinTimeout(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 
 	status := m.Status()
 	require.NotNil(t, status.Pairing)
@@ -97,7 +97,7 @@ func TestStartPairing_QRChannelOpenedBeforeConnect(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 
 	calls := cli.callLog()
 	qrAt := indexOf(calls, "qr_channel")
@@ -115,7 +115,7 @@ func TestStartPairing_QRTimesOutWithoutCode(t *testing.T) {
 	m, _, _, _ := newTestManager(t, cli, false)
 	// No QR item is emitted; cancel the request context so the bounded wait
 	// resolves without burning qrFirstCodeTimeout in the suite.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	err := m.StartPairing(ctx, PairRequest{Method: PairMethodQR})
@@ -131,7 +131,7 @@ func TestStartPairing_ConnectFailureAbandonsPairing(t *testing.T) {
 	cli.connectErr = errors.New("dial failed")
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	assert.Error(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	assert.Error(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	assert.Nil(t, m.Status().Pairing)
 	assert.Equal(t, StateNotPaired, m.Status().State)
 }
@@ -142,7 +142,7 @@ func TestPairingExpiry_UsesAcceleratedClock(t *testing.T) {
 	m, _, _, _ := newTestManager(t, cli, false)
 
 	before := accelerated.GetCurrentTime()
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
 	after := accelerated.GetCurrentTime()
 
 	status := m.Status()
@@ -159,7 +159,7 @@ func TestCancelPairing_IsIdempotent(t *testing.T) {
 	m, _, _, _ := newTestManager(t, cli, false)
 
 	m.CancelPairing() // no pairing in flight
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
 
 	m.CancelPairing()
 	assert.Nil(t, m.Status().Pairing)
@@ -177,10 +177,10 @@ func TestCancelPairing_IsIdempotent(t *testing.T) {
 func TestDisconnect_HappyPathDeletesDevice(t *testing.T) {
 	cli := newFakeClient()
 	m, syncStore, _, _, devices := newTestManagerWithDevices(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	require.NoError(t, err)
 	assert.True(t, result.RemoteUnlinked)
 	assert.False(t, result.Forced)
@@ -198,10 +198,10 @@ func TestDisconnect_KeepsDeviceWhenLogoutFails(t *testing.T) {
 	cli := newFakeClient()
 	cli.logoutErr = errors.New("server rejected logout")
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, ErrRemoteUnlinkFailed)
 	assert.Equal(t, []types.JID{testDeviceJID}, devices.remaining(),
@@ -215,11 +215,11 @@ func TestDisconnect_KeepsDeviceWhenLogoutFails(t *testing.T) {
 func TestDisconnect_LoggedOutTerminalClearsWithoutRemoteCall(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	require.True(t, dispatchEvent(t, m, nil, &events.LoggedOut{}))
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	require.NoError(t, err)
 	assert.True(t, result.AlreadyUnlinked)
 	assert.NotContains(t, cli.callLog(), "logout", "a confirmed-unlinked device needs no remote call")
@@ -246,7 +246,7 @@ func TestDisconnect_NonLoggedOutTerminalKeepsDeviceWhenConnectFails(t *testing.T
 		t.Run(tt.name, func(t *testing.T) {
 			cli := newFakeClient()
 			m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 			if tt.event != nil {
 				require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 				require.True(t, dispatchEvent(t, m, nil, tt.event))
@@ -258,7 +258,7 @@ func TestDisconnect_NonLoggedOutTerminalKeepsDeviceWhenConnectFails(t *testing.T
 			cli.connected = false
 			cli.mu.Unlock()
 
-			result, err := m.Disconnect(context.Background(), false)
+			result, err := m.Disconnect(t.Context(), false)
 			assert.Nil(t, result)
 			assert.ErrorIs(t, err, ErrRemoteUnlinkFailed)
 			assert.Equal(t, []types.JID{testDeviceJID}, devices.remaining(),
@@ -274,9 +274,9 @@ func TestDisconnect_ForceClearsLocalStateWithWarning(t *testing.T) {
 	cli := newFakeClient()
 	cli.logoutErr = errors.New("still failing")
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
-	result, err := m.Disconnect(context.Background(), true)
+	result, err := m.Disconnect(t.Context(), true)
 	require.NoError(t, err)
 	assert.True(t, result.Forced)
 	assert.NotEmpty(t, result.Warning, "the user must be told to unlink from their phone")
@@ -289,9 +289,9 @@ func TestDisconnect_ForceClearsLocalStateWithWarning(t *testing.T) {
 func TestDisconnect_WhenNotPairedReportsNotPaired(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, ErrNotPaired)
 }
@@ -302,12 +302,12 @@ func TestDisconnect_WhenNotPairedReportsNotPaired(t *testing.T) {
 func TestDisconnect_ReconnectsSolelyToUnlinkWhenNotConnected(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	require.True(t, dispatchEvent(t, m, nil, &events.ClientOutdated{}))
 	cli.setConnected(false)
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	require.NoError(t, err)
 	assert.True(t, result.RemoteUnlinked)
 	assert.Contains(t, cli.callLog(), "logout")
@@ -322,7 +322,7 @@ func TestHistoryFetcher_NilWhenNotConnected(t *testing.T) {
 	m, _, _, _ := newTestManager(t, newFakeClient(), true)
 	assert.Nil(t, m.HistoryFetcher(), "no session yet")
 
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	assert.Nil(t, m.HistoryFetcher(),
 		"a fake session carries no *whatsmeow.Client, so there is nothing to fetch through")
 }
@@ -333,10 +333,10 @@ func TestStartPairing_ExpiredPairingIsTakenOverNotConflicted(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
 	expirePairing(m)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}),
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}),
 		"an expired attempt is taken over, not treated as a conflict")
 
 	status := m.Status()
@@ -355,7 +355,7 @@ func TestRunQRChannel_ClosedChannelReleasesThePairingSlot(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	require.NotNil(t, m.Status().Pairing)
 
 	close(cli.qrChan)
@@ -372,7 +372,7 @@ func TestRunQRChannel_RefreshesTheStoredCode(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	require.NotNil(t, m.Status().Pairing)
 	require.Equal(t, defaultFakeQRCode, *m.Status().Pairing.QRCode)
 
@@ -391,7 +391,7 @@ func TestStartPairing_PhoneWaitsForConnectionBeforeRequestingCode(t *testing.T) 
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
 
 	calls := cli.callLog()
 	qrAt := indexOf(calls, "qr_channel")
@@ -411,7 +411,7 @@ func TestStartPairing_PhoneTimesOutWhenConnectionNeverEstablishes(t *testing.T) 
 	cli.qrSilent = true
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	err := m.StartPairing(ctx, PairRequest{Method: PairMethodPhone, Phone: "+15551234567"})
@@ -426,7 +426,7 @@ func TestStartPairing_PhoneDoesNotReportAQRCode(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
 
 	status := m.Status()
 	require.NotNil(t, status.Pairing)
@@ -455,7 +455,7 @@ func TestStartPairing_CancelDuringSessionBuildDiscardsTheClient(t *testing.T) {
 	})
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}) }()
+	go func() { errCh <- m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}) }()
 
 	<-building
 	m.CancelPairing()
@@ -486,7 +486,7 @@ func TestStartPairing_CancelDuringSessionBuildCancelsTheQRContext(t *testing.T) 
 		return fakeSessionFor(cli, false, nil), nil
 	})
 
-	go func() { _ = m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}) }()
+	go func() { _ = m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}) }()
 	<-building
 
 	attempt := m.inspect().Pairing
@@ -520,7 +520,7 @@ func TestCancelPairing_DuringTheQRChannelToConnectBatch(t *testing.T) {
 	m, _, _, _ := newTestManager(t, cli, false)
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}) }()
+	go func() { errCh <- m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}) }()
 
 	<-entered
 	attempt := m.inspect().Pairing
@@ -547,7 +547,7 @@ func TestCancelPairing_StopsADrainOnAChannelThatNeverCloses(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	view := m.inspect()
 	require.NotNil(t, view.Pairing)
 	require.True(t, view.PairingDrainOn)
@@ -572,7 +572,7 @@ func TestStop_StopsADrainOnAChannelThatNeverCloses(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	view := m.inspect()
 	require.NotNil(t, view.Pairing)
 	require.True(t, view.PairingDrainOn)
@@ -607,7 +607,7 @@ func TestStop_DuringSessionBuildDiscardsTheClient(t *testing.T) {
 	})
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}) }()
+	go func() { errCh <- m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}) }()
 	<-building
 
 	stopped := make(chan struct{})
@@ -645,7 +645,7 @@ func TestDisconnect_StopsTheOldClientBeforeBuildingTheUnlinkClient(t *testing.T)
 	unlink.name, unlink.shared = "unlink", shared
 
 	m, _, _, _ := newTestManager(t, old, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	// The socket drops; whatsmeow is now auto-reconnecting behind the scenes.
@@ -659,7 +659,7 @@ func TestDisconnect_StopsTheOldClientBeforeBuildingTheUnlinkClient(t *testing.T)
 		return fakeSessionFor(unlink, true, &jid), nil
 	})
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	require.NoError(t, err)
 	assert.True(t, result.RemoteUnlinked)
 
@@ -686,7 +686,7 @@ func TestOnPairSuccess_FromCancelledPairingIsIgnored(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	pairingSess := pairingSession(t, m)
 	require.NotNil(t, pairingSess)
 
@@ -717,12 +717,12 @@ func TestOnPairSuccess_FromSupersededPairingIsIgnored(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	stale := pairingSession(t, m)
 	require.NotNil(t, stale)
 
 	expirePairing(m)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	current := pairingSession(t, m)
 	require.NotNil(t, current)
 	require.NotSame(t, stale, current)
@@ -741,7 +741,7 @@ func TestOnConnected_FromAbandonedClientIsIgnored(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	orphan := pairingSession(t, m)
 	m.CancelPairing()
 
@@ -754,12 +754,12 @@ func TestOnConnected_FromAbandonedClientIsIgnored(t *testing.T) {
 func TestClearLocalDevice_ResetsTerminalReasonPersisted(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	require.True(t, dispatchEvent(t, m, nil, &events.LoggedOut{}))
 	require.NotNil(t, m.Status().TerminalReasonPersisted)
 
-	_, err := m.Disconnect(context.Background(), false)
+	_, err := m.Disconnect(t.Context(), false)
 	require.NoError(t, err)
 
 	status := m.Status()
@@ -788,10 +788,10 @@ func TestDisconnect_RemoteFailureKeepsTheDevice(t *testing.T) {
 	cli := newFakeClient()
 	cli.logoutErr = logoutRemoteFailure()
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, ErrRemoteUnlinkFailed)
 	assert.Equal(t, []types.JID{testDeviceJID}, devices.remaining(),
@@ -806,10 +806,10 @@ func TestDisconnect_LocalDeleteFailureAfterRemoteSuccessIsNotAFailedUnlink(t *te
 	cli := newFakeClient()
 	cli.logoutErr = logoutLocalDeleteFailure()
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	require.NoError(t, err, "the remote device is gone; this is not a failed unlink")
 	require.NotNil(t, result)
 	assert.True(t, result.RemoteUnlinked)
@@ -825,10 +825,10 @@ func TestDisconnect_LocalCleanupFailureIsSurfaced(t *testing.T) {
 	cli.logoutErr = logoutLocalDeleteFailure()
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
 	devices.setErr(func(d *fakeDevices) { d.delErr = errors.New("database is down") })
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, ErrLocalCleanupFailed)
 	assert.NotErrorIs(t, err, ErrRemoteUnlinkFailed, "the unlink itself succeeded")
@@ -844,7 +844,7 @@ func TestDisconnect_LocalCleanupFailureIsSurfaced(t *testing.T) {
 	cli.calls = nil
 	cli.mu.Unlock()
 
-	result, err = m.Disconnect(context.Background(), false)
+	result, err = m.Disconnect(t.Context(), false)
 	require.NoError(t, err)
 	assert.True(t, result.AlreadyUnlinked)
 	assert.NotContains(t, cli.callLog(), "logout", "the remote half is settled; only the local clear was outstanding")
@@ -858,9 +858,9 @@ func TestDisconnect_ForceReportsAFailedLocalClear(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
 	devices.setErr(func(d *fakeDevices) { d.delErr = errors.New("database is down") })
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
-	result, err := m.Disconnect(context.Background(), true)
+	result, err := m.Disconnect(t.Context(), true)
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, ErrLocalCleanupFailed)
 	assert.Equal(t, StateDisconnectFailed, m.Status().State)
@@ -880,7 +880,7 @@ func TestDisconnect_ForceReportsAFailedLocalClear(t *testing.T) {
 		return fakeSessionFor(cli, true, &jid), nil
 	})
 
-	result, err = m.Disconnect(context.Background(), false)
+	result, err = m.Disconnect(t.Context(), false)
 	require.NoError(t, err)
 	assert.True(t, result.RemoteUnlinked)
 	assert.Contains(t, cli.callLog(), "logout",
@@ -892,13 +892,13 @@ func TestDisconnect_ForceReportsAFailedLocalClear(t *testing.T) {
 func TestDisconnect_AlreadyUnlinkedReportsAFailedLocalClear(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	require.True(t, dispatchEvent(t, m, nil, &events.LoggedOut{}))
 
 	devices.setErr(func(d *fakeDevices) { d.delErr = errors.New("database is down") })
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, ErrLocalCleanupFailed)
 	assert.NotContains(t, cli.callLog(), "logout")
@@ -921,13 +921,13 @@ func TestDisconnect_AfterRestartIntoLoggedOutSurfacesAnUnreachableStore(t *testi
 			m, syncStore, _, _, devices := newTestManagerWithDevices(t, cli, true)
 			syncStore.seedTerminal(ReasonLoggedOut, nil)
 
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 			require.Equal(t, StateDisconnected, m.Status().State)
 			require.Nil(t, installedSession(t, m), "the terminal gate deliberately installs no session")
 
 			devices.setErr(func(d *fakeDevices) { d.listErr = errors.New("device store unreachable") })
 
-			result, err := m.Disconnect(context.Background(), force)
+			result, err := m.Disconnect(t.Context(), force)
 			assert.Nil(t, result)
 			assert.ErrorIs(t, err, ErrLocalCleanupFailed,
 				"a store we cannot read is a cleanup that did not happen")
@@ -943,10 +943,10 @@ func TestDisconnect_AfterRestartIntoLoggedOutSurfacesAnUnreachableStore(t *testi
 func TestDisconnect_WithNothingStoredClearsCleanly(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.Equal(t, StateNotPaired, m.Status().State)
 
-	result, err := m.Disconnect(context.Background(), true)
+	result, err := m.Disconnect(t.Context(), true)
 	require.NoError(t, err)
 	assert.True(t, result.Forced)
 	assert.Equal(t, StateNotPaired, m.Status().State)
@@ -962,10 +962,10 @@ func TestDisconnect_WithNothingStoredClearsCleanly(t *testing.T) {
 func TestDisconnect_LiveClientLogoutPublishesNotPaired(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.NotErrorIs(t, err, ErrOperationSuperseded)
@@ -975,9 +975,9 @@ func TestDisconnect_LiveClientLogoutPublishesNotPaired(t *testing.T) {
 func TestDisconnect_ForceClearPublishesNotPaired(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
-	result, err := m.Disconnect(context.Background(), true)
+	result, err := m.Disconnect(t.Context(), true)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.True(t, result.Forced)
@@ -987,11 +987,11 @@ func TestDisconnect_ForceClearPublishesNotPaired(t *testing.T) {
 func TestDisconnect_ServerConfirmedLoggedOutPublishesNotPaired(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	require.True(t, dispatchEvent(t, m, nil, &events.LoggedOut{}))
 
-	result, err := m.Disconnect(context.Background(), false)
+	result, err := m.Disconnect(t.Context(), false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.True(t, result.AlreadyUnlinked)
@@ -1014,11 +1014,11 @@ func TestDisconnect_RefusesWhileAPairingExists(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cli := newFakeClient()
 			m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 			cli.setConnected(false)
-			require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+			require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 
-			result, err := m.Disconnect(context.Background(), force)
+			result, err := m.Disconnect(t.Context(), force)
 			assert.Nil(t, result)
 			assert.ErrorIs(t, err, ErrPairingInProgress)
 			assert.Equal(t, 0, devices.enumerations(), "nothing is enumerated")
@@ -1037,16 +1037,16 @@ func TestStartPairing_RefusesWhileAnUnlinkIsInFlight(t *testing.T) {
 	cli.logoutBlock = release
 
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	done := make(chan struct{})
-	go func() { defer close(done); _, _ = m.Disconnect(context.Background(), false) }()
+	go func() { defer close(done); _, _ = m.Disconnect(t.Context(), false) }()
 	<-entered
 
 	fresh := newFakeClient()
 	useClient(m, fresh, false)
-	err := m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR})
+	err := m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR})
 	assert.ErrorIs(t, err, ErrUnlinkInProgress)
 	assert.Empty(t, fresh.callLog(), "no fresh device is even built")
 
@@ -1065,14 +1065,14 @@ func TestDisconnect_RefusesASecondUnlink(t *testing.T) {
 	cli.logoutBlock = release
 
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	done := make(chan struct{})
-	go func() { defer close(done); _, _ = m.Disconnect(context.Background(), false) }()
+	go func() { defer close(done); _, _ = m.Disconnect(t.Context(), false) }()
 	<-entered
 
-	_, err := m.Disconnect(context.Background(), false)
+	_, err := m.Disconnect(t.Context(), false)
 	assert.ErrorIs(t, err, ErrUnlinkInProgress)
 
 	close(release)
@@ -1086,7 +1086,7 @@ func TestDisconnect_RefusesASecondUnlink(t *testing.T) {
 func TestDisconnect_LateSaveFromAnAbandonedPairingIsSuperseded(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
 	lateJID := types.NewJID("15559990000", types.DefaultUserServer)
 	delEntered := make(chan struct{})
@@ -1098,7 +1098,7 @@ func TestDisconnect_LateSaveFromAnAbandonedPairingIsSuperseded(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := m.Disconnect(context.Background(), true)
+		_, err := m.Disconnect(t.Context(), true)
 		errCh <- err
 	}()
 
@@ -1123,9 +1123,9 @@ func TestClearLocalDevice_PurgesTheEnumeratedSet(t *testing.T) {
 	retained := types.NewJID("15551110000", types.DefaultUserServer)
 	devices.add(retained)
 
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
-	result, err := m.Disconnect(context.Background(), true)
+	result, err := m.Disconnect(t.Context(), true)
 	require.NoError(t, err)
 	assert.True(t, result.Forced)
 	assert.Empty(t, devices.remaining(), "the enumerated set is gone, not just the one in use")
@@ -1139,11 +1139,11 @@ func TestClearLocalDevice_PurgesTheEnumeratedSet(t *testing.T) {
 func TestClearLocalDevice_PublicationIsOneTurn(t *testing.T) {
 	cli := newFakeClient()
 	m, syncStore, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	syncStore.resetCalls()
 
-	_, err := m.Disconnect(context.Background(), false)
+	_, err := m.Disconnect(t.Context(), false)
 	require.NoError(t, err)
 
 	calls := syncStore.callLog()
@@ -1161,19 +1161,19 @@ func TestClearLocalDevice_PublicationIsOneTurn(t *testing.T) {
 func TestClearLocalDevice_RefusesWhileAPairingExists(t *testing.T) {
 	cli := newFakeClient()
 	m, syncStore, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	cli.setConnected(false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	require.True(t, dispatchEvent(t, m, pairingSession(t, m), &events.PairSuccess{
 		ID: types.NewJID("15552223333", types.DefaultUserServer),
 	}))
 	// Re-enter a pairing so the exclusion rule applies at the moment of the call.
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	linkedBefore := syncStore.linkedJID()
 	require.NotEmpty(t, linkedBefore)
 	syncStore.resetCalls()
 
-	_, err := m.Disconnect(context.Background(), true)
+	_, err := m.Disconnect(t.Context(), true)
 	assert.ErrorIs(t, err, ErrPairingInProgress)
 	assert.Equal(t, linkedBefore, syncStore.linkedJID(), "the linked device record is untouched")
 	assert.Empty(t, syncStore.callLog(), "a refused unlink writes nothing at all")
@@ -1196,12 +1196,12 @@ func TestDisconnect_AbortsWhenStartInstallsASessionMidUnlink(t *testing.T) {
 	oldClient.logoutBlock = release
 
 	m, _, _, _ := newTestManager(t, oldClient, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	unlinkErr := make(chan error, 1)
 	go func() {
-		_, err := m.Disconnect(context.Background(), false)
+		_, err := m.Disconnect(t.Context(), false)
 		unlinkErr <- err
 	}()
 	<-entered
@@ -1213,7 +1213,7 @@ func TestDisconnect_AbortsWhenStartInstallsASessionMidUnlink(t *testing.T) {
 		jid := testDeviceJID
 		return fakeSessionFor(newClient, true, &jid), nil
 	})
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	installed := installedSession(t, m)
 	require.NotNil(t, installed)
 
@@ -1274,14 +1274,14 @@ func TestDisconnect_FailurePublicationIsFenced(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cli := newFakeClient()
 			m, _, _, _, devices := newTestManagerWithDevices(t, cli, true)
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 			require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 			entered, release := tt.setup(t, cli, devices)
 
 			unlinkErr := make(chan error, 1)
 			go func() {
-				_, err := m.Disconnect(context.Background(), false)
+				_, err := m.Disconnect(t.Context(), false)
 				unlinkErr <- err
 			}()
 			<-entered
@@ -1292,7 +1292,7 @@ func TestDisconnect_FailurePublicationIsFenced(t *testing.T) {
 				jid := testDeviceJID
 				return fakeSessionFor(newClient, true, &jid), nil
 			})
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 			installed := installedSession(t, m)
 			require.NotNil(t, installed)
 
@@ -1327,7 +1327,7 @@ func TestDisconnect_EffectDeadlineExpiryReleasesTheUnlink(t *testing.T) {
 		return fakeSessionFor(cli, true, &jid), nil
 	})
 
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	// A logout that outlives the effect deadline.
@@ -1337,7 +1337,7 @@ func TestDisconnect_EffectDeadlineExpiryReleasesTheUnlink(t *testing.T) {
 	cli.logoutBlock = stuck
 	cli.mu.Unlock()
 
-	_, err := m.Disconnect(context.Background(), false)
+	_, err := m.Disconnect(t.Context(), false)
 	require.Error(t, err, "the caller must be answered, not left waiting")
 
 	eventually(t, "the published state reports the failure rather than a stale not_paired", func() bool {
@@ -1351,7 +1351,7 @@ func TestDisconnect_EffectDeadlineExpiryReleasesTheUnlink(t *testing.T) {
 		jid := testDeviceJID
 		return fakeSessionFor(cli2, true, &jid), nil
 	})
-	_, err = m.Disconnect(context.Background(), false)
+	_, err = m.Disconnect(t.Context(), false)
 	assert.NotErrorIs(t, err, ErrUnlinkInProgress,
 		"a second unlink must be accepted, which is what proves the flag was released")
 }
@@ -1364,7 +1364,7 @@ func TestPairingOperations_EffectDeadlineExpiryReleaseTheirSlot(t *testing.T) {
 		m := newDeadlineManager(t, 50*time.Millisecond)
 		m.setSessionFactory(blockingSessionFactory())
 
-		err := m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR})
+		err := m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR})
 		require.Error(t, err, "the caller must be answered, not left waiting")
 		eventually(t, "the pairing slot is released", func() bool { return m.Status().Pairing == nil })
 
@@ -1372,21 +1372,21 @@ func TestPairingOperations_EffectDeadlineExpiryReleaseTheirSlot(t *testing.T) {
 		// answering ErrPairingInProgress.
 		cli := newFakeClient()
 		useClient(m, cli, false)
-		assert.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+		assert.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	})
 
 	t.Run("Start", func(t *testing.T) {
 		m := newDeadlineManager(t, 50*time.Millisecond)
 		m.setSessionFactory(blockingSessionFactory())
 
-		require.NoError(t, m.Start(context.Background()))
+		require.NoError(t, m.Start(t.Context()))
 		assert.Equal(t, StateError, m.Status().State, "the failure is published rather than left pending")
 		assert.False(t, m.inspect().StartInFlight, "the start flag is released by the loop")
 
 		// And the release is real: a second Start runs rather than being ignored.
 		cli := newFakeClient()
 		useClient(m, cli, true)
-		require.NoError(t, m.Start(context.Background()))
+		require.NoError(t, m.Start(t.Context()))
 		assert.Equal(t, StateConnecting, m.Status().State)
 	})
 }
@@ -1417,8 +1417,8 @@ func TestQRItems_NonTerminalItemsDoNotEndTheAttempt(t *testing.T) {
 	t.Run("scanned without multidevice keeps the attempt alive", func(t *testing.T) {
 		cli := newFakeClient()
 		m, _, _, _ := newTestManager(t, cli, false)
-		require.NoError(t, m.Start(context.Background()))
-		require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+		require.NoError(t, m.Start(t.Context()))
+		require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 
 		cli.qrChan <- whatsmeow.QRChannelScannedWithoutMultidevice
 		eventually(t, "the user is told what to change, because a silent retry looks like a scan that did nothing",
@@ -1440,8 +1440,8 @@ func TestQRItems_NonTerminalItemsDoNotEndTheAttempt(t *testing.T) {
 		t.Run("passkey item "+event+" ends the attempt with a reason", func(t *testing.T) {
 			cli := newFakeClient()
 			m, _, _, _ := newTestManager(t, cli, false)
-			require.NoError(t, m.Start(context.Background()))
-			require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+			require.NoError(t, m.Start(t.Context()))
+			require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 
 			cli.qrChan <- whatsmeow.QRChannelItem{Event: event}
 			eventually(t, "the attempt ends rather than running out of codes in silence", func() bool {
@@ -1455,14 +1455,14 @@ func TestQRItems_NonTerminalItemsDoNotEndTheAttempt(t *testing.T) {
 	t.Run("a passkey item over a durable terminal state does not overwrite it", func(t *testing.T) {
 		cli := newFakeClient()
 		m, _, _, _ := newTestManager(t, cli, true)
-		require.NoError(t, m.Start(context.Background()))
+		require.NoError(t, m.Start(t.Context()))
 		require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 		require.True(t, dispatchEvent(t, m, nil, &events.LoggedOut{}))
 		require.Equal(t, StateDisconnected, m.Status().State)
 
 		pairClient := newFakeClient()
 		useClient(m, pairClient, false)
-		require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+		require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 
 		pairClient.qrChan <- whatsmeow.QRChannelItem{Event: whatsmeow.QRChannelEventPasskeyRequest}
 		eventually(t, "the attempt ends", func() bool { return m.Status().Pairing == nil })
@@ -1482,7 +1482,7 @@ func TestQRItems_NonTerminalItemsDoNotEndTheAttempt(t *testing.T) {
 func TestCancelledPairing_RestoresWhatItDisplaced(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	require.True(t, dispatchEvent(t, m, nil, &events.LoggedOut{}))
 	require.Equal(t, StateDisconnected, m.Status().State)
@@ -1490,7 +1490,7 @@ func TestCancelledPairing_RestoresWhatItDisplaced(t *testing.T) {
 
 	pairClient := newFakeClient()
 	useClient(m, pairClient, false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	require.Equal(t, StatePairing, m.Status().State)
 
 	m.CancelPairing()
@@ -1536,10 +1536,10 @@ func TestDisconnect_CallerGivingUpDoesNotCancelTheUnlink(t *testing.T) {
 	cli.logoutEntered, cli.logoutBlock = entered, release
 
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	returned := make(chan error, 1)
 	go func() {
 		_, err := m.Disconnect(ctx, false)

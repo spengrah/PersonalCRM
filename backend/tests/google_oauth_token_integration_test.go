@@ -8,14 +8,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/crypto"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/google"
 	"personal-crm/backend/internal/repository"
 
@@ -29,22 +28,13 @@ import (
 // the caller-supplied test server URL.
 func newGoogleOAuthTestService(t *testing.T) (*google.OAuthService, *repository.OAuthRepository, *config.Config, context.Context) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewOAuthRepository(database.Queries)
 	svc, err := google.NewOAuthService(cfg, repo, nil)
@@ -121,8 +111,8 @@ func TestGoogleOAuth_ExchangeRoundTrip(t *testing.T) {
 	svc.SetUserInfoEndpoint(fake.server.URL + "/userinfo")
 
 	t.Cleanup(func() {
-		if cred, err := repo.GetByProviderAndAccount(context.Background(), google.ProviderName, email); err == nil {
-			_ = repo.Delete(context.Background(), cred.ID)
+		if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), google.ProviderName, email); err == nil {
+			_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 		}
 	})
 
@@ -157,8 +147,8 @@ func TestGoogleOAuth_RefreshPersistsRotatedToken(t *testing.T) {
 	svc.SetUserInfoEndpoint(fake.server.URL + "/userinfo")
 
 	t.Cleanup(func() {
-		if cred, err := repo.GetByProviderAndAccount(context.Background(), google.ProviderName, email); err == nil {
-			_ = repo.Delete(context.Background(), cred.ID)
+		if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), google.ProviderName, email); err == nil {
+			_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 		}
 	})
 
@@ -219,8 +209,8 @@ func TestGoogleOAuth_LegacyRowDecryptsAndUpgrades(t *testing.T) {
 	svc, repo, cfg, ctx := newGoogleOAuthTestService(t)
 
 	t.Cleanup(func() {
-		if cred, err := repo.GetByProviderAndAccount(context.Background(), google.ProviderName, email); err == nil {
-			_ = repo.Delete(context.Background(), cred.ID)
+		if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), google.ProviderName, email); err == nil {
+			_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 		}
 	})
 
@@ -317,8 +307,8 @@ func TestGoogleOAuth_LegacyRow_RefreshlessWriteKeepsDecryptable(t *testing.T) {
 		require.NoError(t, err)
 
 		t.Cleanup(func() {
-			if cred, err := repo.GetByProviderAndAccount(context.Background(), google.ProviderName, email); err == nil {
-				_ = repo.Delete(context.Background(), cred.ID)
+			if cred, err := repo.GetByProviderAndAccount(context.WithoutCancel(t.Context()), google.ProviderName, email); err == nil {
+				_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 			}
 		})
 	}

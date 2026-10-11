@@ -2,10 +2,9 @@ package tests
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/rand"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -25,22 +24,14 @@ import (
 // level; future migrations can widen the interaction.source CHECK list and
 // extend this coverage.
 func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceFilter(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	gen, _ := migrationGenerator(t)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
@@ -80,7 +71,7 @@ func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceF
 
 	// Insert one telegram inbound + one gcal inbound for the same contact
 	// in overlapping windows. The source filter must distinguish them.
-	_, err = interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
+	_, err := interactionRepo.CreateInteraction(ctx, repository.CreateInteractionRequest{
 		ContactID:  contact.ID,
 		Source:     repository.InteractionSourceTelegram,
 		SourceRef:  &tgRef,
@@ -131,7 +122,7 @@ func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceF
 			windowStart, windowEnd,
 		)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound, got %v", err)
+		assert.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound, got %v", err)
 	})
 
 	t.Run("non-matching prefix returns ErrNotFound", func(t *testing.T) {
@@ -146,7 +137,7 @@ func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceF
 			nonMatchingPrefix, windowStart, windowEnd,
 		)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound, got %v", err)
+		assert.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound, got %v", err)
 	})
 
 	t.Run("out-of-window returns ErrNotFound", func(t *testing.T) {
@@ -158,7 +149,7 @@ func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceF
 			tgPrefix, futureStart, futureEnd,
 		)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound, got %v", err)
+		assert.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound, got %v", err)
 	})
 
 	// FindRecentOutboundInteractionBySource has a hard-coded direction
@@ -191,6 +182,6 @@ func TestInteractionRepository_FindRecentInteractionBySourceAndDirection_SourceF
 			repository.InteractionSourceGCal, gcalPrefix, windowStart, windowEnd,
 		)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound, got %v", err)
+		assert.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound, got %v", err)
 	})
 }

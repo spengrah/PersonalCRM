@@ -3,7 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"sort"
 	"strings"
 	"testing"
@@ -36,21 +36,13 @@ type jsonbGINEnv struct {
 
 func setupJSONBGINEnv(t *testing.T) *jsonbGINEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	ctx := context.Background()
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	ctx := t.Context()
+	database := testsupport.OpenDatabase(t)
 
 	suffix := uuid.NewString()
 	sourceIDPfx := "jsonb_gin_test_" + suffix + "_"
@@ -71,8 +63,8 @@ func setupJSONBGINEnv(t *testing.T) *jsonbGINEnv {
 		// Best-effort cleanup. Ignore errors so a failing test still cleans
 		// up the rest. Each fixture row has the per-test suffix in its
 		// identifying column so this never touches another test's data.
-		_ = env.fixtureRepo.DeleteExternalContactsBySourceIDPrefix(context.Background(), sourceIDPfx)
-		_ = env.fixtureRepo.DeleteCalendarEventsByGcalEventIDPrefix(context.Background(), gcalIDPfx)
+		_ = env.fixtureRepo.DeleteExternalContactsBySourceIDPrefix(context.WithoutCancel(t.Context()), sourceIDPfx)
+		_ = env.fixtureRepo.DeleteCalendarEventsByGcalEventIDPrefix(context.WithoutCancel(t.Context()), gcalIDPfx)
 	})
 
 	return env

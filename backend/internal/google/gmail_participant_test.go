@@ -49,7 +49,7 @@ func foldAndEvaluate(
 	for _, msg := range msgs {
 		p.foldDiscovery(msg, knownMap, knownSet, meSet, ownDomains, agg)
 	}
-	return d.EvaluateAddresses(context.Background(), sortedAggregates(agg))
+	return d.EvaluateAddresses(context.WithoutCancel(t.Context()), sortedAggregates(agg))
 }
 
 // 1. First sighting from a trusted (known-contact) sender proposes a create

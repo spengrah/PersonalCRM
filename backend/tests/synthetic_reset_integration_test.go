@@ -3,7 +3,7 @@
 package tests
 
 import (
-	"context"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
@@ -83,19 +83,15 @@ var catalogExclusions = []string{"predicate", "entity_type"}
 // asserts: every wiped table is empty after the reset, schema_migrations
 // survives, and the catalog guard (every public table is accounted for).
 func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping destructive reset integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -233,19 +229,15 @@ func TestSyntheticResetSyntheticData_WipesEveryDataTable(t *testing.T) {
 // guard were absent or moved AFTER ResetSyntheticData, the seeded contact would
 // be wiped and the survival assertion would fail.
 func TestSyntheticReset_InvalidNamespaceLeavesDataIntact(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping destructive reset integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	support := repository.NewSyntheticSupportRepository(database.Queries)
 
@@ -253,7 +245,7 @@ func TestSyntheticReset_InvalidNamespaceLeavesDataIntact(t *testing.T) {
 	h := synthetic.NewHarnessForNamespace(t, ctx, database, "reset", factory.DefaultSeed)
 	gen := h.Generator()
 	spec := gen.Contact(factory.WithEmail())
-	_, err = h.SeedContact(ctx, spec)
+	_, err := h.SeedContact(ctx, spec)
 	require.NoError(t, err)
 
 	beforeContacts, err := support.CountAllRows(ctx, "contact")

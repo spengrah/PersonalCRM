@@ -15,7 +15,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,13 +55,9 @@ func newJobsTestDB(t *testing.T, ctx context.Context) (*db.Database, *config.Con
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
 	cfg.Database.MigrationsPath = migrationsPathForTest()
-	cfg.Database.MaxConns = 6
-	cfg.Database.MinConns = 1
 	cfg.River.WorkerConcurrency = 2
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 	return database, cfg
 }
 
@@ -93,14 +89,9 @@ func waitForJobState(t *testing.T, ctx context.Context, queries *db.Queries, id 
 
 func TestListAndRetryJobs_Integration(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newJobsTestDB(t, ctx)
 
 	workers := river.NewWorkers()
@@ -119,7 +110,7 @@ func TestListAndRetryJobs_Integration(t *testing.T) {
 		if clientStopped {
 			return
 		}
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 		clientStopped = true

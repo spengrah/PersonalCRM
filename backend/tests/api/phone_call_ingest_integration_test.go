@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -112,7 +113,7 @@ func (f *failingPhoneCallWriter) MarkProcessedTx(ctx context.Context, tx pgx.Tx,
 func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// Records interactions INLINE (no async worker), but pairs the singleton
 	// mac_host with a DB-wide DeleteAllMacHosts teardown that collides on the
 	// shared package DB, so it runs on a per-test clone.
@@ -281,7 +282,7 @@ func setupPhoneCallIngestEnv(t *testing.T) *phoneCallIngestEnv {
 	}
 
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		// phone_call rows are scoped to the host's mac_host_id.
 		_ = phoneCallRepo.HardDeleteByMacHost(cleanCtx, env.pairedHostID)
@@ -381,12 +382,10 @@ func postIngestCall(t *testing.T, env *phoneCallIngestEnv, body any) *httptest.R
 // NOT last_outreach_at — phone_calls follow the standard direction
 // semantics).
 func TestIngestCall_Inbound_RecordsInteractionAndBumpsLastContacted(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	callID := env.sourcePrefix + "inbound"
 	ev := buildCallEvent(t, events.KindCallReceived, env.pairedHostID, callID, env.seededPhone, nil)
@@ -450,12 +449,10 @@ func TestIngestCall_Inbound_RecordsInteractionAndBumpsLastContacted(t *testing.T
 // last_outreach_at and NOT last_contacted (the user reaching out is
 // recorded as outreach, not as contact).
 func TestIngestCall_Outbound_BumpsLastOutreachAt(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	callID := env.sourcePrefix + "outbound"
 	ev := buildCallEvent(t, events.KindCallSent, env.pairedHostID, callID, env.seededPhone, func(p *events.CallPayload) {
@@ -501,12 +498,10 @@ func TestIngestCall_Outbound_BumpsLastOutreachAt(t *testing.T) {
 
 // spec: ING-039.connected-outbound
 func TestIngestCall_ConnectedOutbound_BumpsLastContacted(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	callID := env.sourcePrefix + "outbound"
 	ev := buildCallEvent(t, events.KindCallSent, env.pairedHostID, callID, env.seededPhone, func(p *events.CallPayload) {
@@ -553,12 +548,10 @@ func TestIngestCall_ConnectedOutbound_BumpsLastContacted(t *testing.T) {
 // interaction_id=NULL, but no interaction row, no interaction.recorded
 // event, and no cadence bump.
 func TestIngestCall_MissedInboundNoVoicemail_NoInteractionWritten(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	callID := env.sourcePrefix + "missed"
 	ev := buildCallEvent(t, events.KindCallReceived, env.pairedHostID, callID, env.seededPhone, func(p *events.CallPayload) {
@@ -591,12 +584,10 @@ func TestIngestCall_MissedInboundNoVoicemail_NoInteractionWritten(t *testing.T) 
 // rolls back; the response surfaces a rejection. No phone_call row,
 // no interaction row, no event row land for this envelope.
 func TestIngestCall_UpsertFailure_RollsBackBatch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	env.failWriter.failOnUpsert = errors.New("injected upsert failure")
 	t.Cleanup(func() { env.failWriter.failOnUpsert = nil })
 
@@ -621,12 +612,10 @@ func TestIngestCall_UpsertFailure_RollsBackBatch(t *testing.T) {
 // the staging row AND the interaction. The event-log row must also be
 // rolled back.
 func TestIngestCall_MarkProcessedFailure_RollsBackBatch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	env.failWriter.failOnMarkProcess = errors.New("injected mark-processed failure")
 	t.Cleanup(func() { env.failWriter.failOnMarkProcess = nil })
 
@@ -654,9 +643,7 @@ func TestIngestCall_MarkProcessedFailure_RollsBackBatch(t *testing.T) {
 // TestIngestExternalContact_VersionTooHigh_Rejected and the equivalent
 // raw_message guard.
 func TestIngestCall_VersionTooHigh_Rejected(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 	env := setupPhoneCallIngestEnv(t)
 
@@ -672,6 +659,6 @@ func TestIngestCall_VersionTooHigh_Rejected(t *testing.T) {
 	require.Contains(t, resp.Errors[0].Message, "upgrade Pi")
 
 	// No row should have landed.
-	_, err := env.phoneCallRepo.GetCallByUniqueID(context.Background(), callID)
+	_, err := env.phoneCallRepo.GetCallByUniqueID(t.Context(), callID)
 	require.ErrorIs(t, err, db.ErrNotFound)
 }

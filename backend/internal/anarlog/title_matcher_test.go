@@ -40,7 +40,7 @@ func contactMatch(id uuid.UUID, name string, similarity float64) repository.Cont
 func TestMatchTitleToken_NoMatches(t *testing.T) {
 	mock := &mockContactMatchFinder{matches: nil}
 	m := NewTitleMatcher(mock)
-	got, err := m.MatchTitleToken(context.Background(), "Alice")
+	got, err := m.MatchTitleToken(t.Context(), "Alice")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestMatchTitleToken_SingleHighConfidence(t *testing.T) {
 		contactMatch(id, "Alice Smith", 0.8),
 	}}
 	m := NewTitleMatcher(mock)
-	got, err := m.MatchTitleToken(context.Background(), "Alice")
+	got, err := m.MatchTitleToken(t.Context(), "Alice")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestMatchTitleToken_BelowConfidenceFloor(t *testing.T) {
 		contactMatch(id, "Alice", 0.30),
 	}}
 	m := NewTitleMatcher(mock)
-	got, err := m.MatchTitleToken(context.Background(), "Alice")
+	got, err := m.MatchTitleToken(t.Context(), "Alice")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestMatchTitleToken_CollisionGapTooSmall(t *testing.T) {
 		contactMatch(uuid.New(), "Alice Two", 0.6),
 	}}
 	m := NewTitleMatcher(mock)
-	got, err := m.MatchTitleToken(context.Background(), "Alice")
+	got, err := m.MatchTitleToken(t.Context(), "Alice")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestMatchTitleToken_CollisionGapJustMeets(t *testing.T) {
 		contactMatch(uuid.New(), "Alice Two", 0.5),
 	}}
 	m := NewTitleMatcher(mock)
-	got, err := m.MatchTitleToken(context.Background(), "Alice")
+	got, err := m.MatchTitleToken(t.Context(), "Alice")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestMatchTitleToken_CollisionGapExceeds(t *testing.T) {
 		contactMatch(uuid.New(), "Alice Runner", 0.49),
 	}}
 	m := NewTitleMatcher(mock)
-	got, err := m.MatchTitleToken(context.Background(), "Alice")
+	got, err := m.MatchTitleToken(t.Context(), "Alice")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestMatchTitleToken_TieBreakerStable(t *testing.T) {
 		contactMatch(idA, "Alice A", 0.7),
 	}}
 	m := NewTitleMatcher(mock)
-	got, err := m.MatchTitleToken(context.Background(), "Alice")
+	got, err := m.MatchTitleToken(t.Context(), "Alice")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestMatchTitleToken_TieBreakerStable(t *testing.T) {
 func TestMatchTitleToken_EmptyToken(t *testing.T) {
 	mock := &mockContactMatchFinder{}
 	m := NewTitleMatcher(mock)
-	got, err := m.MatchTitleToken(context.Background(), "")
+	got, err := m.MatchTitleToken(t.Context(), "")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestMatchTitleToken_EmptyToken(t *testing.T) {
 func TestMatchTitleToken_RepoError(t *testing.T) {
 	mock := &mockContactMatchFinder{err: errors.New("boom")}
 	m := NewTitleMatcher(mock)
-	got, err := m.MatchTitleToken(context.Background(), "Alice")
+	got, err := m.MatchTitleToken(t.Context(), "Alice")
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}

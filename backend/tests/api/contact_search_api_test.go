@@ -36,7 +36,7 @@ func searchNS(t *testing.T) string {
 // handler -> service -> repository -> SQL read path).
 func newContactSearchAPITest(t *testing.T) (*gin.Engine, *repository.ContactRepository, *repository.ContactMethodRepository) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newAPISharedTestDB(t, ctx)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -80,7 +80,7 @@ func createSearchContact(t *testing.T, ctx context.Context, contactRepo *reposit
 	t.Helper()
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: fullName})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(context.Background(), contact.ID) })
+	t.Cleanup(func() { _ = contactRepo.HardDeleteContact(context.WithoutCancel(t.Context()), contact.ID) })
 	return contact.ID
 }
 
@@ -157,7 +157,7 @@ func TestContactSearchAPI_MatchesNameAndMethod(t *testing.T) {
 
 	t.Run("NameMatch", func(t *testing.T) {
 		// spec: CON-023
-		ctx := context.Background()
+		ctx := t.Context()
 		tok := searchNS(t)
 		id := createSearchContact(t, ctx, contactRepo, "NameHit "+tok)
 
@@ -169,7 +169,7 @@ func TestContactSearchAPI_MatchesNameAndMethod(t *testing.T) {
 
 	t.Run("MethodValueMatch", func(t *testing.T) {
 		// spec: CON-023
-		ctx := context.Background()
+		ctx := t.Context()
 		tokM := searchNS(t)
 		// The name deliberately does NOT contain tokM, and the token-bearing
 		// method is a non-primary telegram handle (a primary phone with a
@@ -200,7 +200,7 @@ func TestContactSearchAPI_RelevanceAndSortOverride(t *testing.T) {
 
 	t.Run("DefaultOrder_IsRelevance", func(t *testing.T) {
 		// spec: CON-023
-		ctx := context.Background()
+		ctx := t.Context()
 		tok := searchNS(t)
 		// HI: tok appears twice -> higher ts_rank (term frequency); name
 		// sorts last alphabetically ("Zzz").
@@ -222,7 +222,7 @@ func TestContactSearchAPI_RelevanceAndSortOverride(t *testing.T) {
 
 	t.Run("ExplicitSort_OverridesRelevance", func(t *testing.T) {
 		// spec: CON-023
-		ctx := context.Background()
+		ctx := t.Context()
 		// A fresh token: this subtest's own matched set, independent of
 		// DefaultOrder_IsRelevance's.
 		tok := searchNS(t)
@@ -249,7 +249,7 @@ func TestContactSearchAPI_EmptyResult(t *testing.T) {
 	router, contactRepo, _ := newContactSearchAPITest(t)
 
 	t.Run("NoMatch_ReturnsEmptyArray", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		ns := searchNS(t)
 		seededID := createSearchContact(t, ctx, contactRepo, "SeededButUnrelated "+ns)
 

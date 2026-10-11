@@ -83,7 +83,7 @@ func TestUpsertTitleCandidateTx_TitleCaseNormalization(t *testing.T) {
 	mock := &mockExternalUpserter{}
 	w := NewDiscoveryWriter(mock)
 	sid := uuid.New()
-	err := w.UpsertTitleCandidateTx(context.Background(), nil, sid, "alice", "ALICE")
+	err := w.UpsertTitleCandidateTx(t.Context(), nil, sid, "alice", "ALICE")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestUpsertTitleCandidateTx_MetadataShape(t *testing.T) {
 	mock := &mockExternalUpserter{}
 	w := NewDiscoveryWriter(mock)
 	sid := uuid.New()
-	err := w.UpsertTitleCandidateTx(context.Background(), nil, sid, "alice", "Alice")
+	err := w.UpsertTitleCandidateTx(t.Context(), nil, sid, "alice", "Alice")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestUpsertTitleCandidateTx_SourceAndSourceID(t *testing.T) {
 	mock := &mockExternalUpserter{}
 	w := NewDiscoveryWriter(mock)
 	sid := uuid.MustParse("8a4f2c1e-1234-5678-9abc-def012345678")
-	err := w.UpsertTitleCandidateTx(context.Background(), nil, sid, "alice", "Alice")
+	err := w.UpsertTitleCandidateTx(t.Context(), nil, sid, "alice", "Alice")
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestUpsertTitleCandidateTx_RepoError(t *testing.T) {
 	mock := &mockExternalUpserter{err: errors.New("boom")}
 	w := NewDiscoveryWriter(mock)
 	sid := uuid.New()
-	err := w.UpsertTitleCandidateTx(context.Background(), nil, sid, "alice", "Alice")
+	err := w.UpsertTitleCandidateTx(t.Context(), nil, sid, "alice", "Alice")
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
@@ -166,7 +166,7 @@ func TestUpsertTitleCandidateTx_EmptyNormalizedToken(t *testing.T) {
 	mock := &mockExternalUpserter{}
 	w := NewDiscoveryWriter(mock)
 	sid := uuid.New()
-	err := w.UpsertTitleCandidateTx(context.Background(), nil, sid, "", "Alice")
+	err := w.UpsertTitleCandidateTx(t.Context(), nil, sid, "", "Alice")
 	if err == nil {
 		t.Fatalf("expected error for empty normalizedToken, got nil")
 	}

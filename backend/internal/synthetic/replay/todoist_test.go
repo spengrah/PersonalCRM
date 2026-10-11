@@ -1,7 +1,6 @@
 package replay
 
 import (
-	"context"
 	"regexp"
 	"testing"
 
@@ -100,7 +99,7 @@ func TestSeedVisibleTaskSpread_NoOpBelowMinCatalog(t *testing.T) {
 		for i := range ids {
 			ids[i] = uuid.New()
 		}
-		res, err := h.SeedVisibleTaskSpread(context.Background(), ids)
+		res, err := h.SeedVisibleTaskSpread(t.Context(), ids)
 		require.NoError(t, err, "no-op for %d ids", k)
 		require.Equal(t, SpreadResult{}, res, "spread is a no-op below %d ids (got %d)", visibleSpreadMinCatalog, k)
 		require.Nil(t, h.ManualCohortIDs(), "no manual cohort recorded for %d ids", k)

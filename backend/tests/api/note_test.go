@@ -2,18 +2,16 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -23,25 +21,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupNoteTestRouter() (*gin.Engine, func()) {
-	ctx := context.Background()
-	databaseURL := os.Getenv("DATABASE_URL")
+func setupNoteTestRouter(t *testing.T) (*gin.Engine, func()) {
 
 	// Migrations are applied once by TestMain.
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	if err != nil {
-		panic("Failed to connect to test database: " + err.Error())
-	}
+	database := testsupport.OpenDatabase(t)
 
 	// Set up repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -117,17 +102,10 @@ func deleteTestContact(t *testing.T, router *gin.Engine, contactID string) {
 }
 
 func TestNoteAPI_GetContactNotepad(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupNoteTestRouter()
+	router, cleanup := setupNoteTestRouter(t)
 	defer cleanup()
 
 	t.Run("GetNote_NonExistent_Returns204", func(t *testing.T) {
@@ -238,17 +216,10 @@ func TestNoteAPI_GetContactNotepad(t *testing.T) {
 }
 
 func TestNoteAPI_SaveContactNotepad(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupNoteTestRouter()
+	router, cleanup := setupNoteTestRouter(t)
 	defer cleanup()
 
 	t.Run("SaveNote_CreateNew_Returns200", func(t *testing.T) {
@@ -545,17 +516,10 @@ func TestNoteAPI_SaveContactNotepad(t *testing.T) {
 }
 
 func TestNoteAPI_LazyCreationPattern(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, cleanup := setupNoteTestRouter()
+	router, cleanup := setupNoteTestRouter(t)
 	defer cleanup()
 
 	t.Run("LazyCreation_NoRecordUntilContent", func(t *testing.T) {

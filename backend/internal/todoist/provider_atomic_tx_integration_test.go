@@ -3,7 +3,7 @@ package todoist
 import (
 	"context"
 	"fmt"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"sync"
 	"testing"
@@ -122,25 +122,12 @@ type atomicTxTestEnv struct {
 func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
 	// Migrations are applied once into the template; the per-package clone
 	// (testdb.SetupPackage in testmain_integration_test.go) inherits the
 	// fully-migrated schema, so no inline db.RunMigrations is needed here.
-	ctx := context.Background()
+	ctx := t.Context()
 
-	database, err := db.NewDatabase(ctx, config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          config.DefaultDBMaxConns,
-		MinConns:          config.DefaultDBMinConns,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	})
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
@@ -189,7 +176,7 @@ func setupAtomicTxTestEnv(t *testing.T) (*atomicTxTestEnv, func()) {
 	)
 
 	cleanup := func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer stopCancel()
 		_ = riverClient.Stop(stopCtx)
 		database.Close()

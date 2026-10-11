@@ -115,7 +115,7 @@ func TestCandidatePreview_EventAttendeesMatchedFlag(t *testing.T) {
 	// any attendee).
 	impliedSet := map[uuid.UUID]struct{}{matchedID: {}}
 
-	preview, missing, err := svc.candidatePreview(context.Background(), repository.LinkedKindEvent, evt.ID, impliedSet)
+	preview, missing, err := svc.candidatePreview(t.Context(), repository.LinkedKindEvent, evt.ID, impliedSet)
 	require.NoError(t, err)
 	require.False(t, missing)
 	require.NotNil(t, preview)
@@ -147,7 +147,7 @@ func TestCandidatePreview_PhoneCallSyntheticAttendee(t *testing.T) {
 	svc := &MeetingNoteService{linkageTargets: &stubLinkageTargets{call: call}}
 
 	// Matched when the peer contact is in the implied set.
-	preview, missing, err := svc.candidatePreview(context.Background(), repository.LinkedKindPhoneCall, call.ID, map[uuid.UUID]struct{}{peerID: {}})
+	preview, missing, err := svc.candidatePreview(t.Context(), repository.LinkedKindPhoneCall, call.ID, map[uuid.UUID]struct{}{peerID: {}})
 	require.NoError(t, err)
 	require.False(t, missing)
 	require.Len(t, preview.Attendees, 1)
@@ -155,7 +155,7 @@ func TestCandidatePreview_PhoneCallSyntheticAttendee(t *testing.T) {
 	require.True(t, preview.Attendees[0].Matched)
 
 	// Not matched when the peer is absent from the implied set.
-	preview2, _, err := svc.candidatePreview(context.Background(), repository.LinkedKindPhoneCall, call.ID, map[uuid.UUID]struct{}{})
+	preview2, _, err := svc.candidatePreview(t.Context(), repository.LinkedKindPhoneCall, call.ID, map[uuid.UUID]struct{}{})
 	require.NoError(t, err)
 	require.Len(t, preview2.Attendees, 1)
 	require.False(t, preview2.Attendees[0].Matched)

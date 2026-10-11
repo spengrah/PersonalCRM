@@ -2,7 +2,7 @@ package api
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -33,17 +33,13 @@ type discoveryTestEnv struct {
 func setupDiscoveryEnv(t *testing.T) *discoveryTestEnv {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := t.Context()
 	require.NoError(t, db.RunMigrations(ctx, databaseURL, getMigrationsPath()))
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
@@ -82,7 +78,7 @@ func setupDiscoveryEnv(t *testing.T) *discoveryTestEnv {
 // SQL). Returns the row id.
 func (e *discoveryTestEnv) seedTitleRow(t *testing.T, token string, sessionUUID uuid.UUID) uuid.UUID {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	tx, err := e.database.Pool.Begin(ctx)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
@@ -102,7 +98,7 @@ func (e *discoveryTestEnv) seedTitleRow(t *testing.T, token string, sessionUUID 
 // surface its title as evidence.
 func (e *discoveryTestEnv) seedMeetingNote(t *testing.T, sessionUUID uuid.UUID, title string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	tx, err := e.database.Pool.Begin(ctx)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
@@ -139,7 +135,7 @@ func anarlogTitleSourceID(normalizedToken string, sessionUUID uuid.UUID) string 
 
 func (e *discoveryTestEnv) findGroup(t *testing.T, token string) *service.DiscoveryGroup {
 	t.Helper()
-	groups, err := e.svc.ListGroups(context.Background())
+	groups, err := e.svc.ListGroups(t.Context())
 	require.NoError(t, err)
 	for i := range groups {
 		if groups[i].NormalizedToken == token {
@@ -152,7 +148,7 @@ func (e *discoveryTestEnv) findGroup(t *testing.T, token string) *service.Discov
 func TestAnarlogDiscovery_ListGroups(t *testing.T) {
 	t.Parallel()
 	env := setupDiscoveryEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	tokenA := "alpha" + env.tokenSuffix
 	tokenB := "beta" + env.tokenSuffix
@@ -188,7 +184,7 @@ func TestAnarlogDiscovery_ListGroups(t *testing.T) {
 func TestAnarlogDiscovery_ResolveImport(t *testing.T) {
 	t.Parallel()
 	env := setupDiscoveryEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	token := "gamma" + env.tokenSuffix
 	sess1, sess2 := uuid.New(), uuid.New()
 	id1 := env.seedTitleRow(t, token, sess1)
@@ -224,7 +220,7 @@ func TestAnarlogDiscovery_ResolveImport(t *testing.T) {
 func TestAnarlogDiscovery_ResolveIgnore(t *testing.T) {
 	t.Parallel()
 	env := setupDiscoveryEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	token := "delta" + env.tokenSuffix
 	id := env.seedTitleRow(t, token, uuid.New())
 
@@ -250,7 +246,7 @@ func TestAnarlogDiscovery_ResolveIgnore(t *testing.T) {
 func TestAnarlogDiscovery_ResolveLinkMissingContact(t *testing.T) {
 	t.Parallel()
 	env := setupDiscoveryEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	token := "epsilon" + env.tokenSuffix
 	env.seedTitleRow(t, token, uuid.New())
 	t.Cleanup(func() { _ = env.externalRepo.MarkAnarlogTitleSiblingsIgnoredByToken(ctx, token) })
@@ -267,7 +263,7 @@ func TestAnarlogDiscovery_ResolveLinkMissingContact(t *testing.T) {
 func TestAnarlogDiscovery_ResolveLinkPreservesProfileAndCadence(t *testing.T) {
 	t.Parallel()
 	env := setupDiscoveryEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Seed a contact with profile fields + a known cadence/contact_by.
 	loc := "Berlin"
@@ -331,7 +327,7 @@ func TestAnarlogDiscovery_ResolveLinkPreservesProfileAndCadence(t *testing.T) {
 func TestAnarlogDiscovery_LinkNameOnlyPreservesContactBy(t *testing.T) {
 	t.Parallel()
 	env := setupDiscoveryEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	startCadence := "weekly"
 	contact, _, err := env.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
@@ -368,7 +364,7 @@ func TestAnarlogDiscovery_LinkNameOnlyPreservesContactBy(t *testing.T) {
 func TestAnarlogDiscovery_DuplicateRowExcludedFromMark(t *testing.T) {
 	t.Parallel()
 	env := setupDiscoveryEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	token := "theta" + env.tokenSuffix
 	liveID := env.seedTitleRow(t, token, uuid.New())
 	dupID := env.seedTitleRow(t, token, uuid.New())

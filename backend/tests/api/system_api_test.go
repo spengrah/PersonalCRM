@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/accelerated"
@@ -33,16 +33,7 @@ import (
 func newSystemTestDatabase(t *testing.T) *db.Database {
 	t.Helper()
 
-	dbConfig := config.DatabaseConfig{
-		URL:               os.Getenv("DATABASE_URL"),
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(context.Background(), dbConfig)
-	require.NoError(t, err, "failed to connect to test database")
+	database := testsupport.OpenDatabase(t)
 	return database
 }
 
@@ -82,19 +73,14 @@ func collectKeys(value interface{}, into map[string]bool) {
 }
 
 func TestSystemAPI_ExportData(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	database := newSystemTestDatabase(t)
 	defer database.Close()
 	router := setupSystemExportTestRouter(database)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contactRepo := repository.NewContactRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	noteRepo := repository.NewNoteRepository(database.Queries)

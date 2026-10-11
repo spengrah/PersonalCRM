@@ -5,13 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/google/uuid"
@@ -36,18 +35,11 @@ type chatStagingEnv struct {
 // migration refuses to revert while any NULL-contact row survives.
 func setupChatStagingTest(t *testing.T) *chatStagingEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Registered first so it runs LAST (t.Cleanup is LIFO) — the row sweeps
 	// below need the pool open.
 	t.Cleanup(database.Close)

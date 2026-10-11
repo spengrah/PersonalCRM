@@ -56,7 +56,7 @@ func TestSweeperWorker_EnqueuesPerContact(t *testing.T) {
 		map[string]UnprocessedContactLister{"messages": lister},
 		inserter,
 	)
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
 	require.NoError(t, err)
 	require.Equal(t, 1, lister.called)
 	require.Len(t, inserter.calls, 3)
@@ -77,7 +77,7 @@ func TestSweeperWorker_EmptyList_NoEnqueues(t *testing.T) {
 		map[string]UnprocessedContactLister{"messages": lister},
 		inserter,
 	)
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
 	require.NoError(t, err)
 	require.Empty(t, inserter.calls)
 }
@@ -97,7 +97,7 @@ func TestSweeperWorker_ListError_LogsAndContinues(t *testing.T) {
 		},
 		inserter,
 	)
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
 	require.NoError(t, err)
 	// The healthy source's contact still gets enqueued.
 	require.Len(t, inserter.calls, 1)
@@ -115,7 +115,7 @@ func TestSweeperWorker_EnqueueError_ContinuesToNextContact(t *testing.T) {
 		map[string]UnprocessedContactLister{"messages": lister},
 		inserter,
 	)
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
 	require.NoError(t, err)
 	require.Len(t, inserter.calls, 1)
 	require.True(t, inserter.failed)
@@ -133,7 +133,7 @@ func TestSweeperWorker_DuplicateSkipped_ContinuesToNextContact(t *testing.T) {
 		map[string]UnprocessedContactLister{"messages": lister},
 		inserter,
 	)
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
 	require.NoError(t, err)
 	require.Len(t, inserter.calls, 2)
 }
@@ -146,7 +146,7 @@ func TestSweeperWorker_NilRiverClient_NoOps(t *testing.T) {
 		map[string]UnprocessedContactLister{"messages": lister},
 		nil,
 	)
-	err := worker.Work(context.Background(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
+	err := worker.Work(t.Context(), &river.Job[consumerjobs.MessagingAggregateSweeperArgs]{})
 	require.NoError(t, err)
 	require.Equal(t, 1, lister.called)
 }

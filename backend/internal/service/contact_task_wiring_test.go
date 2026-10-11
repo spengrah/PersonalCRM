@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"net/http"
 	"sync/atomic"
 	"testing"
@@ -53,7 +52,7 @@ func TestNewContactTaskService_WiresEnvAwareFactory(t *testing.T) {
 	require.True(t, ok, "factory should return *todoist.SyncClient")
 	sc.SetHTTPClient(&http.Client{Transport: rt})
 
-	_, err := sc.QuickAdd(context.Background(), "x", "")
+	_, err := sc.QuickAdd(t.Context(), "x", "")
 	require.ErrorIs(t, err, todoist.ErrNonProdWriteRefused,
 		"staging cfg must produce a write-refusing client")
 	assert.Equal(t, int32(0), rt.calls.Load(), "no HTTP request should be issued")

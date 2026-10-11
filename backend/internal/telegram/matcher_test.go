@@ -99,7 +99,7 @@ func TestMatchPeer_UsernameMatch(t *testing.T) {
 	}
 
 	username := "alice"
-	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	result, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Alice"), nil, nil)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -128,7 +128,7 @@ func TestMatchPeer_PhoneFallback(t *testing.T) {
 
 	username := "bob"
 	phone := "+15551234567"
-	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Bob"), nil, &phone)
+	result, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Bob"), nil, &phone)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -158,7 +158,7 @@ func TestMatchPeer_UsernamePriority(t *testing.T) {
 
 	username := "charlie"
 	phone := "+15559876543"
-	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Charlie"), nil, &phone)
+	result, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Charlie"), nil, &phone)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -178,7 +178,7 @@ func TestMatchPeer_Unmatched(t *testing.T) {
 	}
 
 	username := "nobody"
-	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Nobody"), nil, nil)
+	result, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Nobody"), nil, nil)
 
 	require.NoError(t, err)
 	assert.Nil(t, result) // no match
@@ -196,7 +196,7 @@ func TestMatchPeer_NilUsernameAndPhone(t *testing.T) {
 		discoveryMinMsgs:    3,
 	}
 
-	result, err := matcher.MatchPeer(context.Background(), 12345, nil, nil, nil, nil)
+	result, err := matcher.MatchPeer(t.Context(), 12345, nil, nil, nil, nil)
 
 	require.NoError(t, err)
 	assert.Nil(t, result)
@@ -215,13 +215,13 @@ func TestOnPeerLinked_WithUsername(t *testing.T) {
 		discoveryMinMsgs:    3,
 	}
 
-	err := matcher.OnPeerLinked(context.Background(), 12345, "alice", contactID)
+	err := matcher.OnPeerLinked(t.Context(), 12345, "alice", contactID)
 	require.NoError(t, err)
 
 	// Should call MatchOrCreate with KnownContactID to link identity
 	require.Len(t, identityMock.calls, 1)
 	assert.Equal(t, "alice", identityMock.calls[0].RawIdentifier)
-	assert.NotNil(t, identityMock.calls[0].KnownContactID)
+	require.NotNil(t, identityMock.calls[0].KnownContactID)
 	assert.Equal(t, contactID, *identityMock.calls[0].KnownContactID)
 }
 
@@ -236,7 +236,7 @@ func TestOnPeerLinked_WithoutUsername(t *testing.T) {
 		discoveryMinMsgs:    3,
 	}
 
-	err := matcher.OnPeerLinked(context.Background(), 12345, "", contactID)
+	err := matcher.OnPeerLinked(t.Context(), 12345, "", contactID)
 	require.NoError(t, err)
 
 	// No MatchOrCreate call when username is empty
@@ -257,7 +257,7 @@ func TestMarkExternalContactMatched_AlreadyMatched(t *testing.T) {
 	}
 
 	// Should not call UpdateMatch — already matched
-	matcher.markExternalContactMatched(context.Background(), 12345, contactID)
+	matcher.markExternalContactMatched(t.Context(), 12345, contactID)
 	assert.Empty(t, ecMock.updateMatchCalls)
 }
 
@@ -275,7 +275,7 @@ func TestMarkExternalContactMatched_Unmatched(t *testing.T) {
 		externalContactRepo: ecMock,
 	}
 
-	matcher.markExternalContactMatched(context.Background(), 12345, contactID)
+	matcher.markExternalContactMatched(t.Context(), 12345, contactID)
 	require.Len(t, ecMock.updateMatchCalls, 1)
 	assert.Equal(t, ecID, ecMock.updateMatchCalls[0].id)
 	assert.Equal(t, contactID, *ecMock.updateMatchCalls[0].contactID)
@@ -302,7 +302,7 @@ func TestUpdateDiscoveryCandidatesForPeer_BelowThreshold(t *testing.T) {
 		discoveryMinMsgs:    3,
 	}
 
-	matcher.UpdateDiscoveryCandidatesForPeer(context.Background(), 12345, ptr("alice"), ptr("Alice"), nil)
+	matcher.UpdateDiscoveryCandidatesForPeer(t.Context(), 12345, ptr("alice"), ptr("Alice"), nil)
 
 	// Below threshold — no upsert
 	assert.Empty(t, ecMock.upsertCalls)
@@ -318,7 +318,7 @@ func TestUpdateDiscoveryCandidatesForPeer_AtThreshold(t *testing.T) {
 		discoveryMinMsgs:    3,
 	}
 
-	matcher.UpdateDiscoveryCandidatesForPeer(context.Background(), 12345, ptr("alice"), ptr("Alice"), nil)
+	matcher.UpdateDiscoveryCandidatesForPeer(t.Context(), 12345, ptr("alice"), ptr("Alice"), nil)
 
 	// At threshold — should upsert
 	require.Len(t, ecMock.upsertCalls, 1)
@@ -345,7 +345,7 @@ func TestUpdateDiscoveryCandidatesForPeer_NilNames_StillSendsUpsert(t *testing.T
 		discoveryMinMsgs:    3,
 	}
 
-	matcher.UpdateDiscoveryCandidatesForPeer(context.Background(), 12345, nil, nil, nil)
+	matcher.UpdateDiscoveryCandidatesForPeer(t.Context(), 12345, nil, nil, nil)
 
 	require.Len(t, ecMock.upsertCalls, 1)
 	call := ecMock.upsertCalls[0]
@@ -374,7 +374,7 @@ func TestUpdateDiscoveryCandidatesForPeer_EmptyStringsTreatedAsNil(t *testing.T)
 	}
 
 	empty := ""
-	matcher.UpdateDiscoveryCandidatesForPeer(context.Background(), 12345, &empty, &empty, &empty)
+	matcher.UpdateDiscoveryCandidatesForPeer(t.Context(), 12345, &empty, &empty, &empty)
 
 	require.Len(t, ecMock.upsertCalls, 1)
 	call := ecMock.upsertCalls[0]
@@ -422,7 +422,7 @@ func TestMatchPeer_UsernameMatch_FiresEnricher(t *testing.T) {
 	}
 
 	username := "alice"
-	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	result, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Alice"), nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, contactID, *result)
@@ -450,7 +450,7 @@ func TestMatchPeer_PhoneMatchWithUsername_FiresEnricher(t *testing.T) {
 
 	username := "bob"
 	phone := "+15551234567"
-	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Bob"), nil, &phone)
+	result, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Bob"), nil, &phone)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, enricher.captured, 1)
@@ -474,7 +474,7 @@ func TestMatchPeer_PhoneMatchWithoutUsername_NoUsernameInMetadata(t *testing.T) 
 	}
 
 	phone := "+15551234567"
-	result, err := matcher.MatchPeer(context.Background(), 12345, nil, nil, nil, &phone)
+	result, err := matcher.MatchPeer(t.Context(), 12345, nil, nil, nil, &phone)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, enricher.captured, 1)
@@ -493,7 +493,7 @@ func TestMatchPeer_Unmatched_NoEnricherCall(t *testing.T) {
 	}
 
 	username := "nobody"
-	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Nobody"), nil, nil)
+	result, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Nobody"), nil, nil)
 	require.NoError(t, err)
 	assert.Nil(t, result)
 	assert.Empty(t, enricher.captured)
@@ -514,7 +514,7 @@ func TestMatchPeer_NilEnricher_NoPanic(t *testing.T) {
 	}
 
 	username := "alice"
-	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	result, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Alice"), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, contactID, *result)
 }
@@ -535,7 +535,7 @@ func TestMatchPeer_EnricherError_DoesNotFailMatch(t *testing.T) {
 	}
 
 	username := "alice"
-	result, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	result, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Alice"), nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, contactID, *result)
@@ -567,7 +567,7 @@ func TestMatchPeer_PersistedExternalPreferred(t *testing.T) {
 	}
 
 	username := "newhandle"
-	_, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("New"), nil, nil)
+	_, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("New"), nil, nil)
 	require.NoError(t, err)
 	require.Len(t, enricher.captured, 1)
 	got := enricher.captured[0].external
@@ -595,7 +595,7 @@ func TestMatchPeer_AbsentExternal_Synthesized(t *testing.T) {
 	}
 
 	username := "alice"
-	_, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	_, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Alice"), nil, nil)
 	require.NoError(t, err)
 	require.Len(t, enricher.captured, 1)
 	got := enricher.captured[0].external
@@ -629,7 +629,7 @@ func TestMatchPeer_PersistedNilMetadata_Initialized(t *testing.T) {
 	}
 
 	username := "alice"
-	_, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	_, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Alice"), nil, nil)
 	require.NoError(t, err)
 	require.Len(t, enricher.captured, 1)
 	assert.Equal(t, "@alice", enricher.captured[0].external.Metadata["username"])
@@ -659,7 +659,7 @@ func TestMatchPeer_PersistedEmptyMetadata_GapFilled(t *testing.T) {
 	}
 
 	username := "alice"
-	_, err := matcher.MatchPeer(context.Background(), 12345, &username, ptr("Alice"), nil, nil)
+	_, err := matcher.MatchPeer(t.Context(), 12345, &username, ptr("Alice"), nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "@alice", enricher.captured[0].external.Metadata["username"])
 }
@@ -688,7 +688,7 @@ func TestMatchPeer_NoUsernameAnywhere_NoUsernameWritten(t *testing.T) {
 	}
 
 	phone := "+15551234567"
-	_, err := matcher.MatchPeer(context.Background(), 12345, nil, nil, nil, &phone)
+	_, err := matcher.MatchPeer(t.Context(), 12345, nil, nil, nil, &phone)
 	require.NoError(t, err)
 	require.Len(t, enricher.captured, 1)
 	_, has := enricher.captured[0].external.Metadata["username"]

@@ -23,6 +23,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -58,11 +59,9 @@ type discoveryEnv struct {
 
 func newDiscoveryEnv(t *testing.T) *discoveryEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	// Per-test isolated clone: the live consumer drains a private river_job.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	commsRepo := repository.NewCommsMessageRepository(database.Queries)
@@ -275,7 +274,7 @@ func TestDiscovery_LinkAddsMethodAndDispatchesRematch(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, riverClient.Start(e.ctx))
 	t.Cleanup(func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
 		defer cancel()
 		_ = riverClient.Stop(stopCtx)
 	})

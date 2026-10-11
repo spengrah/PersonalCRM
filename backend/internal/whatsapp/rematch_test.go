@@ -62,7 +62,7 @@ func TestWhatsAppRematch_AttachesByNormalizedPhoneOnly(t *testing.T) {
 	engine := &fakeContactAggregator{}
 	contactID := uuid.New()
 
-	n, err := NewWhatsAppMethodRematchHandler(attacher, engine).Rematch(context.Background(), contactID, "+12045550107")
+	n, err := NewWhatsAppMethodRematchHandler(attacher, engine).Rematch(t.Context(), contactID, "+12045550107")
 
 	require.NoError(t, err)
 	assert.Equal(t, 3, n)
@@ -85,7 +85,7 @@ func TestWhatsAppRematch_EmptyValueIsANoop(t *testing.T) {
 		attacher := &fakeCommsAttacher{attached: 5}
 		engine := &fakeContactAggregator{}
 
-		n, err := NewPhoneRematchHandler(attacher, engine).Rematch(context.Background(), uuid.New(), value)
+		n, err := NewPhoneRematchHandler(attacher, engine).Rematch(t.Context(), uuid.New(), value)
 
 		require.NoError(t, err)
 		assert.Equal(t, 0, n)
@@ -101,7 +101,7 @@ func TestWhatsAppRematch_ZeroAttachedSkipsAggregation(t *testing.T) {
 	attacher := &fakeCommsAttacher{attached: 0}
 	engine := &fakeContactAggregator{}
 
-	n, err := NewPhoneRematchHandler(attacher, engine).Rematch(context.Background(), uuid.New(), "+12045550107")
+	n, err := NewPhoneRematchHandler(attacher, engine).Rematch(t.Context(), uuid.New(), "+12045550107")
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
@@ -117,7 +117,7 @@ func TestWhatsAppRematch_AttachErrorIsReturned(t *testing.T) {
 	attacher := &fakeCommsAttacher{attached: 4, err: sentinel}
 	engine := &fakeContactAggregator{}
 
-	n, err := NewWhatsAppMethodRematchHandler(attacher, engine).Rematch(context.Background(), uuid.New(), "+12045550107")
+	n, err := NewWhatsAppMethodRematchHandler(attacher, engine).Rematch(t.Context(), uuid.New(), "+12045550107")
 
 	require.Error(t, err, "a failure to attach must be reported, not swallowed")
 	assert.ErrorIs(t, err, sentinel)
@@ -132,7 +132,7 @@ func TestWhatsAppRematch_AggregationErrorReturnsTheAttachedCount(t *testing.T) {
 	attacher := &fakeCommsAttacher{attached: 7}
 	engine := &fakeContactAggregator{err: sentinel}
 
-	n, err := NewWhatsAppMethodRematchHandler(attacher, engine).Rematch(context.Background(), uuid.New(), "+12045550107")
+	n, err := NewWhatsAppMethodRematchHandler(attacher, engine).Rematch(t.Context(), uuid.New(), "+12045550107")
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, sentinel)

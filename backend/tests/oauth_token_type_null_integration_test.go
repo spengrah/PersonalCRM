@@ -2,11 +2,10 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/stretchr/testify/require"
@@ -22,21 +21,13 @@ import (
 func TestOAuthCredential_TokenTypeStoredNullNotEmptyString(t *testing.T) {
 	t.Parallel()
 
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewOAuthRepository(database.Queries)
 
@@ -54,7 +45,7 @@ func TestOAuthCredential_TokenTypeStoredNullNotEmptyString(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = repo.Delete(context.Background(), cred.ID)
+		_ = repo.Delete(context.WithoutCancel(t.Context()), cred.ID)
 	})
 
 	n, err := repo.CountOAuthCredentialWithNullTokenTypeForTest(ctx, cred.ID)

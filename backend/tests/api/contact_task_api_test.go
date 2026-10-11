@@ -4,17 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"sync"
 	"testing"
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
-	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/contacttask"
 	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
@@ -82,26 +80,12 @@ type contactTaskAPIHarness struct {
 func setupContactTaskAPIRouter(t *testing.T) (*contactTaskAPIHarness, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactTaskRepo := repository.NewContactTaskRepository(database.Queries)
@@ -156,7 +140,7 @@ func setupContactTaskAPIRouter(t *testing.T) (*contactTaskAPIHarness, func()) {
 // contact_task rows).
 func createContactTaskTestContact(t *testing.T, h *contactTaskAPIHarness, name string) uuid.UUID {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contact, err := h.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -173,14 +157,12 @@ func decodeContactTaskEnvelope(t *testing.T, body []byte) map[string]any {
 }
 
 func TestContactTaskAPI_ListFilters(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	h, cleanup := setupContactTaskAPIRouter(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	suffix := uuid.NewString()[:8]
 	contactID := createContactTaskTestContact(t, h, "Task State Filter API Test "+suffix)
@@ -362,9 +344,7 @@ func postManualTask(t *testing.T, h *contactTaskAPIHarness, contactID uuid.UUID,
 }
 
 func TestContactTaskAPI_CreateManualTask(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	h, cleanup := setupContactTaskAPIRouter(t)
@@ -475,14 +455,12 @@ func TestContactTaskAPI_CreateManualTask(t *testing.T) {
 }
 
 func TestContactTaskAPI_DeleteTaskLink(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	h, cleanup := setupContactTaskAPIRouter(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	suffix := uuid.NewString()[:8]
 	contactID := createContactTaskTestContact(t, h, "Task Unlink API Test "+suffix)
@@ -507,7 +485,7 @@ func TestContactTaskAPI_DeleteTaskLink(t *testing.T) {
 
 		// The CRM link row is gone...
 		_, err = h.contactTaskRepo.GetContactTask(ctx, task.ID)
-		assert.True(t, errors.Is(err, db.ErrNotFound), "CRM link should be removed, got err=%v", err)
+		assert.ErrorIs(t, err, db.ErrNotFound, "CRM link should be removed, got err=%v", err)
 
 		// ...but ONLY the link: the contact is untouched and no remote
 		// provider mutation happened (the Todoist client was never called).

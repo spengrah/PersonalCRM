@@ -119,7 +119,7 @@ func setupTestEventBus(
 	require.NoError(t, client.Start(ctx))
 
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})
@@ -200,7 +200,7 @@ func setupTestEventBusWithRematch(
 	require.NoError(t, client.Start(ctx))
 
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})
@@ -299,7 +299,7 @@ func setupTestEventBusForEmail(
 
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})

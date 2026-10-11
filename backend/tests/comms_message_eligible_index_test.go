@@ -3,6 +3,7 @@
 package tests
 
 import (
+	"personal-crm/backend/tests/testsupport"
 	"regexp"
 	"sort"
 	"strings"
@@ -67,9 +68,7 @@ func predicateConjuncts(t *testing.T, def string) []string {
 }
 
 func TestCommsMessageEligibleIndexes_Definitions(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	database, ctx := graphTestDB(t)
@@ -135,9 +134,7 @@ func indexNames(defs map[string]string) []string {
 // than left to the behavioral tests. Same reasoning, and the same catalog read,
 // as the comms_message eligible indexes above.
 func TestWhatsAppHistoryClaimIndex_Definition(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	database, ctx := graphTestDB(t)

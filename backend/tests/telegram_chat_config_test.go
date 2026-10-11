@@ -1,8 +1,7 @@
 package tests
 
 import (
-	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -23,7 +22,7 @@ func chatConfigIDs(t *testing.T, queries db.Querier) (id1, id2, id3 int64) {
 	base, _ := uniqueTestIDs(t, ns)
 	id1, id2, id3 = base, base+1, base+2
 	clean := func() {
-		ctx := context.Background()
+		ctx := t.Context()
 		_ = queries.DeleteTelegramChatConfig(ctx, id1)
 		_ = queries.DeleteTelegramChatConfig(ctx, id2)
 		_ = queries.DeleteTelegramChatConfig(ctx, id3)
@@ -34,24 +33,16 @@ func chatConfigIDs(t *testing.T, queries db.Querier) (id1, id2, id3 int64) {
 }
 
 func TestChatConfig_UpsertAndList(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -62,7 +53,7 @@ func TestChatConfig_UpsertAndList(t *testing.T) {
 
 	title := "Test Group"
 	mc := int32(5)
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID1,
 		ChatTitle:      &title,
 		ChatType:       "group",
@@ -86,24 +77,16 @@ func TestChatConfig_UpsertAndList(t *testing.T) {
 }
 
 func TestChatConfig_UpdateStatus(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -113,7 +96,7 @@ func TestChatConfig_UpdateStatus(t *testing.T) {
 	chatID1, _, _ := chatConfigIDs(t, database.Queries)
 
 	title := "Status Test"
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID1,
 		ChatTitle:      &title,
 		ChatType:       "group",
@@ -127,24 +110,16 @@ func TestChatConfig_UpdateStatus(t *testing.T) {
 }
 
 func TestChatConfig_BackfillCursorAndComplete(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -153,7 +128,7 @@ func TestChatConfig_BackfillCursorAndComplete(t *testing.T) {
 
 	_, chatID2, _ := chatConfigIDs(t, database.Queries)
 
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID2,
 		ChatType:       "private",
 		Status:         "auto",
@@ -181,24 +156,16 @@ func TestChatConfig_BackfillCursorAndComplete(t *testing.T) {
 }
 
 func TestChatConfig_ResetBackfill(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -207,7 +174,7 @@ func TestChatConfig_ResetBackfill(t *testing.T) {
 
 	_, _, chatID3 := chatConfigIDs(t, database.Queries)
 
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID3,
 		ChatType:       "group",
 		Status:         "auto",
@@ -229,24 +196,16 @@ func TestChatConfig_ResetBackfill(t *testing.T) {
 }
 
 func TestChatConfig_ListForBackfill(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -256,7 +215,7 @@ func TestChatConfig_ListForBackfill(t *testing.T) {
 	chatID1, chatID2, _ := chatConfigIDs(t, database.Queries)
 
 	// Create one incomplete and one complete
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID1,
 		ChatType:       "private",
 		Status:         "auto",
@@ -291,24 +250,16 @@ func TestChatConfig_ListForBackfill(t *testing.T) {
 }
 
 func TestChatConfig_UpdateMemberCount(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -318,7 +269,7 @@ func TestChatConfig_UpdateMemberCount(t *testing.T) {
 	chatID1, _, _ := chatConfigIDs(t, database.Queries)
 
 	mc := int32(5)
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID1,
 		ChatType:       "group",
 		MemberCount:    &mc,
@@ -336,24 +287,16 @@ func TestChatConfig_UpdateMemberCount(t *testing.T) {
 }
 
 func TestChatConfig_BackfillResume(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER chatConfigIDs' row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -363,7 +306,7 @@ func TestChatConfig_BackfillResume(t *testing.T) {
 	chatID1, chatID2, _ := chatConfigIDs(t, database.Queries)
 
 	// Chat 1: has cursor (interrupted mid-backfill)
-	_, err = repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
+	_, err := repo.UpsertConfig(ctx, repository.UpsertTelegramChatConfigParams{
 		TelegramChatID: chatID1,
 		ChatType:       "private",
 		Status:         "auto",

@@ -2,7 +2,7 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -30,21 +30,14 @@ func setupDiscoveryUpsertTest(t *testing.T) (
 	func(),
 ) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	// Migrations are applied once by TestMain.
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(context.Background(), cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewExternalContactRepository(database.Queries)
 
@@ -53,7 +46,7 @@ func setupDiscoveryUpsertTest(t *testing.T) (
 		// Narrow cleanup: only this test's per-run prefix. Use the sqlc query
 		// (also used by the /test/cleanup handler) rather than raw SQL.
 		_, _ = database.Queries.DeleteExternalContactsBySourceIDPrefix(
-			context.Background(),
+			t.Context(),
 			prefix,
 		)
 		database.Close()
@@ -66,7 +59,7 @@ func TestUpsertDiscoveryCandidate_InsertsNewRow(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	got, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
@@ -103,7 +96,7 @@ func TestUpsertDiscoveryCandidate_TelegramSemanticsUnchanged(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 	sourceID := prefix + "semantics"
 
@@ -142,7 +135,7 @@ func TestUpsertDiscoveryCandidate_WhatsAppRowUsesSameSemantics(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 	sourceID := prefix + "wa@lid"
 
@@ -175,7 +168,7 @@ func TestUpsertDiscoveryCandidate_PreservesFirstNameWhenNil(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	// Seed with names populated.
@@ -206,7 +199,7 @@ func TestUpsertDiscoveryCandidate_OverwritesFirstNameWhenNewValueProvided(t *tes
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
@@ -233,7 +226,7 @@ func TestUpsertDiscoveryCandidate_MergesMetadata_PreservesExistingKey(t *testing
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	// Seed with a username key.
@@ -262,7 +255,7 @@ func TestUpsertDiscoveryCandidate_MergesMetadata_IncomingWinsForDuplicate(t *tes
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
@@ -288,7 +281,7 @@ func TestUpsertDiscoveryCandidate_SyncedAtAlwaysUpdates(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	start := accelerated.GetCurrentTime()
 	_, err := repo.UpsertDiscoveryCandidate(ctx, repository.UpsertDiscoveryCandidateRequest{
@@ -317,7 +310,7 @@ func TestUpsertDiscoveryCandidate_DoesNotClearEmailsSetBySharedUpsert(t *testing
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	// Seed via the shared Upsert so emails are populated.
@@ -351,7 +344,7 @@ func TestUpsertDiscoveryCandidate_DoesNotTouchMatchStatus(t *testing.T) {
 	repo, database, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	// Create a real CRM contact so the FK (external_contact.crm_contact_id ->
@@ -395,7 +388,7 @@ func TestUpsertExternalContact_SharedUpsertStillOverwrites(t *testing.T) {
 	repo, _, prefix, cleanup := setupDiscoveryUpsertTest(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 
 	_, err := repo.Upsert(ctx, repository.UpsertExternalContactRequest{
@@ -424,22 +417,15 @@ func TestUpsertExternalContact_SharedUpsertStillOverwrites(t *testing.T) {
 // external_contact row with populated names and a metadata.username, not
 // wipe them.
 func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER the row-delete t.Cleanup below
 	// — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -481,7 +467,7 @@ func TestUpdateDiscoveryCandidates_BatchPath_BlankStringsDoNotClobberStoredData(
 	base := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 
 	// Newer row: blank entity strings (the outbound private-chat shape).
-	_, err = messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+	_, err := messageRepo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 99001,
 		TelegramChatID:    testChatID,
 		ChatType:          "private",

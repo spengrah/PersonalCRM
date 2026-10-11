@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ import (
 // cleanups, so the returned closeFn is a no-op kept for call-site stability.
 func newFollowUpIntegrationDB(t *testing.T) (*db.Database, func()) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	return database, func() {}
 }
@@ -97,7 +98,7 @@ type followUpIntegrationEnv struct {
 func newFollowUpIntegrationEnv(t *testing.T) (*followUpIntegrationEnv, func()) {
 	t.Helper()
 	database, closeFn := newFollowUpIntegrationDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contactRepo.SetPool(database.Pool)
@@ -222,7 +223,7 @@ func (*followUpTestNoopInteractionRec) Work(context.Context, *river.Job[consumer
 // seedContact creates a contact with an optional cadence.
 func (e *followUpIntegrationEnv) seedContact(t *testing.T, cadenceStr string) *repository.Contact {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	req := repository.CreateContactRequest{FullName: e.gen.Contact(factory.WithNoMethods()).FullName}
 	if cadenceStr != "" {
 		req.Cadence = &cadenceStr
@@ -262,7 +263,7 @@ func (e *followUpIntegrationEnv) recordedEnv(
 		Payload:    raw,
 		ObservedAt: occurredAt,
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	// Insert the event row so claim + shadow FK constraints hold.
 	require.NoError(t, pgx.BeginTxFunc(ctx, e.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		return e.bus.PublishTx(ctx, tx, env)
@@ -273,7 +274,7 @@ func (e *followUpIntegrationEnv) recordedEnv(
 // countContactTaskRows counts follow-up tasks for the contact.
 func (e *followUpIntegrationEnv) countContactTaskRows(t *testing.T, contactID uuid.UUID) int {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	rows, err := e.taskRepo.ListContactTasksFiltered(ctx, contactID, nil, nil, ptr(contacttask.LifecycleFollowUpLoop))
 	require.NoError(t, err)
 	return len(rows)
@@ -283,7 +284,7 @@ func (e *followUpIntegrationEnv) countContactTaskRows(t *testing.T, contactID uu
 // contact_task id + op verb.
 func (e *followUpIntegrationEnv) countOpJobs(t *testing.T, contactTaskID uuid.UUID, op string) int {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	n, err := e.taskRepo.CountTodoistOpJobsByOp(ctx, contactTaskID, op)
 	require.NoError(t, err)
 	return int(n)
@@ -295,7 +296,7 @@ func ptr[T any](v T) *T { return &v }
 // commits. All remote effects leave via op jobs enqueued in that tx.
 func (e *followUpIntegrationEnv) applyInEventTx(t *testing.T, env *events.Envelope) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	err := pgx.BeginTxFunc(ctx, e.database.Pool, pgx.TxOptions{}, func(tx pgx.Tx) error {
 		return e.manager.HandleEvent(ctx, tx, env)
 	})
@@ -307,9 +308,7 @@ func (e *followUpIntegrationEnv) applyInEventTx(t *testing.T, env *events.Envelo
 // produces a skip observation and NO contact_task row. Closes #267.
 func TestIntegration_FollowUpManager_BackdatedOutbound(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	contact := env.seedContact(t, "weekly")
@@ -333,9 +332,7 @@ func TestIntegration_FollowUpManager_BackdatedOutbound(t *testing.T) {
 // it proceeds to create the pending_remote_create row.
 func TestIntegration_FollowUpManager_ManualSourceBypassesBackdatedGuard(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	contact := env.seedContact(t, "weekly")
@@ -354,12 +351,10 @@ func TestIntegration_FollowUpManager_ManualSourceBypassesBackdatedGuard(t *testi
 // occurred_at, the outbound is skipped.
 func TestIntegration_FollowUpManager_OutOfOrderSkips(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 	contact := env.seedContact(t, "weekly")
 
 	// Record an inbound at T+1h FIRST — this is the "response after the
@@ -391,12 +386,10 @@ func TestIntegration_FollowUpManager_OutOfOrderSkips(t *testing.T) {
 // idempotency key, and enqueues a TodoistFollowUpCreateJob.
 func TestIntegration_FollowUpManager_OutboundFreshCreatesPendingRow(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 	contact := env.seedContact(t, "weekly")
 
 	occurred := accelerated.GetCurrentTime()
@@ -444,12 +437,10 @@ func TestIntegration_FollowUpManager_OutboundFreshCreatesPendingRow(t *testing.T
 // handle the race when it runs).
 func TestIntegration_FollowUpManager_InboundCompletesPending(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 	contact := env.seedContact(t, "weekly")
 
 	// Seed a pending_remote_create row via the outbound path first.
@@ -489,13 +480,11 @@ func TestIntegration_FollowUpManager_InboundCompletesPending(t *testing.T) {
 // event never both land follow-up work.
 func TestIntegration_FollowUpManager_DuplicateEventClaimBlocks(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
 	contact := env.seedContact(t, "weekly")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	occurred := accelerated.GetCurrentTime()
 	recorded := env.recordedEnv(t, contact.ID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, occurred, "weekly")
@@ -530,12 +519,10 @@ func TestIntegration_FollowUpManager_DuplicateEventClaimBlocks(t *testing.T) {
 // past their own guard-3 read.
 func TestIntegration_FollowUpManager_UniqueLiveCollisionRecovers(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	contact := env.seedContact(t, "weekly")
 
 	// Build two distinct envelopes for the same contact so the consumer
@@ -620,12 +607,10 @@ func (r *raceAfterFirstPendingRead) FindPendingFollowUpTx(ctx context.Context, t
 // rollback sees the winner's row, and the loser refreshes it.
 func TestIntegration_FollowUpManager_UniqueLiveCollisionRefreshesWinner(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 	contact := env.seedContact(t, "weekly")
 
 	winnerOccurred := accelerated.GetCurrentTime().Add(-2 * time.Hour)
@@ -679,12 +664,10 @@ func TestIntegration_FollowUpManager_UniqueLiveCollisionRefreshesWinner(t *testi
 // the authoritative signal.
 func TestIntegration_FollowUpManager_InboundClosesFinalizedRow(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	env, cleanup := newFollowUpIntegrationEnv(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 	contact := env.seedContact(t, "weekly")
 
 	// Seed a fully-finalized follow-up row: state=managed with a

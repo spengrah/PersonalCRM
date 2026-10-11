@@ -2,13 +2,12 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/stretchr/testify/assert"
@@ -25,31 +24,23 @@ func telegramTestChat(t *testing.T, repo *repository.TelegramMessageRepository) 
 	t.Helper()
 	_, ns := migrationGenerator(t)
 	base, _ := uniqueTestIDs(t, ns)
-	clean := func() { _ = repo.HardDeleteByChatIDRange(context.Background(), base, base) }
+	clean := func() { _ = repo.HardDeleteByChatIDRange(t.Context(), base, base) }
 	clean()
 	t.Cleanup(clean)
 	return base
 }
 
 func TestTelegramMessage_UpsertAndGet(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -94,24 +85,16 @@ func TestTelegramMessage_UpsertAndGet(t *testing.T) {
 }
 
 func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -151,24 +134,16 @@ func TestTelegramMessage_UpsertIdempotent(t *testing.T) {
 }
 
 func TestTelegramMessage_UpsertEdit(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -180,7 +155,7 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Original"
 
-	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+	_, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90003,
 		TelegramChatID:    chatID,
 		ChatType:          "private",
@@ -210,24 +185,16 @@ func TestTelegramMessage_UpsertEdit(t *testing.T) {
 }
 
 func TestTelegramMessage_SoftDelete(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -243,7 +210,7 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "To be deleted"
 
-	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+	_, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: msgID,
 		TelegramChatID:    chatID,
 		ChatType:          "private",
@@ -264,24 +231,16 @@ func TestTelegramMessage_SoftDelete(t *testing.T) {
 }
 
 func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -293,12 +252,12 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 	// matching negative-range cleanup too.
 	base := telegramTestChat(t, repo)
 	chatID := -base
-	t.Cleanup(func() { _ = repo.HardDeleteByChatIDRange(context.Background(), chatID, chatID) })
+	t.Cleanup(func() { _ = repo.HardDeleteByChatIDRange(context.WithoutCancel(t.Context()), chatID, chatID) })
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Channel message"
 
-	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+	_, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90005,
 		TelegramChatID:    chatID,
 		ChatType:          "group",
@@ -318,24 +277,16 @@ func TestTelegramMessage_SoftDeleteChannel(t *testing.T) {
 }
 
 func TestTelegramMessage_ListUnprocessed(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	t.Parallel()
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close via t.Cleanup (LIFO) so it runs AFTER telegramTestChat's row-delete
 	// cleanup — a defer would close the pool first and the deletes would no-op.
 	t.Cleanup(func() { database.Close() })
@@ -347,7 +298,7 @@ func TestTelegramMessage_ListUnprocessed(t *testing.T) {
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	text := "Unprocessed msg"
 
-	_, err = repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
+	_, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
 		TelegramMessageID: 90001,
 		TelegramChatID:    chatID,
 		ChatType:          "private",

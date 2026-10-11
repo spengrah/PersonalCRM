@@ -3,8 +3,8 @@ package tests
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -25,19 +25,12 @@ import (
 // (gotcha table).
 func setupCommsMessageTest(t *testing.T) (context.Context, *repository.CommsMessageRepository, *repository.ContactRepository, *repository.ContactMethodRepository) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	// Register the pool close via t.Cleanup BEFORE any row-cleanup callbacks
 	// are registered in the test body. t.Cleanup runs LIFO, so this close runs
@@ -239,7 +232,7 @@ func TestCommsMessageRepository_GetMessage_NotFound(t *testing.T) {
 
 	_, err := repo.GetMessage(ctx, repository.InteractionSourceEmail, "<missing-"+suffix+">", contact.ID)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, db.ErrNotFound), "expected ErrNotFound, got %v", err)
+	assert.ErrorIs(t, err, db.ErrNotFound, "expected ErrNotFound, got %v", err)
 }
 
 func TestCommsMessageRepository_UpsertIdempotentSameAccount(t *testing.T) {
@@ -404,8 +397,7 @@ func TestCommsMessageRepository_MarkProcessedTx(t *testing.T) {
 	databaseURL := os.Getenv("DATABASE_URL")
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 	// Close this second pool via t.Cleanup (LIFO) so it outlives the
 	// interaction-cleanup callback registered below, which uses interactionRepo.
 	t.Cleanup(database.Close)
@@ -557,20 +549,12 @@ func TestCommsMessageRepository_ListEmailIdentitiesForSync(t *testing.T) {
 // HARD-delete the seeded interaction before closing (the 059 down-migration
 // data-loss guard counts rows regardless of deleted_at).
 func TestInteractionSourceCheck_AcceptsEmail(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -779,9 +763,9 @@ func TestSoftDeleteByExternalID_AllFannedRows(t *testing.T) {
 
 	// Both rows now invisible to the deleted_at-filtered GetMessage.
 	_, err = repo.GetMessage(ctx, src, externalID, contactA.ID)
-	assert.True(t, errors.Is(err, db.ErrNotFound))
+	assert.ErrorIs(t, err, db.ErrNotFound)
 	_, err = repo.GetMessage(ctx, src, externalID, contactB.ID)
-	assert.True(t, errors.Is(err, db.ErrNotFound))
+	assert.ErrorIs(t, err, db.ErrNotFound)
 
 	// Idempotent: re-deleting affects 0 rows.
 	n, err = repo.SoftDeleteByExternalID(ctx, src, externalID, now)
@@ -812,7 +796,7 @@ func TestGetLatestByExternalID_NewestFirstAndNotFound(t *testing.T) {
 	assert.Equal(t, externalID, got.ExternalID)
 
 	_, err = repo.GetLatestByExternalID(ctx, src, "spaces/AAAA/messages/missing-"+suffix)
-	assert.True(t, errors.Is(err, db.ErrNotFound))
+	assert.ErrorIs(t, err, db.ErrNotFound)
 }
 
 // TestBackfillParticipantNames_AdditiveMergeAndIdempotent pins the additive

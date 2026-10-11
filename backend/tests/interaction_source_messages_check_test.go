@@ -2,14 +2,13 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/stretchr/testify/assert"
@@ -21,20 +20,12 @@ import (
 // The migration lifts the interaction_source_check constraint from
 // {manual, gcal, todoist, telegram} to also include 'messages'.
 func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -72,20 +63,12 @@ func TestInteraction_SourceCheckAcceptsMessages(t *testing.T) {
 // extension: an interaction with source="whatsapp" inserts successfully. It
 // replaces the rejection test 076 deliberately invalidated.
 func TestInteraction_SourceCheckAcceptsWhatsapp(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -123,20 +106,12 @@ func TestInteraction_SourceCheckAcceptsWhatsapp(t *testing.T) {
 // as the regression guard against accidentally widening the CHECK beyond the
 // supported source set.
 func TestInteraction_SourceCheckRejectsUnknownSource(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 	t.Parallel()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)

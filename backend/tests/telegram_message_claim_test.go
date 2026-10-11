@@ -3,12 +3,12 @@ package tests
 import (
 	"context"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/synthetic/factory"
 
@@ -23,18 +23,11 @@ import (
 // telegram peer band, which is deterministically distinct per namespace.
 func telegramClaimSetup(t *testing.T) (context.Context, *factory.Generator, *repository.TelegramMessageRepository, *repository.ContactRepository, *repository.Contact, int64, func()) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	repo := repository.NewTelegramMessageRepository(database.Queries)
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -189,9 +182,7 @@ func TestTelegramMessageRepository_MarkProcessedTx_RejectsOtherSession(t *testin
 	databaseURL := os.Getenv("DATABASE_URL")
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	sentAt := accelerated.GetCurrentTime().Truncate(time.Microsecond)
 	msg, err := repo.UpsertMessage(ctx, repository.UpsertTelegramMessageParams{
@@ -235,9 +226,7 @@ func TestTelegramMessageRepository_MarkProcessedTx_AcceptsOwnSession(t *testing.
 	databaseURL := os.Getenv("DATABASE_URL")
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	// Create a real interaction so the FK constraint is satisfied.
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
@@ -289,9 +278,7 @@ func TestTelegramMessageRepository_MarkProcessedTx_AcceptsNullClaim(t *testing.T
 	databaseURL := os.Getenv("DATABASE_URL")
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	defer database.Close()
+	database := testsupport.OpenDatabase(t)
 
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
 	ref := "tg:null-claim:" + gen.Prefix()

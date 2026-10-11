@@ -1,11 +1,11 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -22,9 +22,7 @@ import (
 // spec: CON-005.live-contact-flag, CON-005.list-entries-carry-flag
 // spec: CON-018.followup-filter-closed-set
 func TestContactAPI_FourConsumersAgree(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, contactRepo, _, cleanup := setupAwaitingReplyAPIRouter(t)
@@ -42,7 +40,7 @@ func TestContactAPI_FourConsumersAgree(t *testing.T) {
 	for _, id := range []string{awaitingID, closedID} {
 		contactUUID, err := uuid.Parse(id)
 		require.NoError(t, err)
-		require.NoError(t, contactRepo.TestSeedContactCadenceFields(context.Background(), contactUUID, repository.TestCadenceSeed{
+		require.NoError(t, contactRepo.TestSeedContactCadenceFields(t.Context(), contactUUID, repository.TestCadenceSeed{
 			ContactBy: &contactBy,
 		}))
 	}
@@ -60,7 +58,7 @@ func TestContactAPI_FourConsumersAgree(t *testing.T) {
 			detail := fetchContactEntry(t, router, "/api/v1/contacts/"+candidate.id, candidate.id)
 			contactUUID, err := uuid.Parse(candidate.id)
 			require.NoError(t, err)
-			contact, err := contactRepo.GetContact(context.Background(), contactUUID)
+			contact, err := contactRepo.GetContact(t.Context(), contactUUID)
 			require.NoError(t, err)
 			expected := cadence.IsAwaitingReply(
 				payloadTime(t, detail, "last_outreach_at"),

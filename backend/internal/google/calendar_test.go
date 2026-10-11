@@ -1,7 +1,6 @@
 package google
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/api/calendar/v3"
 )
 
@@ -96,7 +96,7 @@ func TestGetOrganizerEmail(t *testing.T) {
 			if tt.expected == nil {
 				assert.Nil(t, result)
 			} else {
-				assert.NotNil(t, result)
+				require.NotNil(t, result)
 				assert.Equal(t, *tt.expected, *result)
 			}
 		})
@@ -127,7 +127,7 @@ func TestStrPtrIfNotEmpty(t *testing.T) {
 			if tt.expected == nil {
 				assert.Nil(t, result)
 			} else {
-				assert.NotNil(t, result)
+				require.NotNil(t, result)
 				assert.Equal(t, *tt.expected, *result)
 			}
 		})
@@ -197,7 +197,7 @@ func TestCalendarSyncProvider_GetUserResponse(t *testing.T) {
 			if tt.expected == nil {
 				assert.Nil(t, result)
 			} else {
-				assert.NotNil(t, result)
+				require.NotNil(t, result)
 				assert.Equal(t, *tt.expected, *result)
 			}
 		})
@@ -232,7 +232,7 @@ func TestCalendarSyncProvider_BuildAttendeeList(t *testing.T) {
 
 	attendees := provider.buildAttendeeList(event, accountID)
 
-	assert.Len(t, attendees, 3)
+	require.Len(t, attendees, 3)
 
 	// Check self attendee
 	selfAttendee := attendees[0]
@@ -305,7 +305,7 @@ func TestGetUserResponse_DeclinedAttendee(t *testing.T) {
 	}
 
 	userResponse := provider.getUserResponse(event, accountID)
-	assert.NotNil(t, userResponse)
+	require.NotNil(t, userResponse)
 	assert.Equal(t, "declined", *userResponse)
 }
 
@@ -326,7 +326,7 @@ func TestMatchAttendees_SkipsSelfAttendee(t *testing.T) {
 		}
 	}
 
-	assert.Len(t, nonSelfAttendees, 1)
+	require.Len(t, nonSelfAttendees, 1)
 	assert.Equal(t, "other@example.com", nonSelfAttendees[0].Email)
 	_ = accountID // Used in actual implementation
 }
@@ -345,7 +345,7 @@ func TestMatchAttendees_SkipsEmptyEmails(t *testing.T) {
 		}
 	}
 
-	assert.Len(t, validAttendees, 1)
+	require.Len(t, validAttendees, 1)
 	assert.Equal(t, "valid@example.com", validAttendees[0].Email)
 }
 
@@ -362,7 +362,7 @@ func TestBuildAttendeeList_EmptyAttendees(t *testing.T) {
 	attendees := provider.buildAttendeeList(event, accountID)
 
 	// Organizer should be included even when not in attendees list
-	assert.Len(t, attendees, 1)
+	require.Len(t, attendees, 1)
 	assert.Equal(t, "organizer@example.com", attendees[0].Email)
 	assert.Equal(t, "Organizer", attendees[0].DisplayName)
 	assert.True(t, attendees[0].Organizer)
@@ -438,7 +438,7 @@ func TestUserResponse_MultipleAttendees(t *testing.T) {
 			if tt.expected == nil {
 				assert.Nil(t, result)
 			} else {
-				assert.NotNil(t, result)
+				require.NotNil(t, result)
 				assert.Equal(t, *tt.expected, *result)
 			}
 		})
@@ -460,7 +460,7 @@ func TestBuildAttendeeList_OrganizerIdentification(t *testing.T) {
 
 	attendees := provider.buildAttendeeList(event, accountID)
 
-	assert.Len(t, attendees, 2)
+	require.Len(t, attendees, 2)
 
 	// Find Alice (organizer)
 	var alice *repository.Attendee
@@ -470,7 +470,7 @@ func TestBuildAttendeeList_OrganizerIdentification(t *testing.T) {
 			break
 		}
 	}
-	assert.NotNil(t, alice)
+	require.NotNil(t, alice)
 	assert.True(t, alice.Organizer, "Alice should be marked as organizer")
 
 	// Find Bob (not organizer)
@@ -481,7 +481,7 @@ func TestBuildAttendeeList_OrganizerIdentification(t *testing.T) {
 			break
 		}
 	}
-	assert.NotNil(t, bob)
+	require.NotNil(t, bob)
 	assert.False(t, bob.Organizer, "Bob should not be marked as organizer")
 }
 
@@ -511,7 +511,7 @@ func TestBuildAttendeeList_OrganizerNotInAttendees(t *testing.T) {
 	attendees := provider.buildAttendeeList(event, accountID)
 
 	// Should have 2 attendees: Alice (self) + Bob (organizer added)
-	assert.Len(t, attendees, 2)
+	require.Len(t, attendees, 2)
 
 	// Find Bob (organizer who was added)
 	var organizer *repository.Attendee
@@ -521,7 +521,7 @@ func TestBuildAttendeeList_OrganizerNotInAttendees(t *testing.T) {
 			break
 		}
 	}
-	assert.NotNil(t, organizer, "Organizer should be in attendees list")
+	require.NotNil(t, organizer, "Organizer should be in attendees list")
 	assert.Equal(t, "Bob", organizer.DisplayName)
 	assert.True(t, organizer.Organizer)
 	assert.False(t, organizer.Self)
@@ -591,7 +591,7 @@ func TestBuildAttendeeList_OrganizerIsSelf(t *testing.T) {
 	attendees := provider.buildAttendeeList(event, accountID)
 
 	// Should only have 1 attendee - organizer (self) should NOT be added
-	assert.Len(t, attendees, 1)
+	require.Len(t, attendees, 1)
 	assert.Equal(t, "other@example.com", attendees[0].Email)
 }
 
@@ -640,7 +640,7 @@ func TestBuildAttendeeList_NoOrganizer(t *testing.T) {
 	attendees := provider.buildAttendeeList(event, accountID)
 
 	// Should work fine with nil organizer
-	assert.Len(t, attendees, 1)
+	require.Len(t, attendees, 1)
 	assert.Equal(t, "other@example.com", attendees[0].Email)
 }
 
@@ -666,7 +666,7 @@ func TestBuildAttendeeList_OrganizerEmptyEmail(t *testing.T) {
 	attendees := provider.buildAttendeeList(event, accountID)
 
 	// Should not add organizer with empty email
-	assert.Len(t, attendees, 1)
+	require.Len(t, attendees, 1)
 	assert.Equal(t, "other@example.com", attendees[0].Email)
 }
 
@@ -696,7 +696,7 @@ func TestBuildAttendeeList_OrganizerSelfFlag(t *testing.T) {
 
 	// Should only have 1 attendee - organizer with Self=true should NOT be added
 	// even though their email doesn't match accountID
-	assert.Len(t, attendees, 1)
+	require.Len(t, attendees, 1)
 	assert.Equal(t, "other@example.com", attendees[0].Email)
 }
 
@@ -745,7 +745,7 @@ func TestPtrToStr(t *testing.T) {
 // TestMatchAttendees_WithMockedIdentityService tests contact matching with mocked identity service
 // This tests the ACTUAL CalendarSyncProvider.matchAttendees() method with mocked dependencies
 func TestMatchAttendees_WithMockedIdentityService(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID1 := uuid.New()
 	contactID2 := uuid.New()
@@ -785,7 +785,7 @@ func TestMatchAttendees_WithMockedIdentityService(t *testing.T) {
 
 // TestMatchAttendees_DeduplicatesContacts tests that duplicate contact matches are deduplicated
 func TestMatchAttendees_DeduplicatesContacts(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -807,13 +807,13 @@ func TestMatchAttendees_DeduplicatesContacts(t *testing.T) {
 
 	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", nil)
 
-	assert.Len(t, matchedIDs, 1) // Only one unique contact
+	require.Len(t, matchedIDs, 1) // Only one unique contact
 	assert.Equal(t, contactID, matchedIDs[0])
 }
 
 // TestMatchAttendees_HandlesIdentityServiceError tests error handling
 func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -838,7 +838,7 @@ func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
 	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", nil)
 
 	assert.True(t, mockIdentity.matchOrCreateCalled)
-	assert.Len(t, matchedIDs, 1)
+	require.Len(t, matchedIDs, 1)
 	assert.Equal(t, contactID, matchedIDs[0])
 }
 
@@ -848,7 +848,7 @@ func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
 // exercises the real plan Decision 6 wiring — rolling back to off/shadow
 // does NOT restore the direct path (spec §3.9).
 func TestUpdateLastContactedForPastEvents_NilBus_SkipsEventsWithoutMarking(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	eventID := uuid.New()
 	contactID1 := uuid.New()
@@ -883,7 +883,7 @@ func TestUpdateLastContactedForPastEvents_NilBus_SkipsEventsWithoutMarking(t *te
 
 // TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate tests the empty case
 func TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockCalRepo := &mockCalendarRepo{
 		listPastResult: []repository.CalendarEvent{}, // No events
@@ -906,7 +906,7 @@ func TestUpdateLastContactedForPastEvents_NoEventsNeedingUpdate(t *testing.T) {
 
 // TestMatchAttendees_FuzzyMatchFallback tests that fuzzy matching is attempted when exact match fails
 func TestMatchAttendees_FuzzyMatchFallback(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -958,7 +958,7 @@ func TestMatchAttendees_FuzzyMatchFallback(t *testing.T) {
 
 // TestMatchAttendees_FuzzyMatchWithMethodOverlap tests fuzzy matching with contact method overlap
 func TestMatchAttendees_FuzzyMatchWithMethodOverlap(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1001,13 +1001,13 @@ func TestMatchAttendees_FuzzyMatchWithMethodOverlap(t *testing.T) {
 	// With 80% name similarity and 100% method overlap (1/1 methods match):
 	// Score = 0.6 * 0.80 + 0.4 * 1.0 = 0.48 + 0.40 = 0.88 (above 0.7 threshold)
 	// Fuzzy match should succeed
-	assert.Len(t, matchedIDs, 1)
+	require.Len(t, matchedIDs, 1)
 	assert.Equal(t, contactID, matchedIDs[0])
 }
 
 // TestMatchAttendees_ExactMatchTakesPrecedence tests that exact matches are preferred over fuzzy
 func TestMatchAttendees_ExactMatchTakesPrecedence(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	exactContactID := uuid.New()
 	fuzzyContactID := uuid.New()
@@ -1051,13 +1051,13 @@ func TestMatchAttendees_ExactMatchTakesPrecedence(t *testing.T) {
 	assert.False(t, mockContactRepo.findSimilarCalled)
 
 	// Should return exact match, not fuzzy
-	assert.Len(t, matchedIDs, 1)
+	require.Len(t, matchedIDs, 1)
 	assert.Equal(t, exactContactID, matchedIDs[0])
 }
 
 // TestMatchAttendees_NoDisplayName_SkipsFuzzyMatch tests that fuzzy matching is skipped without display name
 func TestMatchAttendees_NoDisplayName_SkipsFuzzyMatch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Identity service returns no match
 	mockIdentity := &mockIdentityService{
@@ -1085,7 +1085,7 @@ func TestMatchAttendees_NoDisplayName_SkipsFuzzyMatch(t *testing.T) {
 
 // TestFindFuzzyMatch_NoMatches tests findFuzzyMatch when no similar contacts exist
 func TestFindFuzzyMatch_NoMatches(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockContactRepo := &mockContactRepo{
 		findSimilarResults: []repository.ContactMatch{}, // No matches
@@ -1101,7 +1101,7 @@ func TestFindFuzzyMatch_NoMatches(t *testing.T) {
 
 // TestFindFuzzyMatch_BelowThreshold tests that matches below confidence threshold are rejected
 func TestFindFuzzyMatch_BelowThreshold(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1129,7 +1129,7 @@ func TestFindFuzzyMatch_BelowThreshold(t *testing.T) {
 
 // TestFindFuzzyMatch_SelectsBestMatch tests that the highest scoring match is selected
 func TestFindFuzzyMatch_SelectsBestMatch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contact1ID := uuid.New()
 	contact2ID := uuid.New()
@@ -1163,13 +1163,13 @@ func TestFindFuzzyMatch_SelectsBestMatch(t *testing.T) {
 
 	// Contact 1: 0.6 * 0.85 + 0.4 * 0 = 0.51 (below threshold)
 	// Contact 2: 0.6 * 0.75 + 0.4 * 1.0 = 0.45 + 0.40 = 0.85 (above threshold!)
-	assert.NotNil(t, result)
+	require.NotNil(t, result)
 	assert.Equal(t, contact2ID, *result)
 }
 
 // TestFindFuzzyMatch_EmailNormalization tests that email comparison is case-insensitive
 func TestFindFuzzyMatch_EmailNormalization(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1194,13 +1194,13 @@ func TestFindFuzzyMatch_EmailNormalization(t *testing.T) {
 
 	// Emails should match despite case difference
 	// Score = 0.6 * 0.90 + 0.4 * 1.0 = 0.54 + 0.40 = 0.94 (above threshold)
-	assert.NotNil(t, result)
+	require.NotNil(t, result)
 	assert.Equal(t, contactID, *result)
 }
 
 // TestFindFuzzyMatch_IgnoresNonEmailMethods tests that only emails are counted for overlap
 func TestFindFuzzyMatch_IgnoresNonEmailMethods(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1230,7 +1230,7 @@ func TestFindFuzzyMatch_IgnoresNonEmailMethods(t *testing.T) {
 	// Score = 0.6 * 0.80 + 0.4 * 1.0 = 0.48 + 0.40 = 0.88 (above 0.7 threshold)
 	// Without the fix, it would count all methods: 1/3 = 0.33 overlap
 	// Wrong score would be: 0.6 * 0.80 + 0.4 * 0.33 = 0.48 + 0.13 = 0.61 (below threshold!)
-	assert.NotNil(t, result)
+	require.NotNil(t, result)
 	assert.Equal(t, contactID, *result)
 }
 
@@ -1249,7 +1249,7 @@ func TestSyncWindowConstants(t *testing.T) {
 
 // TestProcessEvent_ExtractsHtmlLink verifies that HtmlLink is extracted from Google Calendar events
 func TestProcessEvent_ExtractsHtmlLink(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockCalRepo := &mockCalendarRepo{}
 	mockContactRepo := &mockContactRepo{}
@@ -1278,15 +1278,15 @@ func TestProcessEvent_ExtractsHtmlLink(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, mockCalRepo.upsertCalled, "Upsert should be called")
-	assert.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
-	assert.NotNil(t, mockCalRepo.upsertRequest.HtmlLink, "HtmlLink should not be nil")
+	require.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
+	require.NotNil(t, mockCalRepo.upsertRequest.HtmlLink, "HtmlLink should not be nil")
 	assert.Equal(t, "https://www.google.com/calendar/event?eid=abc123", *mockCalRepo.upsertRequest.HtmlLink)
 }
 
 // TestProcessEvent_MatchesOrganizerNotInAttendees verifies that when an organizer is not in the
 // attendees list, they are still matched to a contact (fix for issue #183)
 func TestProcessEvent_MatchesOrganizerNotInAttendees(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	organizerContactID := uuid.New()
 
@@ -1332,10 +1332,10 @@ func TestProcessEvent_MatchesOrganizerNotInAttendees(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, mockCalRepo.upsertCalled, "Upsert should be called")
-	assert.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
+	require.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
 
 	// Verify the organizer was matched even though they weren't in attendees
-	assert.Len(t, mockCalRepo.upsertRequest.MatchedContactIDs, 1,
+	require.Len(t, mockCalRepo.upsertRequest.MatchedContactIDs, 1,
 		"Organizer should be matched even when not in attendees list")
 	assert.Equal(t, organizerContactID, mockCalRepo.upsertRequest.MatchedContactIDs[0],
 		"Matched contact should be the organizer's contact")
@@ -1358,7 +1358,7 @@ func TestProcessEvent_MatchesOrganizerNotInAttendees(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_Success tests successful storage of unmatched attendees
 func TestStoreUnmatchedAttendee_Success(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 
@@ -1379,16 +1379,16 @@ func TestStoreUnmatchedAttendee_Success(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, mockExtRepo.upsertCalled)
-	assert.Len(t, mockExtRepo.upsertRequests, 1)
+	require.Len(t, mockExtRepo.upsertRequests, 1)
 
 	req := mockExtRepo.upsertRequests[0]
 	assert.Equal(t, CalendarAttendeeSource, req.Source)
 	assert.Equal(t, "unknown@example.com", req.SourceID) // Normalized email
-	assert.NotNil(t, req.AccountID)
+	require.NotNil(t, req.AccountID)
 	assert.Equal(t, "user@example.com", *req.AccountID)
-	assert.NotNil(t, req.DisplayName)
+	require.NotNil(t, req.DisplayName)
 	assert.Equal(t, "Unknown Person", *req.DisplayName)
-	assert.Len(t, req.Emails, 1)
+	require.Len(t, req.Emails, 1)
 	assert.Equal(t, "unknown@example.com", req.Emails[0].Value)
 
 	// Verify metadata
@@ -1401,7 +1401,7 @@ func TestStoreUnmatchedAttendee_Success(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_NilExternalRepo tests that nil repo is handled gracefully
 func TestStoreUnmatchedAttendee_NilExternalRepo(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Provider without external contact repo
 	provider := newTestProvider(nil, nil, nil)
@@ -1424,7 +1424,7 @@ func TestStoreUnmatchedAttendee_NilExternalRepo(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_NilEventContext tests that nil event context is handled gracefully
 func TestStoreUnmatchedAttendee_NilEventContext(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
@@ -1443,7 +1443,7 @@ func TestStoreUnmatchedAttendee_NilEventContext(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_EmailNormalization tests that email is normalized to lowercase
 func TestStoreUnmatchedAttendee_EmailNormalization(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
@@ -1470,7 +1470,7 @@ func TestStoreUnmatchedAttendee_EmailNormalization(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_EmptyDisplayName_InfersFromEmail tests that name is inferred from email when display name is empty
 func TestStoreUnmatchedAttendee_EmptyDisplayName_InfersFromEmail(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
@@ -1492,13 +1492,13 @@ func TestStoreUnmatchedAttendee_EmptyDisplayName_InfersFromEmail(t *testing.T) {
 
 	// DisplayName should be inferred from email pattern "john.smith@..." -> "John Smith"
 	req := mockExtRepo.upsertRequests[0]
-	assert.NotNil(t, req.DisplayName)
+	require.NotNil(t, req.DisplayName)
 	assert.Equal(t, "John Smith", *req.DisplayName)
 }
 
 // TestStoreUnmatchedAttendee_RepoError tests error handling when repo fails
 func TestStoreUnmatchedAttendee_RepoError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{
 		upsertError: assert.AnError,
@@ -1523,7 +1523,7 @@ func TestStoreUnmatchedAttendee_RepoError(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_Deduplication tests that same email results in same source_id
 func TestStoreUnmatchedAttendee_Deduplication(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
@@ -1540,7 +1540,7 @@ func TestStoreUnmatchedAttendee_Deduplication(t *testing.T) {
 	_ = provider.storeUnmatchedAttendee(ctx, attendee, "user@example.com", event1)
 	_ = provider.storeUnmatchedAttendee(ctx, attendee, "user@example.com", event2)
 
-	assert.Len(t, mockExtRepo.upsertRequests, 2)
+	require.Len(t, mockExtRepo.upsertRequests, 2)
 
 	// Both should use the same source_id (normalized email)
 	// This allows the database to handle deduplication via upsert
@@ -1550,7 +1550,7 @@ func TestStoreUnmatchedAttendee_Deduplication(t *testing.T) {
 
 // TestMatchAttendees_StoresUnmatchedAttendees tests that unmatched attendees are stored via matchAttendees
 func TestMatchAttendees_StoresUnmatchedAttendees(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1583,19 +1583,19 @@ func TestMatchAttendees_StoresUnmatchedAttendees(t *testing.T) {
 	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", eventContext)
 
 	// Alice matched
-	assert.Len(t, matchedIDs, 1)
+	require.Len(t, matchedIDs, 1)
 	assert.Equal(t, contactID, matchedIDs[0])
 
 	// Bob should be stored as unmatched
 	assert.True(t, mockExtRepo.upsertCalled)
-	assert.Len(t, mockExtRepo.upsertRequests, 1)
+	require.Len(t, mockExtRepo.upsertRequests, 1)
 	assert.Equal(t, "bob@example.com", mockExtRepo.upsertRequests[0].SourceID)
 	assert.Equal(t, "Team Meeting", mockExtRepo.upsertRequests[0].Metadata["meeting_title"])
 }
 
 // TestProcessEvent_HandlesEmptyHtmlLink verifies that empty HtmlLink is handled correctly
 func TestProcessEvent_HandlesEmptyHtmlLink(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockCalRepo := &mockCalendarRepo{}
 	mockContactRepo := &mockContactRepo{}
@@ -1624,7 +1624,7 @@ func TestProcessEvent_HandlesEmptyHtmlLink(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.True(t, mockCalRepo.upsertCalled, "Upsert should be called")
-	assert.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
+	require.NotNil(t, mockCalRepo.upsertRequest, "Upsert request should not be nil")
 	assert.Nil(t, mockCalRepo.upsertRequest.HtmlLink, "HtmlLink should be nil for empty string")
 }
 
@@ -1672,7 +1672,7 @@ func TestIsBlockedCalendarEmail_Legacy(t *testing.T) {
 
 // TestMatchAttendees_SkipsBlockedDomains tests that blocked calendar domains are skipped
 func TestMatchAttendees_SkipsBlockedDomains(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := uuid.New()
 
@@ -1703,14 +1703,14 @@ func TestMatchAttendees_SkipsBlockedDomains(t *testing.T) {
 	matchedIDs := provider.matchAttendees(ctx, attendees, "user@example.com", eventContext)
 
 	// Only Alice should be matched
-	assert.Len(t, matchedIDs, 1)
+	require.Len(t, matchedIDs, 1)
 	assert.Equal(t, contactID, matchedIDs[0])
 
 	// Identity service should only be called for non-blocked emails (alice and unknown)
 	assert.Equal(t, 2, len(mockIdentity.matchOrCreateRequests))
 
 	// Only unknown@example.com should be stored as import candidate (not the blocked domains)
-	assert.Len(t, mockExtRepo.upsertRequests, 1)
+	require.Len(t, mockExtRepo.upsertRequests, 1)
 	assert.Equal(t, "unknown@example.com", mockExtRepo.upsertRequests[0].SourceID)
 }
 
@@ -1768,7 +1768,7 @@ func TestInferNameFromEmail(t *testing.T) {
 			if tt.expected == nil {
 				assert.Nil(t, result)
 			} else {
-				assert.NotNil(t, result)
+				require.NotNil(t, result)
 				assert.Equal(t, *tt.expected, *result)
 			}
 		})
@@ -1821,7 +1821,7 @@ func TestCapitalize(t *testing.T) {
 
 // TestStoreUnmatchedAttendee_PreservesExistingDisplayName tests that provided display names are not overwritten
 func TestStoreUnmatchedAttendee_PreservesExistingDisplayName(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mockExtRepo := &mockExternalContactRepo{}
 	provider := newTestProviderWithExternal(nil, nil, nil, mockExtRepo)
@@ -1843,7 +1843,7 @@ func TestStoreUnmatchedAttendee_PreservesExistingDisplayName(t *testing.T) {
 	assert.True(t, mockExtRepo.upsertCalled)
 
 	req := mockExtRepo.upsertRequests[0]
-	assert.NotNil(t, req.DisplayName)
+	require.NotNil(t, req.DisplayName)
 	assert.Equal(t, "John Smith III", *req.DisplayName)
 }
 
@@ -1890,7 +1890,7 @@ func TestProcessEvent_OnlyAcceptsAcceptedEvents(t *testing.T) {
 					"Expected event with response '%s' to be skipped", tt.responseStatus)
 			} else {
 				// Event should be processed (userResponse is "accepted")
-				assert.NotNil(t, userResponse)
+				require.NotNil(t, userResponse)
 				assert.Equal(t, "accepted", *userResponse)
 			}
 		})

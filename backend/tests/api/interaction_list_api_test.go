@@ -40,7 +40,7 @@ func strptr(value string) *string { return &value }
 
 func newInteractionAPITest(t *testing.T) *interactionAPIDB {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 	contactRepo := repository.NewContactRepository(database.Queries)
 	contact, err := contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: "Synthetic interaction contact"})
@@ -135,7 +135,7 @@ func seedAPINote(t *testing.T, e *interactionAPIDB, sessionID uuid.UUID, linkedI
 	}
 	tx, err := e.database.Pool.Begin(e.ctx)
 	require.NoError(t, err)
-	defer tx.Rollback(e.ctx)
+	defer func() { _ = tx.Rollback(e.ctx) }()
 	row, err := e.noteRepo.InsertMeetingNoteTx(e.ctx, tx, repository.InsertMeetingNoteParams{AnarlogSessionID: sessionID, Title: &title, Summary: &summary, Memo: &memo, LinkedKind: linkedKind, LinkedID: linkedID, LinkageState: repository.LinkageStateLinked, InputHash: "", ResolvedSetHash: "", MeetingAt: time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)})
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit(e.ctx))

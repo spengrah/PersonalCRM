@@ -82,7 +82,7 @@ func TestCommsReenqueuer_HappyPath(t *testing.T) {
 	contactID := uuid.New()
 
 	env := buildGChatEnvelope(t, events.KindMessageReceived, "gchat:spaces/AAA")
-	err := r.Reenqueue(context.Background(), env, contactID)
+	err := r.Reenqueue(t.Context(), env, contactID)
 	require.NoError(t, err)
 	require.Len(t, ins.calls, 1)
 	require.Equal(t, contactID, ins.calls[0].ContactID)
@@ -99,7 +99,7 @@ func TestCommsReenqueuer_OutboundKindAlsoParses(t *testing.T) {
 	contactID := uuid.New()
 
 	env := buildGChatEnvelope(t, events.KindMessageSent, "gchat:spaces/BBB")
-	err := r.Reenqueue(context.Background(), env, contactID)
+	err := r.Reenqueue(t.Context(), env, contactID)
 	require.NoError(t, err)
 	require.Len(t, eng.calls, 1)
 	require.Equal(t, "spaces/BBB", eng.calls[0].chatID)
@@ -112,7 +112,7 @@ func TestCommsReenqueuer_WrongPrefix_LogsAndReturnsNil(t *testing.T) {
 	r := NewCommsAggregatorReenqueuer(eng, nil, "gchat")
 
 	env := buildGChatEnvelope(t, events.KindMessageReceived, "messages:chat-A")
-	err := r.Reenqueue(context.Background(), env, uuid.New())
+	err := r.Reenqueue(t.Context(), env, uuid.New())
 	require.NoError(t, err)
 	require.Empty(t, eng.calls, "engine MUST NOT be invoked when the prefix does not match the source")
 }
@@ -124,7 +124,7 @@ func TestCommsReenqueuer_EmptyChatID_LogsAndReturnsNil(t *testing.T) {
 	r := NewCommsAggregatorReenqueuer(eng, nil, "gchat")
 
 	env := buildGChatEnvelope(t, events.KindMessageReceived, "gchat:")
-	err := r.Reenqueue(context.Background(), env, uuid.New())
+	err := r.Reenqueue(t.Context(), env, uuid.New())
 	require.NoError(t, err)
 	require.Empty(t, eng.calls, "engine MUST NOT be invoked when chat ID is empty")
 }
@@ -135,7 +135,7 @@ func TestCommsReenqueuer_NilEngine_NoOpsButStillEnqueues(t *testing.T) {
 	ins := &stubCommsInserter{}
 	r := NewCommsAggregatorReenqueuer(nil, ins, "gchat")
 	env := buildGChatEnvelope(t, events.KindMessageReceived, "gchat:spaces/CCC")
-	err := r.Reenqueue(context.Background(), env, uuid.New())
+	err := r.Reenqueue(t.Context(), env, uuid.New())
 	require.NoError(t, err)
 	require.Len(t, ins.calls, 1, "fresh-enqueue path must fire even when engine is nil")
 }
@@ -148,7 +148,7 @@ func TestCommsReenqueuer_InserterError_LogsAndContinues(t *testing.T) {
 	r := NewCommsAggregatorReenqueuer(eng, ins, "gchat")
 
 	env := buildGChatEnvelope(t, events.KindMessageReceived, "gchat:spaces/DDD")
-	err := r.Reenqueue(context.Background(), env, uuid.New())
+	err := r.Reenqueue(t.Context(), env, uuid.New())
 	require.NoError(t, err)
 	require.Len(t, eng.calls, 1, "engine pass must still fire after enqueue failure")
 }
@@ -160,7 +160,7 @@ func TestCommsReenqueuer_NonMessageKind_ReturnsNil(t *testing.T) {
 	r := NewCommsAggregatorReenqueuer(eng, nil, "gchat")
 
 	env := &events.Envelope{Source: "gchat", Kind: events.KindInteractionRecorded}
-	err := r.Reenqueue(context.Background(), env, uuid.New())
+	err := r.Reenqueue(t.Context(), env, uuid.New())
 	require.NoError(t, err)
 	require.Empty(t, eng.calls)
 }

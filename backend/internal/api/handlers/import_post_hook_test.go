@@ -44,7 +44,7 @@ func TestPostImportDispatch_RoutesWhatsAppToWhatsAppHook(t *testing.T) {
 		Source: "whatsapp", SourceID: "88800000002@lid",
 		Metadata: map[string]any{"phone_e164": "+15559876543"},
 	}
-	h.triggerPostImportHook(context.Background(), external, contactID)
+	h.triggerPostImportHook(t.Context(), external, contactID)
 
 	assert.Equal(t, 1, wa.calls)
 	assert.Zero(t, tg.calls, "a candidate reaches exactly one hook")
@@ -59,7 +59,7 @@ func TestPostImportDispatch_RoutesTelegramToTelegramHook(t *testing.T) {
 	h.RegisterPostImportHook(wa)
 	h.RegisterPostImportHook(tg)
 
-	h.triggerPostImportHook(context.Background(),
+	h.triggerPostImportHook(t.Context(),
 		&repository.ExternalContact{Source: "telegram", SourceID: "12345"}, uuid.New())
 
 	assert.Equal(t, 1, tg.calls)
@@ -111,7 +111,7 @@ func TestPostImportDispatch_TelegramBehaviorUnchanged(t *testing.T) {
 	assert.Equal(t, "telegram", hook.Source())
 
 	contactID := uuid.New()
-	require.NoError(t, hook.OnPeerLinked(context.Background(),
+	require.NoError(t, hook.OnPeerLinked(t.Context(),
 		&repository.ExternalContact{
 			Source: "telegram", SourceID: "12345",
 			Metadata: map[string]any{"username": "@handle"},
@@ -127,7 +127,7 @@ func TestPostImportDispatch_TelegramMissingUsernameIsEmpty(t *testing.T) {
 	linker := &recordingTelegramLinker{}
 	hook := telegram.NewPostImportHook(linker)
 
-	require.NoError(t, hook.OnPeerLinked(context.Background(),
+	require.NoError(t, hook.OnPeerLinked(t.Context(),
 		&repository.ExternalContact{Source: "telegram", SourceID: "999"}, uuid.New()))
 
 	require.Equal(t, 1, linker.calls)
@@ -139,7 +139,7 @@ func TestPostImportDispatch_TelegramUnparseableSourceIDIsTolerated(t *testing.T)
 	linker := &recordingTelegramLinker{}
 	hook := telegram.NewPostImportHook(linker)
 
-	require.NoError(t, hook.OnPeerLinked(context.Background(),
+	require.NoError(t, hook.OnPeerLinked(t.Context(),
 		&repository.ExternalContact{Source: "telegram", SourceID: "not-a-number"}, uuid.New()),
 		"an unparseable source id logs and returns nil, exactly as the handler did")
 	assert.Zero(t, linker.calls, "and nothing is delegated with a garbage peer id")
@@ -154,7 +154,7 @@ func TestPostImportDispatch_WhatsAppDerivesJIDAndPhone(t *testing.T) {
 	assert.Equal(t, "whatsapp", hook.Source())
 
 	contactID := uuid.New()
-	require.NoError(t, hook.OnPeerLinked(context.Background(),
+	require.NoError(t, hook.OnPeerLinked(t.Context(),
 		&repository.ExternalContact{
 			Source: "whatsapp", SourceID: "88800000002@lid",
 			Metadata: map[string]any{"phone_e164": "+15559876543"},
@@ -171,7 +171,7 @@ func TestPostImportDispatch_WhatsAppWithoutPhonePassesNil(t *testing.T) {
 	linker := &recordingWhatsAppLinker{}
 	hook := whatsapp.NewPostImportHook(linker)
 
-	require.NoError(t, hook.OnPeerLinked(context.Background(),
+	require.NoError(t, hook.OnPeerLinked(t.Context(),
 		&repository.ExternalContact{Source: "whatsapp", SourceID: "88800000002@lid"}, uuid.New()))
 
 	require.Equal(t, 1, linker.calls)
@@ -182,7 +182,7 @@ func TestPostImportDispatch_WhatsAppWithoutPhonePassesNil(t *testing.T) {
 	// no staged row and would look like a deliberate narrowing.
 	linker2 := &recordingWhatsAppLinker{}
 	hook2 := whatsapp.NewPostImportHook(linker2)
-	require.NoError(t, hook2.OnPeerLinked(context.Background(),
+	require.NoError(t, hook2.OnPeerLinked(t.Context(),
 		&repository.ExternalContact{
 			Source: "whatsapp", SourceID: "88800000002@lid",
 			Metadata: map[string]any{"phone_e164": ""},
@@ -192,10 +192,10 @@ func TestPostImportDispatch_WhatsAppWithoutPhonePassesNil(t *testing.T) {
 }
 
 func TestPostImportDispatch_UnwiredDelegateIsNoop(t *testing.T) {
-	require.NoError(t, telegram.NewPostImportHook(nil).OnPeerLinked(context.Background(),
+	require.NoError(t, telegram.NewPostImportHook(nil).OnPeerLinked(t.Context(),
 		&repository.ExternalContact{Source: "telegram", SourceID: "12345"}, uuid.New()),
 		"an unwired delegate is a no-op, not a panic")
-	require.NoError(t, whatsapp.NewPostImportHook(nil).OnPeerLinked(context.Background(),
+	require.NoError(t, whatsapp.NewPostImportHook(nil).OnPeerLinked(t.Context(),
 		&repository.ExternalContact{Source: "whatsapp", SourceID: "88800000002@lid"}, uuid.New()))
 }
 
@@ -204,7 +204,7 @@ func TestPostImportDispatch_UnknownSourceIsNoop(t *testing.T) {
 	h := &ImportHandler{}
 	h.RegisterPostImportHook(tg)
 
-	h.triggerPostImportHook(context.Background(),
+	h.triggerPostImportHook(t.Context(),
 		&repository.ExternalContact{Source: "google", SourceID: "abc"}, uuid.New())
 	assert.Zero(t, tg.calls)
 }
@@ -212,7 +212,7 @@ func TestPostImportDispatch_UnknownSourceIsNoop(t *testing.T) {
 func TestPostImportDispatch_NoHooksRegisteredIsNoop(t *testing.T) {
 	h := &ImportHandler{}
 	assert.NotPanics(t, func() {
-		h.triggerPostImportHook(context.Background(),
+		h.triggerPostImportHook(t.Context(),
 			&repository.ExternalContact{Source: "whatsapp", SourceID: "x"}, uuid.New())
 	})
 }
@@ -223,7 +223,7 @@ func TestPostImportDispatch_HookErrorIsNonFatal(t *testing.T) {
 	h.RegisterPostImportHook(wa)
 
 	assert.NotPanics(t, func() {
-		h.triggerPostImportHook(context.Background(),
+		h.triggerPostImportHook(t.Context(),
 			&repository.ExternalContact{Source: "whatsapp", SourceID: "x"}, uuid.New())
 	}, "the import already succeeded; the back-link is best-effort")
 	assert.Equal(t, 1, wa.calls)
@@ -236,7 +236,7 @@ func TestPostImportDispatch_RegisteringTwiceReplaces(t *testing.T) {
 	h.RegisterPostImportHook(first)
 	h.RegisterPostImportHook(second)
 
-	h.triggerPostImportHook(context.Background(),
+	h.triggerPostImportHook(t.Context(),
 		&repository.ExternalContact{Source: "whatsapp", SourceID: "x"}, uuid.New())
 	assert.Zero(t, first.calls)
 	assert.Equal(t, 1, second.calls)

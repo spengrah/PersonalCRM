@@ -18,7 +18,7 @@ import (
 func TestMacHost_GetSourceCounts_HappyPath(t *testing.T) {
 
 	env := setupMacHostEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	hostA, err := env.hostRepo.SeedRevokedHostForTest(ctx,
 		"src-counts-A-"+uuid.NewString()[:8], "0.0.0", 1, "$2a$04$srcA")
@@ -113,7 +113,7 @@ func TestMacHost_GetSourceCounts_UnknownHost_404(t *testing.T) {
 func TestMacHost_GetSourceCounts_NoRowsReturnsEmpty(t *testing.T) {
 
 	env := setupMacHostEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	host, err := env.hostRepo.SeedRevokedHostForTest(ctx,
 		"src-counts-empty-"+uuid.NewString()[:8], "0.0.0", 1, "$2a$04$empty")
 	require.NoError(t, err)
@@ -135,7 +135,7 @@ func TestMacHost_GetSourceCounts_NoRowsReturnsEmpty(t *testing.T) {
 func TestMacHost_GetSourceCounts_Unauthenticated_401(t *testing.T) {
 
 	env := setupMacHostEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	host, err := env.hostRepo.SeedRevokedHostForTest(ctx,
 		"src-counts-noauth-"+uuid.NewString()[:8], "0.0.0", 1, "$2a$04$nA")
 	require.NoError(t, err)

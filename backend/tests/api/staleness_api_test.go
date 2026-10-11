@@ -3,11 +3,10 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -33,22 +31,8 @@ func stalenessNS(t *testing.T) string {
 
 func setupStalenessAPITest(t *testing.T) (*gin.Engine, *repository.StalenessRepository, func()) {
 	t.Helper()
-	ctx := context.Background()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
 
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
 	macHostRepo := repository.NewMacHostRepository(database.Queries)
@@ -68,7 +52,7 @@ func setupStalenessAPITest(t *testing.T) (*gin.Engine, *repository.StalenessRepo
 
 func TestStalenessAPI_GetActiveBreaches(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	router, breachRepo, cleanup := setupStalenessAPITest(t)
 	defer cleanup()
 

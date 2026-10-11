@@ -220,7 +220,7 @@ func TestSnapshotIsPublishedFromOnePlace(t *testing.T) {
 func TestActorNeverBlocksOnItsOwnDispatch(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	reentered := make(chan struct{}, 1)
@@ -251,7 +251,7 @@ func TestActorNeverBlocksOnItsOwnDispatch(t *testing.T) {
 func TestActorSerializesTerminalAndAdoption(t *testing.T) {
 	installed := newFakeClient()
 	m, syncStore, _, _ := newTestManager(t, installed, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	sessA := installedSession(t, m)
@@ -260,7 +260,7 @@ func TestActorSerializesTerminalAndAdoption(t *testing.T) {
 
 	pairingClient := newFakeClient()
 	useClient(m, pairingClient, false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	sessB := pairingSession(t, m)
 	require.NotNil(t, sessB)
 
@@ -301,7 +301,7 @@ func TestActorSerializesTerminalAndAdoption(t *testing.T) {
 // and it must still end inside the budget the queue's latency rests on.
 func TestTurnBudgetHoldsForTheWorstTurn(t *testing.T) {
 	m, syncStore, _, _ := newTestManager(t, newFakeClient(), true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	wedged := make(chan struct{})
@@ -329,14 +329,14 @@ func TestTurnBudgetHoldsForTheWorstTurn(t *testing.T) {
 func TestStatusSnapshotIsDeepCopied(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
+	require.NoError(t, m.Start(t.Context()))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15551234567"}))
 	require.True(t, dispatchEvent(t, m, pairingSession(t, m), &events.PairSuccess{
 		ID:           types.NewJID("15551234567", types.DefaultUserServer),
 		BusinessName: "Acme",
 	}))
 	require.True(t, dispatchEvent(t, m, installedSession(t, m), &events.Connected{}))
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodPhone, Phone: "+15559998888"}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodPhone, Phone: "+15559998888"}))
 
 	before := m.Status()
 	require.NotNil(t, before.JID)
@@ -506,7 +506,7 @@ func TestDataPlaneRecorderFailureUnderConcurrentSwap(t *testing.T) {
 // dispatched node handler.
 func TestControlEvent_ReturnsImmediatelyWhileATurnIsBlocked(t *testing.T) {
 	m, _, _, _ := newTestManager(t, newFakeClient(), true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
 	release := parkLoop(t, m)
 	t.Cleanup(release)
@@ -548,7 +548,7 @@ func TestFullMailbox_TerminalEventsAreEventuallyPersisted(t *testing.T) {
 			m.SetHistoryDrainReady()
 			useClient(m, cli, true)
 
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 			require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 			sess := installedSession(t, m)
 
@@ -587,8 +587,8 @@ const tm50 = 50 * time.Millisecond
 func TestFullMailbox_PairSuccessIsEventuallyAdopted(t *testing.T) {
 	cli := newFakeClient()
 	m, syncStore, _, _ := newTestManager(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.Start(t.Context()))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	sess := pairingSession(t, m)
 	require.NotNil(t, sess)
 
@@ -619,8 +619,8 @@ func TestFullMailbox_PairSuccessIsEventuallyAdopted(t *testing.T) {
 func TestFullMailbox_PairErrorIsEventuallyHandled(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.Start(t.Context()))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	sess := pairingSession(t, m)
 	require.NotNil(t, sess)
 
@@ -661,7 +661,7 @@ func TestFullMailbox_ConnectedIsLosslessLikeTheRest(t *testing.T) {
 	m := newDeadlineManager(t, effectDeadline)
 	cli := newFakeClient()
 	useClient(m, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	sess := installedSession(t, m)
 
 	release := parkLoop(t, m)
@@ -689,7 +689,7 @@ func TestFullMailbox_ConnectedIsLosslessLikeTheRest(t *testing.T) {
 func TestHandleEvent_PairErrorIsNotADefaultBranchEvent(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	sess := pairingSession(t, m)
 	require.NotNil(t, sess)
 
@@ -714,12 +714,12 @@ func TestStop_TearsDownWhileTheLoopIsWedged(t *testing.T) {
 	tuneTimeouts(m, func(tm *managerTimeouts) { tm.stopLoop = 100 * time.Millisecond })
 	installed := newFakeClient()
 	useClient(m, installed, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	installed.setConnected(false)
 
 	pairingClient := newFakeClient()
 	useClient(m, pairingClient, false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	attempt := m.inspect().Pairing
 	require.NotNil(t, attempt)
 
@@ -798,7 +798,7 @@ func TestStop_ReturnsWhileTheDatabaseIsWedged(t *testing.T) {
 	m.SetHistoryDrainReady()
 	cli := newFakeClient()
 	useClient(m, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	wedged := make(chan struct{})
@@ -832,7 +832,7 @@ func TestStop_ReturnsWhileTheDatabaseIsWedged(t *testing.T) {
 func TestStop_WaitsForEveryEffectGoroutine(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	entered := make(chan struct{})
@@ -844,7 +844,7 @@ func TestStop_WaitsForEveryEffectGoroutine(t *testing.T) {
 	cli.mu.Unlock()
 
 	unlinkDone := make(chan struct{})
-	go func() { defer close(unlinkDone); _, _ = m.Disconnect(context.Background(), false) }()
+	go func() { defer close(unlinkDone); _, _ = m.Disconnect(t.Context(), false) }()
 	<-entered
 
 	m.Stop()
@@ -865,7 +865,7 @@ func TestStop_WaitsForEveryEffectGoroutine(t *testing.T) {
 func TestStop_FinalTurnMayStillLaunchEffects(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
 	entered := make(chan struct{})
 	gate := make(chan struct{})
@@ -972,7 +972,7 @@ func TestStop_TearsDownASessionInstalledByTheFinalTurn(t *testing.T) {
 func TestStop_ReleasesAContinuationBlockedOnAFullMailbox(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 
 	entered := make(chan struct{})
@@ -983,7 +983,7 @@ func TestStop_ReleasesAContinuationBlockedOnAFullMailbox(t *testing.T) {
 	cli.mu.Unlock()
 
 	unlinkDone := make(chan struct{})
-	go func() { defer close(unlinkDone); _, _ = m.Disconnect(context.Background(), false) }()
+	go func() { defer close(unlinkDone); _, _ = m.Disconnect(t.Context(), false) }()
 	<-entered
 
 	// Park the loop BEFORE filling, so the mailbox is still full when the
@@ -1040,7 +1040,7 @@ func TestStop_WedgedLoopDoesNotStartAQueuedEffect(t *testing.T) {
 	// No live client, so the unlink builds one: the batch is
 	// [connectEffect, logoutEffect] — the first parked, the second not started.
 	unlinkDone := make(chan struct{})
-	go func() { defer close(unlinkDone); _, _ = m.Disconnect(context.Background(), false) }()
+	go func() { defer close(unlinkDone); _, _ = m.Disconnect(t.Context(), false) }()
 	<-entered
 
 	parkRelease := parkLoop(t, m)
@@ -1069,7 +1069,7 @@ func TestStartPairing_QRTimeoutWhileTheLoopIsBusy(t *testing.T) {
 	cli.qrSilent = true
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	errCh := make(chan error, 1)
 	go func() { errCh <- m.StartPairing(ctx, PairRequest{Method: PairMethodQR}) }()
 
@@ -1131,7 +1131,7 @@ func TestConnect_HonoursTheEffectDeadline(t *testing.T) {
 	useClient(m, cli, true)
 
 	done := make(chan struct{})
-	go func() { defer close(done); _ = m.Start(context.Background()) }()
+	go func() { defer close(done); _ = m.Start(t.Context()) }()
 
 	select {
 	case <-done:
@@ -1157,7 +1157,7 @@ func TestConnect_ConnectionOutlivesTheBatchThatDialedIt(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
 
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.Equal(t, StateConnecting, m.Status().State)
 
 	// Start returned, so the batch that dialled has completed and its context
@@ -1173,7 +1173,7 @@ func TestConnect_ConnectionOutlivesTheBatchThatDialedIt(t *testing.T) {
 func TestStop_CancelsTheConnectionContext(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, cli.pumpRunning())
 
 	m.Stop()
@@ -1189,11 +1189,11 @@ func TestStop_CancelsTheConnectionContext(t *testing.T) {
 func TestDisconnect_TearingDownASessionEndsItsConnectionContext(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, cli.pumpRunning())
 
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
-	_, err := m.Disconnect(context.Background(), false)
+	_, err := m.Disconnect(t.Context(), false)
 	require.NoError(t, err)
 
 	eventually(t, "tearing the session down ends its connection context", func() bool {
@@ -1214,7 +1214,7 @@ func TestStop_UnblocksABlackHoledDial(t *testing.T) {
 	useClient(m, cli, true)
 
 	started := make(chan struct{})
-	go func() { defer close(started); _ = m.Start(context.Background()) }()
+	go func() { defer close(started); _ = m.Start(t.Context()) }()
 	<-entered
 
 	stopped := make(chan struct{})
@@ -1245,17 +1245,17 @@ func TestStalePairEvent_NeverTouchesTheDeviceStore(t *testing.T) {
 
 			cli := newFakeClient()
 			m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
-			require.NoError(t, m.Start(context.Background()))
+			require.NoError(t, m.Start(t.Context()))
 
 			// An attempt is started and abandoned; its pair event is delayed.
-			require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+			require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 			abandoned := pairingSession(t, m)
 			require.NotNil(t, abandoned)
 			m.CancelPairing()
 
 			// A NEW attempt is started for the same account, and the library
 			// saves its row before announcing it.
-			require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+			require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 			require.NotNil(t, m.Status().Pairing)
 			devices.add(jid)
 
@@ -1295,7 +1295,7 @@ func TestStalePairEvent_NeverTouchesTheDeviceStore(t *testing.T) {
 func TestDisconnect_AbortedUnlinkDoesNotOrphanTheClientItBuilt(t *testing.T) {
 	installed := newFakeClient()
 	m, _, _, _ := newTestManager(t, installed, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	// The installed socket is down, so the unlink builds a client of its own —
 	// which is the path that can strand one.
 	installed.setConnected(false)
@@ -1313,7 +1313,7 @@ func TestDisconnect_AbortedUnlinkDoesNotOrphanTheClientItBuilt(t *testing.T) {
 
 	unlinkErr := make(chan error, 1)
 	go func() {
-		_, err := m.Disconnect(context.Background(), false)
+		_, err := m.Disconnect(t.Context(), false)
 		unlinkErr <- err
 	}()
 	<-entered
@@ -1325,7 +1325,7 @@ func TestDisconnect_AbortedUnlinkDoesNotOrphanTheClientItBuilt(t *testing.T) {
 		jid := testDeviceJID
 		return fakeSessionFor(replacement, true, &jid), nil
 	})
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 
 	close(release)
 	assert.ErrorIs(t, <-unlinkErr, ErrOperationSuperseded)
@@ -1351,10 +1351,10 @@ func TestStop_LeavesAnInterruptedPairingsRowForTheNextBoot(t *testing.T) {
 
 	cli := newFakeClient()
 	m, _, _, _, devices := newTestManagerWithDevices(t, cli, false)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.Equal(t, StateNotPaired, m.Status().State, "a store that has never been paired")
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	require.True(t, cli.pumpRunning(), "the attempt's socket is up")
 
 	// The library saves the row from its own goroutine, mid-attempt.
@@ -1385,11 +1385,11 @@ func TestDisconnect_FailedLogoutStillReleasesTheClient(t *testing.T) {
 	cli := newFakeClient()
 	cli.logoutErr = logoutRemoteFailure()
 	m, _, _, _ := newTestManager(t, cli, true)
-	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(t.Context()))
 	require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 	require.True(t, cli.IsConnected())
 
-	_, err := m.Disconnect(context.Background(), false)
+	_, err := m.Disconnect(t.Context(), false)
 	require.ErrorIs(t, err, ErrRemoteUnlinkFailed)
 	assert.Equal(t, StateDisconnectFailed, m.Status().State)
 
@@ -1406,7 +1406,7 @@ func TestCancelPairing_ReleasesTheAttemptsConnectionContext(t *testing.T) {
 	cli := newFakeClient()
 	m, _, _, _ := newTestManager(t, cli, false)
 
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	require.True(t, cli.pumpRunning(), "the attempt's socket is up")
 
 	m.CancelPairing()
@@ -1465,7 +1465,7 @@ func TestStart_SessionReplacedMidDialIsStillReleased(t *testing.T) {
 	m, _, _, _ := newTestManager(t, startClient, true)
 
 	startDone := make(chan struct{})
-	go func() { defer close(startDone); _ = m.Start(context.Background()) }()
+	go func() { defer close(startDone); _ = m.Start(t.Context()) }()
 	<-entered
 	startSess := installedSession(t, m)
 	require.NotNil(t, startSess)
@@ -1473,7 +1473,7 @@ func TestStart_SessionReplacedMidDialIsStillReleased(t *testing.T) {
 	// A pairing completes while the dial is parked, replacing the slot.
 	pairClient := newFakeClient()
 	useClient(m, pairClient, false)
-	require.NoError(t, m.StartPairing(context.Background(), PairRequest{Method: PairMethodQR}))
+	require.NoError(t, m.StartPairing(t.Context(), PairRequest{Method: PairMethodQR}))
 	require.True(t, dispatchEvent(t, m, pairingSession(t, m), &events.PairSuccess{
 		ID: types.NewJID("15556667777", types.DefaultUserServer),
 	}))
@@ -1501,7 +1501,7 @@ func TestDisconnect_LibraryEchoDoesNotKillTheUnlinkInFlight(t *testing.T) {
 	t.Run("live client, LoggedOut echoes our own logout", func(t *testing.T) {
 		cli := newFakeClient()
 		m, _, _, _ := newTestManager(t, cli, true)
-		require.NoError(t, m.Start(context.Background()))
+		require.NoError(t, m.Start(t.Context()))
 		require.True(t, dispatchEvent(t, m, nil, &events.Connected{}))
 		sess := installedSession(t, m)
 		require.NotNil(t, sess)
@@ -1514,7 +1514,7 @@ func TestDisconnect_LibraryEchoDoesNotKillTheUnlinkInFlight(t *testing.T) {
 
 		done := make(chan opResult, 1)
 		go func() {
-			res, err := m.Disconnect(context.Background(), false)
+			res, err := m.Disconnect(t.Context(), false)
 			done <- opResult{val: res, err: err}
 		}()
 		<-entered
@@ -1543,7 +1543,7 @@ func TestDisconnect_LibraryEchoDoesNotKillTheUnlinkInFlight(t *testing.T) {
 		built.mu.Unlock()
 
 		m, _, _, _ := newTestManager(t, installed, true)
-		require.NoError(t, m.Start(context.Background()))
+		require.NoError(t, m.Start(t.Context()))
 		// Down, so the unlink has to BUILD a client to log out with.
 		installed.setConnected(false)
 
@@ -1556,7 +1556,7 @@ func TestDisconnect_LibraryEchoDoesNotKillTheUnlinkInFlight(t *testing.T) {
 
 		done := make(chan opResult, 1)
 		go func() {
-			res, err := m.Disconnect(context.Background(), false)
+			res, err := m.Disconnect(t.Context(), false)
 			done <- opResult{val: res, err: err}
 		}()
 		<-entered
@@ -1605,7 +1605,7 @@ func TestEndAttempt_ReleaseWaitsForTheDrainItAttached(t *testing.T) {
 	// Running that release must not touch the client while the drain is parked.
 	effect := releaseSessionEffect{release: rel, drainWait: 3 * time.Second}
 	done := make(chan struct{})
-	go func() { defer close(done); effect.run(context.Background()) }()
+	go func() { defer close(done); effect.run(t.Context()) }()
 
 	consistently(t, "the client the drain is still reading for must stay open until the drain unwinds",
 		300*time.Millisecond, func() bool { return indexOf(cli.callLog(), "disconnect") < 0 })

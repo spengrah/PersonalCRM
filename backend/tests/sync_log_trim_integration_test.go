@@ -4,13 +4,12 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/testdb"
 
@@ -23,22 +22,15 @@ import (
 // database no sibling writes to; and it freezes the process-global app clock
 // via accelerated.SetNowForTest, which a parallel sibling could observe.
 func TestSyncLogTrim_Isolated(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 	repo := repository.NewSyncRepository(database.Queries)
 
 	// Freeze the app clock 100 days AHEAD of wall time. This is the time-

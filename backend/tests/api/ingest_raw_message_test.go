@@ -52,7 +52,7 @@ type ingestRawTestEnv struct {
 func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// This file asserts DB-wide over river_job (CountRiverJobsByKind) AND
 	// pairs the singleton mac_host with a DB-wide DeleteAllMacHosts teardown
 	// — both collide on the shared package DB, so it runs on a per-test clone.
@@ -175,7 +175,7 @@ func setupRawIngestEnv(t *testing.T) *ingestRawTestEnv {
 	}
 
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = messagesRepo.HardDeleteByMacHost(cleanCtx, env.pairedHostID)
 		// Identity rows for the messages source (best-effort wipe
@@ -272,7 +272,7 @@ func parseIngestResp(t *testing.T, w *httptest.ResponseRecorder) handlers.Ingest
 // is bounded by DeleteRiverJobsByKindAny in t.Cleanup.
 func countRiverJobs(t *testing.T, env *ingestRawTestEnv, kind string) int {
 	t.Helper()
-	count, err := env.database.Queries.CountRiverJobsByKind(context.Background(), kind)
+	count, err := env.database.Queries.CountRiverJobsByKind(t.Context(), kind)
 	require.NoError(t, err)
 	return int(count)
 }
@@ -337,7 +337,7 @@ func TestIngestRawMessage_HappyPath_StagesRowAndEnqueuesJob(t *testing.T) {
 	require.Equal(t, 0, resp.Duplicate)
 	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
 
-	msg, err := env.messagesRepo.GetMessage(context.Background(), guid)
+	msg, err := env.messagesRepo.GetMessage(t.Context(), guid)
 	require.NoError(t, err)
 	require.NotNil(t, msg)
 	require.NotNil(t, msg.MatchedContactID, "expected matched_contact_id to be set")
@@ -367,7 +367,7 @@ func TestIngestRawMessage_Sent_StagesOutgoingRowAndEnqueuesJob(t *testing.T) {
 	require.Equal(t, 1, resp.Accepted)
 	require.Equal(t, 0, resp.Rejected, "errors: %+v", resp.Errors)
 
-	msg, err := env.messagesRepo.GetMessage(context.Background(), guid)
+	msg, err := env.messagesRepo.GetMessage(t.Context(), guid)
 	require.NoError(t, err)
 	require.NotNil(t, msg)
 	require.True(t, msg.IsOutgoing, "raw_message.sent must stage is_outgoing=true")
@@ -401,7 +401,7 @@ func TestIngestRawMessage_Duplicate_DetectedAndSkipped(t *testing.T) {
 	require.Equal(t, 1, resp.Duplicate)
 	require.Equal(t, 0, resp.Rejected)
 
-	count, err := env.database.Queries.CountMessagesMessageByGuid(context.Background(), guid)
+	count, err := env.database.Queries.CountMessagesMessageByGuid(t.Context(), guid)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), count)
 }
@@ -421,7 +421,7 @@ func TestIngestRawMessage_UnmatchedPeer_StagedWithoutContactNoJob(t *testing.T) 
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, 1, parseIngestResp(t, w).Accepted)
 
-	msg, err := env.messagesRepo.GetMessage(context.Background(), guid)
+	msg, err := env.messagesRepo.GetMessage(t.Context(), guid)
 	require.NoError(t, err)
 	require.Nil(t, msg.MatchedContactID, "unmatched peer must produce a NULL matched_contact_id")
 
@@ -598,30 +598,30 @@ func TestIngestRawMessage_AdminRematch_MatchesAfterContactAdded(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	require.Equal(t, 1, parseIngestResp(t, w).Accepted)
 
-	msg, err := env.messagesRepo.GetMessage(context.Background(), guid)
+	msg, err := env.messagesRepo.GetMessage(t.Context(), guid)
 	require.NoError(t, err)
 	require.Nil(t, msg.MatchedContactID)
 
 	// Step 2 — operator adds a contact_method that matches the
 	// stranded peer.
-	created, err := env.contactRepo.CreateContact(context.Background(), repository.CreateContactRequest{
+	created, err := env.contactRepo.CreateContact(t.Context(), repository.CreateContactRequest{
 		FullName: "Late Add Contact",
 	})
 	require.NoError(t, err)
 	contactB := created.ID
-	_, err = env.cmRepo.CreateContactMethod(context.Background(), repository.CreateContactMethodRequest{
+	_, err = env.cmRepo.CreateContactMethod(t.Context(), repository.CreateContactMethodRequest{
 		ContactID: contactB,
 		Type:      "phone",
 		Value:     "+15558887777",
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_ = env.cmRepo.DeleteContactMethodsByContact(context.Background(), contactB)
-		_ = env.contactRepo.HardDeleteContact(context.Background(), contactB)
+		_ = env.cmRepo.DeleteContactMethodsByContact(context.WithoutCancel(t.Context()), contactB)
+		_ = env.contactRepo.HardDeleteContact(context.WithoutCancel(t.Context()), contactB)
 	})
 
 	// Step 3 — invoke admin rematch handler.
-	res, err := messages.RematchStranded(context.Background(), messages.RematchStrandedDeps{
+	res, err := messages.RematchStranded(t.Context(), messages.RematchStrandedDeps{
 		Messages:    env.messagesRepo,
 		Identity:    env.identityService,
 		RiverClient: adminRiverInserter{client: env.riverClient},
@@ -632,7 +632,7 @@ func TestIngestRawMessage_AdminRematch_MatchesAfterContactAdded(t *testing.T) {
 	require.Equal(t, 1, res.Enqueued)
 
 	// Step 4 — verify the staging row is now matched.
-	msg, err = env.messagesRepo.GetMessage(context.Background(), guid)
+	msg, err = env.messagesRepo.GetMessage(t.Context(), guid)
 	require.NoError(t, err)
 	require.NotNil(t, msg.MatchedContactID)
 	require.Equal(t, contactB, *msg.MatchedContactID)

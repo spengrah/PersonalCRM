@@ -43,7 +43,7 @@ func TestEnrichSparseEntity_FillsWhenUnresolvedAndCachedDataAvailable(t *testing
 		PeerEntityResolved: false,
 	}
 
-	h.enrichSparseEntity(context.Background(), parsed)
+	h.enrichSparseEntity(t.Context(), parsed)
 
 	assert.Equal(t, 1, mock.CallCount)
 	require.NotNil(t, parsed.PeerUsername)
@@ -68,7 +68,7 @@ func TestEnrichSparseEntity_ShortCircuitsWhenResolved(t *testing.T) {
 		PeerEntityResolved: true,
 	}
 
-	h.enrichSparseEntity(context.Background(), parsed)
+	h.enrichSparseEntity(t.Context(), parsed)
 
 	assert.Equal(t, 0, mock.CallCount, "fetcher must not be called when entity was resolved")
 	assert.Equal(t, "dan13ram", *parsed.PeerUsername)
@@ -89,7 +89,7 @@ func TestEnrichSparseEntity_ResolvedWithEmptyFieldsRespectsRemoval(t *testing.T)
 		PeerEntityResolved: true,
 	}
 
-	h.enrichSparseEntity(context.Background(), parsed)
+	h.enrichSparseEntity(t.Context(), parsed)
 
 	assert.Equal(t, 0, mock.CallCount)
 	assert.Nil(t, parsed.PeerUsername, "removed username must remain nil")
@@ -104,7 +104,7 @@ func TestEnrichSparseEntity_NoCachedData(t *testing.T) {
 		PeerEntityResolved: false,
 	}
 
-	h.enrichSparseEntity(context.Background(), parsed)
+	h.enrichSparseEntity(t.Context(), parsed)
 
 	assert.Equal(t, 1, mock.CallCount)
 	assert.Nil(t, parsed.PeerUsername)
@@ -121,7 +121,7 @@ func TestEnrichSparseEntity_LookupErrorIsBestEffort(t *testing.T) {
 	}
 
 	require.NotPanics(t, func() {
-		h.enrichSparseEntity(context.Background(), parsed)
+		h.enrichSparseEntity(t.Context(), parsed)
 	})
 	assert.Equal(t, 1, mock.CallCount)
 	assert.Equal(t, "preserved", *parsed.PeerFirstName, "parsed must remain unchanged on error")
@@ -131,7 +131,7 @@ func TestEnrichSparseEntity_NilParsed(t *testing.T) {
 	mock := &mockPeerEntityFetcher{}
 	h := &MessageHandler{peerEntityFetcher: mock}
 	require.NotPanics(t, func() {
-		h.enrichSparseEntity(context.Background(), nil)
+		h.enrichSparseEntity(t.Context(), nil)
 	})
 	assert.Equal(t, 0, mock.CallCount)
 }
@@ -140,7 +140,7 @@ func TestEnrichSparseEntity_NilPeerUserID(t *testing.T) {
 	mock := &mockPeerEntityFetcher{}
 	h := &MessageHandler{peerEntityFetcher: mock}
 	parsed := &ParsedMessage{PeerUserID: nil, PeerEntityResolved: false}
-	h.enrichSparseEntity(context.Background(), parsed)
+	h.enrichSparseEntity(t.Context(), parsed)
 	assert.Equal(t, 0, mock.CallCount)
 }
 

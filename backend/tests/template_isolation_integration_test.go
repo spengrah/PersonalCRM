@@ -5,6 +5,7 @@ package tests
 import (
 	"context"
 	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -25,15 +26,11 @@ import (
 // repository layer, matching the existing TestContactRepository_Integration
 // convention.
 func TestTemplateIsolation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Package clone: create a sentinel contact.
 	pkgCfg := config.TestConfig()

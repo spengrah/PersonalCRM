@@ -2,13 +2,12 @@ package tests
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 
 	"github.com/stretchr/testify/assert"
@@ -31,19 +30,11 @@ import (
 // distinction is made.
 func TestCommsThreadID_ThreeStateDiscrimination(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	gen, ns := migrationGenerator(t)
 	contact, contactCleanup := seedMigrationContact(ctx, t, database, gen)
@@ -68,7 +59,7 @@ func TestCommsThreadID_ThreeStateDiscrimination(t *testing.T) {
 	nullRow := base
 	nullRow.ExternalID = ns + "-null"
 	nullRow.ThreadID = nil
-	_, err = comms.UpsertMessage(ctx, nullRow)
+	_, err := comms.UpsertMessage(ctx, nullRow)
 	require.NoError(t, err)
 
 	emptyRow := base
@@ -96,19 +87,11 @@ func TestCommsThreadID_ThreeStateDiscrimination(t *testing.T) {
 // a NULL-only guard would already pass the NULL and value cases.
 func TestTelegramPeerEntity_ThreeStateDiscrimination(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := context.WithoutCancel(t.Context())
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	_, ns := migrationGenerator(t)
 	repo := repository.NewTelegramMessageRepository(database.Queries)

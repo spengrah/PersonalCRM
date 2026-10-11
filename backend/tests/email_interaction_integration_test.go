@@ -192,7 +192,7 @@ func (e *emailEnv) waitForCommsProcessed(t *testing.T, externalID string, contac
 
 func TestEmailIntegration_CreateInbound_AppliesCadence(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
 
@@ -218,7 +218,7 @@ func TestEmailIntegration_CreateInbound_AppliesCadence(t *testing.T) {
 
 func TestEmailIntegration_CreateOutbound_AppliesOutreachCadence(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
 
@@ -241,7 +241,7 @@ func TestEmailIntegration_CreateOutbound_AppliesOutreachCadence(t *testing.T) {
 
 func TestEmailIntegration_SameThreadDay_Extends(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
 
@@ -281,7 +281,7 @@ func TestEmailIntegration_SameThreadDay_Extends(t *testing.T) {
 
 func TestEmailIntegration_NextDay_NewInteraction(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
 
@@ -306,7 +306,7 @@ func TestEmailIntegration_NextDay_NewInteraction(t *testing.T) {
 
 func TestEmailIntegration_MixedDirection_PromotesToMutual(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
 
@@ -337,7 +337,7 @@ func TestEmailIntegration_MixedDirection_PromotesToMutual(t *testing.T) {
 
 func TestEmailIntegration_OutOfOrderBackfill_NoBackwardMove(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
 
@@ -373,7 +373,7 @@ func TestEmailIntegration_OutOfOrderBackfill_NoBackwardMove(t *testing.T) {
 
 func TestEmailIntegration_ReDelivery_Idempotent(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
 
@@ -401,7 +401,7 @@ func TestEmailIntegration_ReDelivery_Idempotent(t *testing.T) {
 
 func TestEmailIntegration_CrossAccountSameMessageID_OneInteraction(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
 
@@ -423,7 +423,7 @@ func TestEmailIntegration_CrossAccountSameMessageID_OneInteraction(t *testing.T)
 
 func TestEmailIntegration_MatchOnly_NoContactCreation(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
 
@@ -442,7 +442,7 @@ func TestEmailIntegration_MatchOnly_NoContactCreation(t *testing.T) {
 
 func TestEmailIntegration_Concurrent_NoBackwardMove(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	e := newEmailEnv(t, ctx)
 	contact := e.newEmailTestContact(t)
 

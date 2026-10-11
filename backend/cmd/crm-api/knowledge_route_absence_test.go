@@ -12,7 +12,7 @@
 package main
 
 import (
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
@@ -102,9 +102,7 @@ func requireRouteAbsent(t *testing.T, routes gin.RoutesInfo, wantAbsent string) 
 // disabled shape pins the invariant on the minimal tree too.
 func TestKnowledgeRouteAbsence_AssertionStoreInvisible(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Run("maximal route surface exposes no assertion-store route", func(t *testing.T) {
 		// spec: KNW-033

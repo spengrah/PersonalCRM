@@ -72,7 +72,7 @@ func seedImportedWithPending(
 func TestSuggestions_List_SurfacesLinkedRowWithName(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	email := "list-" + abSuffix(t) + "@example.com"
@@ -99,7 +99,7 @@ func TestSuggestions_List_SurfacesLinkedRowWithName(t *testing.T) {
 func TestSuggestions_List_DropsSoftDeletedContact(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	email := "softdel-" + abSuffix(t) + "@example.com"
@@ -116,7 +116,7 @@ func TestSuggestions_List_DropsSoftDeletedContact(t *testing.T) {
 func TestSuggestions_List_SourceScopeExcludesNonAddressBook(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	svc := newSuggestionService(env)
 
 	// Seed a telegram row with pending JSONB directly (non-address-book
@@ -160,7 +160,7 @@ func TestSuggestions_List_SourceScopeExcludesNonAddressBook(t *testing.T) {
 func TestSuggestions_Resolve_AddsMethodAndClearsPending(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	email := "resolve-" + abSuffix(t) + "@example.com"
@@ -192,7 +192,7 @@ func TestSuggestions_Resolve_AddsMethodAndClearsPending(t *testing.T) {
 func TestSuggestions_Resolve_Idempotent(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	email := "resolve-idem-" + abSuffix(t) + "@example.com"
@@ -221,7 +221,7 @@ func TestSuggestions_Resolve_Idempotent(t *testing.T) {
 func TestSuggestions_Resolve_RequestedSubset_OnlyRequestedConfirmed(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	emailX := "resolve-subset-x-" + abSuffix(t) + "@example.com"
@@ -252,7 +252,7 @@ func TestSuggestions_Resolve_RequestedSubset_OnlyRequestedConfirmed(t *testing.T
 func TestSuggestions_Resolve_Unspecified_ConfirmsAllPending(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	emailX := "resolve-all-x-" + abSuffix(t) + "@example.com"
@@ -274,7 +274,7 @@ func TestSuggestions_Resolve_Unspecified_ConfirmsAllPending(t *testing.T) {
 func TestSuggestions_Resolve_AlreadyOnContact_NotReAdded(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	email := "resolve-present-" + abSuffix(t) + "@example.com"
@@ -302,7 +302,7 @@ func TestSuggestions_Resolve_AlreadyOnContact_NotReAdded(t *testing.T) {
 func TestSuggestions_Resolve_UnknownMethodIsNoOp(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	email := "resolve-unknown-" + abSuffix(t) + "@example.com"
@@ -324,7 +324,7 @@ func TestSuggestions_Resolve_UnknownMethodIsNoOp(t *testing.T) {
 func TestSuggestions_Resolve_MalformedMethod400(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	email := "resolve-malformed-" + abSuffix(t) + "@example.com"
@@ -345,7 +345,7 @@ func TestSuggestions_Resolve_MalformedMethod400(t *testing.T) {
 func TestSuggestions_Dismiss_RecordsStickyAndDropsPending(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	emailX := "dismiss-x-" + abSuffix(t) + "@example.com"
@@ -383,7 +383,7 @@ func TestSuggestions_Dismiss_RecordsStickyAndDropsPending(t *testing.T) {
 func TestSuggestions_Dismiss_Idempotent(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	email := "dismiss-idem-" + abSuffix(t) + "@example.com"
@@ -415,7 +415,7 @@ func TestSuggestions_Dismiss_Idempotent(t *testing.T) {
 func TestSuggestions_Dismiss_StickyPerType_SameValueSurvivesDifferentType(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	svc := newSuggestionService(env)
 
 	sfx := abSuffix(t)
@@ -471,7 +471,7 @@ func TestSuggestions_Dismiss_StickyPerType_SameValueSurvivesDifferentType(t *tes
 func TestSuggestions_Dismiss_AlreadyOnContact_NotStickyDismissed(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	email := "dismiss-present-" + abSuffix(t) + "@example.com"
@@ -507,7 +507,7 @@ func TestSuggestions_Dismiss_AlreadyOnContact_NotStickyDismissed(t *testing.T) {
 func TestSuggestions_Dismiss_NoLongerOffered_PrunedNotDismissed(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	email := "dismiss-gone-source-" + abSuffix(t) + "@example.com"
@@ -543,7 +543,7 @@ func TestSuggestions_Dismiss_NoLongerOffered_PrunedNotDismissed(t *testing.T) {
 func TestSuggestions_Resolve_ContactGone(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 
 	email := "gone-" + abSuffix(t) + "@example.com"
@@ -557,7 +557,7 @@ func TestSuggestions_Resolve_ContactGone(t *testing.T) {
 func TestSuggestions_DuplicateOfCanonical_ResolvesToCanonicalContact(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	svc := newSuggestionService(env)
 
 	// Canonical: a linked imported gcontacts row.
@@ -622,7 +622,7 @@ func TestSuggestions_DuplicateOfCanonical_ResolvesToCanonicalContact(t *testing.
 func TestSuggestionsAPI_Resolve_SoftDeletedContact_Returns410(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 	router := newSuggestionRouter(svc)
 
@@ -645,7 +645,7 @@ func TestSuggestionsAPI_Resolve_SoftDeletedContact_Returns410(t *testing.T) {
 func TestSuggestionsAPI_Dismiss_SoftDeletedContact_Returns410(t *testing.T) {
 	t.Parallel()
 	env := setupABReconcileEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	svc := newSuggestionService(env)
 	router := newSuggestionRouter(svc)
 

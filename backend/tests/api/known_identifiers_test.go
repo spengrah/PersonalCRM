@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -39,17 +39,13 @@ type knownIDsEnv struct {
 
 func setupKnownIDsEnv(t *testing.T) *knownIDsEnv {
 	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-	ctx := context.Background()
+	databaseURL := testsupport.RequireDatabase(t)
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.External.APIKey = macHostTestKey
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
@@ -90,7 +86,7 @@ func setupKnownIDsEnv(t *testing.T) *knownIDsEnv {
 	}
 
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		for _, id := range env.seededContacts {
 			_ = contactMethodRepo.DeleteContactMethodsByContact(cleanCtx, id)
@@ -107,7 +103,7 @@ func setupKnownIDsEnv(t *testing.T) *knownIDsEnv {
 // Each method tuple is (type, value).
 func (e *knownIDsEnv) seedKnownIDsContact(t *testing.T, name string, methods [][2]string) uuid.UUID {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	created, err := e.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
 	require.NoError(t, err)
 	for _, m := range methods {
@@ -194,7 +190,7 @@ func TestKnownIdentifiers_HappyPath_ReturnsSortedDistinctSets(t *testing.T) {
 
 func TestKnownIdentifiers_ExcludesSoftDeletedContact(t *testing.T) {
 	env := setupKnownIDsEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	suffix := uuid.NewString()[:8]
 	live := env.seedKnownIDsContact(t, "KnownIDs Live "+suffix, [][2]string{
 		{"email", "live-" + suffix + "@example.invalid"},

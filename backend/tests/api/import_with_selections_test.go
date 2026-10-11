@@ -6,14 +6,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
 	"personal-crm/backend/internal/api"
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -23,25 +22,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository, *repository.ContactRepository, *repository.ContactMethodRepository, func()) {
-	ctx := context.Background()
-	databaseURL := os.Getenv("DATABASE_URL")
+func setupImportTestRouter(t *testing.T) (*gin.Engine, *repository.ExternalContactRepository, *repository.ContactRepository, *repository.ContactMethodRepository, func()) {
 
 	// Migrations are applied once by TestMain.
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	if err != nil {
-		panic("Failed to connect to test database: " + err.Error())
-	}
+	database := testsupport.OpenDatabase(t)
 
 	// Create repositories
 	contactRepo := repository.NewContactRepository(database.Queries)
@@ -91,20 +77,13 @@ func setupImportTestRouter() (*gin.Engine, *repository.ExternalContactRepository
 }
 
 func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_WithSelectedMethods", func(t *testing.T) {
 		// Create an external contact with multiple emails
@@ -352,20 +331,13 @@ func TestImportAPI_ImportWithMethodSelection(t *testing.T) {
 }
 
 func TestImportAPI_LinkWithMethodSelection(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("LinkContact_WithSelectedMethods_AddsNewMethods", func(t *testing.T) {
 		// Create a CRM contact without methods
@@ -649,20 +621,13 @@ func TestImportAPI_LinkWithMethodSelection(t *testing.T) {
 }
 
 func TestImportAPI_ImportWithCadence(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_WithCadence", func(t *testing.T) {
 		// Create an external contact
@@ -779,20 +744,13 @@ func TestImportAPI_ImportWithCadence(t *testing.T) {
 }
 
 func TestImportAPI_LinkWithCadence(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("LinkContact_WithCadence_UpdatesExisting", func(t *testing.T) {
 		// Create a CRM contact without cadence
@@ -1030,20 +988,13 @@ func TestImportAPI_LinkWithCadence(t *testing.T) {
 }
 
 func TestImportAPI_ImportWithName(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_WithCustomName", func(t *testing.T) {
 		// Create an external contact with a name
@@ -1157,20 +1108,13 @@ func TestImportAPI_ImportWithName(t *testing.T) {
 }
 
 func TestImportAPI_ImportWithPrimaryMethod(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_WithPrimaryMethod", func(t *testing.T) {
 		// Create an external contact with multiple methods
@@ -1301,20 +1245,13 @@ func TestImportAPI_ImportWithPrimaryMethod(t *testing.T) {
 }
 
 func TestImportAPI_LinkWithName(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("LinkContact_WithCustomName_UpdatesCRM", func(t *testing.T) {
 		// Create a CRM contact with original name
@@ -1419,20 +1356,13 @@ func TestImportAPI_LinkWithName(t *testing.T) {
 }
 
 func TestImportAPI_LinkWithPrimaryMethod(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("LinkContact_WithPrimaryMethod_SetsNewPrimary", func(t *testing.T) {
 		// Create a CRM contact
@@ -1634,20 +1564,13 @@ func TestImportAPI_LinkWithPrimaryMethod(t *testing.T) {
 }
 
 func TestImportAPI_EdgeCases(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_WithEmptyStringNameOverride_UsesOriginal", func(t *testing.T) {
 		// Create an external contact with a valid name
@@ -2123,20 +2046,13 @@ func TestImportAPI_EdgeCases(t *testing.T) {
 }
 
 func TestImportAPI_ImportValidation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	t.Run("ImportContact_InvalidUUID", func(t *testing.T) {
 		req, _ := http.NewRequest("POST", "/api/v1/imports/candidates/not-a-uuid/import", nil)
@@ -2308,20 +2224,13 @@ func TestImportAPI_ImportValidation(t *testing.T) {
 // server-side (403) rather than merely hidden by the UI.
 // spec: IMP-014
 func TestImportAPI_LinkOnlySourcePolicy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, _, _, cleanup := setupImportTestRouter()
+	router, externalRepo, _, _, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	suffix := uuid.New().String()[:8]
 	displayName := "Link Only Policy " + suffix
@@ -2395,34 +2304,16 @@ func TestImportAPI_LinkOnlySourcePolicy(t *testing.T) {
 }
 
 func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Use a separate enrichment repo to verify audit rows.
-	databaseURL2 := os.Getenv("DATABASE_URL")
-	dbCfg := config.DatabaseConfig{
-		URL:               databaseURL2,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	auditDB, err := db.NewDatabase(ctx, dbCfg)
-	require.NoError(t, err)
-	defer auditDB.Close()
+	auditDB := testsupport.OpenDatabase(t)
 	enrichmentRepo := repository.NewEnrichmentRepository(auditDB.Queries)
 
 	seed := func(t *testing.T, tgUsername string) (*repository.Contact, *repository.ExternalContact, func()) {
@@ -2623,20 +2514,13 @@ func TestImportAPI_TelegramLinkWithMethodSelection(t *testing.T) {
 }
 
 func TestImportAPI_TelegramImportNewRegression(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	t.Parallel()
-	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter()
+	router, externalRepo, contactRepo, contactMethodRepo, cleanup := setupImportTestRouter(t)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	displayName := "TG Import Regression " + uuid.New().String()[:8]
 	external, err := externalRepo.Upsert(ctx, repository.UpsertExternalContactRequest{

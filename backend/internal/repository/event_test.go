@@ -1,7 +1,6 @@
 package repository
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -106,7 +105,7 @@ func TestInsertEvent_NilTx_ReturnsError(t *testing.T) {
 		Payload:    []byte(`{"version":1}`),
 		ObservedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC),
 	}
-	err := repo.InsertEvent(context.Background(), nil, env)
+	err := repo.InsertEvent(t.Context(), nil, env)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "nil tx")
 }
@@ -116,7 +115,7 @@ func TestInsertEvent_NilTx_ReturnsError(t *testing.T) {
 // check passes and we hit the envelope check.
 func TestInsertEvent_NilEnvelope_ReturnsError(t *testing.T) {
 	repo := NewEventRepository(nil)
-	err := repo.InsertEvent(context.Background(), stubTx{}, nil)
+	err := repo.InsertEvent(t.Context(), stubTx{}, nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "nil envelope")
 }

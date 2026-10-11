@@ -8,8 +8,7 @@
 package main
 
 import (
-	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 
 	"personal-crm/backend/internal/config"
@@ -42,7 +41,6 @@ type wireWhatsAppHarness struct {
 
 func newWireWhatsAppHarness(t *testing.T, mutate func(*config.Config)) wireWhatsAppHarness {
 	t.Helper()
-	ctx := context.Background()
 
 	cloneURL, drop := testdb.NewEphemeralClone(t)
 	t.Cleanup(drop)
@@ -52,9 +50,7 @@ func newWireWhatsAppHarness(t *testing.T, mutate func(*config.Config)) wireWhats
 	cfg.Database.MigrationsPath = migrationsPathForTest()
 	mutate(cfg)
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	riverWorkers := river.NewWorkers()
 	reg := newRiverRegistrar(riverWorkers)
@@ -82,9 +78,7 @@ func newWireWhatsAppHarness(t *testing.T, mutate func(*config.Config)) wireWhats
 // to false would have landed with everything green.
 func TestWireWhatsApp_TurnsTheFeatureOn(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	h := newWireWhatsAppHarness(t, func(c *config.Config) {
 		c.Features.EnableExternalSync = true
@@ -109,7 +103,7 @@ func TestWireWhatsApp_TurnsTheFeatureOn(t *testing.T) {
 		nil,
 	)
 
-	stk := wireWhatsApp(context.Background(), h.cfg, h.database, h.reg, ingestor)
+	stk := wireWhatsApp(t.Context(), h.cfg, h.database, h.reg, ingestor)
 	require.NotNil(t, stk.Manager, "the device store opens against a real database")
 	t.Cleanup(stk.Manager.Stop)
 
@@ -134,13 +128,11 @@ func TestWireWhatsApp_TurnsTheFeatureOn(t *testing.T) {
 // WhatsApp-disabled deployment gains no manager, no worker and no periodic.
 func TestWireWhatsApp_RegistersNothingWhenDisabled(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	h := newWireWhatsAppHarness(t, func(c *config.Config) {})
 
-	stk := wireWhatsApp(context.Background(), h.cfg, h.database, h.reg, nil)
+	stk := wireWhatsApp(t.Context(), h.cfg, h.database, h.reg, nil)
 
 	assert.Nil(t, stk.Manager)
 	assert.Nil(t, stk.Handler)

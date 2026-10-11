@@ -2,12 +2,11 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 	"personal-crm/backend/internal/api/handlers"
 	"personal-crm/backend/internal/config"
 	"personal-crm/backend/internal/contacttask"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -29,26 +27,12 @@ import (
 func setupDirectionAPIRouter(t *testing.T) (*gin.Engine, *repository.ContactTaskRepository, func()) {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
-
 	// Migrations are applied once by TestMain.
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// MaxConns/MinConns mirror config.TestConfig() (8/1) to cap the per-pool
 	// connection ceiling under parallel execution.
-	dbConfig := config.DatabaseConfig{
-		URL:               databaseURL,
-		MaxConns:          8,
-		MinConns:          1,
-		MaxConnIdleTime:   config.DefaultDBMaxConnIdleTime,
-		MaxConnLifetime:   config.DefaultDBMaxConnLifetime,
-		HealthCheckPeriod: config.DefaultDBHealthCheckPeriod,
-	}
-	database, err := db.NewDatabase(ctx, dbConfig)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	interactionRepo := repository.NewInteractionRepository(database.Queries)
@@ -121,9 +105,7 @@ func recordDirectionTestInteraction(t *testing.T, router *gin.Engine, contactID,
 }
 
 func TestInteractionAPI_DirectionInResponse(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
@@ -196,9 +178,7 @@ func TestInteractionAPI_DirectionInResponse(t *testing.T) {
 }
 
 func TestContactAPI_AwaitingReply(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
@@ -238,9 +218,7 @@ func TestContactAPI_AwaitingReply(t *testing.T) {
 
 func TestContactAPI_ListReportsAwaitingReply(t *testing.T) {
 	// spec: CON-005.list-entries-carry-flag
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
@@ -280,9 +258,7 @@ func TestContactAPI_ListReportsAwaitingReply(t *testing.T) {
 }
 
 func TestContactAPI_DirectionTimestamps(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
@@ -319,9 +295,7 @@ func TestContactAPI_DirectionTimestamps(t *testing.T) {
 }
 
 func TestContactAPI_FollowupFilter(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, _, cleanup := setupDirectionAPIRouter(t)
@@ -380,14 +354,12 @@ func TestContactAPI_FollowupFilter(t *testing.T) {
 }
 
 func TestContactTaskAPI_FollowUpKindValidation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	router, contactTaskRepo, cleanup := setupDirectionAPIRouter(t)
 	defer cleanup()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	contactID := createDirectionTestContact(t, router, "Task Kind API Test "+uuid.NewString()[:8])
 	id, _ := uuid.Parse(contactID)

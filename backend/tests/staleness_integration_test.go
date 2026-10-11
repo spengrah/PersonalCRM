@@ -53,7 +53,7 @@ func openBreachByType(breaches []repository.StalenessBreach, breachType string) 
 // forbids sharing the package DB).
 func TestStalenessWatchdog_LifecycleEndToEnd(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -171,7 +171,7 @@ func TestStalenessWatchdog_LifecycleEndToEnd(t *testing.T) {
 // on every error attempt; UpdateSyncStateSuccess clears it).
 func TestStalenessWatchdog_SyncErrorPath(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -263,7 +263,7 @@ func TestStalenessWatchdog_SyncErrorPath(t *testing.T) {
 // survive.
 func TestStalenessWatchdog_RetentionPrune(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -320,7 +320,7 @@ func TestStalenessWatchdog_RetentionPrune(t *testing.T) {
 // the args/worker/service wiring end to end.
 func TestStalenessWatchdog_WorkerThroughRiver(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newIsolatedRiverTestDB(t, ctx)
 
 	syncRepo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -363,7 +363,7 @@ func TestStalenessWatchdog_WorkerThroughRiver(t *testing.T) {
 	// fetching when its fetch-loop ctx cancels; core.md).
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = client.Stop(stopCtx)
 	})
@@ -372,9 +372,9 @@ func TestStalenessWatchdog_WorkerThroughRiver(t *testing.T) {
 	require.NoError(t, err)
 
 	// Poll until the breach row appears (the worker ran).
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := accelerated.GetCurrentTime().Add(20 * time.Second)
 	var breaches []repository.StalenessBreach
-	for time.Now().Before(deadline) {
+	for accelerated.GetCurrentTime().Before(deadline) {
 		breaches, err = svc.ListActiveBreaches(ctx)
 		require.NoError(t, err)
 		if len(breaches) > 0 {

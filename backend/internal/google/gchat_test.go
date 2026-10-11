@@ -59,7 +59,7 @@ func humanMsg(name, senderName, createTime, text string) *chat.Message {
 }
 
 func TestClassifyMessage_InboundSenderOnly(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	alice := uuid.New()
 	bob := uuid.New()
 	carol := uuid.New()
@@ -89,7 +89,7 @@ func TestClassifyMessage_InboundSenderOnly(t *testing.T) {
 }
 
 func TestClassifyMessage_OutboundFanOut(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	alice := uuid.New()
 	bob := uuid.New()
 	resolver := staticResolver(t, map[string]string{
@@ -115,7 +115,7 @@ func TestClassifyMessage_OutboundFanOut(t *testing.T) {
 }
 
 func TestClassifyMessage_OutboundExcludesSelfContact(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	alice := uuid.New()
 	selfContact := uuid.New()
 	resolver := staticResolver(t, map[string]string{
@@ -144,7 +144,7 @@ func TestClassifyMessage_OutboundExcludesSelfContact(t *testing.T) {
 }
 
 func TestClassifyMessage_BystanderAndUnresolved(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	alice := uuid.New()
 	resolver := staticResolver(t, map[string]string{
 		"users/stranger": "stranger@example.test", // resolvable but unknown
@@ -173,7 +173,7 @@ func TestClassifyMessage_BystanderAndUnresolved(t *testing.T) {
 // the id to "" (the not-in-Google-Contacts case). The peer email is carried
 // from the idMatch (not the empty People-API result).
 func TestClassifyMessage_MatchesBySenderID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dave := uuid.New()
 	// The People API returns "" for users/dave (simulating not-in-Contacts).
 	resolver := staticResolver(t, map[string]string{"users/dave": ""}, nil)
@@ -197,7 +197,7 @@ func TestClassifyMessage_MatchesBySenderID(t *testing.T) {
 // message — meIDs makes it fall through to the email path, where the sender (me)
 // is classified outbound, not inbound from that contact.
 func TestClassifyMessage_InboundIDPathYieldsToMeID(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	strayContact := uuid.New()
 	// The account's own id resolves to its own email via the email path.
 	resolver := staticResolver(t, map[string]string{"users/me": "me@example.test"}, nil)
@@ -221,7 +221,7 @@ func TestClassifyMessage_InboundIDPathYieldsToMeID(t *testing.T) {
 // message fans out to the UNION of email-resolved and id-resolved known members,
 // deduped and self-excluded.
 func TestClassifyMessage_OutboundFanOutIncludesIDResolvedMembers(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	alice := uuid.New()
 	dave := uuid.New()
 	resolver := staticResolver(t, map[string]string{"users/me": "me@example.test"}, nil)
@@ -250,7 +250,7 @@ func TestClassifyMessage_OutboundFanOutIncludesIDResolvedMembers(t *testing.T) {
 // meSet-independence is safe; self-exclusion of a meSet *email* member is
 // covered directly in TestFlattenKnownMembersAndIDs_UnionDedupSelfExclude.
 func TestClassifyMessage_OutboundFanOutDedupsContact(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	alice := uuid.New()
 	resolver := staticResolver(t, map[string]string{"users/me": "me@example.test"}, nil)
 	knownMap := map[string][]uuid.UUID{"alice@example.test": {alice}}
@@ -291,7 +291,7 @@ func TestFlattenKnownMembersAndIDs_UnionDedupSelfExclude(t *testing.T) {
 // matches WITHOUT calling the email resolver, while an id absent from knownIDs
 // falls through to the (still-working) email path.
 func TestClassifyMessage_IDPathPreferredEmailFallback(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dave := uuid.New()
 	erin := uuid.New()
 	calls := 0
@@ -346,7 +346,7 @@ func TestQualifiableContentMessage_FiltersBotsTombstonesNameless(t *testing.T) {
 }
 
 func TestResolveKnownMembers_ResolvesAndExcludesSelf(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	alice := uuid.New()
 	resolver := staticResolver(t, map[string]string{
 		"users/alice":   "alice@example.test",
@@ -373,7 +373,7 @@ func TestResolveKnownMembers_ResolvesAndExcludesSelf(t *testing.T) {
 }
 
 func TestResolveKnownMembers_PropagatesResolveError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	resolveErr := errors.New("people api transient")
 	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
 		ResolvePersonEmail: func(context.Context, string) (string, error) { return "", resolveErr },
@@ -385,7 +385,7 @@ func TestResolveKnownMembers_PropagatesResolveError(t *testing.T) {
 }
 
 func TestCachedEmailResolver_PositiveNegativeCachingAndTTL(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	calls := 0
 	resolver := staticResolver(t, map[string]string{
 		"users/alice": "alice@example.test",
@@ -457,7 +457,7 @@ func fakeIDFetcher(mapping map[string]string, callCount *int) *fakeChatFetcher {
 }
 
 func TestMemberIDResolver_GlobalPositiveReusedAcrossSpaces(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	calls := 0
 	fetcher := fakeIDFetcher(map[string]string{
 		"spaces/A|person@example.test": "users/777",
@@ -485,7 +485,7 @@ func TestMemberIDResolver_GlobalPositiveReusedAcrossSpaces(t *testing.T) {
 }
 
 func TestMemberIDResolver_NegativeIsPerSpace(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	calls := 0
 	// person is a member of B only; absent from A.
 	fetcher := fakeIDFetcher(map[string]string{
@@ -518,7 +518,7 @@ func TestMemberIDResolver_NegativeIsPerSpace(t *testing.T) {
 }
 
 func TestMemberIDResolver_NegativeInvalidatedByFingerprintChange(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	calls := 0
 	// Initially absent from A; after the "join" the mapping yields an id.
 	mapping := map[string]string{}
@@ -555,7 +555,7 @@ func TestMemberIDResolver_NegativeInvalidatedByFingerprintChange(t *testing.T) {
 }
 
 func TestMemberIDResolver_ResolveCapDefers(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	calls := 0
 	fetcher := fakeIDFetcher(map[string]string{
 		"spaces/A|a@example.test": "users/1",
@@ -580,7 +580,7 @@ func TestMemberIDResolver_ResolveCapDefers(t *testing.T) {
 }
 
 func TestMemberIDResolver_BudgetExhaustionDefers(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	calls := 0
 	fetcher := fakeIDFetcher(map[string]string{"spaces/A|a@example.test": "users/1"}, &calls)
 	cap := 10
@@ -596,7 +596,7 @@ func TestMemberIDResolver_BudgetExhaustionDefers(t *testing.T) {
 }
 
 func TestMemberIDResolver_PropagatesFetcherError(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	wantErr := errors.New("members.get transient")
 	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
 		ResolveMemberID: func(context.Context, string, string) (string, bool, error) {
@@ -622,7 +622,7 @@ func TestMemberIDResolver_PropagatesFetcherError(t *testing.T) {
 // cached id is already a member of the space, and that a fresh resolve happens
 // only for an uncached non-negative email.
 func TestBuildKnownIDIndex_SeedsFromPositiveCacheZeroCalls(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dave := uuid.New()
 	frank := uuid.New()
 	members := []string{"users/dave", "users/frank", "users/me"}
@@ -661,7 +661,7 @@ func TestBuildKnownIDIndex_SeedsFromPositiveCacheZeroCalls(t *testing.T) {
 // the meIDs guard, the account's own outbound messages would misclassify as
 // inbound from that contact.
 func TestBuildKnownIDIndex_ExcludesMeIDs(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	strayContact := uuid.New()
 	freshStray := uuid.New()
 	members := []string{"users/me", "users/other"}
@@ -700,7 +700,7 @@ func TestBuildKnownIDIndex_ExcludesMeIDs(t *testing.T) {
 // identify the account's own member id. The discovery is cache-only (no fresh
 // members.get): the me-email's id was cached by an earlier space.
 func TestBuildKnownIDIndex_DiscoversMeIDFromCachedPositive(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	strayContact := uuid.New()
 	members := []string{"users/me", "users/other"}
 	fp := memberSetFingerprint(members)
@@ -743,7 +743,7 @@ func TestBuildKnownIDIndex_DiscoversMeIDFromCachedPositive(t *testing.T) {
 //	(c) priority — when the cap admits only N resolves, fingerprint-invalidated
 //	    candidates are resolved before never-seen ones.
 func TestBuildKnownIDIndex_DeferredCapReturnsDebtFlagOnly(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 	fresh := now.Format(chatTimeLayout)
 
@@ -831,7 +831,7 @@ func TestBuildKnownIDIndex_DeferredCapReturnsDebtFlagOnly(t *testing.T) {
 // member is actually added (fingerprint flips), the affected candidate becomes
 // UNKNOWN and is re-resolved.
 func TestBuildKnownIDIndex_ActivityDoesNotReincurDebt(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	now := accelerated.GetCurrentTime()
 	fresh := now.Format(chatTimeLayout)
 	absent := uuid.New()
@@ -883,7 +883,7 @@ func TestBuildKnownIDIndex_ActivityDoesNotReincurDebt(t *testing.T) {
 // resolution could ever newly attach to a known email. The index is seeded only
 // from the positive cache. Keyed strictly on id signals (never People-resolution).
 func TestBuildKnownIDIndex_SkipsResolutionWhenAllMembersCovered(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dave := uuid.New()
 	otherContact := uuid.New()
 	members := []string{"users/dave", "users/other", "users/me"}
@@ -934,7 +934,7 @@ func TestBuildKnownIDIndex_SkipsResolutionWhenAllMembersCovered(t *testing.T) {
 // second distinct member id. The set-based test continues until BOTH distinct
 // uncovered ids are attached, then STOPS (no further members.get).
 func TestBuildKnownIDIndex_StopsAfterAllUncoveredMemberIDsMatched(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dave := uuid.New()
 	daveAlt := uuid.New()
 	frank := uuid.New()
@@ -1001,7 +1001,7 @@ func TestBuildKnownIDIndex_StopsAfterAllUncoveredMemberIDsMatched(t *testing.T) 
 // ListGChatIdentitiesForSync dual-source shape: one contact with both a gchat and
 // an email value that differ.
 func TestBuildKnownIDIndex_DualSourceIdentityNotLost(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dave := uuid.New()
 	// users/dave is a member; People would resolve it to dave-people@ (a NON-known
 	// address — not in knownMap). But the contact is reachable via TWO known
@@ -1256,7 +1256,7 @@ func TestFirstN(t *testing.T) {
 // returns proven=false and the ORIGINAL cursor (so the caller does NOT advance
 // past an un-listed page).
 func TestConsumeContentWindow_BudgetExhaustionKeepsCursor(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// A fetcher that always reports another page (never returns next == "").
 	pageCalls := 0
@@ -1288,7 +1288,7 @@ func TestConsumeContentWindow_BudgetExhaustionKeepsCursor(t *testing.T) {
 // TestConsumeContentWindow_FullyPagedIsProven proves a window that pages to
 // completion (next == "") returns proven=true and advances to maxCreate.
 func TestConsumeContentWindow_FullyPagedIsProven(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	alice := uuid.New()
 	msgTime := "2026-06-04T10:00:00Z"
 	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
@@ -1329,7 +1329,7 @@ func TestConsumeContentWindow_FullyPagedIsProven(t *testing.T) {
 // every sweep, holding its cursor and consuming the shared page budget —
 // reintroducing the starvation this hotfix removed.
 func TestConsumeContentWindow_NonQualifiableOnlyWindowStillAdvances(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	earlier := "2026-06-04T10:00:00Z"
 	latest := "2026-06-04T11:00:00Z"
 	// A bot message (non-HUMAN sender) and a tombstone — both non-qualifiable.
@@ -1378,7 +1378,7 @@ func TestConsumeContentWindow_NonQualifiableOnlyWindowStillAdvances(t *testing.T
 // would leave the cursor at "...00Z" and re-list the ".001Z" message every
 // sweep. The cursor must end at "...00.001Z".
 func TestConsumeContentWindow_CursorAdvancesByInstantNotLexical(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fracMsg := "2026-06-04T10:00:00.001Z" // chronologically LATER, lexically SMALLER
 	zMsg := "2026-06-04T10:00:00Z"        // chronologically EARLIER, lexically LARGER
 	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
@@ -1438,7 +1438,7 @@ func TestLaterChatTime(t *testing.T) {
 // signals incomplete=true when the shared budget runs out before the member
 // list is fully paged (so the caller does not act on a partial list).
 func TestPaginateMembers_BudgetIncomplete(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	fetcher := &fakeChatFetcher{funcs: FakeChatFetcherFuncs{
 		ListMembers: func(_ context.Context, _, _ string) ([]*chat.Membership, string, error) {
 			// Always another page → never completes on its own.
@@ -1522,7 +1522,7 @@ func TestBuildContentMetadata(t *testing.T) {
 // requests larger pages; the PageSize(1000) request is pinned separately by
 // TestListMessages_RequestsMaxPageSize.
 func TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	floor := "2026-01-01T00:00:00Z"
 	// The window needs exactly 30 pages to fully list: pages 1..29 each report
 	// another page (a bystander/unknown sender so no upsert and no commsRepo is
@@ -1598,7 +1598,7 @@ func TestConsumeContentWindow_DeepHistoryCompletesUnderRaisedBudget(t *testing.T
 // seam where the unit fakes cannot.
 func TestChatServiceFetcher_ResolveMemberID_RequestPath(t *testing.T) {
 	t.Run("success_parses_canonical_id", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		var gotPath string
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gotPath = r.URL.Path
@@ -1627,7 +1627,7 @@ func TestChatServiceFetcher_ResolveMemberID_RequestPath(t *testing.T) {
 	for _, code := range []int{400, 404} {
 		code := code
 		t.Run("status_maps_to_notMember", func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(code)
@@ -1647,7 +1647,7 @@ func TestChatServiceFetcher_ResolveMemberID_RequestPath(t *testing.T) {
 	}
 
 	t.Run("server_error_propagates", func(t *testing.T) {
-		ctx := context.Background()
+		ctx := t.Context()
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(500)
@@ -1682,7 +1682,7 @@ func TestListMessages_RequestsMaxPageSize(t *testing.T) {
 			name = "editDeletePass"
 		}
 		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			var gotQuery url.Values
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				gotQuery = r.URL.Query()

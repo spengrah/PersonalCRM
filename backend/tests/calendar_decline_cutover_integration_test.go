@@ -15,6 +15,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"personal-crm/backend/tests/testsupport"
 	"testing"
 	"time"
 
@@ -88,7 +89,7 @@ func newDeclineCutoverEnv(t *testing.T, ctx context.Context) *declineCutoverEnv 
 	declineShim.real = consumer.NewCalendarDeclineHandlerWorker(bus, database.Pool, declineHandler)
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})
@@ -203,10 +204,8 @@ func (e *declineCutoverEnv) waitForInteractionGone(t *testing.T, contactID uuid.
 // pool and the live decline consumer, asserting the full chain.
 func TestIntegration_DeclineCutover_RemovesEventAndInteractionThroughProcessEvent(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	ctx := context.Background()
+	testsupport.RequireDatabase(t)
+	ctx := context.WithoutCancel(t.Context())
 	e := newDeclineCutoverEnv(t, ctx)
 
 	cad := "weekly"
@@ -276,10 +275,8 @@ func TestIntegration_DeclineCutover_RemovesEventAndInteractionThroughProcessEven
 // calendar_event row survives (the delete never commits).
 func TestIntegration_DeclineCutover_PublishFailureLeavesRowIntact(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	ctx := context.Background()
+	testsupport.RequireDatabase(t)
+	ctx := t.Context()
 	e := newDeclineCutoverEnv(t, ctx)
 
 	contact := e.newContact(t, nil)

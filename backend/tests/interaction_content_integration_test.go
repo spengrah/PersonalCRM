@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"sort"
 	"sync/atomic"
 	"testing"
@@ -61,12 +61,7 @@ func (e *contentEnv) svc(q db.Querier) *service.InteractionContentService {
 
 func requireContentIntegration(t *testing.T) {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	testsupport.RequireDatabase(t)
 }
 
 func seedInteraction(t *testing.T, e *contentEnv, contactID uuid.UUID, source string, at time.Time, ref *string) repository.Interaction {
@@ -127,7 +122,7 @@ func insertNote(t *testing.T, e *contentEnv, sessionID uuid.UUID, eventID *uuid.
 	title, summary, memo := "Note title", "Note summary", "Note memo"
 	tx, err := e.db.Pool.Begin(e.ctx)
 	require.NoError(t, err)
-	defer tx.Rollback(e.ctx)
+	defer func() { _ = tx.Rollback(e.ctx) }()
 	_, err = e.nr.InsertMeetingNoteTx(e.ctx, tx, repository.InsertMeetingNoteParams{AnarlogSessionID: sessionID, Title: &title, Summary: &summary, Memo: &memo, LinkedKind: kind, LinkedID: eventID, LinkageState: repository.LinkageStateLinked, InputHash: "", ResolvedSetHash: "", MeetingAt: at})
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit(e.ctx))
@@ -280,7 +275,7 @@ func TestInteractionContentService_ReadOnlyEnforced(t *testing.T) {
 	rows := []repository.Interaction{comms, tg, msgs, gcal, gcalWithoutNote, anarlog, call, manual, todo}
 	tx, err := e.db.Pool.BeginTx(e.ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
 	require.NoError(t, err)
-	defer tx.Rollback(e.ctx)
+	defer func() { _ = tx.Rollback(e.ctx) }()
 	ro := e.svc(db.New(tx))
 	enriched, err := ro.EnrichPage(e.ctx, rows)
 	require.NoError(t, err)
@@ -592,12 +587,13 @@ func TestInteractionContentFilteredList(t *testing.T) {
 	var ids []uuid.UUID
 	var filterRows []repository.Interaction
 	for i := 0; i < 5; i++ {
-		at := base.Add(time.Duration(i) * time.Second)
-		if i == 0 {
+		var at time.Time
+		switch i {
+		case 0:
 			at = base.Add(3 * time.Second)
-		} else if i == 1 || i == 2 {
+		case 1, 2:
 			at = base.Add(2 * time.Second)
-		} else {
+		default:
 			at = to
 		}
 		row := seedInteraction(t, e, e.contact.ID, repository.InteractionSourceGChat, at, nil)

@@ -2,14 +2,12 @@ package scheduler
 
 import (
 	"context"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"personal-crm/backend/internal/accelerated"
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/scheduler"
 	"personal-crm/backend/internal/service"
@@ -33,24 +31,16 @@ import (
 // doesn't block, cross-window) lives in sync_repo_enqueue_test.go. This
 // file only proves the tick-to-insert plumbing.
 func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	// Clean-up pre-existing state that could collide with this test's
 	// account IDs. The source strings embed the test name so future
@@ -58,7 +48,7 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 	src1 := "tick_test_gmail"
 	src2 := "tick_test_todoist"
 
-	_, err = database.Pool.Exec(ctx,
+	_, err := database.Pool.Exec(ctx,
 		`DELETE FROM river_job WHERE kind = 'sync_provider_account'
 		 AND (args->>'source') IN ($1, $2)`, src1, src2)
 	require.NoError(t, err)
@@ -107,9 +97,9 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = database.Pool.Exec(context.Background(),
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()),
 			`DELETE FROM external_sync_state WHERE source IN ($1, $2)`, src1, src2)
-		_, _ = database.Pool.Exec(context.Background(),
+		_, _ = database.Pool.Exec(context.WithoutCancel(t.Context()),
 			`DELETE FROM river_job WHERE kind = 'sync_provider_account'
 			 AND (args->>'source') IN ($1, $2)`, src1, src2)
 	})
@@ -137,7 +127,7 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 	// (TestPeriodicTick_FiresOnStart below opens its own non-TestOnly
 	// client and is sensitive to any residual notifier reconnect loops).
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 5*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})
@@ -175,21 +165,16 @@ func TestPeriodicTick_EndToEndEnqueueWithAtomicClaim(t *testing.T) {
 // returns empty due list → tick Work returns nil fast).
 func TestPeriodicTick_FiresOnStart(t *testing.T) {
 	testsupport.RequireLongTests(t)
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.Database.MigrationsPath = testsupport.GetMigrationsPath()
 
 	// Migrations are applied once by TestMain.
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabase(t)
 
 	// Empty registry → service.ListDueAccounts returns 0 due accounts →
 	// Work returns nil immediately with no downstream enqueues.
@@ -241,7 +226,7 @@ func TestPeriodicTick_FiresOnStart(t *testing.T) {
 	// (documented project gotcha; applies to test harnesses too).
 	require.NoError(t, client.Start(ctx))
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer stopCancel()
 		_ = client.Stop(stopCtx)
 	})

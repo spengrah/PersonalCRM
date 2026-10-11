@@ -93,7 +93,7 @@ func TestAwaitingReplyWindow_FollowUpCreateDeadline(t *testing.T) {
 	h.SetDecisionObserver(func(d Decision) { observed = append(observed, d) })
 	occurredAt := accelerated.GetCurrentTime()
 	env := buildRecordedEnv(t, contactID, repository.InteractionDirectionOutbound, repository.InteractionSourceTelegram, occurredAt, cadenceStr)
-	require.NoError(t, h.HandleEvent(context.Background(), &awaitingReplyWindowTx{}, env))
+	require.NoError(t, h.HandleEvent(t.Context(), &awaitingReplyWindowTx{}, env))
 	require.Len(t, observed, 1)
 	require.Equal(t, repository.FollowUpActionCreate, observed[0].Action)
 	require.NotNil(t, observed[0].WouldDeadline)

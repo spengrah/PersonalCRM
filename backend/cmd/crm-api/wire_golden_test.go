@@ -17,9 +17,9 @@
 package main
 
 import (
-	"context"
 	"os"
 	"path/filepath"
+	"personal-crm/backend/tests/testsupport"
 	"runtime"
 	"sort"
 	"testing"
@@ -121,9 +121,7 @@ var shape6Providers = sortedCopy([]string{
 
 func TestWireGoldenLists(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	tests := []struct {
 		name          string
@@ -235,11 +233,9 @@ type wireChain struct {
 // server.
 func buildWireChainForGolden(t *testing.T, cfg *config.Config) wireChain {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 
 	core := buildCoreRepos(database.Queries)
 

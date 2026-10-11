@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"sync"
 	"testing"
@@ -105,19 +105,15 @@ func (e *meetingNoteIngestEnv) newSessionUUID() string {
 func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	t.Helper()
 
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
 	cfg.External.APIKey = macHostTestKey
 	cfg.Features.EnableEventBusIngest = true
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
+	database := testsupport.OpenDatabase(t)
 
 	hostRepo := repository.NewMacHostRepository(database.Queries)
 	pairingRepo := repository.NewMacHostPairingTokenRepository(database.Queries)
@@ -284,7 +280,7 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	}
 
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		// Drop interactions for the session UUIDs this test created
 		// (scoped per-session — no broad anarlog:% sweep). Each test
@@ -414,7 +410,7 @@ func (e *meetingNoteIngestEnv) seedCalendarEventInWindow(t *testing.T, startTime
 // is a distinct DB row. Returns the inserted event ID.
 func (e *meetingNoteIngestEnv) seedCalendarEventInWindowWithTitle(t *testing.T, startTime time.Time, title string, matchedContactIDs []uuid.UUID) uuid.UUID {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	suffix := uuid.NewString()[:8]
 	upserted, err := e.calendarRepo.Upsert(ctx, repository.UpsertCalendarEventRequest{
 		GcalEventID:       e.sourceIDPrefix + "cal-" + suffix,
@@ -452,7 +448,7 @@ func (e *meetingNoteIngestEnv) seedPhoneCallInWindow(t *testing.T, startedAt tim
 // cleaned up by mac_host_id. Returns the inserted phone_call ID.
 func (e *meetingNoteIngestEnv) seedPhoneCallInWindowFull(t *testing.T, startedAt time.Time, peerNormalized, service, direction string, answered *bool, durationSeconds int32, peerContactID *uuid.UUID) uuid.UUID {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	suffix := uuid.NewString()[:8]
 	hostID := e.pairedHostID
 	call, err := e.phoneCallRepo.UpsertCall(ctx, repository.UpsertPhoneCallParams{
@@ -583,7 +579,7 @@ func postMNIngest(t *testing.T, env *meetingNoteIngestEnv, body any) *httptest.R
 // For tombstone-aware lookups we open a tx and call the ForUpdate variant.
 func findMeetingNoteRow(t *testing.T, env *meetingNoteIngestEnv, sessionUUID string) *repository.MeetingNote {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	sid, err := uuid.Parse(sessionUUID)
 	require.NoError(t, err)
 	tx, err := env.database.Pool.Begin(ctx)
@@ -601,7 +597,7 @@ func findMeetingNoteRow(t *testing.T, env *meetingNoteIngestEnv, sessionUUID str
 // (matching anarlog:<sid>:%) for the given session UUID.
 func listSessionInteractions(t *testing.T, env *meetingNoteIngestEnv, sessionUUID string) []repository.Interaction {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	tx, err := env.database.Pool.Begin(ctx)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
@@ -620,7 +616,7 @@ func TestMeetingNote_OrphanNoTagged(t *testing.T) {
 	sessionUUID := env.newSessionUUID()
 	meetingAt := time.Date(2026, 5, 1, 14, 30, 0, 0, time.UTC)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	nodeRepo := repository.NewNodeRepository(env.database.Queries)
 
 	ev := buildMNRecordedEvent(t, env.pairedHostID, sessionUUID, meetingAt, "Orphan Session", nil)
@@ -938,12 +934,13 @@ func TestMeetingNote_DeleteCascadesToInteractions(t *testing.T) {
 	require.Equal(t, 1, parseMNIngestResp(t, w).Accepted)
 
 	// Live lookup returns nil; tombstoned row still exists.
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	sid, _ := uuid.Parse(sessionUUID)
 	tx, err := env.database.Pool.Begin(ctx)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
-	liveRow, _ := env.meetingRepo.GetMeetingNoteBySessionIDTx(ctx, tx, sid)
+	liveRow, err := env.meetingRepo.GetMeetingNoteBySessionIDTx(ctx, tx, sid)
+	require.ErrorIs(t, err, db.ErrNotFound)
 	require.Nil(t, liveRow, "live row must be gone after delete")
 	tomb, err := env.meetingRepo.GetTombstonedMeetingNoteBySessionIDTx(ctx, tx, sid)
 	require.NoError(t, err)
@@ -1146,7 +1143,7 @@ func TestMeetingNote_ImportBackfillResolvesOnResync(t *testing.T) {
 	// endpoint. That handler calls backfillAnarlogIdentity which links
 	// the anarlog_human_id identity row to the imported contact —
 	// the exact path the production flow takes.
-	ctx := context.Background()
+	ctx := t.Context()
 	idents, err := env.identityRepo.FindIdentitiesByAnarlogHumanID(ctx, anarlogX)
 	require.NoError(t, err)
 	require.Len(t, idents, 1, "identity row planted at ingest time")
@@ -1256,7 +1253,7 @@ func TestMeetingNote_AnarlogHumanIdentityRegistered(t *testing.T) {
 
 	// Identity row exists and is linked to contactA via the email-match
 	// + anarlog-link path in handleExternalContactUpserted.
-	ctx := context.Background()
+	ctx := t.Context()
 	idents, err := env.identityRepo.FindIdentitiesByAnarlogHumanID(ctx, anarlogID)
 	require.NoError(t, err)
 	require.Len(t, idents, 1)
@@ -1363,7 +1360,7 @@ func TestMeetingNote_DeleteCrossHostSilentNoOp(t *testing.T) {
 	// behavior is what the cross-host guard ultimately defends against.
 	// For this test we just need a distinct host_id for the second
 	// auth path; revoke + re-pair simulates the scenario.
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, env.macService.RevokeHost(ctx, env.pairedHostID))
 	plainB, _, err := env.macService.CreatePairingToken(ctx)
 	require.NoError(t, err)
@@ -1486,7 +1483,7 @@ func newTitleToken(t *testing.T, env *meetingNoteIngestEnv) string {
 // registers it for cleanup. Returns the contact UUID.
 func seedTitleContact(t *testing.T, env *meetingNoteIngestEnv, name string) uuid.UUID {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	c, err := env.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
 	require.NoError(t, err)
 	env.seededTitleContactIDsMu.Lock()
@@ -1514,7 +1511,7 @@ func getAnarlogTitleRow(t *testing.T, env *meetingNoteIngestEnv, normalizedToken
 	sid, err := uuid.Parse(sessionUUID)
 	require.NoError(t, err)
 	sourceID := computeTestAnarlogTitleSourceID(normalizedToken, sid)
-	row, gerr := env.externalRepo.GetBySource(context.Background(), "anarlog_title", sourceID, nil)
+	row, gerr := env.externalRepo.GetBySource(t.Context(), "anarlog_title", sourceID, nil)
 	if gerr != nil {
 		return nil
 	}
@@ -1527,7 +1524,7 @@ func getAnarlogTitleRow(t *testing.T, env *meetingNoteIngestEnv, normalizedToken
 // re-emitting the same (token, session) should NOT create new rows.
 func countAnarlogTitleRowsForToken(t *testing.T, env *meetingNoteIngestEnv, tokenDisplay string) int64 {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	n, err := env.database.Queries.CountExternalContactsByDisplayNamePrefix(ctx, tokenDisplay)
 	require.NoError(t, err)
 	return n
@@ -1550,7 +1547,7 @@ func TestMeetingNote_TitleMatch_OrphanWithTagsAndTitleMatch(t *testing.T) {
 	// can pick "QtokenA" up unambiguously.
 	tokenA := newTitleToken(t, env)
 	tokenB := newTitleToken(t, env)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
 	require.NoError(t, err)
 	contactB := seedTitleContact(t, env, tokenB+" Jones")
@@ -1601,7 +1598,7 @@ func TestMeetingNote_TitleMatch_OrphanWithTagsAndTitleNoMatch(t *testing.T) {
 
 	tokenA := newTitleToken(t, env) // matches contactA after rename
 	tokenC := newTitleToken(t, env) // no CRM contact
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
 	require.NoError(t, err)
 
@@ -1700,7 +1697,7 @@ func TestMeetingNote_TitleMatch_LinkedWithTitleMatch(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	tokenA := newTitleToken(t, env)
 	tokenB := newTitleToken(t, env)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
 	require.NoError(t, err)
 	_ = seedTitleContact(t, env, tokenB+" Jones")
@@ -1735,7 +1732,7 @@ func TestMeetingNote_TitleMatch_LinkedWithTitleUnmatched(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	tokenA := newTitleToken(t, env)
 	tokenE := newTitleToken(t, env)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
 	require.NoError(t, err)
 
@@ -1768,7 +1765,7 @@ func TestMeetingNote_TitleMatch_StrictWinnerViaTitleToken(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
 	tokenA := newTitleToken(t, env)
 	tokenB := newTitleToken(t, env)
-	ctx := context.Background()
+	ctx := t.Context()
 	// tokenA matches contactA (who is in event 1 attendees), tokenB
 	// matches a brand-new contact not in any event → only event 1
 	// gains overlap from the title matches → strict winner.
@@ -1842,7 +1839,7 @@ func TestMeetingNote_TitleMatch_DedupAgainstTagged(t *testing.T) {
 	anarlogA := env.seedAnarlogHumanResolvingTo(t, emailA)
 
 	tokenA := newTitleToken(t, env)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := env.contactRepo.UpdateContact(ctx, env.contactA, repository.UpdateContactRequest{FullName: tokenA + " Smith"})
 	require.NoError(t, err)
 
@@ -2067,7 +2064,7 @@ func TestMeetingNote_TitleMatch_HostOwnershipSkipsTitleWork(t *testing.T) {
 	// contains an unmatched token. The host-ownership guard must
 	// silently drop the event before any title work runs. The
 	// mac_host singleton index requires revoking host A first.
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, env.macService.RevokeHost(ctx, env.pairedHostID))
 	plain, _, err := env.macService.CreatePairingToken(ctx)
 	require.NoError(t, err)
@@ -2230,7 +2227,7 @@ func TestMeetingNote_TitleMatch_ImportsUIExcludesAnarlogTitle(t *testing.T) {
 // ----------------------------------------------------------------------------
 func TestMeetingNote_TitleMatch_CountQueryExcludesAnarlogTitle(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	tokenJ := newTitleToken(t, env)
 	sessionUUID := env.newSessionUUID()
@@ -2358,7 +2355,7 @@ func TestMeetingNote_TitleMatch_ContactRenameInvalidatesCarryForward(t *testing.
 	// Rename contact so the trigram no longer matches the title token.
 	// Use a totally unrelated synthetic prefix.
 	renameToken := newTitleToken(t, env)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := env.contactRepo.UpdateContact(ctx, contactA, repository.UpdateContactRequest{FullName: renameToken + " Renamed"})
 	require.NoError(t, err)
 
@@ -2438,7 +2435,7 @@ func TestMeetingNote_TitleMatch_PreviouslyAmbiguousNowDisambiguated(t *testing.T
 		"ambiguous title → only Carol-tagged")
 
 	// Soft-delete contactA2 → match becomes unique.
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, env.contactRepo.SoftDeleteContact(ctx, contactA2))
 
 	// Re-ingest.
@@ -2483,7 +2480,7 @@ func TestMeetingNote_TitleMatch_LegacySessionBackfillsDiscoveryOnCarryForward(t 
 	// Simulate the pre-title-parsing state by hard-deleting the discovery row.
 	// The meeting_note row's input_hash + resolved_set_hash are
 	// unchanged from the original ingest.
-	ctx := context.Background()
+	ctx := t.Context()
 	rowsDeleted, err := env.database.Queries.DeleteExternalContactsByDisplayNamePrefix(ctx, tokenK)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, rowsDeleted, int64(1), "delete the pre-existing discovery row")
@@ -2804,7 +2801,7 @@ func TestListNeedsAttention_BasicProjection(t *testing.T) {
 	// attendee entries so the preview's attendee_count is nonzero and
 	// distinct from the candidate count (2) — a hardcoded or misprojected
 	// count cannot pass.
-	upserted, err := env.calendarRepo.Upsert(context.Background(), repository.UpsertCalendarEventRequest{
+	upserted, err := env.calendarRepo.Upsert(t.Context(), repository.UpsertCalendarEventRequest{
 		GcalEventID:     env.sourceIDPrefix + "cal-proj-" + uuid.NewString()[:8],
 		GcalCalendarID:  "primary",
 		GoogleAccountID: "test-account",
@@ -3043,7 +3040,7 @@ func TestResolveLink_NoneOfTheseFiresDiscoveryUpsert(t *testing.T) {
 	// resolve-link re-upsert is observable.
 	existing := getAnarlogTitleRow(t, env, strings.ToLower(tokenC), sessionUUID)
 	require.NotNil(t, existing)
-	require.NoError(t, env.database.Queries.TestDeleteExternalContactsBySourceIDPrefix(context.Background(), existing.SourceID))
+	require.NoError(t, env.database.Queries.TestDeleteExternalContactsBySourceIDPrefix(t.Context(), existing.SourceID))
 	require.Nil(t, getAnarlogTitleRow(t, env, strings.ToLower(tokenC), sessionUUID))
 
 	w = postResolveLink(t, env, row.ID.String(), map[string]any{"action": "none_of_these"})
@@ -3106,7 +3103,7 @@ func TestResolveLink_TargetMissingReturns404(t *testing.T) {
 	// Hard-delete eventA via the test-only repository helper
 	// (calendar_event has no soft-delete column; raw SQL in Go is
 	// banned by core.md absolute rule 2).
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, env.calendarRepo.TestHardDeleteByID(ctx, eventA))
 
 	w = postResolveLink(t, env, row.ID.String(), map[string]any{
@@ -3179,7 +3176,7 @@ func TestListNeedsAttention_HostFilter(t *testing.T) {
 // spec: NTS-025.returns-attention-notes-newest-first
 func TestListNeedsAttention_HostScope_TwoHosts(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 
 	// Own (paired) host's attention row: no candidates, no participants
 	// → orphan_needs_review directly at ingest.
@@ -3199,7 +3196,7 @@ func TestListNeedsAttention_HostScope_TwoHosts(t *testing.T) {
 	require.NoError(t, err)
 	otherHostID := otherHost.ID
 	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		// The env teardown's DeleteAllMacHosts sweeps the seeded host
 		// row itself; its meeting_note rows are ours to remove.
@@ -3280,7 +3277,7 @@ func TestListNeedsAttention_TargetMissingProjection(t *testing.T) {
 	// Hard-delete eventA so its snapshot entry becomes a stale pointer.
 	// Uses the test-only repository helper per core.md absolute rule 2
 	// ("no raw SQL in Go").
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, env.calendarRepo.TestHardDeleteByID(ctx, eventA))
 
 	w = getNeedsAttention(t, env, env.pairedHostID.String())
@@ -3383,7 +3380,7 @@ func TestResolveLink_PhoneCallTargetMissingReturns404(t *testing.T) {
 	// Hard-delete the phone_call so the snapshot entry becomes a stale
 	// pointer. Uses the test-only repository helper per core.md absolute
 	// rule 2 ("no raw SQL in Go").
-	ctx := context.Background()
+	ctx := t.Context()
 	pc, err := env.phoneCallRepo.GetCallByID(ctx, callID)
 	require.NoError(t, err)
 	require.NoError(t, env.phoneCallRepo.HardDeleteByUniqueID(ctx, pc.CallUniqueID))
@@ -3757,7 +3754,7 @@ func TestResolveLink_OrphanToImpromptu_WithNewlyResolvableParticipant(t *testing
 
 	// Make T resolvable via the real import/link handler (links T's
 	// anarlog_human identity to env.contactA).
-	ctx := context.Background()
+	ctx := t.Context()
 	external, err := env.externalRepo.GetBySource(ctx, "anarlog_humans", anarlogT, nil)
 	require.NoError(t, err)
 	require.NotNil(t, external)
@@ -3827,7 +3824,7 @@ func TestResolveLink_OrphanToImpromptu_WithNewlyResolvableParticipant(t *testing
 // spec: NTS-018.conflict-pending-row-missing
 func TestResolveLink_SnapshotMissingReturns422(t *testing.T) {
 	env := setupMeetingNoteIngestEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	sessionUUID := env.newSessionUUID()
 	sid, err := uuid.Parse(sessionUUID)
 	require.NoError(t, err)
@@ -4012,7 +4009,7 @@ func randomTestPhoneNumber(t *testing.T) string {
 // design so membership cannot be asserted on the persisted row).
 func assertCalendarWindowExactly(t *testing.T, env *meetingNoteIngestEnv, meetingAt time.Time, expected ...uuid.UUID) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	tx, err := env.database.Pool.Begin(ctx)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
@@ -4029,7 +4026,7 @@ func assertCalendarWindowExactly(t *testing.T, env *meetingNoteIngestEnv, meetin
 // assertCalendarWindowExactly.
 func assertPhoneWindowExactly(t *testing.T, env *meetingNoteIngestEnv, meetingAt time.Time, expected ...uuid.UUID) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	tx, err := env.database.Pool.Begin(ctx)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()

@@ -14,7 +14,7 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"sync"
 	"testing"
 	"time"
@@ -70,25 +70,19 @@ func newJobSampleTestDB(t *testing.T, ctx context.Context) (*db.Database, *confi
 	cfg := config.TestConfig()
 	cfg.Database.URL = cloneURL
 	cfg.Database.MigrationsPath = migrationsPathForTest()
-	cfg.Database.MaxConns = 6
-	cfg.Database.MinConns = 1
 	cfg.River.WorkerConcurrency = 2
 
-	database, err := db.NewDatabase(ctx, cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := testsupport.OpenDatabaseAt(t, cfg.Database.URL)
 	return database, cfg
 }
 
 func TestJobSampleRecorder_EndToEnd(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
 	// Base ctx for Start — NEVER a timeout-derived ctx (River silently stops
 	// fetching if its fetch-loop ctx cancels).
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newJobSampleTestDB(t, ctx)
 	repo := repository.NewJobSampleRepository(database.Queries)
 
@@ -113,7 +107,7 @@ func TestJobSampleRecorder_EndToEnd(t *testing.T) {
 		if stopped {
 			return
 		}
-		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		_ = client.Stop(stopCtx)
 		stopped = true
@@ -220,11 +214,9 @@ func (w *jsSnoozeWorker) Work(_ context.Context, job *river.Job[jsSnoozeArgs]) e
 // reuses the decremented attempt across snoozes; only attempted_at differs).
 func TestJobSampleRecorder_RepeatedSnooze(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database, cfg := newJobSampleTestDB(t, ctx)
 	repo := repository.NewJobSampleRepository(database.Queries)
 
@@ -246,7 +238,7 @@ func TestJobSampleRecorder_RepeatedSnooze(t *testing.T) {
 		if stopped {
 			return
 		}
-		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
 		_ = client.Stop(stopCtx)
 		stopped = true

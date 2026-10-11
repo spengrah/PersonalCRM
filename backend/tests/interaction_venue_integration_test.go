@@ -4,7 +4,6 @@ package tests
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -126,7 +125,7 @@ func whatsappVenueKindFor(t *testing.T, ctx context.Context, database *db.Databa
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		// LIKE pattern: the trailing % is what makes this a prefix delete.
-		_ = commsRepo.HardDeleteBySourceAndExternalIDPrefix(context.Background(), repository.InteractionSourceWhatsApp, externalID+"%")
+		_ = commsRepo.HardDeleteBySourceAndExternalIDPrefix(context.WithoutCancel(t.Context()), repository.InteractionSourceWhatsApp, externalID+"%")
 	})
 
 	venueRepo := repository.NewVenueRepository(database.Queries)
@@ -156,12 +155,7 @@ func whatsappVenueKindFor(t *testing.T, ctx context.Context, database *db.Databa
 //
 // spec: WHA-043.direct-chat-is-a-dm
 func TestWhatsAppVenue_DirectJIDIsDM(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 	database, ctx := newSyntheticDB(t)
 	t.Parallel()
 
@@ -176,12 +170,7 @@ func TestWhatsAppVenue_DirectJIDIsDM(t *testing.T) {
 //
 // spec: WHA-043.group-chat-is-a-group-chat
 func TestWhatsAppVenue_GroupJIDIsGroupChat(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping integration test")
-	}
+	testsupport.RequireDatabase(t)
 	database, ctx := newSyntheticDB(t)
 	t.Parallel()
 

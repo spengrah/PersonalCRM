@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"personal-crm/backend/tests/testsupport"
 	"sync"
 	"testing"
 	"time"
@@ -45,9 +46,7 @@ func assertNodes(t *testing.T, ctx context.Context, nodeRepo *repository.NodeRep
 }
 
 func TestAssertionStore_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	t.Parallel()
 
 	database, ctx := graphTestDB(t)

@@ -91,7 +91,7 @@ func TestRematchStranded_HappyPath_MatchesAndEnqueues(t *testing.T) {
 	}
 	inserter := &stubAdminInserter{}
 
-	res, err := RematchStranded(context.Background(), RematchStrandedDeps{
+	res, err := RematchStranded(t.Context(), RematchStrandedDeps{
 		Messages:    lister,
 		Identity:    matcher,
 		RiverClient: inserter,
@@ -125,7 +125,7 @@ func TestRematchStranded_StillUnmatched_NoUpdateOrEnqueue(t *testing.T) {
 	matcher := &stubAdminMatcher{} // no entries → unmatched
 	inserter := &stubAdminInserter{}
 
-	res, err := RematchStranded(context.Background(), RematchStrandedDeps{
+	res, err := RematchStranded(t.Context(), RematchStrandedDeps{
 		Messages:    lister,
 		Identity:    matcher,
 		RiverClient: inserter,
@@ -161,7 +161,7 @@ func TestRematchStranded_DuplicateContact_EnqueuesOnce(t *testing.T) {
 	}
 	inserter := &stubAdminInserter{}
 
-	res, err := RematchStranded(context.Background(), RematchStrandedDeps{
+	res, err := RematchStranded(t.Context(), RematchStrandedDeps{
 		Messages:    lister,
 		Identity:    matcher,
 		RiverClient: inserter,
@@ -197,7 +197,7 @@ func TestRematchStranded_IdentityError_CountsAndContinues(t *testing.T) {
 	}
 	inserter := &stubAdminInserter{}
 
-	res, err := RematchStranded(context.Background(), RematchStrandedDeps{
+	res, err := RematchStranded(t.Context(), RematchStrandedDeps{
 		Messages:    lister,
 		Identity:    matcher,
 		RiverClient: inserter,
@@ -228,7 +228,7 @@ func TestRematchStranded_NilRiverClient_StillUpdates(t *testing.T) {
 		},
 	}
 
-	res, err := RematchStranded(context.Background(), RematchStrandedDeps{
+	res, err := RematchStranded(t.Context(), RematchStrandedDeps{
 		Messages: lister,
 		Identity: matcher,
 	})
@@ -241,10 +241,10 @@ func TestRematchStranded_NilRiverClient_StillUpdates(t *testing.T) {
 // TestRematchStranded_RequiresMessagesAndIdentity verifies the
 // precondition checks.
 func TestRematchStranded_RequiresMessagesAndIdentity(t *testing.T) {
-	_, err := RematchStranded(context.Background(), RematchStrandedDeps{})
+	_, err := RematchStranded(t.Context(), RematchStrandedDeps{})
 	require.Error(t, err)
 
-	_, err = RematchStranded(context.Background(), RematchStrandedDeps{
+	_, err = RematchStranded(t.Context(), RematchStrandedDeps{
 		Messages: &stubStrandedLister{},
 	})
 	require.Error(t, err)
@@ -257,7 +257,7 @@ func TestRematchStranded_ListError_Bubbles(t *testing.T) {
 	lister := &stubStrandedLister{listErr: errors.New("list down")}
 	matcher := &stubAdminMatcher{}
 
-	_, err := RematchStranded(context.Background(), RematchStrandedDeps{
+	_, err := RematchStranded(t.Context(), RematchStrandedDeps{
 		Messages: lister,
 		Identity: matcher,
 	})

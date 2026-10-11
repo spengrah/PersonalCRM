@@ -4,12 +4,11 @@ package google
 
 import (
 	"context"
-	"os"
+	"personal-crm/backend/tests/testsupport"
 	"strings"
 	"testing"
 
 	"personal-crm/backend/internal/config"
-	"personal-crm/backend/internal/db"
 	"personal-crm/backend/internal/repository"
 	"personal-crm/backend/internal/service"
 
@@ -35,19 +34,11 @@ type gcontactsForwardEnv struct {
 // Sync, so no Google client is needed.
 func setupGcontactsForwardEnv(t *testing.T) *gcontactsForwardEnv {
 	t.Helper()
-	if testing.Short() {
-		t.Skip("Skipping DB-backed test in short mode")
-	}
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	databaseURL := testsupport.RequireDatabase(t)
 
 	cfg := config.TestConfig()
 	cfg.Database.URL = databaseURL
-	database, err := db.NewDatabase(context.Background(), cfg.Database)
-	require.NoError(t, err)
-	t.Cleanup(database.Close)
+	database := testsupport.OpenDatabase(t)
 
 	contactRepo := repository.NewContactRepository(database.Queries)
 	methodRepo := repository.NewContactMethodRepository(database.Queries)
@@ -120,7 +111,7 @@ func (env *gcontactsForwardEnv) seedContactWithEmail(t *testing.T, ctx context.C
 // forward).
 func TestProcessContact_ForwardReconcile_LinkedRowGainsMethod(t *testing.T) {
 	env := setupGcontactsForwardEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	sfx := gcontactsForwardSuffix()
 	accountID := "acct-" + sfx + "@example.com"
 	resource := "people/c-fwd-" + sfx
@@ -163,7 +154,7 @@ func TestProcessContact_ForwardReconcile_LinkedRowGainsMethod(t *testing.T) {
 // via attemptMatch's match path (which a stale-struct read would allow).
 func TestProcessContact_ForwardReconcile_DupOfLinkedReconcilesToCanonical(t *testing.T) {
 	env := setupGcontactsForwardEnv(t)
-	ctx := context.Background()
+	ctx := context.WithoutCancel(t.Context())
 	sfx := gcontactsForwardSuffix()
 	acctA := "acctA-" + sfx + "@example.com"
 	acctB := "acctB-" + sfx + "@example.com"

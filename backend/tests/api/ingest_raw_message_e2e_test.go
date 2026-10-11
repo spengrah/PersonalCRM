@@ -49,7 +49,7 @@ type rawMessageE2EEnv struct {
 // (River stop + FK-ordered hard deletes) is registered via t.Cleanup.
 func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	// This func genuinely works jobs (real aggregator + recorder, polls for
 	// the worked result) AND asserts DB-wide
 	// (CountInteractionsByIDContactAndSource) + pairs the singleton mac_host,
@@ -192,11 +192,11 @@ func setupRawMessageE2E(t *testing.T) *rawMessageE2EEnv {
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cancel()
 		_ = riverClient.Stop(stopCtx)
 
-		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanCtx, cleanCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
 		defer cleanCancel()
 		// Hard-delete in FK order: interactions reference the contact;
 		// contact_methods reference the contact; mac_host references
@@ -290,7 +290,7 @@ func pollProcessedRawMessage(t *testing.T, env *rawMessageE2EEnv, guid string) *
 	t.Helper()
 	var msg *repository.MessagesMessage
 	for range 200 {
-		m, err := env.messagesRepo.GetMessage(context.Background(), guid)
+		m, err := env.messagesRepo.GetMessage(t.Context(), guid)
 		require.NoError(t, err)
 		if m.ProcessedAt != nil && m.InteractionID != nil {
 			msg = m
@@ -332,7 +332,7 @@ func TestIngestRawMessage_E2E_StagesAggregatesAndCreatesInteraction(t *testing.T
 
 	// And the interaction row exists with source=messages.
 	interactionCount, err := env.database.Queries.CountInteractionsByIDContactAndSource(
-		context.Background(),
+		t.Context(),
 		db.CountInteractionsByIDContactAndSourceParams{
 			ID:        *msg.InteractionID,
 			ContactID: env.contactID,

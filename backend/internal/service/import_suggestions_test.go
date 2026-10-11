@@ -6,6 +6,7 @@ import (
 	"personal-crm/backend/internal/repository"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func sug(t, v string) repository.PendingMethodSuggestion {
@@ -54,7 +55,7 @@ func TestSubtractDismissed(t *testing.T) {
 	dismissed := []repository.PendingMethodSuggestion{sug("email", "a@example.test")}
 
 	got := subtractDismissed(pending, dismissed)
-	assert.Len(t, got, 1)
+	require.Len(t, got, 1)
 	assert.Equal(t, "phone", got[0].Type)
 }
 
@@ -65,7 +66,7 @@ func TestUnionSuggestions_AppendOnlyDedup(t *testing.T) {
 		sug("phone", "+15551230000"),   // new
 	}
 	got := unionSuggestions(base, additions)
-	assert.Len(t, got, 2)
+	require.Len(t, got, 2)
 	assert.Equal(t, "a@example.test", got[0].Value)
 	assert.Equal(t, "phone", got[1].Type)
 }
@@ -124,7 +125,7 @@ func TestSelectionsForConfirmed_MapsBackToOriginal(t *testing.T) {
 	// selectionsForConfirmed maps it back to the external row's original.
 	confirmed := []repository.PendingMethodSuggestion{sug("email", "mixed@example.test")}
 	selections := svc.selectionsForConfirmed(external, confirmed)
-	assert.Len(t, selections, 1)
+	require.Len(t, selections, 1)
 	assert.Equal(t, "Mixed@Example.Test", selections[0].OriginalValue)
 	assert.Equal(t, "email", selections[0].Type)
 }

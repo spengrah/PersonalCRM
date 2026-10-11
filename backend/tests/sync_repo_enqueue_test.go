@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"encoding/json"
+	"personal-crm/backend/tests/testsupport"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -43,7 +44,7 @@ func newEnqueueTestEnv(t *testing.T) (*repository.SyncRepository, *db.Database) 
 	// Per-test isolated clone: these tests issue DB-wide river_job
 	// count/delete assertions, so a private river_job table keeps sibling
 	// jobs from colliding.
-	ctx := context.Background()
+	ctx := t.Context()
 	database, _ := newIsolatedRiverTestDB(t, ctx)
 
 	repo := repository.NewSyncRepositoryWithPool(database.Queries, database.Pool)
@@ -106,14 +107,12 @@ func newJobEnqueuer(t *testing.T, database *db.Database) (repository.JobEnqueuer
 
 func TestEnqueueAccountSyncIfNotInFlight_SkipsWhenInFlight(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	repo, database := newEnqueueTestEnv(t)
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "gmail"
 	acct := "u1@example.com"
 
@@ -136,14 +135,12 @@ func TestEnqueueAccountSyncIfNotInFlight_SkipsWhenInFlight(t *testing.T) {
 
 func TestEnqueueAccountSyncIfNotInFlight_InsertsWhenClear(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	repo, database := newEnqueueTestEnv(t)
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "gmail"
 	acct := "u2@example.com"
 
@@ -162,14 +159,12 @@ func TestEnqueueAccountSyncIfNotInFlight_InsertsWhenClear(t *testing.T) {
 
 func TestEnqueueAccountSyncIfNotInFlight_CompletedDoesNotBlock(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	repo, database := newEnqueueTestEnv(t)
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "gmail"
 	acct := "u3@example.com"
 
@@ -184,14 +179,12 @@ func TestEnqueueAccountSyncIfNotInFlight_CompletedDoesNotBlock(t *testing.T) {
 
 func TestEnqueueAccountSyncIfNotInFlight_CrossWindowOverlapPrevented(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	repo, database := newEnqueueTestEnv(t)
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "calendar"
 	acct := "u4@example.com"
 
@@ -212,14 +205,12 @@ func TestEnqueueAccountSyncIfNotInFlight_CrossWindowOverlapPrevented(t *testing.
 
 func TestEnqueueAccountSyncIfNotInFlight_AtomicUnderConcurrency(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	repo, database := newEnqueueTestEnv(t)
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "todoist"
 	acct := "race@example.com"
 
@@ -288,14 +279,12 @@ func firstErr(errs []error) error {
 // must treat nil and empty as the same bucket.
 func TestEnqueueAccountSyncIfNotInFlight_NilAccountID(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
+	testsupport.RequireDatabase(t)
 	repo, database := newEnqueueTestEnv(t)
 	enqueuer, cleanup := newJobEnqueuer(t, database)
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	source := "imessage"
 
 	// First call: inserts.

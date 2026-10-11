@@ -442,7 +442,7 @@ func TestHandleCall_MissedInboundNoVoicemail_SkipsInteractionEmit(t *testing.T) 
 	require.NoError(t, err)
 	env := &events.Envelope{Source: "phone_calls", SourceID: "missed-1", Kind: events.KindCallReceived, Payload: raw}
 
-	postCommit, rej := h.svc.handleCall(context.Background(), nil, env, host, false)
+	postCommit, rej := h.svc.handleCall(t.Context(), nil, env, host, false)
 	require.Nil(t, rej)
 	require.Nil(t, postCommit)
 
@@ -495,7 +495,7 @@ func TestHandleCall_Outbound_ForcesAnsweredNullOnStaging(t *testing.T) {
 	require.NoError(t, err)
 	env := &events.Envelope{Source: "phone_calls", SourceID: "outbound-1", Kind: events.KindCallSent, Payload: raw}
 
-	_, rej := h.svc.handleCall(context.Background(), nil, env, host, true)
+	_, rej := h.svc.handleCall(t.Context(), nil, env, host, true)
 	require.Nil(t, rej)
 
 	require.Len(t, h.phoneCalls.upsertParams, 1)
@@ -543,7 +543,7 @@ func TestHandleCall_Replay_ShortCircuitsBusEmit(t *testing.T) {
 	require.NoError(t, err)
 	env := &events.Envelope{Source: "phone_calls", SourceID: "replay-1", Kind: events.KindCallReceived, Payload: raw}
 
-	postCommit, rej := h.svc.handleCall(context.Background(), nil, env, host, false)
+	postCommit, rej := h.svc.handleCall(t.Context(), nil, env, host, false)
 	require.Nil(t, rej)
 	require.Nil(t, postCommit)
 
@@ -564,7 +564,7 @@ func TestHandleCall_IdentityMatchFailed_Rejects(t *testing.T) {
 	h := newCallTestHarness(nil)
 	host := uuid.New()
 	env := validCallEnv(t, events.KindCallReceived, host, "no-match-1")
-	_, rej := h.svc.handleCall(context.Background(), nil, env, host, false)
+	_, rej := h.svc.handleCall(t.Context(), nil, env, host, false)
 	require.NotNil(t, rej)
 	require.Equal(t, ingestRejectIdentityMatchFailed, rej.Code)
 }
@@ -577,7 +577,7 @@ func TestHandleCall_IdentityMatchError_Rejects(t *testing.T) {
 	h.identity.err = errors.New("transient db error")
 	host := uuid.New()
 	env := validCallEnv(t, events.KindCallReceived, host, "ident-err-1")
-	_, rej := h.svc.handleCall(context.Background(), nil, env, host, false)
+	_, rej := h.svc.handleCall(t.Context(), nil, env, host, false)
 	require.NotNil(t, rej)
 	require.Equal(t, ingestRejectIdentityMatchFailed, rej.Code)
 }
@@ -590,7 +590,7 @@ func TestHandleCall_StagingUpsertFailed_Rejects(t *testing.T) {
 	h.phoneCalls.upsertErr = errors.New("FK violation")
 	host := uuid.New()
 	env := validCallEnv(t, events.KindCallReceived, host, "upsert-err-1")
-	_, rej := h.svc.handleCall(context.Background(), nil, env, host, false)
+	_, rej := h.svc.handleCall(t.Context(), nil, env, host, false)
 	require.NotNil(t, rej)
 	require.Equal(t, ingestRejectStagingUpsertFailed, rej.Code)
 }
@@ -608,7 +608,7 @@ func TestHandleCall_PayloadDecodeError(t *testing.T) {
 		Kind:     events.KindCallReceived,
 		Payload:  json.RawMessage("{not json"),
 	}
-	_, rej := h.svc.handleCall(context.Background(), nil, env, host, false)
+	_, rej := h.svc.handleCall(t.Context(), nil, env, host, false)
 	require.NotNil(t, rej)
 	require.Equal(t, ingestRejectPayloadInvalid, rej.Code)
 }

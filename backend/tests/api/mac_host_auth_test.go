@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -29,9 +28,9 @@ func TestMacHost_Auth_AmbiguousAuth_400(t *testing.T) {
 	env := setupMacHostEnv(t)
 
 	// Pair a host so we have a valid id/key for the daemon side.
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
-	res, err := env.macService.PairWithToken(context.Background(), plain, "host", "0.1.0", 1)
+	res, err := env.macService.PairWithToken(t.Context(), plain, "host", "0.1.0", 1)
 	require.NoError(t, err)
 
 	headers := map[string]string{
@@ -51,9 +50,9 @@ func TestMacHost_Auth_AdminRouteHostAuth_401(t *testing.T) {
 	env := setupMacHostEnv(t)
 
 	// Pair a host.
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
-	res, err := env.macService.PairWithToken(context.Background(), plain, "host", "0.1.0", 1)
+	res, err := env.macService.PairWithToken(t.Context(), plain, "host", "0.1.0", 1)
 	require.NoError(t, err)
 
 	// Try to hit the admin list with host auth → 401 because the v1
@@ -69,9 +68,9 @@ func TestMacHost_Auth_IDParamMismatch_403(t *testing.T) {
 
 	env := setupMacHostEnv(t)
 
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
-	res, err := env.macService.PairWithToken(context.Background(), plain, "host", "0.1.0", 1)
+	res, err := env.macService.PairWithToken(t.Context(), plain, "host", "0.1.0", 1)
 	require.NoError(t, err)
 
 	// Use the daemon's correct credentials but a different :id on the
@@ -90,9 +89,9 @@ func TestMacHost_Auth_MinProtocolVersion_412(t *testing.T) {
 
 	env := setupMacHostEnv(t)
 
-	plain, _, err := env.macService.CreatePairingToken(context.Background())
+	plain, _, err := env.macService.CreatePairingToken(t.Context())
 	require.NoError(t, err)
-	res, err := env.macService.PairWithToken(context.Background(), plain, "host", "0.1.0", 1)
+	res, err := env.macService.PairWithToken(t.Context(), plain, "host", "0.1.0", 1)
 	require.NoError(t, err)
 
 	w := macHTTP(t, env, http.MethodPost, "/api/v1/host/"+res.HostID.String()+"/heartbeat", map[string]string{
