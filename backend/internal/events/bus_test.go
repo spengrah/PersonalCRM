@@ -32,8 +32,8 @@ func mustMarshalContactMethodsAdded(t *testing.T, contactID, jobID uuid.UUID) js
 }
 
 // TestConsumerJobsForKind_FiveAsyncKindsEnqueueInteractionRecorder asserts
-// the PR 5 routing: async-publisher kinds enqueue exactly one
-// InteractionRecorder river job each with MaxAttempts=5 (plan Decision 8).
+// that async-publisher kinds enqueue exactly one InteractionRecorder river
+// job each, with MaxAttempts=5.
 func TestConsumerJobsForKind_FiveAsyncKindsEnqueueInteractionRecorder(t *testing.T) {
 	asyncKinds := []Kind{
 		KindMessageReceived, KindMessageSent, KindCalendarAttended,
@@ -150,7 +150,7 @@ func TestConsumerJobsForKind_EmailEnqueuesEmailConsumer(t *testing.T) {
 	}
 }
 
-// TestConsumerJobsForKind_ContactMethodsAdded asserts the PR 10 routing:
+// TestConsumerJobsForKind_ContactMethodsAdded asserts that
 // contact_methods.added enqueues exactly one RematchDispatcher job with
 // the payload-derived ContactID + RematchJobID and UniqueOpts set for
 // belt-and-suspenders dedup behind the event.source_id unique index.

@@ -39,9 +39,8 @@ func setupTestDB(t *testing.T) (*db.Database, func()) {
 
 // seedContactForMerge creates a contact through the ContactService write path so
 // location/birthday/how_met are persisted as assertions and reflected in the
-// cache columns (the repository's CreateContact no longer writes those columns
-// post-cutover). Matches the repo's 2-value return shape so the merge fixtures
-// read unchanged.
+// cache columns (the repository's CreateContact does not write those columns).
+// Matches the repo's 2-value return shape.
 func seedContactForMerge(ctx context.Context, svc *service.ContactService, req repository.CreateContactRequest) (*repository.Contact, error) {
 	c, _, err := svc.CreateContact(ctx, req, nil)
 	return c, err

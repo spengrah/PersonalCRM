@@ -1,5 +1,5 @@
-// Integration coverage for SyncService.ReconcileGChatSyncStates (GChat
-// integration PR 3 — the GO-LIVE enablement reconciliation). These tests drive
+// Integration coverage for SyncService.ReconcileGChatSyncStates, the GChat
+// enablement reconciliation. These tests drive
 // the REAL service method against a REAL external_sync_state table via the
 // repository (no raw SQL), with a stub GoogleAccountLister (no OAuth). They
 // prove the chat-scope enablement gate + the idempotency contract that makes

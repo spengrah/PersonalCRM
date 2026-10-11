@@ -1,6 +1,5 @@
-// Integration coverage for the post-cutover sole-writer paths through
-// CadenceUpdater. Replaces the deleted shadow-era
-// consumer_cadence_updater_integration_test.go. These tests hit a real
+// Integration coverage for the sole-writer paths through
+// CadenceUpdater. These tests hit a real
 // database.
 //
 // Coverage matrix:

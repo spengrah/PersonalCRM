@@ -884,7 +884,7 @@ func TestHistoryDrainer_DroppedInlineChunkSkipsDownloadAndDelete(t *testing.T) {
 	row := env.store.add(&repository.HistoryNotification{
 		ProtocolMsgID: "pm-1",
 		Disposition:   repository.HistoryDispositionDroppedInline,
-		// PR3's SQL derives this starting phase from the disposition.
+		// The SQL derives this starting phase from the disposition.
 		Phase: repository.HistoryPhaseProjected,
 	})
 

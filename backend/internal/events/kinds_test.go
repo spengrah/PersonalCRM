@@ -381,9 +381,9 @@ func TestMarshalUnmarshal_InteractionRecorded(t *testing.T) {
 	require.Equal(t, original, decoded)
 }
 
-// TestMarshalUnmarshal_InteractionRecorded_V2 asserts the V2 payload shape
-// added in PR 7 (plan Decision 2a): PrevCadenceSnapshot and
-// PrevCadenceValue round-trip through JSON and reach the consumer intact.
+// TestMarshalUnmarshal_InteractionRecorded_V2 asserts the V2 payload shape:
+// PrevCadenceSnapshot and PrevCadenceValue round-trip through JSON and reach
+// the consumer intact.
 func TestMarshalUnmarshal_InteractionRecorded_V2(t *testing.T) {
 	ref := "tg:123:456"
 	cadenceStr := "weekly"
@@ -490,8 +490,8 @@ func TestTaskCompletedPayload_V1Decode_DefaultsSuppressFollowUpFalse(t *testing.
 }
 
 // TestMarshalUnmarshal_InteractionRecorded_V1BackCompat asserts that a
-// PR 5/6-era Version=1 payload (no PrevCadenceSnapshot / PrevCadenceValue)
-// still unmarshals cleanly — the new fields are nil. The PR 7 consumer
+// Version=1 payload (no PrevCadenceSnapshot / PrevCadenceValue)
+// still unmarshals cleanly — the new fields are nil. CadenceUpdater
 // logs ERROR and skips when it sees V1, but the unmarshal itself must
 // succeed so the ERROR path can fire with the envelope context.
 func TestMarshalUnmarshal_InteractionRecorded_V1BackCompat(t *testing.T) {

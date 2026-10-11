@@ -86,8 +86,7 @@ func TestStartRematchForContact_NoMatchingHandler(t *testing.T) {
 // TestEligibleMethods_FiltersToRegisteredHandlers pins the publisher
 // contract: ContactService / EnrichmentService / RescanRematch call
 // EligibleMethods BEFORE minting a jobID, so unhandled method types
-// produce uuid.Nil in the API response (matches pre-cutover
-// StartRematchForContact semantics).
+// produce uuid.Nil in the API response.
 func TestEligibleMethods_FiltersToRegisteredHandlers(t *testing.T) {
 	svc := NewRematchService()
 	svc.Register(&stubHandler{typ: "email"})

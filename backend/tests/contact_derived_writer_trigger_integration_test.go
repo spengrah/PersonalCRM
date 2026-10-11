@@ -1,15 +1,14 @@
 //go:build integration_testdb
 
-// The derived-writer trigger's behavioral coverage (arc GI-4 / PR7). Migration
+// The derived-writer trigger's behavioral coverage. Migration
 // 079 pushes the eight-derived-column sole-writer rule from Go convention
 // (backend/tests/sole_writer_static_test.go) into the schema itself: a BEFORE UPDATE trigger on contact that rejects any
 // change to a derived column unless the transaction has declared its owner via
 // repository.SetDerivedWriterTx.
 //
-// See .ai/log/plan/arch-hygiene-pr7.md D7-6 for the coverage rationale (48
-// rejection subtests: 5 unauthorized-cadence + 3 unauthorized-knowledge + 40
-// wrong-owner) and the freshness rule that makes the "unset" branch distinct
-// from the wrong-owner table's "" row.
+// The rejection subtests cover unauthorized cadence writes, unauthorized
+// knowledge writes, and wrong-owner writes. The freshness rule makes the
+// "unset" branch distinct from the wrong-owner table's "" row.
 package tests
 
 import (

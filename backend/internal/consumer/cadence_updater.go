@@ -339,10 +339,8 @@ func (h *CadenceUpdater) ApplyUndoSkip(ctx context.Context, tx pgx.Tx, contactID
 // --------------------------------------------------------------------------
 
 // buildInteractionWrite builds the cadenceWriteRequest for an
-// interaction-driven path (HandleEvent + ApplyInteraction). Reproduces
-// the direction-rule apply flags and the contact_by derivation the
-// pre-cutover direct path used (spec §3.4.2), so the post-cutover
-// write matches the pre-cutover behavior bit-for-bit.
+// interaction-driven path (HandleEvent + ApplyInteraction). It derives the
+// direction-rule apply flags and the contact_by value (spec §3.4.2).
 func (h *CadenceUpdater) buildInteractionWrite(
 	contactID uuid.UUID, direction, source string, occurredAt time.Time,
 	prev repository.ContactCadenceFields, cadenceStr string,
@@ -362,9 +360,7 @@ func (h *CadenceUpdater) buildInteractionWrite(
 
 	// Interaction-driven paths bump last_interaction_at whenever they
 	// bump last_contacted (inbound + mutual + manual of either direction).
-	// Outbound-only writes don't touch either — that's the pre-cutover
-	// semantic (UpdateContactResponseFields/UpdateContactMutualFields both
-	// wrote last_interaction_at; UpdateContactOutreachAt did not).
+	// Outbound-only writes touch neither field.
 	req := cadenceWriteRequest{
 		ContactID:               contactID,
 		Branch:                  branch,

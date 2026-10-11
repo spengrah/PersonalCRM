@@ -13,10 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These tests pin the nil semantics preserved by the setter→constructor-arg
-// conversion (PR5): the promoted consumer args carry exactly the behavior their
-// former setters had. A fully-nil consumer set is the "setter never called"
-// posture — the guarded write paths must still return their "not wired" ERRORS
+// These tests pin the nil semantics of the consumer constructor args. A
+// fully-nil consumer set is the "not wired" posture — the guarded write paths must still return their "not wired" ERRORS
 // (not panic), and a HALF-set knowledge pair must fail LOUDLY at construction.
 
 // stubCacheRefresher is a non-nil knowledgeCacheRefresher for the half-set-pair

@@ -153,10 +153,10 @@ func (*TodoistTaskOpWorker) Timeout(j *river.Job[consumerjobs.TodoistTaskOpArgs]
 	return 30 * time.Second
 }
 
-// defaultCreateCommandUUID is the command UUID for a new-kind create op:
+// defaultCreateCommandUUID is the command UUID for a create op:
 // v5 over (create, taskID, "") — matching buildItemAddFromMetadata's
 // default. The legacy create adapter injects a different derivation so a
-// queued legacy job retries with its original UUID (DD5/DD9).
+// queued legacy job retries with its original UUID.
 func defaultCreateCommandUUID(taskID uuid.UUID) string {
 	return taskOpCommandUUID(consumerjobs.TaskOpCreate, taskID, "")
 }
@@ -355,7 +355,7 @@ func deadlineUpdateVerb() opUpdateVerb {
 }
 
 // descriptionUpdateVerb pushes the row's current `description` metadata
-// verbatim. Fails permanently if the key is absent (arc §5.3 / DD4).
+// verbatim. Fails permanently if the key is absent.
 // Fingerprint is sha256(description) so distinct descriptions get distinct
 // command UUIDs.
 func descriptionUpdateVerb() opUpdateVerb {
@@ -420,9 +420,9 @@ func (w *TodoistTaskOpWorker) executeUpdate(ctx context.Context, taskID uuid.UUI
 		return river.JobCancel(fmt.Errorf("todoist_task_op %s: contact_task %s missing metadata to push", verb.op, taskID))
 	}
 	if task.ExternalTaskID == "" {
-		// Managed rows always carry an external id (finalize sets state + id
-		// in one UPDATE; PR3's manual adopt does likewise), so an empty id on
-		// a managed row is genuine corruption, not a race. Return a retryable
+		// Managed rows always carry an external id (UpdateContactTaskExternalID
+		// sets state and id in one UPDATE), so an empty id on a managed row is
+		// genuine corruption, not a race. Return a retryable
 		// error so it exhausts MaxAttempts and surfaces in dead-letter rather
 		// than snoozing forever.
 		return fmt.Errorf("todoist_task_op %s: managed contact_task %s has empty external_task_id (corrupt row)", verb.op, taskID)

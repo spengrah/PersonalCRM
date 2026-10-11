@@ -141,7 +141,7 @@ func (h *knowledgeCutoverHarness) registerCleanup(t *testing.T, ctx context.Cont
 // seedPreCutoverContact creates a contact (ContactRepository.CreateContact
 // creates its person node in the same statement, repo path which no longer
 // writes the cache columns) and then sets the cache columns directly,
-// simulating a pre-cutover contact: cache populated, NO knowledge assertions.
+// simulating a contact with cache columns populated and NO knowledge assertions.
 func (h *knowledgeCutoverHarness) seedPreCutoverContact(t *testing.T, ctx context.Context, name string, location *string, birthday *time.Time) *repository.Contact {
 	t.Helper()
 	contact, err := h.contactRepo.CreateContact(ctx, repository.CreateContactRequest{FullName: name})
@@ -574,7 +574,7 @@ func TestContactKnowledgeCutover_EmptyFieldNormalization(t *testing.T) {
 	blank := "   " // whitespace-only
 
 	// Create with whitespace-only location/how_met → no assertion, no error, cache
-	// stays empty (the pre-cutover leniency for blank fields).
+	// stays empty (blank fields are treated as unset, not rejected).
 	contact, _, err := h.contactSvc.CreateContact(ctx, repository.CreateContactRequest{
 		FullName: "Empty Field " + ns,
 		Location: &blank,

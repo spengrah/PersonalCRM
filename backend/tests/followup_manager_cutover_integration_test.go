@@ -1,4 +1,4 @@
-// Integration coverage for the post-cutover FollowUpManager.
+// Integration coverage for FollowUpManager.
 //
 // Acceptance matrix:
 //   - Backdated outbound (non-manual) → no contact_task row, no Todoist call.

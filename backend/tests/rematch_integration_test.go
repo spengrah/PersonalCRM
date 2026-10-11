@@ -24,7 +24,7 @@ import (
 
 // rematchTestEnv bundles the dependencies a typical rematch test needs.
 //
-// Post-PR-6 cutover: `bus` is a live events.Bus with the
+// `bus` is a live events.Bus with the
 // InteractionRecorderWorker running in the background. Rematch/aggregation
 // publishers are constructed against this bus so publish → enqueue →
 // consumer write happens asynchronously (just like production). Tests
@@ -62,8 +62,7 @@ func setupRematchEnv(t *testing.T) *rematchTestEnv {
 	enrichmentRepo := repository.NewEnrichmentRepository(database.Queries)
 
 	// Build rematchSvc first so it can be passed as RematchRegistry to
-	// ContactService's constructor (post-PR-10 wiring; SetRematchService
-	// is gone). Handlers register AFTER the bus exists, below.
+	// ContactService's constructor. Handlers register after the bus exists, below.
 	rematchSvc := service.NewRematchService()
 
 	cadenceUpdater := buildCadenceUpdaterForTest(t, database)
@@ -187,8 +186,8 @@ func TestRematch_CalendarPastEvent_RecordsInteraction(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, updatedEvent.MatchedContactIDs, contact.ID)
 
-	// An interaction should exist for (contact, gcal, event.ID). Post-PR-6
-	// the write is async via the event bus consumer — poll until it lands.
+	// An interaction should exist for (contact, gcal, event.ID). The write is async
+	// via the event bus consumer, so poll until it lands.
 	eventIDStr := event.ID.String()
 	interaction := waitForInteractionBySourceRef(t, env.ctx, env.interactionRepo, contact.ID, repository.InteractionSourceGCal, eventIDStr, defaultInteractionWaitTimeout)
 	require.NotNil(t, interaction)
@@ -664,10 +663,8 @@ func TestRematch_RescanContact_RunsForAllMethods(t *testing.T) {
 	pastEnd := accelerated.GetCurrentTime().Add(-time.Hour)
 	event := seedCalendarEventWithAttendee(t, env, accountID, email, pastEnd, "confirmed")
 
-	// Manual rescan — post-PR-10 the handler calls
-	// ContactService.RescanRematch (publishes via event bus +
-	// RegisterPending) instead of the deleted
-	// RematchService.RescanContact.
+	// Manual rescan: ContactService.RescanRematch publishes via the event bus and
+	// calls RegisterPending.
 	jobID, err := env.contactSvc.RescanRematch(env.ctx, contact.ID)
 	require.NoError(t, err)
 	require.NotEqual(t, uuid.Nil, jobID)
@@ -772,8 +769,8 @@ func TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction(t *tes
 	require.NoError(t, peerMatcher.OnPeerLinked(env.ctx, peerUserID, username, contact.ID))
 	require.NoError(t, aggregationEngine.AggregateForContactBatch(env.ctx, contact.ID))
 
-	// Invariant: exactly one telegram interaction for this contact. Post-PR-6
-	// the write is async — poll for it to appear, then assert uniqueness.
+	// Invariant: exactly one telegram interaction for this contact. The write is
+	// async, so poll for it to appear, then assert uniqueness.
 	_ = waitForTelegramInteractionCount(t, env.ctx, env.database.Pool, contact.ID, 1, defaultInteractionWaitTimeout)
 	var total int
 	require.NoError(t, env.database.Pool.QueryRow(env.ctx,

@@ -1,5 +1,5 @@
 -- 056_meeting_note_conflict_candidates_and_phone_call_window_index.up.sql
--- Mac daemon Phase 2 PR 5: persist the per-candidate participant-overlap
+-- Persist the per-candidate participant-overlap
 -- snapshot recorded at the moment linkage_state is set to conflict_pending
 -- so the resolve-link endpoint can validate user-supplied (kind, id) tuples
 -- against the snapshot AND the needs-attention list endpoint can render

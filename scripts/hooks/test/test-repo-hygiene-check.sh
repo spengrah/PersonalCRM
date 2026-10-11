@@ -25,6 +25,6 @@ assert_eq "reports every root offender" "a.html,b.html," "$got"
 assert_eq "empty input → no offenders" "" "$(printf '' | root_html_offenders)"
 
 # The live repo is currently clean — the gate must exit 0.
-if run_repo_hygiene >/dev/null 2>&1; then echo "ok: live repo clean (no root *.html, no file-wide eslint-disable)"; else echo "FAIL: live repo fails repo hygiene (run scripts/hooks/repo-hygiene-check.sh)"; fail=1; fi
+if run_repo_hygiene >/dev/null 2>&1; then echo "ok: live repo clean (no root *.html, no file-wide eslint-disable, no history comments)"; else echo "FAIL: live repo fails repo hygiene (run scripts/hooks/repo-hygiene-check.sh)"; fail=1; fi
 
 [[ "$fail" -eq 0 ]] && { echo "ALL PASS"; exit 0; } || { echo "FAILURES"; exit 1; }

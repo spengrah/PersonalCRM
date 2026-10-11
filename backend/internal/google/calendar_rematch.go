@@ -20,11 +20,10 @@ import (
 // whose end_time has already passed, it publishes calendar.attended so the
 // async consumer writes the interaction.
 //
-// Post-PR-6 (cutover): the direct-path recorder has been removed.
 // Past-confirmed events publish to the event bus BEFORE appending to
 // matched_contact_ids — a publish failure leaves matched_contact_ids
 // unchanged so the next rematch re-selects the pair. Append-then-publish
-// would strand the interaction if publish failed (plan Decision 11a).
+// would strand the interaction if publish failed.
 type CalendarRematchHandler struct {
 	calendarRepo *repository.CalendarEventRepository
 	externalRepo *repository.ExternalContactRepository
@@ -34,7 +33,7 @@ type CalendarRematchHandler struct {
 }
 
 // NewCalendarRematchHandler constructs a CalendarRematchHandler. eventBus
-// is required in cutover (default post-PR-6).
+// is required.
 func NewCalendarRematchHandler(
 	cr *repository.CalendarEventRepository,
 	er *repository.ExternalContactRepository,

@@ -195,8 +195,8 @@ func TestContactRepository_Integration(t *testing.T) {
 
 	t.Run("CreateAndGetContact", func(t *testing.T) {
 		// Create a contact. location is intentionally omitted: the repository's
-		// CreateContact no longer writes the location/birthday/how_met cache
-		// columns post-cutover (those flow from the assertion store via the
+		// CreateContact does not write the location/birthday/how_met cache
+		// columns. Those flow from the assertion store via the
 		// ContactService write path — covered by the knowledge-cutover
 		// integration tests). This repo-layer test exercises name + cadence only.
 		req := repository.CreateContactRequest{

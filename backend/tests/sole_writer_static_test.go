@@ -17,7 +17,7 @@
 //   - Inventory tracks the sqlc query + wrapper selector names that mutate
 //     one or more derived columns, INCLUDING CreateContactWithNode +
 //     UpdateContact (both write derived-family columns in their full column
-//     lists, even though post-cutover UpdateContact is profile-only by
+//     lists, even though UpdateContact is profile-only by
 //     convention and CreateContactWithNode's write is an INSERT the trigger
 //     does not reach).
 //   - For CreateContactWithNode/UpdateContact specifically, we only flag
@@ -166,7 +166,7 @@ var allowedCallSites = map[string]allowedCallSite{
 		why:     "the ONLY permitted caller of the three knowledge Tx wrappers; KnowledgeCacheUpdater is the column owner",
 	},
 	"internal/repository/contact.go:CreateContact": {
-		symbols: []string{"CreateContactWithNode"}, // PR5 renamed the query; the wrapper method kept its name
+		symbols: []string{"CreateContactWithNode"}, // The sqlc query name differs from the wrapper method name.
 		why:     "initial row seed carve-out (INSERT; the trigger is UPDATE-only)",
 	},
 	"internal/repository/contact.go:UpdateContact": {
@@ -200,7 +200,7 @@ var allowedCallSites = map[string]allowedCallSite{
 		symbols: []string{"UpdateContactHowMetCache"},
 		why:     "knowledge-cache sole-writer wrapper body; declares the knowledge_cache owner",
 	},
-	// Test-only fixture wrapper selectors (PR7 D7-7). No new write SQL: the
+	// Test-only fixture wrapper selectors. No new write SQL: the
 	// cadence pair reuses the production UpdateContactCadenceUnconditional
 	// query; the deliberate unauthorized probes exist solely so the
 	// derived-writer trigger's rejection tests have a legal way to attempt a
@@ -553,9 +553,8 @@ func TestUpdateContactSQL_SetClauseIsExactlyProfileColumns(t *testing.T) {
 // against it, and asserts a violation is reported. Without this, a future
 // loosening of the check (e.g., all-files-allowed) could silently pass.
 //
-// Synthesizes UpdateContactCadenceForward rather than UpdateContactMutualFields
-// (the pre-PR7 choice): the latter left the inventory when the legacy cadence
-// queries were deleted, and UpdateContactCadenceForward is a symbol that stays.
+// Synthesizes UpdateContactCadenceForward, a symbol that stays in the inventory.
+// A query that leaves the inventory would make this test vacuous.
 func TestCadenceSoleWriter_NegativeGuardCatchesNewWrite(t *testing.T) {
 	t.Parallel()
 	src := `package poc

@@ -249,10 +249,10 @@ func (f *failingEnqueuer) InsertTx(_ context.Context, _ pgx.Tx, _ river.JobArgs,
 }
 
 // TestSyncService_TriggerSync_NoLongerReadsSyncingStatus verifies that
-// the legacy "already syncing" early-return is gone. Seed a state with
-// status='syncing' and assert TriggerSync still dispatches
-// successfully — the status-column mutex was retired in favor of
-// river_job state as the source of truth for "in-flight".
+// TriggerSync ignores the status column when deciding whether a sync is
+// already running. Seed a state with status='syncing' and assert TriggerSync
+// still dispatches successfully. river_job state is the source of truth for
+// "in-flight" work.
 func TestSyncService_TriggerSync_NoLongerReadsSyncingStatus(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()

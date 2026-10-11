@@ -9,6 +9,10 @@
 #   - No file-wide `/* eslint-disable` block comment under frontend/. It hides every
 #     later violation of that rule in the file; use `eslint-disable-next-line` or
 #     `-line` with a reason instead.
+#   - No history-narrating comments in Go, TS/TSX, Swift or SQL source. A comment
+#     states current behavior or the reason for it. Delivery ids ("PR 7", "DD 3",
+#     "arc §4", "pre-cutover", "Codex P1", "retired with") name a change that git
+#     already records, and they rot. Spec ids such as CON-001 never match.
 #
 # Sourceable: when sourced (BASH_SOURCE != $0) it only defines functions, so the
 # logic can be unit-tested with injected input (see test/test-repo-hygiene-check.sh).
@@ -32,6 +36,22 @@ eslint_filewide_disable_offenders() {
   done
 }
 
+# A comment marker followed later on the same line by a delivery id (ERE, matched
+# case-insensitively).
+NB='(^|[^[:alnum:]_])'
+HISTORY_COMMENT_RE="(//|/\\*|^[[:space:]]*\\*|--).*((pre|post)-?PR-?[[:space:]]*#?[0-9]|${NB}PR[[:space:]]*#?[0-9]|${NB}DD[[:space:]]?[0-9]|${NB}arc[[:space:]]*§|${NB}(pre|post)-cutover([^[:alnum:]_]|\$)|${NB}Codex P[0-9]|${NB}retired (with|in)([^[:alnum:]_]|\$))"
+
+# history_comment_offenders prints path:line:text for each history comment in
+# tracked Go, TS/TSX, Swift and SQL source. Generated files (a "Code generated",
+# "DO NOT EDIT" or "@generated" header) are skipped; their source is checked.
+# Run from the repo root.
+history_comment_offenders() {
+  local globs=('*.go' '*.ts' '*.tsx' '*.swift' '*.sql') generated
+  generated="$(git grep -lE '^(//|/\*|--) ?(Code generated|DO NOT EDIT|@generated)' -- "${globs[@]}" | sed 's/$/:/')"
+  git grep -nIEi -e "$HISTORY_COMMENT_RE" -- "${globs[@]}" |
+    grep -vF -f <(printf '%s' "$generated") || true
+}
+
 run_repo_hygiene() {
   local repo_root fail=0 offenders
   repo_root="$(git rev-parse --show-toplevel)"
@@ -49,6 +69,14 @@ run_repo_hygiene() {
   if [ -n "$offenders" ]; then
     echo "repo-hygiene: file-wide '/* eslint-disable' under frontend/ — use eslint-disable-next-line with a reason:" >&2
     echo "$offenders" | sed 's/^/  - /' >&2
+    fail=1
+  fi
+
+  # Check: no history-narrating comments in source.
+  offenders="$(cd "$repo_root" && history_comment_offenders)"
+  if [ -n "$offenders" ]; then
+    echo "repo-hygiene: history-narrating comments — state the current behavior or the reason, not the PR or phase that changed it:" >&2
+    echo "$offenders" | cut -c1-200 | sed 's/^/  - /' >&2
     fail=1
   fi
 

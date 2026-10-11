@@ -284,11 +284,9 @@ func TestIntegration_CalendarAttended_CutoverWritesInteraction(t *testing.T) {
 	require.Equal(t, events.KindInteractionRecorded, recorded.Kind)
 }
 
-// TestIntegration_CalendarAttended_TitlePreservedInInteraction regression-
-// tests the Codex P2 fix: calendar.attended events carry the calendar
-// event's title in the payload so the consumer populates
-// interaction.description. Pre-cutover this came from the direct-path
-// RecordInteraction arg; post-cutover it must flow through the payload.
+// TestIntegration_CalendarAttended_TitlePreservedInInteraction checks that
+// calendar.attended events carry the calendar event's title in the payload,
+// so the consumer populates interaction.description from it.
 func TestIntegration_CalendarAttended_TitlePreservedInInteraction(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()

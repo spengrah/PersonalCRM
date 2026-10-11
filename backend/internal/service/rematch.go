@@ -241,9 +241,8 @@ func (s *RematchService) RegisterPending(jobID, contactID uuid.UUID, methods []M
 // EligibleMethods returns the subset of methods whose Type has a
 // registered handler. Publishers call this at mutation time so they
 // can skip minting a jobID + publishing an event when nothing would
-// actually run — preserves the pre-cutover contract that
-// mutation responses return rematch_job_id=null when no rematch work
-// applies.
+// actually run. Mutation responses return rematch_job_id=null when no rematch
+// work applies.
 func (s *RematchService) EligibleMethods(methods []Method) []Method {
 	if len(methods) == 0 {
 		return nil

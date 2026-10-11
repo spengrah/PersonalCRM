@@ -107,8 +107,8 @@ func TestRiverClient_StartStop_Integration(t *testing.T) {
 }
 
 // TestRiverClient_InsertAndWork_Integration proves the full enqueue →
-// worker Work path. Codex review on PR 1 flagged that Start/Stop alone
-// does not demonstrate that the AddWorker registration actually dispatches
+// worker Work path. Start/Stop alone does not demonstrate that the AddWorker
+// registration dispatches a job; this test does.
 // a job — this test does. It's kept separate from the Start/Stop smoke
 // test so a registration regression fails this test specifically.
 func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
@@ -178,11 +178,9 @@ func TestRiverClient_InsertAndWork_Integration(t *testing.T) {
 // asserts that river.NewClient accepts this bundle and that Start /
 // Stop complete cleanly.
 //
-// Regression guard for the PR 3 bug where the scheduler workers were
-// registered inside `if cfg.Features.EnableExternalSync` but the noop
-// was removed, producing an empty Workers bundle and a boot failure
-// ("at least one Worker must be added to the Workers bundle") in the
-// default configuration. #281 restored the noop.
+// Guards the noop worker. Without it, a default configuration (external sync
+// disabled) builds an empty Workers bundle, and river.NewClient fails with
+// "at least one Worker must be added to the Workers bundle".
 func TestRiverClient_BootsWithNoopWorkerOnly(t *testing.T) {
 	t.Parallel()
 	testsupport.RequireDatabase(t)

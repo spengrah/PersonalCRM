@@ -202,9 +202,8 @@ func TestSyncWorker_ContextCancelledRetry(t *testing.T) {
 
 // TestSyncWorker_AbandonedLogOnStartupRecovery verifies the explicit
 // 'abandoned' transition when a pre-existing 'running' log row exists
-// for a sync state and a new attempt begins. This is the acceptance
-// case called out in DD 9 — it checks the data-integrity story even
-// without invoking the rescue daemon.
+// for a sync state and a new attempt begins. It checks the data-integrity
+// story even without invoking the rescue daemon.
 func TestSyncWorker_AbandonedLogOnStartupRecovery(t *testing.T) {
 	databaseURL := testsupport.RequireDatabase(t)
 

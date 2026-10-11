@@ -173,8 +173,8 @@ func (f *calendarServiceFetcher) ListEvents(ctx context.Context, calendarID stri
 
 // CalendarSyncProvider implements SyncProvider for Google Calendar.
 //
-// Post-PR-6 (cutover): past-event interaction writes happen via the
-// event bus — updateLastContactedForPastEvents publishes calendar.attended
+// Past-event interaction writes go through the event bus.
+// updateLastContactedForPastEvents publishes calendar.attended
 // per (event, contact) pair and the async consumer writes the
 // interaction rows.
 type CalendarSyncProvider struct {
@@ -183,9 +183,9 @@ type CalendarSyncProvider struct {
 	contactRepo         contactRepoInterface
 	identityService     identityServiceInterface
 	externalContactRepo externalContactRepoInterface
-	// eventBus is required in cutover mode. Nil when mode=off/shadow
-	// post-cutover — past-event publishes are skipped and
-	// last_contacted-from-calendar updates do NOT happen (spec §3.9).
+	// eventBus is required. Nil when mode=off/shadow: past-event publishes
+	// are skipped and last_contacted-from-calendar updates do NOT happen
+	// (spec §3.9).
 	eventBus *events.Bus
 	// pool is required by the cutover decline remove branch, which does
 	// N calendar.declined publishes + one calendar_event DELETE in a single
@@ -209,7 +209,7 @@ type CalendarSyncProvider struct {
 }
 
 // NewCalendarSyncProvider creates a new Google Calendar sync provider.
-// eventBus is required in cutover (default post-PR-6). Nil disables
+// eventBus is required. Nil disables
 // past-event interaction writes entirely. pool backs the decline remove
 // branch's atomic publish-before-delete tx; in off mode (nil eventBus or
 // nil pool) the branch defers cleanup via MarkCancelledByGcalID.

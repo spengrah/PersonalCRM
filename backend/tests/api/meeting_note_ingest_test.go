@@ -204,7 +204,7 @@ func setupMeetingNoteIngestEnv(t *testing.T) *meetingNoteIngestEnv {
 	imports.POST("/candidates/:id/link", importHandler.LinkContact)
 	imports.GET("/candidates", importHandler.ListImportCandidates)
 
-	// Wire the PR 5 user-driven resolve-link + needs-attention routes
+	// Wire the user-driven resolve-link + needs-attention routes
 	// behind the global API-key middleware so resolve-link tests
 	// exercise the same code path as production.
 	meetingNoteLinkageTargets := &mnTestLinkageTargetReader{
@@ -784,7 +784,7 @@ func TestMeetingNote_TwoCandidatesConflict(t *testing.T) {
 	require.Len(t, resp.NeedsAttention, 1)
 	require.Equal(t, "conflict", resp.NeedsAttention[0].Reason)
 
-	// PR 5 invariant: conflict_candidates snapshot is persisted on the
+	// Invariant: the conflict_candidates snapshot is persisted on the
 	// row. The empty implied set → both entries have overlap_count=0.
 	require.NotEmpty(t, row.ConflictCandidates, "snapshot must be persisted on conflict_pending")
 	var snap []repository.ConflictCandidateSummary
@@ -1087,7 +1087,7 @@ func TestMeetingNote_ResyncRefreshesInteractionContent(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// TC-DD1: two anarlog_human_ids mapping to the same CRM
+// Two anarlog_human_ids mapping to the same CRM
 // contact produce exactly ONE interaction.
 // ----------------------------------------------------------------------------
 func TestMeetingNote_DedupesByContactID(t *testing.T) {

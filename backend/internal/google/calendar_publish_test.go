@@ -88,8 +88,7 @@ func TestPublishCalendarAttended_EnvelopeFields(t *testing.T) {
 
 // TestPublishCalendarAttended_CarriesTitleInPayload asserts that the
 // calendar event's title flows through the payload so the consumer can
-// populate interaction.description. Fixes Codex PR 6 P2 regression where
-// the pre-cutover description-from-title was silently dropped.
+// populate interaction.description.
 func TestPublishCalendarAttended_CarriesTitleInPayload(t *testing.T) {
 	bus := &capturingBus{}
 	eventID := uuid.NewString()

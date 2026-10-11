@@ -331,8 +331,7 @@ func (e *Engine) tryExplicitReplyBridge(ctx context.Context, contactID uuid.UUID
 //     scope, then proceed with the normal fresh-rows claim+publish.
 //
 // Returns an error when publisher is the nil interface — mode=off/
-// shadow is effectively broken post-cutover and the publisher refuses
-// to silently drop the interaction.
+// shadow would silently drop the interaction, so the call refuses (spec §3.9).
 func (e *Engine) createInteractionForSession(ctx context.Context, contactID uuid.UUID, sess msgSession) error {
 	if e.publisher == nil {
 		return fmt.Errorf("aggregation: cutover wiring requires publisher; refusing to drop interaction (mode=off/shadow is post-cutover broken per spec §3.9)")

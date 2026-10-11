@@ -35,8 +35,7 @@ import (
 const ingestTestAPIKey = "test-ingest-api-key"
 
 // ingestTestNoopArgs satisfies river's "at least one worker" requirement.
-// No job is enqueued at this kind — PR 4 only publishes events; consumer
-// jobs arrive in PR 5+.
+// No job is enqueued at this kind. The ingest path only publishes events.
 type ingestTestNoopArgs struct{}
 
 func (ingestTestNoopArgs) Kind() string { return "ingest_test_noop" }

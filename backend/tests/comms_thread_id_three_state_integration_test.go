@@ -14,9 +14,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// This file is Test 5 of the sqlc type-override arc (repo-shrink-sqlc-overrides
-// PR1, plan §5.5/§7.5): it discriminates NULL, empty-string, and a real value
-// on the two peer-field/thread-id sites the override flip made
+// This file checks NULL, empty-string, and a real value on the two
+// peer-field/thread-id sites that sqlc type overrides leave
 // compiler-blind — a guard that regresses from `p != nil && *p != ""` to a
 // bare `p != nil` compiles equally well but silently lets an empty string
 // leak through as if it were a real value.

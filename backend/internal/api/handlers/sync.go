@@ -162,10 +162,10 @@ func (h *SyncHandler) TriggerSync(c *gin.Context) {
 	}
 
 	// Enqueue the sync in a background goroutine with a detached context.
-	// After #180 PR 3 this is just a river Insert (fast), but we keep the
+	// The enqueue is a river Insert (fast), but we keep the
 	// goroutine so the HTTP client gets a 202 immediately even if the DB
-	// briefly stalls. 30s timeout is plenty for an Insert under realistic
-	// load; the old 5m was sized for full sync work, which is now off-handler.
+	// briefly stalls. The sync work runs off the handler, so a 30s timeout is
+	// plenty for an Insert under realistic load.
 	srcName := source // explicit capture for goroutine
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

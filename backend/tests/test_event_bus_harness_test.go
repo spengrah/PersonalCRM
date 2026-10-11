@@ -34,9 +34,8 @@ import (
 // waitForInteractionCount / waitForTelegramMessagesProcessed to wait for
 // the async consumer write.
 //
-// This replaces the PR 5 "direct path wrote first" synchronous behavior
-// that pre-cutover tests relied on. Post-PR-6 there is no direct path —
-// the async consumer is the sole writer (spec §3.4.1; plan Decision 4a).
+// The async consumer is the sole writer. There is no direct path that writes
+// first; tests wait for the consumer's write (spec §3.4.1).
 func setupTestEventBus(
 	t *testing.T,
 	ctx context.Context,

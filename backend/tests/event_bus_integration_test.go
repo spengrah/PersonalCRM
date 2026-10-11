@@ -20,7 +20,7 @@ import (
 
 // eventBusNoopArgs is a test-only river job kind registered so the client
 // has at least one worker at Start (river rejects empty Workers). No job is
-// ever enqueued against it in PR 2 — the event Bus's registry stub returns
+// ever enqueued against it. The event Bus's registry stub returns
 // an empty slice for every kind.
 type eventBusNoopArgs struct{}
 

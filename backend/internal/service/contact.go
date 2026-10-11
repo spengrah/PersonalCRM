@@ -34,8 +34,8 @@ type OverdueContact struct {
 	SuggestedAction string
 }
 
-// FollowUpConsumer is the subset of *consumer.FollowUpManager
-// ContactService depends on post-cutover. ApplyInteraction is the
+// FollowUpConsumer is the subset of *consumer.FollowUpManager that
+// ContactService depends on. ApplyInteraction is the
 // direct-invoke path for non-bus callers (Todoist completion wrapper,
 // Promote/ExtendInteraction). All remote effects leave via
 // todoist_task_op jobs enqueued in the caller's tx, so no post-commit
@@ -48,7 +48,7 @@ type FollowUpConsumer interface {
 }
 
 // cadenceWriter abstracts the direct-invoke write surface of
-// *consumer.CadenceUpdater that ContactService needs post-cutover.
+// *consumer.CadenceUpdater that ContactService needs.
 // Defined as a narrow interface so tests can stub it without importing
 // the consumer package graph, and so the service layer's dependency
 // stays unambiguous.
@@ -81,7 +81,7 @@ type ContactService struct {
 	interactionRepo   *repository.InteractionRepository
 	contactTaskRepo   *repository.ContactTaskRepository
 	// followUp is the FollowUpManager consumer — the sole writer of
-	// contact_task.kind='follow_up' lifecycle post-cutover. Passed to
+	// contact_task.kind='follow_up' lifecycle. Passed to
 	// NewContactService. Nil-tolerant: when nil, applyFollowUpInlineTx
 	// no-ops and non-bus follow-up work is silently skipped. Non-bus
 	// callers (Todoist completion path, Promote/Extend) route through
@@ -99,8 +99,8 @@ type ContactService struct {
 	// after publish. Implemented by *RematchService. Required alongside
 	// bus in production; nil-safe for tests.
 	rematchRegistry RematchRegistry
-	// cadence is the direct-invoke writer (the sole writer of the four
-	// cadence columns post-cutover). Passed to NewContactService.
+	// cadence is the direct-invoke writer, the sole writer of the four
+	// cadence columns. Passed to NewContactService.
 	// When nil, MergeContacts / ExtendInteraction /
 	// PromoteInteractionToMutual / cadence-edit UpdateContact paths
 	// return an error rather than silently no-op-ing on a code path
@@ -461,8 +461,7 @@ func (s *ContactService) CreateContact(ctx context.Context, req repository.Creat
 	//
 	// Filter to eligible methods first: if no registered rematch handler
 	// matches any new method, we skip publishing entirely and return
-	// uuid.Nil — matches the pre-cutover StartRematchForContact contract
-	// where unhandled methods produced no job id.
+	// uuid.Nil. Methods with no registered rematch handler produce no job id.
 	var eligibleMethods []Method
 	if len(createdMethods) > 0 && s.rematchRegistry != nil {
 		eligibleMethods = s.rematchRegistry.EligibleMethods(toRematchMethods(createdMethods))
@@ -554,7 +553,7 @@ func (s *ContactService) UpdateContact(ctx context.Context, id uuid.UUID, req re
 			newContactBy = &t
 		}
 	}
-	// The DTO's ContactBy field is ignored post-cutover — contact_by is
+	// The DTO's ContactBy field is ignored — contact_by is
 	// always recomputed from the cadence string to preserve the
 	// invariant "cadence drives contact_by". Zero it explicitly on the
 	// DTO so a future profile-only query extension can't accidentally

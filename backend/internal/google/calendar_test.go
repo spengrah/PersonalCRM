@@ -843,10 +843,9 @@ func TestMatchAttendees_HandlesIdentityServiceError(t *testing.T) {
 }
 
 // TestUpdateLastContactedForPastEvents_NilBus_SkipsEventsWithoutMarking asserts
-// the post-cutover behavior: when eventBus is nil (mode=off/shadow), the
-// loop lists past events but skips the publish/mark block per event. This
-// exercises the real plan Decision 6 wiring — rolling back to off/shadow
-// does NOT restore the direct path (spec §3.9).
+// that when eventBus is nil (mode=off/shadow), the loop lists past events
+// but skips the publish/mark block per event. No direct write path runs
+// in off/shadow (spec §3.9).
 func TestUpdateLastContactedForPastEvents_NilBus_SkipsEventsWithoutMarking(t *testing.T) {
 	ctx := t.Context()
 

@@ -955,9 +955,8 @@ func TestConfig_Validate_EventBusInteractionMode(t *testing.T) {
 }
 
 // TestConfig_CadenceMode_DefaultCutover asserts EVENT_BUS_CADENCE_MODE
-// defaults to "cutover" post-cutover — the direct path is gone, the
-// consumer is the sole writer, and shadow/off are no longer safe
-// defaults.
+// defaults to "cutover". The consumer is the sole writer, so off is not a
+// safe default.
 func TestConfig_CadenceMode_DefaultCutover(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
@@ -974,8 +973,8 @@ func TestConfig_CadenceMode_DefaultCutover(t *testing.T) {
 
 // TestConfig_CadenceMode_OffRejectedWithoutUnsafeOverride asserts the
 // startup gate: EVENT_BUS_CADENCE_MODE=off is a configuration error in
-// non-test load paths because post-cutover the direct path is gone and
-// "off" silently disables the sole writer of cadence columns.
+// non-test load paths because there is no direct path, and "off"
+// silently disables the sole writer of cadence columns.
 func TestConfig_CadenceMode_OffRejectedWithoutUnsafeOverride(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")
@@ -1112,7 +1111,7 @@ func TestConfig_Validate_EventBusCadenceMode(t *testing.T) {
 
 // TestConfig_FollowUpMode_DefaultCutover asserts EVENT_BUS_FOLLOWUP_MODE
 // defaults to "cutover" — FollowUpManager is the sole writer of
-// follow-up tasks post-cutover.
+// follow-up tasks.
 func TestConfig_FollowUpMode_DefaultCutover(t *testing.T) {
 	WithEnv(t, "DATABASE_URL", "postgres://localhost/test")
 	WithEnv(t, "NODE_ENV", "development")

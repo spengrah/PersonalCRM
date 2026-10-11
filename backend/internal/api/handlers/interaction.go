@@ -21,9 +21,9 @@ import (
 
 // InteractionHandler handles interaction-related HTTP requests.
 //
-// Post-PR-6 (cutover): all writes go through manualHandler.Run, which
+// All writes go through manualHandler.Run, which
 // opens a tx, publishes interaction.manual, invokes the consumer inline,
-// and commits. When manualHandler is nil (mode=off/shadow post-cutover),
+// and commits. When manualHandler is nil (interaction mode off),
 // POST returns 503 Service Unavailable.
 type InteractionHandler struct {
 	interactionRepo *repository.InteractionRepository

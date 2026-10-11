@@ -485,8 +485,7 @@ func TestHandleEvent_InteractionManual_EmptyDirectionDefaultsMutual(t *testing.T
 // -----------------------------------------------------------------------------
 // Replay cases. Writer returns isReplay=true → consumer skips
 // interaction.recorded emit, but mark-processed
-// still fires for telegram kinds — matches the pre-cutover publisher's
-// unconditional MarkMessagesProcessed call.
+// still fires for telegram kinds, unconditionally.
 // -----------------------------------------------------------------------------
 
 func TestHandleEvent_MessageReceived_CutoverReplay(t *testing.T) {

@@ -115,7 +115,7 @@ func TestContactBy_CreateWithCadence(t *testing.T) {
 }
 
 // TestContactBy_CadenceStateTransitions verifies contact_by behavior
-// when cadence changes. Post-cutover the repository.UpdateContact
+// when cadence changes. The repository.UpdateContact
 // query is profile-only; contact_by mutations route through
 // ContactService.UpdateContact → CadenceUpdater.ApplyContactByOverride,
 // so this test exercises the service layer to cover the end-to-end

@@ -153,7 +153,7 @@ func TestAggregation_BatchOutboundBurst(t *testing.T) {
 	err := engine.AggregateAll(ctx)
 	require.NoError(t, err)
 
-	// Post-PR-6: aggregation publishes, consumer writes async.
+	// Aggregation publishes; the consumer writes async.
 	interactions := waitForInteractionCountExact(t, ctx, interactionRepo, contact.ID, 1, defaultInteractionWaitTimeout)
 	assert.Equal(t, "outbound", interactions[0].Direction)
 	assert.Equal(t, "telegram", interactions[0].Source)
@@ -273,7 +273,7 @@ func TestAggregation_IncrementalCoalescing(t *testing.T) {
 	// Outbound extends bump ONLY last_outreach_at; last_contacted,
 	// last_interaction_at, last_response_at and contact_by must stay put
 	// (spec §3.4.2 direction rules). ExtendInteraction routes through
-	// CadenceUpdater.ApplyInteraction post-cutover.
+	// CadenceUpdater.ApplyInteraction.
 	updated, err := contactRepo.GetContact(ctx, contact.ID)
 	require.NoError(t, err)
 	require.NotNil(t, updated.LastOutreachAt, "outbound extend must set last_outreach_at")
@@ -320,8 +320,8 @@ func TestAggregation_IncrementalReplyBridge(t *testing.T) {
 	assert.Equal(t, "outbound", interactions[0].Direction)
 
 	// Inbound reply within 48h → aggregation's reply-bridge path calls
-	// PromoteInteractionToMutual (sync, plan Decision 3 — extend/promote
-	// stay direct-path through PR 6).
+	// PromoteInteractionToMutual (sync; extend and promote write directly, not
+	// through the event bus).
 	replyTime := base.Add(30 * time.Minute)
 	insertTestMessage(t, messageRepo, 80052, 302, false, replyTime, &contact.ID, 70006)
 	err = engine.AggregateForContact(ctx, contact.ID, 302)
@@ -403,8 +403,8 @@ func TestAggregation_IncrementalExplicitReplyBridge(t *testing.T) {
 	require.NoError(t, err)
 
 	// Step 3: aggregate incrementally — PromoteInteractionToMutual is the
-	// sync service path for reply-bridging (plan Decision 3 — extend/promote
-	// stay direct-path through PR 6). No event-bus wait needed for the
+	// sync service path for reply-bridging; extend and promote write directly, not
+	// through the event bus. No event-bus wait needed for the
 	// promotion itself, but the prior async outbound write must have landed
 	// before the promotion can find the interaction row to update — and it
 	// did above via waitForInteractionCountExact. Re-list to capture the

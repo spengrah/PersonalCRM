@@ -11,8 +11,8 @@
 -- the table has no callers yet, so there is no transitional shape worth
 -- landing separately.
 --
--- Also widens interaction.source CHECK to include 'anarlog_sessions' so PR 3
--- can write session-derived interactions without a schema change of its own.
+-- Also widens interaction.source CHECK to include 'anarlog_sessions' for
+-- session-derived interactions.
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------

@@ -517,7 +517,7 @@ func base62UUID(id uuid.UUID) string {
 // alphanumeric id the fake Sync returns for it (mirroring the temp→real handoff
 // the real Todoist Sync API performs). The provider mints temp ids via
 // uuid.New().String(), so the normal path parses + base62-encodes the UUID to
-// match PR1's follow-up-id convention; a non-UUID temp id (never emitted by the
+// match the base62 encoding of externalTaskIDForContact; a non-UUID temp id (never emitted by the
 // provider) falls back to base62 of the raw bytes so the result stays alphanumeric
 // and unique regardless.
 func finalizeTempID(tempID string) string {

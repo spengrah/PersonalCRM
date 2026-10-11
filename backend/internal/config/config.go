@@ -237,7 +237,7 @@ type RiverConfig struct {
 //     modes, there is no UnsafeAllowOff gate on interaction
 //     mode — publisher paths are not sole-writer-gated the
 //     same way, so "off" is safe to flip without the gate.
-//     Does NOT restore any pre-cutover direct path.
+//     Does NOT restore a direct write path.
 //   - "cutover": default. Consumer is the sole writer; publishers only
 //     Publish events. This is the intended production mode.
 //
@@ -246,8 +246,8 @@ type RiverConfig struct {
 //   - "off":     emergency override that disables the sole writer of
 //     the four cadence columns entirely. Startup REFUSES to boot
 //     on "off" unless UnsafeAllowOffMode is explicitly set (via
-//     EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true). Does NOT restore any
-//     pre-cutover direct path. Real rollback is `git revert`, not a
+//     EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true). Does NOT restore a
+//     direct write path. Real rollback is `git revert`, not a
 //     flag flip. See backend/internal/eventbus/README.md.
 //   - "cutover": default. CadenceUpdater is the sole writer of the
 //     four cadence columns; InteractionRecorder inline-applies on
@@ -285,7 +285,7 @@ const (
 )
 
 // EventBus follow-up-mode constants. Mirrors (and must stay in sync
-// with) consumer.FollowUpMode*. Post-cutover the direct path is gone,
+// with) consumer.FollowUpMode*. There is no direct path,
 // so FollowUpMode=off is a startup-time kill switch: turning the
 // consumer off leaves nothing to create or complete follow-ups.
 // Startup REFUSES to boot on "off" unless FollowUpUnsafeAllowOff is
@@ -595,7 +595,7 @@ func Load() (*Config, error) {
 	// AND CadenceMode=off was honored, emit a loud WARN so repeated
 	// config reloads keep surfacing the degraded state. The startup gate
 	// in Validate already refuses boot without the override; this WARN
-	// covers the "override honored" case. Pre-cutover TestConfig callers
+	// covers the "override honored" case. TestConfig callers
 	// don't land here because they don't call Load().
 	cfg.EventBus.MaybeWarnUnsafeOff()
 
@@ -855,8 +855,8 @@ func (c *Config) Validate() error {
 	}
 
 	// EventBus cadence-mode validation. Default is "cutover". The "off"
-	// value is a startup-time kill switch post-cutover — the direct path
-	// is gone, so "off" disables the sole writer of cadence columns.
+	// value is a startup-time kill switch. There is no direct path,
+	// so "off" disables the sole writer of cadence columns.
 	// Require explicit opt-in via UnsafeAllowOffMode
 	// (EVENT_BUS_CADENCE_UNSAFE_ALLOW_OFF=true) before accepting "off"
 	// in non-test config. TestConfig() sets UnsafeAllowOffMode=true so
@@ -1129,7 +1129,7 @@ func TestConfig() *Config {
 			// unit tests don't inadvertently exercise the cutover writer
 			// path; tests that need cutover explicitly override this.
 			// UnsafeAllowOffMode + FollowUpUnsafeAllowOff are set so
-			// Validate() doesn't reject "off" via the post-cutover startup
+			// Validate() doesn't reject "off" via the startup
 			// gates — those gates exist to catch prod misconfigs, not test
 			// harnesses that deliberately opt into "off".
 			CadenceMode:            EventBusCadenceModeOff,
