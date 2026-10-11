@@ -83,6 +83,7 @@ assert_not_in_group "frontendx/y.ts" frontend
 assert_in_group     "path-filters.yml" backend
 # Lint config is in backend so a config-only lint change triggers CI's lint job.
 assert_in_group     ".golangci.yml" backend
+assert_in_group     ".golangci.forward.yml" backend
 
 # --- seed group: the staging auto-reseed surface (orthogonal to test selection) ---
 # Synthetic toolkit + profiles ARE the seed surface.

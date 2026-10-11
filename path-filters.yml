@@ -17,6 +17,7 @@ backend:
   - 'go.sum'
   - 'Makefile'
   - '.golangci.yml'
+  - '.golangci.forward.yml'
   - '.github/workflows/ci.yml'
   - '.github/workflows/deploy-staging.yml'
   - 'path-filters.yml'

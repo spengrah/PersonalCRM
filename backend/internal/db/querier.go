@@ -2861,6 +2861,11 @@ type Querier interface {
 	// whatsapp history claim index from 076). Read-only catalog access, mirroring
 	// TestListPublicTables.
 	TestListIndexDefsForTable(ctx context.Context, tableName string) ([]*TestListIndexDefsForTableRow, error)
+	// Schema-invariant test only: every public timestamp column that is nullable
+	// yet defaults to now(). Such a column promises "always set" but lets an
+	// explicit NULL through, so it must be NOT NULL. Read-only catalog access,
+	// mirroring TestListPublicTables.
+	TestListNullableTimestampDefaultNow(ctx context.Context) ([]string, error)
 	// Reset integration test only: enumerate every base table in the public schema
 	// so the catalog guard can assert each is in the wiped list, is schema_migrations,
 	// or matches the river_% allowlist. Read-only catalog access.

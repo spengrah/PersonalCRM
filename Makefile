@@ -524,9 +524,21 @@ ci-build: ci-build-backend ci-build-frontend
 # Linting
 GOLANGCI_LINT := $(shell which golangci-lint 2>/dev/null || echo $$(go env GOPATH)/bin/golangci-lint)
 
-lint: lint-ingest-registry ## Run all linters (backend + frontend)
+lint: lint-ingest-registry lint-forward ## Run all linters (backend + frontend)
 	@echo "Running golangci-lint..."
 	@cd backend && $(GOLANGCI_LINT) run ./...
+
+# Forward-only rules (.golangci.forward.yml): patterns that exist today and need
+# a refactor to remove. --new-from-rev at the merge base with origin/develop limits
+# the report to lines changed on this branch, so only new violations fail. The
+# GIT_* variables a git hook exports are cleared so golangci's own git diff sees
+# this worktree. Needs origin/develop in the local refs (CI checks out with
+# fetch-depth: 0); the hook does not fetch.
+lint-forward: ## Run forward-only Go lint rules against changes since origin/develop
+	@echo "Running forward-only golangci-lint rules..."
+	@cd backend && base=$$(git merge-base origin/develop HEAD) && \
+		env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
+		$(GOLANGCI_LINT) run -c ../.golangci.forward.yml --new-from-rev=$$base ./...
 
 lint-fix:
 	@echo "Running golangci-lint with auto-fix..."

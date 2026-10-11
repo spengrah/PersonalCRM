@@ -1621,3 +1621,16 @@ SELECT (current_setting('crm.derived_writer', true) IS NULL)::boolean;
 -- because a global count is vacuous under t.Parallel() — any sibling's NULL
 -- row satisfies it.
 SELECT count(*) FROM oauth_credential WHERE id = $1 AND token_type IS NULL;
+
+-- name: TestListNullableTimestampDefaultNow :many
+-- Schema-invariant test only: every public timestamp column that is nullable
+-- yet defaults to now(). Such a column promises "always set" but lets an
+-- explicit NULL through, so it must be NOT NULL. Read-only catalog access,
+-- mirroring TestListPublicTables.
+SELECT (table_name || '.' || column_name)::text AS qualified_column
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND data_type LIKE 'timestamp%'
+  AND is_nullable = 'YES'
+  AND column_default ILIKE '%now()%'
+ORDER BY table_name, column_name;
