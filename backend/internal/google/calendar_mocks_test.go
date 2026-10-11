@@ -158,8 +158,7 @@ func (m *mockExternalContactRepo) Upsert(ctx context.Context, req repository.Ups
 }
 
 // newTestProvider creates a CalendarSyncProvider with mocked dependencies for testing.
-// Post-PR-6 cutover: CalendarSyncProvider no longer holds an interactionRecorder —
-// past-event interaction writes happen via the event bus (eventBus=nil in unit
+// Past-event interaction writes go through the event bus (eventBus=nil in unit
 // tests skips the publish path; integration tests cover the consumer flow).
 func newTestProvider(calRepo calendarRepoInterface, contactRepo contactRepoInterface, idSvc identityServiceInterface) *CalendarSyncProvider {
 	return newTestProviderWithExternal(calRepo, contactRepo, idSvc, nil)

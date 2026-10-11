@@ -125,8 +125,7 @@ type FollowUpHandler interface {
 //  1. Unit + integration tests install a DecisionObserver closure to
 //     assert on the manager's classification (action, skip reason,
 //     would-be deadline, idempotency key, contact_task id) without a
-//     DB round trip. Replaces the shadow-observation-table assertions
-//     retired with migration 044.
+//     DB round trip.
 //  2. Operators / future metrics can wire the observer to emit
 //     Prometheus counters or a structured audit log without having to
 //     modify the manager's branches.

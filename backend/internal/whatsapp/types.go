@@ -218,7 +218,7 @@ type Status struct {
 	// The pairing is deliberately NOT torn down in that case — the device is
 	// genuinely linked remotely.
 	LinkSelectorPersisted *bool `json:"link_selector_persisted,omitempty"`
-	// Backfill reports the history drain. PR3 records notifications; the
+	// Backfill reports the history drain. Notifications are recorded; the
 	// counts stay zero until a chunk arrives.
 	Backfill BackfillStatus `json:"backfill"`
 	// Ingest reports what the live message path observed.

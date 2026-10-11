@@ -41,7 +41,7 @@ type EnrichmentService struct {
 	rematchRegistry RematchRegistry
 	cadence         cadenceWriter
 	// knowledge persists inferred location/birthday/how_met as assertions and
-	// refreshes the derived cache columns inline. Post-cutover the contact SQL
+	// refreshes the derived cache columns inline. The contact SQL
 	// no longer writes those columns, so an enrichment that infers them MUST
 	// route through this writer or the value silently vanishes. Built by
 	// NewEnrichmentService from the (assertSvc, knowledgeCache) pair; when nil,
@@ -51,7 +51,7 @@ type EnrichmentService struct {
 }
 
 // NewEnrichmentService creates a new enrichment service. database is
-// required post-cutover so the cadence-override path can open its own
+// required so the cadence-override path can open its own
 // tx for the profile-update + ApplyContactByOverride pair. bus +
 // rematchRegistry are required for the event-bus rematch path:
 // EnrichContactFromExternal* publish contact_methods.added through bus

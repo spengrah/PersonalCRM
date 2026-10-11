@@ -1408,13 +1408,11 @@ func (p *CadenceSyncProvider) reconcileExistingTask(
 				commands = append(commands, NewItemCloseCommand(task.ExternalTaskID))
 			}
 
-			// This branch previously re-computed and wrote contact_by
-			// here. Post-cutover the upstream non-Todoist interaction
-			// (via InteractionRecorder → CadenceUpdater) already wrote
-			// contact_by; reconciliation reads the live
-			// contact.ContactBy for the new Todoist task's deadline
-			// instead of re-computing + re-writing. Removing the write
-			// keeps CadenceUpdater as the sole writer of contact_by.
+			// The upstream non-Todoist interaction already wrote contact_by
+			// through InteractionRecorder and CadenceUpdater. Reconciliation
+			// reads the live contact.ContactBy for the new Todoist task's
+			// deadline and does not write contact_by. CadenceUpdater is the
+			// sole writer of contact_by.
 			if contact.Cadence != nil && *contact.Cadence != "" && contact.ContactBy != nil {
 				// Create new task with updated deadline
 				cmd := p.createTaskCommand(contact, settings, &pushDeadline)

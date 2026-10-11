@@ -82,8 +82,7 @@ UPDATE contact SET how_met = $2 WHERE id = $1 AND deleted_at IS NULL;
 -- (apply_last_interaction_at), independent of apply_last_contacted.
 -- Interaction-driven paths (HandleEvent, ApplyInteraction) set both
 -- flags together so inbound/mutual still bump last_interaction_at
--- alongside last_contacted, matching the pre-cutover
--- UpdateContactResponseFields/UpdateContactMutualFields write surface.
+-- alongside last_contacted.
 -- Merge (BulkApply) sets apply_last_interaction_at=false because a
 -- merge is not an interaction and must not mutate the "last
 -- non-outbound interaction" timestamp of the surviving contact.
@@ -177,10 +176,10 @@ UPDATE contact SET
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;
 
 -- name: SnapshotContactCadenceFields :one
--- Returns the five cadence columns, including awaiting_reply_until. Used by PR 7's
--- direct-path post-commit closure to capture the post-image inside its
--- own short-lived tx (plan Decision 5). Consumer does NOT call this —
--- consumer reads prev from the event payload (plan Decision 2a).
+-- Returns the five cadence columns, including awaiting_reply_until. The contact
+-- repository runs it in its own short-lived tx to read a post-write image.
+-- The consumer does not call this; it reads the previous cadence state from
+-- the event payload.
 SELECT last_contacted, last_outreach_at, last_response_at, contact_by, awaiting_reply_until
 FROM contact
 WHERE id = sqlc.arg(id) AND deleted_at IS NULL;

@@ -172,10 +172,8 @@ func TestRunKeyedCitationsClean(t *testing.T) {
 
 // TestSpecCoverage_KeyedCorpusInsertionStable is acceptance criterion 2 at the
 // CLI boundary: the same corpus with one item inserted at position 1 keeps
-// every keyed citation's verdict. (The indexed contrast leg retired with the
-// form; the retirement tests now own that subject.) The anti-vacuity controls
-// are the base-corpus precondition and the fresh-orphan check on the inserted
-// item — the latter added here because the CLI side previously lacked it.
+// every keyed citation's verdict. The anti-vacuity controls are the
+// base-corpus precondition and the fresh-orphan check on the inserted item.
 func TestSpecCoverage_KeyedCorpusInsertionStable(t *testing.T) {
 	_, before, _ := runCLI(t, fixtures+"/coverage-keys")
 	code, after, _ := runCLI(t, fixtures+"/coverage-keys-inserted")

@@ -19,7 +19,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
-// buildManualHandlerForTest wires the PR 6 cutover manual-interaction
+// buildManualHandlerForTest wires the manual-interaction
 // pipeline (bus → consumer → manual handler) against a real DB + live
 // river client. The manual handler invokes HandleEvent INLINE inside its
 // own tx, so the HTTP response returns immediately with the interaction.

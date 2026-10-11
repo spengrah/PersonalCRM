@@ -283,9 +283,7 @@ func (r *InteractionRecorder) HandleEvent(ctx context.Context, tx pgx.Tx, env *e
 	// Mark staging rows processed inside the SAME tx as the
 	// interaction insert so the staging.interaction_id FK write is
 	// atomic with the row it references. Runs on BOTH fresh-write and
-	// replay paths — matches the telegram publisher's pre-cutover
-	// behavior of always calling MarkMessagesProcessed after
-	// RecordInteraction, regardless of dedup-hit.
+	// replay paths, regardless of dedup-hit.
 	//
 	// Dispatches on env.Source so message.* events from any source
 	// (telegram today, messages once the Mac daemon ingest writer is

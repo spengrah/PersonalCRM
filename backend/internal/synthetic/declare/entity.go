@@ -11,10 +11,8 @@ import (
 	"personal-crm/backend/internal/synthetic/factory"
 )
 
-// Entity is one thing a declaration creates. PR1 shipped Contact; the
-// adversarial catalog adds ExternalCandidate / Note / Merge / SoftDelete, and
-// later domain PRs add CalendarEvent / MacHost / MeetingNote / Task as their
-// domains migrate.
+// Entity is one thing a declaration creates. Each seeded domain adds its own
+// implementations.
 type Entity interface {
 	// handle is the declaration-local name the manifest keys the created row by.
 	handle() string

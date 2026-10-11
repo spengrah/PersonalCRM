@@ -11,13 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestEnrichmentService_NilPairGuards pins the EnrichmentService nil semantics
-// preserved by the PR5 setter→constructor-arg conversion: a nil knowledge pair
-// still errors on inferred location/birthday, and a nil cadence still errors on
-// a cadence-override request — the same "not wired" errors the deleted setters
-// guarded, not panics. (crm-admin passes nil cadence in production, so the
-// cadence guard is live semantics, not dead code.) The ContactService + half-set
-// construction guards are unit-tested in internal/service/wiring_guards_test.go.
+// TestEnrichmentService_NilPairGuards pins the EnrichmentService nil semantics:
+// a nil knowledge pair still errors on inferred location/birthday, and a nil
+// cadence still errors on a cadence-override request, rather than panicking.
+// (crm-admin passes nil cadence in production, so the cadence guard is live
+// semantics, not dead code.) The ContactService + half-set construction guards
+// are unit-tested in internal/service/wiring_guards_test.go.
 func TestEnrichmentService_NilPairGuards(t *testing.T) {
 	testsupport.RequireDatabase(t)
 	t.Parallel()

@@ -36,9 +36,8 @@ const (
 	KindEmailReceived Kind = "email.received"
 	KindEmailSent     Kind = "email.sent"
 
-	// Derived event — emitted by the InteractionRecorder consumer (spec
-	// §3.4.1) atomically with an interaction row insert. PR 2 declares
-	// the constant; PR 5 introduces the consumer that emits it.
+	// Derived event, emitted by the InteractionRecorder consumer (spec
+	// §3.4.1) atomically with an interaction row insert.
 	KindInteractionRecorded Kind = "interaction.recorded"
 
 	// Daemon-emitted raw-message events. Published by the Mac daemon
@@ -195,10 +194,8 @@ type MessageSentPayload struct {
 // CalendarAttendedPayload is the payload for KindCalendarAttended.
 //
 // Title carries the calendar event's summary/title so the consumer can
-// populate interaction.description. Pre-cutover (PR 5) the direct-path
-// RecordInteraction call passed the title inline; post-cutover the
-// consumer is the sole writer and needs the title via the payload.
-// Optional (nil when the calendar event has no title).
+// populate interaction.description. It is optional (nil when the calendar
+// event has no title).
 type CalendarAttendedPayload struct {
 	Version    int       `json:"version"`
 	ContactID  uuid.UUID `json:"contact_id"`
@@ -301,13 +298,11 @@ type EmailEventPayload struct {
 }
 
 // InteractionRecordedPayload is the payload for KindInteractionRecorded,
-// emitted by the InteractionRecorder consumer in PR 5+. PR 7 bumps
-// Version to 2 and adds the PrevCadenceSnapshot + PrevCadenceValue
-// fields so CadenceUpdater can replay the direct-path's pre-cadence
-// state deterministically (plan Decision 2a). V1 payloads continue to
-// unmarshal — the new fields default to nil and InteractionRecorder
-// (the only PR 6 consumer of this event) ignores them. PR 7's
-// CadenceUpdater rejects V1 payloads at ERROR level.
+// emitted by the InteractionRecorder consumer. Version 2 adds the
+// PrevCadenceSnapshot + PrevCadenceValue fields so CadenceUpdater can
+// replay the pre-cadence state deterministically. Version 1 payloads still
+// unmarshal: the new fields default to nil, and InteractionRecorder ignores
+// them. CadenceUpdater rejects any Version other than 2 or 3 at ERROR level.
 type InteractionRecordedPayload struct {
 	Version       int       `json:"version"`
 	ContactID     uuid.UUID `json:"contact_id"`

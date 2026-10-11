@@ -670,7 +670,7 @@ func (r *SyncRepository) AbandonRunningLogsForState(ctx context.Context, stateID
 // JobArgs whose JSON shape matches the CountInFlightSyncJobs dedup
 // query's expectations (keys `source` and `account_id`).
 //
-// Atomicity story (see .ai/log/plan/event-bus-foundation-pr3-scheduler-river.md DD 1):
+// Enqueue is atomic under a per-account advisory lock:
 //  1. Begin a pgx.Tx on the shared pool.
 //  2. Acquire a per-account advisory lock via
 //     pg_advisory_xact_lock(hashtextextended($1||'|'||COALESCE($2,”), 0)).

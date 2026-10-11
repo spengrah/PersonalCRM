@@ -37,8 +37,8 @@ func TestMessagesAdapter_Description_Mutual_DefaultsToExchange(t *testing.T) {
 	require.Equal(t, "Messages exchange (5 messages)", got)
 }
 
-// TestMessagesAdapter_SourceRefPrefix_EscapesLikeWildcards is the
-// load-bearing assertion from Codex P2: the prefix MUST escape `_`
+// TestMessagesAdapter_SourceRefPrefix_EscapesLikeWildcards asserts that the
+// prefix MUST escape `_`
 // and `%` so a chat_guid containing those wildcards doesn't false-
 // match unrelated rows when used as a LIKE pattern. The escape
 // character is `\` and the corresponding sqlc queries use

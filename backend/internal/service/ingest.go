@@ -1,6 +1,6 @@
 // Package service provides business-logic wrappers around repositories.
 // IngestService owns the single-tx batch-publish semantics for the HTTP
-// ingestion endpoint introduced in PR 4 of the event-bus-foundation spec.
+// ingestion endpoint.
 package service
 
 import (

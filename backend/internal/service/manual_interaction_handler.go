@@ -48,10 +48,6 @@ type manualInteractionBus interface {
 // response. Errors are propagated — db.ErrNotFound surfaces for a missing
 // contact; all other errors fail the request and the tx rolls back (no
 // partial write).
-//
-// Rollback-era note: pre-PR-6 this helper was named ManualInteractionShadow
-// and ran a two-tx flow alongside a direct ContactService.RecordInteraction
-// path. PR 6 collapsed both into this single-tx, single-writer flow.
 type ManualInteractionHandler struct {
 	pool     *pgxpool.Pool
 	bus      manualInteractionBus

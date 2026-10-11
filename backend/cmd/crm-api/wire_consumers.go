@@ -120,7 +120,7 @@ func buildDomainConsumers(
 	}
 
 	// FollowUpManager consumer — the sole writer of
-	// contact_task.kind='follow_up' lifecycle post-cutover. Constructed
+	// contact_task.kind='follow_up' lifecycle. Constructed
 	// BEFORE ContactService because it is passed to NewContactService as the
 	// followUp arg (and to the InteractionRecorder for inline-invoke on fresh
 	// writes). Todoist settings are looked up via a deferred holder populated
@@ -251,7 +251,7 @@ func registerCoreConsumerWorkers(
 // resolveInteractionMode applies the interaction-mode wiring gate. Cutover
 // is the normal operating posture; off is the emergency-override retained so
 // rollback can silence publisher-driven paths without a code change. A
-// deploy in off mode does NOT restore any pre-cutover direct path — rollback
+// deploy in off mode does not restore a direct write path; rollback
 // is `git revert`. Returns pubBus as a CONCRETE *events.Bus (nil in off
 // mode) so it is threaded by concrete type through the provider wiring, and
 // the manual-interaction handler (nil in off mode).
@@ -342,10 +342,10 @@ func registerModeWorkers(
 		contactTaskRepo, followUpSettings, todoistClientFactory, riverClient, database.Pool,
 	)
 	addWorker(reg, todoistOpWorker)
-	// Transitional adapters for the three legacy follow-up kinds: queued
-	// pre-cutover jobs, plus the two surviving legacy close-enqueue sites
-	// (provider temp-id finalize, contact-merge close), still execute by
-	// delegating to the shared executor. Removed once drained in prod.
+	// Adapters for the three legacy follow-up kinds: queued legacy jobs,
+	// plus the two legacy close-enqueue sites (provider temp-id finalize,
+	// contact-merge close), execute by delegating to the shared executor.
+	// TODO: remove once legacy jobs drain in prod.
 	addWorker(reg, consumer.NewTodoistFollowUpCreateAdapterWorker(todoistOpWorker))
 	addWorker(reg, consumer.NewTodoistFollowUpCloseAdapterWorker(todoistOpWorker))
 	addWorker(reg, consumer.NewTodoistFollowUpRefreshAdapterWorker(todoistOpWorker))

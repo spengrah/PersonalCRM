@@ -53,8 +53,8 @@ type knowledgeFieldValues struct {
 
 // normalized collapses a whitespace-only Location/HowMet to nil so an
 // empty-string field (the HTTP layer forwards request strings verbatim) reads as
-// "no value" — a create skips it and an update treats it as a CLEAR, matching the
-// pre-cutover leniency where a blank field was unset rather than rejected.
+// "no value" — a create skips it and an update treats it as a CLEAR. A blank field is
+// unset, not rejected.
 func (v knowledgeFieldValues) normalized() knowledgeFieldValues {
 	v.Location = nonBlank(v.Location)
 	v.HowMet = nonBlank(v.HowMet)
@@ -118,8 +118,7 @@ func (w *knowledgeWriter) assertCreate(ctx context.Context, tx pgx.Tx, contactID
 //   - how_met: nil means the form simply doesn't carry how_met (it has no
 //     how_met input), NOT a user clear → NO-OP, leaving the existing how_met
 //     assertion untouched. (This both avoids polluting the assertion history with
-//     a spurious closure on every edit AND preserves how_met across edits — the
-//     pre-cutover SQL path wiped how_met on every save, which this fixes.)
+//     a spurious closure on every edit AND preserves how_met across edits.)
 //
 // An explicit how_met value (non-nil after trim) is always asserted.
 func (w *knowledgeWriter) applyUpdate(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, next, existing knowledgeFieldValues, prov knowledgeFieldProvenance) error {
@@ -170,8 +169,7 @@ func (w *knowledgeWriter) reconcileBirthday(ctx context.Context, tx pgx.Tx, cont
 
 // assertLocation ensures the place entity node for the label, then asserts the
 // lives_in edge. A whitespace-only label is skipped (no place node minted for a
-// blank string — the cache column simply stays empty, matching the pre-cutover
-// leniency where a blank location was stored verbatim rather than rejected).
+// blank string — the cache column simply stays empty).
 func (w *knowledgeWriter) assertLocation(ctx context.Context, tx pgx.Tx, contactID uuid.UUID, label string, prov knowledgeFieldProvenance) error {
 	if strings.TrimSpace(label) == "" {
 		return nil

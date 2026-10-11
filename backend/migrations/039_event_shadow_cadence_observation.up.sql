@@ -1,13 +1,11 @@
 -- 039_event_shadow_cadence_observation.up.sql
--- Shadow-mode observation table for the event-bus CadenceUpdater consumer
--- (PR 7 of #180). See .ai/spec/event-bus-foundation.md §3.4.2 and
--- .ai/log/plan/event-bus-foundation-pr7-cadence-updater-shadow.md
--- Design Decision 1.
+-- Shadow-mode observation table for the event-bus CadenceUpdater consumer.
+-- See .ai/spec/event-bus-foundation.md §3.4.2.
 --
 -- Sibling table to event_shadow_observation (migration 038). Parallel
 -- structure, distinct payload — the cadence observation captures the
 -- four cadence-column pre/post images per event, whereas 038 captures
--- interaction-row resolution. PR 12 drops both shadow tables together.
+-- interaction-row resolution. Migration 044 drops both shadow tables.
 --
 -- Append-only. Each write path (direct vs consumer) produces its own
 -- row — the UNIQUE (event_id, writer) key prevents duplicate writes

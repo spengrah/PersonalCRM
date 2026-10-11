@@ -24,7 +24,7 @@ public protocol ExecutableAdapter {
     /// invoked it.
     func currentExecutablePath() throws -> String
     /// Single-Mach-O ad-hoc sign. Used during the legacy migration
-    /// cleanup path only — the bare-binary install pre-PR8c.
+    /// cleanup path only, for the old bare-binary install.
     /// `codesign -s - --force --preserve-metadata=... <path>`.
     func adhocCodesign(path: String) throws
     /// Two-pass sign of a complete `.app` bundle:

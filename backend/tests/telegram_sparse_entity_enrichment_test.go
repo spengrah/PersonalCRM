@@ -357,10 +357,10 @@ func TestSparseEntityEnrichment_UntrackedGroupSkipsBeforeEnrichment(t *testing.T
 
 // TestSparseEntityEnrichment_HandleEditMessage_FillsFromHistory has already
 // covered the "older row is rich, sparse new arrives" path. This test covers
-// the inverse recency edge case Codex flagged in PR #278: after the user has
+// the inverse recency edge case: after the user has
 // removed their handle in an authoritative update (Username=""), a SUBSEQUENT
 // sparse update must NOT resurrect the old handle from the historical row.
-// The fix relies on the persisted peer_entity_resolved flag so that
+// The code relies on the persisted peer_entity_resolved flag so that
 // GetPeerEntityByUserID prefers the most recent authoritative row over any
 // older non-blank value.
 func TestSparseEntityEnrichment_AuthoritativeRemovalSticksAcrossSparseUpdates(t *testing.T) {

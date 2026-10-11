@@ -456,9 +456,8 @@ func TestComputeCoverageKeyedVerdicts(t *testing.T) {
 // TestComputeCoverage_KeyedCitationSurvivesThenInsertion is acceptance
 // criterion 2: two corpora differing only by an item inserted at position 1,
 // and every keyed citation keeps the identical verdict for the identical
-// assertion text. (The contrast leg — indexed citations re-pointing across the
-// same insertion — retired with the form itself; its subject is now the
-// retirement tests, which prove the form cannot be written at all.)
+// assertion text. (Positional citations are rejected at collection, so there is
+// no contrast leg; TestCollectCitations_IndexedFormRejected covers that.)
 //
 // Two assertions keep this from going vacuous: the precondition that each keyed
 // text exists in the base corpus (if keying silently stopped resolving, it

@@ -1,4 +1,4 @@
-// Go-live acceptance for the GChat integration (PR 3, spec §8 Phase 3). This is
+// Go-live acceptance for the GChat integration. This is
 // the end-to-end proof that flipping the feature on actually works: a
 // GChatSyncProvider registered in a real ProviderRegistry, an enabled
 // (gchat, account) external_sync_state created exactly as the boot

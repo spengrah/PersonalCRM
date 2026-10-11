@@ -1,7 +1,7 @@
 //go:build integration_testdb
 
-// Golden-list regression pin for the composition-root wire split (contract 7,
-// PR4). River's public API does not enumerate registered workers or periodic
+// Golden-list regression pin for the composition-root wire split (contract 7).
+// River's public API does not enumerate registered workers or periodic
 // jobs, so the wire functions register through riverRegistrar, which records
 // the kind of every worker + periodic job. This test drives the wire chain in
 // run()'s exact order (MINUS buildTelegram — see the telegram-skip rule) per

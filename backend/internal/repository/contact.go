@@ -348,7 +348,7 @@ func (r *ContactRepository) CreateContact(ctx context.Context, req CreateContact
 }
 
 // UpdateContact updates an existing contact's profile fields (name, cadence,
-// profile_photo). Post-cutover this path NEVER writes last_contacted,
+// profile_photo). This path NEVER writes last_contacted,
 // last_outreach_at, last_response_at, contact_by, OR the location/birthday/
 // how_met cache columns — those flow from the assertion store via the
 // knowledge-cache consumer (the req.Location/Birthday/HowMet fields are consumed
@@ -377,7 +377,7 @@ func (r *ContactRepository) UpdateContact(ctx context.Context, id uuid.UUID, req
 
 // UpdateContactLocationCacheTx refreshes the derived location cache column from
 // the knowledge store (nil clears it to NULL). The knowledge-cache consumer is
-// the sole writer of this column post-cutover; it recomputes the value from the
+// the sole writer of this column; it recomputes the value from the
 // current-accepted lives_in edge's place-node label.
 func (r *ContactRepository) UpdateContactLocationCacheTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, location *string) error {
 	if err := SetDerivedWriterTx(ctx, tx, DerivedWriterKnowledgeCache); err != nil {

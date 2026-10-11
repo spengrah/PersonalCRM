@@ -41,7 +41,7 @@ type contactCacheWriter interface {
 	UpdateContactHowMetCacheTx(ctx context.Context, tx pgx.Tx, id uuid.UUID, howMet *string) error
 }
 
-// KnowledgeCacheUpdater is the sole post-cutover writer of the derived
+// KnowledgeCacheUpdater is the sole writer of the derived
 // contact.location / contact.birthday / contact.how_met cache columns. It
 // recomputes a column from the current-accepted lives_in / birthday / how_met
 // assertion (recompute-from-scratch, NOT an incremental patch), which makes it
@@ -55,7 +55,7 @@ type contactCacheWriter interface {
 //   - HandleEvent: envelope-driven (the river worker), for assertion.accepted /
 //     assertion.superseded events from any other producer (SP3 extractors, the
 //     rollover worker, retractions). It decodes the payload's predicate_key and
-//     no-ops unless the predicate is one of the three cutover cache predicates.
+//     no-ops unless the predicate is one of the three cache predicates.
 //
 // The subject node id is the contact id (node.id == contact.id for person
 // nodes), so the cache column is keyed directly off the assertion's subject.

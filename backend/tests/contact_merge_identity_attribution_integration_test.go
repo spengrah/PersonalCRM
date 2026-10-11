@@ -1133,10 +1133,10 @@ type assertErr string
 func (e assertErr) Error() string { return string(e) }
 
 // TestMergeContacts_CloseEnqueue_ExecutesThroughAdapter is the binding
-// gate for the reconciler PR1 cutover: the merge-close call site keeps
-// enqueuing the LEGACY todoist_followup_close kind, and after the bespoke
-// close worker is deleted the surviving legacy job must still execute —
-// via the transitional close adapter delegating to the unified executor.
+// gate for the merge-close path. The call site enqueues the legacy
+// todoist_followup_close kind, and no bespoke close worker exists: the
+// transitional close adapter runs the job by delegating to the unified
+// executor.
 // Drives the live merge site, then runs the enqueued legacy-kind job
 // through the adapter and asserts it reaches an item_close for the row's
 // real external id.

@@ -277,8 +277,8 @@ func (b *Bus) PublishTx(ctx context.Context, tx pgx.Tx, env *Envelope) error {
 	return nil
 }
 
-// GetEvent returns the envelope for an event id. Used by consumer worker
-// wrappers (PR 5+) to fetch the full payload given a job-arg event id.
+// GetEvent returns the envelope for an event id. Consumer workers use it
+// to fetch the full payload given a job-arg event id.
 func (b *Bus) GetEvent(ctx context.Context, id uuid.UUID) (*Envelope, error) {
 	return b.eventRepo.GetEvent(ctx, id)
 }
