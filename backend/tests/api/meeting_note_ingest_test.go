@@ -940,7 +940,7 @@ func TestMeetingNote_DeleteCascadesToInteractions(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
 	liveRow, err := env.meetingRepo.GetMeetingNoteBySessionIDTx(ctx, tx, sid)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, db.ErrNotFound)
 	require.Nil(t, liveRow, "live row must be gone after delete")
 	tomb, err := env.meetingRepo.GetTombstonedMeetingNoteBySessionIDTx(ctx, tx, sid)
 	require.NoError(t, err)

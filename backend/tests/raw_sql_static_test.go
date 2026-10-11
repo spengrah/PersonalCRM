@@ -14,6 +14,7 @@
 package tests
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -51,6 +52,38 @@ var rawSQLAllowedSites = map[string]string{
 	"internal/db/migration.go:runRiverMigrations":           "session-scoped advisory lock on one pooled connection; sqlc cannot pin a connection",
 	"internal/db/migration.go:SeedDatabase":                 "seed placeholder executes an inline marker statement",
 	"internal/db/migration_status.go:migrationsTableExists": "pre-migration probe: runs before schema_migrations exists, so no sqlc-visible schema",
+}
+
+// rawSQLBaseline records raw-SQL calls that predate the rule, keyed
+// "file:function" with the number of calls in that function. The guard is
+// forward-only: a function over its count fails, and an entry whose count is
+// no longer reached also fails, so the baseline only shrinks. Migrate a site
+// to a sqlc query, then lower or delete its entry.
+var rawSQLBaseline = map[string]int{
+	"internal/repository/sync.go:EnqueueAccountSyncIfNotInFlight":                                                    1,
+	"tests/consumer_interaction_recorder_integration_test.go:TestIntegration_CalendarAttended_Replay":                1,
+	"tests/consumer_interaction_recorder_integration_test.go:TestIntegration_ManualHandler_SingleTxFlow":             2,
+	"tests/followup_manager_cutover_integration_test.go:TestIntegration_FollowUpManager_UniqueLiveCollisionRecovers": 1,
+	"tests/integration_test.go:TestMigration020_UnifyEmailDedup":                                                     6,
+	"tests/migration_status_integration_test.go:schemaMigrationsTableExists":                                         1,
+	"tests/rematch_integration_test.go:TestRematch_ConcurrentJobs_PerContactMutex":                                   1,
+	"tests/rematch_integration_test.go:TestRematch_TelegramPhoneMatch":                                               3,
+	"tests/rematch_integration_test.go:TestRematch_TelegramRematchPlusPostImportHook_NoDuplicateInteraction":         4,
+	"tests/rematch_integration_test.go:TestRematch_TelegramUsernameMatch":                                            3,
+	"tests/river_integration_test.go:TestRunMigrations_River_Integration":                                            1,
+	"tests/river/sync_worker_leased_retry_test.go:TestSyncWorker_AbandonedLogOnStartupRecovery":                      6,
+	"tests/river/sync_worker_leased_retry_test.go:TestSyncWorker_ContextCancelledRetry":                              9,
+	"tests/river/sync_worker_leased_retry_test.go:TestSyncWorker_RescueOnCrash":                                      8,
+	"tests/river/sync_worker_leased_retry_test.go:waitForSyncLogStatus":                                              1,
+	"tests/scheduler/river_periodic_scheduler_tick_test.go:TestPeriodicTick_EndToEndEnqueueWithAtomicClaim":          5,
+	"tests/sync_repo_enqueue_test.go:newEnqueueTestEnv":                                                              1,
+	"tests/sync_repo_enqueue_test.go:seedRiverJob":                                                                   1,
+	"tests/sync_repo_enqueue_test.go:TestEnqueueAccountSyncIfNotInFlight_AtomicUnderConcurrency":                     1,
+	"tests/sync_repo_enqueue_test.go:TestEnqueueAccountSyncIfNotInFlight_CrossWindowOverlapPrevented":                1,
+	"tests/sync_repo_enqueue_test.go:TestEnqueueAccountSyncIfNotInFlight_InsertsWhenClear":                           1,
+	"tests/sync_repo_enqueue_test.go:TestEnqueueAccountSyncIfNotInFlight_SkipsWhenInFlight":                          1,
+	"tests/test_event_bus_harness_test.go:waitForTelegramInteractionCount":                                           1,
+	"tests/test_event_bus_harness_test.go:waitForTelegramMessagesProcessed":                                          1,
 }
 
 type rawSQLHit struct {
@@ -102,17 +135,36 @@ func TestNoRawSQLInGo(t *testing.T) {
 		t.Fatalf("walk backend: %v", walkErr)
 	}
 
-	var violations []string
+	counts := map[string]int{}
+	byPos := map[string][]string{}
 	for _, h := range hits {
 		if _, ok := rawSQLAllowedSites[h.site]; ok {
 			continue
 		}
-		violations = append(violations, h.pos+": "+h.call+" with inline SQL "+strconv.Quote(h.snippet))
+		counts[h.site]++
+		byPos[h.site] = append(byPos[h.site], h.pos+": "+h.call+" with inline SQL "+strconv.Quote(h.snippet))
+	}
+
+	var violations, stale []string
+	for site, n := range counts {
+		if n > rawSQLBaseline[site] {
+			violations = append(violations, byPos[site]...)
+		}
+	}
+	for site, allowed := range rawSQLBaseline {
+		if n := counts[site]; n < allowed {
+			stale = append(stale, fmt.Sprintf("%s: baseline allows %d, found %d", site, allowed, n))
+		}
 	}
 	sort.Strings(violations)
+	sort.Strings(stale)
 	if len(violations) > 0 {
-		t.Fatalf("raw SQL in Go (%d). Add a sqlc query (and a repository wrapper, test-only if needed) instead, or allowlist the site in rawSQLAllowedSites with a reason:\n  %s",
+		t.Errorf("new raw SQL in Go (%d call sites in functions over their baseline). Add a sqlc query (and a repository wrapper, test-only if needed) instead, or allowlist the site in rawSQLAllowedSites with a reason:\n  %s",
 			len(violations), strings.Join(violations, "\n  "))
+	}
+	if len(stale) > 0 {
+		t.Errorf("stale rawSQLBaseline entries (%d). Lower the count or delete the entry; the baseline only shrinks:\n  %s",
+			len(stale), strings.Join(stale, "\n  "))
 	}
 }
 

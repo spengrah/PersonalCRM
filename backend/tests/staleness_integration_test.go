@@ -372,9 +372,9 @@ func TestStalenessWatchdog_WorkerThroughRiver(t *testing.T) {
 	require.NoError(t, err)
 
 	// Poll until the breach row appears (the worker ran).
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := accelerated.GetCurrentTime().Add(20 * time.Second)
 	var breaches []repository.StalenessBreach
-	for time.Now().Before(deadline) {
+	for accelerated.GetCurrentTime().Before(deadline) {
 		breaches, err = svc.ListActiveBreaches(ctx)
 		require.NoError(t, err)
 		if len(breaches) > 0 {
