@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import type { OverdueContact } from '@/types/contact'
+import { getErrorMessage } from '@/lib/utils'
 
 interface OverdueApiResponse {
   success: boolean
@@ -38,7 +39,7 @@ export default function TestApiPage() {
         setResult(data)
       } catch (err: unknown) {
         setStatus('❌ Failed')
-        setError(err instanceof Error ? err.message : 'Unknown error')
+        setError(getErrorMessage(err, 'Unknown error'))
       }
     }
 

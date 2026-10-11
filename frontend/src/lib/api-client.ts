@@ -1,4 +1,5 @@
 import type { APIError as WireAPIError, Meta } from '@/types/generated/api-envelope'
+import { getErrorMessage } from '@/lib/utils'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || ''
 
@@ -137,11 +138,7 @@ class ApiClient {
       }
 
       // Network or other errors
-      throw new ApiError(
-        error instanceof Error ? error.message : 'An unexpected error occurred',
-        0,
-        'NETWORK_ERROR'
-      )
+      throw new ApiError(getErrorMessage(error, 'An unexpected error occurred'), 0, 'NETWORK_ERROR')
     }
   }
 
@@ -274,11 +271,7 @@ class ApiClient {
         throw new ApiError('Request timed out', 408, 'TIMEOUT_ERROR')
       }
 
-      throw new ApiError(
-        error instanceof Error ? error.message : 'An unexpected error occurred',
-        0,
-        'NETWORK_ERROR'
-      )
+      throw new ApiError(getErrorMessage(error, 'An unexpected error occurred'), 0, 'NETWORK_ERROR')
     }
   }
 }

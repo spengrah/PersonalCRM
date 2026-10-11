@@ -6,6 +6,7 @@ import { useAcceleratedTime } from '@/hooks/use-accelerated-time'
 import { Button } from '@/components/ui/button'
 import { X } from 'lucide-react'
 import type { InteractionDirection } from '@/lib/interactions-api'
+import { getErrorMessage } from '@/lib/utils'
 
 interface LogInteractionModalProps {
   contactId: string
@@ -75,7 +76,7 @@ export function LogInteractionModal({ contactId, contactName, onClose }: LogInte
       await createInteraction.mutateAsync({ contactId, data: body })
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to log interaction')
+      setError(getErrorMessage(err, 'Failed to log interaction'))
     }
   }
 

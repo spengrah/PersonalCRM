@@ -1,0 +1,112 @@
+{
+  "src/app/contacts/page.tsx": {
+    "local/form-control-primitives": {
+      "count": 2
+    }
+  },
+  "src/app/settings/page.tsx": {
+    "local/api-client-only": {
+      "count": 4
+    }
+  },
+  "src/app/test-api/page.tsx": {
+    "local/api-client-only": {
+      "count": 2
+    }
+  },
+  "src/components/contacts/add-task-modal.tsx": {
+    "local/form-control-primitives": {
+      "count": 2
+    }
+  },
+  "src/components/contacts/contact-form.tsx": {
+    "local/form-control-primitives": {
+      "count": 1
+    }
+  },
+  "src/components/contacts/interaction-filters.tsx": {
+    "local/form-control-primitives": {
+      "count": 3
+    }
+  },
+  "src/components/contacts/log-interaction-modal.tsx": {
+    "local/form-control-primitives": {
+      "count": 1
+    }
+  },
+  "src/components/contacts/merge-contact-modal.tsx": {
+    "local/form-control-primitives": {
+      "count": 1
+    }
+  },
+  "src/components/imports/interactions/NameCandidateModal.tsx": {
+    "local/form-control-primitives": {
+      "count": 1
+    }
+  },
+  "src/components/imports/suggestion-modal.tsx": {
+    "local/form-control-primitives": {
+      "count": 1
+    }
+  },
+  "src/components/providers/rematch-job-watcher.tsx": {
+    "local/query-invalidation-registry": {
+      "count": 5
+    }
+  },
+  "src/components/settings/telegram-section.tsx": {
+    "local/form-control-primitives": {
+      "count": 4
+    }
+  },
+  "src/components/settings/todoist-accounts-section.tsx": {
+    "local/form-control-primitives": {
+      "count": 2
+    }
+  },
+  "src/components/settings/whatsapp-section.tsx": {
+    "local/form-control-primitives": {
+      "count": 2
+    }
+  },
+  "src/hooks/use-accelerated-time.ts": {
+    "local/query-invalidation-registry": {
+      "count": 1
+    }
+  },
+  "src/hooks/use-google-accounts.ts": {
+    "local/query-invalidation-registry": {
+      "count": 1
+    }
+  },
+  "src/hooks/use-mac-hosts.ts": {
+    "local/query-invalidation-registry": {
+      "count": 1
+    }
+  },
+  "src/hooks/use-merge.ts": {
+    "local/query-invalidation-registry": {
+      "count": 1
+    }
+  },
+  "src/hooks/use-telegram.ts": {
+    "local/query-invalidation-registry": {
+      "count": 5
+    }
+  },
+  "src/hooks/use-todoist-accounts.ts": {
+    "local/query-invalidation-registry": {
+      "count": 1
+    }
+  },
+  "src/hooks/use-todoist-settings.ts": {
+    "local/query-invalidation-registry": {
+      "count": 1
+    }
+  },
+  "src/hooks/use-whatsapp.ts": {
+    "local/query-invalidation-registry": {
+      "count": 5
+    }
+  }
+}

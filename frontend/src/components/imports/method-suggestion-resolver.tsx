@@ -15,6 +15,7 @@ import type {
   MethodComparison,
 } from '@/types/import'
 import type { ContactMethodType } from '@/types/contact'
+import { getErrorMessage } from '@/lib/utils'
 
 interface MethodSuggestionResolverProps {
   suggestion: MethodSuggestion
@@ -114,7 +115,7 @@ export function MethodSuggestionResolver({
       )
       onClose()
     } catch (error) {
-      onError(error instanceof Error ? error.message : 'Failed to add methods')
+      onError(getErrorMessage(error, 'Failed to add methods'))
     }
   }
 
@@ -128,7 +129,7 @@ export function MethodSuggestionResolver({
       onSuccess(`Dismissed suggestions for ${suggestion.contact_name}`)
       onClose()
     } catch (error) {
-      onError(error instanceof Error ? error.message : 'Failed to dismiss suggestions')
+      onError(getErrorMessage(error, 'Failed to dismiss suggestions'))
     }
   }
 

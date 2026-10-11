@@ -13,6 +13,7 @@ import {
   useUpdateTelegramChatStatus,
 } from '@/hooks/use-telegram'
 import { telegramApi } from '@/lib/telegram-api'
+import { getErrorMessage } from '@/lib/utils'
 
 type Step =
   | 'loading'
@@ -86,7 +87,7 @@ export function TelegramSection() {
       setCodeType(result.code_type)
       setStep('awaiting_code')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start auth')
+      setError(getErrorMessage(err, 'Failed to start auth'))
     }
   }, [phone, startAuth])
 
@@ -102,7 +103,7 @@ export function TelegramSection() {
         setStep('awaiting_password')
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid code')
+      setError(getErrorMessage(err, 'Invalid code'))
     }
   }, [authToken, code, verifyCode, resetAuthState])
 
@@ -116,7 +117,7 @@ export function TelegramSection() {
         resetAuthState()
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid password')
+      setError(getErrorMessage(err, 'Invalid password'))
     }
   }, [authToken, password, verifyPassword, resetAuthState])
 
@@ -127,7 +128,7 @@ export function TelegramSection() {
       setStep('disconnected')
       setNotification({ type: 'success', message: 'Telegram disconnected' })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to disconnect')
+      setError(getErrorMessage(err, 'Failed to disconnect'))
     }
   }, [disconnect])
 

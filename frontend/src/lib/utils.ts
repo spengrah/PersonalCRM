@@ -121,3 +121,11 @@ export function formatCadence(cadence: string | undefined | null): string {
   }
   return labels[cadence] || cadence
 }
+
+/**
+ * The message of a thrown Error, or `fallback` for any other thrown value.
+ */
+export function getErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback
+  return error.message
+}

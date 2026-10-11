@@ -6,6 +6,7 @@ import { ContactForm } from '@/components/contacts/contact-form'
 import { useCreateContact } from '@/hooks/use-contacts'
 import { useSaveContactNote } from '@/hooks/use-contact-note'
 import type { ContactSubmitData } from '@/lib/validations/contact'
+import { getErrorMessage } from '@/lib/utils'
 
 export default function NewContactPage() {
   const router = useRouter()
@@ -70,9 +71,7 @@ export default function NewContactPage() {
               <div className="ml-3">
                 <h3 className="text-sm font-medium text-red-800">Error creating contact</h3>
                 <p className="mt-1 text-sm text-red-700">
-                  {createContactMutation.error instanceof Error
-                    ? createContactMutation.error.message
-                    : 'An unexpected error occurred'}
+                  {getErrorMessage(createContactMutation.error, 'An unexpected error occurred')}
                 </p>
               </div>
             </div>

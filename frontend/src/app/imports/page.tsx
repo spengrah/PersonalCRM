@@ -55,6 +55,7 @@ import type {
   NeedsAttentionCandidate,
   NameCandidateGroup,
 } from '@/types/import'
+import { getErrorMessage } from '@/lib/utils'
 
 // Constants
 const DEFAULT_PAGE_SIZE = 20
@@ -527,7 +528,7 @@ function ImportsPageInner() {
     } catch (error) {
       setNotification({
         type: 'error',
-        message: error instanceof Error ? error.message : 'Failed to dismiss suggestions',
+        message: getErrorMessage(error, 'Failed to dismiss suggestions'),
       })
     } finally {
       setActionInProgress(null)
@@ -545,8 +546,7 @@ function ImportsPageInner() {
         message: `${displayName} ignored`,
       })
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : `Failed to ignore ${displayName}`
+      const errorMessage = getErrorMessage(error, `Failed to ignore ${displayName}`)
       setNotification({
         type: 'error',
         message: errorMessage,
@@ -577,10 +577,7 @@ function ImportsPageInner() {
       })
     } catch (error) {
       // Extract error message from API response
-      let errorMessage = 'Failed to start contacts sync. Please try again.'
-      if (error instanceof Error) {
-        errorMessage = error.message
-      }
+      let errorMessage = getErrorMessage(error, 'Failed to start contacts sync. Please try again.')
 
       // Provide more specific guidance for common errors
       if (errorMessage.includes('decrypt') || errorMessage.includes('authentication failed')) {
@@ -620,10 +617,7 @@ function ImportsPageInner() {
         message: `Calendar sync started for ${googleAccounts.length} account${googleAccounts.length > 1 ? 's' : ''}!`,
       })
     } catch (error) {
-      let errorMessage = 'Failed to start calendar sync. Please try again.'
-      if (error instanceof Error) {
-        errorMessage = error.message
-      }
+      let errorMessage = getErrorMessage(error, 'Failed to start calendar sync. Please try again.')
 
       if (errorMessage.includes('decrypt') || errorMessage.includes('authentication failed')) {
         errorMessage =
@@ -691,7 +685,7 @@ function ImportsPageInner() {
     } catch (err) {
       setNotification({
         type: 'error',
-        message: err instanceof Error ? err.message : 'Failed to resolve session',
+        message: getErrorMessage(err, 'Failed to resolve session'),
       })
     } finally {
       setResolveBusyId(null)
@@ -712,7 +706,7 @@ function ImportsPageInner() {
     } catch (err) {
       setNotification({
         type: 'error',
-        message: err instanceof Error ? err.message : 'Failed to resolve session',
+        message: getErrorMessage(err, 'Failed to resolve session'),
       })
     } finally {
       setResolveBusyId(null)
@@ -732,7 +726,7 @@ function ImportsPageInner() {
     } catch (err) {
       setNotification({
         type: 'error',
-        message: err instanceof Error ? err.message : 'Failed to ignore name',
+        message: getErrorMessage(err, 'Failed to ignore name'),
       })
     } finally {
       setNameCandidateBusyToken(null)
@@ -855,7 +849,7 @@ function ImportsPageInner() {
                       Error loading import candidates
                     </h3>
                     <p className="mt-1 text-sm text-red-700">
-                      {error instanceof Error ? error.message : 'An unexpected error occurred'}
+                      {getErrorMessage(error, 'An unexpected error occurred')}
                     </p>
                   </div>
                 </div>

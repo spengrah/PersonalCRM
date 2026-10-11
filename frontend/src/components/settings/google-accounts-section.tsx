@@ -22,6 +22,7 @@ import {
 } from '@/hooks/use-sync-states'
 import { useTriggerSync } from '@/hooks/use-imports'
 import { startGoogleOAuthFlow, GoogleAccount } from '@/lib/oauth-api'
+import { getErrorMessage } from '@/lib/utils'
 
 // GCHAT_REQUIRED_SCOPES gates the Google Chat sync badge. It mirrors the backend
 // enablement gate (service.gchatRequiredScopes): the sweep needs all three Chat
@@ -78,7 +79,7 @@ export function GoogleAccountsSection() {
       })
     } catch (error) {
       console.error('Calendar sync error:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      const errorMessage = getErrorMessage(error, 'Unknown error')
       setNotification({
         type: 'error',
         message: errorMessage.includes('authentication')
@@ -100,7 +101,7 @@ export function GoogleAccountsSection() {
       })
     } catch (error) {
       console.error('Contacts sync error:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      const errorMessage = getErrorMessage(error, 'Unknown error')
       setNotification({
         type: 'error',
         message: errorMessage.includes('authentication')
@@ -122,7 +123,7 @@ export function GoogleAccountsSection() {
       })
     } catch (error) {
       console.error('Gmail sync error:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      const errorMessage = getErrorMessage(error, 'Unknown error')
       setNotification({
         type: 'error',
         message: errorMessage.includes('authentication')
@@ -144,7 +145,7 @@ export function GoogleAccountsSection() {
       })
     } catch (error) {
       console.error('Google Chat sync error:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      const errorMessage = getErrorMessage(error, 'Unknown error')
       setNotification({
         type: 'error',
         message: errorMessage.includes('authentication')

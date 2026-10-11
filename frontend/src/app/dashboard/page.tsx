@@ -24,7 +24,7 @@ import {
   getPrimaryAndSecondaryMethods,
 } from '@/lib/contact-methods'
 import { cadenceBaseDate, formatOverdueRecency } from '@/lib/contact-recency'
-import { formatRelativeTime } from '@/lib/utils'
+import { formatRelativeTime, getErrorMessage } from '@/lib/utils'
 import type { ContactMethod, OverdueContact } from '@/types/contact'
 import { clsx } from 'clsx'
 
@@ -334,7 +334,7 @@ export default function DashboardPage() {
                     Error loading overdue contacts
                   </h3>
                   <p className="mt-1 text-sm text-red-700">
-                    {error instanceof Error ? error.message : 'An unexpected error occurred'}
+                    {getErrorMessage(error, 'An unexpected error occurred')}
                   </p>
                 </div>
               </div>
