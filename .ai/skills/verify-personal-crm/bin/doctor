@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Read-only: is this checkout's verify instance worth driving? Exit 0 only when
+# every check passes.
+set -uo pipefail
+source "$(dirname "$0")/_common.sh"
+
+bad=0
+ok()   { echo "✓ $*"; }
+nope() { echo "✗ $*"; bad=1; }
+
+echo "slot $VERIFY_SLOT: frontend $VERIFY_BASE_URL, api $VERIFY_API_URL, db $VERIFY_DB_NAME"
+[ -d "$INSTANCE_DIR" ] || { echo "✗ no instance recorded; run bin/launch"; exit 1; }
+
+check_proc() {  # name needle port
+  local pid; pid="$(cat "$INSTANCE_DIR/$1.pid" 2>/dev/null)"
+  if ! pid_is "$pid" "$2"; then nope "$1 process (pid ${pid:-none}) not running"; return; fi
+  ok "$1 process running (pid $pid)"
+  # The port must belong to our process group, not to some other server.
+  local holder holders; holders="$(port_pids "$3")"
+  for holder in $holders; do
+    if [ "$(ps -o pgid= -p "$holder" | tr -d ' ')" = "$pid" ]; then ok "port $3 held by our $1"; return; fi
+  done
+  nope "port $3 not held by our $1 (holders: ${holders:-none})"
+}
+check_proc backend "$INSTANCE_DIR/crm-api" "$VERIFY_BACKEND_PORT"
+check_proc frontend "next" "$VERIFY_FRONTEND_PORT"
+
+health="$(curl -fsS "$VERIFY_API_URL/health" 2>/dev/null)"
+if [ -n "$health" ] && [ "$(printf '%s' "$health" | jq -r .status)" = healthy ]; then
+  ok "backend /health healthy"
+  built="$(printf '%s' "$health" | jq -r .version.git_commit)"
+  head="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+  [ "$built" = "$head" ] && ok "backend built from HEAD ($head)" \
+    || nope "backend built from $built but HEAD is $head; run bin/cleanup && bin/launch"
+  changed="$(find "$REPO_ROOT/backend" -name '*.go' -newer "$INSTANCE_DIR/crm-api" -print -quit)"
+  [ -z "$changed" ] && ok "no backend .go file changed since the build" \
+    || nope "backend source changed since the build (e.g. ${changed#"$REPO_ROOT"/}); run bin/cleanup && bin/launch"
+else
+  nope "backend /health not healthy at $VERIFY_API_URL/health"
+fi
+
+code="$(curl -s -o /dev/null -w '%{http_code}' -H "X-API-Key: $VERIFY_API_KEY" "$VERIFY_API_URL/api/v1/contacts?limit=1")"
+[ "$code" = 200 ] && ok "API key accepted (GET /api/v1/contacts → 200)" || nope "GET /api/v1/contacts → $code"
+
+contacts="$(verify_psql "$VERIFY_DB_NAME" -tAc "SELECT count(*) FROM contact WHERE deleted_at IS NULL" 2>/dev/null | tr -d '[:space:]')"
+[ -n "$contacts" ] && [ "$contacts" -gt 0 ] && ok "database $VERIFY_DB_NAME has $contacts live contacts" \
+  || nope "database $VERIFY_DB_NAME has no live contacts (seed missing?)"
+
+code="$(curl -s -o /dev/null -w '%{http_code}' "$VERIFY_BASE_URL/dashboard")"
+[ "$code" = 200 ] && ok "frontend /dashboard → 200" || nope "frontend /dashboard → $code"
+
+exit "$bad"

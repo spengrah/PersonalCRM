@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Call the verify backend with the API key and print the response body.
+# Usage: bin/api GET /api/v1/contacts/overdue
+#        bin/api POST /api/v1/contacts '{"full_name":"x"}'   (setup only; prove behavior through the UI)
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+method="$1" path="$2" body="${3:-}"
+args=(-sS -X "$method" -H "X-API-Key: $VERIFY_API_KEY" -w '\n[HTTP %{http_code}]\n')
+[ -z "$body" ] || args+=(-H 'Content-Type: application/json' --data "$body")
+curl "${args[@]}" "$VERIFY_API_URL$path"

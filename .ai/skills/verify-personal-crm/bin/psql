@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Run psql against the verify database. Read side effects with it; do not write.
+# Usage: bin/psql -c "SELECT count(*) FROM contact WHERE deleted_at IS NULL"
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+verify_psql "$VERIFY_DB_NAME" "$@"

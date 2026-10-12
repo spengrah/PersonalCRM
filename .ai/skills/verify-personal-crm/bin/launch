@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Start an isolated, seeded Personal CRM instance for verification: its own
+# database, its own ports, the synthetic `standard` world, the backend binary
+# built from this checkout, and `next dev` from this checkout's frontend/.
+#
+# Refuses instead of sharing: an instance already recorded, a busy port, or a
+# `next dev` already running from this frontend/ (two dev servers would fight
+# over frontend/.next).
+#
+# Knobs: VERIFY_SLOT (port/DB slot), VERIFY_SEED_PROFILE (default: standard).
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+fail() { echo "✗ launch: $*" >&2; exit 1; }
+
+if [ -f "$INSTANCE_DIR/backend.pid" ] || [ -f "$INSTANCE_DIR/frontend.pid" ]; then
+  fail "an instance is already recorded in $INSTANCE_DIR. Run bin/doctor, or bin/cleanup first."
+fi
+for p in "$VERIFY_FRONTEND_PORT" "$VERIFY_BACKEND_PORT"; do
+  [ -z "$(port_pids "$p")" ] || fail "port $p is in use (pids: $(port_pids "$p" | tr '\n' ' ')). Set VERIFY_SLOT to another 0-399 value."
+done
+for pid in $(pgrep -f 'next dev' || true); do
+  cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
+  [ "$cwd" != "$REPO_ROOT/frontend" ] || fail "a next dev server (pid $pid) already runs from $REPO_ROOT/frontend; it shares frontend/.next with this one. Stop it, or verify from another worktree."
+done
+[ -x "$REPO_ROOT/frontend/node_modules/.bin/next" ] || fail "frontend dependencies missing. Run: make worktree-deps (main checkout: cd frontend && bun install --frozen-lockfile)"
+
+mkdir -p "$INSTANCE_DIR" "$RUNS_DIR"
+echo "slot $VERIFY_SLOT: frontend :$VERIFY_FRONTEND_PORT, backend :$VERIFY_BACKEND_PORT, db $VERIFY_DB_NAME"
+
+# Backend environment: the E2E testing env file, never the real .env.
+backend_env() {
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/.env.example.testing"
+  set +a
+  export DATABASE_URL="$VERIFY_DATABASE_URL" PORT="$VERIFY_BACKEND_PORT" \
+    FRONTEND_URL="$VERIFY_BASE_URL" API_KEY="$VERIFY_API_KEY" \
+    MIGRATIONS_PATH=migrations CRM_ENV=testing CORS_ALLOW_ALL=true \
+    ENABLE_EXTERNAL_SYNC=true EVENT_BUS_INGEST_ENABLED=true GIN_MODE=debug
+}
+
+echo "→ postgres"
+bash "$REPO_ROOT/scripts/ensure-postgres-for-tests.sh" > "$INSTANCE_DIR/postgres.log" 2>&1 \
+  || fail "postgres did not start; see $INSTANCE_DIR/postgres.log"
+
+echo "→ fresh database $VERIFY_DB_NAME"
+E2E_DATABASE_NAME="$VERIFY_DB_NAME" bash "$REPO_ROOT/scripts/e2e-db-reset.sh" > "$INSTANCE_DIR/db-reset.log" 2>&1 \
+  || fail "database reset refused or failed; see $INSTANCE_DIR/db-reset.log"
+
+echo "→ seed profile ${VERIFY_SEED_PROFILE:-standard} (migrates first)"
+( backend_env; cd "$REPO_ROOT/backend" && go run ./cmd/crm-admin --seed --profile "${VERIFY_SEED_PROFILE:-standard}" --yes ) \
+  > "$INSTANCE_DIR/seed.log" 2>&1 || fail "seed failed; see $INSTANCE_DIR/seed.log"
+
+echo "→ build backend"
+commit="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+ldflags="-X personal-crm/backend/internal/health.Version=verify -X personal-crm/backend/internal/health.GitCommit=$commit"
+( cd "$REPO_ROOT/backend" && go build -ldflags "$ldflags" -o "$INSTANCE_DIR/crm-api" ./cmd/crm-api ) \
+  > "$INSTANCE_DIR/build.log" 2>&1 || fail "backend build failed; see $INSTANCE_DIR/build.log"
+
+# Job control puts each server in its own process group, so it outlives this
+# shell and cleanup can signal the whole group (next dev forks workers).
+set -m
+
+echo "→ start backend"
+( backend_env; cd "$REPO_ROOT/backend" && exec nohup "$INSTANCE_DIR/crm-api" ) > "$INSTANCE_DIR/backend.log" 2>&1 &
+echo $! > "$INSTANCE_DIR/backend.pid"
+
+echo "→ start frontend (next dev)"
+( cd "$REPO_ROOT/frontend" && exec nohup env PORT="$VERIFY_FRONTEND_PORT" NODE_ENV=development \
+    NEXT_PUBLIC_API_URL="$VERIFY_API_URL" NEXT_PUBLIC_API_KEY="$VERIFY_API_KEY" \
+    ./node_modules/.bin/next dev --turbopack --port "$VERIFY_FRONTEND_PORT" --hostname 127.0.0.1 ) \
+  > "$INSTANCE_DIR/frontend.log" 2>&1 &
+echo $! > "$INSTANCE_DIR/frontend.pid"
+set +m
+
+wait_for() {  # name url timeout-seconds pidfile
+  local deadline=$(( $(date +%s) + $3 ))
+  until curl -fs -o /dev/null "$2"; do
+    kill -0 "$(cat "$4")" 2>/dev/null || fail "$1 exited during startup; see $INSTANCE_DIR/$1.log (then run bin/cleanup)"
+    [ "$(date +%s)" -lt "$deadline" ] || fail "$1 not ready after $3s at $2; see $INSTANCE_DIR/$1.log (then run bin/cleanup)"
+    sleep 1
+  done
+}
+wait_for backend "$VERIFY_API_URL/health" 120 "$INSTANCE_DIR/backend.pid"
+# The first request compiles the route; 240s matches playwright.config.ts.
+wait_for frontend "$VERIFY_BASE_URL/dashboard" 240 "$INSTANCE_DIR/frontend.pid"
+
+printf 'commit=%s\nstarted=%s\nslot=%s\n' "$commit" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$VERIFY_SLOT" > "$INSTANCE_DIR/meta"
+echo "✓ ready: $VERIFY_BASE_URL (api $VERIFY_API_URL)"
