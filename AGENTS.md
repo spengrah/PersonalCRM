@@ -59,5 +59,4 @@ Repo rules get anything another agent or environment needs. Private memory gets 
 ## Privacy
 
 - **Never include PII in code, comments, commit messages, PR descriptions, GitHub issues, plan docs, or any other repo artifact.** PII = real contact full names, email addresses, phone numbers, contact UUIDs, account IDs, prod hostnames, anything that could identify a real person or system. Use placeholders ("contact A", "the affected contact", "two contacts on date X", `<prod-host>`), redact UUIDs, and keep specifics in private notes outside the repo. The repo is the user's own CRM and the data inside it is real — leaking PII into git history is irreversible.
-- `.ai/log/plan/` is gitignored (safe scratch space for raw prod observations).
-- `.ai/log/learnings/*.yaml` IS tracked in git (the `.ai/log/*` ignore is overridden by `!.ai/log/learnings/*`). This is a historical archive; new learnings extraction is no longer wired into the push flow. The PII rule applies to any manual edits.
+- `.ai/log/` is gitignored (safe scratch space for plans and raw prod observations).
