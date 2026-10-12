@@ -236,9 +236,6 @@ volumes/
 logs/
 log/
 
-# But allow .ai/log directory (learnings storage)
-!.ai/log/
-
 # Runtime logs
 npm-debug.log*
 yarn-debug.log*
@@ -370,14 +367,11 @@ Personal CRM.app/
 .claude/cache/
 .claude/scheduled_tasks.lock
 
-# Learnings log (allow learnings directory only)
-.ai/log/*
-!.ai/log/learnings/
-!.ai/log/learnings/*
+# Agent working logs: plans, review logs, verification evidence
+.ai/log/
 
 # Git worktrees
 .worktrees/
-.ai/log/.transcript-temp.md
 
 # ===========================================
 # MAC DAEMON (Swift)

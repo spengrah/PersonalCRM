@@ -1,9 +1,6 @@
 ---
 name: langfuse-cli
 description: Langfuse CLI usage reference — install, resource/action discovery, credentials, and common usage tips for `langfuse-cli`. Use for further tips on using the Langfuse CLI.
-metadata:
-  required_access:
-    - LANGFUSE_PROJECT_INTERFACE
 ---
 
 # Langfuse CLI Reference
@@ -14,11 +11,10 @@ Documentation: https://langfuse.com/docs/api-and-data-platform/features/cli
 
 ```bash
 # Run directly (recommended)
-npx langfuse-cli api <resource> <action>
 bunx langfuse-cli api <resource> <action>
 
 # Or install globally
-npm i -g langfuse-cli
+bun add -g langfuse-cli
 langfuse api <resource> <action>
 ```
 
