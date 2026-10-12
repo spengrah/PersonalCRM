@@ -198,7 +198,7 @@ WHERE id = sqlc.arg(id);
 -- TEST-ONLY. Calls the live normalize_contact_method_value function so the
 -- C6 parity test can compare the Go mirror against the actual SQL that the
 -- unique index is enforced over. Raw SQL is banned in Go including tests
--- (.ai/rules/core.md), so this query is the permitted access path.
+-- (.agents/rules/core.md), so this query is the permitted access path.
 --
 -- Not used by production code. Do not make it one: production reads the
 -- trigger's output from the stored column.

@@ -1,5 +1,5 @@
 // Package events defines the typed event kinds and Envelope passed through
-// the event bus. See .ai/spec/event-bus-foundation.md §3.2.
+// the event bus. See .agents/spec/event-bus-foundation.md §3.2.
 package events
 
 import (
@@ -64,7 +64,7 @@ const (
 	// bus consumer — IngestService processes them inline within the
 	// per-event savepoint (linkage-detection algorithm: calendar window
 	// match, tagged-participant resolve, walk-in supplemental). See
-	// .ai/spec/mac-daemon-phase-2-anarlog-matching.md for the full
+	// .agents/spec/mac-daemon-phase-2-anarlog-matching.md for the full
 	// linkage state machine.
 	KindMeetingNoteRecorded Kind = "meeting_note.recorded"
 	KindMeetingNoteDeleted  Kind = "meeting_note.deleted"

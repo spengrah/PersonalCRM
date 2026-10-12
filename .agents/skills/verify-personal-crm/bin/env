@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Print this checkout's verify instance coordinates as shell exports.
+# Usage: eval "$(.agents/skills/verify-personal-crm/bin/env)"
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+cat <<VARS
+export VERIFY_SLOT=$VERIFY_SLOT
+export VERIFY_BASE_URL=$VERIFY_BASE_URL
+export VERIFY_API_URL=$VERIFY_API_URL
+export VERIFY_API_KEY=$VERIFY_API_KEY
+export VERIFY_DB_NAME=$VERIFY_DB_NAME
+export VERIFY_DATABASE_URL='$VERIFY_DATABASE_URL'
+export VERIFY_INSTANCE_DIR=$INSTANCE_DIR
+export VERIFY_RUNS_DIR=$RUNS_DIR
+VARS

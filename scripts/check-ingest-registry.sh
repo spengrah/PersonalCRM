@@ -20,7 +20,7 @@
 # the verify switches, shouldRunInlineOnDuplicate) and are NOT scanned.
 #
 # New routing must go through ingest_registry.go's descriptor table; see
-# .ai/patterns/sync.md "Daemon event families".
+# .agents/patterns/sync.md "Daemon event families".
 #
 # Exits 0 when the IngestBatch body is kind-reference-free, 1 otherwise.
 
@@ -72,7 +72,7 @@ if [[ -n "$HITS" ]]; then
   echo "IngestBatch routing must go through the daemonFamily descriptor table" >&2
   echo "(kindToFamily lookups in backend/internal/service/ingest_registry.go)." >&2
   echo "Do NOT name event kinds, dotted kind literals, or per-family predicates" >&2
-  echo "in the IngestBatch body. See .ai/patterns/sync.md 'Daemon event families'." >&2
+  echo "in the IngestBatch body. See .agents/patterns/sync.md 'Daemon event families'." >&2
   exit 1
 fi
 

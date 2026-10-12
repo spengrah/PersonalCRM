@@ -356,7 +356,7 @@ crm-admin: ## Build the operator-only admin CLI (backend/crm-admin)
 # because the Pi-side build pipeline has no Swift toolchain.
 # Produces a signed crm-mac.app bundle at mac-daemon/.build/release/crm-mac.app
 # (per the SMAppService architecture in
-# .ai/log/plan/mac-daemon-app-bundle-rewrite.md). Set
+# .agents/log/plan/mac-daemon-app-bundle-rewrite.md). Set
 # CRM_MAC_CODESIGN_IDENTITY to use a stable local codesigning identity;
 # otherwise the bundle is ad-hoc signed.
 # Bundle assembly is delegated to Scripts/assemble_bundle.sh — only

@@ -2,7 +2,7 @@
 -- 054_meeting_note_input_and_content_hash: add input_hash, resolved_set_hash,
 -- last_content_hash, and meeting_at columns to meeting_note
 -- ============================================================================
--- Spec: .ai/spec/mac-daemon-phase-2-anarlog-matching.md
+-- Spec: .agents/spec/mac-daemon-phase-2-anarlog-matching.md
 --
 -- The columns added here power the linkage-detection re-sync algorithm and the
 -- /known-ids endpoint:

@@ -1,6 +1,6 @@
 -- 055_phone_call.up.sql
 -- Mac daemon Phase 1.5: phone_call staging table + interaction.source CHECK
--- extension for 'phone_calls'. See .ai/spec/mac-daemon.md (the `phone_calls`
+-- extension for 'phone_calls'. See .agents/spec/mac-daemon.md (the `phone_calls`
 -- source section, the `phone_call` staging-table definition, and the
 -- `interaction.source` CHECK).
 

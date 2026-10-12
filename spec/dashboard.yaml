@@ -148,14 +148,14 @@ behaviors:
     type: intent
     status: current
     statement: a user opening the dashboard can decide who to contact next and how to reach them without opening any contact's page — the overdue surface is scannable rather than a wall of undifferentiated entries, and more urgent relationships stand out from less urgent ones
-    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
 
   - id: DSH-011
     title: The dashboard never dead-ends
     type: intent
     status: retired
     statement: whatever state the dashboard is in — populated, all caught up, still loading, or failed — the user always has a clear next action available and is never stranded on a blank or ambiguous screen
-    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
     notes: Retired as too trivial to judge.
 
   - id: DSH-012
@@ -163,5 +163,5 @@ behaviors:
     type: intent
     status: retired
     statement: any action in the app that changes who is overdue is reflected on an open dashboard without the user reloading the page — the overdue list can be trusted as live
-    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
     notes: Retired because no tour exercises its goal, so it passed without being tested. The freshness gap it tracked stays proposed as DSH-009.

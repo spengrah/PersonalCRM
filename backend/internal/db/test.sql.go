@@ -703,7 +703,7 @@ type SeedMacHostParams struct {
 	ApiKeyHash      string `json:"api_key_hash"`
 }
 
-// Mac host test helpers — per .ai/rules/core.md rule 2 (no raw SQL in
+// Mac host test helpers — per .agents/rules/core.md rule 2 (no raw SQL in
 // Go test fixtures), test setup uses these instead of pool.Exec.
 // Inserts a host with caller-supplied hostname + bcrypted api_key_hash.
 // Used by integration tests that need to bypass the pairing flow.

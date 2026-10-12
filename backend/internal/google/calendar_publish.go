@@ -37,7 +37,7 @@ type busTx interface {
 // IS NOT NULL (migration 036), so a calendar event with N CRM-tracked
 // attendees would collide on contacts 2..N if SourceID were just the
 // event UUID. Per-entity SourceID lets each contact's row survive ingest;
-// see .ai/rules/core.md "Multi-entity events" gotcha. Consumer dedup on
+// see .agents/rules/core.md "Multi-entity events" gotcha. Consumer dedup on
 // (contact_id, "gcal", eventIDStr) uses the payload's EventID field, not
 // the envelope's SourceID, so this format change is consumer-transparent.
 func publishCalendarAttended(

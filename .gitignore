@@ -78,11 +78,7 @@ $RECYCLE.BIN/
 *.sublime-workspace
 
 # Cursor IDE
-# Exclude all contents but allow specific files to be re-included
-.cursor/*
-# But allow configuration files
-!.cursor/config.json
-!.cursor/rules
+.cursor/
 
 # ===========================================
 # GO BACKEND
@@ -368,7 +364,7 @@ Personal CRM.app/
 .claude/scheduled_tasks.lock
 
 # Agent working logs: plans, review logs, verification evidence
-.ai/log/
+.agents/log/
 
 # Git worktrees
 .worktrees/

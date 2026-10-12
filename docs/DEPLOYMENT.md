@@ -208,7 +208,7 @@ DB_MIN_CONNS=3
 
 ## Worker Queue Configuration
 
-The backend uses [River](https://riverqueue.com) for background jobs. See issue #180 and `.ai/spec/event-bus-foundation.md`.
+The backend uses [River](https://riverqueue.com) for background jobs. See issue #180 and `.agents/spec/event-bus-foundation.md`.
 
 | Setting | Default | Description |
 |---------|---------|-------------|

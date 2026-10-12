@@ -183,7 +183,7 @@ func (s *SyncService) TriggerSync(ctx context.Context, source string, accountID 
 	// bootstrap a new sync_state keep working unchanged.
 	//
 	// Distinguish "state not found" (benign — create a fresh row) from a
-	// transient DB error (surface so the caller can retry) per .ai/rules/
+	// transient DB error (surface so the caller can retry) per .agents/rules/
 	// core.md. A blanket `err != nil` check would mask a transient failure
 	// as a create attempt, which then fails with a unique-constraint error
 	// from the unique index on (source, account_id).

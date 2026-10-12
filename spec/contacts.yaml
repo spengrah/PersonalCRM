@@ -57,7 +57,7 @@ behaviors:
       - the node canonical label equals the contact full name
       - key: fk-enforced
         text: the node/contact identity equation is enforced by a database foreign key, not just application code
-    provenance: [ContactRepository.CreateContact, contact_id_node_fk, .ai/guides/architecture.md]
+    provenance: [ContactRepository.CreateContact, contact_id_node_fk, .agents/guides/architecture.md]
 
   - id: CON-004
     title: Contact writes never set location, birthday, or how-met directly
@@ -65,7 +65,7 @@ behaviors:
     status: current
     surface: none
     statement: contact create, update, and merge never write the location, birthday, or how_met columns directly — those fields are routed through the knowledge domain, and the contact returned from a write already reflects the routed values.
-    provenance: [knowledgeWriter.assertCreate, contact.sql, .ai/guides/architecture.md, reject_unauthorized_derived_contact_write trigger (migration 079)]
+    provenance: [knowledgeWriter.assertCreate, contact.sql, .agents/guides/architecture.md, reject_unauthorized_derived_contact_write trigger (migration 079)]
     notes: Enforced both by code wiring (services hard-error if the knowledge writer is unset) and, from migration 079, by a database trigger that rejects any UPDATE changing location, birthday, or how_met without crm.derived_writer='knowledge_cache'. How the knowledge domain derives and refreshes these cache columns is knowledge-domain scope.
 
   - id: CON-005
@@ -293,7 +293,7 @@ behaviors:
     then:
       - contacts without a value sort after all contacts with a value
       - this holds for both ascending and descending order
-    provenance: [contact.sql sorted queries, .ai/rules/core.md NULLS LAST gotcha]
+    provenance: [contact.sql sorted queries, .agents/rules/core.md NULLS LAST gotcha]
 
   - id: CON-020
     title: Cadence sort orders by contact frequency
@@ -318,7 +318,7 @@ behaviors:
     then:
       - has_cadence matches only contacts whose cadence is non-null and non-empty
       - no_cadence matches contacts whose cadence is null or empty
-    provenance: [contact.sql cadence_filter predicates, .ai/rules/core.md three-state gotcha]
+    provenance: [contact.sql cadence_filter predicates, .agents/rules/core.md three-state gotcha]
 
   - id: CON-022
     title: Follow-up filter keys on the derived awaiting-reply state
@@ -351,7 +351,7 @@ behaviors:
     status: current
     surface: none
     statement: soft-deleted contacts are excluded from every list, search, count, navigation-ID, and single-contact read; only their id-preserving rows remain in the database.
-    provenance: [contact.sql deleted_at IS NULL filters, live_contact view, .ai/rules/core.md Soft Deletes]
+    provenance: [contact.sql deleted_at IS NULL filters, live_contact view, .agents/rules/core.md Soft Deletes]
 
   - id: CON-025
     title: Navigation IDs apply the same query semantics as the list
@@ -581,7 +581,7 @@ behaviors:
       - key: parameter-stripped-from-url
         text: the parameter is stripped from the URL so refresh or back-navigation does not re-trigger it
     serves: [CON-051]
-    provenance: [contact detail action-param effect, .ai/rules/core.md one-time action gotcha]
+    provenance: [contact detail action-param effect, .agents/rules/core.md one-time action gotcha]
 
   - id: CON-042
     title: Deleting a contact requires explicit confirmation
@@ -996,7 +996,7 @@ behaviors:
       - key: returning-lands-list-page
         text: returning lands on the list page that contains the contact that was open, rather than page 1
     serves: [CON-051]
-    provenance: [ContactNavigationBar back control, buildBackToListUrl, 'contacts page ?page URL sync', contact-navigation.spec.ts, '.ai/spec/2026-07-21-contact-list-back-navigation-design.md']
+    provenance: [ContactNavigationBar back control, buildBackToListUrl, 'contacts page ?page URL sync', contact-navigation.spec.ts, '.agents/spec/2026-07-21-contact-list-back-navigation-design.md']
 
   - id: CON-066
     title: Changing list context resets pagination to the first page
@@ -1036,18 +1036,18 @@ behaviors:
     type: intent
     status: current
     statement: contact data is never lost through a single accidental interaction — destructive flows demand an explicit, informed confirmation, and what will happen is visible before it happens
-    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
 
   - id: CON-051
     title: Browsing contacts never loses the user's place
     type: intent
     status: current
     statement: moving between the contact list and contact detail feels like traversing one consistent, ordered list — sort, search, and filter context carries across navigation in both directions, with keyboard and mouse as equals
-    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
 
   - id: CON-052
     title: The birthdays page is a planning surface, not a data dump
     type: intent
     status: current
     statement: the birthdays page answers whose birthday needs attention now and soon — imminent birthdays stand apart from distant ones, celebrated ones recede, and the user never has to compute dates themselves
-    provenance: ['.ai/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']
+    provenance: ['.agents/spec/2026-07-10-ssot-intent-layer-and-judged-ux-goals-design.md']

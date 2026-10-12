@@ -1,6 +1,6 @@
 -- 050_external_contact_deleted_at.up.sql
 -- Mac daemon: tombstone semantics for external_contact via deleted_at.
--- Spec: .ai/spec/mac-daemon.md §2 iCloud Contacts (deletion handling),
+-- Spec: .agents/spec/mac-daemon.md §2 iCloud Contacts (deletion handling),
 -- §3 external_contact rules.
 --
 -- The column gives the inline external_contact.deleted handler a

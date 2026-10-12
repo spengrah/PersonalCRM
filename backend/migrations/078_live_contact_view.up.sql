@@ -6,7 +6,7 @@
 -- Explicit column list, not SELECT *: Postgres freezes a view's column set at
 -- creation time either way, but an explicit list makes that freeze visible in
 -- the DDL. Adding a column to contact does NOT appear here automatically — see
--- the When-You-Change row in .ai/rules/core.md.
+-- the When-You-Change row in .agents/rules/core.md.
 --
 -- Column order matches db.Contact (backend/internal/db/models.go) field for
 -- field, so a query that selects live_contact.* generates the same row shape

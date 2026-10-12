@@ -1,8 +1,8 @@
 -- ============================================================================
 -- 053_meeting_note: anarlog session staging table + linkage columns
 -- ============================================================================
--- Spec: .ai/spec/mac-daemon-phase-2-anarlog-matching.md
--- Parent spec: .ai/spec/mac-daemon.md (v2 — Anarlog humans + sessions)
+-- Spec: .agents/spec/mac-daemon-phase-2-anarlog-matching.md
+-- Parent spec: .agents/spec/mac-daemon.md (v2 — Anarlog humans + sessions)
 --
 -- Creates the staging table that the Mac daemon writes anarlog session payloads
 -- into via the /ingest/events endpoint (`meeting_note.recorded`). Includes the

@@ -278,7 +278,7 @@ func TestSyncWorker_AbandonedLogOnStartupRecovery(t *testing.T) {
 
 // fastRetryPolicy is a test-only retry policy that puts every retry 200ms
 // in the future, regardless of attempt count. Uses
-// accelerated.GetCurrentTime() per .ai/rules/core.md — NextRetry is
+// accelerated.GetCurrentTime() per .agents/rules/core.md — NextRetry is
 // called from river's worker-retry machinery as part of the sync
 // pipeline, so the accelerated clock must apply here.
 type fastRetryPolicy struct{}

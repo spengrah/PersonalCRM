@@ -1,1 +1,1 @@
-../../.ai/rules/core.md
+../../.agents/rules/core.md

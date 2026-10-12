@@ -1,6 +1,6 @@
 -- 038_event_shadow_observation.up.sql
 -- Shadow-mode observation table for the event-bus InteractionRecorder
--- consumer. See .ai/spec/event-bus-foundation.md §3.8.
+-- consumer. See .agents/spec/event-bus-foundation.md §3.8.
 --
 -- Append-only. Each write path (direct vs consumer) produces its own row so
 -- the post-bake divergence query can FULL OUTER JOIN on (source, source_ref)

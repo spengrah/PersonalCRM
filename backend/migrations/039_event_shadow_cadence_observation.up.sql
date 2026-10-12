@@ -1,6 +1,6 @@
 -- 039_event_shadow_cadence_observation.up.sql
 -- Shadow-mode observation table for the event-bus CadenceUpdater consumer.
--- See .ai/spec/event-bus-foundation.md §3.4.2.
+-- See .agents/spec/event-bus-foundation.md §3.4.2.
 --
 -- Sibling table to event_shadow_observation (migration 038). Parallel
 -- structure, distinct payload — the cadence observation captures the

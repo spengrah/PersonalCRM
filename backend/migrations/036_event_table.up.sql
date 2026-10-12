@@ -1,6 +1,6 @@
 -- 036_event_table.up.sql
 -- Append-only event log feeding the river-backed worker queue. See
--- .ai/spec/event-bus-foundation.md §3.1.
+-- .agents/spec/event-bus-foundation.md §3.1.
 CREATE TABLE event (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     source      text NOT NULL,

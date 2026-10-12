@@ -12,12 +12,12 @@ git config user.name "Test"
 git config user.email "test@example.invalid"
 git config commit.gpgsign false
 git config core.hooksPath /dev/null
-mkdir -p .ai scripts/hooks
+mkdir -p .agents scripts/hooks
 cp "$repo/scripts/hooks/pre-push" scripts/hooks/pre-push
 cp "$repo/path-filters.yml" .
 # Preserve the real selection config while replacing heavyweight commands.
 jq '.checks |= map(.command = ("echo executed:" + .name + "; test \"$FAIL_CHECK\" != " + (.name | @sh)))' \
-  "$repo/.ai/pre-push.json" > .ai/pre-push.json
+  "$repo/.agents/pre-push.json" > .agents/pre-push.json
 git add .
 git commit -qm base
 base=$(git rev-parse HEAD)
@@ -59,7 +59,7 @@ assert_absent "$out" "executed:Backend lint"
 out=$(select_for mac-daemon/Sources/example.swift)
 assert_absent "$out" "executed:Frontend lint"
 assert_absent "$out" "executed:Backend lint"
-out=$(select_for .ai/pre-push.json)
+out=$(select_for .agents/pre-push.json)
 assert_contains "$out" "executed:Frontend lint"
 assert_contains "$out" "executed:Backend lint"
 assert_contains "$out" "executed:Spec drift"
@@ -142,7 +142,7 @@ refs/heads/feature $head refs/heads/feature $base"; then
   echo "FAIL: mixed push skipped"; exit 1
 fi
 if refs_all_target_main ""; then echo "FAIL: empty push skipped"; exit 1; fi
-rm .ai/pre-push.json
+rm .agents/pre-push.json
 if printf 'refs/heads/develop %s refs/heads/main %s\n' "$head" "$base" | bash "$repo/scripts/hooks/pre-push" origin >/dev/null 2>&1; then
   echo "FAIL: missing configuration accepted"; exit 1
 fi

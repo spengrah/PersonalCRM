@@ -1,6 +1,6 @@
 # A0 Containerization Cutover — Runbook
 
-One-time, manual cutover of prod from the systemd + Docker-Postgres hybrid to rootless Podman Quadlets. Design + rationale: `.ai/spec/2026-06-07-containerization-cutover-design.md`. Every command below was validated in a lima Debian-12 arm64 VM against a `crm` system account mirroring the Pi.
+One-time, manual cutover of prod from the systemd + Docker-Postgres hybrid to rootless Podman Quadlets. Design + rationale: `.agents/spec/2026-06-07-containerization-cutover-design.md`. Every command below was validated in a lima Debian-12 arm64 VM against a `crm` system account mirroring the Pi.
 
 Throughout: `$PI_HOST` is the Pi's SSH host; `crm` is the existing service user (uid 995, system account, home `/var/lib/personalcrm`). Helper for rootless user-systemd / podman as `crm` — note the `cd /tmp` + explicit `HOME`: interactive `sudo -u crm` inherits the SSH user's CWD/HOME which crm can't access, so rootless podman fails to chdir without this (the Quadlet *services* run under systemd and are unaffected):
 

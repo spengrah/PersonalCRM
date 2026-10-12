@@ -1,7 +1,7 @@
 -- 049_messages_message_and_claim_columns.up.sql
 -- Mac daemon: messages_message staging table + claim columns on
 -- telegram_message + interaction.source CHECK extended to include
--- 'messages'. Spec: .ai/spec/mac-daemon.md §3 New tables, §3 Race
+-- 'messages'. Spec: .agents/spec/mac-daemon.md §3 New tables, §3 Race
 -- mechanics, §5 Failure modes.
 
 -- ============================================================================

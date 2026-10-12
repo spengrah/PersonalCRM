@@ -137,7 +137,7 @@ Fixes #123"
 gh pr create --fill
 ```
 
-> **Note:** See [`.ai/rules/core.md`](.ai/rules/core.md) for full branch naming conventions.
+> **Note:** See [`.agents/rules/core.md`](.agents/rules/core.md) for full branch naming conventions.
 
 ### For Humans
 
