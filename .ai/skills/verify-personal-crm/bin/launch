@@ -19,8 +19,18 @@ fi
 for p in "$VERIFY_FRONTEND_PORT" "$VERIFY_BACKEND_PORT"; do
   [ -z "$(port_pids "$p")" ] || fail "port $p is in use (pids: $(port_pids "$p" | tr '\n' ' ')). Set VERIFY_SLOT to another 0-399 value."
 done
+# Working directory of a PID: /proc on Linux, lsof on macOS; empty when unknown.
+proc_cwd() {
+  if [ -e "/proc/$1/cwd" ]; then
+    readlink "/proc/$1/cwd" 2>/dev/null
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p'
+  fi
+}
 for pid in $(pgrep -f 'next dev' || true); do
-  cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')"
+  cwd="$(proc_cwd "$pid")"
+  # Fail closed: an unreadable cwd could be this checkout's frontend/.
+  [ -n "$cwd" ] || fail "cannot read the working directory of next dev pid $pid (no /proc/$pid/cwd and no lsof), so cannot rule out a second dev server in $REPO_ROOT/frontend. Stop that process, or install lsof."
   [ "$cwd" != "$REPO_ROOT/frontend" ] || fail "a next dev server (pid $pid) already runs from $REPO_ROOT/frontend; it shares frontend/.next with this one. Stop it, or verify from another worktree."
 done
 [ -x "$REPO_ROOT/frontend/node_modules/.bin/next" ] || fail "frontend dependencies missing. Run: make worktree-deps (main checkout: cd frontend && bun install --frozen-lockfile)"
